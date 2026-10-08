@@ -30,7 +30,12 @@ import type {
 	PlanReviewComment,
 	WikiReviewComment,
 } from "../contracts/workflow";
-import type { StartedBy, WorkflowView } from "../contracts/workflow.ts";
+import type {
+	BlueprintStepCatalog,
+	BlueprintValidation,
+	StartedBy,
+	WorkflowView,
+} from "../contracts/workflow.ts";
 import { runDeveloperQuestion } from "../workflow/cli/commands/dispatch-actions.ts";
 import { resolveHandoffIdentity } from "../workflow/cli/identity.ts";
 import {
@@ -58,6 +63,10 @@ import {
 	orchestratorLaunchCeiling,
 } from "./config.ts";
 import {
+	blueprintStepCatalog,
+	validateWorkflowBlueprint,
+} from "./operations/blueprints.ts";
+import {
 	answerWorkflowQuestion,
 	dashboardApplication,
 	getWorkflowView,
@@ -65,6 +74,7 @@ import {
 	repairWorkflow,
 	requestWorkflowExecution,
 	runWorkflowAction,
+	startBlueprintWorkflowInProcess,
 	startWorkflowInProcess,
 } from "./operations/engine.ts";
 import type { DashboardObservation } from "./operations/observations.ts";
@@ -117,6 +127,12 @@ export interface ServerOperations {
 	view(repo: string, workflowId: string): WorkflowView;
 	action(request: ActionRequest, options?: ActionOptions): WorkflowView;
 	start(request: StartRequest, options?: StartOptions): Promise<string>;
+	/** The blueprint step catalog the orchestrator shapes workflows from
+	 * (add-orchestrator-blueprint-workflows). */
+	blueprintSteps(): BlueprintStepCatalog;
+	/** Compile a blueprint without side effects: the summary and digest, or the
+	 * compiler's diagnostics. Never reads or writes a store. */
+	validateBlueprint(blueprint: unknown): BlueprintValidation;
 	/** Orchestrator-started workflow counts across every target, for the launch
 	 * ceiling the transport enforces before `start`. */
 	orchestratorLaunches(): OrchestratorLaunchCounts;
@@ -166,11 +182,34 @@ export function runAction(
 	return getWorkflowView(request.repo, request.workflowId);
 }
 
-/** Start a workflow and return the bounded acknowledgement string. */
+/** Start a workflow and return the bounded acknowledgement string. A
+ * blueprint start compiles and stores the definition server-side and pins the
+ * blueprint on the workflow's metadata; the two start shapes are mutually
+ * exclusive, enforced here as well as in the wire schema so the in-process
+ * adapter refuses exactly like the transport does. */
 export function startWorkflow(
 	request: StartRequest,
 	options: StartOptions = {},
 ): Promise<string> {
+	if (request.workflowType !== undefined && request.blueprint !== undefined)
+		throw new Error(
+			"a start request cannot name both a workflowType and a blueprint",
+		);
+	if (request.blueprint !== undefined)
+		return startBlueprintWorkflowInProcess({
+			repo: request.repo,
+			workflowId: request.workflowId,
+			blueprint: request.blueprint,
+			task: request.task,
+			ticket: request.ticket ?? "",
+			mode: request.mode,
+			preset: request.preset,
+			principal: options.principal,
+			...(options.enforceHumanReviewGates
+				? { enforceHumanReviewGates: true }
+				: {}),
+			startedBy: startedByFor(options.principal),
+		});
 	return startWorkflowInProcess({
 		...(options.enforceHumanReviewGates
 			? { enforceHumanReviewGates: true }
@@ -400,6 +439,8 @@ export const serverOperations: ServerOperations = {
 	view: workflowView,
 	action: runAction,
 	start: startWorkflow,
+	blueprintSteps: blueprintStepCatalog,
+	validateBlueprint: validateWorkflowBlueprint,
 	orchestratorLaunches,
 	repair,
 	question,

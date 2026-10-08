@@ -36,6 +36,10 @@ import {
 	traceSummaryPageSchema,
 } from "../contracts/telemetry.ts";
 import {
+	type BlueprintStepCatalog,
+	type BlueprintValidation,
+	blueprintStepCatalogSchema,
+	blueprintValidationSchema,
 	type WorkflowView,
 	workflowIdResponseSchema,
 	workflowViewListSchema,
@@ -271,12 +275,43 @@ export class BackendClient implements DashboardGateway {
 		ticket?: string;
 		task?: string;
 		workflowType?: string;
+		/** A blueprint the server compiles, stores and starts instead of a
+		 * built-in type; mutually exclusive with `workflowType`. */
+		blueprint?: unknown;
 		preset?: string;
 	}): Promise<string> {
 		return this.decode<string>(
 			"core.workflow-id",
 			workflowIdResponseSchema,
 			await this.request("POST", "/api/v1/workflow/start", request),
+		);
+	}
+
+	/** The blueprint step catalog (add-orchestrator-blueprint-workflows): the
+	 * logical steps a model-authored blueprint may use. */
+	async blueprintSteps(signal?: AbortSignal): Promise<BlueprintStepCatalog> {
+		return this.decode<BlueprintStepCatalog>(
+			"core.blueprint-step-catalog",
+			blueprintStepCatalogSchema,
+			await this.request("GET", "/api/v1/workflow/steps", undefined, signal),
+		);
+	}
+
+	/** Compile a blueprint without side effects: the compiled summary and digest,
+	 * or the compiler's diagnostics. */
+	async validateBlueprint(
+		blueprint: unknown,
+		signal?: AbortSignal,
+	): Promise<BlueprintValidation> {
+		return this.decode<BlueprintValidation>(
+			"core.blueprint-validation",
+			blueprintValidationSchema,
+			await this.request(
+				"POST",
+				"/api/v1/workflow/blueprint/validate",
+				{ blueprint },
+				signal,
+			),
 		);
 	}
 

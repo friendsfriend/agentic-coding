@@ -7,6 +7,7 @@ import {
 	classifierRequestSchema,
 	reviewSaveRequestSchema,
 	workflowActionRequestSchema,
+	workflowBlueprintValidateRequestSchema,
 	workflowDeleteRequestSchema,
 	workflowExecuteRequestSchema,
 	workflowQuestionRequestSchema,
@@ -86,6 +87,18 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: "/api/v1/workflow/start",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "GET",
+		path: "/api/v1/workflow/steps",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/workflow/blueprint/validate",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -264,6 +277,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/workflow/start",
 		schemaId: "server.workflow.start",
 		schema: workflowStartRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/blueprint/validate",
+		schemaId: "server.workflow.blueprint.validate",
+		schema: workflowBlueprintValidateRequestSchema,
 	},
 	{
 		path: "/api/v1/workflow/repair",

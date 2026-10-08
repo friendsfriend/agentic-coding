@@ -269,6 +269,11 @@ export interface WorkflowMetadata {
 	 * operator action never re-attributes it. Absent on snapshots started before
 	 * the attribution existed; those read as `developer`. */
 	startedBy?: StartedBy;
+	/** The blueprint a custom-shaped workflow was started from, pinned at start
+	 * (add-orchestrator-blueprint-workflows): the label and rationale the model
+	 * authored and the compiled digest the workflow pins, so the custom shape is
+	 * auditable after the fact. Absent for built-in and operator-defined starts. */
+	blueprint?: { label: string; rationale: string; digest: string };
 	/** The classifier provider id resolved once at start and pinned for the
 	 * run's lifetime, so a mid-run config edit cannot switch the endpoint. The
 	 * *model id* is not pinned: it continues to follow
@@ -1513,3 +1518,58 @@ export const workflowIdResponseSchema = Schema.String.pipe(
 
 /** Saved review comments are not echoed back; the server returns a count. */
 export const savedReviewResponseSchema = Schema.Unknown;
+
+// ---------------------------------------------------------------------------
+// Blueprint contracts (add-orchestrator-blueprint-workflows): the step catalog
+// the orchestrator reads, and the validate route's compiled summary or
+// diagnostics. Pure wire shapes; the server maps the compiler's own types onto
+// them so no workflow module crosses into this layer.
+// ---------------------------------------------------------------------------
+
+/** One logical blueprint step as the catalog serves it. */
+const blueprintStepSchema = Schema.Struct({
+	id: text(256),
+	label: text(256),
+	actor: Schema.Literal("agent", "developer", "system"),
+	outcomes: Schema.Array(text(256)),
+	description: boundedText(4096),
+});
+export type BlueprintStepCatalogEntry = typeof blueprintStepSchema.Type;
+
+/** The step catalog read (`GET /api/v1/workflow/steps`). */
+export const blueprintStepCatalogSchema = Schema.Array(blueprintStepSchema);
+export type BlueprintStepCatalog = typeof blueprintStepCatalogSchema.Type;
+
+/** One compiler diagnostic: the rule that rejected a blueprint and the step or
+ * edge involved. */
+export const blueprintDiagnosticSchema = Schema.Struct({
+	rule: boundedText(256),
+	message: boundedText(4096),
+	path: Schema.optional(Schema.Array(boundedText(256))),
+});
+export type BlueprintDiagnostic = typeof blueprintDiagnosticSchema.Type;
+
+/** The compiled summary of a blueprint that validates. */
+export const blueprintSummarySchema = Schema.Struct({
+	label: boundedText(256),
+	rationale: boundedText(4096),
+	steps: Schema.Array(boundedText(256)),
+	initial: boundedText(256),
+	terminal: Schema.Array(boundedText(256)),
+	stepCount: integer(),
+	edgeCount: integer(),
+	verificationRounds: integer(1),
+});
+export type BlueprintSummary = typeof blueprintSummarySchema.Type;
+
+/** The validate route's answer: the compiled digest and summary, or the
+ * diagnostics. `diagnostics` is always present (empty on success) so a caller
+ * never has to branch on the field's existence. */
+export const blueprintValidationSchema = Schema.Struct({
+	ok: Schema.Boolean,
+	digest: Schema.optional(boundedText(4096)),
+	definitionId: Schema.optional(boundedText(256)),
+	summary: Schema.optional(blueprintSummarySchema),
+	diagnostics: Schema.Array(blueprintDiagnosticSchema),
+});
+export type BlueprintValidation = typeof blueprintValidationSchema.Type;

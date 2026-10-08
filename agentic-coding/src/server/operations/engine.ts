@@ -33,6 +33,7 @@ import {
 	validateWorkflowId,
 } from "../../workflow/runtime.ts";
 import { prepareWorkflowStart } from "../../workflow/startup.ts";
+import { prepareBlueprintWorkflowStart } from "./blueprints.ts";
 
 export {
 	fusionPlannerCount,
@@ -310,6 +311,51 @@ export async function startWorkflowInProcess(
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, args.workflowId);
 	return `Workflow started: ${args.workflowId}`;
+}
+
+/** Everything a blueprint start carries in addition to the ordinary start
+ * fields: the compiled document and the principal its stored origin records. */
+export interface BlueprintStartRequest {
+	repo: string;
+	workflowId: string;
+	blueprint: unknown;
+	task?: string;
+	ticket?: string;
+	mode?: string;
+	preset?: string;
+	principal?: WorkflowPrincipal;
+	enforceHumanReviewGates?: boolean;
+	startedBy?: StartedBy;
+}
+
+/**
+ * Start a blueprint workflow (add-orchestrator-blueprint-workflows): the server
+ * compiles the blueprint, stores its definition in the target repository's
+ * store with its origin and principal, pins the blueprint's label, rationale
+ * and digest on the workflow's metadata, and starts it through the same path a
+ * built-in type uses. A blueprint the compiler rejects is refused by
+ * `prepareBlueprintWorkflowStart` before anything is written.
+ */
+export async function startBlueprintWorkflowInProcess(
+	input: BlueprintStartRequest,
+): Promise<string> {
+	const prepared = prepareBlueprintWorkflowStart({
+		repo: input.repo,
+		workflowId: input.workflowId,
+		blueprint: input.blueprint,
+		task: input.task,
+		ticket: input.ticket,
+		mode: input.mode as "worktree" | "checkout" | undefined,
+		preset: input.preset,
+		principal: input.principal,
+		now: dashboardApplication.clock,
+		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
+		...(input.startedBy ? { startedBy: input.startedBy } : {}),
+	});
+	const engine = workflowEngineFactory(dashboardApplication);
+	engine.start(prepared.input);
+	requestWorkflowExecution(prepared.target, input.workflowId);
+	return `Workflow started: ${input.workflowId}`;
 }
 
 /** Start the home-only wiki review without requiring a repository. */

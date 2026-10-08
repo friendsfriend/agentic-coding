@@ -51,6 +51,8 @@ surface. Every row is served in this process; a path in neither manifest is a
 | GET | `/api/v1/workflow/view` | bun |
 | POST | `/api/v1/workflow/action` | bun |
 | POST | `/api/v1/workflow/start` | bun |
+| GET | `/api/v1/workflow/steps` | bun |
+| POST | `/api/v1/workflow/blueprint/validate` | bun |
 | POST | `/api/v1/workflow/repair` | bun |
 | POST | `/api/v1/workflow/question` | bun |
 | POST | `/api/v1/workflow/review-save` | bun |
@@ -72,6 +74,18 @@ surface. Every row is served in this process; a path in neither manifest is a
 
 Reads remain observational: the observation dispatcher only lists/reads/views and
 never initializes or migrates a store, expires a question or claims an effect.
+
+### Blueprints
+
+`GET /api/v1/workflow/steps` serves the blueprint step catalog and
+`POST /api/v1/workflow/blueprint/validate` compiles a blueprint without any side
+effect, answering with its compiled summary and digest or the compiler's
+diagnostics. `POST /api/v1/workflow/start` accepts `blueprint` as an alternative
+to `workflowType` (mutually exclusive): the server compiles it, stores the
+resulting definition in the target repository's store with its `blueprint`
+origin and principal, pins `metadata.blueprint = { label, rationale, digest }` on
+the workflow, and starts it. A blueprint that fails compilation is refused
+before anything is written.
 
 ### Environment ownership
 

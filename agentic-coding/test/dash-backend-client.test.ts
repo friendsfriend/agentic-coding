@@ -84,6 +84,8 @@ function recordingOperations(calls: Calls): ServerOperations {
 			calls.start = request;
 			return `started ${request.workflowId}`;
 		},
+		blueprintSteps: () => [],
+		validateBlueprint: () => ({ ok: false, diagnostics: [] }),
 		orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 		repair: (request) => {
 			calls.repair = request;

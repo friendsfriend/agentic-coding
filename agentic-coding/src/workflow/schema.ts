@@ -514,6 +514,17 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 			Schema.Literal("developer", "orchestrator"),
 			{ exact: true },
 		),
+		/** The blueprint a custom-shaped workflow was started from
+		 * (add-orchestrator-blueprint-workflows): the authored label and rationale
+		 * plus the compiled digest the workflow pins. */
+		blueprint: Schema.optionalWith(
+			Schema.Struct({
+				label: boundedText(256),
+				rationale: boundedText(4096),
+				digest: boundedText(4096),
+			}),
+			{ exact: true },
+		),
 		gatePolicies: Schema.optionalWith(
 			Schema.Record({ key: Schema.String, value: Schema.String }),
 			{ exact: true },

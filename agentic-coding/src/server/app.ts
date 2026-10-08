@@ -12,6 +12,7 @@ import type {
 	AgentsMutationRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
+	WorkflowBlueprintValidateRequest,
 	WorkflowDeleteRequest,
 	WorkflowExecuteRequest,
 	WorkflowQuestionRequest,
@@ -307,6 +308,25 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				runId: decoded.workflowId,
 			});
 			return json({ ok: true, value });
+		}
+
+		if (method === "GET" && path === "/api/v1/workflow/steps") {
+			// The blueprint step catalog is small and static per binary; it is a
+			// read, so it never initializes a store.
+			return json({ ok: true, value: operations.blueprintSteps() });
+		}
+
+		if (method === "POST" && path === "/api/v1/workflow/blueprint/validate") {
+			const decoded = decodeRouteRequest<WorkflowBlueprintValidateRequest>(
+				"/api/v1/workflow/blueprint/validate",
+				await readJsonBody(request),
+			);
+			// Side-effect free: the operation only compiles, so the answer is the
+			// compiled summary/digest or the compiler's diagnostics.
+			return json({
+				ok: true,
+				value: operations.validateBlueprint(decoded.blueprint),
+			});
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/repair") {

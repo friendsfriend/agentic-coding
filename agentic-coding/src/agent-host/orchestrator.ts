@@ -140,9 +140,97 @@ const WorkflowIdParameter = Type.String({
 	description: "Workflow id",
 });
 
+/** The blueprint tool's parameter schema: the logical shape the model authors
+ * and the server compiles (add-orchestrator-blueprint-workflows). The caps
+ * mirror the server's decode bounds so an oversized document is refused here
+ * with the model's own arguments rather than as a server diagnostic. */
+const BlueprintStepParameter = Type.String({
+	minLength: 1,
+	maxLength: 256,
+	description: "A logical step id from list_steps",
+});
+const BlueprintParameter = Type.Object(
+	{
+		label: Type.String({
+			minLength: 1,
+			maxLength: 256,
+			description: "Short human label for the workflow shape",
+		}),
+		rationale: Type.String({
+			minLength: 1,
+			maxLength: 4096,
+			description:
+				"Why this shape fits the request; the developer reads it in every review",
+		}),
+		traits: Type.Object({
+			changeArtifacts: Type.Union([
+				Type.Literal("openspec"),
+				Type.Literal("none"),
+			]),
+			planning: Type.Union([
+				Type.Literal("none"),
+				Type.Literal("single"),
+				Type.Literal("fusion"),
+			]),
+			changeIdentity: Type.Union([
+				Type.Literal("planned"),
+				Type.Literal("workflow-id"),
+				Type.Literal("none"),
+			]),
+			delivery: Type.Union([
+				Type.Literal("pull-request"),
+				Type.Literal("none"),
+			]),
+			startRequirements: Type.Array(
+				Type.Union([
+					Type.Literal("task"),
+					Type.Literal("clean-tree"),
+					Type.Literal("openspec-project"),
+					Type.Literal("openspec-change"),
+					Type.Literal("base-commit"),
+					Type.Literal("rebase-refs"),
+				]),
+				{ maxItems: 6 },
+			),
+			openspecVerifier: Type.Boolean(),
+		}),
+		checkoutRequired: Type.Optional(
+			Type.Boolean({
+				description:
+					"true when the workflow runs in the repository checkout instead of an isolated worktree",
+			}),
+		),
+		verificationRounds: Type.Integer({
+			minimum: 1,
+			description:
+				"Verification round budget; the core.verification fix edge must loop exactly this many times",
+		}),
+		steps: Type.Array(BlueprintStepParameter, {
+			maxItems: 64,
+			description: "The logical steps, from list_steps",
+		}),
+		edges: Type.Array(
+			Type.Object({
+				from: BlueprintStepParameter,
+				outcome: Type.String({ minLength: 1, maxLength: 256 }),
+				to: BlueprintStepParameter,
+				loop: Type.Optional(
+					Type.Object({ maxAttempts: Type.Integer({ minimum: 1 }) }),
+				),
+			}),
+			{ maxItems: 256 },
+		),
+	},
+	{
+		description:
+			"A workflow shape the server compiles; routing, gates and human reviews are inserted by the server",
+	},
+);
+
 const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer and launch, monitor and manage their coding workflows through your tools.
 
 - Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows.
+- Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
 - Plan approval, developer review, findings review and wiki review always belong to the developer. When a workflow waits on one, tell the developer what is waiting and where; never try to decide it.
@@ -302,9 +390,31 @@ export function createOrchestratorExtension(
 				),
 			}),
 			defineTool({
+				name: "list_steps",
+				description:
+					"List the logical steps a blueprint may compose: id, label, actor, outcomes and what the step does. The server inserts routing, triage-routing and gate steps itself.",
+				replay: "safe",
+				parameters: Type.Object({}),
+				execute: run(async (_args, env) =>
+					call(env, "GET", "/api/v1/workflow/steps"),
+				),
+			}),
+			defineTool({
+				name: "validate_blueprint",
+				description:
+					"Compile a blueprint without side effects and report its compiled summary and digest, or the diagnostics that refused it. Validate before starting a blueprint.",
+				replay: "safe",
+				parameters: Type.Object({ blueprint: BlueprintParameter }),
+				execute: run(async (args: { blueprint: unknown }, env) =>
+					call(env, "POST", "/api/v1/workflow/blueprint/validate", {
+						blueprint: args.blueprint,
+					}),
+				),
+			}),
+			defineTool({
 				name: "start_workflow",
 				description:
-					"Start a workflow. Human reviews (plan approval, developer review, wiki review) are always kept for workflows you start.",
+					"Start a workflow from exactly one of a built-in workflow type or a validated blueprint. Human reviews (plan approval, developer review, wiki review) are always kept for workflows you start.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -312,9 +422,13 @@ export function createOrchestratorExtension(
 						maxLength: 64,
 						description: "New workflow id: lowercase kebab-case",
 					}),
-					workflowType: Type.String({
-						description: "A workflow type id from list_workflow_types",
-					}),
+					workflowType: Type.Optional(
+						Type.String({
+							description:
+								"A workflow type id from list_workflow_types; mutually exclusive with blueprint",
+						}),
+					),
+					blueprint: Type.Optional(BlueprintParameter),
 					task: Type.String({
 						minLength: 1,
 						maxLength: 16_000,
@@ -342,7 +456,8 @@ export function createOrchestratorExtension(
 						args: {
 							repo: string;
 							workflowId: string;
-							workflowType: string;
+							workflowType?: string;
+							blueprint?: unknown;
 							task: string;
 							mode?: "worktree" | "checkout";
 							preset?: string;
@@ -352,10 +467,20 @@ export function createOrchestratorExtension(
 						},
 						env,
 					) => {
+						if (args.blueprint !== undefined && args.workflowType !== undefined)
+							throw new Error(
+								"start_workflow takes a workflowType or a blueprint, not both",
+							);
+						if (args.blueprint === undefined && args.workflowType === undefined)
+							throw new Error(
+								"start_workflow needs a workflowType or a validated blueprint",
+							);
 						const message = await call(env, "POST", "/api/v1/workflow/start", {
 							repo: args.repo,
 							workflowId: args.workflowId,
-							workflowType: args.workflowType,
+							...(args.blueprint === undefined
+								? { workflowType: args.workflowType }
+								: { blueprint: args.blueprint }),
 							task: args.task,
 							mode: args.mode ?? "worktree",
 							...(args.preset ? { preset: args.preset } : {}),

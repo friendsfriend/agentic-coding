@@ -216,4 +216,149 @@ describe("orchestrator host mode", () => {
 			await server.stop();
 		}
 	});
+
+	test("shapes a workflow: list_steps, validate_blueprint, then start_workflow", async () => {
+		// The orchestrator validates a blueprint through the server, then starts it
+		// as a blueprint instead of a built-in type. The stub server records both
+		// calls so the tool bodies are visible without compiling a workflow.
+		const seen: { validation?: unknown; start?: unknown } = {};
+		const blueprint = {
+			label: "Small fix",
+			rationale: "One implementation agent, start to finish.",
+			traits: {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["task"],
+				openspecVerifier: false,
+			},
+			verificationRounds: 6,
+			steps: ["core.implementation", "core.completed", "core.closed"],
+			edges: [
+				{
+					from: "core.implementation",
+					outcome: "complete",
+					to: "core.completed",
+				},
+				{ from: "core.completed", outcome: "close", to: "core.closed" },
+			],
+		};
+		const server = await startWorkflowServer({
+			operations: {
+				blueprintSteps: () => [
+					{
+						id: "core.implementation",
+						label: "Implementation",
+						actor: "agent",
+						outcomes: ["complete", "blocked", "failed"],
+						description: "The worker applies the approved change.",
+					},
+				],
+				validateBlueprint: (value: unknown) => {
+					seen.validation = value;
+					return {
+						ok: true,
+						digest: "validated-digest",
+						definitionId: "custom.abc123",
+						summary: {
+							label: "Small fix",
+							rationale: "One implementation agent, start to finish.",
+							steps: ["core.route-implementation"],
+							initial: "core.route-implementation",
+							terminal: ["core.closed"],
+							stepCount: 1,
+							edgeCount: 0,
+							verificationRounds: 6,
+						},
+						diagnostics: [],
+					};
+				},
+				start: async (request: unknown) => {
+					seen.start = request;
+					return "Workflow started: wf-blueprint";
+				},
+				loadAgents: () => ({
+					agents: {},
+					orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+					orchestratorLimitsConfigured: false,
+				}),
+				orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-blueprint-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("list_steps", {})], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[fauxToolCall("validate_blueprint", { blueprint })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					[
+						fauxToolCall("start_workflow", {
+							repo: "/repos/shop",
+							workflowId: "wf-blueprint",
+							task: "fix the flag",
+							blueprint,
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"shape a workflow for me",
+				"req-blueprint",
+			);
+			const results = await waitForResults(host, "orchestrator", 3);
+			expect(results[0]).toContain("core.implementation");
+			expect(results[1]).toContain("validated-digest");
+			expect(results[2]).toContain("wf-blueprint");
+			expect(seen.validation).toEqual(blueprint);
+			expect(seen.start).toMatchObject({
+				repo: "/repos/shop",
+				workflowId: "wf-blueprint",
+				task: "fix the flag",
+				mode: "worktree",
+				blueprint,
+			});
+			// A blueprint start never also names a built-in type.
+			expect(
+				(seen.start as { workflowType?: unknown }).workflowType,
+			).toBeUndefined();
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
 });

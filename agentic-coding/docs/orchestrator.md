@@ -11,11 +11,39 @@ with the developer; so do developer questions from workflow agents.
 | --- | --- | --- |
 | Page | `src/tui/orchestrator/OrchestratorView.tsx` | The `orchestrator` route body: the shared `AgentSessionView` transcript, the `orchestrator.view` keymap field (`session` / `picker`), and `/new`. |
 | Host bootstrap | `src/tui/orchestrator/session.ts` | One host under `<config root>/orchestrator/agent-host/` started with `agent host --orchestrator`, the active session name (`session.json`), the run env with the orchestrator capability, and the configured model. |
-| Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `start_workflow`, `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
+| Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_steps`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `validate_blueprint`, `start_workflow` (built-in type or blueprint), `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
 | Capability | `src/server/auth.ts` `orchestratorTokenFor` | HMAC of the instance token. The server authenticates it as the `orchestrator` principal. |
 | Policy | `src/server/orchestrator-policy.ts` | Route allowlist, action allowlist, human-review step set. Enforced in `src/server/app.ts` before any operation runs. |
 | Model setting | `[agents.orchestrator] { model, thinking, monitor, limits }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation) edits `model`/`thinking`/`monitor`; `limits` is file-only and shown read-only. `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
 | Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
+
+## Shaping workflows
+
+The orchestrator prefers a built-in workflow type; when none fits the request
+it composes one from the blueprint step catalog instead of guessing at a
+built-in:
+
+- `list_steps` reads `GET /api/v1/workflow/steps`, the logical steps a
+  blueprint may use (id, label, actor, outcomes, description). Routing, the
+triage-routing step, the stage gates and every per-step routing step are
+inserted by the server, so the catalog never lists them.
+- `validate_blueprint` posts the candidate to
+  `POST /api/v1/workflow/blueprint/validate`, which compiles it without any
+  side effect and answers with the compiled summary and digest, or the
+  diagnostics that refused it.
+- `start_workflow` takes the validated blueprint instead of a built-in type
+  (exactly one of the two; naming both is a malformed request). The server
+  compiles the blueprint, stores its definition in the target repository's
+  store with the `blueprint` origin and the authenticated principal, pins
+  `metadata.blueprint = { label, rationale, digest }` on the workflow, and
+  starts it through the same path a built-in type uses. The definition is
+  content-addressed, so a retried start reuses the stored row.
+
+Because the compiler's human-review invariant applies to every blueprint, a
+shape that routes around plan approval, developer review or wiki approval is
+refused with the compiler's diagnostic before anything is written — by the
+orchestrator and the operator alike. An operator who genuinely needs a
+review-free graph defines it explicitly with `workflow define`.
 
 ## Monitoring
 
@@ -101,10 +129,11 @@ accepted by design.
   `bash`, `write`, `edit` or codemode, so the capability in its run env is the
   only way it can act. The host process environment has the operator tokens
   (`AGENTIC_WORKFLOW_TOKEN`, `AGENTIC_DEVENV_TOKEN`) removed.
-- Allowed routes: health, observe, workflow view/start/action/execute, agents
-  config read, classifier status, events. Everything else is `403
-  orchestrator-forbidden` (questions, review saves, repair, delete, config
-  writes, agent handoffs, credentials, the environment and legacy surfaces).
+- Allowed routes: health, observe, workflow view/start/steps/blueprint
+  validate/action/execute, agents config read, classifier status, events.
+  Everything else is `403 orchestrator-forbidden` (questions, review saves,
+  repair, delete, config writes, agent handoffs, credentials, the environment
+  and legacy surfaces).
 - Allowed actions: `resume`, `retry-effect:*`, `switch-preset` anywhere;
   `close` and `create-pr` outside a review step. Every approval/rejection/
   review-comment action is refused, and nothing but recovery is allowed while
@@ -117,7 +146,8 @@ accepted by design.
 
 ## Not yet
 
-Custom workflow graphs (blueprints compiled from registered steps) are a
-follow-up: they need persisted custom definitions and trait-based step
-behavior instead of definition-id checks. See the design notes in the
-originating discussion.
+Custom-graph presentation in the dashboard (`show-custom-workflow-graph`) and
+blueprint editing in the TUI are follow-ups: the orchestrator can shape and
+start a blueprint, and the workflow stores and pins it, but the dashboard still
+renders the graph of the pinned built-in-style definition rather than a
+custom-graph view.

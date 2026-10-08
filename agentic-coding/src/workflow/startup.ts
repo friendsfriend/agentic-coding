@@ -80,6 +80,11 @@ export interface WorkflowStartRequest {
 	/** Pin the plan, developer, and wiki review gates to `always`. Set by the
 	 * server for orchestrator-started work, never from a wire request. */
 	enforceHumanReviewGates?: boolean;
+	/** The blueprint provenance the server compiles and stores before starting
+	 * a custom-shaped workflow (add-orchestrator-blueprint-workflows): pinned
+	 * onto the workflow's metadata so the shape stays auditable. Set by the
+	 * server, never from a wire request. */
+	blueprint?: { label: string; rationale: string; digest: string };
 	/** Who started this workflow. Set by the server from the authenticated
 	 * principal, never from a wire request; the engine-facing request defaults
 	 * to the operator (`developer`). */
@@ -607,6 +612,10 @@ function prepareFromContext(
 				// lifetime, and an operator start says so explicitly instead of
 				// leaving the reader to infer the default.
 				...{ startedBy: request.startedBy ?? "developer" },
+				// The blueprint a custom-shaped start was compiled from, pinned with
+				// the definition it produced: the label and rationale the model
+				// authored and the digest the workflow pins.
+				...(request.blueprint ? { blueprint: request.blueprint } : {}),
 				executionSettings: settings,
 			},
 			routing,

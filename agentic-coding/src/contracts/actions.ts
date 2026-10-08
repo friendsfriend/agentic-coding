@@ -33,11 +33,34 @@ export const workflowStartRequestSchema = Schema.Struct({
 	task: Schema.optional(Schema.String),
 	mode: Schema.String,
 	workflowType: Schema.optional(Schema.String),
+	/** A custom-shaped blueprint the server compiles, stores and starts instead
+	 * of a built-in type (add-orchestrator-blueprint-workflows). `Unknown` so an
+	 * undecodable document reaches the compiler's own diagnostics rather than
+	 * failing the route with an opaque schema error; the two shapes are
+	 * mutually exclusive. A request that names neither keeps its historical
+	 * meaning (the `openspec` family). */
+	blueprint: Schema.optional(Schema.Unknown),
 	preset: Schema.optional(Schema.String),
 	/** Only the rebase type reads these: the branch that gets rebased and the
 	 * ref it is rebased onto, both chosen from a branch list rather than typed. */
 	sourceBranch: Schema.optional(Schema.String),
 	targetBranch: Schema.optional(Schema.String),
+}).pipe(
+	Schema.filter(
+		(request) =>
+			request.workflowType === undefined || request.blueprint === undefined,
+		{
+			message: () =>
+				"a start request cannot name both a workflowType and a blueprint",
+		},
+	),
+);
+
+/** One blueprint validation request (add-orchestrator-blueprint-workflows): the
+ * document is compiled without side effects and answered with its summary and
+ * diagnostics, so it is deliberately undecoded here (`Unknown`). */
+export const workflowBlueprintValidateRequestSchema = Schema.Struct({
+	blueprint: Schema.Unknown,
 });
 
 export const workflowRepairRequestSchema = Schema.Struct({
@@ -174,6 +197,10 @@ export type WorkflowActionRequest = typeof workflowActionRequestSchema.Type;
 
 /** Decoded request type for `workflowStartRequestSchema`. */
 export type WorkflowStartRequest = typeof workflowStartRequestSchema.Type;
+
+/** Decoded request type for `workflowBlueprintValidateRequestSchema`. */
+export type WorkflowBlueprintValidateRequest =
+	typeof workflowBlueprintValidateRequestSchema.Type;
 
 /** Decoded request type for `workflowRepairRequestSchema`. */
 export type WorkflowRepairRequest = typeof workflowRepairRequestSchema.Type;

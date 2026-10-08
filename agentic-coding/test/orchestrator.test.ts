@@ -160,6 +160,14 @@ describe("orchestrator policy", () => {
 			true,
 		);
 		expect(orchestratorRouteAllowed("get", "/api/v1/workflow/view")).toBe(true);
+		// Shaping a workflow is a read plus a side-effect-free compile: the
+		// orchestrator may do both before it starts anything.
+		expect(orchestratorRouteAllowed("GET", "/api/v1/workflow/steps")).toBe(
+			true,
+		);
+		expect(
+			orchestratorRouteAllowed("POST", "/api/v1/workflow/blueprint/validate"),
+		).toBe(true);
 		for (const [method, path] of [
 			["POST", "/api/v1/workflow/question"],
 			["POST", "/api/v1/workflow/review-save"],

@@ -66,6 +66,8 @@ function stubOperations(scenario: Scenario): ServerOperations {
 			return { ...stubView, revision: request.revision + 1 };
 		},
 		start: async (request) => `started ${request.workflowId}`,
+		blueprintSteps: () => [],
+		validateBlueprint: () => ({ ok: false, diagnostics: [] }),
 		orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 		repair: () => stubView,
 		question: () => stubView,
