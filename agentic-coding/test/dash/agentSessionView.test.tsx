@@ -1778,3 +1778,78 @@ test("the prompt's metadata row shows context, cost, tokens and tok/s", async ()
 		t.renderer.destroy();
 	}
 });
+
+test("Shift+Enter starts a new prompt line and Enter sends the whole message", async () => {
+	const submitted: string[] = [];
+	const t = await testRender(
+		() => (
+			<Harness
+				onSubmit={(text) => submitted.push(text)}
+				onAbort={() => {}}
+				onBack={() => {}}
+			/>
+		),
+		// A terminal in the kitty keyboard protocol (the renderer's own mode):
+		// only then is Shift+Enter distinguishable from Enter.
+		{ width: 100, height: 30, kittyKeyboard: true },
+	);
+	try {
+		await t.flush();
+		for (const character of "first line") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter({ shift: true });
+		for (const character of "second line") t.mockInput.pressKey(character);
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		// Both lines are on screen at once, not one line with a lost separator.
+		expect(frame).toContain("first line");
+		expect(frame).toContain("second line");
+		expect(submitted).toEqual([]);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submitted).toEqual(["first line\nsecond line"]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("the prompt grows with the message and scrolls once it is eight lines tall", async () => {
+	const t = await testRender(
+		() => (
+			<Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />
+		),
+		{ width: 100, height: 30, kittyKeyboard: true },
+	);
+	try {
+		await t.flush();
+		for (const line of ["alpha", "beta", "gamma"]) {
+			for (const character of line) t.mockInput.pressKey(character);
+			t.mockInput.pressEnter({ shift: true });
+		}
+		await t.renderOnce();
+		const grown = t.captureCharFrame();
+		// The transcript above the prompt keeps its rows: the prompt grew into
+		// the space it needs instead of covering the conversation.
+		expect(grown).toContain("fix the parser");
+		expect(grown).toContain("alpha");
+		expect(grown).toContain("beta");
+		expect(grown).toContain("gamma");
+		// Past the cap the editor scrolls instead of eating the transcript.
+		const numbered = Array.from(
+			{ length: 12 },
+			(_, index) => `line${String(index).padStart(2, "0")}`,
+		);
+		for (const line of numbered) {
+			for (const character of line) t.mockInput.pressKey(character);
+			t.mockInput.pressEnter({ shift: true });
+		}
+		await t.renderOnce();
+		const capped = t.captureCharFrame();
+		expect(capped).toContain("fix the parser");
+		expect(capped).toContain(numbered.at(-1) ?? "");
+		const visible = numbered.filter((line) => capped.includes(line));
+		expect(visible.length).toBeGreaterThan(0);
+		expect(visible.length).toBeLessThanOrEqual(8);
+	} finally {
+		t.renderer.destroy();
+	}
+});

@@ -21,10 +21,10 @@
 // message; a keymap-only surface (the workspace sidebar, an open dialog) blurs
 // it through `inputActive` so its keys are not swallowed.
 import type {
-	InputRenderable,
 	KeyEvent,
 	Renderable,
 	ScrollBoxRenderable,
+	TextareaRenderable,
 } from "@opentui/core";
 import {
 	CliRenderEvents,
@@ -43,12 +43,14 @@ import {
 	uiColors,
 } from "@ui";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
 	onCleanup,
 	onMount,
 	Show,
+	untrack,
 } from "solid-js";
 import {
 	type AgentSessionBlock,
@@ -723,11 +725,36 @@ interface PickerState {
 }
 
 export function AgentSessionView(props: AgentSessionViewProps) {
-	let inputRef: InputRenderable | undefined;
+	let inputRef: TextareaRenderable | undefined;
+	// The editor buffer is the source of truth while typing (native editing,
+	// undo and selection); the draft signal is kept in step with it.
+	const promptText = () => inputRef?.plainText ?? props.draft;
+	// One write path for every prompt change the view makes itself: the editor
+	// buffer first, then the draft the parent owns. The editor publishes its
+	// own content change asynchronously, so a clear that waited for the signal
+	// to round-trip would land after the next keystrokes.
+	const setPrompt = (text: string) => {
+		const editor = inputRef;
+		if (editor && editor.plainText !== text) {
+			editor.setText(text);
+			editor.gotoBufferEnd();
+		}
+		if (props.draft !== text) props.onDraftChange(text);
+	};
+	// A write the view did not make itself — the parent resetting the draft —
+	// reaches the editor here. Typing is skipped: the buffers already match,
+	// and re-setting the text would drop the cursor and the undo history.
+	createEffect(() => {
+		const editor = inputRef;
+		const draft = props.draft;
+		if (!editor || editor.plainText === draft) return;
+		editor.setText(draft);
+		editor.gotoBufferEnd();
+	});
 	// Negative offsets from newest; zero is the empty prompt, not an entry.
 	let historyIndex = 0;
 	const recallHistory = (direction: -1 | 1): boolean => {
-		const value = inputRef?.value ?? props.draft;
+		const value = promptText();
 		if (value.length === 0) historyIndex = 0;
 		// Only empty or unchanged recalled input can navigate. Never overwrite edits.
 		else if (historyIndex === 0 || value !== props.history.at(historyIndex))
@@ -738,9 +765,19 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		);
 		if (next === historyIndex) return historyIndex !== 0;
 		historyIndex = next;
-		props.onDraftChange(next === 0 ? "" : (props.history.at(next) ?? ""));
+		setPrompt(next === 0 ? "" : (props.history.at(next) ?? ""));
 		setAutocompleteIndex(0);
 		return true;
+	};
+	// The prompt's own first (`up`) or last (`down`) logical line, so history
+	// browsing only takes the arrow key the cursor has nowhere left to go with
+	// it: inside a multi-line message the arrows move the cursor instead.
+	const onPromptEdge = (up: boolean) => {
+		const editor = inputRef;
+		if (!editor) return true;
+		return up
+			? editor.logicalCursor.row === 0
+			: editor.logicalCursor.row >= editor.lineCount - 1;
 	};
 	/**
 	 * The transcript rows, plus the id the "new content" divider sits above.
@@ -915,8 +952,12 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	};
 
 	/** The command list shown while the draft is still a bare `/prefix`. */
+	/** The command list shown while the draft is still a bare `/prefix`. Read
+	 * from the editor buffer, not the draft signal: the editor publishes its
+	 * content asynchronously, so the signal can still be one render behind the
+	 * keystrokes that make up the very command being completed. */
 	const autocompleteItems = () => {
-		const match = /^\/(\S*)$/.exec(props.draft);
+		const match = /^\/(\S*)$/.exec(promptText());
 		if (!match) return [];
 		const query = (match[1] ?? "").toLowerCase();
 		return [...SESSION_COMMANDS, ...(props.extraCommands ?? [])].filter(
@@ -1004,9 +1045,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			if (extra) extra.run();
 			else props.onSubmit(name);
 		}
-		props.onDraftChange("");
+		setPrompt("");
 	};
-
 	const submit = () => {
 		// An open autocomplete owns Enter: it runs the highlighted command
 		// rather than sending the raw text.
@@ -1018,7 +1058,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				return;
 			}
 		}
-		const text = (inputRef?.value ?? props.draft).trim();
+		const text = promptText().trim();
 		if (!text) return;
 		runCommand(text);
 	};
@@ -1208,45 +1248,68 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							paddingLeft={2}
 							paddingRight={2}
 						>
-							<input
-								ref={inputRef}
+							<textarea
+								ref={(editor) => {
+									inputRef = editor;
+								}}
 								focused={
 									picker() === undefined && (props.inputActive?.() ?? true)
 								}
-								value={props.draft}
+								// The editor owns its buffer once mounted; the effect above syncs
+								// it with every external draft write.
+								initialValue={untrack(() => props.draft)}
+								width="100%"
+								// One row to start, growing with the message and scrolling once
+								// it would take the transcript's place.
+								minHeight={1}
+								maxHeight={8}
+								wrapMode="word"
 								placeholder="Ask anything…"
-								onInput={(value: string) => {
-									props.onDraftChange(value);
+								onContentChange={() => {
+									const value = promptText();
+									if (value !== props.draft) props.onDraftChange(value);
 									setAutocompleteIndex(0);
 								}}
 								onSubmit={submit}
 								onKeyDown={(event: KeyEvent) => {
-									if (event.ctrl && event.name.toLowerCase() === "t") {
+									const name = event.name.toLowerCase();
+									// Enter sends; Shift+Enter is the newline the multi-line prompt
+									// exists for. The editor's own bindings never see either.
+									if (
+										name === "return" ||
+										name === "kpenter" ||
+										name === "linefeed"
+									) {
+										event.preventDefault();
+										if (event.shift) inputRef?.newLine();
+										else submit();
+										return;
+									}
+									if (event.ctrl && name === "t") {
 										event.preventDefault();
 										toggleBlocksOfKind("reasoning");
 										return;
 									}
-									if (event.ctrl && event.name.toLowerCase() === "o") {
+									if (event.ctrl && name === "o") {
 										event.preventDefault();
 										toggleBlocksOfKind("tool");
 										return;
 									}
-									const name = event.name.toLowerCase();
 									// `?` opens the shared help, but only on an empty prompt: a message
 									// may start with one, so anything typed keeps it literal.
-									if (
-										name === "?" &&
-										(inputRef?.value ?? props.draft).length === 0
-									) {
+									if (name === "?" && promptText().length === 0) {
 										event.preventDefault();
 										props.onHelp?.();
 										return;
 									}
+									// Up and Down browse history only from the prompt's own first and
+									// last line; inside a multi-line message they move the cursor.
 									if (
 										!event.ctrl &&
 										!event.meta &&
 										!event.shift &&
 										(name === "up" || name === "down") &&
+										onPromptEdge(name === "up") &&
 										recallHistory(name === "up" ? -1 : 1)
 									) {
 										event.preventDefault();
@@ -1268,7 +1331,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											items[Math.min(autocompleteIndex(), items.length - 1)];
 										if (item) {
 											historyIndex = 0;
-											props.onDraftChange(item.name);
+											setPrompt(item.name);
 										}
 									}
 								}}
