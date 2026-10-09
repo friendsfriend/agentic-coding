@@ -126,6 +126,25 @@ test("renders waits and grants, resolving workflow titles", () => {
 			(id) => id,
 		),
 	).toBeUndefined();
+	// An app the idle lifecycle released names the owner it was taken from.
+	expect(
+		slotToast(
+			envelope("environment.slot.reaped", {
+				app: "customer-mw",
+				owner: "workflow:abc",
+			}),
+			(id) => `Workflow ${id}`,
+		),
+	).toEqual({
+		message: "customer-mw sat idle, so it was released from Workflow abc",
+		type: "warning",
+	});
+	expect(
+		slotToast(
+			envelope("environment.slot.reaped", { app: "customer-mw" }),
+			(id) => id,
+		),
+	).toBeUndefined();
 });
 
 test("the shell subscription raises one toast per slot event", async () => {

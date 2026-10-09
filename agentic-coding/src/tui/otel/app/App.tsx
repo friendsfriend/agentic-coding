@@ -513,10 +513,17 @@ export function App(props: {
 			const open = workflow();
 			if (open?.workflowId === workflowId) pages.goToParent();
 			// The stored state is gone either way; a worktree that could not be
-			// removed is reported, because the files are still on disk.
+			// removed is reported, because the files are still on disk, and so is a
+			// release the environment server never confirmed, because those runs may
+			// still hold their apps.
 			if (deletion.worktreeError)
 				notify(
 					`Deleted ${workflowId}, but its worktree was kept: ${deletion.worktreeError}`,
+					"warning",
+				);
+			else if (deletion.teardownError)
+				notify(
+					`Deleted ${workflowId}, but its app runs were not released: ${deletion.teardownError}`,
 					"warning",
 				);
 			else notify(`Deleted ${workflowId}`, "success");

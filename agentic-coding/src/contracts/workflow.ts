@@ -172,7 +172,9 @@ export type EffectKind =
 	| "delivery.push"
 	| "pull-request.create"
 	| "workspace.close"
-	| "workspace.cleanup";
+	| "workspace.cleanup"
+	/** Owner-bound release of every app one workflow holds (close and delete). */
+	| "environment.teardown";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
 	| JsonPrimitive

@@ -66,6 +66,44 @@ FIFO queue ordered by one global sequence:
   undone: the poll consumes the notice and answers `released-by-developer`
   instead of restarting the app the developer just took away.
 
+## Lifecycle
+
+An app is held until its owner stops it or until it sits idle, so nothing an
+agent forgets can block the queue forever.
+
+- **Owner-bound release.** Closing or deleting a workflow emits the durable
+  `environment.teardown { workflowId, owner }` effect, which calls
+  `POST /api/v1/environment/apps/teardown { owner }` and stops every app that
+  owner holds through the normal stop path. An unreachable server is an
+  `infrastructure` failure: the outbox retries it, and a release is never
+  recorded as completed without an answer. A process with no environment server
+  at all fails permanently instead of retrying forever — no retry attaches a
+  transport. `user` is refused: the developer's own runs are never released by a
+  workflow lifecycle.
+- **Ordering.** A close enqueues the teardown *before* the `workspace.cleanup`
+  its close effect queues, because a stop runs from the workflow's own checkout:
+  removing that first would leave a run nobody can stop.
+- **Delete.** The delete removes the workflow's rows — and its outbox — with it,
+  so it drains the teardown first within a bounded window and reports
+  `teardownError` on the deletion when the server did not confirm the release.
+  The delete itself still happens; the report is what keeps the release honest
+  instead of silently forgotten.
+- **Activity.** `last_activity_at` is written by any operation on a held app.
+  Writes are coalesced to one per app per 30 s, and a waiting owner refreshes
+  the rows it holds at most once per second while it long-polls, so an app in
+  active use never looks idle.
+- **Idle reaper.** One server-scoped reaper runs every 60 s and stops
+  agent-held apps that have been idle longer than
+  `environment.instances.idle_ttl_minutes` (default 30). It skips an app in
+  `unknown` state, an app held by `user`, and an app held by an owner that is
+  currently waiting for another app. A reap goes through the normal stop path,
+  so the queue grants the next waiter on that waiter's own next poll, and it
+  publishes `environment.slot.reaped { app, owner }` for the shell toast.
+- The setting is file-only: `environment.instances.idle_ttl_minutes` in the
+  layered workflow configuration (`$AGENTIC_CODING_CONFIG_DIR/config.json`),
+  re-read on every reap pass. An unusable value falls back to the 30-minute
+  default instead of disabling the lifecycle.
+
 ## Instance variables
 
 The server passes these values to Compose interpolation or the script process:
@@ -97,6 +135,7 @@ implicitly selected.
 | `POST /api/v1/environment/apps/acquire` | `{ owner, apps[], target?, profile?, waitSec? }`; answers `started`/`already-running` with the held instances, `waiting` with positions and holders, `released-by-developer`, or fails with `deadlock`. |
 | `POST /api/v1/environment/apps/{app}/release` | Developer force release: stops the holder's run, leaves it the `released-by-developer` notice, and lets the queue grant the next waiter. |
 | `POST /api/v1/environment/apps/{app}/stop` | Stops the app's current run without the notice. |
+| `POST /api/v1/environment/apps/teardown` | `{ owner }`; stops every app that owner holds through the normal stop path and answers the apps it stopped. Idempotent, and `user` is refused. |
 | `GET /api/v1/environment/apps/slots` | Every configured app's `holder`, `status` and `waiters`. |
 
 `endpoints` report the definition's declared endpoint exports (Kubernetes
@@ -128,10 +167,12 @@ once and then starts cleanly.
   developer who wants the queue and the holder notice to stay consistent stops
   the app through its app-level action (or `POST /app/release`) instead.
 - The server publishes `environment.slot.waiting` once per new queue entry
-  (`{ app, waiter, holder, position }`) and `environment.slot.granted` per grant
-  (`{ app, owner }`). The shell turns them into toasts: "<waiter> waits for
-  <app> (held by <holder>)" and "<owner> got <app>", resolving workflow ids to
-  their sidebar titles. Only these bounded fields are published. A request may
+  (`{ app, waiter, holder, position }`), `environment.slot.granted` per grant
+  (`{ app, owner }`), and `environment.slot.reaped` per app the idle lifecycle
+  released (`{ app, owner }`). The shell turns them into toasts: "<waiter> waits
+  for <app> (held by <holder>)", "<owner> got <app>", and "<app> sat idle, so it
+  was released from <owner>". Resolving workflow ids to their sidebar titles is
+  the same in all three. Only these bounded fields are published. A request may
   not name a `configOverlay`: the configuration root the server discovers and
   executes from is never chosen by a client.
 

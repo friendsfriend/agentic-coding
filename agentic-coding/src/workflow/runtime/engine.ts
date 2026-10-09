@@ -21,6 +21,7 @@ import path from "node:path";
 import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
 import {
 	decodeCommand,
+	type EffectKind,
 	type WorkflowCommand,
 	type WorkflowRun,
 	type WorkflowSnapshot,
@@ -590,6 +591,51 @@ export class WorkflowEngine {
 			self.onCommitted(repo);
 		});
 	}
+	/**
+	 * Enqueue one durable effect for a workflow outside a step transition. The
+	 * delete path's `environment.teardown` is the caller: it must be a durable
+	 * outbox row so the release is retried, but it is emitted by an operation the
+	 * workflow's current step does not own (see `validateEffect`'s
+	 * step-independent lifecycle kinds). The idempotency key makes a repeated
+	 * emission the same row instead of a second release.
+	 */
+	enqueueEffect(
+		repo: string,
+		workflowId: string,
+		kind: EffectKind,
+		idempotencyKey: string,
+		payload: unknown,
+	): void {
+		this.run(
+			this.enqueueEffectProgram(
+				repo,
+				workflowId,
+				kind,
+				idempotencyKey,
+				payload,
+			),
+		);
+	}
+	/** Effect program for enqueueing one durable effect; run at the named
+	 * application composition root (complete-workflow-effect-cutover, task 2.1). */
+	enqueueEffectProgram(
+		repo: string,
+		workflowId: string,
+		kind: EffectKind,
+		idempotencyKey: string,
+		payload: unknown,
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			yield* store.transaction(repo, (db) => {
+				const owner = instance(db, workflowId);
+				const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
+				enqueue(db, snapshot, kind, idempotencyKey, payload);
+			});
+			self.onCommitted(repo);
+		});
+	}
 	previewRepair(repo: string, workflowId: string): RepairPreview[] {
 		return this.run(this.previewRepairEffect(repo, workflowId));
 	}
@@ -689,12 +735,52 @@ export class WorkflowEngine {
 		WorkflowRuntimeError,
 		WorkflowStore | WorkflowTelemetry
 	> {
+		return this.claimProgram(repo, limit, leaseMs);
+	}
+	/**
+	 * Claim ready effects of one kind only. The delete path's owner-bound
+	 * `environment.teardown` uses it: releasing a workflow's apps must not
+	 * execute the rest of that repository's pending work (another workflow's
+	 * agent launch, or the departing workflow's own artifacts) on the way.
+	 */
+	claimEffectsOfKind(
+		repo: string,
+		kind: EffectKind,
+		limit = 1,
+		leaseMs = 30_000,
+	): ClaimedEffect[] {
+		return this.run(this.claimEffectsOfKindEffect(repo, kind, limit, leaseMs));
+	}
+	/** Effect program for a kind-scoped claim; run at the named application
+	 * composition root (complete-workflow-effect-cutover, task 2.1). */
+	claimEffectsOfKindEffect(
+		repo: string,
+		kind: EffectKind,
+		limit = 1,
+		leaseMs = 30_000,
+	): Effect.Effect<
+		ClaimedEffect[],
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
+		return this.claimProgram(repo, limit, leaseMs, kind);
+	}
+	private claimProgram(
+		repo: string,
+		limit: number,
+		leaseMs: number,
+		kind?: EffectKind,
+	): Effect.Effect<
+		ClaimedEffect[],
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
 		return Effect.gen(function* () {
 			const store = yield* WorkflowStore;
 			yield* self.initializeProgram(repo);
 			const result = yield* store.transaction(repo, (db) =>
-				self.commitClaim(db, limit, leaseMs),
+				self.commitClaim(db, limit, leaseMs, kind),
 			);
 			// Several expired effects of one workflow can exhaust in a single
 			// claim; each still exports its own `effect.exhausted`, but the
@@ -1616,17 +1702,24 @@ export class WorkflowEngine {
 		db: import("bun:sqlite").Database,
 		limit: number,
 		leaseMs: number,
+		kind?: EffectKind,
 	): { claimed: ClaimedEffect[]; exhausted: ExhaustedTelemetry[] } {
 		const claimed: ClaimedEffect[] = [];
 		const exhausted: ExhaustedTelemetry[] = [];
 		const at = this.now();
 		// Preset-switch stop effects are a durable barrier: a second drainer must
 		// not launch the replacement while the old canonical pane can still live.
+		// The optional `kind` scope narrows the same ready set to one effect kind
+		// (the delete path's owner-bound teardown) instead of a second query.
 		const rows = db
 			.query(
-				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid`,
+				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?))${kind ? " AND ready.kind=?" : ""} AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid`,
 			)
-			.all(at.toISOString(), at.toISOString()) as EffectRow[];
+			.all(
+				...((kind
+					? [at.toISOString(), at.toISOString(), kind]
+					: [at.toISOString(), at.toISOString()]) as [string, string]),
+			) as EffectRow[];
 		for (const row of rows) {
 			if (claimed.length + exhausted.length >= limit) break;
 			const owner = instance(db, row.workflow_id);

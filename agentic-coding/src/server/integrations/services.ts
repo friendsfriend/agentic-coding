@@ -6,6 +6,7 @@
 // carries a token across the private adapter boundary.
 import path from "node:path";
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
+import { environmentInstanceIdleTtlMs } from "../../workflow/effects.ts";
 import { engine as workflowEngine } from "../../workflow/operations.ts";
 import { workflowTargets } from "../../workflow/runtime/target-registry.ts";
 import { canonicalRepository } from "../../workflow/runtime/targets.ts";
@@ -237,6 +238,9 @@ export function createIntegrationServices(
 					options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver(),
 				...(options.observation ? { observation: options.observation } : {}),
 				...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
+				// The idle TTL is configuration, not a constant: the reaper resolves
+				// `environment.instances.idle_ttl_minutes` on every pass.
+				idleTtlMs: () => environmentInstanceIdleTtlMs(),
 				publish: (event) => dashboardEvents.publish?.(event),
 				...(options.logger ? { logger: options.logger } : {}),
 			})

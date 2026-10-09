@@ -286,6 +286,17 @@ export interface WorkflowConfig {
 		sidebar_mode?: "expanding" | "permanent";
 	};
 	wiki?: { root?: string; reviewer?: string };
+	/**
+	 * App-run lifecycle settings (`environment.instances.*`). File-only for now:
+	 * the value is read by the server that owns the slots, and no Settings row
+	 * edits it.
+	 */
+	environment?: {
+		instances?: {
+			/** Minutes an agent-held app may sit idle before it is released. */
+			idle_ttl_minutes?: number;
+		};
+	};
 }
 
 /** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
@@ -304,6 +315,7 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 		selection_height: 10,
 	},
 	wiki: { root: "~/.config/agentic-coding/wiki" },
+	environment: { instances: { idle_ttl_minutes: 30 } },
 };
 
 export interface ConfigProvenance {
@@ -496,6 +508,25 @@ function resolveConfigWithProvenance(
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 	return loadConfigWithProvenance(options).config;
+}
+
+/** Built-in idle TTL for an agent-held app: 30 minutes. */
+export const DEFAULT_ENVIRONMENT_IDLE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * How long an agent-held app may sit idle before the server's reaper stops it,
+ * from the layered configuration's `environment.instances.idle_ttl_minutes`.
+ * Resolved per reap pass, so an edit applies to the next pass. A missing or
+ * unusable value falls back to the 30-minute default: a typo must never disable
+ * the lifecycle that keeps the queue moving.
+ */
+export function environmentInstanceIdleTtlMs(
+	config: WorkflowConfig = loadConfig(),
+): number {
+	const minutes = config.environment?.instances?.idle_ttl_minutes;
+	if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0)
+		return DEFAULT_ENVIRONMENT_IDLE_TTL_MS;
+	return minutes * 60_000;
 }
 
 /** Resolve one secret from process environment or selected config-root `.env`.

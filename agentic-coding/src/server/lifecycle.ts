@@ -121,6 +121,10 @@ export async function startWorkflowServer(
 	options.integrations?.attachDashboardEvents?.((event) => {
 		events.publish(event);
 	});
+	// The idle lifecycle is server-scoped: one reaper for this server's whole
+	// lifetime, stopped with it. It reads the configured TTL on every pass, so an
+	// edit applies without a restart.
+	const stopIdleReaper = options.integrations?.instances?.startIdleReaper();
 	const app = createServerApp({
 		authority,
 		events,
@@ -177,6 +181,7 @@ export async function startWorkflowServer(
 		stop: async () => {
 			if (stopped) return;
 			stopped = true;
+			stopIdleReaper?.();
 			credentials.cancelAll();
 			events.closeAll();
 			hub.stop();

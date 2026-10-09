@@ -48,6 +48,7 @@ const EFFECTS: EffectKind[] = [
 	"pull-request.create",
 	"workspace.close",
 	"workspace.cleanup",
+	"environment.teardown",
 ];
 const CAPABILITIES: AdapterCapability[] = [
 	"interactive",

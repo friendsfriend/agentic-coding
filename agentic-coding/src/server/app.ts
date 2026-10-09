@@ -23,6 +23,7 @@ import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import type {
 	AcquireSlotsRequest,
 	AppSlotOperationRequest,
+	EnvironmentTeardownRequest,
 	ObserveRequest,
 } from "../contracts/environment.ts";
 import type {
@@ -278,6 +279,28 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			);
 			try {
 				return json({ ok: true, value: await appSlots.acquire(decoded) });
+			} catch (error) {
+				return instanceErrorResponse(error);
+			}
+		}
+
+		if (method === "POST" && path === "/api/v1/environment/apps/teardown") {
+			const appSlots = instances();
+			if (!appSlots)
+				return errorResponse(
+					503,
+					"instances-unavailable",
+					"environment instance capability is not attached",
+				);
+			const decoded = decodeRouteRequest<EnvironmentTeardownRequest>(
+				path,
+				await readJsonBody(request),
+			);
+			try {
+				return json({
+					ok: true,
+					value: await appSlots.stopByOwner(decoded.owner),
+				});
 			} catch (error) {
 				return instanceErrorResponse(error);
 			}

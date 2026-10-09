@@ -19,6 +19,7 @@ import { decodeContract } from "../contracts/decode.ts";
 import {
 	acquireSlotsRequestSchema,
 	appSlotOperationRequestSchema,
+	environmentTeardownRequestSchema,
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
@@ -292,6 +293,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/environment/apps/acquire",
 		schemaId: "server.environment.apps.acquire",
 		schema: acquireSlotsRequestSchema,
+	},
+	{
+		path: "/api/v1/environment/apps/teardown",
+		schemaId: "server.environment.apps.teardown",
+		schema: environmentTeardownRequestSchema,
 	},
 	{
 		path: "/api/v1/environment/apps/{app}/release",

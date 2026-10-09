@@ -1,10 +1,11 @@
 // Shell toasts for environment app slots.
 //
-// The server publishes `environment.slot.waiting` once per new queue entry and
-// `environment.slot.granted` per grant. The shell is where the developer sees
-// them, so this module turns a bounded envelope into one toast: who waits for
-// which app and who holds it, or who got it. `user` reads as "you" and a
-// workflow id resolves through the sidebar model's display name.
+// The server publishes `environment.slot.waiting` once per new queue entry,
+// `environment.slot.granted` per grant, and `environment.slot.reaped` per app
+// the idle lifecycle released. The shell is where the developer sees them, so
+// this module turns a bounded envelope into one toast: who waits for which app
+// and who holds it, who got it, or which app sat idle for too long. `user` reads
+// as "you" and a workflow id resolves through the sidebar model's display name.
 import type { EventEnvelope } from "../../../contracts/environment.ts";
 import { subscribeDataEvents } from "../../data/events.ts";
 import { notify } from "./notifications.ts";
@@ -48,6 +49,14 @@ export function slotToast(
 		const granted = ownerLabel(payload.owner, workflowTitle);
 		if (!granted) return undefined;
 		return { message: `${granted} got ${app}`, type: "info" };
+	}
+	if (event.kind === "environment.slot.reaped") {
+		const owner = ownerLabel(payload.owner, workflowTitle);
+		if (!owner) return undefined;
+		return {
+			message: `${app} sat idle, so it was released from ${owner}`,
+			type: "warning",
+		};
 	}
 	return undefined;
 }

@@ -353,7 +353,14 @@ describe("workflow store service", () => {
 
 			const deletion = await deleteWorkflow(repo, started.view.workflowId);
 
-			expect(deletion).toEqual({ worktreeRemoved: false });
+			// The store rows are gone and the shared root survived. The app release is
+			// reported separately: this process has no environment server to ask, so the
+			// workflow's durable `environment.teardown` effect cannot confirm it, and a
+			// delete that removed the workflow's outbox can no longer retry it.
+			expect(deletion).toEqual({
+				worktreeRemoved: false,
+				teardownError: expect.stringContaining("no environment server"),
+			});
 			expect(fs.readFileSync(marker, "utf8")).toBe(
 				"every workflow's rows live here",
 			);

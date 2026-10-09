@@ -44,3 +44,16 @@ afterAll(() => {
 	fs.rmSync(root, { recursive: true, force: true });
 });
 process.env.AGENTIC_CODING_CONFIG_DIR = root;
+
+// The workflow runner also exports the authenticated server handoff to every
+// managed child, so a test process started by a workflow inherits
+// `AGENTIC_WORKFLOW_URL`/`AGENTIC_WORKFLOW_TOKEN` and would reach the *live*
+// server through `backendClientFromEnv()`. Measured, not theoretical: the
+// durable `environment.teardown` effect resolves exactly that client, so a
+// test's `deleteWorkflow` posted to the running server and released a real app
+// run (and answered `unknown route` against a server built from other sources).
+// The handoff is cleared unconditionally, like the configuration root above; a
+// test that needs a server of its own sets these itself (test/otel/
+// workspaceSidebar.test.tsx does).
+delete process.env.AGENTIC_WORKFLOW_URL;
+delete process.env.AGENTIC_WORKFLOW_TOKEN;

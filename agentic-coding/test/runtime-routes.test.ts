@@ -140,6 +140,7 @@ describe("environment app slot routes", () => {
 			}),
 			release: async () => ({ ...instance, status: "released-by-developer" }),
 			stopApp: async () => ({ ...instance, status: "stopped" }),
+			stopByOwner: async (owner: string) => ({ owner, apps: ["shop"] }),
 			...overrides,
 		};
 	}
@@ -213,6 +214,77 @@ describe("environment app slot routes", () => {
 			((await stop.json()) as { value: { status: string } }).value.status,
 		).toBe("stopped");
 		api.events.closeAll();
+	});
+
+	test("an owner teardown stops the owner's apps and needs an owner", async () => {
+		const authority = createInstanceAuthority("slot-teardown", "token");
+		const tornDown: string[] = [];
+		const api = createServerApp({
+			authority,
+			events: new EventBroker(authority.instance),
+			credentials: new CredentialRegistry(),
+			integrations: {
+				instances: slotInstances({
+					stopByOwner: async (owner: string) => {
+						tornDown.push(owner);
+						return { owner, apps: ["shop"] };
+					},
+				}),
+			} as never,
+		});
+		const headers = { authorization: `Bearer ${authority.token}` };
+		const teardown = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/teardown", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ owner: "workflow:run-a" }),
+			}),
+		);
+		expect(await teardown.json()).toEqual({
+			ok: true,
+			value: { owner: "workflow:run-a", apps: ["shop"] },
+		});
+		expect(tornDown).toEqual(["workflow:run-a"]);
+
+		// The owner is the whole request: an empty body cannot release anything.
+		const empty = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/teardown", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({}),
+			}),
+		);
+		expect(empty.status).toBe(400);
+		// A refusal is answered as the typed environment error, never as success.
+		const refused = createServerApp({
+			authority,
+			events: new EventBroker(authority.instance),
+			credentials: new CredentialRegistry(),
+			integrations: {
+				instances: slotInstances({
+					stopByOwner: async () => {
+						throw new EnvironmentInstanceError(
+							"invalid-owner",
+							400,
+							"the developer's own apps are never released by a workflow lifecycle",
+						);
+					},
+				}),
+			} as never,
+		});
+		const user = await refused.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/teardown", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ owner: "user" }),
+			}),
+		);
+		expect(user.status).toBe(400);
+		expect(
+			((await user.json()) as { error: { code: string } }).error.code,
+		).toBe("invalid-owner");
+		api.events.closeAll();
+		refused.events.closeAll();
 	});
 
 	test("a deadlock is answered as the typed refusal", async () => {

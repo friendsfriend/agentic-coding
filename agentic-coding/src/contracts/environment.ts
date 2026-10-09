@@ -134,6 +134,26 @@ export const appSlotOperationRequestSchema = Schema.Struct({}).pipe(
 	}),
 );
 
+/**
+ * Body of the owner teardown route: a workflow's durable `environment.teardown`
+ * effect names the owner whose apps it releases. The owner is the only input —
+ * which apps an owner holds is the server's own state, never a request's claim.
+ */
+export const environmentTeardownRequestSchema = Schema.Struct({
+	owner: safeInstanceText.pipe(Schema.minLength(1)),
+});
+
+/** What one owner teardown stopped, so the caller can record the release. */
+export const environmentTeardownResultSchema = Schema.Struct({
+	owner: Schema.String,
+	apps: Schema.Array(Schema.String),
+});
+
+export type EnvironmentTeardownRequest =
+	typeof environmentTeardownRequestSchema.Type;
+export type EnvironmentTeardownResult =
+	typeof environmentTeardownResultSchema.Type;
+
 export type AcquireSlotsRequest = typeof acquireSlotsRequestSchema.Type;
 export type AppSlotOperationRequest = typeof appSlotOperationRequestSchema.Type;
 

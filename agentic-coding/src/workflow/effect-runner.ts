@@ -12,6 +12,11 @@ import {
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
+import {
+	BackendClientError,
+	backendClient,
+	backendClientFromEnv,
+} from "../server/client.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
@@ -259,7 +264,20 @@ export class EffectRunner {
 		private readonly repo: string,
 		private readonly engine: WorkflowEngine,
 		private readonly handlers: Partial<Record<EffectKind, EffectHandler>>,
+		/**
+		 * Optional claim scope. `claimKind` narrows every claim this runner makes to
+		 * one effect kind, which is how the delete path drains an owner-bound
+		 * teardown without executing the rest of the repository's pending work.
+		 */
+		private readonly options: { claimKind?: EffectKind } = {},
 	) {}
+	/** Claim the next ready effect, scoped to one kind when the runner is. */
+	private claimOne(leaseMs: number): ClaimedEffect | undefined {
+		const kind = this.options.claimKind;
+		return kind
+			? this.engine.claimEffectsOfKind(this.repo, kind, 1, leaseMs)[0]
+			: this.engine.claimEffects(this.repo, 1, leaseMs)[0];
+	}
 	/** Serial just-in-time claims with final lease validation, but the per-claim
 	 * machinery is one Effect execution scope (supervised renewal fiber,
 	 * interruption propagation, typed failure classification, guaranteed scope
@@ -293,7 +311,7 @@ export class EffectRunner {
 				// Claim immediately before execution. A serial runner must not
 				// reserve work that is still waiting behind an earlier, possibly
 				// slow effect.
-				const effect = self.engine.claimEffects(self.repo, 1, leaseMs)[0];
+				const effect = self.claimOne(leaseMs);
 				if (!effect) break;
 				const { lease } = effect;
 				if (!lease) throw new Error(`claimed effect ${effect.id} has no lease`);
@@ -2025,6 +2043,62 @@ export function agentEffectHandlers(
 								),
 						);
 					return { cleaned: true };
+				}),
+		},
+		// Owner-bound release: the workflow's apps are stopped through the server's
+		// stop-by-owner operation. Deliberately no `observe`: the operation is
+		// idempotent (an owner that holds nothing answers an empty list), so a
+		// read-only probe would only add a second round trip per attempt, and the
+		// outbox row's completion is the recorded release.
+		"environment.teardown": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const payload = effect.payload as { owner?: unknown };
+					const owner = typeof payload.owner === "string" ? payload.owner : "";
+					if (owner === "" || owner === "user")
+						throw new PermanentFailure(
+							`environment.teardown needs a workflow owner, received ${JSON.stringify(owner)}`,
+						);
+					const client = backendClientFromEnv() ?? backendClient();
+					if (!client)
+						// This process has no environment transport at all, and no retry can
+						// attach one: the release is reported as not done rather than looping in
+						// the outbox. An attached server that does not answer is the transient
+						// case below.
+						throw new PermanentFailure(
+							`no environment server is attached to this process; ${owner} was not released`,
+						);
+					const outcome = yield* Effect.either(
+						Effect.tryPromise({
+							try: () => client.stopByOwner(owner, signal),
+							catch: (error) =>
+								error instanceof Error ? error : new Error(String(error)),
+						}),
+					);
+					if (Either.isLeft(outcome)) {
+						const failure = outcome.left;
+						if (failure instanceof BackendClientError) {
+							const detail = `${failure.code}: ${failure.message}`;
+							// A rejected request is permanent; a busy or unavailable server is
+							// infrastructure and belongs in the durable retry budget, so the
+							// release is never recorded as completed without an answer.
+							if (
+								failure.status >= 400 &&
+								failure.status < 500 &&
+								failure.status !== 409
+							)
+								throw new PermanentFailure(
+									`environment teardown was rejected (${detail})`,
+								);
+							throw new TransientFailure(
+								`environment server could not release ${owner} (${detail})`,
+							);
+						}
+						throw new TransientFailure(
+							`environment server could not release ${owner} (${failure.message})`,
+						);
+					}
+					return { owner, apps: outcome.right.apps };
 				}),
 		},
 	};

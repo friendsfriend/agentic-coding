@@ -47,6 +47,7 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"pull-request.create",
 	"workspace.close",
 	"workspace.cleanup",
+	"environment.teardown",
 ]);
 
 export function nowIso(now: () => Date): string {
@@ -1568,12 +1569,20 @@ export function validateEffect(
 		row.kind === "workspace.setup" &&
 		snapshot.definition.id === "research" &&
 		snapshot.currentStep === "core.research";
+	// Two lifecycle effects are enqueued outside the contract of whatever step the
+	// workflow happens to be in. `agent.stop` retires an obsolete launch; the
+	// owner-bound `environment.teardown` is emitted when the workflow is closed
+	// and when it is deleted, and a delete can land at any step. Judging either by
+	// the current step's `allowedEffects` would refuse the row — and, at claim
+	// time, break the drain of the whole store rather than the one effect.
+	const stepIndependent =
+		row.kind === "agent.stop" || row.kind === "environment.teardown";
 	if (
 		!allowed &&
 		!declaredInbound &&
 		!setupBeforeEntry &&
 		!researchSetup &&
-		row.kind !== "agent.stop"
+		!stepIndependent
 	)
 		throw new WorkflowRuntimeError(
 			"invalid-state",

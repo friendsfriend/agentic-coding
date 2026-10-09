@@ -217,3 +217,21 @@ Derived from the above and used by tasks 6.1–6.4:
 
 All fixtures run against temporary directories; no test touches real user
 configuration or secrets.
+
+## 6. Configuration added after this inventory
+
+Keys added by later changes, recorded here so the file stays the one place that
+says where a value lives.
+
+| Key | File | Owner | Default |
+| --- | --- | --- | --- |
+| `environment.instances.idle_ttl_minutes` | `$AGENTIC_CODING_CONFIG_DIR/config.json` (the layered workflow configuration) | `src/workflow/effects.ts` parses it, `src/server/runtime/instances.ts` (the idle reaper) consumes it | `30` |
+
+`environment.instances.idle_ttl_minutes` is how many minutes an agent-held app
+may sit idle before the server's reaper stops it and frees its slot
+(`add-environment-instance-lifecycle`). It is **file-only**: the server resolves
+it on every reap pass, a missing or unusable value falls back to the 30-minute
+default instead of disabling the lifecycle, and Settings exposes no editor for
+it. The lifecycle it drives — owner-bound `environment.teardown`, activity
+coalescing, the reap event — is documented in
+[`agent-environments.md`](agent-environments.md).

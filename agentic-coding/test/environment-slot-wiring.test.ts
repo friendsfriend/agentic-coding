@@ -307,4 +307,60 @@ describe("composed slot wiring", () => {
 			await server.stop();
 		}
 	});
+
+	test("the server-scoped reaper releases an idle held app", async () => {
+		const f = compose();
+		// An agent-held app nobody has touched for an hour, and a one-minute TTL
+		// from the layered configuration: the server's first reap pass releases it
+		// through the composed stop path.
+		const idle = new Date(Date.now() - 60 * 60_000).toISOString();
+		f.state.setEnvironmentInstance({
+			id: "workflow-a-shop",
+			owner: "workflow:a",
+			app: "shop",
+			targetId: "shop:docker:default",
+			runtime: "docker",
+			checkoutPath: f.appDirectory,
+			imageTag: "workflow-a",
+			status: "running",
+			createdAt: idle,
+			lastActivityAt: idle,
+		});
+		const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+		const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reaper-config-"));
+		const configFile = path.join(configRoot, "config.json");
+		fs.writeFileSync(
+			configFile,
+			`${JSON.stringify({ environment: { instances: { idle_ttl_minutes: 1 } } })}\n`,
+		);
+		process.env.HERDR_WORKFLOW_CONFIG = configFile;
+		cleanups.push(() => {
+			if (previousConfig === undefined)
+				delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
+			fs.rmSync(configRoot, { recursive: true, force: true });
+		});
+		await f.services.instances?.ready;
+		// Only `startWorkflowServer` starts the reaper, so a server that owns these
+		// integrations is what proves the wire.
+		const server = await startWorkflowServer({
+			port: 0,
+			ownTelemetry: false,
+			integrations: f.services,
+		});
+		try {
+			const deadline = Date.now() + 2_000;
+			while (
+				Date.now() < deadline &&
+				f.state.findActiveEnvironmentInstance("shop") !== undefined
+			)
+				await Bun.sleep(10);
+			expect(f.state.findActiveEnvironmentInstance("shop")).toBeUndefined();
+			expect(
+				f.state.findEnvironmentInstance("workflow:a", "shop")?.status,
+			).toBe("stopped");
+		} finally {
+			await server.stop();
+		}
+	});
 });

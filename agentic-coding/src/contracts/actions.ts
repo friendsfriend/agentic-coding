@@ -105,11 +105,19 @@ export interface WorkflowDeletion {
 	readonly worktreeRemoved: boolean;
 	/** Why the worktree could not be removed, when it was not. */
 	readonly worktreeError?: string;
+	/**
+	 * Why the workflow's app slots were not confirmed released before its rows
+	 * were removed. The delete removes the workflow's outbox with it, so a
+	 * teardown the environment server never answered is reported here instead of
+	 * being retried afterwards.
+	 */
+	readonly teardownError?: string;
 }
 
 export const workflowDeletionSchema = Schema.Struct({
 	worktreeRemoved: Schema.Boolean,
 	worktreeError: Schema.optional(Schema.String),
+	teardownError: Schema.optional(Schema.String),
 });
 
 export const agentHandoffRequestSchema = Schema.Struct({

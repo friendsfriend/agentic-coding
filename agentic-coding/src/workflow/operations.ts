@@ -208,7 +208,13 @@ export async function sessionsReport(options?: {
  * directory. The branch is kept (the same policy the workflow's own
  * `workspace.cleanup` effect applies), so the committed work stays reviewable.
  * Repository-independent workflows (wiki, research) own no worktree and are
- * store-only. */
+ * store-only.
+ *
+ * The workflow's app slots are released first, through the same durable
+ * `environment.teardown` effect a close emits. The delete removes the outbox
+ * with the workflow, so a teardown that cannot complete can no longer be
+ * retried afterwards: it is drained here within a bounded window and reported
+ * in the deletion result instead of being silently forgotten. */
 export async function deleteWorkflow(
 	repo: string,
 	workflowId: string,
@@ -218,8 +224,83 @@ export async function deleteWorkflow(
 	// The worktree path lives in the snapshot the delete removes, so it is read
 	// before the transaction.
 	const view = workflowEngine.status(repo, workflowId);
+	const teardownError = await releaseOwnedApps(
+		workflowEngine,
+		repo,
+		workflowId,
+	);
 	workflowEngine.deleteWorkflow(repo, workflowId);
-	return removeWorkflowWorktree(repo, view.worktree, view.repository);
+	const removal = await removeWorkflowWorktree(
+		repo,
+		view.worktree,
+		view.repository,
+	);
+	return teardownError ? { ...removal, teardownError } : removal;
+}
+
+/** How long a delete waits for the workflow's app teardown to be answered. */
+const TEARDOWN_WAIT_MS = 10_000;
+/** How often that wait re-drains while an unreachable server is retried. */
+const TEARDOWN_POLL_MS = 500;
+
+/**
+ * Emit the workflow's durable `environment.teardown` effect and drain it until
+ * it completes, fails or the bounded window elapses. Answers the reason the
+ * release was not confirmed, or `undefined` once it was. The effect row is the
+ * durable record: an unreachable server is retried through the outbox's own
+ * attempt accounting, not by calling the server again from here.
+ */
+async function releaseOwnedApps(
+	workflowEngine: WorkflowEngine,
+	repo: string,
+	workflowId: string,
+): Promise<string | undefined> {
+	workflowEngine.enqueueEffect(
+		repo,
+		workflowId,
+		"environment.teardown",
+		`environment:${workflowId}:teardown`,
+		{ workflowId, owner: `workflow:${workflowId}` },
+	);
+	const deadline = Date.now() + TEARDOWN_WAIT_MS;
+	// A kind-scoped runner: the release is drained on its own, so deleting a
+	// workflow never executes the repository's other pending work (another
+	// workflow's launch, or the departing workflow's own artifacts).
+	const runner = new EffectRunner(
+		repo,
+		workflowEngine,
+		// Only the teardown kind is ever claimed, so no agent adapter is needed.
+		agentEffectHandlers(repo, workflowEngine, {
+			registry,
+			adapters: new Map<string, AgentAdapter>(),
+		}),
+		{ claimKind: "environment.teardown" },
+	);
+	for (;;) {
+		try {
+			await Effect.runPromise(runner.drainProgram(1, 30_000));
+		} catch (error) {
+			return `the environment teardown could not be drained: ${message(error)}`;
+		}
+		const pending = workflowEngine
+			.status(repo, workflowId)
+			.effects.find(
+				(effect) =>
+					effect.kind === "environment.teardown" &&
+					effect.status !== "completed",
+			);
+		if (!pending) return undefined;
+		if (pending.status === "failed" || Date.now() >= deadline)
+			return (
+				pending.lastError ??
+				`the environment server did not confirm the release of ${workflowId}'s apps`
+			);
+		await Bun.sleep(TEARDOWN_POLL_MS);
+	}
+}
+
+function message(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /** The shared wiki/research data root, when this machine has one. Its store

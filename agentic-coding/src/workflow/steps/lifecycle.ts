@@ -153,6 +153,20 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 			enqueue("workspace.close", `workspace:${snapshot.workflowId}:close`, {
 				workflowId: snapshot.workflowId,
 			});
+			// Releasing the workflow's app slots is the owner-bound teardown: it runs
+			// through the outbox so an unreachable environment server is retried
+			// instead of being recorded as a release. It is enqueued here, before the
+			// `workspace.cleanup` the close effect's completion queues, because the
+			// stop runs from the workflow's own checkout — removing it first would
+			// leave a run nobody can stop.
+			enqueue(
+				"environment.teardown",
+				`environment:${snapshot.workflowId}:teardown`,
+				{
+					workflowId: snapshot.workflowId,
+					owner: `workflow:${snapshot.workflowId}`,
+				},
+			);
 			return undefined;
 		},
 	},

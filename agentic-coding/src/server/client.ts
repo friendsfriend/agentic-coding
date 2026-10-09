@@ -19,7 +19,9 @@ import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
 import {
 	type ConnectionState,
+	type EnvironmentTeardownResult,
 	type EventEnvelope,
+	environmentTeardownResultSchema,
 	type ObservationRequest,
 	wireEnvelopeSchema,
 } from "../contracts/environment.ts";
@@ -364,6 +366,24 @@ export class BackendClient implements DashboardGateway {
 			"core.workflow-deletion",
 			workflowDeletionSchema,
 			await this.request("POST", "/api/v1/workflow/delete", request),
+		);
+	}
+
+	/** Stop every app one owner holds: the operation a workflow's durable
+	 * `environment.teardown` effect calls on close and on delete. */
+	async stopByOwner(
+		owner: string,
+		signal?: AbortSignal,
+	): Promise<EnvironmentTeardownResult> {
+		return this.decode<EnvironmentTeardownResult>(
+			"server.environment.apps.teardown",
+			environmentTeardownResultSchema,
+			await this.request(
+				"POST",
+				"/api/v1/environment/apps/teardown",
+				{ owner },
+				signal,
+			),
 		);
 	}
 

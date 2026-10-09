@@ -20,6 +20,20 @@
 // Runs of one workflow share that workflow's slot (one workflow has one
 // checkout), and a definition runs with its own static names, ports and image
 // references: only `AC_OWNER` and `AC_APP_DIR` are injected.
+//
+// `add-environment-instance-lifecycle` adds the release half of that model: an
+// app is held until its owner stops it or until it sits idle, so a forgotten
+// run can never block the queue forever.
+//
+//   - activity (`last_activity_at`) is any operation on the app, coalesced to
+//     one write per app per 30 s, and a waiting owner keeps refreshing its own
+//     held rows while it long-polls;
+//   - an owner's apps are released through `stopByOwner`, the operation the
+//     workflow's durable `environment.teardown` effect calls on close/delete;
+//   - a server-scoped reaper stops agent-held apps that have been idle longer
+//     than the configured TTL, and publishes `environment.slot.reaped` for the
+//     shell. `user`-held apps, unobserved (`unknown`) apps and apps whose owner
+//     is waiting for another app are never reaped.
 import path from "node:path";
 import { discoverActionTargets } from "../actions/discovery.ts";
 import type { ActionTarget } from "../actions/targets.ts";
@@ -55,6 +69,17 @@ const MAX_WAIT_SEC = 300;
 const QUEUE_GRACE_MS = 60 * 1000;
 /** How often a waiting request refreshes its held slots' activity stamp. */
 const ACTIVITY_NOTE_MS = 1000;
+/**
+ * Activity writes are coalesced per app: an app that is worked on is stamped
+ * once per window instead of once per call, so a busy agent cannot turn every
+ * operation into a state write. The window is far below any sane TTL, so a live
+ * app never looks idle to the reaper.
+ */
+const ACTIVITY_COALESCE_MS = 30 * 1000;
+/** How often the idle reaper looks for a forgotten agent-held app. */
+const REAPER_INTERVAL_MS = 60 * 1000;
+/** Built-in idle TTL, used when no configuration resolves one. */
+const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
 /**
  * How often a waiting request re-runs run observation. Observation may spawn a
  * process (`tmux`) or walk the config tree, so it is never re-run on the 25 ms
@@ -140,9 +165,34 @@ export interface RunObserver {
 /** One dashboard envelope a slot publishes. */
 export interface SlotEvent {
 	readonly domain: "environment";
-	readonly kind: "environment.slot.waiting" | "environment.slot.granted";
+	readonly kind:
+		| "environment.slot.waiting"
+		| "environment.slot.granted"
+		| "environment.slot.reaped";
 	readonly resource: string;
 	readonly payload: Record<string, unknown>;
+}
+
+/** One app the idle reaper released. */
+export interface ReapedApp {
+	readonly app: string;
+	readonly owner: EnvironmentOwner;
+}
+
+/** The apps one owner's teardown stopped. */
+export interface OwnerTeardown {
+	readonly owner: EnvironmentOwner;
+	readonly apps: string[];
+}
+
+/** How the server-scoped idle reaper is started. */
+export interface IdleReaperOptions {
+	/** Test seam: the TTL resolved for each pass instead of the configured one. */
+	readonly ttlMs?: () => number;
+	/** How often a pass runs; defaults to one minute. */
+	readonly intervalMs?: number;
+	/** Ends the loop; the returned stop function does the same. */
+	readonly signal?: AbortSignal;
 }
 
 export class EnvironmentInstanceError extends Error {
@@ -176,6 +226,14 @@ export interface EnvironmentInstanceControllerOptions {
 	readonly observation?: RunObserver;
 	/** Test seam: replaces the built-in run observation. */
 	readonly observeRun?: (app: App) => Promise<RunObservationState>;
+	/**
+	 * How long an agent-held app may sit idle before the reaper stops it, in
+	 * milliseconds. Resolved per reap pass, so a configuration edit applies to
+	 * the next pass instead of the next server start.
+	 */
+	readonly idleTtlMs?: () => number;
+	/** How often the idle reaper runs; defaults to one minute. */
+	readonly reaperIntervalMs?: number;
 	/** Test seam: replaces the wall clock. */
 	readonly now?: () => Date;
 	/** Test seam: replaces the long-poll sleep. */
@@ -283,6 +341,10 @@ export class EnvironmentInstanceController {
 	private readonly queueGraceMs: number;
 	private readonly waitPollMs: number;
 	private readonly observationRefreshMs: number;
+	private readonly idleTtlMs: () => number;
+	private readonly reaperIntervalMs: number;
+	/** The last activity write per app, so touches coalesce per app. */
+	private readonly activityTouches = new Map<string, number>();
 	private readonly publish?: (event: SlotEvent) => void;
 	private readonly logger?: (message: string) => void;
 	private readonly queues = new Map<string, SlotWaiter[]>();
@@ -344,6 +406,8 @@ export class EnvironmentInstanceController {
 		this.waitPollMs = options.waitPollMs ?? WAIT_POLL_MS;
 		this.observationRefreshMs =
 			options.observationRefreshMs ?? OBSERVATION_REFRESH_MS;
+		this.idleTtlMs = options.idleTtlMs ?? (() => DEFAULT_IDLE_TTL_MS);
+		this.reaperIntervalMs = options.reaperIntervalMs ?? REAPER_INTERVAL_MS;
 		this.publish = options.publish;
 		this.logger = options.logger;
 		this.ready = this.reconcile().catch((error: unknown) => {
@@ -475,6 +539,9 @@ export class EnvironmentInstanceController {
 		}
 
 		this.expireWaiters(startedAt);
+		// The request itself is activity: an app this owner already runs must not
+		// look idle while the owner is still working with it.
+		this.noteActivity(owner, startedAt);
 		let waiter = this.findWaiter(owner, apps);
 		if (!waiter) {
 			// Publish the wait edge first, then check it: the in-memory queues are
@@ -1554,7 +1621,12 @@ export class EnvironmentInstanceController {
 			if (key.startsWith(`${app}\0`)) this.targets.delete(key);
 	}
 
-	/** Refreshes the activity stamp of every active row the owner holds. */
+	/**
+	 * Refreshes the activity stamp of every active row the owner holds. This is
+	 * the queue's liveness stamp — a waiting owner is working, so what it still
+	 * holds must not look idle — and it is throttled by the caller
+	 * (`ACTIVITY_NOTE_MS`), not by the per-app coalescing window below.
+	 */
 	private noteActivity(owner: EnvironmentOwner, at: number): void {
 		const stamp = new Date(at).toISOString();
 		for (const record of this.state.getActiveEnvironmentInstances()) {
@@ -1566,6 +1638,168 @@ export class EnvironmentInstanceController {
 				stamp,
 			);
 		}
+	}
+
+	/**
+	 * Records activity on an app's slot. Every agent operation on an app goes
+	 * through here — the slot calls today, the environment, browser and debug
+	 * tools as they arrive — so the idle lifecycle measures real use. Writes are
+	 * coalesced to one per app per `ACTIVITY_COALESCE_MS`: a burst of operations
+	 * on a busy app is one state write, not one per call.
+	 */
+	touchActivity(app: string, at = this.now().getTime()): void {
+		const last = this.activityTouches.get(app);
+		if (last !== undefined && at - last < ACTIVITY_COALESCE_MS) return;
+		const record = this.state.findActiveEnvironmentInstance(app);
+		if (!record) return;
+		this.activityTouches.set(app, at);
+		const stamp = new Date(at).toISOString();
+		if (record.lastActivityAt === stamp) return;
+		this.state.updateEnvironmentInstanceStatus(record.id, record.status, stamp);
+	}
+
+	// --- owner lifecycle -----------------------------------------------------
+
+	/**
+	 * Stop every app one owner holds, through the normal stop path, and answer
+	 * the apps this call stopped. Idempotent: an owner that holds nothing answers
+	 * an empty list, and a retry after a partial stop finishes the rest, which is
+	 * what makes it safe as a durable outbox operation.
+	 *
+	 * `user` is refused: a developer's own run is never torn down by a workflow
+	 * lifecycle, and the refusal is a request error rather than a silent no-op.
+	 */
+	async stopByOwner(ownerValue: string): Promise<OwnerTeardown> {
+		await this.ready;
+		let owner: EnvironmentOwner;
+		try {
+			owner = parseEnvironmentOwner(ownerValue);
+		} catch (error) {
+			throw new EnvironmentInstanceError("invalid-owner", 400, message(error), {
+				cause: error,
+			});
+		}
+		if (owner === "user")
+			throw new EnvironmentInstanceError(
+				"invalid-owner",
+				400,
+				"the developer's own apps are never released by a workflow lifecycle",
+			);
+		const apps: string[] = [];
+		const failures: string[] = [];
+		// The active rows are read once: stopping one only moves it out of the
+		// active set, and a row that vanished underneath us is already free.
+		for (const record of this.state.getActiveEnvironmentInstances()) {
+			if (record.owner !== owner) continue;
+			// Re-read before stopping: a row that died or was re-granted in the
+			// meantime is no longer this owner's run to stop.
+			if (!this.heldBy(record.app, owner)) continue;
+			try {
+				await this.stopSlot(record.app, "stopped");
+				apps.push(record.app);
+			} catch (error) {
+				if (
+					error instanceof EnvironmentInstanceError &&
+					error.code === "no-holder"
+				)
+					continue;
+				failures.push(`${record.app}: ${message(error)}`);
+			}
+		}
+		if (failures.length > 0)
+			throw new EnvironmentInstanceError(
+				"teardown-failed",
+				500,
+				`${owner} still holds apps that could not be stopped: ${failures.join("; ")}`,
+			);
+		return { owner, apps };
+	}
+
+	/**
+	 * Release every agent-held app that has sat idle longer than the TTL, through
+	 * the normal stop path: the row is left `stopped`, so the next waiter is
+	 * granted on its own next poll. Never reaped: a `user`-held app (the
+	 * developer's own run), an app whose status is not `running` (`unknown` is
+	 * unobserved, `starting`/`stopping` are mid-transition), and an app held by an
+	 * owner that is currently waiting for another app.
+	 */
+	async reapIdleApps(ttlMs = this.idleTtlMs()): Promise<ReapedApp[]> {
+		await this.ready;
+		const at = this.now().getTime();
+		const reaped: ReapedApp[] = [];
+		for (const record of this.state.getActiveEnvironmentInstances()) {
+			if (record.owner === "user" || record.status !== "running") continue;
+			const owner = parseEnvironmentOwner(record.owner);
+			if (this.waitsOf(owner).length > 0) continue;
+			const lastActivity = Date.parse(record.lastActivityAt);
+			if (!Number.isFinite(lastActivity) || at - lastActivity < ttlMs) continue;
+			// Re-read before stopping: a row that died or was re-granted in the
+			// meantime is no longer the idle run this pass decided to release.
+			if (!this.heldBy(record.app, owner)) continue;
+			try {
+				await this.stopSlot(record.app, "stopped");
+			} catch (error) {
+				this.logger?.(
+					`[slots] reaping idle ${record.app} (held by ${owner}) failed: ${message(error)}`,
+				);
+				continue;
+			}
+			reaped.push({ app: record.app, owner });
+			this.emit("environment.slot.reaped", record.app, {
+				app: record.app,
+				owner,
+			});
+		}
+		return reaped;
+	}
+
+	/**
+	 * Start the server-scoped idle reaper: one pass every `intervalMs` (a minute)
+	 * on this controller's injected clock. The server owns the returned stop
+	 * function and calls it on shutdown; a pass that throws (an unreadable
+	 * configuration, an unavailable runtime) is logged and retried on the next
+	 * tick instead of ending the loop.
+	 */
+	startIdleReaper(options: IdleReaperOptions = {}): () => void {
+		const controller = new AbortController();
+		const signal = options.signal
+			? AbortSignal.any([options.signal, controller.signal])
+			: controller.signal;
+		const interval = options.intervalMs ?? this.reaperIntervalMs;
+		const ttl = options.ttlMs ?? this.idleTtlMs;
+		void (async () => {
+			while (!signal.aborted) {
+				try {
+					await this.reapIdleApps(ttl());
+				} catch (error) {
+					this.logger?.(`[slots] idle reap failed: ${message(error)}`);
+				}
+				await this.sleepUntil(interval, signal);
+			}
+		})();
+		return () => controller.abort();
+	}
+
+	/** Sleep for `ms`, or until `signal` aborts: a stopped server stops waiting. */
+	private async sleepUntil(ms: number, signal: AbortSignal): Promise<void> {
+		if (signal.aborted) return;
+		let onAbort: (() => void) | undefined;
+		try {
+			await Promise.race([
+				this.sleep(ms),
+				new Promise<void>((resolve) => {
+					onAbort = () => resolve();
+					signal.addEventListener("abort", onAbort, { once: true });
+				}),
+			]);
+		} finally {
+			if (onAbort) signal.removeEventListener("abort", onAbort);
+		}
+	}
+
+	/** Whether the app's active row is still this owner's run. */
+	private heldBy(app: string, owner: EnvironmentOwner): boolean {
+		return this.state.findActiveEnvironmentInstance(app)?.owner === owner;
 	}
 
 	/** The apps an owner is queued for. */

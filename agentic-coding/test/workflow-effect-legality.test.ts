@@ -70,6 +70,21 @@ test("the promotion stays legal at the close gate the wiki family reaches", () =
 		).not.toThrow();
 });
 
+test("the owner-bound teardown is legal wherever it is emitted from", () => {
+	const version = definitionVersionForStepRouting(6);
+	// Close emits it at `core.closed`; a delete emits it at whatever step the
+	// workflow happens to be in, so no step contract can own it.
+	for (const currentStep of [
+		"core.closed",
+		"core.implementation",
+		"core.plan",
+		"core.completed",
+	])
+		expect(
+			legality("openspec", version, "environment.teardown", currentStep),
+		).not.toThrow();
+});
+
 test("an inbound declaration does not legalize the effect anywhere else", () => {
 	const version = definitionVersionForStepRouting(6);
 	expect(
