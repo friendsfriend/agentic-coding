@@ -21,6 +21,7 @@ function view(
 		step?: string;
 		label?: string;
 		pendingQuestions?: number;
+		orchestratorQuestions?: number;
 		failedEffects?: Array<{
 			id: string;
 			kind: WorkflowView["effects"][number]["kind"];
@@ -45,6 +46,10 @@ function view(
 			{ length: overrides.pendingQuestions ?? 0 },
 			(_, index) => ({ id: `q-${index}` }),
 		),
+		orchestratorQuestions: Array.from(
+			{ length: overrides.orchestratorQuestions ?? 0 },
+			(_, index) => ({ id: `oq-${index}` }),
+		),
 		availableActions: [],
 	} as unknown as WorkflowView;
 }
@@ -67,6 +72,7 @@ describe("workflow projection", () => {
 			stepLabel: "core.developer-review",
 			reviewPending: true,
 			questionPending: true,
+			orchestratorQuestionPending: false,
 			failedEffects: [{ id: "e1", kind: "agent.launch" }],
 			completed: false,
 		});
@@ -121,6 +127,23 @@ describe("transition detection", () => {
 			},
 		]);
 		expect(isHumanNeeded(transitions[0]?.kind ?? "completed")).toBe(true);
+	});
+
+	test("an orchestrator-routed question yields one non-human transition", () => {
+		const transitions = detectTransitions(
+			project({ step: "core.implementation" }),
+			project({ step: "core.implementation", orchestratorQuestions: 1 }),
+			"wf-1",
+		);
+		expect(transitions).toEqual([
+			{
+				workflowId: "wf-1",
+				kind: "orchestrator-question-pending",
+				stepId: "core.implementation",
+				stepLabel: "core.implementation",
+			},
+		]);
+		expect(isHumanNeeded(transitions[0]?.kind ?? "completed")).toBe(false);
 	});
 
 	test("a pending developer question yields one transition", () => {

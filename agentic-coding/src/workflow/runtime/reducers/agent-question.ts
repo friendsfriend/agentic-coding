@@ -13,8 +13,10 @@ import {
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import {
+	forwardToDeveloper,
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
 	MAX_DIALOGUE_BYTES,
+	ORCHESTRATOR_QUESTION_TARGET,
 	QUESTION_WAIT_MS,
 	questionRun,
 } from "../dialogue.ts";
@@ -48,6 +50,14 @@ export function agentQuestion(
 	const groupId = grouped ? randomUUID() : undefined;
 	const createdAt = nowIso(now);
 	const expiresAt = new Date(now().getTime() + QUESTION_WAIT_MS).toISOString();
+	// Orchestrator-started workflows route a developer question to the
+	// orchestrator session first (route-developer-questions-through-orchestrator):
+	// the record is marked `targetRole: "orchestrator"`, which keeps it out of the
+	// developer's pending set until the orchestrator either answers it or forwards
+	// it (clearing the marker). The orchestrator is not a workflow run, so there is
+	// no `targetRunId`; its standing capability, not a per-question nonce,
+	// authorizes its answer.
+	const orchestratorFirst = snapshot.metadata.startedBy === "orchestrator";
 	const questions = items.map(
 		(item, itemIndex): DeveloperDialogueRecord => ({
 			id: randomUUID(),
@@ -60,6 +70,7 @@ export function agentQuestion(
 			...(item.context === undefined ? {} : { context: item.context }),
 			options: item.options.map(resolveDeveloperQuestionOption),
 			...(groupId === undefined ? {} : { groupId, itemIndex }),
+			...(orchestratorFirst ? { targetRole: "orchestrator" } : {}),
 			timerNonce: randomUUID(),
 			status: "pending",
 			createdAt,
@@ -120,6 +131,23 @@ export function expireQuestionTimer(
 					item.groupId === question.groupId && item.status === "pending",
 			)
 		: [question];
+	// An orchestrator-routed question the orchestrator never answered does not
+	// expire at its deadline: it auto-forwards to the developer with a fresh
+	// window (route-developer-questions-through-orchestrator), so the developer is
+	// the backstop whenever the orchestrator session is off or silent.
+	if (question.targetRole === ORCHESTRATOR_QUESTION_TARGET) {
+		forwardToDeveloper(group, now);
+		return {
+			type: "developer.question.forwarded",
+			actor: { kind: "system" },
+			data: {
+				...(question.groupId
+					? { groupId: question.groupId }
+					: { questionId: question.id }),
+				reason: "orchestrator-timeout",
+			},
+		};
+	}
 	const at = nowIso(now);
 	for (const item of group) {
 		item.status = "expired";

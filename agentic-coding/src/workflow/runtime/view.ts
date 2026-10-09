@@ -110,6 +110,22 @@ function pendingDeveloperQuestions(
 	);
 }
 
+/** Pending questions routed to the orchestrator first
+ * (route-developer-questions-through-orchestrator). The orchestrator session
+ * reads these to answer or forward them; the developer never sees them until
+ * they are forwarded (their marker cleared). */
+function pendingOrchestratorQuestions(
+	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
+	now: () => Date,
+): NonNullable<WorkflowView["developerDialogue"]> {
+	return publicDialogue(snapshot).filter(
+		(item) =>
+			item.targetRole === "orchestrator" &&
+			item.status === "pending" &&
+			Date.parse(item.expiresAt) > now().getTime(),
+	);
+}
+
 export function diagnosticView(
 	changeId: string,
 	diagnostic: string,
@@ -282,6 +298,10 @@ export function view(
 			classifierDecisions: snapshot.classifierDecisions ?? [],
 			gateDecisions: snapshot.gateDecisions ?? [],
 			pendingQuestions: pendingDeveloperQuestions(
+				snapshot.developerDialogue ?? [],
+				now,
+			),
+			orchestratorQuestions: pendingOrchestratorQuestions(
 				snapshot.developerDialogue ?? [],
 				now,
 			),

@@ -33,7 +33,7 @@ const profile: ResolvedProfile = {
 	digest: "profile",
 };
 
-function setup() {
+function setup(options: { startedBy?: "developer" | "orchestrator" } = {}) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-question-"));
 	const repo = repository(root);
 	let time = new Date("2026-01-01T00:00:00Z");
@@ -47,6 +47,7 @@ function setup() {
 			baseBranch: "main",
 			baseCommit: "base",
 			task: "do work",
+			...(options.startedBy ? { startedBy: options.startedBy } : {}),
 		},
 		routing: {
 			defaultProfile: "test",
@@ -510,6 +511,162 @@ test("question capability rejects another run and expires after 24 hours", () =>
 				questionId,
 			}),
 		).toThrow(/no longer pending/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("orchestrator-started workflows route questions to the orchestrator first", () => {
+	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "which design?",
+			options: [{ label: "A", value: "a" }],
+		});
+		const question = created.snapshot.developerDialogue[0];
+		const questionId = question?.id;
+		if (!questionId) throw new Error("question missing");
+		// Routed to the orchestrator: hidden from the developer, visible to the
+		// orchestrator.
+		expect(question?.targetRole).toBe("orchestrator");
+		const view = engine.status(repo, "question");
+		expect(view.pendingQuestions).toHaveLength(0);
+		expect(view.orchestratorQuestions?.map((item) => item.id)).toEqual([
+			questionId,
+		]);
+		// The operator cannot answer a question routed to the orchestrator.
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "answer-question",
+				input: { questionId, kind: "option", value: "a" },
+			}),
+		).toThrow(/another responder/);
+		// The orchestrator answers it.
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: created.snapshot.revision,
+			actionId: "answer-question",
+			principal: "orchestrator",
+			input: { questionId, kind: "option", value: "a" },
+		});
+		expect(answered.view.developerDialogue?.[0]?.status).toBe("answered");
+		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("a");
+		expect(answered.view.orchestratorQuestions).toHaveLength(0);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("the orchestrator forwards a question it cannot answer to the developer", () => {
+	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "which design?",
+			options: [],
+		});
+		const questionId = created.snapshot.developerDialogue[0]?.id;
+		if (!questionId) throw new Error("question missing");
+		// The operator cannot forward; only the orchestrator may.
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "forward-question",
+				input: { questionId },
+			}),
+		).toThrow(/reserved for the orchestrator/);
+		const forwarded = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: created.snapshot.revision,
+			actionId: "forward-question",
+			principal: "orchestrator",
+			input: { questionId },
+		});
+		// Now a normal developer question: visible to the developer, no longer the
+		// orchestrator's, and still pending.
+		expect(forwarded.view.orchestratorQuestions).toHaveLength(0);
+		expect(forwarded.view.pendingQuestions?.map((item) => item.id)).toEqual([
+			questionId,
+		]);
+		expect(forwarded.view.developerDialogue?.[0]?.status).toBe("pending");
+		expect(forwarded.view.developerDialogue?.[0]?.targetRole).toBeUndefined();
+		// The developer can now answer it.
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: forwarded.view.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "custom", value: "do A" },
+		});
+		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("do A");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("an unanswered orchestrator question auto-forwards to the developer on timeout", () => {
+	const { repo, engine, run, token, now } = setup({
+		startedBy: "orchestrator",
+	});
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "which design?",
+			options: [],
+		});
+		const question = created.snapshot.developerDialogue[0];
+		const questionId = question?.id;
+		const timerNonce = question?.timerNonce;
+		if (!questionId || !timerNonce) throw new Error("question data missing");
+		now(new Date("2026-01-02T00:00:00.000Z"));
+		const forwarded = engine.dispatch(repo, {
+			type: "timer.question-expire",
+			workflowId: run.workflowId,
+			questionId,
+			timerNonce,
+		});
+		const record = forwarded.view.developerDialogue?.[0];
+		// Not expired: forwarded to the developer with a fresh window.
+		expect(record?.status).toBe("pending");
+		expect(record?.targetRole).toBeUndefined();
+		expect(forwarded.view.pendingQuestions?.map((item) => item.id)).toEqual([
+			questionId,
+		]);
+		expect(Date.parse(record?.expiresAt ?? "")).toBe(
+			new Date("2026-01-02T00:00:00.000Z").getTime() + QUESTION_WAIT_MS,
+		);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

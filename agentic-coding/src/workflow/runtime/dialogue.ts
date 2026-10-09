@@ -3,10 +3,12 @@
 // Self-contained, snapshot-in/snapshot-out, needing only the clock. Moved
 // verbatim out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import {
 	type DeveloperDialogueRecord,
 	type DeveloperQuestionAnswer,
 	decodeDeveloperQuestionAnswer,
+	decodeForwardQuestionInput,
 	type WorkflowRun,
 	type WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
@@ -16,6 +18,27 @@ import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "./store.ts";
 
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
 export const QUESTION_WAIT_MS = 24 * 60 * 60_000;
+/** The `targetRole` marker for a developer question routed to the orchestrator
+ * session before the developer (route-developer-questions-through-orchestrator).
+ * It is not a workflow role, so it never resolves a `targetRunId`; clearing it
+ * forwards the question to the developer. */
+export const ORCHESTRATOR_QUESTION_TARGET = "orchestrator";
+
+/** Forward orchestrator-routed questions to the developer: clear the
+ * orchestrator marker, keep the records pending, and reset the wait window and
+ * timer nonce so the developer gets a full window and a fresh expiry timer.
+ * Shared by the explicit forward-question action and the timer auto-forward. */
+export function forwardToDeveloper(
+	group: readonly DeveloperDialogueRecord[],
+	now: () => Date,
+): void {
+	const expiresAt = new Date(now().getTime() + QUESTION_WAIT_MS).toISOString();
+	for (const item of group) {
+		delete item.targetRole;
+		item.timerNonce = randomUUID();
+		item.expiresAt = expiresAt;
+	}
+}
 /** Aggregate content bound the persisted dialogue must stay under. */
 export const MAX_DIALOGUE_BYTES = 128 * 1024;
 
@@ -118,10 +141,17 @@ export function expireQuestions(
 		}
 }
 
+/** Answer a developer question. `expectedTarget` is the `targetRole` the
+ * responder is authorized for: `undefined` for the developer (only questions
+ * with no routing marker) and `ORCHESTRATOR_QUESTION_TARGET` for the
+ * orchestrator (only questions still routed to it). The guard both enables the
+ * orchestrator path and keeps the developer path from answering a question
+ * routed elsewhere (a peer or the orchestrator). */
 export function answerQuestion(
 	snapshot: WorkflowSnapshot,
 	raw: unknown,
 	now: () => Date,
+	expectedTarget: string | undefined = undefined,
 ): { type: string; actor: unknown; data: unknown } {
 	let answer: DeveloperQuestionAnswer;
 	try {
@@ -136,6 +166,11 @@ export function answerQuestion(
 		const group = snapshot.developerDialogue
 			.filter((item) => item.groupId === answer.groupId)
 			.sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0));
+		if (group.some((item) => item.targetRole !== expectedTarget))
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"question is routed to another responder",
+			);
 		if (!group.length || group.some((item) => item.status !== "pending"))
 			throw new WorkflowRuntimeError(
 				"stale-question",
@@ -222,6 +257,11 @@ export function answerQuestion(
 				"questionnaire requires a complete grouped response set",
 			);
 	}
+	if (question && question.targetRole !== expectedTarget)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"question is routed to another responder",
+		);
 	if (question?.status !== "pending")
 		throw new WorkflowRuntimeError(
 			"stale-question",
@@ -261,5 +301,64 @@ export function answerQuestion(
 		type: "developer.question.answered",
 		actor: { kind: "developer" },
 		data: { questionId: question.id, outcome: question.status },
+	};
+}
+
+/** Forward an orchestrator-routed question (or questionnaire group) to the
+ * developer. Orchestrator-only: the record must still carry the orchestrator
+ * marker and be pending. On success the marker is cleared and the wait window
+ * reset, so the question surfaces in the developer's pending set. */
+export function forwardQuestion(
+	snapshot: WorkflowSnapshot,
+	raw: unknown,
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	const input = decodeForwardQuestionInput(raw);
+	if ("groupId" in input) {
+		const group = snapshot.developerDialogue.filter(
+			(item) => item.groupId === input.groupId,
+		);
+		if (!group.length || group.some((item) => item.status !== "pending"))
+			throw new WorkflowRuntimeError(
+				"stale-question",
+				"questionnaire is no longer pending",
+			);
+		if (group.some((item) => item.targetRole !== ORCHESTRATOR_QUESTION_TARGET))
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"question is not routed to the orchestrator",
+			);
+		forwardToDeveloper(group, now);
+		return {
+			type: "developer.question.forwarded",
+			actor: { kind: "developer" },
+			data: { groupId: input.groupId },
+		};
+	}
+	const question = snapshot.developerDialogue.find(
+		(item) => item.id === input.questionId,
+	);
+	if (question?.status !== "pending")
+		throw new WorkflowRuntimeError(
+			"stale-question",
+			"question is no longer pending",
+		);
+	if (question.targetRole !== ORCHESTRATOR_QUESTION_TARGET)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"question is not routed to the orchestrator",
+		);
+	const group = question.groupId
+		? snapshot.developerDialogue.filter(
+				(item) => item.groupId === question.groupId,
+			)
+		: [question];
+	forwardToDeveloper(group, now);
+	return {
+		type: "developer.question.forwarded",
+		actor: { kind: "developer" },
+		data: question.groupId
+			? { groupId: question.groupId }
+			: { questionId: question.id },
 	};
 }

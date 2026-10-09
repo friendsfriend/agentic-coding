@@ -109,6 +109,9 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 		health: view.health,
 		availableActions: view.availableActions,
 		pendingQuestions: view.pendingQuestions,
+		// Developer questions routed to you first: answer with workflow_action
+		// answer-question, or hand them to the developer with forward-question.
+		orchestratorQuestions: view.orchestratorQuestions,
 		runs: runs.slice(-20).map((run) => ({
 			stepId: run.stepId,
 			role: run.role,
@@ -234,7 +237,7 @@ const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk w
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
 - Plan approval, developer review, findings review and wiki review always belong to the developer. When a workflow waits on one, tell the developer what is waiting and where; never try to decide it.
-- Developer questions from workflow agents are answered by the developer in the workflow dashboard, not by you.
+- Developer questions from the workflows you started are routed to you first and appear as \`orchestratorQuestions\` in workflow_status. Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
 - Report what you did and the resulting workflow status. Be concise.`;
 
@@ -495,7 +498,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_action",
 				description:
-					"Run a management action on a workflow: resume, retry-effect:<id>, switch-preset (input {preset}), close, or create-pr. Read the current revision with workflow_status first. Review decisions are refused.",
+					"Run a management action on a workflow: resume, retry-effect:<id>, switch-preset (input {preset}), close, create-pr, answer-question (answer a developer question routed to you; input is the question answer), or forward-question (hand a routed question to the developer; input {questionId} or {groupId}). Read the current revision with workflow_status first. Review decisions are refused.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,

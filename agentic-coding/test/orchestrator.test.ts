@@ -199,6 +199,14 @@ describe("orchestrator policy", () => {
 		).toContain("developer review");
 	});
 
+	test("answering and forwarding routed developer questions is allowed", () => {
+		// A developer question can be pending during any step; the orchestrator may
+		// answer the ones routed to it or forward them, whatever the current step.
+		for (const action of ["answer-question", "forward-question"])
+			for (const step of ["core.implementation", "core.developer-review"])
+				expect(orchestratorActionRefusal(action, step)).toBeUndefined();
+	});
+
 	test("the launch ceiling refuses at the bound and allows below it", () => {
 		const launch = (workflowId: string): OrchestratorLaunch => ({
 			workflowId,

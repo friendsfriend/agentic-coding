@@ -654,8 +654,12 @@ export interface WorkflowView {
 	classifierDecisions?: ClassifierDecisionRecord[];
 	/** Stage-gate decisions in creation order. */
 	gateDecisions?: GateDecisionRecord[];
-	/** Pending subset, ordered oldest first. */
+	/** Pending subset routed to the developer, ordered oldest first. */
 	pendingQuestions?: DeveloperDialogueRecord[];
+	/** Pending subset routed to the orchestrator first (orchestrator-started
+	 * workflows). The orchestrator either answers these or forwards them to the
+	 * developer, at which point they move into `pendingQuestions`. */
+	orchestratorQuestions?: DeveloperDialogueRecord[];
 	availableActions: WorkflowActionView[];
 }
 
@@ -1068,6 +1072,13 @@ export function decodeCommand(value: unknown): WorkflowCommand {
 			...command,
 			input: decodeDeveloperQuestionAnswer(command.input),
 		};
+	// The forward-question action (orchestrator-only) names exactly one of a
+	// single question or a questionnaire group to hand back to the developer.
+	if (
+		command.type === "developer.action" &&
+		command.actionId === "forward-question"
+	)
+		return { ...command, input: decodeForwardQuestionInput(command.input) };
 	return command;
 }
 
@@ -1097,6 +1108,30 @@ export function decodeDeveloperQuestionAnswer(
 		DeveloperQuestionAnswerSchema,
 		value,
 	);
+}
+
+/** The forward-question action input: exactly one of a single question id or a
+ * questionnaire group id. Pure validation, matching the answer decode style. */
+export type ForwardQuestionInput = { questionId: string } | { groupId: string };
+export function decodeForwardQuestionInput(
+	value: unknown,
+): ForwardQuestionInput {
+	const input = value as
+		| { questionId?: unknown; groupId?: unknown }
+		| null
+		| undefined;
+	const questionId =
+		typeof input?.questionId === "string" ? input.questionId : "";
+	const groupId = typeof input?.groupId === "string" ? input.groupId : "";
+	if (!questionId === !groupId)
+		throw new ContractFailure("core.developer-question", [
+			{
+				path: "$.input",
+				message:
+					"forward-question requires exactly one of questionId or groupId",
+			},
+		]);
+	return questionId ? { questionId } : { groupId };
 }
 
 // ---------------------------------------------------------------------------

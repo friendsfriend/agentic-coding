@@ -6,9 +6,12 @@
 //
 // The orchestrator observes everything, starts and drains workflows, and
 // performs lifecycle management. It never decides a human review: plan,
-// developer, findings and wiki reviews stay with the developer, as do developer
-// questions, configuration edits, repairs, deletions, and the environment and
-// credential surfaces.
+// developer, findings and wiki reviews stay with the developer, as do
+// configuration edits, repairs, deletions, and the environment and credential
+// surfaces. It may answer or forward the developer questions its own workflows
+// route to it first (route-developer-questions-through-orchestrator): the
+// reducer restricts `answer-question` to questions still marked for the
+// orchestrator, and `forward-question` hands them back to the developer.
 
 import type { OrchestratorLimits } from "../workflow/profiles.ts";
 import type { OrchestratorLaunch } from "../workflow/runtime/orchestrator-launches.ts";
@@ -54,6 +57,14 @@ function recoveryAction(actionId: string): boolean {
 	);
 }
 
+/** Developer-question actions the orchestrator may run on its own workflows: it
+ * answers a question routed to it, or forwards it to the developer. The reducer
+ * enforces that only orchestrator-routed questions are affected; this gate only
+ * frees the action from the developer-reserved refusal, whatever the step. */
+function questionAction(actionId: string): boolean {
+	return actionId === "answer-question" || actionId === "forward-question";
+}
+
 /** Lifecycle actions offered once the work is done (completion step). */
 const LIFECYCLE_ACTIONS: ReadonlySet<string> = new Set(["close", "create-pr"]);
 
@@ -64,6 +75,7 @@ export function orchestratorActionRefusal(
 	currentStep: string,
 ): string | undefined {
 	if (recoveryAction(actionId)) return undefined;
+	if (questionAction(actionId)) return undefined;
 	if (HUMAN_REVIEW_STEPS.has(currentStep))
 		return `${currentStep} is a developer review; only the developer can decide it`;
 	if (LIFECYCLE_ACTIONS.has(actionId)) return undefined;

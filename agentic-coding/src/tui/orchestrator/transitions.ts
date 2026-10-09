@@ -26,8 +26,11 @@ export interface WorkflowProjection {
 	readonly stepLabel: string;
 	/** The current step is one whose decision belongs to the developer. */
 	readonly reviewPending: boolean;
-	/** At least one developer question is waiting for an answer. */
+	/** At least one developer question is waiting for the developer's answer. */
 	readonly questionPending: boolean;
+	/** At least one developer question is routed to the orchestrator first and is
+	 * waiting for it to answer or forward. */
+	readonly orchestratorQuestionPending: boolean;
 	/** Effects currently in `failed`, with the kind that names them. */
 	readonly failedEffects: readonly { id: string; kind: EffectKind }[];
 	readonly completed: boolean;
@@ -36,6 +39,7 @@ export interface WorkflowProjection {
 export type TransitionKind =
 	| "review-pending"
 	| "question-pending"
+	| "orchestrator-question-pending"
 	| "attention-required"
 	| "effect-failed"
 	| "completed";
@@ -68,6 +72,7 @@ export function projectWorkflow(view: WorkflowView): WorkflowProjection {
 		stepLabel: view.currentStep?.label ?? stepId,
 		reviewPending: HUMAN_REVIEW_STEPS.has(stepId),
 		questionPending: (view.pendingQuestions?.length ?? 0) > 0,
+		orchestratorQuestionPending: (view.orchestratorQuestions?.length ?? 0) > 0,
 		failedEffects,
 		completed: view.status === "completed",
 	};
@@ -87,6 +92,12 @@ export function detectTransitions(
 		transitions.push({ workflowId, kind: "review-pending", ...step });
 	if (!previous.questionPending && next.questionPending)
 		transitions.push({ workflowId, kind: "question-pending", ...step });
+	if (!previous.orchestratorQuestionPending && next.orchestratorQuestionPending)
+		transitions.push({
+			workflowId,
+			kind: "orchestrator-question-pending",
+			...step,
+		});
 	if (
 		previous.status !== "attention-required" &&
 		next.status === "attention-required"
@@ -117,6 +128,8 @@ export function describeTransition(transition: WorkflowTransition): string {
 			return "developer review waiting";
 		case "question-pending":
 			return "developer question pending";
+		case "orchestrator-question-pending":
+			return "developer question routed to you — answer or forward it";
 		case "attention-required":
 			return "attention required";
 		case "effect-failed":

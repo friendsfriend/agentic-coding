@@ -33,7 +33,11 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import { answerQuestion } from "../dialogue.ts";
+import {
+	answerQuestion,
+	forwardQuestion,
+	ORCHESTRATOR_QUESTION_TARGET,
+} from "../dialogue.ts";
 import { validateSourceBaseline } from "../evidence.ts";
 import {
 	enqueue,
@@ -91,7 +95,26 @@ function reduceDeveloperAction(
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
 	if (command.actionId === "answer-question")
-		return answerQuestion(snapshot, command.input, now);
+		// The orchestrator capability may only answer questions still routed to it;
+		// the operator may only answer questions routed to the developer. The
+		// expected `targetRole` is derived from the acting principal.
+		return answerQuestion(
+			snapshot,
+			command.input,
+			now,
+			command.principal === "orchestrator"
+				? ORCHESTRATOR_QUESTION_TARGET
+				: undefined,
+		);
+	if (command.actionId === "forward-question") {
+		if (command.principal !== "orchestrator")
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"forward-question is reserved for the orchestrator",
+				snapshot.revision,
+			);
+		return forwardQuestion(snapshot, command.input, now);
+	}
 	if (command.actionId === "switch-preset") {
 		const requested =
 			typeof command.input === "string"
