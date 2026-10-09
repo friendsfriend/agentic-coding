@@ -11,7 +11,7 @@ Big ones:
 * Implement Infrastructure and testing / debugging integration -> Devenv environments fused with agentic work
  ┌────┬───────────────────────────────────────┬────────────┬──────────────┐
  │ #  │ Change                                │ Depends on │ Size (tasks) │
- │ 1  │ add-environment-instances             │ —          │ 12           │
+ │ 1  │ add-environment-instances             │ —          │ 12           │ -> done
  │ 2  │ add-instance-infra-isolation          │ 1          │ 9            │
  │ 3  │ add-environment-instance-lifecycle    │ 1          │ 8            │
  │ 4  │ add-kubernetes-environment-instances  │ 1, 3       │ 9            │
