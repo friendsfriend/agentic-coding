@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Durable agents drive a local headless browser against their environment
-instances, step by step or by script, and keep screenshots, videos and repro
+Durable agents drive a local headless browser against the apps their workflow
+holds, step by step or by script, and keep screenshots, videos and repro
 scripts as evidence.
 
 ## ADDED Requirements
@@ -28,12 +28,17 @@ Browser sessions SHALL be isolated browser contexts of one shared browser proces
 
 ### Requirement: Discrete browser tools
 
-Every durable run SHALL be offered the browser tools; `browser_snapshot` SHALL return an accessibility tree with element refs that action tools accept, and `browser_open` SHALL resolve an app endpoint to the owner's instance.
+Every durable run SHALL be offered the browser tools; `browser_snapshot` SHALL return an accessibility tree with element refs that action tools accept, and `browser_open` SHALL resolve an app endpoint only when the calling workflow holds that app, otherwise failing with `app-not-held` naming the holder.
 
 #### Scenario: Click by ref
 
 - **WHEN** an agent takes a snapshot and calls `browser_click` with a ref from it
 - **THEN** the referenced element SHALL be clicked
+
+#### Scenario: App held by another workflow
+
+- **WHEN** an agent opens the `customer-fe` endpoint while another workflow holds `customer-fe`
+- **THEN** `browser_open` SHALL fail with `app-not-held` naming the holding workflow
 
 ### Requirement: Playwright script execution
 

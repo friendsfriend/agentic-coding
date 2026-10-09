@@ -2,25 +2,25 @@
 
 ## Purpose
 
-The developer sees which instances run for whom, what is queued, and can stop
-agent instances from the Environments feature.
+The developer sees who holds and who waits for each app, and can unblock a
+waiter by force releasing the holder from the Environments feature.
 
 ## ADDED Requirements
 
-### Requirement: Instances and queue are listed live
+### Requirement: Slots show holders and waiters live
 
-The Environments feature SHALL list instances grouped by owner with app, runtime, status, endpoints, idle time and TTL remaining, and queued starts with position, updated from instance events.
+The Environments feature SHALL list every app that is agent-held or has waiters, with its holder, status, endpoints, idle time and the waiting workflows in queue order, updated from slot events without a manual refresh.
 
-#### Scenario: Agent starts an app
+#### Scenario: Workflow starts waiting
 
-- **WHEN** a workflow agent starts an instance
-- **THEN** the view SHALL show it under that workflow without a manual refresh
+- **WHEN** a workflow starts waiting for `customer-mw` held by another workflow
+- **THEN** the Slots section SHALL show `customer-mw` with its holder and the waiting workflow at its queue position
 
-### Requirement: Stop and navigate
+### Requirement: Force release and navigation
 
-The developer SHALL be able to stop an instance after confirmation and open the owning workflow's dashboard from an instance row.
+The developer SHALL be able to force-release an app after a confirmation naming the holder and the next waiter, and SHALL be able to open the dashboard of the holder or of a waiter from the section.
 
-#### Scenario: Stop agent instance
+#### Scenario: Unblock a waiter
 
-- **WHEN** the developer confirms stopping an agent-owned instance
-- **THEN** the instance SHALL be removed including its provisioned schema
+- **WHEN** the developer confirms force release of `customer-mw`
+- **THEN** the holder's run SHALL be stopped and the next waiter SHALL be shown as the holder

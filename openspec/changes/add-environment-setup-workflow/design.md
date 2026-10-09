@@ -4,11 +4,13 @@
 
 The `wiki` family proves the "repository as read-only evidence, write
 elsewhere, approve, then publish" shape. `config migrate` proves protected
-backups. Instances reserve a `config_overlay` column (change 1).
+backups. Slot rows carry a `config_overlay` column
+(`add-environment-instances`, kept by `make-app-runs-exclusive`).
 
 ## Goals / Non-Goals
 
-**Goals:** agents author complete, templated, validated environment definitions;
+**Goals:** agents author complete, validated environment definitions with static
+names and ports;
 nothing becomes live without approval; existing config is never corrupted.
 
 **Non-Goals:** modifying the app repository (mock-auth profiles or OTel agents
@@ -18,15 +20,17 @@ the report lists).
 
 ## Decisions
 
-- **Overlay, not copy.** Discovery for an overlay instance checks the drafts
+- **Overlay, not copy.** Discovery for a run with an overlay checks the drafts
   dir first, then the live config dir, per file name. A draft can therefore
   replace or add a target without touching live files.
-- **Owner.** The setup workflow owns its validation instances as
-  `workflow:<id>` with `config_overlay` set; teardown removes them like any
-  workflow instance.
-- **Validation is deterministic.** The system step runs `env validate` on the
-  overlay (must be templated, `AC_DB_SCHEMA` when requiring isolated infra,
-  `AC_OTEL_*` referenced) and starts each target, waiting for readiness from
+- **Owner.** The setup workflow holds the app slot as `workflow:<id>` with
+  `config_overlay` set while it validates; it waits like any workflow when the
+  app is held, and teardown releases it. Drafts keep the app's existing static
+  ports and names so routing to other apps stays unchanged.
+- **Validation is deterministic.** The system step checks that the overlay
+  parses, discovers and compiles, that run targets reference `AC_OTEL_*`, and
+  that host ports do not collide with another app's static ports. It then
+  starts each target, waiting for readiness from
   the action engine. Agent-side browser smoke checks are part of authoring, not
   of the gate.
 - **Approval diff.** File-level list with unified diffs; files under

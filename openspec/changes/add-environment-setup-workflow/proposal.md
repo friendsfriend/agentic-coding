@@ -3,7 +3,7 @@
 ## Why
 
 A fresh app has no build/test/run definitions, and the converted existing apps
-still need semantic edits (schema variable, mock-auth profile, OTel wiring).
+still need OTel wiring and, where available, a mock-auth profile.
 Writing compose files, run scripts, k8s configs and infra definitions by hand
 is the bottleneck the environment features depend on. Agents can author them,
 but definitions run arbitrary commands on the developer's machine, so nothing
@@ -20,9 +20,10 @@ an agent writes may become runnable without human approval.
     `apps/build/*`, `apps/run/*`, `apps/compose/*`,
     `apps/kubernetes/<app>-<profile>.k8s.json`, `infrastructure/definitions/*`,
     `infrastructure/compose/*`. While authoring, the agent's `env_*` tools run
-    against the drafts via the instance config overlay, so it can build, start
-    and browse its own drafts.
-  - `setup.validate` (system): template validator + start every drafted run
+    against the drafts via the slot's config overlay, so it can build, start
+    and browse its own drafts (waiting like any workflow if the app is held).
+  - `setup.validate` (system): structural checks (definitions parse,
+    discover and compile; `AC_OTEL_*` referenced) + start every drafted run
     target (Docker always; script if drafted; Kubernetes only if drafted and the
     cluster exists) and wait for readiness; failure returns to author with the
     report (bounded 5 rounds).
@@ -53,8 +54,8 @@ an agent writes may become runnable without human approval.
 - `agent-definitions/instructions/env-setup.md`,
   `src/workflow/definitions/graphs/env-setup.ts`, `src/workflow/steps/env-setup.ts`,
   `registerBuiltins.ts`, `catalog.ts`; overlay support in
-  `src/server/actions/discovery.ts` and instance start; promotion in
+  `src/server/actions/discovery.ts` and slot start; promotion in
   `src/server/environment/manager.ts`; approval diff view on the dashboard.
-- Depends on `add-environment-instances`, `add-instance-infra-isolation`,
-  `template-existing-environment-configs` (validator),
-  `add-agent-environment-tools`.
+- Depends on `make-app-runs-exclusive` (slot + `config_overlay`),
+  `add-agent-environment-tools` and `add-agent-debug-tools` (`AC_OTEL_*`
+  variables the validation checks).

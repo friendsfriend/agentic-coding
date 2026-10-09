@@ -37,9 +37,9 @@ After investigation the workflow SHALL wait at `debug.review`; approve SHALL com
 
 ### Requirement: Debug workflows never deliver
 
-The `debug` family SHALL NOT contain archive, delivery or pull-request steps, and closing it SHALL tear down its instances.
+The `debug` family SHALL NOT contain archive, delivery or pull-request steps, and closing it SHALL stop and release every app it holds.
 
 #### Scenario: Close
 
 - **WHEN** the developer closes a completed debug workflow
-- **THEN** its instances SHALL be removed and no pull request SHALL exist
+- **THEN** every app it held SHALL be stopped and released and no pull request SHALL exist

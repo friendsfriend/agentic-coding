@@ -2,31 +2,35 @@
 
 ## Why
 
-Agent-owned instances, queued starts and idle timers run in the background.
-Without visibility the developer cannot tell why the machine is loaded, which
-workflow owns a container, or why an agent waits in a queue.
+With one run per app, workflows wait for each other and for the developer. A
+toast says that something waits, but the developer needs one place to see who
+holds which app, who waits and for how long, and to unblock a waiter by force
+releasing the holder.
 
 ## What Changes
 
-- An **Instances** section in the Environments feature: rows grouped by owner
-  (`user`, each workflow with its title), columns app, runtime, status,
-  endpoints/ports, idle time and TTL remaining.
-- A **Queue** section showing queued starts with position and age.
-- Actions: stop an agent-owned instance (confirmation), jump to the owning
-  workflow's dashboard.
-- Live updates through the existing event stream (`environment.instance.*`
-  events emitted by the instance manager).
+- A **Slots** section in the Environments feature. One row per app that is
+  held or waited for, with: holder (`you` or the workflow title), runtime,
+  status, endpoints, held-since and idle time (TTL remaining for agent
+  holders), and the waiting workflows in queue order with their wait time.
+- Actions:
+  - **Force release** (with confirmation): stops the holder's run and grants
+    the next waiter (route from `make-app-runs-exclusive`).
+  - **Open owning workflow**: jumps to the holder's or a waiter's dashboard.
+- Live updates from `environment.slot.*` events, with a re-snapshot from
+  `GET /api/v1/environment/apps/slots` on a sequence gap.
+- The app list marks apps held by an agent, so a refused human start explains
+  itself.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `environment-instance-view`: TUI listing of instances and queue with stop and
-  navigate actions.
+- `environment-instance-view`: TUI listing of app slots, holders and waiters,
+  with force-release and navigation actions.
 
 ## Impact
 
 - `src/tui/app/EnvironmentsFeature.tsx` and its packages under
-  `packages/devenv/cli/src/tui/`, the environment keybind catalog, event
-  publication in `src/server/environment/instances/`.
-- Depends on `add-environment-instances`, `add-environment-instance-lifecycle`.
+  `packages/devenv/cli/src/tui/`, the environment keybind catalog.
+- Depends on `make-app-runs-exclusive` and `add-environment-instance-lifecycle`.

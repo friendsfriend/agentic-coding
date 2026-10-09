@@ -32,9 +32,10 @@ mock auth), visual diffing, remote/container browsers.
   the internal snapshot API is unavailable, inject `data-ac-ref` attributes
   while walking the accessibility tree (fallback decided in the spike).
 - **Endpoint resolution.** `browser_open({app, endpoint})` resolves the
-  owner's instance endpoint and touches instance activity; any URL is allowed
-  (agents have bash anyway), but only loopback and instance endpoints are
-  pre-resolved.
+  app's static endpoint, but only when the calling workflow holds that app;
+  otherwise it returns `app-not-held` naming the holder, so an agent never
+  tests another workflow's code by accident. It touches the app's activity.
+  Any raw URL is allowed (agents have bash anyway).
 - **Recording.** Playwright records video per context from creation.
   `browser_record_start` snapshots `storageState` and URL, creates a recording
   context, and restores them; `browser_record_stop` closes it to flush the

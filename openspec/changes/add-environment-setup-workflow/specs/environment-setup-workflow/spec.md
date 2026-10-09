@@ -19,7 +19,7 @@ The `env-setup` family SHALL write definitions only under its drafts directory; 
 
 ### Requirement: Drafts are runnable before approval
 
-During authoring and validation, instances owned by the setup workflow SHALL resolve definitions from the drafts directory before the live configuration.
+During authoring and validation, app runs held by the setup workflow SHALL resolve definitions from the drafts directory before the live configuration.
 
 #### Scenario: Agent starts its draft
 
@@ -28,12 +28,12 @@ During authoring and validation, instances owned by the setup workflow SHALL res
 
 ### Requirement: Deterministic validation gate
 
-Before approval the workflow SHALL validate every drafted target with the template validator and by starting it to readiness; a failure SHALL return to authoring with the failure report, bounded to five rounds.
+Before approval the workflow SHALL validate every drafted target structurally (parse, discover, compile, OTel variables, no host-port collision with another app) and by starting it to readiness; a failure SHALL return to authoring with the failure report, bounded to five rounds.
 
-#### Scenario: Missing schema variable
+#### Scenario: Port collision
 
-- **WHEN** a drafted target requires isolated Postgres without `AC_DB_SCHEMA`
-- **THEN** validation SHALL fail and the author SHALL receive the validator finding
+- **WHEN** a drafted compose target publishes host port 8080 already used by another app's definition
+- **THEN** validation SHALL fail and the author SHALL receive the collision finding
 
 ### Requirement: Approval shows a diff and flags shared infra
 

@@ -13,7 +13,8 @@ approve it.
 - Tools for every durable run except debug runs themselves:
   - `debug_request({goal, context?, apps?})` → request id; starts a `debug`
     role run asynchronously in the **caller's worktree** with the caller
-    workflow's owner (shared instances);
+    workflow's owner (it shares the workflow's held apps and waits like any
+    workflow run for apps others hold);
   - `debug_result(id)` → status and report when done;
   - `debug_wait(id, timeoutSec?)` → blocks until done or timeout (≤ 30 min);
   - `debug_cancel(id)`.

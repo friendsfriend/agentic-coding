@@ -14,7 +14,7 @@ with evidence.
 - A **`debug` agent role**: instructions `agent-definitions/instructions/debug.md`
   (reproduce first, minimal hypothesis-driven probing, Docker-first, kind only
   for concurrency, keep evidence only when it shows the problem or the fix,
-  stop instances when done, structured report). Writable: it may edit code to
+  stop apps when done because others may be waiting, structured report). Writable: it may edit code to
   probe or fix.
 - A standalone **`debug` workflow family**: `start --workflow debug --repo PATH
   --mode worktree --branch BRANCH --task TEXT [--app IDENT]`.
@@ -26,7 +26,7 @@ with evidence.
   - Output: `debug-report.md` (summary, environment, reproduction steps,
     expected vs actual, findings with evidence ids, code changes, open
     questions) plus `changes.patch` evidence when the worktree is dirty.
-  - No delivery, archive or PR steps. Close tears down instances (change 3) and
+  - No delivery, archive or PR steps. Close releases its apps (`add-environment-instance-lifecycle`) and
     cleanup removes the worktree.
 - Routing: a `debug` pool in presets, falling back to the preset default
   profile.

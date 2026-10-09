@@ -1,15 +1,15 @@
 # Tasks
 
-## 1. Events
+## 1. Data
 
-- [ ] 1.1 Publish `environment.instance.*` events from the instance manager and queue; verify payloads and sequence.
+- [ ] 1.1 Keep a keyed slot store from `environment.slot.*` and start/stop events, re-snapshotting from `/api/v1/environment/apps/slots` on a gap; verify with a fake event stream.
 
 ## 2. View
 
-- [ ] 2.1 Add the Instances and Queue sections with live store and gap re-snapshot; verify with OpenTUI test renderer.
-- [ ] 2.2 Add stop (with confirmation) and open-workflow actions; verify routes called and `user` vs agent behavior.
-- [ ] 2.3 Declare keybinds in the environment catalog; open the TUI and confirm footer and `?` help.
+- [ ] 2.1 Add the Slots section (holder, waiters in order, wait time, idle/TTL) and the held-by-agent marker in the app list; verify with the OpenTUI test renderer.
+- [ ] 2.2 Add force release (with confirmation) and open-workflow; verify the routes called and the confirmation text.
+- [ ] 2.3 Declare the keybinds in the environment catalog; open the TUI and confirm the footer and `?` help list them.
 
 ## 3. Checks
 
-- [ ] 3.1 Run `bun run lint`, `bun run type-check` and focused tests with zero diagnostics.
+- [ ] 3.1 Run `bun run lint`, `bun run type-check` and the focused tests with zero diagnostics.

@@ -2,35 +2,25 @@
 
 ## Purpose
 
-Agent-owned instances are bounded in number and lifetime: removed with their
-owner or when idle, and queued when the machine is at capacity.
+Agent-held apps are released when their workflow ends or when they sit idle,
+so waiting workflows always make progress.
 
 ## ADDED Requirements
 
-### Requirement: Owner-bound teardown
+### Requirement: Owner-bound release
 
-When a workflow is closed or deleted, the engine SHALL remove every instance owned by that workflow through a durable `environment.teardown` effect; an unreachable environment server SHALL be retried and SHALL NOT be recorded as a completed removal.
+When a workflow is closed or deleted, the engine SHALL stop every app held by that workflow through a durable `environment.teardown` effect; an unreachable environment server SHALL be retried and SHALL NOT be recorded as a completed release.
 
-#### Scenario: Workflow deleted
+#### Scenario: Workflow deleted while another waits
 
-- **WHEN** a workflow with two running instances is deleted
-- **THEN** both instances and their provisioned schemas SHALL be removed
+- **WHEN** a workflow holding `customer-mw` is deleted while another workflow waits for `customer-mw`
+- **THEN** `customer-mw` SHALL be stopped and granted to the waiting workflow
 
-### Requirement: Idle instances are reaped
+### Requirement: Idle agent-held apps are released
 
-Agent-owned instances idle longer than the configured TTL SHALL be removed; instances in `unknown` state and `user` instances SHALL NOT be reaped.
+Agent-held apps idle longer than the configured TTL SHALL be stopped and released, with a reap event published; apps in `unknown` state, apps held by `user`, and apps held by an owner that is currently waiting for other apps SHALL NOT be reaped.
 
-#### Scenario: Forgotten instance
+#### Scenario: Forgotten app
 
-- **WHEN** an agent-owned instance has no activity for longer than `idle_ttl_minutes`
-- **THEN** the reaper SHALL remove it
-
-### Requirement: Capacity caps queue starts
-
-An agent-owned start that would exceed `max_total`, or `max_kubernetes` for a Kubernetes target, SHALL be queued FIFO and answered with its queue position; removing an instance SHALL promote queued starts that now fit. `user` instances SHALL NOT count against the caps.
-
-#### Scenario: Seventh instance
-
-- **WHEN** six agent-owned instances run and a seventh start arrives with the default cap
-- **THEN** the start SHALL be answered `queued` with position 1
-- **AND** it SHALL start once one of the six is removed
+- **WHEN** an agent-held app has no activity for longer than `idle_ttl_minutes`
+- **THEN** the reaper SHALL stop it, release the slot and publish `environment.slot.reaped`

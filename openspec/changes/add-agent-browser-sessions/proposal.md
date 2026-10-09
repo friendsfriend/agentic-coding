@@ -6,7 +6,7 @@ Agents can start web apps but cannot see them. Verifying UI behavior,
 reproducing a user-reported bug, or showing the developer what happened needs a
 real browser plus screenshots and video. The existing `playwright-server`
 infrastructure container is not used by agents, and a container browser cannot
-reach host-published instance ports without extra networking.
+reach apps published on host loopback without extra networking.
 
 ## What Changes
 
@@ -15,10 +15,11 @@ reach host-published instance ports without extra networking.
   `~/.config/agentic-coding/browsers/` (Settings → Browser → Install), or a
   detected system Chrome is used without download.
 - Sessions per durable run (default session plus named ones), capped by
-  `browser.max_sessions` (default 4) with the same FIFO queue semantics as
-  instances; closed on run end and after idle TTL.
+  `browser.max_sessions` (default 4) with FIFO queueing of session opens;
+  closed on run end and after idle TTL.
 - Discrete tools for every durable run:
-  `browser_open({url | app+endpoint, session?, viewport?})`,
+  `browser_open({url | app+endpoint, session?, viewport?})` (an app endpoint
+  resolves to the app's static URL and requires the workflow to hold the app),
   `browser_snapshot` (accessibility tree with element refs),
   `browser_click`, `browser_fill`, `browser_press`, `browser_select`,
   `browser_hover`, `browser_wait({ref|text|url, timeoutMs})`,

@@ -2,43 +2,44 @@
 
 ## Purpose
 
-Agents read traces, data and API responses of their own instances, with every
-span attributed to an instance and every access bounded and read-only.
+Agents read traces, data and API responses of the apps their workflow holds.
+Every span is attributed to the workflow run that produced it, and every access
+is bounded and read-only.
 
 ## ADDED Requirements
 
-### Requirement: Instances export traces to the local receiver
+### Requirement: App runs export attributed traces to the local receiver
 
-Every instance SHALL receive OTel endpoint, service name and resource attributes identifying instance, owner and app, resolved for its runtime; the receiver SHALL NOT bind a wildcard address.
+Every app run SHALL receive an OTel endpoint, a service name and resource attributes identifying the app, the owner and the slot grant, resolved for its runtime; the receiver SHALL NOT bind a wildcard address.
 
-#### Scenario: Script instance
+#### Scenario: Script run
 
-- **WHEN** a script instance starts without its own `OTEL_*` settings
-- **THEN** it SHALL receive `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at the local receiver and `OTEL_RESOURCE_ATTRIBUTES` containing `ac.instance`
+- **WHEN** a script run starts without its own `OTEL_*` settings
+- **THEN** it SHALL receive `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at the local receiver and `OTEL_RESOURCE_ATTRIBUTES` containing `ac.owner` and `ac.run`
 
-### Requirement: Trace query is scoped to the owner
+### Requirement: Trace query is scoped to the workflow's runs
 
-`otel_query` SHALL return only spans whose `ac.instance` belongs to the calling owner, as bounded trace summaries or one bounded span tree.
+`otel_query` SHALL return only spans whose `ac.owner` is the calling workflow, as bounded trace summaries or one bounded span tree.
 
-#### Scenario: Error trace
+#### Scenario: Previous holder's traces
 
-- **WHEN** an agent queries `status: error` after a failing request
-- **THEN** the result SHALL list the failing trace and its span tree SHALL include the exception event
+- **WHEN** `workflow:a` ran `customer-mw`, released it, and `workflow:b` now queries traces of `customer-mw`
+- **THEN** `workflow:a`'s spans SHALL NOT appear in `workflow:b`'s result
 
 ### Requirement: Database access is read-only and bounded
 
-`db_query` SHALL run in a read-only transaction scoped to the instance schema with a statement timeout and row cap, SHALL always roll back, and SHALL refuse infra without isolation and the `user` instance.
+`db_query` SHALL run in a read-only transaction with a statement timeout and row cap, SHALL always roll back, and SHALL be allowed only for infra with a declared query connection that a held app of the workflow requires.
 
 #### Scenario: Write attempt
 
 - **WHEN** an agent runs `UPDATE` through `db_query`
 - **THEN** the database SHALL reject it inside the read-only transaction and no change SHALL persist
 
-### Requirement: HTTP calls target own instances
+### Requirement: HTTP calls target held apps
 
-`http_request` SHALL only call endpoints of the owner's instances and SHALL return a size-capped, redacted response.
+`http_request` SHALL only call static endpoints of apps the calling workflow holds and SHALL return a size-capped, redacted response.
 
-#### Scenario: Foreign host
+#### Scenario: App not held
 
-- **WHEN** an agent calls `http_request` with a URL outside its instances
-- **THEN** the tool SHALL refuse it
+- **WHEN** an agent calls `http_request` for an app another workflow holds
+- **THEN** the tool SHALL refuse naming the holder
