@@ -9,8 +9,11 @@
 //     itself stays in the CLI layer)
 //   - `drainEffects` + `CONTINUATION_WAIT_MS` moved from cli/drain.ts
 //   - `listProjects` moved from cli/commands/misc.ts
+import fs from "node:fs";
+import path from "node:path";
 import { Effect } from "effect";
 import type { WorkflowDeletion } from "../contracts/actions.ts";
+import type { SessionsReport } from "../contracts/sessions-report.ts";
 import { runWorktree } from "../worktree/boundary.ts";
 import { WorktreeAdapter } from "../worktree/index.ts";
 import { WorktreeError } from "../worktree/port.ts";
@@ -24,6 +27,7 @@ import {
 	loadProjectCatalog,
 	type ProjectCatalogOptions,
 	type ProjectOption,
+	projectCanonicalRoots,
 	projectOptions,
 } from "./project-catalog.ts";
 import {
@@ -32,7 +36,13 @@ import {
 	isWikiWorkflowTarget,
 	WorkflowEngine,
 	wikiWorkflowDataRoot,
+	workflowTargets,
 } from "./runtime.ts";
+import {
+	buildSessionsReport,
+	parseSinceToMs,
+	type SessionFileInput,
+} from "./sessions-report.ts";
 export const CONTINUATION_WAIT_MS = 65_000;
 
 /** The `WorkflowEngine` factory built from the process-lifetime builtin
@@ -106,6 +116,92 @@ export async function listProjects(
 ): Promise<ProjectOption[]> {
 	const catalog = await loadProjectCatalog(options);
 	return projectOptions(catalog);
+}
+
+/** The session-efficiency report over telemetry from every known target
+ * (the configured project catalog + the custom-path target registry + the
+ * shared wiki/research data root — the same set the sidebar and launch limits
+ * read). Observational: it only reads `telemetry.jsonl` files, never a store,
+ * so it never initializes, migrates, drains, or mutates. A target whose
+ * directory cannot be read is named in `skippedTargets`, not dropped silently.
+ * The deterministic analysis lives in the pure `sessions-report` module; this
+ * is the one I/O boundary both the orchestrator observation and the CLI
+ * command share. */
+export async function sessionsReport(options?: {
+	since?: string;
+	nowMs?: number;
+	catalog?: ProjectCatalogOptions;
+}): Promise<SessionsReport> {
+	const nowMs = options?.nowMs ?? Date.now();
+	const windowMs = parseSinceToMs(options?.since);
+	const sinceLabel = options?.since ?? "7d";
+	const fromMs = nowMs - windowMs;
+
+	const targets = new Set<string>();
+	try {
+		for (const root of projectCanonicalRoots(
+			await loadProjectCatalog(options?.catalog ?? {}),
+		))
+			targets.add(root);
+	} catch {
+		// A catalog that cannot load contributes no roots; the registry and the
+		// shared data root below are still read.
+	}
+	for (const target of workflowTargets()) targets.add(target);
+
+	const files: SessionFileInput[] = [];
+	const skippedTargets: string[] = [];
+
+	// A repository target keeps its runs under `<target>/.herdr-workflow/<id>/`;
+	// the shared wiki/research store keeps them directly under its data root.
+	const collect = (target: string, workflowsRoot: string): void => {
+		let entries: fs.Dirent[];
+		try {
+			if (!fs.existsSync(workflowsRoot)) return;
+			entries = fs.readdirSync(workflowsRoot, { withFileTypes: true });
+		} catch {
+			skippedTargets.push(target);
+			return;
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const file = path.join(workflowsRoot, entry.name, "telemetry.jsonl");
+			try {
+				const stat = fs.statSync(file);
+				// Cheap pre-filter: a file last written before the window opened
+				// cannot hold an in-window run.
+				if (stat.mtimeMs < fromMs) continue;
+				const events = fs
+					.readFileSync(file, "utf8")
+					.split(/\r?\n/)
+					.filter(Boolean)
+					.flatMap((line) => {
+						try {
+							return [JSON.parse(line) as Record<string, unknown>];
+						} catch {
+							return [];
+						}
+					});
+				if (events.length > 0)
+					files.push({ target, workflowId: entry.name, events });
+			} catch {
+				// A missing or unreadable telemetry file for one workflow is skipped
+				// individually; it does not fail the whole target.
+			}
+		}
+	};
+
+	for (const target of targets)
+		collect(target, path.join(target, ".herdr-workflow"));
+	try {
+		const shared = wikiWorkflowDataRoot();
+		collect(shared, shared);
+	} catch {
+		// No shared data root on this machine; nothing to collect.
+	}
+
+	const report = buildSessionsReport(files, { nowMs, windowMs, sinceLabel });
+	return { ...report, skippedTargets: skippedTargets.sort() };
 }
 
 /** Delete one durable workflow: its store rows first, then its worktree

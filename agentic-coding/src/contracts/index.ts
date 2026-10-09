@@ -20,5 +20,6 @@ export * from "./decode.ts";
 export * from "./environment.ts";
 export * from "./gateway.ts";
 export * from "./integration.ts";
+export * from "./sessions-report.ts";
 export * from "./telemetry.ts";
 export * from "./workflow.ts";

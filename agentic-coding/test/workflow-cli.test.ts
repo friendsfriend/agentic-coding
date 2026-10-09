@@ -85,6 +85,7 @@ describe("breaking workflow CLI surface", () => {
 			"repin",
 			"migrate",
 			"projects",
+			"sessions-report",
 			"config",
 			"agent-extension",
 			"wiki",

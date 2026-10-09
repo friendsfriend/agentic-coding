@@ -33,6 +33,7 @@ import type {
 } from "../../contracts/workflow";
 import type { WorkflowView } from "../../contracts/workflow.ts";
 import { effectiveManifestPolicy } from "../../workflow/definitions.ts";
+import { sessionsReport } from "../../workflow/operations.ts";
 import {
 	fetchProjectCatalog,
 	loadProjectCatalog,
@@ -106,7 +107,8 @@ export type DashboardObservation =
 	| { kind: "developer-review-findings"; repo: string; workflowId: string }
 	| { kind: "repair-preview"; repo: string; workflowId: string }
 	| { kind: "changes"; repo: string }
-	| { kind: "branches"; repo: string };
+	| { kind: "branches"; repo: string }
+	| { kind: "sessions-report"; since?: string };
 
 /** Run an observation in-process. This is the server-side dispatch the HTTP
  * transport exposes (expose-unified-bun-backend, task 2.2): the TUI reaches it
@@ -168,6 +170,8 @@ export async function runLocalObservation(
 			return discoverChanges(observation.repo);
 		case "branches":
 			return discoverBranches(observation.repo);
+		case "sessions-report":
+			return sessionsReport({ since: observation.since });
 	}
 }
 

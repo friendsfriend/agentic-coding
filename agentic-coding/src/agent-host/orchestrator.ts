@@ -373,6 +373,23 @@ export function createOrchestratorExtension(
 				}),
 			}),
 			defineTool({
+				name: "sessions_report",
+				description:
+					"Read a deterministic efficiency report over the agent sessions of every workflow in a time window (default 7d). Per role × model-profile × family: turns, tools, batching ratio (tools per turn), tool failures, blocked and abandoned runs, and cost; plus a ranked, content-free finding list. Each finding is tagged prompt | config | engine | task: `prompt` means the issue reproduced across ≥2 model profiles for that role (a brief to fix), `config` means it was seen under a single model (the model is not ruled out — consider routing, not a prompt edit). No session content, task text, or command text is included. Use it to answer how recent runs went and what to improve.",
+				replay: "safe",
+				parameters: Type.Object({
+					since: Type.Optional(
+						Type.String({
+							description:
+								"Window length as <number><unit>, unit one of s/m/h/d. Default 7d.",
+						}),
+					),
+				}),
+				execute: run(async (args: { since?: string }, env) =>
+					observe(env, { kind: "sessions-report", since: args.since }),
+				),
+			}),
+			defineTool({
 				name: "workflow_status",
 				description:
 					"Read one workflow in detail: status, current step, runs, failed effects, pending developer questions, and available actions.",

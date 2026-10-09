@@ -10,7 +10,7 @@ import { Schema } from "effect";
 import { backendClientFromEnv } from "../../server/client.ts";
 import { WorkflowApplication } from "../application.ts";
 import { loadConfig } from "../effects.ts";
-import { drainEffects, listProjects } from "../operations.ts";
+import { drainEffects, listProjects, sessionsReport } from "../operations.ts";
 import { verificationPosition } from "../run-projections.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
@@ -150,6 +150,23 @@ export async function run(argv: string[]): Promise<void> {
 				client
 					? await client.observe({ kind: "projects" }, Schema.Unknown)
 					: await listProjects(),
+			),
+		);
+		return;
+	}
+	if (command === "sessions-report") {
+		const since = flag(rest, "since") ?? "7d";
+		const client = backendClientFromEnv();
+		console.log(
+			JSON.stringify(
+				client
+					? await client.observe(
+							{ kind: "sessions-report", since },
+							Schema.Unknown,
+						)
+					: await sessionsReport({ since }),
+				null,
+				2,
 			),
 		);
 		return;

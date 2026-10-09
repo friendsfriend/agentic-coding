@@ -18,6 +18,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"repin",
 	"migrate",
 	"projects",
+	"sessions-report",
 	"config",
 	"agent-extension",
 	"wiki",
@@ -130,6 +131,7 @@ const FLAG_SCHEMA: Record<
 	},
 	sidebar: { values: ["repo"], booleans: ["disable"], positionals: [0, 0] },
 	projects: { values: [], positionals: [0, 0] },
+	"sessions-report": { values: ["since"], positionals: [0, 0] },
 	config: { values: [], positionals: [0, 0] },
 	"agent-extension": { values: ["profile"], positionals: [1, 2] },
 	wiki: {

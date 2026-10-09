@@ -68,6 +68,10 @@ const observationSchema = Schema.Union(
 	}),
 	Schema.Struct({ kind: Schema.Literal("changes"), repo: Schema.String }),
 	Schema.Struct({ kind: Schema.Literal("branches"), repo: Schema.String }),
+	Schema.Struct({
+		kind: Schema.Literal("sessions-report"),
+		since: Schema.optional(Schema.String),
+	}),
 );
 
 export type ObservationRequest = typeof observationSchema.Type;
