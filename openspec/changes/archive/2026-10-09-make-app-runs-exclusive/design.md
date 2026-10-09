@@ -41,10 +41,13 @@ is), priorities or preemption between agents.
   same apps keeps the queue position if it arrives within 60 s; after that the
   entry expires. Abort of the HTTP request withdraws the entry after the 60 s
   grace.
-- **Deadlock.** Before enqueueing, build the wait-for graph (owner → holders of
-  the requested apps → apps those holders wait for → …). If the requester is
-  reachable, fail with `deadlock` and the cycle. `user` never waits, so it
-  never closes a cycle.
+- **Deadlock.** A request is given its wait edge in every queue first, and the
+  wait-for graph (owner → holders of the requested apps → apps those holders
+  wait for → …) is walked after: if the requester is reachable, the entry is
+  withdrawn and the request fails with `deadlock` and the cycle. Publishing the
+  edge first is what makes two crossing requests detectable — the request that
+  enqueues last sees every earlier edge. `user` never waits, so it never closes
+  a cycle.
 - **Activity while waiting.** A waiting owner's held slots count as active, so
   idle TTL (`add-environment-instance-lifecycle`) does not reap apps the owner
   still needs.
@@ -67,6 +70,12 @@ is), priorities or preemption between agents.
   one app (left from the parallel era), keep the observed-running one and mark
   the others `stopped` after observation confirms they are gone. Otherwise keep
   them as `unknown`, which blocks the slot until reconcile or force release.
+  The SQL migration alone cannot observe, so it never writes `stopped`: it keeps
+  the persisted-`running` row (or else the newest, as `unknown`) and retires the
+  others to `superseded`, and the controller's startup `reconcile()` observes
+  each retired row before it may become `stopped` (a container that is still
+  there keeps its honest `superseded` status and is cleared by a developer
+  release or stop, which stops the parallel-era `<app>-<instance>` project).
   Backup and integrity checks follow the existing path.
 - **Routes.** `/api/v1/environment/apps/{acquire,{app}/release,{app}/stop}`
   plus `GET /api/v1/environment/apps/slots` (holder, status, waiters). The

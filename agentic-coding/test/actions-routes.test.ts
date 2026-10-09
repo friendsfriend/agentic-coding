@@ -267,6 +267,72 @@ describe("definitions", () => {
 });
 
 describe("running an action", () => {
+	test("an agent holding the app refuses the developer's run and restart", async () => {
+		const f = fixture();
+		await rebuildDefinitions(f.services, f.context.registry);
+		// The app runs once at a time: while an agent holds the slot, a run or a
+		// restart is refused and names the holder instead of replacing its copy.
+		const context = createActionRouteContext({
+			...f.services,
+			registry: f.context.registry,
+			humanRunGuard: async (ident: string) =>
+				ident === "shop" ? { holder: "workflow:run-a" } : undefined,
+		});
+		for (const actionId of [
+			"app/shop/action/run/command-shell/dev",
+			"app/shop/action/restart/docker/default",
+		]) {
+			const response = await call(context, "POST", "/api/action-runs", {
+				actionId,
+			});
+			expect(response.status).toBe(409);
+			expect(await response.json()).toEqual({
+				error: "held-by",
+				message: "held-by workflow:run-a",
+			});
+		}
+		expect(context.runs.all()).toEqual([]);
+	});
+
+	test("a developer stop yields the slot before it tears the run down", async () => {
+		const f = fixture();
+		await rebuildDefinitions(f.services, f.context.registry);
+		const released: string[] = [];
+		const context = createActionRouteContext({
+			...f.services,
+			registry: f.context.registry,
+			humanStopRelease: async (ident: string) => {
+				released.push(ident);
+				return undefined;
+			},
+		});
+		const response = await call(context, "POST", "/api/action-runs", {
+			actionId: "app/shop/action/stop/docker/default",
+		});
+		expect(response.status).toBe(202);
+		expect(released).toEqual(["shop"]);
+		expect(await response.json()).not.toHaveProperty("warning");
+	});
+
+	test("a stop whose yield failed reports the warning in its response", async () => {
+		const f = fixture();
+		await rebuildDefinitions(f.services, f.context.registry);
+		const context = createActionRouteContext({
+			...f.services,
+			registry: f.context.registry,
+			humanStopRelease: async () =>
+				"shop: the holding run could not be released; it may still be recorded as running",
+		});
+		const response = await call(context, "POST", "/api/action-runs", {
+			actionId: "app/shop/action/stop/docker/default",
+		});
+		expect(response.status).toBe(202);
+		expect((await response.json()) as { warning?: string }).toMatchObject({
+			warning:
+				"shop: the holding run could not be released; it may still be recorded as running",
+		});
+	});
+
 	test("a command step runs, is projected and is persisted", async () => {
 		const f = fixture();
 		await rebuildDefinitions(f.services, f.context.registry);

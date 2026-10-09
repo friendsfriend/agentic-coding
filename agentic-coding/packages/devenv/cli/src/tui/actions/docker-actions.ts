@@ -8,6 +8,7 @@ import type {
 } from "@devenv/types";
 import type { AppStore } from "../stores/app-store.ts";
 import type { UiStore } from "../stores/ui-store.ts";
+import { agentSlotRefusal } from "./app-slot.ts";
 
 export function operationProgressLabel(
 	action: AppAction | "start" | "stop" | "restart",
@@ -417,6 +418,16 @@ export function createDockerActions(
 		target: ActionTarget,
 	) => {
 		const appIdent = app.ident;
+		// An agent holding the app's slot keeps the developer from starting a
+		// second copy: refuse with one toast before anything is marked in
+		// progress, rather than raising the same text on two surfaces.
+		if (action === "run") {
+			const refusal = await agentSlotRefusal(client, appIdent, app.displayName);
+			if (refusal) {
+				uiStore.setNotification(refusal, "warning");
+				return;
+			}
+		}
 		appStore.setOperationInProgressForApp(appIdent);
 		appStore.setError(null);
 		setActionStatus(

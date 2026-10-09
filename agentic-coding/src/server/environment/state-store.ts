@@ -14,7 +14,36 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
+
+/** Statuses that hold an app's slot: the app runs, starts, stops or cannot be
+ * observed, so no other owner may start it. A unique partial index on `app`
+ * enforces at most one such row per app. */
+export const ACTIVE_INSTANCE_STATUSES = [
+	"starting",
+	"running",
+	"stopping",
+	"unknown",
+] as const;
+
+/** Statuses that release an app's slot. `failed` is terminal-and-unowned (v8
+ * treats it as re-claimable), `released-by-developer` is the notice the force
+ * release leaves for the holder's next call, and `superseded` is the honest
+ * status the v9 collapse gives a parallel-era row it could not observe: the row
+ * no longer holds the slot, but nothing claims its run is gone. */
+export const INACTIVE_INSTANCE_STATUSES = [
+	"stopped",
+	"failed",
+	"released-by-developer",
+	"superseded",
+] as const;
+
+const ACTIVE_STATUS_SQL = ACTIVE_INSTANCE_STATUSES.map(
+	(status) => `'${status}'`,
+).join(", ");
+const INACTIVE_STATUS_SQL = INACTIVE_INSTANCE_STATUSES.map(
+	(status) => `'${status}'`,
+).join(", ");
 
 export class EnvironmentStateError extends Error {
 	readonly code: string = "environment-state";
@@ -83,12 +112,6 @@ export interface EnvironmentInstanceRecord {
 	status: string;
 	createdAt: string;
 	lastActivityAt: string;
-}
-
-export interface PortAllocationRecord {
-	instanceId: string;
-	name: string;
-	port: number;
 }
 
 interface EnvironmentInstanceDbRow {
@@ -321,6 +344,56 @@ const MIGRATIONS: Migration[] = [
 					PRIMARY KEY(instance_id, name)
 				)
 			`);
+		},
+	},
+	{
+		version: 9,
+		apply: (db) => {
+			// The parallel era allocated a host port per instance; static ports are
+			// the definition's own now, so the allocator table has no reader left.
+			db.exec(`DROP TABLE IF EXISTS port_allocations`);
+			// One active row per app. A v8 database may hold several active rows for
+			// one app, each with its own `<app>-<instance>` compose project. The
+			// database alone cannot confirm such a run is gone, so this migration
+			// never writes `stopped`: the rows it retires become `superseded`, and
+			// `reconcile()` (which observes the runtime) confirms them as stopped.
+			// The statuses below are frozen literals, like every earlier migration:
+			// the on-disk schema of version 9 must not depend on which build applied
+			// it. A future status change needs its own migration that recreates
+			// idx_env_instances_active_app.
+			const apps = db
+				.query(
+					`SELECT DISTINCT app FROM env_instances
+					 WHERE status IN ('starting', 'running', 'stopping', 'unknown')`,
+				)
+				.all() as Array<{ app: string }>;
+			const retireRow = db.prepare(
+				`UPDATE env_instances SET status = 'superseded' WHERE id = ?`,
+			);
+			const setStatus = db.prepare(
+				`UPDATE env_instances SET status = ? WHERE id = ?`,
+			);
+			for (const { app } of apps) {
+				const rows = db
+					.query(
+						`SELECT id, status FROM env_instances
+						 WHERE app = ? AND status IN ('starting', 'running', 'stopping', 'unknown')
+						 ORDER BY created_at DESC, id DESC`,
+					)
+					.all(app) as Array<{ id: string; status: string }>;
+				if (rows.length <= 1) continue;
+				const running = rows.find((row) => row.status === "running");
+				const keep = running ?? (rows[0] as { id: string; status: string });
+				for (const row of rows) if (row.id !== keep.id) retireRow.run(row.id);
+				// Without an observed run the kept row blocks the slot as `unknown`
+				// until reconcile or force release decides.
+				if (!running) setStatus.run("unknown", keep.id);
+			}
+			db.exec(
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_env_instances_active_app
+				 ON env_instances(app)
+				 WHERE status IN ('starting', 'running', 'stopping', 'unknown')`,
+			);
 		},
 	},
 ];
@@ -818,6 +891,45 @@ export class EnvironmentStateStore {
 		);
 	}
 
+	/** The active rows: at most one per app, held regardless of owner. */
+	getActiveEnvironmentInstances(): EnvironmentInstanceRecord[] {
+		const rows = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances WHERE status IN (${ACTIVE_STATUS_SQL}) ORDER BY created_at, id`,
+			)
+			.all() as EnvironmentInstanceDbRow[];
+		return rows.map(
+			(row) => mapEnvironmentInstanceRow(row) as EnvironmentInstanceRecord,
+		);
+	}
+
+	/**
+	 * Parallel-era rows the v9 collapse retired without observing them. Only
+	 * `reconcile()` may confirm them as stopped.
+	 */
+	getSupersededEnvironmentInstances(): EnvironmentInstanceRecord[] {
+		const rows = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances WHERE status = 'superseded' ORDER BY created_at, id`,
+			)
+			.all() as EnvironmentInstanceDbRow[];
+		return rows.map(
+			(row) => mapEnvironmentInstanceRow(row) as EnvironmentInstanceRecord,
+		);
+	}
+
+	/** The row that holds `app`, whichever owner it belongs to. */
+	findActiveEnvironmentInstance(
+		app: string,
+	): EnvironmentInstanceRecord | undefined {
+		const row = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances WHERE app = ? AND status IN (${ACTIVE_STATUS_SQL}) ORDER BY created_at, id LIMIT 1`,
+			)
+			.get(app) as EnvironmentInstanceDbRow | null;
+		return mapEnvironmentInstanceRow(row);
+	}
+
 	getEnvironmentInstance(id: string): EnvironmentInstanceRecord | undefined {
 		const row = this.db
 			.query(
@@ -869,7 +981,7 @@ export class EnvironmentStateStore {
 			const updated = this.db
 				.prepare(
 					`UPDATE env_instances SET target_id=?, runtime=?, checkout_path=?, config_overlay=?, image_tag=?, status=?, last_activity_at=?
-				 WHERE owner=? AND app=? AND status IN ('stopped', 'failed')`,
+				 WHERE owner=? AND app=? AND status IN (${INACTIVE_STATUS_SQL})`,
 				)
 				.run(
 					instance.targetId,
@@ -951,30 +1063,12 @@ export class EnvironmentStateStore {
 		expectedStatus: string,
 		status: string,
 		at: string,
-		releasePorts: boolean,
 	): boolean {
-		let changed = false;
-		this.transaction(() => {
-			const result = this.db
-				.query(
-					`UPDATE env_instances SET status = ?, last_activity_at = ? WHERE id = ? AND status = ?`,
-				)
-				.run(status, at, id, expectedStatus);
-			changed = result.changes > 0;
-			if (changed && releasePorts)
-				this.db
-					.query(`DELETE FROM port_allocations WHERE instance_id = ?`)
-					.run(id);
-		});
-		return changed;
-	}
-
-	releasePortAllocationsIfStatus(instanceId: string, status: string): boolean {
 		const result = this.db
 			.query(
-				`DELETE FROM port_allocations WHERE instance_id = ? AND EXISTS (SELECT 1 FROM env_instances WHERE id = ? AND status = ?)`,
+				`UPDATE env_instances SET status = ?, last_activity_at = ? WHERE id = ? AND status = ?`,
 			)
-			.run(instanceId, instanceId, status);
+			.run(status, at, id, expectedStatus);
 		return result.changes > 0;
 	}
 
@@ -999,62 +1093,6 @@ export class EnvironmentStateStore {
 
 	deleteEnvironmentInstance(id: string): void {
 		this.db.query(`DELETE FROM env_instances WHERE id = ?`).run(id);
-	}
-
-	getPortAllocations(instanceId?: string): PortAllocationRecord[] {
-		const rows =
-			instanceId === undefined
-				? (this.db
-						.query(
-							`SELECT instance_id, name, port FROM port_allocations ORDER BY port`,
-						)
-						.all() as Array<{
-						instance_id: string;
-						name: string;
-						port: number;
-					}>)
-				: (this.db
-						.query(
-							`SELECT instance_id, name, port FROM port_allocations WHERE instance_id = ? ORDER BY name`,
-						)
-						.all(instanceId) as Array<{
-						instance_id: string;
-						name: string;
-						port: number;
-					}>);
-		return rows.map((row) => ({
-			instanceId: row.instance_id,
-			name: row.name,
-			port: row.port,
-		}));
-	}
-
-	setPortAllocation(allocation: PortAllocationRecord): boolean {
-		try {
-			this.db
-				.prepare(
-					`INSERT INTO port_allocations (instance_id, name, port) VALUES (?, ?, ?)
-				 ON CONFLICT(instance_id, name) DO UPDATE SET port=excluded.port`,
-				)
-				.run(allocation.instanceId, allocation.name, allocation.port);
-			return true;
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				/UNIQUE constraint failed: port_allocations.port/.test(error.message)
-			)
-				return false;
-			throw new EnvironmentStateError(
-				`state: failed to persist port allocation for ${JSON.stringify(allocation.instanceId)}: ${error instanceof Error ? error.message : String(error)}`,
-				{ cause: error },
-			);
-		}
-	}
-
-	deletePortAllocations(instanceId: string): void {
-		this.db
-			.query(`DELETE FROM port_allocations WHERE instance_id = ?`)
-			.run(instanceId);
 	}
 
 	getDependencyLeases(): DependencyLease[] {
@@ -1219,6 +1257,58 @@ function takeBackup(db: Database, dbPath: string, fromVersion: number): string {
 		return target;
 	} catch (error) {
 		fs.rmSync(temporary, { force: true });
+		throw error;
+	}
+}
+
+/**
+ * Materialize the schema of one earlier release on an empty database.
+ *
+ * Fixture tests use it so a hand-built database of an older version cannot
+ * drift from the frozen migration sequence (the shipped open path always
+ * migrates to the current version). It is deliberately strict: the durable
+ * version marker is only ever written for an empty database, inside the same
+ * immediate transaction `migrate()` uses.
+ *
+ * @internal Test-only helper; never call it on a database in use.
+ */
+export function migrateToVersion(db: Database, version: number): void {
+	if (version > SCHEMA_VERSION || version < 1)
+		throw new EnvironmentStateError(
+			`state: cannot migrate to version ${version} (supported 1-${SCHEMA_VERSION})`,
+		);
+	if (readSchemaVersion(db) !== 0)
+		throw new EnvironmentStateError(
+			"state: migrateToVersion requires a database without a schema version",
+		);
+	const tables = db
+		.query(
+			`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+		)
+		.all() as Array<{ name: string }>;
+	if (tables.length > 0)
+		throw new EnvironmentStateError(
+			`state: migrateToVersion requires an empty database; found ${tables
+				.map((table) => table.name)
+				.slice(0, 8)
+				.join(", ")}`,
+		);
+	db.exec("BEGIN IMMEDIATE");
+	try {
+		ensureSchemaMeta(db);
+		for (const migration of MIGRATIONS) {
+			if (migration.version > version) break;
+			migration.apply(db);
+		}
+		db.prepare(
+			`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		).run(String(version));
+		db.exec("COMMIT");
+	} catch (error) {
+		try {
+			db.exec("ROLLBACK");
+		} catch {}
 		throw error;
 	}
 }

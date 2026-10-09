@@ -109,7 +109,7 @@ describe("launching a script service", () => {
 		const { infra, calls } = harness({
 			tmux: true,
 			outputs: {
-				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - environment-instance:agent-shop -e AC_INSTANCE=agent-shop -e AGENTIC_DEVENV_TOKEN= -e AGENTIC_WORKFLOW_TOKEN= -e AGENTIC_WORKFLOW_URL= -e AGENTIC_DEVENV_URL= /bin/sh /work/run.sh":
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - environment-instance:agent-shop -e AC_OWNER=workflow:agent -e AGENTIC_DEVENV_TOKEN= -e AGENTIC_WORKFLOW_TOKEN= -e AGENTIC_WORKFLOW_URL= -e AGENTIC_DEVENV_URL= /bin/sh /work/run.sh":
 					"@8:4242",
 			},
 		});
@@ -118,10 +118,10 @@ describe("launching a script service", () => {
 			runner: SCRIPT_RUNNER.shell,
 			command: "/bin/sh",
 			args: ["/work/run.sh"],
-			env: { AC_INSTANCE: "agent-shop" },
+			env: { AC_OWNER: "workflow:agent" },
 			spawn: () => ({ pid: 1 }),
 		});
-		expect(calls[0]).toContain("-e AC_INSTANCE=agent-shop");
+		expect(calls[0]).toContain("-e AC_OWNER=workflow:agent");
 		expect(calls[0]).toContain("-e AGENTIC_WORKFLOW_TOKEN=");
 		expect(
 			infra.executionHandle("environment-instance:agent-shop")?.paneId,

@@ -8,7 +8,15 @@ export type EnvironmentInstanceStatus =
 	| "stopping"
 	| "stopped"
 	| "failed"
-	| "unknown";
+	| "unknown"
+	/** The developer force-released the app; the holder reads this once. */
+	| "released-by-developer"
+	/**
+	 * A parallel-era row the v9 collapse retired without observing it: it no
+	 * longer holds the app's slot, and nothing claims its run is gone. Only
+	 * reconcile or a developer release/stop may confirm it as `stopped`.
+	 */
+	| "superseded";
 
 export class EnvironmentInstanceModelError extends Error {
 	readonly code = "invalid-owner";
@@ -90,9 +98,6 @@ export interface EnvironmentInstance {
 	readonly status: EnvironmentInstanceStatus;
 	readonly createdAt: string;
 	readonly lastActivityAt: string;
+	/** The definition's own static endpoint exports. */
 	readonly endpoints: Readonly<Record<string, string>>;
-}
-
-export function composeProjectName(app: string, instanceId: string): string {
-	return `${app}-${instanceId}`.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }

@@ -116,6 +116,11 @@ export async function startWorkflowServer(
 				: undefined;
 	const telemetry = options.telemetry ?? ownedTelemetry;
 	const hub = options.hub ?? startWorkflowEventHub(events);
+	// Slot waits and grants are dashboard envelopes: the broker they publish on
+	// exists here, after the integration services were built.
+	options.integrations?.attachDashboardEvents?.((event) => {
+		events.publish(event);
+	});
 	const app = createServerApp({
 		authority,
 		events,

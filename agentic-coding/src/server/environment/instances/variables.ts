@@ -1,26 +1,20 @@
 import type { EnvironmentOwner } from "./model.ts";
 
 export interface InstanceVariableContext {
-	readonly instanceId: string;
 	readonly owner: EnvironmentOwner;
 	readonly appDir: string;
-	readonly ports?: Readonly<Record<string, number>>;
 }
 
-/** Values passed to Compose or a script; user ports remain unset for :-defaults. */
+/**
+ * Values passed to Compose or a script. An app runs once at a time with its own
+ * static names and ports, so the owner and checkout directory are the only
+ * values the definition needs: nothing is templated per instance.
+ */
 export function resolveInstanceVariables(
 	context: InstanceVariableContext,
 ): Record<string, string> {
-	const values: Record<string, string> = {
-		AC_INSTANCE: context.instanceId,
+	return {
 		AC_OWNER: context.owner,
 		AC_APP_DIR: context.appDir,
-		AC_IMAGE_TAG: context.owner === "user" ? "latest" : context.instanceId,
 	};
-	if (context.owner !== "user") {
-		for (const [name, port] of Object.entries(context.ports ?? {})) {
-			values[`AC_PORT_${name}`] = String(port);
-		}
-	}
-	return values;
 }

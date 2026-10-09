@@ -95,21 +95,43 @@ const safeInstanceText = Schema.String.pipe(
 	}),
 );
 
-export const environmentInstanceStartRequestSchema = Schema.Struct({
+export const acquireSlotsRequestSchema = Schema.Struct({
 	owner: safeInstanceText.pipe(Schema.minLength(1)),
-	app: safeInstanceText.pipe(Schema.minLength(1)),
+	apps: Schema.Array(safeInstanceText.pipe(Schema.minLength(1))).pipe(
+		Schema.minItems(1),
+		Schema.maxItems(16),
+	),
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
+	/** Bounded long poll: the tool layer re-polls, so one call never blocks
+	 * longer than this. */
+	waitSec: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
+				message: () => "waitSec must be a non-negative number",
+			}),
+			Schema.lessThanOrEqualTo(300),
+		),
+	),
 });
 
-export const environmentInstanceStopRequestSchema = Schema.Struct({
-	app: Schema.optional(safeInstanceText),
-});
+/**
+ * Body of the release/stop routes: both operations are app-scoped, so the path
+ * alone names their subject. No `configOverlay` is accepted anywhere on this
+ * surface: a request may never choose the configuration root the server
+ * discovers and executes from (a row that already carries a reserved overlay
+ * keeps it in storage). An empty struct alone would still accept fields, so the
+ * filter is what makes the body strictly empty.
+ */
+export const appSlotOperationRequestSchema = Schema.Struct({}).pipe(
+	Schema.filter((value) => Object.keys(value as object).length === 0, {
+		message: () =>
+			"this route takes no body fields; the app is named by the path",
+	}),
+);
 
-export type EnvironmentInstanceStartRequest =
-	typeof environmentInstanceStartRequestSchema.Type;
-export type EnvironmentInstanceStopRequest =
-	typeof environmentInstanceStopRequestSchema.Type;
+export type AcquireSlotsRequest = typeof acquireSlotsRequestSchema.Type;
+export type AppSlotOperationRequest = typeof appSlotOperationRequestSchema.Type;
 
 // ---------------------------------------------------------------------------
 // Dashboard session wire records: event envelopes, connection state, errors

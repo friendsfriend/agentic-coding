@@ -20,6 +20,7 @@ import {
 	EnvironmentStateReadOnlyError,
 	EnvironmentStateStore,
 	EnvironmentStateVersionError,
+	migrateToVersion,
 	SCHEMA_VERSION,
 } from "../src/server/environment/state-store.ts";
 
@@ -563,47 +564,171 @@ describe("environment state fixtures", () => {
 		}
 	});
 
-	test("schema v7 migrates to v8, reopens idempotently, and persists instances and ports", () => {
-		const { dir } = copyFixture("current");
+	const row = (overrides: Record<string, unknown> = {}) => ({
+		id: "id-one",
+		owner: "workflow:a",
+		app: "shop",
+		targetId: "target-one",
+		runtime: "docker",
+		checkoutPath: "/repo/a",
+		imageTag: "tag-one",
+		status: "stopped",
+		createdAt: "2026-01-01T00:00:00.000Z",
+		lastActivityAt: "2026-01-01T00:00:00.000Z",
+		...overrides,
+	});
+
+	/**
+	 * A schema-v8 database: the parallel era's two tables plus its version. The
+	 * schema comes from the frozen migration sequence itself, so it cannot drift
+	 * from what the v8 release wrote; the rows mirror what it stored (one
+	 * `<app>-<instance>` compose project per row, and its port allocations).
+	 */
+	function seedV8(dir: string): void {
+		const db = new Database(path.join(dir, "state.db"));
 		try {
-			const first = EnvironmentStateStore.open(dir);
-			expect(first.schemaVersion).toBe(8);
-			first.setEnvironmentInstance({
-				id: "workflow-a-app",
-				owner: "workflow:a",
-				app: "shop",
-				targetId: "shop:docker:default",
-				runtime: "docker",
-				checkoutPath: "/worktrees/a/shop",
-				imageTag: "workflow-a-app",
-				status: "running",
-				createdAt: "2026-01-01T00:00:00.000Z",
-				lastActivityAt: "2026-01-01T00:00:00.000Z",
-			});
-			expect(
-				first.setPortAllocation({
-					instanceId: "workflow-a-app",
-					name: "HTTP",
-					port: 21000,
+			migrateToVersion(db, 8);
+			const insert = db.prepare(
+				`INSERT INTO env_instances (id, owner, app, target_id, runtime, checkout_path, image_tag, status, created_at, last_activity_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			);
+			for (const instance of [
+				row({ id: "a-shop", owner: "workflow:a", status: "running" }),
+				row({
+					id: "b-shop",
+					owner: "workflow:b",
+					status: "unknown",
+					createdAt: "2026-01-02T00:00:00.000Z",
 				}),
-			).toBe(true);
-			first.close();
+				row({
+					id: "c-api",
+					owner: "workflow:c",
+					app: "api",
+					status: "unknown",
+				}),
+				row({
+					id: "d-api",
+					owner: "workflow:d",
+					app: "api",
+					status: "stopping",
+					createdAt: "2026-01-03T00:00:00.000Z",
+				}),
+			])
+				insert.run(
+					instance.id,
+					instance.owner,
+					instance.app,
+					instance.targetId,
+					instance.runtime,
+					instance.checkoutPath,
+					instance.imageTag,
+					instance.status,
+					instance.createdAt,
+					instance.lastActivityAt,
+				);
+			db.prepare(
+				`INSERT INTO port_allocations (instance_id, name, port) VALUES (?, ?, ?)`,
+			).run("a-shop", "HTTP", 21000);
+		} finally {
+			db.close();
+		}
+	}
+
+	test("schema v8 migrates to v9, drops port allocations and retires duplicate active rows", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-state-v9-"));
+		const dbPath = path.join(dir, "state.db");
+		try {
+			seedV8(dir);
+			const migrated = EnvironmentStateStore.open(dir);
+			try {
+				expect(migrated.schemaVersion).toBe(9);
+				expect(migrated.backupPath).toBe(backupPathFor(dbPath, 8));
+				// One active row per app: the persisted-running row keeps the slot and
+				// the others are retired. A retired row is never claimed `stopped` from
+				// the database alone, because nothing confirmed its container is gone.
+				expect(migrated.findActiveEnvironmentInstance("shop")?.id).toBe(
+					"a-shop",
+				);
+				expect(migrated.getEnvironmentInstance("b-shop")?.status).toBe(
+					"superseded",
+				);
+				expect(
+					migrated
+						.getSupersededEnvironmentInstances()
+						.map((instance) => instance.id)
+						.sort(),
+				).toEqual(["b-shop", "c-api"]);
+				// Without a running row the newest stays active as `unknown`, which
+				// blocks the slot until reconcile or force release decides.
+				expect(migrated.findActiveEnvironmentInstance("api")?.id).toBe("d-api");
+				expect(migrated.findActiveEnvironmentInstance("api")?.status).toBe(
+					"unknown",
+				);
+			} finally {
+				migrated.close();
+			}
+
+			const raw = new Database(dbPath, { readonly: true });
+			try {
+				expect(
+					raw
+						.query(
+							`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'port_allocations'`,
+						)
+						.get(),
+				).toBeNull();
+				// The v9 index predicate is frozen, so a fresh database and a migrated
+				// one agree on the same DDL.
+				expect(
+					(
+						raw
+							.query(
+								`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_env_instances_active_app'`,
+							)
+							.get() as { sql: string }
+					).sql,
+				).toContain("'starting', 'running', 'stopping', 'unknown'");
+			} finally {
+				raw.close();
+			}
 
 			const reopened = EnvironmentStateStore.open(dir);
 			try {
-				expect(reopened.schemaVersion).toBe(8);
+				expect(reopened.schemaVersion).toBe(9);
 				expect(
-					reopened.findEnvironmentInstance("workflow:a", "shop"),
-				).toMatchObject({
-					id: "workflow-a-app",
-					checkoutPath: "/worktrees/a/shop",
-					status: "running",
-				});
-				expect(reopened.getPortAllocations("workflow-a-app")).toEqual([
-					{ instanceId: "workflow-a-app", name: "HTTP", port: 21000 },
-				]);
+					reopened
+						.getActiveEnvironmentInstances()
+						.map((instance) => instance.id)
+						.sort(),
+				).toEqual(["a-shop", "d-api"]);
+				// The partial index still keeps one active row per app.
+				expect(() =>
+					reopened.setEnvironmentInstance(
+						row({ id: "e-shop", owner: "workflow:e", status: "starting" }),
+					),
+				).toThrow(EnvironmentStateError);
 			} finally {
 				reopened.close();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("migrateToVersion refuses a database that already has a schema", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-state-guard-"));
+		const dbPath = path.join(dir, "state.db");
+		try {
+			const db = new Database(dbPath);
+			try {
+				migrateToVersion(db, 8);
+				// The durable version marker is only ever written on an empty database.
+				expect(() => migrateToVersion(db, 9)).toThrow(EnvironmentStateError);
+				expect(() => migrateToVersion(db, SCHEMA_VERSION + 1)).toThrow(
+					EnvironmentStateError,
+				);
+			} finally {
+				db.close();
 			}
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
@@ -649,13 +774,35 @@ describe("environment state fixtures", () => {
 			expect(store.findEnvironmentInstance("workflow:a", "shop")?.id).toBe(
 				"id-one",
 			);
-			expect(() =>
-				store.setPortAllocation({
-					instanceId: "missing",
-					name: "HTTP",
-					port: 26000,
+			expect(store.findActiveEnvironmentInstance("shop")?.id).toBe("id-one");
+			// Another owner cannot take an app while a row holds it.
+			expect(
+				store.claimEnvironmentInstance({
+					...row,
+					id: "id-other",
+					owner: "workflow:b",
+					status: "starting",
 				}),
-			).toThrow(EnvironmentStateError);
+			).toBeUndefined();
+			expect(store.findActiveEnvironmentInstance("shop")?.id).toBe("id-one");
+			// A terminal status releases the app for the next owner.
+			expect(
+				store.transitionEnvironmentInstanceStatus(
+					"id-one",
+					"starting",
+					"stopped",
+					"2026-01-02T00:00:00.000Z",
+				),
+			).toBe(true);
+			expect(store.findActiveEnvironmentInstance("shop")).toBeUndefined();
+			expect(
+				store.claimEnvironmentInstance({
+					...row,
+					id: "id-other",
+					owner: "workflow:b",
+					status: "starting",
+				}),
+			).toBe("id-other");
 		} finally {
 			store.close();
 			fs.rmSync(dir, { recursive: true, force: true });

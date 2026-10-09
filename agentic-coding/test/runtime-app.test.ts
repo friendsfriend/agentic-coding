@@ -158,8 +158,8 @@ async function call(
 	return response;
 }
 
-describe("instance-aware run target compilation", () => {
-	test("discovery and compile preserve instance project and environment", () => {
+describe("run target compilation", () => {
+	test("compiles the definition's own argv without an instance project", () => {
 		const { services, root } = fixture();
 		const sourcePath = path.join(
 			services.configDir,
@@ -169,27 +169,18 @@ describe("instance-aware run target compilation", () => {
 		);
 		fs.writeFileSync(
 			sourcePath,
-			`services:\n  web:\n    image: "shop:\${AC_IMAGE_TAG:-latest}"\n`,
+			`services:\n  web:\n    container_name: shop-web\n    image: "shop:latest"\n    ports:\n      - "8080:80"\n`,
 		);
 		const targets = discoverActionTargets({
 			appIdent: "shop",
 			localDir: "/worktrees/run-a/shop",
 			action: "run",
 			configDir: services.configDir,
-			instance: {
-				id: "run-a-shop",
-				env: {
-					AC_INSTANCE: "run-a-shop",
-					AC_OWNER: "workflow:run-a",
-					AC_APP_DIR: "/worktrees/run-a/shop",
-					AC_IMAGE_TAG: "run-a-shop",
-				},
-			},
 		});
 		const target = targets.find(
 			(candidate) => candidate.sourcePath === sourcePath,
 		);
-		if (!target) throw new Error("instance compose target was not discovered");
+		if (!target) throw new Error("compose target was not discovered");
 		const definition = compileTargetGraph(
 			"shop",
 			target,
@@ -201,14 +192,19 @@ describe("instance-aware run target compilation", () => {
 		);
 		expect(execute?.configuration).toMatchObject({
 			command: "docker-compose",
-			args: ["-p", "shop-run-a-shop", "-f", sourcePath, "up", "-d"],
-			env: expect.arrayContaining([
-				"AC_INSTANCE=run-a-shop",
-				"AC_OWNER=workflow:run-a",
-				"AC_APP_DIR=/worktrees/run-a/shop",
-				"AC_IMAGE_TAG=run-a-shop",
-			]),
+			args: ["-f", sourcePath, "up", "-d"],
 		});
+		// Nothing overrides the compose project or templates the definition per
+		// instance any more: the app's own names and ports are what run.
+		expect(
+			(execute?.configuration as { args?: string[] } | undefined)?.args,
+		).not.toContain("-p");
+		const readiness = definition.root.children?.find((child) =>
+			child.id.endsWith("/readiness"),
+		);
+		expect(
+			(readiness?.configuration as { args?: string[] } | undefined)?.args,
+		).toEqual(["-f", sourcePath]);
 		fs.rmSync(root, { recursive: true, force: true });
 	});
 });

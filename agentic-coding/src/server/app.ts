@@ -21,8 +21,8 @@ import type {
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import type {
-	EnvironmentInstanceStartRequest,
-	EnvironmentInstanceStopRequest,
+	AcquireSlotsRequest,
+	AppSlotOperationRequest,
 	ObserveRequest,
 } from "../contracts/environment.ts";
 import type {
@@ -247,65 +247,37 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			return json({ ok: true, value });
 		}
 
-		if (method === "GET" && path === "/api/v1/environment/instances") {
-			const instances = options.integrations?.instances;
-			if (!instances)
+		const instances = () => options.integrations?.instances;
+
+		if (method === "GET" && path === "/api/v1/environment/apps/slots") {
+			const appSlots = instances();
+			if (!appSlots)
 				return errorResponse(
 					503,
 					"instances-unavailable",
 					"environment instance capability is not attached",
 				);
 			try {
-				return json({ ok: true, value: await instances.list() });
+				return json({ ok: true, value: await appSlots.slots() });
 			} catch (error) {
 				return instanceErrorResponse(error);
 			}
 		}
 
-		if (method === "GET" && path.startsWith("/api/v1/environment/instances/")) {
-			const instances = options.integrations?.instances;
-			if (!instances)
+		if (method === "POST" && path === "/api/v1/environment/apps/acquire") {
+			const appSlots = instances();
+			if (!appSlots)
 				return errorResponse(
 					503,
 					"instances-unavailable",
 					"environment instance capability is not attached",
 				);
-			const id = decodeURIComponent(
-				path.slice("/api/v1/environment/instances/".length),
-			);
-			if (!id || id.includes("/"))
-				return errorResponse(
-					404,
-					"instance-not-found",
-					"environment instance not found",
-				);
-			try {
-				return json({
-					ok: true,
-					value: await instances.get(
-						id,
-						url.searchParams.get("app") ?? undefined,
-					),
-				});
-			} catch (error) {
-				return instanceErrorResponse(error);
-			}
-		}
-
-		if (method === "POST" && path === "/api/v1/environment/instances/start") {
-			const instances = options.integrations?.instances;
-			if (!instances)
-				return errorResponse(
-					503,
-					"instances-unavailable",
-					"environment instance capability is not attached",
-				);
-			const decoded = decodeRouteRequest<EnvironmentInstanceStartRequest>(
+			const decoded = decodeRouteRequest<AcquireSlotsRequest>(
 				path,
 				await readJsonBody(request),
 			);
 			try {
-				return json({ ok: true, value: await instances.start(decoded) });
+				return json({ ok: true, value: await appSlots.acquire(decoded) });
 			} catch (error) {
 				return instanceErrorResponse(error);
 			}
@@ -313,38 +285,39 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 
 		if (
 			method === "POST" &&
-			path.startsWith("/api/v1/environment/instances/") &&
-			path.endsWith("/stop")
+			path.startsWith("/api/v1/environment/apps/") &&
+			(path.endsWith("/release") || path.endsWith("/stop"))
 		) {
-			const instances = options.integrations?.instances;
-			if (!instances)
+			const appSlots = instances();
+			if (!appSlots)
 				return errorResponse(
 					503,
 					"instances-unavailable",
 					"environment instance capability is not attached",
 				);
-			const decoded = decodeRouteRequest<EnvironmentInstanceStopRequest>(
-				"/api/v1/environment/instances/{id}/stop",
+			const release = path.endsWith("/release");
+			// Decoding through the manifest keeps the wire contract enforced even
+			// though both operations act on the app in the path.
+			decodeRouteRequest<AppSlotOperationRequest>(
+				release
+					? "/api/v1/environment/apps/{app}/release"
+					: "/api/v1/environment/apps/{app}/stop",
 				await readJsonBody(request),
 			);
-			const encodedId = path.slice(
-				"/api/v1/environment/instances/".length,
-				-"/stop".length,
+			const app = decodeURIComponent(
+				path.slice(
+					"/api/v1/environment/apps/".length,
+					release ? -"/release".length : -"/stop".length,
+				),
 			);
-			const id = decodeURIComponent(encodedId);
-			if (!id || id.includes("/"))
-				return errorResponse(
-					404,
-					"instance-not-found",
-					"environment instance not found",
-				);
+			if (!app || app.includes("/"))
+				return errorResponse(404, "app-not-found", "app not found");
 			try {
 				return json({
 					ok: true,
-					value: await instances.stop(
-						id,
-						decoded.app ?? url.searchParams.get("app") ?? undefined,
-					),
+					value: release
+						? await appSlots.release(app)
+						: await appSlots.stopApp(app),
 				});
 			} catch (error) {
 				return instanceErrorResponse(error);

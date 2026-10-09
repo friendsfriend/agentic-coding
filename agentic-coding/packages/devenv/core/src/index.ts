@@ -79,6 +79,7 @@ import {
 	streamContainerStats,
 	testApp,
 } from "./docker-client.ts";
+import { type AppSlot, getAppSlots } from "./environment-client.ts";
 import {
 	getActionHistory,
 	getActionLogs,
@@ -197,6 +198,10 @@ export class DevEnvClient {
 		signal?: AbortSignal,
 	): Promise<import("@devenv/types").ProjectCatalog> {
 		return getProjectCatalog(this.deps, signal);
+	}
+	/** Every configured app's slot: holder, status and waiters. */
+	getAppSlots(): Promise<AppSlot[]> {
+		return getAppSlots(this.deps);
 	}
 	createExampleConfig(): Promise<void> {
 		return createExampleConfig(this.deps);
@@ -816,6 +821,7 @@ export * from "@devenv/types";
 export * from "./clipboard.ts";
 export * from "./custom-fetch.ts";
 export * from "./diff-utils.ts";
+export * from "./environment-client.ts";
 export * from "./logger.ts";
 export * from "./projects-client.ts";
 export type { FetchFunction };

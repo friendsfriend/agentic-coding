@@ -167,6 +167,22 @@ export interface ActionRouteServices {
 		app: { readonly ident: string; readonly localDirectoryPath: string },
 	) => boolean;
 	readonly runtime?: RuntimeOperationDispatch;
+	/**
+	 * The app's slot. A developer run or restart of an app an agent holds is
+	 * refused (`held-by <workflow>`); a developer stop is the sanctioned way to
+	 * take the app back, so it first yields the slot through `humanStopRelease`
+	 * and the holder reads `released-by-developer`. The TUI's run action lands
+	 * here, so the refusal is enforced server-side for every client.
+	 */
+	readonly humanRunGuard?: (
+		appIdent: string,
+	) => Promise<{ readonly holder: string } | undefined>;
+	/**
+	 * Called before a developer stop so the slot, queue and notice stay
+	 * consistent. Resolves with a warning when the holder could not be released —
+	 * the stop still runs, but the developer is told the holder was not notified.
+	 */
+	readonly humanStopRelease?: (appIdent: string) => Promise<string | undefined>;
 	readonly stream?: LegacyEventStream;
 	readonly now?: () => Date;
 	readonly logger?: (message: string) => void;
@@ -573,6 +589,7 @@ async function startActionRun(
 	if (snapshot.version === 0 && snapshot.definitions.length === 0) {
 		return errorResponse(503, "Action registry unavailable");
 	}
+	let slotWarning: string | undefined;
 	let definition = snapshot.get(body.actionId ?? "");
 	if (!definition) return errorResponse(404, "Action not found");
 	if (!definition.availability.available) {
@@ -583,6 +600,21 @@ async function startActionRun(
 	}
 	const blocked = dependencyStopBlocked(context, definition);
 	if (blocked) return errorResponse(409, blocked);
+	// An app runs once at a time. A run or restart that would replace another
+	// owner's copy is refused with the holder; a developer stop is honoured, but
+	// it yields the slot first so the holder is told and the queue can grant.
+	if (definition.owner.kind === "app") {
+		if (definition.type === "run" || definition.type === "restart") {
+			const held = await services.humanRunGuard?.(definition.owner.id);
+			if (held)
+				return json(
+					{ error: "held-by", message: `held-by ${held.holder}` },
+					409,
+				);
+		}
+		if (definition.type === "stop")
+			slotWarning = await services.humanStopRelease?.(definition.owner.id);
+	}
 
 	const inputs = body.inputs ?? {};
 	const allowed = new Set<string>();
@@ -633,6 +665,7 @@ async function startActionRun(
 			actionId: definition.id,
 			runId,
 			registryVersion: snapshot.version,
+			...(slotWarning ? { warning: slotWarning } : {}),
 		},
 		202,
 	);

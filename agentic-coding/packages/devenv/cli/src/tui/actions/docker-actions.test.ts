@@ -49,7 +49,7 @@ function createStores(
 		kubernetesClusterStatus: () => kubernetesClusterStatus,
 	};
 	const uiStore = {
-		setNotification: () => {},
+		setNotification: (_message: string, _type: string) => {},
 		setActionTargetPickerTargets: (_next: unknown[]) => {},
 		setActionTargetPickerSelectedIndex: () => {},
 		setActionTargetPickerAppIdent: () => {},
@@ -62,6 +62,85 @@ function createStores(
 }
 
 describe("docker actions", () => {
+	test("an agent-held app refuses the run with one actionable toast", async () => {
+		const app = { ident: "web", displayName: "Web" };
+		const target = {
+			id: "app/web/action/run/command-shell/dev",
+			action: "run",
+			runtime: "shell",
+			label: "dev",
+		};
+		const { appStore, uiStore } = createStores(app);
+		const notifications: Array<[string, string]> = [];
+		const errors: string[] = [];
+		uiStore.setNotification = (message: string, type: string) => {
+			notifications.push([message, type]);
+		};
+		const calls: unknown[][] = [];
+		const client = {
+			getAppSlots: async () => [
+				{ app: "web", holder: "workflow:abc", status: "running", waiters: [] },
+			],
+			startActionRun: async (...args: unknown[]) => {
+				calls.push(args);
+			},
+		};
+		const actions = createDockerActions(
+			appStore as unknown as DockerActionStore,
+			uiStore as unknown as DockerActionUiStore,
+			client as unknown as DockerActionClient,
+			(_title, error) => errors.push(error),
+		);
+		await actions.runSelectedTarget(
+			app as unknown as Parameters<typeof actions.runSelectedTarget>[0],
+			"run",
+			target as unknown as Parameters<typeof actions.runSelectedTarget>[2],
+		);
+		// Nothing starts, no modal dialog repeats the toast, and the one sentence
+		// says what to do and fits the CLI's single-line toast.
+		expect(calls).toEqual([]);
+		expect(errors).toEqual([]);
+		expect(notifications).toEqual([
+			[
+				"An agent run is using Web. Wait for it to finish, then press s again.",
+				"warning",
+			],
+		]);
+		expect((notifications[0] as [string, string])[0].length).toBeLessThan(80);
+	});
+
+	test("a run starts while no agent holds the app", async () => {
+		const app = { ident: "web", displayName: "Web" };
+		const target = {
+			id: "app/web/action/run/command-shell/dev",
+			action: "run",
+			runtime: "shell",
+			label: "dev",
+		};
+		const { appStore, uiStore } = createStores(app);
+		const calls: unknown[][] = [];
+		const client = {
+			getAppSlots: async () => [
+				{ app: "web", holder: "user", status: "running", waiters: [] },
+			],
+			startActionRun: async (...args: unknown[]) => {
+				calls.push(args);
+			},
+		};
+		const actions = createDockerActions(
+			appStore as unknown as DockerActionStore,
+			uiStore as unknown as DockerActionUiStore,
+			client as unknown as DockerActionClient,
+			() => {},
+		);
+		await actions.runSelectedTarget(
+			app as unknown as Parameters<typeof actions.runSelectedTarget>[0],
+			"run",
+			target as unknown as Parameters<typeof actions.runSelectedTarget>[2],
+		);
+		expect(calls).toEqual([["app/web/action/run/command-shell/dev"]]);
+	});
+
 	test("selected build starts backend action id", async () => {
 		const app = { ident: "web", displayName: "Web" };
 		const target = {

@@ -69,9 +69,11 @@ function view(workflowId: string, step: string): WorkflowView {
 const keyOf = (repo: string, workflowId: string) =>
 	`${repo}\u0000${workflowId}`;
 
-/** A gateway slice: the monitor's subscription plus the views it re-reads. */
+/** A gateway slice: the shell's subscriptions plus the views they re-read. The
+ * shell owns more than one (the workflow monitor and the app-slot toasts), so
+ * events fan out to every subscriber like the real gateway. */
 class ShellGateway {
-	handlers: GatewayEventHandlers | undefined;
+	handlers = new Set<GatewayEventHandlers>();
 	subscribes = 0;
 	readonly views = new Map<string, WorkflowView>();
 
@@ -80,9 +82,9 @@ class ShellGateway {
 		connectionState: () => "open" as const,
 		subscribe: (handlers: GatewayEventHandlers) => {
 			this.subscribes += 1;
-			this.handlers = handlers;
+			this.handlers.add(handlers);
 			return () => {
-				this.handlers = undefined;
+				this.handlers.delete(handlers);
 			};
 		},
 		view: async (repo: string, workflowId: string) => {
@@ -102,7 +104,7 @@ class ShellGateway {
 	}
 
 	event(repo: string, workflowId: string): void {
-		this.handlers?.onEvent({
+		const envelope = {
 			instance: "test",
 			sequence: 1,
 			domain: "workflow",
@@ -111,7 +113,8 @@ class ShellGateway {
 			runId: workflowId,
 			at: new Date().toISOString(),
 			payload: null,
-		} satisfies EventEnvelope);
+		} satisfies EventEnvelope;
+		for (const handlers of this.handlers) handlers.onEvent?.(envelope);
 	}
 }
 
@@ -152,13 +155,15 @@ test("the shell monitors orchestrator-started workflows while their page is clos
 	);
 	await t.renderOnce();
 
-	// The shell subscribes by itself: the Orchestrator page was never opened.
-	expect(gateway.subscribes).toBe(1);
+	// The shell subscribes by itself, without the Orchestrator page ever being
+	// opened: the workflow monitor owns one subscription and the app-slot toasts
+	// own another.
+	expect(gateway.subscribes).toBe(2);
 
 	// Baseline: the workflow is seen first while it runs.
 	gateway.put("/demo", view("wf-1", "core.implementation"));
 	gateway.event("/demo", "wf-1");
-	await waitFor(() => gateway.handlers !== undefined);
+	await waitFor(() => gateway.handlers.size > 0);
 	await new Promise((resolve) => setTimeout(resolve, 400));
 	expect(activeNotification()).toBeUndefined();
 
@@ -170,8 +175,8 @@ test("the shell monitors orchestrator-started workflows while their page is clos
 		"wf-1: developer review waiting (core.plan-approval)",
 	);
 
-	// Stopping the shell stops the monitor's subscription.
+	// Stopping the shell stops both subscriptions.
 	t.renderer.destroy();
 	await new Promise((resolve) => setTimeout(resolve, 50));
-	expect(gateway.handlers).toBeUndefined();
+	expect(gateway.handlers.size).toBe(0);
 });

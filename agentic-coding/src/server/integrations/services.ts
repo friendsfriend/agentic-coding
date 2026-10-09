@@ -150,8 +150,6 @@ export interface IntegrationServicesOptions {
 		owner: `workflow:${string}`,
 		app: App,
 	) => string | undefined | Promise<string | undefined>;
-	/** Configured `environment.instances.port_range`; defaults to 20000-29999. */
-	readonly instancePortRange?: () => string;
 	/** Container runtime selection for instance starts, when not preselected. */
 	readonly resolveDockerRuntime?: () => Promise<
 		import("../runtime/docker.ts").DockerRuntimeSelection | undefined
@@ -202,20 +200,23 @@ export function createIntegrationServices(
 	const instanceState = options.state as unknown as Record<string, unknown>;
 	const hasInstanceStore = [
 		"getEnvironmentInstances",
+		"getActiveEnvironmentInstances",
 		"getEnvironmentInstance",
 		"findEnvironmentInstance",
+		"findActiveEnvironmentInstance",
 		"claimEnvironmentInstance",
 		"claimEnvironmentInstanceStop",
 		"compareAndSetEnvironmentInstanceStatus",
 		"transitionEnvironmentInstanceStatus",
-		"releasePortAllocationsIfStatus",
 		"deleteEnvironmentInstanceIfStatus",
 		"updateEnvironmentInstanceStatus",
 		"deleteEnvironmentInstance",
-		"getPortAllocations",
-		"setPortAllocation",
-		"deletePortAllocations",
 	].every((method) => typeof instanceState[method] === "function");
+	// The broker exists only once the server is built, so the slot notifications
+	// are published through this holder; tests that attach no server drop them.
+	const dashboardEvents: {
+		publish?: (event: import("../runtime/instances.ts").SlotEvent) => void;
+	} = {};
 	const instances = hasInstanceStore
 		? new EnvironmentInstanceController({
 				state: options.state as unknown as EnvironmentInstanceState,
@@ -234,10 +235,9 @@ export function createIntegrationServices(
 					: {}),
 				resolveOwnerCheckout:
 					options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver(),
-				...(options.instancePortRange
-					? { portRange: options.instancePortRange }
-					: {}),
+				...(options.observation ? { observation: options.observation } : {}),
 				...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
+				publish: (event) => dashboardEvents.publish?.(event),
 				...(options.logger ? { logger: options.logger } : {}),
 			})
 		: undefined;
@@ -263,6 +263,36 @@ export function createIntegrationServices(
 				}
 			: {}),
 		...(options.observation ? { observation: options.observation } : {}),
+		// An agent holding an app's slot keeps the developer from starting a
+		// second copy of it; the refusal names the holder. A developer stop is
+		// allowed, but it yields the slot first (the holder is told and the queue
+		// may grant) instead of tearing the container down behind the row.
+		...(instances
+			? {
+					humanRunGuard: async (ident: string) => {
+						const occupant = await instances.occupancy(ident);
+						if (!occupant || occupant.holder === "user") return undefined;
+						return { holder: occupant.holder };
+					},
+					humanStopRelease: async (ident: string) => {
+						try {
+							const occupant = await instances.occupancy(ident);
+							if (occupant && occupant.holder !== "user")
+								await instances.release(ident);
+							return undefined;
+						} catch (error) {
+							// The developer's stop still runs, but the holder was not released
+							// and is not told: say so instead of hiding it behind a log line.
+							const reason =
+								error instanceof Error ? error.message : String(error);
+							options.logger?.(
+								`[slots] yielding ${ident} to a developer stop failed: ${reason}`,
+							);
+							return `${ident}: the holding run could not be released (${reason}); it may still be recorded as running`;
+						}
+					},
+				}
+			: {}),
 		// Until the server's broker exists the stream is still the source of truth
 		// for the action view; the broker is attached by the composition root.
 		publish: options.publish ?? (() => {}),
@@ -317,6 +347,11 @@ export function createIntegrationServices(
 		},
 		...(options.runtime ? { runtime: options.runtime } : {}),
 		...(instances ? { instances } : {}),
+		...{
+			attachDashboardEvents: (publish) => {
+				dashboardEvents.publish = publish;
+			},
+		},
 		...(options.fetch ? { fetch: options.fetch } : {}),
 		...(options.logger ? { logger: options.logger } : {}),
 	};

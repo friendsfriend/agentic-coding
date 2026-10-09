@@ -20,6 +20,7 @@ import type {
 	DockerRuntimeSelection,
 } from "../src/server/runtime/docker.ts";
 import { DockerClient } from "../src/server/runtime/docker.ts";
+import { EnvironmentInstanceError } from "../src/server/runtime/instances.ts";
 import {
 	KubernetesClusterService,
 	type KubernetesExec,
@@ -107,32 +108,55 @@ async function call(
 	return response;
 }
 
-describe("environment instance routes", () => {
-	test("lists, reads, starts idempotently, and stops an instance", async () => {
-		const authority = createInstanceAuthority("instance-routes", "token");
-		let startCount = 0;
-		const instance = {
-			id: "run-a-shop",
-			owner: "workflow:run-a",
-			app: "shop",
-			targetId: "shop:docker:default",
-			runtime: "docker",
-			checkoutPath: "/worktrees/run-a/shop",
-			imageTag: "run-a-shop",
-			status: "running",
-			createdAt: "2026-01-01T00:00:00.000Z",
-			lastActivityAt: "2026-01-01T00:00:00.000Z",
-			endpoints: { HTTP: "http://127.0.0.1:25000" },
-		};
-		const instances = {
-			list: async () => [instance],
-			get: async () => instance,
-			start: async () => ({
-				outcome: ++startCount === 1 ? "started" : "already-running",
-				instance,
+describe("environment app slot routes", () => {
+	const instance = {
+		id: "run-a-shop",
+		owner: "workflow:run-a",
+		app: "shop",
+		targetId: "shop:docker:default",
+		runtime: "docker",
+		checkoutPath: "/worktrees/run-a/shop",
+		imageTag: "run-a-shop",
+		status: "running",
+		createdAt: "2026-01-01T00:00:00.000Z",
+		lastActivityAt: "2026-01-01T00:00:00.000Z",
+		endpoints: {},
+	};
+	const slot = {
+		app: "shop",
+		holder: "workflow:run-a",
+		status: "running",
+		waiters: ["workflow:run-b"],
+	};
+
+	/** A complete fake slot capability: the routes must be able to call all four. */
+	function slotInstances(overrides: Record<string, unknown> = {}) {
+		return {
+			slots: async () => [slot],
+			acquire: async () => ({
+				outcome: "started",
+				owner: "workflow:run-a",
+				instances: [instance],
 			}),
-			stop: async () => ({ ...instance, status: "stopped" }),
+			release: async () => ({ ...instance, status: "released-by-developer" }),
+			stopApp: async () => ({ ...instance, status: "stopped" }),
+			...overrides,
 		};
+	}
+
+	test("lists slots, acquires, releases and stops an app", async () => {
+		const authority = createInstanceAuthority("slot-routes", "token");
+		const acquired: unknown[] = [];
+		const instances = slotInstances({
+			acquire: async (request: unknown) => {
+				acquired.push(request);
+				return {
+					outcome: "started",
+					owner: "workflow:run-a",
+					instances: [instance],
+				};
+			},
+		});
 		const api = createServerApp({
 			authority,
 			events: new EventBroker(authority.instance),
@@ -140,55 +164,148 @@ describe("environment instance routes", () => {
 			integrations: { instances } as never,
 		});
 		const headers = { authorization: `Bearer ${authority.token}` };
-		const list = await api.fetch(
-			new Request("http://127.0.0.1/api/v1/environment/instances", { headers }),
+		const slots = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/slots", {
+				headers,
+			}),
 		);
-		expect(((await list.json()) as { value: unknown[] }).value).toHaveLength(1);
-		const start = (owner: string) =>
-			api.fetch(
-				new Request("http://127.0.0.1/api/v1/environment/instances/start", {
-					method: "POST",
-					headers,
-					body: JSON.stringify({ owner, app: "shop" }),
+		expect(((await slots.json()) as { value: unknown[] }).value).toHaveLength(
+			1,
+		);
+
+		const acquire = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/acquire", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					owner: "workflow:run-a",
+					apps: ["shop"],
+					waitSec: 30,
 				}),
-			);
-		expect(
-			(
-				(await (await start("workflow:run-a")).json()) as {
-					value: { outcome: string };
-				}
-			).value.outcome,
-		).toBe("started");
-		expect(
-			(
-				(await (await start("workflow:run-a")).json()) as {
-					value: { outcome: string };
-				}
-			).value.outcome,
-		).toBe("already-running");
-		const read = await api.fetch(
-			new Request(
-				"http://127.0.0.1/api/v1/environment/instances/run-a-shop?app=shop",
-				{ headers },
-			),
+			}),
 		);
 		expect(
-			((await read.json()) as { value: { endpoints: Record<string, string> } })
-				.value.endpoints.HTTP,
-		).toBe("http://127.0.0.1:25000");
+			((await acquire.json()) as { value: { outcome: string } }).value.outcome,
+		).toBe("started");
+		expect(acquired).toEqual([
+			{ owner: "workflow:run-a", apps: ["shop"], waitSec: 30 },
+		]);
+
+		const release = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/shop/release", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({}),
+			}),
+		);
+		expect(
+			((await release.json()) as { value: { status: string } }).value.status,
+		).toBe("released-by-developer");
+
 		const stop = await api.fetch(
-			new Request(
-				"http://127.0.0.1/api/v1/environment/instances/run-a-shop/stop",
-				{
-					method: "POST",
-					headers,
-					body: JSON.stringify({ app: "shop" }),
-				},
-			),
+			new Request("http://127.0.0.1/api/v1/environment/apps/shop/stop", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({}),
+			}),
 		);
 		expect(
 			((await stop.json()) as { value: { status: string } }).value.status,
 		).toBe("stopped");
+		api.events.closeAll();
+	});
+
+	test("a deadlock is answered as the typed refusal", async () => {
+		const authority = createInstanceAuthority("slot-deadlock", "token");
+		const api = createServerApp({
+			authority,
+			events: new EventBroker(authority.instance),
+			credentials: new CredentialRegistry(),
+			integrations: {
+				instances: {
+					slots: async () => [],
+					acquire: async () => {
+						throw new EnvironmentInstanceError(
+							"deadlock",
+							409,
+							"deadlock: workflow:b waits for fe (held by workflow:a)",
+						);
+					},
+					release: async () => undefined,
+					stopApp: async () => undefined,
+				},
+			} as never,
+		});
+		const response = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/acquire", {
+				method: "POST",
+				headers: { authorization: `Bearer ${authority.token}` },
+				body: JSON.stringify({
+					owner: "workflow:b",
+					apps: ["fe"],
+				}),
+			}),
+		);
+		expect(response.status).toBe(409);
+		const body = (await response.json()) as {
+			error: { code: string; message: string };
+		};
+		expect(body.error.code).toBe("deadlock");
+		expect(body.error.message).toContain("workflow:a");
+		api.events.closeAll();
+	});
+
+	test("an oversized wait or app list is rejected at the contract", async () => {
+		const authority = createInstanceAuthority("slot-contract", "token");
+		const api = createServerApp({
+			authority,
+			events: new EventBroker(authority.instance),
+			credentials: new CredentialRegistry(),
+			integrations: { instances: slotInstances() } as never,
+		});
+		const post = (body: unknown) =>
+			api.fetch(
+				new Request("http://127.0.0.1/api/v1/environment/apps/acquire", {
+					method: "POST",
+					headers: { authorization: `Bearer ${authority.token}` },
+					body: JSON.stringify(body),
+				}),
+			);
+		// The wait is bounded by the schema, so the tool layer's re-poll contract
+		// cannot be talked out of its bound.
+		expect(
+			(await post({ owner: "workflow:a", apps: ["shop"], waitSec: 301 }))
+				.status,
+		).toBe(400);
+		// The app list is bounded on both ends.
+		expect(
+			(
+				await post({
+					owner: "workflow:a",
+					apps: Array.from({ length: 17 }, () => "shop"),
+				})
+			).status,
+		).toBe(400);
+		expect((await post({ owner: "workflow:a", apps: [] })).status).toBe(400);
+		// A request may not choose the configuration root the server executes from.
+		expect(
+			(
+				await post({
+					owner: "workflow:a",
+					apps: ["shop"],
+					configOverlay: "/tmp/elsewhere",
+				})
+			).status,
+		).toBe(400);
+		// Release and stop are app-scoped: their body carries no owner to discard.
+		const release = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/apps/shop/release", {
+				method: "POST",
+				headers: { authorization: `Bearer ${authority.token}` },
+				body: JSON.stringify({ owner: "workflow:a" }),
+			}),
+		);
+		expect(release.status).toBe(400);
 		api.events.closeAll();
 	});
 });

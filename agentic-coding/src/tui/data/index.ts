@@ -178,6 +178,9 @@ export class DataCache {
 			this.invalidate("telemetry");
 			return;
 		}
+		// Slot waits and grants drive a toast, not a cached read: nothing in the
+		// cache is derived from them, so they must not flush every entry.
+		if (event.domain === "environment") return;
 		this.clear();
 	}
 

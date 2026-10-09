@@ -17,8 +17,8 @@ import {
 import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
-	environmentInstanceStartRequestSchema,
-	environmentInstanceStopRequestSchema,
+	acquireSlotsRequestSchema,
+	appSlotOperationRequestSchema,
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
@@ -227,25 +227,19 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/v1/environment/instances/*",
-		owner: "bun",
-		domain: "environment",
-	},
-	{
-		method: "GET",
-		path: "/api/v1/environment/instances",
+		path: "/api/v1/environment/apps/slots",
 		owner: "bun",
 		domain: "environment",
 	},
 	{
 		method: "POST",
-		path: "/api/v1/environment/instances/start",
+		path: "/api/v1/environment/apps/acquire",
 		owner: "bun",
 		domain: "environment",
 	},
 	{
 		method: "POST",
-		path: "/api/v1/environment/instances/*",
+		path: "/api/v1/environment/apps/*",
 		owner: "bun",
 		domain: "environment",
 	},
@@ -295,14 +289,19 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		schema: observeRequestSchema,
 	},
 	{
-		path: "/api/v1/environment/instances/start",
-		schemaId: "server.environment.instances.start",
-		schema: environmentInstanceStartRequestSchema,
+		path: "/api/v1/environment/apps/acquire",
+		schemaId: "server.environment.apps.acquire",
+		schema: acquireSlotsRequestSchema,
 	},
 	{
-		path: "/api/v1/environment/instances/{id}/stop",
-		schemaId: "server.environment.instances.stop",
-		schema: environmentInstanceStopRequestSchema,
+		path: "/api/v1/environment/apps/{app}/release",
+		schemaId: "server.environment.apps.release",
+		schema: appSlotOperationRequestSchema,
+	},
+	{
+		path: "/api/v1/environment/apps/{app}/stop",
+		schemaId: "server.environment.apps.stop",
+		schema: appSlotOperationRequestSchema,
 	},
 	{
 		path: "/api/v1/workflow/action",

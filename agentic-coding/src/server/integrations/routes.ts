@@ -632,10 +632,18 @@ export interface IntegrationServices {
 	readonly actions?: import("../actions/routes.ts").ActionRouteContext;
 	/** Container and Kubernetes capabilities (`docker`/`kubernetes` families). */
 	readonly runtime?: RuntimeRouteServices;
-	/** Owner-scoped app run-target instances. */
+	/** Owner-scoped app run-target slots: one app runs once at a time. */
 	readonly instances?: import("../runtime/instances.ts").EnvironmentInstanceController;
 	/** The application/infrastructure family (`app` rows). */
 	readonly appFamily?: import("../runtime/app-routes.ts").AppFamilyServices;
+	/**
+	 * Late-bound dashboard envelope fan-out: the broker is created by the server,
+	 * after these services exist, so slot waits and grants arrive through a
+	 * holder instead of a second event path.
+	 */
+	readonly attachDashboardEvents?: (
+		publish: (event: import("../runtime/instances.ts").SlotEvent) => void,
+	) => void;
 }
 
 /** Serve one Bun-owned legacy route, or `undefined` when the path belongs to

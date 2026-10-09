@@ -188,7 +188,9 @@ import {
 	type SidebarMode,
 	sidebarIndexFor,
 	toggleSidebarMode,
+	workflowDisplayName,
 } from "./sidebar-model.ts";
+import { startSlotToasts } from "./slot-toasts.ts";
 
 /** Bounded poll for the sidebar's workflow observation. The store is SQLite
  * and the read is a catalog pass; a few seconds keeps a started or finished
@@ -617,6 +619,19 @@ export function App(props: {
 		if (!gatewayReady()) return;
 		const monitor = startWorkflowMonitor();
 		onCleanup(() => monitor.stop());
+	});
+	// App slots: the server publishes who waits for which app and who got it, so
+	// the developer sees the queue without opening anything. Needs the gateway,
+	// so the effect re-runs when the composition root installs it.
+	createEffect(() => {
+		if (!gatewayReady()) return;
+		const dispose = startSlotToasts((workflowId) => {
+			const overview = sidebarOverviews().find(
+				(entry) => entry.state.workflowId === workflowId,
+			);
+			return overview ? workflowDisplayName(overview) : workflowId;
+		});
+		onCleanup(dispose);
 	});
 	// Panel focus drives two keymap fields: `app.view` parks the dashboard's own
 	// layers when the sidebar holds focus, and `shell.panel` activates the
