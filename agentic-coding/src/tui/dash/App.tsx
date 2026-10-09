@@ -418,7 +418,9 @@ export function App(props: {
 		props.keymap.setData("agent.view", "session");
 		void (async () => {
 			try {
-				const { HostClient } = await import("../../agent-host/client.ts");
+				const { HostClient, watchStream } = await import(
+					"../../agent-host/client.ts"
+				);
 				const { buildAgentSessionView, readAgentSessionMetadata } =
 					await import("./agent-session.ts");
 				const client = new HostClient(session.hostSocket);
@@ -433,17 +435,35 @@ export function App(props: {
 						setAgentSessionContextWindows(catalog.contextWindows ?? {});
 					})
 					.catch(() => undefined);
-				const stop = await client.watch(
-					session.runId,
-					(value) => {
+				// The stream stays live across a host restart or a dropped socket:
+				// `watchStream` reconnects instead of freezing the transcript on the
+				// last frame. Once a frame has arrived the transcript stays and
+				// silently refreshes on reconnect; before the first frame a drop keeps
+				// the "Connecting…" placeholder rather than going blank.
+				let receivedFrame = false;
+				const stop = watchStream(client, session.runId, {
+					...(session.conversationId
+						? { conversationId: session.conversationId }
+						: {}),
+					onFrame: (value) => {
 						if (agentSession()?.runId !== session.runId) return;
+						receivedFrame = true;
 						setAgentSessionBlocks(buildAgentSessionView(value));
 						setAgentSessionMetadata(readAgentSessionMetadata(value));
 					},
-					session.conversationId
-						? { conversationId: session.conversationId }
-						: {},
-				);
+					onState: (state) => {
+						if (agentSession()?.runId !== session.runId) return;
+						if (state !== "open" && !receivedFrame)
+							setAgentSessionBlocks([
+								{
+									id: "route:connecting",
+									kind: "notice",
+									tone: "muted",
+									text: "Connecting…",
+								},
+							]);
+					},
+				});
 				if (agentSession()?.runId !== session.runId) {
 					stop();
 					return;

@@ -106,6 +106,22 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** A sleep that resolves early (never rejects) when the signal aborts, so a
+ * reconnect backoff that is torn down mid-wait simply stops instead of leaking
+ * a timer or throwing. */
+function sleepUntilAborted(ms: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal?.addEventListener("abort", finish, { once: true });
+	});
+}
+
 /** Ensure a workflow's host is reachable, spawning it when the socket is not
  * yet accepting connections. Idempotent under a concurrent caller: a host
  * that is still starting is simply retried against, and a host that won the
@@ -248,14 +264,33 @@ export class HostClient {
 	watch(
 		runId: string,
 		onFrame: (value: unknown) => void,
-		options: { conversationId?: string } = {},
+		options: {
+			conversationId?: string;
+			/** Called once if the stream drops *after* it had started — the socket
+			 * closed or errored past the handshake. Not called when the caller stops
+			 * the watch itself. A single-shot watch swallowed a post-start close,
+			 * freezing the view on the last frame; `watchStream` uses this to
+			 * reconnect instead of going stale. */
+			onClose?: (error?: Error) => void;
+		} = {},
 	): Promise<() => void> {
 		return new Promise((resolve, reject) => {
 			const socket = net.createConnection(this.socketPath);
 			const reader = new FrameReader();
 			let settled = false;
+			// Once the watch has started the caller already holds `stop`, so a later
+			// drop must notify `onClose` rather than be swallowed; `done` guards both
+			// an intentional stop and a doubled close/error event.
+			let done = false;
 			const fail = (error: Error) => {
-				if (settled) return;
+				if (settled) {
+					if (done) return;
+					done = true;
+					clearTimeout(timer);
+					socket.destroy();
+					options.onClose?.(error);
+					return;
+				}
 				settled = true;
 				clearTimeout(timer);
 				socket.destroy();
@@ -298,7 +333,12 @@ export class HostClient {
 						if (!settled) {
 							settled = true;
 							clearTimeout(timer);
-							resolve(() => socket.end());
+							// An intentional stop marks `done` so the close it triggers is
+							// not reported to `onClose` as a dropped stream.
+							resolve(() => {
+								done = true;
+								socket.end();
+							});
 						}
 					}
 				}
@@ -315,4 +355,101 @@ function unexpected(response: HostResponse): Error {
 	if (response.type === "error")
 		return new Error(`agent host: ${response.code}: ${response.message}`);
 	return new Error(`agent host: unexpected response type ${response.type}`);
+}
+
+/** The live connection state of a resilient watch: `connecting` is an attempt
+ * in flight, `open` is streaming frames, `closed` is a drop awaiting the next
+ * reconnect. */
+export type WatchStreamState = "connecting" | "open" | "closed";
+
+export interface WatchStreamOptions {
+	readonly conversationId?: string;
+	readonly onFrame: (value: unknown) => void;
+	/** Connection-state changes, so a caller can fall back to a status badge or
+	 * show a "reconnecting" notice while the stream is down. */
+	readonly onState?: (state: WatchStreamState) => void;
+	/** First reconnect backoff, doubling up to `maxBackoffMs`. */
+	readonly backoffMs?: number;
+	readonly maxBackoffMs?: number;
+	/** Injectable for tests. */
+	readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+/**
+ * A watch that stays live: it opens `client.watch`, forwards every frame, and
+ * reconnects with doubling backoff whenever the stream drops, until the
+ * returned `stop()` is called. A single `watch()` resolves once and then goes
+ * silent if its socket closes, freezing the view on the last frame; this is the
+ * resilient wrapper the dashboard's transcript and live activity use, so a host
+ * restart or a dropped socket self-heals instead of leaving the UI stale.
+ */
+export function watchStream(
+	client: HostClient,
+	runId: string,
+	options: WatchStreamOptions,
+): () => void {
+	const sleep = options.sleep ?? sleepUntilAborted;
+	const base = options.backoffMs ?? 500;
+	const max = options.maxBackoffMs ?? 10_000;
+	const controller = new AbortController();
+	let innerStop: (() => void) | undefined;
+	let attempt = 0;
+	void (async () => {
+		while (!controller.signal.aborted) {
+			options.onState?.("connecting");
+			// A drop after the watch started resolves the wait below, waking the loop
+			// to reconnect; `dropped` covers a drop that races the resolve setup.
+			let wake: (() => void) | undefined;
+			let dropped = false;
+			try {
+				const stop = await client.watch(
+					runId,
+					(value) => {
+						if (!controller.signal.aborted) options.onFrame(value);
+					},
+					{
+						...(options.conversationId
+							? { conversationId: options.conversationId }
+							: {}),
+						onClose: () => {
+							dropped = true;
+							wake?.();
+						},
+					},
+				);
+				if (controller.signal.aborted) {
+					stop();
+					return;
+				}
+				innerStop = stop;
+				attempt = 0;
+				options.onState?.("open");
+				await new Promise<void>((resolve) => {
+					if (dropped || controller.signal.aborted) {
+						resolve();
+						return;
+					}
+					wake = resolve;
+					controller.signal.addEventListener("abort", () => resolve(), {
+						once: true,
+					});
+				});
+				innerStop = undefined;
+				if (controller.signal.aborted) return;
+			} catch {
+				// The initial handshake failed (host not up yet, or it refused the
+				// run): fall through to the same backoff and try again.
+				if (controller.signal.aborted) return;
+			}
+			options.onState?.("closed");
+			attempt++;
+			let backoff = base;
+			for (let i = 1; i < attempt; i++) backoff = Math.min(backoff * 2, max);
+			await sleep(backoff, controller.signal);
+		}
+	})();
+	return () => {
+		controller.abort();
+		innerStop?.();
+	};
 }

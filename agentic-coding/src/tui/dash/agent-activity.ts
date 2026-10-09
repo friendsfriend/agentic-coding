@@ -167,14 +167,24 @@ export function agentActivityFromValue(
 	return undefined;
 }
 
-/** The production watch: one HostClient connection streaming the run's view. */
+/** The production watch: one HostClient connection streaming the run's view,
+ * kept live across a host restart or a dropped socket by `watchStream`. A
+ * single-shot watch froze the badge on the last frame when the socket closed;
+ * the resilient stream reconnects, and clears the badge (fall back to the
+ * workflow status) while it is down so a disconnected run never reads as still
+ * running its last tool. */
 const hostWatch: AgentActivityWatch = async (target, onValue) => {
-	const { HostClient } = await import("../../agent-host/client.ts");
-	return await new HostClient(target.hostSocket).watch(
-		target.runId,
-		onValue,
-		target.conversationId ? { conversationId: target.conversationId } : {},
+	const { HostClient, watchStream } = await import(
+		"../../agent-host/client.ts"
 	);
+	const client = new HostClient(target.hostSocket);
+	return watchStream(client, target.runId, {
+		...(target.conversationId ? { conversationId: target.conversationId } : {}),
+		onFrame: onValue,
+		onState: (state) => {
+			if (state !== "open") onValue(undefined);
+		},
+	});
 };
 
 /**

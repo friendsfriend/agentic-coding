@@ -114,7 +114,9 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			const opened = await openOrchestratorSession({ fresh, model });
 			if (disposed) return;
 			setSession(opened);
-			const { HostClient } = await import("../../agent-host/client.ts");
+			const { HostClient, watchStream } = await import(
+				"../../agent-host/client.ts"
+			);
 			const host = new HostClient(opened.hostSocket);
 			void host
 				.catalog()
@@ -124,10 +126,31 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 					setContextWindows(catalog.contextWindows ?? {});
 				})
 				.catch(() => undefined);
-			const stop = await host.watch(opened.runId, (value) => {
-				if (session()?.runId !== opened.runId) return;
-				setBlocks(view.buildAgentSessionView(value));
-				setMetadata(view.readAgentSessionMetadata(value));
+			// The stream stays live across a host restart or a dropped socket:
+			// `watchStream` reconnects instead of freezing the transcript on the last
+			// frame. The transcript stays once a frame has arrived and refreshes
+			// silently on reconnect; before the first frame a drop keeps the
+			// "Connecting…" placeholder rather than going blank.
+			let receivedFrame = false;
+			const stop = watchStream(host, opened.runId, {
+				onFrame: (value) => {
+					if (session()?.runId !== opened.runId) return;
+					receivedFrame = true;
+					setBlocks(view.buildAgentSessionView(value));
+					setMetadata(view.readAgentSessionMetadata(value));
+				},
+				onState: (state) => {
+					if (session()?.runId !== opened.runId) return;
+					if (state !== "open" && !receivedFrame)
+						setBlocks([
+							{
+								id: "route:connecting",
+								kind: "notice",
+								tone: "muted",
+								text: "Connecting…",
+							},
+						]);
+				},
 			});
 			if (disposed || session()?.runId !== opened.runId) {
 				stop();
