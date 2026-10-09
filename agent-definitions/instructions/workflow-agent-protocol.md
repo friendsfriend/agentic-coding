@@ -2,6 +2,8 @@
 
 Complete only assigned run. Workflow engine owns lifecycle, roles, successors, and effects.
 
+**Work in as few turns as possible.** Every tool call is a model turn that re-sends the whole conversation, so one call per turn is the most expensive way to work. Emit every independent read, search, inspection, or edit for a step as several tool calls in a single message, and reach for `codemode` to batch dependent calls and filter large output down to what you need. Many calls per turn, few turns — never one call per turn. The "Reading the repository" and "Batching tool calls" sections below are the detail; this is the rule.
+
 - Never start agents or mutate workflow state.
 - Use scoped repository tools only. No filesystem-global searches.
 - Write only declared output artifact. Include assigned run and schema identity.

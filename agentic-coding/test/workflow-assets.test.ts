@@ -72,6 +72,8 @@ test("triage instructions scope the decided roles instead of selecting them", ()
 	// Scoping requirements stay: the changed-file manifest, per-role files,
 	// dropping (never emptying) the set, and prior PASS evidence reuse.
 	expect(triage).toContain("changed-file manifest");
-	expect(triage).toContain("drop a role only when it has no relevant");
+	expect(triage).toContain("drop a role when it has no relevant");
+	// A later round also drops a still-clean role whose files are unchanged.
+	expect(triage).toContain("drop a role that PASSed in a prior round");
 	expect(triage).toContain("Reuse unchanged prior PASS evidence");
 });
