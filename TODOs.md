@@ -10,9 +10,9 @@ Big ones:
 
 * Implement Infrastructure and testing / debugging integration -> Devenv environments fused with agentic work
  │ #  │ Change                                  │ Needs                              │ Why here                                                                                                                        │
- │ 1  │ make-app-runs-exclusive                 │ archived add-environment-instances │ Undoes the parallel runs from step 1 and adds one run per app with waiting and toasts. Everything else builds on it.            │
- │ 2  │ add-environment-instance-lifecycle      │ 1                                  │ Apps are released when the workflow ends or sits idle, so waiting agents can't get stuck behind a forgotten app.                │
- │ 3  │ add-agent-environment-tools             │ 1, 2                               │ First change agents can use: the env_* tools, with env_start blocking while it waits.                                           │
+ │ 1  │ make-app-runs-exclusive                 │ archived add-environment-instances │ Undoes the parallel runs from step 1 and adds one run per app with waiting and toasts. Everything else builds on it.            │ done
+ │ 2  │ add-environment-instance-lifecycle      │ 1                                  │ Apps are released when the workflow ends or sits idle, so waiting agents can't get stuck behind a forgotten app.                │ done
+ │ 3  │ add-agent-environment-tools             │ 1, 2                               │ First change agents can use: the env_* tools, with env_start blocking while it waits.                                           │ done
  │ 4  │ show-environment-instances              │ 1, 2                               │ As soon as agents hold apps, you can see who holds and who waits, and force-release.                                            │
  │ 5  │ add-workflow-evidence-store             │ —                                  │ Storage the browser needs. It has no dependencies, so it can also run in parallel with 1–4.                                     │
  │ 6  │ add-dashboard-evidence-panel            │ 5                                  │ Shows evidence in the dashboard before the agents start producing it.                                                           │
