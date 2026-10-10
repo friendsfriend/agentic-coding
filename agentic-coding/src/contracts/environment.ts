@@ -107,7 +107,7 @@ export const acquireSlotsRequestSchema = Schema.Struct({
 	),
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
-	/** Bounded long poll: the tool layer re-polls, so one call never blocks
+	/** A bounded long poll: the tool layer re-polls, so one call never blocks
 	 * longer than this. */
 	waitSec: Schema.optional(
 		Schema.Number.pipe(
@@ -117,6 +117,9 @@ export const acquireSlotsRequestSchema = Schema.Struct({
 			Schema.lessThanOrEqualTo(300),
 		),
 	),
+	/** Narrow the runtime the owner asked for (`docker`, `shell`,
+	 * `systemshell`); an unavailable one is refused rather than substituted. */
+	runtime: Schema.optional(safeInstanceText),
 });
 
 /**
@@ -156,6 +159,54 @@ export type EnvironmentTeardownResult =
 
 export type AcquireSlotsRequest = typeof acquireSlotsRequestSchema.Type;
 export type AppSlotOperationRequest = typeof appSlotOperationRequestSchema.Type;
+
+// ---------------------------------------------------------------------------
+// Agent environment requests (`add-agent-environment-tools`)
+// ---------------------------------------------------------------------------
+// The bodies a durable run's `env_*` tools send. The owner is never a field:
+// it comes from the capability the run presents (`environmentTokenFor`), so a
+// request cannot name another workflow's apps.
+
+const agentAppName = safeInstanceText.pipe(Schema.minLength(1));
+/** How many apps one acquire may name, in the controller's own bound. */
+export const MAX_AGENT_ENV_APPS = 16;
+
+export const agentEnvironmentAcquireSchema = Schema.Struct({
+	/** One app name, or a bounded list: the tool sends every app it needs in
+	 * one call so the server can grant atomically and detect a deadlock. */
+	apps: Schema.Union(
+		agentAppName,
+		Schema.Array(agentAppName).pipe(
+			Schema.minItems(1),
+			Schema.maxItems(MAX_AGENT_ENV_APPS),
+		),
+	),
+	target: Schema.optional(safeInstanceText),
+	profile: Schema.optional(safeInstanceText),
+	runtime: Schema.optional(safeInstanceText),
+	waitSec: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
+				message: () => "waitSec must be a non-negative number",
+			}),
+			Schema.lessThanOrEqualTo(300),
+		),
+	),
+});
+
+export const agentEnvironmentAppSchema = Schema.Struct({
+	app: agentAppName,
+});
+
+export const agentEnvironmentBuildSchema = Schema.Struct({
+	app: agentAppName,
+	target: Schema.optional(safeInstanceText),
+	profile: Schema.optional(safeInstanceText),
+});
+
+export type AgentEnvironmentAcquire = typeof agentEnvironmentAcquireSchema.Type;
+export type AgentEnvironmentApp = typeof agentEnvironmentAppSchema.Type;
+export type AgentEnvironmentBuild = typeof agentEnvironmentBuildSchema.Type;
 
 // ---------------------------------------------------------------------------
 // Dashboard session wire records: event envelopes, connection state, errors

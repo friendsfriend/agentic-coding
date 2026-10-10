@@ -24,6 +24,7 @@ import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
+import { createEnvironmentExtension } from "./environment-tools.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
 import {
@@ -198,17 +199,19 @@ export class DurableHost {
 		 * it, so a read-only run's explicit selection can still offer it. */
 		private readonly codemodeTool: ToolRegistration | undefined,
 		/** The read-only run's share of the workflow extensions: `ask_jev` (the
-		 * in-session judgment tool the protocol tells every verifier to reach for)
-		 * and `grep` (the bounded repository search a review needs). A read-only
-		 * run names its tools explicitly, so both have to be listed here or the
+		 * in-session judgment tool the protocol tells every verifier to reach for),
+		 * `grep` (the bounded repository search a review needs) and the environment
+		 * tools (a verifier starts and reads the app it verifies). A read-only run
+		 * names its tools explicitly, so all of them have to be listed here or the
 		 * prompt would name a tool the session never got. */
 		private readonly readOnlyTools: readonly ToolRegistration[],
 		/** The orchestrator extension, present only in orchestrator mode. */
 		private readonly orchestratorExtension: Extension | undefined,
 	) {}
 
-	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, and the
-	 * workflow system prompt. Never installed in orchestrator mode. */
+	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, the
+	 * environment tools, and the workflow system prompt. Never installed in
+	 * orchestrator mode. */
 	private static installWorkflowExtensions(
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
@@ -219,8 +222,17 @@ export class DurableHost {
 		registry.install(jev);
 		const search = createSearchExtension();
 		registry.install(search);
+		// Every durable run gets the environment tools, read-only runs included:
+		// they act on the app slot instead of the source tree, so a verifier can
+		// start, read and stop the app it is verifying without edit rights.
+		const environment = createEnvironmentExtension(lookup);
+		registry.install(environment);
 		registry.install(createPromptExtension(options.globalAgentDir));
-		return [...(jev.tools ?? []), ...(search.tools ?? [])];
+		return [
+			...(jev.tools ?? []),
+			...(search.tools ?? []),
+			...(environment.tools ?? []),
+		];
 	}
 
 	private log(line: string): void {

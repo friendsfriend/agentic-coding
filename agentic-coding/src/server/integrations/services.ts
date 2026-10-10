@@ -218,6 +218,11 @@ export function createIntegrationServices(
 	const dashboardEvents: {
 		publish?: (event: import("../runtime/instances.ts").SlotEvent) => void;
 	} = {};
+	// One resolver for every caller: the slot controller's starts and the agent
+	// environment routes' build/test runs must agree on which checkout is the
+	// workflow's own.
+	const ownerCheckoutResolver =
+		options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver();
 	const instances = hasInstanceStore
 		? new EnvironmentInstanceController({
 				state: options.state as unknown as EnvironmentInstanceState,
@@ -234,8 +239,7 @@ export function createIntegrationServices(
 									)),
 						}
 					: {}),
-				resolveOwnerCheckout:
-					options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver(),
+				resolveOwnerCheckout: ownerCheckoutResolver,
 				...(options.observation ? { observation: options.observation } : {}),
 				...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
 				// The idle TTL is configuration, not a constant: the reaper resolves
@@ -351,6 +355,7 @@ export function createIntegrationServices(
 		},
 		...(options.runtime ? { runtime: options.runtime } : {}),
 		...(instances ? { instances } : {}),
+		resolveOwnerCheckout: ownerCheckoutResolver,
 		...{
 			attachDashboardEvents: (publish) => {
 				dashboardEvents.publish = publish;

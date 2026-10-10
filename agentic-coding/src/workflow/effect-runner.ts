@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
+import { environmentRunEnv } from "../agent-host/environment-capability.ts";
 import { hostLayout } from "../agent-host/layout.ts";
 import {
 	type AgentHandle,
@@ -3185,6 +3186,9 @@ function assignmentFor(
 			// its own payloads; the runtime bridges read it from the run environment
 			// instead of re-reading the config (SEC-001).
 			...(captureContent ? { HERDR_CAPTURE_CONTENT: "1" } : {}),
+			// The owner-scoped environment capability the `env_*` tools call the
+			// server with: every run of this workflow acts as `workflow:<id>`.
+			...environmentRunEnv(run.workflowId),
 			HERDR_TELEMETRY_PATH:
 				snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"

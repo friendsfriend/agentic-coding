@@ -5,6 +5,10 @@
 // authority, the legacy devenv surface and the telemetry receivers. Native
 // Bun/Promise I/O lives here; operation handlers stay transport-agnostic.
 
+import {
+	clearEnvironmentServer,
+	publishEnvironmentServer,
+} from "../agent-host/environment-capability.ts";
 import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
 import {
@@ -169,6 +173,9 @@ export async function startWorkflowServer(
 	const url = `http://${listener.hostname}:${assignedPort}`;
 	const tokenFile = instanceTokenFile(assignedPort);
 	publishInstanceToken(tokenFile, authority.token);
+	// Every durable run of this server's workflows gets its own owner-scoped
+	// environment capability derived from this endpoint and token.
+	publishEnvironmentServer({ url, token: authority.token });
 	let stopped = false;
 	return {
 		url,
@@ -181,6 +188,7 @@ export async function startWorkflowServer(
 		stop: async () => {
 			if (stopped) return;
 			stopped = true;
+			clearEnvironmentServer(authority.token);
 			stopIdleReaper?.();
 			credentials.cancelAll();
 			events.closeAll();

@@ -449,7 +449,13 @@ async function kubernetesReleaseLogs(
 	runner: Runner,
 	namespace: string,
 	release: string,
+	/** Bounds for a caller that answers an agent: how many lines per pod, and how
+	 * many characters of all pods together. The legacy route passes none and keeps
+	 * its own `--tail 500` over every pod. */
+	options: { tail?: number; maxChars?: number } = {},
 ): Promise<string> {
+	const perPodTail = String(options.tail ?? 500);
+	const maxChars = options.maxChars ?? Number.POSITIVE_INFINITY;
 	const pods = await runKubernetes(
 		services,
 		runner.kubectl(
@@ -469,6 +475,10 @@ async function kubernetesReleaseLogs(
 	}
 	let combined = "";
 	for (const pod of names) {
+		if (combined.length >= maxChars) {
+			combined += `… ${names.length - names.indexOf(pod)} further pod(s) not read: the result reached ${maxChars} characters\n`;
+			break;
+		}
 		let output: string;
 		try {
 			output = await runKubernetes(
@@ -480,7 +490,7 @@ async function kubernetesReleaseLogs(
 					pod,
 					"--all-containers",
 					"--tail",
-					"500",
+					perPodTail,
 				),
 			);
 		} catch (error) {

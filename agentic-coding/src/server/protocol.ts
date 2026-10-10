@@ -18,6 +18,9 @@ import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
 	acquireSlotsRequestSchema,
+	agentEnvironmentAcquireSchema,
+	agentEnvironmentAppSchema,
+	agentEnvironmentBuildSchema,
 	appSlotOperationRequestSchema,
 	environmentTeardownRequestSchema,
 	type ObservationRequest,
@@ -33,6 +36,19 @@ import {
 
 /** Bumped whenever a breaking wire change lands; clients send it back. */
 export const SERVER_API_VERSION = "v1";
+
+export const AGENT_ENVIRONMENT_PREFIX = "/api/v1/agent-env/";
+
+/** The seven agent environment routes. Declared here (the transport manifest)
+ * and served by `environment/agent-routes.ts`, so the surface is visible in one
+ * place and a client cannot invent a path the server does not own. */
+export const AGENT_LIST_PATH = `${AGENT_ENVIRONMENT_PREFIX}list`;
+export const AGENT_STATUS_PATH = `${AGENT_ENVIRONMENT_PREFIX}status`;
+export const AGENT_LOGS_PATH = `${AGENT_ENVIRONMENT_PREFIX}logs`;
+export const AGENT_ACQUIRE_PATH = `${AGENT_ENVIRONMENT_PREFIX}acquire`;
+export const AGENT_STOP_PATH = `${AGENT_ENVIRONMENT_PREFIX}stop`;
+export const AGENT_BUILD_PATH = `${AGENT_ENVIRONMENT_PREFIX}build`;
+export const AGENT_TEST_PATH = `${AGENT_ENVIRONMENT_PREFIX}test`;
 
 /** Bounded request body (a single observation/diff can be a few MiB). */
 export const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -238,6 +254,14 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		owner: "bun",
 		domain: "environment",
 	},
+	// The owner teardown route is served as its own exact path (the `*` row below
+	// covers the release/stop rows), so the manifest names it exactly.
+	{
+		method: "POST",
+		path: "/api/v1/environment/apps/teardown",
+		owner: "bun",
+		domain: "environment",
+	},
 	{
 		method: "POST",
 		path: "/api/v1/environment/apps/*",
@@ -247,6 +271,21 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: "/api/v1/environment/private/*",
+		owner: "bun",
+		domain: "environment",
+	},
+	// The agent environment surface is one prefix per method: its seven routes
+	// live in `environment/agent-routes.ts` and only ever answer to the
+	// owner-scoped capability, never to the instance token.
+	{
+		method: "GET",
+		path: `${AGENT_ENVIRONMENT_PREFIX}*`,
+		owner: "bun",
+		domain: "environment",
+	},
+	{
+		method: "POST",
+		path: `${AGENT_ENVIRONMENT_PREFIX}*`,
 		owner: "bun",
 		domain: "environment",
 	},
@@ -408,6 +447,26 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/telemetry/prune",
 		schemaId: "server.telemetry.prune",
 		schema: telemetryPruneRequestSchema,
+	},
+	{
+		path: AGENT_ACQUIRE_PATH,
+		schemaId: "server.agent-env.acquire",
+		schema: agentEnvironmentAcquireSchema,
+	},
+	{
+		path: AGENT_STOP_PATH,
+		schemaId: "server.agent-env.stop",
+		schema: agentEnvironmentAppSchema,
+	},
+	{
+		path: AGENT_BUILD_PATH,
+		schemaId: "server.agent-env.build",
+		schema: agentEnvironmentBuildSchema,
+	},
+	{
+		path: AGENT_TEST_PATH,
+		schemaId: "server.agent-env.test",
+		schema: agentEnvironmentBuildSchema,
 	},
 ];
 

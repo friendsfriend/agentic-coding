@@ -735,6 +735,21 @@ function broadcast(context: ActionRouteContext, event: LegacyEvent): void {
 	context.services.publish(event);
 }
 
+/** A command event observer one caller can attach to a run without owning the
+ * event stream: `add-agent-environment-tools` uses it to return a build's
+ * output to an agent. The run's own events are published and persisted exactly
+ * as before. */
+export interface ActionRunObserver {
+	onCommand(event: CommandEvent): void;
+}
+
+/** How one executed run ended, so a caller that awaited it can report the
+ * outcome without reading history. */
+export interface ActionRunOutcome {
+	readonly status: string;
+	readonly error?: string;
+}
+
 /** Runs one definition to completion and records its lifecycle. Never rejects. */
 async function executeRun(
 	context: ActionRouteContext,
@@ -742,7 +757,8 @@ async function executeRun(
 	runId: string,
 	rawInputs: Record<string, unknown>,
 	signal: AbortSignal,
-): Promise<void> {
+	observer?: ActionRunObserver,
+): Promise<ActionRunOutcome> {
 	const { services, runs, processes } = context;
 	const projection = new ActionRunProjection(runs);
 	const events = {
@@ -761,6 +777,7 @@ async function executeRun(
 	};
 	const commandSink: CommandEventSink = {
 		emitCommand: (event: CommandEvent): void => {
+			observer?.onCommand(event);
 			const properties = {
 				runId,
 				stepId: event.stepId,
@@ -870,15 +887,20 @@ async function executeRun(
 		inputs.set(key, { type: "string", visibility: "public", data: value });
 	}
 	let status: string = RUN_STATUS.completed;
+	let failure: string | undefined;
 	try {
 		const result = await engine.run(signal, runId, definition, inputs);
 		if (signal.aborted) status = RUN_STATUS.canceled;
 		else if (result.error || result.outcome === OUTCOME.failed) {
 			status = RUN_STATUS.failed;
+			failure = result.error
+				? message(result.error)
+				: `step outcome ${String(result.outcome)}`;
 		}
 	} catch (error) {
 		status = RUN_STATUS.failed;
-		services.logger?.(`[ERROR] action ${runId} failed: ${message(error)}`);
+		failure = message(error);
+		services.logger?.(`[ERROR] action ${runId} failed: ${failure}`);
 	} finally {
 		context.cancels.delete(runId);
 		runs.complete(runId, status as typeof RUN_STATUS.completed);
@@ -897,6 +919,216 @@ async function executeRun(
 				context.services.leases?.releaseForOwner(definition.owner.id);
 			}
 		}
+	}
+	return { status, ...(failure ? { error: failure } : {}) };
+}
+
+/** A build or test one agent asked for is already running for that app: the
+ * conflict keeps its own code and status instead of surfacing as a malformed
+ * request. */
+export class ActionConflictError extends Error {
+	readonly code = "action-active";
+	readonly status = 409;
+	constructor(message: string) {
+		super(message);
+		this.name = "ActionConflictError";
+	}
+}
+
+/** How much of a build/test result one agent receives; a longer stream is cut
+ * rather than buffered whole. */
+const MAX_AGENT_ACTION_OUTPUT_CHARS = 40_000;
+
+/** One agent-requested build or test of an app, in the workflow's own
+ * checkout (`add-agent-environment-tools`). */
+export interface AgentActionRequest {
+	readonly app: ActionApp;
+	readonly action: "build" | "test";
+	/** The caller's checkout: the action runs there, not in the app's own. */
+	readonly checkoutDir: string;
+	readonly target?: string;
+	readonly profile?: string;
+	readonly signal?: AbortSignal;
+}
+
+/** The bounded answer: what ran, how it ended, and what it printed. */
+export interface AgentActionResult {
+	readonly runId: string;
+	readonly status: string;
+	readonly targetId: string;
+	readonly runtime: string;
+	readonly exitCode: number | null;
+	readonly output: string;
+	readonly truncated: boolean;
+	readonly error?: string;
+}
+
+/** The build/test target one agent request names: an id or label, else the
+ * profile's own default, and never a silent guess between several. */
+function agentTarget(
+	targets: readonly ActionTarget[],
+	request: AgentActionRequest,
+): ActionTarget {
+	const named = request.target
+		? targets.find(
+				(candidate) =>
+					candidate.id === request.target || candidate.label === request.target,
+			)
+		: undefined;
+	if (request.target && !named)
+		throw new Error(
+			`${request.action} target ${JSON.stringify(request.target)} not found for ${request.app.ident}`,
+		);
+	if (named) return named;
+	let candidates = [...targets];
+	if (request.profile)
+		candidates = candidates.filter(
+			(candidate) =>
+				candidate.profile === request.profile ||
+				(!candidate.profile && request.profile === "default"),
+		);
+	if (candidates.length === 0)
+		throw new Error(
+			`no ${request.action} target of ${request.app.ident} matches profile ${JSON.stringify(request.profile)}`,
+		);
+	const preferred = candidates.find(
+		(candidate) => (candidate.profile ?? "default") === "default",
+	);
+	if (preferred) return preferred;
+	if (candidates.length === 1) return candidates[0] as ActionTarget;
+	throw new Error(
+		`${request.app.ident} offers several ${request.action} targets (${candidates
+			.map((candidate) => candidate.id)
+			.join(", ")}); name one with target or profile`,
+	);
+}
+
+/**
+ * Compile and run one app build/test action against a caller-supplied checkout.
+ *
+ * The compilers are the registry's own, with the caller's checkout substituted
+ * for the app's, so an agent's build is the same action the developer's UI runs
+ * — compiled from the same targets, recorded in the same history and streamed on
+ * the same event stream — instead of a second build implementation. A failing
+ * build is a result, not a thrown error.
+ */
+export async function runAppBuildTestAction(
+	context: ActionRouteContext,
+	request: AgentActionRequest,
+): Promise<AgentActionResult> {
+	const { services } = context;
+	const tools = services.tools
+		? await services.tools()
+		: await checkToolAvailability();
+	const targets = discoverActionTargets({
+		appIdent: request.app.ident,
+		localDir: request.checkoutDir,
+		action: request.action,
+		configDir: services.configDir,
+		platform: process.platform,
+	});
+	if (targets.length === 0)
+		throw new Error(
+			`${request.app.ident} has no ${request.action} target in ${request.checkoutDir}`,
+		);
+	const target = agentTarget(targets, request);
+	const definitions = compileContainerTargetsWithTools(
+		request.app.ident,
+		target,
+		targetResolver(
+			services.apps.getApps(),
+			services.infraServices,
+			services.configDir,
+		),
+		tools,
+		{
+			checkoutDir: request.checkoutDir,
+			configDir: services.configDir,
+			tempDir: services.tempDir ?? "",
+		},
+	);
+	// The developer's own build action has a tmux (window) variant and a plain
+	// command variant; an agent's build must finish and return its output, so the
+	// synchronous variant is the one chosen.
+	const definition =
+		definitions.find(
+			(candidate) =>
+				candidate.type === request.action && candidate.runtime !== "tmux",
+		) ??
+		definitions.find((candidate) => candidate.type === request.action) ??
+		definitions[0];
+	if (!definition)
+		throw new Error(
+			`no ${request.action} action compiled for ${request.app.ident}`,
+		);
+	const snapshot = context.registry.snapshot();
+	const runId = `action-${crypto.randomUUID()}`;
+	const run: ActionRun = {
+		id: runId,
+		title: definition.label,
+		appIdent: request.app.ident,
+		action: definition.type,
+		kind: actionKind(definition.type),
+		profile: definition.runtime,
+		targetLabel: definition.label,
+		status: RUN_STATUS.active,
+		steps: [],
+		startedAt: new Date().toISOString(),
+		registryVersion: snapshot.version,
+		definitionSnapshot: definitionSnapshot(definition),
+	};
+	try {
+		context.runs.start(run, request.app.ident, definition.type);
+	} catch (error) {
+		// The same app+action is already running (the developer's own run, or
+		// another run of this workflow): a conflict, not a malformed request.
+		throw new ActionConflictError(message(error));
+	}
+	publishAndPersist(context, "action.started", { run });
+	const controller = new AbortController();
+	context.cancels.set(runId, controller);
+	const abort = () => controller.abort();
+	request.signal?.addEventListener("abort", abort, { once: true });
+	let output = "";
+	let truncated = false;
+	let exitCode: number | null = null;
+	try {
+		const outcome = await executeRun(
+			context,
+			definition,
+			runId,
+			{},
+			controller.signal,
+			{
+				onCommand: (event) => {
+					if (event.exitCode !== undefined) exitCode = event.exitCode;
+					if (event.type !== "command.output" || !event.chunk) return;
+					const room = MAX_AGENT_ACTION_OUTPUT_CHARS - output.length;
+					if (room <= 0) {
+						truncated = true;
+						return;
+					}
+					if (event.chunk.length > room) {
+						output += event.chunk.slice(0, room);
+						truncated = true;
+						return;
+					}
+					output += event.chunk;
+				},
+			},
+		);
+		return {
+			runId,
+			status: outcome.status,
+			targetId: target.id,
+			runtime: target.runtime,
+			exitCode,
+			output,
+			truncated,
+			...(outcome.error ? { error: outcome.error } : {}),
+		};
+	} finally {
+		request.signal?.removeEventListener("abort", abort);
 	}
 }
 

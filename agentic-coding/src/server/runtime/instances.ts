@@ -260,7 +260,12 @@ export interface AcquireSlotsRequest {
 	readonly apps: readonly string[];
 	readonly target?: string;
 	readonly profile?: string;
+	/** Narrow the runtime to start (`docker`, `shell`, `systemshell`). */
+	readonly runtime?: string;
 	readonly waitSec?: number;
+	/** Aborts the wait: the entry leaves the queue and the request answers
+	 * `cancelled`, so an abandoned long poll cannot still commit a start. */
+	readonly signal?: AbortSignal;
 }
 
 export interface SlotGrant {
@@ -286,7 +291,18 @@ export interface SlotWait {
 	readonly holders: Record<string, EnvironmentOwner>;
 }
 
-export type AcquireSlotsResult = SlotGrant | SlotRelease | SlotWait;
+/** The caller went away: the entry left the queue and nothing was started. */
+export interface SlotCancelled {
+	readonly outcome: "cancelled";
+	readonly owner: EnvironmentOwner;
+	readonly apps: string[];
+}
+
+export type AcquireSlotsResult =
+	| SlotGrant
+	| SlotRelease
+	| SlotWait
+	| SlotCancelled;
 
 /** One app's slot as `GET /api/v1/environment/apps/slots` reports it. */
 export interface AppSlot {
@@ -299,6 +315,7 @@ export interface AppSlot {
 interface QueuedRequest {
 	readonly target?: string;
 	readonly profile?: string;
+	readonly runtime?: string;
 }
 
 interface SlotWaiter {
@@ -514,6 +531,10 @@ export class EnvironmentInstanceController {
 		}
 		const apps = this.requestedApps(input.apps);
 		const waitSec = boundWaitSec(input.waitSec);
+		// A request that was already abandoned must not enqueue: a long poll nobody
+		// is listening to could otherwise still commit a start.
+		if (input.signal?.aborted)
+			return { outcome: "cancelled", owner, apps: [...apps] };
 		const startedAt = this.now().getTime();
 		// A request is a fresh look at the world: the observation cached during a
 		// previous wait must not decide this one.
@@ -551,6 +572,7 @@ export class EnvironmentInstanceController {
 			waiter = this.enqueue(owner, apps, {
 				...(input.target ? { target: input.target } : {}),
 				...(input.profile ? { profile: input.profile } : {}),
+				...(input.runtime ? { runtime: input.runtime } : {}),
 			});
 			const cycle = await this.deadlockPath(owner, apps);
 			if (cycle) {
@@ -566,7 +588,7 @@ export class EnvironmentInstanceController {
 		// second concurrent request joins the loop in flight instead of racing it.
 		const inFlight = waiter.inFlight;
 		if (inFlight) return inFlight;
-		const poll = this.poll(waiter, waitSec);
+		const poll = this.poll(waiter, waitSec, input.signal);
 		waiter.inFlight = poll;
 		try {
 			return await poll;
@@ -575,10 +597,13 @@ export class EnvironmentInstanceController {
 		}
 	}
 
-	/** The long-poll loop for one queue entry. */
+	/** The long-poll loop for one queue entry. `signal` ends the wait when the
+	 * caller disconnects: the entry is withdrawn, so the queue position is not
+	 * held by a request nobody is waiting for. */
 	private async poll(
 		waiter: SlotWaiter,
 		waitSec: number,
+		signal?: AbortSignal,
 	): Promise<AcquireSlotsResult> {
 		const startedAt = this.now().getTime();
 		waiter.lastSeenAt = startedAt;
@@ -586,6 +611,14 @@ export class EnvironmentInstanceController {
 		const deadline = startedAt + waitSec * 1000;
 		try {
 			for (;;) {
+				if (signal?.aborted) {
+					this.dequeue(waiter);
+					return {
+						outcome: "cancelled",
+						owner: waiter.owner,
+						apps: [...waiter.apps],
+					};
+				}
 				const granted = await this.tryGrant(waiter);
 				if (granted) return granted;
 				if (!waiter.notified) {
@@ -727,6 +760,36 @@ export class EnvironmentInstanceController {
 	/** Stop the app's current run without the release notice. */
 	async stopApp(app: string): Promise<EnvironmentInstance> {
 		await this.ready;
+		return this.stopSlot(app, "stopped");
+	}
+
+	/**
+	 * Stop the app only while `owner` holds it.
+	 *
+	 * `stopApp` acts on whichever active row currently holds the app, so a caller
+	 * that checked the holder separately would authorize on a stale read. Here the
+	 * check and the claim happen in one synchronous step (no `await` between them,
+	 * and the claim is a compare-and-set on the row id), so an app that changed
+	 * owner cannot be stopped by the owner that no longer holds it.
+	 */
+	async stopOwned(
+		owner: EnvironmentOwner,
+		app: string,
+	): Promise<EnvironmentInstance> {
+		await this.ready;
+		const record = this.state.findActiveEnvironmentInstance(app);
+		if (!record)
+			throw new EnvironmentInstanceError(
+				"no-holder",
+				409,
+				`no environment instance holds ${JSON.stringify(app)}`,
+			);
+		if (parseEnvironmentOwner(record.owner) !== owner)
+			throw new EnvironmentInstanceError(
+				"held-by",
+				409,
+				`${JSON.stringify(app)} is held by ${record.owner}; only its owner may stop it`,
+			);
 		return this.stopSlot(app, "stopped");
 	}
 
@@ -1462,7 +1525,7 @@ export class EnvironmentInstanceController {
 		const at = this.now().getTime();
 		this.sequence += 1;
 		const waiter: SlotWaiter = {
-			id: `${owner}#${apps.join("+")}`,
+			id: `${owner}#${[...apps].sort().join("+")}`,
 			owner,
 			apps: [...apps],
 			sequence: this.sequence,
@@ -1656,6 +1719,27 @@ export class EnvironmentInstanceController {
 		const stamp = new Date(at).toISOString();
 		if (record.lastActivityAt === stamp) return;
 		this.state.updateEnvironmentInstanceStatus(record.id, record.status, stamp);
+	}
+
+	/**
+	 * Records activity on an app, but only while `owner` holds it.
+	 *
+	 * The environment tools read and act on apps through the agent surface, and a
+	 * read of an app another workflow holds is not that workflow's use of it: one
+	 * agent polling `env_logs` must not keep another owner's run alive past its
+	 * idle TTL. The check is one synchronous row read, and the write keeps the
+	 * per-app coalescing above.
+	 */
+	touchOwnedActivity(
+		owner: string,
+		app: string,
+		at = this.now().getTime(),
+	): void {
+		const record = this.state.findActiveEnvironmentInstance(app);
+		if (!record) return;
+		if (parseEnvironmentOwner(record.owner) !== parseEnvironmentOwner(owner))
+			return;
+		this.touchActivity(app, at);
 	}
 
 	// --- owner lifecycle -----------------------------------------------------
@@ -2035,7 +2119,12 @@ function isLegacyContainer(
 	return container.Labels?.["com.docker.compose.project"] === project;
 }
 
-function containerFromConfigFiles(
+/** Whether a container was created from one of the given compose files. The
+ * compose config-file label is what identifies a run across checkouts: every
+ * run of an app discovers the same compose file, whichever worktree started it.
+ * Exported for the agent environment log reader, which resolves an app's
+ * containers the same way a stop does. */
+export function containerFromConfigFiles(
 	container: { Labels?: Record<string, string> },
 	sourcePaths: readonly string[],
 ): boolean {
@@ -2049,11 +2138,16 @@ function containerFromConfigFiles(
 	return files.some((file) => resolved.includes(file));
 }
 
+/** Whether two requests name the same apps. Order is not identity: one
+ * workflow's `[a,b]` and `[b,a]` are the same request, and treating them as two
+ * entries would put the same owner in the queue twice (a spurious
+ * `instance-busy` while the abandoned entry sits at the head for the grace
+ * window). */
 function sameApps(left: readonly string[], right: readonly string[]): boolean {
-	return (
-		left.length === right.length &&
-		left.every((app, index) => app === right[index])
-	);
+	if (left.length !== right.length) return false;
+	const sortedLeft = [...left].sort();
+	const sortedRight = [...right].sort();
+	return sortedLeft.every((app, index) => app === sortedRight[index]);
 }
 
 function boundWaitSec(value: number | undefined): number {
@@ -2086,6 +2180,10 @@ function selectTarget(
 			target.runtime === "shell" ||
 			target.runtime === "systemshell",
 	);
+	if (request.runtime)
+		candidates = candidates.filter(
+			(target) => target.runtime === request.runtime,
+		);
 	if (!dockerAvailable)
 		candidates = candidates.filter((target) => target.runtime !== "docker");
 	if (request.profile)

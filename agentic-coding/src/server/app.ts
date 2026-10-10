@@ -37,6 +37,7 @@ import { WorkflowRuntimeError } from "../workflow/contracts.ts";
 import {
 	AuthorizationError,
 	assertBoundedText,
+	authorizeEnvironmentRequest,
 	authorizeRequest,
 	type InstanceAuthority,
 	isPublicRoute,
@@ -46,6 +47,10 @@ import {
 	readJsonBody,
 } from "./auth.ts";
 import type { CredentialRegistry } from "./credentials.ts";
+import {
+	type AgentEnvironmentDeps,
+	handleAgentEnvironmentRoute,
+} from "./environment/agent-routes.ts";
 import {
 	ENVIRONMENT_OPERATION_PATH,
 	type EnvironmentAuthority,
@@ -64,6 +69,7 @@ import {
 	orchestratorRouteAllowed,
 } from "./orchestrator-policy.ts";
 import {
+	AGENT_ENVIRONMENT_PREFIX,
 	decodeRouteRequest,
 	MAX_REQUEST_BYTES,
 	SERVER_API_VERSION,
@@ -168,6 +174,33 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		telemetryWatchers.set(repo, unwatch);
 	};
 
+	/** What the owner-scoped agent environment routes read. Every capability is
+	 * optional so a server without the environment slot controller or the action
+	 * engine answers 503 for that operation instead of inventing a result. */
+	const agentEnvironmentDeps = (): AgentEnvironmentDeps => ({
+		configDir: options.configDir ?? "",
+		...(options.environment?.manager
+			? { apps: options.environment.manager }
+			: {}),
+		...(options.integrations?.instances
+			? { instances: options.integrations.instances }
+			: {}),
+		...(options.integrations?.actions?.registry
+			? { registry: options.integrations.actions.registry }
+			: {}),
+		...(options.integrations?.actions
+			? { actions: options.integrations.actions }
+			: {}),
+		...(options.integrations?.runtime
+			? { runtime: options.integrations.runtime }
+			: {}),
+		...(options.integrations?.resolveOwnerCheckout
+			? {
+					resolveOwnerCheckout: options.integrations.resolveOwnerCheckout,
+				}
+			: {}),
+	});
+
 	const handle = async (request: Request): Promise<Response> => {
 		let url: URL;
 		try {
@@ -184,6 +217,28 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		// foreign origin never reaches a route (or a Go mutation) at all.
 		if (!originAllowed(request.headers.get("origin")))
 			return errorResponse(403, "origin", "untrusted origin");
+		// The agent environment surface authenticates with the owner-scoped
+		// capability a durable run holds, never with the instance token, so it is
+		// decided before the instance authorization below. The owner the capability
+		// names is verified here, before any route runs, so a request can never act
+		// on behalf of another workflow.
+		if (url.pathname.startsWith(AGENT_ENVIRONMENT_PREFIX)) {
+			let owner: string;
+			try {
+				owner = authorizeEnvironmentRequest(request, authority);
+			} catch (error) {
+				const status = error instanceof AuthorizationError ? error.status : 401;
+				return errorResponse(status, "unauthorized", safeMessage(error));
+			}
+			return (
+				(await handleAgentEnvironmentRoute(
+					agentEnvironmentDeps(),
+					request,
+					url,
+					owner,
+				)) ?? errorResponse(404, "not-found", "unknown route")
+			);
+		}
 		// The liveness probe is public (no secret in it); every other route needs
 		// the instance bearer token.
 		let principal: Principal = "operator";
@@ -195,6 +250,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				return errorResponse(status, "unauthorized", safeMessage(error));
 			}
 		}
+
 		// The orchestrator capability is confined to its route policy before any
 		// handler runs; its action/start limits are applied inside `route`.
 		if (

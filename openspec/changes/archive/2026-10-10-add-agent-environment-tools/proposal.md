@@ -21,7 +21,9 @@ workflow and wait for busy apps without burning tokens.
     app.
   - `env_start({apps: string[] | app, target?, profile?, runtime?, replicas?,
     timeoutSec?})` — **blocks** until every named app is started for this
-    workflow. It long-polls the acquire route, keeps its queue position, and
+    workflow. `runtime` selects the target's runtime; `replicas` is accepted
+    only as 1, because an app runs once at a time whatever its runtime. It
+    long-polls the acquire route, keeps its queue position, and
     sends a progress update with position and holder. On `timeoutSec`
     (default 30 min, max 2 h) it returns `still-waiting` with the queue
     position; calling it again keeps the position. A wait that would deadlock
@@ -33,7 +35,9 @@ workflow and wait for busy apps without burning tokens.
   - `env_logs({app, service?, infra?, since?, grep?, tail?})`.
 - Output is bounded (`MAX_OUTPUT_CHARS`) and redacted: values from the config
   `.env` and secret action values become `«redacted:NAME»`.
-- Every call touches app activity.
+- Every call touches the activity of the apps the caller holds, so an agent's
+  own app is never reaped while it works with it (another owner's app is left
+  alone: a read is not that owner's use of it).
 
 ## Capabilities
 

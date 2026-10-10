@@ -634,6 +634,14 @@ export interface IntegrationServices {
 	readonly runtime?: RuntimeRouteServices;
 	/** Owner-scoped app run-target slots: one app runs once at a time. */
 	readonly instances?: import("../runtime/instances.ts").EnvironmentInstanceController;
+	/** Resolves a workflow's own managed checkout for an app, so an agent's
+	 * environment work (`env_build`/`env_test`) never runs in another checkout.
+	 * Optional: a fixture that attaches no slot controller has no owner
+	 * checkouts to resolve. */
+	readonly resolveOwnerCheckout?: (
+		owner: `workflow:${string}`,
+		app: import("../environment/config.ts").App,
+	) => string | undefined | Promise<string | undefined>;
 	/** The application/infrastructure family (`app` rows). */
 	readonly appFamily?: import("../runtime/app-routes.ts").AppFamilyServices;
 	/**

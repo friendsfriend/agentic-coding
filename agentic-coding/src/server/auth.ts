@@ -156,6 +156,59 @@ export function orchestratorTokenFor(instanceToken: string): string {
 		.digest("hex");
 }
 
+/** Header naming the owner an agent environment capability was minted for. The
+ * owner is not a claim the wire may choose: the server recomputes the
+ * capability for the named owner and refuses a request whose token does not
+ * match, so a run can never speak for another workflow. */
+export const ENVIRONMENT_OWNER_HEADER = "x-agentic-env-owner";
+
+/** The agent environment capability for one owner: an HMAC of the instance
+ * token bound to that owner. Every run of a workflow receives this (never the
+ * instance token), and the server derives the owner from the pair, so a
+ * request can only act on the owner's own apps. */
+export function environmentTokenFor(
+	instanceToken: string,
+	owner: string,
+): string {
+	return createHmac("sha256", instanceToken)
+		.update(`agentic-coding:environment:v1:${owner}`)
+		.digest("hex");
+}
+
+/** The owner form an environment capability may name. Deliberately narrower
+ * than `parseEnvironmentOwner`: an agent capability is always a workflow's. */
+function isEnvironmentOwner(value: string): boolean {
+	if (value.length > 512) return false;
+	if (!value.startsWith("workflow:")) return false;
+	const id = value.slice("workflow:".length);
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: rejects control characters in a header value
+	return id.trim() !== "" && !/[\x00-\x1f\x7f]/.test(value);
+}
+
+/** Authorize an agent environment request and name the owner it acts as.
+ * Throws `AuthorizationError` for a missing/forged capability, an owner the
+ * capability was not minted for, or an untrusted origin. */
+export function authorizeEnvironmentRequest(
+	request: Request,
+	authority: InstanceAuthority,
+): string {
+	if (!originAllowed(request.headers.get("origin")))
+		throw new AuthorizationError(403, "untrusted origin");
+	const owner = (request.headers.get(ENVIRONMENT_OWNER_HEADER) ?? "").trim();
+	if (!isEnvironmentOwner(owner))
+		throw new AuthorizationError(
+			401,
+			"missing or invalid agent environment owner",
+		);
+	const header = request.headers.get("authorization") ?? "";
+	if (!header.startsWith("Bearer "))
+		throw new AuthorizationError(401, "missing agent environment capability");
+	const supplied = header.slice("Bearer ".length).trim();
+	if (!constantTimeEqual(supplied, environmentTokenFor(authority.token, owner)))
+		throw new AuthorizationError(401, "invalid agent environment capability");
+	return owner;
+}
+
 /** Authorize a request against the instance authority and name the principal
  * it authenticated as. Throws `AuthorizationError` for a missing/forged token
  * or an untrusted origin. */
