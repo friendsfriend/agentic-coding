@@ -1,10 +1,13 @@
-// The Home Orchestrator's tool and prompt surface (orchestrator host mode,
-// `host-main.ts --orchestrator`). Every tool calls the unified server through
-// the narrower orchestrator capability the TUI writes into the session's run
-// environment (`AGENTIC_ORCHESTRATOR_URL` / `AGENTIC_ORCHESTRATOR_TOKEN`); the
-// server, not this prompt, enforces what that capability may do
-// (`src/server/orchestrator-policy.ts`). The session gets no shell and no file
-// writes, so the capability is the only way it can act.
+// The Home Orchestrator's workflow-management tool and prompt surface
+// (orchestrator host mode, `host-main.ts --orchestrator`). Every tool here
+// calls the unified server through the narrower orchestrator capability the
+// TUI writes into the session's run environment (`AGENTIC_ORCHESTRATOR_URL` /
+// `AGENTIC_ORCHESTRATOR_TOKEN`); the server, not this prompt, enforces what
+// that capability may do (`src/server/orchestrator-policy.ts`). The session
+// also gets the full coding tools (read/write/edit/bash, wired in `host.ts`)
+// so it can decide for itself whether a request is a direct edit or a
+// workflow to launch; those tools act on the local filesystem directly, not
+// through the server capability.
 import { Type } from "@earendil-works/pi-ai";
 import {
 	defineExtension,
@@ -135,7 +138,7 @@ const RepoParameter = Type.String({
 	minLength: 1,
 	maxLength: 4096,
 	description:
-		"Workflow target: the repository path from list_projects, or the `target` from list_workflows",
+		"Workflow target: any existing repository path on this machine (an absolute path, or one relative to your working directory), not only a path from list_projects or list_workflows",
 });
 const WorkflowIdParameter = Type.String({
 	minLength: 1,
@@ -230,8 +233,10 @@ const BlueprintParameter = Type.Object(
 	},
 );
 
-const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer and launch, monitor and manage their coding workflows through your tools.
+const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer, make direct edits with your own coding tools (read/write/edit/bash) and launch, monitor and manage coding workflows through your other tools.
 
+- Default to acting yourself, immediately, with read/write/edit/bash: looking something up (files, directories, OpenSpec changes/specs, git state, logs, anything readable) is never a reason to start a workflow or to ask the developer first — read it and answer. The same goes for a small, well-understood edit you can make and verify yourself. Only reach for a workflow when the request needs planning, a developer/plan/findings/wiki review, several coordinated agent steps, or a durable record of the work; say briefly why a workflow fits when you choose one.
+- A workflow target (\`repo\`) is any existing path on this machine, not only one from list_projects or list_workflows; list_projects/list_workflows are for discovering what is already configured and running, not a restriction on where you may work or look.
 - Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows.
 - Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.

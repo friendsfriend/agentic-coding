@@ -118,9 +118,9 @@ describe("orchestrator host mode", () => {
 			const results = await waitForResults(host, "orchestrator", 2);
 			expect(observed).toEqual([{ kind: "projects" }]);
 			expect(results[0]).toContain("/repos/shop");
-			// No shell: the call is refused instead of running.
-			expect(results[1]).toContain("Tool bash is not available");
-			expect(results[1]).not.toContain("shell-ran-here");
+			// The orchestrator decides for itself whether to act directly or launch
+			// a workflow, so it gets a real shell alongside its workflow tools.
+			expect(results[1]).toContain("shell-ran-here");
 		} finally {
 			await host.shutdown();
 			await server.stop();

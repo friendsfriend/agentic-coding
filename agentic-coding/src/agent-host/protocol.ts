@@ -13,7 +13,8 @@ export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 /** `orchestrator` is served only by a host opened in orchestrator mode: the
- * `read` tool plus the orchestrator's workflow tools, no shell, no writes. */
+ * full coding tools (read/write/edit/bash) plus the orchestrator's own
+ * workflow-management tools, so it can act directly or launch a workflow. */
 export type ToolPolicy = "default" | "read-only" | "orchestrator";
 
 export interface EnsureRunRequest {

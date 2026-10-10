@@ -408,8 +408,11 @@ export class DurableHost {
 		if (this.orchestratorExtension) {
 			if (policy !== "orchestrator")
 				throw new Error("this host only serves the orchestrator session");
+			// The orchestrator decides for itself whether a request is a direct edit
+			// or a workflow: it gets the full coding tools (read/write/edit/bash)
+			// alongside its own workflow-management tools, not a read-only subset.
 			return [
-				...(CodingTools.tools ?? []).filter((tool) => tool.name === "read"),
+				...codingTools(false),
 				...(this.orchestratorExtension.tools ?? []),
 			];
 		}
