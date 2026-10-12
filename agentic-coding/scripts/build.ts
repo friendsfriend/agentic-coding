@@ -63,6 +63,10 @@ function patchOpenTUISolidTransform() {
 // generated module is what materializes agent instructions without any
 // source-relative path at runtime.
 await $`bun run scripts/generate-embedded.ts`;
+// The artifact cannot read `playwright-core`'s manifest at run time, so the
+// Playwright version and Chromium revision this build pins are generated into it
+// (the browser install guard and the install command pin both).
+await $`bun run scripts/generate-bundled-playwright.ts`;
 
 const agentDefDir = path.resolve(root, "..", "agent-definitions");
 if (!fs.existsSync(agentDefDir)) {
@@ -116,6 +120,13 @@ await Bun.build({
 		],
 	},
 	entrypoints: ["./src/cli.ts", parserWorker, codemodeWorker],
+	// `playwright-core` requires `chromium-bidi` lazily, only for the BiDi-over-CDP
+	// transport this server never uses, and declares it as no dependency of its
+	// own. Bundling the require would fail the build for a module that is never
+	// loaded; leaving it external keeps the lazy require intact, and the server's
+	// driver (which drives CDP) never reaches it. Verified by the browser spike
+	// (scripts/browser-spike.ts) in a compiled artifact.
+	external: ["chromium-bidi"],
 	define: {
 		AGENTIC_CODING_VERSION: `'${appVersion}'`,
 		OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,

@@ -40,7 +40,10 @@
 			}
 		},
 		{
-			"includes": ["src/workflow/embedded.generated.ts"],
+			"includes": [
+				"src/workflow/embedded.generated.ts",
+				"src/server/browser/bundled-playwright.generated.ts"
+			],
 			"linter": {
 				"enabled": false
 			},

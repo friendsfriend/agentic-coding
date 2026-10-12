@@ -31,6 +31,7 @@ export type PageId =
 	| "settings"
 	| "settings.appearance"
 	| "settings.agents"
+	| "settings.browser"
 	| "settings.providers"
 	| "environments"
 	| "environments.applications"
@@ -77,7 +78,12 @@ export interface PageDef {
 }
 
 /** Settings sections, in listing order (centralize-application-settings). */
-export const SETTINGS_SECTIONS = ["appearance", "agents", "providers"] as const;
+export const SETTINGS_SECTIONS = [
+	"appearance",
+	"agents",
+	"browser",
+	"providers",
+] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /** Human labels for the Settings sections, in listing order. */
@@ -86,6 +92,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<
 > = {
 	appearance: "Appearance",
 	agents: "Agent Presets",
+	browser: "Browser",
 	providers: "Providers/credentials",
 };
 
@@ -95,6 +102,7 @@ export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
 > = {
 	appearance: "Theme and client-local UI preferences",
 	agents: "Model profiles and configuration presets",
+	browser: "The opt-in headless browser agent runs drive",
 	providers: "Git providers and protected credentials",
 };
 
@@ -183,6 +191,11 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	},
 	"settings.agents": {
 		label: SETTINGS_SECTION_LABELS.agents,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.browser": {
+		label: SETTINGS_SECTION_LABELS.browser,
 		parent: () => ({ page: "settings" }),
 		picker: true,
 	},

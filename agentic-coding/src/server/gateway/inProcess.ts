@@ -22,6 +22,7 @@ import type {
 	WorkflowRepairRequest,
 	WorkflowStartRequest,
 } from "../../contracts/actions.ts";
+import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { CredentialRespondRequest } from "../../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../../contracts/decode.ts";
 import type {
@@ -193,6 +194,22 @@ export function createInProcessGateway(
 		): Promise<ClassifierStatusResponse> {
 			const value = await operations.cancelClassifierInstall(repository);
 			publishWorkflow("classifier.install.cancel", "");
+			return value;
+		},
+
+		async browserStatus(): Promise<BrowserStatusResponse> {
+			return await operations.browserStatus();
+		},
+
+		async browserInstall(): Promise<BrowserStatusResponse> {
+			const value = await operations.installBrowser();
+			publishWorkflow("browser.install", "");
+			return value;
+		},
+
+		async browserInstallCancel(): Promise<BrowserStatusResponse> {
+			const value = await operations.cancelBrowserInstall();
+			publishWorkflow("browser.install.cancel", "");
 			return value;
 		},
 

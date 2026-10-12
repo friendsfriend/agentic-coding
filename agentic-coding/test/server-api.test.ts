@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Schema } from "effect";
+import type { BrowserStatusResponse } from "../src/contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../src/contracts/gateway.ts";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
@@ -60,6 +61,22 @@ const stubView = {
 	availableActions: [],
 } as unknown as WorkflowView;
 
+/** The browser status the stub server reports: nothing downloaded, default
+ * bounds. */
+function browserStubStatus() {
+	return {
+		available: false,
+		source: "none" as const,
+		browsersPath: "/tmp/browsers",
+		install: { phase: "idle" as const },
+		settings: {
+			maxSessions: 4,
+			idleTtlMs: 900_000,
+			viewport: { width: 1280, height: 800 },
+		},
+	};
+}
+
 function stubOperations(
 	overrides: Partial<ServerOperations> = {},
 ): ServerOperations {
@@ -104,6 +121,9 @@ function stubOperations(
 			providers: [],
 			local: { installed: false, running: false },
 		}),
+		browserStatus: async () => browserStubStatus(),
+		installBrowser: async () => browserStubStatus(),
+		cancelBrowserInstall: async () => browserStubStatus(),
 	};
 	return { ...base, ...overrides };
 }
@@ -722,6 +742,94 @@ describe("classifier status and install", () => {
 		expect(events).toContainEqual(
 			expect.objectContaining({ kind: "classifier.install.cancel" }),
 		);
+	});
+
+	test("the browser status, install and cancel answer the operations and publish", async () => {
+		const calls: string[] = [];
+		const events: unknown[] = [];
+		await withServer(
+			async (server) => {
+				const subscription = server.app.events.open({}, (event) =>
+					events.push(event),
+				);
+				try {
+					const client = new BackendClient({
+						baseUrl: server.url,
+						token: server.token,
+						ownerId: "tui-1",
+					});
+					expect(await client.browserStatus()).toEqual(browserStubStatus());
+					expect(await client.browserInstall()).toEqual(browserStubStatus());
+					expect(await client.browserInstallCancel()).toEqual(
+						browserStubStatus(),
+					);
+				} finally {
+					subscription.unsubscribe();
+				}
+			},
+			stubOperations({
+				browserStatus: async () => {
+					calls.push("status");
+					return browserStubStatus();
+				},
+				installBrowser: async () => {
+					calls.push("install");
+					return browserStubStatus();
+				},
+				cancelBrowserInstall: async () => {
+					calls.push("cancel");
+					return browserStubStatus();
+				},
+			}),
+		);
+		expect(calls).toEqual(["status", "install", "cancel"]);
+		// An install request starts the download through the route, and the route
+		// answers the state the caller then polls.
+		expect(events).toContainEqual(
+			expect.objectContaining({ kind: "browser.install" }),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({ kind: "browser.install.cancel" }),
+		);
+	});
+
+	test("the browser routes require the instance token", async () => {
+		await withServer(async (server) => {
+			for (const [method, path] of [
+				["GET", "/api/v1/browser/status"],
+				["POST", "/api/v1/browser/install"],
+				["POST", "/api/v1/browser/install/cancel"],
+			] as const) {
+				const response = await fetch(`${server.url}${path}`, { method });
+				expect(response.status).toBe(401);
+			}
+		});
+	});
+
+	test("a browser status missing its bounds is rejected at the client boundary", async () => {
+		const malformed = {
+			available: false,
+			source: "none",
+			browsersPath: "/tmp/browsers",
+			install: { phase: "idle" },
+		} as unknown as BrowserStatusResponse;
+		const stubbed = stubOperations({
+			browserStatus: async () => malformed,
+			installBrowser: async () => malformed,
+			cancelBrowserInstall: async () => malformed,
+		});
+		await withServer(async (server) => {
+			const client = new BackendClient({
+				baseUrl: server.url,
+				token: server.token,
+				ownerId: "tui-1",
+			});
+			// Every browser call decodes through the same contract, so a response the
+			// contract does not accept cannot reach a view as if it were data.
+			await expect(client.browserStatus()).rejects.toThrow();
+			await expect(client.browserInstall()).rejects.toThrow();
+			await expect(client.browserInstallCancel()).rejects.toThrow();
+		}, stubbed);
 	});
 
 	test("the classifier routes require the instance token", async () => {

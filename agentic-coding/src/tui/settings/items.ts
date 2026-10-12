@@ -7,6 +7,7 @@
 // an item that cannot be edited here is marked read-only and carries the
 // explanation from the inventory instead of pretending to accept an edit.
 
+import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
 import {
 	DEFAULT_ORCHESTRATOR_LIMITS,
@@ -32,6 +33,11 @@ export type SettingsAction =
 	| { kind: "theme-picker" }
 	/** Re-read the connected server after an unavailable/error state. */
 	| { kind: "retry" }
+	/** The one download path: ask the server to install Chromium. Nothing is
+	 * fetched until this action is activated, and the row says so. */
+	| { kind: "browser-install" }
+	/** Stop an in-flight browser download. */
+	| { kind: "browser-install-cancel" }
 	| { kind: "navigate"; route: Route };
 
 export interface SettingsItem {
@@ -133,6 +139,9 @@ export interface SettingsContext {
 	/** Classifier provider selection and local-model status. Absent until the
 	 * first server read resolves; the item then states the built-in default. */
 	classifier?: ClassifierStatusResponse;
+	/** Browser install state and effective bounds. Absent until the first server
+	 * read resolves. */
+	browser?: BrowserStatusResponse;
 }
 
 /** The structural shape of `[agents] file_judgment` this layer renders. Declared
@@ -435,7 +444,115 @@ export function settingsItems(context: SettingsContext): SettingsItem[] {
 			return appearanceItems(context);
 		case "agents":
 			return agentItems(context);
+		case "browser":
+			return browserItems(context);
 		case "providers":
 			return providerItems(context);
 	}
+}
+
+/** One-line browser phase copy; the raw enum is never shown. */
+function browserPhaseLabel(
+	install: BrowserStatusResponse["install"] | undefined,
+): string {
+	switch (install?.phase) {
+		case "downloading":
+			return "installing…";
+		case "ready":
+			return "installed";
+		case "failed":
+			return install.detail ?? "install failed";
+		case "cancelled":
+			return "install cancelled";
+		default:
+			return "not installed";
+	}
+}
+
+/**
+ * The Browser section: which browser the server would launch, the opt-in
+ * install (the only download path in the application) and the effective
+ * `browser.*` bounds.
+ */
+function browserItems(context: SettingsContext): SettingsItem[] {
+	const browser = context.browser;
+	if (!browser)
+		return [
+			{
+				id: "browser.unavailable",
+				label: "Browser",
+				value: "unavailable",
+				detail:
+					"the connected server could not be read; an unreachable server never falls back to a local configuration",
+				editable: true,
+				action: { kind: "retry" },
+			},
+		];
+	const items: SettingsItem[] = [];
+	const where =
+		browser.source === "system-chrome"
+			? `system Chrome · ${browser.systemChrome ?? browser.executablePath ?? "detected"}`
+			: browser.source === "installed-chromium"
+				? `installed Chromium · ${browser.executablePath ?? browser.browsersPath}`
+				: "none installed";
+	items.push({
+		id: "browser.state",
+		label: "Headless browser",
+		value: where,
+		detail: `${inventoryDetail("browser.install")} · agent runs drive one shared process`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	const downloading = browser.install.phase === "downloading";
+	// The install row keeps its position *and* its id while a download runs, and
+	// becomes inert rather than turning into the cancel action: a held or repeated
+	// Enter then repeats a no-op instead of cancelling the download it just started.
+	items.push({
+		id: "browser.install",
+		label: "Install Chromium",
+		value: browserPhaseLabel(browser.install),
+		detail: downloading
+			? `${inventoryDetail("browser.install")} · a download is already running; cancel it with the row below`
+			: `${inventoryDetail("browser.install")} · downloads Chrome for Testing (~150 MB) into ${browser.browsersPath}; nothing is downloaded until you activate this row`,
+		// Editable is the section's word for "not a config-file setting"; this row
+		// is temporarily inert, not read-only, so it keeps that word and makes its
+		// action a no-op instead of borrowing the read-only suffix.
+		editable: true,
+		action: downloading ? { kind: "none" } : { kind: "browser-install" },
+	});
+	if (downloading)
+		items.push({
+			id: "browser.cancel",
+			label: "Cancel download",
+			value: browser.install.detail ?? "downloading",
+			detail: `${inventoryDetail("browser.install")} · the partial download is left for the next attempt`,
+			editable: true,
+			action: { kind: "browser-install-cancel" },
+		});
+	const settings = browser.settings;
+	items.push({
+		id: "browser.max-sessions",
+		label: "Max sessions",
+		value: String(settings.maxSessions),
+		detail: `${inventoryDetail("browser.sessions")} · read-only: edit the config file`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	items.push({
+		id: "browser.idle-ttl",
+		label: "Idle TTL",
+		value: `${Math.round(settings.idleTtlMs / 60_000)} min`,
+		detail: `${inventoryDetail("browser.sessions")} · read-only: edit the config file`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	items.push({
+		id: "browser.viewport",
+		label: "Default viewport",
+		value: `${settings.viewport.width}×${settings.viewport.height}`,
+		detail: `${inventoryDetail("browser.sessions")} · screenshots returned to a model are at most 1280 px wide`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	return items;
 }

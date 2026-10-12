@@ -15,6 +15,10 @@ import {
 	type WorkflowDeletion,
 	workflowDeletionSchema,
 } from "../contracts/actions.ts";
+import {
+	type BrowserStatusResponse,
+	browserStatusResponseSchema,
+} from "../contracts/browser.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
 import {
@@ -524,6 +528,30 @@ export class BackendClient implements DashboardGateway {
 				`/api/v1/classifier/install/cancel${query}`,
 				{},
 			),
+		);
+	}
+
+	async browserStatus(): Promise<BrowserStatusResponse> {
+		return this.decode(
+			"core.browser-status",
+			browserStatusResponseSchema,
+			await this.request("GET", "/api/v1/browser/status", undefined),
+		);
+	}
+
+	async browserInstall(): Promise<BrowserStatusResponse> {
+		return this.decode(
+			"core.browser-status",
+			browserStatusResponseSchema,
+			await this.request("POST", "/api/v1/browser/install", {}),
+		);
+	}
+
+	async browserInstallCancel(): Promise<BrowserStatusResponse> {
+		return this.decode(
+			"core.browser-status",
+			browserStatusResponseSchema,
+			await this.request("POST", "/api/v1/browser/install/cancel", {}),
 		);
 	}
 

@@ -84,6 +84,22 @@ interface Calls {
 	observation?: unknown;
 }
 
+/** The browser status the stub server reports: nothing downloaded, default
+ * bounds. */
+function browserStubStatus() {
+	return {
+		available: false,
+		source: "none" as const,
+		browsersPath: "/tmp/browsers",
+		install: { phase: "idle" as const },
+		settings: {
+			maxSessions: 4,
+			idleTtlMs: 900_000,
+			viewport: { width: 1280, height: 800 },
+		},
+	};
+}
+
 function recordingOperations(calls: Calls): ServerOperations {
 	return {
 		runObservation: async (observation) => {
@@ -152,6 +168,9 @@ function recordingOperations(calls: Calls): ServerOperations {
 			providers: [],
 			local: { installed: false, running: false },
 		}),
+		browserStatus: async () => browserStubStatus(),
+		installBrowser: async () => browserStubStatus(),
+		cancelBrowserInstall: async () => browserStubStatus(),
 	};
 }
 

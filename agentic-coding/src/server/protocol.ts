@@ -14,6 +14,18 @@ import {
 	workflowRepairRequestSchema,
 	workflowStartRequestSchema,
 } from "../contracts/actions.ts";
+import {
+	browserActionRequestSchema,
+	browserEvalRequestSchema,
+	browserInstallRequestSchema,
+	browserLogRequestSchema,
+	browserOpenRequestSchema,
+	browserRecordRequestSchema,
+	browserScreenshotRequestSchema,
+	browserScriptRequestSchema,
+	browserSessionRequestSchema,
+	browserWaitRequestSchema,
+} from "../contracts/browser.ts";
 import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
@@ -56,6 +68,29 @@ export const AGENT_TEST_PATH = `${AGENT_ENVIRONMENT_PREFIX}test`;
 export const AGENT_EVIDENCE_ATTACH_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence/attach`;
 export const AGENT_EVIDENCE_LIST_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence`;
 
+/** The browser surface of one run (`add-agent-browser-sessions`). Declared here
+ * with the rest of the transport manifest: one path per discrete tool, so the
+ * wire keeps the tool contract's shape instead of inventing a second one. */
+export const AGENT_BROWSER_PREFIX = `${AGENT_ENVIRONMENT_PREFIX}browser/`;
+export const AGENT_BROWSER_OPEN_PATH = `${AGENT_BROWSER_PREFIX}open`;
+export const AGENT_BROWSER_SNAPSHOT_PATH = `${AGENT_BROWSER_PREFIX}snapshot`;
+export const AGENT_BROWSER_ACTION_PATH = `${AGENT_BROWSER_PREFIX}action`;
+export const AGENT_BROWSER_WAIT_PATH = `${AGENT_BROWSER_PREFIX}wait`;
+export const AGENT_BROWSER_EVAL_PATH = `${AGENT_BROWSER_PREFIX}eval`;
+export const AGENT_BROWSER_CONSOLE_PATH = `${AGENT_BROWSER_PREFIX}console`;
+export const AGENT_BROWSER_NETWORK_PATH = `${AGENT_BROWSER_PREFIX}network`;
+export const AGENT_BROWSER_SCREENSHOT_PATH = `${AGENT_BROWSER_PREFIX}screenshot`;
+export const AGENT_BROWSER_RECORD_PATH = `${AGENT_BROWSER_PREFIX}record`;
+export const AGENT_BROWSER_SCRIPT_PATH = `${AGENT_BROWSER_PREFIX}script`;
+export const AGENT_BROWSER_CLOSE_PATH = `${AGENT_BROWSER_PREFIX}close`;
+
+/** The instance-authenticated browser install surface, read and driven by the
+ * Settings section. No route here is a download on its own: only `install`
+ * asks for one, and only when the developer asked it to. */
+export const BROWSER_STATUS_PATH = "/api/v1/browser/status";
+export const BROWSER_INSTALL_PATH = "/api/v1/browser/install";
+export const BROWSER_INSTALL_CANCEL_PATH = "/api/v1/browser/install/cancel";
+
 /** The dashboard's evidence file read, under the instance capability: the
  * recorded bytes of one manifest entry, addressed by workflow and entry id.
  * Declared here with the rest of the transport manifest, so the client and the
@@ -86,6 +121,7 @@ export const ROUTE_DOMAINS = [
 	"credentials",
 	"environment",
 	"evidence",
+	"browser",
 	"integrations",
 	"git",
 	"wiki",
@@ -211,6 +247,21 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		path: "/api/v1/classifier/install/cancel",
 		owner: "bun",
 		domain: "workflow",
+	},
+	// The Settings browser surface: install state, the opt-in install and its
+	// cancel. Instance-authenticated like the classifier's own install routes.
+	{ method: "GET", path: BROWSER_STATUS_PATH, owner: "bun", domain: "browser" },
+	{
+		method: "POST",
+		path: BROWSER_INSTALL_PATH,
+		owner: "bun",
+		domain: "browser",
+	},
+	{
+		method: "POST",
+		path: BROWSER_INSTALL_CANCEL_PATH,
+		owner: "bun",
+		domain: "browser",
 	},
 	{ method: "GET", path: "/api/v1/events", owner: "bun", domain: "events" },
 	{
@@ -494,6 +545,71 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: AGENT_EVIDENCE_ATTACH_PATH,
 		schemaId: "server.agent-env.evidence.attach",
 		schema: evidenceAttachRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_OPEN_PATH,
+		schemaId: "server.agent-env.browser.open",
+		schema: browserOpenRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_SNAPSHOT_PATH,
+		schemaId: "server.agent-env.browser.snapshot",
+		schema: browserSessionRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_ACTION_PATH,
+		schemaId: "server.agent-env.browser.action",
+		schema: browserActionRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_WAIT_PATH,
+		schemaId: "server.agent-env.browser.wait",
+		schema: browserWaitRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_EVAL_PATH,
+		schemaId: "server.agent-env.browser.eval",
+		schema: browserEvalRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_CONSOLE_PATH,
+		schemaId: "server.agent-env.browser.console",
+		schema: browserLogRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_NETWORK_PATH,
+		schemaId: "server.agent-env.browser.network",
+		schema: browserLogRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_SCREENSHOT_PATH,
+		schemaId: "server.agent-env.browser.screenshot",
+		schema: browserScreenshotRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_RECORD_PATH,
+		schemaId: "server.agent-env.browser.record",
+		schema: browserRecordRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_SCRIPT_PATH,
+		schemaId: "server.agent-env.browser.script",
+		schema: browserScriptRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_CLOSE_PATH,
+		schemaId: "server.agent-env.browser.close",
+		schema: browserSessionRequestSchema,
+	},
+	{
+		path: BROWSER_INSTALL_PATH,
+		schemaId: "server.browser.install",
+		schema: browserInstallRequestSchema,
+	},
+	{
+		path: BROWSER_INSTALL_CANCEL_PATH,
+		schemaId: "server.browser.install.cancel",
+		schema: browserInstallRequestSchema,
 	},
 ];
 

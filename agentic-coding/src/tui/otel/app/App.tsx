@@ -67,6 +67,14 @@ import {
 	refreshAgentConfig,
 } from "../../dash/agent-config-cache.ts";
 import {
+	browserSnapshot,
+	cancelBrowserInstallJob,
+	clearBrowserError,
+	lastBrowserError,
+	refreshBrowserStatus,
+	startBrowserInstall,
+} from "../../dash/browser-status.ts";
+import {
 	classifierSnapshot,
 	refreshClassifierStatus,
 } from "../../dash/classifier-status.ts";
@@ -995,6 +1003,7 @@ export function App(props: {
 	const [settingsAgentVersion, setSettingsAgentVersion] = createSignal(0);
 	const [settingsClassifierVersion, setSettingsClassifierVersion] =
 		createSignal(0);
+	const [settingsBrowserVersion, setSettingsBrowserVersion] = createSignal(0);
 	const settingsSection = (): SettingsSection | undefined =>
 		settingsSectionOfPage(currentPage());
 	/** Stable configured project id of a project-scoped Settings page. */
@@ -1014,6 +1023,8 @@ export function App(props: {
 		// Re-read after a classifier-status refresh (the snapshot itself is not
 		// reactive).
 		settingsClassifierVersion();
+		// Re-read after a browser-status refresh, for the same reason.
+		settingsBrowserVersion();
 		const repository = settingsAgentRepository();
 		const entry = agentConfigEntry(repository);
 		const agents = entry.agents;
@@ -1064,6 +1075,7 @@ export function App(props: {
 			},
 			providers: settingsProviders(),
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
+			...(browserSnapshot() ? { browser: browserSnapshot() } : {}),
 		};
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
@@ -1099,6 +1111,40 @@ export function App(props: {
 			setSettingsClassifierVersion((value) => value + 1),
 		);
 	});
+	createEffect(() => {
+		if (settingsSection() !== "browser") return;
+		// The browser install state is a server read too; refresh it when the
+		// section opens so the row states what would launch right now.
+		void refreshBrowserStatus().then(() =>
+			setSettingsBrowserVersion((value) => value + 1),
+		);
+	});
+	// While the download runs, poll the server so the row shows its own progress
+	// and the cancel row appears without the developer pressing reload. The poll
+	// stops as soon as the phase settles or the section is left.
+	let browserPoll: ReturnType<typeof setInterval> | undefined;
+	const stopBrowserPoll = (): void => {
+		if (browserPoll === undefined) return;
+		clearInterval(browserPoll);
+		browserPoll = undefined;
+	};
+	createEffect(() => {
+		// The poll is armed from the *snapshot* this effect reads through the
+		// version signal, so a download the section itself started re-arms it: the
+		// first tick bumps the version, the effect re-runs, and the interval is
+		// only recreated while the phase is still `downloading`.
+		settingsBrowserVersion();
+		const inSection = settingsSection() === "browser";
+		const downloading = browserSnapshot()?.install.phase === "downloading";
+		stopBrowserPoll();
+		if (!inSection || !downloading) return;
+		browserPoll = setInterval(() => {
+			void refreshBrowserStatus().then(() =>
+				setSettingsBrowserVersion((value) => value + 1),
+			);
+		}, 1000);
+	});
+	onCleanup(stopBrowserPoll);
 	const settingsIndex = (): number =>
 		pages.viewState<number>(pages.current()) ?? 0;
 	const setSettingsIndex = (index: number): void => {
@@ -1118,8 +1164,59 @@ export function App(props: {
 				nav.pushModal("theme", "home");
 				return;
 			case "retry":
+				// Every section's retry re-reads what *its* rows come from: the
+				// browser section reads the server's install state, and a retry that
+				// only refreshed providers would leave its error row unchanged.
+				if (settingsSection() === "browser") {
+					void refreshBrowserStatus().then(() =>
+						setSettingsBrowserVersion((value) => value + 1),
+					);
+					return;
+				}
 				void refreshSettingsProviders(props.environments?.serverUrl);
 				void refreshSettingsProjects(props.environments?.serverUrl);
+				return;
+			case "browser-install":
+				// The one download path in the application, and it runs only because
+				// the developer activated this row. The row itself says what it fetches
+				// and where it lands, so the confirmation is the activation. Bumping the
+				// version re-arms the progress poll above.
+				void startBrowserInstall().then(() => {
+					const failure = lastBrowserError();
+					if (failure) {
+						clearBrowserError();
+						notify(`Could not start the download: ${failure}`, "error");
+					} else notify("Downloading the headless browser…", "info");
+					setSettingsBrowserVersion((value) => value + 1);
+				});
+				return;
+			case "browser-install-cancel":
+				void cancelBrowserInstallJob().then((status) => {
+					const failure = lastBrowserError();
+					clearBrowserError();
+					// The server cancels only what is running, so the phase it returns
+					// says what actually happened: `cancelled` means it worked, and any
+					// other phase means there was nothing left to cancel.
+					switch (status?.install.phase) {
+						case "cancelled":
+							notify("Download cancelled", "info");
+							break;
+						case "ready":
+							notify("The download had already finished", "info");
+							break;
+						case "downloading":
+							notify(
+								failure
+									? `Could not cancel the download: ${failure}`
+									: "The download is still running",
+								"error",
+							);
+							break;
+						default:
+							notify("No download was running", "info");
+					}
+					setSettingsBrowserVersion((value) => value + 1);
+				});
 				return;
 			case "navigate":
 				pages.navigate(item.action.route);
@@ -1133,11 +1230,17 @@ export function App(props: {
 		const items = settingsSectionItems();
 		if (!items) return false;
 		if (shifted && key === "r") {
+			// Every section's value is re-read, the Browser section's included: the
+			// footer advertises this key for the section it is shown on.
 			void refreshSettingsProviders(props.environments?.serverUrl);
 			void refreshSettingsProjects(props.environments?.serverUrl);
 			void refreshAgentConfig(settingsAgentRepository()).then(() =>
 				setSettingsAgentVersion((value) => value + 1),
 			);
+			if (settingsSection() === "browser")
+				void refreshBrowserStatus().then(() =>
+					setSettingsBrowserVersion((value) => value + 1),
+				);
 			notify("Settings reloaded", "info");
 			return true;
 		}

@@ -21,6 +21,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
+import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
@@ -228,11 +229,17 @@ export class DurableHost {
 		// start, read and stop the app it is verifying without edit rights.
 		const environment = createEnvironmentExtension(lookup);
 		registry.install(environment);
+		// The browser tools are part of the same environment capability: a run
+		// browses the apps it holds, and a read-only verifier browses too, so they
+		// are installed outside the edit-rights gate.
+		const browser = createBrowserExtension(lookup);
+		registry.install(browser);
 		registry.install(createPromptExtension(options.globalAgentDir));
 		return [
 			...(jev.tools ?? []),
 			...(search.tools ?? []),
 			...(environment.tools ?? []),
+			...(browser.tools ?? []),
 		];
 	}
 

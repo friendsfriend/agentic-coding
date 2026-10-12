@@ -8,8 +8,9 @@ Settings section page, a scope, a storage description, and at least one rendered
 item, so nothing can be inventoried and then never shown.
 
 Sections: `settings` (landing) with `settings.appearance`,
-`settings.agents` and `settings.providers`. A section route may carry a
-configured application/library id (`resourceId`) as its stable project scope.
+`settings.agents`, `settings.browser` and `settings.providers`. A section route
+may carry a configured application/library id (`resourceId`) as its stable
+project scope.
 
 ## Scopes
 
@@ -35,6 +36,8 @@ unavailable or unauthorized server is a section error with a retry.
 | Orchestrator session | Agent Presets | `src/server/config.ts` | user | `[agents.orchestrator]` `model` (`provider/modelId`), `thinking` and `monitor` (`wake`/`notify`/`off`) in the layered workflow config; absent `model`/`thinking` use the durable host defaults and an absent `monitor` means `wake` | no | next time the Orchestrator page opens, and the next time the shell starts its workflow monitor | yes (Agent Presets picker) |
 | Orchestrator launch limits | Agent Presets | `src/workflow/profiles.ts` | user | `[agents.orchestrator]` `limits` (`max_active`, `max_starts_per_day`; positive integers, defaults 3/20) in the layered workflow config | no | next orchestrator start | no (file-only guard, shown read-only) |
 | Routing and definition defaults | Agent Presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults`, `gates` (the global stage-gate fallback a preset with no entry resolves against), `file_judgment` (the per-file judgment sweep: `enabled`, and the optional `threshold`, `unsure`, `concurrency` bounds) | no | next workflow start | no (no bounded editor; edit the config file) |
+| Headless browser | Browser | `src/server/browser/install.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/browsers` (Playwright's `PLAYWRIGHT_BROWSERS_PATH`); a detected system Chrome is used instead when present, and the opt-in Install row is the only download path in the application | no | immediate | yes (Settings → Browser → Install Chromium) |
+| Browser sessions | Browser | `src/workflow/effects.ts` | user | `browser.max_sessions`, `browser.idle_ttl_minutes` and `browser.viewport` in the layered workflow config | no | immediate | no (file-only bounds, shown read-only) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
 

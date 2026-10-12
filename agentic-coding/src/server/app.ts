@@ -5,6 +5,7 @@
 // runtime. Since the Go backend was retired there is no delegation: every route
 // is answered in this process or is 404.
 
+import { resolveConfigRoot } from "../config-root.ts";
 import type {
 	AgentHandoffRequest,
 	AgentQuestionRequest,
@@ -46,6 +47,8 @@ import {
 	type Principal,
 	readJsonBody,
 } from "./auth.ts";
+import { type BrowserRouteDeps, handleBrowserRoute } from "./browser/routes.ts";
+import { type BrowserRuntime, browserRuntime } from "./browser/runtime.ts";
 import type { CredentialRegistry } from "./credentials.ts";
 import {
 	type AgentEnvironmentDeps,
@@ -75,6 +78,8 @@ import {
 } from "./orchestrator-policy.ts";
 import {
 	AGENT_ENVIRONMENT_PREFIX,
+	BROWSER_INSTALL_CANCEL_PATH,
+	BROWSER_INSTALL_PATH,
 	decodeRouteRequest,
 	MAX_REQUEST_BYTES,
 	SERVER_API_VERSION,
@@ -102,6 +107,9 @@ export interface ServerAppOptions {
 	readonly telemetry?: TelemetryOperations;
 	/** Server-owned workflow refresh subscriptions. */
 	readonly hub?: WorkflowEventHub;
+	/** The browser runtime (installer + pool). Absent: the process-wide one for
+	 * the server's own configuration directory is used. */
+	readonly browser?: BrowserRuntime;
 	/** Bun-served legacy integration families (Git, providers, repository
 	 * search). When absent the legacy `/api/*` surface answers 503. */
 	readonly integrations?: IntegrationServices;
@@ -163,6 +171,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 	const { authority, events, credentials } = options;
 	const operations = options.operations ?? serverOperations;
 	const telemetryWatchers = new Map<string, () => void>();
+	// One browser runtime per server process: one Chromium, one session cap, one
+	// opt-in install, shared by every run this server hosts.
+	const browser =
+		options.browser ?? browserRuntime(options.configDir ?? resolveConfigRoot());
 
 	/** One server-owned file watcher per repository, registered on first use
 	 * (scan or the explicit watch route) and announced on the event stream so
@@ -206,6 +218,18 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			: {}),
 	});
 
+	const browserDeps = (): BrowserRouteDeps => ({
+		installer: browser.installer,
+		pool: browser.pool,
+		settings: browser.settings,
+		...(options.environment?.manager
+			? { apps: options.environment.manager }
+			: {}),
+		...(options.integrations?.instances
+			? { instances: options.integrations.instances }
+			: {}),
+	});
+
 	const handle = async (request: Request): Promise<Response> => {
 		let url: URL;
 		try {
@@ -240,6 +264,15 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// environment router's own 404.
 			const evidence = await handleEvidenceRoute({}, request, url, owner);
 			if (evidence) return evidence;
+			// The browser surface rides the same capability: a run drives its own
+			// sessions and resolves only the app endpoints it holds.
+			const browsed = await handleBrowserRoute(
+				browserDeps(),
+				request,
+				url,
+				owner,
+			);
+			if (browsed) return browsed;
 			return (
 				(await handleAgentEnvironmentRoute(
 					agentEnvironmentDeps(),
@@ -369,10 +402,12 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				await readJsonBody(request),
 			);
 			try {
-				return json({
-					ok: true,
-					value: await appSlots.stopByOwner(decoded.owner),
-				});
+				const value = await appSlots.stopByOwner(decoded.owner);
+				// A run that ends takes its browser sessions with it: the pool is
+				// released here, where the run's own apps are released, so nothing keeps a
+				// browser slot for a workflow that is over.
+				await browser.pool.closeOwner(decoded.owner);
+				return json({ ok: true, value });
 			} catch (error) {
 				return instanceErrorResponse(error);
 			}
@@ -683,6 +718,32 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				url.searchParams.get("repository") ?? undefined,
 			);
 			events.publish({ domain: "workflow", kind: "classifier.install.cancel" });
+			return json({ ok: true, value });
+		}
+
+		// The literal paths are the manifest's own (`protocol.ts` declares
+		// `BROWSER_*_PATH`), and the manifest test asserts the two agree.
+		if (method === "GET" && path === "/api/v1/browser/status")
+			return json({ ok: true, value: await operations.browserStatus() });
+
+		if (method === "POST" && path === "/api/v1/browser/install") {
+			// The only path that downloads. It runs only because this request exists,
+			// and the body must be empty: nothing here takes a URL or a version to
+			// fetch. The operations facade owns it, so this route, the dashboard's
+			// in-process adapter and its HTTP client all cross one seam.
+			decodeRouteRequest(BROWSER_INSTALL_PATH, await readJsonBody(request));
+			const value = await operations.installBrowser();
+			events.publish({ domain: "workflow", kind: "browser.install" });
+			return json({ ok: true, value });
+		}
+
+		if (method === "POST" && path === "/api/v1/browser/install/cancel") {
+			decodeRouteRequest(
+				BROWSER_INSTALL_CANCEL_PATH,
+				await readJsonBody(request),
+			);
+			const value = await operations.cancelBrowserInstall();
+			events.publish({ domain: "workflow", kind: "browser.install.cancel" });
 			return json({ ok: true, value });
 		}
 

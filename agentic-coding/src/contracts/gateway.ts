@@ -21,6 +21,7 @@ import type {
 	WorkflowRepairRequest,
 	WorkflowStartRequest,
 } from "./actions.ts";
+import type { BrowserStatusResponse } from "./browser.ts";
 import type { CredentialRespondRequest } from "./credential.ts";
 import type {
 	ConnectionState,
@@ -135,6 +136,10 @@ export interface DashboardGateway {
 	 * Settings session sees the project layer's selection. */
 	classifierStatus(repository?: string): Promise<ClassifierStatusResponse>;
 
+	/** Browser install state and effective bounds, plus the opt-in install and
+	 * its cancel. Server-owned: the view never downloads anything itself. */
+	browserStatus(): Promise<BrowserStatusResponse>;
+
 	// -- mutations -----------------------------------------------------------
 	action(request: WorkflowActionRequest): Promise<WorkflowView>;
 	start(request: WorkflowStartRequest): Promise<string>;
@@ -158,6 +163,10 @@ export interface DashboardGateway {
 	classifierInstallCancel(
 		repository?: string,
 	): Promise<ClassifierStatusResponse>;
+	/** Start (or resume) the opt-in Chromium download; idempotent. */
+	browserInstall(): Promise<BrowserStatusResponse>;
+	/** Cancel an in-flight Chromium download. */
+	browserInstallCancel(): Promise<BrowserStatusResponse>;
 	respondCredential(request: CredentialRespondRequest): Promise<void>;
 
 	// -- telemetry -----------------------------------------------------------

@@ -297,6 +297,19 @@ export interface WorkflowConfig {
 			idle_ttl_minutes?: number;
 		};
 	};
+	/**
+	 * Browser sessions an agent drives (`browser.*`, `add-agent-browser-sessions`).
+	 * File-only, like the app-run lifecycle settings: the server that owns the
+	 * browser pool reads them, and Settings shows the effective values.
+	 */
+	browser?: {
+		/** Browser sessions the one shared Chromium keeps open at once. */
+		max_sessions?: number;
+		/** Minutes a browser session may sit idle before it is closed. */
+		idle_ttl_minutes?: number;
+		/** The viewport a new session opens with. */
+		viewport?: { width?: number; height?: number };
+	};
 }
 
 /** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
@@ -316,6 +329,11 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 	},
 	wiki: { root: "~/.config/agentic-coding/wiki" },
 	environment: { instances: { idle_ttl_minutes: 30 } },
+	browser: {
+		max_sessions: 4,
+		idle_ttl_minutes: 15,
+		viewport: { width: 1280, height: 800 },
+	},
 };
 
 export interface ConfigProvenance {
@@ -512,6 +530,64 @@ export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 
 /** Built-in idle TTL for an agent-held app: 30 minutes. */
 export const DEFAULT_ENVIRONMENT_IDLE_TTL_MS = 30 * 60 * 1000;
+
+/** Built-in browser session bounds (`browser.*`). */
+export const DEFAULT_BROWSER_MAX_SESSIONS = 4;
+export const DEFAULT_BROWSER_IDLE_TTL_MS = 15 * 60 * 1000;
+export const DEFAULT_BROWSER_VIEWPORT = { width: 1280, height: 800 } as const;
+/** The widest screenshot returned to a model, in CSS pixels. */
+export const BROWSER_MAX_IMAGE_WIDTH = 1280;
+/** The smallest and largest viewport a session may be opened with. */
+export const BROWSER_MIN_VIEWPORT = 200;
+export const BROWSER_MAX_VIEWPORT = 4096;
+
+export interface ResolvedBrowserSettings {
+	readonly maxSessions: number;
+	readonly idleTtlMs: number;
+	readonly viewport: { readonly width: number; readonly height: number };
+}
+
+function boundedViewportSide(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.min(
+		BROWSER_MAX_VIEWPORT,
+		Math.max(BROWSER_MIN_VIEWPORT, Math.round(value)),
+	);
+}
+
+/**
+ * The effective browser bounds, from the layered configuration's `browser.*`.
+ * Every unusable value falls back to the built-in default: a typo must never
+ * disable the idle lifecycle that keeps the session cap moving, nor open a
+ * session at a viewport no model could read.
+ */
+export function resolvedBrowserSettings(
+	config: WorkflowConfig = loadConfig(),
+): ResolvedBrowserSettings {
+	const sessions = config.browser?.max_sessions;
+	const minutes = config.browser?.idle_ttl_minutes;
+	const viewport = config.browser?.viewport;
+	return {
+		maxSessions:
+			typeof sessions === "number" && Number.isFinite(sessions) && sessions >= 1
+				? Math.floor(sessions)
+				: DEFAULT_BROWSER_MAX_SESSIONS,
+		idleTtlMs:
+			typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0
+				? minutes * 60_000
+				: DEFAULT_BROWSER_IDLE_TTL_MS,
+		viewport: {
+			width: boundedViewportSide(
+				viewport?.width,
+				DEFAULT_BROWSER_VIEWPORT.width,
+			),
+			height: boundedViewportSide(
+				viewport?.height,
+				DEFAULT_BROWSER_VIEWPORT.height,
+			),
+		},
+	};
+}
 
 /**
  * How long an agent-held app may sit idle before the server's reaper stops it,

@@ -139,6 +139,33 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		note: "File-only guard: the server enforces the ceiling, so Settings shows the effective value read-only.",
 	},
 	{
+		id: "browser.install",
+		section: "browser",
+		label: "Headless browser",
+		owner: "src/server/browser/install.ts",
+		scope: "server",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR/browsers (`PLAYWRIGHT_BROWSERS_PATH` for the server's own Playwright); a detected system Chrome is used instead when present",
+		secret: false,
+		effect: "immediate",
+		editable: true,
+		items: ["browser."],
+	},
+	{
+		id: "browser.sessions",
+		section: "browser",
+		label: "Browser sessions",
+		owner: "src/workflow/effects.ts",
+		scope: "user",
+		storage:
+			"`browser.max_sessions`, `browser.idle_ttl_minutes` and `browser.viewport` in the layered workflow config",
+		secret: false,
+		effect: "immediate",
+		editable: false,
+		items: ["browser."],
+		note: "File-only bounds: the server that owns the browser pool reads them, so Settings shows the effective values read-only.",
+	},
+	{
 		id: "agents.routing",
 		section: "agents",
 		label: "Routing and definition defaults",

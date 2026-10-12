@@ -48,6 +48,22 @@ interface Scenario {
 	readonly applied: string[];
 }
 
+/** The browser status the stub server reports: nothing downloaded, default
+ * bounds. */
+function browserStubStatus() {
+	return {
+		available: false,
+		source: "none" as const,
+		browsersPath: "/tmp/browsers",
+		install: { phase: "idle" as const },
+		settings: {
+			maxSessions: 4,
+			idleTtlMs: 900_000,
+			viewport: { width: 1280, height: 800 },
+		},
+	};
+}
+
 function stubOperations(scenario: Scenario): ServerOperations {
 	return {
 		runObservation: async (request) => ({ echoed: request.kind }),
@@ -104,6 +120,9 @@ function stubOperations(scenario: Scenario): ServerOperations {
 			providers: [],
 			local: { installed: false, running: false },
 		}),
+		browserStatus: async () => browserStubStatus(),
+		installBrowser: async () => browserStubStatus(),
+		cancelBrowserInstall: async () => browserStubStatus(),
 	};
 }
 
@@ -197,6 +216,21 @@ describe("gateway conformance", () => {
 		expect(http.status).toEqual(inProcess.status);
 		expect(http.installed).toEqual(inProcess.installed);
 		expect(http.cancelled).toEqual(inProcess.cancelled);
+	});
+
+	test("the browser status, install and cancel agree across adapters", async () => {
+		const { http, inProcess } = await bothAdapters(
+			{ applied: [] },
+			async (g) => ({
+				status: await g.browserStatus(),
+				installed: await g.browserInstall(),
+				cancelled: await g.browserInstallCancel(),
+			}),
+		);
+		expect(http.status).toEqual(inProcess.status);
+		expect(http.installed).toEqual(inProcess.installed);
+		expect(http.cancelled).toEqual(inProcess.cancelled);
+		expect(http.status.install.phase).toBe("idle");
 	});
 
 	test("a mutation returns the committed view from both adapters", async () => {

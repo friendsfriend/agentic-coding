@@ -23,6 +23,7 @@ import type {
 	workflowRepairRequestSchema,
 	workflowStartRequestSchema,
 } from "../contracts/actions.ts";
+import type { BrowserStatusResponse } from "../contracts/browser.ts";
 import type { ObservationRequest } from "../contracts/environment.ts";
 import type { ClassifierStatusResponse } from "../contracts/gateway.ts";
 import type {
@@ -53,6 +54,11 @@ import {
 	QUESTION_WAIT_MS,
 } from "../workflow/runtime.ts";
 import type { Principal } from "./auth.ts";
+import {
+	browserStatus,
+	cancelBrowserInstall,
+	installBrowser,
+} from "./browser/operations.ts";
 import {
 	cancelLocalClassifierInstall,
 	classifierStatus,
@@ -152,6 +158,10 @@ export interface ServerOperations {
 	cancelClassifierInstall(
 		repository?: string,
 	): Promise<ClassifierStatusResponse>;
+	/** Server-owned browser install state and the opt-in install/cancel. */
+	browserStatus(): Promise<BrowserStatusResponse>;
+	installBrowser(): Promise<BrowserStatusResponse>;
+	cancelBrowserInstall(): Promise<BrowserStatusResponse>;
 	agentQuestion(
 		request: AgentQuestionRequest,
 		signal: AbortSignal,
@@ -456,6 +466,9 @@ export const serverOperations: ServerOperations = {
 	classifierStatus,
 	installClassifier: installLocalClassifier,
 	cancelClassifierInstall: cancelLocalClassifierInstall,
+	browserStatus,
+	installBrowser,
+	cancelBrowserInstall,
 	agentQuestion,
 	researchHandoff,
 };
