@@ -30,6 +30,10 @@ import {
 	untrack,
 } from "solid-js";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
+import type {
+	EvidenceEntry,
+	EvidenceManifest,
+} from "../../contracts/environment.ts";
 import {
 	type DashboardData,
 	type DeveloperDialogueRecord,
@@ -38,8 +42,14 @@ import {
 } from "../../contracts/workflow.ts";
 
 import { wikiWorkflowDataRoot } from "../../workflow/runtime.ts";
+import { copyToClipboard } from "../clipboard.ts";
+import {
+	evidenceFileKey,
+	loadEvidence,
+	loadEvidenceFile,
+} from "../data/evidence.ts";
 import { loadArtifact, loadArtifacts } from "../data/git.ts";
-import { gatewayOrUndefined } from "../data/index.ts";
+import { gatewayOrUndefined, invalidateKey } from "../data/index.ts";
 import {
 	answerQuestion,
 	applyRepair,
@@ -58,6 +68,8 @@ import {
 } from "../shared/preferences.ts";
 import { createAgentActivitySource } from "./agent-activity.ts";
 import { testDashboard } from "./demo.ts";
+import { evidenceLocalPath, openEvidenceExternally } from "./evidence-open.ts";
+import { evidencePreviewEntry, evidenceRows } from "./evidence-panel.ts";
 import { createDashboardKeyHandler } from "./handlers/keys.ts";
 import {
 	agentSessionKeybindCatalog,
@@ -80,10 +92,15 @@ import { Overlays } from "./modals/Overlays.tsx";
 import { workflowGraphRows } from "./modals/WorkflowGraphModal.tsx";
 import { notify } from "./notifications.ts";
 import { openFindingInEditor } from "./open-finding.ts";
-import { CLASSIFIER_PANEL } from "./panel-grid.ts";
+import { CLASSIFIER_PANEL, EVIDENCE_PANEL } from "./panel-grid.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
 import { ClassifierPanel } from "./panels/ClassifierPanel.tsx";
+import {
+	EvidencePanel,
+	type EvidencePreviewState,
+	inlineImagePreview,
+} from "./panels/EvidencePanel.tsx";
 import { OpenSpecPanel } from "./panels/OpenSpecPanel.tsx";
 import {
 	agentMetricLine,
@@ -243,6 +260,8 @@ export function App(props: {
 	const setSelectedArtifact = panels.setArtifact;
 	const selectedDecision = panels.decision;
 	const setSelectedDecision = panels.setDecision;
+	const selectedEvidence = panels.evidence;
+	const setSelectedEvidence = panels.setEvidence;
 	const artifacts = panels.artifacts;
 	const setArtifacts = panels.setArtifacts;
 	let artifactGeneration = 0;
@@ -273,6 +292,209 @@ export function App(props: {
 					);
 			});
 	});
+	// The open workflow's evidence: the manifest the panel lists, the selected
+	// entry's bytes when the terminal can render them, and the local path
+	// `Enter`/`y` act on.
+	const [evidence, setEvidence] = createSignal<EvidenceManifest>({
+		workflowId: props.workflowId,
+		entries: [],
+		bytes: 0,
+		quotaBytes: 0,
+	});
+	/** What the manifest read is doing. The panel shows the neutral empty state
+	 * only for a read that actually succeeded with no entries. */
+	const [evidenceState, setEvidenceState] = createSignal<
+		"loading" | "ready" | "error"
+	>("loading");
+	const [evidenceError, setEvidenceError] = createSignal<string | undefined>(
+		undefined,
+	);
+	let evidenceGeneration = 0;
+	let evidenceController: AbortController | undefined;
+	let lastEvidenceError: string | undefined;
+	const [evidencePreview, setEvidencePreview] = createSignal<
+		Uint8Array | undefined
+	>(undefined);
+	/** What the selected entry's preview is doing: `absent` is the gateway's own
+	 * answer that the recorded file is gone, so it must not read as loading. */
+	const [evidencePreviewState, setEvidencePreviewState] =
+		createSignal<EvidencePreviewState>("loading");
+	let evidencePreviewGeneration = 0;
+	let evidencePreviewController: AbortController | undefined;
+	/** Kitty graphics support is the renderer's own capability probe: the panel
+	 * never sniffs `$TERM`, and an unanswered probe means no inline image. The
+	 * probe itself is not reactive, so it is read into a signal — and re-read when
+	 * the dashboard or the selection changes, which is what lets the panel's own
+	 * memos follow a capability that settled after the first paint. */
+	const [kittyGraphics, setKittyGraphics] = createSignal(
+		inlineImagePreview(renderer.capabilities),
+	);
+	createEffect(() => {
+		data();
+		selectedEvidence();
+		setKittyGraphics(inlineImagePreview(renderer.capabilities));
+	});
+	/** The height of the full-width Evidence row: a share of the terminal, so the
+	 * preview keeps room on a tall window and never eats a short one. */
+	const evidencePanelHeight = () =>
+		Math.max(6, Math.round(dimensions().height * 0.28));
+	const evidenceListRows = createMemo(() => evidenceRows(evidence().entries));
+	const selectedEvidenceEntry = createMemo(
+		() => evidenceListRows()[selectedEvidence()]?.entry,
+	);
+	const selectedEvidencePath = createMemo(() => {
+		const entry = selectedEvidenceEntry();
+		if (!entry) return undefined;
+		try {
+			return evidenceLocalPath(data().state, entry);
+		} catch {
+			// An unaddressable workflow id: the panel shows metadata without a path.
+			return undefined;
+		}
+	});
+	const previewEvidenceEntry = createMemo(() =>
+		evidencePreviewEntry(evidenceListRows(), selectedEvidence()),
+	);
+	// The manifest read follows every dashboard refresh: attaching evidence does
+	// not bump the workflow revision, and a workflow event drops the cached
+	// manifest, so a forced read is what keeps the panel from missing an entry
+	// written mid-refresh.
+	createEffect(() => {
+		data();
+		if (props.profile === "test" || !gatewayOrUndefined()) {
+			// The demo fixture carries no evidence, so the listing is empty rather
+			// than eternally loading; a transport that is not installed yet keeps the
+			// loading state that the next dashboard read settles.
+			if (props.profile === "test") setEvidenceState("ready");
+			return;
+		}
+		const generation = ++evidenceGeneration;
+		evidenceController?.abort();
+		evidenceController = new AbortController();
+		void loadEvidence(props.repo, props.workflowId, evidenceController.signal, {
+			refresh: true,
+		})
+			.then((next) => {
+				if (!next || generation !== evidenceGeneration) return;
+				setEvidence(next);
+				setEvidenceState("ready");
+				setEvidenceError(undefined);
+				lastEvidenceError = undefined;
+			})
+			.catch((error) => {
+				if (generation !== evidenceGeneration) return;
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				// A read that failed is not "no evidence attached": the panel says so
+				// and the developer hears about it once per distinct failure.
+				const message = error instanceof Error ? error.message : String(error);
+				setEvidenceState("error");
+				setEvidenceError(message);
+				traceTui(
+					"tui.dashboard.evidence",
+					{ surface: "dashboard", action: "evidence" },
+					"error",
+				);
+				if (message !== lastEvidenceError) {
+					lastEvidenceError = message;
+					notify(`Evidence could not be read: ${message}`, "error");
+				}
+			});
+	});
+	// The selected entry's bytes, read only when the renderer can show them: a
+	// screenshot, or the poster of a selected video. Stored bytes are immutable
+	// once written, so a selection that does not move is not re-read — and its
+	// image renderable is not remounted — on every dashboard refresh, and only
+	// the current selection's bytes stay cached.
+	let previewBytesId: string | undefined;
+	createEffect(() => {
+		const entry = previewEvidenceEntry();
+		const id = kittyGraphics() ? entry?.id : undefined;
+		if (id !== undefined && id === previewBytesId) return;
+		const previous = previewBytesId;
+		previewBytesId = id;
+		const generation = ++evidencePreviewGeneration;
+		setEvidencePreview(undefined);
+		setEvidencePreviewState("loading");
+		evidencePreviewController?.abort();
+		if (previous !== undefined && previous !== id)
+			invalidateKey(evidenceFileKey(props.repo, props.workflowId, previous));
+		if (id === undefined) {
+			// Nothing to show: no image-bearing entry is selected, or the terminal
+			// cannot draw one.
+			setEvidencePreviewState("ready");
+			return;
+		}
+		if (props.profile === "test" || !gatewayOrUndefined()) return;
+		evidencePreviewController = new AbortController();
+		void loadEvidenceFile(
+			props.repo,
+			props.workflowId,
+			id,
+			evidencePreviewController.signal,
+		)
+			.then((bytes) => {
+				if (generation !== evidencePreviewGeneration) return;
+				// A file the gateway answers as gone is not still loading: the panel says
+				// so, and the next refresh retries it instead of pinning the selection to
+				// a preview that will never arrive.
+				if (bytes === undefined) {
+					previewBytesId = undefined;
+					// The absent answer is cached like any other, so the retry has to drop it
+					// too — otherwise the next read is served the same `undefined` without
+					// ever reaching the gateway.
+					invalidateKey(evidenceFileKey(props.repo, props.workflowId, id));
+				}
+				setEvidencePreview(bytes);
+				setEvidencePreviewState(bytes === undefined ? "absent" : "ready");
+			})
+			.catch((error) => {
+				if (generation !== evidencePreviewGeneration) return;
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				// A preview that cannot be read leaves the metadata, and the next
+				// refresh retries it rather than pinning an empty preview forever.
+				if (previewBytesId === id) previewBytesId = undefined;
+				setEvidencePreviewState("error");
+				traceTui(
+					"tui.dashboard.evidence.preview",
+					{ surface: "dashboard", action: "evidence-preview" },
+					"error",
+				);
+			});
+	});
+	// The dashboard body is one instance per workflow page, so its last preview's
+	// bytes are dropped with it: a browsing session leaves nothing resident, and
+	// the bytes are immutable and re-readable if the page is opened again.
+	onCleanup(() => {
+		if (previewBytesId === undefined) return;
+		invalidateKey(
+			evidenceFileKey(props.repo, props.workflowId, previewBytesId),
+		);
+	});
+	const openEvidence = async (entry: EvidenceEntry) => {
+		try {
+			await openEvidenceExternally(data().state, entry);
+		} catch (error) {
+			notify(
+				`Could not open evidence: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"error",
+			);
+		}
+	};
+	const copyEvidencePath = (entry: EvidenceEntry) => {
+		let file: string;
+		try {
+			file = evidenceLocalPath(data().state, entry);
+		} catch {
+			notify("Evidence has no local path", "error");
+			return;
+		}
+		if (copyToClipboard(file)) notify(`Copied ${file}`, "success");
+		else notify("Copy failed", "error");
+	};
 	// Every classification the workflow recorded, in the order it happened:
 	// model-pool routing, verifier-role triage, stage gates, and the per-file
 	// judgment sweep. The panel, its keybinds, and Enter all read this one list.
@@ -282,6 +504,7 @@ export function App(props: {
 			agents: data().agents.length,
 			artifacts: artifacts().length,
 			classifications: classifications().length,
+			evidence: evidence().entries.length,
 		}),
 	);
 	const requiredUserAction = createMemo(() =>
@@ -1571,6 +1794,11 @@ export function App(props: {
 		setSelectedArtifact,
 		selectedDecision,
 		setSelectedDecision,
+		selectedEvidence,
+		setSelectedEvidence,
+		evidenceRows: () => evidenceListRows(),
+		openEvidence: (entry) => void openEvidence(entry),
+		copyEvidencePath,
 		artifacts,
 		data,
 		setData,
@@ -2845,7 +3073,7 @@ export function App(props: {
 								width: "100%",
 								flexGrow: 1,
 								minHeight: 0,
-								flexDirection: "row",
+								flexDirection: "column",
 								gap: 1,
 							}}
 							// The agent session page takes the body: the grid stays mounted
@@ -2854,41 +3082,65 @@ export function App(props: {
 							visible={!agentSessionOpen()}
 						>
 							<box
-								flexGrow={1}
-								flexBasis={0}
-								minWidth={0}
-								height="100%"
-								flexDirection="column"
-								gap={1}
+								style={{
+									width: "100%",
+									flexGrow: 1,
+									minHeight: 0,
+									flexDirection: "row",
+									gap: 1,
+								}}
 							>
-								<ChangePanel
-									data={data()}
-									active={activePanel() === 0}
-									onScrollBoxReady={(box) => {
-										changeScroll = box as ScrollBoxRenderable;
-									}}
-								/>
-								<Show when={artifacts().length > 0}>
-									<OpenSpecPanel
-										artifacts={artifacts()}
-										active={activePanel() === 6}
-										selectedIndex={selectedArtifact()}
+								<box
+									flexGrow={1}
+									flexBasis={0}
+									minWidth={0}
+									height="100%"
+									flexDirection="column"
+									gap={1}
+								>
+									<ChangePanel
+										data={data()}
+										active={activePanel() === 0}
+										onScrollBoxReady={(box) => {
+											changeScroll = box as ScrollBoxRenderable;
+										}}
 									/>
-								</Show>
-								{/* Always rendered, empty state included: a newly started
+									<Show when={artifacts().length > 0}>
+										<OpenSpecPanel
+											artifacts={artifacts()}
+											active={activePanel() === 6}
+											selectedIndex={selectedArtifact()}
+										/>
+									</Show>
+									{/* Always rendered, empty state included: a newly started
 								    workflow must show where its decisions will land. */}
-								<ClassifierPanel
-									entries={classifications()}
-									active={activePanel() === CLASSIFIER_PANEL}
-									selectedIndex={selectedDecision()}
+									<ClassifierPanel
+										entries={classifications()}
+										active={activePanel() === CLASSIFIER_PANEL}
+										selectedIndex={selectedDecision()}
+									/>
+								</box>
+								<AgentsPanel
+									data={data()}
+									active={activePanel() === 1}
+									selectedIndex={selectedAgent()}
+									narrow={dimensions().width < 90}
+									activity={agentActivity.activity}
 								/>
 							</box>
-							<AgentsPanel
-								data={data()}
-								active={activePanel() === 1}
-								selectedIndex={selectedAgent()}
-								narrow={dimensions().width < 90}
-								activity={agentActivity.activity}
+							{/* Read-only, and always rendered with its empty state: the
+							    evidence a run produced is never a panel that appears late. */}
+							<EvidencePanel
+								entries={evidence().entries}
+								active={activePanel() === EVIDENCE_PANEL}
+								selectedIndex={selectedEvidence()}
+								kitty={kittyGraphics()}
+								preview={() => evidencePreview()}
+								previewState={evidencePreviewState()}
+								path={selectedEvidencePath()}
+								height={evidencePanelHeight()}
+								state={evidenceState()}
+								error={evidenceError()}
 							/>
 						</box>
 						<Show when={agentSessionOpen() && agentSession()}>

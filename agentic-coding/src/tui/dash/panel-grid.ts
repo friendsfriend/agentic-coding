@@ -1,14 +1,15 @@
 /**
  * 2D panel navigation model for the dashboard detail view.
  *
- * The rendered panels form a 2×3 occupancy grid; a panel may span more than
+ * The rendered panels form a 2×4 occupancy grid; a panel may span more than
  * one cell:
  *
  * ```
- *         col 0           col 1
- * row 0   Change (0)      Agents (1)
- * row 1   OpenSpec (6)    Agents (1)
- * row 2   Classifications (7)  Agents (1)   (span: rows 0–2)
+ *         col 0                col 1
+ * row 0   Change (0)           Agents (1)
+ * row 1   OpenSpec (6)         Agents (1)
+ * row 2   Classifications (7)  Agents (1)     (span: rows 0–2)
+ * row 3   Evidence (8)         Evidence (8)   (span: the whole row)
  * ```
  *
  * Empty conditional cells are transparent to navigation. `movePanel` scans
@@ -16,7 +17,8 @@
  * panel's anchor cell in the pressed direction, skipping cells owned by the
  * same panel's span and empty cells, wrapping at every grid edge, and landing
  * on the first distinct panel found. A direction with no distinct rendered
- * panel after the scan leaves focus on the active panel.
+ * panel after the scan leaves focus on the active panel — which is how the
+ * full-width Evidence row makes left/right a no-op.
  */
 
 export type PanelId = number;
@@ -26,8 +28,9 @@ export const CHANGE_PANEL = 0;
 export const AGENTS_PANEL = 1;
 export const OPENSPEC_PANEL = 6;
 export const CLASSIFIER_PANEL = 7;
+export const EVIDENCE_PANEL = 8;
 
-export const GRID_ROWS = 3;
+export const GRID_ROWS = 4;
 export const GRID_COLS = 2;
 
 export interface PanelGridOptions {
@@ -40,11 +43,12 @@ const FULL_GRID: ReadonlyArray<ReadonlyArray<PanelId>> = [
 	[CHANGE_PANEL, AGENTS_PANEL],
 	[OPENSPEC_PANEL, AGENTS_PANEL],
 	[CLASSIFIER_PANEL, AGENTS_PANEL],
+	[EVIDENCE_PANEL, EVIDENCE_PANEL],
 ];
 
 /** Rendered occupancy: the OpenSpec cell is empty while no artifacts exist.
- * The Classifications cell is always occupied — the panel renders an empty
- * state for a workflow that has not classified anything yet. */
+ * The Classifications and Evidence cells are always occupied — both render an
+ * empty state for a workflow that has nothing to show yet. */
 function renderedGrid(
 	opts: PanelGridOptions,
 ): Array<Array<PanelId | undefined>> {
@@ -52,6 +56,7 @@ function renderedGrid(
 		[CHANGE_PANEL, AGENTS_PANEL],
 		[opts.artifactsVisible ? OPENSPEC_PANEL : undefined, AGENTS_PANEL],
 		[CLASSIFIER_PANEL, AGENTS_PANEL],
+		[EVIDENCE_PANEL, EVIDENCE_PANEL],
 	];
 }
 

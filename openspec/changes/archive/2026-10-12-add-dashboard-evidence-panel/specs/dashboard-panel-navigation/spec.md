@@ -1,0 +1,65 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Panel grid positions
+The workflow dashboard detail view SHALL map its interactive panels onto a 2-column, 4-row grid: the Change panel SHALL occupy the top-left cell; the OpenSpec panel SHALL occupy the cell directly below Change and SHALL be present only while OpenSpec artifacts are listed; the Classifier panel SHALL occupy the cell below OpenSpec, rendered for every workflow (its empty state is the panel); the Agents panel SHALL occupy the right column spanning the first three rows; and the Evidence panel SHALL occupy both cells of the fourth row, below the Change/OpenSpec/Classifier column and the Agents panel. The detail view SHALL NOT include the Current task panel in the grid.
+
+#### Scenario: Grid with artifacts listed
+- **WHEN** the detail view renders with OpenSpec artifacts present and no classifier decisions exposed
+- **THEN** Change occupies the top-left cell, OpenSpec occupies the cell below Change, and Agents spans the right column beside the Change and OpenSpec rows
+
+#### Scenario: Grid with artifacts and decisions listed
+- **WHEN** the detail view renders with OpenSpec artifacts present and classifier decisions exposed
+- **THEN** Change occupies the top-left cell, OpenSpec the cell below it, Classifier the cell below that, and Agents spans the right column beside all three left-column rows
+
+#### Scenario: Grid with the evidence row
+- **WHEN** the detail view renders, with or without OpenSpec artifacts
+- **THEN** the Evidence panel occupies the whole fourth row, below both columns
+- **AND** it is the focusable panel of that row
+
+#### Scenario: Grid without artifacts
+- **WHEN** the detail view renders with no OpenSpec artifacts
+- **THEN** the OpenSpec cell is empty
+- **AND** Change, Classifier, Agents and Evidence are the focusable panels
+
+#### Scenario: Grid without decisions
+- **WHEN** the detail view renders with no classifier decisions exposed
+- **THEN** the Classifier cell stays occupied by its own empty state
+- **AND** Change, OpenSpec (when artifacts are listed), Classifier, Agents and Evidence are the focusable panels
+
+### Requirement: Vim-style navigation with Shift modifier
+The detail view SHALL move keyboard focus between panels using Shift+J (one cell down), Shift+K (one cell up), Shift+H (one cell left), and Shift+L (one cell right). When focus is at an edge of the grid in the pressed direction, focus SHALL wrap to the opposite edge. If a direction has no distinct rendered panel after skipping empty cells and the active panel's span, focus SHALL remain on the active panel.
+
+#### Scenario: Vertical move down the left column
+- **WHEN** focus is on the Change panel, OpenSpec artifacts are listed, and Shift+J is pressed
+- **THEN** focus moves to the OpenSpec panel
+
+#### Scenario: Vertical move up the left column
+- **WHEN** focus is on the OpenSpec panel and Shift+K is pressed
+- **THEN** focus moves to the Change panel
+
+#### Scenario: Vertical move onto the classifier panel
+- **WHEN** OpenSpec artifacts are listed, classifier decisions are exposed, and focus is on the OpenSpec panel with Shift+J pressed
+- **THEN** focus moves to the Classifier panel
+
+#### Scenario: Vertical wrapping in the left column
+- **WHEN** focus is on the topmost or bottommost rendered left-column panel and the user presses the corresponding upward or downward edge direction
+- **THEN** focus wraps to the other rendered panel in that column's scan, the evidence row included
+
+#### Scenario: Vertical movement into and out of the evidence row
+- **WHEN** focus is on the lowest rendered left-column panel or on the Agents panel and Shift+J is pressed
+- **THEN** focus moves to the Evidence panel
+- **AND** Shift+K from the Evidence panel returns to the lowest rendered left-column panel while Shift+J wraps to Change
+
+#### Scenario: Horizontal movement between columns
+- **WHEN** focus is on Change, OpenSpec, Classifier, or Agents and the user presses Shift+H or Shift+L toward the other column
+- **THEN** focus moves between the left-column panel at that row and Agents
+
+#### Scenario: No distinct horizontal neighbor on the full-width row
+- **WHEN** focus is on the Evidence panel and Shift+H or Shift+L is pressed
+- **THEN** focus remains on the Evidence panel
+
+#### Scenario: No distinct vertical neighbor without OpenSpec artifacts
+- **WHEN** focus is on a rendered panel, no other panel is rendered in the pressed direction's scan, and Shift+J or Shift+K is pressed
+- **THEN** focus remains on the active panel

@@ -145,6 +145,15 @@ test("footer follows the focused detail panel and hides standard keys", async ()
 	expect(agents).not.toContain("Enter open");
 	expect(agents).not.toContain("Enter decision");
 
+	// Shift+H → Change, then Shift+K → the full-width Evidence row: its own
+	// actions replace the Change panel's.
+	t.mockInput.pressKey("h", { shift: true });
+	await t.renderOnce();
+	t.mockInput.pressKey("k", { shift: true });
+	const evidence = await t.waitForFrame((frame) => frame.includes("y copy"));
+	expect(evidence).toContain("Enter open");
+	expect(evidence).not.toContain("Enter approve");
+
 	t.renderer.destroy();
 });
 
@@ -167,6 +176,8 @@ test("`?` help keeps the full descriptions the footer shortens", async () => {
 	expect(help).toContain("Move between panels");
 	expect(help).toContain("View selected verifier result");
 	expect(help).toContain("View selected classification");
+	expect(help).toContain("Open evidence externally");
+	expect(help).toContain("Copy evidence path");
 
 	t.renderer.destroy();
 });

@@ -1,12 +1,8 @@
-# Spec Delta
+# dashboard-evidence-panel Specification
 
 ## Purpose
-
-The developer reviews screenshots, videos and repro scripts produced by agents
-directly from the workflow dashboard.
-
-## ADDED Requirements
-
+TBD - created by archiving change add-dashboard-evidence-panel. Update Purpose after archive.
+## Requirements
 ### Requirement: Evidence panel lists workflow evidence
 
 The workflow dashboard SHALL show an evidence panel listing every manifest entry of the workflow with kind, caption, producing step or role and time, grouped by debug request when present, and SHALL offer no mutating action.
@@ -15,6 +11,11 @@ The workflow dashboard SHALL show an evidence panel listing every manifest entry
 
 - **WHEN** a workflow has evidence from two debug requests
 - **THEN** the panel SHALL group the entries under each request
+
+#### Scenario: A read that did not succeed
+
+- **WHEN** the manifest has not been read yet, or the read failed
+- **THEN** the panel SHALL say so and SHALL NOT present the listing as empty
 
 ### Requirement: Inline images when supported
 
@@ -33,3 +34,14 @@ Pressing the open key on an entry SHALL open its file with the platform's system
 
 - **WHEN** the developer opens a video entry
 - **THEN** the WebM file SHALL be passed to the system opener
+
+#### Scenario: The highlighted entry is the one acted on
+
+- **WHEN** the panel lists several entries and the developer presses the open key on one of them
+- **THEN** the file handed to the system opener SHALL be that highlighted entry's
+
+#### Scenario: Copy the highlighted entry's path
+
+- **WHEN** the developer presses the copy key on the panel
+- **THEN** the copied value SHALL be the highlighted entry's stored file path
+

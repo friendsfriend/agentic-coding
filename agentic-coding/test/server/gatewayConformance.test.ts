@@ -224,6 +224,18 @@ describe("gateway conformance", () => {
 		expect(scenario.applied).toEqual(["delete:wf-1", "delete:wf-1"]);
 	});
 
+	test("an unknown workflow's evidence file is absent from both adapters", async () => {
+		// The dashboard renders a missing image as metadata rather than as an
+		// error; the HTTP adapter maps the file route's 404 onto the same answer
+		// the in-process adapter gives for a store that has no such entry.
+		const { http, inProcess } = await bothAdapters(
+			{ applied: [] },
+			async (gw) => gw.evidenceFile("wf-missing", "01JCAAAAAAAAAAAAAAAAAAAAAA"),
+		);
+		expect(http).toBeUndefined();
+		expect(inProcess).toBeUndefined();
+	});
+
 	test("a stale revision fails without mutating in either adapter", async () => {
 		const scenario: Scenario = { applied: [] };
 		const stale = {

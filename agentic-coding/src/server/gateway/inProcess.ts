@@ -39,6 +39,7 @@ import type { TraceSummaryPage } from "../../contracts/telemetry.ts";
 import type { WorkflowView } from "../../contracts/workflow.ts";
 import type { CredentialRegistry } from "../credentials.ts";
 import type { EventBroker } from "../events.ts";
+import { readEvidenceBytes } from "../evidence/routes.ts";
 import type { ServerOperations } from "../handlers.ts";
 import type { WorkflowEventHub } from "../subscriptions.ts";
 import type { TelemetryOperations } from "../telemetry.ts";
@@ -159,6 +160,18 @@ export function createInProcessGateway(
 
 		async loadAgents(repository?: string): Promise<AgentsListResponse> {
 			return operations.loadAgents(repository);
+		},
+
+		/** One evidence file's bytes. This process owns the store the file route
+		 * serves, so the read goes straight through the same store — no second copy
+		 * of the bytes and no local HTTP round trip. */
+		async evidenceFile(
+			workflowId: string,
+			id: string,
+			signal?: AbortSignal,
+		): Promise<Uint8Array | undefined> {
+			assertNotAborted(signal);
+			return await withSignal(readEvidenceBytes(workflowId, id), signal);
 		},
 
 		async classifierStatus(

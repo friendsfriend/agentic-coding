@@ -42,6 +42,25 @@ export function sideAppMode(
 	return tmuxClient(env) && hasTmux ? "tmux" : "local";
 }
 
+/**
+ * The platform's system opener for one file: `open` on macOS, `xdg-open`
+ * elsewhere, and `cmd /c start` on Windows. The file is one argument, never a
+ * shell string, and `cwd` is the file's own directory so the opener is not tied
+ * to whatever the TUI was started in. Pure, so the launch shape is testable per
+ * platform.
+ */
+export function systemOpenerSideApp(
+	file: string,
+	platform: NodeJS.Platform = process.platform,
+): SideAppRequest {
+	const separator = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+	const cwd = file.slice(0, Math.max(0, separator)) || ".";
+	if (platform === "darwin") return { command: "open", args: [file], cwd };
+	if (platform === "win32")
+		return { command: "cmd", args: ["/c", "start", "", file], cwd };
+	return { command: "xdg-open", args: [file], cwd };
+}
+
 /** `tmux new-window` argv for one side app. `-c` pins the working directory so
  * the window does not inherit the pane's cwd. */
 export function tmuxSideAppArgs(request: SideAppRequest): string[] {
@@ -163,31 +182,73 @@ export interface SideAppRenderer {
 	resume?: () => void;
 }
 
-async function spawnLocal(request: SideAppRequest): Promise<void> {
+async function spawnLocal(
+	request: SideAppRequest,
+	captureStderr: boolean,
+): Promise<SideAppOutcome> {
 	const renderer = globalThis.__renderer as SideAppRenderer | undefined;
 	renderer?.suspend?.();
 	try {
-		const process = Bun.spawn([request.command, ...request.args], {
+		const child = Bun.spawn([request.command, ...request.args], {
 			cwd: request.cwd,
-			stdio: ["inherit", "inherit", "inherit"],
+			stdio: captureStderr
+				? ["inherit", "inherit", "pipe"]
+				: ["inherit", "inherit", "inherit"],
 		});
-		await process.exited;
+		const stderr = captureStderr ? await new Response(child.stderr).text() : "";
+		const status = await child.exited;
+		return { mode: "local", status, stderr };
 	} finally {
 		renderer?.resume?.();
 	}
 }
 
-async function spawnTmux(request: SideAppRequest): Promise<void> {
-	const process = Bun.spawn(["tmux", ...tmuxSideAppArgs(request)], {
-		stdio: ["ignore", "ignore", "ignore"],
+async function spawnTmux(request: SideAppRequest): Promise<SideAppOutcome> {
+	// `tmux new-window`'s status is the *request's* outcome — the server is gone,
+	// the window limit is reached, or `-c` names a directory that no longer exists
+	// — which is what a caller that reports failures needs, exactly as
+	// `openViewWindow` treats it.
+	const child = Bun.spawn(["tmux", ...tmuxSideAppArgs(request)], {
+		stdio: ["ignore", "ignore", "pipe"],
 	});
-	await process.exited;
+	const stderr = await new Response(child.stderr).text();
+	const status = await child.exited;
+	return { mode: "tmux", status, stderr };
+}
+
+/** How one side-app launch went. A local spawn reports the app's own exit
+ * status; a tmux launch reports the window request's. */
+export interface SideAppOutcome {
+	readonly mode: SideAppMode;
+	/** The process's exit status (`0` is success). */
+	readonly status?: number;
+	/** What the process wrote to stderr. */
+	readonly stderr?: string;
+}
+
+/**
+ * Open one side app and answer how the launch went, so a caller that has
+ * something to say about a failure can say it. A caller with nothing to say uses
+ * `openSideApp`, which keeps the fully inherited stdio of an interactive app.
+ */
+export async function runSideApp(
+	request: SideAppRequest,
+): Promise<SideAppOutcome> {
+	if (sideAppMode() === "tmux") {
+		try {
+			return await spawnTmux(request);
+		} catch {
+			/* fall through to the local spawn */
+		}
+	}
+	return await spawnLocal(request, true);
 }
 
 /**
  * Open one side app and resolve with the mode that ran. A tmux launch failure
  * falls back to the local spawn: the side app is a convenience, never a reason
- * to lose the editor.
+ * to lose the editor. A launched app that exits non-zero is not this caller's
+ * business — `runSideApp` is where that status is answered.
  */
 export async function openSideApp(
 	request: SideAppRequest,
@@ -200,6 +261,5 @@ export async function openSideApp(
 			/* fall through to the local spawn */
 		}
 	}
-	await spawnLocal(request);
-	return "local";
+	return (await spawnLocal(request, false)).mode;
 }

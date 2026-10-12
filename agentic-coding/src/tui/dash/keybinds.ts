@@ -3,6 +3,7 @@ import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-
 import {
 	AGENTS_PANEL,
 	CLASSIFIER_PANEL,
+	EVIDENCE_PANEL,
 	OPENSPEC_PANEL,
 } from "./panel-grid.ts";
 
@@ -15,8 +16,10 @@ export const CHANGE_PANEL_CONTEXT = "change";
 export const OPENSPEC_PANEL_CONTEXT = "openspec";
 export const AGENTS_PANEL_CONTEXT = "agents";
 export const CLASSIFIER_PANEL_CONTEXT = "classifier";
+export const EVIDENCE_PANEL_CONTEXT = "evidence";
 
 export function panelContext(panel: number): string {
+	if (panel === EVIDENCE_PANEL) return EVIDENCE_PANEL_CONTEXT;
 	if (panel === OPENSPEC_PANEL) return OPENSPEC_PANEL_CONTEXT;
 	if (panel === CLASSIFIER_PANEL) return CLASSIFIER_PANEL_CONTEXT;
 	if (panel === AGENTS_PANEL) return AGENTS_PANEL_CONTEXT;
@@ -170,6 +173,23 @@ export function dashboardDetailKeybindCatalog(options: {
 					action: "View selected verifier result",
 					short: "verifier",
 					context: AGENTS_PANEL_CONTEXT,
+				},
+			],
+		},
+		{
+			title: "Evidence panel",
+			keybinds: [
+				{
+					key: "Enter",
+					action: "Open evidence externally",
+					short: "open",
+					context: EVIDENCE_PANEL_CONTEXT,
+				},
+				{
+					key: "y",
+					action: "Copy evidence path",
+					short: "copy",
+					context: EVIDENCE_PANEL_CONTEXT,
 				},
 			],
 		},

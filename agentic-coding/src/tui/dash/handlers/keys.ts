@@ -7,6 +7,7 @@
  */
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
+import type { EvidenceEntry } from "../../../contracts/environment.ts";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { copyToClipboard } from "../../clipboard.ts";
 import {
@@ -14,9 +15,11 @@ import {
 	requestShutdown,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
+import type { EvidenceListRow } from "../evidence-panel.ts";
 import {
 	CHANGE_PANEL,
 	CLASSIFIER_PANEL,
+	EVIDENCE_PANEL,
 	movePanel,
 	type PanelDirection,
 } from "../panel-grid.ts";
@@ -47,6 +50,15 @@ export interface DashboardKeyContext {
 	readonly setSelectedArtifact: (index: number) => void;
 	readonly selectedDecision: () => number;
 	readonly setSelectedDecision: (index: number) => void;
+	readonly selectedEvidence: () => number;
+	readonly setSelectedEvidence: (index: number) => void;
+	/** The panel's rows, newest first and grouped — the one index space the
+	 * panel renders, the selection indexes and this handler acts on. */
+	readonly evidenceRows: () => readonly EvidenceListRow[];
+	/** Hand one evidence file to the platform's system opener. */
+	readonly openEvidence: (entry: EvidenceEntry) => void;
+	/** Copy one evidence file's local path to the clipboard. */
+	readonly copyEvidencePath: (entry: EvidenceEntry) => void;
 	readonly artifacts: () => string[];
 	readonly data: () => DashboardData;
 	readonly dimensions: () => { width: number; height: number };
@@ -217,6 +229,9 @@ export function createDashboardKeyHandler(
 			setSelectedArtifact,
 			selectedDecision,
 			setSelectedDecision,
+			selectedEvidence,
+			setSelectedEvidence,
+			evidenceRows,
 			artifacts,
 			data,
 			notify,
@@ -406,6 +421,11 @@ export function createDashboardKeyHandler(
 			}
 			return;
 		}
+		if (name === "y" && activePanel() === EVIDENCE_PANEL) {
+			const row = evidenceRows()[selectedEvidence()];
+			if (row) context.copyEvidencePath(row.entry);
+			return;
+		}
 		if (name === "r") {
 			refresh();
 			return;
@@ -454,6 +474,13 @@ export function createDashboardKeyHandler(
 						selectedDecision() + 1,
 					),
 				);
+			else if (activePanel() === EVIDENCE_PANEL)
+				setSelectedEvidence(
+					Math.min(
+						Math.max(0, evidenceRows().length - 1),
+						selectedEvidence() + 1,
+					),
+				);
 			return;
 		}
 		if (name === "up" || name === "k") {
@@ -464,6 +491,8 @@ export function createDashboardKeyHandler(
 				setSelectedArtifact(Math.max(0, selectedArtifact() - 1));
 			else if (activePanel() === CLASSIFIER_PANEL)
 				setSelectedDecision(Math.max(0, selectedDecision() - 1));
+			else if (activePanel() === EVIDENCE_PANEL)
+				setSelectedEvidence(Math.max(0, selectedEvidence() - 1));
 			return;
 		}
 		if (name === "enter" || name === "return") {
@@ -526,6 +555,13 @@ export function createDashboardKeyHandler(
 						? { conversationId: agent.conversationId }
 						: {}),
 				});
+				return;
+			}
+			if (activePanel() === EVIDENCE_PANEL) {
+				// Every kind opens the stored file externally — including a video,
+				// whose bytes are never rendered inline.
+				const row = evidenceRows()[selectedEvidence()];
+				if (row) context.openEvidence(row.entry);
 				return;
 			}
 			const approval = gate();

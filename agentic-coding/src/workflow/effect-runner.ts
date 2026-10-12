@@ -2044,8 +2044,10 @@ export function agentEffectHandlers(
 					const snapshot = snapshotFor(effect);
 					// Evidence is deleted with the workflow's workspace. Best-effort: a
 					// directory that cannot be removed must not make the cleanup effect
-					// fail, and the observe above reports the remaining work instead.
-					yield* Effect.sync(() =>
+					// fail, and the observe above reports the remaining work instead. The
+					// deletion takes the evidence root's write lock, so an attach in
+					// flight cannot recreate what it removed.
+					yield* Effect.promise(() =>
 						removeWorkflowEvidence(evidenceLocation(snapshot)),
 					);
 					if (

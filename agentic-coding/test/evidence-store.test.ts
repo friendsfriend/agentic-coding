@@ -9,13 +9,14 @@ import path from "node:path";
 import {
 	attachEvidence,
 	EVIDENCE_FILE_MAX_BYTES,
+	EVIDENCE_MANIFEST_FILE,
 	EVIDENCE_QUOTA_BYTES,
 	EvidenceError,
 	evidenceDirectoryNames,
 	evidenceEntry,
-	evidenceFilePath,
 	evidenceId,
 	listEvidence,
+	openEvidenceFile,
 } from "../src/server/evidence/store.ts";
 import {
 	removeWorkflowEvidence,
@@ -297,9 +298,14 @@ describe("kind and content checks", () => {
 		});
 		expect(entry.file.endsWith(".jpg")).toBe(true);
 		expect(evidenceEntry(scope, entry.id)).toMatchObject({ id: entry.id });
-		const file = evidenceFilePath(scope, entry);
-		expect(file).toBe(path.join(scope.root, entry.file));
-		expect(fs.readFileSync(file ?? "")).toEqual(JPEG);
+		const opened = openEvidenceFile(scope, entry);
+		if (!opened) throw new Error("the stored file did not open");
+		try {
+			expect(fs.readFileSync(opened.fd)).toEqual(JPEG);
+		} finally {
+			fs.closeSync(opened.fd);
+		}
+		expect(fs.existsSync(path.join(scope.root, entry.file))).toBe(true);
 	});
 });
 
@@ -487,16 +493,17 @@ describe("evidence lifecycle", () => {
 		expect(workflowEvidencePresent({ workflowId: WORKFLOW_ID, worktree })).toBe(
 			true,
 		);
-		expect(removeWorkflowEvidence({ workflowId: WORKFLOW_ID, worktree })).toBe(
-			true,
-		);
+		expect(
+			await removeWorkflowEvidence({ workflowId: WORKFLOW_ID, worktree }),
+		).toBe(true);
 		expect(fs.existsSync(scope.root)).toBe(false);
 		expect(workflowEvidencePresent({ workflowId: WORKFLOW_ID, worktree })).toBe(
 			false,
 		);
-		expect(removeWorkflowEvidence({ workflowId: WORKFLOW_ID, worktree })).toBe(
-			false,
-		);
+		// A second delete is already clean.
+		expect(
+			await removeWorkflowEvidence({ workflowId: WORKFLOW_ID, worktree }),
+		).toBe(false);
 	});
 
 	test("a wiki workflow keeps its evidence in the shared data root", () => {
@@ -509,5 +516,146 @@ describe("evidence lifecycle", () => {
 			path.join("/tmp/wiki-worktree", ".herdr-workflow"),
 		);
 		expect(scope.root.endsWith(path.join("evidence", WORKFLOW_ID))).toBe(true);
+	});
+});
+
+describe("a read is bounded by the rules the store writes by", () => {
+	function manifestFile(scope: { root: string }): string {
+		return path.join(scope.root, EVIDENCE_MANIFEST_FILE);
+	}
+
+	test("a manifest written by another revision is refused, not reinterpreted", async () => {
+		const { scope, write } = fixture();
+		fs.mkdirSync(scope.root, { recursive: true });
+		fs.writeFileSync(
+			manifestFile(scope),
+			JSON.stringify({ version: 2, workflowId: WORKFLOW_ID, entries: [] }),
+		);
+
+		expect(() => listEvidence(scope)).toThrow(/version 2/);
+		// An attach cannot downgrade the marker: it refuses before it rewrites.
+		await expect(
+			attachEvidence(scope, {
+				path: write("shot.png", PNG),
+				kind: "screenshot",
+				caption: "new",
+			}),
+		).rejects.toMatchObject({ code: "evidence-manifest" });
+		expect(
+			JSON.parse(fs.readFileSync(manifestFile(scope), "utf8")).version,
+		).toBe(2);
+	});
+
+	test("a manifest without a version marker reads as the first layout", () => {
+		const { scope } = fixture();
+		const stored = {
+			id: "01JCAAAAAAAAAAAAAAAAAAAAAA",
+			kind: "screenshot",
+			file: "01JCAAAAAAAAAAAAAAAAAAAAAA.png",
+			caption: "legacy",
+			createdAt: "2026-01-01T00:00:00.000Z",
+		};
+		fs.mkdirSync(scope.root, { recursive: true });
+		fs.writeFileSync(
+			manifestFile(scope),
+			JSON.stringify({ workflowId: WORKFLOW_ID, entries: [stored] }),
+		);
+		expect(listEvidence(scope).entries.map((item) => item.id)).toEqual([
+			stored.id,
+		]);
+		expect(evidenceEntry(scope, stored.id)).toMatchObject({ id: stored.id });
+	});
+
+	test("a stored file replaced by a symlink is never opened", async () => {
+		const { scope, write } = fixture();
+		const stored = await attachEvidence(scope, {
+			path: write("shot.png", PNG),
+			kind: "screenshot",
+			caption: "swap",
+		});
+		const secret = write("secret.txt", Buffer.from("not evidence"));
+		const file = path.join(scope.root, stored.file);
+		fs.rmSync(file);
+		fs.symlinkSync(secret, file);
+
+		// The manifest still lists the entry; its file no longer opens through the
+		// store, so no reader can be handed the target's bytes.
+		expect(listEvidence(scope).entries).toHaveLength(1);
+		expect(openEvidenceFile(scope, stored)).toBeUndefined();
+	});
+
+	test("a delete that races an attach is not undone by it", async () => {
+		const { scope, worktree, write } = fixture();
+		// The attach takes the root's write lock first, so the delete runs after it:
+		// nothing the attach wrote survives the deletion.
+		const attaching = attachEvidence(scope, {
+			path: write("shot.png", PNG),
+			kind: "screenshot",
+			caption: "race",
+		});
+		const deleted = await removeWorkflowEvidence({
+			workflowId: WORKFLOW_ID,
+			worktree,
+		});
+		await attaching;
+
+		expect(deleted).toBe(true);
+		expect(fs.existsSync(scope.root)).toBe(false);
+	});
+
+	test("an attach whose workflow vanished refuses instead of recreating the root", async () => {
+		const { scope, write } = fixture();
+		await expect(
+			attachEvidence(scope, {
+				path: write("shot.png", PNG),
+				kind: "screenshot",
+				caption: "gone",
+				verify: () => {
+					throw new EvidenceError(
+						"evidence-missing",
+						"the workflow is gone",
+						404,
+					);
+				},
+			}),
+		).rejects.toMatchObject({ code: "evidence-missing", status: 404 });
+		expect(fs.existsSync(scope.root)).toBe(false);
+	});
+
+	test("a refused attach leaves no descriptor behind", async () => {
+		const { scope, write } = fixture();
+		const source = write("shot.png", PNG);
+		const descriptors = () => fs.readdirSync("/dev/fd").length;
+		/** Both refusals that sit between the source open and the copy: an
+		 * unnameable request id, and the in-lock re-check a delete wins. */
+		const refused = async () => {
+			await expect(
+				attachEvidence(scope, {
+					path: source,
+					kind: "screenshot",
+					caption: "bad id",
+					requestId: "fix login bug",
+				}),
+			).rejects.toMatchObject({ code: "evidence-path" });
+			await expect(
+				attachEvidence(scope, {
+					path: source,
+					kind: "screenshot",
+					caption: "gone",
+					verify: () => {
+						throw new EvidenceError(
+							"evidence-missing",
+							"the workflow is gone",
+							404,
+						);
+					},
+				}),
+			).rejects.toMatchObject({ code: "evidence-missing" });
+		};
+		// Warm up first, so the baseline is not one allocation behind.
+		await refused();
+		const before = descriptors();
+		for (let index = 0; index < 10; index++) await refused();
+		expect(descriptors()).toBeLessThanOrEqual(before + 1);
 	});
 });

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeKeybindCatalog } from "@ui";
+import { activeKeybindCatalog, activeKeybindContext } from "@ui";
 import { onCleanup } from "solid-js";
 import type { DashboardData } from "../../src/contracts/workflow";
 import { App } from "../../src/tui/dash/App.tsx";
@@ -108,6 +108,21 @@ async function expectClassifier(t: Test) {
 	expect(frame).not.toContain("Plan review");
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Classifier ·"));
+}
+
+// Evidence probe: it is the one panel whose Enter hands a file to the system
+// opener instead of opening a modal, so pressing Enter would spawn a real
+// opener. This suite renders no footer, so the keybind context the dashboard
+// publishes is what identifies the focused panel — and the always-rendered
+// panel shows its empty state for the demo fixture rather than a loading one.
+async function expectEvidence(t: Test) {
+	for (let pass = 0; pass < 20 && activeKeybindContext() !== "evidence"; pass++)
+		await t.renderOnce();
+	expect(activeKeybindContext()).toBe("evidence");
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Evidence");
+	expect(frame).toContain("No evidence attached yet");
+	expect(frame).not.toContain("Loading evidence…");
 }
 
 async function expectChange(t: Test) {
@@ -250,12 +265,22 @@ test("Shift+J/K move focus vertically with wrap at both edges", async () => {
 	await t.renderOnce();
 	await expectClassifier(t);
 
-	// Classifications → (Shift+J, bottom wraps to top) → Change.
+	// Classifications → (Shift+J) → Evidence, the full-width bottom row.
+	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
+
+	// Evidence → (Shift+J, bottom wraps to top) → Change.
 	t.mockInput.pressKey("j", { shift: true });
 	await t.renderOnce();
 	await expectChange(t);
 
-	// Change → (Shift+K, top wraps to bottom) → Classifications.
+	// Change → (Shift+K, top wraps to the bottom row) → Evidence.
+	t.mockInput.pressKey("k", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
+
+	// Evidence → (Shift+K) → Classifications, which is always rendered.
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
 	await expectClassifier(t);
@@ -319,38 +344,41 @@ test("Shift+J/K without artifacts skip the empty OpenSpec cell into Classificati
 	await t.renderOnce();
 	await expectClassifier(t);
 
-	// Classifications → (Shift+K) → Change; Change has no *distinct* upward
-	// neighbor either (the wrap reaches Classifications, not OpenSpec).
+	// Classifications → (Shift+K) → Change; Change's own upward move wraps to
+	// the bottom Evidence row rather than reaching the empty OpenSpec cell.
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
 	await expectChange(t);
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
-	await expectClassifier(t);
+	await expectEvidence(t);
 	t.mockInput.pressKey("j", { shift: true });
 	await t.renderOnce();
 	await expectChange(t);
 
-	// The spanning Agents column also has no distinct vertical neighbor:
-	// Shift+J/K leave it focused, so `v` still opens the selection's verdict.
+	// The spanning Agents column reaches that same row: Shift+J leaves it for
+	// Evidence — where `v` still opened the selection's verdict on the way
+	// (expectAgents probes the column before the move).
 	t.mockInput.pressKey("l", { shift: true });
 	await t.renderOnce();
 	await expectAgents(t);
 	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
+
+	// Evidence spans the whole row, so a horizontal move stays on it, and
+	// Shift+K climbs back to Classifications.
+	t.mockInput.pressKey("h", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
-	t.mockInput.pressKey("v");
-	const frame = await t.waitForFrame((value) =>
-		value.includes("VERDICT: PASS"),
-	);
-	expect(frame).toContain("security-verifier · demo");
-	t.mockInput.pressEscape();
-	await t.waitForFrame((frame) => !frame.includes("VERDICT"));
+	await expectClassifier(t);
 
 	t.renderer.destroy();
 });
 
-test("Shift+J/K on the spanning Agents column stay on Agents", async () => {
+test("the full-width Evidence row has no horizontal neighbour", async () => {
 	const t = await testRender(
 		() => <TestDashboard testData={artifactsFixture(5)} />,
 		{
@@ -360,22 +388,19 @@ test("Shift+J/K on the spanning Agents column stay on Agents", async () => {
 	);
 	await dashboardReady(t);
 
-	t.mockInput.pressKey("l", { shift: true });
-	await t.renderOnce();
-	await expectAgents(t);
-
-	// Agents → (Shift+J) and (Shift+K) have no distinct vertical neighbor
-	// (the right column is a single spanning panel): focus stays on Agents.
-	t.mockInput.pressKey("j", { shift: true });
+	// Change → (Shift+K, the top row wraps to the bottom) → Evidence.
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
-	t.mockInput.pressKey("v");
-	const frame = await t.waitForFrame((value) =>
-		value.includes("VERDICT: PASS"),
-	);
-	expect(frame).toContain("security-verifier · demo");
-	t.mockInput.pressEscape();
-	await t.waitForFrame((frame) => !frame.includes("VERDICT"));
+	await expectEvidence(t);
+
+	// The row spans both columns, so neither horizontal move has a distinct
+	// panel to land on: focus stays on Evidence.
+	t.mockInput.pressKey("l", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
+	t.mockInput.pressKey("h", { shift: true });
+	await t.renderOnce();
+	await expectEvidence(t);
 
 	t.renderer.destroy();
 });
@@ -499,7 +524,7 @@ test("detail view never renders a Current task panel or row", async () => {
 	const moves = [
 		["j", { shift: true }], // Change → OpenSpec
 		["l", { shift: true }], // OpenSpec → Agents
-		["k", { shift: true }], // Agents → (no vertical neighbor)
+		["k", { shift: true }], // Agents → Evidence (the bottom row)
 		["h", { shift: true }], // Agents → Change
 	] as const;
 	for (const [key, opts] of moves) {

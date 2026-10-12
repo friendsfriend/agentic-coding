@@ -3,6 +3,7 @@
 // running server — is pinned without a tmux client or a terminal.
 import { describe, expect, test } from "bun:test";
 import {
+	runSideApp,
 	sideAppMode,
 	tmuxWindowName,
 	viewWindowArgs,
@@ -78,4 +79,34 @@ describe("side app mode", () => {
 		expect(sideAppMode({ TMUX: "/tmp/tmux-1" }, false)).toBe("local");
 		expect(sideAppMode({}, true)).toBe("local");
 	});
+});
+
+describe("the launcher's outcome", () => {
+	// A real spawn is the only way to pin that a local launch reports its exit
+	// status and stderr at all; the caller's mapping of that status to a toast is
+	// covered in test/dash/evidenceOpen.test.ts. Inside a tmux client the launch
+	// is a window request instead, so these do not apply there.
+	test.skipIf(sideAppMode() === "tmux")(
+		"reports a non-zero exit status and the child's stderr",
+		async () => {
+			const outcome = await runSideApp({
+				command: process.execPath,
+				args: ["-e", "process.stderr.write('boom\\n'); process.exit(3)"],
+				cwd: process.cwd(),
+			});
+			expect(outcome).toEqual({ mode: "local", status: 3, stderr: "boom\n" });
+		},
+	);
+
+	test.skipIf(sideAppMode() === "tmux")(
+		"reports a clean exit as status 0",
+		async () => {
+			const outcome = await runSideApp({
+				command: process.execPath,
+				args: ["-e", "process.exit(0)"],
+				cwd: process.cwd(),
+			});
+			expect(outcome).toEqual({ mode: "local", status: 0, stderr: "" });
+		},
+	);
 });

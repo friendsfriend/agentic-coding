@@ -172,6 +172,12 @@ export class DataCache {
 			this.invalidate(`artifacts:${event.resource}`);
 			this.invalidate(`wiki:${event.resource}`);
 			this.invalidate(`git:${event.resource}`);
+			// Evidence is attached while a run works, so any event on the workflow
+			// may have brought new entries: the manifest is dropped and re-read. The
+			// entry bytes live in their own `evidence-file:` family instead, because a
+			// stored file is immutable once written — only a full invalidation drops
+			// them.
+			this.invalidate(`evidence:${event.resource}`);
 			return;
 		}
 		if (event.domain === "telemetry") {

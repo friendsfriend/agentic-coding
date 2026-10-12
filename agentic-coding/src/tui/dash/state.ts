@@ -43,11 +43,15 @@ export interface PanelState {
 	readonly setArtifact: Setter<number>;
 	readonly decision: () => number;
 	readonly setDecision: Setter<number>;
+	/** Selection of the Evidence panel's entry list. */
+	readonly evidence: () => number;
+	readonly setEvidence: Setter<number>;
 	/** Clamp every selection to the current list lengths. */
 	readonly clamp: (counts: {
 		agents: number;
 		artifacts: number;
 		classifications: number;
+		evidence: number;
 	}) => void;
 }
 
@@ -57,6 +61,7 @@ export function createPanelState(): PanelState {
 	const [artifacts, setArtifactsSignal] = createSignal<string[]>([]);
 	const [artifact, setArtifactSignal] = createSignal(0);
 	const [decision, setDecisionSignal] = createSignal(0);
+	const [evidence, setEvidenceSignal] = createSignal(0);
 	const clampIndex = (value: number, length: number) =>
 		Math.max(0, Math.min(value, Math.max(0, length - 1)));
 	return {
@@ -70,10 +75,18 @@ export function createPanelState(): PanelState {
 		setArtifact: setArtifactSignal,
 		decision,
 		setDecision: setDecisionSignal,
-		clamp: ({ agents, artifacts: artifactCount, classifications }) => {
+		evidence,
+		setEvidence: setEvidenceSignal,
+		clamp: ({
+			agents,
+			artifacts: artifactCount,
+			classifications,
+			evidence: evidenceCount,
+		}) => {
 			setAgentSignal((index) => clampIndex(index, agents));
 			setArtifactSignal((index) => clampIndex(index, artifactCount));
 			setDecisionSignal((index) => clampIndex(index, classifications));
+			setEvidenceSignal((index) => clampIndex(index, evidenceCount));
 			// Only a *hidden* panel bounces focus away. Classifications is always
 			// rendered (its empty state is the panel), so it stays focusable with
 			// zero decisions.

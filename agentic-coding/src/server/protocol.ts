@@ -56,6 +56,12 @@ export const AGENT_TEST_PATH = `${AGENT_ENVIRONMENT_PREFIX}test`;
 export const AGENT_EVIDENCE_ATTACH_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence/attach`;
 export const AGENT_EVIDENCE_LIST_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence`;
 
+/** The dashboard's evidence file read, under the instance capability: the
+ * recorded bytes of one manifest entry, addressed by workflow and entry id.
+ * Declared here with the rest of the transport manifest, so the client and the
+ * route can never drift apart. */
+export const EVIDENCE_FILE_PREFIX = "/api/v1/evidence/";
+
 /** Bounded request body (a single observation/diff can be a few MiB). */
 export const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 /** Bounded textual path/argument length accepted from a client. */

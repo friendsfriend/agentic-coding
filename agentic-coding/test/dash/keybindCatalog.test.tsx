@@ -15,6 +15,7 @@ import {
 	panelContext,
 	workflowLaunchKeybindCatalog,
 } from "../../src/tui/dash/keybinds.ts";
+import { EVIDENCE_PANEL } from "../../src/tui/dash/panel-grid.ts";
 
 describe("keybind catalog contract", () => {
 	it("hides standard keys from footers but keeps them in the catalog", () => {
@@ -68,6 +69,23 @@ describe("keybind catalog contract", () => {
 		expect(agents).not.toContain("Approve gate / review changed files");
 	});
 
+	it("scopes the Evidence panel's actions to the evidence context", () => {
+		// The panel is always rendered (empty state included), so `Enter` and `y`
+		// are always in the catalog and always context-scoped.
+		const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: false });
+		expect(catalogKeybinds(catalog).map((keybind) => keybind.action)).toContain(
+			"Open evidence externally",
+		);
+		const evidence = footerKeybinds(catalog, "evidence").map(
+			(keybind) => keybind.action,
+		);
+		expect(evidence).toContain("Open evidence externally");
+		expect(evidence).toContain("Copy evidence path");
+		expect(
+			footerKeybinds(catalog, "change").map((keybind) => keybind.action),
+		).not.toContain("Open evidence externally");
+	});
+
 	it("publishes the session's keys while the agent page replaces the grid", () => {
 		const catalog = agentSessionKeybindCatalog();
 		const all = catalogKeybinds(catalog);
@@ -100,6 +118,7 @@ describe("keybind catalog contract", () => {
 		expect(panelContext(1)).toBe("agents");
 		expect(panelContext(6)).toBe("openspec");
 		expect(panelContext(7)).toBe("classifier");
+		expect(panelContext(EVIDENCE_PANEL)).toBe("evidence");
 	});
 
 	it("always scopes the Classifications section to its panel", () => {

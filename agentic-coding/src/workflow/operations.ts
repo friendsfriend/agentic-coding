@@ -234,8 +234,10 @@ export async function deleteWorkflow(
 	// The workflow's evidence goes with it, in the same delete: a repository-mode
 	// workflow keeps its checkout directory, so nothing else would ever remove
 	// `evidence/<workflowId>`. Best-effort — a directory that cannot be removed
-	// must not report the deletion as failed.
-	removeWorkflowEvidence({
+	// must not report the deletion as failed — and awaited, because the deletion
+	// takes the evidence root's write lock so an attach in flight cannot recreate
+	// what it removed.
+	await removeWorkflowEvidence({
 		workflowId,
 		worktree: view.worktree,
 		definitionId: view.definition.id,

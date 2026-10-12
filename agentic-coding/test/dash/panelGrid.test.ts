@@ -3,6 +3,7 @@ import {
 	AGENTS_PANEL,
 	CHANGE_PANEL,
 	CLASSIFIER_PANEL,
+	EVIDENCE_PANEL,
 	movePanel,
 	OPENSPEC_PANEL,
 	type PanelDirection,
@@ -11,27 +12,35 @@ import {
 
 type Row = Record<PanelDirection, PanelId>;
 
-/** Transition tables from the design: design.md → section `### 2.`, with the
- * Classifications cell always occupied (its empty state is the panel) and only
- * the OpenSpec cell conditional. */
+/** Transition tables from the grid the detail view renders: a 2×4 occupancy
+ * grid with Classifications, Evidence and the spanning Agents column always
+ * occupied and only the OpenSpec cell conditional. The Evidence panel spans the
+ * whole bottom row, so its own horizontal moves have no distinct panel to land
+ * on. */
 const WITHOUT_ARTIFACTS: Record<PanelId, Row> = {
 	[CHANGE_PANEL]: {
 		down: CLASSIFIER_PANEL,
-		up: CLASSIFIER_PANEL,
+		up: EVIDENCE_PANEL,
 		left: AGENTS_PANEL,
 		right: AGENTS_PANEL,
 	},
 	[CLASSIFIER_PANEL]: {
-		down: CHANGE_PANEL,
+		down: EVIDENCE_PANEL,
 		up: CHANGE_PANEL,
 		left: AGENTS_PANEL,
 		right: AGENTS_PANEL,
 	},
 	[AGENTS_PANEL]: {
-		down: AGENTS_PANEL,
-		up: AGENTS_PANEL,
+		down: EVIDENCE_PANEL,
+		up: EVIDENCE_PANEL,
 		left: CHANGE_PANEL,
 		right: CHANGE_PANEL,
+	},
+	[EVIDENCE_PANEL]: {
+		down: CHANGE_PANEL,
+		up: CLASSIFIER_PANEL,
+		left: EVIDENCE_PANEL,
+		right: EVIDENCE_PANEL,
 	},
 };
 
@@ -41,7 +50,7 @@ describe("movePanel with open-spec artifacts listed", () => {
 	const table: Record<PanelId, Row> = {
 		[CHANGE_PANEL]: {
 			down: OPENSPEC_PANEL,
-			up: CLASSIFIER_PANEL,
+			up: EVIDENCE_PANEL,
 			left: AGENTS_PANEL,
 			right: AGENTS_PANEL,
 		},
@@ -52,16 +61,22 @@ describe("movePanel with open-spec artifacts listed", () => {
 			right: AGENTS_PANEL,
 		},
 		[CLASSIFIER_PANEL]: {
-			down: CHANGE_PANEL,
+			down: EVIDENCE_PANEL,
 			up: OPENSPEC_PANEL,
 			left: AGENTS_PANEL,
 			right: AGENTS_PANEL,
 		},
 		[AGENTS_PANEL]: {
-			down: AGENTS_PANEL,
-			up: AGENTS_PANEL,
+			down: EVIDENCE_PANEL,
+			up: EVIDENCE_PANEL,
 			left: CHANGE_PANEL,
 			right: CHANGE_PANEL,
+		},
+		[EVIDENCE_PANEL]: {
+			down: CHANGE_PANEL,
+			up: CLASSIFIER_PANEL,
+			left: EVIDENCE_PANEL,
+			right: EVIDENCE_PANEL,
 		},
 	};
 	for (const [from, moves] of Object.entries(table)) {
@@ -88,7 +103,8 @@ describe("movePanel without open-spec artifacts", () => {
 });
 
 describe("movePanel stale focus on a hidden panel", () => {
-	// Only OpenSpec can be hidden; Classifications is rendered everywhere.
+	// Only OpenSpec can be hidden; Classifications and Evidence are rendered
+	// everywhere.
 	test("OpenSpec loses a panel while focused: any move lands on a rendered panel", () => {
 		expect(movePanel(OPENSPEC_PANEL, "down", { artifactsVisible: false })).toBe(
 			CLASSIFIER_PANEL,

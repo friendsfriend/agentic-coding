@@ -48,7 +48,7 @@ import {
 	workflowViewSchema,
 } from "../contracts/workflow.ts";
 import { instanceTokenFileForUrl, readInstanceTokenFile } from "./auth.ts";
-import { SERVER_API_VERSION } from "./protocol.ts";
+import { EVIDENCE_FILE_PREFIX, SERVER_API_VERSION } from "./protocol.ts";
 
 export interface BackendClientConfig {
 	readonly baseUrl: string;
@@ -236,6 +236,45 @@ export class BackendClient implements DashboardGateway {
 				signal,
 			),
 		);
+	}
+
+	/** One evidence file's raw bytes. Unlike every other read this one is not a
+	 * JSON envelope: the route streams the stored file itself under the instance
+	 * capability, so the body is decoded from the response rather than from the
+	 * wire envelope. A `404` is `undefined` (the entry or its file is gone); any
+	 * other failure is the transport's error. */
+	async evidenceFile(
+		workflowId: string,
+		id: string,
+		signal?: AbortSignal,
+	): Promise<Uint8Array | undefined> {
+		const path = `${EVIDENCE_FILE_PREFIX}${encodeURIComponent(workflowId)}/${encodeURIComponent(id)}`;
+		const token = this.authToken();
+		const send = (authorization: string) =>
+			fetch(`${this.baseUrl}${path}`, {
+				headers: this.headers(false, authorization),
+				...(signal ? { signal } : {}),
+			});
+		let response: Response;
+		try {
+			response = await send(token);
+			// The same stale-token retry `request` performs: a loopback server that
+			// restarted may not publish the local token file yet.
+			if (response.status === 401 && token !== this.token)
+				response = await send(this.token);
+		} catch (error) {
+			if (signal?.aborted)
+				throw new DOMException("operation cancelled", "AbortError");
+			throw error;
+		}
+		if (response.status === 404) return undefined;
+		if (!response.ok)
+			throw new BackendClientError(
+				response.status,
+				"evidence-file",
+				`backend refused the evidence file (${response.status})`,
+			);
+		return new Uint8Array(await response.arrayBuffer());
 	}
 
 	async view(

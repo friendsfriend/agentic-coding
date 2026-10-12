@@ -15,8 +15,10 @@ import {
 	EVIDENCE_AGENT_LIST_PATH,
 	handleEvidenceFileRoute,
 	handleEvidenceRoute,
+	readEvidenceBytes,
 } from "../src/server/evidence/routes.ts";
 import { decodeRouteRequest } from "../src/server/protocol.ts";
+import { workflowEvidenceScope } from "../src/workflow/runtime/evidence-store.ts";
 
 const WORKFLOW_ID = "wf-alpha";
 const OWNER = `workflow:${WORKFLOW_ID}`;
@@ -196,6 +198,127 @@ describe("the evidence file route", () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toBe("image/png");
 		expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG);
+	});
+
+	test("the in-process dashboard read answers the same bytes as the file route", async () => {
+		const { worktree } = fixture();
+		const source = path.join(worktree, "shot.png");
+		fs.writeFileSync(source, PNG);
+		const deps = { locate: locateFor(worktree) };
+		const attached = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{ body: { path: source, kind: "screenshot", caption: "shot" } },
+		);
+		const entry = attached.body.value as { id: string };
+
+		expect(await readEvidenceBytes(WORKFLOW_ID, entry.id, deps)).toEqual(
+			new Uint8Array(PNG),
+		);
+		// An unknown entry, an unknown workflow and a workflow with no evidence
+		// directory are all `undefined`: nothing to render is an answer.
+		expect(
+			await readEvidenceBytes(WORKFLOW_ID, "01JCAAAAAAAAAAAAAAAAAAAAAA", deps),
+		).toBeUndefined();
+		expect(await readEvidenceBytes("wf-other", entry.id, deps)).toBeUndefined();
+	});
+
+	test("an attach is refused once the workflow's workspace was cleaned", async () => {
+		const { worktree } = fixture();
+		const source = path.join(worktree, "shot.png");
+		fs.writeFileSync(source, PNG);
+		// The close order: `workspace.cleanup` removed the evidence directory while
+		// the workflow record stayed, so locating it still answers — but a closed
+		// workflow may not receive new evidence.
+		const deps = {
+			locate: (workflowId: string) =>
+				workflowId === WORKFLOW_ID
+					? { workflowId, worktree, status: "closed" as const }
+					: undefined,
+		};
+		const refused = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{ body: { path: source, kind: "screenshot", caption: "late" } },
+		);
+
+		expect(refused.status).toBe(409);
+		expect((refused.body.error as { code: string }).code).toBe(
+			"evidence-missing",
+		);
+		expect(
+			fs.existsSync(
+				workflowEvidenceScope({ workflowId: WORKFLOW_ID, worktree }).root,
+			),
+		).toBe(false);
+	});
+
+	test("a stored file removed before the read is missing, not an empty body", async () => {
+		const { worktree } = fixture();
+		const source = path.join(worktree, "shot.png");
+		fs.writeFileSync(source, PNG);
+		const deps = { locate: locateFor(worktree) };
+		const attached = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{ body: { path: source, kind: "screenshot", caption: "gone" } },
+		);
+		const entry = attached.body.value as { id: string; file: string };
+		fs.rmSync(
+			path.join(
+				workflowEvidenceScope({ workflowId: WORKFLOW_ID, worktree }).root,
+				entry.file,
+			),
+		);
+
+		const url = `http://127.0.0.1:4050/api/v1/evidence/${WORKFLOW_ID}/${entry.id}`;
+		const response = await handleEvidenceFileRoute(
+			deps,
+			new Request(url),
+			new URL(url),
+		);
+		// A gone file is a 404 the client maps to `undefined`, never a 200 with an
+		// empty body that would be cached as an image.
+		expect(response.status).toBe(404);
+		expect(
+			await readEvidenceBytes(WORKFLOW_ID, entry.id, deps),
+		).toBeUndefined();
+	});
+
+	test("a stored file swapped for a symlink is refused, not followed", async () => {
+		const { worktree } = fixture();
+		const source = path.join(worktree, "shot.png");
+		fs.writeFileSync(source, PNG);
+		const deps = { locate: locateFor(worktree) };
+		const attached = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{ body: { path: source, kind: "screenshot", caption: "swap" } },
+		);
+		const entry = attached.body.value as { id: string; file: string };
+		const secret = path.join(worktree, "secret.txt");
+		fs.writeFileSync(secret, "not evidence");
+		const stored = path.join(
+			workflowEvidenceScope({ workflowId: WORKFLOW_ID, worktree }).root,
+			entry.file,
+		);
+		fs.rmSync(stored);
+		fs.symlinkSync(secret, stored);
+
+		const url = `http://127.0.0.1:4050/api/v1/evidence/${WORKFLOW_ID}/${entry.id}`;
+		const response = await handleEvidenceFileRoute(
+			deps,
+			new Request(url),
+			new URL(url),
+		);
+		expect(response.status).toBe(404);
+		expect(
+			await readEvidenceBytes(WORKFLOW_ID, entry.id, deps),
+		).toBeUndefined();
 	});
 
 	test("an unknown id is not found, and a traversing id never reaches the disk", async () => {

@@ -23,7 +23,13 @@ import type {
 	EvidenceKind,
 	EvidenceManifest,
 } from "../../contracts/environment.ts";
-import type { WorkflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts";
+import {
+	EVIDENCE_REQUEST_PREFIX,
+	evidenceFileAt,
+	isPlainEvidenceName,
+	type WorkflowEvidenceScope,
+	withEvidenceRootLock,
+} from "../../workflow/runtime/evidence-store.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -326,7 +332,7 @@ export function evidenceRequestDirectory(requestId: string): string {
 			"evidence-path",
 			`requestId must be 1-64 letters, digits, dots, dashes or underscores`,
 		);
-	return `req-${requestId}`;
+	return `${EVIDENCE_REQUEST_PREFIX}${requestId}`;
 }
 
 /** Whether one absolute, already-resolved source path is inside a root. */
@@ -344,19 +350,12 @@ function requireRelativeEvidenceFile(file: string): string {
 			`manifest entry names a nested evidence file: ${JSON.stringify(file)}`,
 			500,
 		);
-	for (const component of components)
-		if (
-			component === "" ||
-			component === "." ||
-			component === ".." ||
-			component.includes("/") ||
-			component.includes("\\")
-		)
-			throw new EvidenceError(
-				"evidence-manifest",
-				`manifest entry names an unsafe evidence file: ${JSON.stringify(file)}`,
-				500,
-			);
+	if (!components.every(isPlainEvidenceName))
+		throw new EvidenceError(
+			"evidence-manifest",
+			`manifest entry names an unsafe evidence file: ${JSON.stringify(file)}`,
+			500,
+		);
 	return components.join("/");
 }
 
@@ -364,17 +363,17 @@ function requireRelativeEvidenceFile(file: string): string {
 // Manifest
 // ---------------------------------------------------------------------------
 
+/** Version of the on-disk manifest this build reads. An unknown version is
+ * refused rather than reinterpreted, so a manifest written by a newer layout is
+ * reported as unreadable instead of being served as if it were this one — and an
+ * attach can never downgrade its marker, because reading it refuses first. */
+export const EVIDENCE_MANIFEST_VERSION = 1;
+
 interface StoredManifest {
-	readonly version: 1;
+	readonly version: typeof EVIDENCE_MANIFEST_VERSION;
 	readonly workflowId: string;
 	readonly entries: EvidenceEntry[];
 }
-
-const EMPTY_MANIFEST = (workflowId: string): StoredManifest => ({
-	version: 1,
-	workflowId,
-	entries: [],
-});
 
 function requireEntry(value: unknown, workflowId: string): EvidenceEntry {
 	if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -401,16 +400,16 @@ function requireEntry(value: unknown, workflowId: string): EvidenceEntry {
 	return entry as unknown as EvidenceEntry;
 }
 
-function readManifest(
+function readManifestRecord(
 	directory: number,
 	scope: WorkflowEvidenceScope,
-): StoredManifest {
+): { readonly entries: readonly unknown[] } {
 	let fd: number | undefined;
 	try {
 		fd = openSecureFile(directory, EVIDENCE_MANIFEST_FILE);
 	} catch {
 		// No manifest yet: the workflow simply has no evidence.
-		return EMPTY_MANIFEST(scope.workflowId);
+		return { entries: [] };
 	}
 	try {
 		const stat = fs.fstatSync(fd);
@@ -428,6 +427,16 @@ function readManifest(
 				500,
 			);
 		const record = parsed as Record<string, unknown>;
+		// A manifest written before the marker existed is the first layout, so
+		// reading it as version 1 is exact rather than a guess.
+		const version =
+			record.version === undefined ? EVIDENCE_MANIFEST_VERSION : record.version;
+		if (version !== EVIDENCE_MANIFEST_VERSION)
+			throw new EvidenceError(
+				"evidence-manifest",
+				`the evidence manifest of ${scope.workflowId} is version ${JSON.stringify(record.version)}; this build reads version ${EVIDENCE_MANIFEST_VERSION}`,
+				500,
+			);
 		if (!Array.isArray(record.entries))
 			throw new EvidenceError(
 				"evidence-manifest",
@@ -440,13 +449,7 @@ function readManifest(
 				`the evidence manifest of ${scope.workflowId} holds more than ${MAX_MANIFEST_ENTRIES} entries`,
 				500,
 			);
-		return {
-			version: 1,
-			workflowId: scope.workflowId,
-			entries: record.entries.map((entry) =>
-				requireEntry(entry, scope.workflowId),
-			),
-		};
+		return { entries: record.entries };
 	} catch (error) {
 		if (error instanceof EvidenceError) throw error;
 		throw new EvidenceError(
@@ -459,6 +462,20 @@ function readManifest(
 	} finally {
 		fs.closeSync(fd);
 	}
+}
+
+function readManifest(
+	directory: number,
+	scope: WorkflowEvidenceScope,
+): StoredManifest {
+	const record = readManifestRecord(directory, scope);
+	return {
+		version: EVIDENCE_MANIFEST_VERSION,
+		workflowId: scope.workflowId,
+		entries: record.entries.map((entry) =>
+			requireEntry(entry, scope.workflowId),
+		),
+	};
 }
 
 function writeManifest(directory: number, manifest: StoredManifest): void {
@@ -486,27 +503,10 @@ function openEvidenceDirectory(
 }
 
 // One attach at a time per evidence root: read-modify-write of the manifest is
-// only safe while one writer holds the directory. The lock is in-process
-// because the store is only reached through the one server process (and the
-// engine that deletes a workflow's evidence whole, which needs no manifest).
-const manifestLocks = new Map<string, Promise<void>>();
-
-function withManifestLock<T>(
-	key: string,
-	run: () => T | Promise<T>,
-): Promise<T> {
-	const previous = manifestLocks.get(key) ?? Promise.resolve();
-	const result = previous.then(run, run);
-	const chained = result.then(
-		() => undefined,
-		() => undefined,
-	);
-	manifestLocks.set(key, chained);
-	void chained.then(() => {
-		if (manifestLocks.get(key) === chained) manifestLocks.delete(key);
-	});
-	return result;
-}
+// only safe while one writer holds the directory. The lock itself lives with the
+// root derivation (`withEvidenceRootLock`), because the workflow's deletion is a
+// writer of the same root and an attach that ran after it would recreate what it
+// removed.
 
 // ---------------------------------------------------------------------------
 // Attach
@@ -529,6 +529,11 @@ export interface EvidenceAttachRequest {
 	readonly now?: () => Date;
 	/** Test seam: the randomness the ULID is filled with. */
 	readonly random?: () => Uint8Array;
+	/** Re-check the precondition the caller verified before it awaited its own
+	 * request body. Runs inside the root lock, so a workflow deleted while that
+	 * body was being read refuses the attach instead of recreating its evidence
+	 * root after the deletion. */
+	readonly verify?: () => void;
 }
 
 interface SourceFile {
@@ -684,80 +689,101 @@ export async function attachEvidence(
 	scope: WorkflowEvidenceScope,
 	input: EvidenceAttachRequest,
 ): Promise<EvidenceEntry> {
-	const source = openSource(scope, input);
+	// The request directory is a pure derivation, so it is computed before the
+	// source is opened: nothing that can refuse an attach may sit between the open
+	// and the try that owns the descriptor.
 	const requestDirectory =
 		input.requestId === undefined
 			? undefined
 			: evidenceRequestDirectory(input.requestId);
-	return await withManifestLock(scope.root, async () => {
-		let root: number | undefined;
-		let directory: number | undefined;
-		try {
-			root = openEvidenceDirectory(scope, true);
-			// One owned descriptor either way: the root itself, or the request
-			// subdirectory opened through it without following a component.
-			directory =
-				requestDirectory === undefined
-					? openSecureDirectoryRelative(root, ".", false)
-					: openSecureDirectoryRelative(root, requestDirectory, true);
-			// The manifest is one file per workflow, at the root, whether the
-			// bytes land beside it or in a debug request's subdirectory: a reader
-			// asking for the request's entries must not need a second manifest.
-			const manifest = readManifest(root, scope);
-			if (manifest.entries.length >= MAX_MANIFEST_ENTRIES)
-				throw new EvidenceError(
-					"evidence-quota",
-					`${scope.workflowId} already holds the maximum of ${MAX_MANIFEST_ENTRIES} evidence entries; nothing was evicted to make room`,
-					409,
+	const source = openSource(scope, input);
+	// One owner for the source descriptor: every exit from here — including the
+	// refusals that will keep growing — closes it exactly once.
+	let sourceClosed = false;
+	const closeSource = () => {
+		if (sourceClosed) return;
+		sourceClosed = true;
+		fs.closeSync(source.fd);
+	};
+	try {
+		return await withEvidenceRootLock(scope.root, async () => {
+			let root: number | undefined;
+			let directory: number | undefined;
+			try {
+				// The caller verified the workflow exists before its own await;
+				// re-running that check under the lock is what keeps a deleted
+				// workflow's evidence deleted (a delete holds the same lock).
+				input.verify?.();
+				root = openEvidenceDirectory(scope, true);
+				// One owned descriptor either way: the root itself, or the request
+				// subdirectory opened through it without following a component.
+				directory =
+					requestDirectory === undefined
+						? openSecureDirectoryRelative(root, ".", false)
+						: openSecureDirectoryRelative(root, requestDirectory, true);
+				// The manifest is one file per workflow, at the root, whether the
+				// bytes land beside it or in a debug request's subdirectory: a reader
+				// asking for the request's entries must not need a second manifest.
+				const manifest = readManifest(root, scope);
+				if (manifest.entries.length >= MAX_MANIFEST_ENTRIES)
+					throw new EvidenceError(
+						"evidence-quota",
+						`${scope.workflowId} already holds the maximum of ${MAX_MANIFEST_ENTRIES} evidence entries; nothing was evicted to make room`,
+						409,
+					);
+				const recorded = recordedBytes(manifest.entries);
+				if (recorded + source.size > EVIDENCE_QUOTA_BYTES)
+					throw new EvidenceError(
+						"evidence-quota",
+						`${scope.workflowId} has ${recorded} of ${EVIDENCE_QUOTA_BYTES} evidence bytes recorded; ${source.size} more would exceed the cap`,
+						409,
+					);
+				const at = input.now?.() ?? new Date();
+				const id = evidenceId(at.getTime(), input.random?.());
+				const name = `${id}.${source.extension}`;
+				const relative =
+					requestDirectory === undefined ? name : `${requestDirectory}/${name}`;
+				copyIn(
+					source.fd,
+					source.size,
+					directory,
+					name,
+					evidenceFileAt(scope.root, relative),
 				);
-			const recorded = recordedBytes(manifest.entries);
-			if (recorded + source.size > EVIDENCE_QUOTA_BYTES)
-				throw new EvidenceError(
-					"evidence-quota",
-					`${scope.workflowId} has ${recorded} of ${EVIDENCE_QUOTA_BYTES} evidence bytes recorded; ${source.size} more would exceed the cap`,
-					409,
+				const entry: EvidenceEntry = {
+					id,
+					kind: input.kind,
+					file: relative,
+					caption: input.caption,
+					createdAt: at.toISOString(),
+					...(input.step ? { step: input.step } : {}),
+					...(input.role ? { role: input.role } : {}),
+					...(input.app ? { app: input.app } : {}),
+					...(input.url ? { url: input.url } : {}),
+					...(input.poster ? { poster: input.poster } : {}),
+					bytes: source.size,
+					...(input.pinned ? { pinned: true } : {}),
+				};
+				const entries = [...manifest.entries, entry].sort((left, right) =>
+					left.id.localeCompare(right.id),
 				);
-			const at = input.now?.() ?? new Date();
-			const id = evidenceId(at.getTime(), input.random?.());
-			const name = `${id}.${source.extension}`;
-			const relative =
-				requestDirectory === undefined ? name : `${requestDirectory}/${name}`;
-			copyIn(
-				source.fd,
-				source.size,
-				directory,
-				name,
-				path.join(scope.root, relative),
-			);
-			const entry: EvidenceEntry = {
-				id,
-				kind: input.kind,
-				file: relative,
-				caption: input.caption,
-				createdAt: at.toISOString(),
-				...(input.step ? { step: input.step } : {}),
-				...(input.role ? { role: input.role } : {}),
-				...(input.app ? { app: input.app } : {}),
-				...(input.url ? { url: input.url } : {}),
-				...(input.poster ? { poster: input.poster } : {}),
-				bytes: source.size,
-				...(input.pinned ? { pinned: true } : {}),
-			};
-			const entries = [...manifest.entries, entry].sort((left, right) =>
-				left.id.localeCompare(right.id),
-			);
-			writeManifest(root, {
-				version: 1,
-				workflowId: scope.workflowId,
-				entries,
-			});
-			return entry;
-		} finally {
-			if (directory !== undefined) closeSecureDirectory(directory);
-			if (root !== undefined) closeSecureDirectory(root);
-			fs.closeSync(source.fd);
-		}
-	});
+				writeManifest(root, {
+					version: EVIDENCE_MANIFEST_VERSION,
+					workflowId: scope.workflowId,
+					entries,
+				});
+				return entry;
+			} finally {
+				if (directory !== undefined) closeSecureDirectory(directory);
+				if (root !== undefined) closeSecureDirectory(root);
+				closeSource();
+			}
+		});
+	} finally {
+		// The refusals above (and any future one) leave through this: the source
+		// descriptor is opened once and closed once.
+		closeSource();
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -813,21 +839,54 @@ export function listEvidence(
 	}
 }
 
-/** One recorded entry, by id. */
+/** One recorded entry, by id. Only the entry that matched is validated, so a
+ * per-file read costs one manifest parse rather than a validation pass over
+ * every entry the workflow holds. */
 export function evidenceEntry(
 	scope: WorkflowEvidenceScope,
 	id: string,
 ): EvidenceEntry | undefined {
 	if (!/^[A-Za-z0-9]{26}$/.test(id)) return undefined;
-	return listEvidence(scope).entries.find((entry) => entry.id === id);
+	let directory: number | undefined;
+	try {
+		directory = openEvidenceDirectory(scope, false);
+	} catch {
+		return undefined;
+	}
+	try {
+		const record = readManifestRecord(directory, scope);
+		const found = record.entries.find(
+			(candidate) =>
+				candidate !== null &&
+				typeof candidate === "object" &&
+				(candidate as { id?: unknown }).id === id,
+		);
+		return found === undefined
+			? undefined
+			: requireEntry(found, scope.workflowId);
+	} finally {
+		closeSecureDirectory(directory);
+	}
 }
 
-/** The absolute path of a recorded entry, verified to be a regular file inside
- * the workflow's evidence directory. The caller serves (or reads) that path. */
-export function evidenceFilePath(
+/** One stored evidence file, opened and verified. */
+export interface OpenedEvidenceFile {
+	/** The verified descriptor: read it, then close it. */
+	readonly fd: number;
+	readonly size: number;
+}
+
+/**
+ * Open one recorded entry's file for reading: every component of the path is
+ * opened without following a symlink, and `fstat` confirms a regular file. The
+ * caller reads the returned descriptor and closes it — the name is never
+ * re-opened, so a file swapped for a symlink after this check cannot be served
+ * through the store's readers.
+ */
+export function openEvidenceFile(
 	scope: WorkflowEvidenceScope,
 	entry: EvidenceEntry,
-): string | undefined {
+): OpenedEvidenceFile | undefined {
 	const relative = requireRelativeEvidenceFile(entry.file);
 	const components = relative.split("/");
 	const name = components[components.length - 1] as string;
@@ -848,7 +907,10 @@ export function evidenceFilePath(
 		fd = openSecureFile(directory, name);
 		const stat = fs.fstatSync(fd);
 		if (!stat.isFile()) return undefined;
-		return path.join(scope.root, relative);
+		const opened: OpenedEvidenceFile = { fd, size: stat.size };
+		// The caller owns the descriptor now; the `finally` must not close it.
+		fd = undefined;
+		return opened;
 	} catch {
 		return undefined;
 	} finally {

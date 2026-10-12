@@ -41,6 +41,7 @@ describe("dashboard data layer", () => {
 		expect(files.map((f) => relative(DATA, f)).sort()).toEqual([
 			"agents.ts",
 			"events.ts",
+			"evidence.ts",
 			"git.ts",
 			"index.ts",
 			"review.ts",

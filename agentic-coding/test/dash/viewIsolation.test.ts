@@ -177,7 +177,9 @@ describe("the dashboard route is a coordinator", () => {
 		const inline = [
 			...source.matchAll(/const \[([A-Za-z]+), set[A-Za-z]+\] = createSignal/g),
 		].map((m) => m[1]);
-		// only the route's own loading/credential state remains inline
+		// the route's own loading/credential state, the dashboard observation, the
+		// evidence manifest with the preview bytes it renders, and the renderer's
+		// kitty capability read into a signal
 		for (const name of inline)
 			expect([
 				"busy",
@@ -187,6 +189,11 @@ describe("the dashboard route is a coordinator", () => {
 				"reviewFinishingMessage",
 				"credentialInput",
 				"userActionOpen",
+				"evidence",
+				"evidencePreview",
+				"evidenceState",
+				"evidenceError",
+				"kittyGraphics",
 			]).toContain(name);
 	});
 });

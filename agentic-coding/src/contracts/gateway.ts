@@ -119,6 +119,16 @@ export interface DashboardGateway {
 		schema: Schema.Schema<any, any, never>,
 		signal?: AbortSignal,
 	): Promise<T>;
+	/** One evidence entry's recorded bytes — a screenshot, or the poster
+	 * screenshot of a video — as the local dashboard renders them. `undefined`
+	 * when the workflow is unknown or the file is gone: a missing image is an
+	 * answer, not a failure. */
+	evidenceFile(
+		workflowId: string,
+		id: string,
+		signal?: AbortSignal,
+	): Promise<Uint8Array | undefined>;
+
 	loadAgents(repository?: string): Promise<AgentsListResponse>;
 	/** Classifier provider selection plus local-model status (server-owned). The
 	 * repository scopes the read exactly like `loadAgents`, so a project-scoped
