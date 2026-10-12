@@ -184,9 +184,13 @@ import {
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
+	SIDEBAR_ORCHESTRATOR_PIN,
 	type SidebarFilter,
 	type SidebarMode,
+	sidebarCursorCount,
+	sidebarCursorForWorkflow,
 	sidebarIndexFor,
+	sidebarWorkflowIndex,
 	toggleSidebarMode,
 	workflowDisplayName,
 } from "./sidebar-model.ts";
@@ -429,6 +433,20 @@ export function App(props: {
 	/** Workflow dashboard target of the current route, when it is one. */
 	const workflow = () => workflowTarget(pages.current());
 	const sidebarAvailable = () => Boolean(props.dashboard);
+	/** The Orchestrator is a Home surface: only the shell that renders its page
+	 * pins the sidebar entry (the same condition `surface().orchestrator`
+	 * reports). */
+	const orchestratorPinned = (): boolean => props.dashboard?.mode === "home";
+	/** Cursor positions the sidebar offers: the pinned Orchestrator first, then
+	 * the filter's workflow rows. */
+	const sidebarEntryCount = (): number =>
+		sidebarCursorCount(sidebarRows().length, orchestratorPinned());
+	/** The workflow the sidebar cursor names, or undefined while it sits on the
+	 * pinned Orchestrator entry. */
+	const selectedSidebarWorkflow = (): WorkflowOverview | undefined => {
+		const index = sidebarWorkflowIndex(sidebarIndex(), orchestratorPinned());
+		return index >= 0 ? sidebarRows()[index] : undefined;
+	};
 	/** Open one workflow's dashboard in the page body and focus it. */
 	const openWorkflow = (overview: WorkflowOverview): void => {
 		pages.navigate(
@@ -436,6 +454,11 @@ export function App(props: {
 			// workflow's rows live in the shared wiki/research store.
 			workflowRoute(overview.target, overview.state.workflowId),
 		);
+		setFocusPanel("content");
+	};
+	/** Open the Orchestrator page (the sidebar's pinned entry) and focus it. */
+	const openOrchestrator = (): void => {
+		pages.navigate({ page: "orchestrator" });
 		setFocusPanel("content");
 	};
 	/** Open a workflow dashboard by id (the Slots section's open-workflow
@@ -453,13 +476,20 @@ export function App(props: {
 		pages.navigate(workflowRoute(props.repos[0] ?? "", workflowId));
 		setFocusPanel("content");
 	};
-	/** Move the sidebar cursor onto the workflow the page body is showing, so
+	/** Move the sidebar cursor onto the entry the page body is showing, so
 	 * focusing the panel from a dashboard lands on that row instead of wherever
-	 * the cursor was left. A dashboard opened for a filtered-out or not-yet-polled
-	 * workflow leaves the cursor alone rather than jumping to a wrong row. */
+	 * the cursor was left: the Orchestrator page lands on its pinned entry, a
+	 * workflow dashboard on its row. A dashboard opened for a filtered-out or
+	 * not-yet-polled workflow leaves the cursor alone rather than jumping to a
+	 * wrong row. */
 	const revealOpenWorkflow = (): void => {
+		if (orchestratorPinned() && currentPage() === "orchestrator") {
+			setSidebarIndex(0);
+			return;
+		}
 		const index = sidebarIndexFor(sidebarRows(), workflow());
-		if (index >= 0) setSidebarIndex(index);
+		if (index >= 0)
+			setSidebarIndex(sidebarCursorForWorkflow(index, orchestratorPinned()));
 	};
 	/** Focus the workspace sidebar, revealing the open workflow on its way in. */
 	const focusSidebar = (): void => {
@@ -552,8 +582,7 @@ export function App(props: {
 	};
 	const handleSidebarKey = (event: KeyEvent): void => {
 		const key = event.name.toLowerCase();
-		const rows = sidebarRows();
-		const last = Math.max(0, rows.length - 1);
+		const last = Math.max(0, sidebarEntryCount() - 1);
 		if (key === "j" || key === "down") {
 			setSidebarIndex((index) => Math.min(last, index + 1));
 			return;
@@ -563,7 +592,13 @@ export function App(props: {
 			return;
 		}
 		if (key === "enter" || key === "return") {
-			const entry = rows[sidebarIndex()];
+			// The pinned entry leads the cursor space, so the first Enter opens the
+			// Orchestrator exactly like every other row opens its page.
+			if (orchestratorPinned() && sidebarIndex() === 0) {
+				openOrchestrator();
+				return;
+			}
+			const entry = selectedSidebarWorkflow();
 			if (entry) openWorkflow(entry);
 			return;
 		}
@@ -572,12 +607,14 @@ export function App(props: {
 			return;
 		}
 		if (key === "n") {
-			const entry = rows[sidebarIndex()];
+			// The pinned entry is not a workflow: the spawn/delete actions have
+			// nothing to act on while the cursor is on it.
+			const entry = selectedSidebarWorkflow();
 			if (entry) spawnWorkspaceWindow(entry);
 			return;
 		}
 		if (key === "d") {
-			const entry = rows[sidebarIndex()];
+			const entry = selectedSidebarWorkflow();
 			if (entry) {
 				setDeleteTarget(entry);
 				nav.pushModal("delete-workflow");
@@ -603,9 +640,9 @@ export function App(props: {
 		if (nav.modal() !== "delete-workflow") setDeleteTarget(undefined);
 	});
 	// Keep the cursor inside the filtered list without resetting it on every
-	// poll: the index clamps only when the row count shrinks past it.
+	// poll: the index clamps only when the entry count shrinks past it.
 	createEffect(() => {
-		const last = Math.max(0, sidebarRows().length - 1);
+		const last = Math.max(0, sidebarEntryCount() - 1);
 		setSidebarIndex((index) => Math.min(last, index));
 	});
 	// The workflow store is the durable source; this reads it (plus the page's
@@ -855,7 +892,7 @@ export function App(props: {
 		environments: Boolean(props.environments),
 		tracesOnly: Boolean(props.tracesOnly),
 		wiki: props.dashboard?.mode === "home",
-		orchestrator: props.dashboard?.mode === "home",
+		orchestrator: orchestratorPinned(),
 		// Settings owns the shared keymap the profile/preset editor needs, so the
 		// surface that renders it is the one that has a dashboard-mounted shell.
 		settings: Boolean(props.dashboard),
@@ -2720,10 +2757,12 @@ export function App(props: {
 							side={sidebarSide()}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
+							pin={orchestratorPinned() ? SIDEBAR_ORCHESTRATOR_PIN : undefined}
 							filter={sidebarFilter()}
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
+							onOpenPin={openOrchestrator}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}
@@ -3097,10 +3136,12 @@ export function App(props: {
 							side={sidebarSide()}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
+							pin={orchestratorPinned() ? SIDEBAR_ORCHESTRATOR_PIN : undefined}
 							filter={sidebarFilter()}
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
+							onOpenPin={openOrchestrator}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}

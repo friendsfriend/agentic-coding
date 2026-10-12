@@ -222,8 +222,9 @@ test("the collapsed strip shows no filler when there is nothing to list", async 
 	stubGateway([]);
 	const t = await renderShell();
 	try {
-		// Unfocused and empty: the strip is the toggle glyph and nothing else. The
-		// list primitive's own empty state ("No items") must not leak into it.
+		// Unfocused and empty: the strip is the toggle glyph and the pinned entry,
+		// and nothing else. The list primitive's own empty state ("No items") must
+		// not leak into it.
 		expect(t.captureCharFrame()).not.toContain("No items");
 		expect(t.captureCharFrame()).not.toContain("Reading workflows");
 
@@ -265,6 +266,10 @@ test("Enter opens the selected workflow's dashboard page", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
+		// The pinned Orchestrator leads the cursor space, so the first workflow
+		// row is one step down.
+		t.mockInput.pressKey("j");
+		await advance(t);
 		t.mockInput.pressEnter();
 		// The workflow-dashboard route names the workflow in the breadcrumb and
 		// the shell badge reports the workflow tab.
@@ -283,7 +288,11 @@ test("Enter opens the selected workflow's dashboard page", async () => {
 test("rows show the state that needs a reader as a glyph", async () => {
 	stubGateway([
 		overview("wf-question", "attention-required", { pendingQuestions: 1 }),
-		overview("wf-blocked", "active", { attention: ["retry limit reached"] }),
+		// A committed blocker: attention notes on a *running* workflow are
+		// diagnostics, so the blocker status is what lights the `!`.
+		overview("wf-blocked", "attention-required", {
+			attention: ["retry limit reached"],
+		}),
 		overview("wf-review", "active", { stepId: "core.developer-review" }),
 		overview("wf-running", "active"),
 		overview("wf-idle", "paused"),
@@ -298,6 +307,63 @@ test("rows show the state that needs a reader as a glyph", async () => {
 		expect(frame).toContain("✓ wf-review");
 		expect(frame).toContain("… wf-running");
 		expect(frame).toContain("◦ wf-idle");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("the pinned Orchestrator entry is always visible", async () => {
+	stubGateway();
+	const t = await renderShell();
+	try {
+		// Unfocused, the collapsed strip keeps the pinned entry's slot as its mark.
+		expect(t.captureCharFrame()).toContain("⌂");
+		await focusSidebar(t);
+		expect(await renderUntil(t, "Orchestrator")).toBe(true);
+		expect(t.captureCharFrame()).toContain("chat · launch · manage");
+
+		// The filter only changes the workflow rows underneath: the pinned entry is
+		// chrome above them and never disappears with them.
+		t.mockInput.pressKey("f");
+		expect(await renderUntil(t, "wf-attention")).toBe(true);
+		expect(t.captureCharFrame()).toContain("Orchestrator");
+		t.mockInput.pressKey("f");
+		expect(await renderUntil(t, "wf-done")).toBe(true);
+		expect(t.captureCharFrame()).toContain("Orchestrator");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("the pinned Orchestrator entry shows even with no workflows at all", async () => {
+	stubGateway([]);
+	const t = await renderShell();
+	try {
+		expect(t.captureCharFrame()).toContain("⌂");
+		await focusSidebar(t);
+		expect(await renderUntil(t, "No active workflows")).toBe(true);
+		expect(t.captureCharFrame()).toContain("Orchestrator");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Enter on the pinned Orchestrator entry opens the Orchestrator page", async () => {
+	stubGateway();
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "Orchestrator")).toBe(true);
+		// The shell badge names the current page in lowercase and the pin's own
+		// label is capitalised, so the lowercase name is the page and nothing else.
+		expect(t.captureCharFrame()).not.toContain("orchestrator");
+		t.mockInput.pressEnter();
+		expect(
+			await renderUntil(t, (frame) => frame.includes("orchestrator")),
+		).toBe(true);
 	} finally {
 		t.renderer.destroy();
 		clearGateway();
@@ -458,8 +524,11 @@ test("d confirms before deleting the selected workflow", async () => {
 	const t = await renderShell();
 	try {
 		await focusSidebar(t);
-		// Newest first: the attention workflow is the selected row.
+		// Newest first below the pinned Orchestrator: the attention workflow is the
+		// selected row once the cursor steps down onto it.
 		expect(await renderUntil(t, "wf-attention")).toBe(true);
+		t.mockInput.pressKey("j");
+		await advance(t);
 
 		// The key opens the question; nothing is deleted while it is open.
 		t.mockInput.pressKey("d");
@@ -507,6 +576,8 @@ test("d deletes a repository-independent workflow through its target store", asy
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "research-1")).toBe(true);
+		t.mockInput.pressKey("j");
+		await advance(t);
 
 		t.mockInput.pressKey("d");
 		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
@@ -556,6 +627,8 @@ test("n reports an error when no tmux client is available", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
+		t.mockInput.pressKey("j");
+		await advance(t);
 		t.mockInput.pressKey("n");
 		expect(
 			await renderUntil(t, (frame) => frame.includes("tmux is not available")),
@@ -578,6 +651,8 @@ test("n reports when no server is running to attach the window to", async () => 
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
+		t.mockInput.pressKey("j");
+		await advance(t);
 		t.mockInput.pressKey("n");
 		expect(
 			await renderUntil(t, (frame) =>

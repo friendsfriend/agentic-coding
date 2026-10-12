@@ -6,6 +6,10 @@ Workflow creation belongs to the resource page that owns the target. The full
 application's workspace sidebar lists the durable workflows, opens one
 workflow's dashboard, and deletes one behind a confirmation (`d`: store rows
 and worktree go, the branch stays); there is no separate history/recent browser.
+The Orchestrator is pinned as a fixed first entry above the workflow rows
+(`⌂ Orchestrator`, separated by a rule), so it stays reachable whatever the
+filter lists and even when there is no workflow at all; selecting it opens the
+Orchestrator page like any other row opens its dashboard.
 
 This file is the human-readable mirror of
 `agentic-coding/src/tui/dash/launch.ts` (the launch context and outcome

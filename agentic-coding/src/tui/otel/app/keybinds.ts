@@ -21,8 +21,12 @@ export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 		{
 			title: "Workspaces",
 			keybinds: [
-				{ key: "j/k or ↑/↓", action: "select workflow", standard: true },
-				{ key: "Enter", action: "open workflow dashboard", short: "open" },
+				{
+					key: "j/k or ↑/↓",
+					action: "select the Orchestrator or a workflow",
+					standard: true,
+				},
+				{ key: "Enter", action: "open the selected entry", short: "open" },
 				{
 					key: "f",
 					action: "cycle filter (active/attention/all)",

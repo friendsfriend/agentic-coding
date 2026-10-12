@@ -69,6 +69,46 @@ export function filterOverviews(
 	);
 }
 
+/** The pinned entry the sidebar keeps above every workflow row. It is not a
+ * workflow: it has no overview, no status and no filter, so the poll, the
+ * cursor reveal and the delete/spawn actions never see it. The shell pins it
+ * while it renders the Orchestrator surface (home mode), whatever the workflow
+ * list and its filter happen to hold. */
+export interface SidebarPin {
+	/** Row mark; the same Home glyph an orchestrator-started workflow carries. */
+	readonly glyph: string;
+	readonly label: string;
+	/** Second line, in the slot a workflow row uses for its phase and project. */
+	readonly meta: string;
+}
+
+export const SIDEBAR_ORCHESTRATOR_PIN: SidebarPin = {
+	glyph: "⌂",
+	label: "Orchestrator",
+	meta: "chat · launch · manage",
+};
+
+/** Cursor positions the sidebar offers: the pinned entry first (when it is
+ * pinned), then the filter's workflow rows. */
+export function sidebarCursorCount(rowCount: number, pinned: boolean): number {
+	return Math.max(0, rowCount) + (pinned ? 1 : 0);
+}
+
+/** The workflow row a cursor position names, or -1 while the cursor sits on the
+ * pinned leading entry. The inverse of `sidebarCursorForWorkflow`. */
+export function sidebarWorkflowIndex(cursor: number, pinned: boolean): number {
+	return pinned ? cursor - 1 : cursor;
+}
+
+/** The cursor position that selects a workflow row, so revealing the open
+ * workflow keeps the pinned entry's leading slot. */
+export function sidebarCursorForWorkflow(
+	index: number,
+	pinned: boolean,
+): number {
+	return pinned ? index + 1 : index;
+}
+
 /** Next filter in catalog order, wrapping at the end. */
 export function cycleFilter(filter: SidebarFilter): SidebarFilter {
 	const index = SIDEBAR_FILTERS.findIndex((entry) => entry.id === filter);

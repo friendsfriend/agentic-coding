@@ -14,8 +14,12 @@ import {
 	isReviewStep,
 	isRunningStatus,
 	SIDEBAR_FILTERS,
+	SIDEBAR_ORCHESTRATOR_PIN,
+	sidebarCursorCount,
+	sidebarCursorForWorkflow,
 	sidebarIndexFor,
 	sidebarStatusGlyph,
+	sidebarWorkflowIndex,
 	workflowMeta,
 	workflowRowLabel,
 } from "../src/tui/otel/app/sidebar-model.ts";
@@ -171,6 +175,35 @@ describe("workspace sidebar filters", () => {
 		expect(cycleFilter("active")).toBe("attention");
 		expect(cycleFilter("attention")).toBe("all");
 		expect(cycleFilter("all")).toBe("active");
+	});
+});
+
+describe("workspace sidebar pinned entry", () => {
+	test("names the Orchestrator and carries the Home mark", () => {
+		expect(SIDEBAR_ORCHESTRATOR_PIN.label).toBe("Orchestrator");
+		// The same mark an orchestrator-started workflow row carries.
+		expect(SIDEBAR_ORCHESTRATOR_PIN.glyph).toBe("⌂");
+	});
+
+	test("leads the cursor space, shifting every workflow row by one", () => {
+		// No pin: the cursor space is exactly the workflow rows.
+		expect(sidebarCursorCount(3, false)).toBe(3);
+		expect(sidebarWorkflowIndex(0, false)).toBe(0);
+		expect(sidebarCursorForWorkflow(2, false)).toBe(2);
+
+		// Pinned: the entry wins the first slot, so workflow 0 sits at cursor 1
+		// and the pin itself names no workflow (-1).
+		expect(sidebarCursorCount(0, true)).toBe(1);
+		expect(sidebarCursorCount(3, true)).toBe(4);
+		expect(sidebarWorkflowIndex(0, true)).toBe(-1);
+		expect(sidebarWorkflowIndex(1, true)).toBe(0);
+		expect(sidebarWorkflowIndex(2, true)).toBe(1);
+		expect(sidebarCursorForWorkflow(0, true)).toBe(1);
+		expect(sidebarCursorForWorkflow(2, true)).toBe(3);
+		// The reveal mapping round-trips, so the pin never steals a row's slot.
+		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, true), true)).toBe(
+			2,
+		);
 	});
 });
 
