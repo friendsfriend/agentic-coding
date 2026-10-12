@@ -49,7 +49,8 @@ export type TabType =
 	| "libraries"
 	| "scripts"
 	| "kubernetes"
-	| "ui-test";
+	| "ui-test"
+	| "slots";
 
 type TableSortKey =
 	| "status"
@@ -272,6 +273,12 @@ export function uiTestTabEnabled(
 
 export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 	const [apps, setApps] = createSignal<App[]>([]);
+	// Slot holders keyed by app ident, written by the slot store (a separate
+	// store so the app table never depends on the slot data). App rows carry the
+	// holder as `slotHolder` so the table can mark an agent-held app.
+	const [slotHolders, setSlotHolders] = createSignal<
+		Record<string, string | null>
+	>({});
 	const [infraServices, setInfraServices] = createSignal<InfraService[]>([]);
 	const [kubernetesClusterStatus, setKubernetesClusterStatus] =
 		createSignal<KubernetesClusterStatus | null>(null);
@@ -397,6 +404,7 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 		scripts: {},
 		kubernetes: {},
 		"ui-test": {},
+		slots: {},
 	});
 	const [showTableSortModal, setShowTableSortModal] = createSignal(false);
 	const [tableSortSelectedIndex, setTableSortSelectedIndex] = createSignal(0);
@@ -420,6 +428,7 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 		scripts: scriptSortRules(),
 		kubernetes: appSortRules(),
 		"ui-test": appSortRules(),
+		slots: appSortRules(),
 	});
 	const [operationInProgressForApp, setOperationInProgressForApp] =
 		createSignal<string | null>(null);
@@ -544,13 +553,21 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 		if (tab === "applications")
 			return allApps
 				.filter((app) => app.appType === "APP")
-				.map((app) => ({ ...app, rowKind: "app" as const }));
+				.map((app) => ({
+					...app,
+					rowKind: "app" as const,
+					slotHolder: slotHolders()[app.ident] ?? null,
+				}));
 		if (tab === "libraries")
 			return allApps
 				.filter((app) => app.appType === "LIB")
-				.map((app) => ({ ...app, rowKind: "app" as const }));
+				.map((app) => ({
+					...app,
+					rowKind: "app" as const,
+					slotHolder: slotHolders()[app.ident] ?? null,
+				}));
 		if (tab === "scripts") return scriptRows();
-		if (tab === "kubernetes" || tab === "ui-test") return [];
+		if (tab === "kubernetes" || tab === "ui-test" || tab === "slots") return [];
 		if (tab === "infrastructure") {
 			return infraServices().map(
 				(svc): TableRow => ({
@@ -628,6 +645,13 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 			scriptVisibleRows().length === 0,
 	);
 
+	/** Slots tab badge: how many apps are agent-held (the contention rows). */
+	const visibleSlotCount = createMemo(
+		() =>
+			apps().filter((app) => slotHolders()[app.ident]?.startsWith("workflow:"))
+				.length,
+	);
+
 	const tableTabs = createMemo((): TableTab<TabType>[] => {
 		const allApps = apps();
 		return [
@@ -648,6 +672,11 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 			},
 			{ id: "scripts", label: "Tasks", count: scriptVisibleRows().length },
 			{
+				id: "slots",
+				label: "Slots",
+				count: visibleSlotCount(),
+			},
+			{
 				id: "kubernetes",
 				label: "Kubernetes",
 				count: kubernetesClusterStatus()?.exists ? 1 : 0,
@@ -663,6 +692,8 @@ export function createAppStore(env: NodeJS.ProcessEnv = process.env) {
 	return {
 		apps,
 		setApps,
+		slotHolders,
+		setSlotHolders,
 		infraServices,
 		setInfraServices,
 		kubernetesClusterStatus,

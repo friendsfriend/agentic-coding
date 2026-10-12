@@ -121,6 +121,11 @@ export { PermanentFailure, TransientFailure };
 import { hashToken } from "./runtime/capability.ts";
 import { renderAgentQuestionMessage } from "./runtime/dialogue.ts";
 import {
+	removeWorkflowEvidence,
+	type WorkflowEvidenceLocation,
+	workflowEvidencePresent,
+} from "./runtime/evidence-store.ts";
+import {
 	closeSecureDirectory,
 	openSecureDirectory,
 	writeAtomicPrivateFile,
@@ -785,6 +790,19 @@ export interface AdapterEffectOptions {
 	 * the drain path needs no extra service. */
 	telemetry?: (directory: string, envelope: TelemetryEnvelope) => void;
 }
+/** The location a snapshot's evidence is derived from: the workflow's own
+ * checkout and definition decide whether its data directory is the checkout's
+ * `.herdr-workflow` or the shared wiki/research root. */
+function evidenceLocation(
+	snapshot: WorkflowSnapshot,
+): WorkflowEvidenceLocation {
+	return {
+		workflowId: snapshot.workflowId,
+		worktree: snapshot.metadata.worktree,
+		definitionId: snapshot.definition.id,
+	};
+}
+
 export function agentEffectHandlers(
 	repo: string,
 	engine: WorkflowEngine,
@@ -2006,6 +2024,10 @@ export function agentEffectHandlers(
 			observe: (effect) =>
 				Effect.sync(() => {
 					const snapshot = snapshotFor(effect);
+					// The workflow's evidence belongs to the workspace too: while it is
+					// still there, cleanup has work left even when the checkout itself
+					// is already gone (or was never separate from the repository).
+					if (workflowEvidencePresent(evidenceLocation(snapshot))) return false;
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
@@ -2020,6 +2042,12 @@ export function agentEffectHandlers(
 			execute: (effect, _signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
+					// Evidence is deleted with the workflow's workspace. Best-effort: a
+					// directory that cannot be removed must not make the cleanup effect
+					// fail, and the observe above reports the remaining work instead.
+					yield* Effect.sync(() =>
+						removeWorkflowEvidence(evidenceLocation(snapshot)),
+					);
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||

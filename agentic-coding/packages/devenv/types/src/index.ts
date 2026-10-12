@@ -95,6 +95,9 @@ export interface App {
 
 export interface AppTableRow extends App {
 	rowKind: "app";
+	/** Owner holding this app's slot when it is held (`user` or
+	 * `workflow:<id>`), or null/absent when the app is free. */
+	slotHolder?: string | null;
 }
 
 export interface InfraTableRow extends InfraService {

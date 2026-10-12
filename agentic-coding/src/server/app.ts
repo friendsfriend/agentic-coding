@@ -58,6 +58,11 @@ import {
 	executeEnvironmentOperation,
 } from "./environment/private-api.ts";
 import type { EventBroker } from "./events.ts";
+import {
+	EVIDENCE_FILE_PREFIX,
+	handleEvidenceFileRoute,
+	handleEvidenceRoute,
+} from "./evidence/routes.ts";
 import { type ServerOperations, serverOperations } from "./handlers.ts";
 import {
 	handleLegacyRoute,
@@ -230,6 +235,11 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				const status = error instanceof AuthorizationError ? error.status : 401;
 				return errorResponse(status, "unauthorized", safeMessage(error));
 			}
+			// The evidence surface rides the same owner-scoped capability but owns
+			// its own paths; it is asked first so it never depends on the
+			// environment router's own 404.
+			const evidence = await handleEvidenceRoute({}, request, url, owner);
+			if (evidence) return evidence;
 			return (
 				(await handleAgentEnvironmentRoute(
 					agentEnvironmentDeps(),
@@ -293,6 +303,12 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				at: (options.now?.() ?? new Date()).toISOString(),
 			});
 		}
+
+		// The recorded bytes of one evidence entry, served to the local dashboard
+		// under the instance capability. The workflow is located from the path's
+		// own id through the recorded targets, so no repo is taken from a request.
+		if (method === "GET" && path.startsWith(EVIDENCE_FILE_PREFIX))
+			return await handleEvidenceFileRoute({}, request, url);
 
 		if (method === "POST" && path === "/api/v1/observe") {
 			const body = await readJsonBody(request);

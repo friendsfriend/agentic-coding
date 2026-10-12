@@ -10,6 +10,7 @@ import type {
 	LogActions,
 	PipelineActions,
 	ProviderActions,
+	SlotActions,
 	UtilActions,
 } from "../actions/index.ts";
 import type {
@@ -21,6 +22,7 @@ import type {
 	IssueStore,
 	LogStore,
 	ProviderStore,
+	SlotStore,
 	UiStore,
 } from "../stores/index.ts";
 
@@ -34,6 +36,7 @@ export interface ViewStores {
 	agentStore: AgentStore;
 	appDetailStore: AppDetailStore;
 	actionRunStore: ActionRunStore;
+	slotStore: SlotStore;
 }
 
 export interface ViewActions {
@@ -48,6 +51,7 @@ export interface ViewActions {
 	utilActions: UtilActions;
 	pipelineActions: PipelineActions;
 	helpActions: HelpActions;
+	slotActions: SlotActions;
 }
 
 export interface ContentRouterProps {

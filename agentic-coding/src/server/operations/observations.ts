@@ -16,6 +16,7 @@ import {
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import type { EvidenceManifest } from "../../contracts/environment.ts";
 import type {
 	LocalChange,
 	WorktreeGitStatus,
@@ -48,6 +49,7 @@ import {
 	countVerifierFindings,
 } from "../../workflow/run-projections";
 import { latestRunsByRole } from "../../workflow/run-projections.ts";
+import { workflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts";
 import {
 	canonicalStorePath,
 	isResearchWorkflowTarget,
@@ -63,6 +65,7 @@ import {
 	snapshotList,
 	snapshotRead,
 } from "../../workflow/wiki.ts";
+import { listEvidence } from "../evidence/store.ts";
 import {
 	answerWorkflowQuestion,
 	dashboardState,
@@ -108,6 +111,13 @@ export type DashboardObservation =
 	| { kind: "repair-preview"; repo: string; workflowId: string }
 	| { kind: "changes"; repo: string }
 	| { kind: "branches"; repo: string }
+	| {
+			kind: "evidence";
+			repo: string;
+			workflowId: string;
+			/** Narrow the manifest to one debug request's entries. */
+			requestId?: string;
+	  }
 	| { kind: "sessions-report"; since?: string };
 
 /** Run an observation in-process. This is the server-side dispatch the HTTP
@@ -170,6 +180,12 @@ export async function runLocalObservation(
 			return discoverChanges(observation.repo);
 		case "branches":
 			return discoverBranches(observation.repo);
+		case "evidence":
+			return loadEvidence(
+				observation.repo,
+				observation.workflowId,
+				observation.requestId,
+			);
 		case "sessions-report":
 			return sessionsReport({ since: observation.since });
 	}
@@ -906,6 +922,26 @@ export function loadDeveloperReviewFindings(
 			fix: typeof item.fix === "string" ? item.fix : undefined,
 			verifier: item.verifier,
 		}));
+}
+
+/**
+ * One workflow's evidence manifest: every screenshot, video, trace, script and
+ * log a run attached, in creation order (ULIDs sort by time), optionally
+ * narrowed to one debug request's entries. Reads only — a workflow that never
+ * attached anything answers with an empty manifest.
+ */
+export function loadEvidence(
+	repo: string,
+	workflowId: string,
+	requestId?: string,
+): EvidenceManifest {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
+	const scope = workflowEvidenceScope({
+		workflowId,
+		worktree: state.worktree,
+		definitionId: state.definition?.id,
+	});
+	return listEvidence(scope, requestId === undefined ? {} : { requestId });
 }
 
 export function loadVerifierReport(

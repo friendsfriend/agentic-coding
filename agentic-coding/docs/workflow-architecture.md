@@ -122,6 +122,36 @@ transition. There are no automatic down migrations; rollback to an older
 binary requires a verified pre-upgrade backup or explicit support in that
 binary.
 
+### Evidence store
+
+Durable debugging evidence (screenshots, videos, traces, repro scripts, logs)
+lives beside the workflow it came from, not in the agent's scratch space:
+`<workflow data root>/evidence/<workflowId>/[req-<requestId>/]<id>.<ext>` plus
+one `manifest.json` per workflow, written atomically. The data root is the
+checkout's own `.herdr-workflow` for a repository-backed workflow and the shared
+workflow data root for a wiki/research one; `workflow/runtime/evidence-store.ts`
+is the one place that derivation and the deletion live, so the store, the
+routes, the observation and the engine cannot disagree about where evidence is.
+
+- **Layout and rules** are owned by `server/evidence/store.ts`: ULID ids (so
+  lexical order is creation order), kind/content checks (PNG/JPEG/WebP,
+  WebM/MP4, ZIP, text), a per-file cap (video 100 MB, other 20 MB) and a
+  per-workflow cap (1 GB) that both **refuse with `evidence-quota`** — nothing
+  already stored is ever evicted to make room.
+- **Attach is copy-in and path-safe.** The source must resolve, by `realpath`,
+  inside the workflow's checkout or data directory; the destination is derived
+  from a fresh ULID, never from the caller's path.
+- **Surfaces.** `POST/GET /api/v1/agent-env/evidence[/attach]` ride the owner
+  capability a run already holds (the workflow comes from the verified owner),
+  `GET /api/v1/evidence/{workflowId}/{id}` serves the recorded bytes to the
+  local dashboard under the instance capability, and the `evidence` observation
+  returns the manifest. The `evidence_attach`/`evidence_list` tools are offered
+  to every durable run beside the `env_*` tools.
+- **Lifecycle.** `workspace.cleanup` deletes the workflow's evidence with its
+  workspace (and reports remaining evidence in its observation, so a
+  repository-mode workflow still loses it), and workflow deletion removes it in
+  the same step.
+
 ## Custom workflow definitions
 
 A workflow pins `definition: { id, version, digest }`. Built-in definitions
@@ -876,6 +906,7 @@ row):
 | `store.ts` | Schema DDL, row mapping, open/close, snapshot/run/effect read-write helpers, plus the registry-only structural invariants (`validateStructure`, `validateSnapshot`, `validateEffect`, `actions`, `requireRevision`) and the due-question-expiry read path (`expireDueQuestions`, `getSnapshot`) — grouped here because none of them touch anything beyond `registry` and an already-open `db`, so they sit at the foundation alongside row IO rather than needing a home in a higher tier. |
 | `definitions.ts` | The definition resolver: built-in registry first, then the target store's `workflow_definitions` rows for the `custom.` namespace, recompiled against the current step catalog and cached per process by identity (re-validated against the requesting registry on every hit), plus `validateDefinition`/`storeDefinition` for the operator `define` path. Imports `store.ts` (not the reverse: `store.ts` takes the resolver as an injected parameter for its due-question-expiry path). |
 | `evidence.ts` | Git inspection, source-content fingerprinting, changed-file discovery, current-branch lookup, wiki baseline/verification content reads — all external-I/O reads. |
+| `evidence-store.ts` | The evidence store's location and lifecycle (`add-workflow-evidence-store`): `workflowDataRoot`/`workflowEvidenceRoot`/`workflowEvidenceScope` (the checkout's `.herdr-workflow` or the shared wiki/research data root, plus the roots an attach may resolve inside) and `workflowEvidencePresent`/`removeWorkflowEvidence`, which the engine's `workspace.cleanup` observation and execution both use. The manifest, ids, content checks and caps live in `server/evidence/store.ts`. |
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
 | `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`), and marking questions expired (`expireQuestions`). Needs only the clock. |
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
@@ -1002,7 +1033,7 @@ runtime code depends on it.
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/`, `tui/orchestrator/` | Dashboard, observability, settings and Home Orchestrator feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |
 | **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
 | **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
-| **root** | `cli.ts`, `worktree/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
+| **root** | `cli.ts`, `worktree/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`, and `evidence/` (the evidence store and its routes, `add-workflow-evidence-store`). See [`docs/unified-backend-api.md`](unified-backend-api.md). |
 
 Allowed directions (anything else fails, **including type-only imports**):
 

@@ -48,6 +48,9 @@ export interface EnvironmentsFeatureProps {
 		name: string;
 		repository: string;
 	}) => void;
+	/** Open one workflow's dashboard (the Slots section's open-workflow action).
+	 * The shell resolves the workflow target; absent standalone. */
+	onOpenWorkflow?: (workflowId: string) => void;
 	active?: () => boolean;
 	onModalChange?: (open: boolean) => void;
 }
@@ -75,6 +78,9 @@ export function EnvironmentsFeature(props: EnvironmentsFeatureProps) {
 			destination={props.destination?.()}
 			{...(props.onStartWorkflow
 				? { onStartWorkflow: props.onStartWorkflow }
+				: {})}
+			{...(props.onOpenWorkflow
+				? { onOpenWorkflow: props.onOpenWorkflow }
 				: {})}
 		/>
 	);

@@ -31,6 +31,7 @@ import {
 	createLogActions,
 	createPipelineActions,
 	createProviderActions,
+	createSlotActions,
 	createUtilActions,
 	initializeApp,
 } from "./actions/index.ts";
@@ -73,6 +74,7 @@ import {
 	createIssueStore,
 	createLogStore,
 	createProviderStore,
+	createSlotStore,
 	createUiStore,
 } from "./stores/index.ts";
 import {
@@ -124,6 +126,10 @@ export interface TUIAppProps {
 	 * and nothing else, so it never duplicates start or Herdr handoff logic.
 	 */
 	onStartWorkflow?: (target: EnvironmentLaunchTarget) => void;
+	/** Open one workflow's dashboard (workspace-sidebar navigation). Supplied by
+	 * the unified shell; absent standalone, where the Slots section reports that
+	 * navigation needs the shell. */
+	onOpenWorkflow?: (workflowId: string) => void;
 }
 
 export interface EnvironmentDestination {
@@ -170,6 +176,7 @@ export function TUIApp(props: TUIAppProps) {
 
 	const showError = uiStore.showError;
 	const client = createClient(props.serverUrl, undefined, showError);
+	const slotStore = createSlotStore({ client });
 
 	// --- Actions ---
 	const appActions = createAppActions(
@@ -233,6 +240,13 @@ export function TUIApp(props: TUIAppProps) {
 		changeRequestStore,
 		uiStore,
 	);
+	const slotActions = createSlotActions(
+		appStore,
+		slotStore,
+		uiStore,
+		client,
+		props.onOpenWorkflow,
+	);
 
 	const clearGlobalSelectionMouseUpHandler = setGlobalSelectionMouseUpHandler(
 		utilActions.handleCopySelection,
@@ -253,6 +267,21 @@ export function TUIApp(props: TUIAppProps) {
 
 	// --- Effects ---
 	setupLogEffects(logStore, client, props.active);
+
+	// Slots section (show-environment-instances): one subscription per active
+	// feature instance. The store applies domain slot events, re-reads the
+	// snapshot on a stream gap, and mirrors holders into the app store so the app
+	// list can mark an agent-held row.
+	createEffect(() => {
+		if (props.active && !props.active()) return;
+		slotStore.start();
+	});
+	onCleanup(() => slotStore.stop());
+	createEffect(() => {
+		const holders: Record<string, string | null> = {};
+		for (const row of slotStore.rows()) holders[row.app] = row.holder;
+		appStore.setSlotHolders(holders);
+	});
 
 	createEffect(() => {
 		if (props.active && !props.active()) return;
@@ -543,6 +572,7 @@ export function TUIApp(props: TUIAppProps) {
 		agentStore,
 		appDetailStore,
 		actionRunStore,
+		slotStore,
 	};
 	const kbActions: KeyboardActions = {
 		appActions,
@@ -556,6 +586,7 @@ export function TUIApp(props: TUIAppProps) {
 		utilActions,
 		pipelineActions,
 		helpActions,
+		slotActions,
 	};
 	const kbCtx: KeyboardContext = {
 		renderer,
@@ -664,6 +695,7 @@ export function TUIApp(props: TUIAppProps) {
 		agentStore,
 		appDetailStore,
 		actionRunStore,
+		slotStore,
 	};
 	const viewActions: ViewActions = {
 		appActions,
@@ -677,6 +709,7 @@ export function TUIApp(props: TUIAppProps) {
 		utilActions,
 		pipelineActions,
 		helpActions,
+		slotActions,
 	};
 
 	const headerDeps = {

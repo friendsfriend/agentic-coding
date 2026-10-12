@@ -6,4 +6,5 @@ export * from "./cr-store.ts";
 export * from "./issue-store.ts";
 export * from "./log-store.ts";
 export * from "./provider-store.ts";
+export * from "./slot-store.ts";
 export * from "./ui-store.ts";

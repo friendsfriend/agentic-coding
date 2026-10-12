@@ -22,10 +22,11 @@ import {
 	TimelineView,
 	uiColors,
 } from "@ui";
-import { createEffect, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides/index.ts";
 import { ActionsView } from "./actions-view.tsx";
 import { ShutdownSplash } from "./shutdown-splash.tsx";
+import { SlotsView } from "./slots-view.tsx";
 import { StartupSplash } from "./startup-splash.tsx";
 import type { ContentRouterProps } from "./types.ts";
 
@@ -36,6 +37,7 @@ export function ContentRouter(props: ContentRouterProps) {
 		changeRequestStore,
 		appDetailStore,
 		actionRunStore,
+		slotStore,
 	} = props.stores;
 	const {
 		helpActions,
@@ -55,6 +57,15 @@ export function ContentRouter(props: ContentRouterProps) {
 		)
 			return;
 		void dockerActions.refreshKubernetesCluster();
+	});
+
+	// Slots wait/idle times tick while the Slots section is shown; the view reads
+	// `nowMs()` so a wait time advances without a new snapshot.
+	const [nowMs, setNowMs] = createSignal(Date.now());
+	createEffect(() => {
+		if (appStore.activeTab() !== "slots") return;
+		const timer = setInterval(() => setNowMs(Date.now()), 1000);
+		onCleanup(() => clearInterval(timer));
 	});
 
 	// ContentStack adds one-line top and bottom gutters around the table. A host
@@ -626,20 +637,38 @@ export function ContentRouter(props: ContentRouterProps) {
 														<Show
 															when={appStore.activeTab() === "infrastructure"}
 															fallback={
-																<RepositoryTable
-																	apps={appStore.tableFilteredApps()}
-																	columns={tableColumns()}
-																	selectedIndex={appStore.selectedIndex()}
-																	onSelect={appStore.setSelectedIndex}
-																	showBorder={true}
-																	availableLines={availableTableLines}
-																	searchMode={appStore.tableSearchMode()}
-																	searchQuery={appStore.tableSearchQuery()}
-																	filterSummary={tableFilterSummary()}
-																	sortSummary={tableSortSummary()}
-																	runningTextEnabled={props.runningTextEnabled}
-																	runningTextOffset={props.runningTextOffset}
-																/>
+																<Show
+																	when={appStore.activeTab() === "slots"}
+																	fallback={
+																		<RepositoryTable
+																			apps={appStore.tableFilteredApps()}
+																			columns={tableColumns()}
+																			selectedIndex={appStore.selectedIndex()}
+																			onSelect={appStore.setSelectedIndex}
+																			showBorder={true}
+																			availableLines={availableTableLines}
+																			searchMode={appStore.tableSearchMode()}
+																			searchQuery={appStore.tableSearchQuery()}
+																			filterSummary={tableFilterSummary()}
+																			sortSummary={tableSortSummary()}
+																			runningTextEnabled={
+																				props.runningTextEnabled
+																			}
+																			runningTextOffset={
+																				props.runningTextOffset
+																			}
+																		/>
+																	}
+																>
+																	<SlotsView
+																		rows={slotStore.visible()}
+																		selectedIndex={appStore.selectedIndex()}
+																		nowMs={nowMs()}
+																		height={availableTableLines}
+																		loading={slotStore.loading()}
+																		error={slotStore.error()}
+																	/>
+																</Show>
 															}
 														>
 															<InfrastructureTable

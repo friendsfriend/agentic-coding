@@ -79,7 +79,11 @@ import {
 	streamContainerStats,
 	testApp,
 } from "./docker-client.ts";
-import { type AppSlot, getAppSlots } from "./environment-client.ts";
+import {
+	type DomainEventMessage,
+	subscribeDomainEvents,
+} from "./domain-events-client.ts";
+import { type AppSlot, getAppSlots, releaseApp } from "./environment-client.ts";
 import {
 	getActionHistory,
 	getActionLogs,
@@ -199,9 +203,20 @@ export class DevEnvClient {
 	): Promise<import("@devenv/types").ProjectCatalog> {
 		return getProjectCatalog(this.deps, signal);
 	}
-	/** Every configured app's slot: holder, status and waiters. */
+	/** Every configured app's slot: holder, status, waiters and wait times. */
 	getAppSlots(): Promise<AppSlot[]> {
 		return getAppSlots(this.deps);
+	}
+	/** Developer force release: stop the holder's run and let the queue advance. */
+	releaseApp(appIdent: string): Promise<void> {
+		return releaseApp(this.deps, appIdent);
+	}
+	/** The bounded domain event stream (`/api/v1/events`). */
+	subscribeDomainEvents(
+		signal?: AbortSignal,
+		cursor?: number,
+	): AsyncGenerator<DomainEventMessage> {
+		return subscribeDomainEvents(this.deps, signal, cursor);
 	}
 	createExampleConfig(): Promise<void> {
 		return createExampleConfig(this.deps);
@@ -821,6 +836,7 @@ export * from "@devenv/types";
 export * from "./clipboard.ts";
 export * from "./custom-fetch.ts";
 export * from "./diff-utils.ts";
+export * from "./domain-events-client.ts";
 export * from "./environment-client.ts";
 export * from "./logger.ts";
 export * from "./projects-client.ts";

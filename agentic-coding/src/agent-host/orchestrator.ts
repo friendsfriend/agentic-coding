@@ -99,6 +99,8 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 	const definition = view.definition as Record<string, unknown> | undefined;
 	return {
 		workflowId: view.workflowId,
+		// Pass this as `revision` to workflow_action; a stale value is rejected.
+		revision: view.revision,
 		workflowType: definition?.id,
 		status: view.status,
 		currentStep: step ? { id: step.id, label: step.label } : undefined,

@@ -23,6 +23,7 @@ import {
 	agentEnvironmentBuildSchema,
 	appSlotOperationRequestSchema,
 	environmentTeardownRequestSchema,
+	evidenceAttachRequestSchema,
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
@@ -49,6 +50,11 @@ export const AGENT_ACQUIRE_PATH = `${AGENT_ENVIRONMENT_PREFIX}acquire`;
 export const AGENT_STOP_PATH = `${AGENT_ENVIRONMENT_PREFIX}stop`;
 export const AGENT_BUILD_PATH = `${AGENT_ENVIRONMENT_PREFIX}build`;
 export const AGENT_TEST_PATH = `${AGENT_ENVIRONMENT_PREFIX}test`;
+/** The evidence surface of one run: attach and list ride the same owner-scoped
+ * capability, so the workflow is named by the owner and never by the body. The
+ * declared paths live here so the transport manifest owns the whole surface. */
+export const AGENT_EVIDENCE_ATTACH_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence/attach`;
+export const AGENT_EVIDENCE_LIST_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence`;
 
 /** Bounded request body (a single observation/diff can be a few MiB). */
 export const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -73,6 +79,7 @@ export const ROUTE_DOMAINS = [
 	"events",
 	"credentials",
 	"environment",
+	"evidence",
 	"integrations",
 	"git",
 	"wiki",
@@ -289,6 +296,15 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		owner: "bun",
 		domain: "environment",
 	},
+	// The recorded bytes of one evidence entry, for the local dashboard. The
+	// prefix row covers `/api/v1/evidence/{workflowId}/{id}`: the workflow is
+	// located from the id through the recorded targets, never from the path.
+	{
+		method: "GET",
+		path: "/api/v1/evidence/*",
+		owner: "bun",
+		domain: "evidence",
+	},
 ];
 
 /** Resolve the owner of a method+path, longest prefix first so a wildcard
@@ -468,6 +484,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		schemaId: "server.agent-env.test",
 		schema: agentEnvironmentBuildSchema,
 	},
+	{
+		path: AGENT_EVIDENCE_ATTACH_PATH,
+		schemaId: "server.agent-env.evidence.attach",
+		schema: evidenceAttachRequestSchema,
+	},
 ];
 
 /** Decode a route body through the schema the manifest declares for it. */
@@ -504,6 +525,7 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "verifier-report", domain: "workflow" },
 	{ kind: "developer-review-findings", domain: "workflow" },
 	{ kind: "repair-preview", domain: "workflow" },
+	{ kind: "evidence", domain: "evidence" },
 ];
 
 /** Decode a request body through its schema, throwing `ContractFailure`.

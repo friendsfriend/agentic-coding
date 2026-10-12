@@ -10,12 +10,17 @@
 // instead of spending a model turn per poll, and every tool is deliberately not
 // replay-safe: after an interruption the agent calls it again rather than the
 // host re-issuing a start it cannot see the end of.
+import path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import {
 	defineExtension,
 	defineTool,
 	type Extension,
 } from "@earendil-works/pi-durable";
+import {
+	AGENT_EVIDENCE_ATTACH_PATH,
+	AGENT_EVIDENCE_LIST_PATH,
+} from "../server/protocol.ts";
 import {
 	ENVIRONMENT_OWNER_HEADER,
 	ENVIRONMENT_TOKEN_ENV,
@@ -156,6 +161,52 @@ const EnvActionParameters = Type.Object({
 		Type.String({ description: "Build or test target id or label" }),
 	),
 	profile: Type.Optional(Type.String({ description: "Target profile" })),
+});
+
+/** `evidence_attach`: store one file this run produced. `path` is resolved
+ * against the run's own working directory and re-checked on the server, which
+ * refuses anything outside the workflow's checkout or data directory. */
+const EvidenceAttachParameters = Type.Object({
+	path: Type.String({
+		minLength: 1,
+		description:
+			"The file to store: absolute, or relative to this run's working directory. It must be a file this run produced inside its own checkout or scratch directory.",
+	}),
+	kind: Type.Union(
+		[
+			Type.Literal("screenshot"),
+			Type.Literal("video"),
+			Type.Literal("trace"),
+			Type.Literal("script"),
+			Type.Literal("log"),
+			Type.Literal("other"),
+		],
+		{
+			description:
+				"What the file is. The content must match: screenshot is PNG/JPEG/WebP, video is WebM/MP4, trace is a ZIP, script and log are text.",
+		},
+	),
+	caption: Type.String({
+		minLength: 1,
+		description:
+			"One line the developer will read next to the evidence, saying what it shows.",
+	}),
+	requestId: Type.Optional(
+		Type.String({
+			description:
+				"Store it under one debug request's evidence when it belongs to one.",
+		}),
+	),
+});
+
+/** `evidence_list`: what this workflow has already stored. */
+const EvidenceListParameters = Type.Object({
+	requestId: Type.Optional(
+		Type.String({
+			description:
+				"Only this debug request's evidence; all of it when omitted.",
+		}),
+	),
 });
 
 const EnvLogsParameters = Type.Object({
@@ -488,6 +539,67 @@ export function createEnvironmentExtension(
 						);
 					} catch (error) {
 						return failure(`env_logs: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "evidence_attach",
+				description: [
+					"Store one file this run produced — a screenshot, video, trace, repro script or log — so it outlives this turn and the developer can review it.",
+					"The file must be inside this run's own checkout or scratch directory: the server resolves it and refuses anything outside, so never attach a file you only read from elsewhere.",
+					"The content must match the kind, and the store refuses a file over its cap (video 100 MB, other 20 MB) or one that would exceed the workflow's total; nothing already stored is ever deleted to make room.",
+				].join(" "),
+				parameters: EvidenceAttachParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("evidence_attach: run context unavailable");
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_EVIDENCE_ATTACH_PATH, {
+								timeoutMs: ACTION_TIMEOUT_MS,
+								body: {
+									// A path the agent wrote is relative to its own working
+									// directory; the server never resolves a caller path itself.
+									path: path.resolve(run.cwd, args.path),
+									kind: args.kind,
+									caption: args.caption,
+									...(args.requestId ? { requestId: args.requestId } : {}),
+									// The producing step and role come from this run's own
+									// environment, so the manifest records who attached it.
+									...(run.env.HERDR_STEP_ID
+										? { step: run.env.HERDR_STEP_ID }
+										: {}),
+									...(run.env.HERDR_ROLE ? { role: run.env.HERDR_ROLE } : {}),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`evidence_attach: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "evidence_list",
+				description:
+					"List the evidence this workflow has stored: the manifest entries with their id, kind, caption, step and role. Read it before attaching so the same evidence is not stored twice.",
+				parameters: EvidenceListParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("evidence_list: run context unavailable");
+					const query = args.requestId
+						? `?requestId=${encodeURIComponent(args.requestId)}`
+						: "";
+					try {
+						return text(
+							await call(
+								run.env,
+								"GET",
+								`${AGENT_EVIDENCE_LIST_PATH}${query}`,
+								{ timeoutMs: READ_TIMEOUT_MS },
+							),
+						);
+					} catch (error) {
+						return failure(`evidence_list: ${message(error)}`);
 					}
 				},
 			}),

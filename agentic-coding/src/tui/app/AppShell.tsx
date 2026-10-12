@@ -101,6 +101,7 @@ export function AppShell(props: AppShellProps) {
 								name: string;
 								repository: string;
 							}) => void,
+							onOpenWorkflow: (workflowId: string) => void,
 						) => (
 							<EnvironmentsFeature
 								serverUrl={props.environments?.serverUrl ?? ""}
@@ -109,6 +110,7 @@ export function AppShell(props: AppShellProps) {
 								onModalChange={onModalChange}
 								destination={destination}
 								onStartWorkflow={onStartWorkflow}
+								onOpenWorkflow={onOpenWorkflow}
 							/>
 						)
 					: undefined

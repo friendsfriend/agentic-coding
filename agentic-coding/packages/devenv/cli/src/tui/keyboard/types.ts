@@ -10,6 +10,7 @@ import type {
 	LogActions,
 	PipelineActions,
 	ProviderActions,
+	SlotActions,
 	UtilActions,
 } from "../actions/index.ts";
 import type {
@@ -21,6 +22,7 @@ import type {
 	IssueStore,
 	LogStore,
 	ProviderStore,
+	SlotStore,
 	UiStore,
 } from "../stores/index.ts";
 
@@ -45,6 +47,7 @@ export interface KeyboardStores {
 	agentStore: AgentStore;
 	appDetailStore: AppDetailStore;
 	actionRunStore: ActionRunStore;
+	slotStore: SlotStore;
 }
 
 /** All actions bundled for dispatcher access */
@@ -60,6 +63,7 @@ export interface KeyboardActions {
 	utilActions: UtilActions;
 	pipelineActions: PipelineActions;
 	helpActions: HelpActions;
+	slotActions: SlotActions;
 }
 
 /** Extra context that dispatchers may need beyond stores/actions */

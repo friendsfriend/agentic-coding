@@ -38,6 +38,7 @@ export type PageId =
 	| "environments.infrastructure"
 	| "environments.scripts"
 	| "environments.kubernetes"
+	| "environments.slots"
 	| "environments.resource"
 	| "observability"
 	| "observability.traces"
@@ -120,6 +121,7 @@ export const ENVIRONMENT_CATEGORIES = [
 	"infrastructure",
 	"scripts",
 	"kubernetes",
+	"slots",
 ] as const;
 export type EnvironmentCategory = (typeof ENVIRONMENT_CATEGORIES)[number];
 
@@ -221,6 +223,12 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	},
 	"environments.kubernetes": {
 		label: "Kubernetes",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.slots": {
+		label: "Slots",
 		feature: "environments",
 		parent: () => ({ page: "environments" }),
 		picker: true,

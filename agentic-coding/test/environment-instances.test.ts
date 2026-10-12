@@ -533,7 +533,7 @@ describe("app slot starts", () => {
 			expect(again.outcome).toBe("already-running");
 			expect(slots.calls).toHaveLength(1);
 
-			expect(await slots.slots()).toEqual([
+			expect(await slots.slots()).toMatchObject([
 				{
 					app: "shop",
 					holder: "workflow:a",

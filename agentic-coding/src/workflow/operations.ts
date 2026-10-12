@@ -30,6 +30,7 @@ import {
 	projectCanonicalRoots,
 	projectOptions,
 } from "./project-catalog.ts";
+import { removeWorkflowEvidence } from "./runtime/evidence-store.ts";
 import {
 	dueQuestionTimers,
 	isResearchWorkflowTarget,
@@ -230,6 +231,15 @@ export async function deleteWorkflow(
 		workflowId,
 	);
 	workflowEngine.deleteWorkflow(repo, workflowId);
+	// The workflow's evidence goes with it, in the same delete: a repository-mode
+	// workflow keeps its checkout directory, so nothing else would ever remove
+	// `evidence/<workflowId>`. Best-effort — a directory that cannot be removed
+	// must not report the deletion as failed.
+	removeWorkflowEvidence({
+		workflowId,
+		worktree: view.worktree,
+		definitionId: view.definition.id,
+	});
 	const removal = await removeWorkflowWorktree(
 		repo,
 		view.worktree,

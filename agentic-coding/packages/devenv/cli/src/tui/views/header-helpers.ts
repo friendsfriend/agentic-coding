@@ -14,7 +14,8 @@ export type TabType =
 	| "libraries"
 	| "scripts"
 	| "kubernetes"
-	| "ui-test";
+	| "ui-test"
+	| "slots";
 
 export const getTabName = (tab: TabType): string => {
 	switch (tab) {
@@ -30,6 +31,8 @@ export const getTabName = (tab: TabType): string => {
 			return "Kubernetes";
 		case "ui-test":
 			return "UI Test";
+		case "slots":
+			return "Slots";
 	}
 };
 

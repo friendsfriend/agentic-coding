@@ -453,6 +453,41 @@ export async function handleTableKeys(
 		return true;
 	}
 
+	// Slots section (show-environment-instances): row navigation plus force
+	// release and open-workflow. It owns no search/filter/sort, so every other
+	// key falls through to the generic table handler.
+	if (appStore.activeTab() === "slots") {
+		const slotRows = stores.slotStore.visible();
+		switch (key) {
+			case "j":
+			case "down":
+				appStore.setSelectedIndex(
+					Math.min(
+						Math.max(0, slotRows.length - 1),
+						appStore.selectedIndex() + 1,
+					),
+				);
+				return true;
+			case "k":
+			case "up":
+				appStore.setSelectedIndex(Math.max(0, appStore.selectedIndex() - 1));
+				return true;
+			case "g":
+				appStore.setSelectedIndex(0);
+				return true;
+			case "G":
+				appStore.setSelectedIndex(Math.max(0, slotRows.length - 1));
+				return true;
+			case "x":
+				actions.slotActions.requestRelease();
+				return true;
+			case "return":
+			case "enter":
+				actions.slotActions.openOwningWorkflow();
+				return true;
+		}
+	}
+
 	if (appStore.activeTab() === "kubernetes") {
 		// Panel focus navigation for Kubernetes panels
 		const panelCount = appStore.kubernetesPanelCount;

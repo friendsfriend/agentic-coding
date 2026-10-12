@@ -69,6 +69,13 @@ const observationSchema = Schema.Union(
 	Schema.Struct({ kind: Schema.Literal("changes"), repo: Schema.String }),
 	Schema.Struct({ kind: Schema.Literal("branches"), repo: Schema.String }),
 	Schema.Struct({
+		kind: Schema.Literal("evidence"),
+		repo: Schema.String,
+		workflowId: Schema.String,
+		/** Narrow the manifest to one debug request's entries. */
+		requestId: Schema.optional(Schema.String),
+	}),
+	Schema.Struct({
 		kind: Schema.Literal("sessions-report"),
 		since: Schema.optional(Schema.String),
 	}),
@@ -207,6 +214,99 @@ export const agentEnvironmentBuildSchema = Schema.Struct({
 export type AgentEnvironmentAcquire = typeof agentEnvironmentAcquireSchema.Type;
 export type AgentEnvironmentApp = typeof agentEnvironmentAppSchema.Type;
 export type AgentEnvironmentBuild = typeof agentEnvironmentBuildSchema.Type;
+
+// ---------------------------------------------------------------------------
+// Evidence store (`add-workflow-evidence-store`)
+// ---------------------------------------------------------------------------
+// The manifest entry, the attach body and the manifest a reader gets back.
+// Every text field is length-checked so an agent-supplied caption or URL can
+// never become an unbounded manifest.
+
+/** The evidence kinds one entry may declare. */
+export const EVIDENCE_KINDS = [
+	"screenshot",
+	"video",
+	"trace",
+	"script",
+	"log",
+	"other",
+] as const;
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+
+export const evidenceKindSchema: Schema.Schema<EvidenceKind> = Schema.Literal(
+	...EVIDENCE_KINDS,
+);
+
+/** The caption and short metadata fields, bounded and control-character free. */
+const evidenceText = (max: number) =>
+	safeInstanceText.pipe(Schema.maxLength(max));
+
+/** One recorded piece of evidence. `file` is relative to the workflow's
+ * evidence root and always inside it (`[req-<requestId>/]<id>.<ext>`). */
+export const evidenceEntrySchema = Schema.Struct({
+	id: evidenceText(64),
+	kind: evidenceKindSchema,
+	file: evidenceText(512),
+	/** Empty is allowed: an entry without a caption is still listed. */
+	caption: evidenceText(512),
+	createdAt: evidenceText(64),
+	step: Schema.optional(evidenceText(128)),
+	role: Schema.optional(evidenceText(128)),
+	app: Schema.optional(evidenceText(256)),
+	/** Where the evidence came from (the page or endpoint a trace describes). */
+	url: Schema.optional(evidenceText(2048)),
+	/** The screenshot entry showing a video's final frame. */
+	poster: Schema.optional(evidenceText(64)),
+	/** Bytes on disk, so the workflow's quota is answerable from the manifest. */
+	bytes: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
+				message: () => "expected integer >= 0",
+			}),
+		),
+	),
+	/** Pinned evidence is kept by any future prune and is not charged against
+	 * the workflow's cap. */
+	pinned: Schema.optional(Schema.Boolean),
+});
+export type EvidenceEntry = typeof evidenceEntrySchema.Type;
+
+/** What one workflow's (or one debug request's) manifest holds. */
+export const evidenceManifestSchema = Schema.Struct({
+	workflowId: evidenceText(80),
+	requestId: Schema.optional(evidenceText(64)),
+	entries: Schema.Array(evidenceEntrySchema),
+	/** Non-pinned bytes recorded, and the cap they are measured against. */
+	bytes: Schema.Number.pipe(
+		Schema.filter((value) => Number.isFinite(value) && value >= 0, {
+			message: () => "expected a non-negative number",
+		}),
+	),
+	quotaBytes: Schema.Number.pipe(
+		Schema.filter((value) => Number.isFinite(value) && value >= 0, {
+			message: () => "expected a non-negative number",
+		}),
+	),
+});
+export type EvidenceManifest = typeof evidenceManifestSchema.Type;
+
+/** Body of an attach: a file the caller produced, and the caption it carries.
+ * `path` is an absolute path the server resolves and re-checks against the
+ * workflow's own roots; it is never accepted as the destination. */
+export const evidenceAttachRequestSchema = Schema.Struct({
+	path: safeInstanceText.pipe(Schema.minLength(1)),
+	kind: evidenceKindSchema,
+	caption: evidenceText(512),
+	/** The debug request this evidence belongs to, when it belongs to one. */
+	requestId: Schema.optional(safeInstanceText.pipe(Schema.minLength(1))),
+	step: Schema.optional(evidenceText(128)),
+	role: Schema.optional(evidenceText(128)),
+	app: Schema.optional(evidenceText(256)),
+	url: Schema.optional(evidenceText(2048)),
+	poster: Schema.optional(evidenceText(64)),
+	pinned: Schema.optional(Schema.Boolean),
+});
+export type EvidenceAttachRequest = typeof evidenceAttachRequestSchema.Type;
 
 // ---------------------------------------------------------------------------
 // Dashboard session wire records: event envelopes, connection state, errors

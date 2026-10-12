@@ -107,7 +107,7 @@ describe("home and category destinations", () => {
 		]);
 	});
 
-	test("environments exposes the five categories as pages", () => {
+	test("environments exposes the six categories as pages", () => {
 		expect(
 			categoryDestinations("environments", FULL_SURFACE).map(
 				(entry) => entry.id,
@@ -118,6 +118,7 @@ describe("home and category destinations", () => {
 			"environments.infrastructure",
 			"environments.scripts",
 			"environments.kubernetes",
+			"environments.slots",
 		]);
 	});
 
@@ -294,6 +295,7 @@ describe("every routed page has a definition and a label", () => {
 			"environments.infrastructure",
 			"environments.scripts",
 			"environments.kubernetes",
+			"environments.slots",
 			"environments.resource",
 			"observability",
 			"observability.traces",

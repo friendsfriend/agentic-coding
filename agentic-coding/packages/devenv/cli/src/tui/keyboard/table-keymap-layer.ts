@@ -351,6 +351,63 @@ export function registerTableKeymapLayer(
 				},
 			],
 		}),
+		keymap.registerLayer({
+			name: "Slots Tab",
+			priority: KUBERNETES_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
+			shutdown: false,
+			envModal: "none",
+			appViewMode: "table",
+			activeTab: "slots",
+			commands: [
+				{
+					name: "slots.release",
+					context: "slots",
+					category: "Slots",
+					title: "Force release app",
+					desc: "Stop the holder's run and grant the app to the next waiter.",
+					footer: "x",
+					discoverable: true,
+					run: ({ event }) => runTable(event),
+				},
+				{
+					name: "slots.open",
+					context: "slots",
+					category: "Slots",
+					title: "Open owning workflow",
+					desc: "Open the holder's or a waiter's workflow dashboard.",
+					footer: "Enter",
+					discoverable: true,
+					run: ({ event }) => runTable(event),
+				},
+			],
+			bindings: [
+				{
+					key: "x",
+					cmd: "slots.release",
+					context: "slots",
+					category: "Slots",
+					footer: "x",
+					discoverable: true,
+				},
+				{
+					key: "return",
+					cmd: "slots.open",
+					context: "slots",
+					category: "Slots",
+					footer: "Enter",
+					discoverable: true,
+				},
+				{
+					key: "enter",
+					cmd: "slots.open",
+					context: "slots",
+					category: "Slots",
+					footer: "Enter",
+					discoverable: true,
+				},
+			],
+		}),
 		...Array.from({ length: 4 }, (_, index) => {
 			const scrollCommand = `kubernetes.panel.${index}.scroll`;
 			const halfPageCommand = `kubernetes.panel.${index}.half-page`;

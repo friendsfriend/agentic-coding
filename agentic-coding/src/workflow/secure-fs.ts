@@ -248,10 +248,15 @@ export function openSecureFile(
 	return fd;
 }
 
-export function writeAtomicPrivateFile(
+/** Write bytes as a private file through an already-open directory descriptor:
+ * a fresh 0600 temporary in the same directory, then one rename, so a reader
+ * never sees a half-written file and an existing file is replaced whole. The
+ * binary counterpart of `writeAtomicPrivateFile`, for evidence whose content is
+ * an image, a video or a trace rather than text. */
+export function writeAtomicPrivateBytes(
 	directory: number,
 	name: string,
-	content: string,
+	content: Uint8Array,
 	mode: number,
 ): void {
 	const temporary = `${name}.${randomUUID()}.tmp`;
@@ -279,6 +284,15 @@ export function writeAtomicPrivateFile(
 		libc.symbols.unlinkat(directory, encodedTemporary, 0);
 		throw errnoMessage("renameat", name);
 	}
+}
+
+export function writeAtomicPrivateFile(
+	directory: number,
+	name: string,
+	content: string,
+	mode: number,
+): void {
+	writeAtomicPrivateBytes(directory, name, Buffer.from(content, "utf8"), mode);
 }
 
 export function closeSecureDirectory(directory: number): void {

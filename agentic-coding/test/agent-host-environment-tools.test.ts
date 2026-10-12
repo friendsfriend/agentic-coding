@@ -217,6 +217,140 @@ describe("environment tool surface", () => {
 	});
 });
 
+// `evidence_attach` and `evidence_list` (`add-workflow-evidence-store`, task
+// 3.1): the two tools every durable run is offered beside the `env_*` surface,
+// the owner capability they present, the run's own working directory a relative
+// path is resolved against, and the producing step and role they report.
+describe("evidence tools", () => {
+	const EVIDENCE_ENV = {
+		HERDR_WORKFLOW_ID: "wf-alpha",
+		HERDR_RUN_ID: "run-1",
+		HERDR_STEP_ID: "core.implementation",
+		HERDR_ROLE: "worker",
+		AGENTIC_ENV_URL: "http://127.0.0.1:4050",
+		AGENTIC_ENV_TOKEN: "capability-for-wf-alpha",
+	};
+	const evidenceLookup: RunContextLookup = () => ({
+		runId: "run-1",
+		cwd: "/tmp/evidence-run",
+		env: EVIDENCE_ENV,
+	});
+
+	async function callEvidence(
+		name: string,
+		args: unknown,
+		server: FakeServer,
+	): Promise<{ text: string; isError: boolean }> {
+		const extension = createEnvironmentExtension(evidenceLookup, {
+			fetch: fakeFetch(server),
+		});
+		const result = await toolOf(extension, name).execute(args, apiOf([]), {});
+		return {
+			text: result.content.map((block) => block.text).join(""),
+			isError: result.isError === true,
+		};
+	}
+
+	test("attach reports the entry and names the producing step", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ id: "01JCAAAAAAAAAAAAAAAAAAAAAA", kind: "screenshot" }],
+		};
+		const result = await callEvidence(
+			"evidence_attach",
+			{
+				path: "/tmp/evidence-run/shot.png",
+				kind: "screenshot",
+				caption: "checkout, empty cart",
+			},
+			server,
+		);
+		expect(result.isError).toBe(false);
+		expect(result.text).toContain("01JCAAAAAAAAAAAAAAAAAAAAAA");
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/evidence/attach",
+		);
+		expect(server.calls[0]?.owner).toBe("workflow:wf-alpha");
+		expect(server.calls[0]?.body).toEqual({
+			path: "/tmp/evidence-run/shot.png",
+			kind: "screenshot",
+			caption: "checkout, empty cart",
+			step: "core.implementation",
+			role: "worker",
+		});
+	});
+
+	test("a relative path is resolved against the run's own directory", async () => {
+		const server: FakeServer = { calls: [], replies: [{ id: "x" }] };
+		await callEvidence(
+			"evidence_attach",
+			{ path: "artifacts/shot.png", kind: "screenshot", caption: "shot" },
+			server,
+		);
+		expect(server.calls[0]?.body).toMatchObject({
+			path: "/tmp/evidence-run/artifacts/shot.png",
+		});
+	});
+
+	test("a request id narrows where the entry is stored", async () => {
+		const server: FakeServer = { calls: [], replies: [{ id: "x" }] };
+		await callEvidence(
+			"evidence_attach",
+			{
+				path: "/tmp/evidence-run/trace.zip",
+				kind: "trace",
+				caption: "trace",
+				requestId: "42",
+			},
+			server,
+		);
+		expect(server.calls[0]?.body).toMatchObject({ requestId: "42" });
+	});
+
+	test("list reads the manifest, narrowed to one request", async () => {
+		const server: FakeServer = { calls: [], replies: [{ entries: [] }] };
+		const all = await callEvidence("evidence_list", {}, server);
+		expect(all.isError).toBe(false);
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/evidence",
+		);
+		await callEvidence("evidence_list", { requestId: "42" }, server);
+		expect(server.calls[1]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/evidence?requestId=42",
+		);
+	});
+
+	test("a refusal is reported as the tool's own failure", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					error: {
+						code: "evidence-path",
+						message: "resolves outside the workflow's checkout",
+					},
+				},
+			],
+		};
+		const result = await callEvidence(
+			"evidence_attach",
+			{ path: "/etc/passwd", kind: "log", caption: "nope" },
+			server,
+		);
+		expect(result.isError).toBe(true);
+		expect(result.text).toContain("evidence_attach");
+		expect(result.text).toContain("resolves outside");
+	});
+
+	test("both evidence tools are not replayable either", () => {
+		const extension = createEnvironmentExtension(evidenceLookup, {
+			fetch: fakeFetch({ calls: [], replies: [] }),
+		});
+		for (const name of ["evidence_attach", "evidence_list"])
+			expect(toolOf(extension, name).replay).toBeUndefined();
+	});
+});
+
 describe("env_start waits for a held app", () => {
 	test("a held app is waited out and reported as progress, then the start is returned", async () => {
 		const server: FakeServer = {

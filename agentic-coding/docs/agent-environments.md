@@ -136,7 +136,7 @@ implicitly selected.
 | `POST /api/v1/environment/apps/{app}/release` | Developer force release: stops the holder's run, leaves it the `released-by-developer` notice, and lets the queue grant the next waiter. |
 | `POST /api/v1/environment/apps/{app}/stop` | Stops the app's current run without the notice. |
 | `POST /api/v1/environment/apps/teardown` | `{ owner }`; stops every app that owner holds through the normal stop path and answers the apps it stopped. Idempotent, and `user` is refused. |
-| `GET /api/v1/environment/apps/slots` | Every configured app's `holder`, `status` and `waiters`. |
+| `GET /api/v1/environment/apps/slots` | Every configured app's `holder`, `status`, `waiters`/`waiting` (each with wait start and queue position), `holderSince`, `idleMs`, `idleTtlMs` (agent holders only) and `endpoints`. |
 
 `endpoints` report the definition's declared endpoint exports (Kubernetes
 targets). A Compose target's ports are its own static mapping, so there is
@@ -175,6 +175,15 @@ once and then starts cleanly.
   the same in all three. Only these bounded fields are published. A request may
   not name a `configOverlay`: the configuration root the server discovers and
   executes from is never chosen by a client.
+- The Environments feature's **Slots** section lists every app that is
+  agent-held or has waiters, from the same `environment.slot.*` envelopes over
+  the domain stream plus a re-snapshot on a stream gap: holder, status,
+  endpoints, idle time with the agent TTL remaining, and the waiting workflows
+  in queue order with their wait time. `x` force releases the selected app after
+  a confirmation that names the holder and the next waiter, and `Enter` opens
+  the holder's (or a waiter's) workflow dashboard through the shell's sidebar
+  resolution rule. The app list marks an agent-held app so a refused human start
+  explains itself.
 
 ## Upgrading from the parallel era
 

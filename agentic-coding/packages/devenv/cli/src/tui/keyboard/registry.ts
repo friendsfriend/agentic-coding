@@ -346,6 +346,22 @@ const RAW_KEYBINDS: KeybindDef[] = [
 		category: "Docker",
 	},
 
+	// ========== slots (show-environment-instances) ==========
+	{
+		keys: ["x"],
+		description: "Force release the selected app",
+		footerDescription: "Release",
+		context: "slots",
+		category: "Slots",
+	},
+	{
+		keys: ["Enter"],
+		description: "Open the owning workflow's dashboard",
+		footerDescription: "Open",
+		context: "slots",
+		category: "Slots",
+	},
+
 	// ========== kubernetes ==========
 	{
 		keys: ["Shift+J", "Shift+K"],

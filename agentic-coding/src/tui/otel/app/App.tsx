@@ -331,6 +331,7 @@ export function App(props: {
 		onModalChange: (open: boolean) => void,
 		destination: () => EnvironmentDestination | undefined,
 		onStartWorkflow: (project: EnvironmentLaunchRequest) => void,
+		onOpenWorkflow: (workflowId: string) => void,
 	) => JSX.Element;
 	/** Keymap/host context; see `DashboardTab`. */
 	dashboard?: DashboardTab;
@@ -435,6 +436,21 @@ export function App(props: {
 			// workflow's rows live in the shared wiki/research store.
 			workflowRoute(overview.target, overview.state.workflowId),
 		);
+		setFocusPanel("content");
+	};
+	/** Open a workflow dashboard by id (the Slots section's open-workflow
+	 * action): resolve through the sidebar's own rows when it has seen the
+	 * workflow, so repository-independent targets resolve like every other
+	 * sidebar open. */
+	const openWorkflowById = (workflowId: string): void => {
+		const overview = sidebarOverviews().find(
+			(candidate) => candidate.state.workflowId === workflowId,
+		);
+		if (overview) {
+			openWorkflow(overview);
+			return;
+		}
+		pages.navigate(workflowRoute(props.repos[0] ?? "", workflowId));
 		setFocusPanel("content");
 	};
 	/** Move the sidebar cursor onto the workflow the page body is showing, so
@@ -2847,6 +2863,7 @@ export function App(props: {
 												name: project.name,
 												repository: project.repository,
 											}),
+										(workflowId) => openWorkflowById(workflowId),
 									)}
 								</box>
 							)}

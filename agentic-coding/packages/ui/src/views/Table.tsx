@@ -151,6 +151,9 @@ function WorkItemTable<T = string>(
 			return app.interpreter ? ` • ${app.interpreter}` : "";
 		}
 		const details = [
+			app.rowKind === "app" && app.slotHolder?.startsWith("workflow:")
+				? "agent-held"
+				: undefined,
 			gitStatusText(app),
 			app.rowKind === "app" && app.branch ? `branch ${app.branch}` : undefined,
 		]

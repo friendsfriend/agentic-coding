@@ -55,6 +55,7 @@ const CATEGORY_LABELS: Readonly<Record<string, string>> = {
 	infrastructure: "Infrastructure",
 	scripts: "Scripts",
 	kubernetes: "Kubernetes",
+	slots: "Slots",
 };
 
 const CATEGORY_DESCRIPTIONS: Readonly<Record<string, string>> = {
@@ -63,6 +64,7 @@ const CATEGORY_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	infrastructure: "Infrastructure services and their logs",
 	scripts: "Configured scripts and task runs",
 	kubernetes: "Cluster status, workloads and pods",
+	slots: "App holders and waiting workflows",
 };
 
 const VIEW_DESCRIPTIONS: Readonly<Record<string, string>> = {

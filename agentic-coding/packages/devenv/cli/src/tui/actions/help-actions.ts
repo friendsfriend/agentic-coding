@@ -31,6 +31,7 @@ const CONTEXT_TITLES: Record<string, string> = {
 	global: "Global",
 	table: "Repository Table",
 	kubernetes: "Kubernetes Cluster",
+	slots: "App Slots",
 	changeRequests: "Change Request List",
 	changeRequestDetail: "Change Request Detail",
 	jobs: "Pipeline Jobs",
@@ -66,6 +67,12 @@ const CONTEXT_TITLES: Record<string, string> = {
 	confirmDialog: "Confirm Dialog",
 	profilePicker: "Profile Picker",
 };
+
+function tableContextForTab(activeTab: string): string {
+	return activeTab === "kubernetes" || activeTab === "slots"
+		? activeTab
+		: "table";
+}
 
 function keyTokens(key: string): string[] {
 	return key
@@ -201,12 +208,10 @@ export function createHelpActions(
 		}
 		const currentView = appStore.previousViewMode() ?? "table";
 		const context =
-			currentView === "table" && appStore.activeTab() === "kubernetes"
-				? "kubernetes"
+			currentView === "table"
+				? tableContextForTab(appStore.activeTab())
 				: currentView;
-		const title =
-			CONTEXT_TITLES[context] ??
-			(context === "kubernetes" ? "Kubernetes" : "Help");
+		const title = CONTEXT_TITLES[context] ?? "Help";
 		return {
 			title,
 			sections: keymap
@@ -288,8 +293,8 @@ export function createHelpActions(
 
 		const viewMode = appStore.viewMode();
 		const context =
-			viewMode === "table" && appStore.activeTab() === "kubernetes"
-				? "kubernetes"
+			viewMode === "table"
+				? tableContextForTab(appStore.activeTab())
 				: viewMode;
 		const binds = getFooterKeybindsForContext(context);
 		if (binds.length > 0) return binds;

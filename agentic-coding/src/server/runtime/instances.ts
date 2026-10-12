@@ -304,12 +304,31 @@ export type AcquireSlotsResult =
 	| SlotWait
 	| SlotCancelled;
 
+/** One queued owner of an app slot, with the instant its wait began. */
+export interface SlotWaiterView {
+	readonly owner: EnvironmentOwner;
+	readonly since: string;
+	/** 1-based queue position for the app. */
+	readonly position: number;
+}
+
 /** One app's slot as `GET /api/v1/environment/apps/slots` reports it. */
 export interface AppSlot {
 	readonly app: string;
 	readonly holder: EnvironmentOwner | null;
 	readonly status: EnvironmentInstanceStatus | "observed" | null;
+	/** Waiting owners in queue order (the owner strings of `waiting`). */
 	readonly waiters: EnvironmentOwner[];
+	/** `waiters` with each owner's wait start and queue position. */
+	readonly waiting: readonly SlotWaiterView[];
+	/** When the current holder acquired the app (ISO), or null when it holds no row. */
+	readonly holderSince: string | null;
+	/** Milliseconds since the holder's last activity, or null when unobserved. */
+	readonly idleMs: number | null;
+	/** Idle TTL the server applies to agent holders, or null for humans/free apps. */
+	readonly idleTtlMs: number | null;
+	/** The definition's declared endpoint exports, by name. */
+	readonly endpoints: Readonly<Record<string, string>>;
 }
 
 interface QueuedRequest {
@@ -489,22 +508,34 @@ export class EnvironmentInstanceController {
 	async slots(): Promise<AppSlot[]> {
 		await this.ready;
 		await this.refreshScriptRows();
-		const waiters = new Map<string, EnvironmentOwner[]>();
-		for (const [app, queue] of this.queues)
-			waiters.set(
-				app,
-				queue.map((waiter) => waiter.owner),
-			);
+		const at = this.now().getTime();
 		const rows = await Promise.all(
 			this.apps()
 				.filter((app) => app.appType !== "library" && app.appType !== "LIB")
 				.map(async (app) => {
 					const occupant = await this.occupancyCached(app.ident);
+					const record = this.state.findActiveEnvironmentInstance(app.ident);
+					const publicInstance = record ? this.toPublic(record) : undefined;
+					const queue = this.queues.get(app.ident) ?? [];
+					const waiting: SlotWaiterView[] = queue.map((waiter, index) => ({
+						owner: waiter.owner,
+						since: new Date(waiter.enqueuedAt).toISOString(),
+						position: index + 1,
+					}));
+					const lastActivity = record
+						? Date.parse(record.lastActivityAt)
+						: Number.NaN;
 					return {
 						app: app.ident,
 						holder: occupant?.holder ?? null,
 						status: occupant?.status ?? null,
-						waiters: waiters.get(app.ident) ?? [],
+						waiters: waiting.map((waiter) => waiter.owner),
+						waiting,
+						holderSince: record?.createdAt ?? null,
+						idleMs: Number.isFinite(lastActivity) ? at - lastActivity : null,
+						idleTtlMs:
+							record && record.owner !== "user" ? this.idleTtlMs() : null,
+						endpoints: publicInstance?.endpoints ?? {},
 					};
 				}),
 		);
