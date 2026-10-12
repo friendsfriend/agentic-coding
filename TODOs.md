@@ -15,7 +15,7 @@ Big ones:
  │ 3  │ add-agent-environment-tools             │ 1, 2                               │ First change agents can use: the env_* tools, with env_start blocking while it waits.                                           │ done
  │ 4  │ show-environment-instances              │ 1, 2                               │ As soon as agents hold apps, you can see who holds and who waits, and force-release.                                            │ done
  │ 5  │ add-workflow-evidence-store             │ —                                  │ Storage the browser needs. It has no dependencies, so it can also run in parallel with 1–4.                                     │ done
- │ 6  │ add-dashboard-evidence-panel            │ 5                                  │ Shows evidence in the dashboard before the agents start producing it.                                                           │
+ │ 6  │ add-dashboard-evidence-panel            │ 5                                  │ Shows evidence in the dashboard before the agents start producing it.                                                           │ done
  │ 7  │ add-agent-browser-sessions              │ 3, 5                               │ Headless browser, screenshots and video.                                                                                        │
  │ 8  │ add-agent-debug-tools                   │ 1, 3                               │ OTel wiring and otel_query / db_query / http_request.                                                                           │
  │ 9  │ add-environment-setup-workflow          │ 1, 3, 8                            │ Agents write the run definitions, including the OTel wiring from 8.                                                             │
@@ -33,3 +33,4 @@ Small ones:
 * Orchestrator 
   * Improve tool descriptions so that orchestrator instantly knows which data to request from the user first -> e.g model preset and so on
   * If no default is set in the menu -> Show message in transcript as red error for the user to select /model and /thinking before asking questions
+* Improve mouse navigation. Many components currently dont support mouse clicking (agents panel, and so on)
