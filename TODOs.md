@@ -34,3 +34,6 @@ Small ones:
   * Improve tool descriptions so that orchestrator instantly knows which data to request from the user first -> e.g model preset and so on
   * If no default is set in the menu -> Show message in transcript as red error for the user to select /model and /thinking before asking questions
 * Improve mouse navigation. Many components currently dont support mouse clicking (agents panel, and so on)
+* Make the server be deployable on a server
+  * User handling
+  * Repository handling
