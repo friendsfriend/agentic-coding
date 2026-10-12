@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { activeErrorModal, dismissErrorModal } from "@ui";
 import { onCleanup } from "solid-js";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
@@ -24,7 +25,12 @@ import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
-import { advance, renderUntil, type Test } from "../app/support/terminal.ts";
+import {
+	advance,
+	pressEscapeAndSettle,
+	renderUntil,
+	type Test,
+} from "../app/support/terminal.ts";
 
 function overview(
 	workflowId: string,
@@ -108,6 +114,10 @@ afterEach(() => {
 	delete process.env.HERDR_WORKFLOW_CONFIG;
 	for (const dir of tempConfigDirs.splice(0))
 		rmSync(dir, { recursive: true, force: true });
+	// The shell's error modal is a module-level store, so it outlives a destroyed
+	// renderer: a dashboard whose background reads fail leaves it up for the next
+	// test in this process, where it would own every key and every click.
+	dismissErrorModal();
 });
 
 function persistedSidebarMode(): unknown {
@@ -124,7 +134,14 @@ const OVERVIEWS = [
 	overview("wf-done", "completed"),
 ];
 
-function stubGateway(overviews: WorkflowOverview[] = OVERVIEWS): void {
+function stubGateway(
+	overviews: WorkflowOverview[] = OVERVIEWS,
+	/** How the dashboard's own view read answers. The workspace cycle opens real
+	 * dashboard pages, so a cycle test keeps that read pending: a failed
+	 * observation raises the global error modal, which owns every key until it is
+	 * dismissed and would swallow the next cycle press. */
+	view: "throw" | "pending" = "throw",
+): void {
 	configureGateway({
 		kind: "in-process",
 		connectionState: () => "open",
@@ -138,9 +155,12 @@ function stubGateway(overviews: WorkflowOverview[] = OVERVIEWS): void {
 				);
 			throw new Error(`unexpected observation ${observation.kind}`);
 		},
-		view: async () => {
-			throw new Error("no workflow view in this stub");
-		},
+		view:
+			view === "pending"
+				? () => new Promise<never>(() => {})
+				: async () => {
+						throw new Error("no workflow view in this stub");
+					},
 		deleteWorkflow: async (request: { repo: string; workflowId: string }) => {
 			deletedWorkflows.push(request);
 			return { worktreeRemoved: false };
@@ -149,7 +169,11 @@ function stubGateway(overviews: WorkflowOverview[] = OVERVIEWS): void {
 	} as unknown as DashboardGateway);
 }
 
-async function renderShell(): Promise<Test> {
+async function renderShell(
+	/** Kitty keyboard protocol: the terminal that reports Ctrl+H as its own key
+	 * instead of the Backspace byte. */
+	options: { kittyKeyboard?: boolean } = {},
+): Promise<Test> {
 	const db = new TraceDb(mkdtempSync(join(tmpdir(), "sidebar-render-")));
 	const configDir = mkdtempSync(join(tmpdir(), "sidebar-config-"));
 	currentConfigFile = join(configDir, "config.json");
@@ -175,7 +199,7 @@ async function renderShell(): Promise<Test> {
 				/>
 			);
 		},
-		{ width: 140, height: 40 },
+		{ width: 140, height: 40, ...options },
 	);
 	await advance(t);
 	return t;
@@ -192,6 +216,31 @@ async function focusSidebar(t: Test): Promise<void> {
 async function unfocusSidebar(t: Test): Promise<void> {
 	t.mockInput.pressKey("s", { ctrl: true });
 	await advance(t, 4, 60);
+}
+
+/** The breadcrumb row of a frame: the line carrying the separator, or "" on a
+ * page with no ancestors (Home). It is read from the frame the renderer handed
+ * back rather than captured again, so a predicate never re-captures mid-render
+ * and the workspace the page body landed on is judged by the crumb alone — the
+ * sidebar rows name workflows too. */
+function crumbLine(frame: string): string {
+	return frame.split("\n").find((line) => line.includes("›")) ?? "";
+}
+
+/** Wait until the page body shows `workspace` — the crumb names the resource of
+ * the workspace a cycle press opened. */
+async function renderWorkspace(t: Test, workspace: string): Promise<boolean> {
+	return renderUntil(t, (frame) => crumbLine(frame).includes(workspace));
+}
+
+/** A workflow dashboard reads its own view and observability data on mount, and
+ * this stub answers only the workflow list, so the dashboard reports the failed
+ * reads through the shell's global error modal — which owns every key until it is
+ * dismissed. A real dashboard reaches its gateway, so this only ever fires here;
+ * clear it so the next cycle press is delivered instead of being eaten. */
+async function dismissObservationError(t: Test): Promise<void> {
+	if (!activeErrorModal()) return;
+	await pressEscapeAndSettle(t, () => !activeErrorModal());
 }
 
 test("the sidebar collapses to indices while unfocused and expands on focus", async () => {
@@ -662,6 +711,127 @@ test("n reports when no server is running to attach the window to", async () => 
 	} finally {
 		if (previousUrl !== undefined)
 			process.env.AGENTIC_WORKFLOW_URL = previousUrl;
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("a kitty-protocol terminal cycles back with Ctrl+H itself", async () => {
+	stubGateway(OVERVIEWS, "pending");
+	const t = await renderShell({ kittyKeyboard: true });
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+		// Forward onto the first row, then back from the page body: where the
+		// terminal reports Ctrl+H as its own key, both directions work from any
+		// surface and no Backspace is involved.
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
+		await dismissObservationError(t);
+		t.mockInput.pressKey("h", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "Orchestrator")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Ctrl+L and Ctrl+H open the next and previous workspace, wrapping", async () => {
+	stubGateway(OVERVIEWS, "pending");
+	const t = await renderShell();
+	try {
+		// The cycle walks the sidebar's entries in order: the pinned Orchestrator,
+		// then the active filter's rows, newest first. The crumb names the workspace
+		// the page body landed on — the sidebar rows name workflows either way — so
+		// it is what a cycle press is judged by.
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
+
+		await dismissObservationError(t);
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-active")).toBe(true);
+		// Past the last workflow the cycle wraps onto the pinned Orchestrator.
+		await dismissObservationError(t);
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "Orchestrator")).toBe(true);
+
+		// Backwards wraps the same way: the Orchestrator's previous entry is the
+		// last row, and the first row's previous entry is the pinned Orchestrator.
+		// Ctrl+H arrives as the Backspace byte on a terminal without the kitty
+		// keyboard protocol, and the cycle accepts that byte only while the sidebar
+		// holds focus — so the walk back starts from the sidebar, which Ctrl+S puts
+		// on the workspace the page body is showing.
+		for (const expected of ["wf-active", "wf-attention", "Orchestrator"]) {
+			await dismissObservationError(t);
+			await focusSidebar(t);
+			t.mockInput.pressKey("h", { ctrl: true });
+			await advance(t);
+			expect(await renderWorkspace(t, expected)).toBe(true);
+		}
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Ctrl+L keeps cycling while the page body holds the keys", async () => {
+	stubGateway(OVERVIEWS, "pending");
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+		// Opening a workspace focuses its page body: the next Ctrl+L walks on from
+		// there, not from the panel cursor left behind, because the cycle is a host
+		// key rather than a sidebar-layer one.
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
+		await dismissObservationError(t);
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-active")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("the Backspace byte cycles back only while the sidebar holds focus", async () => {
+	stubGateway(OVERVIEWS, "pending");
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+		// A terminal without the kitty keyboard protocol reports Ctrl+H as the
+		// Backspace byte. The sidebar is the one surface where that byte edits no
+		// text, so it cycles there: the cursor sits on the first row, and the entry
+		// before it is the pinned Orchestrator.
+		t.mockInput.pressKey("j");
+		await advance(t);
+		// The terminal's Ctrl+H byte, which is also what `pressBackspace` sends: the
+		// two are one key on a terminal without the kitty keyboard protocol.
+		t.mockInput.pressBackspace();
+		await advance(t);
+		expect(await renderWorkspace(t, "Orchestrator")).toBe(true);
+
+		// Everywhere else the byte keeps its own meaning: a Backspace in the page
+		// body must never switch the workspace behind the reader's back.
+		await dismissObservationError(t);
+		t.mockInput.pressKey("l", { ctrl: true });
+		await advance(t);
+		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
+		t.mockInput.pressBackspace();
+		await advance(t);
+		expect(crumbLine(t.captureCharFrame())).toContain("wf-attention");
+	} finally {
 		t.renderer.destroy();
 		clearGateway();
 	}

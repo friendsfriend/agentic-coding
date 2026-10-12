@@ -115,6 +115,23 @@ export function cycleFilter(filter: SidebarFilter): SidebarFilter {
 	return SIDEBAR_FILTERS[(index + 1) % SIDEBAR_FILTERS.length].id;
 }
 
+/**
+ * Next cursor position in a wrapped walk over the sidebar's entries — the
+ * workspace cycle (`Ctrl+H`/`Ctrl+L`). An empty cursor space has nowhere to go,
+ * and a position left outside the space (the filter or a poll shrank the list
+ * under the cursor) clamps into it before stepping, so a cycle can never move
+ * the cursor out of range.
+ */
+export function cycleCursor(
+	index: number,
+	count: number,
+	delta: number,
+): number {
+	if (count <= 0) return 0;
+	const from = Math.min(Math.max(index, 0), count - 1);
+	return (((from + delta) % count) + count) % count;
+}
+
 export function filterLabel(filter: SidebarFilter): string {
 	return SIDEBAR_FILTERS.find((entry) => entry.id === filter)?.label ?? filter;
 }

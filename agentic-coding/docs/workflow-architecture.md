@@ -55,7 +55,13 @@ resolves a row through `target` and never through `state.repository`.
 deletes the workflow (its store rows and worktree directory; the branch is
 kept, so the committed work stays reviewable), and `Ctrl+S` toggles focus between
 the sidebar and the page body on every surface (it is a host key, so feature
-views that claim `h`/`l` cannot swallow it). The sidebar collapses to
+views that claim `h`/`l` cannot swallow it). `Ctrl+H`/`Ctrl+L` open the
+previous/next workspace — the pinned Orchestrator and the filter's rows in
+order, wrapping at both ends — and are host keys for the same reason. A
+terminal without the kitty keyboard protocol reports `Ctrl+H` as the Backspace
+byte, so a Backspace counts as `Ctrl+H` only while the sidebar holds focus:
+that is the one surface where the two cannot be told apart from text editing.
+The sidebar collapses to
 the workspace index while unfocused; `ui.sidebar_mode: "permanent"` keeps it
 expanded, and the `e` toggle (or the title/strip glyph) writes that value back
 to the user configuration so it survives restarts. Side apps that used to run in a pane (the editor opened

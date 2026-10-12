@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import type { WorkflowOverview } from "../src/contracts/workflow.ts";
 import {
 	clip,
+	cycleCursor,
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
@@ -204,6 +205,44 @@ describe("workspace sidebar pinned entry", () => {
 		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, true), true)).toBe(
 			2,
 		);
+	});
+});
+
+describe("workspace sidebar cycle", () => {
+	test("wraps at both ends and never leaves the cursor space", () => {
+		// Three entries: forward walks 0→1→2→0, backward 0→2→1→0.
+		expect(cycleCursor(0, 3, 1)).toBe(1);
+		expect(cycleCursor(1, 3, 1)).toBe(2);
+		expect(cycleCursor(2, 3, 1)).toBe(0);
+		expect(cycleCursor(0, 3, -1)).toBe(2);
+		expect(cycleCursor(2, 3, -1)).toBe(1);
+		expect(cycleCursor(1, 3, -1)).toBe(0);
+	});
+
+	test("a step longer than the space still lands inside it", () => {
+		expect(cycleCursor(0, 3, 5)).toBe(2);
+		expect(cycleCursor(0, 3, -5)).toBe(1);
+		expect(cycleCursor(0, 3, 3)).toBe(0);
+	});
+
+	test("the pinned Orchestrator alone keeps the cycle on itself", () => {
+		// No workflows under the filter: the pin is the whole cursor space.
+		expect(cycleCursor(0, 1, 1)).toBe(0);
+		expect(cycleCursor(0, 1, -1)).toBe(0);
+	});
+
+	test("an empty cursor space has nowhere to go", () => {
+		// No pin and no rows: the cycle stays put instead of inventing a row.
+		expect(cycleCursor(3, 0, 1)).toBe(0);
+		expect(cycleCursor(0, 0, -1)).toBe(0);
+	});
+
+	test("a position left outside the space clamps before stepping", () => {
+		// A poll or a filter change can shrink the list under the cursor; the
+		// cycle must not step from a position that no longer exists.
+		expect(cycleCursor(9, 3, 1)).toBe(0);
+		expect(cycleCursor(9, 3, -1)).toBe(1);
+		expect(cycleCursor(-4, 3, -1)).toBe(2);
 	});
 });
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
-import { observabilityKeybindCatalog } from "../../src/tui/otel/app/keybinds.ts";
+import {
+	observabilityKeybindCatalog,
+	workspaceSidebarKeybindCatalog,
+	workspaceSidebarPanelSection,
+} from "../../src/tui/otel/app/keybinds.ts";
 
 /** The label a footer surface actually renders for an entry. */
 const footerLabels = (
@@ -95,5 +99,32 @@ describe("observability shell keybind catalog", () => {
 		const all = catalogKeybinds(catalog).map((kb) => kb.action);
 		expect(all).toContain("visual line selection");
 		expect(all).toContain("next/previous note");
+	});
+});
+
+describe("workspace sidebar keybind catalog", () => {
+	it("lists the workspace cycle with the sidebar's own keys", () => {
+		const catalog = workspaceSidebarKeybindCatalog();
+		const all = catalogKeybinds(catalog);
+		expect(all.find((kb) => kb.key === "Ctrl+H")?.action).toBe(
+			"previous workspace",
+		);
+		expect(all.find((kb) => kb.key === "Ctrl+L")?.action).toBe(
+			"next workspace",
+		);
+		// Navigation, so `?` help documents it and the footer keeps advertising
+		// the sidebar's own actions.
+		expect(all.find((kb) => kb.key === "Ctrl+H")?.standard).toBe(true);
+		expect(all.find((kb) => kb.key === "Ctrl+L")?.standard).toBe(true);
+		expect(footerKeybinds(catalog).map((kb) => kb.key)).not.toContain("Ctrl+H");
+	});
+
+	it("names the cycle in the page body's panel section", () => {
+		// The page body advertises how to reach and walk the sidebar, so the
+		// cycle travels with the Ctrl+S toggle rather than living only in the
+		// panel's own catalog.
+		expect(
+			catalogKeybinds([workspaceSidebarPanelSection()]).map((kb) => kb.key),
+		).toEqual(["Ctrl+S", "Ctrl+H", "Ctrl+L"]);
 	});
 });

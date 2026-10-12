@@ -181,6 +181,7 @@ import {
 import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
 import { activeNotification, notify } from "./notifications.ts";
 import {
+	cycleCursor,
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
@@ -441,12 +442,16 @@ export function App(props: {
 	 * the filter's workflow rows. */
 	const sidebarEntryCount = (): number =>
 		sidebarCursorCount(sidebarRows().length, orchestratorPinned());
-	/** The workflow the sidebar cursor names, or undefined while it sits on the
-	 * pinned Orchestrator entry. */
-	const selectedSidebarWorkflow = (): WorkflowOverview | undefined => {
-		const index = sidebarWorkflowIndex(sidebarIndex(), orchestratorPinned());
+	/** The workflow one sidebar cursor position names, or undefined while the
+	 * position holds the pinned Orchestrator entry. */
+	const sidebarWorkflowAt = (cursor: number): WorkflowOverview | undefined => {
+		const index = sidebarWorkflowIndex(cursor, orchestratorPinned());
 		return index >= 0 ? sidebarRows()[index] : undefined;
 	};
+	/** The workflow the sidebar cursor names, or undefined while it sits on the
+	 * pinned Orchestrator entry. */
+	const selectedSidebarWorkflow = (): WorkflowOverview | undefined =>
+		sidebarWorkflowAt(sidebarIndex());
 	/** Open one workflow's dashboard in the page body and focus it. */
 	const openWorkflow = (overview: WorkflowOverview): void => {
 		pages.navigate(
@@ -476,20 +481,50 @@ export function App(props: {
 		pages.navigate(workflowRoute(props.repos[0] ?? "", workflowId));
 		setFocusPanel("content");
 	};
+	/** Cursor position of the workspace the page body is showing: the pinned
+	 * Orchestrator page lands on the leading slot and a workflow dashboard on its
+	 * row. `undefined` while the page is neither (another page, or a dashboard
+	 * opened for a filtered-out or not-yet-polled workflow), so a reader is never
+	 * moved onto a wrong row. */
+	const openWorkspaceCursor = (): number | undefined => {
+		if (orchestratorPinned() && currentPage() === "orchestrator") return 0;
+		const index = sidebarIndexFor(sidebarRows(), workflow());
+		if (index < 0) return undefined;
+		return sidebarCursorForWorkflow(index, orchestratorPinned());
+	};
 	/** Move the sidebar cursor onto the entry the page body is showing, so
 	 * focusing the panel from a dashboard lands on that row instead of wherever
-	 * the cursor was left: the Orchestrator page lands on its pinned entry, a
-	 * workflow dashboard on its row. A dashboard opened for a filtered-out or
-	 * not-yet-polled workflow leaves the cursor alone rather than jumping to a
-	 * wrong row. */
+	 * the cursor was left, and leaves it alone when nothing on screen has a row. */
 	const revealOpenWorkflow = (): void => {
-		if (orchestratorPinned() && currentPage() === "orchestrator") {
-			setSidebarIndex(0);
+		const cursor = openWorkspaceCursor();
+		if (cursor !== undefined) setSidebarIndex(cursor);
+	};
+	/** Open the workspace one sidebar cursor position names: the pinned
+	 * Orchestrator opens its page, every workflow row its dashboard. */
+	const openWorkspaceAt = (cursor: number): void => {
+		if (orchestratorPinned() && cursor === 0) {
+			openOrchestrator();
 			return;
 		}
-		const index = sidebarIndexFor(sidebarRows(), workflow());
-		if (index >= 0)
-			setSidebarIndex(sidebarCursorForWorkflow(index, orchestratorPinned()));
+		const entry = sidebarWorkflowAt(cursor);
+		if (entry) openWorkflow(entry);
+	};
+	/** Ctrl+H/Ctrl+L: open the previous/next workspace, walking the sidebar's
+	 * entries in order and wrapping at both ends. The pinned Orchestrator is one
+	 * of those entries whenever it is navigable, so the cycle includes it. The
+	 * walk starts from the workspace on screen rather than from a cursor the
+	 * reader cannot see, and falls back to the panel's own cursor (a filtered-out
+	 * dashboard, or a page that is not a workspace at all). */
+	const cycleWorkspace = (delta: number): void => {
+		const count = sidebarEntryCount();
+		if (count === 0) return;
+		const next = cycleCursor(
+			openWorkspaceCursor() ?? sidebarIndex(),
+			count,
+			delta,
+		);
+		setSidebarIndex(next);
+		openWorkspaceAt(next);
 	};
 	/** Focus the workspace sidebar, revealing the open workflow on its way in. */
 	const focusSidebar = (): void => {
@@ -1941,6 +1976,24 @@ export function App(props: {
 			if (focusPanel() === "sidebar") setFocusPanel("content");
 			else focusSidebar();
 			return;
+		}
+
+		// The workspace cycle: Ctrl+H/Ctrl+L open the previous/next workspace and
+		// wrap at both ends (also host keybinds, so a workflow dashboard or an
+		// environment table cannot swallow the switch). A terminal without the
+		// kitty keyboard protocol reports Ctrl+H as the Backspace byte, so a
+		// Backspace counts as Ctrl+H while the sidebar holds focus — the one
+		// surface where nothing edits text, and the only place the conflation can
+		// be told apart from typing.
+		if (nav.modal() === "none" && sidebarAvailable()) {
+			if (event.ctrl && (key === "h" || key === "l")) {
+				cycleWorkspace(key === "l" ? 1 : -1);
+				return;
+			}
+			if (key === "backspace" && focusPanel() === "sidebar") {
+				cycleWorkspace(-1);
+				return;
+			}
 		}
 
 		// The one Escape ladder owns every Escape press from here on.

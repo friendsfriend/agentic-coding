@@ -32,6 +32,23 @@ describe("keybind catalog contract", () => {
 		);
 	});
 
+	it("keeps the workspace cycle in the detail catalog's global keys", () => {
+		const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: false });
+		const cycle = catalogKeybinds(catalog).filter(
+			(keybind) => keybind.key === "Ctrl+H" || keybind.key === "Ctrl+L",
+		);
+		expect(cycle.map((keybind) => keybind.action)).toEqual([
+			"previous workspace",
+			"next workspace",
+		]);
+		// A dashboard is one of the entries the cycle walks, so the keys are live
+		// here; they are navigation, hence `?` help and not the footer.
+		expect(cycle.every((keybind) => keybind.standard === true)).toBe(true);
+		expect(
+			footerKeybinds(catalog, "change").map((keybind) => keybind.key),
+		).not.toContain("Ctrl+L");
+	});
+
 	it("scopes panel-specific footer keybinds to the focused panel", () => {
 		const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: true });
 		const change = footerKeybinds(catalog, "change").map((kb) => kb.action);

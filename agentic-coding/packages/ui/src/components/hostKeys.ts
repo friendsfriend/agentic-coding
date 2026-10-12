@@ -51,6 +51,26 @@ export const HOST_KEYBINDS: readonly HostKeybind[] = [
 		short: "sidebar",
 	},
 	{
+		// The workspace cycle, host-owned for the same reason as the sidebar
+		// toggle: it must work while a workflow dashboard or a feature view that
+		// claims h/l holds the keys. The sidebar's entries are the cycle — the
+		// pinned Orchestrator, then the filter's workflow rows — and it wraps at
+		// both ends. Navigation, so it stays out of the footers and is documented
+		// by the `?` help modal.
+		binding: "ctrl+h",
+		key: "Ctrl+H",
+		action: "previous workspace",
+		short: "prev",
+		standard: true,
+	},
+	{
+		binding: "ctrl+l",
+		key: "Ctrl+L",
+		action: "next workspace",
+		short: "next",
+		standard: true,
+	},
+	{
 		// The tmux new-window instinct: open the view being shown in a new tmux
 		// window running this shell attached to the same server.
 		binding: "ctrl+t",

@@ -182,6 +182,10 @@ export function dashboardDetailKeybindCatalog(options: {
 				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },
 				{ key: "r", action: "Refresh dashboard", short: "refresh" },
+				// The workspace cycle stays live here: a dashboard is one of the
+				// entries Ctrl+H/Ctrl+L walk.
+				hostKeybind("ctrl+h"),
+				hostKeybind("ctrl+l"),
 				hostKeybind("ctrl+t"),
 				hostKeybind("?"),
 				hostKeybind("q"),

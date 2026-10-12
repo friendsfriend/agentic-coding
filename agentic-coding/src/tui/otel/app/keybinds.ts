@@ -5,16 +5,25 @@ import {
 } from "@ui";
 import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
-/** The page body's panel section: the dedicated Ctrl+S toggle, a host key so
- * every surface (including feature views that claim h/l) reaches it. */
+/** The page body's panel section: the dedicated Ctrl+S toggle and the
+ * Ctrl+H/Ctrl+L workspace cycle, all host keys so every surface (including
+ * feature views that claim h/l) reaches them. */
 export function workspaceSidebarPanelSection(): KeybindSection {
-	return { title: "Panels", keybinds: [hostKeybind("ctrl+s")] };
+	return {
+		title: "Panels",
+		keybinds: [
+			hostKeybind("ctrl+s"),
+			hostKeybind("ctrl+h"),
+			hostKeybind("ctrl+l"),
+		],
+	};
 }
 
 /**
  * Workspace sidebar keys (integrated-multiplexer sidebar), published while the
- * sidebar panel holds focus: the rows, the panel actions, and the dedicated
- * Ctrl+S toggle back to the page body.
+ * sidebar panel holds focus: the rows, the panel actions, the workspace cycle
+ * (host keys, so they also work from the page body) and the dedicated Ctrl+S
+ * toggle back to the page body.
  */
 export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 	return [
@@ -53,6 +62,8 @@ export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 					action: "start a new workflow",
 					short: "new",
 				},
+				hostKeybind("ctrl+h"),
+				hostKeybind("ctrl+l"),
 				hostKeybind("ctrl+s"),
 				hostKeybind("ctrl+t"),
 				{
@@ -92,6 +103,8 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 		{
 			title: "Actions",
 			keybinds: [
+				hostKeybind("ctrl+h"),
+				hostKeybind("ctrl+l"),
 				hostKeybind("ctrl+s"),
 				hostKeybind("ctrl+t"),
 				hostKeybind("?"),
