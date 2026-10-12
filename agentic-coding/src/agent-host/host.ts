@@ -47,6 +47,7 @@ import {
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
 	type RunContextLookup,
+	recordAbortedRunHandoff,
 } from "./tools.ts";
 
 // pi-ai's default OAuth loaders hide imports from bundlers. Embed/register all
@@ -600,13 +601,37 @@ export class DurableHost {
 	}
 
 	async abort(runId: string): Promise<void> {
-		const record = this.runs.get(runId);
-		if (!record) return;
+		await this.stopConversation(runId, true);
+	}
+
+	/** Abort a run's conversation. A developer-initiated abort (`recordBlocked`)
+	 * also records the run's `blocked` handoff, because the aborted turn can no
+	 * longer hand off itself and the engine would otherwise keep the run
+	 * `working` forever; a teardown (`shutdown`) records nothing. */
+	private async stopConversation(
+		runId: string,
+		recordBlocked: boolean,
+	): Promise<void> {
+		const tracked = this.runs.get(runId);
+		if (!tracked) return;
 		const conversation = await this.harness.conversation(
-			record.conversationId,
+			tracked.conversationId,
 			BACKGROUND_CONTEXT,
 		);
+		const context = this.contexts.get(tracked.conversationId);
 		await conversation?.abort(BACKGROUND_CONTEXT);
+		if (!recordBlocked || !context) return;
+		try {
+			await recordAbortedRunHandoff(context);
+		} catch (error) {
+			// Best-effort: a run that already handed off, or an engine that
+			// rejects the handoff, must not fail the abort the developer asked for.
+			this.log(
+				`abort handoff not recorded for ${runId}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 	}
 
 	async stopRun(runId: string): Promise<void> {
@@ -670,7 +695,7 @@ export class DurableHost {
 		}
 		for (const runId of [...this.runs.keys()]) {
 			try {
-				await this.abort(runId);
+				await this.stopConversation(runId, false);
 			} catch {
 				/* best-effort drain before close */
 			}

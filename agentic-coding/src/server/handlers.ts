@@ -48,7 +48,10 @@ import {
 	countOrchestratorLaunches,
 	type OrchestratorLaunchCounts,
 } from "../workflow/runtime/orchestrator-launches.ts";
-import { QUESTION_WAIT_MS } from "../workflow/runtime.ts";
+import {
+	AGENT_QUESTION_WAIT_MS,
+	QUESTION_WAIT_MS,
+} from "../workflow/runtime.ts";
 import type { Principal } from "./auth.ts";
 import {
 	cancelLocalClassifierInstall,
@@ -393,7 +396,7 @@ export function agentQuestion(
 		engine,
 		request.repo,
 		request.input as Parameters<typeof runDeveloperQuestion>[2],
-		request.timeoutMs ?? QUESTION_WAIT_MS,
+		request.timeoutMs ?? AGENT_QUESTION_WAIT_MS,
 		QUESTION_WAIT_MS,
 		dashboardApplication,
 		request.environment,

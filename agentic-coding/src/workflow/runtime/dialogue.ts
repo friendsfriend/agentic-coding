@@ -17,7 +17,15 @@ import { tokenMatches } from "./capability.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "./store.ts";
 
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
+/** How long a question record stays pending before its durable expiry. */
 export const QUESTION_WAIT_MS = 24 * 60 * 60_000;
+/** How long the agent-facing `question`/`ask` command waits for an answer
+ * before returning the pending record (make-developer-questions-asynchronous).
+ * The wait is a grace, not the question's lifetime: it keeps the common case a
+ * single turn while never holding a model turn open until the durable expiry.
+ * A question that is not answered within it stays pending and resumes the
+ * asking run through `resumeBlockedAsker` when the answer arrives. */
+export const AGENT_QUESTION_WAIT_MS = 120_000;
 /** The `targetRole` marker for a developer question routed to the orchestrator
  * session before the developer (route-developer-questions-through-orchestrator).
  * It is not a workflow role, so it never resolves a `targetRunId`; clearing it
@@ -141,12 +149,57 @@ export function expireQuestions(
 		}
 }
 
+/** The first answered record an answer event names: its own id for a single
+ * question, or the first item of its questionnaire group. Used by the answer
+ * reducers to find the record whose asking run may resume. */
+export function answeredQuestionRecord(
+	snapshot: WorkflowSnapshot,
+	data: unknown,
+): DeveloperDialogueRecord | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const { questionId, groupId } = data as {
+		questionId?: unknown;
+		groupId?: unknown;
+	};
+	return snapshot.developerDialogue.find(
+		(item) =>
+			item.status === "answered" &&
+			((typeof questionId === "string" && item.id === questionId) ||
+				(typeof groupId === "string" && item.groupId === groupId)),
+	);
+}
+
+/** Whether the acting responder may answer a record carrying `targetRole`:
+ * the orchestrator only its own routed records, the developer its own records
+ * and — as the backstop when the orchestrator does not act
+ * (make-developer-questions-asynchronous) — any record still routed to the
+ * orchestrator. */
+function responderMayAnswer(
+	expectedTarget: string | undefined,
+	targetRole: string | undefined,
+): boolean {
+	return expectedTarget === undefined
+		? targetRole === undefined || targetRole === ORCHESTRATOR_QUESTION_TARGET
+		: targetRole === expectedTarget;
+}
+
+/** Drop an orchestrator routing marker when the developer answers a record the
+ * orchestrator had not acted on, so the record stops reading as routed and no
+ * later responder tries to forward or re-answer it. */
+function clearOrchestratorRouting(
+	item: DeveloperDialogueRecord,
+	expectedTarget: string | undefined,
+): void {
+	if (expectedTarget === undefined && item.targetRole !== undefined)
+		delete item.targetRole;
+}
+
 /** Answer a developer question. `expectedTarget` is the `targetRole` the
- * responder is authorized for: `undefined` for the developer (only questions
- * with no routing marker) and `ORCHESTRATOR_QUESTION_TARGET` for the
- * orchestrator (only questions still routed to it). The guard both enables the
- * orchestrator path and keeps the developer path from answering a question
- * routed elsewhere (a peer or the orchestrator). */
+ * responder is authorized for: `undefined` for the developer and
+ * `ORCHESTRATOR_QUESTION_TARGET` for the orchestrator. The guard both enables
+ * the orchestrator path and keeps each responder out of a record routed to a
+ * peer; a developer answer clears an orchestrator marker, since the developer
+ * is the backstop once the orchestrator has not acted. */
 export function answerQuestion(
 	snapshot: WorkflowSnapshot,
 	raw: unknown,
@@ -166,7 +219,9 @@ export function answerQuestion(
 		const group = snapshot.developerDialogue
 			.filter((item) => item.groupId === answer.groupId)
 			.sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0));
-		if (group.some((item) => item.targetRole !== expectedTarget))
+		if (
+			group.some((item) => !responderMayAnswer(expectedTarget, item.targetRole))
+		)
 			throw new WorkflowRuntimeError(
 				"unauthorized",
 				"question is routed to another responder",
@@ -236,6 +291,7 @@ export function answerQuestion(
 			item.status = "answered";
 			item.answeredAt = at;
 			item.answer = { kind: response.kind, value: response.value };
+			clearOrchestratorRouting(item, expectedTarget);
 		}
 		assertDialogueContentBound(snapshot.developerDialogue);
 		return {
@@ -257,7 +313,7 @@ export function answerQuestion(
 				"questionnaire requires a complete grouped response set",
 			);
 	}
-	if (question && question.targetRole !== expectedTarget)
+	if (question && !responderMayAnswer(expectedTarget, question.targetRole))
 		throw new WorkflowRuntimeError(
 			"unauthorized",
 			"question is routed to another responder",
@@ -295,6 +351,7 @@ export function answerQuestion(
 		kind: answer.kind,
 		...(answer.value === undefined ? {} : { value: answer.value }),
 	};
+	clearOrchestratorRouting(question, expectedTarget);
 	if (answer.kind !== "cancel")
 		assertDialogueContentBound(snapshot.developerDialogue);
 	return {

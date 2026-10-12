@@ -4,6 +4,7 @@
 // `src/workflow/README.md` for the module map.
 export { WorkflowRuntimeError } from "./contracts.ts";
 export {
+	AGENT_QUESTION_WAIT_MS,
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
 	QUESTION_WAIT_MS,
 } from "./runtime/dialogue.ts";

@@ -17,7 +17,11 @@ import {
 	agentEffectHandlers,
 	EffectRunner,
 } from "../src/workflow/effect-runner.ts";
-import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
+import {
+	AGENT_QUESTION_WAIT_MS,
+	QUESTION_WAIT_MS,
+	WorkflowEngine,
+} from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
 import {
 	autoRemoveRepoFixtures,
@@ -128,6 +132,19 @@ describe("breaking workflow CLI surface", () => {
 			expect(() => cliTest.validateQuestionTimeout(timeout)).toThrow(
 				`question timeout must be an integer from 1 to ${QUESTION_WAIT_MS}`,
 			);
+	});
+	test("the agent-facing question wait defaults to the grace, not the durable expiry", () => {
+		// A question's durable lifetime and the time a tool call waits for an
+		// answer are separate: the call returns pending well before the record
+		// expires (make-developer-questions-asynchronous).
+		expect(AGENT_QUESTION_WAIT_MS).toBeLessThan(QUESTION_WAIT_MS);
+		expect(cliTest.agentQuestionTimeoutMs(undefined)).toBe(
+			AGENT_QUESTION_WAIT_MS,
+		);
+		expect(cliTest.agentQuestionTimeoutMs("5000")).toBe(5000);
+		expect(() => cliTest.agentQuestionTimeoutMs("0")).toThrow(
+			/question timeout/,
+		);
 	});
 	test("help needs no config, database, or runtime", async () => {
 		const lines: string[] = [];

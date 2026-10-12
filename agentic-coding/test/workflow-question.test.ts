@@ -2,13 +2,20 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import {
+	type AgentHandle,
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
 	type ResolvedProfile,
 } from "../src/contracts/workflow.ts";
+import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	agentEffectHandlers,
+	EffectRunner,
+} from "../src/workflow/effect-runner.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import {
 	autoRemoveRepoFixtures,
@@ -32,6 +39,39 @@ const profile: ResolvedProfile = {
 	capabilities: ["prompt", "run-environment", "observe"],
 	digest: "profile",
 };
+
+/** A launch that succeeds without a host, so the assignment render path runs
+ * and the resumed attempt's prior dialogue can be read from disk. */
+class StubAdapter implements AgentAdapter {
+	readonly id = "pi-durable" as const;
+	launch(ctx: LaunchContext) {
+		return Effect.succeed({
+			runtime: "pi-durable" as const,
+			name: ctx.name,
+			hostSocket: "/tmp/question-host.sock",
+			sessionId: ctx.assignment.runId,
+		});
+	}
+	preflight() {}
+	prompt() {
+		return Effect.void;
+	}
+	observe(_handle: AgentHandle) {
+		return Effect.succeed({ status: "working" as const });
+	}
+	stop() {
+		return Effect.void;
+	}
+}
+
+/** Render the assignment of every pending run through the runner's own path. */
+async function drainAssignments(repo: string, engine: WorkflowEngine) {
+	const handlers = agentEffectHandlers(repo, engine, {
+		registry: registerBuiltins(),
+		adapters: new Map([["pi-durable", new StubAdapter()]]),
+	});
+	await new EffectRunner(repo, engine, handlers).drain();
+}
 
 function setup(options: { startedBy?: "developer" | "orchestrator" } = {}) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-question-"));
@@ -435,6 +475,11 @@ test("questions persist, answer in FIFO order, and do not change workflow lifecy
 		);
 		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("a");
 		expect(answered.view.status).toBe("active");
+		// The asking run never handed off `blocked`, so answering adds no run: the
+		// resume path is only for a parked asker.
+		expect(
+			answered.view.runs.filter((candidate) => candidate.role === "worker"),
+		).toHaveLength(1);
 		const reloaded = new WorkflowEngine(registerBuiltins()).status(
 			repo,
 			"question",
@@ -535,24 +580,15 @@ test("orchestrator-started workflows route questions to the orchestrator first",
 		const question = created.snapshot.developerDialogue[0];
 		const questionId = question?.id;
 		if (!questionId) throw new Error("question missing");
-		// Routed to the orchestrator: hidden from the developer, visible to the
-		// orchestrator.
+		// Routed to the orchestrator: it sees the question, and the developer's
+		// pending set lists it too so an idle orchestrator cannot strand the
+		// workflow (make-developer-questions-asynchronous).
 		expect(question?.targetRole).toBe("orchestrator");
 		const view = engine.status(repo, "question");
-		expect(view.pendingQuestions).toHaveLength(0);
+		expect(view.pendingQuestions?.map((item) => item.id)).toEqual([questionId]);
 		expect(view.orchestratorQuestions?.map((item) => item.id)).toEqual([
 			questionId,
 		]);
-		// The operator cannot answer a question routed to the orchestrator.
-		expect(() =>
-			engine.dispatch(repo, {
-				type: "developer.action",
-				workflowId: run.workflowId,
-				revision: created.snapshot.revision,
-				actionId: "answer-question",
-				input: { questionId, kind: "option", value: "a" },
-			}),
-		).toThrow(/another responder/);
 		// The orchestrator answers it.
 		const answered = engine.dispatch(repo, {
 			type: "developer.action",
@@ -565,6 +601,167 @@ test("orchestrator-started workflows route questions to the orchestrator first",
 		expect(answered.view.developerDialogue?.[0]?.status).toBe("answered");
 		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("a");
 		expect(answered.view.orchestratorQuestions).toHaveLength(0);
+		expect(answered.view.pendingQuestions).toHaveLength(0);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("the developer answers an orchestrator-routed question when the orchestrator does not act", () => {
+	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "which design?",
+			options: [{ label: "A", value: "a" }],
+		});
+		const questionId = created.snapshot.developerDialogue[0]?.id;
+		if (!questionId) throw new Error("question missing");
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: created.snapshot.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "custom", value: "do it" },
+		});
+		expect(answered.view.developerDialogue?.[0]?.status).toBe("answered");
+		expect(answered.view.orchestratorQuestions).toHaveLength(0);
+		// The routing marker is cleared in durable state, so nothing forwards a
+		// question that is already answered.
+		expect(
+			engine.getSnapshot(repo, "question").developerDialogue[0]?.targetRole,
+		).toBeUndefined();
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("the orchestrator cannot answer a developer-routed question", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which design?",
+			options: [],
+		});
+		const questionId = created.snapshot.developerDialogue[0]?.id;
+		if (!questionId) throw new Error("question missing");
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "answer-question",
+				principal: "orchestrator",
+				input: { questionId, kind: "option", value: "a" },
+			}),
+		).toThrow(/another responder/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("an answered question resumes the blocked asking run with the answer in its assignment", async () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which approach?",
+			options: [{ label: "Use A", value: "a" }],
+		});
+		const questionId = created.snapshot.developerDialogue[0]?.id;
+		if (!questionId) throw new Error("question missing");
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "blocked",
+			message: "waiting on the developer",
+		});
+		expect(blocked.view.status).toBe("attention-required");
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: blocked.snapshot.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "option", value: "a" },
+		});
+		expect(answered.view.status).toBe("active");
+		const resumed = answered.view.runs.find(
+			(candidate) =>
+				candidate.role === "worker" && candidate.status === "pending",
+		);
+		if (!resumed) throw new Error("resumed run missing");
+		expect(resumed.attempt).toBe(2);
+		await drainAssignments(repo, engine);
+		const assignment = fs.readFileSync(
+			engine.getRun(repo, resumed.id).assignmentPath,
+			"utf8",
+		);
+		expect(assignment).toContain("## Prior dialogue (untrusted context)");
+		expect(assignment).toContain("which approach?");
+		expect(assignment).toContain("→ a");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a cancelled question leaves the parked run for explicit recovery", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which approach?",
+			options: [],
+		});
+		const questionId = created.snapshot.developerDialogue[0]?.id;
+		if (!questionId) throw new Error("question missing");
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "blocked",
+			message: "waiting on the developer",
+		});
+		const cancelled = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: blocked.snapshot.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "cancel" },
+		});
+		expect(cancelled.view.status).toBe("attention-required");
+		expect(
+			cancelled.view.runs.filter((candidate) => candidate.status === "blocked"),
+		).toHaveLength(1);
+		expect(
+			cancelled.view.runs.filter((candidate) => candidate.status === "pending"),
+		).toHaveLength(0);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

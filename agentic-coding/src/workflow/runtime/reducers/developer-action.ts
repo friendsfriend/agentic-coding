@@ -44,6 +44,7 @@ import {
 	enterStep,
 	expireRuns,
 	freshStep,
+	resumeAskerAfterAnswer,
 	transition,
 	validateFusionRouting,
 } from "../kernel.ts";
@@ -94,11 +95,12 @@ function reduceDeveloperAction(
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
-	if (command.actionId === "answer-question")
+	if (command.actionId === "answer-question") {
 		// The orchestrator capability may only answer questions still routed to it;
-		// the operator may only answer questions routed to the developer. The
+		// the operator may answer questions routed to it or to the orchestrator (the
+		// developer is the backstop when the orchestrator has not acted). The
 		// expected `targetRole` is derived from the acting principal.
-		return answerQuestion(
+		const event = answerQuestion(
 			snapshot,
 			command.input,
 			now,
@@ -106,6 +108,15 @@ function reduceDeveloperAction(
 				? ORCHESTRATOR_QUESTION_TARGET
 				: undefined,
 		);
+		return resumeAskerAfterAnswer(
+			db,
+			snapshot,
+			definition,
+			registry,
+			event,
+			now,
+		);
+	}
 	if (command.actionId === "forward-question") {
 		if (command.principal !== "orchestrator")
 			throw new WorkflowRuntimeError(

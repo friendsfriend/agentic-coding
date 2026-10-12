@@ -914,9 +914,9 @@ row):
 | `evidence.ts` | Git inspection, source-content fingerprinting, changed-file discovery, current-branch lookup, wiki baseline/verification content reads — all external-I/O reads. |
 | `evidence-store.ts` | The evidence store's location and lifecycle (`add-workflow-evidence-store`): `workflowDataRoot`/`workflowEvidenceRoot`/`workflowEvidenceScope` (the checkout's `.herdr-workflow` or the shared wiki/research data root, plus the roots an attach may resolve inside) and `workflowEvidencePresent`/`removeWorkflowEvidence`, which the engine's `workspace.cleanup` observation and execution both use. The manifest, ids, content checks and caps live in `server/evidence/store.ts`. |
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
-| `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`), and marking questions expired (`expireQuestions`). Needs only the clock. |
+| `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`, including the developer's backstop answer for an orchestrator-routed record), finding the record an answer event names (`answeredQuestionRecord`), and marking questions expired (`expireQuestions`). The agent-facing wait (`AGENT_QUESTION_WAIT_MS`) and the durable lifetime (`QUESTION_WAIT_MS`) live here as separate constants. Needs only the clock. |
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
-| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
+| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, `resumeBlockedAsker`/`resumeAskerAfterAnswer` (re-issue the run that asked a question once its answer is recorded), plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
 | `migration.ts` | Legacy `workflows`-table discovery, phase-to-step mapping, legacy evidence conversion, migration diagnostics. **Thinnest test coverage in the package** (`test/workflow-migration.test.ts` is the only oracle) — moved verbatim with no signature change beyond taking `registry`/`now` as explicit parameters. |
 | `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
 | `reducers/*.ts` | One file per `reduce()` command branch (or a small explicitly-grouped set: `agent-question.ts` holds both `agent.question` and `agent.question-expire`; `repair.ts` holds `operator.repair`, `operator.repin`, and `operator.resume`). Each reducer receives `registry`/`now` as explicit parameters and the already-open `db`/`snapshot` — it runs inside the kernel's existing transaction, never opening its own. |
@@ -997,8 +997,8 @@ them:
 | `client.ts` | `HostClient` (typed request/response + `watch`) and `ensureHostRunning` (connect-or-spawn). The engine adapter (`PiDurableAdapter` in `workflow/adapters.ts`) and the dashboard session snapshot (`tui/dash/handlers/keys.ts`) depend on this module only. | No. |
 | `settings.ts` | The `agentHost` configuration section type and its one-time seeding from the global pi `settings.json`. | No. |
 | `credentials.ts` | `PiAuthCredentialStore`, a pi-ai `CredentialStore`-shaped adapter over the user's live `~/.pi/agent/auth.json` (no copying). | No (structurally compatible, not statically coupled). |
-| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask`, `ask_jev`, and the system-prompt sections. | Yes. |
-| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations. | Yes. |
+| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and `recordAbortedRunHandoff` (the `blocked` handoff a developer abort records). | Yes. |
+| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, and records a developer abort as the run's `blocked` handoff (`abort`; never on teardown). | Yes. |
 | `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
 
 `src/cli.ts`'s `agent host` mode reaches `host-main.ts` through a dynamic
@@ -1018,6 +1018,33 @@ implementation pass could not fully verify with focused tests; `pi-durable`
 model validation at workflow start accepts a built-in provider's model on
 shape alone rather than enumerating pi-ai's full catalog (a locally configured
 custom provider's models are still validated exactly).
+
+### Developer-question lifecycle (asynchronous)
+
+The tool call is **not** the answer-delivery channel
+(make-developer-questions-asynchronous). A question is a durable dialogue
+record; `developer_question`/`agent_ask` wait only `AGENT_QUESTION_WAIT_MS`
+(the agent grace) and then return the pending record. An agent that receives a
+pending record reports a bounded `blocked` handoff, so the workflow parks in
+`attention-required` with the question as its visible reason instead of holding
+a model turn open until the 24 h durable expiry.
+
+When the answer arrives — from the developer's modal, the orchestrator's
+action, or a peer's `workflow answer` — the answer reducers call
+`resumeAskerAfterAnswer`, which re-issues only the run that asked (its attempt
+bumped) when that run handed off `blocked` for this question and no other run
+of its role is active. The answer reaches the new attempt through the
+assignment's existing `## Prior dialogue (untrusted context)` section. A
+cancelled or expired question does not resume: the parked step waits for the
+developer's explicit repair or retry.
+
+An orchestrator-routed question stays the orchestrator's first, but it is also
+listed in the developer's `pendingQuestions` and `answerQuestion` accepts the
+developer's answer (clearing the routing marker), so an orchestrator session
+that is off or idle cannot strand the workflow. A developer abort of a run is
+recorded by the host as that run's `blocked` handoff, so an interrupted turn
+parks the workflow rather than leaving a `working` run with no turn left to
+finish it.
 
 ## Source-layer boundaries (enforced)
 

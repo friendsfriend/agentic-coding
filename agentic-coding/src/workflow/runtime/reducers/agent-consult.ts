@@ -16,6 +16,10 @@ import {
 	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import type {
+	CompiledWorkflowDefinition,
+	WorkflowRegistry,
+} from "../../registry.ts";
 import { tokenMatches } from "../capability.ts";
 import {
 	assertDialogueContentBound,
@@ -24,7 +28,7 @@ import {
 	QUESTION_WAIT_MS,
 	questionRun,
 } from "../dialogue.ts";
-import { enqueue } from "../kernel.ts";
+import { enqueue, resumeAskerAfterAnswer } from "../kernel.ts";
 import { nowIso, type RunRow, runFromRow, runs } from "../store.ts";
 
 /** The latest completed, still-live run for `targetRole` outside the current
@@ -114,7 +118,9 @@ export function agentAsk(
 export function agentAnswer(
 	db: Database,
 	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
 	command: Extract<WorkflowCommand, { type: "agent.answer" }>,
+	registry: WorkflowRegistry,
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	const row = db
@@ -172,9 +178,18 @@ export function agentAnswer(
 	question.answeredAt = at;
 	question.answer = { kind: "custom", value: command.answer };
 	assertDialogueContentBound(snapshot.developerDialogue);
-	return {
-		type: "agent.question.answered",
-		actor: { kind: "agent", runId: run.id, role: run.role },
-		data: { questionId: question.id, outcome: "answered" },
-	};
+	// The asking run, not the answering peer, is the one that may resume
+	// (make-developer-questions-asynchronous).
+	return resumeAskerAfterAnswer(
+		db,
+		snapshot,
+		definition,
+		registry,
+		{
+			type: "agent.question.answered",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: { questionId: question.id, outcome: "answered" },
+		},
+		now,
+	);
 }

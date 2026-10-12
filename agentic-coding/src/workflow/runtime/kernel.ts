@@ -14,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
+	DeveloperDialogueRecord,
 	EffectKind,
 	JsonValue as JsonValueType,
 	WorkflowRouting,
@@ -36,9 +37,15 @@ import type {
 	StepArrivalPrior,
 	StepBehavior,
 } from "../steps/types.ts";
-import { expireQuestions } from "./dialogue.ts";
+import { answeredQuestionRecord, expireQuestions } from "./dialogue.ts";
 import { wikiVerificationPayload } from "./evidence.ts";
-import { json, nowIso, payload, runs as storeRuns } from "./store.ts";
+import {
+	ACTIVE_RUN,
+	json,
+	nowIso,
+	payload,
+	runs as storeRuns,
+} from "./store.ts";
 import { wikiWorkflowDataRoot } from "./targets.ts";
 
 export function enqueue(
@@ -372,6 +379,89 @@ export function createRun(
 	});
 	enqueue(db, snapshot, "agent.launch", `run:${id}:launch`, { runId: id });
 	return run;
+}
+
+/** Re-issue the run that asked a question once its answer is recorded
+ * (make-developer-questions-asynchronous): the tool call that asked is gone by
+ * then, so the answer reaches its run through the new attempt's prior-dialogue
+ * context. Only the asking role is re-issued — a sibling run that already
+ * completed is untouched — and only when the workflow is parked on that very
+ * run: the question's step is the current step, its run handed off `blocked`,
+ * and no other run of the role is active. Returns the resumed run, or
+ * `undefined` when the state is not a parked asker (already resumed, still
+ * working, moved on, paused, or terminal). */
+export function resumeBlockedAsker(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	registry: WorkflowRegistry,
+	question: Pick<DeveloperDialogueRecord, "runId" | "stepId" | "role">,
+	now: () => Date,
+): WorkflowRun | undefined {
+	if (
+		snapshot.status === "paused" ||
+		snapshot.status === "completed" ||
+		snapshot.status === "closed"
+	)
+		return undefined;
+	if (question.stepId !== snapshot.currentStep) return undefined;
+	if (!snapshot.step.completedRunIds.includes(question.runId)) return undefined;
+	const runList = storeRuns(db, snapshot.workflowId);
+	const asker = runList.find((run) => run.id === question.runId);
+	if (asker?.status !== "blocked") return undefined;
+	if (
+		runList.some(
+			(run) => run.role === question.role && ACTIVE_RUN.has(run.status),
+		)
+	)
+		return undefined;
+	const step = registry.stepForDefinition(definition, snapshot.currentStep);
+	snapshot.step.attempt += 1;
+	const resumed = createRun(db, snapshot, step, question.role, now);
+	// Resume the workflow only when nothing else is parked: a second blocked run
+	// keeps the workflow at `attention-required` for its own question.
+	if (!runList.some((run) => run.id !== asker.id && run.status === "blocked")) {
+		snapshot.status = "active";
+		snapshot.attention = [];
+	}
+	return resumed;
+}
+
+/** Resume the asking run when an answer event names an answered record; the
+ * developer path and the peer path return the same shape under their own event
+ * type. Returns the event unchanged when no parked run matches the record, and
+ * adds the resumed run id to the event data when one does. */
+export function resumeAskerAfterAnswer(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	registry: WorkflowRegistry,
+	event: { type: string; actor: unknown; data: unknown },
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	if (
+		event.type !== "developer.question.answered" &&
+		event.type !== "agent.question.answered"
+	)
+		return event;
+	const answered = answeredQuestionRecord(snapshot, event.data);
+	if (!answered) return event;
+	const resumed = resumeBlockedAsker(
+		db,
+		snapshot,
+		definition,
+		registry,
+		answered,
+		now,
+	);
+	if (!resumed) return event;
+	return {
+		...event,
+		data: {
+			...(event.data as Record<string, unknown>),
+			resumedRunId: resumed.id,
+		},
+	};
 }
 
 export function freshStep(attempt: number): WorkflowSnapshot["step"] {

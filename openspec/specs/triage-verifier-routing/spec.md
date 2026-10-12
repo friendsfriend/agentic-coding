@@ -230,9 +230,9 @@ round with a non-empty selection.
 
 ### Requirement: Classifier failure never blocks verification
 
-A classification failure — a missing credential, a provider error, an invalid
-response body, answers with no usable value, **or a partially answered
-classification** — SHALL NOT stop the workflow. The routing step SHALL let
+A classification failure SHALL NOT stop the workflow — a missing credential, a
+provider error, an invalid response body, answers with no usable value, **or a
+partially answered classification**. The routing step SHALL let
 `core.triage` run unconstrained, exactly as it did before this change, and the
 workflow SHALL record an `attention` entry naming the failure.
 The full-suite verifier role SHALL remain reachable in that round. A selection

@@ -8,6 +8,7 @@ import { drainEffects } from "../../operations.ts";
 // (split-workflow-god-modules); migrated to run Effect programs at the
 // CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
 import {
+	AGENT_QUESTION_WAIT_MS,
 	canonicalStorePath,
 	QUESTION_WAIT_MS,
 	type WorkflowEngine,
@@ -76,6 +77,18 @@ export function validateQuestionTimeout(timeoutMs: number): void {
 		);
 }
 
+/** The wait an agent-facing `question`/`ask` command uses: the agent grace when
+ * `--timeout` is absent, otherwise the caller's duration. The question's
+ * durable lifetime stays `QUESTION_WAIT_MS`; this is only how long the tool
+ * call waits before returning the pending record
+ * (make-developer-questions-asynchronous). */
+export function agentQuestionTimeoutMs(timeout: string | undefined): number {
+	const timeoutMs =
+		timeout === undefined ? AGENT_QUESTION_WAIT_MS : Number(timeout);
+	validateQuestionTimeout(timeoutMs);
+	return timeoutMs;
+}
+
 type DeveloperQuestionCliInput = {
 	description?: string;
 	context?: string;
@@ -87,7 +100,9 @@ export async function runDeveloperQuestion(
 	repo: string,
 	inputOrDescription: DeveloperQuestionCliInput | string,
 	optionsOrTimeout: unknown = [],
-	timeoutMs = QUESTION_WAIT_MS,
+	// The agent-facing default is the grace; the question's durable lifetime is
+	// separate and comes from the reducer's expiry timestamp.
+	timeoutMs = AGENT_QUESTION_WAIT_MS,
 	application?: App,
 	/** Caller environment forwarded across the transport (managed agents). */
 	environmentOverride?: CallerEnvironment,
@@ -309,9 +324,10 @@ export async function runAgentAsk(
 		throw new Error("ask requires an authenticated managed agent");
 	const targetRole = requireFlag(rest, "role");
 	const description = requireFlag(rest, "description");
-	const timeout = flag(rest, "timeout");
-	const timeoutMs = timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
-	validateQuestionTimeout(timeoutMs);
+	// The agent-facing wait is the grace, not the durable expiry: an unanswered
+	// question returns pending and resumes the asking run when the answer
+	// arrives (make-developer-questions-asynchronous).
+	const timeoutMs = agentQuestionTimeoutMs(flag(rest, "timeout"));
 	const repo = managedWorkflowTarget();
 	const identity = resolveHandoffIdentity(workflowEngine, repo, application);
 	const context = flag(rest, "context");
@@ -530,7 +546,10 @@ export async function runQuestion(
 			: { questions: parseInlineJson(questions, "--questions") }),
 	};
 	const timeout = flag(rest, "timeout");
-	const timeoutMs = timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
+	// The agent-facing wait is the grace, not the durable expiry: an unanswered
+	// question returns pending and resumes the asking run when the answer
+	// arrives (make-developer-questions-asynchronous).
+	const timeoutMs = agentQuestionTimeoutMs(timeout);
 	// Managed agent across the transport: forward the authenticated caller
 	// environment; the server resolves identity and the engine validates the
 	// run capability, bounded by the request signal.
@@ -552,7 +571,7 @@ export async function runQuestion(
 			managedWorkflowTarget(),
 			input,
 			timeoutMs,
-			QUESTION_WAIT_MS,
+			AGENT_QUESTION_WAIT_MS,
 			application,
 		),
 	);

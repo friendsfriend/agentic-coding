@@ -17,6 +17,7 @@ import {
 	resolveDefinition,
 	resolveDefinitionWithOrigin,
 } from "./definitions.ts";
+import { ORCHESTRATOR_QUESTION_TARGET } from "./dialogue.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
 import {
 	ACTIVE_RUN,
@@ -95,16 +96,20 @@ function publicDialogue(
 	);
 }
 
-/** Pending questions the developer must answer. Peer-agent questions are
- * delivered and answered by another agent, so they never open the developer
- * modal even while they are pending. */
+/** Pending questions the developer may answer in the modal. Peer-agent
+ * questions are delivered and answered by another agent, so they never open the
+ * developer modal even while they are pending. Records still routed to the
+ * orchestrator stay listed: the orchestrator answers or forwards them first,
+ * but the developer is the backstop when it does not act
+ * (make-developer-questions-asynchronous). */
 function pendingDeveloperQuestions(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
 	now: () => Date,
 ): NonNullable<WorkflowView["developerDialogue"]> {
 	return publicDialogue(snapshot).filter(
 		(item) =>
-			item.targetRole === undefined &&
+			(item.targetRole === undefined ||
+				item.targetRole === ORCHESTRATOR_QUESTION_TARGET) &&
 			item.status === "pending" &&
 			Date.parse(item.expiresAt) > now().getTime(),
 	);

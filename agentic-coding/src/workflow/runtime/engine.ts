@@ -1900,7 +1900,14 @@ export class WorkflowEngine {
 		if (command.type === "agent.ask")
 			return agentAsk(db, snapshot, command, this.now);
 		if (command.type === "agent.answer")
-			return agentAnswer(db, snapshot, command, this.now);
+			return agentAnswer(
+				db,
+				snapshot,
+				definition,
+				command,
+				this.registry,
+				this.now,
+			);
 		if (command.type === "agent.question-expire")
 			return expireQuestion(db, snapshot, command, this.now);
 		if (command.type === "timer.question-expire")

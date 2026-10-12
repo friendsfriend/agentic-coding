@@ -206,6 +206,9 @@ export function DeveloperQuestionModal(props: {
 									<box>
 										<text fg={uiColors.textMuted}>
 											Requester: {item().role} · {item().stepId}
+											{item().targetRole
+												? " · also routed to the orchestrator"
+												: ""}
 										</text>
 									</box>
 								</Show>

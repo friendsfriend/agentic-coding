@@ -35,6 +35,7 @@
 		"verificationPosition"
 	],
 	"runtime.ts": [
+		"AGENT_QUESTION_WAIT_MS",
 		"ClaimedEffect",
 		"DispatchResult",
 		"MAX_DEVELOPER_DIALOGUE_RECORDS",

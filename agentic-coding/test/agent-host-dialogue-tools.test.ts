@@ -11,6 +11,7 @@ import path from "node:path";
 import {
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
+	recordAbortedRunHandoff,
 } from "../src/agent-host/tools.ts";
 
 function installAgenticCodingShim(script: string): {
@@ -152,5 +153,68 @@ describe("agent_ask", () => {
 		const invoked = fs.readFileSync(shim.log, "utf8").trim();
 		expect(invoked).toContain("workflow ask");
 		expect(invoked).toContain("--role planner");
+	});
+});
+
+describe("question call lifecycle", () => {
+	test("an aborted call cancels the spawned question process", async () => {
+		const shim = installAgenticCodingShim(
+			["#!/bin/sh", "exec sleep 30"].join("\n"),
+		);
+		restore = shim.restore;
+		const extension = createWorkflowDialogueExtension(() => runContext());
+		const tool = extension.tools?.find(
+			(item) => item.name === "developer_question",
+		);
+		if (!tool) throw new Error("developer_question tool not found");
+		const controller = new AbortController();
+		const pending = tool.execute(
+			{ description: "Which approach?" },
+			{ conversationId: 1 } as never,
+			{ abortSignal: controller.signal } as never,
+		);
+		// Let the child start before aborting, so the kill has a live process.
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		controller.abort();
+		const result = await pending;
+		expect(result.isError).toBe(true);
+		expect(
+			(result.content?.[0] as { text: string } | undefined)?.text,
+		).toContain("cancelled");
+	});
+});
+
+describe("aborted run handoff", () => {
+	test("records a blocked handoff for a run with a managed environment", async () => {
+		const shim = installAgenticCodingShim(
+			["#!/bin/sh", 'printf \'%s\\n\' "$*" >> "__LOG__"'].join("\n"),
+		);
+		restore = shim.restore;
+		await recordAbortedRunHandoff(
+			runContext({
+				env: { HERDR_RUN_TOKEN: "token", HERDR_WORKFLOW_ID: "workflow" },
+			}),
+		);
+		const invoked = fs.readFileSync(shim.log, "utf8").trim();
+		expect(invoked).toContain("workflow handoff --outcome blocked --no-drain");
+	});
+
+	test("does not spawn a handoff for a run without a managed environment", async () => {
+		const shim = installAgenticCodingShim(["#!/bin/sh", "exit 0"].join("\n"));
+		restore = shim.restore;
+		await recordAbortedRunHandoff(runContext());
+		expect(fs.existsSync(shim.log)).toBe(false);
+	});
+
+	test("a rejected handoff is reported to the caller", async () => {
+		const shim = installAgenticCodingShim(
+			["#!/bin/sh", "printf 'stale capability\\n' 1>&2", "exit 1"].join("\n"),
+		);
+		restore = shim.restore;
+		await expect(
+			recordAbortedRunHandoff(
+				runContext({ env: { HERDR_RUN_TOKEN: "token" } }),
+			),
+		).rejects.toThrow(/stale capability/);
 	});
 });

@@ -17,6 +17,7 @@ import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
 import { runDefine } from "./commands/define.ts";
 import {
+	agentQuestionTimeoutMs,
 	runAction,
 	runAgentAnswer,
 	runAgentAsk,
@@ -207,6 +208,7 @@ export const cliTest = {
 	detachedDrainArgv,
 	verificationPosition,
 	validateQuestionTimeout,
+	agentQuestionTimeoutMs,
 	resolveHandoffIdentity: (
 		workflowEngine: WorkflowEngine,
 		repo: string,

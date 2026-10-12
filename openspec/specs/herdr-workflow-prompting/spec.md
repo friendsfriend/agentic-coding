@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change check-workflow-bugs-frontier-model. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Role lifecycle uses Herdr agent commands
 The workflow SHALL launch each new managed session and re-prompt each reused session through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection. Managed sessions SHALL not be stopped or have panes closed by handoff, failure cleanup, repair, migration, or round completion; workspace closure owns teardown.
 
@@ -34,7 +32,7 @@ The workflow SHALL launch each new managed session and re-prompt each reused ses
 - **AND** grouped triage/verifier roles SHALL keep the same identity for same role across rounds
 
 ### Requirement: Every role has a role-specific prompt
-When assignment interaction mode is `developer-dialogue`, the prompt SHALL permit visible discussion and blockers and SHALL identify the `developer_question` interface as the preferred way to resolve an unclear decision before implementation or verification proceeds. When assignment interaction mode is `silent`, the prompt SHALL require artifact-based handoff without chat summary, but the role SHALL still be able to use the authenticated question interface when the workflow exposes it. Every assignment SHALL include the workflow's available prior developer dialogue as explicitly untrusted decision context.
+When assignment interaction mode is `developer-dialogue`, the prompt SHALL permit visible discussion and blockers and SHALL identify the `developer_question` interface as the preferred way to resolve an unclear decision before implementation or verification proceeds. When assignment interaction mode is `silent`, the prompt SHALL require artifact-based handoff without chat summary, but the role SHALL still be able to use the authenticated question interface when the workflow exposes it. Every assignment SHALL include the workflow's available prior developer dialogue as explicitly untrusted decision context. The prompt SHALL state that when the question interface returns a pending question instead of an answer, the agent SHALL report a bounded `blocked` handoff naming that question rather than guessing, and that the answer arrives as prior dialogue in the attempt that resumes the run.
 
 #### Scenario: Role focus is explicit
 - **WHEN** engine renders assignment
@@ -50,6 +48,11 @@ When assignment interaction mode is `developer-dialogue`, the prompt SHALL permi
 - **WHEN** a planner, worker, consolidator, or fusion planner receives a `developer-dialogue` assignment and cannot determine the intended behavior
 - **THEN** the prompt SHALL tell the agent to ask `developer_question` with a concise description and recommended options before choosing an irreversible interpretation
 - **AND** the agent SHALL resume from the returned answer or hand off a bounded cancellation/blocker
+
+#### Scenario: Question comes back pending
+- **WHEN** the question interface returns a pending question without an answer
+- **THEN** the prompt SHALL direct the agent to hand off `blocked` with a bounded message naming that question
+- **AND** the prompt SHALL state that the developer's answer appears as prior dialogue in the attempt that resumes the run
 
 #### Scenario: Silent verifier can use shared guidance
 - **WHEN** a verifier receives a `silent` assignment after a developer question was answered
@@ -67,17 +70,6 @@ When assignment interaction mode is `developer-dialogue`, the prompt SHALL permi
 - **THEN** prompt SHALL permit visible discussion and blockers
 - **WHEN** assignment interaction mode is `silent`
 - **THEN** prompt SHALL require artifact-based handoff without chat summary
-
-#### Scenario: Planner assigns focused validation only
-- **WHEN** a planning role defines implementation tasks or required validation for an OpenSpec change
-- **THEN** its instructions SHALL require focused checks that cover the changed behavior
-- **AND** its instructions SHALL prohibit requiring the worker to run the complete repository test suite
-- **AND** its instructions SHALL identify the complete suite as owned by the workflow test-verifier after implementation and selected verification runs complete
-
-#### Scenario: Fusion planning preserves test ownership
-- **WHEN** a fusion planner or consolidation role proposes or reconciles implementation validation for an OpenSpec change
-- **THEN** the resulting plan SHALL preserve focused worker checks for changed behavior
-- **AND** it SHALL not add a complete-suite worker task that duplicates the workflow test-verifier run
 
 ### Requirement: Triage has its own tab and each verifier role has its own tab
 The workflow SHALL run triage in its own tab labeled `triage` and SHALL give every verifier role its own tab labeled with a shortened form of that role's name and current run status glyph. Verifier roles SHALL NOT share a tab and SHALL NOT split a shared verifier pane into a grid; each verifier pane SHALL occupy the full tab height. Verifier pane geometry SHALL never anchor on the triage pane, and a verifier tab SHALL be reused across verification rounds and fix loops rather than duplicated.
@@ -122,3 +114,4 @@ The workflow SHALL run triage in its own tab labeled `triage` and SHALL give eve
 - **WHEN** repair or failure cleanup expires a managed run and workflow later needs same step and role
 - **THEN** engine SHALL send its complete fresh assignment through `herdr agent prompt` to existing session
 - **AND** it SHALL NOT call agent stop or close that agent pane before workspace closure
+

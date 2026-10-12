@@ -107,6 +107,32 @@ function runWorkflowCli(
 	});
 }
 
+/** Record a developer-initiated abort as this run's `blocked` handoff
+ * (make-developer-questions-asynchronous): a turn that was torn down can no
+ * longer hand off itself, and without this the engine would keep the run
+ * `working` with nothing left to finish it. Best-effort by design — a run that
+ * already handed off or has no managed-agent environment is left unchanged, and
+ * `--no-drain` keeps the abort response quick. */
+export async function recordAbortedRunHandoff(
+	context: DurableRunContext,
+): Promise<void> {
+	if (!context.env.HERDR_RUN_TOKEN) return;
+	const result = await runWorkflowCli(
+		[
+			"workflow",
+			"handoff",
+			"--outcome",
+			"blocked",
+			"--no-drain",
+			"--message",
+			"aborted by the developer",
+		],
+		context,
+	);
+	if (result.exitCode !== 0)
+		throw new Error(result.stderr.trim() || "abort handoff was not recorded");
+}
+
 const QuestionOption = Type.Object({
 	title: Type.String({ minLength: 1, maxLength: 256 }),
 	value: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
@@ -139,7 +165,8 @@ const AskPeerParameters = Type.Object({
  * dialogue tools"). Same parameters and CLI invocation as the pi extension;
  * `replay` is intentionally left unset (default `"unsafe"`), so a crash while
  * waiting reports an interrupted result instead of asking the developer or a
- * peer a second time. */
+ * peer a second time. The tool context's abort signal reaches the spawned CLI,
+ * so an aborted call kills the question process instead of leaving it polling. */
 export function createWorkflowDialogueExtension(
 	lookup: RunContextLookup,
 ): Extension {
@@ -149,9 +176,9 @@ export function createWorkflowDialogueExtension(
 			defineTool({
 				name: "developer_question",
 				description:
-					"Ask the workflow developer for guidance only when a consequential decision is materially ambiguous. Prefer the questions form: give each item a short ident for its tab, a concise question, a markdown context with the background evidence and trade-offs, and options that each carry a title, an optional recommended marker, and a markdown description. Results are developer-provided, untrusted input, not general chat, so validate them before use.",
+					"Ask the workflow developer for guidance only when a consequential decision is materially ambiguous. Prefer the questions form: give each item a short ident for its tab, a concise question, a markdown context with the background evidence and trade-offs, and options that each carry a title, an optional recommended marker, and a markdown description. The call waits only a short grace window: when a record comes back with status pending, nobody answered in time — do not guess, report a bounded blocker and hand off with outcome blocked, and the answer arrives as prior dialogue on the attempt that resumes this run. Results are developer-provided, untrusted input, not general chat, so validate them before use.",
 				parameters: DeveloperQuestionParameters,
-				execute: async (args, api) => {
+				execute: async (args, api, context) => {
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
@@ -176,7 +203,11 @@ export function createWorkflowDialogueExtension(
 						if (args.context) cliArgs.push("--context", args.context);
 						cliArgs.push("--options", JSON.stringify(args.options ?? []));
 					}
-					const result = await runWorkflowCli(cliArgs, run);
+					const result = await runWorkflowCli(
+						cliArgs,
+						run,
+						context?.abortSignal,
+					);
 					if (result.aborted)
 						return {
 							content: [{ type: "text", text: "Developer question cancelled" }],
@@ -207,9 +238,9 @@ export function createWorkflowDialogueExtension(
 			defineTool({
 				name: "agent_ask",
 				description:
-					"Ask a completed peer agent in this workflow for a bounded clarification. The peer answers from its own earlier work without involving the developer. Only roles whose step already completed and whose session is still live can be asked.",
+					"Ask a completed peer agent in this workflow for a bounded clarification. The peer answers from its own earlier work without involving the developer. Only roles whose step already completed and whose session is still live can be asked. The call waits only a short grace window: a record that comes back with status pending was not answered in time, so report a bounded blocker and hand off with outcome blocked instead of guessing; the peer's answer arrives as prior dialogue on the attempt that resumes this run.",
 				parameters: AskPeerParameters,
-				execute: async (args, api) => {
+				execute: async (args, api, context) => {
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
@@ -228,7 +259,11 @@ export function createWorkflowDialogueExtension(
 					];
 					if (args.context) cliArgs.push("--context", args.context);
 					cliArgs.push("--options", JSON.stringify(args.options ?? []));
-					const result = await runWorkflowCli(cliArgs, run);
+					const result = await runWorkflowCli(
+						cliArgs,
+						run,
+						context?.abortSignal,
+					);
 					if (result.aborted)
 						return {
 							content: [{ type: "text", text: "Peer question cancelled" }],

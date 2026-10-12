@@ -235,6 +235,64 @@ test("agent asks a completed peer and the peer answer unblocks the record", () =
 	}
 });
 
+test("a peer answer resumes the blocked asking run", () => {
+	const { repo, engine, workflowId, worker, triage, triageToken } = setup();
+	try {
+		const asked = engine.dispatch(repo, {
+			type: "agent.ask",
+			workflowId,
+			runId: triage.id,
+			stepId: "core.triage",
+			role: "triage",
+			token: triageToken,
+			targetRole: "worker",
+			description: "Which module owns the question reducer?",
+		});
+		const question = asked.snapshot.developerDialogue.at(-1);
+		if (!question) throw new Error("question missing");
+		const prompt = engine
+			.claimEffects(repo)
+			.find((effect) => effect.kind === "agent.prompt");
+		if (!prompt) throw new Error("prompt missing");
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: triage.id,
+			generation: triage.generation,
+			token: triageToken,
+			outcome: "blocked",
+			message: "waiting on the peer",
+		});
+		expect(blocked.view.status).toBe("attention-required");
+		const nonce = "peer-resume-nonce";
+		engine.dispatch(repo, {
+			type: "effect.result",
+			effectId: prompt.id,
+			lease: prompt.lease,
+			outcome: "complete",
+			data: { prompted: true, answerNonceHash: runtimeTest.hashToken(nonce) },
+		});
+		const answered = engine.dispatch(repo, {
+			type: "agent.answer",
+			workflowId,
+			runId: worker.id,
+			stepId: "core.implementation",
+			role: "worker",
+			questionId: question.id,
+			answerNonce: nonce,
+			answer: "reducers/agent-consult.ts",
+		});
+		expect(answered.view.status).toBe("active");
+		const resumed = answered.view.runs.find(
+			(candidate) =>
+				candidate.role === "triage" && candidate.status === "pending",
+		);
+		if (!resumed) throw new Error("resumed triage run missing");
+		expect(resumed.attempt).toBe(triage.attempt + 1);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("only a completed peer role with a live session is consultable", () => {
 	const { repo, engine, workflowId, triage, triageToken } = setup();
 	try {

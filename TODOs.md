@@ -16,7 +16,7 @@ Big ones:
  │ 4  │ show-environment-instances              │ 1, 2                               │ As soon as agents hold apps, you can see who holds and who waits, and force-release.                                            │ done
  │ 5  │ add-workflow-evidence-store             │ —                                  │ Storage the browser needs. It has no dependencies, so it can also run in parallel with 1–4.                                     │ done
  │ 6  │ add-dashboard-evidence-panel            │ 5                                  │ Shows evidence in the dashboard before the agents start producing it.                                                           │ done
- │ 7  │ add-agent-browser-sessions              │ 3, 5                               │ Headless browser, screenshots and video.                                                                                        │
+ │ 7  │ add-agent-browser-sessions              │ 3, 5                               │ Headless browser, screenshots and video.                                                                                        │ done
  │ 8  │ add-agent-debug-tools                   │ 1, 3                               │ OTel wiring and otel_query / db_query / http_request.                                                                           │
  │ 9  │ add-environment-setup-workflow          │ 1, 3, 8                            │ Agents write the run definitions, including the OTel wiring from 8.                                                             │
  │ —  │ Operational: one env-setup pass per app │ 9                                  │ Adds OTel wiring and a mock-auth profile to your existing apps, so the debug tools return useful data.                          │
