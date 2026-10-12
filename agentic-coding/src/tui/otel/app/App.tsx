@@ -1891,8 +1891,10 @@ export function App(props: {
 		}
 
 		// The dedicated sidebar toggle works on every surface (host keybind), so
-		// feature views whose own layers claim h/l still reach it. A shell overlay
-		// owns input while one is open.
+		// feature views whose own layers claim h/l still reach it, and it is the
+		// only key that focuses the sidebar: a shifted h/l moves between the
+		// dashboard's own panels and never opens the workspace panel. A shell
+		// overlay owns input while one is open.
 		if (
 			nav.modal() === "none" &&
 			sidebarAvailable() &&
@@ -1901,21 +1903,6 @@ export function App(props: {
 		) {
 			if (focusPanel() === "sidebar") setFocusPanel("content");
 			else focusSidebar();
-			return;
-		}
-
-		// Shell panel model: Shift+H/L move focus to the workspace sidebar while
-		// the page body holds it, on the side the sidebar is configured for. The
-		// dashboard's own layer handles this itself while it is mounted; a shell
-		// overlay owns the key while one is open.
-		if (
-			nav.modal() === "none" &&
-			sidebarAvailable() &&
-			event.shift &&
-			((key === "h" && sidebarSide() === "left") ||
-				(key === "l" && sidebarSide() === "right"))
-		) {
-			focusSidebar();
 			return;
 		}
 

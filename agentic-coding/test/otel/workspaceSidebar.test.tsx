@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 // Workspace sidebar render test (integrated-multiplexer sidebar): the shell
 // shows the durable workflows, collapses them to indices while unfocused,
-// filters them from the keyboard, moves panel focus with Shift+H/L, opens the
-// selected workflow's dashboard page, and reports a missing tmux on `n`. The
+// filters them from the keyboard, focuses the panel with the Ctrl+S host key
+// (and with nothing else), opens the selected workflow's dashboard page, and
+// reports a missing tmux on `n`. The
 // overview read is stubbed at the gateway port, so the test pins presentation
 // and navigation rather than the store.
 import { afterEach, expect, test } from "bun:test";
@@ -385,6 +386,28 @@ test("Ctrl+S toggles sidebar focus from any surface", async () => {
 		t.mockInput.pressKey("s", { ctrl: true });
 		await advance(t, 4, 60);
 		expect(t.captureCharFrame()).not.toContain("wf-active");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Shift+H/L never focus the sidebar: only Ctrl+S does", async () => {
+	stubGateway();
+	const t = await renderShell();
+	try {
+		// The page body's shifted h/l keys belong to the dashboard's own panel
+		// grid; they must not reach the workspace sidebar behind it.
+		t.mockInput.pressKey("h", { shift: true });
+		await advance(t, 4, 60);
+		expect(t.captureCharFrame()).not.toContain("wf-active");
+		t.mockInput.pressKey("l", { shift: true });
+		await advance(t, 4, 60);
+		expect(t.captureCharFrame()).not.toContain("wf-active");
+
+		// Ctrl+S is the one way in, and it still works after the shifted keys.
+		await focusSidebar(t);
+		expect(t.captureCharFrame()).toContain("wf-active");
 	} finally {
 		t.renderer.destroy();
 		clearGateway();
