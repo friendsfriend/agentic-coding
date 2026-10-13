@@ -27,6 +27,7 @@ import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
 import { createDebugExtension } from "./debug-tools.ts";
 import { createEnvironmentExtension } from "./environment-tools.ts";
+import { createFrameThrottle } from "./frame-throttle.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
 import {
@@ -55,6 +56,12 @@ import {
 // pi-ai's default OAuth loaders hide imports from bundlers. Embed/register all
 // flows here so compiled hosts can derive auth and refresh without node_modules.
 registerBunOAuthFlows();
+
+/** Shortest interval between two conversation frames a watcher receives. A
+ * generating model changes the conversation at token rate; 50 ms keeps the
+ * transcript live (about 20 frames a second) while bounding what each frame
+ * costs the watcher. */
+const STATE_FRAME_COALESCE_MS = 50;
 
 interface RunMapState extends JsonObject {
 	runs: Record<string, { conversationId: number }>;
@@ -690,9 +697,18 @@ export class DurableHost {
 			timings: this.timings.get(conversationId) ?? {},
 		});
 		onValue(augment(state.value));
-		const unsubscribe = state.subscribe((value) => onValue(augment(value)));
+		// Coalesce what follows: a generating model changes this state at token
+		// rate, and every frame crosses the socket and rebuilds the watcher's whole
+		// transcript. The initial frame above is delivered directly, because a
+		// watcher's handshake resolves on it.
+		const frames = createFrameThrottle<unknown>({
+			windowMs: STATE_FRAME_COALESCE_MS,
+			deliver: (value) => onValue(value),
+		});
+		const unsubscribe = state.subscribe((value) => frames.push(augment(value)));
 		return () => {
 			unsubscribe();
+			frames.dispose();
 			state.dispose();
 		};
 	}

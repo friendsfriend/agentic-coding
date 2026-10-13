@@ -258,6 +258,9 @@ export async function startWorkflow(
 ): Promise<string> {
 	const workflowId = await gateway().start(request);
 	cache.invalidate(viewsKey(request.repo));
+	// A start adds a row to the catalog the sidebar lists, and its poll reads the
+	// catalog only when a workflow event or an explicit invalidation dropped it.
+	cache.invalidate("workflows");
 	return workflowId;
 }
 

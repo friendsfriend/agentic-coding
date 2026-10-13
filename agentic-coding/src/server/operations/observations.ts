@@ -79,6 +79,7 @@ import {
 	viewToDashboardState,
 	workflowExecutionError,
 } from "./engine.ts";
+import { cachedText } from "./file-cache.ts";
 
 export type DashboardObservation =
 	| { kind: "dashboard"; repo: string; workflowId: string }
@@ -505,8 +506,11 @@ function summary(path: string) {
 	);
 }
 
+/** The task checklist of one workflow, as the sidebar's progress count. The
+ * read is cached by (mtime, size): the sidebar poll repeats it every 5 s for
+ * every listed workflow, and only the workflow a step committed to changed. */
 function tasks(path: string) {
-	return [...read(path).matchAll(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/gm)].map(
+	return [...cachedText(path).matchAll(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/gm)].map(
 		(match) => ({
 			done: match[1]?.toLowerCase() === "x",
 			text: match[2]?.trim(),

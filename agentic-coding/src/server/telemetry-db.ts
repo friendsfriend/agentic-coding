@@ -1,9 +1,11 @@
 import { Database, type Statement } from "bun:sqlite";
 import {
+	closeSync,
 	existsSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
-	readFileSync,
+	readSync,
 	statSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -21,7 +23,13 @@ import {
 	loadProjectCatalog,
 	projectCanonicalRoots,
 } from "../workflow/project-catalog.ts";
-import { parseJsonl, parseTelemetryJsonl } from "./telemetry-parser";
+import {
+	jsonlLines,
+	parseJsonl,
+	parseLine as parseJsonlLine,
+	parseTelemetryJsonlFrom,
+	parseTelemetryLine,
+} from "./telemetry-parser";
 
 interface TraceRow {
 	id: number;
@@ -49,12 +57,51 @@ const MAX_TRACE_BYTES = 16 * 1024 * 1024;
 const MAX_TRACE_LIST_PER_PAGE = 500;
 
 const MAX_TELEMETRY_SPANS = 50_000;
-/** Bumped whenever the ingest parser changes so existing workspaces re-ingest. */
-const PARSER_VERSION = 3;
+/** Bumped whenever the ingest parser or the persisted watermark changes so
+ * existing workspaces re-ingest from the start of their file instead of
+ * resuming at an offset the new code did not write. */
+const PARSER_VERSION = 4;
+/** How often a watched repository is checked for appended bytes. */
+const WORKSPACE_WATCH_MS = 2000;
+/** Lines parsed between two yields of the event loop. The watcher runs inside
+ * the TUI process, so a long appended tail is parsed in bounded chunks. */
+const INGEST_CHUNK_LINES = 500;
 
 interface TraceSource {
 	path: string;
-	parse: (text: string) => SpanData[];
+	/** Parse one window of JSONL lines, continuing the line numbering of the
+	 * windows already parsed (`startIndex`); see `parseTelemetryJsonlFrom`. */
+	parse: (text: string, startIndex?: number) => SpanData[];
+	/** Parse a single line at its 1-based position in the file. */
+	parseLine: (line: string, index: number) => SpanData | undefined;
+}
+
+/** The bytes already ingested for one workspace file. `ingest_offset` is a byte
+ * offset at a line boundary: everything before it was parsed exactly once by
+ * this parser version, and only what follows is parsed on the next tick. */
+interface WorkspaceFileState {
+	path: string;
+	file_mtime: number;
+	file_size: number;
+	ingest_offset: number;
+	line_index: number;
+	parser_version: number;
+}
+
+/** Where one workspace file's ingest starts on this tick, and whether the rows
+ * already stored for the workflow have to be dropped first (a full re-ingest). */
+interface IngestPlan {
+	readonly start: number;
+	readonly lineIndex: number;
+	readonly reset: boolean;
+}
+
+/** Where a window ends in the file, and the line numbering it leaves behind. */
+interface IngestWatermark {
+	readonly mtime: number;
+	readonly size: number;
+	readonly offset: number;
+	readonly lineIndex: number;
 }
 
 /** Pick the span source for a workflow directory. The current engine only
@@ -70,13 +117,80 @@ function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
 		const legacyMtime = statSync(legacyPath).mtimeMs;
 		const telemetryMtime = statSync(telemetryPath).mtimeMs;
 		return telemetryMtime >= legacyMtime
-			? { path: telemetryPath, parse: parseTelemetryJsonl }
-			: { path: legacyPath, parse: parseJsonl };
+			? {
+					path: telemetryPath,
+					parse: parseTelemetryJsonlFrom,
+					parseLine: parseTelemetryLine,
+				}
+			: { path: legacyPath, parse: parseJsonl, parseLine: parseJsonlLine };
 	}
 	if (telemetryExists)
-		return { path: telemetryPath, parse: parseTelemetryJsonl };
-	if (legacyExists) return { path: legacyPath, parse: parseJsonl };
+		return {
+			path: telemetryPath,
+			parse: parseTelemetryJsonlFrom,
+			parseLine: parseTelemetryLine,
+		};
+	if (legacyExists)
+		return { path: legacyPath, parse: parseJsonl, parseLine: parseJsonlLine };
 	return undefined;
+}
+
+const NEWLINE_BYTE = 0x0a;
+
+/** A trailing fragment is a complete record only when it parses: an append-only
+ * writer may never terminate its last line and a full parse reads it, while a
+ * half-written line has to wait for the next tick instead of being consumed. */
+function isCompleteRecord(fragment: string): boolean {
+	const trimmed = fragment.trim();
+	if (!trimmed) return false;
+	try {
+		JSON.parse(trimmed);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** How many bytes of a read window form complete lines: everything up to the
+ * last newline, plus a trailing line that is already a complete record. */
+function consumedLineBytes(window: Buffer): number {
+	if (window.length === 0) return 0;
+	const last = window.lastIndexOf(NEWLINE_BYTE);
+	if (last === window.length - 1) return window.length;
+	if (isCompleteRecord(window.subarray(last + 1).toString("utf8")))
+		return window.length;
+	return last + 1;
+}
+
+/** Read `[start, end)` without loading what precedes it: the point of the
+ * watermark is that an append costs the appended bytes, not the whole file. */
+function readWindowSync(path: string, start: number, end: number): Buffer {
+	const length = Math.max(0, end - start);
+	if (length === 0) return Buffer.alloc(0);
+	const buffer = Buffer.allocUnsafe(length);
+	const fd = openSync(path, "r");
+	try {
+		let read = 0;
+		while (read < length) {
+			const chunk = readSync(fd, buffer, read, length - read, start + read);
+			if (chunk <= 0) break;
+			read += chunk;
+		}
+		return buffer.subarray(0, read);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** The async read of the same window, so the watcher does not block on I/O. */
+async function readWindowAsync(
+	path: string,
+	start: number,
+	end: number,
+): Promise<Buffer> {
+	const length = Math.max(0, end - start);
+	if (length === 0) return Buffer.alloc(0);
+	return Buffer.from(await Bun.file(path).slice(start, end).arrayBuffer());
 }
 
 /** The aggregated trace-list columns for one ingested span. A malformed span
@@ -137,6 +251,9 @@ export class TraceDb {
 	private ingestMetricStmt: Statement;
 	private ingestLogStmt: Statement;
 	private upsertWorkspaceStmt: Statement;
+	private workspaceStateStmt: Statement;
+	private traceCountStmt: Statement;
+	private trimTracesStmt: Statement;
 	private readonly listeners = new Set<() => void>();
 	private readonly watchedRepos = new Map<string, () => void>();
 
@@ -182,14 +299,25 @@ export class TraceDb {
       change_id TEXT UNIQUE NOT NULL,
       path TEXT NOT NULL,
       file_mtime INTEGER NOT NULL DEFAULT 0,
-      parser_version INTEGER NOT NULL DEFAULT 1
+      parser_version INTEGER NOT NULL DEFAULT 1,
+      file_size INTEGER NOT NULL DEFAULT 0,
+      ingest_offset INTEGER NOT NULL DEFAULT 0,
+      line_index INTEGER NOT NULL DEFAULT 0
     )`);
-		try {
-			this.db.run(
-				"ALTER TABLE workspace_files ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 1",
-			);
-		} catch (error) {
-			if (!String(error).includes("duplicate column name")) throw error;
+		// The watermark columns arrived after the table did: an existing database
+		// gains them here (and re-ingests once, because its rows still carry the
+		// old parser version).
+		for (const column of [
+			"parser_version INTEGER NOT NULL DEFAULT 1",
+			"file_size INTEGER NOT NULL DEFAULT 0",
+			"ingest_offset INTEGER NOT NULL DEFAULT 0",
+			"line_index INTEGER NOT NULL DEFAULT 0",
+		]) {
+			try {
+				this.db.run(`ALTER TABLE workspace_files ADD COLUMN ${column}`);
+			} catch (error) {
+				if (!String(error).includes("duplicate column name")) throw error;
+			}
 		}
 		this.db.run(`CREATE TABLE IF NOT EXISTS metrics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,8 +351,95 @@ export class TraceDb {
 			"INSERT INTO logs (change_id, log, ingested_at) VALUES ($change_id, $log, datetime('now'))",
 		);
 		this.upsertWorkspaceStmt = this.db.prepare(
-			`INSERT INTO workspace_files (change_id, path, file_mtime, parser_version) VALUES ($change_id, $path, $mtime, ${PARSER_VERSION}) ON CONFLICT(change_id) DO UPDATE SET path=$path, file_mtime=$mtime, parser_version=${PARSER_VERSION}`,
+			`INSERT INTO workspace_files (change_id, path, file_mtime, parser_version, file_size, ingest_offset, line_index) VALUES ($change_id, $path, $mtime, ${PARSER_VERSION}, $size, $offset, $line_index) ON CONFLICT(change_id) DO UPDATE SET path=$path, file_mtime=$mtime, parser_version=${PARSER_VERSION}, file_size=$size, ingest_offset=$offset, line_index=$line_index`,
 		);
+		this.workspaceStateStmt = this.db.prepare(
+			"SELECT path, file_mtime, file_size, ingest_offset, line_index, parser_version FROM workspace_files WHERE change_id=?",
+		);
+		this.traceCountStmt = this.db.prepare(
+			"SELECT COUNT(*) count FROM traces WHERE change_id=?",
+		);
+		this.trimTracesStmt = this.db.prepare(
+			`DELETE FROM traces WHERE id IN (SELECT id FROM traces WHERE change_id=$change_id ORDER BY id DESC LIMIT -1 OFFSET $keep)`,
+		);
+	}
+
+	/** The bytes already ingested for a workspace, if this database ingested it
+	 * with the current parser version. */
+	private workspaceFileState(changeId: string): WorkspaceFileState | undefined {
+		return this.workspaceStateStmt.get(changeId) as
+			| WorkspaceFileState
+			| undefined;
+	}
+
+	/** What one workspace file needs on this tick: nothing, the appended tail, or
+	 * a full re-ingest. */
+	private planIngest(
+		source: TraceSource,
+		size: number,
+		mtime: number,
+		known: WorkspaceFileState | undefined,
+	): IngestPlan | undefined {
+		// A parser upgrade or a source switch (a legacy snapshot versus the
+		// workflow's own telemetry) invalidates the stored offsets: both re-ingest
+		// from zero instead of resuming at a watermark they did not write.
+		if (
+			known &&
+			known.parser_version >= PARSER_VERSION &&
+			known.path === source.path
+		) {
+			if (known.file_size === size && known.file_mtime >= mtime)
+				return undefined;
+			// Truncation or rotation: the file shrank below the watermark, so the
+			// prefix the stored offsets describe is gone.
+			if (size >= known.ingest_offset && size >= known.file_size)
+				return {
+					start: known.ingest_offset,
+					lineIndex: known.line_index,
+					reset: false,
+				};
+		}
+		return { start: 0, lineIndex: 0, reset: true };
+	}
+
+	/** Write one window's spans and advance the watermark in the same
+	 * transaction, so an interrupted ingest resumes at the next unparsed line
+	 * instead of replaying (and duplicating) the spans it already wrote. */
+	private writeWindow(
+		changeId: string,
+		source: TraceSource,
+		spans: readonly SpanData[],
+		watermark: IngestWatermark,
+	): number {
+		const write = this.db.transaction(() => {
+			for (const span of spans)
+				this.ingestStmt.run({ $change_id: changeId, ...traceColumns(span) });
+			this.upsertWorkspaceStmt.run({
+				$change_id: changeId,
+				$path: source.path,
+				$mtime: watermark.mtime,
+				$size: watermark.size,
+				$offset: watermark.offset,
+				$line_index: watermark.lineIndex,
+			});
+		});
+		write();
+		return spans.length;
+	}
+
+	/** Keep the per-workflow span cap the database-level retention intends.
+	 * Append-only ingest never drops a row, so the cap is enforced by dropping
+	 * the oldest rows once a workflow passes it; the check only costs a count for
+	 * a file with more lines than the cap, and nothing at all below it. */
+	private trimToCap(changeId: string, lineIndex: number): void {
+		if (lineIndex <= MAX_TELEMETRY_SPANS) return;
+		const total = (this.traceCountStmt.get(changeId) as { count: number })
+			.count;
+		if (total <= MAX_TELEMETRY_SPANS) return;
+		this.trimTracesStmt.run({
+			$change_id: changeId,
+			$keep: MAX_TELEMETRY_SPANS,
+		});
 	}
 
 	/** One-time materialization of the aggregated columns for rows ingested
@@ -398,39 +613,49 @@ export class TraceDb {
 	ingestWorkspace(herdrPath: string, changeId: string): number {
 		const source = workspaceTraceSource(herdrPath);
 		if (!source) return 0;
-		const mtime = Math.floor(statSync(source.path).mtimeMs);
-		const known = this.db
-			.prepare(
-				"SELECT file_mtime, parser_version FROM workspace_files WHERE change_id=?",
-			)
-			.get(changeId) as
-			| { file_mtime: number; parser_version?: number }
-			| undefined;
-		if (
-			known &&
-			known.file_mtime >= mtime &&
-			(known.parser_version ?? 1) >= PARSER_VERSION
-		)
+		const stat = statSync(source.path);
+		const size = stat.size;
+		const mtime = Math.floor(stat.mtimeMs);
+		if (size > MAX_TRACE_BYTES) return 0;
+		const plan = this.planIngest(
+			source,
+			size,
+			mtime,
+			this.workspaceFileState(changeId),
+		);
+		if (!plan) return 0;
+		const window = readWindowSync(source.path, plan.start, size);
+		const consumed = consumedLineBytes(window);
+		if (consumed === 0) {
+			// Only a half-written line so far: remember the check (an unchanged file
+			// is skipped by (mtime,size)) and retry the line on the next tick.
+			if (!plan.reset)
+				this.writeWindow(changeId, source, [], {
+					mtime,
+					size,
+					offset: plan.start,
+					lineIndex: plan.lineIndex,
+				});
 			return 0;
-		if (statSync(source.path).size > MAX_TRACE_BYTES) return 0;
-		const text = readFileSync(source.path, "utf8");
+		}
+		const text = window.subarray(0, consumed).toString("utf8");
+		const lineIndex = plan.lineIndex + jsonlLines(text).length;
+		// A full re-ingest replaces what the workflow had: its old rows describe a
+		// file prefix that is gone, or one this parser version never wrote.
+		if (plan.reset)
+			this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
+		const parsed = source.parse(text, plan.lineIndex);
 		// Keep the trailing window: append-only telemetry must retain the newest
 		// events, matching the DB-level cap's recency intent.
-		const spans = source.parse(text).slice(-MAX_TELEMETRY_SPANS);
-		// Remove old traces for this change and re-ingest
-		this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
-		const insert = this.db.transaction(() => {
-			for (const span of spans) {
-				this.ingestStmt.run({ $change_id: changeId, ...traceColumns(span) });
-			}
-			this.upsertWorkspaceStmt.run({
-				$change_id: changeId,
-				$path: source.path,
-				$mtime: mtime,
-			});
+		const spans = plan.reset ? parsed.slice(-MAX_TELEMETRY_SPANS) : parsed;
+		const written = this.writeWindow(changeId, source, spans, {
+			mtime,
+			size,
+			offset: plan.start + consumed,
+			lineIndex,
 		});
-		insert();
-		return spans.length;
+		this.trimToCap(changeId, lineIndex);
+		return written;
 	}
 
 	ingestMetrics(changeId: string, metrics: MetricData[]): number {
@@ -576,59 +801,107 @@ export class TraceDb {
 		onNew: (changeId: string, spans: SpanData[]) => void,
 	): () => void {
 		const timer = setInterval(() => {
-			const workflowDir = join(repoRoot, ".herdr-workflow");
-			if (!existsSync(workflowDir)) return;
-			try {
-				const entries = readdirSync(workflowDir, { withFileTypes: true });
-				for (const entry of entries) {
-					if (!entry.isDirectory()) continue;
-					const source = workspaceTraceSource(join(workflowDir, entry.name));
-					if (!source) continue;
-					const mtime = Math.floor(statSync(source.path).mtimeMs);
-					const known = this.db
-						.prepare(
-							"SELECT file_mtime, parser_version FROM workspace_files WHERE change_id=?",
-						)
-						.get(entry.name) as
-						| { file_mtime: number; parser_version?: number }
-						| undefined;
-					if (
-						known &&
-						known.file_mtime >= mtime &&
-						(known.parser_version ?? 1) >= PARSER_VERSION
-					)
-						continue;
-					if (this.ingesting.has(entry.name)) continue;
-					if (statSync(source.path).size > MAX_TRACE_BYTES) continue;
-					this.ingesting.add(entry.name);
-					void (async () => {
-						const text = await Bun.file(source.path).text();
-						const spans = source.parse(text).slice(-MAX_TELEMETRY_SPANS);
-						this.db.run("DELETE FROM traces WHERE change_id=?", [entry.name]);
-						const insert = this.db.transaction(() => {
-							for (const span of spans) {
-								this.ingestStmt.run({
-									$change_id: entry.name,
-									...traceColumns(span),
-								});
-							}
-							this.upsertWorkspaceStmt.run({
-								$change_id: entry.name,
-								$path: source.path,
-								$mtime: mtime,
-							});
-						});
-						insert();
-						onNew(entry.name, spans);
-					})()
-						.catch((error) => console.error("watchWorkspaces error:", error))
-						.finally(() => this.ingesting.delete(entry.name));
-				}
-			} catch (e) {
-				console.error("watchWorkspaces error:", e);
-			}
-		}, 2000);
+			void this.ingestRepository(repoRoot, onNew).catch((error) =>
+				console.error("watchWorkspaces error:", error),
+			);
+		}, WORKSPACE_WATCH_MS);
 		return () => clearInterval(timer);
+	}
+
+	/** One watcher tick: ingest what was appended to every workspace file of a
+	 * repository. Only appended bytes are read and parsed, and the parse runs in
+	 * bounded chunks with a yield between them, so a long telemetry file never
+	 * holds the event loop of the process the watcher runs in. */
+	private async ingestRepository(
+		repoRoot: string,
+		onNew: (changeId: string, spans: SpanData[]) => void,
+	): Promise<void> {
+		const workflowDir = join(repoRoot, ".herdr-workflow");
+		if (!existsSync(workflowDir)) return;
+		const entries = readdirSync(workflowDir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			if (this.ingesting.has(entry.name)) continue;
+			const source = workspaceTraceSource(join(workflowDir, entry.name));
+			if (!source) continue;
+			let size = 0;
+			let mtime = 0;
+			try {
+				const stat = statSync(source.path);
+				size = stat.size;
+				mtime = Math.floor(stat.mtimeMs);
+			} catch {
+				// The workspace file was rotated away between the directory read and
+				// the stat: the next tick sees the new one.
+				continue;
+			}
+			if (size > MAX_TRACE_BYTES) continue;
+			const plan = this.planIngest(
+				source,
+				size,
+				mtime,
+				this.workspaceFileState(entry.name),
+			);
+			if (!plan) continue;
+			this.ingesting.add(entry.name);
+			try {
+				const spans = await this.ingestTail(entry.name, source, {
+					size,
+					mtime,
+					plan,
+				});
+				if (spans.length) onNew(entry.name, spans);
+			} finally {
+				this.ingesting.delete(entry.name);
+			}
+		}
+	}
+
+	/** Parse and store the appended tail of one workspace file. */
+	private async ingestTail(
+		changeId: string,
+		source: TraceSource,
+		window: { size: number; mtime: number; plan: IngestPlan },
+	): Promise<SpanData[]> {
+		const { plan, size, mtime } = window;
+		const bytes = await readWindowAsync(source.path, plan.start, size);
+		const consumed = consumedLineBytes(bytes);
+		if (consumed === 0) {
+			// Only a half-written line so far, and no complete line to renumber from
+			// on a full re-ingest: leave the watermark where it is.
+			if (!plan.reset)
+				this.writeWindow(changeId, source, [], {
+					mtime,
+					size,
+					offset: plan.start,
+					lineIndex: plan.lineIndex,
+				});
+			return [];
+		}
+		const lines = jsonlLines(bytes.subarray(0, consumed).toString("utf8"));
+		if (plan.reset)
+			this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
+		const parsed: SpanData[] = [];
+		let lineIndex = plan.lineIndex;
+		for (let start = 0; start < lines.length; start += INGEST_CHUNK_LINES) {
+			for (const line of lines.slice(start, start + INGEST_CHUNK_LINES)) {
+				lineIndex += 1;
+				const span = source.parseLine(line, lineIndex);
+				if (span) parsed.push(span);
+			}
+			// Yield to the event loop between chunks: this parse is main-thread work
+			// in the process that hosts the watcher.
+			await Bun.sleep(0);
+		}
+		const spans = plan.reset ? parsed.slice(-MAX_TELEMETRY_SPANS) : parsed;
+		this.writeWindow(changeId, source, spans, {
+			mtime,
+			size,
+			offset: plan.start + consumed,
+			lineIndex,
+		});
+		this.trimToCap(changeId, lineIndex);
+		return spans;
 	}
 
 	close() {

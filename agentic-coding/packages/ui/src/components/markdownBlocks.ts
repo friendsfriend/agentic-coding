@@ -83,6 +83,107 @@ function lastContentLine(raw: string, startLine: number): number {
 	return startLine + index;
 }
 
+/** One rendered piece of a document split at its top-level block boundaries:
+ * a fenced code block draws as its own text immediately, prose goes through the
+ * markdown syntax pass. Each part keeps the blank lines up to the next part,
+ * because a rendered part only draws the spacing that is part of its own
+ * text. */
+export interface MarkdownBlockPart {
+	/** The part's source text, including the blank lines up to the next part. */
+	readonly source: string;
+	/** Fenced code: drawn as text instead of waiting for the syntax pass. */
+	readonly code: boolean;
+}
+
+/** The 0-based offset each source line starts at. */
+function lineStarts(content: string): number[] {
+	const starts = [0];
+	for (let index = 0; index < content.length; index++)
+		if (content[index] === "\n") starts.push(index + 1);
+	return starts;
+}
+
+/** Split a document at its top-level blocks, with each part's offset in the
+ * document (the start of the line its block starts on). */
+function partOffsets(content: string): {
+	readonly parts: MarkdownBlockPart[];
+	readonly offsets: number[];
+} {
+	const blocks = parseMarkdownBlocks(content);
+	const lines = content.split("\n");
+	const starts = lineStarts(content);
+	const parts: MarkdownBlockPart[] = [];
+	const offsets: number[] = [];
+	for (const [index, block] of blocks.entries()) {
+		const next = blocks[index + 1];
+		parts.push({
+			source: lines
+				.slice(block.startLine - 1, next ? next.startLine - 1 : lines.length)
+				.join("\n"),
+			code: block.kind === "code",
+		});
+		offsets.push(starts[block.startLine - 1] ?? content.length);
+	}
+	return { parts, offsets };
+}
+
+/** Split a document into the parts it renders as (see `parseMarkdownBlocks`). */
+export function markdownBlockParts(content: string): MarkdownBlockPart[] {
+	return partOffsets(content).parts;
+}
+
+/** The parts of a document being streamed, and what a later frame can reuse. */
+export interface StreamingMarkdownBlockParts {
+	/** The text these parts were parsed from. */
+	readonly content: string;
+	/** Every part of the document, in order. */
+	readonly parts: readonly MarkdownBlockPart[];
+	/** Offset in `content` where the last part starts. Everything before it is
+	 * settled: only the last block can still grow. */
+	readonly tail: number;
+}
+
+function partsOf(content: string): StreamingMarkdownBlockParts {
+	const { parts, offsets } = partOffsets(content);
+	return {
+		content,
+		parts,
+		tail: offsets[offsets.length - 1] ?? content.length,
+	};
+}
+
+/** Parse `content` as the next frame of a streamed document, reusing the parts
+ * the previous frame had already settled when the document only grew.
+ *
+ * A transcript re-parses its assistant message on every host frame, and lexing
+ * the whole message is the expensive half of that render. Text appended at the
+ * end cannot re-open a block boundary the settled text already closed, so only
+ * the tail is lexed again: the parts before it keep their identity, and the
+ * renderer keeps their rows instead of rebuilding every one of them per
+ * token. */
+export function streamingMarkdownBlockParts(
+	previous: StreamingMarkdownBlockParts | undefined,
+	content: string,
+): StreamingMarkdownBlockParts {
+	if (
+		previous &&
+		previous.tail > 0 &&
+		content.length >= previous.tail &&
+		content.startsWith(previous.content)
+	) {
+		const tailText = content.slice(previous.tail);
+		const { parts: tailParts, offsets } = partOffsets(tailText);
+		const tail = offsets[offsets.length - 1] ?? tailText.length;
+		if (tailParts.length > 0)
+			return {
+				content,
+				parts: [...previous.parts.slice(0, -1), ...tailParts],
+				tail: previous.tail + tail,
+			};
+	}
+	return partsOf(content);
+}
+
 /**
  * Map a selection of block indices (single block or a visual range) to the
  * source-line range it anchors: the first block's `startLine` through the last

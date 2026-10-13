@@ -280,8 +280,22 @@ export function parseTelemetryLine(
 }
 
 export function parseTelemetryJsonl(text: string): SpanData[] {
+	return parseTelemetryJsonlFrom(text, 0);
+}
+
+/** Parse a JSONL window that continues an earlier one.
+ *
+ * `startIndex` is the number of non-empty lines already parsed before this
+ * window, so the line numbering stays the one a full parse would use: the
+ * envelope parser derives a span's id from `index:line`, and a tail parsed
+ * with a restarted numbering would produce different spans than a full parse of
+ * the same file. */
+export function parseTelemetryJsonlFrom(
+	text: string,
+	startIndex = 0,
+): SpanData[] {
 	const spans: SpanData[] = [];
-	let index = 0;
+	let index = startIndex;
 	for (const line of text.split(/\r?\n/)) {
 		if (!line.trim()) continue;
 		index += 1;
@@ -289,4 +303,11 @@ export function parseTelemetryJsonl(text: string): SpanData[] {
 		if (span) spans.push(span);
 	}
 	return spans;
+}
+
+/** The lines a JSONL parser visits: blank lines carry no record and are the
+ * only lines it skips, so an incremental ingest can count and split a window
+ * exactly as the whole-file parsers above do. */
+export function jsonlLines(text: string): string[] {
+	return text.split(/\r?\n/).filter((line) => line.trim() !== "");
 }

@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { blockSelectionToLines, parseMarkdownBlocks } from "@ui";
+import {
+	blockSelectionToLines,
+	markdownBlockParts,
+	parseMarkdownBlocks,
+	streamingMarkdownBlockParts,
+} from "@ui";
 
 test("parses top-level blocks with exact source-line ranges", () => {
 	const doc = `# Heading
@@ -109,4 +114,50 @@ test("blockSelectionToLines clamps out-of-range indices", () => {
 		start: 3,
 		end: 3,
 	});
+});
+
+test("splits a document into the parts a transcript renders", () => {
+	const parts = markdownBlockParts(
+		"# Plan\n\nStep one.\n\n```ts\nconst x = 1;\n```\n",
+	);
+	// Fenced code is drawn as its own text instead of through the syntax pass.
+	expect(parts.map((part) => part.code)).toEqual([false, false, true]);
+	expect(parts[0]?.source).toBe("# Plan\n");
+	expect(parts[2]?.source).toContain("const x = 1;");
+});
+
+test("a streamed message reuses the parts its earlier frames settled", () => {
+	const first = "# Plan\n\nStep one.\n";
+	const grown = `${first}\nStep two with **bold**.\n\n\`\`\`ts\nconst x = 1;\n\`\`\`\n`;
+	const start = streamingMarkdownBlockParts(undefined, first);
+	const next = streamingMarkdownBlockParts(start, grown);
+	// The settled part is the same object, which is what keeps its render row.
+	expect(next.parts[0]).toBe(start.parts[0]);
+	// And the reuse is invisible: the result is what a full parse produces.
+	expect(next.parts).toEqual(markdownBlockParts(grown));
+	// The tail moved to the last part, so the next frame lexes from there.
+	expect(grown.slice(next.tail)).toContain("const x = 1;");
+});
+
+test("a text that is not an extension of the cached one is parsed in full", () => {
+	const start = streamingMarkdownBlockParts(undefined, "# one\n\nbody\n");
+	// A different message under the same key: nothing is reused, so parts can
+	// never be spliced from another document.
+	const replaced = streamingMarkdownBlockParts(start, "# two\n\nother body\n");
+	expect(replaced.parts).toEqual(markdownBlockParts("# two\n\nother body\n"));
+	expect(replaced.parts[0]).not.toBe(start.parts[0]);
+	// A message that only shrank re-parses too.
+	expect(streamingMarkdownBlockParts(start, "# one\n").parts).toEqual(
+		markdownBlockParts("# one\n"),
+	);
+});
+
+test("an empty document has no parts and no tail", () => {
+	const empty = streamingMarkdownBlockParts(undefined, "");
+	expect(empty.parts).toEqual([]);
+	expect(empty.tail).toBe(0);
+	// The first text that arrives is parsed from the start.
+	expect(streamingMarkdownBlockParts(empty, "hello").parts).toEqual(
+		markdownBlockParts("hello"),
+	);
 });

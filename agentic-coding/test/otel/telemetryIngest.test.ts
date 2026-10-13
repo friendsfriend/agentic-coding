@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TraceDb } from "../../src/server/telemetry-db";
@@ -184,6 +190,154 @@ describe("enriched telemetry payload ingest", () => {
 });
 
 describe("TraceDb telemetry ingest", () => {
+	const envelope = (event: string, at: string, workflowId = "wf-1") =>
+		JSON.stringify({
+			schemaVersion: 1,
+			at,
+			layer: "engine",
+			event,
+			workflowId,
+		});
+	/** One envelope per second from a fixed origin, so a synthetic file is easy to
+	 * grow a line at a time. */
+	const envelopeAt = (index: number, workflowId = "wf-1") =>
+		envelope(
+			`event.${index}`,
+			new Date(Date.UTC(2026, 8, 11, 9, 0, index)).toISOString(),
+			workflowId,
+		);
+
+	test("parses only the appended tail of a growing workspace file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-tail-"));
+		const path = join(dir, "telemetry.jsonl");
+		writeFileSync(path, `${envelopeAt(0)}\n${envelopeAt(1)}\n`);
+		const db = new TraceDb(join(dir, "db"));
+		try {
+			expect(db.ingestWorkspace(dir, "wf-tail")).toBe(2);
+			writeFileSync(path, `${envelopeAt(2)}\n`, { flag: "a" });
+			// One appended line: a tick must parse what was appended, not the file it
+			// already ingested.
+			expect(db.ingestWorkspace(dir, "wf-tail")).toBe(1);
+			const spans = db.loadSpans("wf-tail");
+			expect(spans.map((span) => span.name)).toEqual([
+				"event.0",
+				"event.1",
+				"event.2",
+			]);
+			// The tail keeps the line numbering of a full parse, so span identity is
+			// identical to what a whole-file ingest produces.
+			const full = parseTelemetryJsonl(readFileSync(path, "utf8"));
+			expect(spans.map((span) => span.spanId)).toEqual(
+				full.map((span) => span.spanId),
+			);
+			// An unchanged file (same size, same mtime) is not read again.
+			expect(db.ingestWorkspace(dir, "wf-tail")).toBe(0);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("waits for the newline of a half-written line", () => {
+		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-partial-"));
+		const path = join(dir, "telemetry.jsonl");
+		const second = envelopeAt(1);
+		// The writer is mid-line: only the complete first record is ingested, and the
+		// fragment waits instead of being consumed as a truncated record.
+		writeFileSync(path, `${envelopeAt(0)}\n${second.slice(0, 24)}`);
+		const db = new TraceDb(join(dir, "db"));
+		try {
+			expect(db.ingestWorkspace(dir, "wf-partial")).toBe(1);
+			expect(db.loadSpans("wf-partial").map((span) => span.name)).toEqual([
+				"event.0",
+			]);
+			writeFileSync(path, `${second.slice(24)}\n`, { flag: "a" });
+			expect(db.ingestWorkspace(dir, "wf-partial")).toBe(1);
+			expect(db.loadSpans("wf-partial").map((span) => span.name)).toEqual([
+				"event.0",
+				"event.1",
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("re-ingests from the start when the file is truncated or rotated", () => {
+		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-rotate-"));
+		const path = join(dir, "telemetry.jsonl");
+		writeFileSync(path, `${envelopeAt(0)}\n${envelopeAt(1)}\n`);
+		const db = new TraceDb(join(dir, "db"));
+		try {
+			expect(db.ingestWorkspace(dir, "wf-rotate")).toBe(2);
+			// A rotated (shorter) file: the watermark's prefix is gone, so the rows it
+			// described are dropped rather than left behind as stale spans.
+			writeFileSync(path, `${envelopeAt(9)}\n`);
+			expect(db.ingestWorkspace(dir, "wf-rotate")).toBe(1);
+			expect(db.loadSpans("wf-rotate").map((span) => span.name)).toEqual([
+				"event.9",
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("an appended line costs the tail, not the whole file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-cost-"));
+		const path = join(dir, "telemetry.jsonl");
+		const lines = Array.from({ length: 12_000 }, (_, index) =>
+			envelopeAt(index % 60, `wf-${index}`),
+		);
+		writeFileSync(path, `${lines.join("\n")}\n`);
+		const db = new TraceDb(join(dir, "db"));
+		try {
+			const firstIngest = performance.now();
+			expect(db.ingestWorkspace(dir, "wf-cost")).toBe(12_000);
+			const firstIngestMs = performance.now() - firstIngest;
+			// Two appended ticks, keeping the cheaper measurement: what this asserts is
+			// the work an append does, and a busy machine can only add time to it.
+			const appendedMs = Math.min(
+				...[0, 1].map((index) => {
+					writeFileSync(path, `${envelopeAt(index, "wf-appended")}\n`, {
+						flag: "a",
+					});
+					const started = performance.now();
+					expect(db.ingestWorkspace(dir, "wf-cost")).toBe(1);
+					return performance.now() - started;
+				}),
+			);
+			// The watermark is the whole point: a tick that appends one line must not
+			// pay for the 12000 lines it already ingested (measured ~60 ms against
+			// ~3 ms; before this change the two were the same work).
+			expect(appendedMs).toBeLessThan(firstIngestMs / 3);
+			expect(db.loadSpans("wf-cost")).toHaveLength(12_002);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("keeps the per-workflow span cap once a growing file passes it", () => {
+		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-cap-"));
+		const path = join(dir, "telemetry.jsonl");
+		const lines = Array.from({ length: 50_000 }, (_, index) =>
+			envelopeAt(index % 60, "wf-cap"),
+		);
+		writeFileSync(path, `${lines.join("\n")}\n`);
+		const db = new TraceDb(join(dir, "db"));
+		try {
+			expect(db.ingestWorkspace(dir, "wf-cap")).toBe(50_000);
+			// Append-only ingest never drops a row by itself, so the cap has to be
+			// enforced: the rows past it are the oldest ones, never the new arrival.
+			writeFileSync(path, `${envelopeAt(0, "wf-cap")}\n`, { flag: "a" });
+			expect(db.ingestWorkspace(dir, "wf-cap")).toBe(1);
+			writeFileSync(path, `${envelopeAt(1, "wf-cap")}\n`, { flag: "a" });
+			expect(db.ingestWorkspace(dir, "wf-cap")).toBe(1);
+			expect(
+				db.listTraceSummaries({ changeId: "wf-cap" }).items[0]?.spanCount,
+			).toBe(50_000);
+		} finally {
+			db.close();
+		}
+	});
+
 	test("ingests a workspace that only has telemetry.jsonl", () => {
 		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-db-"));
 		writeFileSync(join(dir, "telemetry.jsonl"), TELEMETRY);
@@ -234,22 +388,68 @@ describe("TraceDb telemetry ingest", () => {
 		}
 	});
 
-	test("watcher picks up a new telemetry workspace and reports its spans", async () => {
-		const root = mkdtempSync(join(tmpdir(), "otel-telemetry-watch-"));
-		const workflowDir = join(root, ".herdr-workflow", "wf-3");
+	test("the watcher reads only the appended tail of a large workspace file", async () => {
+		const root = mkdtempSync(join(tmpdir(), "otel-telemetry-watch-tail-"));
+		const workflowDir = join(root, ".herdr-workflow", "wf-big");
 		mkdirSync(workflowDir, { recursive: true });
-		writeFileSync(join(workflowDir, "telemetry.jsonl"), TELEMETRY);
+		const path = join(workflowDir, "telemetry.jsonl");
+		// ~370 KiB already ingested: the watcher's next tick must read the appended
+		// bytes at that offset, not the file the watermark covers.
+		writeFileSync(
+			path,
+			`${Array.from({ length: 3000 }, (_, index) => envelopeAt(index % 60, "wf-big")).join("\n")}\n`,
+		);
 		const db = new TraceDb(join(root, "db"));
+		expect(db.ingestWorkspace(workflowDir, "wf-big")).toBe(3000);
 		const seen: string[] = [];
 		const stop = db.watchWorkspaces(root, (changeId, spans) => {
 			seen.push(`${changeId}:${spans.length}`);
 		});
 		try {
-			const deadline = Date.now() + 6000;
-			while (!seen.includes("wf-3:2") && Date.now() < deadline)
+			writeFileSync(path, `${envelopeAt(1, "wf-big")}\n`, { flag: "a" });
+			const deadline = Date.now() + 12_000;
+			while (!seen.includes("wf-big:1") && Date.now() < deadline)
 				await Bun.sleep(50);
+			expect(seen).toContain("wf-big:1");
+			expect(
+				db.listTraceSummaries({ changeId: "wf-big" }).items[0]?.spanCount,
+			).toBe(3001);
+		} finally {
+			stop();
+			db.close();
+		}
+	});
+
+	test("watcher picks up a new telemetry workspace and reports its spans", async () => {
+		const root = mkdtempSync(join(tmpdir(), "otel-telemetry-watch-"));
+		const workflowDir = join(root, ".herdr-workflow", "wf-3");
+		mkdirSync(workflowDir, { recursive: true });
+		const path = join(workflowDir, "telemetry.jsonl");
+		writeFileSync(path, TELEMETRY);
+		const db = new TraceDb(join(root, "db"));
+		const seen: string[] = [];
+		const stop = db.watchWorkspaces(root, (changeId, spans) => {
+			seen.push(`${changeId}:${spans.length}`);
+		});
+		const waitFor = async (entry: string): Promise<void> => {
+			const deadline = Date.now() + 12_000;
+			while (!seen.includes(entry) && Date.now() < deadline)
+				await Bun.sleep(50);
+		};
+		try {
+			await waitFor("wf-3:2");
 			expect(seen).toContain("wf-3:2");
 			expect(db.loadSpans("wf-3")).toHaveLength(2);
+			// An append is reported as the appended line alone, not as another
+			// whole-file re-ingest.
+			writeFileSync(
+				path,
+				`\n${JSON.stringify({ schemaVersion: 1, at: "2026-09-11T09:14:17.000Z", layer: "engine", event: "effect.result", workflowId: "wf-3" })}`,
+				{ flag: "a" },
+			);
+			await waitFor("wf-3:1");
+			expect(seen).toContain("wf-3:1");
+			expect(db.loadSpans("wf-3")).toHaveLength(3);
 		} finally {
 			stop();
 			db.close();

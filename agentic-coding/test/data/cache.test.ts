@@ -108,6 +108,9 @@ describe("data cache", () => {
 			"telemetry:traces:*:1",
 		])
 			await cache.load(key, loader);
+		// The overview catalog is one unkeyed read over every configured root, and a
+		// workflow event is what makes it stale: the sidebar's poll reads it.
+		await cache.load("workflows", loader);
 		cache.applyEvent({
 			instance: "server",
 			sequence: 1,
@@ -124,6 +127,7 @@ describe("data cache", () => {
 			"artifacts:/repo:wf-1",
 			"wiki:/repo:wf-1",
 			"git:/repo:wf-1",
+			"workflows",
 		])
 			expect(cache.has(key)).toBe(false);
 		// another repository and the telemetry reads are untouched

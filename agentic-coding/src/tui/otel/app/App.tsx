@@ -205,10 +205,16 @@ import {
 } from "./sidebar-model.ts";
 import { startSlotToasts } from "./slot-toasts.ts";
 
-/** Bounded poll for the sidebar's workflow observation. The store is SQLite
- * and the read is a catalog pass; a few seconds keeps a started or finished
- * workflow visible without a per-workflow subscription per row. */
+/** Bounded poll for the sidebar's workflow observation. The workflow event
+ * stream drops the cached catalog when a workflow changes (see
+ * `DataCache.applyEvent`), so a poll in between is a cache hit and costs the
+ * shell nothing; this interval only decides how soon an invalidated catalog is
+ * re-read. */
 const SIDEBAR_REFRESH_MS = 5_000;
+/** Every nth poll re-reads the catalog even without an event: a workflow started
+ * or finished outside this shell reports nothing over the event stream, and the
+ * sidebar has to notice it anyway. */
+const SIDEBAR_RESYNC_TICKS = 6;
 
 type Tab =
 	| "home"
@@ -690,13 +696,20 @@ export function App(props: {
 	});
 	// The workflow store is the durable source; this reads it (plus the page's
 	// revisit) on a bounded poll so started and finished workflows appear
-	// without a restart and without a second state store to keep in sync.
+	// without a restart and without a second state store to keep in sync. Only
+	// the periodic resync forces the read: a forced pass walks every configured
+	// catalog and reads every listed workflow's tasks.md, which is not work to
+	// repeat every 5 s while no workflow event reported a change.
 	createEffect(() => {
 		if (!sidebarAvailable()) return;
 		let disposed = false;
-		const refresh = async (): Promise<void> => {
+		let ticks = 0;
+		const refresh = async (force: boolean): Promise<void> => {
 			try {
-				const next = await loadOverviews(undefined, { refresh: true });
+				const next = await loadOverviews(
+					undefined,
+					force ? { refresh: true } : undefined,
+				);
 				if (disposed || !next) return;
 				setSidebarOverviews(next);
 				setSidebarLoading(false);
@@ -704,8 +717,11 @@ export function App(props: {
 				// A failed observation keeps the last list; the next poll retries.
 			}
 		};
-		void refresh();
-		const timer = setInterval(() => void refresh(), SIDEBAR_REFRESH_MS);
+		void refresh(true);
+		const timer = setInterval(() => {
+			ticks += 1;
+			void refresh(ticks % SIDEBAR_RESYNC_TICKS === 0);
+		}, SIDEBAR_REFRESH_MS);
 		onCleanup(() => {
 			disposed = true;
 			clearInterval(timer);

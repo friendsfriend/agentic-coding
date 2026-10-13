@@ -37,9 +37,11 @@ import { useRenderer } from "@opentui/solid";
 import {
 	getMarkdownSyntaxStyle,
 	ListViewModal,
+	type MarkdownBlockPart,
 	MarkdownViewer,
-	parseMarkdownBlocks,
 	ScrollableContent,
+	type StreamingMarkdownBlockParts,
+	streamingMarkdownBlockParts,
 	uiColors,
 } from "@ui";
 import {
@@ -252,33 +254,13 @@ function truncateModel(model: string): string {
 	return model.length > 32 ? `${model.slice(0, 31)}…` : model;
 }
 
-/** One rendered piece of an assistant message: a fenced code block, or the
- * prose around it. */
-interface AssistantPart {
-	readonly source: string;
-	/** Fenced code: drawn as text immediately instead of waiting for the
-	 * markdown syntax pass (prose needs that pass to conceal its own markers). */
-	readonly code: boolean;
-}
-
-/**
- * Split an assistant message at its top-level markdown blocks. Each part keeps
- * the blank lines up to the next block, because a rendered part only draws the
- * spacing that is part of its own text.
- */
-function assistantParts(text: string): AssistantPart[] {
-	const blocks = parseMarkdownBlocks(text);
-	const lines = text.split("\n");
-	return blocks.map((block, index) => {
-		const next = blocks[index + 1];
-		return {
-			source: lines
-				.slice(block.startLine - 1, next ? next.startLine - 1 : lines.length)
-				.join("\n"),
-			code: block.kind === "code",
-		};
-	});
-}
+/** Parsed markdown parts, per block id, kept for the life of one view: a
+ * streaming block re-renders every frame, and this is what lets a frame lex its
+ * tail instead of the whole message. */
+type MarkdownPartsFor = (
+	key: string,
+	text: string,
+) => readonly MarkdownBlockPart[];
 
 /**
  * One assistant message as its markdown pieces. A single `<markdown>` for the
@@ -287,10 +269,18 @@ function assistantParts(text: string): AssistantPart[] {
  * block — so code draws as a code block and prose as a streaming preview, and
  * neither waits to become visible.
  */
-function AssistantMarkdown(props: { text: string; live?: boolean }) {
+function AssistantMarkdown(props: {
+	transcript: MarkdownPartsFor;
+	/** Identity of the message this text belongs to: the key its parsed parts are
+	 * reused under across frames. */
+	partKey: string;
+	text: string;
+	live?: boolean;
+}) {
 	// Lexing the message is the expensive part of a render, so it happens once
-	// per text (every streaming frame), not once per part.
-	const parts = createMemo(() => assistantParts(props.text));
+	// per text (every streaming frame), not once per part — and a frame that only
+	// appended to the message reuses the parts the previous frame settled.
+	const parts = createMemo(() => props.transcript(props.partKey, props.text));
 	return (
 		<box flexDirection="column">
 			<For each={parts()}>
@@ -333,6 +323,7 @@ function ToolRow(props: {
 	/** Which rows are folded open, and how to fold one. */
 	openRows: () => ReadonlySet<string>;
 	onToggleRow: (key: string) => void;
+	transcript: MarkdownPartsFor;
 }) {
 	const key = () => `${props.block.id}:${props.row.id ?? props.row.text}`;
 	const open = () => props.openRows().has(key());
@@ -373,7 +364,11 @@ function ToolRow(props: {
 						</text>
 					}
 				>
-					<AssistantMarkdown text={props.row.text} />
+					<AssistantMarkdown
+						transcript={props.transcript}
+						partKey={key()}
+						text={props.row.text}
+					/>
 				</Show>
 			</box>
 			<Show when={open()}>
@@ -387,6 +382,7 @@ function ToolRow(props: {
 								row={row}
 								openRows={props.openRows}
 								onToggleRow={props.onToggleRow}
+								transcript={props.transcript}
 							/>
 						)}
 					</For>
@@ -413,6 +409,8 @@ function Block(props: {
 	role: string;
 	expanded: boolean;
 	onToggle: (id: string) => void;
+	/** The parsed markdown parts of a block, reused across this view's frames. */
+	transcript: MarkdownPartsFor;
 	/** Which parts a reader toggled away from their default, and how to toggle
 	 * one: a part that starts folded (`script`) opens on a click, one that starts
 	 * open closes on it. */
@@ -455,6 +453,8 @@ function Block(props: {
 		return (
 			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
 				<AssistantMarkdown
+					transcript={props.transcript}
+					partKey={props.block.id}
 					text={props.block.text}
 					{...(props.block.live === true ? { live: true } : {})}
 				/>
@@ -555,6 +555,7 @@ function Block(props: {
 										row={row}
 										openRows={props.openRows}
 										onToggleRow={props.onToggleRow}
+										transcript={props.transcript}
 									/>
 								)}
 							</For>
@@ -589,6 +590,7 @@ function Block(props: {
 																row={row}
 																openRows={props.openRows}
 																onToggleRow={props.onToggleRow}
+																transcript={props.transcript}
 															/>
 														)}
 													</For>
@@ -880,6 +882,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const [expandedRows, setExpandedRows] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
+	// The parsed markdown parts per message, kept for the life of the view: the
+	// streaming assistant block changes on every host frame, and this is what
+	// lets a frame lex only its tail instead of the whole message.
+	const markdownCache = new Map<string, StreamingMarkdownBlockParts>();
+	const markdownParts: MarkdownPartsFor = (key, text) => {
+		const next = streamingMarkdownBlockParts(markdownCache.get(key), text);
+		markdownCache.set(key, next);
+		return next.parts;
+	};
 	const toggleRow = (key: string) => {
 		keepPlace();
 		setExpandedRows((current) => {
@@ -1159,6 +1170,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											onToggleSection={toggleSection}
 											openRows={expandedRows}
 											onToggleRow={toggleRow}
+											transcript={markdownParts}
 										/>
 									</box>
 								)}

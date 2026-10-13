@@ -178,6 +178,10 @@ export class DataCache {
 			// stored file is immutable once written — only a full invalidation drops
 			// them.
 			this.invalidate(`evidence:${event.resource}`);
+			// The overview catalog is one unkeyed read over every configured root
+			// (store rows plus each workflow's tasks.md), so a workflow event makes
+			// it stale; the sidebar's bounded poll is what re-reads it.
+			this.invalidate("workflows");
 			return;
 		}
 		if (event.domain === "telemetry") {
