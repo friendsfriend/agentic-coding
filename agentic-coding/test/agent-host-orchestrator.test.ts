@@ -280,7 +280,7 @@ describe("orchestrator host mode", () => {
 				},
 				loadAgents: () => ({
 					agents: {},
-					orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+					orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
 					orchestratorLimitsConfigured: false,
 				}),
 				orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),

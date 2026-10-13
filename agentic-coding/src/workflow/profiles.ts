@@ -138,10 +138,10 @@ export interface OrchestratorLimits {
 	readonly maxStartsPerDay: number;
 }
 
-/** The ceiling an absent `limits` key means: at most three active workflows and
+/** The ceiling an absent `limits` key means: at most five active workflows and
  * twenty starts in the trailing 24 hours. */
 export const DEFAULT_ORCHESTRATOR_LIMITS: OrchestratorLimits = {
-	maxActive: 3,
+	maxActive: 5,
 	maxStartsPerDay: 20,
 };
 
@@ -153,7 +153,7 @@ export function orchestratorMonitorMode(
 	return agents?.orchestrator?.monitor ?? DEFAULT_ORCHESTRATOR_MONITOR;
 }
 
-/** The effective launch ceiling, defaulting each unset key to 3 active / 20
+/** The effective launch ceiling, defaulting each unset key to 5 active / 20
  * starts per trailing 24 h so a configuration that says nothing still has a
  * guard. */
 export function orchestratorLaunchLimits(

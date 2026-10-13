@@ -100,7 +100,7 @@ function stubOperations(scenario: Scenario): ServerOperations {
 			provenance: { source: "default", files: [] },
 			conflicts: [],
 			revision: "rev-1",
-			orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+			orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
 			orchestratorLimitsConfigured: false,
 		}),
 		agentQuestion: async () => "answer",

@@ -101,7 +101,7 @@ function stubOperations(
 			provenance: { source: "default", files: [] },
 			conflicts: [],
 			revision: "stub-revision",
-			orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+			orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
 			orchestratorLimitsConfigured: false,
 		}),
 		agentQuestion: async () => "answer",

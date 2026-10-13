@@ -213,31 +213,38 @@ describe("orchestrator policy", () => {
 			repository: "/repo",
 			createdAt: "2026-10-06T00:00:00Z",
 		});
-		const limits = { maxActive: 3, maxStartsPerDay: 20 };
+		const limits = { maxActive: 5, maxStartsPerDay: 20 };
 		// Below the active bound: allowed.
 		expect(
 			orchestratorLaunchRefusal({
 				limits,
-				active: [launch("a"), launch("b")],
+				active: [launch("a"), launch("b"), launch("c"), launch("d")],
 				recent: [launch("a"), launch("b")],
 			}),
 		).toBeUndefined();
 		// At the active bound: refused, naming the limit, the count and the workflows.
 		const atActive = orchestratorLaunchRefusal({
 			limits,
-			active: [launch("a"), launch("b"), launch("c")],
+			active: [launch("a"), launch("b"), launch("c"), launch("d"), launch("e")],
 			recent: [launch("a"), launch("b"), launch("c")],
 		});
-		expect(atActive).toContain("3 of 3 active workflows");
-		expect(atActive).toContain("(a, b, c)");
+		expect(atActive).toContain("5 of 5 active workflows");
+		expect(atActive).toContain("(a, b, c, d, e)");
 		// Above the active bound: still refused.
 		expect(
 			orchestratorLaunchRefusal({
 				limits,
-				active: [launch("a"), launch("b"), launch("c"), launch("d")],
+				active: [
+					launch("a"),
+					launch("b"),
+					launch("c"),
+					launch("d"),
+					launch("e"),
+					launch("f"),
+				],
 				recent: [],
 			}),
-		).toContain("4 of 3 active workflows");
+		).toContain("6 of 5 active workflows");
 		// The trailing-24 h bound applies when the active bound is not reached.
 		const daily = orchestratorLaunchRefusal({
 			limits: { maxActive: 5, maxStartsPerDay: 2 },
@@ -385,7 +392,7 @@ describe("orchestrator over the transport", () => {
 	};
 
 	test("an orchestrator start at the configured active ceiling is 409 and never reaches the operation", async () => {
-		// The ceiling is deliberately not the default 3: a transport that ignored
+		// The ceiling is deliberately not the default 5: a transport that ignored
 		// the configured table would allow this start and fail the test.
 		await withServer(
 			"core.implementation",
@@ -515,7 +522,7 @@ describe("orchestrator configuration", () => {
 		).toBe(DEFAULT_ORCHESTRATOR_MONITOR);
 	});
 
-	test("[agents.orchestrator] limits parses positive integers and defaults to 3/20", () => {
+	test("[agents.orchestrator] limits parses positive integers and defaults to 5/20", () => {
 		expect(
 			parseAgentsConfig({
 				orchestrator: { limits: { max_active: 5, max_starts_per_day: 50 } },
@@ -539,7 +546,7 @@ describe("orchestrator configuration", () => {
 					orchestrator: { limits: { max_starts_per_day: 1 } },
 				}),
 			),
-		).toEqual({ maxActive: 3, maxStartsPerDay: 1 });
+		).toEqual({ maxActive: 5, maxStartsPerDay: 1 });
 		// A non-positive, fractional or non-numeric bound is refused on either key,
 		// as is a typo.
 		for (const key of ["max_active", "max_starts_per_day"] as const)

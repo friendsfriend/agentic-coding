@@ -510,7 +510,7 @@ describe("section items surface every inventoried setting", () => {
 			);
 		// Nothing configured: the defaults are named, and the row is read-only.
 		const defaults = row({});
-		expect(defaults?.value).toBe("3 active · 20 starts per 24 h (defaults)");
+		expect(defaults?.value).toBe("5 active · 20 starts per 24 h (defaults)");
 		expect(defaults?.editable).toBe(false);
 		// A configured ceiling is shown without the default marker, and a single
 		// start is not pluralized.

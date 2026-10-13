@@ -92,7 +92,7 @@ enforces regardless of what the session decides:
 
 ```toml
 [agents.orchestrator.limits]
-max_active = 3          # default 3
+max_active = 5          # default 5
 max_starts_per_day = 20 # default 20
 ```
 
@@ -101,7 +101,7 @@ orchestrator-started workflows across every workflow target: those that are
 neither `completed` nor `closed` against `max_active`, and those created in the
 trailing 24 hours against `max_starts_per_day`. When a bound is reached the
 start is refused with `409 orchestrator-limit`, and the refusal names the limit,
-the current count and the workflows counted (`3 of 3 active workflows (a, b,
+the current count and the workflows counted (`5 of 5 active workflows (a, b,
 c)`), so the session can relay exactly why it was refused. Operator starts are
 never limited or counted.
 
