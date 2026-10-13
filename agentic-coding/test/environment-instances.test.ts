@@ -12,6 +12,7 @@ import {
 	environmentInstanceStorageId,
 	parseEnvironmentOwner,
 } from "../src/server/environment/instances/model.ts";
+import type { OtelReceiverTarget } from "../src/server/environment/instances/variables.ts";
 import { resolveInstanceVariables } from "../src/server/environment/instances/variables.ts";
 import { EnvironmentStateStore } from "../src/server/environment/state-store.ts";
 import {
@@ -246,6 +247,8 @@ function harness(options: {
 	scriptInfra?:
 		| ReturnType<typeof fakeScriptInfra>
 		| ReturnType<typeof spawningScriptInfra>;
+	/** The telemetry receiver the runs of this harness are told about. */
+	otelReceiver?: () => OtelReceiverTarget | undefined;
 	/** Poll cadence; a small value with a small clock step exercises the wait loop. */
 	waitPollMs?: number;
 }): Harness {
@@ -260,6 +263,7 @@ function harness(options: {
 		...(options.docker ? { docker: options.docker } : {}),
 		...(options.resolveDocker ? { resolveDocker: options.resolveDocker } : {}),
 		...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
+		...(options.otelReceiver ? { otelReceiver: options.otelReceiver } : {}),
 		observeRun:
 			options.observeRun ??
 			(async (candidate) =>
@@ -340,18 +344,44 @@ describe("environment owner identity and variables", () => {
 		);
 	});
 
-	test("injects only the owner and the checkout directory", () => {
+	test("injects the owner, the checkout directory and the run's OTel wiring", () => {
 		expect(
-			resolveInstanceVariables({ owner: "user", appDir: "/apps/shop" }),
-		).toEqual({ AC_OWNER: "user", AC_APP_DIR: "/apps/shop" });
+			resolveInstanceVariables({
+				owner: "user",
+				appDir: "/apps/shop",
+				app: "shop",
+				grantId: "grant-1",
+				runtime: "script",
+			}),
+		).toEqual({
+			AC_OWNER: "user",
+			AC_APP_DIR: "/apps/shop",
+			AC_OTEL_ENDPOINT: "http://127.0.0.1:4318",
+			AC_OTEL_PROTOCOL: "http/json",
+			AC_OTEL_SERVICE_NAME: "shop",
+			AC_OTEL_RESOURCE_ATTRIBUTES: "ac.app=shop,ac.owner=user,ac.run=grant-1",
+			OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318",
+			OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+			OTEL_SERVICE_NAME: "shop",
+			OTEL_RESOURCE_ATTRIBUTES: "ac.app=shop,ac.owner=user,ac.run=grant-1",
+		});
 		expect(
 			resolveInstanceVariables({
 				owner: "workflow:abc",
 				appDir: "/worktrees/abc/shop",
+				app: "shop",
+				grantId: "grant-2",
+				runtime: "docker",
+				receiver: { httpPort: 4318, containerHost: "172.17.0.1" },
 			}),
 		).toEqual({
 			AC_OWNER: "workflow:abc",
 			AC_APP_DIR: "/worktrees/abc/shop",
+			AC_OTEL_ENDPOINT: "http://172.17.0.1:4318",
+			AC_OTEL_PROTOCOL: "http/json",
+			AC_OTEL_SERVICE_NAME: "shop",
+			AC_OTEL_RESOURCE_ATTRIBUTES:
+				"ac.app=shop,ac.owner=workflow:abc,ac.run=grant-2",
 		});
 	});
 });
@@ -553,6 +583,64 @@ describe("app slot starts", () => {
 			if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
 			else process.env.DOCKER_HOST = originalDockerHost;
 		}
+	});
+
+	test("gives every grant its own run id and exports with it", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-grant-"));
+		const fixture = composeFixture(root);
+		const state = tempState("grant");
+		const slots = harness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			apps: () => [app(fixture.checkout)],
+			store: state.store,
+			docker: dockerSelection(),
+			otelReceiver: () => ({ httpPort: 4318, containerHost: "172.17.0.1" }),
+		});
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+		const started = await slots.controller.acquire({
+			owner: "workflow:a",
+			apps: ["shop"],
+			waitSec: 1,
+		});
+		if (started.outcome !== "started") throw new Error("not started");
+		const first = started.instances[0];
+		if (!first) throw new Error("no instance");
+		// A container is told to export to the address the receiver bound, under
+		// the app's own service name and this grant's resource attributes.
+		const firstEnv = slots.calls[0]?.env ?? {};
+		expect(firstEnv.AC_OTEL_ENDPOINT).toBe("http://172.17.0.1:4318");
+		expect(firstEnv.AC_OTEL_PROTOCOL).toBe("http/json");
+		expect(firstEnv.AC_OTEL_SERVICE_NAME).toBe("shop");
+		const firstRun = firstEnv.AC_OTEL_RESOURCE_ATTRIBUTES ?? "";
+		expect(firstRun).toMatch(
+			/^ac\.app=shop,ac\.owner=workflow:a,ac\.run=[0-9a-f-]{36}$/,
+		);
+		// The grant is reported with the instance, so a caller can name the run its
+		// app telemetry belongs to.
+		expect(first.run).toBe(
+			firstRun.slice("ac.app=shop,ac.owner=workflow:a,ac.run=".length),
+		);
+		// The stop path substitutes exactly the variables of the grant it started
+		// under, so a definition referencing them never renders an empty value.
+		await slots.controller.stopApp("shop");
+		expect(slots.calls[1]?.env.AC_OTEL_RESOURCE_ATTRIBUTES).toBe(firstRun);
+
+		const second = await slots.controller.acquire({
+			owner: "workflow:a",
+			apps: ["shop"],
+			waitSec: 1,
+		});
+		if (second.outcome !== "started") throw new Error("not started again");
+		const secondRun = slots.calls[2]?.env.AC_OTEL_RESOURCE_ATTRIBUTES ?? "";
+		// Same app, same static address: only the grant tells the two runs apart.
+		expect(slots.calls[2]?.env.AC_OTEL_ENDPOINT).toBe("http://172.17.0.1:4318");
+		expect(secondRun).not.toBe(firstRun);
+		expect(second.instances[0]?.run).not.toBe(first.run);
 	});
 
 	test("starts and stops a script target through its lifecycle owner", async () => {

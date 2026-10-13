@@ -25,6 +25,7 @@ import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
+import { createDebugExtension } from "./debug-tools.ts";
 import { createEnvironmentExtension } from "./environment-tools.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
@@ -202,10 +203,11 @@ export class DurableHost {
 		private readonly codemodeTool: ToolRegistration | undefined,
 		/** The read-only run's share of the workflow extensions: `ask_jev` (the
 		 * in-session judgment tool the protocol tells every verifier to reach for),
-		 * `grep` (the bounded repository search a review needs) and the environment
-		 * tools (a verifier starts and reads the app it verifies). A read-only run
-		 * names its tools explicitly, so all of them have to be listed here or the
-		 * prompt would name a tool the session never got. */
+		 * `grep` (the bounded repository search a review needs), the environment
+		 * tools (a verifier starts and reads the app it verifies), the browser and
+		 * the debug tools (a verifier reproduces the failure it reads about). A
+		 * read-only run names its tools explicitly, so all of them have to be listed
+		 * here or the prompt would name a tool the session never got. */
 		private readonly readOnlyTools: readonly ToolRegistration[],
 		/** The orchestrator extension, present only in orchestrator mode. */
 		private readonly orchestratorExtension: Extension | undefined,
@@ -234,12 +236,18 @@ export class DurableHost {
 		// are installed outside the edit-rights gate.
 		const browser = createBrowserExtension(lookup);
 		registry.install(browser);
+		// The debug tools ride the same capability: they read the traces this
+		// workflow's runs exported, the data an app it holds requires, and the
+		// endpoints of the apps it holds — all of which a verifier needs.
+		const debug = createDebugExtension(lookup);
+		registry.install(debug);
 		registry.install(createPromptExtension(options.globalAgentDir));
 		return [
 			...(jev.tools ?? []),
 			...(search.tools ?? []),
 			...(environment.tools ?? []),
 			...(browser.tools ?? []),
+			...(debug.tools ?? []),
 		];
 	}
 

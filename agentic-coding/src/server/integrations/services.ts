@@ -157,6 +157,12 @@ export interface IntegrationServicesOptions {
 	>;
 	/** Run-target/Kubernetes observer, owned by the runtime composition. */
 	readonly observation?: RunObservation;
+	/** The telemetry receiver this process bound, so every run it starts exports
+	 * its spans with the attributes `otel_query` scopes by. Omitted means this
+	 * process owns no receiver and runs get the standard OTLP HTTP endpoint. */
+	readonly otelReceiver?: () =>
+		| import("../environment/instances/variables.ts").OtelReceiverTarget
+		| undefined;
 }
 
 /**
@@ -245,6 +251,7 @@ export function createIntegrationServices(
 				// The idle TTL is configuration, not a constant: the reaper resolves
 				// `environment.instances.idle_ttl_minutes` on every pass.
 				idleTtlMs: () => environmentInstanceIdleTtlMs(),
+				...(options.otelReceiver ? { otelReceiver: options.otelReceiver } : {}),
 				publish: (event) => dashboardEvents.publish?.(event),
 				...(options.logger ? { logger: options.logger } : {}),
 			})

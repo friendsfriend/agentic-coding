@@ -39,14 +39,20 @@ import {
 } from "../server/classifier.ts";
 import { backendClient, configureBackendClient } from "../server/client.ts";
 import { createEnvironmentAuthority } from "../server/environment/authority.ts";
+import type { OtelReceiverTarget } from "../server/environment/instances/variables.ts";
 import { createIntegrationServices } from "../server/integrations/services.ts";
 import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
 } from "../server/lifecycle.ts";
+import {
+	defaultContainerGateway,
+	planReceiverBinds,
+} from "../server/receivers/bind.ts";
 import { discoverProjectRepos, TraceDb } from "../server/telemetry-db";
 import { APP_VERSION } from "../version.ts";
 import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
+import { receiverContainerBind } from "../workflow/effects.ts";
 import {
 	activeWorkflowExecutions,
 	cancelActiveWorkflowExecutions,
@@ -444,6 +450,26 @@ export async function main(): Promise<void> {
 	const statsdPort = portArg("--statsd-port");
 	const tracesOnly = process.argv.includes("--traces-only");
 
+	// The receivers take the spans the apps this workflow holds export. The bind
+	// plan is resolved once and used twice: the listeners bind exactly the
+	// addresses the runs are told to export to, and the plan never carries a
+	// wildcard (`server/receivers/bind.ts`).
+	const receiverBinds = await planReceiverBinds({
+		containerBind: receiverContainerBind(),
+		gateway: () =>
+			defaultContainerGateway(process.env.DEVENV_CONTAINER_RUNTIME ?? "docker"),
+		warn: (message) => process.stderr.write(`${message}\n`),
+	});
+	// What every app run this process starts is told about the receiver: the
+	// listener it exports to, and the host a container reaches it at.
+	const otelReceiver = (): OtelReceiverTarget => ({
+		...(httpPort ? { httpPort } : {}),
+		...(grpcPort ? { grpcPort } : {}),
+		...(receiverBinds.containerHost
+			? { containerHost: receiverBinds.containerHost }
+			: {}),
+	});
+
 	const traceStore = new TraceStore();
 	const metricStore = new MetricStore();
 	const logStore = new LogStore();
@@ -752,6 +778,8 @@ export async function main(): Promise<void> {
 						state: environmentAuthority.state,
 						configDir: resolveConfigDir(),
 						homeDir: resolveDevenvHome(),
+						// The runs this process starts export to the receivers it bound.
+						otelReceiver,
 						logger: (message) =>
 							traceTui("tui.process.startup", {
 								surface: "process",
@@ -797,6 +825,7 @@ export async function main(): Promise<void> {
 									promTargets,
 									promIntervalMs: promInterval,
 									statsdPort: statsdPort ?? undefined,
+									binds: receiverBinds,
 								},
 								signalSink: signalRouter,
 							}

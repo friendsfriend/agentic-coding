@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SpanData } from "../contracts/telemetry.ts";
+import type { SpanData, SpanEvent } from "../contracts/telemetry.ts";
 import { workflowTraceId } from "../workflow/observability.ts";
 
 const id = (value: unknown, size: number) =>
@@ -77,6 +77,31 @@ export function parseLine(line: string): SpanData | undefined {
 				: { code: raw.status === "ERROR" ? 2 : raw.status === "OK" ? 0 : 0 };
 		const attributes = normalizeAttrs(raw.attributes ?? []);
 		const resourceAttributes = normalizeAttrs(raw.resource?.attributes ?? []);
+		const events: SpanEvent[] = Array.isArray(raw.events)
+			? raw.events
+					.filter(
+						(event: unknown) =>
+							typeof (event as { name?: unknown } | null)?.name === "string",
+					)
+					.map(
+						(event: {
+							name: string;
+							timeUnixNano?: unknown;
+							attributes?: unknown;
+						}) => ({
+							name: event.name,
+							timeUnixNano: nanos(event.timeUnixNano)
+								? String(event.timeUnixNano)
+								: String(raw.startTimeUnixNano),
+							attributes: normalizeAttrs(event.attributes ?? []).map(
+								(attribute) => ({
+									key: attribute.key,
+									value: String(attribute.value),
+								}),
+							),
+						}),
+					)
+			: [];
 		const serviceName = String(
 			attributes.find((attribute) => attribute.key === "service.name")?.value ??
 				resourceAttributes.find((attribute) => attribute.key === "service.name")
@@ -103,6 +128,7 @@ export function parseLine(line: string): SpanData | undefined {
 			scope: { name: raw.scope?.name ?? "", version: raw.scope?.version ?? "" },
 			serviceName,
 			kind: Number(raw.kind ?? 0),
+			...(events.length > 0 ? { events } : {}),
 		};
 	} catch {
 		return undefined;

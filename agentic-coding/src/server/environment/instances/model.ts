@@ -98,6 +98,9 @@ export interface EnvironmentInstance {
 	readonly status: EnvironmentInstanceStatus;
 	readonly createdAt: string;
 	readonly lastActivityAt: string;
+	/** The slot grant this run started under (`ac.run`). Absent for a row this
+	 * process did not start, whose grant it therefore does not know. */
+	readonly run?: string;
 	/** The definition's own static endpoint exports. */
 	readonly endpoints: Readonly<Record<string, string>>;
 }

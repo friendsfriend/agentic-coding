@@ -535,6 +535,9 @@ export function summarizeAcquire(result: {
 		readonly checkoutPath: string;
 		readonly imageTag: string;
 		readonly endpoints: Readonly<Record<string, string>>;
+		/** The slot grant this run started under (`ac.run`), when this process
+		 * started it and therefore knows the grant. */
+		readonly run?: string;
 	}[];
 }): Record<string, unknown> {
 	if (result.outcome === "started" || result.outcome === "already-running")
@@ -549,6 +552,9 @@ export function summarizeAcquire(result: {
 				checkout: instance.checkoutPath,
 				imageTag: instance.imageTag,
 				endpoints: instance.endpoints,
+				// The run's own id, so the agent can match the spans `otel_query`
+				// reports (`ac.run`) to the hold it is debugging.
+				...(instance.run ? { run: instance.run } : {}),
 			})),
 		};
 	if (result.outcome === "released-by-developer")

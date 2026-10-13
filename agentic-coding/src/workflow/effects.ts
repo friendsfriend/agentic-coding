@@ -272,7 +272,20 @@ export interface WorkflowConfig {
 		base_branch: string;
 		pr_tool?: string;
 	};
-	telemetry: { capture_content: boolean };
+	telemetry: {
+		capture_content: boolean;
+		/**
+		 * Receiver listeners (`telemetry.receiver.*`, `add-agent-debug-tools`).
+		 * File-only, like the app-run lifecycle settings: the process that binds
+		 * the receivers reads them, and no Settings row edits them.
+		 */
+		receiver?: {
+			/** Addresses beyond loopback the telemetry receivers bind: `auto` (the
+			 * container bridge gateway, on a Linux engine), `off` (loopback only),
+			 * or one explicit address. A wildcard address is never bound. */
+			container_bind?: string;
+		};
+	};
 	ui: {
 		theme: string;
 		selection_height: number;
@@ -322,7 +335,7 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 		branch_prefix: "feature/",
 		base_branch: "origin/HEAD",
 	},
-	telemetry: { capture_content: true },
+	telemetry: { capture_content: true, receiver: { container_bind: "auto" } },
 	ui: {
 		theme: "catppuccin",
 		selection_height: 10,
@@ -526,6 +539,26 @@ function resolveConfigWithProvenance(
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 	return loadConfigWithProvenance(options).config;
+}
+
+/** The built-in receiver bind mode: the bridge gateway, on a Linux engine. */
+export const DEFAULT_RECEIVER_CONTAINER_BIND = "auto";
+
+/**
+ * How the telemetry receivers bind beyond loopback, from the layered
+ * configuration's `telemetry.receiver.container_bind`. `auto` (the default)
+ * binds the container bridge gateway when a Linux engine is detected, `off`
+ * keeps them loopback-only, and anything else is an explicit address. An empty
+ * or missing value falls back to `auto`; a wildcard address is never bound
+ * (`src/server/receivers/bind.ts` refuses it).
+ */
+export function receiverContainerBind(
+	config: WorkflowConfig = loadConfig(),
+): string {
+	const value = config.telemetry?.receiver?.container_bind;
+	if (typeof value !== "string") return DEFAULT_RECEIVER_CONTAINER_BIND;
+	const trimmed = value.trim();
+	return trimmed === "" ? DEFAULT_RECEIVER_CONTAINER_BIND : trimmed;
 }
 
 /** Built-in idle TTL for an agent-held app: 30 minutes. */

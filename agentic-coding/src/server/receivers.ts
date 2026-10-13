@@ -4,6 +4,8 @@
 // root and route decoded signals to an injected sink. The shell owns the sink
 // (its live view stores); the server owns the listeners and their bounded
 // shutdown. Every listener, gRPC included, runs in this one process.
+
+import type { ReceiverBindPlan } from "./receivers/bind";
 import type { SignalRouter } from "./receivers/index";
 import {
 	routeReceiverRequest,
@@ -20,6 +22,10 @@ export interface TelemetryReceiverConfig {
 	readonly promTargets?: ReadonlyArray<{ host: string; port: number }>;
 	readonly promIntervalMs?: number;
 	readonly statsdPort?: number;
+	/** The addresses the listeners bind, from `planReceiverBinds`. Omitted means
+	 * loopback only: the receiver is never exposed beyond what was asked for,
+	 * and never on a wildcard address. */
+	readonly binds?: ReceiverBindPlan;
 }
 
 export interface OwnedTelemetryReceivers {
@@ -34,25 +40,34 @@ export async function startTelemetryReceivers(
 	const servers: Array<ReturnType<typeof Bun.serve>> = [];
 	const stops: Array<() => void | Promise<void>> = [];
 
+	const hosts = config.binds?.hosts ?? ["127.0.0.1"];
 	const httpPorts = new Set<number>();
 	if (config.httpPort) httpPorts.add(config.httpPort);
 	if (config.zipkinPort) httpPorts.add(config.zipkinPort);
 	if (config.datadogPort) httpPorts.add(config.datadogPort);
+	// One listener per port *and* address: a container reaches the gateway the
+	// plan bound, the host keeps its loopback listener.
 	for (const port of httpPorts)
-		servers.push(
-			Bun.serve({
-				hostname: "127.0.0.1",
-				port,
-				fetch: (request) =>
-					routeReceiverRequest(request, sink) ??
-					new Response("not found", { status: 404 }),
-			}),
-		);
+		for (const hostname of hosts)
+			servers.push(
+				Bun.serve({
+					hostname,
+					port,
+					fetch: (request) =>
+						routeReceiverRequest(request, sink) ??
+						new Response("not found", { status: 404 }),
+				}),
+			);
 
 	// The OTLP gRPC TraceService is an in-process listener like the HTTP ones: a
 	// bind failure is a startup failure, never a silently missing receiver.
 	if (config.grpcPort) {
-		const grpc = await startOtlpGrpcReceiver(config.grpcPort, sink);
+		const grpc = await startOtlpGrpcReceiver(
+			config.grpcPort,
+			sink,
+			hosts[0] ?? "127.0.0.1",
+			hosts.slice(1),
+		);
 		stops.push(() => grpc.stop());
 	}
 

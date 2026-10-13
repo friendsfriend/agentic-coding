@@ -51,6 +51,21 @@ export interface KubernetesInfra {
 	timeout?: string;
 }
 
+/**
+ * The read-only SQL connection an infrastructure definition may declare
+ * (`db_query`, `add-agent-debug-tools`). The credentials are named, never
+ * written: `userEnv`/`passwordEnv` are resolved from the configuration `.env`
+ * when a query runs, so a definition file holds no secret.
+ */
+export interface InfraQueryConnection {
+	kind: "postgres" | "mysql";
+	host: string;
+	port: number;
+	database: string;
+	userEnv: string;
+	passwordEnv: string;
+}
+
 export interface InfraService {
 	displayName: string;
 	ident: string;
@@ -66,6 +81,9 @@ export interface InfraService {
 	logPath?: string;
 	executionHandle?: ExecutionHandle;
 	kubernetes?: KubernetesInfra;
+	/** The read-only connection `db_query` may use. Absent means the service is
+	 * not queryable, not that it is unreachable. */
+	query?: InfraQueryConnection;
 }
 
 /** An application or library as the catalog sees it.
@@ -196,6 +214,8 @@ export function normalizeInfraService(service: InfraService): InfraService {
 	const normalized: InfraService = { ...service };
 	if (!normalized.ident?.trim())
 		throw new Error("infra service ident is required");
+	if (normalized.query !== undefined)
+		normalized.query = normalizeInfraQuery(normalized.query, normalized.ident);
 	const type = normalized.type?.trim() ? normalized.type : INFRA_TYPE_DOCKER;
 	normalized.type = type;
 	switch (type) {
@@ -248,6 +268,42 @@ export function normalizeInfraService(service: InfraService): InfraService {
 		default:
 			throw new Error(`unsupported infra service type ${JSON.stringify(type)}`);
 	}
+}
+
+/**
+ * Validate a declared query connection. A malformed one fails the whole load,
+ * like every other definition error: a `db_query` that silently found no
+ * connection would be indistinguishable from an infra service without one.
+ */
+export function normalizeInfraQuery(
+	query: InfraQueryConnection,
+	ident: string,
+): InfraQueryConnection {
+	const at = (detail: string) =>
+		`infra service ${JSON.stringify(ident)} query: ${detail}`;
+	if (query.kind !== "postgres" && query.kind !== "mysql")
+		throw new Error(
+			at(
+				`kind must be "postgres" or "mysql", received ${JSON.stringify(query.kind)}`,
+			),
+		);
+	if (!query.host?.trim()) throw new Error(at("host is required"));
+	if (!Number.isInteger(query.port) || query.port < 1 || query.port > 65535)
+		throw new Error(at(`port must be 1-65535, received ${query.port}`));
+	if (!query.database?.trim()) throw new Error(at("database is required"));
+	for (const key of ["userEnv", "passwordEnv"] as const) {
+		const value = query[key];
+		if (
+			typeof value !== "string" ||
+			!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value)
+		)
+			throw new Error(
+				at(
+					`${key} must name an environment variable (letters, digits and _), received ${JSON.stringify(value)}`,
+				),
+			);
+	}
+	return { ...query };
 }
 
 /** Parse one infrastructure definition file (paths still unexpanded). */

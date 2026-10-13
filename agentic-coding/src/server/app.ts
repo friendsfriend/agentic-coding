@@ -50,6 +50,8 @@ import {
 import { type BrowserRouteDeps, handleBrowserRoute } from "./browser/routes.ts";
 import { type BrowserRuntime, browserRuntime } from "./browser/runtime.ts";
 import type { CredentialRegistry } from "./credentials.ts";
+import { type DebugRouteDeps, handleDebugRoute } from "./debug/routes.ts";
+import type { TraceIndex } from "./debug/trace-index.ts";
 import {
 	type AgentEnvironmentDeps,
 	handleAgentEnvironmentRoute,
@@ -113,6 +115,10 @@ export interface ServerAppOptions {
 	/** Bun-served legacy integration families (Git, providers, repository
 	 * search). When absent the legacy `/api/*` surface answers 503. */
 	readonly integrations?: IntegrationServices;
+	/** The live trace index the telemetry receivers feed, so an agent can query
+	 * the spans its own runs exported (`otel_query`). Absent: the process owns no
+	 * receivers and answers that no trace is queryable. */
+	readonly traceIndex?: TraceIndex;
 }
 
 export interface ServerApp {
@@ -230,6 +236,29 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			: {}),
 	});
 
+	/** What the owner-scoped debug routes read: the trace index this process's
+	 * receivers feed, the app slots a held-app precondition is checked against,
+	 * and the configured infra services a query connection is declared on. */
+	const debugDeps = (): DebugRouteDeps => ({
+		...(options.traceIndex ? { traceIndex: options.traceIndex } : {}),
+		configDir: options.configDir ?? "",
+		...(options.environment?.manager
+			? { apps: options.environment.manager }
+			: {}),
+		...(options.environment?.manager
+			? {
+					infraServices: () =>
+						options.environment?.manager.getInfraServices() ?? [],
+				}
+			: {}),
+		...(options.integrations?.instances
+			? { instances: options.integrations.instances }
+			: {}),
+		...(options.integrations?.resolveOwnerCheckout
+			? { resolveOwnerCheckout: options.integrations.resolveOwnerCheckout }
+			: {}),
+	});
+
 	const handle = async (request: Request): Promise<Response> => {
 		let url: URL;
 		try {
@@ -273,6 +302,11 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				owner,
 			);
 			if (browsed) return browsed;
+			// The debug surface rides the same capability too: it reads the traces of
+			// this workflow's runs, the data an app it holds requires, and the
+			// endpoints of the apps it holds.
+			const debugged = await handleDebugRoute(debugDeps(), request, url, owner);
+			if (debugged) return debugged;
 			return (
 				(await handleAgentEnvironmentRoute(
 					agentEnvironmentDeps(),

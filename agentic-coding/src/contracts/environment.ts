@@ -216,6 +216,86 @@ export type AgentEnvironmentApp = typeof agentEnvironmentAppSchema.Type;
 export type AgentEnvironmentBuild = typeof agentEnvironmentBuildSchema.Type;
 
 // ---------------------------------------------------------------------------
+// Agent debug requests (`add-agent-debug-tools`)
+// ---------------------------------------------------------------------------
+// The bodies the `otel_query`, `db_query` and `http_request` tools send. Like
+// the environment bodies, the workflow is not a field: the capability the run
+// presents names it, so a query can only ever read this workflow's own runs,
+// data and endpoints.
+
+/** Multi-line free text (a SQL statement, a request body): bounded by length,
+ * with every control character but newline, carriage return and tab refused. */
+const agentFreeText = (max: number) =>
+	Schema.String.pipe(
+		Schema.maxLength(max),
+		Schema.filter(
+			(value) => {
+				for (let index = 0; index < value.length; index++) {
+					const code = value.charCodeAt(index);
+					if (code === 0x0a || code === 0x09 || code === 0x0d) continue;
+					if (code < 0x20 || code === 0x7f) return false;
+				}
+				return true;
+			},
+			{ message: () => "control characters are not allowed" },
+		),
+	);
+
+const agentLimit = (max: number) =>
+	Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter(
+				(value) => Number.isInteger(value) && value >= 1 && value <= max,
+				{ message: () => `limit must be an integer between 1 and ${max}` },
+			),
+		),
+	);
+
+/** `otel_query`: a bounded trace list, or one trace's span tree when a
+ * `traceId` names it. The owner comes from the capability, never the body. */
+export const agentOtelQuerySchema = Schema.Struct({
+	app: Schema.optional(agentAppName),
+	since: Schema.optional(safeInstanceText),
+	status: Schema.optional(Schema.Literal("all", "error", "success")),
+	name: Schema.optional(safeInstanceText),
+	traceId: Schema.optional(safeInstanceText),
+	limit: agentLimit(100),
+});
+
+/** `db_query`: one read-only statement against an infra service whose declared
+ * query connection a held app requires. */
+export const agentDbQuerySchema = Schema.Struct({
+	infra: agentAppName,
+	sql: agentFreeText(20_000).pipe(Schema.minLength(1)),
+	schema: Schema.optional(safeInstanceText),
+	limit: agentLimit(200),
+});
+
+/** `http_request`: one call to a static endpoint of an app this workflow
+ * holds. */
+export const agentHttpRequestSchema = Schema.Struct({
+	app: agentAppName,
+	endpoint: agentAppName,
+	method: Schema.optional(
+		Schema.Literal("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"),
+	),
+	path: Schema.optional(safeInstanceText),
+	headers: Schema.optional(
+		Schema.Array(
+			Schema.Struct({
+				name: safeInstanceText.pipe(Schema.maxLength(128)),
+				value: agentFreeText(4096),
+			}),
+		).pipe(Schema.maxItems(32)),
+	),
+	body: Schema.optional(agentFreeText(65_536)),
+});
+
+export type AgentOtelQuery = typeof agentOtelQuerySchema.Type;
+export type AgentDbQuery = typeof agentDbQuerySchema.Type;
+export type AgentHttpRequest = typeof agentHttpRequestSchema.Type;
+
+// ---------------------------------------------------------------------------
 // Evidence store (`add-workflow-evidence-store`)
 // ---------------------------------------------------------------------------
 // The manifest entry, the attach body and the manifest a reader gets back.

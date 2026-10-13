@@ -22,6 +22,7 @@ import {
 	startSelectedLocalClassifier,
 } from "./classifier.ts";
 import { CredentialRegistry } from "./credentials.ts";
+import { TraceIndex } from "./debug/trace-index.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
@@ -119,6 +120,12 @@ export async function startWorkflowServer(
 				? new TelemetryService()
 				: undefined;
 	const telemetry = options.telemetry ?? ownedTelemetry;
+	// The receivers' spans are indexed where they are decoded, so an agent can
+	// query the traces its own runs produced (`otel_query`). The index exists only
+	// when this process owns the receivers: without a listener there is nothing to
+	// index, and the route says so instead of answering an empty list.
+	const traceIndex =
+		options.receivers && options.signalSink ? new TraceIndex() : undefined;
 	const hub = options.hub ?? startWorkflowEventHub(events);
 	// Slot waits and grants are dashboard envelopes: the broker they publish on
 	// exists here, after the integration services were built.
@@ -141,6 +148,7 @@ export async function startWorkflowServer(
 				}
 			: {}),
 		...(telemetry ? { telemetry } : {}),
+		...(traceIndex ? { traceIndex } : {}),
 		...(options.environment ? { environment: options.environment } : {}),
 		...(options.version ? { version: options.version } : {}),
 		...(options.operations ? { operations: options.operations } : {}),
@@ -157,7 +165,20 @@ export async function startWorkflowServer(
 	});
 	const ownedReceivers: OwnedTelemetryReceivers | undefined =
 		options.receivers && options.signalSink
-			? await startTelemetryReceivers(options.receivers, options.signalSink)
+			? await startTelemetryReceivers(
+					options.receivers,
+					traceIndex
+						? {
+								...options.signalSink,
+								// One push feeds both views: the shell's live stores and the index
+								// `otel_query` reads, so neither can miss a span the other has.
+								pushTraces: (spans) => {
+									traceIndex.push(spans);
+									options.signalSink?.pushTraces(spans);
+								},
+							}
+						: options.signalSink,
+				)
 			: undefined;
 	const assignedPort = listener.port ?? options.port ?? 0;
 	// The UI spawns the local classifier sidecar at startup whenever that

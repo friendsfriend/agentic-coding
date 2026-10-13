@@ -3,6 +3,7 @@ import type {
 	MetricData,
 	MetricDataPoint,
 	SpanData,
+	SpanEvent,
 } from "../../contracts/telemetry.ts";
 
 function id(value: unknown, size: number): boolean {
@@ -93,6 +94,31 @@ function normalizeOtlpSpan(raw: any): SpanData | undefined {
 			: { code: raw.status === "ERROR" ? 2 : 0 };
 	const attributes = normAttrs(raw.attributes ?? []);
 	const resourceAttributes = normAttrs(raw.resource?.attributes ?? []);
+	// Exceptions and log points arrive as span events. They are kept (bounded to
+	// their name, time and normalized attributes) because they are usually the
+	// reason a span failed, and dropping them would leave a status code as the
+	// only explanation a debug tool can report.
+	const events: SpanEvent[] = Array.isArray(raw.events)
+		? raw.events
+				.filter(
+					(event: unknown) =>
+						typeof (event as { name?: unknown } | null)?.name === "string",
+				)
+				.map(
+					(event: {
+						name: string;
+						timeUnixNano?: unknown;
+						attributes?: unknown;
+					}) => ({
+						name: event.name,
+						timeUnixNano: nanos(event.timeUnixNano) ?? startTimeUnixNano,
+						attributes: normAttrs(event.attributes ?? []).map((attribute) => ({
+							key: attribute.key,
+							value: String(attribute.value),
+						})),
+					}),
+				)
+		: [];
 	const serviceName = String(
 		attributes.find((a) => a.key === "service.name")?.value ??
 			resourceAttributes.find((a) => a.key === "service.name")?.value ??
@@ -116,6 +142,7 @@ function normalizeOtlpSpan(raw: any): SpanData | undefined {
 		scope: { name: raw.scope?.name ?? "", version: raw.scope?.version ?? "" },
 		serviceName,
 		kind: Number(raw.kind ?? 0),
+		...(events.length > 0 ? { events } : {}),
 	};
 }
 
@@ -123,13 +150,22 @@ export // biome-ignore lint/suspicious/noExplicitAny: untrusted OTLP JSON, valid
 function decodeOtlpTraces(payload: any): SpanData[] {
 	const spans: SpanData[] = [];
 	for (const resource of payload?.resourceSpans ?? []) {
-		const resAttrs = strAttrs(resource.resource?.attributes ?? []);
+		// The resource's attributes are handed to the span normalizer *raw* (in
+		// their OTLP `{stringValue}` form) and merged into the span's own: it
+		// normalizes once, so a value that arrives typed (an int, a bool) stays
+		// typed, and `ac.owner`/`ac.run` survive for attribution.
+		const resourceAttributes = resource.resource?.attributes ?? [];
 		for (const scope of resource.scopeSpans ?? []) {
 			for (const span of scope.spans ?? []) {
 				const normalized = normalizeOtlpSpan({
 					...span,
-					attributes: [...resAttrs, ...strAttrs(span.attributes ?? [])],
-					resource: { attributes: resAttrs, droppedAttributesCount: 0 },
+					attributes: [...resourceAttributes, ...(span.attributes ?? [])],
+					resource: {
+						attributes: resourceAttributes,
+						droppedAttributesCount: Number(
+							resource.resource?.droppedAttributesCount ?? 0,
+						),
+					},
 				});
 				if (normalized) spans.push(normalized);
 			}

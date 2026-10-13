@@ -44,6 +44,14 @@ export interface ServiceNode {
 	avgDurationMs: number;
 }
 
+/** One event a span carries (an exception, a log point): the OTLP span event
+ * shape, with its attributes normalized the way a span's are. */
+export interface SpanEvent {
+	name: string;
+	timeUnixNano: string;
+	attributes: Array<{ key: string; value: string }>;
+}
+
 export interface SpanData {
 	traceId: string;
 	spanId: string;
@@ -60,6 +68,8 @@ export interface SpanData {
 	scope: { name: string; version: string };
 	serviceName: string;
 	kind: number;
+	/** Events the span reported. Absent for a source that carries none. */
+	events?: SpanEvent[];
 }
 
 export interface TreeNode {

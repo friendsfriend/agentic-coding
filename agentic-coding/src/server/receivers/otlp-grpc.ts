@@ -49,11 +49,15 @@ export function toOtlpJson(value: unknown): unknown {
 }
 
 /** Start the OTLP TraceService on `host:port`. Resolves once the bound address
- * is known, so readiness is the listener, not a sleep. */
+ * is known, so readiness is the listener, not a sleep. `extraHosts` are the
+ * additional addresses one server binds (the container bridge gateway, when the
+ * plan asked for it): gRPC accepts several addresses on one listener, so a
+ * container reaches the same service the host does. */
 export async function startOtlpGrpcReceiver(
 	port: number,
 	sink: SignalRouter,
 	hostname = "127.0.0.1",
+	extraHosts: readonly string[] = [],
 ): Promise<OwnedGrpcReceiver> {
 	const grpc = await import("@grpc/grpc-js");
 	const protoLoader = await import("@grpc/proto-loader");
@@ -96,20 +100,21 @@ export async function startOtlpGrpcReceiver(
 		},
 	);
 
-	await new Promise<void>((resolve, reject) => {
-		server.bindAsync(
-			`${hostname}:${port}`,
-			grpc.ServerCredentials.createInsecure(),
-			(error) =>
-				error
-					? reject(
-							new Error(
-								`gRPC telemetry could not bind ${hostname}:${port}: ${error.message}`,
-							),
-						)
-					: resolve(),
-		);
-	});
+	for (const host of [hostname, ...extraHosts])
+		await new Promise<void>((resolve, reject) => {
+			server.bindAsync(
+				`${host}:${port}`,
+				grpc.ServerCredentials.createInsecure(),
+				(error) =>
+					error
+						? reject(
+								new Error(
+									`gRPC telemetry could not bind ${host}:${port}: ${error.message}`,
+								),
+							)
+						: resolve(),
+			);
+		});
 
 	return {
 		address: `${hostname}:${port}`,

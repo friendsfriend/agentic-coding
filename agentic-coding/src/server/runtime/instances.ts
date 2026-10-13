@@ -34,6 +34,7 @@
 //     than the configured TTL, and publishes `environment.slot.reaped` for the
 //     shell. `user`-held apps, unobserved (`unknown`) apps and apps whose owner
 //     is waiting for another app are never reaped.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { discoverActionTargets } from "../actions/discovery.ts";
 import type { ActionTarget } from "../actions/targets.ts";
@@ -46,6 +47,10 @@ import {
 	environmentInstanceStorageId,
 	parseEnvironmentOwner,
 } from "../environment/instances/model.ts";
+import type {
+	InstanceRuntimeKind,
+	OtelReceiverTarget,
+} from "../environment/instances/variables.ts";
 import { resolveInstanceVariables } from "../environment/instances/variables.ts";
 import type {
 	EnvironmentInstanceRecord,
@@ -236,6 +241,14 @@ export interface EnvironmentInstanceControllerOptions {
 	readonly reaperIntervalMs?: number;
 	/** Test seam: replaces the wall clock. */
 	readonly now?: () => Date;
+	/**
+	 * The telemetry receiver this process bound, as a run of one runtime reaches
+	 * it (`variables.ts`). Omitted means the standard OTLP HTTP port, so a run
+	 * always learns an endpoint instead of having to guess one.
+	 */
+	readonly otelReceiver?: () => OtelReceiverTarget | undefined;
+	/** Test seam: the slot grant id every start of this controller mints. */
+	readonly newGrantId?: () => string;
 	/** Test seam: replaces the long-poll sleep. */
 	readonly sleep?: (ms: number) => Promise<void>;
 	/** Queue position grace, in milliseconds. */
@@ -379,6 +392,16 @@ export class EnvironmentInstanceController {
 	private readonly observationRefreshMs: number;
 	private readonly idleTtlMs: () => number;
 	private readonly reaperIntervalMs: number;
+	/** The telemetry receiver a run exports to, resolved per start. */
+	private readonly otelReceiver?: () => OtelReceiverTarget | undefined;
+	/** Mints the slot grant id of one start: fresh on every grant. */
+	private readonly newGrantId: () => string;
+	/**
+	 * The slot grant each instance row was started under, so the stop path
+	 * substitutes exactly the variables the start did. Bounded by the instance
+	 * rows this process has seen, one entry each.
+	 */
+	private readonly grants = new Map<string, string>();
 	/** The last activity write per app, so touches coalesce per app. */
 	private readonly activityTouches = new Map<string, number>();
 	private readonly publish?: (event: SlotEvent) => void;
@@ -444,6 +467,8 @@ export class EnvironmentInstanceController {
 			options.observationRefreshMs ?? OBSERVATION_REFRESH_MS;
 		this.idleTtlMs = options.idleTtlMs ?? (() => DEFAULT_IDLE_TTL_MS);
 		this.reaperIntervalMs = options.reaperIntervalMs ?? REAPER_INTERVAL_MS;
+		this.otelReceiver = options.otelReceiver;
+		this.newGrantId = options.newGrantId ?? (() => randomUUID());
 		this.publish = options.publish;
 		this.logger = options.logger;
 		this.ready = this.reconcile().catch((error: unknown) => {
@@ -1062,10 +1087,7 @@ export class EnvironmentInstanceController {
 				{
 					cwd: record.checkoutPath,
 					env: environmentWith(
-						this.variables(
-							parseEnvironmentOwner(record.owner),
-							record.checkoutPath,
-						),
+						this.variablesOf(record),
 						parseEnvironmentOwner(record.owner),
 					),
 				},
@@ -1176,7 +1198,16 @@ export class EnvironmentInstanceController {
 				409,
 				`${appIdent} was taken by another owner while the start was prepared`,
 			);
-		const variables = this.variables(owner, checkoutPath);
+		// The grant is fresh per start, so this run's spans are attributable to
+		// this hold of the app and not to a previous holder of the same slot.
+		const grantId = this.newGrantId();
+		this.grants.set(claimedId, grantId);
+		const variables = this.variables(owner, checkoutPath, {
+			app: appIdent,
+			runtime: selected.runtime === "docker" ? "docker" : "script",
+			grantId,
+			...(selected.env ? { definitionEnv: selected.env } : {}),
+		});
 		// The early exit of a script that dies before the `starting -> running`
 		// CAS: the completion would otherwise be dropped and leave a dead row
 		// holding the app forever.
@@ -2065,11 +2096,50 @@ export class EnvironmentInstanceController {
 		return [...byId.values()];
 	}
 
+	/**
+	 * The variables one run receives. `grant` carries what only a start knows:
+	 * the app, the runtime shape, the fresh slot grant and the definition's own
+	 * environment (whose values win over the standard OTLP ones).
+	 */
 	private variables(
 		owner: EnvironmentOwner,
 		checkoutPath: string,
+		grant: {
+			readonly app: string;
+			readonly runtime: InstanceRuntimeKind;
+			readonly grantId: string;
+			readonly definitionEnv?: Readonly<Record<string, string>>;
+		},
 	): Record<string, string> {
-		return resolveInstanceVariables({ owner, appDir: checkoutPath });
+		const receiver = this.otelReceiver?.();
+		return resolveInstanceVariables({
+			owner,
+			appDir: checkoutPath,
+			app: grant.app,
+			runtime: grant.runtime,
+			grantId: grant.grantId,
+			...(receiver ? { receiver } : {}),
+			...(grant.definitionEnv ? { definitionEnv: grant.definitionEnv } : {}),
+		});
+	}
+
+	/**
+	 * The variables of an existing row, resolved for the stop path. A stop runs
+	 * the definition's own `compose down`, which substitutes the same variables
+	 * the start did, so the row keeps the grant it was started under.
+	 */
+	private variablesOf(
+		record: EnvironmentInstanceRecord,
+	): Record<string, string> {
+		return this.variables(
+			parseEnvironmentOwner(record.owner),
+			record.checkoutPath,
+			{
+				app: record.app,
+				runtime: record.runtime === "docker" ? "docker" : "script",
+				grantId: this.grants.get(record.id) ?? this.newGrantId(),
+			},
+		);
 	}
 
 	private async dockerRuntime(): Promise<DockerRuntimeSelection | undefined> {
@@ -2103,6 +2173,12 @@ export class EnvironmentInstanceController {
 			status: record.status as EnvironmentInstanceStatus,
 			createdAt: record.createdAt,
 			lastActivityAt: record.lastActivityAt,
+			// The slot grant this run started under, so a caller (the agent's
+			// `env_start`, or the agent reading its own span attributes) can name
+			// the run its app telemetry belongs to.
+			...(this.grants.has(record.id)
+				? { run: this.grants.get(record.id) as string }
+				: {}),
 			endpoints: target ? endpointsOf(target) : {},
 		};
 	}

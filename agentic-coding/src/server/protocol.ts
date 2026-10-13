@@ -30,9 +30,12 @@ import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
 	acquireSlotsRequestSchema,
+	agentDbQuerySchema,
 	agentEnvironmentAcquireSchema,
 	agentEnvironmentAppSchema,
 	agentEnvironmentBuildSchema,
+	agentHttpRequestSchema,
+	agentOtelQuerySchema,
 	appSlotOperationRequestSchema,
 	environmentTeardownRequestSchema,
 	evidenceAttachRequestSchema,
@@ -83,6 +86,14 @@ export const AGENT_BROWSER_SCREENSHOT_PATH = `${AGENT_BROWSER_PREFIX}screenshot`
 export const AGENT_BROWSER_RECORD_PATH = `${AGENT_BROWSER_PREFIX}record`;
 export const AGENT_BROWSER_SCRIPT_PATH = `${AGENT_BROWSER_PREFIX}script`;
 export const AGENT_BROWSER_CLOSE_PATH = `${AGENT_BROWSER_PREFIX}close`;
+
+/** The debug surface of one run (`add-agent-debug-tools`): the traces its runs
+ * exported, the data the infra services it requires hold, and the endpoints of
+ * the apps it holds. Declared here with the rest of the transport manifest. */
+export const AGENT_DEBUG_PREFIX = `${AGENT_ENVIRONMENT_PREFIX}debug/`;
+export const AGENT_OTEL_QUERY_PATH = `${AGENT_DEBUG_PREFIX}otel`;
+export const AGENT_DB_QUERY_PATH = `${AGENT_DEBUG_PREFIX}db`;
+export const AGENT_HTTP_REQUEST_PATH = `${AGENT_DEBUG_PREFIX}http`;
 
 /** The instance-authenticated browser install surface, read and driven by the
  * Settings section. No route here is a download on its own: only `install`
@@ -600,6 +611,21 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: AGENT_BROWSER_CLOSE_PATH,
 		schemaId: "server.agent-env.browser.close",
 		schema: browserSessionRequestSchema,
+	},
+	{
+		path: AGENT_OTEL_QUERY_PATH,
+		schemaId: "server.agent-env.debug.otel",
+		schema: agentOtelQuerySchema,
+	},
+	{
+		path: AGENT_DB_QUERY_PATH,
+		schemaId: "server.agent-env.debug.db",
+		schema: agentDbQuerySchema,
+	},
+	{
+		path: AGENT_HTTP_REQUEST_PATH,
+		schemaId: "server.agent-env.debug.http",
+		schema: agentHttpRequestSchema,
 	},
 	{
 		path: BROWSER_INSTALL_PATH,
