@@ -69,7 +69,12 @@ import {
 import { createAgentActivitySource } from "./agent-activity.ts";
 import { testDashboard } from "./demo.ts";
 import { evidenceLocalPath, openEvidenceExternally } from "./evidence-open.ts";
-import { evidencePreviewEntry, evidenceRows } from "./evidence-panel.ts";
+import {
+	type EvidenceReadState,
+	evidencePanelLines,
+	evidencePreviewEntry,
+	evidenceRows,
+} from "./evidence-panel.ts";
 import { createDashboardKeyHandler } from "./handlers/keys.ts";
 import {
 	agentSessionKeybindCatalog,
@@ -303,9 +308,8 @@ export function App(props: {
 	});
 	/** What the manifest read is doing. The panel shows the neutral empty state
 	 * only for a read that actually succeeded with no entries. */
-	const [evidenceState, setEvidenceState] = createSignal<
-		"loading" | "ready" | "error"
-	>("loading");
+	const [evidenceState, setEvidenceState] =
+		createSignal<EvidenceReadState>("loading");
 	const [evidenceError, setEvidenceError] = createSignal<string | undefined>(
 		undefined,
 	);
@@ -334,10 +338,17 @@ export function App(props: {
 		selectedEvidence();
 		setKittyGraphics(inlineImagePreview(renderer.capabilities));
 	});
-	/** The height of the full-width Evidence row: a share of the terminal, so the
-	 * preview keeps room on a tall window and never eats a short one. */
+	/** The height of the full-width Evidence row: compact and fixed, one line while
+	 * the run has attached nothing, and capped on a short terminal. Keeping it a
+	 * budget rather than a share of the terminal is what leaves the agents list
+	 * the rest of the grid — and it scrolls inside its own height, so a long
+	 * manifest costs the panels above it nothing. */
 	const evidencePanelHeight = () =>
-		Math.max(6, Math.round(dimensions().height * 0.28));
+		evidencePanelLines({
+			entries: evidence().entries.length,
+			state: evidenceState(),
+			terminalLines: dimensions().height,
+		});
 	const evidenceListRows = createMemo(() => evidenceRows(evidence().entries));
 	const selectedEvidenceEntry = createMemo(
 		() => evidenceListRows()[selectedEvidence()]?.entry,

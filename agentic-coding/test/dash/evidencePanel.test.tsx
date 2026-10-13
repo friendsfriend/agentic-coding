@@ -14,7 +14,11 @@ import type {
 	EvidenceManifest,
 } from "../../src/contracts/environment.ts";
 import {
+	EVIDENCE_EMPTY_LINES,
+	EVIDENCE_MESSAGE_LINES,
+	EVIDENCE_PANEL_LINES,
 	evidenceDetailLines,
+	evidencePanelLines,
 	evidencePreviewEntry,
 	evidenceRows,
 } from "../../src/tui/dash/evidence-panel.ts";
@@ -161,6 +165,86 @@ test("kitty graphics support is the renderer's own answer", () => {
 	).toBe(false);
 	expect(inlineImagePreview(null)).toBe(false);
 	expect(inlineImagePreview(undefined)).toBe(false);
+});
+
+test("the panel's height is compact, collapses when empty and is capped on a short terminal", () => {
+	// A manifest with entries gets the fixed compact height, however long the
+	// manifest is: the listing windows itself instead of growing the row.
+	expect(
+		evidencePanelLines({ entries: 1, state: "ready", terminalLines: 60 }),
+	).toBe(EVIDENCE_PANEL_LINES);
+	expect(
+		evidencePanelLines({ entries: 40, state: "ready", terminalLines: 60 }),
+	).toBe(EVIDENCE_PANEL_LINES);
+	// Nothing attached, and the read that established it succeeded: the title row
+	// carries the empty state, so the panel is one line.
+	expect(
+		evidencePanelLines({ entries: 0, state: "ready", terminalLines: 60 }),
+	).toBe(EVIDENCE_EMPTY_LINES);
+	// A read in flight, or one that failed with nothing to list, keeps the row
+	// that says so.
+	expect(
+		evidencePanelLines({ entries: 0, state: "loading", terminalLines: 60 }),
+	).toBe(EVIDENCE_MESSAGE_LINES);
+	expect(
+		evidencePanelLines({ entries: 0, state: "error", terminalLines: 60 }),
+	).toBe(EVIDENCE_MESSAGE_LINES);
+	// A short terminal scales the panel down instead of letting it crowd the grid
+	// above it.
+	expect(
+		evidencePanelLines({ entries: 3, state: "ready", terminalLines: 12 }),
+	).toBe(4);
+	expect(
+		evidencePanelLines({ entries: 3, state: "ready", terminalLines: 8 }),
+	).toBe(EVIDENCE_MESSAGE_LINES);
+});
+
+test("an empty listing collapses the panel to its title row", async () => {
+	const t = await testRender(
+		() => (
+			<EvidencePanel
+				entries={[]}
+				active
+				selectedIndex={0}
+				kitty={false}
+				height={EVIDENCE_EMPTY_LINES}
+				state="ready"
+			/>
+		),
+		{ width: 100, height: 6 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("No evidence attached yet"),
+	);
+	const rows = frame.split("\n");
+	// The single row is the title, with the empty state beside it rather than a
+	// body that was clipped away.
+	expect(rows[0]).toContain("Evidence");
+	expect(rows[0]).toContain("No evidence attached yet");
+	expect((rows[1] ?? "").trim()).toBe("");
+	t.renderer.destroy();
+});
+
+test("a collapsed panel that failed to read still says so", async () => {
+	const t = await testRender(
+		() => (
+			<EvidencePanel
+				entries={[]}
+				active
+				selectedIndex={0}
+				kitty={false}
+				height={EVIDENCE_EMPTY_LINES}
+				state="error"
+				error="the evidence manifest cannot be read"
+			/>
+		),
+		{ width: 120, height: 6 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("Evidence could not be read"),
+	);
+	expect(frame).toContain("the evidence manifest cannot be read");
+	t.renderer.destroy();
 });
 
 test("the panel lists the manifest with each debug request's heading", async () => {

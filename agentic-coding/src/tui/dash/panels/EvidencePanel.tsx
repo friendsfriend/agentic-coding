@@ -13,7 +13,12 @@
  * Without kitty graphics support the image renderable is never mounted: a
  * terminal that cannot show the picture gets the metadata only, rather than a
  * half-block approximation or an image escape sequence it would print as
- * garbage. */
+ * garbage.
+ *
+ * The panel is a compact row (see `evidencePanelLines`), so the preview column
+ * often has fewer than `MIN_IMAGE_LINES` rows to spare: the metadata keeps
+ * them, the row says the picture has no room, and the panel never grows to fit
+ * an image — the file is one keybind away from the platform's own viewer. */
 
 import type { TerminalCapabilities } from "@opentui/core";
 import { resolveImageRenderProtocol, TextAttributes } from "@opentui/core";
@@ -21,6 +26,9 @@ import { Panel, SelectableList, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
 import type { EvidenceEntry } from "../../../contracts/environment.ts";
 import {
+	EVIDENCE_EMPTY_LINES,
+	EVIDENCE_PANEL_LINES,
+	type EvidenceReadState,
 	evidenceDetailLines,
 	evidencePreviewEntry,
 	evidenceRows,
@@ -45,7 +53,7 @@ export function inlineImagePreview(
 /** What the manifest read is doing. Only a read that actually succeeded with no
  * entries renders the neutral empty state: "this run produced no evidence" is a
  * fact the dashboard has to have established, not the default. */
-export type EvidencePanelState = "loading" | "ready" | "error";
+export type EvidencePanelState = EvidenceReadState;
 
 /** What the selected entry's preview is doing. `absent` is an answer — the
  * gateway reports that the recorded file is gone — so it must not read as
@@ -79,8 +87,13 @@ export interface EvidencePanelProps {
 
 export function EvidencePanel(props: EvidencePanelProps) {
 	const rows = createMemo(() => evidenceRows(props.entries));
-	const height = () => Math.max(3, props.height ?? 10);
-	const bodyLines = () => height() - 1;
+	// The panel is a compact fixed-height row: the listing scrolls inside the
+	// body rather than growing the panel, and a caller may go as low as the one
+	// title row (the empty state the route asks for with nothing attached).
+	const height = () =>
+		Math.max(EVIDENCE_EMPTY_LINES, props.height ?? EVIDENCE_PANEL_LINES);
+	const bodyLines = () => Math.max(0, height() - 1);
+	const collapsed = () => bodyLines() === 0;
 	const selected = createMemo(() => rows()[props.selectedIndex]?.entry);
 	const image = createMemo(() =>
 		props.kitty ? evidencePreviewEntry(rows(), props.selectedIndex) : undefined,
@@ -139,6 +152,17 @@ export function EvidencePanel(props: EvidencePanelProps) {
 		if (props.state === "loading") return "Loading evidence…";
 		return "No evidence attached yet";
 	};
+	/** What the title row carries beside the title. A collapsed panel is that row
+	 * alone, so the state message moves into it rather than being clipped away
+	 * with the body. */
+	const accessory = (): { text: string; failure: boolean } | undefined => {
+		if (collapsed()) {
+			if (rows().length > 0) return undefined;
+			return { text: bodyMessage(), failure: props.state === "error" };
+		}
+		const marker = staleMarker();
+		return marker ? { text: marker, failure: true } : undefined;
+	};
 	return (
 		<Panel
 			title="Evidence"
@@ -146,138 +170,138 @@ export function EvidencePanel(props: EvidencePanelProps) {
 			active={props.active}
 			style={{ width: "100%", height: height(), flexShrink: 0 }}
 			accessory={
-				<Show when={staleMarker()}>
-					{(marker) => (
-						<text
-							fg={props.state === "error" ? uiColors.error : uiColors.textMuted}
-						>
-							{marker()}
+				<Show when={accessory()}>
+					{(line) => (
+						<text fg={line().failure ? uiColors.error : uiColors.textMuted}>
+							{line().text}
 						</text>
 					)}
 				</Show>
 			}
 		>
-			<box
-				style={{
-					width: "100%",
-					height: "100%",
-					flexDirection: "row",
-					gap: 1,
-				}}
-			>
+			<Show when={!collapsed()}>
 				<box
 					style={{
-						flexGrow: 1,
-						flexBasis: 0,
-						minWidth: 0,
+						width: "100%",
 						height: "100%",
+						flexDirection: "row",
+						gap: 1,
 					}}
 				>
-					<Show
-						when={rows().length > 0}
-						fallback={
-							<text
-								fg={
-									props.state === "error"
-										? uiColors.error
-										: uiColors.textSecondary
-								}
-							>
-								{bodyMessage()}
-							</text>
-						}
+					<box
+						style={{
+							flexGrow: 1,
+							flexBasis: 0,
+							minWidth: 0,
+							height: "100%",
+						}}
 					>
-						<SelectableList
-							items={rows()}
-							availableLines={bodyLines()}
-							// A row that opens a debug request's group spends a second line
-							// on its heading.
-							itemHeights={rows().map((row) => (row.header ? 2 : 1))}
-							selectedIndex={props.active ? props.selectedIndex : -1}
-							renderItem={(row, selectedRow) => (
-								<box
-									width="100%"
-									height={row.header ? 2 : 1}
-									flexDirection="column"
+						<Show
+							when={rows().length > 0}
+							fallback={
+								<text
+									fg={
+										props.state === "error"
+											? uiColors.error
+											: uiColors.textSecondary
+									}
 								>
-									<Show when={row.header}>
-										{(header) => (
-											<box width="100%" height={1} overflow="hidden">
-												<text fg={uiColors.textMuted}>{header()}</text>
-											</box>
-										)}
-									</Show>
-									<box width="100%" height={1} overflow="hidden">
-										<text
-											fg={
-												selectedRow
-													? uiColors.textPrimary
-													: uiColors.textSecondary
-											}
-											attributes={selectedRow ? TextAttributes.BOLD : 0}
-										>
-											{row.label}
-										</text>
+									{bodyMessage()}
+								</text>
+							}
+						>
+							<SelectableList
+								items={rows()}
+								availableLines={bodyLines()}
+								// A row that opens a debug request's group spends a second line
+								// on its heading.
+								itemHeights={rows().map((row) => (row.header ? 2 : 1))}
+								selectedIndex={props.active ? props.selectedIndex : -1}
+								renderItem={(row, selectedRow) => (
+									<box
+										width="100%"
+										height={row.header ? 2 : 1}
+										flexDirection="column"
+									>
+										<Show when={row.header}>
+											{(header) => (
+												<box width="100%" height={1} overflow="hidden">
+													<text fg={uiColors.textMuted}>{header()}</text>
+												</box>
+											)}
+										</Show>
+										<box width="100%" height={1} overflow="hidden">
+											<text
+												fg={
+													selectedRow
+														? uiColors.textPrimary
+														: uiColors.textSecondary
+												}
+												attributes={selectedRow ? TextAttributes.BOLD : 0}
+											>
+												{row.label}
+											</text>
+										</box>
 									</box>
+								)}
+							/>
+						</Show>
+					</box>
+					<box
+						style={{
+							width: "45%",
+							minWidth: 0,
+							height: "100%",
+							flexDirection: "column",
+						}}
+					>
+						<Show when={selected() !== undefined}>
+							<Show when={showsImage()}>
+								<box
+									style={{
+										width: "100%",
+										height: imageLines(),
+										flexShrink: 0,
+									}}
+								>
+									<image
+										source={props.preview?.()}
+										fit="fit"
+										style={{ width: "100%", height: "100%" }}
+									/>
 								</box>
-							)}
-						/>
-					</Show>
-				</box>
-				<box
-					style={{
-						width: "45%",
-						minWidth: 0,
-						height: "100%",
-						flexDirection: "column",
-					}}
-				>
-					<Show when={selected() !== undefined}>
-						<Show when={showsImage()}>
+							</Show>
+							<Show when={showsMessage()}>
+								<box width="100%" height={1} flexShrink={0}>
+									<text
+										fg={
+											props.previewState === "error"
+												? uiColors.error
+												: uiColors.textMuted
+										}
+									>
+										{previewMessage()}
+									</text>
+								</box>
+							</Show>
 							<box
 								style={{
 									width: "100%",
-									height: imageLines(),
-									flexShrink: 0,
+									flexGrow: 1,
+									minHeight: 0,
+									flexDirection: "column",
 								}}
 							>
-								<image
-									source={props.preview?.()}
-									fit="fit"
-									style={{ width: "100%", height: "100%" }}
-								/>
+								{visibleDetailLines().map((line) => (
+									<box width="100%" height={1} overflow="hidden">
+										<text fg={uiColors.textSecondary}>{line}</text>
+									</box>
+								))}
 							</box>
 						</Show>
-						<Show when={showsMessage()}>
-							<box width="100%" height={1} flexShrink={0}>
-								<text
-									fg={
-										props.previewState === "error"
-											? uiColors.error
-											: uiColors.textMuted
-									}
-								>
-									{previewMessage()}
-								</text>
-							</box>
-						</Show>
-						<box
-							style={{
-								width: "100%",
-								flexGrow: 1,
-								minHeight: 0,
-								flexDirection: "column",
-							}}
-						>
-							{visibleDetailLines().map((line) => (
-								<box width="100%" height={1} overflow="hidden">
-									<text fg={uiColors.textSecondary}>{line}</text>
-								</box>
-							))}
-						</box>
-					</Show>
+					</box>
 				</box>
-			</box>
+			</Show>
 		</Panel>
 	);
 }

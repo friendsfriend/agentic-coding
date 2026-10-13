@@ -17,8 +17,10 @@ import type {
 	DashboardGateway,
 	GatewayEventHandlers,
 } from "../../src/contracts/gateway.ts";
+import type { DashboardData } from "../../src/contracts/workflow.ts";
 import { App } from "../../src/tui/dash/App.tsx";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
+import { EVIDENCE_PANEL_LINES } from "../../src/tui/dash/evidence-panel.ts";
 import {
 	activeNotification,
 	resetNotifications,
@@ -78,7 +80,11 @@ type FileAnswer = "png" | "absent" | "error";
 
 function fakeGateway(
 	evidence: EvidenceSource,
-	options: { readonly file?: FileAnswer } = {},
+	options: {
+		readonly file?: FileAnswer;
+		/** The dashboard the panels render, when a test needs its own rows. */
+		readonly dashboard?: DashboardData;
+	} = {},
 ): FakeGateway {
 	const files: string[] = [];
 	const observes: number[] = [];
@@ -87,7 +93,8 @@ function fakeGateway(
 		kind: "in-process",
 		connectionState: () => "open",
 		observe: async (observation: ObservationRequest) => {
-			if (observation.kind === "dashboard") return testDashboard();
+			if (observation.kind === "dashboard")
+				return options.dashboard ?? testDashboard();
 			if (observation.kind === "evidence") {
 				observes.push(observes.length + 1);
 				const answer = typeof evidence === "function" ? evidence() : evidence;
@@ -392,3 +399,156 @@ test("opening evidence that is not on this machine is reported, not silent", asy
 	expect(activeNotification()?.message).toContain("is not on this machine");
 	t.renderer.destroy();
 });
+
+/** A dashboard whose agents are identifiable in a frame and much longer than any
+ * of the panel sizes below: 24 two-line rows, so the list always overflows. */
+function manyAgents(): DashboardData {
+	return {
+		...testDashboard(),
+		agents: Array.from({ length: 24 }, (_, index) => ({
+			role: `agent-${String(index).padStart(2, "0")}`,
+			status: "completed" as const,
+		})),
+	};
+}
+
+/** The last agent of the fixture: a role no other panel paints, so a frame match
+ * is the agents list and not a mention somewhere else. */
+const LAST_AGENT = "agent-23";
+
+/** The three terminal sizes the detail grid has to survive, with the evidence
+ * row each one earns: the compact height, and the 30% cap on the short one. */
+const LAYOUT_SIZES = [
+	{ name: "small", width: 100, height: 24, evidenceLines: 7 },
+	{
+		name: "medium",
+		width: 120,
+		height: 40,
+		evidenceLines: EVIDENCE_PANEL_LINES,
+	},
+	{
+		name: "large",
+		width: 160,
+		height: 60,
+		evidenceLines: EVIDENCE_PANEL_LINES,
+	},
+] as const;
+
+/** Scroll the agents panel to its last row, where a list windowed by the
+ * terminal's height instead of the panel's lets the cursor scroll under the
+ * evidence row. */
+async function scrollAgentsToEnd(t: Test, presses: number) {
+	t.mockInput.pressKey("l", { shift: true });
+	for (let index = 0; index < presses; index++) t.mockInput.pressKey("j");
+	await t.renderOnce();
+}
+
+/** The screen's rows from a captured frame: the capture carries a trailing row
+ * for the cursor, which is not a row of the dashboard. */
+function frameRows(t: Test, height: number): string[] {
+	return t.captureCharFrame().split("\n").slice(0, height);
+}
+
+test("the compact evidence row leaves the agents panel the rest at every size", async () => {
+	const fake = fakeGateway(MANIFEST, { dashboard: manyAgents() });
+	configureGateway(fake.gateway);
+	for (const size of LAYOUT_SIZES) {
+		const t = await testRender(() => <TestDashboard />, {
+			width: size.width,
+			height: size.height,
+		});
+		await dashboardReady(t);
+		await t.waitForFrame((frame) => frame.includes("first shot"));
+		const rows = frameRows(t, size.height);
+		const evidenceTop = rows.findIndex((row) => row.includes("Evidence"));
+		// Compact and capped: the row is a fixed height, not the 28% of the
+		// terminal it used to take, whatever the manifest holds.
+		expect(rows.length - evidenceTop, `${size.name} evidence row`).toBe(
+			size.evidenceLines,
+		);
+		// The grid above ends at its own last row plus the one-row gap: the
+		// evidence row pushes and resizes nothing.
+		expect((rows[evidenceTop - 1] ?? "").trim(), size.name).toBe("");
+
+		await scrollAgentsToEnd(t, 24);
+		const scrolled = frameRows(t, size.height);
+		const lastAgentRow = scrolled.findIndex((row) => row.includes(LAST_AGENT));
+		// The list windows on the rows the panel has: the cursor stays inside the
+		// panel instead of being clipped behind the evidence row.
+		expect(lastAgentRow, `${size.name} last agent`).toBeGreaterThan(0);
+		expect(lastAgentRow, `${size.name} last agent`).toBeLessThan(evidenceTop);
+		t.renderer.destroy();
+	}
+}, 30000);
+
+/** The dashboard as the shell hosts it: the same body, inside a page column that
+ * leaves it fewer rows than the terminal has. `dimensions()` still reports the
+ * terminal, which is what a list sized by the terminal got wrong. */
+function HostedDashboard() {
+	return (
+		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+			<box style={{ width: "100%", height: 4 }}>
+				<text>shell chrome</text>
+			</box>
+			<box style={{ width: "100%", flexGrow: 1, minHeight: 0 }}>
+				<TestDashboard />
+			</box>
+		</box>
+	);
+}
+
+test("the agents panel scrolls inside the body a host leaves it, not the terminal", async () => {
+	const fake = fakeGateway(MANIFEST, { dashboard: manyAgents() });
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <HostedDashboard />, {
+		width: 120,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await t.waitForFrame((frame) => frame.includes("first shot"));
+	const evidenceTop = t
+		.captureCharFrame()
+		.split("\n")
+		.findIndex((row) => row.includes("Evidence"));
+
+	await scrollAgentsToEnd(t, 24);
+	const lastAgentRow = t
+		.captureCharFrame()
+		.split("\n")
+		.findIndex((row) => row.includes(LAST_AGENT));
+	// The body is a few rows shorter than the terminal: a list windowed by the
+	// terminal would put the last agent under the evidence row. It measures its own
+	// body instead, so the cursor stays inside the panel.
+	expect(lastAgentRow).toBeGreaterThan(0);
+	expect(lastAgentRow).toBeLessThan(evidenceTop);
+	t.renderer.destroy();
+}, 20000);
+
+test("a run with no evidence spends one row instead of the grid's height", async () => {
+	const fake = fakeGateway(
+		{ ...MANIFEST, entries: [] },
+		{ dashboard: manyAgents() },
+	);
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 100,
+		height: 24,
+	});
+	await dashboardReady(t);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("No evidence attached yet"),
+	);
+	const rows = frame.split("\n").slice(0, 24);
+	// Collapsed: the title row carries the empty state, so the seven rows the
+	// panel would otherwise take stay with the grid above it.
+	expect(rows.at(-1)).toContain("Evidence");
+	expect(rows.at(-1)).toContain("No evidence attached yet");
+
+	await scrollAgentsToEnd(t, 24);
+	const lastAgentRow = frameRows(t, 24).findIndex((row) =>
+		row.includes(LAST_AGENT),
+	);
+	expect(lastAgentRow).toBeGreaterThan(0);
+	expect(lastAgentRow).toBeLessThan(rows.length - 1);
+	t.renderer.destroy();
+}, 20000);

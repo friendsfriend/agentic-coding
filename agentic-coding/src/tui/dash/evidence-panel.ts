@@ -16,6 +16,56 @@ import type {
 import { formatBytes } from "../../workflow/format.ts";
 import { evidenceRequestIdOf } from "../../workflow/runtime/evidence-store.ts";
 
+/** What the manifest read is doing. `ready` with nothing attached is a fact the
+ * read established — the run produced no evidence — not a default. */
+export type EvidenceReadState = "loading" | "ready" | "error";
+
+/** The Evidence panel's height in lines when the manifest has something to
+ * list: its title row and a short body. The listing scrolls inside that body,
+ * so the panel's height is a display budget and never the manifest's length. */
+export const EVIDENCE_PANEL_LINES = 8;
+
+/** The height for a read in flight or a read that failed with nothing to list:
+ * the title row and the one message that says so. */
+export const EVIDENCE_MESSAGE_LINES = 2;
+
+/** The height for a read that succeeded with nothing attached: the single title
+ * row carries the empty state, so a run with no evidence spends one line. */
+export const EVIDENCE_EMPTY_LINES = 1;
+
+/** The share of the host's rows the compact height is allowed to fill. Only a
+ * short terminal reads it: the fixed height is what the panel asks for, and
+ * this keeps the grid above it from being crowded on a very small window. */
+const EVIDENCE_PANEL_SHARE = 0.3;
+
+/**
+ * The Evidence row's height in lines for one read state.
+ *
+ * Bounded on purpose: the panel is the last row of the detail grid, so every
+ * line it takes is a line the panels above it (the agents list in particular)
+ * do not get. It is compact by default, collapses to its title row while the
+ * run has attached nothing, and never grows with the manifest — the listing
+ * windows itself instead.
+ */
+export function evidencePanelLines(input: {
+	/** How many entries the read answered with. */
+	readonly entries: number;
+	readonly state: EvidenceReadState;
+	/** The terminal's rows. A cap only: the host's chrome may leave the dashboard
+	 * fewer rows than this, which is why the panels measure their own body. */
+	readonly terminalLines: number;
+}): number {
+	if (input.entries === 0)
+		return input.state === "ready"
+			? EVIDENCE_EMPTY_LINES
+			: EVIDENCE_MESSAGE_LINES;
+	const cap = Math.max(
+		EVIDENCE_MESSAGE_LINES,
+		Math.round(input.terminalLines * EVIDENCE_PANEL_SHARE),
+	);
+	return Math.min(EVIDENCE_PANEL_LINES, cap);
+}
+
 /** One row of the panel's list. Every row selects an entry; the row that opens
  * a debug request's group also carries its heading. */
 export interface EvidenceListRow {

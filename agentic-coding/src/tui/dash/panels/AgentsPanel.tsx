@@ -6,9 +6,9 @@
  * from the route's host watches, and the narrow-terminal rule for the finding
  * summary is a prop rather than a global read. */
 
-import { TextAttributes } from "@opentui/core";
+import { type BoxRenderable, TextAttributes } from "@opentui/core";
 import { Badge, type Highlight, Panel, SelectableList, uiColors } from "@ui";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { formatDuration } from "../../../workflow/format.ts";
 import type { AgentActivity } from "../agent-activity.ts";
@@ -27,6 +27,20 @@ export interface AgentsPanelProps {
 }
 
 export function AgentsPanel(props: AgentsPanelProps) {
+	// The panel's own body height, measured once the layout has run. The list
+	// windows on these rows: a list that budgeted by the terminal's height instead
+	// painted rows past the panel — clipped, and taking the cursor out of view
+	// with them, which is what broke scrolling while the Evidence row was on
+	// screen (and whenever the shell left the dashboard fewer rows than the
+	// terminal has). `undefined` until the first measurement, so the list keeps its
+	// host-chrome fallback for the frame that precedes it.
+	const [bodyLines, setBodyLines] = createSignal<number | undefined>(undefined);
+	let body: BoxRenderable | undefined;
+	const measure = () => {
+		if (!body) return;
+		const next = Math.max(1, body.height ?? 0);
+		if (next !== bodyLines()) setBodyLines(next);
+	};
 	const findingSummaryRows = () => (props.narrow ? 3 : 1);
 	/** The row heights, in item order: role + runtime/model, plus the metrics
 	 * line and the finding summary when present. `SelectableList` needs them to
@@ -48,129 +62,144 @@ export function AgentsPanel(props: AgentsPanelProps) {
 				height: "100%",
 			}}
 		>
-			<SelectableList
-				items={props.data.agents}
-				itemHeights={rowHeights()}
-				selectedIndex={props.active ? props.selectedIndex : -1}
-				renderItem={(agent, _selected) => {
-					const timeline = () =>
-						props.data.verifierTimeline.find(
-							(item) => item.role === agent.role,
-						);
-					const metricsLine = () => agentMetricLine(agent.metrics);
-					const runtimeModelLine = () =>
-						agentRuntimeModelLine(
-							agent.runtime,
-							timeline()?.model ?? agent.model,
-						);
-					// A live watch frame outranks the coarse workflow status while work is in
-					// flight: the badge then names what the run is doing (bash/read/thinking)
-					// instead of the status word it will only settle into later.
-					const activity = () => {
-						const current = props.activity?.(agent.role);
-						return current?.active ? current : undefined;
-					};
-					const highlight = (): Highlight => {
-						const running = activity();
-						if (running)
-							return running.tone === "blocked" ? "warning" : "highlight2";
-						return agent.status === "working"
-							? "highlight2"
-							: agent.status === "completed"
-								? "positive"
-								: agent.status === "blocked"
-									? "warning"
-									: agent.status === "failed"
-										? "negative"
-										: "secondary";
-					};
-					return (
-						<box
-							width="100%"
-							height={rowHeight(agent)}
-							flexDirection="column"
-							paddingRight={1}
-						>
-							<box width="100%" height={1} flexDirection="row">
-								<box flexGrow={1} minWidth={0} overflow="hidden">
-									<text
-										fg={uiColors.textPrimary}
+			<box
+				ref={(element: BoxRenderable) => {
+					body = element;
+					queueMicrotask(measure);
+				}}
+				onSizeChange={measure}
+				style={{
+					width: "100%",
+					flexGrow: 1,
+					minHeight: 0,
+					flexDirection: "column",
+				}}
+			>
+				<SelectableList
+					items={props.data.agents}
+					availableLines={bodyLines()}
+					itemHeights={rowHeights()}
+					selectedIndex={props.active ? props.selectedIndex : -1}
+					renderItem={(agent, _selected) => {
+						const timeline = () =>
+							props.data.verifierTimeline.find(
+								(item) => item.role === agent.role,
+							);
+						const metricsLine = () => agentMetricLine(agent.metrics);
+						const runtimeModelLine = () =>
+							agentRuntimeModelLine(
+								agent.runtime,
+								timeline()?.model ?? agent.model,
+							);
+						// A live watch frame outranks the coarse workflow status while work is in
+						// flight: the badge then names what the run is doing (bash/read/thinking)
+						// instead of the status word it will only settle into later.
+						const activity = () => {
+							const current = props.activity?.(agent.role);
+							return current?.active ? current : undefined;
+						};
+						const highlight = (): Highlight => {
+							const running = activity();
+							if (running)
+								return running.tone === "blocked" ? "warning" : "highlight2";
+							return agent.status === "working"
+								? "highlight2"
+								: agent.status === "completed"
+									? "positive"
+									: agent.status === "blocked"
+										? "warning"
+										: agent.status === "failed"
+											? "negative"
+											: "secondary";
+						};
+						return (
+							<box
+								width="100%"
+								height={rowHeight(agent)}
+								flexDirection="column"
+								paddingRight={1}
+							>
+								<box width="100%" height={1} flexDirection="row">
+									<box flexGrow={1} minWidth={0} overflow="hidden">
+										<text
+											fg={uiColors.textPrimary}
+											attributes={TextAttributes.BOLD}
+										>
+											{agent.role}
+										</text>
+									</box>
+									<Badge
+										text={activity()?.label ?? agent.status}
+										appearance="text"
+										highlight={highlight()}
+										{...(activity()?.tone === "blocked"
+											? { animatedTone: "warning" as const }
+											: {})}
+										animation={
+											activity()?.tone === "working" ||
+											(!activity() && agent.status === "working")
+												? "aurora"
+												: "static"
+										}
 										attributes={TextAttributes.BOLD}
-									>
-										{agent.role}
-									</text>
+										// No `transitionKey`: the badge is the agent's live status, so a
+										// bash→read→thinking change swaps instantly instead of wiping
+										// through the previous word (the aurora/tone animation still
+										// runs while a step is active).
+									/>
 								</box>
-								<Badge
-									text={activity()?.label ?? agent.status}
-									appearance="text"
-									highlight={highlight()}
-									{...(activity()?.tone === "blocked"
-										? { animatedTone: "warning" as const }
-										: {})}
-									animation={
-										activity()?.tone === "working" ||
-										(!activity() && agent.status === "working")
-											? "aurora"
-											: "static"
-									}
-									attributes={TextAttributes.BOLD}
-									// No `transitionKey`: the badge is the agent's live status, so a
-									// bash→read→thinking change swaps instantly instead of wiping
-									// through the previous word (the aurora/tone animation still
-									// runs while a step is active).
-								/>
-							</box>
-							<box width="100%" height={1} flexDirection="row">
-								<box flexGrow={1} minWidth={0} overflow="hidden">
-									<text fg={uiColors.textMuted}>
-										{runtimeModelLine() ??
-											(timeline()
-												? "default"
-												: agent.role.endsWith("verifier")
-													? "Awaiting verification run"
-													: "Interactive workflow agent")}
-									</text>
+								<box width="100%" height={1} flexDirection="row">
+									<box flexGrow={1} minWidth={0} overflow="hidden">
+										<text fg={uiColors.textMuted}>
+											{runtimeModelLine() ??
+												(timeline()
+													? "default"
+													: agent.role.endsWith("verifier")
+														? "Awaiting verification run"
+														: "Interactive workflow agent")}
+										</text>
+									</box>
+									<Show when={timeline()}>
+										{(entry) => {
+											const duration = entry().durationSeconds;
+											return (
+												<text
+													fg={
+														entry().status === "PASS"
+															? uiColors.success
+															: entry().status === "FAIL"
+																? uiColors.error
+																: uiColors.warning
+													}
+												>
+													{entry().status}
+													{duration !== undefined
+														? ` · ${formatDuration(duration)}`
+														: ""}
+													{entry().fallback ? " · fallback" : ""}
+												</text>
+											);
+										}}
+									</Show>
 								</box>
-								<Show when={timeline()}>
-									{(entry) => {
-										const duration = entry().durationSeconds;
-										return (
-											<text
-												fg={
-													entry().status === "PASS"
-														? uiColors.success
-														: entry().status === "FAIL"
-															? uiColors.error
-															: uiColors.warning
-												}
-											>
-												{entry().status}
-												{duration !== undefined
-													? ` · ${formatDuration(duration)}`
-													: ""}
-												{entry().fallback ? " · fallback" : ""}
-											</text>
-										);
-									}}
+								<Show when={agent.findingCounts}>
+									{(counts) => (
+										<FindingCountSummary
+											counts={counts()}
+											compact={findingSummaryRows() === 3}
+										/>
+									)}
+								</Show>
+								<Show when={metricsLine()}>
+									<box width="100%" height={1} overflow="hidden">
+										<text fg={uiColors.textMuted}>{metricsLine()}</text>
+									</box>
 								</Show>
 							</box>
-							<Show when={agent.findingCounts}>
-								{(counts) => (
-									<FindingCountSummary
-										counts={counts()}
-										compact={findingSummaryRows() === 3}
-									/>
-								)}
-							</Show>
-							<Show when={metricsLine()}>
-								<box width="100%" height={1} overflow="hidden">
-									<text fg={uiColors.textMuted}>{metricsLine()}</text>
-								</box>
-							</Show>
-						</box>
-					);
-				}}
-			/>
+						);
+					}}
+				/>
+			</box>
 		</Panel>
 	);
 }
