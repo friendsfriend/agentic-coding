@@ -1,18 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 // Workspace sidebar render test (integrated-multiplexer sidebar): the shell
-// shows the durable workflows, collapses them to indices while unfocused,
-// filters them from the keyboard, focuses the panel with the Ctrl+S host key
-// (and with nothing else), opens the selected workflow's dashboard page, and
-// reports a missing tmux on `n`. The
+// shows the durable workflows, collapses them to a status glyph plus their
+// index while unfocused, filters them from the keyboard, focuses the panel with
+// the Ctrl+S host key (and with nothing else), opens the selected workflow's
+// dashboard page, and reports a missing tmux on `n`. The
 // overview read is stubbed at the gateway port, so the test pins presentation
 // and navigation rather than the store.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TextAttributes } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeErrorModal, dismissErrorModal } from "@ui";
+import { activeErrorModal, dismissErrorModal, uiColors } from "@ui";
 import { onCleanup } from "solid-js";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
@@ -21,6 +22,7 @@ import { TraceDb } from "../../src/server/telemetry-db";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 import { App } from "../../src/tui/otel/app/App.tsx";
+import { SIDEBAR_COLLAPSED_WIDTH } from "../../src/tui/otel/components/WorkspaceSidebar.tsx";
 import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
@@ -31,6 +33,17 @@ import {
 	renderUntil,
 	type Test,
 } from "../app/support/terminal.ts";
+
+/** One theme colour as the red/green/blue triple the renderer reports a span's
+ * foreground in. */
+function rgb(hex: string): [number, number, number] {
+	const value = hex.replace("#", "");
+	return [
+		parseInt(value.slice(0, 2), 16),
+		parseInt(value.slice(2, 4), 16),
+		parseInt(value.slice(4, 6), 16),
+	];
+}
 
 function overview(
 	workflowId: string,
@@ -243,6 +256,60 @@ async function dismissObservationError(t: Test): Promise<void> {
 	await pressEscapeAndSettle(t, () => !activeErrorModal());
 }
 
+/** The collapsed strip of a frame: its leftmost columns on every line. Only the
+ * strip (the toggle glyph, the pinned entry and one row per workflow) draws
+ * there, so this block is everything a glance at the collapsed sidebar reads. */
+function collapsedStrip(frame: string): string {
+	return frame
+		.split("\n")
+		.map((line) => line.slice(0, SIDEBAR_COLLAPSED_WIDTH))
+		.join("\n");
+}
+
+/** The status mark of the strip row at `position`, as the renderer painted it:
+ * the char frame names the row (`<glyph> <position>` in the strip's columns) and
+ * the captured spans of the same line carry the tone colour and the weight. */
+function collapsedMark(
+	t: Test,
+	position: number,
+): { bold: boolean; fg: string } {
+	const rows = t.captureCharFrame().split("\n");
+	const row = rows.findIndex((line) =>
+		new RegExp(`^..\\S ${position}$`).test(
+			line.slice(0, SIDEBAR_COLLAPSED_WIDTH).trimEnd(),
+		),
+	);
+	if (row < 0) throw new Error(`no collapsed row at position ${position}`);
+	const cell = rows[row].slice(0, SIDEBAR_COLLAPSED_WIDTH).trim();
+	const glyph = cell.slice(0, cell.indexOf(" "));
+	// A bold glyph is its own span; a plain one shares the row's span with its
+	// position digits. Either way the glyph's colour and weight are on the span
+	// that holds it.
+	const span = t
+		.captureSpans()
+		.lines[row]?.spans.find((entry) => entry.text.includes(glyph));
+	if (!span) throw new Error(`no span holds ${glyph} on line ${row}`);
+	return {
+		bold: (span.attributes & TextAttributes.BOLD) !== 0,
+		fg: span.fg.buffer.slice(0, 3).join(","),
+	};
+}
+
+/** One expected mark: the row's glyph and position in the strip, then the tone
+ * colour and whether the glyph is painted bold. */
+function expectMark(
+	t: Test,
+	position: number,
+	cell: string,
+	color: string,
+	bold: boolean,
+): void {
+	const mark = collapsedMark(t, position);
+	expect(collapsedStrip(t.captureCharFrame())).toContain(cell);
+	expect(mark.fg).toBe(rgb(color).join(","));
+	expect(mark.bold).toBe(bold);
+}
+
 test("the sidebar collapses to indices while unfocused and expands on focus", async () => {
 	stubGateway();
 	const t = await renderShell();
@@ -258,9 +325,61 @@ test("the sidebar collapses to indices while unfocused and expands on focus", as
 		// The default filter hides completed workflows.
 		expect(t.captureCharFrame()).not.toContain("wf-done");
 
-		// Unfocus: the panel slides back to the index-only strip.
+		// Unfocus: the panel slides back to the glyph-and-index strip.
 		await unfocusSidebar(t);
 		expect(t.captureCharFrame()).not.toContain("wf-active");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("the collapsed strip carries each workflow's status glyph", async () => {
+	stubGateway([
+		overview("wf-question", "attention-required", { pendingQuestions: 1 }),
+		overview("wf-review", "active", { stepId: "core.developer-review" }),
+		overview("wf-invalid", "active", { valid: false }),
+		overview("wf-running", "active"),
+		overview("wf-idle", "paused"),
+	]);
+	const t = await renderShell();
+	try {
+		// Unfocused, each row leads with the same status mark the expanded row
+		// shows, in its tone colour; a state waiting on a reader is bold as well, so
+		// `?`, `!` and the review `✓` stand out at the collapsed width while the
+		// running and paused rows stay plain.
+		expectMark(t, 1, "… 1", uiColors.info, false);
+		expectMark(t, 2, "✓ 2", uiColors.info, true);
+		expectMark(t, 3, "? 3", uiColors.warning, true);
+		expectMark(t, 4, "! 4", uiColors.error, true);
+		expectMark(t, 5, "◦ 5", uiColors.textMuted, false);
+		// The strip names nothing: no workflow id reaches it.
+		expect(collapsedStrip(t.captureCharFrame())).not.toContain("wf-");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("the collapsed strip keeps its shape with many workflows", async () => {
+	stubGateway(
+		Array.from({ length: 30 }, (_, index) =>
+			overview(`wf-a-very-long-workflow-id-${index}`, "active"),
+		),
+	);
+	const t = await renderShell();
+	try {
+		// Long ids never reach the strip, so many rows and long names leave its shape
+		// alone: one mark plus its position per row, inside the collapsed width.
+		const rows = collapsedStrip(t.captureCharFrame())
+			.split("\n")
+			.map((line) => line.slice(2).trimEnd());
+		const marks = rows.filter((row) => /^\S \d+$/.test(row));
+		expect(marks[0]).toBe("… 1");
+		expect(marks[9]).toBe("… 10");
+		expect(collapsedStrip(t.captureCharFrame())).not.toContain(
+			"wf-a-very-long",
+		);
 	} finally {
 		t.renderer.destroy();
 		clearGateway();

@@ -62,7 +62,9 @@ terminal without the kitty keyboard protocol reports `Ctrl+H` as the Backspace
 byte, so a Backspace counts as `Ctrl+H` only while the sidebar holds focus:
 that is the one surface where the two cannot be told apart from text editing.
 The sidebar collapses to
-the workspace index while unfocused; `ui.sidebar_mode: "permanent"` keeps it
+each workspace's status glyph and index while unfocused (the glyph the
+expanded row shows, in its tone colour, and bold while the state waits on a
+reader); `ui.sidebar_mode: "permanent"` keeps it
 expanded, and the `e` toggle (or the title/strip glyph) writes that value back
 to the user configuration so it survives restarts. Side apps that used to run in a pane (the editor opened
 from a finding) go through `src/tui/shared/side-app.ts`: a new tmux window when

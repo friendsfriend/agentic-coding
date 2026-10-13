@@ -16,10 +16,12 @@ import {
 	isRunningStatus,
 	SIDEBAR_FILTERS,
 	SIDEBAR_ORCHESTRATOR_PIN,
+	sidebarCollapsedRow,
 	sidebarCursorCount,
 	sidebarCursorForWorkflow,
 	sidebarIndexFor,
 	sidebarStatusGlyph,
+	sidebarStatusNeedsReader,
 	sidebarWorkflowIndex,
 	workflowMeta,
 	workflowRowLabel,
@@ -468,6 +470,125 @@ describe("workspace sidebar rows", () => {
 				12,
 			),
 		).toBe("◊ a-very-lo…");
+	});
+
+	test("the collapsed strip row carries the glyph, the tone and the position", () => {
+		expect(
+			sidebarCollapsedRow(
+				overview({ workflowId: "a", status: "active" }),
+				0,
+				4,
+			),
+		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "1" });
+		expect(
+			sidebarCollapsedRow(
+				overview({
+					workflowId: "q",
+					status: "attention-required",
+					pendingQuestions: 1,
+				}),
+				2,
+				4,
+			),
+		).toEqual({ glyph: "?", tone: "warning", needsReader: true, index: "3" });
+		// The review gate and the completed workflow share the `✓`, so the tone —
+		// and the emphasis it drives — is what tells "waiting for a reader" from
+		// "done".
+		expect(
+			sidebarCollapsedRow(
+				overview({
+					workflowId: "r",
+					status: "active",
+					stepId: "core.developer-review",
+				}),
+				0,
+				4,
+			),
+		).toEqual({ glyph: "✓", tone: "info", needsReader: true, index: "1" });
+		expect(
+			sidebarCollapsedRow(
+				overview({ workflowId: "d", status: "completed" }),
+				0,
+				4,
+			),
+		).toEqual({ glyph: "✓", tone: "success", needsReader: false, index: "1" });
+	});
+
+	test("a collapsed row clips its position before the glyph", () => {
+		// A list long enough to outgrow the strip loses the tail of its index,
+		// never the mark: the glyph leads the row.
+		expect(
+			sidebarCollapsedRow(
+				overview({ workflowId: "a", status: "active" }),
+				119,
+				4,
+			),
+		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "1…" });
+		expect(
+			sidebarCollapsedRow(
+				overview({ workflowId: "a", status: "active" }),
+				0,
+				1,
+			),
+		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "" });
+	});
+
+	test("a state waiting on a reader is marked for emphasis", () => {
+		expect(
+			sidebarStatusNeedsReader(overview({ workflowId: "a", status: "active" })),
+		).toBe(false);
+		expect(
+			sidebarStatusNeedsReader(
+				overview({
+					workflowId: "q",
+					status: "attention-required",
+					pendingQuestions: 1,
+				}),
+			),
+		).toBe(true);
+		expect(
+			sidebarStatusNeedsReader(
+				overview({
+					workflowId: "b",
+					status: "attention-required",
+					attention: ["retry limit reached"],
+				}),
+			),
+		).toBe(true);
+		expect(
+			sidebarStatusNeedsReader(
+				overview({ workflowId: "i", status: "active", valid: false }),
+			),
+		).toBe(true);
+		expect(
+			sidebarStatusNeedsReader(
+				overview({
+					workflowId: "r",
+					status: "active",
+					stepId: "core.developer-review",
+				}),
+			),
+		).toBe(true);
+		expect(
+			sidebarStatusNeedsReader(overview({ workflowId: "p", status: "paused" })),
+		).toBe(false);
+		expect(
+			sidebarStatusNeedsReader(
+				overview({ workflowId: "d", status: "completed" }),
+			),
+		).toBe(false);
+		// Diagnostic notes on a running workflow are not a request for the
+		// developer: the glyph stays the running ellipsis and so does the emphasis.
+		expect(
+			sidebarStatusNeedsReader(
+				overview({
+					workflowId: "impl",
+					status: "active",
+					stepId: "core.implementation",
+					attention: ["stage gate skipped tests (policy always)"],
+				}),
+			),
+		).toBe(false);
 	});
 
 	test("clip never exceeds the budget and keeps short values whole", () => {

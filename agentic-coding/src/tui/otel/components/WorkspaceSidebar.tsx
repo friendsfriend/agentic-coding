@@ -7,8 +7,10 @@
 // clicks report back through the same callbacks the key layer uses.
 //
 // The panel is collapsible: focused it expands to its full width, unfocused it
-// collapses to the workspace index only. The width change is a short tween, so
-// focus movement reads as a slide rather than a jump.
+// collapses to the workspace index. Either way a row leads with its status
+// glyph, so the collapsed strip still says which workspace needs a reader. The
+// width change is a short tween, so focus movement reads as a slide rather than
+// a jump.
 
 import type { MouseEvent } from "@opentui/core";
 import {
@@ -28,6 +30,7 @@ import {
 	type SidebarMode,
 	type SidebarPin,
 	type StatusTone,
+	sidebarCollapsedRow,
 	sidebarStatusGlyph,
 	workflowMeta,
 	workflowRowLabel,
@@ -38,10 +41,17 @@ import {
  * terminal. */
 export const SIDEBAR_WIDTH = 34;
 
-/** Collapsed width: the selection marker, one gap column and two index digits. */
-export const SIDEBAR_COLLAPSED_WIDTH = 5;
+/** Collapsed width: the selection marker, one gap column, the status glyph and
+ * two index digits, so a marked row still fits the strip. */
+export const SIDEBAR_COLLAPSED_WIDTH = 6;
 
-/** Width at which the full row content replaces the index-only rows. */
+/** Columns a collapsed row has left for its content once the selection marker
+ * and its gap are spent. The strip grows from this width and never shrinks, so
+ * the row is measured against the collapsed width itself and not the animated
+ * one. */
+const SIDEBAR_COLLAPSED_ROW_WIDTH = SIDEBAR_COLLAPSED_WIDTH - 2;
+
+/** Width at which the full row content replaces the glyph-and-index rows. */
 const SIDEBAR_EXPANDED_THRESHOLD = 14;
 
 /** One width tween: ~150ms of 16ms steps, eased out. Quick enough to read as a
@@ -227,9 +237,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 			<Show
 				when={expanded()}
 				fallback={
-					// Collapsed: a toggle glyph, the pinned entry as its mark, then the
-					// workspace index only, one row per workflow, so the strip stays a
-					// usable jump list without names or metadata.
+					// Collapsed: a toggle glyph, the pinned entry as its mark, then one row
+					// per workflow carrying its status glyph and its index, so the strip
+					// stays a jump list that also flags the workspace waiting on a reader,
+					// without names or metadata.
 					<>
 						<box
 							style={{
@@ -276,9 +287,27 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 									props.onFocus();
 									props.onSelectIndex(index + pinOffset());
 								}}
-								renderItem={(_overview, _selected, index) => (
-									<text fg={uiColors.textSecondary}>{`${index + 1}`}</text>
-								)}
+								renderItem={(overview, _selected, index) => {
+									// The strip carries the row's status mark in its tone colour,
+									// so the glance the collapsed width affords is the state that
+									// needs a reader; a state waiting on the developer is bold
+									// as well.
+									const row = sidebarCollapsedRow(
+										overview,
+										index,
+										SIDEBAR_COLLAPSED_ROW_WIDTH,
+									);
+									return (
+										<text fg={toneColor(row.tone)}>
+											{row.needsReader ? (
+												<strong>{row.glyph}</strong>
+											) : (
+												row.glyph
+											)}
+											{row.index ? ` ${row.index}` : ""}
+										</text>
+									);
+								}}
 							/>
 						</Show>
 					</>

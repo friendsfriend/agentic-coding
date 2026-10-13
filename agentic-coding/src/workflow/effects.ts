@@ -293,9 +293,9 @@ export interface WorkflowConfig {
 		 * once and panel movement follows it. */
 		sidebar_side?: "left" | "right";
 		/** How the workspace sidebar sizes itself: `expanding` (the default)
-		 * collapses it to the workspace index while unfocused and expands it on
-		 * focus; `permanent` keeps it expanded. The shell can toggle the mode at
-		 * runtime; this is only its initial value. */
+		 * collapses it to each workspace's status glyph and index while unfocused
+		 * and expands it on focus; `permanent` keeps it expanded. The shell can
+		 * toggle the mode at runtime; this is only its initial value. */
 		sidebar_mode?: "expanding" | "permanent";
 	};
 	wiki?: { root?: string; reviewer?: string };

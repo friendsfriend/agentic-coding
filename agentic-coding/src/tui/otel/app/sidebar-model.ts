@@ -186,6 +186,55 @@ export function sidebarStatusGlyph(overview: WorkflowOverview): {
 	}
 }
 
+/** True when the row's state is waiting on a reader: a pending developer
+ * question, an invalid workflow, a committed `attention-required` status (a
+ * blocked review gate included), or a workflow parked on a review/approval
+ * step. Exactly the states `sidebarStatusGlyph` marks `?`, `!` or the review
+ * `✓`, so the mark and its emphasis can never disagree. */
+export function sidebarStatusNeedsReader(overview: WorkflowOverview): boolean {
+	const state = overview.state;
+	if ((state.pendingQuestions?.length ?? 0) > 0) return true;
+	if (!state.health.valid) return true;
+	if (state.status === "attention-required") return true;
+	return isReviewStep(state.stepId ?? state.phase);
+}
+
+/** One row of the collapsed strip: the status mark and the workflow's position,
+ * which is all the strip has room for. */
+export interface SidebarCollapsedRow {
+	/** The status glyph — the strip's whole status signal. */
+	readonly glyph: string;
+	readonly tone: StatusTone;
+	/** True when the state waits on a reader, so the strip paints the glyph bold
+	 * as well as in the tone colour and those rows stand out at a glance. */
+	readonly needsReader: boolean;
+	/** The 1-based position drawn after the glyph, clipped to the columns the
+	 * row has left (empty when the glyph is all that fits). */
+	readonly index: string;
+}
+
+/**
+ * The collapsed strip's row for one workflow: the same status glyph and tone
+ * the expanded row shows, then the workflow's 1-based position in the strip.
+ * The strip names nothing, so a long id cannot overflow it; only the position
+ * digits of a very long list can, and they give way while the glyph — the row's
+ * reason to exist — never does.
+ */
+export function sidebarCollapsedRow(
+	overview: WorkflowOverview,
+	position: number,
+	width: number,
+): SidebarCollapsedRow {
+	const status = sidebarStatusGlyph(overview);
+	const room = width - status.glyph.length - 1;
+	return {
+		glyph: status.glyph,
+		tone: status.tone,
+		needsReader: sidebarStatusNeedsReader(overview),
+		index: room > 0 ? clip(`${position + 1}`, room) : "",
+	};
+}
+
 /** The workflow's display name: the id the dashboard is addressed by. */
 export function workflowDisplayName(overview: WorkflowOverview): string {
 	return overview.state.workflowId;
