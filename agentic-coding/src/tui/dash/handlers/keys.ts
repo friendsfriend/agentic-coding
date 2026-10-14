@@ -155,6 +155,9 @@ export interface DashboardKeyContext {
 	readonly completedInputHint: () => string;
 	readonly planRejectionReasons: readonly string[];
 	readonly openCost: () => void;
+	/** Open the delegated debug requests dialog (`d`). Read-only: it lists the
+	 * workflow's requests, their reports and their evidence. */
+	readonly openDebugRequests: () => void;
 	/** Open the workflow graph dialog (`g` on the Change panel). */
 	readonly openWorkflowGraph: () => void;
 	readonly openReview: (kind: "developer" | "plan" | "wiki") => void;
@@ -274,6 +277,7 @@ export function createDashboardKeyHandler(
 		const _completedInputHint = context.completedInputHint;
 		const _planRejectionReasons = context.planRejectionReasons;
 		const _openCost = context.openCost;
+		const openDebugRequests = context.openDebugRequests;
 		const _openReview = context.openReview;
 		const _openPresetSwitcherInternal = context.openPresetSwitcher;
 		const themeIndex = context.themeIndex;
@@ -406,6 +410,10 @@ export function createDashboardKeyHandler(
 			setCostOffset(0);
 			setCostOpen(true);
 			props.keymap.setData("modal.active", "cost");
+			return;
+		}
+		if (name === "d") {
+			openDebugRequests();
 			return;
 		}
 

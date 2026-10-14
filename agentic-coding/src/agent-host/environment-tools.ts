@@ -563,7 +563,15 @@ export function createEnvironmentExtension(
 									path: path.resolve(run.cwd, args.path),
 									kind: args.kind,
 									caption: args.caption,
-									...(args.requestId ? { requestId: args.requestId } : {}),
+									...(args.requestId || run.env.HERDR_DEBUG_REQUEST_ID
+										? {
+												// A delegated debug run files its evidence under its request
+												// without having to repeat the id: the run environment carries it
+												// (add-debug-subagent-requests).
+												requestId:
+													args.requestId ?? run.env.HERDR_DEBUG_REQUEST_ID,
+											}
+										: {}),
 									// The producing step and role come from this run's own
 									// environment, so the manifest records who attached it.
 									...(run.env.HERDR_STEP_ID

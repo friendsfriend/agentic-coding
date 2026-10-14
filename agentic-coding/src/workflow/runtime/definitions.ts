@@ -21,15 +21,47 @@ import {
 } from "../definitions/custom.ts";
 import type {
 	CompiledWorkflowDefinition,
+	StepDefinition,
 	WorkflowManifest,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
 import {
 	type DefinitionRow,
 	insertDefinition,
 	openReadStore,
 	storedDefinition,
 } from "./store.ts";
+
+/** The registered `debug` definition and its investigation step: the step a
+ * delegated debug request's side run executes
+ * (add-debug-subagent-requests). The newest registered version is taken — every
+ * build registers the versions its policy tiers produce — and the step is
+ * resolved through the definition's own pinned reference, so the assignment's
+ * instruction digests and the run's output contract come from the same pin the
+ * `debug` family itself uses. */
+export function debugInvestigation(registry: WorkflowRegistry): {
+	readonly definition: Readonly<CompiledWorkflowDefinition>;
+	readonly step: Readonly<StepDefinition>;
+} {
+	const definitions = registry
+		.definitions()
+		.filter((candidate) => candidate.id === DEBUG_DEFINITION_ID);
+	if (!definitions.length)
+		throw new WorkflowRuntimeError(
+			"invalid-state",
+			"the debug workflow definition is not registered",
+		);
+	const definition = definitions.reduce((newest, candidate) =>
+		candidate.version > newest.version ? candidate : newest,
+	);
+	return {
+		definition,
+		step: registry.stepForDefinition(definition, DEBUG_INVESTIGATE_STEP),
+	};
+}
+
+const DEBUG_DEFINITION_ID = "debug";
 
 /** The pinned definition digest, the content address the store keys on, and
  * the id derived from it. The engine pins `definitionDigest` (the compiled

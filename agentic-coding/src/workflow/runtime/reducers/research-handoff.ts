@@ -14,6 +14,10 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
+import {
+	openDebugRequestRefusal,
+	openDebugRequestsForRun,
+} from "../debug-requests.ts";
 import { questionRun } from "../dialogue.ts";
 import { validateSourceBaseline } from "../evidence.ts";
 import { expireRuns, transition } from "../kernel.ts";
@@ -43,6 +47,17 @@ export function recordResearchHandoff(
 			"research handoff recording is only available to the active core.research researcher run",
 		);
 	const run = questionRun(db, snapshot, command, now);
+	// The same handoff guard `agentHandoff` applies: this is the research family's
+	// only successful completion lane (`createRun` gives the researcher run
+	// `allowedOutcomes: ["blocked","failed"]`, so `agent.handoff` can never carry
+	// its completion), and it retires the run just as definitively. A caller must
+	// collect or cancel its open debug requests before it leaves the step, or the
+	// delegated run keeps working in a checkout whose workflow is already being
+	// closed.
+	const refusal = openDebugRequestRefusal(
+		openDebugRequestsForRun(db, snapshot.workflowId, run.id),
+	);
+	if (refusal) throw new WorkflowRuntimeError("open-debug-requests", refusal);
 	let handoff: ReturnType<typeof decodeResearchHandoff>;
 	try {
 		handoff = decodeResearchHandoff(command.handoff);

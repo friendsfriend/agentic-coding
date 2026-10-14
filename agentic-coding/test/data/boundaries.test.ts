@@ -40,6 +40,7 @@ describe("dashboard data layer", () => {
 		expect(files.length).toBeGreaterThanOrEqual(4);
 		expect(files.map((f) => relative(DATA, f)).sort()).toEqual([
 			"agents.ts",
+			"debug-requests.ts",
 			"events.ts",
 			"evidence.ts",
 			"git.ts",

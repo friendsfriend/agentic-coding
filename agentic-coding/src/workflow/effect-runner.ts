@@ -40,6 +40,7 @@ import {
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
+import { listEvidence } from "../server/evidence/store.ts";
 import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
@@ -129,7 +130,17 @@ import type {
 	WorkflowRegistry,
 } from "./registry.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
-import { resolveDefinitionAt } from "./runtime/definitions.ts";
+import {
+	captureDebugBaseline,
+	type DebugRequest,
+	resolveDebugReportPath,
+} from "./runtime/debug-requests.ts";
+import {
+	debugInvestigation,
+	resolveDefinitionAt,
+} from "./runtime/definitions.ts";
+import { debugReportSummary } from "./runtime/reducers/debug-request.ts";
+import { ACTIVE_RUN } from "./runtime/store.ts";
 import {
 	type ClaimedEffect,
 	changedFilesIn,
@@ -148,6 +159,7 @@ import {
 	removeWorkflowEvidence,
 	type WorkflowEvidenceLocation,
 	workflowEvidencePresent,
+	workflowEvidenceScope,
 } from "./runtime/evidence-store.ts";
 import {
 	closeSecureDirectory,
@@ -1450,10 +1462,16 @@ export function agentEffectHandlers(
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
-					const step = options.registry.stepForDefinition(
-						snapshotDefinition(snapshot, options.registry),
-						run.stepId,
-					);
+					// A delegated debug side run renders the debug family's investigation
+					// step (its assets, its requirements and its output contract), which is
+					// deliberately not a step of the caller's definition.
+					const debugRequest = engine.debugRequestForRun(repo, run.id);
+					const step = debugRequest
+						? debugInvestigation(options.registry).step
+						: options.registry.stepForDefinition(
+								snapshotDefinition(snapshot, options.registry),
+								run.stepId,
+							);
 					if (
 						(effect.payload as { cancelRequested?: unknown })
 							.cancelRequested === true
@@ -1464,7 +1482,14 @@ export function agentEffectHandlers(
 							effect.lease ?? "",
 						);
 						const handle = ownsClaim
-							? (run.handle ?? durableHandleFor(snapshot, run))
+							? (run.handle ??
+								durableHandleFor(
+									snapshot,
+									run,
+									engine.debugRequestForRun(repo, run.id)
+										? debugRunAgentName(snapshot, run)
+										: undefined,
+								))
 							: undefined;
 						if (
 							handle &&
@@ -1497,14 +1522,22 @@ export function agentEffectHandlers(
 						run.stepId === "core.triage"
 							? yield* p(() => changedFilesInAsync(snapshot))
 							: [];
-					const assignment = assignmentFor(
-						run,
-						snapshot,
-						token,
-						options.registry,
-						changedFiles,
-						captureContent,
-					);
+					const assignment = debugRequest
+						? debugRequestAssignment(
+								run,
+								snapshot,
+								debugRequest,
+								token,
+								captureContent,
+							)
+						: assignmentFor(
+								run,
+								snapshot,
+								token,
+								options.registry,
+								changedFiles,
+								captureContent,
+							);
 					const assetRoot = workflowAssets(
 						snapshot.metadata.worktree,
 						snapshot.workflowId,
@@ -1523,12 +1556,14 @@ export function agentEffectHandlers(
 							`adapter unavailable: ${run.profile.runtime}`,
 						);
 					adapter.preflight(run.profile, step.requirements);
-					const name = canonicalAgentName(
-						snapshot.workflowId,
-						snapshot.definition.id,
-						run,
-						step,
-					);
+					const name = debugRequest
+						? debugRunAgentName(snapshot, run)
+						: canonicalAgentName(
+								snapshot.workflowId,
+								snapshot.definition.id,
+								run,
+								step,
+							);
 					// The telemetry bridge recovers the run env through this pointer, so it
 					// must exist before the agent process boots inside adapter.launch.
 					const runDirectory =
@@ -1667,7 +1702,14 @@ export function agentEffectHandlers(
 										: {}),
 								}
 							: ownsClaim
-								? (run.handle ?? durableHandleFor(snapshot, run))
+								? (run.handle ??
+									durableHandleFor(
+										snapshot,
+										run,
+										engine.debugRequestForRun(repo, run.id)
+											? debugRunAgentName(snapshot, run)
+											: undefined,
+									))
 								: undefined;
 					if (
 						resolved &&
@@ -1765,7 +1807,15 @@ export function agentEffectHandlers(
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
-					const resolved = run.handle ?? durableHandleFor(snapshot, run);
+					const resolved =
+						run.handle ??
+						durableHandleFor(
+							snapshot,
+							run,
+							engine.debugRequestForRun(repo, run.id)
+								? debugRunAgentName(snapshot, run)
+								: undefined,
+						);
 					if (resolved) {
 						const adapter = options.adapters.get(run.profile.runtime);
 						if (!adapter)
@@ -2272,6 +2322,124 @@ export function agentEffectHandlers(
 					return { phase, ok: true };
 				}),
 		},
+		// The delegated debug request's start (add-debug-subagent-requests): take
+		// the baseline the touched-file report is measured against, mark the
+		// request running and enqueue the delegated run's own launch. The launch
+		// row's idempotency key (`run:<id>:launch`) is what makes a retried effect
+		// start the run exactly once.
+		"debug.request.run": {
+			execute: (effect) =>
+				Effect.gen(function* () {
+					const payload = effect.payload as {
+						requestId?: unknown;
+						runId?: unknown;
+					};
+					const requestId =
+						typeof payload.requestId === "string" ? payload.requestId : "";
+					const runId = typeof payload.runId === "string" ? payload.runId : "";
+					if (!requestId || !runId)
+						throw new PermanentFailure(
+							"debug.request.run needs a request id and a run id",
+						);
+					const request = engine.debugRequest(repo, requestId);
+					if (!request)
+						throw new PermanentFailure(`unknown debug request: ${requestId}`);
+					if (request.status !== "queued" && request.status !== "running")
+						return { started: false, status: request.status };
+					const snapshot = engine.getSnapshot(repo, request.workflowId);
+					// Git is I/O and stays outside the store's write transaction.
+					const baseline = yield* p(async () =>
+						captureDebugBaseline(snapshot.metadata.worktree),
+					);
+					const started = yield* p(async () =>
+						engine.startDebugRequestRun(repo, requestId, runId, baseline),
+					);
+					emitAdapter(snapshot, engine.getRun(repo, runId), {
+						event: "debug.request.run",
+						effectId: effect.id,
+						outcome: "ok",
+						payload: { "herdr.debug.request": requestId },
+					});
+					return started as unknown as JsonValue;
+				}),
+		},
+		// The delivery into the caller's conversation: the report summary, its
+		// path, the request's evidence ids and the files that changed while it ran.
+		// The submission id is `debug:<requestId>`, so a retried effect is the same
+		// message to the host. A caller run that has already ended keeps the
+		// artifact and is never retried forever.
+		"debug.request.deliver": {
+			execute: (effect, _signal) =>
+				Effect.gen(function* () {
+					const payload = effect.payload as { requestId?: unknown };
+					const requestId =
+						typeof payload.requestId === "string" ? payload.requestId : "";
+					if (!requestId)
+						throw new PermanentFailure(
+							"debug.request.deliver needs a request id",
+						);
+					const request = engine.debugRequest(repo, requestId);
+					if (!request)
+						throw new PermanentFailure(`unknown debug request: ${requestId}`);
+					if (request.status === "cancelled")
+						return { delivered: false, reason: "cancelled" };
+					if (request.deliveredAt)
+						return { delivered: false, reason: "already-delivered" };
+					let observedCaller: ReturnType<typeof engine.getRun> | undefined;
+					try {
+						observedCaller = engine.getRun(repo, request.callerRunId);
+					} catch {
+						observedCaller = undefined;
+					}
+					// The caller ended: the artifact stays, `delivered_at` stays empty, and
+					// the effect completes instead of being retried forever. "Ended" is
+					// the run's own lifecycle status, not the absence of a handle: a
+					// finished run keeps its `handle_json`, so a caller that handed off
+					// while the delivery was pending would otherwise be prompted again in a
+					// conversation whose step has moved on.
+					if (!observedCaller || !ACTIVE_RUN.has(observedCaller.status))
+						return { delivered: false, reason: "caller-ended" };
+					const callerRun = observedCaller;
+					const handle = callerRun.handle;
+					// A run that was never launched has no conversation to deliver into.
+					if (!handle?.hostSocket || !handle.sessionId)
+						return { delivered: false, reason: "caller-ended" };
+					const snapshot = engine.getSnapshot(repo, request.workflowId);
+					// A crash between the handoff commit and the staged report's rename
+					// leaves the bytes at `<report_path>.<debug_run_id>.tmp`; completing
+					// that rename here (the effect is durable and retried) is what keeps a
+					// `done` request's report reachable.
+					const message = yield* p(async () =>
+						debugDeliveryMessage(snapshot, request),
+					);
+					if (!live(effect)) return { delivered: false, reason: "cancelled" };
+					yield* p(async () => {
+						const { HostClient } = await import("../agent-host/client.ts");
+						// `debug:<requestId>` is the delivery's own identity: the host keeps
+						// one submission per id, so a retried effect cannot inject the report
+						// into the caller's conversation twice.
+						await new HostClient(handle.hostSocket as string).submit(
+							handle.sessionId as string,
+							message,
+							`debug:${requestId}`,
+							"followUp",
+						);
+					});
+					const delivered = yield* p(async () =>
+						engine.recordDebugRequestDelivered(repo, requestId),
+					);
+					emitAdapter(snapshot, callerRun, {
+						event: "debug.request.deliver",
+						effectId: effect.id,
+						outcome: "ok",
+						payload: { "herdr.debug.request": requestId },
+					});
+					return {
+						delivered: true,
+						at: delivered.deliveredAt ?? "",
+					} as unknown as JsonValue;
+				}),
+		},
 		// The env-setup validation gate (`add-environment-setup-workflow`): the
 		// structural checks plus a real start of every drafted run target. Its
 		// report is the effect's data, which the step hands to the author as the
@@ -2597,6 +2765,174 @@ function roundScoped(
  * is cosmetic only (the hash already encodes the full role) and is clamped to
  * keep the name under the cap.
  */
+/** The delegated debug run's conversation name
+ * (add-debug-subagent-requests): unique per run, because each request
+ * investigates its own goal in its own conversation, while a **retried** launch
+ * of the same run has to reach the same conversation again. */
+export function debugRunAgentName(
+	snapshot: WorkflowSnapshot,
+	run: { id: string },
+): string {
+	const hash = createHash("sha256")
+		.update(`${snapshot.workflowId}\n${run.id}`)
+		.digest("hex")
+		.slice(0, 12);
+	return `debug-${hash}`;
+}
+
+/** The assignment one delegated debug run receives: the caller's goal, the
+ * caller's context, the shared-worktree rule both prompts state, and the
+ * request id the run files its evidence under. The protocol and the debug role
+ * brief are prepended by `renderAssignment` from the debug step's own pinned
+ * assets. */
+function debugRequestAssignment(
+	run: ReturnType<WorkflowEngine["getRun"]>,
+	snapshot: WorkflowSnapshot,
+	request: DebugRequest,
+	token: string,
+	captureContent: boolean,
+): Assignment {
+	const output =
+		run.outputPath && run.outputSchema
+			? {
+					path: run.outputPath,
+					schemaId: run.outputSchema.id,
+					schemaVersion: run.outputSchema.version,
+					maxBytes: 512 * 1024,
+				}
+			: undefined;
+	return {
+		protocolVersion: 1,
+		workflowId: run.workflowId,
+		runId: run.id,
+		generation: run.generation,
+		stepId: run.stepId,
+		role: run.role,
+		objective: request.goal,
+		interaction: "silent",
+		inputs: [
+			"## Shared worktree (add-debug-subagent-requests)",
+			`You work in the caller workflow's own checkout (${snapshot.metadata.worktree}) beside the run that delegated this request, and it keeps working there. Never switch branches, commit, rebase or clean the checkout: the caller's uncommitted work must survive your investigation.`,
+			"Your edits are probes or a candidate fix proof. Leave a candidate fix in place only when the report explains it and the evidence shows it works; the caller reviews every file that changed while you worked.",
+			`## Debug request ${request.id}`,
+			...(request.context ? [request.context] : []),
+			request.apps.length
+				? `Apps this request names: ${request.apps.join(" ")}.`
+				: "No app was named: pick the repository's configured app from `env_list` (a repository that maps to several apps requires the caller to name one).",
+			`Attach every piece of evidence with \`evidence_attach\` and pass requestId=${request.id}, so it is filed under this request and the developer sees it beside the report.`,
+			"The caller workflow holds the apps: `env_list` first, share its holds, and stop what you start.",
+			"Hand off `complete` with the whole markdown report in the output artifact's `report` field; the engine writes it beside the caller's workflow data and delivers its summary to the caller.",
+		],
+		permissions: [
+			"reproduce and probe the running app with the env, browser and debug tools",
+			"edit the checkout to probe or to prove a candidate fix",
+			"attach evidence only when it shows the problem or the fix",
+		],
+		checks: [
+			"the reported behavior is reproduced (or its irreproducibility is stated)",
+			"every finding names the evidence id that shows it",
+			"the report carries every required heading",
+			"the caller's checkout is left on its own branch, with nothing committed",
+		],
+		...(output ? { output } : {}),
+		allowedOutcomes: run.allowedOutcomes,
+		environment: {
+			HERDR_WORKFLOW_ID: run.workflowId,
+			...(snapshot.metadata.changeId
+				? { HERDR_CHANGE_ID: snapshot.metadata.changeId }
+				: {}),
+			HERDR_RUN_ID: run.id,
+			HERDR_RUN_GENERATION: String(run.generation),
+			HERDR_RUN_TOKEN: token,
+			HERDR_OUTPUT: run.outputPath ?? "",
+			HERDR_OUTPUT_SCHEMA_ID: run.outputSchema?.id ?? "",
+			HERDR_OUTPUT_SCHEMA_VERSION: String(run.outputSchema?.version ?? ""),
+			HERDR_STEP_ID: run.stepId,
+			HERDR_ROLE: run.role,
+			HERDR_PROFILE: run.profile.name,
+			HERDR_WORKFLOW_TARGET: snapshot.metadata.repository,
+			HERDR_RUNTIME: run.profile.runtime,
+			// The delegated run files its evidence under this request without being
+			// told again: the evidence tools default to it from the run environment.
+			HERDR_DEBUG_REQUEST_ID: request.id,
+			...(captureContent ? { HERDR_CAPTURE_CONTENT: "1" } : {}),
+			// The owner-scoped environment capability: the delegated run shares the
+			// caller workflow's holds, exactly as the roadmap's locked decision says.
+			...environmentRunEnv(run.workflowId),
+			HERDR_TELEMETRY_PATH: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.workflowId}/telemetry.jsonl`,
+			TRACEPARENT: traceparent(workflowTraceContext(run.workflowId)),
+		},
+	};
+}
+
+/** The follow-up message one finished debug request injects into its caller's
+ * conversation: what happened, the report summary, where the whole report and
+ * its evidence are, and the files that changed while the request ran. */
+function debugDeliveryMessage(
+	snapshot: WorkflowSnapshot,
+	request: DebugRequest,
+): string {
+	// A staged rename left behind by a crash is completed here, so the message
+	// reads the same bytes the row's `report_path` names.
+	const report = readDebugReport(resolveDebugReportPath(request));
+	let evidence: string[] = [];
+	try {
+		evidence = listEvidence(
+			workflowEvidenceScope({
+				workflowId: snapshot.workflowId,
+				worktree: snapshot.metadata.worktree,
+				definitionId: snapshot.definition.id,
+			}),
+			{ requestId: request.id },
+		).entries.map((entry) =>
+			entry.caption.trim()
+				? `${entry.id} (${entry.kind}: ${entry.caption.trim()})`
+				: `${entry.id} (${entry.kind})`,
+		);
+	} catch {
+		evidence = [];
+	}
+	const changed = request.changedFiles;
+	return [
+		`## Debug request ${request.id} ${request.status === "done" ? "finished" : "failed"}`,
+		"",
+		...(report
+			? [debugReportSummary(report)]
+			: [
+					"The delegated debug run did not produce a report: the request failed or was reported blocked.",
+				]),
+		"",
+		...(request.reportPath ? [`Report: ${request.reportPath}`] : []),
+		...(evidence.length
+			? [`Evidence: ${evidence.join("; ")}`]
+			: ["Evidence: none attached"]),
+		...(changed.length
+			? [
+					request.baselineUsable
+						? `Files changed during the request (debug or caller): ${changed.join(" ")}`
+						: `Files changed during the request (debug or caller; baseline unavailable, so tracked changes could not be measured and only files untracked at start are listed): ${changed.join(" ")}`,
+				]
+			: request.baselineUsable
+				? []
+				: [
+						"Files changed during the request: baseline unavailable, so tracked changes could not be measured.",
+					]),
+		"",
+		`The full report stays available through debug_result("${request.id}") and in the dashboard's debug requests view.`,
+	].join("\n");
+}
+
+/** The report bytes at a request's path, or `undefined` when the file is gone.
+ * The message falls back to a status line rather than failing the delivery. */
+function readDebugReport(reportPath: string | undefined): string | undefined {
+	if (!reportPath) return undefined;
+	try {
+		return fs.readFileSync(reportPath, "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
 export function canonicalAgentName(
 	workflowId: string,
 	definitionId: string,
@@ -2625,6 +2961,10 @@ function durableHandleFor(
 		profile: { runtime: RuntimeId };
 		handle?: AgentHandle;
 	},
+	/** The conversation name for a run whose name is not the canonical (step,
+	 * role) one: a delegated debug run is named per run
+	 * (add-debug-subagent-requests). */
+	name?: string,
 ): AgentHandle {
 	const runtimeDir =
 		snapshot.definition.id === "wiki-comments" ||
@@ -2633,7 +2973,9 @@ function durableHandleFor(
 			: path.join(snapshot.metadata.worktree, ".herdr-workflow");
 	return {
 		runtime: run.profile.runtime,
-		name: canonicalAgentName(snapshot.workflowId, snapshot.definition.id, run),
+		name:
+			name ??
+			canonicalAgentName(snapshot.workflowId, snapshot.definition.id, run),
 		hostSocket: hostLayout(runtimeDir).socketPath,
 		sessionId: run.id,
 	};
@@ -3354,18 +3696,26 @@ async function renderedAssignmentAsync(
 ) {
 	const run = engine.getRun(repo, runId);
 	const snapshot = engine.getSnapshot(repo, run.workflowId);
-	const step = registry.stepForDefinition(
-		snapshotDefinition(snapshot, registry),
-		run.stepId,
-	);
-	const assignment = assignmentFor(
-		run,
-		snapshot,
-		token,
-		registry,
-		run.stepId === "core.triage" ? await changedFilesInAsync(snapshot) : [],
-		captureContent,
-	);
+	// A delegated debug side run renders the debug family's own step: its
+	// instruction assets, its output contract and its assignment inputs are the
+	// debug role's, not the caller's current step's.
+	const debugRequest = engine.debugRequestForRun(repo, run.id);
+	const step = debugRequest
+		? debugInvestigation(registry).step
+		: registry.stepForDefinition(
+				snapshotDefinition(snapshot, registry),
+				run.stepId,
+			);
+	const assignment = debugRequest
+		? debugRequestAssignment(run, snapshot, debugRequest, token, captureContent)
+		: assignmentFor(
+				run,
+				snapshot,
+				token,
+				registry,
+				run.stepId === "core.triage" ? await changedFilesInAsync(snapshot) : [],
+				captureContent,
+			);
 	return {
 		run,
 		assignment,

@@ -139,6 +139,38 @@ export function evidenceFileAt(root: string, file: string): string {
 	return path.join(root, file);
 }
 
+/** Where one request's report is written: inside the workflow's own data
+ * directory **in the repository**, not in the checkout's worktree, so the
+ * developer still has the report after the worktree is removed — the same
+ * place, and for the same reason, the debug family's own `debug-report.md`
+ * lives. Empty repository (a wiki/research caller) falls back to the worktree,
+ * which such a workflow keeps. */
+/** The request-id shape the store writes (`randomUUID`). A stored id that is
+ * not this shape is refused rather than composed into a path: the id is a file
+ * name component, and the row it comes from lives inside the workflow's own
+ * checkout, where a run can write it. */
+const DEBUG_REQUEST_ID_SHAPE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function debugRequestReportPathFor(
+	repository: string,
+	worktree: string,
+	workflowId: string,
+	requestId: string,
+): string {
+	if (!DEBUG_REQUEST_ID_SHAPE.test(requestId))
+		throw new Error(`invalid debug request id: ${JSON.stringify(requestId)}`);
+	const root = repository || worktree;
+	return path.join(
+		root,
+		".herdr-workflow",
+		workflowId,
+		"debug-requests",
+		requestId,
+		"debug-report.md",
+	);
+}
+
 /**
  * One manifest entry's absolute path, composed from the workflow's own evidence
  * root — or `undefined` when the recorded name is not the shape the store

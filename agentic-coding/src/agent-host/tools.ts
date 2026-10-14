@@ -959,3 +959,178 @@ export function createPromptExtension(
 		],
 	});
 }
+
+const DebugRequestParameters = Type.Object({
+	goal: Type.String({
+		minLength: 1,
+		maxLength: 4096,
+		description: "What the investigation should establish, in one paragraph.",
+	}),
+	context: Type.Optional(
+		Type.String({
+			maxLength: 16384,
+			description:
+				"What you already know: the failing behavior, the files you suspect, what you tried.",
+		}),
+	),
+	apps: Type.Optional(
+		Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 8 }),
+	),
+});
+const DebugResultParameters = Type.Object({
+	requestId: Type.String({ minLength: 1, maxLength: 64 }),
+});
+const DebugWaitParameters = Type.Object({
+	requestId: Type.String({ minLength: 1, maxLength: 64 }),
+	timeoutSec: Type.Optional(
+		Type.Number({ description: "How long to wait, in seconds (1-1800)." }),
+	),
+});
+
+/** The delegated debug request tools' names: the set a `debug` run must not be
+ * offered, so recursion is impossible rather than merely discouraged. */
+export function debugRequestToolNames(): readonly string[] {
+	return ["debug_request", "debug_result", "debug_wait", "debug_cancel"];
+}
+
+/** One explicit tool selection minus the delegated debug request tools. Pure,
+ * so the exclusion a `debug` run depends on is testable without a host. */
+export function withoutDebugRequestTools<T extends { name: string }>(
+	tools: readonly T[],
+): readonly T[] {
+	const withheld = new Set(debugRequestToolNames());
+	return tools.filter((tool) => !withheld.has(tool.name));
+}
+
+/** The four delegated debug request tools (add-debug-subagent-requests). They
+ * are installed for every durable run **except** a `debug` run: a debug run
+ * answering a request must not delegate another one, which is what makes
+ * recursion impossible rather than merely discouraged. Each tool is a thin
+ * wrapper around the `agentic-coding workflow debug-*` command, exactly like
+ * the dialogue tools, so the request lifecycle lives in the engine's store and
+ * not in the agent's process. */
+export function createDebugRequestExtension(
+	lookup: RunContextLookup,
+): Extension {
+	const invoke = async (
+		cliArgs: string[],
+		label: string,
+		run: DurableRunContext,
+		signal?: AbortSignal,
+	) => {
+		const result = await runWorkflowCli(cliArgs, run, signal);
+		if (result.aborted)
+			return {
+				content: [{ type: "text" as const, text: `${label} cancelled` }],
+				isError: true,
+			};
+		if (result.exitCode !== 0)
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `${label} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+					},
+				],
+				isError: true,
+			};
+		return { content: [{ type: "text" as const, text: result.stdout.trim() }] };
+	};
+	return defineExtension({
+		name: "agentic.debug-request",
+		tools: [
+			defineTool({
+				name: "debug_request",
+				description:
+					"Delegate a focused investigation to a debug sub-agent that runs in this same worktree: it reproduces the behavior, probes the running app, and reports. You keep working; the report is injected into this conversation as a follow-up when it lands. At most one open request per run and two per workflow, and a handoff is refused while a request is open — collect it with debug_result/debug_wait or cancel it with debug_cancel first.",
+				parameters: DebugRequestParameters,
+				execute: async (args, api, context) => {
+					const run = lookup(api.conversationId);
+					if (!run)
+						return {
+							content: [
+								{
+									type: "text",
+									text: "debug_request: run context unavailable",
+								},
+							],
+							isError: true,
+						};
+					const cliArgs = ["workflow", "debug-request", "--goal", args.goal];
+					if (args.context) cliArgs.push("--context", args.context);
+					if (args.apps?.length) cliArgs.push("--apps", args.apps.join(","));
+					return invoke(cliArgs, "debug_request", run, context?.abortSignal);
+				},
+			}),
+			defineTool({
+				name: "debug_result",
+				description:
+					"Read one debug request's status and, once it finished, its report. Non-blocking: a request that is still running answers with its status and what to do next.",
+				parameters: DebugResultParameters,
+				execute: async (args, api, context) => {
+					const run = lookup(api.conversationId);
+					if (!run)
+						return {
+							content: [
+								{ type: "text", text: "debug_result: run context unavailable" },
+							],
+							isError: true,
+						};
+					return invoke(
+						["workflow", "debug-result", "--request-id", args.requestId],
+						"debug_result",
+						run,
+						context?.abortSignal,
+					);
+				},
+			}),
+			defineTool({
+				name: "debug_wait",
+				description:
+					"Block until one debug request finishes, then answer with its report (at most 30 minutes; the poll is read-only). Use it when you cannot continue without the result.",
+				parameters: DebugWaitParameters,
+				execute: async (args, api, context) => {
+					const run = lookup(api.conversationId);
+					if (!run)
+						return {
+							content: [
+								{ type: "text", text: "debug_wait: run context unavailable" },
+							],
+							isError: true,
+						};
+					const cliArgs = [
+						"workflow",
+						"debug-wait",
+						"--request-id",
+						args.requestId,
+					];
+					if (args.timeoutSec !== undefined)
+						cliArgs.push("--timeout-sec", String(Math.floor(args.timeoutSec)));
+					return invoke(cliArgs, "debug_wait", run, context?.abortSignal);
+				},
+			}),
+			defineTool({
+				name: "debug_cancel",
+				description:
+					"Cancel one debug request and stop its delegated run. Cancel a request you no longer need: a handoff is refused while one is open, and the report is not delivered afterwards.",
+				parameters: DebugResultParameters,
+				execute: async (args, api, context) => {
+					const run = lookup(api.conversationId);
+					if (!run)
+						return {
+							content: [
+								{ type: "text", text: "debug_cancel: run context unavailable" },
+							],
+							isError: true,
+						};
+					return invoke(
+						["workflow", "debug-cancel", "--request-id", args.requestId],
+						"debug_cancel",
+						run,
+						context?.abortSignal,
+					);
+				},
+			}),
+		],
+	});
+}

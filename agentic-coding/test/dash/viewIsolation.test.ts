@@ -193,6 +193,9 @@ describe("the dashboard route is a coordinator", () => {
 				"evidencePreview",
 				"evidenceState",
 				"evidenceError",
+				"debugRequests",
+				"debugRequestsState",
+				"debugRequestsError",
 				"kittyGraphics",
 			]).toContain(name);
 	});

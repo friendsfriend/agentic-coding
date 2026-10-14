@@ -33,6 +33,12 @@ export function help(command?: string): void {
 		projects: "projects",
 		"sessions-report":
 			"sessions-report [--since 7d] (deterministic, content-free report over every workflow's agent sessions in the window; per role \u00d7 model-profile \u00d7 family metrics plus ranked findings tagged prompt|config|engine|task)",
+		"debug-request":
+			"debug-request --goal TEXT [--context TEXT] [--apps a,b] (starts one delegated debug run in this workflow's checkout; at most one open request per run and two per workflow)",
+		"debug-result": "debug-result --request-id ID",
+		"debug-wait":
+			"debug-wait --request-id ID [--timeout-sec N] (blocks until the request finishes; N from 1 to 1800, default 300)",
+		"debug-cancel": "debug-cancel --request-id ID",
 		config: "config",
 		wiki: "wiki list|search TERMS|show ID|write --path ID --type T --title T --description D|verify --path ID [--actor A]|log --entry TEXT [--path DIR]",
 	};

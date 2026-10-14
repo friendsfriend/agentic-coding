@@ -20,6 +20,7 @@ import {
 	VerdictModal,
 } from "@ui";
 import { Show } from "solid-js";
+import type { DebugRequestView } from "../../../contracts/environment.ts";
 import type {
 	WorkflowDefinitionGraph,
 	WorkflowDefinitionOrigin,
@@ -28,7 +29,9 @@ import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
 } from "../agent-session.ts";
+import type { DebugRequestsReadState } from "../debug-requests-panel.ts";
 import { CostModal } from "../ui/CostModal.tsx";
+import { DebugRequestsModal } from "../ui/DebugRequestsModal.tsx";
 import { FindingsModal } from "../ui/FindingsModal.tsx";
 import { NotificationOverlay } from "../ui/Notification.tsx";
 import type { PresetChoice } from "../ui/PresetSwitcherModal.tsx";
@@ -112,6 +115,8 @@ export interface OverlaysState {
 	readonly costSelection: () => number;
 	readonly costAgent: () => string | null;
 	readonly costOffset: () => number;
+	readonly debugRequestsSelection: () => number;
+	readonly debugRequestsOffset: () => number;
 	readonly presetSwitcherChoices: () => readonly PresetChoice[];
 	readonly presetSwitcherHandler: () =>
 		| ((event: KeyEvent) => boolean)
@@ -126,6 +131,16 @@ export interface OverlaysState {
 	readonly agentSessionHistory: () => readonly string[];
 }
 
+/** The delegated debug requests dialog's values (its selection and report
+ * scroll live in `dash/state.ts`, like the other detail dialogs'). */
+export interface DebugRequestsOverlay {
+	readonly requests: readonly DebugRequestView[];
+	readonly state: DebugRequestsReadState;
+	readonly error?: string;
+	readonly selectedIndex: number;
+	readonly offset: number;
+}
+
 export interface OverlaysProps {
 	readonly state: OverlaysState;
 	/** Present only while the dialog is open. */
@@ -136,6 +151,7 @@ export interface OverlaysProps {
 	readonly findings?: FindingsOverlay;
 	readonly planRejection?: PlanRejectionOverlay;
 	readonly cost?: CostOverlay;
+	readonly debugRequests?: DebugRequestsOverlay;
 	readonly presetSwitcher?: PresetSwitcherOverlay;
 	readonly verdict?: VerdictOverlay;
 	readonly workflowGraph?: WorkflowGraphOverlay;
@@ -274,6 +290,9 @@ export function Overlays(props: OverlaysProps) {
 						)}
 					/>
 				)}
+			</Show>
+			<Show when={props.debugRequests}>
+				{(overlay) => <DebugRequestsModal {...overlay()} />}
 			</Show>
 			<Show when={props.cost}>
 				{(cost) => (

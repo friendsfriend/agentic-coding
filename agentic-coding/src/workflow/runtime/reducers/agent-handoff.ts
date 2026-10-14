@@ -16,6 +16,10 @@ import type {
 } from "../../registry.ts";
 import type { PreparedStepEvidence } from "../../steps/validation.ts";
 import { artifact, tokenMatches } from "../capability.ts";
+import {
+	openDebugRequestRefusal,
+	openDebugRequestsForRun,
+} from "../debug-requests.ts";
 import { sourceContentFingerprint } from "../evidence.ts";
 import {
 	applyCompletionResult,
@@ -25,6 +29,7 @@ import {
 import { prepareStepEvidence } from "../step-evidence.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";
 import { wikiWorkflowDataRoot } from "../targets.ts";
+import type { PreparedDebugRequestHandoff } from "./debug-request.ts";
 
 export interface PreparedHandoffEvidence {
 	artifactDigest?: string;
@@ -44,6 +49,10 @@ export interface PreparedHandoffEvidence {
 		digest: string;
 	}[];
 	pendingArtifacts?: readonly { path: string; tempPath: string }[];
+	/** Present when the handing-off run is a caller workflow's delegated debug
+	 * side run: the report and the files that changed since its baseline
+	 * (add-debug-subagent-requests). */
+	debugRequest?: PreparedDebugRequestHandoff;
 }
 
 export function agentHandoff(
@@ -78,6 +87,15 @@ export function agentHandoff(
 			"unauthorized",
 			"invalid or expired run capability",
 		);
+	// The handoff guard (add-debug-subagent-requests): a caller that delegated
+	// debug work cannot hand off while a request is still open. The delegated
+	// run's result is either collected or the request cancelled; the ids are
+	// named so the caller knows exactly what to resolve. The message comes from
+	// one shared helper, so every lane that retires a run refuses identically.
+	const refusal = openDebugRequestRefusal(
+		openDebugRequestsForRun(db, snapshot.workflowId, run.id),
+	);
+	if (refusal) throw new WorkflowRuntimeError("open-debug-requests", refusal);
 	if (prepared?.sourceFingerprint) {
 		const currentFingerprint = sourceContentFingerprint(
 			snapshot.metadata.repository,

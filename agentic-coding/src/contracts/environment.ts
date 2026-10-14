@@ -89,6 +89,11 @@ const observationSchema = Schema.Union(
 		requestId: Schema.optional(Schema.String),
 	}),
 	Schema.Struct({
+		kind: Schema.Literal("debug-requests"),
+		repo: Schema.String,
+		workflowId: Schema.String,
+	}),
+	Schema.Struct({
 		kind: Schema.Literal("sessions-report"),
 		since: Schema.optional(Schema.String),
 	}),
@@ -394,6 +399,51 @@ export const evidenceManifestSchema = Schema.Struct({
 	),
 });
 export type EvidenceManifest = typeof evidenceManifestSchema.Type;
+
+/** One delegated debug request as the dashboard reads it
+ * (add-debug-subagent-requests): the durable row, the report text the debug run
+ * produced, and the evidence filed under the request. Read-only: the view
+ * offers navigation and opening files, never an action. */
+export const debugRequestStatusSchema = Schema.Literal(
+	"queued",
+	"running",
+	"done",
+	"failed",
+	"cancelled",
+);
+export const debugRequestViewSchema = Schema.Struct({
+	id: evidenceText(64),
+	status: debugRequestStatusSchema,
+	callerRole: evidenceText(128),
+	callerRunId: evidenceText(128),
+	goal: evidenceText(4096),
+	context: Schema.optional(evidenceText(16384)),
+	createdAt: evidenceText(64),
+	finishedAt: Schema.optional(evidenceText(64)),
+	durationSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
+				message: () => "expected a non-negative number",
+			}),
+		),
+	),
+	reportPath: Schema.optional(evidenceText(4096)),
+	/** The report markdown, when the request produced one. */
+	report: Schema.optional(evidenceText(200_000)),
+	changedFiles: Schema.Array(evidenceText(1024)),
+	/** Whether the changed-file list could measure tracked changes at all. */
+	baseline: Schema.Literal("usable", "unavailable"),
+	delivered: Schema.Boolean,
+	/** The request's own evidence entries, filtered from the workflow manifest. */
+	evidence: Schema.Array(evidenceEntrySchema),
+});
+export type DebugRequestView = typeof debugRequestViewSchema.Type;
+
+export const debugRequestsSchema = Schema.Struct({
+	workflowId: evidenceText(80),
+	requests: Schema.Array(debugRequestViewSchema),
+});
+export type DebugRequests = typeof debugRequestsSchema.Type;
 
 /** Body of an attach: a file the caller produced, and the caption it carries.
  * `path` is an absolute path the server resolves and re-checks against the

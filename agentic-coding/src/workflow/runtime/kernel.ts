@@ -29,6 +29,7 @@ import type {
 	WorkflowEdge,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { DEBUG_ROLE } from "../steps/debug.ts";
 import { fusionPlannerRoles as stepFusionPlannerRoles } from "../steps/planning.ts";
 import { STEP_ROUTES } from "../steps/routing.ts";
 import type {
@@ -37,6 +38,7 @@ import type {
 	StepArrivalPrior,
 	StepBehavior,
 } from "../steps/types.ts";
+import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
 import { answeredQuestionRecord, expireQuestions } from "./dialogue.ts";
 import { wikiVerificationPayload } from "./evidence.ts";
 import {
@@ -378,6 +380,80 @@ export function createRun(
 		runId: id,
 	});
 	enqueue(db, snapshot, "agent.launch", `run:${id}:launch`, { runId: id });
+	return run;
+}
+
+/** Create one delegated debug request's side run
+ * (add-debug-subagent-requests).
+ *
+ * The run belongs to the caller's workflow — so it shares the workflow's
+ * environment owner and app holds — but it is deliberately **outside**
+ * `snapshot.step.activeRunIds`: it runs the `debug` family's investigation step
+ * under the `debug` role in the caller's own worktree, and no step transition,
+ * sibling expiry or step reducer may touch it. Its profile is the requesting
+ * run's, because the caller's routing table pins no `debug` route. */
+export function createDebugRequestRun(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	callerRun: Pick<WorkflowRun, "profile">,
+	outputSchema: { readonly id: string; readonly version: number },
+	now: () => Date,
+): WorkflowRun {
+	const id = randomUUID();
+	const directory = path.join(
+		snapshot.metadata.worktree,
+		".herdr-workflow",
+		snapshot.workflowId,
+		"runs",
+	);
+	const assignmentPath = path.join(directory, `${id}.assignment.md`);
+	const outputPath = path.join(directory, `${id}.output.json`);
+	const expires = new Date(now().getTime() + 24 * 3600_000).toISOString();
+	const created = nowIso(now);
+	const run: WorkflowRun = {
+		id,
+		workflowId: snapshot.workflowId,
+		stepId: DEBUG_INVESTIGATE_STEP,
+		role: DEBUG_ROLE,
+		// The delegated run opens its own conversation, so its first round is
+		// generation 1: the assignment carries the full protocol and role brief.
+		generation: 1,
+		attempt: 1,
+		status: "pending",
+		profile: callerRun.profile,
+		issuedRevision: snapshot.revision,
+		allowedOutcomes: ["complete", "blocked", "failed"],
+		capabilityHash: "",
+		capabilityExpiresAt: expires,
+		assignmentPath,
+		outputPath,
+		outputSchema: { id: outputSchema.id, version: outputSchema.version },
+		createdAt: created,
+	};
+	db.query(
+		"INSERT INTO workflow_runs(id,workflow_id,step_id,role,generation,attempt,status,profile_json,issued_revision,allowed_outcomes_json,capability_hash,capability_expires_at,assignment_path,output_path,output_schema_id,output_schema_version,output_digest,handle_json,created_at,completed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+	).run(
+		run.id,
+		run.workflowId,
+		run.stepId,
+		run.role,
+		run.generation,
+		run.attempt,
+		run.status,
+		json(run.profile),
+		run.issuedRevision,
+		json(run.allowedOutcomes),
+		"",
+		expires,
+		assignmentPath,
+		outputPath,
+		outputSchema.id,
+		outputSchema.version,
+		null,
+		null,
+		created,
+		null,
+	);
 	return run;
 }
 

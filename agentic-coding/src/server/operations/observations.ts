@@ -17,7 +17,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { resolveConfigRoot } from "../../config-root.ts";
-import type { EvidenceManifest } from "../../contracts/environment.ts";
+import type {
+	DebugRequests,
+	EvidenceManifest,
+} from "../../contracts/environment.ts";
 import type {
 	LocalChange,
 	WorktreeGitStatus,
@@ -56,7 +59,14 @@ import {
 	countVerifierFindings,
 } from "../../workflow/run-projections";
 import { latestRunsByRole } from "../../workflow/run-projections.ts";
-import { workflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts";
+import {
+	debugRequestDurationSeconds,
+	resolveDebugReportPath,
+} from "../../workflow/runtime/debug-requests.ts";
+import {
+	debugRequestReportPathFor,
+	workflowEvidenceScope,
+} from "../../workflow/runtime/evidence-store.ts";
 import {
 	canonicalStorePath,
 	isResearchWorkflowTarget,
@@ -135,6 +145,7 @@ export type DashboardObservation =
 			/** Narrow the manifest to one debug request's entries. */
 			requestId?: string;
 	  }
+	| { kind: "debug-requests"; repo: string; workflowId: string }
 	| { kind: "sessions-report"; since?: string };
 
 /** Run an observation in-process. This is the server-side dispatch the HTTP
@@ -211,6 +222,8 @@ export async function runLocalObservation(
 				observation.workflowId,
 				observation.requestId,
 			);
+		case "debug-requests":
+			return loadDebugRequests(observation.repo, observation.workflowId);
 		case "sessions-report":
 			return sessionsReport({ since: observation.since });
 	}
@@ -1074,6 +1087,111 @@ export function loadEvidence(
 	});
 	return listEvidence(scope, requestId === undefined ? {} : { requestId });
 }
+
+/** One workflow's delegated debug requests, oldest first, each with the report
+ * it produced and the evidence filed under it (add-debug-subagent-requests).
+ *
+ * Read-only, and authorized through the workflow itself: the same
+ * `dashboardState` read every sibling observation goes through must resolve the
+ * workflow before any request is listed, so a request can never be read for a
+ * workflow this store does not know. A store that predates the v6 table simply
+ * has none.
+ */
+export function loadDebugRequests(
+	repo: string,
+	workflowId: string,
+): DebugRequests {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
+	const engine = workflowEngine();
+	const requests = engine.debugRequests(repo, workflowId);
+	const scope = workflowEvidenceScope({
+		workflowId,
+		worktree: state.worktree,
+		definitionId: state.definition?.id,
+	});
+	return {
+		workflowId,
+		requests: requests.map((request) => {
+			const durationSeconds = debugRequestDurationSeconds(request);
+			// The stored `report_path` is untrusted on read for the same reason the
+			// env-setup drafts root is: the store lives inside the workflow's own
+			// checkout, which its runs write to. The path this workflow's request
+			// *would* have is recomputed from the workflow's own identity and the
+			// request id; a row that names anything else is served without a report
+			// rather than disclosing the file it points at.
+			const expectedReportPath = (() => {
+				try {
+					return debugRequestReportPathFor(
+						state.repository,
+						state.worktree,
+						workflowId,
+						request.id,
+					);
+				} catch {
+					// A request id that is not the shape the store writes cannot name a
+					// report of this workflow at all.
+					return undefined;
+				}
+			})();
+			const reportPath =
+				expectedReportPath !== undefined &&
+				request.reportPath === expectedReportPath
+					? request.reportPath
+					: undefined;
+			const report = readDebugRequestReport(reportPath);
+			let evidence: DebugRequests["requests"][number]["evidence"] = [];
+			try {
+				evidence = listEvidence(scope, { requestId: request.id }).entries;
+			} catch {
+				// A manifest that cannot be read is an empty evidence list, not a
+				// failed request listing: the report is the primary answer.
+				evidence = [];
+			}
+			return {
+				id: request.id,
+				status: request.status,
+				callerRole: request.callerRole,
+				callerRunId: request.callerRunId,
+				goal: request.goal,
+				...(request.context ? { context: request.context } : {}),
+				createdAt: request.createdAt,
+				...(request.finishedAt ? { finishedAt: request.finishedAt } : {}),
+				...(durationSeconds === undefined ? {} : { durationSeconds }),
+				...(reportPath ? { reportPath } : {}),
+				...(report === undefined ? {} : { report }),
+				changedFiles: [...request.changedFiles],
+				baseline: request.baselineUsable ? "usable" : "unavailable",
+				delivered: request.deliveredAt !== undefined,
+				evidence,
+			};
+		}),
+	};
+}
+
+/** The report text at a request's own path. The path comes from the workflow's
+ * store row, so it is the workflow's own data directory and not a caller path;
+ * a file that is gone or is not a regular file answers `undefined` rather than
+ * failing the listing. */
+function readDebugRequestReport(reportPath?: string): string | undefined {
+	if (!reportPath) return undefined;
+	// `resolveDebugReportPath` completes a staged rename an interrupted handoff
+	// left behind, so a `done` request whose report never reached its target still
+	// answers with the bytes the row describes.
+	const resolved = resolveDebugReportPath({ reportPath });
+	if (!resolved) return undefined;
+	try {
+		if (!statSync(resolved).isFile()) return undefined;
+		return readFileSync(resolved, "utf8").slice(
+			0,
+			DEBUG_REQUEST_REPORT_MAX_CHARS,
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+/** The report bytes one observation returns, bounded for the wire. */
+const DEBUG_REQUEST_REPORT_MAX_CHARS = 200_000;
 
 export function loadVerifierReport(
 	repo: string,

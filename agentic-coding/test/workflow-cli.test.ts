@@ -94,6 +94,13 @@ describe("breaking workflow CLI surface", () => {
 			"agent-extension",
 			"wiki",
 			"sidebar",
+			// The delegated debug request lifecycle
+			// (add-debug-subagent-requests): requested by an agent run, read and
+			// cancelled by the same run while it keeps working.
+			"debug-request",
+			"debug-result",
+			"debug-wait",
+			"debug-cancel",
 		]);
 		for (const removed of [
 			"planner",

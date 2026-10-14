@@ -8,6 +8,9 @@
 import type { StepBehavior } from "./types.ts";
 
 export const DEBUG_ROLE = "debug";
+/** The family's investigation step: the step a delegated debug request
+ * (add-debug-subagent-requests) runs as a side run of its caller's workflow. */
+export const DEBUG_INVESTIGATE_STEP = "debug.investigate";
 /** The report artifact the engine writes from the agent's output. */
 export const DEBUG_REPORT_FILE = "debug-report.md";
 /** The patch artifact the engine writes when the detached worktree is dirty. */

@@ -31,6 +31,7 @@ import {
 } from "solid-js";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
 import type {
+	DebugRequests,
 	EvidenceEntry,
 	EvidenceManifest,
 } from "../../contracts/environment.ts";
@@ -40,9 +41,9 @@ import {
 	decodeWorkflowDefinitionGraph,
 	resolveDeveloperQuestionOption,
 } from "../../contracts/workflow.ts";
-
 import { wikiWorkflowDataRoot } from "../../workflow/runtime.ts";
 import { copyToClipboard } from "../clipboard.ts";
+import { loadDebugRequests } from "../data/debug-requests.ts";
 import {
 	evidenceFileKey,
 	loadEvidence,
@@ -71,6 +72,11 @@ import {
 	createAgentSessionProjection,
 	streamAgentSessionProjection,
 } from "./agent-session.ts";
+import { openDebugRequestReport } from "./debug-requests-open.ts";
+import {
+	type DebugRequestsReadState,
+	debugRequestsKeyAction,
+} from "./debug-requests-panel.ts";
 import { testDashboard } from "./demo.ts";
 import { evidenceLocalPath, openEvidenceExternally } from "./evidence-open.ts";
 import {
@@ -303,6 +309,21 @@ export function App(props: {
 					);
 			});
 	});
+	// The delegated debug requests the workflow asked for, and what came back
+	// (add-debug-subagent-requests). One read per dashboard refresh: a finished
+	// request is worth seeing without a manual refresh, and the dialog is
+	// read-only.
+	const [debugRequests, setDebugRequests] = createSignal<
+		DebugRequests | undefined
+	>(undefined);
+	const [debugRequestsState, setDebugRequestsState] =
+		createSignal<DebugRequestsReadState>("loading");
+	const [debugRequestsError, setDebugRequestsError] = createSignal<
+		string | undefined
+	>(undefined);
+	let debugRequestsGeneration = 0;
+	let debugRequestsController: AbortController | undefined;
+	let lastDebugRequestsError: string | undefined;
 	// The open workflow's evidence: the manifest the panel lists, the selected
 	// entry's bytes when the terminal can render them, and the local path
 	// `Enter`/`y` act on.
@@ -415,6 +436,45 @@ export function App(props: {
 				if (message !== lastEvidenceError) {
 					lastEvidenceError = message;
 					notify(`Evidence could not be read: ${message}`, "error");
+				}
+			});
+	});
+	// The delegated debug request read follows every dashboard refresh, exactly
+	// like the evidence manifest: a request is created and finished by other
+	// runs, so a workflow event is what drops the cached listing.
+	createEffect(() => {
+		data();
+		if (props.profile === "test" || !gatewayOrUndefined()) {
+			if (props.profile === "test") setDebugRequestsState("ready");
+			return;
+		}
+		const generation = ++debugRequestsGeneration;
+		debugRequestsController?.abort();
+		debugRequestsController = new AbortController();
+		void loadDebugRequests(
+			props.repo,
+			props.workflowId,
+			debugRequestsController.signal,
+			{ refresh: true },
+		)
+			.then((next) => {
+				if (generation !== debugRequestsGeneration) return;
+				setDebugRequests(next);
+				setDebugRequestsState("ready");
+				setDebugRequestsError(undefined);
+			})
+			.catch((error) => {
+				if (generation !== debugRequestsGeneration) return;
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				setDebugRequestsState("error");
+				const message = error instanceof Error ? error.message : String(error);
+				setDebugRequestsError(message);
+				// A failed read must not leave a stale list looking live: it is
+				// reported once per distinct failure, like the evidence read.
+				if (message !== lastDebugRequestsError) {
+					lastDebugRequestsError = message;
+					notify(`Debug requests could not be read: ${message}`, "error");
 				}
 			});
 	});
@@ -579,6 +639,10 @@ export function App(props: {
 	const setCostAgent = overlays.setCostAgent;
 	const _costOffset = overlays.costOffset;
 	const setCostOffset = overlays.setCostOffset;
+	const debugRequestsSelection = overlays.debugRequestsSelection;
+	const setDebugRequestsSelection = overlays.setDebugRequestsSelection;
+	const debugRequestsOffset = overlays.debugRequestsOffset;
+	const setDebugRequestsOffset = overlays.setDebugRequestsOffset;
 	const presetSwitcherHandler = overlays.presetSwitcherHandler;
 	const setPresetSwitcherHandler = overlays.setPresetSwitcherHandler;
 	const presetSwitcherChoices = overlays.presetSwitcherChoices;
@@ -865,6 +929,7 @@ export function App(props: {
 		| "repair"
 		| "question"
 		| "cost"
+		| "debug-requests"
 		| "review"
 		| "credentials"
 		| "preset-switcher"
@@ -1174,6 +1239,41 @@ export function App(props: {
 	const costOpen = () => modalOpen("cost");
 	const setCostOpen = (open: boolean) =>
 		open ? openModal("cost", "dashboard") : closeModal("cost");
+	const debugRequestsOpen = () => modalOpen("debug-requests");
+	const setDebugRequestsOpen = (open: boolean) =>
+		open
+			? openModal("debug-requests", "dashboard")
+			: closeModal("debug-requests");
+	const openDebugRequests = () => {
+		setDebugRequestsSelection(0);
+		setDebugRequestsOffset(0);
+		setDebugRequestsOpen(true);
+		props.keymap.setData("modal.active", "debug-requests");
+	};
+	const openSelectedDebugRequestReport = async () => {
+		const request = debugRequests()?.requests[debugRequestsSelection()];
+		if (!request) return;
+		if (!request.reportPath) {
+			// `Enter` is advertised unconditionally, so a request that has not
+			// reported yet says why nothing happened instead of doing nothing.
+			const pending =
+				request.status === "queued" || request.status === "running";
+			notify(
+				pending
+					? `${request.id} has no report file yet`
+					: `${request.id} produced no report`,
+				pending ? "info" : "warning",
+			);
+			return;
+		}
+		try {
+			// The path is recomputed from this workflow's own identity before the
+			// opener sees it: the stored row is not trusted for a filesystem open.
+			await openDebugRequestReport(data().state, request);
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+		}
+	};
 	const workflowGraphOpen = () => modalOpen("workflow-graph");
 	const setWorkflowGraphOpen = (open: boolean) =>
 		open
@@ -1915,6 +2015,7 @@ export function App(props: {
 		openPresetSwitcher,
 		openAgentSession,
 		openCost: () => setCostOpen(true),
+		openDebugRequests,
 		openWorkflowGraph,
 		openReview: (kind) =>
 			kind === "plan" ? openPlanReview() : openDeveloperReview(),
@@ -2478,6 +2579,40 @@ export function App(props: {
 				(key) => ({ key, cmd: "cost.handle" }),
 			),
 		});
+		const disposeDebugRequests = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "debug-requests",
+			priority: 1000,
+			activeModal: "debug-requests",
+			commands: [
+				{
+					name: "debug-requests.handle",
+					run: ({ event }) => {
+						if (routeModalHelp(event.name.toLowerCase())) return true;
+						// The whole key surface is one pure function, so the dialog's
+						// read-only actions are exactly what the tests assert.
+						const action = debugRequestsKeyAction(event, {
+							selection: debugRequestsSelection(),
+							offset: debugRequestsOffset(),
+							count: debugRequests()?.requests.length ?? 0,
+						});
+						if (action.kind === "close") {
+							setDebugRequestsOpen(false);
+							props.keymap.setData("modal.active", "none");
+						} else if (action.kind === "select")
+							setDebugRequestsSelection(action.index);
+						else if (action.kind === "scroll")
+							setDebugRequestsOffset(action.offset);
+						else if (action.kind === "open")
+							void openSelectedDebugRequestReport();
+						return true;
+					},
+				},
+			],
+			bindings: ["escape", "enter", "return", "j", "k", "J", "K", "?"].map(
+				(key) => ({ key, cmd: "debug-requests.handle" }),
+			),
+		});
 		const disposeWorkflowGraph = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "workflow-graph",
@@ -2981,6 +3116,7 @@ export function App(props: {
 			disposeRepair();
 			disposeUserAction();
 			disposeCost();
+			disposeDebugRequests();
 			disposeWorkflowGraph();
 			disposePresetSwitcher();
 			disposeHelp();
@@ -3371,6 +3507,19 @@ export function App(props: {
 						: undefined
 				}
 				cost={costOpen() ? { rows: data().costBreakdown } : undefined}
+				debugRequests={
+					debugRequestsOpen()
+						? {
+								requests: debugRequests()?.requests ?? [],
+								state: debugRequestsState(),
+								...(debugRequestsError()
+									? { error: debugRequestsError() }
+									: {}),
+								selectedIndex: debugRequestsSelection(),
+								offset: debugRequestsOffset(),
+							}
+						: undefined
+				}
 				presetSwitcher={
 					presetSwitcherOpen()
 						? {

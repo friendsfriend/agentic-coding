@@ -220,6 +220,12 @@ export interface OverlayState {
 	readonly setCostAgent: Setter<string | null>;
 	readonly costOffset: () => number;
 	readonly setCostOffset: Setter<number>;
+	/** The delegated debug requests dialog (`d`): which request is selected and
+	 * how far its report/evidence pane is scrolled. */
+	readonly debugRequestsSelection: () => number;
+	readonly setDebugRequestsSelection: Setter<number>;
+	readonly debugRequestsOffset: () => number;
+	readonly setDebugRequestsOffset: Setter<number>;
 	readonly presetSwitcherHandler: () =>
 		| ((event: KeyEvent) => boolean)
 		| undefined;
@@ -335,6 +341,9 @@ export function createOverlayState(options: {
 
 	const [costOffset, setCostOffset] = createSignal(0);
 
+	const [debugRequestsSelection, setDebugRequestsSelection] = createSignal(0);
+	const [debugRequestsOffset, setDebugRequestsOffset] = createSignal(0);
+
 	const [agentSession, setAgentSession] = createSignal<AgentSessionIdentity>();
 	const [agentSessionOpen, setAgentSessionOpen] = createSignal(false);
 	const [agentSessionBlocks, setAgentSessionBlocks] = createSignal<
@@ -394,6 +403,10 @@ export function createOverlayState(options: {
 		setCostAgent,
 		costOffset,
 		setCostOffset,
+		debugRequestsSelection,
+		setDebugRequestsSelection,
+		debugRequestsOffset,
+		setDebugRequestsOffset,
 		presetSwitcherHandler,
 		setPresetSwitcherHandler,
 		presetSwitcherChoices,

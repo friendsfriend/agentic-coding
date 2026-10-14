@@ -15,6 +15,12 @@ import { verificationPosition } from "../run-projections.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
+import {
+	runDebugCancel,
+	runDebugRequest,
+	runDebugResult,
+	runDebugWait,
+} from "./commands/debug-requests.ts";
 import { runDefine } from "./commands/define.ts";
 import {
 	agentQuestionTimeoutMs,
@@ -124,6 +130,12 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	repair: runRepair,
 	repin: runRepin,
 	migrate: runMigrate,
+	"debug-request": runDebugRequest,
+	"debug-result": (rest, workflowEngine) =>
+		runDebugResult(rest, workflowEngine),
+	"debug-wait": (rest, workflowEngine) => runDebugWait(rest, workflowEngine),
+	"debug-cancel": (rest, workflowEngine) =>
+		runDebugCancel(rest, workflowEngine),
 };
 
 export async function run(argv: string[]): Promise<void> {

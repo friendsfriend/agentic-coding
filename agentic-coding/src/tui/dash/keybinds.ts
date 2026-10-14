@@ -202,6 +202,11 @@ export function dashboardDetailKeybindCatalog(options: {
 			keybinds: [
 				{ key: "O", action: "Show safe repair guidance", short: "repair" },
 				{ key: "c", action: "View agent cost breakdown", short: "cost" },
+				{
+					key: "d",
+					action: "Show delegated debug requests",
+					short: "debug",
+				},
 				{ key: "m", action: "Switch agent preset", short: "preset" },
 				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },

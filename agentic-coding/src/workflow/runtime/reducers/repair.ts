@@ -12,6 +12,10 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
+import {
+	openDebugRequestsForWorkflow,
+	updateDebugRequest,
+} from "../debug-requests.ts";
 import { enterStep, expireRuns, freshStep } from "../kernel.ts";
 import {
 	effects,
@@ -181,8 +185,27 @@ export function repair(
 			`incompatible repair target: ${command.targetStep}`,
 		);
 	expireRuns(db, snapshot, now);
+	// A repair re-enters the step with a fresh attempt, so the retired run's open
+	// debug requests are closed in the same transaction: an open request whose
+	// lifecycle effect was expired could never advance again, and it would hold
+	// one of the workflow's two open slots forever.
+	for (const request of openDebugRequestsForWorkflow(db, snapshot.workflowId)) {
+		updateDebugRequest(db, request.id, {
+			status: "cancelled",
+			finishedAt: nowIso(now),
+		});
+		if (request.debugRunId)
+			db.query(
+				"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
+			).run(nowIso(now), request.debugRunId);
+	}
+	// Keep the debug-request lifecycle effects: their stable idempotency keys are
+	// the durable entry contract for the delegated run's launch and for the
+	// report's delivery, exactly as this reducer already keeps the other
+	// non-run lifecycle effects above. Expiring them would strand a request the
+	// caller already collected.
 	db.query(
-		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running')",
+		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind NOT IN ('debug.request.run','debug.request.deliver')",
 	).run(snapshot.workflowId);
 	const source = snapshot.currentStep;
 	snapshot.currentStep = command.targetStep;

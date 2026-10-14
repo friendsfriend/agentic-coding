@@ -44,6 +44,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { DEBUG_ROLE } from "../steps/debug.ts";
 import { ensureBundle, wikiRoot } from "../wiki.ts";
 import {
 	authorizeAgentCapability as capabilityAuthorizeAgentCapability,
@@ -52,7 +53,26 @@ import {
 	hashToken,
 	prepareHandoffArtifact,
 } from "./capability.ts";
-import { resolveDefinition, resolveDefinitionAt } from "./definitions.ts";
+import {
+	type DebugRequest,
+	debugRequestById,
+	debugRequestLimitRefusal,
+	debugRequestsForWorkflow,
+	debugTouchedFiles,
+	insertDebugRequest,
+	isOpenDebugRequest,
+	normalizeDebugApps,
+	openDebugRequestsForRun,
+	openDebugRequestsForWorkflow,
+	debugRequestForRun as storeDebugRequestForRun,
+	updateDebugRequest,
+	validateDebugRequestText,
+} from "./debug-requests.ts";
+import {
+	debugInvestigation,
+	resolveDefinition,
+	resolveDefinitionAt,
+} from "./definitions.ts";
 import type {
 	ClaimedEffect,
 	DispatchResult,
@@ -73,6 +93,7 @@ import {
 	wikiBaselineFor,
 } from "./evidence.ts";
 import {
+	createDebugRequestRun,
 	enqueue,
 	enterStep,
 	freshStep,
@@ -89,6 +110,10 @@ import {
 	expireQuestion,
 	expireQuestionTimer,
 } from "./reducers/agent-question.ts";
+import {
+	debugRequestHandoff,
+	debugRequestReportPath,
+} from "./reducers/debug-request.ts";
 import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
 import { migrate, repair, repin, resume } from "./reducers/repair.ts";
@@ -102,13 +127,16 @@ import {
 } from "./services.ts";
 import { prepareStepEvidence } from "./step-evidence.ts";
 import {
+	ACTIVE_RUN,
 	deleteWorkflowRows,
 	type EffectRow,
 	effectFromRow,
 	type InstanceRow,
 	instance,
+	isDebugSideRun,
 	json,
 	nowIso,
+	openReadStore,
 	payload,
 	type RunRow,
 	runs,
@@ -660,6 +688,338 @@ export class WorkflowEngine {
 	}
 	previewRepair(repo: string, workflowId: string): RepairPreview[] {
 		return this.run(this.previewRepairEffect(repo, workflowId));
+	}
+
+	// ------------------------------------------------------------------
+	// Delegated debug requests (add-debug-subagent-requests)
+	// ------------------------------------------------------------------
+
+	/** One workflow's delegated debug requests, oldest first. A read-only store
+	 * read: observation never initializes or migrates the store, and an older
+	 * store without the v6 table answers with no requests at all. */
+	debugRequests(repo: string, workflowId: string): DebugRequest[] {
+		let db: ReturnType<typeof openReadStore>;
+		try {
+			db = openReadStore(repo);
+		} catch {
+			return [];
+		}
+		try {
+			if (!tableExists(db, "debug_requests")) return [];
+			return debugRequestsForWorkflow(db, workflowId);
+		} finally {
+			db.close();
+		}
+	}
+
+	/** One request by id, from the store that holds it. */
+	debugRequest(repo: string, requestId: string): DebugRequest | undefined {
+		const db = openReadStore(repo);
+		try {
+			return debugRequestById(db, requestId);
+		} finally {
+			db.close();
+		}
+	}
+
+	/** The request a run is the delegated run of, when it is one. */
+	debugRequestForRun(repo: string, runId: string): DebugRequest | undefined {
+		const db = openReadStore(repo);
+		try {
+			return storeDebugRequestForRun(db, runId);
+		} finally {
+			db.close();
+		}
+	}
+
+	/** The refusal a handoff would get for this run's open requests, or
+	 * `undefined` when it may hand off. */
+	/** Start one delegated debug request: the request row, its side run and the
+	 * lifecycle effect, in one write transaction. The limits, the recursion
+	 * refusal and the caller's own run identity are all checked under that same
+	 * transaction. */
+	requestDebugRun(
+		repo: string,
+		input: {
+			readonly workflowId: string;
+			readonly callerRunId: string;
+			readonly callerRole: string;
+			readonly goal: string;
+			readonly context?: string;
+			readonly apps?: readonly string[];
+		},
+	): { readonly request: DebugRequest; readonly runId: string } {
+		return this.run(this.requestDebugRunEffect(repo, input));
+	}
+
+	requestDebugRunEffect(
+		repo: string,
+		input: {
+			readonly workflowId: string;
+			readonly callerRunId: string;
+			readonly callerRole: string;
+			readonly goal: string;
+			readonly context?: string;
+			readonly apps?: readonly string[];
+		},
+	): Effect.Effect<
+		{ readonly request: DebugRequest; readonly runId: string },
+		WorkflowRuntimeError,
+		WorkflowStore
+	> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const debugStep = debugInvestigation(self.registry).step;
+			const created = yield* store.transaction(repo, (db) => {
+				const snapshot = decodeSnapshot(
+					JSON.parse(instance(db, input.workflowId).snapshot_json),
+				);
+				const callerRun = runs(db, input.workflowId).find(
+					(run) => run.id === input.callerRunId,
+				);
+				if (!callerRun || callerRun.workflowId !== input.workflowId)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						`unknown caller run: ${input.callerRunId}`,
+					);
+				if (!ACTIVE_RUN.has(callerRun.status))
+					throw new WorkflowRuntimeError(
+						"stale-run",
+						`caller run is not active: ${input.callerRunId}`,
+					);
+				if (callerRun.role !== input.callerRole)
+					throw new WorkflowRuntimeError(
+						"unauthorized",
+						`caller role mismatch for ${input.callerRunId}`,
+					);
+				// Recursion is refused by construction: a delegated debug run is never
+				// offered the tools, and the command refuses it by role.
+				if (callerRun.role === DEBUG_ROLE)
+					throw new WorkflowRuntimeError(
+						"invalid-command",
+						"a debug run may not delegate another debug request",
+					);
+				const textRefusal = validateDebugRequestText({
+					goal: input.goal,
+					...(input.context === undefined ? {} : { context: input.context }),
+				});
+				if (textRefusal)
+					throw new WorkflowRuntimeError("invalid-command", textRefusal);
+				const apps = normalizeDebugApps(input.apps ?? []);
+				const limits = debugRequestLimitRefusal({
+					goal: input.goal,
+					openForRun: openDebugRequestsForRun(
+						db,
+						input.workflowId,
+						input.callerRunId,
+					).length,
+					openForWorkflow: openDebugRequestsForWorkflow(db, input.workflowId)
+						.length,
+				});
+				if (limits) throw new WorkflowRuntimeError("invalid-command", limits);
+				const run = createDebugRequestRun(
+					db,
+					snapshot,
+					callerRun,
+					self.debugStepOutput(debugStep),
+					self.now,
+				);
+				const request = insertDebugRequest(db, {
+					workflowId: input.workflowId,
+					callerRunId: input.callerRunId,
+					callerRole: input.callerRole,
+					goal: input.goal,
+					...(input.context === undefined ? {} : { context: input.context }),
+					apps,
+					debugRunId: run.id,
+					createdAt: nowIso(self.now),
+				});
+				enqueue(
+					db,
+					snapshot,
+					"debug.request.run",
+					`debug-request:${request.id}:run`,
+					{ requestId: request.id, runId: run.id },
+				);
+				return { request, runId: run.id };
+			});
+			self.onCommitted(repo);
+			return created;
+		});
+	}
+
+	/** The lifecycle effect's transaction: the baseline is read before it (git is
+	 * I/O and must not run inside the write lock) and recorded with the status
+	 * change, and the delegated run's launch is enqueued under the same
+	 * transaction. `run:<id>:launch` is the launch's own idempotency key, so a
+	 * retried effect can never start the run twice. */
+	startDebugRequestRun(
+		repo: string,
+		requestId: string,
+		runId: string,
+		baseline: { readonly ref: string; readonly files: Record<string, string> },
+	): { readonly started: boolean; readonly status: DebugRequest["status"] } {
+		return this.run(
+			this.startDebugRequestRunEffect(repo, requestId, runId, baseline),
+		);
+	}
+
+	startDebugRequestRunEffect(
+		repo: string,
+		requestId: string,
+		runId: string,
+		baseline: { readonly ref: string; readonly files: Record<string, string> },
+	): Effect.Effect<
+		{ readonly started: boolean; readonly status: DebugRequest["status"] },
+		WorkflowRuntimeError,
+		WorkflowStore
+	> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const started = yield* store.transaction(repo, (db) => {
+				const request = debugRequestById(db, requestId);
+				if (!request)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						`unknown debug request: ${requestId}`,
+					);
+				if (request.debugRunId !== runId)
+					throw new WorkflowRuntimeError(
+						"invalid-state",
+						`debug request ${requestId} does not own run ${runId}`,
+					);
+				if (request.status !== "queued" && request.status !== "running")
+					return { started: false, status: request.status };
+				const updated =
+					request.status === "queued"
+						? updateDebugRequest(db, requestId, {
+								status: "running",
+								baselineRef: baseline.ref,
+								baselineFiles: baseline.files,
+								// The ref was read moments ago; whether it still resolves is
+								// re-checked when the touched files are measured.
+								baselineUsable: true,
+							})
+						: request;
+				const snapshot = decodeSnapshot(
+					JSON.parse(instance(db, updated.workflowId).snapshot_json),
+				);
+				enqueue(db, snapshot, "agent.launch", `run:${runId}:launch`, {
+					runId,
+					debugRequestId: requestId,
+				});
+				return { started: true, status: updated.status };
+			});
+			self.onCommitted(repo);
+			return started;
+		});
+	}
+
+	/** Cancel one request: its status, its delegated run and that run's pending
+	 * effects, in one transaction. The live conversation is stopped by the caller
+	 * (the CLI's host abort), because the store does not hold sockets. */
+	cancelDebugRequest(
+		repo: string,
+		requestId: string,
+		/** The run the caller authenticated as. Checked inside the transaction, so
+		 * a caller can only cancel its own request (a check made before the
+		 * transaction is not a control). */
+		callerRunId?: string,
+	): DebugRequest {
+		return this.run(
+			this.cancelDebugRequestEffect(repo, requestId, callerRunId),
+		);
+	}
+
+	cancelDebugRequestEffect(
+		repo: string,
+		requestId: string,
+		callerRunId?: string,
+	): Effect.Effect<DebugRequest, WorkflowRuntimeError, WorkflowStore> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const cancelled = yield* store.transaction(repo, (db) => {
+				const request = debugRequestById(db, requestId);
+				if (!request)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						`unknown debug request: ${requestId}`,
+					);
+				if (callerRunId !== undefined && request.callerRunId !== callerRunId)
+					throw new WorkflowRuntimeError(
+						"unauthorized",
+						`debug request ${requestId} belongs to another run`,
+					);
+				// A request that already reached a terminal status is final: the
+				// cancel answers with the row it has instead of failing a transition
+				// the caller cannot influence (the race a `debug_wait` timeout loses).
+				if (!isOpenDebugRequest(request.status)) return request;
+				const updated = updateDebugRequest(db, requestId, {
+					status: "cancelled",
+					finishedAt: nowIso(self.now),
+				});
+				const runId = request.debugRunId;
+				if (runId) {
+					db.query(
+						"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
+					).run(nowIso(self.now), runId);
+					// A claimed launch is marked for cancellation so its runner stops the
+					// conversation; one that has not been claimed is simply expired.
+					db.query(
+						"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',1) WHERE workflow_id=? AND status='running' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
+					).run(request.workflowId, runId);
+					db.query(
+						"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry') AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
+					).run(request.workflowId, runId);
+				}
+				return updated;
+			});
+			self.onCommitted(repo);
+			return cancelled;
+		});
+	}
+
+	/** Record that one request's report reached its caller's conversation. The
+	 * timestamp is the only thing written: the report and the request stay
+	 * readable whether or not it was delivered. */
+	recordDebugRequestDelivered(repo: string, requestId: string): DebugRequest {
+		return this.run(this.recordDebugRequestDeliveredEffect(repo, requestId));
+	}
+
+	recordDebugRequestDeliveredEffect(
+		repo: string,
+		requestId: string,
+	): Effect.Effect<DebugRequest, WorkflowRuntimeError, WorkflowStore> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const delivered = yield* store.transaction(repo, (db) => {
+				const request = debugRequestById(db, requestId);
+				if (!request)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						`unknown debug request: ${requestId}`,
+					);
+				if (request.deliveredAt) return request;
+				return updateDebugRequest(db, requestId, {
+					deliveredAt: nowIso(self.now),
+				});
+			});
+			self.onCommitted(repo);
+			return delivered;
+		});
+	}
+
+	/** The delegated run's own output contract, taken from the registered debug
+	 * investigation step so the run's artifact is parsed exactly as the debug
+	 * family parses it. */
+	private debugStepOutput(step: {
+		readonly output: { readonly id: string; readonly version: number };
+	}): { readonly id: string; readonly version: number } {
+		return { id: step.output.id, version: step.output.version };
 	}
 	previewRepairEffect(
 		repo: string,
@@ -1297,6 +1657,27 @@ export class WorkflowEngine {
 			this.registry,
 			this.now,
 		);
+		// A delegated debug side run hands off into the request's own lane: its
+		// report, its baseline comparison and the delivery to the caller, none of
+		// which the caller's current step has anything to do with.
+		if (
+			isDebugSideRun(
+				observedRun,
+				resolveDefinitionAt(
+					this.registry,
+					repo,
+					observed.definition.id,
+					observed.definition.version,
+					observed.definition.digest,
+				),
+			)
+		)
+			return this.prepareDebugRequestHandoff(
+				repo,
+				command,
+				observedRun,
+				observed,
+			);
 		const handoffWorktree =
 			observed.definition.id === "wiki-comments"
 				? wikiWorkflowDataRoot()
@@ -1409,6 +1790,79 @@ export class WorkflowEngine {
 			preparedHandoff.changedFiles = finalChangedFiles;
 		}
 		return { preparedHandoff, handoffWorktree };
+	}
+
+	/** The handoff evidence of one delegated debug run: the report, the files
+	 * that changed while it ran, and the staged report bytes. Read and staged
+	 * before the writer transaction, exactly like the debug family's own
+	 * artifacts. */
+	private prepareDebugRequestHandoff(
+		repo: string,
+		command: Extract<WorkflowCommand, { type: "agent.handoff" }>,
+		run: WorkflowRun,
+		snapshot: WorkflowSnapshot,
+	): {
+		preparedHandoff: PreparedHandoffEvidence;
+		handoffWorktree: string;
+	} {
+		const worktree = snapshot.metadata.worktree;
+		const request = this.debugRequestForRun(repo, run.id);
+		if (!request)
+			throw new WorkflowRuntimeError(
+				"stale-run",
+				`no debug request owns run ${run.id}`,
+			);
+		const touched = debugTouchedFiles(worktree, {
+			ref: request.baselineRef ?? "",
+			files: request.baselineFiles,
+		});
+		const changedFiles = touched.files;
+		const baselineUsable = touched.baselineUsable;
+		const preparedArtifact = prepareHandoffArtifact(
+			repo,
+			command,
+			this.now,
+			worktree,
+		);
+		if (!preparedArtifact)
+			return {
+				preparedHandoff: {
+					debugRequest: {
+						report: "",
+						changedFiles,
+						baselineUsable,
+						staged: [],
+					},
+				},
+				handoffWorktree: worktree,
+			};
+		// The report contract is parsed here, before the transaction, so a report
+		// missing a required heading is refused as an entry-guard failure rather
+		// than stored and rendered.
+		const step = debugInvestigation(this.registry).step;
+		const report = step.output.parse(preparedArtifact.output) as {
+			report: string;
+		};
+		const reportPath = debugRequestReportPath(snapshot, request.id);
+		const staged = stageDebugArtifactFiles(
+			[{ path: reportPath, content: `${report.report.trim()}\n` }],
+			command.runId,
+		);
+		return {
+			preparedHandoff: {
+				artifactDigest: preparedArtifact.digest,
+				artifactOutput: preparedArtifact.output,
+				debugRequest: {
+					report: report.report,
+					artifactDigest: preparedArtifact.digest,
+					changedFiles,
+					baselineUsable,
+					staged,
+				},
+				pendingArtifacts: staged,
+			},
+			handoffWorktree: worktree,
+		};
 	}
 
 	private commitDispatch(
@@ -2014,7 +2468,26 @@ export class WorkflowEngine {
 			return expireQuestion(db, snapshot, command, this.now);
 		if (command.type === "timer.question-expire")
 			return expireQuestionTimer(db, snapshot, command, this.now);
-		if (command.type === "agent.handoff")
+		if (command.type === "agent.handoff") {
+			// A delegated debug side run's handoff finishes its request instead of
+			// reducing through the caller's current step.
+			const handoffRun = db
+				.query("SELECT step_id,role FROM workflow_runs WHERE id=?")
+				.get(command.runId) as { step_id: string; role: string } | null;
+			if (
+				handoffRun &&
+				isDebugSideRun(
+					{ stepId: handoffRun.step_id, role: handoffRun.role },
+					definition,
+				)
+			)
+				return debugRequestHandoff(
+					db,
+					snapshot,
+					command,
+					this.now,
+					preparedHandoff?.debugRequest,
+				);
 			return agentHandoff(
 				db,
 				snapshot,
@@ -2024,6 +2497,7 @@ export class WorkflowEngine {
 				this.now,
 				preparedHandoff,
 			);
+		}
 		if (command.type === "agent.research-handoff")
 			return recordResearchHandoff(
 				db,

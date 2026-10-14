@@ -181,7 +181,13 @@ export type EffectKind =
 	/** Structural validation of the env-setup drafts plus a real start. */
 	| "environment.validate"
 	/** Atomic promotion of approved env-setup drafts, with rollback. */
-	| "environment.promote";
+	| "environment.promote"
+	/** Starts one delegated debug request's run: captures the baseline and
+	 * enqueues the run's own launch (add-debug-subagent-requests). */
+	| "debug.request.run"
+	/** Injects one finished debug request's report into its caller run's
+	 * conversation as a follow-up (add-debug-subagent-requests). */
+	| "debug.request.deliver";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
 	| JsonPrimitive
@@ -598,6 +604,9 @@ export interface Assignment {
 				/** Session content capture opt-in, forwarded from
 				 * `telemetry.capture_content`; absent when capture is off. */
 				HERDR_CAPTURE_CONTENT?: string;
+				/** The delegated debug request this run is investigating, on the run a
+				 * caller workflow started for it (add-debug-subagent-requests). */
+				HERDR_DEBUG_REQUEST_ID?: string;
 			}>
 	>;
 }

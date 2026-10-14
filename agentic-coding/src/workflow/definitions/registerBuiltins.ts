@@ -54,6 +54,11 @@ const EFFECTS: EffectKind[] = [
 	"environment.setup-guard",
 	"environment.validate",
 	"environment.promote",
+	// The delegated debug request lifecycle (add-debug-subagent-requests). Both
+	// are emitted outside a step's own contract: by the request command, and by
+	// the delegated run's handoff.
+	"debug.request.run",
+	"debug.request.deliver",
 ];
 const CAPABILITIES: AdapterCapability[] = [
 	"interactive",

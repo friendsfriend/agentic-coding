@@ -45,12 +45,14 @@ import { attachTelemetry, type EntryTiming } from "./telemetry.ts";
 import {
 	codingTools,
 	createAskJevExtension,
+	createDebugRequestExtension,
 	createPromptExtension,
 	createSearchExtension,
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
 	type RunContextLookup,
 	recordAbortedRunHandoff,
+	withoutDebugRequestTools,
 } from "./tools.ts";
 
 // pi-ai's default OAuth loaders hide imports from bundlers. Embed/register all
@@ -216,6 +218,10 @@ export class DurableHost {
 		 * read-only run names its tools explicitly, so all of them have to be listed
 		 * here or the prompt would name a tool the session never got. */
 		private readonly readOnlyTools: readonly ToolRegistration[],
+		/** Every workflow tool of a run with edit rights (the read-only set plus
+		 * the dialogue tools). A debug run names its tools explicitly, so it is
+		 * built from this list minus the delegated debug request tools. */
+		private readonly workflowTools: readonly ToolRegistration[],
 		/** The orchestrator extension, present only in orchestrator mode. */
 		private readonly orchestratorExtension: Extension | undefined,
 	) {}
@@ -227,8 +233,12 @@ export class DurableHost {
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
 		options: DurableHostOptions,
-	): readonly ToolRegistration[] {
-		registry.install(createWorkflowDialogueExtension(lookup));
+	): {
+		readonly readOnlyTools: readonly ToolRegistration[];
+		readonly workflowTools: readonly ToolRegistration[];
+	} {
+		const dialogue = createWorkflowDialogueExtension(lookup);
+		registry.install(dialogue);
 		const jev = createAskJevExtension(lookup);
 		registry.install(jev);
 		const search = createSearchExtension();
@@ -248,14 +258,25 @@ export class DurableHost {
 		// endpoints of the apps it holds — all of which a verifier needs.
 		const debug = createDebugExtension(lookup);
 		registry.install(debug);
+		// The delegated debug request tools ride every durable run except a
+		// `debug` run itself: the delegation has to be impossible from the role
+		// that answers requests, not merely discouraged
+		// (add-debug-subagent-requests).
+		const debugRequests = createDebugRequestExtension(lookup);
+		registry.install(debugRequests);
 		registry.install(createPromptExtension(options.globalAgentDir));
-		return [
+		const shared = [
 			...(jev.tools ?? []),
 			...(search.tools ?? []),
 			...(environment.tools ?? []),
 			...(browser.tools ?? []),
 			...(debug.tools ?? []),
+			...(debugRequests.tools ?? []),
 		];
+		return {
+			readOnlyTools: shared,
+			workflowTools: [...(dialogue.tools ?? []), ...shared],
+		};
 	}
 
 	private log(line: string): void {
@@ -282,8 +303,8 @@ export class DurableHost {
 			? createOrchestratorExtension(lookup)
 			: undefined;
 		if (orchestrator) registry.install(orchestrator);
-		const readOnlyTools = orchestrator
-			? []
+		const workflowTools = orchestrator
+			? { readOnlyTools: [], workflowTools: [] }
 			: DurableHost.installWorkflowExtensions(registry, lookup, options);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
@@ -344,7 +365,8 @@ export class DurableHost {
 			options,
 			models,
 			codemode?.tool,
-			readOnlyTools,
+			workflowTools.readOnlyTools,
+			workflowTools.workflowTools,
 			orchestrator,
 		);
 		host.instance = instance;
@@ -354,13 +376,23 @@ export class DurableHost {
 	async ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
 		const context = BACKGROUND_CONTEXT;
 		const key = input.name;
+		// The run's environment is read before the tool selection: the `debug`
+		// role is what withholds the delegated debug request tools, and it is
+		// named in the environment, not in the ensure request.
+		let envVars: Record<string, string> = {};
+		try {
+			envVars = parseRunEnvFile(fs.readFileSync(input.runEnvPath, "utf8"));
+		} catch {
+			/* a run without a readable run.env still launches, with an empty environment */
+		}
 		const map = await this.harness.snapshot(RunMapDoc, context);
 		const existingId = map?.runs[key]?.conversationId;
 		let conversation: Conversation | undefined = existingId
 			? await this.harness.conversation(existingId as ConversationId, context)
 			: undefined;
 		const readOnly = input.toolPolicy === "read-only";
-		const toolSelection = this.toolSelectionFor(input.toolPolicy);
+		const debugRun = envVars.HERDR_ROLE === "debug";
+		const toolSelection = this.toolSelectionFor(input.toolPolicy, debugRun);
 		if (!conversation) {
 			conversation = await this.harness.createConversation(
 				{
@@ -389,12 +421,6 @@ export class DurableHost {
 			);
 		} else {
 			await conversation.configure({ cwd: input.cwd }, context);
-		}
-		let envVars: Record<string, string> = {};
-		try {
-			envVars = parseRunEnvFile(fs.readFileSync(input.runEnvPath, "utf8"));
-		} catch {
-			/* a run without a readable run.env still launches, with an empty environment */
 		}
 		const runContext: DurableRunContext = {
 			runId: input.runId,
@@ -439,7 +465,7 @@ export class DurableHost {
 	/** The explicit tool list for a policy, or undefined for the full default
 	 * selection. A policy the host's mode cannot serve is refused, so a workflow
 	 * run never lands on an orchestrator host or the other way around. */
-	private toolSelectionFor(policy: ToolPolicy) {
+	private toolSelectionFor(policy: ToolPolicy, debugRun = false) {
 		if (this.orchestratorExtension) {
 			if (policy !== "orchestrator")
 				throw new Error("this host only serves the orchestrator session");
@@ -453,17 +479,28 @@ export class DurableHost {
 		}
 		if (policy === "orchestrator")
 			throw new Error("the orchestrator policy needs an orchestrator host");
-		return policy === "read-only" ? this.readOnlyToolSelection() : undefined;
+		if (policy === "read-only") return this.readOnlyToolSelection(debugRun);
+		// A debug run's tool list is explicit for one reason: the default
+		// selection would offer the delegated debug request tools, and a debug
+		// run must not delegate another request.
+		if (!debugRun) return undefined;
+		return [
+			...codingTools(false),
+			...withoutDebugRequestTools(this.workflowTools),
+			...(this.codemodeTool ? [this.codemodeTool] : []),
+		];
 	}
 
-	private readOnlyToolSelection() {
+	private readOnlyToolSelection(debugRun = false) {
 		// codemode stays offered to a read-only run (its script can only reach the
 		// tools this selection names, so `write`/`edit` remain unreachable), and
 		// with it the search and in-session judgment tools a verifier's review
 		// leans on.
 		return [
 			...codingTools(true),
-			...this.readOnlyTools,
+			...(debugRun
+				? withoutDebugRequestTools(this.readOnlyTools)
+				: this.readOnlyTools),
 			...(this.codemodeTool ? [this.codemodeTool] : []),
 		];
 	}

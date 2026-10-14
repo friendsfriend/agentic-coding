@@ -25,6 +25,8 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { DEBUG_ROLE } from "../steps/debug.ts";
+import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
 import {
 	canonicalStorePath,
 	guardStoreFile,
@@ -51,6 +53,8 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"environment.setup-guard",
 	"environment.validate",
 	"environment.promote",
+	"debug.request.run",
+	"debug.request.deliver",
 ]);
 
 export function nowIso(now: () => Date): string {
@@ -86,13 +90,19 @@ export function tableExists(db: Database, name: string): boolean {
 	);
 }
 
-export const STORE_SCHEMA_VERSION = 5;
+export const STORE_SCHEMA_VERSION = 6;
 
 /** The content-addressed custom workflow definitions (store v5). The table is
  * additive: it is created by the v4 -> v5 migration and never read by a
  * read-only observation of an older store. */
 const DEFINITIONS_DDL =
 	"CREATE TABLE IF NOT EXISTS workflow_definitions(digest TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL CHECK(version = 1), manifest_json TEXT NOT NULL, origin_json TEXT NOT NULL, created_at TEXT NOT NULL)";
+
+/** The delegated debug requests (store v6). The table is additive: it is
+ * created by the v5 -> v6 migration and never read by a read-only observation
+ * of an older store. */
+const DEBUG_REQUESTS_DDL =
+	"CREATE TABLE IF NOT EXISTS debug_requests(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), caller_run_id TEXT NOT NULL, caller_role TEXT NOT NULL, goal TEXT NOT NULL, context TEXT, apps_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')), debug_run_id TEXT, baseline_ref TEXT, baseline_files_json TEXT, report_path TEXT, changed_files_json TEXT, created_at TEXT NOT NULL, finished_at TEXT, delivered_at TEXT)";
 
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -102,6 +112,7 @@ CREATE TABLE IF NOT EXISTS workflow_outbox(id TEXT PRIMARY KEY, workflow_id TEXT
 CREATE TABLE IF NOT EXISTS workflow_security_audit(id TEXT PRIMARY KEY, workflow_id TEXT, kind TEXT NOT NULL, subject TEXT, diagnostic TEXT NOT NULL, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workflow_migration_diagnostics(change_id TEXT PRIMARY KEY, repository TEXT NOT NULL, diagnostic TEXT NOT NULL, source_json TEXT, created_at TEXT NOT NULL);
 ${DEFINITIONS_DDL};
+${DEBUG_REQUESTS_DDL};
 CREATE INDEX IF NOT EXISTS workflow_runs_workflow_status ON workflow_runs(workflow_id,status);
 CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_attempt_at,lease_expires_at);
 `;
@@ -117,7 +128,15 @@ const REQUIRED_TABLES = [
 /** The v5 definition table. It is optional for shape validation because a v4
  * store predates it; its absence is exactly what the v4 -> v5 migration adds. */
 const DEFINITIONS_TABLE = "workflow_definitions";
-const KNOWN_TABLES = [...REQUIRED_TABLES, DEFINITIONS_TABLE];
+/** The v6 debug-request table. Optional for shape validation for the same
+ * reason: a v5 store predates it, and its absence is exactly what the v5 -> v6
+ * migration adds. */
+const DEBUG_REQUESTS_TABLE = "debug_requests";
+const KNOWN_TABLES = [
+	...REQUIRED_TABLES,
+	DEFINITIONS_TABLE,
+	DEBUG_REQUESTS_TABLE,
+];
 const CURRENT_COLUMNS: Record<string, string[]> = {
 	workflow_instances: [
 		"id",
@@ -201,6 +220,24 @@ const CURRENT_COLUMNS: Record<string, string[]> = {
 		"manifest_json",
 		"origin_json",
 		"created_at",
+	],
+	debug_requests: [
+		"id",
+		"workflow_id",
+		"caller_run_id",
+		"caller_role",
+		"goal",
+		"context",
+		"apps_json",
+		"status",
+		"debug_run_id",
+		"baseline_ref",
+		"baseline_files_json",
+		"report_path",
+		"changed_files_json",
+		"created_at",
+		"finished_at",
+		"delivered_at",
 	],
 };
 
@@ -354,7 +391,20 @@ function ignorableTables(db: Database, names: Set<string>): Set<string> {
 		[...names].filter((name) => !allowed.has(name) && !tableHasRows(db, name)),
 	);
 }
-function validateCanonicalShape(db: Database, allowHistorical = false): void {
+/** Validate a store's canonical shape.
+ *
+ * `allowHistorical` tolerates the additively-introduced objects a store of an
+ * older version legitimately lacks (the v5 definition table, the v6
+ * debug-request table) and the pre-v3 legacy shapes. `compareObjects` additionally
+ * compares the store's `sqlite_master` objects against the current reference DDL,
+ * which is only valid for a store at the current version: an intermediate
+ * migration step legitimately lacks indexes a later step recreates. Structural
+ * checks (columns, types, primary keys, constraints, foreign keys) always run. */
+function validateCanonicalShape(
+	db: Database,
+	allowHistorical = false,
+	compareObjects = true,
+): void {
 	const instanceSql = tableSql(db, "workflow_instances");
 	const legacyIdentity = /CHANGE_ID\s+TEXT\s+NOT\s+NULL\s+UNIQUE/.test(
 		instanceSql,
@@ -363,6 +413,10 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 	// difference the historical classification may step over.
 	const legacyDefinitions =
 		allowHistorical && !tableExists(db, DEFINITIONS_TABLE);
+	// A v5 store predates the debug-request table, exactly as a v4 store predates
+	// the definition table.
+	const legacyDebugRequests =
+		allowHistorical && !tableExists(db, DEBUG_REQUESTS_TABLE);
 	const legacyChildren = [
 		"workflow_runs",
 		"workflow_events",
@@ -394,7 +448,7 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 				sql: object.sql?.replace(/\s+/g, " ").toUpperCase() ?? null,
 			}));
 		const actualObjects = objects(db);
-		const expectedObjects = objects(reference);
+		const expectedObjects = compareObjects ? objects(reference) : [];
 		// An empty table from another feature (or another build) is not part of
 		// the schema under validation, so neither it nor its indexes take part in
 		// the object comparison. A table with rows stays in and fails the set
@@ -420,28 +474,47 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			);
 		const objectKey = (object: ReturnType<typeof objects>[number]) =>
 			`${object.type}:${object.name}`;
-		const actualKeys = compared.map(objectKey);
-		const expectedKeys = expectedObjects
-			.filter(
-				(object) =>
-					!(
-						legacyDefinitions &&
-						object.type === "table" &&
-						object.name === DEFINITIONS_TABLE
-					),
-			)
-			.map(objectKey);
+		// An intermediate migration step is checked structurally only: its own
+		// version legitimately lacks objects a later step adds (the v1 -> v2 step has
+		// no run-status index yet), so the object comparison belongs to the step
+		// that lands on the current schema.
+		const actualKeys = compareObjects ? compared.map(objectKey) : [];
+		const expectedKeys = compareObjects
+			? expectedObjects
+					.filter(
+						(object) =>
+							!(
+								legacyDefinitions &&
+								object.type === "table" &&
+								object.name === DEFINITIONS_TABLE
+							),
+					)
+					.map(objectKey)
+			: [];
 		if (legacyObject && !expectedKeys.includes("table:workflows"))
 			expectedKeys.push("table:workflows");
+		// A historical store may legitimately lack either additive table.
+		for (const [absent, table] of [
+			[legacyDefinitions, DEFINITIONS_TABLE],
+			[legacyDebugRequests, DEBUG_REQUESTS_TABLE],
+		] as const)
+			if (absent) {
+				const index = expectedKeys.indexOf(`table:${table}`);
+				if (index >= 0) expectedKeys.splice(index, 1);
+			}
 		expectedKeys.sort();
 		if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys))
 			throw new WorkflowRuntimeError(
 				"migration-required",
 				"unsupported unversioned schema objects",
 			);
-		for (const table of [...REQUIRED_TABLES, DEFINITIONS_TABLE]) {
-			// A real v4 store predates the definition table.
+		for (const table of compareObjects
+			? [...REQUIRED_TABLES, DEFINITIONS_TABLE, DEBUG_REQUESTS_TABLE]
+			: []) {
+			// A real v4 store predates the definition table, a v5 store the
+			// debug-request table.
 			if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
+			if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 			const expectedSql = tableSql(reference, table);
 			const actualSql = tableSql(db, table);
 			const normalizedMigratedRunSql = actualSql
@@ -580,10 +653,29 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			origin_json: "TEXT",
 			created_at: "TEXT",
 		},
+		debug_requests: {
+			id: "TEXT",
+			workflow_id: "TEXT",
+			caller_run_id: "TEXT",
+			caller_role: "TEXT",
+			goal: "TEXT",
+			context: "TEXT",
+			apps_json: "TEXT",
+			status: "TEXT",
+			debug_run_id: "TEXT",
+			baseline_ref: "TEXT",
+			baseline_files_json: "TEXT",
+			report_path: "TEXT",
+			changed_files_json: "TEXT",
+			created_at: "TEXT",
+			finished_at: "TEXT",
+			delivered_at: "TEXT",
+		},
 	};
 	for (const [table, expected] of Object.entries(types)) {
-		// The v5 definition table is absent from a v4 store.
+		// The two additive tables are absent from a store that predates them.
 		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
+		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		const info = db.query(`PRAGMA table_info(${table})`).all() as Array<{
 			name: string;
 			type: string;
@@ -631,9 +723,11 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 		["workflow_security_audit", "id"],
 		["workflow_migration_diagnostics", "change_id"],
 		["workflow_definitions", "digest"],
+		["debug_requests", "id"],
 	];
 	for (const [table, ...names] of primaryKeys) {
 		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
+		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		const actual = (
 			db.query(`PRAGMA table_info(${table})`).all() as Array<{
 				name: string;
@@ -667,10 +761,13 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			/CHECK\s*\(STATUS\s+IN\s*\('PENDING','RUNNING','RETRY','COMPLETED','FAILED','EXPIRED'\)\)/,
 		],
 		workflow_definitions: [/CHECK\s*\(VERSION\s*=\s*1\)/],
+		debug_requests: [
+			/CHECK\s*\(STATUS\s+IN\s*\('QUEUED','RUNNING','DONE','FAILED','CANCELLED'\)\)/,
+		],
 	};
 	for (const [table, rules] of Object.entries(signatures)) {
-		// A real v4 store predates the definition table.
 		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
+		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		if (rules.some((rule) => !rule.test(tableSql(db, table))))
 			throw new WorkflowRuntimeError(
 				"migration-required",
@@ -696,18 +793,22 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 				`unsupported foreign key in ${table}`,
 			);
 	}
-	for (const [table, index, expectedColumns] of [
-		[
-			"workflow_runs",
-			"workflow_runs_workflow_status",
-			["workflow_id", "status"],
-		],
-		[
-			"workflow_outbox",
-			"workflow_outbox_ready",
-			["status", "next_attempt_at", "lease_expires_at"],
-		],
-	] as const) {
+	// The two canonical indexes are recreated by the v3 -> v4 step, so an earlier
+	// intermediate step legitimately does not carry them yet.
+	for (const [table, index, expectedColumns] of (compareObjects
+		? [
+				[
+					"workflow_runs",
+					"workflow_runs_workflow_status",
+					["workflow_id", "status"],
+				],
+				[
+					"workflow_outbox",
+					"workflow_outbox_ready",
+					["status", "next_attempt_at", "lease_expires_at"],
+				],
+			]
+		: []) as ReadonlyArray<readonly [string, string, readonly string[]]>) {
 		const indexes = db.query(`PRAGMA index_list(${table})`).all() as Array<{
 			name: string;
 		}>;
@@ -775,8 +876,11 @@ function classifyUnversioned(db: Database): number {
 		);
 	validateCanonicalShape(db, true);
 	const hasDefinitions = names.has(DEFINITIONS_TABLE);
+	const hasDebugRequests = names.has(DEBUG_REQUESTS_TABLE);
 	for (const [table, expected] of Object.entries(CURRENT_COLUMNS)) {
-		if (table === DEFINITIONS_TABLE && !hasDefinitions) continue;
+		// An additive table its predecessor predates is simply absent here; the
+		// migration that adds it is chosen from the inferred version below.
+		if (!names.has(table)) continue;
 		const actual = columns(db, table);
 		const missing = expected.filter((column) => !actual.has(column));
 		const supportedMissing =
@@ -821,9 +925,13 @@ function classifyUnversioned(db: Database): number {
 	);
 	if (/change_id\s+TEXT\s+NULL/i.test(instanceSql) && !hasLegacyChild) {
 		foreignKeyCheck(db);
-		// An unversioned store that already carries the definition table is
-		// adopted at v5 instead of being migrated through v4.
-		return hasDefinitions ? STORE_SCHEMA_VERSION : 4;
+		// The version is inferred from the additive tables the store carries: the
+		// definition table arrived at v5, the debug-request table at v6. A store
+		// that carries neither is a v4 store and is migrated through both steps,
+		// so an unversioned store is never adopted at a version whose schema it
+		// does not have.
+		if (!hasDefinitions) return 4;
+		return hasDebugRequests ? STORE_SCHEMA_VERSION : 5;
 	}
 	return 2;
 }
@@ -920,6 +1028,13 @@ function migrateVersion(db: Database, from: number): void {
 		foreignKeyCheck(db);
 		return;
 	}
+	if (from === 5) {
+		// Additive v6: the delegated debug requests
+		// (add-debug-subagent-requests).
+		db.exec(DEBUG_REQUESTS_DDL);
+		foreignKeyCheck(db);
+		return;
+	}
 	throw new WorkflowRuntimeError(
 		"unsupported-version",
 		`unsupported workflow store version: ${from}`,
@@ -983,9 +1098,17 @@ export function initializeStore(repo: string): void {
 				}
 				migrateVersion(db, observed);
 				// The store must not be version-bumped into a shape this build then
-				// rejects: validate the final migration's result before committing it,
-				// so a rejected store stays byte-identical at its old version.
+				// rejects: validate every migration's result before committing it, so
+				// a rejected store stays byte-identical at its old version. The last
+				// step validates the current schema strictly; an earlier step validates
+				// against the shape its own version has, which is what tolerates the
+				// additive tables a later step introduces.
 				if (observed + 1 === STORE_SCHEMA_VERSION) validateCanonicalShape(db);
+				// An intermediate step is validated structurally: its own version
+				// legitimately lacks the objects a later step adds (the v1 -> v2 step
+				// has no run-status index yet), so the object comparison belongs to the
+				// step that lands on the current schema.
+				else validateCanonicalShape(db, true, false);
 				setPragmaVersion(db, observed + 1);
 				foreignKeyCheck(db);
 				db.exec("COMMIT");
@@ -1291,6 +1414,10 @@ export function deleteWorkflowRows(db: Database, id: string): number {
 	}
 	db.query("DELETE FROM workflow_events WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_runs WHERE workflow_id=?").run(id);
+	// A legacy store opened before the v6 migration owns no debug-request table
+	// yet; its rows cannot exist, so the delete is skipped rather than failing.
+	if (tableExists(db, "debug_requests"))
+		db.query("DELETE FROM debug_requests WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_outbox WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_security_audit WHERE workflow_id=?").run(id);
 	return Number(
@@ -1453,6 +1580,35 @@ export function actions(
 			}) ?? []
 	);
 }
+/** Whether a run is a workflow's delegated debug side run
+ * (add-debug-subagent-requests). Such a run is created beside the caller's
+ * step: it runs the `debug` family's investigation step under the `debug`
+ * role, is deliberately **not** part of `snapshot.step.activeRunIds`, and never
+ * advances the caller's step. The routing, active-run and handoff invariants
+ * below are the step machinery's, so they do not apply to it.
+ *
+ * The definition is what tells the two apart: a `debug` workflow's own
+ * investigation run executes a `debug.investigate` step its definition
+ * declares, while a delegated side run executes that step for a definition that
+ * does not declare it at all. */
+export function isDebugSideRun(
+	run: { stepId: string; role: string },
+	definition: { steps: readonly string[] },
+): boolean {
+	return (
+		run.role === DEBUG_ROLE &&
+		run.stepId === DEBUG_INVESTIGATE_STEP &&
+		!definition.steps.includes(run.stepId)
+	);
+}
+
+/** The two lifecycle effects a debug request emits. They are enqueued by the
+ * CLI command and by the delegated run's handoff at whatever step the caller
+ * workflow happens to be in, exactly like `environment.teardown`. */
+export function isDebugRequestEffect(kind: string): boolean {
+	return kind === "debug.request.run" || kind === "debug.request.deliver";
+}
+
 export function validateStructure(
 	snapshot: WorkflowSnapshot,
 	definition: CompiledWorkflowDefinition,
@@ -1470,6 +1626,9 @@ export function validateStructure(
 		// completed/expired runs retain their original profile as historical
 		// evidence; only runs that can still execute must match current routing.
 		if (!ACTIVE_RUN.has(run.status)) continue;
+		// A delegated debug side run is not routed by the caller's step table: it
+		// runs a foreign step (debug.investigate) under its own role.
+		if (isDebugSideRun(run, definition)) continue;
 		const route = snapshot.routing.routes.find(
 			(item) =>
 				item.stepId === run.stepId &&
@@ -1546,6 +1705,7 @@ export function validateEffect(
 		runId?: unknown;
 		questionId?: unknown;
 		cancelRequested?: unknown;
+		debugRequestId?: unknown;
 	};
 	const allowed = registry
 		.stepForDefinition(definition, snapshot.currentStep)
@@ -1581,7 +1741,11 @@ export function validateEffect(
 	// the current step's `allowedEffects` would refuse the row — and, at claim
 	// time, break the drain of the whole store rather than the one effect.
 	const stepIndependent =
-		row.kind === "agent.stop" || row.kind === "environment.teardown";
+		row.kind === "agent.stop" ||
+		row.kind === "environment.teardown" ||
+		// The debug-request lifecycle is emitted by the CLI and by the delegated
+		// run's own handoff, neither of which moves the caller's step.
+		isDebugRequestEffect(row.kind);
 	if (
 		!allowed &&
 		!declaredInbound &&
@@ -1609,10 +1773,18 @@ export function validateEffect(
 			);
 		const cancelledLaunch =
 			row.kind === "agent.launch" && payload.cancelRequested === true;
+		// A delegated debug side run addresses a run that is deliberately outside
+		// the caller's step machinery, so the active-run/current-step invariants
+		// are the wrong question for it; the run's own existence and status are.
+		const debugSideRun =
+			row.kind === "agent.launch" &&
+			Boolean(run && isDebugSideRun(run, definition)) &&
+			payload.debugRequestId !== undefined;
 		if (
 			!run ||
 			(!consultTarget &&
 				!cancelledLaunch &&
+				!debugSideRun &&
 				(!ACTIVE_RUN.has(run.status) ||
 					!snapshot.step.activeRunIds.includes(run.id) ||
 					run.stepId !== snapshot.currentStep))

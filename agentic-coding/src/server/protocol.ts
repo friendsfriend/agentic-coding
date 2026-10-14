@@ -678,6 +678,9 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "developer-review-findings", domain: "workflow" },
 	{ kind: "repair-preview", domain: "workflow" },
 	{ kind: "evidence", domain: "evidence" },
+	// The delegated debug requests of one workflow: they are durable workflow
+	// rows, so they belong to the workflow domain.
+	{ kind: "debug-requests", domain: "workflow" },
 ];
 
 /** Decode a request body through its schema, throwing `ContractFailure`.

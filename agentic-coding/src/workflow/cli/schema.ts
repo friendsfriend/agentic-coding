@@ -23,6 +23,10 @@ export const SUBCOMMANDS: readonly string[] = [
 	"agent-extension",
 	"wiki",
 	"sidebar",
+	"debug-request",
+	"debug-result",
+	"debug-wait",
+	"debug-cancel",
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
 	start: ["workflow-id"],
@@ -39,6 +43,10 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	answer: ["question-id", "answer", "nonce"],
 	"research-handoff": ["subject", "directives"],
 	sidebar: ["repo"],
+	"debug-request": ["goal"],
+	"debug-result": ["request-id"],
+	"debug-wait": ["request-id"],
+	"debug-cancel": ["request-id"],
 };
 export const AGENT_EXTENSION_SUBCOMMANDS = [
 	"list",
@@ -132,6 +140,16 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	sidebar: { values: ["repo"], booleans: ["disable"], positionals: [0, 0] },
+	"debug-request": {
+		values: ["goal", "context", "apps"],
+		positionals: [0, 0],
+	},
+	"debug-result": { values: ["request-id"], positionals: [0, 0] },
+	"debug-wait": {
+		values: ["request-id", "timeout-sec"],
+		positionals: [0, 0],
+	},
+	"debug-cancel": { values: ["request-id"], positionals: [0, 0] },
 	projects: { values: [], positionals: [0, 0] },
 	"sessions-report": { values: ["since"], positionals: [0, 0] },
 	config: { values: [], positionals: [0, 0] },

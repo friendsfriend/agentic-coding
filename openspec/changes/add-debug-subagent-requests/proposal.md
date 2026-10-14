@@ -25,8 +25,10 @@ approve it.
   forbidden.
 - **Handoff guard:** a caller cannot hand off while it has open requests unless
   it cancels them.
-- Shared-worktree convention in both prompts; the result lists files the debug
-  run touched with their diff.
+- Shared-worktree convention in both prompts; the result lists the files that
+  changed while the request ran (labelled "debug or caller", because the two
+  cannot be told apart), and says so when the baseline could not measure tracked
+  changes.
 - Read-only TUI view: dashboard "Debug requests" list (caller role, goal,
   status, duration) opening the report and the request's evidence. No actions.
 
