@@ -561,6 +561,42 @@ describe("deployment plan and status (Go status_logs_test.go fixture)", () => {
 		]);
 	});
 
+	test("a replica count is written to the target's Helm value path", () => {
+		const withReplicas = (input: {
+			replicas?: number;
+			replicasValuePath?: string;
+		}): string[] =>
+			planKubernetesDeployment({
+				runner: DOCKER,
+				name: "api",
+				namespace: "apps",
+				release: "api",
+				chart: "./chart",
+				values: ["./values.yaml"],
+				images: [],
+				secrets: [],
+				...input,
+			}).commands.map(argv);
+
+		// No count asked for: the chart's own default applies, so no `--set`.
+		expect(withReplicas({})).toEqual([
+			"kind get clusters",
+			"helm --kube-context kind-devenv upgrade --install api ./chart --namespace apps --create-namespace --values ./values.yaml",
+		]);
+		// The default value path, and the target's own one when it configures it.
+		expect(withReplicas({ replicas: 3 })[1]).toBe(
+			"helm --kube-context kind-devenv upgrade --install api ./chart --namespace apps --create-namespace --values ./values.yaml --set replicaCount=3",
+		);
+		expect(
+			withReplicas({ replicas: 2, replicasValuePath: "web.replicas" })[1],
+		).toBe(
+			"helm --kube-context kind-devenv upgrade --install api ./chart --namespace apps --create-namespace --values ./values.yaml --set web.replicas=2",
+		);
+		// A count below one is not a replica count: the plan refuses it instead of
+		// installing a chart with `0` replicas.
+		expect(() => withReplicas({ replicas: 0 })).toThrow(/positive integer/);
+	});
+
 	test("the deployment plan loads images, applies secrets, upgrades and waits", () => {
 		const secrets = buildSecretPlans(
 			DOCKER,

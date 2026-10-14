@@ -143,8 +143,20 @@ export const acquireSlotsRequestSchema = Schema.Struct({
 		),
 	),
 	/** Narrow the runtime the owner asked for (`docker`, `shell`,
-	 * `systemshell`); an unavailable one is refused rather than substituted. */
+	 * `systemshell`, `kubernetes`); an unavailable one is refused rather than
+	 * substituted. */
 	runtime: Schema.optional(safeInstanceText),
+	/** Replica count of a Kubernetes start (`add-kubernetes-run-replicas`):
+	 * applied through the target's Helm value path, and refused for any other
+	 * runtime rather than silently started as a single copy. */
+	replicas: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value >= 1, {
+				message: () => "replicas must be an integer of at least 1",
+			}),
+			Schema.lessThanOrEqualTo(100),
+		),
+	),
 });
 
 /**
@@ -221,6 +233,17 @@ export const agentEnvironmentAcquireSchema = Schema.Struct({
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
 	runtime: Schema.optional(safeInstanceText),
+	/** The replica count of a Kubernetes run; the server refuses it for any other
+	 * runtime, so a request that needs concurrency is never silently started
+	 * once. */
+	replicas: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value >= 1, {
+				message: () => "replicas must be an integer of at least 1",
+			}),
+			Schema.lessThanOrEqualTo(100),
+		),
+	),
 	waitSec: Schema.optional(
 		Schema.Number.pipe(
 			Schema.filter((value) => Number.isFinite(value) && value >= 0, {

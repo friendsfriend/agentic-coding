@@ -126,14 +126,14 @@ const EnvStartParameters = Type.Object({
 	runtime: Type.Optional(
 		Type.String({
 			description:
-				"Start only this runtime: docker, shell or systemshell. Docker is the default choice.",
+				"Start only this runtime: docker, shell, systemshell or kubernetes. Docker is the default choice; `kubernetes` is the opt-in path for a problem that needs several replicas.",
 		}),
 	),
 	replicas: Type.Optional(
 		Type.Integer({
 			minimum: 1,
 			description:
-				"An app runs once at a time; only 1 is supported and anything else is refused",
+				'Replica count of a Kubernetes run; it needs `runtime: "kubernetes"` (or a Kubernetes target) and is refused for any other runtime. Use it only when the problem depends on more than one replica: the cluster run is the slow, opt-in path.',
 		}),
 	),
 	timeoutSec: Type.Optional(
@@ -316,6 +316,7 @@ export function createEnvironmentExtension(
 					"Start every app this run needs for the workflow, and block until the server has started them all.",
 					"Name every app you need in one call: the server grants them together and can tell a deadlock from a wait.",
 					'Prefer Docker (a compose/container target); ask for `runtime: "shell"` only when the app has no container target and runs as a plain process. One copy of an app runs at a time whatever the runtime, so a second copy is never available.',
+					'Ask for `runtime: "kubernetes"` with `replicas` only when the problem depends on more than one replica (locking, caching, scheduled jobs, session affinity): the cluster run is the slow, opt-in path, and it fails with `cluster-unavailable` when the cluster does not exist rather than creating one.',
 					"While an app is held by another workflow this call waits in the queue and reports its position and holder; it returns `still-waiting` with the position once `timeoutSec` elapses — call it again to keep the position. `released-by-developer` means the developer took the app back; `deadlock` means two workflows hold what the other needs — stop an app you hold that the other is waiting for (`env_list` names the holders) and call again, because repeating the same call deadlocks again immediately.",
 					"Stop the apps you started when you are done: another workflow may be waiting for them.",
 				].join(" "),
@@ -323,10 +324,6 @@ export function createEnvironmentExtension(
 				execute: async (args, api, context) => {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("env_start: run context unavailable");
-					if (args.replicas !== undefined && args.replicas !== 1)
-						return failure(
-							"env_start: an app runs once at a time, so replicas is not supported; ask for the app without replicas",
-						);
 					const apps =
 						typeof args.apps === "string" ? [args.apps] : [...args.apps];
 					if (apps.length === 0)
@@ -363,6 +360,9 @@ export function createEnvironmentExtension(
 										...(args.target ? { target: args.target } : {}),
 										...(args.profile ? { profile: args.profile } : {}),
 										...(args.runtime ? { runtime: args.runtime } : {}),
+										...(args.replicas === undefined
+											? {}
+											: { replicas: args.replicas }),
 										waitSec,
 									},
 								},

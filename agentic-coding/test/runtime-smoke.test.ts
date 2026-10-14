@@ -19,6 +19,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
 	containerNameMatches,
 	type DockerClient,
@@ -134,6 +137,49 @@ async function containerPrerequisites(): Promise<
 
 interface ClusterFixture {
 	kubectl: (...args: string[]) => Promise<string>;
+	helm: (...args: string[]) => Promise<string>;
+	/** Whether a Helm CLI answered; the replica fixture needs one. */
+	helmReady: boolean;
+}
+
+/**
+ * A chart whose only interesting value is the replica count. The fixture never
+ * pulls an image, so the assertions are about the rendered `.spec.replicas`
+ * rather than about pods becoming ready.
+ */
+function writeReplicaChart(dir: string): void {
+	fs.mkdirSync(path.join(dir, "templates"), { recursive: true });
+	fs.writeFileSync(
+		path.join(dir, "Chart.yaml"),
+		"apiVersion: v2\nname: devenv-smoke\nversion: 0.1.0\n",
+	);
+	fs.writeFileSync(path.join(dir, "values.yaml"), "replicaCount: 1\n");
+	fs.writeFileSync(
+		path.join(dir, "templates", "deployment.yaml"),
+		[
+			"apiVersion: apps/v1",
+			"kind: Deployment",
+			"metadata:",
+			"  name: {{ .Release.Name }}-web",
+			"  labels:",
+			"    app.kubernetes.io/instance: {{ .Release.Name }}",
+			"spec:",
+			"  replicas: {{ .Values.replicaCount }}",
+			"  selector:",
+			"    matchLabels:",
+			"      app: {{ .Release.Name }}",
+			"  template:",
+			"    metadata:",
+			"      labels:",
+			"        app: {{ .Release.Name }}",
+			"    spec:",
+			"      containers:",
+			"        - name: web",
+			"          image: alpine:3.20",
+			'          command: ["sleep", "3600"]',
+			"",
+		].join("\n"),
+	);
 }
 
 async function clusterPrerequisites(): Promise<
@@ -172,9 +218,17 @@ async function clusterPrerequisites(): Promise<
 			throw new Error(result.stderr.trim() || result.error.message);
 		return result.stdout;
 	};
+	const helm = async (...args: string[]): Promise<string> => {
+		const result = await exec(runner.helm(...args));
+		if (result.error)
+			throw new Error(result.stderr.trim() || result.error.message);
+		return result.stdout;
+	};
 	return {
 		ok: true,
 		kubectl,
+		helm,
+		helmReady: toolReady("helm", ["version", "--short"]),
 	};
 }
 
@@ -185,6 +239,8 @@ const cluster = await clusterPrerequisites();
 // separately from executed passes; the reason is logged for a human reader.
 if (!containers.ok) console.log(`skip: ${containers.reason}`);
 if (!cluster.ok) console.log(`skip: ${cluster.reason}`);
+else if (!cluster.helmReady)
+	console.log("skip: helm is not available for the replica fixture");
 
 describe("container smoke fixture (task 4.2)", () => {
 	test.skipIf(!containers.ok)(
@@ -330,6 +386,66 @@ describe("Kubernetes smoke fixture (task 4.3)", () => {
 			} finally {
 				// Only the namespace this run created is deleted.
 				await kubectl("delete", "namespace", namespace, "--ignore-not-found");
+			}
+		},
+		180_000,
+	);
+
+	test.skipIf(!cluster.ok || !cluster.helmReady)(
+		"a requested replica count reaches the chart and the release is removed again",
+		async () => {
+			if (!cluster.ok || !cluster.helmReady)
+				throw new Error(
+					`prerequisites unavailable: ${cluster.ok ? "helm is not available" : cluster.reason}`,
+				);
+			const { kubectl, helm } = cluster;
+			const namespace = `devenv-smoke-replicas-${RUN_ID}`;
+			const release = `devenv-smoke-${RUN_ID}`;
+			const chart = fs.mkdtempSync(
+				path.join(os.tmpdir(), "devenv-smoke-chart-"),
+			);
+			writeReplicaChart(chart);
+			try {
+				// The replica count of a Kubernetes run is a Helm value: this is the
+				// argv the start produces, against a real cluster.
+				await helm(
+					"upgrade",
+					"--install",
+					release,
+					chart,
+					"--namespace",
+					namespace,
+					"--create-namespace",
+					"--set",
+					"replicaCount=2",
+				);
+				const rendered = await kubectl(
+					"get",
+					"deployment",
+					`${release}-web`,
+					"--namespace",
+					namespace,
+					"-o",
+					"jsonpath={.spec.replicas}",
+				);
+				expect(rendered.trim()).toBe("2");
+			} finally {
+				// Only the release and namespace this fixture created are removed.
+				await helm(
+					"uninstall",
+					release,
+					"--namespace",
+					namespace,
+					"--ignore-not-found",
+				);
+				await kubectl(
+					"delete",
+					"namespace",
+					namespace,
+					"--ignore-not-found",
+					"--wait=false",
+				);
+				fs.rmSync(chart, { recursive: true, force: true });
 			}
 		},
 		180_000,

@@ -93,6 +93,82 @@ function scriptFixture(root: string) {
 	return { configDir, checkout, sourcePath };
 }
 
+/**
+ * A Kubernetes run target of `shop` (`config/apps/k8s/shop/devenv.k8s.json`),
+ * with its own release, namespace, value path and port-forward.
+ */
+function kubernetesFixture(
+	configDir: string,
+	options: { replicasValuePath?: string } = {},
+) {
+	const appDir = path.join(configDir, "apps", "k8s", "shop");
+	const chartDir = path.join(appDir, "chart");
+	fs.mkdirSync(chartDir, { recursive: true });
+	fs.writeFileSync(path.join(chartDir, "Chart.yaml"), "name: shop\n");
+	fs.writeFileSync(
+		path.join(appDir, "values.yaml"),
+		"service:\n  port: 3000\n",
+	);
+	fs.writeFileSync(
+		path.join(appDir, "devenv.k8s.json"),
+		JSON.stringify({
+			targets: [
+				{
+					// A profile of its own: the chart-directory target discovery adds is
+					// `local`, and this config is the one under test.
+					profile: "kind",
+					name: "Kubernetes (kind)",
+					chart: { path: "$CONFIG/apps/k8s/shop/chart" },
+					values: ["$CONFIG/apps/k8s/shop/values.yaml"],
+					release: "shop-kind",
+					namespace: "apps",
+					...(options.replicasValuePath
+						? { replicasValuePath: options.replicasValuePath }
+						: {}),
+					ports: [
+						{
+							name: "http",
+							resource: "svc/shop",
+							localPort: 3000,
+							remotePort: 3000,
+						},
+					],
+				},
+			],
+		}),
+	);
+	return { chartDir, valuesPath: path.join(appDir, "values.yaml") };
+}
+
+/** A script lifecycle that records what it launched and stopped, and never
+ * spawns a process. */
+function recordingScriptInfra(events: string[]) {
+	const running = new Set<string>();
+	return {
+		launch: async (input: { ident: string }) => {
+			running.add(input.ident);
+			events.push(`launch ${input.ident}`);
+			return { status: "running", logPath: "" };
+		},
+		status: async (ident: string) => ({
+			status: running.has(ident) ? "running" : "stopped",
+			logPath: "",
+		}),
+		observe: async (ident: string) => ({
+			status: running.has(ident) ? "running" : "stopped",
+			logPath: "",
+		}),
+		stop: async (ident: string) => {
+			running.delete(ident);
+			events.push(`stop ${ident}`);
+		},
+		executionHandle: (ident: string) =>
+			running.has(ident)
+				? { mode: "logged", runner: "shell", startedAt: "", pid: 4242 }
+				: undefined,
+	};
+}
+
 function dockerSelection(): DockerRuntimeSelection {
 	return containerDocker([]);
 }
@@ -254,6 +330,13 @@ function harness(options: {
 	/** The drafts overlay a workflow owner's runs resolve before the live
 	 * configuration (`add-environment-setup-workflow`). */
 	resolveOwnerOverlay?: () => string | undefined;
+	/** Replaces the default argv runner; the default answers `kind get clusters`
+	 * with the managed cluster and succeeds for everything else. */
+	runCommand?: (
+		command: string,
+		args: readonly string[],
+		options: { cwd: string; env: Readonly<Record<string, string>> },
+	) => Promise<{ exitCode: number; output: string }>;
 }): Harness {
 	const calls: Harness["calls"] = [] as unknown as Harness["calls"];
 	const events: SlotEvent[] = [];
@@ -293,6 +376,12 @@ function harness(options: {
 		waitPollMs: options.waitPollMs ?? 1_000,
 		runCommand: async (command, args, commandOptions) => {
 			calls.push({ command, args, env: commandOptions.env });
+			if (options.runCommand)
+				return options.runCommand(command, args, commandOptions);
+			// A Kubernetes start treats the cluster listing as its precondition, so
+			// the default answers it with the managed cluster.
+			if (command === "kind" && args[0] === "get")
+				return { exitCode: 0, output: "devenv\n" };
 			return { exitCode: 0, output: "" };
 		},
 		publish: (event) => events.push(event),
@@ -679,6 +768,245 @@ describe("app slot starts", () => {
 		});
 		const stopped = await slots.controller.release("shop");
 		expect(stopped.status).toBe("released-by-developer");
+		expect(await slots.occupancy("shop")).toBeUndefined();
+	});
+});
+
+describe("app slot Kubernetes starts", () => {
+	/** A harness whose argv runner records a timeline with the port-forward
+	 * lifecycle, so the ordering of a stop is assertable. */
+	function kubernetesHarness(input: {
+		root: string;
+		configDir: string;
+		checkout: string;
+		store: EnvironmentStateStore;
+		docker?: DockerRuntimeSelection;
+		replicasValuePath?: string;
+		kindClusters?: string;
+		helmExitCode?: number;
+	}) {
+		const timeline: string[] = [];
+		const scriptInfra = recordingScriptInfra(timeline);
+		const slots = harness({
+			root: input.root,
+			configDir: input.configDir,
+			checkout: input.checkout,
+			apps: () => [app(input.checkout)],
+			store: input.store,
+			...(input.docker ? { docker: input.docker } : {}),
+			scriptInfra,
+			runCommand: async (command, args) => {
+				// Only the Kubernetes commands enter the timeline: the compose
+				// commands of the implicit-start case are asserted through `calls`.
+				if (command === "kind" || command === "helm" || command === "kubectl")
+					timeline.push(`${command} ${args.join(" ")}`);
+				if (command === "kind" && args[0] === "get")
+					return {
+						exitCode: 0,
+						output: input.kindClusters ?? "devenv-kind\n",
+					};
+				if (command === "helm" && input.helmExitCode !== undefined)
+					return {
+						exitCode: input.helmExitCode,
+						output: "Error: release failed",
+					};
+				return { exitCode: 0, output: "" };
+			},
+		});
+		return { ...slots, timeline };
+	}
+
+	test("an explicit Kubernetes start holds the slot and applies the replica count", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-k8s-"));
+		const fixture = composeFixture(root);
+		const state = tempState("k8s");
+		const kubernetes = kubernetesFixture(fixture.configDir, {
+			replicasValuePath: "web.replicaCount",
+		});
+		const handle = `environment-instance:${environmentInstanceStorageId("workflow:a", "shop")}:port-forward:0`;
+		const slots = kubernetesHarness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			store: state.store,
+		});
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+
+		const started = await slots.controller.acquire({
+			owner: "workflow:a",
+			apps: ["shop"],
+			runtime: "kubernetes",
+			replicas: 3,
+			waitSec: 1,
+		});
+		if (started.outcome !== "started") throw new Error("not started");
+		expect(started.instances[0]).toMatchObject({
+			owner: "workflow:a",
+			app: "shop",
+			runtime: "kubernetes",
+			status: "running",
+		});
+		// The cluster is only listed (never created), then the chart is installed
+		// with the target's own release, namespace, values and replica path.
+		expect(slots.timeline).toEqual([
+			"kind get clusters",
+			`helm --kube-context kind-devenv-kind upgrade --install shop-kind ${kubernetes.chartDir} --namespace apps --create-namespace --values ${kubernetes.valuesPath} --set web.replicaCount=3`,
+			`launch ${handle}`,
+		]);
+		expect(slots.calls[0]?.env.AC_OWNER).toBe("workflow:a");
+		// A Kubernetes row is not a script row: reading the slots must not report
+		// it stopped for a missing script handle.
+		expect(await slots.slots()).toMatchObject([
+			{ app: "shop", holder: "workflow:a", status: "running" },
+		]);
+
+		const stopped = await slots.controller.stopOwned("workflow:a", "shop");
+		expect(stopped.status).toBe("stopped");
+		// The port-forwards stop first, then the release is uninstalled; only then
+		// is the app's slot free again.
+		expect(slots.timeline.slice(3)).toEqual([
+			`stop ${handle}`,
+			"helm --kube-context kind-devenv-kind uninstall shop-kind --namespace apps --ignore-not-found",
+		]);
+		expect(await slots.occupancy("shop")).toBeUndefined();
+	});
+
+	test("an implicit start still picks Docker over a Kubernetes target", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-k8s-implicit-"));
+		const fixture = composeFixture(root);
+		kubernetesFixture(fixture.configDir);
+		const state = tempState("k8s-implicit");
+		const slots = kubernetesHarness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			store: state.store,
+			docker: dockerSelection(),
+		});
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+
+		const started = await slots.controller.acquire({
+			owner: "workflow:a",
+			apps: ["shop"],
+			waitSec: 1,
+		});
+		if (started.outcome !== "started") throw new Error("not started");
+		expect(started.instances[0]?.runtime).toBe("docker");
+		// No Kubernetes command ran: the implicit selection never reaches it.
+		expect(slots.timeline).toEqual([]);
+		expect(slots.calls.map((call) => call.command)).toEqual(["docker-compose"]);
+	});
+
+	test("a missing cluster fails with cluster-unavailable and is never created", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-k8s-absent-"));
+		const fixture = composeFixture(root);
+		kubernetesFixture(fixture.configDir);
+		const state = tempState("k8s-absent");
+		const slots = kubernetesHarness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			store: state.store,
+			kindClusters: "other\n",
+		});
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+
+		await expect(
+			slots.controller.acquire({
+				owner: "workflow:a",
+				apps: ["shop"],
+				runtime: "kubernetes",
+				waitSec: 1,
+			}),
+		).rejects.toMatchObject({ code: "cluster-unavailable" });
+		// Only the listing ran: the start never creates a cluster.
+		expect(slots.timeline).toEqual(["kind get clusters"]);
+		expect(await slots.occupancy("shop")).toBeUndefined();
+	});
+
+	test("a failed install uninstalls the release and stops the forwards", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-k8s-failed-"));
+		const fixture = composeFixture(root);
+		kubernetesFixture(fixture.configDir);
+		const state = tempState("k8s-failed");
+		const slots = kubernetesHarness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			store: state.store,
+			helmExitCode: 1,
+		});
+		const handle = `environment-instance:${environmentInstanceStorageId("workflow:a", "shop")}:port-forward:0`;
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+
+		await expect(
+			slots.controller.acquire({
+				owner: "workflow:a",
+				apps: ["shop"],
+				runtime: "kubernetes",
+				waitSec: 1,
+			}),
+		).rejects.toMatchObject({ code: "start-failed" });
+		expect(slots.timeline).toEqual([
+			"kind get clusters",
+			"helm --kube-context kind-devenv-kind upgrade --install shop-kind " +
+				path.join(fixture.configDir, "apps", "k8s", "shop", "chart") +
+				` --namespace apps --create-namespace --values ${path.join(fixture.configDir, "apps", "k8s", "shop", "values.yaml")}`,
+			`stop ${handle}`,
+			"helm --kube-context kind-devenv-kind uninstall shop-kind --namespace apps --ignore-not-found",
+		]);
+		// A failed start releases the slot instead of holding it.
+		expect(await slots.occupancy("shop")).toBeUndefined();
+	});
+
+	test("replicas of any other runtime are refused, not silently ignored", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-replicas-"));
+		const fixture = composeFixture(root);
+		kubernetesFixture(fixture.configDir);
+		const state = tempState("replicas");
+		const slots = kubernetesHarness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			store: state.store,
+			docker: dockerSelection(),
+		});
+		track([
+			() => state.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+
+		await expect(
+			slots.controller.acquire({
+				owner: "workflow:a",
+				apps: ["shop"],
+				replicas: 2,
+				waitSec: 1,
+			}),
+		).rejects.toMatchObject({ code: "replicas-unsupported" });
+		expect(slots.calls).toEqual([]);
+		// The count itself is bounded before anything is claimed.
+		await expect(
+			slots.controller.acquire({
+				owner: "workflow:a",
+				apps: ["shop"],
+				runtime: "kubernetes",
+				replicas: 0,
+				waitSec: 1,
+			}),
+		).rejects.toMatchObject({ code: "invalid-replicas" });
 		expect(await slots.occupancy("shop")).toBeUndefined();
 	});
 });

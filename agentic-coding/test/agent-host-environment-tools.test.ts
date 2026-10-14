@@ -541,15 +541,21 @@ describe("env_start waits for a held app", () => {
 		);
 	});
 
-	test("replicas beyond one copy is refused instead of silently ignored", async () => {
+	test("a replica count is forwarded to the server, which owns the refusal", async () => {
+		// Replicas are a Kubernetes start option: the tool passes the count on and
+		// the slot controller decides (it refuses replicas of any other runtime).
 		const server: FakeServer = { calls: [], replies: [{ outcome: "started" }] };
 		const result = await invoke(
 			"env_start",
-			{ apps: ["shop"], replicas: 2 },
+			{ apps: ["shop"], runtime: "kubernetes", replicas: 2 },
 			server,
 		);
-		expect(result.isError).toBe(true);
-		expect(result.text).toContain("replicas is not supported");
-		expect(server.calls.length).toBe(0);
+		expect(result.isError).toBe(false);
+		expect(server.calls.length).toBe(1);
+		expect(server.calls[0]?.body).toMatchObject({
+			apps: ["shop"],
+			runtime: "kubernetes",
+			replicas: 2,
+		});
 	});
 });

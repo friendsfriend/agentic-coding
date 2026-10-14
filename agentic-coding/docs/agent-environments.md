@@ -128,11 +128,43 @@ environment except server capability variables. If no target/profile is named,
 selection prefers Docker and then shell/system-shell; Kubernetes is not
 implicitly selected.
 
+## Kubernetes runs (opt-in)
+
+A Kubernetes target starts only when it is asked for by name — `runtime:
+"kubernetes"`, or the target's id/label through `target` — and it holds the
+app's single slot like any other runtime. It exists for one job: a bug that only
+shows with several replicas (locking, caching, scheduled jobs, session
+affinity). Everything else should stay on Docker; kind is heavy and the cluster
+run is the slow path.
+
+- **Replicas.** `replicas: <n>` is applied as the Helm value the target names in
+  `replicasValuePath` (`config/apps/k8s/<app>/devenv.k8s.json`), defaulting to
+  `replicaCount`. Without `replicas` the chart's own default applies. A request
+  that asks for replicas of any other runtime is refused with
+  `replicas-unsupported` rather than silently started once.
+- **Cluster is a precondition.** The start lists the clusters and fails with
+  `cluster-unavailable` when the configured one (`devenv` by default,
+  profile-scoped as `devenv-<profile>`) does not exist. A cluster is never
+  created implicitly: create it yourself
+  (`kind create cluster --name devenv`) when the run is wanted.
+- **Static identity.** The start installs the target's own release into its own
+  namespace with its own values files, and starts the target's declared
+  port-forwards as managed processes. The chart's image is the target's own
+  value: a run neither builds an image nor applies secrets.
+- **Stop.** Stopping the run tears down the port-forwards first and then
+  uninstalls the Helm release (`helm uninstall <release> --namespace <ns>
+  --ignore-not-found`), so the app's slot is only released once the cluster
+  side is gone. A start that fails after the install cleans its release up
+  again instead of leaving it behind.
+- **Observation.** A Kubernetes release is not a process of the server, so the
+  script-handle observation never applies to its row: a persisted row holds the
+  slot, and whether its pods are there is what the app's runtime status reports.
+
 ## API
 
 | Route | Meaning |
 | --- | --- |
-| `POST /api/v1/environment/apps/acquire` | `{ owner, apps[], target?, profile?, waitSec? }`; answers `started`/`already-running` with the held instances, `waiting` with positions and holders, `released-by-developer`, or fails with `deadlock`. |
+| `POST /api/v1/environment/apps/acquire` | `{ owner, apps[], target?, profile?, runtime?, replicas?, waitSec? }`; answers `started`/`already-running` with the held instances, `waiting` with positions and holders, `released-by-developer`, or fails with `deadlock`. `runtime: "kubernetes"` with `replicas` is the opt-in cluster run; replicas of any other runtime are refused (`replicas-unsupported`) and an absent cluster fails with `cluster-unavailable`. |
 | `POST /api/v1/environment/apps/{app}/release` | Developer force release: stops the holder's run, leaves it the `released-by-developer` notice, and lets the queue grant the next waiter. |
 | `POST /api/v1/environment/apps/{app}/stop` | Stops the app's current run without the notice. |
 | `POST /api/v1/environment/apps/teardown` | `{ owner }`; stops every app that owner holds through the normal stop path and answers the apps it stopped. Idempotent, and `user` is refused. |

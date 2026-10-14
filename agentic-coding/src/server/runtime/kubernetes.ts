@@ -25,6 +25,10 @@ import { spawn } from "node:child_process";
 export const DEFAULT_CLUSTER_NAME = "devenv";
 export const DEFAULT_CONTEXT_NAME = "kind-devenv";
 
+/** The Helm value a requested replica count is written to when a target names
+ * none (`add-kubernetes-run-replicas`). */
+export const DEFAULT_REPLICAS_VALUE_PATH = "replicaCount";
+
 export interface Command {
 	readonly name: string;
 	readonly args: string[];
@@ -1048,9 +1052,14 @@ export interface KubernetesDeploymentPlan {
 }
 
 /**
- * The Helm sequence for one infrastructure deployment: cluster create when
- * needed, image load, secret applies, `helm upgrade --install`, then the
- * readiness wait. Nothing here mutates a cluster by itself.
+ * The Helm sequence for one deployment: cluster listing, image load, secret
+ * applies, `helm upgrade --install`, then the readiness wait. Nothing here
+ * mutates a cluster by itself — in particular the listing never creates a
+ * cluster that is missing.
+ *
+ * A requested `replicas` count is written through `--set` at the target's own
+ * value path (`replicasValuePath`, defaulting to `replicaCount`); without one
+ * the chart's own default applies.
  */
 export function planKubernetesDeployment(input: {
 	readonly runner: Runner;
@@ -1062,6 +1071,8 @@ export function planKubernetesDeployment(input: {
 	readonly images: readonly string[];
 	readonly secrets: readonly SecretApplyPlan[];
 	readonly waitTimeout?: string;
+	readonly replicas?: number;
+	readonly replicasValuePath?: string;
 }): KubernetesDeploymentPlan {
 	const { runner } = input;
 	const commands: Command[] = [];
@@ -1083,6 +1094,7 @@ export function planKubernetesDeployment(input: {
 			input.namespace,
 			"--create-namespace",
 			...input.values.flatMap((value) => ["--values", value]),
+			...helmReplicasOverride(input.replicas, input.replicasValuePath),
 		),
 	);
 	const readiness = [
@@ -1106,6 +1118,28 @@ export function planKubernetesDeployment(input: {
 		commands,
 		readiness,
 	};
+}
+
+/**
+ * `--set <valuePath>=<n>` for a replica count, or nothing when no count was
+ * asked for (the chart's own default then applies). A count below one is not a
+ * replica count: the caller validates the request, and this is the last guard
+ * before the argv is built, so `--set replicaCount=0` can never be produced.
+ */
+export function helmReplicasOverride(
+	replicas: number | undefined,
+	valuePath: string | undefined,
+): string[] {
+	if (replicas === undefined) return [];
+	if (!Number.isInteger(replicas) || replicas < 1)
+		throw new Error(
+			`replicas must be a positive integer, received ${replicas}`,
+		);
+	const path =
+		valuePath === undefined || valuePath.trim() === ""
+			? DEFAULT_REPLICAS_VALUE_PATH
+			: valuePath.trim();
+	return ["--set", `${path}=${replicas}`];
 }
 
 /** Helm release status → infrastructure status. */

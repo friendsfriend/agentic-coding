@@ -764,6 +764,9 @@ interface KubernetesRunTargetConfig {
 	chart: { path?: string; values?: string[] };
 	release?: string;
 	namespace?: string;
+	/** The Helm value a requested replica count is written to. Absent leaves the
+	 * deployment plan's own default (`replicaCount`). */
+	replicasValuePath?: string;
 	values?: string[];
 	image?: KubernetesImageConfig;
 	secrets?: { name: string; keys: string[] }[];
@@ -1122,6 +1125,7 @@ function kubernetesActionTarget(
 		config.context && config.context !== ""
 			? config.context
 			: `kind-${clusterName}`;
+	const replicasValuePath = (config.replicasValuePath ?? "").trim();
 	const kubernetes: KubernetesTargetMetadata = {
 		provider,
 		clusterName,
@@ -1129,6 +1133,9 @@ function kubernetesActionTarget(
 		chartPath: config.chart.path ?? "",
 		release: config.release ?? "",
 		namespace: config.namespace ?? "",
+		// A configured path is carried as it is; an unconfigured one stays absent
+		// so the deployment plan's default is the single place it is decided.
+		...(replicasValuePath !== "" ? { replicasValuePath } : {}),
 		...(values.length > 0 ? { valuesFiles: values } : {}),
 		...(config.image ? { image: config.image } : {}),
 		...(secrets.length > 0 ? { secrets } : {}),

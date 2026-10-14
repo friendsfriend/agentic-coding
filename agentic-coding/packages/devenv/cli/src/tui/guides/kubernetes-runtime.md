@@ -139,6 +139,21 @@ Path variables:
 
 Secrets use explicit `.env` key allowlists. DevEnv validates keys before Helm install and logs only Secret names/key names, never values.
 
+## Replica count
+
+An agent start can ask for several replicas (`env_start` with
+`runtime: "kubernetes"` and `replicas`), which the run applies as a Helm value:
+`replicasValuePath` names that value and defaults to `replicaCount`.
+
+```json
+"replicasValuePath": "web.replicaCount"
+```
+
+Without `replicas` the chart's own default applies. Use it only for a problem
+that depends on more than one replica: the cluster run is the slow, opt-in path,
+and it never creates the cluster (an absent one fails the start with
+`cluster-unavailable`).
+
 ## Kubernetes infrastructure
 
 Define Helm-backed infrastructure in `infrastructure/definitions/<ident>.json`:

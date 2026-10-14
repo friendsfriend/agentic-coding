@@ -90,6 +90,10 @@ export interface KubernetesTargetMetadata {
 	chartPath: string;
 	release: string;
 	namespace?: string;
+	/** The Helm value a requested replica count is written to
+	 * (`add-kubernetes-run-replicas`). Absent means the default
+	 * `DEFAULT_REPLICAS_VALUE_PATH`, which the deployment plan applies. */
+	replicasValuePath?: string;
 	valuesFiles?: string[];
 	image?: KubernetesImageConfig;
 	secrets?: KubernetesSecretSummary[];

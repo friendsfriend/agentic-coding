@@ -509,6 +509,7 @@ async function environmentAcquire(
 		...(body.target ? { target: body.target } : {}),
 		...(body.profile ? { profile: body.profile } : {}),
 		...(body.runtime ? { runtime: body.runtime } : {}),
+		...(body.replicas === undefined ? {} : { replicas: body.replicas }),
 		...(body.waitSec === undefined ? {} : { waitSec: body.waitSec }),
 		// A caller that goes away ends its wait: the queue entry is withdrawn
 		// instead of being left to commit a start nobody asked for any more.

@@ -391,6 +391,67 @@ describe("kubernetes identity", () => {
 		expect(defaultKubernetesRelease("shop", "edge")).toBe("shop-edge");
 	});
 
+	test("a configured replicasValuePath is carried, an unconfigured one stays absent", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devenv-replicas-"));
+		const configDir = path.join(dir, "config");
+		const appDir = path.join(configDir, "apps", "k8s", "shop");
+		fs.mkdirSync(path.join(appDir, "chart"), { recursive: true });
+		fs.writeFileSync(path.join(appDir, "chart", "Chart.yaml"), "name: shop\n");
+		fs.writeFileSync(
+			path.join(appDir, "devenv.k8s.json"),
+			JSON.stringify({
+				targets: [
+					{
+						profile: "kind",
+						chart: { path: "$CONFIG/apps/k8s/shop/chart" },
+						release: "shop-kind",
+						replicasValuePath: "web.replicaCount",
+					},
+				],
+			}),
+		);
+		try {
+			const targets = discoverActionTargets({
+				appIdent: "shop",
+				localDir: "",
+				action: "run",
+				configDir,
+				platform: "linux",
+			}).filter((target) => target.runtime === "kubernetes");
+			expect(
+				targets.map((target) => target.kubernetes?.replicasValuePath),
+			).toEqual(["web.replicaCount"]);
+			// Without one the field stays absent: the default value path
+			// (`replicaCount`) is the deployment plan's own decision, and a target
+			// that configures none is byte-identical to what discovery produced
+			// before this change.
+			fs.writeFileSync(
+				path.join(appDir, "devenv.k8s.json"),
+				JSON.stringify({
+					targets: [
+						{
+							profile: "kind",
+							chart: { path: "$CONFIG/apps/k8s/shop/chart" },
+							release: "shop-kind",
+						},
+					],
+				}),
+			);
+			const plain = discoverActionTargets({
+				appIdent: "shop",
+				localDir: "",
+				action: "run",
+				configDir,
+				platform: "linux",
+			}).filter((target) => target.runtime === "kubernetes");
+			expect(
+				plain.map((target) => target.kubernetes?.replicasValuePath),
+			).toEqual([undefined]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("$APP and $CONFIG expand, then relative paths resolve against the config file", () => {
 		expect(
 			expandKubernetesPath(

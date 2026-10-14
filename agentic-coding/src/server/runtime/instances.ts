@@ -37,7 +37,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { discoverActionTargets } from "../actions/discovery.ts";
-import type { ActionTarget } from "../actions/targets.ts";
+import type {
+	ActionTarget,
+	KubernetesExecutionIdentity,
+	KubernetesTargetMetadata,
+} from "../actions/targets.ts";
+import { resolveKubernetesIdentity } from "../actions/targets.ts";
 import type { App } from "../environment/config.ts";
 import {
 	type EnvironmentInstance,
@@ -60,6 +65,13 @@ import {
 	composeCommandForRuntime,
 	type DockerRuntimeSelection,
 } from "./docker.ts";
+import {
+	type Command,
+	clusterListContains,
+	planKubernetesDeployment,
+	portForwardCommand,
+	Runner,
+} from "./kubernetes.ts";
 import {
 	INSTANCE_SCRIPT_ENV_DENYLIST,
 	ScriptInfrastructure,
@@ -99,6 +111,10 @@ const WAIT_POLL_MS = 25;
 const LIFECYCLE_RECONCILE_GRACE_MS = 5 * 60 * 1000;
 /** Bounded number of apps one start request may name. */
 const MAX_REQUESTED_APPS = 16;
+/** Hard bound on the replica count one Kubernetes start may ask for. */
+const MAX_REPLICAS = 100;
+/** Prefix of every port-forward handle this process tracks. */
+const PORT_FORWARD_HANDLE_PREFIX = "environment-instance:";
 const WORKFLOW_CHILD_ENV_ALLOWLIST = new Set([
 	"PATH",
 	"HOME",
@@ -126,6 +142,10 @@ const WORKFLOW_CHILD_ENV_ALLOWLIST = new Set([
 	"DOCKER_TLS_VERIFY",
 	"DOCKER_CERT_PATH",
 	"DOCKER_CONTEXT",
+	// A Kubernetes run reaches the cluster through the kubeconfig the operator's
+	// own shell uses, so the workflow child env keeps it (a kind context lives
+	// there).
+	"KUBECONFIG",
 	"COMPOSE_FILE",
 	"COMPOSE_PROFILES",
 	"COMPOSE_PROJECT_NAME",
@@ -280,8 +300,13 @@ export interface AcquireSlotsRequest {
 	readonly apps: readonly string[];
 	readonly target?: string;
 	readonly profile?: string;
-	/** Narrow the runtime to start (`docker`, `shell`, `systemshell`). */
+	/** Narrow the runtime to start (`docker`, `shell`, `systemshell`,
+	 * `kubernetes`). */
 	readonly runtime?: string;
+	/** Replica count of a Kubernetes start (`add-kubernetes-run-replicas`). A
+	 * request that asks for replicas of any other runtime is refused rather than
+	 * silently started once. */
+	readonly replicas?: number;
 	readonly waitSec?: number;
 	/** Aborts the wait: the entry leaves the queue and the request answers
 	 * `cancelled`, so an abandoned long poll cannot still commit a start. */
@@ -355,6 +380,7 @@ interface QueuedRequest {
 	readonly target?: string;
 	readonly profile?: string;
 	readonly runtime?: string;
+	readonly replicas?: number;
 }
 
 interface SlotWaiter {
@@ -415,6 +441,12 @@ export class EnvironmentInstanceController {
 	private readonly publish?: (event: SlotEvent) => void;
 	private readonly logger?: (message: string) => void;
 	private readonly queues = new Map<string, SlotWaiter[]>();
+	/**
+	 * The port-forward handles this process started, by app slot. A handle is
+	 * process-local (like a script's), so a stop tears down both the handles it
+	 * knows and the ones the app's current definition declares.
+	 */
+	private readonly portForwards = new Set<string>();
 	/** The last observation per app, reused for `observationRefreshMs`. */
 	private readonly observations = new Map<
 		string,
@@ -595,6 +627,7 @@ export class EnvironmentInstanceController {
 			});
 		}
 		const apps = this.requestedApps(input.apps);
+		const replicas = boundReplicas(input.replicas);
 		const waitSec = boundWaitSec(input.waitSec);
 		// A request that was already abandoned must not enqueue: a long poll nobody
 		// is listening to could otherwise still commit a start.
@@ -638,6 +671,7 @@ export class EnvironmentInstanceController {
 				...(input.target ? { target: input.target } : {}),
 				...(input.profile ? { profile: input.profile } : {}),
 				...(input.runtime ? { runtime: input.runtime } : {}),
+				...(replicas === undefined ? {} : { replicas }),
 			});
 			const cycle = await this.deadlockPath(owner, apps);
 			if (cycle) {
@@ -1069,8 +1103,13 @@ export class EnvironmentInstanceController {
 			);
 	}
 
-	/** Stops whatever the holder's row is running: compose project or script. */
+	/** Stops whatever the holder's row is running: compose project, script or
+	 * Kubernetes release. */
 	private async stopRun(record: EnvironmentInstanceRecord): Promise<void> {
+		if (record.runtime === "kubernetes") {
+			await this.stopKubernetesRun(record);
+			return;
+		}
 		if (record.runtime !== "docker") {
 			const key = scriptHandleKey(record.id);
 			// A handle is process-local: after a restart (or when the row came from a
@@ -1109,6 +1148,40 @@ export class EnvironmentInstanceController {
 				);
 		}
 		await this.removeObservedContainers(docker, record, app);
+	}
+
+	/**
+	 * Stops a Kubernetes run: its port-forwards first (nothing keeps pointing at
+	 * a release that is about to go), then the Helm release itself. The row is
+	 * only released once both are done.
+	 */
+	private async stopKubernetesRun(
+		record: EnvironmentInstanceRecord,
+	): Promise<void> {
+		const app = this.apps().find((candidate) => candidate.ident === record.app);
+		const target = app ? this.findTarget(record, app) : undefined;
+		const meta =
+			target && target.runtime === "kubernetes" ? target.kubernetes : undefined;
+		await this.stopKubernetesPortForwards(record.id, meta);
+		if (!meta || meta.release === "" || meta.chartPath === "") {
+			// The definition that started this run is gone, so its release cannot be
+			// named: the port-forwards this process started are still stopped, and the
+			// release is left for the developer to see rather than guessed at.
+			this.logger?.(
+				`[slots] the Kubernetes definition of ${record.app} is gone; its release cannot be uninstalled`,
+			);
+			return;
+		}
+		await this.uninstallKubernetesRelease({
+			runner: kubernetesRunnerFor(kubernetesIdentityFor(target, meta)),
+			release: meta.release,
+			namespace: kubernetesNamespaceOf(meta),
+			checkoutPath: record.checkoutPath,
+			env: environmentWith(
+				this.variablesOf(record),
+				parseEnvironmentOwner(record.owner),
+			),
+		});
 	}
 
 	/**
@@ -1177,11 +1250,15 @@ export class EnvironmentInstanceController {
 			owner === "user" ? undefined : this.resolveOwnerOverlay?.(owner, app);
 		const targets = this.runTargetsFor(app, checkoutPath, configOverlay);
 		const selected = selectTarget(targets, request, docker !== undefined);
-		if (selected.runtime === "kubernetes")
+		// Replicas are a Kubernetes concept: a request that asks for them of any
+		// other runtime is refused here, before the slot is claimed, rather than
+		// silently started as a single copy.
+		const replicas = boundReplicas(request.replicas);
+		if (replicas !== undefined && selected.runtime !== "kubernetes")
 			throw new EnvironmentInstanceError(
-				"explicit-runtime-required",
+				"replicas-unsupported",
 				400,
-				"Kubernetes is not supported by environment instances in this change",
+				`replicas applies to a Kubernetes run; ${JSON.stringify(selected.id)} is a ${selected.runtime} target`,
 			);
 		const previous = this.state.findEnvironmentInstance(owner, appIdent);
 		const instanceId =
@@ -1216,7 +1293,7 @@ export class EnvironmentInstanceController {
 		this.grants.set(claimedId, grantId);
 		const variables = this.variables(owner, checkoutPath, {
 			app: appIdent,
-			runtime: selected.runtime === "docker" ? "docker" : "script",
+			runtime: instanceRuntimeKind(selected.runtime),
 			grantId,
 			...(selected.env ? { definitionEnv: selected.env } : {}),
 		});
@@ -1247,6 +1324,14 @@ export class EnvironmentInstanceController {
 						500,
 						result.output || `compose exited ${result.exitCode}`,
 					);
+			} else if (selected.runtime === "kubernetes") {
+				await this.startKubernetesRun({
+					storageId: claimedId,
+					target: selected,
+					checkoutPath,
+					env: environmentWith(variables, owner),
+					...(replicas === undefined ? {} : { replicas }),
+				});
 			} else {
 				const key = scriptHandleKey(record.id);
 				const launch = await this.scriptInfra.launch({
@@ -1344,6 +1429,219 @@ export class EnvironmentInstanceController {
 				this.now().toISOString(),
 			);
 			throw error;
+		}
+	}
+
+	/**
+	 * Starts a Kubernetes run under the app's slot.
+	 *
+	 * The cluster is a precondition, never created here: a missing cluster fails
+	 * the start with `cluster-unavailable`. The target's static release,
+	 * namespace and values are what Helm installs, plus the requested replica
+	 * count when one was asked for, and the target's port-forwards are started as
+	 * managed processes the stop path tears down again.
+	 */
+	private async startKubernetesRun(input: {
+		readonly storageId: string;
+		readonly target: ActionTarget;
+		readonly replicas?: number;
+		readonly checkoutPath: string;
+		readonly env: Readonly<Record<string, string>>;
+	}): Promise<void> {
+		const meta = input.target.kubernetes;
+		if (!meta || meta.release === "" || meta.chartPath === "")
+			throw new EnvironmentInstanceError(
+				"target-not-ready",
+				400,
+				`run target ${JSON.stringify(input.target.id)} has no Helm release or chart to install`,
+			);
+		const identity = kubernetesIdentityFor(input.target, meta);
+		const runner = kubernetesRunnerFor(identity);
+		const namespace = kubernetesNamespaceOf(meta);
+		const plan = planKubernetesDeployment({
+			runner,
+			name: input.target.id,
+			namespace,
+			release: meta.release,
+			chart: meta.chartPath,
+			values: meta.valuesFiles ?? [],
+			// The image the chart deploys is the target's own value and its secrets
+			// belong to the definition that owns them: a run neither builds an image
+			// nor applies a secret.
+			images: [],
+			secrets: [],
+			...(input.replicas === undefined ? {} : { replicas: input.replicas }),
+			...(meta.replicasValuePath
+				? { replicasValuePath: meta.replicasValuePath }
+				: {}),
+		});
+		// The plan's first command lists the clusters. A start treats that listing as
+		// its precondition: it never issues `kind create cluster`.
+		const [clusterListing, ...installCommands] = plan.commands;
+		const listed = await this.runKubernetesCommand(
+			clusterListing,
+			input.checkoutPath,
+			input.env,
+			{
+				code: "cluster-unavailable",
+				status: 503,
+				message: `the ${identity.cluster} cluster could not be listed`,
+			},
+		);
+		if (!clusterListContains(listed.output, identity.cluster))
+			throw new EnvironmentInstanceError(
+				"cluster-unavailable",
+				503,
+				`the ${identity.cluster} cluster does not exist; create it before starting a Kubernetes run (clusters are never created implicitly)`,
+			);
+		try {
+			for (const command of installCommands)
+				await this.runKubernetesCommand(
+					command,
+					input.checkoutPath,
+					input.env,
+					{
+						code: "start-failed",
+						status: 500,
+						message: `installing the ${meta.release} release failed`,
+					},
+				);
+			for (const [index, forward] of (meta.ports ?? []).entries()) {
+				const key = portForwardHandleKey(input.storageId, index);
+				const command = portForwardCommand(runner, namespace, forward);
+				const env = commandEnvironment(input.env, command.env);
+				const launch = await this.scriptInfra.launch({
+					ident: key,
+					runner: "shell",
+					command: command.name,
+					args: command.args,
+					dir: input.checkoutPath,
+					env,
+					// A port-forward is infrastructure of this run, never a tmux window the
+					// developer's own session shares.
+					forceLogged: true,
+					spawn: () => {
+						const proc = Bun.spawn([command.name, ...command.args], {
+							cwd: input.checkoutPath,
+							env,
+							stdout: "ignore",
+							stderr: "ignore",
+						});
+						void proc.exited.then((exitCode) => {
+							if (exitCode !== 0)
+								this.logger?.(
+									`[slots] the port forward of ${input.storageId} exited with ${exitCode}`,
+								);
+						});
+						return { pid: proc.pid };
+					},
+				});
+				this.portForwards.add(key);
+				if (launch.status !== "running")
+					throw new EnvironmentInstanceError(
+						"start-failed",
+						500,
+						`the port forward of ${forward.resource} exited during startup with status ${launch.status}`,
+					);
+			}
+		} catch (error) {
+			// A half-installed release and its port-forwards would otherwise hold
+			// cluster resources for a start that never became `running`.
+			await this.stopKubernetesPortForwards(input.storageId, meta);
+			try {
+				await this.uninstallKubernetesRelease({
+					runner,
+					release: meta.release,
+					namespace,
+					checkoutPath: input.checkoutPath,
+					env: input.env,
+				});
+			} catch (cleanupError) {
+				this.logger?.(
+					`[slots] cleaning up the failed ${meta.release} release failed: ${message(cleanupError)}`,
+				);
+			}
+			throw error;
+		}
+	}
+
+	/** Runs one Kubernetes command, mapping a failure to the caller's error. */
+	private async runKubernetesCommand(
+		command: Command,
+		cwd: string,
+		env: Readonly<Record<string, string>>,
+		failure: {
+			readonly code: string;
+			readonly status: number;
+			readonly message: string;
+		},
+	): Promise<{ exitCode: number; output: string }> {
+		let result: { exitCode: number; output: string };
+		try {
+			result = await this.runCommand(command.name, command.args, {
+				cwd,
+				env: commandEnvironment(env, command.env),
+			});
+		} catch (error) {
+			throw new EnvironmentInstanceError(
+				failure.code,
+				failure.status,
+				`${failure.message}: ${message(error)}`,
+			);
+		}
+		if (result.exitCode !== 0)
+			throw new EnvironmentInstanceError(
+				failure.code,
+				failure.status,
+				`${failure.message}: ${result.output || `exit ${result.exitCode}`}`,
+			);
+		return result;
+	}
+
+	/** Uninstalls one release; an absent release is not a failure. */
+	private async uninstallKubernetesRelease(input: {
+		readonly runner: Runner;
+		readonly release: string;
+		readonly namespace: string;
+		readonly checkoutPath: string;
+		readonly env: Readonly<Record<string, string>>;
+	}): Promise<void> {
+		await this.runKubernetesCommand(
+			input.runner.helm(
+				"uninstall",
+				input.release,
+				"--namespace",
+				input.namespace,
+				"--ignore-not-found",
+			),
+			input.checkoutPath,
+			input.env,
+			{
+				code: "stop-failed",
+				status: 500,
+				message: `uninstalling the ${input.release} release failed`,
+			},
+		);
+	}
+
+	/**
+	 * Stops the port-forwards of one app slot: the ones the app's current
+	 * definition declares and the handles this process started for it (a
+	 * definition edited since the start would otherwise leave a forward behind).
+	 */
+	private async stopKubernetesPortForwards(
+		storageId: string,
+		meta: KubernetesTargetMetadata | undefined,
+	): Promise<void> {
+		const keys = new Set<string>();
+		for (const [index] of (meta?.ports ?? []).entries())
+			keys.add(portForwardHandleKey(storageId, index));
+		const prefix = portForwardHandlePrefix(storageId);
+		for (const key of this.portForwards)
+			if (key.startsWith(prefix)) keys.add(key);
+		for (const key of keys) {
+			this.portForwards.delete(key);
+			await this.scriptInfra.stop(key);
 		}
 	}
 
@@ -1447,6 +1745,21 @@ export class EnvironmentInstanceController {
 				}
 				continue;
 			}
+			if (record.runtime === "kubernetes") {
+				// A Kubernetes release cannot be observed from here: a row interrupted
+				// mid-transition is reported `unknown` (which a developer release can
+				// still clear) instead of holding the slot as a stuck `starting` row,
+				// and a `running` row keeps its status because nothing here can confirm
+				// its pods are gone.
+				if (record.status === "starting" || record.status === "stopping")
+					this.state.compareAndSetEnvironmentInstanceStatus(
+						record.id,
+						record.status,
+						"unknown",
+						this.now().toISOString(),
+					);
+				continue;
+			}
 			const key = scriptHandleKey(record.id);
 			if (!this.scriptInfra.executionHandle(key)) {
 				this.state.compareAndSetEnvironmentInstanceStatus(
@@ -1515,7 +1828,11 @@ export class EnvironmentInstanceController {
 	/** Re-reads live script rows so a process that exited stops holding its app. */
 	private async refreshScriptRows(): Promise<void> {
 		for (const record of this.state.getActiveEnvironmentInstances()) {
-			if (record.runtime === "docker") continue;
+			// A Kubernetes release is not a process of this server: whether its pods
+			// are there is what run observation reports, so the script-handle
+			// observation below never applies to it.
+			if (record.runtime === "docker" || record.runtime === "kubernetes")
+				continue;
 			if (record.status !== "running" && record.status !== "unknown") continue;
 			const key = scriptHandleKey(record.id);
 			try {
@@ -2143,7 +2460,7 @@ export class EnvironmentInstanceController {
 			record.checkoutPath,
 			{
 				app: record.app,
-				runtime: record.runtime === "docker" ? "docker" : "script",
+				runtime: instanceRuntimeKind(record.runtime),
 				grantId: this.grants.get(record.id) ?? this.newGrantId(),
 			},
 		);
@@ -2270,6 +2587,93 @@ function boundWaitSec(value: number | undefined): number {
 	return Math.min(value, MAX_WAIT_SEC);
 }
 
+/**
+ * A replica count a request may ask for: a positive integer within the bound.
+ * Anything else is refused before a slot is claimed, so an unusable count can
+ * never reach Helm as a `--set` value.
+ */
+function boundReplicas(value: number | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	if (!Number.isInteger(value) || value < 1)
+		throw new EnvironmentInstanceError(
+			"invalid-replicas",
+			400,
+			`replicas must be a positive integer, received ${JSON.stringify(value)}`,
+		);
+	if (value > MAX_REPLICAS)
+		throw new EnvironmentInstanceError(
+			"invalid-replicas",
+			400,
+			`replicas may be at most ${MAX_REPLICAS}, received ${value}`,
+		);
+	return value;
+}
+
+/** The runtime shape one row's variables are resolved for. */
+function instanceRuntimeKind(runtime: string): InstanceRuntimeKind {
+	if (runtime === "docker") return "docker";
+	if (runtime === "kubernetes") return "kubernetes";
+	return "script";
+}
+
+/**
+ * The identity a Kubernetes command of one target runs under: the target's own
+ * provider, cluster and context, with the port's defaults applied.
+ */
+function kubernetesIdentityFor(
+	target: ActionTarget | undefined,
+	meta: KubernetesTargetMetadata,
+): KubernetesExecutionIdentity {
+	return resolveKubernetesIdentity(
+		meta.provider ?? target?.provider,
+		meta.clusterName,
+		meta.contextName,
+	);
+}
+
+/** The argv builder for one identity: the same runner the action compiler uses. */
+function kubernetesRunnerFor(identity: KubernetesExecutionIdentity): Runner {
+	return new Runner({
+		clusterName: identity.cluster,
+		contextName: identity.context,
+		containerCommand: identity.provider,
+		containerName: identity.provider,
+	});
+}
+
+function kubernetesNamespaceOf(meta: KubernetesTargetMetadata): string {
+	return meta.namespace === undefined || meta.namespace === ""
+		? "default"
+		: meta.namespace;
+}
+
+/**
+ * The environment one command runs with: the run's own variables plus the pairs
+ * the command carries itself (kind's provider hint).
+ */
+function commandEnvironment(
+	env: Readonly<Record<string, string>>,
+	pairs: readonly string[] | undefined,
+): Record<string, string> {
+	const merged: Record<string, string> = { ...env };
+	for (const entry of pairs ?? []) {
+		const separator = entry.indexOf("=");
+		if (separator <= 0) continue;
+		merged[entry.slice(0, separator)] = entry.slice(separator + 1);
+	}
+	return merged;
+}
+
+/** The handle of one port-forward of an app slot; a port-forward is a process
+ * of this server, so the handle is process-local like a script's. */
+function portForwardHandleKey(storageId: string, index: number): string {
+	return `${portForwardHandlePrefix(storageId)}${index}`;
+}
+
+function portForwardHandlePrefix(storageId: string): string {
+	return `${PORT_FORWARD_HANDLE_PREFIX}${storageId}:port-forward:`;
+}
+
 function selectTarget(
 	targets: readonly ActionTarget[],
 	request: QueuedRequest,
@@ -2288,16 +2692,13 @@ function selectTarget(
 			`run target ${JSON.stringify(request.target)} not found`,
 		);
 	if (named) return named;
-	let candidates = [...targets].filter(
-		(target) =>
-			target.runtime === "docker" ||
-			target.runtime === "shell" ||
-			target.runtime === "systemshell",
+	// Kubernetes is opt-in: it is only ever considered when the request names its
+	// runtime (or a Kubernetes target above), never as an implicit fallback.
+	let candidates = [...targets].filter((target) =>
+		target.runtime === "kubernetes"
+			? request.runtime === "kubernetes"
+			: request.runtime === undefined || target.runtime === request.runtime,
 	);
-	if (request.runtime)
-		candidates = candidates.filter(
-			(target) => target.runtime === request.runtime,
-		);
 	if (!dockerAvailable)
 		candidates = candidates.filter((target) => target.runtime !== "docker");
 	if (request.profile)
@@ -2306,7 +2707,12 @@ function selectTarget(
 				target.profile === request.profile ||
 				(!target.profile && request.profile === "default"),
 		);
-	for (const runtime of ["docker", "shell", "systemshell"]) {
+	// An explicit runtime is the only one considered; an implicit request prefers
+	// Docker, then a script target, and never reaches Kubernetes.
+	const order = request.runtime
+		? [request.runtime]
+		: ["docker", "shell", "systemshell"];
+	for (const runtime of order) {
 		const matching = candidates.filter((target) => target.runtime === runtime);
 		if (matching.length === 0) continue;
 		const defaultTarget = matching.find(
@@ -2329,7 +2735,9 @@ function selectTarget(
 	throw new EnvironmentInstanceError(
 		"runtime-unavailable",
 		503,
-		"no eligible Docker or script run target is available",
+		request.runtime
+			? `no ${request.runtime} run target is available`
+			: "no eligible Docker or script run target is available; a Kubernetes run starts only when its runtime is requested explicitly",
 	);
 }
 
