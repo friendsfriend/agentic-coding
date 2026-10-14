@@ -8,9 +8,11 @@
 //
 // The panel is collapsible: focused it expands to its full width, unfocused it
 // collapses to the workspace index. Either way a row leads with its status
-// glyph, so the collapsed strip still says which workspace needs a reader. The
-// width change is a short tween, so focus movement reads as a slide rather than
-// a jump.
+// glyph, so the collapsed strip still says which workspace needs a reader.
+// Expanding is a short width tween, so focus movement reads as a slide rather
+// than a jump; collapsing is a cut to the fixed compact width, because the
+// compact strip is the whole collapsed view and neither its rows nor the columns
+// it frees may wait on an animation.
 
 import type { MouseEvent } from "@opentui/core";
 import {
@@ -20,7 +22,14 @@ import {
 	uiColors,
 	useTerminalDimensions,
 } from "@ui";
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+	untrack,
+} from "solid-js";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
 	clip,
@@ -41,18 +50,39 @@ import {
  * terminal. */
 export const SIDEBAR_WIDTH = 34;
 
-/** Collapsed width: the selection marker, one gap column, the status glyph and
- * two index digits, so a marked row still fits the strip. */
-export const SIDEBAR_COLLAPSED_WIDTH = 6;
+/** Columns a compact row's own content needs: the status glyph, the gap after
+ * it, and the two digits a position takes up to 99 workflows. */
+const SIDEBAR_COLLAPSED_ROW_WIDTH = 4;
 
-/** Columns a collapsed row has left for its content once the selection marker
- * and its gap are spent. The strip grows from this width and never shrinks, so
- * the row is measured against the collapsed width itself and not the animated
- * one. */
-const SIDEBAR_COLLAPSED_ROW_WIDTH = SIDEBAR_COLLAPSED_WIDTH - 2;
+/** Collapsed width: the selection marker, one gap column and the compact row.
+ * Fixed, and the row is measured against it and never against the animated
+ * width, so a marked row fits the strip and the columns the page body gains do
+ * not depend on an animation. */
+export const SIDEBAR_COLLAPSED_WIDTH = SIDEBAR_COLLAPSED_ROW_WIDTH + 2;
 
 /** Width at which the full row content replaces the glyph-and-index rows. */
 const SIDEBAR_EXPANDED_THRESHOLD = 14;
+
+/** What the panel paints for one sidebar state and the width the slide has
+ * reached. The state is the gate: unfocused `expanding` is the fixed compact
+ * strip whatever the animation is doing, and the full rows — which need the room
+ * — appear only while the state asks for the panel *and* the slide has widened it
+ * enough to hold a row. An expanded width left over from an animation that never
+ * ran (a delayed tween on a busy main thread, a width left from the previous
+ * expansion) therefore can never keep the full expanded panel on screen. */
+export function sidebarPanelView(input: {
+	/** `ui.sidebar_mode: "permanent"`, or the panel holds focus. */
+	readonly expandedByState: boolean;
+	/** Width the width tween has reached. */
+	readonly animatedWidth: number;
+}): { readonly width: number; readonly expanded: boolean } {
+	if (!input.expandedByState)
+		return { width: SIDEBAR_COLLAPSED_WIDTH, expanded: false };
+	return {
+		width: input.animatedWidth,
+		expanded: input.animatedWidth >= SIDEBAR_EXPANDED_THRESHOLD,
+	};
+}
 
 /** One width tween: ~150ms of 16ms steps, eased out. Quick enough to read as a
  * slide, slow enough not to strobe. */
@@ -196,7 +226,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	};
 	const animateTo = (target: number): void => {
 		stopAnimation();
-		const start = width();
+		// Untracked: the tween writes the width, so a tracked read would make the
+		// effect below re-run on every frame it renders and restart the tween.
+		const start = untrack(width);
 		if (start === target) return;
 		const startedAt = Date.now();
 		timer = setInterval(() => {
@@ -210,10 +242,26 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 		}, SIDEBAR_ANIMATION_STEP_MS);
 	};
 	createEffect(() => {
-		animateTo(expandedByMode() ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH);
+		if (!expandedByMode()) {
+			// Collapsing is a cut, not a slide: the compact strip is the whole
+			// collapsed view, so the panel returns to its fixed compact width at
+			// once instead of holding the expanded width — and the full expanded
+			// rows — until a tween gets around to finishing.
+			stopAnimation();
+			setWidth(SIDEBAR_COLLAPSED_WIDTH);
+			return;
+		}
+		animateTo(SIDEBAR_WIDTH);
 	});
 	onCleanup(stopAnimation);
-	const expanded = () => width() >= SIDEBAR_EXPANDED_THRESHOLD;
+	/** The panel's width and whether it paints its full rows. The sidebar's own
+	 * mode/focus state decides both, so the collapsed view can never be the
+	 * expanded one and a stale animated width can never widen it. */
+	const panel = () =>
+		sidebarPanelView({
+			expandedByState: expandedByMode(),
+			animatedWidth: width(),
+		});
 	// The glyph points toward the body: on the left side `»` pushes the panel
 	// open (permanent) and `«` returns it to auto-collapse; on the right side
 	// the pair is mirrored.
@@ -228,14 +276,14 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	};
 	return (
 		<box
-			width={width()}
+			width={panel().width}
 			flexShrink={0}
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", minHeight: 0, overflow: "hidden" }}
 			onMouseUp={() => props.onFocus()}
 		>
 			<Show
-				when={expanded()}
+				when={panel().expanded}
 				fallback={
 					// Collapsed: a toggle glyph, the pinned entry as its mark, then one row
 					// per workflow carrying its status glyph and its index, so the strip
@@ -268,7 +316,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 										height={1}
 										onActivate={activatePin}
 									/>
-									<PinDivider width={width()} />
+									<PinDivider width={panel().width} />
 								</>
 							)}
 						</Show>

@@ -22,7 +22,11 @@ import { TraceDb } from "../../src/server/telemetry-db";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 import { App } from "../../src/tui/otel/app/App.tsx";
-import { SIDEBAR_COLLAPSED_WIDTH } from "../../src/tui/otel/components/WorkspaceSidebar.tsx";
+import {
+	SIDEBAR_COLLAPSED_WIDTH,
+	SIDEBAR_WIDTH,
+	sidebarPanelView,
+} from "../../src/tui/otel/components/WorkspaceSidebar.tsx";
 import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
@@ -386,6 +390,149 @@ test("the collapsed strip keeps its shape with many workflows", async () => {
 	}
 });
 
+/** The compact strip's whole vocabulary: the toggle glyph, the pinned entry's
+ * mark, its rule, and one status mark plus position per workflow. The collapsed
+ * sidebar names nothing, so a *letter* in the strip is expanded content — an id,
+ * a phase, a panel title or a filter label — that leaked into it. */
+const COMPACT_STRIP = /^[^A-Za-z]*$/;
+
+/** The column the page body starts at, read from the Home destination list
+ * ("Home"): body content is the column the sidebar is not, so the space the
+ * collapsed strip frees is measured there. */
+function bodyColumn(frame: string): number {
+	for (const line of frame.split("\n")) {
+		const column = line.indexOf("Home");
+		if (column > 1) return column;
+	}
+	return -1;
+}
+
+/** The sidebar band of a frame: the rows between the shell's own header and
+ * status bar, which each span the whole width and belong to no panel. */
+function sidebarBand(frame: string): string[] {
+	const lines = frame.split("\n");
+	const last = lines.reduce((at, line, index) => (line.trim() ? index : at), 0);
+	return lines.slice(1, last);
+}
+
+/** The compact strip of a frame: the leftmost columns of the sidebar band. Only
+ * the strip (the toggle glyph, the pinned entry, its rule and one row per
+ * workflow) draws there, so this block is everything a glance at the collapsed
+ * sidebar reads. */
+function compactStrip(frame: string): string {
+	return sidebarBand(frame)
+		.map((line) => line.slice(0, SIDEBAR_COLLAPSED_WIDTH))
+		.join("\n");
+}
+
+/** The compact strip's non-empty rows, read past its selection marker and gap:
+ * the pinned entry's mark, its rule, then one mark plus position per workflow. */
+function compactRows(frame: string): string[] {
+	return sidebarBand(frame)
+		.map((line) => line.slice(0, SIDEBAR_COLLAPSED_WIDTH).slice(2).trimEnd())
+		.filter((line) => line.length > 0);
+}
+
+test("the collapsed panel is the compact strip whatever the width is", () => {
+	// The sidebar's own state decides the collapsed view: an expanded width left
+	// over from a slide that never ran (or never finished) must not paint the full
+	// rows, and while collapsed the panel paints the fixed compact width — the
+	// columns the page body keeps.
+	expect(
+		sidebarPanelView({ expandedByState: false, animatedWidth: SIDEBAR_WIDTH }),
+	).toEqual({ width: SIDEBAR_COLLAPSED_WIDTH, expanded: false });
+	expect(
+		sidebarPanelView({
+			expandedByState: true,
+			animatedWidth: SIDEBAR_COLLAPSED_WIDTH,
+		}),
+	).toEqual({ width: SIDEBAR_COLLAPSED_WIDTH, expanded: false });
+	expect(
+		sidebarPanelView({ expandedByState: true, animatedWidth: SIDEBAR_WIDTH }),
+	).toEqual({ width: SIDEBAR_WIDTH, expanded: true });
+	// The compact width is exactly what a compact row needs and no more: the
+	// selection marker, its gap column, the status glyph, the gap after it and the
+	// two digits a position takes.
+	expect(SIDEBAR_COLLAPSED_WIDTH).toBe(1 + 1 + 1 + 1 + 2);
+});
+
+test("the collapsed strip paints only the status glyph and the position", async () => {
+	for (const count of [1, 3, 12]) {
+		stubGateway(
+			Array.from({ length: count }, (_, index) =>
+				overview(`wf-a-very-long-workflow-id-${index}`, "active"),
+			),
+		);
+		const t = await renderShell();
+		try {
+			const frame = t.captureCharFrame();
+			// Long ids, and the phase meta under them, never reach the strip.
+			expect(compactStrip(frame)).toMatch(COMPACT_STRIP);
+			// One row per workflow, each exactly its status glyph and its position,
+			// under the pinned entry's own compact mark.
+			expect(compactRows(frame)).toEqual([
+				"⌂",
+				"──",
+				...Array.from({ length: count }, (_, index) => `… ${index + 1}`),
+			]);
+			// The body keeps the columns the strip does not take.
+			expect(bodyColumn(frame)).toBe(SIDEBAR_COLLAPSED_WIDTH + 1);
+		} finally {
+			t.renderer.destroy();
+			clearGateway();
+		}
+	}
+});
+
+test("Ctrl+S collapses to the compact strip at once and expands to the full rows", async () => {
+	stubGateway([
+		overview("wf-running-with-a-very-long-id", "active"),
+		overview("wf-attention-with-a-very-long-id", "attention-required"),
+	]);
+	const t = await renderShell();
+	try {
+		// Startup: `expanding` mode and no focus, so the sidebar is already the
+		// compact strip and the body has the freed columns.
+		const start = t.captureCharFrame();
+		expect(compactRows(start)).toEqual(["⌂", "──", "… 1", "! 2"]);
+		expect(bodyColumn(start)).toBe(SIDEBAR_COLLAPSED_WIDTH + 1);
+
+		// Focus (Ctrl+S): the full rows (id, phase meta, filter row) appear with the
+		// slide.
+		await focusSidebar(t);
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("Workspaces");
+		expect(expanded).toContain("wf-running-with-a-very-l");
+		expect(expanded).toContain("Apply · /demo");
+		expect(expanded).toContain("Attention");
+
+		// Unfocus: the very next painted frame is the compact strip again, and the
+		// page body has the freed columns back — the collapse is a cut, so it never
+		// waits for the width slide to finish (and an unfocused sidebar can never
+		// keep painting the expanded panel).
+		t.mockInput.pressKey("s", { ctrl: true });
+		await t.renderOnce();
+		const collapsed = t.captureCharFrame();
+		expect(compactStrip(collapsed)).toMatch(COMPACT_STRIP);
+		expect(collapsed).not.toContain("wf-running-with-a-very-l");
+		expect(bodyColumn(expanded) - bodyColumn(collapsed)).toBe(
+			SIDEBAR_WIDTH - SIDEBAR_COLLAPSED_WIDTH,
+		);
+
+		// Settled (the slide has finished): still the compact strip.
+		await advance(t, 4, 60);
+		expect(compactRows(t.captureCharFrame())).toEqual([
+			"⌂",
+			"──",
+			"… 1",
+			"! 2",
+		]);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
 test("the collapsed strip shows no filler when there is nothing to list", async () => {
 	stubGateway([]);
 	const t = await renderShell();
@@ -439,12 +586,16 @@ test("Enter opens the selected workflow's dashboard page", async () => {
 		t.mockInput.pressKey("j");
 		await advance(t);
 		t.mockInput.pressEnter();
-		// The workflow-dashboard route names the workflow in the breadcrumb and
-		// the shell badge reports the workflow tab.
+		// The workflow-dashboard route names the workflow in the breadcrumb and the
+		// shell badge reports the workflow tab. The cursor lands on the newest row
+		// the default filter leaves (completed workflows are hidden), so the crumb is
+		// what names it — the collapsed sidebar paints no row of its own.
 		expect(
 			await renderUntil(
 				t,
-				(frame) => frame.includes("wf-active") && frame.includes("workflow"),
+				(frame) =>
+					crumbLine(frame).includes("wf-attention") &&
+					frame.includes("workflow"),
 			),
 		).toBe(true);
 	} finally {
