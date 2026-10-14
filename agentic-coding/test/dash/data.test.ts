@@ -129,7 +129,7 @@ afterEach(() => {
 	for (const root of fixtures.splice(0)) removeRepoFixture(root);
 });
 
-test("workflow metadata task reaches dashboard state and request", () => {
+test("workflow metadata task reaches dashboard state and request", async () => {
 	const repo = fixture();
 	writeState(repo);
 	const workflowView = new WorkflowEngine(registerBuiltins()).status(
@@ -139,7 +139,7 @@ test("workflow metadata task reaches dashboard state and request", () => {
 
 	expect(workflowView.task).toBe("test");
 	expect(viewToDashboardState(workflowView)).toMatchObject({ task: "test" });
-	const dashboard = loadDashboard(repo, "review");
+	const dashboard = await loadDashboard(repo, "review");
 	expect(dashboard.request).toBe("test");
 	expect(dashboard.gitStatus).toMatchObject({
 		available: true,
@@ -150,7 +150,7 @@ test("workflow metadata task reaches dashboard state and request", () => {
 	});
 });
 
-test("loadDashboard projects the pinned runtime without fabricating a model", () => {
+test("loadDashboard projects the pinned runtime without fabricating a model", async () => {
 	const repo = fixture();
 	writeState(repo);
 	const db = new Database(canonicalStorePath(repo));
@@ -160,14 +160,14 @@ test("loadDashboard projects the pinned runtime without fabricating a model", ()
 	);
 	db.close();
 
-	const agent = loadDashboard(repo, "review").agents.find(
+	const agent = (await loadDashboard(repo, "review")).agents.find(
 		(item) => item.role === "worker",
 	);
 	expect(agent).toMatchObject({ runtime: "pi-durable" });
 	expect(agent?.model).toBeUndefined();
 });
 
-test("loadDashboard surfaces a durable agent's session identity to the Agents panel", () => {
+test("loadDashboard surfaces a durable agent's session identity to the Agents panel", async () => {
 	const repo = fixture();
 	writeState(repo);
 	const db = new Database(canonicalStorePath(repo));
@@ -193,7 +193,7 @@ test("loadDashboard surfaces a durable agent's session identity to the Agents pa
 	);
 	db.close();
 
-	const agent = loadDashboard(repo, "review").agents.find(
+	const agent = (await loadDashboard(repo, "review")).agents.find(
 		(item) => item.role === "worker",
 	);
 	// The Agents panel opens the session view from these three fields; without
@@ -206,7 +206,7 @@ test("loadDashboard surfaces a durable agent's session identity to the Agents pa
 	});
 });
 
-test("loadDashboard reports an agent from its run before a pane handle exists", () => {
+test("loadDashboard reports an agent from its run before a pane handle exists", async () => {
 	const repo = fixture();
 	writeState(repo);
 	// `writeState` starts the workflow but never drains the launch effect, so the
@@ -218,11 +218,11 @@ test("loadDashboard reports an agent from its run before a pane handle exists", 
 	db.close();
 	expect(row?.handle_json).toBeNull();
 	expect(
-		loadDashboard(repo, "review").agents.map((agent) => agent.role),
+		(await loadDashboard(repo, "review")).agents.map((agent) => agent.role),
 	).toContain("worker");
 });
 
-test("loadDashboard detects the auto-spawned test verifier before its pane handle exists", () => {
+test("loadDashboard detects the auto-spawned test verifier before its pane handle exists", async () => {
 	const repo = fixture();
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	const profile = {
@@ -293,13 +293,13 @@ test("loadDashboard detects the auto-spawned test verifier before its pane handl
 	);
 	// The run is created during handoff but its launch effect has not persisted
 	// any pane handle, which used to hide it from the agents panel entirely.
-	const agent = loadDashboard(repo, "verify-agent").agents.find(
+	const agent = (await loadDashboard(repo, "verify-agent")).agents.find(
 		(item) => item.role === "test-verifier",
 	);
 	expect(agent?.status).toBe("pending");
 });
 
-test("agents panel keeps the findings of a verifier a later round dropped", () => {
+test("agents panel keeps the findings of a verifier a later round dropped", async () => {
 	const repo = fixture();
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	const profile = {
@@ -408,7 +408,7 @@ test("agents panel keeps the findings of a verifier a later round dropped", () =
 	handoff("quality-verifier", { findings: [] });
 	handoff("test-verifier", { findings: [] });
 
-	const dashboard = loadDashboard(repo, "verify-rounds");
+	const dashboard = await loadDashboard(repo, "verify-rounds");
 	const dropped = dashboard.agents.find(
 		(item) => item.role === "test-quality-verifier",
 	);
@@ -433,7 +433,7 @@ test("dashboard does not fabricate runtime for synthetic agents without runs", (
 	expect(agent?.runtime).toBeUndefined();
 });
 
-test("loadDashboard falls back to the legacy request artifact", () => {
+test("loadDashboard falls back to the legacy request artifact", async () => {
 	const repo = fixture();
 	const workflowRoot = writeState(repo, "legacy");
 	removeWorkflowTask(repo, "legacy");
@@ -445,17 +445,17 @@ test("loadDashboard falls back to the legacy request artifact", () => {
 `,
 	);
 
-	expect(loadDashboard(repo, "legacy").request).toBe(
+	expect((await loadDashboard(repo, "legacy")).request).toBe(
 		"Keep the legacy fallback",
 	);
 });
 
-test("loadDashboard shows the empty request state without either source", () => {
+test("loadDashboard shows the empty request state without either source", async () => {
 	const repo = fixture();
 	writeState(repo, "empty");
 	removeWorkflowTask(repo, "empty");
 
-	expect(loadDashboard(repo, "empty").request).toBe("Not created yet");
+	expect((await loadDashboard(repo, "empty")).request).toBe("Not created yet");
 });
 
 test("loadLocalChanges includes tracked and untracked files, excluding workflow metadata", () => {
@@ -588,9 +588,9 @@ test("savePlanReview serializes and reloads plan review comments", async () => {
 	expect(loadPlanReviewComments(repo, "plan-review")).toEqual(comments);
 });
 
-test("worktreeGitStatus reports clean worktrees and missing upstreams", () => {
+test("worktreeGitStatus reports clean worktrees and missing upstreams", async () => {
 	const repo = fixture();
-	const status = worktreeGitStatus(repo);
+	const status = await worktreeGitStatus(repo);
 	expect(status.available).toBe(true);
 	expect(status.branch).toBeTypeOf("string");
 	expect(status.changedFiles).toBe(0);
@@ -602,7 +602,7 @@ test("worktreeGitStatus reports clean worktrees and missing upstreams", () => {
 	expect(status.behind).toBeUndefined();
 });
 
-test("worktreeGitStatus classifies modified, added, deleted, and renamed paths once each", () => {
+test("worktreeGitStatus classifies modified, added, deleted, and renamed paths once each", async () => {
 	const repo = fixture();
 	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n"); // modified
 	writeFileSync(join(repo, "untracked.ts"), "new\n"); // untracked -> added
@@ -615,49 +615,49 @@ test("worktreeGitStatus classifies modified, added, deleted, and renamed paths o
 	writeFileSync(join(repo, "partial.ts"), "a\n");
 	runGit(repo, "add", "partial.ts");
 	writeFileSync(join(repo, "partial.ts"), "b\n");
-	const status = worktreeGitStatus(repo);
+	const status = await worktreeGitStatus(repo);
 	expect(status.changedFiles).toBe(1); // moved.ts (rename)
 	expect(status.addedFiles).toBe(2); // untracked.ts + partial.ts (staged+edited once)
 	expect(status.deletedFiles).toBe(1); // gone.ts
 });
 
-test("worktreeGitStatus expands untracked directories into their files", () => {
+test("worktreeGitStatus expands untracked directories into their files", async () => {
 	const repo = fixture();
 	mkdirSync(join(repo, "fresh-dir"), { recursive: true });
 	writeFileSync(join(repo, "fresh-dir", "inside.ts"), "export {};\n");
-	const status = worktreeGitStatus(repo);
+	const status = await worktreeGitStatus(repo);
 	// The directory record must not count as a single added "file".
 	expect(status.addedFiles).toBe(1);
 });
 
-test("worktreeGitStatus keeps tracked state fresh while only the untracked walk is cached", () => {
+test("worktreeGitStatus keeps tracked state fresh while only the untracked walk is cached", async () => {
 	// The untracked walk is ~100 ms of a ~110 ms `git status` against ~10 ms for
 	// the tracked half, so the cached half is the one a viewer tolerates lagging.
 	const repo = fixture();
 	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n");
 	writeFileSync(join(repo, "untracked.ts"), "new\n");
-	const first = worktreeGitStatus(repo);
+	const first = await worktreeGitStatus(repo);
 	expect(first.changedFiles).toBe(1);
 	expect(first.addedFiles).toBe(1);
 
 	// Staged inside the cache window: the tracked half is read every call.
 	writeFileSync(join(repo, "staged.ts"), "export {};\n");
 	runGit(repo, "add", "staged.ts");
-	const second = worktreeGitStatus(repo);
+	const second = await worktreeGitStatus(repo);
 	expect(second.changedFiles).toBe(1);
 	expect(second.addedFiles).toBe(2); // cached untracked.ts + staged.ts
 });
 
-test("worktreeGitStatus bounds how long a fresh untracked file can go uncounted", () => {
+test("worktreeGitStatus bounds how long a fresh untracked file can go uncounted", async () => {
 	const repo = fixture();
-	expect(worktreeGitStatus(repo).addedFiles).toBe(0);
+	expect((await worktreeGitStatus(repo)).addedFiles).toBe(0);
 	writeFileSync(join(repo, "later.ts"), "export {};\n");
 	// Deliberate staleness bound: the cached untracked listing is reused for the
 	// cache window, so this is the worst-case lag on a brand-new untracked file.
-	expect(worktreeGitStatus(repo).addedFiles).toBe(0);
+	expect((await worktreeGitStatus(repo)).addedFiles).toBe(0);
 });
 
-test("worktreeGitStatus computes ahead/behind against the configured upstream", () => {
+test("worktreeGitStatus computes ahead/behind against the configured upstream", async () => {
 	const repo = fixture();
 	const main = runGit(repo, "rev-parse", "--abbrev-ref", "HEAD");
 	runGit(repo, "checkout", "-qb", "feature");
@@ -665,7 +665,7 @@ test("worktreeGitStatus computes ahead/behind against the configured upstream", 
 	runGit(repo, "add", "feature.ts");
 	runGit(repo, "commit", "-qm", "feature work");
 	runGit(repo, "branch", "--set-upstream-to", main);
-	let status = worktreeGitStatus(repo);
+	let status = await worktreeGitStatus(repo);
 	expect(status.noUpstream).toBe(false);
 	expect(status.ahead).toBe(1);
 	expect(status.behind).toBe(0);
@@ -674,18 +674,18 @@ test("worktreeGitStatus computes ahead/behind against the configured upstream", 
 	runGit(repo, "add", "main.ts");
 	runGit(repo, "commit", "-qm", "main work");
 	runGit(repo, "checkout", "-q", "feature");
-	status = worktreeGitStatus(repo);
+	status = await worktreeGitStatus(repo);
 	expect(status.ahead).toBe(1);
 	expect(status.behind).toBe(1);
 });
 
-test("loadDashboard exposes the complete Git status snapshot", () => {
+test("loadDashboard exposes the complete Git status snapshot", async () => {
 	const repo = fixture();
 	writeState(repo);
 	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n");
 	writeFileSync(join(repo, "new.ts"), "export const added = true;\n");
 
-	expect(loadDashboard(repo, "review").gitStatus).toMatchObject({
+	expect((await loadDashboard(repo, "review")).gitStatus).toMatchObject({
 		available: true,
 		changedFiles: 1,
 		addedFiles: 1,
@@ -694,13 +694,15 @@ test("loadDashboard exposes the complete Git status snapshot", () => {
 	});
 });
 
-test("worktreeGitStatus reports bounded diagnostics for unavailable worktrees", () => {
-	const missing = worktreeGitStatus(join(tmpdir(), "missing-worktree-fixture"));
+test("worktreeGitStatus reports bounded diagnostics for unavailable worktrees", async () => {
+	const missing = await worktreeGitStatus(
+		join(tmpdir(), "missing-worktree-fixture"),
+	);
 	expect(missing.available).toBe(false);
 	expect(missing.diagnostic).toContain("worktree not found");
 	const plain = mkdtempSync(join(tmpdir(), "agent-dash-nongit-"));
 	roots.push(plain);
-	const status = worktreeGitStatus(plain);
+	const status = await worktreeGitStatus(plain);
 	expect(status.available).toBe(false);
 	expect(status.diagnostic).toBeTruthy();
 	expect((status.diagnostic ?? "").length).toBeLessThanOrEqual(96);
@@ -1661,4 +1663,42 @@ test("demo dashboard exposes cost breakdown", () => {
 	expect(dashboard.agents.find((agent) => agent.role === "worker")?.cost).toBe(
 		0.42,
 	);
+});
+
+test("the dashboard Git status and the review file list share one untracked walk", async () => {
+	// The untracked half of `git status` is the expensive read, and the review
+	// panel asks for the same worktree; one walk must serve both, so the review
+	// list reads the listing the status read just cached instead of walking the
+	// tree a second time.
+	const repo = fixture();
+	writeState(repo);
+	const worktree = new WorkflowEngine(registerBuiltins()).status(
+		repo,
+		"review",
+	).worktree;
+	writeFileSync(join(worktree, "untracked.ts"), "new\n");
+	const status = await worktreeGitStatus(worktree);
+	expect(status.addedFiles).toBe(1);
+
+	// Inside the cache window neither reader walks again, so a file that appeared
+	// after the walk is not counted by either of them.
+	writeFileSync(join(worktree, "later.ts"), "newer\n");
+	expect((await worktreeGitStatus(worktree)).addedFiles).toBe(1);
+	const reviewPaths = loadLocalChanges(repo, "review").map(
+		(change) => change.newPath,
+	);
+	expect(reviewPaths).toContain("untracked.ts");
+	expect(reviewPaths).not.toContain("later.ts");
+});
+
+test("concurrent Git status reads of one worktree agree", async () => {
+	// The first reads race the review panel's own read of the same worktree; the
+	// in-flight walk is shared, so both must answer with the same classification.
+	const repo = fixture();
+	writeFileSync(join(repo, "untracked.ts"), "new\n");
+	const [first, second] = await Promise.all([
+		worktreeGitStatus(repo),
+		worktreeGitStatus(repo),
+	]);
+	expect(second).toEqual(first);
 });

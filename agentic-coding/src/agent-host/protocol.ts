@@ -74,6 +74,12 @@ export interface WatchRequest {
 	 * serves the transcript the conversation already holds and never registers a
 	 * run, so `submit`/`abort` keep refusing an unknown run id. */
 	readonly conversationId?: string;
+	/** What each frame must carry. `docs` serves the live documents (`pi.live`,
+	 * `pi.inbox`) without the committed transcript: the Agents panel's activity
+	 * badge reads nothing else, and a run's transcript is megabytes that would
+	 * otherwise cross the socket again on every token-rate frame. Absent means
+	 * the full conversation view, which the session page needs. */
+	readonly view?: "docs";
 }
 export interface HelloRequest {
 	readonly type: "hello";

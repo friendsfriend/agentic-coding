@@ -150,6 +150,7 @@ function fakeWatch() {
 	const calls: Array<{
 		runId: string;
 		hostSocket: string;
+		view: "docs";
 		onValue: (value: unknown) => void;
 		stopped: boolean;
 	}> = [];
@@ -157,6 +158,7 @@ function fakeWatch() {
 		const call = {
 			runId: target.runId,
 			hostSocket: target.hostSocket,
+			view: target.view,
 			onValue,
 			stopped: false,
 		};
@@ -196,6 +198,20 @@ test("the source watches each durable agent and reports its frames", async () =>
 	// A later frame with no live work clears the activity again.
 	calls[0]?.onValue(liveFrame({}));
 	expect(source.activity("worker")).toBeUndefined();
+	source.dispose();
+});
+
+test("every activity watch asks the host for the live documents alone", async () => {
+	// The badge reads `pi.live`/`pi.inbox` and nothing else, so the watch must
+	// not ask for the committed transcript: shipping it would put a run's whole
+	// conversation on the socket again on every token-rate frame of every agent.
+	const { calls, watch } = fakeWatch();
+	const source = createAgentActivitySource({ watch });
+	source.sync([
+		{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+	]);
+	await settle();
+	expect(calls.map((call) => call.view)).toEqual(["docs"]);
 	source.dispose();
 });
 

@@ -67,6 +67,10 @@ import {
 	savePromptHistory,
 } from "../shared/preferences.ts";
 import { createAgentActivitySource } from "./agent-activity.ts";
+import {
+	createAgentSessionProjection,
+	streamAgentSessionProjection,
+} from "./agent-session.ts";
 import { testDashboard } from "./demo.ts";
 import { evidenceLocalPath, openEvidenceExternally } from "./evidence-open.ts";
 import {
@@ -135,6 +139,7 @@ import type { FindingEvent } from "./ui/FindingsModal.tsx";
 import {
 	debounce,
 	REFRESH_MIN_INTERVAL_MS,
+	seedThenHydrate,
 	startSafetyResync,
 	throttle,
 	watchDirectories,
@@ -594,6 +599,11 @@ export function App(props: {
 	// it streaming). `HostClient` is dynamically imported so no dashboard route
 	// eagerly loads the durable-agent-host module.
 	let agentSessionStopWatch: (() => void) | undefined;
+	// The transcript projection of the frame the watch last delivered: the newest
+	// window is published on arrival and the older entries fill in on idle turns
+	// (see `projectAgentSessionTranscript`). A no-op until a frame starts one, so
+	// every teardown path can call it without a guard.
+	let agentSessionStopProjection: () => void = () => {};
 	// The transcript scroll box, owned by the view and scrolled by the
 	// agent-session keymap layer registered below.
 	let agentSessionScrollbox: ScrollBoxRenderable | undefined;
@@ -626,6 +636,25 @@ export function App(props: {
 		setAgentSessionOpen(false);
 		props.keymap.setData("agent.view", "none");
 	};
+	/**
+	 * Project one host watch frame into the transcript page.
+	 *
+	 * The newest entries paint immediately, so the reader sees the tail of the
+	 * run as soon as the frame lands; the older entries are projected on idle
+	 * turns and published as they complete. Projecting the whole transcript on
+	 * every frame (a streaming run delivers one every ~50 ms) measured ~18 ms for
+	 * a long transcript, most of it for rows the view's own window never renders.
+	 * A newer frame cancels the projection in flight: the tail it built for the
+	 * previous frame is superseded, and the reader is looking at the newest rows
+	 * either way.
+	 */
+	const projectAgentSessionTranscript = (value: unknown) => {
+		agentSessionStopProjection();
+		agentSessionStopProjection = streamAgentSessionProjection(
+			createAgentSessionProjection(value),
+			(blocks) => setAgentSessionBlocks(blocks),
+		);
+	};
 	const openAgentSession = (session: {
 		role: string;
 		runId: string;
@@ -637,6 +666,7 @@ export function App(props: {
 	}) => {
 		agentSessionStopWatch?.();
 		agentSessionStopWatch = undefined;
+		agentSessionStopProjection();
 		setAgentSessionDraft("");
 		setAgentSessionMetadata({ working: false });
 		setAgentSessionBlocks([
@@ -655,8 +685,7 @@ export function App(props: {
 				const { HostClient, watchStream } = await import(
 					"../../agent-host/client.ts"
 				);
-				const { buildAgentSessionView, readAgentSessionMetadata } =
-					await import("./agent-session.ts");
+				const { readAgentSessionMetadata } = await import("./agent-session.ts");
 				const client = new HostClient(session.hostSocket);
 				// The catalog is best-effort: an old host without the request just
 				// leaves the pickers empty instead of failing the session view.
@@ -682,12 +711,15 @@ export function App(props: {
 					onFrame: (value) => {
 						if (agentSession()?.runId !== session.runId) return;
 						receivedFrame = true;
-						setAgentSessionBlocks(buildAgentSessionView(value));
+						projectAgentSessionTranscript(value);
 						setAgentSessionMetadata(readAgentSessionMetadata(value));
 					},
 					onState: (state) => {
 						if (agentSession()?.runId !== session.runId) return;
-						if (state !== "open" && !receivedFrame)
+						if (state !== "open" && !receivedFrame) {
+							// A reconnect before the first frame owns the placeholder
+							// again: nothing may publish over it.
+							agentSessionStopProjection();
 							setAgentSessionBlocks([
 								{
 									id: "route:connecting",
@@ -696,6 +728,7 @@ export function App(props: {
 									text: "Connecting…",
 								},
 							]);
+						}
 					},
 				});
 				if (agentSession()?.runId !== session.runId) {
@@ -705,6 +738,7 @@ export function App(props: {
 				agentSessionStopWatch = stop;
 			} catch (error) {
 				if (agentSession()?.runId !== session.runId) return;
+				agentSessionStopProjection();
 				setAgentSessionBlocks([
 					{
 						id: "route:host-error",
@@ -1720,9 +1754,12 @@ export function App(props: {
 						if (props.active && !props.active()) return;
 						refresh();
 					});
+		// The cheap first paint, so the hydrate below can wait for it (see the
+		// `refresh()` call at the end of this mount).
+		let seedPainted: Promise<unknown> = Promise.resolve();
 		if (props.profile !== "test") {
 			const seedController = new AbortController();
-			void loadDashboardSeed(
+			seedPainted = loadDashboardSeed(
 				props.repo,
 				props.workflowId,
 				seedController.signal,
@@ -1753,9 +1790,23 @@ export function App(props: {
 		const disposeFocusRestorer = registerFocusRestorer("dashboard", () => {
 			props.keymap.setData("modal.active", "none");
 		});
-		refresh();
+		if (props.profile === "test") refresh();
+		// Hydrate after the seed has painted, never before it. The seed is the
+		// cheap workflow-view read the Agents panel renders from; the full
+		// observation reads the whole telemetry log and runs Git synchronously on
+		// this event loop when the server is in-process, so starting it in the same
+		// tick buried the seed's write behind that read and left the panel on its
+		// loading placeholder for the length of the observation.
+		else
+			void seedThenHydrate(
+				seedPainted,
+				renderer,
+				() => refresh(),
+				() => refreshDisposed,
+			);
 		onCleanup(() => {
 			refreshDisposed = true;
+			agentSessionStopProjection();
 			refreshController?.abort();
 			disposeExecutionError?.();
 			disposeExecutionProgress?.();

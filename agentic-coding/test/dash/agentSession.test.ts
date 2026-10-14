@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
 import {
 	buildAgentSessionView,
+	createAgentSessionProjection,
 	readAgentSessionMetadata,
 	renderAgentSessionSummary,
 	reuseAgentSessionBlocks,
+	streamAgentSessionProjection,
 } from "../../src/tui/dash/agent-session.ts";
 
 /** Blocks without their identity or structured tool payload: these assertions
@@ -991,5 +993,191 @@ describe("reuseAgentSessionBlocks", () => {
 		expect(reuseAgentSessionBlocks(first, next)[0]).toBe(next[0]);
 		// A frame that changed nothing at all still reuses the array.
 		expect(reuseAgentSessionBlocks(next, frame("a\nb"))).toBe(next);
+	});
+});
+
+/** A transcript of the shape a long run leaves behind: an assistant step with a
+ * thought and a tool call, then the tool's multi-line output. */
+function longTranscript(steps: number): unknown[] {
+	const entries: unknown[] = [];
+	for (let index = 0; index < steps; index++) {
+		entries.push({
+			id: `step-${index}`,
+			kind: "pi.assistant",
+			model: [
+				{
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [
+						{
+							type: "thinking",
+							thinking: `weighing step ${index} `.repeat(20),
+						},
+						{
+							type: "toolCall",
+							id: `call-${index}`,
+							name: "bash",
+							arguments: { command: `echo ${index}` },
+						},
+					],
+				},
+			],
+		});
+		entries.push({
+			id: `output-${index}`,
+			kind: "pi.tool-result",
+			model: [
+				{
+					toolName: "bash",
+					toolCallId: `call-${index}`,
+					isError: false,
+					content: Array.from(
+						{ length: 60 },
+						(_, line) => `output line ${line} of step ${index}`,
+					).join("\n"),
+				},
+			],
+		});
+	}
+	return entries;
+}
+
+/** No-op blocks the newest assistant step still has in flight. */
+const liveFrame = (entries: unknown[], steps: number) => ({
+	docs: {
+		"pi.live": {
+			run: "run-1",
+			tools: [{ name: "bash", status: "running", callId: `call-${steps - 1}` }],
+		},
+	},
+	entries,
+});
+
+/** Best-of-`runs` wall clock of one projection, so a loaded machine cannot make
+ * the comparison a coin toss. */
+function fastest(runs: number, fn: () => void): number {
+	let best = Number.POSITIVE_INFINITY;
+	for (let index = 0; index < runs; index++) {
+		const started = performance.now();
+		fn();
+		best = Math.min(best, performance.now() - started);
+	}
+	return best;
+}
+
+describe("createAgentSessionProjection", () => {
+	test("paints the newest entries first and converges on the full build", () => {
+		const steps = 400;
+		const frame = liveFrame(longTranscript(steps), steps);
+		const full = buildAgentSessionView(frame);
+		const projection = createAgentSessionProjection(frame);
+
+		// The first paint is the tail of the run, not the whole transcript.
+		expect(projection.complete).toBe(false);
+		expect(projection.blocks.length).toBeGreaterThan(0);
+		expect(projection.blocks.length).toBeLessThan(full.length);
+		expect(projection.blocks.at(-1)?.id).toBe(full.at(-1)?.id);
+		// The running tool slot is in the first paint too: the in-progress row
+		// must not wait for the older entries either.
+		expect(projection.blocks.some((block) => block.pending)).toBe(true);
+
+		let turns = 0;
+		while (!projection.step()) turns++;
+		expect(turns).toBeLessThan(20);
+		expect(projection.blocks).toEqual(buildAgentSessionView(frame));
+	});
+
+	test("first paint does not wait for the full transcript projection", () => {
+		const steps = 600;
+		const frame = liveFrame(longTranscript(steps), steps);
+		// Warm both paths before timing them.
+		buildAgentSessionView(frame);
+		const full = fastest(3, () => {
+			buildAgentSessionView(frame);
+		});
+		const first = fastest(5, () => {
+			createAgentSessionProjection(frame);
+		});
+		// A screenful of a long transcript is a small share of projecting it.
+		expect(first).toBeLessThan(full / 3);
+	});
+
+	test("an empty frame completes on the first paint", () => {
+		const projection = createAgentSessionProjection({ entries: [] });
+		expect(projection.complete).toBe(true);
+		expect(projection.blocks).toEqual([]);
+	});
+
+	test("degrades to no blocks on an unexpected shape", () => {
+		expect(createAgentSessionProjection(undefined).blocks).toEqual([]);
+		expect(createAgentSessionProjection("nonsense").blocks).toEqual([]);
+	});
+});
+
+describe("streamAgentSessionProjection", () => {
+	test("publishes the first paint before any scheduled turn runs", () => {
+		const steps = 400;
+		const frame = liveFrame(longTranscript(steps), steps);
+		const published: Array<readonly AgentSessionBlock[]> = [];
+		const turns: Array<() => void> = [];
+		const stop = streamAgentSessionProjection(
+			createAgentSessionProjection(frame),
+			(blocks) => published.push(blocks),
+			{
+				schedule: (run) => {
+					turns.push(run);
+					return () => {
+						const index = turns.indexOf(run);
+						if (index >= 0) turns.splice(index, 1);
+					};
+				},
+			},
+		);
+
+		// Nothing scheduled has run yet: what the reader has is the tail.
+		expect(published.length).toBe(1);
+		expect(published[0]?.length).toBeLessThan(
+			buildAgentSessionView(frame).length,
+		);
+		while (turns.length > 0) turns.shift()?.();
+		expect(published.at(-1)).toEqual(buildAgentSessionView(frame));
+		stop();
+	});
+
+	test("stops publishing once the projection is superseded", () => {
+		const steps = 400;
+		const frame = liveFrame(longTranscript(steps), steps);
+		let publishes = 0;
+		const turns: Array<() => void> = [];
+		const stop = streamAgentSessionProjection(
+			createAgentSessionProjection(frame),
+			() => publishes++,
+			{
+				schedule: (run) => {
+					turns.push(run);
+					return () => {};
+				},
+			},
+		);
+		const before = publishes;
+		stop();
+		while (turns.length > 0) turns.shift()?.();
+		expect(publishes).toBe(before);
+	});
+
+	test("an already complete projection schedules no turn", () => {
+		let scheduled = 0;
+		const stop = streamAgentSessionProjection(
+			createAgentSessionProjection({ entries: [] }),
+			() => {},
+			{
+				schedule: () => {
+					scheduled++;
+					return () => {};
+				},
+			},
+		);
+		expect(scheduled).toBe(0);
+		stop();
 	});
 });

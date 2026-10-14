@@ -98,6 +98,66 @@ export function throttle(
 	};
 }
 
+/** How long a paint that never arrives may park its waiter: a stopped or
+ * backgrounded renderer emits no frame, and the dashboard's hydrate must not
+ * wait for one forever. */
+export const NEXT_FRAME_TIMEOUT_MS = 50;
+
+/** The frame source `afterNextFrame` waits on: OpenTUI's renderer, structurally
+ * typed so the helper stays free of the renderer package and unit-testable. */
+export interface FrameSource {
+	on(event: string, listener: () => void): unknown;
+	off(event: string, listener: () => void): unknown;
+}
+
+/** Resolve after the next `event` from `source` (`CliRenderEvents.FRAME` by
+ * default), bounded by `timeoutMs`.
+ *
+ * Writing a value into a Solid signal only *schedules* the render. The
+ * dashboard paints its cheap seed and then hydrates; a hydrate started in the
+ * same microtask turn as the seed's write ran its own synchronous read before
+ * the renderer's next frame, so the seed never reached the screen first. One
+ * frame is what separates the two. */
+export function afterNextFrame(
+	source: FrameSource,
+	event = "frame",
+	timeoutMs = NEXT_FRAME_TIMEOUT_MS,
+): Promise<void> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const done = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			source.off(event, done);
+			resolve();
+		};
+		const timer = setTimeout(done, timeoutMs);
+		source.on(event, done);
+	});
+}
+
+/** Hydrate a view after its cheap first paint has reached the screen.
+ *
+ * `seed` is the read whose value the caller already wrote into the view (inside
+ * the promise's own `then`). This waits for that read to settle and then for
+ * one rendered frame, and only then runs `hydrate` — the authoritative read
+ * that would otherwise take the event loop before the renderer's next frame and
+ * keep the first paint off screen for its whole duration. A disposed caller
+ * hydrates nothing. */
+export async function seedThenHydrate(
+	seed: Promise<unknown>,
+	frames: FrameSource,
+	hydrate: () => void,
+	isDisposed: () => boolean = () => false,
+): Promise<void> {
+	await seed.catch(() => undefined);
+	if (isDisposed()) return;
+	await afterNextFrame(frames);
+	if (isDisposed()) return;
+	hydrate();
+}
+
 /** Watch directories (best-effort; a directory that does not exist yet is
  * skipped — the low-frequency safety re-sync picks it up later) and call
  * `onChange` (debounced) whenever a file inside one changes. Returns a disposer. */

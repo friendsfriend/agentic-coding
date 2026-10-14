@@ -47,6 +47,11 @@ export type AgentActivityWatch = (
 		readonly runId: string;
 		readonly hostSocket: string;
 		readonly conversationId?: string;
+		/** Every activity watch asks the host for the live documents alone: the
+		 * badge reads `pi.live`/`pi.inbox` and nothing else, so the committed
+		 * transcript stays on the host instead of crossing the socket again on
+		 * every token-rate frame of every watched agent. */
+		readonly view: "docs";
 	},
 	onValue: (value: unknown) => void,
 ) => Promise<() => void>;
@@ -180,6 +185,7 @@ const hostWatch: AgentActivityWatch = async (target, onValue) => {
 	const client = new HostClient(target.hostSocket);
 	return watchStream(client, target.runId, {
 		...(target.conversationId ? { conversationId: target.conversationId } : {}),
+		view: target.view,
 		onFrame: onValue,
 		onState: (state) => {
 			if (state !== "open") onValue(undefined);
@@ -241,6 +247,7 @@ export function createAgentActivitySource(
 						...(agent.conversationId
 							? { conversationId: agent.conversationId }
 							: {}),
+						view: "docs",
 					},
 					(value) => {
 						if (disposed) return;

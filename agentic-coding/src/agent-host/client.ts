@@ -266,6 +266,9 @@ export class HostClient {
 		onFrame: (value: unknown) => void,
 		options: {
 			conversationId?: string;
+			/** What each frame must carry (`WatchRequest.view`): `docs` asks for
+			 * the live documents alone, which is all the activity badge reads. */
+			view?: "docs";
 			/** Called once if the stream drops *after* it had started — the socket
 			 * closed or errored past the handshake. Not called when the caller stops
 			 * the watch itself. A single-shot watch swallowed a post-start close,
@@ -313,6 +316,7 @@ export class HostClient {
 						...(options.conversationId
 							? { conversationId: options.conversationId }
 							: {}),
+						...(options.view ? { view: options.view } : {}),
 					}),
 				),
 			);
@@ -368,6 +372,8 @@ export interface WatchStreamOptions {
 	/** Connection-state changes, so a caller can fall back to a status badge or
 	 * show a "reconnecting" notice while the stream is down. */
 	readonly onState?: (state: WatchStreamState) => void;
+	/** What each frame must carry (`WatchRequest.view`). */
+	readonly view?: "docs";
 	/** First reconnect backoff, doubling up to `maxBackoffMs`. */
 	readonly backoffMs?: number;
 	readonly maxBackoffMs?: number;
@@ -411,6 +417,7 @@ export function watchStream(
 						...(options.conversationId
 							? { conversationId: options.conversationId }
 							: {}),
+						...(options.view ? { view: options.view } : {}),
 						onClose: () => {
 							dropped = true;
 							wake?.();

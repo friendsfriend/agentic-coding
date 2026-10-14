@@ -673,6 +673,7 @@ export class DurableHost {
 		runId: string,
 		onValue: (value: unknown) => void,
 		recoveredConversationId?: string,
+		view: "docs" | undefined = undefined,
 	): Promise<() => void> {
 		// A host that restarted no longer tracks the runs it served before, and the
 		// run id lives only in that in-memory map. The conversation is durable, so a
@@ -691,11 +692,17 @@ export class DurableHost {
 		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
 		const state = await conversation.viewState(BACKGROUND_CONTEXT);
 		// The measured timings travel with the conversation view, the only place
-		// the dashboard can read them (pi-durable stores no timing itself).
-		const augment = (value: unknown) => ({
-			...(value as Record<string, unknown>),
-			timings: this.timings.get(conversationId) ?? {},
-		});
+		// the dashboard can read them (pi-durable stores no timing itself). A
+		// docs-only watcher reads the live documents and nothing else, so the
+		// committed transcript never crosses the socket for it.
+		const augment = (value: unknown) => {
+			const record = value as Record<string, unknown> | undefined;
+			if (view === "docs") return { docs: record?.docs ?? {} };
+			return {
+				...(record ?? {}),
+				timings: this.timings.get(conversationId) ?? {},
+			};
+		};
 		onValue(augment(state.value));
 		// Coalesce what follows: a generating model changes this state at token
 		// rate, and every frame crosses the socket and rebuilds the watcher's whole
@@ -902,6 +909,7 @@ export class DurableHost {
 							send({ type: "watchFrame", runId: request.runId, value });
 						},
 						request.conversationId,
+						request.view,
 					);
 					cleanups.add(stop);
 					return;

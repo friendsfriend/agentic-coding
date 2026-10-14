@@ -802,40 +802,211 @@ function assistantSummaryBlock(
 	};
 }
 
-export function buildAgentSessionView(value: unknown): AgentSessionBlock[] {
-	if (!isRecord(value)) return [];
-	const docs = isRecord(value.docs) ? value.docs : {};
-	const live = isRecord(docs["pi.live"]) ? docs["pi.live"] : undefined;
-	const entries = Array.isArray(value.entries) ? value.entries : [];
-	const timings = isRecord(value.timings)
-		? (value.timings as Record<string, EntryTiming>)
-		: {};
-	const blocks: AgentSessionBlock[] = [];
-	for (const [index, entry] of entries.entries()) {
-		const entryKey = entryId(entry, index);
-		blocks.push(...entryBlocks(entry, timings, entryKey));
-		const summary = assistantSummaryBlock(entry, timings, entryKey);
+/** Blocks the first paint aims for: a screenful of transcript, which is what a
+ * reader sees before scrolling. A long transcript must not be projected in full
+ * before anything is drawn. */
+const FIRST_PAINT_BLOCKS = 60;
+
+/** Entries one `step` projects before it may stop at the time budget: a chunk
+ * small enough to stay well inside a frame even when the entries carry large
+ * tool results. */
+const PROJECTION_CHUNK = 8;
+
+/** A transcript projection that can be built a slice at a time.
+ *
+ * The dashboard rebuilds the whole session view on every host watch frame (a
+ * streaming run changes `pi.live` at token rate), and projecting every entry of
+ * a long transcript is what made opening the session feel slow: 1044 committed
+ * entries measured 17.6 ms per frame, none of which the reader was looking at,
+ * because the view renders only the newest window. The projection therefore
+ * starts from the newest entries — the ones on screen — and grows older ones
+ * on `step` while the frames keep their cost proportional to what is visible.
+ */
+export interface AgentSessionProjection {
+	/** The blocks projected so far: the newest window of the transcript. */
+	readonly blocks: readonly AgentSessionBlock[];
+	/** Nothing older can add a rendered row: every entry that could still reach
+	 * the rendered window has been projected. */
+	readonly complete: boolean;
+	/** Project older entries within `budgetMs`; returns `complete`. */
+	step(budgetMs?: number): boolean;
+	/** Project every remaining entry and return the blocks. This is the reference
+	 * build: the result is the whole transcript, merged and bounded, whatever the
+	 * projection had grown to. */
+	finish(): readonly AgentSessionBlock[];
+}
+
+class AgentSessionProjectionImpl implements AgentSessionProjection {
+	private readonly entries: readonly unknown[];
+	private readonly timings: Readonly<Record<string, EntryTiming>>;
+	private readonly live: Readonly<Record<string, unknown>> | undefined;
+	private readonly inboxItems: readonly unknown[];
+	/** Index of the oldest projected entry; entries `[start, length)` are in
+	 * `pending`, newest last. */
+	private start: number;
+	/** The un-merged blocks of the projected entries, in transcript order. */
+	private pending: AgentSessionBlock[] = [];
+	private published: readonly AgentSessionBlock[] = [];
+	private done = false;
+
+	constructor(value: unknown) {
+		const record = isRecord(value) ? value : {};
+		const docs = isRecord(record.docs) ? record.docs : {};
+		this.live = isRecord(docs["pi.live"]) ? docs["pi.live"] : undefined;
+		this.entries = Array.isArray(record.entries) ? record.entries : [];
+		this.timings = isRecord(record.timings)
+			? (record.timings as Record<string, EntryTiming>)
+			: {};
+		const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
+		this.inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
+		this.start = this.entries.length;
+		this.project(FIRST_PAINT_BLOCKS);
+	}
+
+	get blocks(): readonly AgentSessionBlock[] {
+		return this.published;
+	}
+
+	get complete(): boolean {
+		return this.done;
+	}
+
+	step(budgetMs = 8): boolean {
+		if (this.done) return true;
+		const deadline = performance.now() + budgetMs;
+		this.project(PROJECTION_CHUNK, deadline);
+		return this.done;
+	}
+
+	finish(): readonly AgentSessionBlock[] {
+		// Every remaining entry in one pass, published without the early stop: the
+		// reference build covers the whole transcript whatever the window held.
+		this.project(Number.POSITIVE_INFINITY, undefined, false);
+		return this.published;
+	}
+
+	/** Project entries backwards from `start` until `target` of them are in
+	 * `pending`, the entries are exhausted, or the time budget is spent (after
+	 * `target` is reached). One publish per call, so the caller has a window to
+	 * render after every slice. */
+	private project(
+		target: number,
+		deadline?: number,
+		mayStopEarly = true,
+	): void {
+		const chunks: AgentSessionBlock[][] = [];
+		let projected = 0;
+		while (
+			this.start > 0 &&
+			(projected < target ||
+				(deadline !== undefined && performance.now() < deadline))
+		) {
+			this.start--;
+			chunks.push(this.entryBlocksAt(this.start));
+			projected++;
+		}
+		if (projected > 0) {
+			chunks.reverse();
+			this.pending = [...chunks.flat(), ...this.pending];
+		}
+		this.publish(mayStopEarly);
+	}
+
+	private entryBlocksAt(index: number): AgentSessionBlock[] {
+		const entry = this.entries[index];
+		const key = entryId(entry, index);
+		const blocks = entryBlocks(entry, this.timings, key);
+		const summary = assistantSummaryBlock(entry, this.timings, key);
 		if (summary) blocks.push(summary);
+		return blocks;
 	}
-	blocks.push(...liveBlocks(live));
-	const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
-	const inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
-	for (const [index, item] of inboxItems.entries()) {
-		if (!isRecord(item) || (item.mode !== "steer" && item.mode !== "followUp"))
-			continue;
-		const text = contentRaw(item.content);
-		if (text)
-			blocks.push({
-				id: `inbox:${index}`,
-				kind: "notice",
-				tone: "warning",
-				text: `Queued ${item.mode === "steer" ? "steering" : "follow-up"}: ${text}`,
-			});
+
+	/** Merge what is projected and remember the window. `mayStopEarly` is the
+	 * incremental path: once the merged window is as long as the projection can
+	 * ever render (`MAX_BLOCKS`), older entries could only produce rows the trim
+	 * would drop, so the projection is complete. `finish` never stops early, so
+	 * its result is the reference build for any input. */
+	private publish(mayStopEarly: boolean): void {
+		const blocks: AgentSessionBlock[] = [...this.pending];
+		blocks.push(...liveBlocks(this.live));
+		for (const [index, item] of this.inboxItems.entries()) {
+			if (
+				!isRecord(item) ||
+				(item.mode !== "steer" && item.mode !== "followUp")
+			)
+				continue;
+			const text = contentRaw(item.content);
+			if (text)
+				blocks.push({
+					id: `inbox:${index}`,
+					kind: "notice",
+					tone: "warning",
+					text: `Queued ${item.mode === "steer" ? "steering" : "follow-up"}: ${text}`,
+				});
+		}
+		const merged = mergeToolLifecycle(blocks);
+		this.published =
+			merged.length > MAX_BLOCKS
+				? merged.slice(merged.length - MAX_BLOCKS)
+				: merged;
+		this.done =
+			this.start === 0 || (mayStopEarly && merged.length >= MAX_BLOCKS);
 	}
-	const merged = mergeToolLifecycle(blocks);
-	return merged.length > MAX_BLOCKS
-		? merged.slice(merged.length - MAX_BLOCKS)
-		: merged;
+}
+
+/** Start projecting one host watch frame: the newest entries are projected by
+ * the time this returns, and `step` grows the window older. */
+export function createAgentSessionProjection(
+	value: unknown,
+): AgentSessionProjection {
+	return new AgentSessionProjectionImpl(value);
+}
+
+/** Runs `run` on a later turn and returns a canceller. Injected so the
+ * progressive publish can be driven synchronously by tests. */
+export type ProjectionScheduler = (run: () => void) => () => void;
+
+/** Default scheduler: the next macrotask, so a slice yields to the renderer's
+ * frame instead of holding the loop through the whole transcript. */
+const nextTurnScheduler: ProjectionScheduler = (run) => {
+	const timer = setTimeout(run, 0);
+	return () => clearTimeout(timer);
+};
+
+/** Publish a projection as it grows: `onUpdate` receives the first paint
+ * immediately — before any scheduled turn runs — and every later slice as it
+ * lands, so the reader sees the newest rows of a long transcript without
+ * waiting for the rest of it. Returns a disposer that stops the pump. */
+export function streamAgentSessionProjection(
+	projection: AgentSessionProjection,
+	onUpdate: (blocks: readonly AgentSessionBlock[]) => void,
+	options: {
+		readonly schedule?: ProjectionScheduler;
+		readonly budgetMs?: number;
+	} = {},
+): () => void {
+	const schedule = options.schedule ?? nextTurnScheduler;
+	let cancelled = false;
+	let cancel: (() => void) | undefined;
+	const pump = () => {
+		if (cancelled) return;
+		projection.step(options.budgetMs);
+		onUpdate(projection.blocks);
+		if (!projection.complete) cancel = schedule(pump);
+	};
+	onUpdate(projection.blocks);
+	if (!projection.complete) cancel = schedule(pump);
+	return () => {
+		cancelled = true;
+		cancel?.();
+		cancel = undefined;
+	};
+}
+
+/** The whole transcript projection for one host watch frame: the reference
+ * build the incremental projection converges to. */
+export function buildAgentSessionView(value: unknown): AgentSessionBlock[] {
+	return [...createAgentSessionProjection(value).finish()];
 }
 
 /** The conversation's current model and thinking level, read from pi-durable's

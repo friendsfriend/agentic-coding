@@ -28,6 +28,7 @@ export {
 } from "./runtime/store.ts";
 export {
 	recordWorkflowTarget,
+	targetMarkerReads,
 	workflowTargets,
 } from "./runtime/target-registry.ts";
 export {

@@ -531,12 +531,55 @@ function git(repo: string, ...args: string[]) {
 	}
 	return result.stdout.toString().trim();
 }
-function gitResult(repo: string, ...args: string[]) {
-	return Bun.spawnSync(["git", ...args], {
+interface GitResult {
+	readonly exitCode: number;
+	readonly stdout: string;
+	readonly stderr: string;
+}
+function gitResult(repo: string, ...args: string[]): GitResult {
+	const result = Bun.spawnSync(["git", ...args], {
 		cwd: repo,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	return {
+		exitCode: result.exitCode,
+		stdout: result.stdout.toString(),
+		stderr: result.stderr.toString(),
+	};
+}
+
+/** The same invocation as `gitResult`, off the event loop.
+ *
+ * The dashboard's observation runs on the TUI process's own loop when the
+ * server is in-process, so a synchronous spawn there is a dropped frame: the
+ * untracked half of `git status` measured ~170 ms on a worktree holding a
+ * `node_modules`, which is exactly the window the agent panel failed to paint
+ * in. A failed spawn degrades to the same non-zero-exit shape the synchronous
+ * helper reports. */
+async function gitResultAsync(
+	repo: string,
+	...args: string[]
+): Promise<GitResult> {
+	try {
+		const process = Bun.spawn(["git", ...args], {
+			cwd: repo,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(process.stdout).text(),
+			new Response(process.stderr).text(),
+			process.exited,
+		]);
+		return { exitCode, stdout, stderr };
+	} catch (error) {
+		return {
+			exitCode: 1,
+			stdout: "",
+			stderr: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 const unavailableGitStatus = (diagnostic: string): WorktreeGitStatus => ({
@@ -555,23 +598,77 @@ const unavailableGitStatus = (diagnostic: string): WorktreeGitStatus => ({
 const isWorkflowMetadataPath = (path: string) =>
 	path === ".herdr-workflow" || path.startsWith(".herdr-workflow/");
 
-/**
- * Inspect a workflow worktree's Git state: branch, distinct changed/added/
- * deleted file counts (porcelain status, paths deduplicated), and upstream
- * ahead/behind counts. Best-effort: a missing or non-Git worktree yields an
- * unavailable result with a bounded diagnostic instead of throwing.
- */
 /** The untracked-path walk is the expensive half of `git status`: a full tree
  * scan (~100 ms here) against ~10 ms for the tracked half, and it is the half a
  * viewer tolerates lagging. Only that half is cached; branch, ahead/behind and
  * tracked/staged/deleted state stay authoritative on every read. */
 const UNTRACKED_PATHS_TTL_MS = 3_000;
 const untrackedPathsCache = new Map<string, { at: number; paths: string[] }>();
+/** One walk per worktree at a time: the dashboard's refresh and the review's
+ * file list can ask for the same worktree before the first answer lands, and
+ * two concurrent full-tree scans of one checkout are pure waste. */
+const untrackedPathsInFlight = new Map<string, Promise<string[]>>();
 
-function untrackedPaths(worktree: string): string[] {
+/** The listing while it is still inside its window; `undefined` once stale. */
+function cachedUntrackedPaths(
+	worktree: string,
+	now: number,
+): string[] | undefined {
 	const cached = untrackedPathsCache.get(worktree);
-	const now = Date.now();
-	if (cached && now - cached.at < UNTRACKED_PATHS_TTL_MS) return cached.paths;
+	return cached && now - cached.at < UNTRACKED_PATHS_TTL_MS
+		? cached.paths
+		: undefined;
+}
+
+/** Remember one walk's result and drop every entry that aged out of the window:
+ * a long-lived dash touches a new worktree per workflow. */
+function rememberUntrackedPaths(
+	worktree: string,
+	paths: string[],
+	now: number,
+): void {
+	for (const [key, value] of untrackedPathsCache)
+		if (now - value.at >= UNTRACKED_PATHS_TTL_MS)
+			untrackedPathsCache.delete(key);
+	untrackedPathsCache.set(worktree, { at: now, paths });
+}
+
+/** The untracked listing for the dashboard's Git status, walked off the event
+ * loop. A failed walk degrades to the last known listing (or none) instead of
+ * throwing, so an unusable checkout keeps counting its tracked half. */
+async function untrackedPaths(worktree: string): Promise<string[]> {
+	const fresh = cachedUntrackedPaths(worktree, Date.now());
+	if (fresh) return fresh;
+	const shared = untrackedPathsInFlight.get(worktree);
+	if (shared) return shared;
+	const walk = (async () => {
+		const listed = await gitResultAsync(
+			worktree,
+			"ls-files",
+			"--others",
+			"--exclude-standard",
+			"-z",
+		);
+		if (listed.exitCode !== 0)
+			return untrackedPathsCache.get(worktree)?.paths ?? [];
+		const paths = listed.stdout.split("\0").filter(Boolean);
+		rememberUntrackedPaths(worktree, paths, Date.now());
+		return paths;
+	})();
+	untrackedPathsInFlight.set(worktree, walk);
+	try {
+		return await walk;
+	} finally {
+		untrackedPathsInFlight.delete(worktree);
+	}
+}
+
+/** The same listing for the review file list, which is opened on demand and
+ * already throttled: it walks synchronously rather than making every caller of
+ * `loadLocalChanges` asynchronous, and shares the cache the dashboard fills. */
+function untrackedPathsSync(worktree: string): string[] {
+	const fresh = cachedUntrackedPaths(worktree, Date.now());
+	if (fresh) return fresh;
 	const listed = gitResult(
 		worktree,
 		"ls-files",
@@ -579,24 +676,32 @@ function untrackedPaths(worktree: string): string[] {
 		"--exclude-standard",
 		"-z",
 	);
-	if (listed.exitCode !== 0) return cached?.paths ?? [];
-	const paths = listed.stdout.toString().split("\0").filter(Boolean);
-	// Keep the map bounded to the worktrees read inside one window: a long-lived
-	// dash touches a new worktree per workflow.
-	for (const [key, value] of untrackedPathsCache)
-		if (now - value.at >= UNTRACKED_PATHS_TTL_MS)
-			untrackedPathsCache.delete(key);
-	untrackedPathsCache.set(worktree, { at: now, paths });
+	if (listed.exitCode !== 0)
+		return untrackedPathsCache.get(worktree)?.paths ?? [];
+	const paths = listed.stdout.split("\0").filter(Boolean);
+	rememberUntrackedPaths(worktree, paths, Date.now());
 	return paths;
 }
 
-export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
+/**
+ * Inspect a workflow worktree's Git state: branch, distinct changed/added/
+ * deleted file counts (porcelain status, paths deduplicated), and upstream
+ * ahead/behind counts. Best-effort: a missing or non-Git worktree yields an
+ * unavailable result with a bounded diagnostic instead of throwing.
+ *
+ * Asynchronous on purpose: the dashboard reads it on the TUI's own event loop
+ * (in-process gateway) and must never hold a frame for a Git invocation.
+ */
+export async function worktreeGitStatus(
+	worktree: string,
+): Promise<WorktreeGitStatus> {
 	if (!existsSync(worktree)) return unavailableGitStatus("worktree not found");
-	// One synchronous invocation for the tracked half: -b adds the branch header
+	// One invocation for the tracked half: -b adds the branch header
 	// (branch...upstream [ahead N, behind M]), -uno skips the untracked tree walk,
 	// core.quotePath=false keeps paths raw. Untracked files come from a separately
-	// cached listing so their count still matches `-uall`'s per-file expansion.
-	const status = gitResult(
+	// cached listing so their count still matches `-uall`'s per-file expansion;
+	// both halves run off the event loop (see `gitResultAsync`).
+	const status = await gitResultAsync(
 		worktree,
 		"-c",
 		"core.quotePath=false",
@@ -606,10 +711,8 @@ export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
 		"-uno",
 	);
 	if (status.exitCode !== 0)
-		return unavailableGitStatus(
-			status.stderr.toString().trim() || "git status failed",
-		);
-	const lines = status.stdout.toString().split(/\r?\n/).filter(Boolean);
+		return unavailableGitStatus(status.stderr.trim() || "git status failed");
+	const lines = status.stdout.split(/\r?\n/).filter(Boolean);
 	const result: WorktreeGitStatus = {
 		available: true,
 		branch: undefined,
@@ -644,7 +747,7 @@ export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
 	}
 	// Untracked paths are added to the same map so the rank rule still counts a
 	// path once and never shadows a staged record for the same path.
-	for (const path of untrackedPaths(worktree)) {
+	for (const path of await untrackedPaths(worktree)) {
 		if (isWorkflowMetadataPath(path)) continue;
 		if (!kinds.has(path)) kinds.set(path, "added");
 	}
@@ -1062,7 +1165,7 @@ export function loadLocalChanges(
 	// same paths, and paid it again on every review refresh. Either way a file
 	// created inside a brand-new directory is its own reviewable row instead of a
 	// single "?? dir/" entry whose diff errors.
-	for (const path of untrackedPaths(state.worktree)) {
+	for (const path of untrackedPathsSync(state.worktree)) {
 		if (path === ".herdr-workflow" || path.startsWith(".herdr-workflow/"))
 			continue;
 		if (changes.has(path)) continue;
@@ -1498,7 +1601,10 @@ export async function loadDashboardAsync(
 	};
 }
 
-export function loadDashboard(repo: string, workflowId: string): DashboardData {
+export async function loadDashboard(
+	repo: string,
+	workflowId: string,
+): Promise<DashboardData> {
 	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const workflowRoot =
 		isResearchWorkflowTarget(repo) || state.definition?.id === "research"
@@ -1512,6 +1618,24 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 	);
 	const latestRuns = latestRunsByRole(state.runs);
 
+	// One committed verifier artifact read per role for this observation. The
+	// timeline and the Agents row describe the same verification run, and every
+	// read re-reads the output file and re-hashes it, so the row's finding counts
+	// are derived from the read the timeline already paid for.
+	const verifierOutputs = new Map<
+		string,
+		ReturnType<typeof committedVerifierOutput>
+	>();
+	const verifierOutput = (role: string) => {
+		if (!verifierOutputs.has(role))
+			verifierOutputs.set(role, committedVerifierOutput(state, role));
+		return verifierOutputs.get(role);
+	};
+	const findingCountsFor = (role: string): FindingCounts | undefined => {
+		const output = verifierOutput(role);
+		return output ? countVerifierFindings(output.findings) : undefined;
+	};
+
 	const telemetry = telemetryEvents(join(workflowRoot, "telemetry.jsonl"));
 	// One timeline entry per verifier role, from the same run the Agents row
 	// represents (see `latestVerifierRuns`): the row's verdict and its finding
@@ -1520,9 +1644,7 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		(run) => {
 			const role = run.role;
 			const committed =
-				run.status === "completed"
-					? committedVerifierOutput(state, role)
-					: undefined;
+				run.status === "completed" ? verifierOutput(role) : undefined;
 			const verdict =
 				run.status === "completed"
 					? !committed
@@ -1575,16 +1697,15 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 			};
 		},
 	);
-	const costByRole = new Map(
-		costSummary(telemetry).map((row) => [row.role, row]),
-	);
+	const costRows = costSummary(telemetry);
+	const costByRole = new Map(costRows.map((row) => [row.role, row]));
 	const metricsByRole = agentMetrics(telemetry);
-	const costBreakdown = costSummary(telemetry).map((row) => ({
+	const costBreakdown = costRows.map((row) => ({
 		...row,
 		messages: costMessages(telemetry, row.role),
 	}));
 	const reviewHistory = verificationHistory(state);
-	const gitStatus = worktreeGitStatus(state.worktree);
+	const gitStatus = await worktreeGitStatus(state.worktree);
 	return {
 		state,
 		request: state.task?.trim()
@@ -1613,7 +1734,7 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 				cost: costByRole.get(run.role)?.cost,
 				metrics: metricsByRole.get(run.role),
 				findingCounts: run.role.endsWith("verifier")
-					? verifierFindingCounts(state, run.role)
+					? findingCountsFor(run.role)
 					: undefined,
 				// A durable agent hosts its own process: the Agents panel opens its
 				// session view by run id + host socket instead of focusing a pane, so

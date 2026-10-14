@@ -6,6 +6,7 @@ import { workflowRoots } from "../src/server/operations/observations.ts";
 import {
 	recordWorkflowTarget,
 	researchWorkflowTarget,
+	targetMarkerReads,
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 	workflowTargets,
@@ -34,6 +35,61 @@ describe("workflow target registry", () => {
 			recordWorkflowTarget("/work/custom-path");
 			recordWorkflowTarget("/work/another");
 			expect(workflowTargets()).toEqual(["/work/another", "/work/custom-path"]);
+		});
+	});
+
+	test("re-lists without re-reading markers that did not change", () => {
+		// The sidebar re-reads the target registry whenever it reads the workflow
+		// catalog. Reading and parsing every marker cost 441 ms on a machine with
+		// 4.2 k recorded targets; the scan must pay that once, not per read.
+		withTempWikiRoot(() => {
+			recordWorkflowTarget("/work/one");
+			recordWorkflowTarget("/work/two");
+			const first = targetMarkerReads();
+			expect(workflowTargets()).toEqual(["/work/one", "/work/two"]);
+			expect(targetMarkerReads()).toBe(first + 2);
+
+			expect(workflowTargets()).toEqual(["/work/one", "/work/two"]);
+			expect(targetMarkerReads()).toBe(first + 2);
+
+			// A target recorded since is still seen: the new marker is re-read.
+			recordWorkflowTarget("/work/three");
+			expect(workflowTargets()).toEqual([
+				"/work/one",
+				"/work/three",
+				"/work/two",
+			]);
+			expect(targetMarkerReads()).toBe(first + 3);
+		});
+	});
+
+	test("drops a marker the registry no longer holds", () => {
+		withTempWikiRoot(() => {
+			recordWorkflowTarget("/work/kept");
+			const directory = path.join(wikiWorkflowDataRoot(), "targets");
+			expect(workflowTargets()).toEqual(["/work/kept"]);
+			fs.writeFileSync(
+				path.join(directory, "extra.json"),
+				'{"target":"/work/extra"}',
+			);
+			expect(workflowTargets()).toEqual(["/work/extra", "/work/kept"]);
+			fs.rmSync(path.join(directory, "extra.json"));
+			expect(workflowTargets()).toEqual(["/work/kept"]);
+		});
+	});
+
+	test("re-reads a marker whose file was rewritten", () => {
+		withTempWikiRoot(() => {
+			recordWorkflowTarget("/work/original");
+			const directory = path.join(wikiWorkflowDataRoot(), "targets");
+			expect(workflowTargets()).toEqual(["/work/original"]);
+			// The metadata is the cache key: a rewritten marker is read again.
+			const file = fs
+				.readdirSync(directory)
+				.map((name) => path.join(directory, name))[0];
+			if (!file) throw new Error("expected a marker file");
+			fs.writeFileSync(file, '{"target":"/work/rewritten"}\n');
+			expect(workflowTargets()).toEqual(["/work/rewritten"]);
 		});
 	});
 

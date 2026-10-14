@@ -60,6 +60,7 @@
 		"researchWorkflowTarget",
 		"runtimeTest",
 		"sourceContentFingerprint",
+		"targetMarkerReads",
 		"validateChangeId",
 		"validateWorkflowId",
 		"wikiWorkflowDataRoot",

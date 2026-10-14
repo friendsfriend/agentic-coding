@@ -151,7 +151,7 @@ describe("observational reads stay non-mutating (task 2.4)", () => {
 
 		const workflowId = "wf-readonly";
 		const read = async () => ({
-			git: ops.worktreeGitStatus(repo),
+			git: await ops.worktreeGitStatus(repo),
 			changes: ops.loadLocalChanges(repo, workflowId),
 			findings: ops.loadVerifierFindings(repo, workflowId, "quality-verifier"),
 			review: ops.loadDeveloperReviewFindings(repo, workflowId),

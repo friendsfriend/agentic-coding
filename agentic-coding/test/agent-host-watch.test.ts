@@ -105,6 +105,84 @@ describe("watch streams the conversation view over the control socket", () => {
 		}
 	});
 
+	test("a docs-only watcher receives the live documents and never the transcript", async () => {
+		// The activity badge of the Agents panel watches every durable run at
+		// once and reads only `pi.live`/`pi.inbox`; a frame that also carried the
+		// committed transcript would put a run's whole conversation on the socket
+		// again on every token-rate frame.
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		await host.listen();
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='docs-run'\n");
+			await host.ensureRun({
+				runId: "docs-run",
+				name: "docs-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+
+			const client = new HostClient(layout.socketPath, 10_000);
+			const docs: unknown[] = [];
+			const full: unknown[] = [];
+			const stopDocs = await client.watch(
+				"docs-run",
+				(value) => docs.push(value),
+				{
+					view: "docs",
+				},
+			);
+			const stopFull = await client.watch("docs-run", (value) =>
+				full.push(value),
+			);
+			try {
+				faux.setResponses([
+					fauxAssistantMessage([fauxToolCall("read", { path: "x.txt" })], {
+						stopReason: "toolUse",
+					}),
+				]);
+				faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
+				await client.submit("docs-run", "read a file", "req-docs");
+
+				// Wait for the transcript the full watcher gets: the docs watcher
+				// must be filtering it out, not simply lagging behind.
+				for (let i = 0; i < 50 && entryCount(full[full.length - 1]) === 0; i++)
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				expect(entryCount(full[full.length - 1])).toBeGreaterThan(0);
+				expect(docs.length).toBeGreaterThan(0);
+				expect(
+					docs.every((value) => isRecord(value) && value.entries === undefined),
+				).toBe(true);
+				expect(
+					docs.some(
+						(value) =>
+							isRecord(value) &&
+							isRecord(value.docs) &&
+							value.docs["pi.live"] !== undefined,
+					),
+				).toBe(true);
+			} finally {
+				stopDocs();
+				stopFull();
+			}
+		} finally {
+			await host.shutdown();
+		}
+	});
+
 	test("a read-only run is offered the search and judgment tools it is told to use", async () => {
 		// The verifier briefs tell the run to prefer `grep` over `bash` scans and to
 		// reach for `ask_jev` instead of reading file after file, and a read-only
