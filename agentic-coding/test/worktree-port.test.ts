@@ -247,6 +247,105 @@ describe("worktree argv", () => {
 		expect(calls[1]).not.toContain("--create");
 	});
 
+	test("a detached ensure creates the worktree through git and reuses it", async () => {
+		const target = "/home/u/.devenv/api/api.feature-x";
+		const { adapter, calls } = scripted((argv) =>
+			argv.includes("list") ? { stdout: LIST_REPLY } : { stdout: "{}" },
+		);
+		const ref = await run(
+			adapter.ensure({
+				repo: "/repo",
+				branch: "feature/x",
+				detached: true,
+				location: { root: "/home/u/.devenv", ident: "api" },
+			} satisfies EnsureInput),
+		);
+		expect(ref.detached).toBe(true);
+		expect(ref.branch).toBe("");
+		expect(ref.created).toBe(true);
+		expect(ref.path).toBe(target);
+		// No worktrunk subcommand is involved: worktrunk cannot create a detached
+		// worktree, so the port's git fallback does, at the branch head.
+		expect(calls[0]).toEqual(["wt", "-C", "/repo", "list", "--format", "json"]);
+		expect(calls[1]).toEqual([
+			"git",
+			"-C",
+			"/repo",
+			"worktree",
+			"add",
+			"--detach",
+			target,
+			"--",
+			"feature/x",
+		]);
+
+		// A second ensure finds the detached worktree by path and reuses it.
+		const detachedList = JSON.stringify({
+			schema: 2,
+			items: [
+				{
+					branch: null,
+					worktree: { path: target, main: false, detached: true },
+				},
+			],
+		});
+		const reuse = scripted((argv) =>
+			argv.includes("list") ? { stdout: detachedList } : { stdout: "{}" },
+		);
+		const reused = await run(
+			reuse.adapter.ensure({
+				repo: "/repo",
+				branch: "feature/x",
+				detached: true,
+				location: { root: "/home/u/.devenv", ident: "api" },
+			} satisfies EnsureInput),
+		);
+		expect(reused.created).toBe(false);
+		expect(reused.path).toBe(target);
+		expect(reuse.calls).toHaveLength(1);
+	});
+
+	test("a detached create that loses the race is rescued by a relist", async () => {
+		const target = "/home/u/.devenv/api/api.feature-x";
+		const detachedList = JSON.stringify({
+			schema: 2,
+			items: [
+				{
+					branch: null,
+					worktree: { path: target, main: false, detached: true },
+				},
+			],
+		});
+		let lists = 0;
+		const { adapter } = scripted((argv) => {
+			if (argv.includes("list")) {
+				lists += 1;
+				return lists <= 1
+					? { stdout: JSON.stringify({ schema: 2, items: [] }) }
+					: { stdout: detachedList };
+			}
+			if (argv.includes("prune")) return { stdout: "" };
+			return {
+				error: new WorktreeError(
+					"conflict",
+					"git worktree add failed: target already exists",
+				),
+			};
+		});
+		const ref = await run(
+			adapter.ensure({
+				repo: "/repo",
+				branch: "feature/x",
+				detached: true,
+				location: { root: "/home/u/.devenv", ident: "api" },
+			} satisfies EnsureInput),
+		);
+		// The create lost to a sibling attempt: the relist reuses what it made
+		// instead of reporting a conflict the workflow cannot retry.
+		expect(ref.created).toBe(false);
+		expect(ref.path).toBe(target);
+	});
+
 	test("removal keeps the branch, and force and reap are opt-in", async () => {
 		const keep = scripted((argv) =>
 			argv.includes("list") ? { stdout: LIST_REPLY } : { stdout: "[]" },
@@ -462,7 +561,27 @@ describe.skipIf(Bun.which("wt") === null)(
 				expect(fromLinked.isMain).toBe(true);
 				expect(fromLinked.path).toBe(primary.path);
 
-				// 4. Removal keeps the branch.
+				// 4. A detached worktree checks out no branch: the selected branch stays
+				// in the primary checkout, and the worktree is at its head.
+				const detached = await run(
+					adapter.ensure({
+						repo,
+						branch: "main",
+						detached: true,
+						location,
+					}),
+				);
+				expect(detached.detached).toBe(true);
+				expect(detached.path).toBe(linkedWorktreePath(root, "demo", "main"));
+				expect(git(repo, ["branch", "--show-current"])).toBe("main");
+				expect(git(detached.path, ["rev-parse", "HEAD"])).toBe(
+					git(repo, ["rev-parse", "HEAD"]),
+				);
+				expect(git(detached.path, ["branch", "--show-current"])).toBe("");
+				// No new branch was created for it.
+				expect(git(repo, ["branch", "--list", "main"])).toContain("main");
+
+				// 5. Removal keeps the branch.
 				await run(adapter.remove({ repo, branch: "feature/from-base" }));
 				expect(git(repo, ["branch", "--list", "feature/from-base"])).toContain(
 					"feature/from-base",

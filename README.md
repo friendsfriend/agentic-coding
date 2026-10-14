@@ -41,8 +41,8 @@ agentic-coding manager   alias for home
 
 ```text
 start --repo PATH --workflow-id ID --mode worktree|checkout
-      [--workflow openspec|openspec-propose|openspec-apply|no-openspec|openspec-fusion|openspec-fusion-propose|wiki|research|env-setup]
-      [--task TEXT] [--ticket ID] [--preset NAME] [--app APP]
+      [--workflow openspec|openspec-propose|openspec-apply|no-openspec|openspec-fusion|openspec-fusion-propose|wiki|research|env-setup|debug]
+      [--task TEXT] [--ticket ID] [--preset NAME] [--app APP] [--branch BRANCH]
 status --repo PATH --workflow-id ID
 action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]
 handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]
@@ -69,6 +69,7 @@ Built-ins register through public registry seam and pin exact `{id, version, dig
 - `wiki`: requires a repository as read-only evidence, writes drafts only to the centralized wiki, and progresses through documentation → wiki approval → completed until explicitly closed; it never modifies source files or runs implementation, verification, archive, delivery, or pull-request stages
 - `research`: runs research, wiki, and wiki review phases
 - `env-setup`: drafts the build/test/run and infrastructure definitions for one configured app (`--app APP`) under the configuration directory's `.drafts/env-setup/<workflow-id>`, resolves those drafts before the live configuration while it works, validates every drafted target structurally and by starting it, shows the developer a diff of the drafts against the live configuration, and promotes the approved drafts atomically with a protected backup and full rollback. The repository is read-only evidence and nothing becomes live without approval; see [`agentic-coding/docs/agent-environments.md`](agentic-coding/docs/agent-environments.md#environment-setup-workflow)
+- `debug`: investigates a behavior or reproduces a bug on one selected branch (`--branch BRANCH`, `--task TEXT`) in a **detached** worktree at that branch's head, using the environment, browser and debug tools (`--app APP` optional: without it the agent picks the repository's configured app). It reports with evidence ids, preserves any code edits as a `changes.patch` evidence entry, and holds at a developer review that either approves the report or requests a bounded follow-up investigation (five rounds). It delivers nothing, creates no pull request, and releases the apps it held when the developer closes it; the detached worktree is removed and the branch is never modified.
 
 Proposal, wiki, and environment-setup workflows require `--mode checkout`, stay on the current branch, and never create or switch a Git branch/worktree. Wiki accepts a dirty checkout as its source baseline and requires a non-empty documentation task, so it supports repository initialization, undocumented-feature documentation, and business-information updates without changing repository content. Environment setup also requires a clean checkout: the drafts live outside the repository, and a write to the live configuration or to the checkout parks the workflow for the developer. They may run alongside a full checkout workflow; each workflow keeps its own change ID and artifacts. Because Git branch selection is checkout-global, a concurrent full checkout workflow can switch the branch while proposal agents are active; proposal observations may therefore race with that switch.
 

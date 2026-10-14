@@ -1733,3 +1733,59 @@ test("concurrent Git status reads of one worktree agree", async () => {
 	]);
 	expect(second).toEqual(first);
 });
+
+test("startArgs forwards the debug branch and keeps worktree mode", () => {
+	// The debug family selects its branch on `sourceBranch`; the launcher must
+	// forward it (only the rebase family used to), or every dashboard and
+	// orchestrator debug start is refused by the start guard.
+	const debugArgs = startArgs({
+		repo: ".",
+		ticket: "",
+		workflowId: "debug-demo",
+		task: "reproduce the bug",
+		mode: "worktree",
+		workflowType: "debug",
+		sourceBranch: "feature/x",
+	});
+	expect(debugArgs).toMatchObject({
+		definitionId: "debug",
+		sourceBranch: "feature/x",
+		mode: "worktree",
+	});
+	expect(debugArgs.sameCheckout).toBeUndefined();
+	// The rebase family still carries both refs and its forced checkout mode.
+	const rebaseArgs = startArgs({
+		repo: ".",
+		ticket: "",
+		workflowId: "rebase-demo",
+		mode: "worktree",
+		workflowType: "rebase",
+		sourceBranch: "feature/x",
+		targetBranch: "origin/main",
+	});
+	expect(rebaseArgs).toMatchObject({
+		sourceBranch: "feature/x",
+		targetBranch: "origin/main",
+		mode: "checkout",
+	});
+});
+
+test("the debug review gate routes to the shared review surface", () => {
+	// Without this branch the gate has no required action: the review popup
+	// never opens and its follow-up action is dispatched without a comment.
+	const action = requiredUserActionFor("debug.review", false, [], "debug", [
+		{ id: "approve-review", label: "Approve report", confirmation: "confirm" },
+		{
+			id: "review-comments",
+			label: "Request follow-up",
+			confirmation: "confirm",
+		},
+	]);
+	expect(action?.key).toBe("developer-review");
+	expect(action?.title).toContain("Debug review");
+	// A view whose actions do not include the approval renders nothing rather
+	// than a popup it cannot finish.
+	expect(
+		requiredUserActionFor("debug.review", false, [], "debug", []),
+	).toBeUndefined();
+});

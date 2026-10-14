@@ -100,6 +100,10 @@ export function ReviewRoute(props: ReviewRouteProps) {
 						...(reviewKind() === "plan"
 							? [{ key: "r", action: "Reject plan" }]
 							: []),
+						...(reviewKind() === "developer" &&
+						reviewVisibleChanges().length === 0
+							? [{ key: "c", action: "Comment on the report" }]
+							: []),
 						{ key: "Esc", action: "Postpone" },
 					]}
 					onBackdropClick={() => {

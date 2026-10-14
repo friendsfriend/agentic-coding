@@ -3,6 +3,7 @@
  * observations when its owner disposes — extracted review state must not
  * outlive its owning component. */
 import { expect, test } from "bun:test";
+import { KeyEvent } from "@opentui/core";
 import { createRoot } from "solid-js";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
@@ -411,4 +412,45 @@ test("the affects-all-apps flag is derived for the setup review only", () => {
 			.affects_all_apps,
 	).toBe(false);
 	feature.dispose?.();
+});
+
+/** One press event, the same shape the keymap delivers. */
+function press(name: string): KeyEvent {
+	return new KeyEvent({
+		name,
+		ctrl: false,
+		meta: false,
+		shift: false,
+		option: false,
+		sequence: name,
+		number: false,
+		raw: name,
+		eventType: "press",
+		source: "raw",
+	});
+}
+
+test("a report-only developer review can author a follow-up comment", () => {
+	// The debug gate reviews a report, not a diff: with no changed files there
+	// is nothing to Enter into, so `c` opens the comment modal directly and the
+	// follow-up cannot silently become an approval.
+	const base = testDashboard();
+	const debugData = () => ({
+		...base,
+		state: {
+			...base.state,
+			definition: { id: "debug", version: 806, digest: "d", label: "Debug" },
+		},
+	});
+	createRoot((dispose) => {
+		const feature = createReviewFeature(context({ data: debugData }));
+		feature.setReviewKind("developer");
+		feature.setReviewView("files");
+		feature.setReviewChanges([]);
+		expect(feature.reviewVisibleChanges()).toHaveLength(0);
+		expect(feature.reviewCommentMode()).toBe(false);
+		feature.handleReviewKey(press("c"));
+		expect(feature.reviewCommentMode()).toBe(true);
+		dispose();
+	});
 });

@@ -280,6 +280,14 @@ const COMPLETED_ACTION_LABELS: Record<string, string> = {
 	close: "Close Herdr workspace",
 };
 
+/** The artifact surface name for a workflow's definition: `Debug report` for
+ * the debug family's markdown report, `OpenSpec` for every OpenSpec-family
+ * change. Shared by the panel heading, the artifact viewer's modal title, and
+ * the `?` help section, so one panel never has two names. */
+export function artifactSurfaceLabel(definitionId?: string): string {
+	return definitionId === "debug" ? "Debug report" : "OpenSpec";
+}
+
 export function requiredUserActionFor(
 	phase: string,
 	prCreated = false,
@@ -355,6 +363,19 @@ export function requiredUserActionFor(
 			title: "Action required · Findings review",
 			prompt:
 				"Review the verification findings and select the ones a worker should fix.",
+			items: [],
+		};
+	}
+	// The debug family's review (`add-debug-workflow`): the same popup and the
+	// same dispatch as the developer review, over the investigation report —
+	// approve it, or request a bounded follow-up investigation with a comment.
+	if (phase === "debug.review") {
+		if (!hasAction("approve-review")) return undefined;
+		return {
+			key: "developer-review",
+			title: "Action required · Debug review",
+			prompt:
+				"Review the debug report before approving or requesting a follow-up.",
 			items: [],
 		};
 	}

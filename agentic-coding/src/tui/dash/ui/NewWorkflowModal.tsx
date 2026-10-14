@@ -240,7 +240,7 @@ export function NewWorkflowModal(props: {
 	const [branchRepo, setBranchRepo] = createSignal<string | undefined>();
 	createEffect(() => {
 		const repo = values().repo;
-		if (!isRebase(values().workflowType) || !repo) {
+		if (!usesBranchPicker(values().workflowType) || !repo) {
 			setBranchOptions(undefined);
 			setBranchNotice(undefined);
 			return;
@@ -268,10 +268,16 @@ export function NewWorkflowModal(props: {
 				setBranchRepo(repo);
 				setValues((current) => ({
 					...current,
-					targetBranch: options.default,
-					sourceBranch: options.local.includes(options.current)
-						? options.current
-						: "",
+					...(!isDebug(current.workflowType)
+						? { targetBranch: options.default }
+						: {}),
+					sourceBranch: isDebug(current.workflowType)
+						? options.local.includes(options.current)
+							? options.current
+							: options.default
+						: options.local.includes(options.current)
+							? options.current
+							: "",
 				}));
 			} catch (error) {
 				if (controller.signal.aborted) return;
@@ -358,6 +364,11 @@ export function NewWorkflowModal(props: {
 	/** The rebase type's two extra steps: the branch that gets rebased and the
 	 * ref it is rebased onto, both chosen from the repository's branch list. */
 	const isRebase = (type: string) => type === "rebase";
+	/** The debug type investigates one selected branch in a detached worktree:
+	 * it needs that branch and a task, and forces the worktree mode itself. */
+	const isDebug = (type: string) => type === "debug";
+	/** Types whose repository needs a branch list read for their pickers. */
+	const usesBranchPicker = (type: string) => isRebase(type) || isDebug(type);
 	/** The verify-only type needs no input beyond the repository: it verifies the
 	 * branch that is already checked out against the configured base branch, so it
 	 * has neither a task step nor a checkout-mode choice. */
@@ -382,6 +393,17 @@ export function NewWorkflowModal(props: {
 				"workflowId",
 				"sourceBranch",
 				"targetBranch",
+			];
+		// The debug type selects one branch and a task, and runs in worktree mode.
+		if (isDebug(values().workflowType))
+			return [
+				...(pathTarget() ? (["repo"] as const) : []),
+				"workflowType",
+				"preset",
+				"ticket",
+				"workflowId",
+				"sourceBranch",
+				"task",
 			];
 		const head: (keyof WorkflowLaunchInput)[] = [
 			...(pathTarget() ? (["repo"] as const) : []),
@@ -408,12 +430,18 @@ export function NewWorkflowModal(props: {
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
 		workflowId: "Workflow ID",
-		task: "Task required for wiki, research, no OpenSpec, and solo",
+		task: "Task required for debug, wiki, research, no OpenSpec, and solo",
 		mode: "Checkout mode",
 		sourceBranch: "Branch to rebase",
 		targetBranch: "Branch to rebase onto",
 		app: "Configured app to set up",
 	};
+	/** The field's label, with the one type-specific rename: the debug branch
+	 * picker selects the branch to investigate, not to rebase. */
+	const labelFor = (key: keyof WorkflowLaunchInput | undefined): string =>
+		key === "sourceBranch" && isDebug(values().workflowType)
+			? "Branch to investigate"
+			: ((key ? fieldLabels[key] : undefined) ?? "");
 
 	const workflowTypeEntry = (choice: string) =>
 		PUBLIC_WORKFLOW_CATALOG.find(
@@ -564,9 +592,15 @@ export function NewWorkflowModal(props: {
 			if (!values().sourceBranch) return fields().indexOf("sourceBranch");
 			return fields().indexOf("targetBranch");
 		}
+		if (isDebug(values().workflowType)) {
+			if (!values().sourceBranch) return fields().indexOf("sourceBranch");
+			return fields().indexOf("task");
+		}
 		return fields().indexOf("task");
 	};
 	const canSubmit = () => {
+		if (isDebug(values().workflowType))
+			return Boolean(values().sourceBranch && values().task?.trim());
 		if (isRebase(values().workflowType))
 			// Both refs are the whole input of a rebase, and neither has a fallback
 			// the workflow could pick on its own.
@@ -588,7 +622,7 @@ export function NewWorkflowModal(props: {
 	const summary = () => [
 		targetSummary(),
 		...fields().map((key) => ({
-			label: fieldLabels[key],
+			label: labelFor(key),
 			value: values()[key] || "—",
 		})),
 	];
@@ -648,6 +682,7 @@ export function NewWorkflowModal(props: {
 			...(key === "workflowType" && isRepositoryBacked(value)
 				? { mode: "checkout" }
 				: {}),
+			...(key === "workflowType" && isDebug(value) ? { mode: "worktree" } : {}),
 		}));
 		setStep((i) => Math.min(i + 1, fields().length));
 		setEditingRepoPath(false);
@@ -817,7 +852,7 @@ export function NewWorkflowModal(props: {
 											</box>
 										) : undefined
 									}
-									fieldLabel={fieldLabels[field()]}
+									fieldLabel={labelFor(field())}
 									summary={summary()}
 									step={step()}
 									total={totalSteps()}
@@ -888,7 +923,7 @@ export function NewWorkflowModal(props: {
 							<ListViewModal
 								sizing="cap"
 								title="New workflow"
-								fieldLabel={fieldLabels[field()]}
+								fieldLabel={labelFor(field())}
 								summary={summary()}
 								items={entries()}
 								selectedIndex={selectedIndex()}

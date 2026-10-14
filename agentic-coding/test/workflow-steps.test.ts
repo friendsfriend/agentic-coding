@@ -8838,6 +8838,7 @@ function expectedCandidateRoles(
 	if (stepId === "core.research") return ["researcher"];
 	if (stepId === "core.archive") return ["archive"];
 	if (stepId === "setup.author") return ["env-setup"];
+	if (stepId === "debug.investigate") return ["debug"];
 	return [];
 }
 

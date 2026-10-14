@@ -46,6 +46,244 @@ function gitNullSeparated(repository: string, args: string[]): string[] {
 		);
 	return result.stdout.toString().split("\0").filter(Boolean);
 }
+const MAX_DEBUG_PATCH_BYTES = 4 * 1024 * 1024;
+
+/** Run one git command in a repository, returning stdout, and throw the same
+ * `source-isolation` error the fingerprint reader uses when it fails. */
+function gitText(repository: string, args: string[]): string {
+	const result = Bun.spawnSync(["git", "-C", repository, ...args], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0)
+		throw new WorkflowRuntimeError(
+			"source-isolation",
+			`git ${args[0]} failed: ${result.stderr.toString().trim()}`,
+		);
+	return result.stdout.toString();
+}
+
+/** `git diff --no-index` exits 1 when the two inputs differ, which is the
+ * normal case for a new file: the difference is the result, not a failure. */
+function gitDiffNoIndex(repository: string, file: string): string {
+	const result = Bun.spawnSync(
+		["git", "-C", repository, "diff", "--no-index", "--", "/dev/null", file],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	if (result.exitCode !== 0 && result.exitCode !== 1)
+		throw new WorkflowRuntimeError(
+			"source-isolation",
+			`git diff --no-index failed: ${result.stderr.toString().trim()}`,
+		);
+	return result.stdout.toString();
+}
+
+/** The debug family's handoff patch: everything the detached worktree changed
+ * against `HEAD`, untracked files included. The patch is computed without
+ * touching the worktree's git index — untracked files are rendered with
+ * `git diff --no-index` instead of being marked intent-to-add — so a rejected
+ * handoff leaves no index mutation behind. Before the diff is read at all, the
+ * changed content is measured **by bytes** and the patch is skipped with a
+ * bounded diagnostic when it exceeds the bound; the byte bound below still
+ * trims a diff that grew past its inputs. */
+export function debugChangesPatch(worktree: string): string | undefined {
+	const untracked = gitNullSeparated(worktree, [
+		"ls-files",
+		"--others",
+		"--exclude-standard",
+		"-z",
+	]).filter(
+		(file) =>
+			file !== ".herdr-workflow" && !file.startsWith(".herdr-workflow/"),
+	);
+	if (debugChangedContentAboveBound(worktree, untracked))
+		return `diff omitted: the worktree changed more than ${MAX_DEBUG_PATCH_BYTES} bytes against HEAD; inspect the checkout before it is removed\n`;
+	const tracked = gitNullSeparated(worktree, [
+		"diff",
+		"HEAD",
+		"--name-only",
+		"-z",
+	]);
+	let diff = tracked.length ? gitText(worktree, ["diff", "HEAD"]) : "";
+	for (const file of untracked) diff += gitDiffNoIndex(worktree, file);
+	if (!diff.trim()) return undefined;
+	if (Buffer.byteLength(diff) > MAX_DEBUG_PATCH_BYTES)
+		return `${diff.slice(0, MAX_DEBUG_PATCH_BYTES)}\n\n[patch truncated at ${MAX_DEBUG_PATCH_BYTES} bytes]\n`;
+	return diff;
+}
+
+/** Whether the changed content is already past the patch bound, measured from
+ * file sizes and blob sizes — never from the diff body — so a single huge line
+ * is refused before `git diff` materializes it. A tracked modification counts
+ * **both** sides (its worktree size plus the `HEAD` blob it replaced), because
+ * the diff can emit both; a deletion counts the blob it removed; an untracked
+ * file counts its worktree size. */
+function debugChangedContentAboveBound(
+	worktree: string,
+	untracked: readonly string[],
+): boolean {
+	const tracked = gitNullSeparated(worktree, [
+		"diff",
+		"HEAD",
+		"--name-only",
+		"-z",
+	]);
+	const headSizes = headBlobBytes(worktree, tracked);
+	let total = 0;
+	for (const file of new Set([...tracked, ...untracked])) {
+		total += worktreeFileBytes(worktree, file) + (headSizes.get(file) ?? 0);
+		if (total > MAX_DEBUG_PATCH_BYTES) return true;
+	}
+	return false;
+}
+
+/** The current size of one worktree file, or `0` when it is absent (a
+ * deletion). */
+function worktreeFileBytes(worktree: string, file: string): number {
+	try {
+		return fs.statSync(path.join(worktree, file)).size;
+	} catch {
+		return 0;
+	}
+}
+
+/** The `HEAD` blob size of each named path, resolved in **one** `git cat-file
+ * --batch-check` rather than one spawn per file. A path absent from `HEAD` (a
+ * new untracked file) contributes nothing. */
+function headBlobBytes(
+	worktree: string,
+	paths: readonly string[],
+): Map<string, number> {
+	const sizes = new Map<string, number>();
+	if (!paths.length) return sizes;
+	const result = Bun.spawnSync(
+		["git", "-C", worktree, "cat-file", "--batch-check"],
+		{
+			stdin: Buffer.from(`${paths.map((file) => `HEAD:${file}`).join("\n")}\n`),
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	if (result.exitCode !== 0) return sizes;
+	const lines = result.stdout.toString().split("\n");
+	paths.forEach((file, index) => {
+		const parts = (lines[index] ?? "").trim().split(" ");
+		if (parts.length < 3 || parts[1] === "missing") return;
+		const size = Number(parts[2]);
+		if (Number.isFinite(size)) sizes.set(file, size);
+	});
+	return sizes;
+}
+
+/** The debug handoff's artifact content: the developer-readable markdown report
+ * and, when the worktree is dirty, the patch. Nothing is written: the engine
+ * commits the handoff first and only then writes {@link DebugHandoffArtifacts.files},
+ * so a rejected or replayed attempt leaves no bytes and no index mutation on
+ * disk. The patch is computed first, so the report is never mistaken for an
+ * edit. */
+export interface DebugHandoffArtifacts {
+	readonly entries: readonly { kind: string; path: string; digest: string }[];
+	readonly files: readonly { path: string; content: string }[];
+}
+
+export function debugHandoffArtifacts(
+	snapshot: WorkflowSnapshot,
+	report: string,
+): DebugHandoffArtifacts {
+	const directory = path.join(
+		snapshot.metadata.repository,
+		".herdr-workflow",
+		snapshot.workflowId,
+	);
+	const patch = debugChangesPatch(snapshot.metadata.worktree);
+	const entries: { kind: string; path: string; digest: string }[] = [];
+	const files: { path: string; content: string }[] = [];
+	const add = (file: string, content: string, kind: string): void => {
+		const target = path.join(directory, file);
+		entries.push({
+			kind,
+			path: target,
+			digest: createHash("sha256").update(content).digest("hex"),
+		});
+		files.push({ path: target, content });
+	};
+	add("debug-report.md", `${report.trim()}\n`, "debug:report");
+	if (patch) add("changes.patch", patch, "debug:changes.patch");
+	return { entries, files };
+}
+
+/** Write one prepared artifact set to disk (mkdir + private write). Called by
+ * the engine **after** the handoff transaction commits. */
+export function writeDebugArtifactFiles(
+	files: readonly { path: string; content: string }[],
+): void {
+	for (const file of files) {
+		fs.mkdirSync(path.dirname(file.path), { recursive: true, mode: 0o700 });
+		fs.writeFileSync(file.path, file.content, { mode: 0o600 });
+	}
+}
+
+/** One staged artifact: where it will land once the handoff commits, and the
+ * temp file that already holds its bytes. */
+export interface StagedDebugArtifacts {
+	readonly path: string;
+	readonly tempPath: string;
+}
+
+/** Stage the computed artifacts beside their targets (`<target>.<runId>.tmp`)
+ * **before** the handoff transaction: if staging fails the handoff fails with
+ * nothing committed, and a rejected attempt only ever leaves its own temp files
+ * (removed by {@link discardStagedArtifacts}), never the bytes a committed
+ * entry points at. The prefix makes a stale temp from a crashed run
+ * identifiable and never a valid target. */
+export function stageDebugArtifactFiles(
+	files: readonly { path: string; content: string }[],
+	runId: string,
+): StagedDebugArtifacts[] {
+	return files.map((file) => {
+		const tempPath = `${file.path}.${runId}.tmp`;
+		fs.mkdirSync(path.dirname(file.path), { recursive: true, mode: 0o700 });
+		fs.writeFileSync(tempPath, file.content, { mode: 0o600 });
+		return { path: file.path, tempPath };
+	});
+}
+
+/** Rename each staged artifact over its target. Atomic within one filesystem,
+ * and effectively infallible once the bytes are already staged. */
+export function commitStagedArtifacts(
+	staged: readonly StagedDebugArtifacts[],
+): void {
+	for (const artifact of staged)
+		fs.renameSync(artifact.tempPath, artifact.path);
+}
+
+/** Remove a rejected attempt's staged artifacts, leaving any committed target
+ * untouched. */
+export function discardStagedArtifacts(
+	staged: readonly StagedDebugArtifacts[],
+): void {
+	for (const artifact of staged)
+		try {
+			fs.rmSync(artifact.tempPath, { force: true });
+		} catch {
+			/* best-effort cleanup of a rejected attempt's temp file */
+		}
+}
+
+/** Compute and write the debug family's handoff artifacts into the
+ * **repository's** own data directory — not the detached worktree's, which
+ * `workspace.cleanup` removes on close — and return the evidence entries the
+ * reducer records. Kept as one call for callers that write eagerly (tests and
+ * any synchronous path); the engine stages and then renames after the commit. */
+export function writeDebugArtifacts(
+	snapshot: WorkflowSnapshot,
+	report: string,
+): { kind: string; path: string; digest: string }[] {
+	const { entries, files } = debugHandoffArtifacts(snapshot, report);
+	writeDebugArtifactFiles(files);
+	return [...entries];
+}
+
 function sourcePathExcluded(
 	repository: string,
 	relative: string,

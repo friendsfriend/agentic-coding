@@ -11,13 +11,17 @@ export interface OpenSpecPanelProps {
 	readonly selectedIndex: number;
 	/** Rows the panel shows before it scrolls (bounded by the artifact count). */
 	readonly visibleRows?: number;
+	/** The surface name for the workflow's artifact list. Defaults to `OpenSpec`;
+	 * the debug family's report is not an OpenSpec artifact, so its panel is
+	 * titled for what it holds. */
+	readonly title?: string;
 }
 
 export function OpenSpecPanel(props: OpenSpecPanelProps) {
 	const rows = () => props.visibleRows ?? Math.min(props.artifacts.length, 5);
 	return (
 		<Panel
-			title="OpenSpec"
+			title={props.title ?? "OpenSpec"}
 			accent={uiColors.accent}
 			active={props.active}
 			style={{

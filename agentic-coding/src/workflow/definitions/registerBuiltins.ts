@@ -11,6 +11,7 @@ import type {
 import { type WorkflowManifest, WorkflowRegistry } from "../registry.ts";
 import { assertStepBehaviorCoverage } from "../steps/index.ts";
 import { definitionVersionForPolicy, withPerStepRouting } from "./edges.ts";
+import { debugManifests } from "./graphs/debug.ts";
 import { envSetupManifests } from "./graphs/env-setup.ts";
 import { fusionManifests } from "./graphs/fusion.ts";
 import { noOpenspecManifests } from "./graphs/no-openspec.ts";
@@ -175,6 +176,7 @@ export function registerBuiltins(
 			...rebaseManifests(version),
 			...verifyManifests(rounds, version),
 			...envSetupManifests(version),
+			...debugManifests(version),
 		]) {
 			const pinnedBase = withManifestPolicy(definition);
 			const pinned: WorkflowManifest = {
@@ -206,6 +208,7 @@ export function registerBuiltins(
 			...rebaseManifests(version),
 			...verifyManifests(rounds, version, true),
 			...envSetupManifests(version),
+			...debugManifests(version),
 		]) {
 			const pinnedBase = withManifestPolicy(definition);
 			const pinned: WorkflowManifest = {
@@ -235,6 +238,7 @@ export function registerBuiltins(
 			...verifyManifests(rounds, version, true),
 			...researchManifests(version, true).map(withFullToolResearchPolicy),
 			...envSetupManifests(version),
+			...debugManifests(version),
 		]) {
 			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
 			const pinned: WorkflowManifest = {
@@ -280,6 +284,7 @@ export function registerBuiltins(
 			...verifyManifests(rounds, version, true),
 			...researchManifests(version, true),
 			...envSetupManifests(version),
+			...debugManifests(version),
 		]) {
 			const catalogPolicy = withPerStepRouting(withManifestPolicy(definition));
 			const pinnedBase =

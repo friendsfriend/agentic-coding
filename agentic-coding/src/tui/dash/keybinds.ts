@@ -6,6 +6,7 @@ import {
 	EVIDENCE_PANEL,
 	OPENSPEC_PANEL,
 } from "./panel-grid.ts";
+import { artifactSurfaceLabel } from "./projections.ts";
 
 /**
  * Footer contexts for the dashboard detail panels. `Keybind.context` entries
@@ -91,6 +92,9 @@ export function agentSessionKeybindCatalog(): KeybindSection[] {
  */
 export function dashboardDetailKeybindCatalog(options: {
 	artifactsVisible: boolean;
+	/** The workflow's definition id, so the artifact panel's help section shares
+	 * the panel's own surface name ("Debug report" for the debug family). */
+	definitionId?: string;
 }): KeybindSection[] {
 	const sections: KeybindSection[] = [
 		{
@@ -134,7 +138,7 @@ export function dashboardDetailKeybindCatalog(options: {
 	];
 	if (options.artifactsVisible)
 		sections.push({
-			title: "OpenSpec panel",
+			title: `${artifactSurfaceLabel(options.definitionId)} panel`,
 			keybinds: [
 				{
 					key: "Enter",

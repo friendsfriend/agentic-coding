@@ -156,6 +156,18 @@ const FAMILY_TRAITS: Readonly<Record<string, WorkflowFamilyTraits>> = {
 		startRequirements: ["clean-tree"],
 		openspecVerifier: false,
 	},
+	// The debug family investigates one selected branch in a detached worktree:
+	// it produces no artifact, plan or delivery, and its `branch` requirement is
+	// what selects the detached-worktree path (the branch may be checked out
+	// elsewhere, and is never modified).
+	debug: {
+		changeArtifacts: "none",
+		planning: "none",
+		changeIdentity: "none",
+		delivery: "none",
+		startRequirements: ["branch", "task"],
+		openspecVerifier: false,
+	},
 };
 
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
@@ -235,6 +247,13 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	"env-setup": {
 		targetKind: "repository",
 		checkoutRequired: true,
+		requiresReadOnlyResearcher: false,
+	},
+	// The debug family runs in its own detached worktree, then removes it, so it
+	// never runs against the repository checkout itself.
+	debug: {
+		targetKind: "repository",
+		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
 	research: {

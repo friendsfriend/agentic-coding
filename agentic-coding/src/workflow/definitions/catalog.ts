@@ -99,4 +99,10 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			description:
 				"Draft the build/test/run and infrastructure definitions for one configured app, validate them by running them, and promote them into the live configuration only after the developer approves the diff.",
 		}),
+		Object.freeze({
+			id: "debug",
+			label: "Debug",
+			description:
+				"Investigate a behavior or reproduce a bug on one selected branch in a detached worktree, report with evidence, and wait for the developer to approve or request a follow-up.",
+		}),
 	] as const);

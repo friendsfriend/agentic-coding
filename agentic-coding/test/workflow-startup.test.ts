@@ -406,3 +406,87 @@ describe("environment-setup startup", () => {
 		}
 	});
 });
+
+// The debug family's start boundary (`add-debug-workflow`, task 3.3): the
+// selected branch is required and must exist, it is forwarded as the branch the
+// detached worktree is created at, and the family runs in worktree mode.
+describe("debug startup", () => {
+	test("requires an existing branch, forwards it, and keeps worktree mode", () => {
+		const repo = repository();
+		const file = path.join(repo, "config.toml");
+		fs.writeFileSync(file, config);
+		const current = Bun.spawnSync([
+			"git",
+			"-C",
+			repo,
+			"branch",
+			"--show-current",
+		])
+			.stdout.toString()
+			.trim();
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			expect(() =>
+				prepareWorkflowStart({
+					repo,
+					workflowId: "debug-no-branch",
+					definitionId: "debug",
+					task: "reproduce the bug",
+					mode: "worktree",
+					preset: "fixed",
+				}),
+			).toThrow(/debug workflow requires --branch/);
+			expect(() =>
+				prepareWorkflowStart({
+					repo,
+					workflowId: "debug-bad-branch",
+					definitionId: "debug",
+					task: "reproduce the bug",
+					mode: "worktree",
+					preset: "fixed",
+					sourceBranch: "does-not-exist",
+				}),
+			).toThrow(/debug branch does not exist/);
+			// A ref whose name begins with `-` would be read as a git option by the
+			// detached worktree creation; it is refused before that.
+			expect(() =>
+				prepareWorkflowStart({
+					repo,
+					workflowId: "debug-option-branch",
+					definitionId: "debug",
+					task: "reproduce the bug",
+					mode: "worktree",
+					preset: "fixed",
+					sourceBranch: "--force",
+				}),
+			).toThrow(/must not begin with '-'/);
+			const started = prepareWorkflowStart({
+				repo,
+				workflowId: "debug-pinned",
+				definitionId: "debug",
+				task: "reproduce the bug",
+				mode: "worktree",
+				preset: "fixed",
+				sourceBranch: current,
+			});
+			expect(started.input.definitionId).toBe("debug");
+			expect(started.input.metadata.branch).toBe(current);
+			expect(started.input.metadata.task).toBe("reproduce the bug");
+			expect(started.input.mode).toBe("worktree");
+			// No `sameCheckout`: the family owns a detached worktree, never the
+			// repository checkout.
+			expect(started.input.sameCheckout).toBe(false);
+			// The routing falls back to the preset's default profile: the `fixed`
+			// preset declares no `debug.investigate` pool.
+			const route = started.input.routing.routes.find(
+				(candidate) => candidate.stepId === "debug.investigate",
+			);
+			expect(route?.profile.name).toBe("p");
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});

@@ -32,6 +32,18 @@ export interface PreparedHandoffEvidence {
 	changedFiles?: readonly string[];
 	sourceFingerprint?: string;
 	stepEvidence?: PreparedStepEvidence;
+	/** Evidence entries a step's handoff produced itself (the debug family's
+	 * `debug-report.md` and `changes.patch`), and the staged temp files that hold
+	 * their bytes. The entries are recorded when the transaction commits; the
+	 * staged files are renamed over their targets only after that commit, and a
+	 * rejected attempt discards them, so the committed digest is never a promise
+	 * about bytes that do not exist. */
+	preparedEvidence?: readonly {
+		kind: string;
+		path: string;
+		digest: string;
+	}[];
+	pendingArtifacts?: readonly { path: string; tempPath: string }[];
 }
 
 export function agentHandoff(
@@ -154,6 +166,19 @@ export function agentHandoff(
 		"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.launch','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
 	).run(snapshot.workflowId, run.id);
 	if (handoffEvidence) snapshot.evidence.push(handoffEvidence);
+	// The debug family's artifacts are written at a stable per-workflow path and a
+	// follow-up round overwrites them; recording a second entry for the same path
+	// would leave the earlier entry's digest stale and both entries resolving to
+	// the new bytes. Replace by path so one path has one current entry.
+	if (command.outcome === "complete" && prepared?.preparedEvidence) {
+		const incoming = new Set(
+			prepared.preparedEvidence.map((entry) => entry.path),
+		);
+		snapshot.evidence = snapshot.evidence.filter(
+			(entry) => !incoming.has(entry.path),
+		);
+		snapshot.evidence.push(...prepared.preparedEvidence);
+	}
 	snapshot.step.activeRunIds = snapshot.step.activeRunIds.filter(
 		(id) => id !== run.id,
 	);

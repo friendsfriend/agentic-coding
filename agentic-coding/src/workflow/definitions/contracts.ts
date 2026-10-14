@@ -23,6 +23,53 @@ import {
 	TriagePlanSchema,
 } from "../schema.ts";
 
+/** The debug family's one agent output: the markdown report the developer
+ * reviews at the gate. The headings are the handoff contract — a report that
+ * omits one is not a finished investigation — so they are enforced here, the
+ * pure decode the reducer runs before a `complete` outcome is accepted. */
+export const DEBUG_REPORT_HEADINGS = [
+	"Summary",
+	"Environment",
+	"Reproduction",
+	"Expected",
+	"Actual",
+	"Findings",
+	"Code changes",
+	"Open questions",
+] as const;
+
+export const debugReport: Contract<{ report: string }> = {
+	id: "core.debug-report",
+	version: 1,
+	parse(value) {
+		const input = value as { report?: unknown } | undefined;
+		const report =
+			typeof input?.report === "string" ? input.report.trim() : undefined;
+		if (!report)
+			throw new ContractFailure("core.debug-report", [
+				{ path: "$.report", message: "expected a non-empty markdown report" },
+			]);
+		const missing = DEBUG_REPORT_HEADINGS.filter(
+			(heading) =>
+				!new RegExp(`^#{1,6}\\s*${escapeRegExp(heading)}\\s*$`, "im").test(
+					report,
+				),
+		);
+		if (missing.length)
+			throw new ContractFailure("core.debug-report", [
+				{
+					path: "$.report",
+					message: `report is missing required headings: ${missing.join(", ")}`,
+				},
+			]);
+		return { report };
+	},
+};
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export const passthrough: Contract<JsonValue> = {
 	id: "core.json",
 	version: 1,

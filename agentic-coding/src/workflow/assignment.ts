@@ -198,7 +198,11 @@ export function renderAssignment(
 								? [
 										"Payload: non-empty string `approach`; non-empty `files` array of `{ path, change }` items with repository-relative paths; `risks` and `questions` arrays of `{ detail }` items.",
 									]
-								: ["Payload: JSON value required by step instructions."]),
+								: assignment.output.schemaId === "core.debug-report"
+									? [
+											"Payload: non-empty string `report` — the whole markdown investigation report, with the headings Summary, Environment, Reproduction, Expected, Actual, Findings, Code changes, and Open questions. Hand off `blocked` with a message when the behavior cannot be reproduced at all.",
+										]
+									: ["Payload: JSON value required by step instructions."]),
 				]
 			: ["No output artifact."]),
 		"",

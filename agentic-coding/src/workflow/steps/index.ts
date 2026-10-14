@@ -1,4 +1,5 @@
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
+import { debugBehaviors } from "./debug.ts";
 import { envSetupBehaviors } from "./env-setup.ts";
 import { gateBehaviors } from "./gates.ts";
 import { implementationBehavior } from "./implementation.ts";
@@ -20,6 +21,7 @@ export const STEP_BEHAVIORS: Readonly<Record<string, StepBehavior>> =
 		"core.rebase": rebaseBehavior,
 		...verificationBehaviors,
 		...envSetupBehaviors,
+		...debugBehaviors,
 		"core.wiki": wikiBehavior,
 		"core.research": researchBehavior,
 		...lifecycleBehaviors,

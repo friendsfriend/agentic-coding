@@ -1900,7 +1900,35 @@ function openSpecRoot(state: WorkflowState): string | undefined {
 		return active;
 	}
 }
+/** The debug family's developer report, written by the engine from the agent's
+ * handoff output into the workflow's own data directory. */
+const DEBUG_REPORT_NAME = "debug-report.md";
+
+/** The debug report's real path, or `undefined` when it does not exist (the
+ * workflow has not reached its review yet). The report lives in the
+ * **repository's** data directory, not the detached worktree's: the worktree is
+ * removed on close, so the report must outlive it. */
+function debugReportPath(state: WorkflowState): string | undefined {
+	try {
+		return realpathSync(
+			join(
+				state.repository,
+				".herdr-workflow",
+				state.workflowId,
+				DEBUG_REPORT_NAME,
+			),
+		);
+	} catch {
+		return undefined;
+	}
+}
+
 export function openSpecArtifacts(state: WorkflowState) {
+	// The debug family owns no OpenSpec change: its developer artifact is the
+	// markdown report the engine wrote beside the workflow's run data. It is
+	// rendered by the same artifact view, under its own name.
+	if (state.definition?.id === "debug")
+		return debugReportPath(state) ? [DEBUG_REPORT_NAME] : [];
 	const root = openSpecRoot(state);
 	if (root === undefined) return [];
 	try {
@@ -1910,6 +1938,13 @@ export function openSpecArtifacts(state: WorkflowState) {
 	}
 }
 export function openSpecArtifact(state: WorkflowState, artifact: string) {
+	if (state.definition?.id === "debug") {
+		if (artifact !== DEBUG_REPORT_NAME)
+			throw new Error("artifact is not a listed Markdown file");
+		const file = debugReportPath(state);
+		if (!file) throw new Error("the debug report does not exist");
+		return read(file);
+	}
 	const change = openSpecRoot(state);
 	if (change === undefined) throw new Error("workflow has no OpenSpec change");
 	const root = resolve(change);

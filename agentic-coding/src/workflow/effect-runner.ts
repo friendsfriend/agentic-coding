@@ -40,9 +40,11 @@ import {
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
+import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
+import { linkedWorktreePath } from "../worktree/template.ts";
 import type { AgentAdapter, LaunchContext } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
@@ -1045,6 +1047,11 @@ export function agentEffectHandlers(
 						sameCheckout?: boolean;
 					};
 					const sameCheckout = input.sameCheckout === true;
+					// The detached-worktree family (`debug`) checks the selected branch
+					// out nowhere: its worktree is addressed by path, not by branch.
+					const detached = startRequirementsOf(snapshot, options).includes(
+						"branch",
+					);
 					const branch = sameCheckout
 						? yield* p(() =>
 								currentBranch(snapshot.metadata.repository, signal),
@@ -1058,6 +1065,16 @@ export function agentEffectHandlers(
 					const current = yield* p(() =>
 						currentBranch(snapshot.metadata.repository, signal),
 					);
+					if (detached) {
+						const target = realpathOrSelf(
+							detachedWorktreePath(snapshot.metadata.repository, branch ?? ""),
+						);
+						const refs = yield* worktreePortCall(
+							worktreePort.list(snapshot.metadata.repository),
+						);
+						const existing = refs.find((ref) => ref.path === target);
+						return existing ? { worktree: existing.path, branch } : undefined;
+					}
 					const worktree =
 						input.mode === "worktree"
 							? yield* resolveWorktree(
@@ -1089,6 +1106,9 @@ export function agentEffectHandlers(
 						sameCheckout?: boolean;
 					};
 					const sameCheckout = input.sameCheckout === true;
+					const detached = startRequirementsOf(snapshot, options).includes(
+						"branch",
+					);
 					const branch = sameCheckout
 						? yield* p(() =>
 								currentBranch(snapshot.metadata.repository, signal),
@@ -1098,6 +1118,20 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"workspace setup requires a named branch",
 						);
+					if (detached) {
+						const location = workflowWorktreeLocation(
+							snapshot.metadata.repository,
+						);
+						const created = yield* worktreePortCall(
+							worktreePort.ensure({
+								repo: snapshot.metadata.repository,
+								branch,
+								detached: true,
+								location,
+							}),
+						);
+						return { worktree: created.path, branch };
+					}
 					// The rebase family declares `rebase-refs`: it selects its own branch
 					// instead of inheriting the checked-out one, so the checkout is
 					// prepared against that selection before anything runs in it.
@@ -2496,6 +2530,29 @@ function resolveWorktree(
 	return port.find(repo, branch).pipe(
 		Effect.map((ref) => ref?.path),
 		Effect.mapError((error) => classifyWorktreeFailure(error)),
+	);
+}
+
+/** The declared start requirements of a workflow's pinned definition. The
+ * `branch` requirement is the detached-worktree family's marker: a family that
+ * declares it checks out a branch it does not own, so the detached handling is
+ * selected by declared traits, never by a definition id. */
+function startRequirementsOf(
+	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
+	options: AdapterEffectOptions,
+): readonly string[] {
+	return (
+		effectiveFamilyTraits(snapshotDefinition(snapshot, options.registry))
+			?.startRequirements ?? []
+	);
+}
+
+/** The directory a detached worktree for `branch` is created at, derived from
+ * the same workflow layout (`linkedWorktreePath`) the port resolves. */
+export function detachedWorktreePath(repo: string, branch: string): string {
+	const location = workflowWorktreeLocation(repo);
+	return realpathOrSelf(
+		linkedWorktreePath(location.root, location.ident, branch),
 	);
 }
 

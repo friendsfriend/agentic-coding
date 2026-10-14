@@ -6,7 +6,7 @@
 // `./cli.ts`, and every invocation disables hooks, directory changes and
 // prompts, so nothing a repository configures can run because an environment
 // action or a workflow asked for a worktree.
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import {
 	classifyWorktreeFailure,
 	decodeWorktrunkList,
@@ -30,7 +30,11 @@ import {
 	type WorktreeRef,
 	type WorktreeRemoveInput,
 } from "./port.ts";
-import { worktreePathConfig, worktreePathConstant } from "./template.ts";
+import {
+	linkedWorktreePath,
+	worktreePathConfig,
+	worktreePathConstant,
+} from "./template.ts";
 
 export interface WorktreeAdapterOptions {
 	/** Overrides `WORKTRUNK_BIN_PATH`. */
@@ -132,6 +136,7 @@ export class WorktreeAdapter implements WorktreePort {
 	}
 
 	ensure(i: WorktreeEnsureInput): Effect.Effect<WorktreeRef, WorktreeError> {
+		if (i.detached) return this.ensureDetached(i);
 		return Effect.gen(this, function* () {
 			yield* this.ensureAvailable();
 			// A base means the branch may not exist yet; a branch worktrunk
@@ -150,6 +155,72 @@ export class WorktreeAdapter implements WorktreePort {
 					),
 				);
 			return reused;
+		});
+	}
+
+	/** The concrete directory a detached `ensure` targets: the caller's exact
+	 * path, or the layout template resolved for the named branch. */
+	private detachedPath(i: WorktreeEnsureInput): string {
+		if (i.path) return i.path;
+		if (!i.location)
+			throw new WorktreeError(
+				"conflict",
+				"a detached worktree needs an explicit path or location",
+			);
+		return linkedWorktreePath(i.location.root, i.location.ident, i.branch);
+	}
+
+	/** Create a **detached** worktree at `branch`'s head (validate-worktree-
+	 * detached). worktrunk cannot create one, so this goes through git directly;
+	 * the branch itself is never checked out, created, or switched. The lookup
+	 * first makes a retried ensure reuse the worktree the previous attempt
+	 * created. A create that loses a race to a sibling attempt is treated as
+	 * reuse too: the worktree is re-listed (after a best-effort prune) and
+	 * returned when it now exists, so only a target that is genuinely still
+	 * absent fails. A detached worktree is addressed by path, never by branch. */
+	private ensureDetached(
+		i: WorktreeEnsureInput,
+	): Effect.Effect<WorktreeRef, WorktreeError> {
+		return Effect.gen(this, function* () {
+			yield* this.ensureAvailable();
+			const target = realpathOrSelf(this.detachedPath(i));
+			const atTarget = (refs: readonly WorktreeRef[]) =>
+				refs.find((ref) => ref.path === target);
+			const existing = atTarget(yield* this.list(i.repo));
+			if (existing) return { ...existing, created: false };
+			const outcome = yield* Effect.either(
+				this.run([
+					"git",
+					"-C",
+					i.repo,
+					"worktree",
+					"add",
+					"--detach",
+					target,
+					// `--` confines the branch to the commit-ish position: a ref whose
+					// name begins with `-` is data, never a git option.
+					"--",
+					i.branch,
+				]),
+			);
+			if (Either.isLeft(outcome)) {
+				// A create that lost a race (a sibling attempt created the worktree
+				// between the lookup and the add) is reuse, not conflict. Prune clears
+				// a half-registered entry, then one relist decides.
+				yield* Effect.either(
+					this.run(["git", "-C", i.repo, "worktree", "prune"]),
+				);
+				const after = atTarget(yield* this.list(i.repo));
+				if (after) return { ...after, created: false };
+				return yield* Effect.fail(outcome.left);
+			}
+			return {
+				path: realpathOrSelf(target),
+				branch: "",
+				isMain: false,
+				detached: true,
+				created: true,
+			};
 		});
 	}
 

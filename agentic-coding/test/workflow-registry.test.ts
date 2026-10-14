@@ -662,6 +662,7 @@ describe("family traits (add-definition-family-traits)", () => {
 		"rebase",
 		"verify",
 		"env-setup",
+		"debug",
 	];
 	const DOCUMENTATION_IDS: readonly string[] = [
 		"wiki",
@@ -910,6 +911,14 @@ describe("family traits (add-definition-family-traits)", () => {
 				startRequirements: ["clean-tree"],
 				openspecVerifier: false,
 			},
+			debug: {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["branch", "task"],
+				openspecVerifier: false,
+			},
 		};
 		for (const id of FAMILY_IDS)
 			expect([
@@ -1007,6 +1016,7 @@ describe("family traits (add-definition-family-traits)", () => {
 				"f66c5e0dfa29b6ca024766240f5cd2439c65e555878457cc369f8c1e32ecd8ec",
 			"env-setup":
 				"c2f9d544c53a97db36778d8ca74e9d962b0bac3afef551bddff90a5384c2ecf2",
+			debug: "84964700a71a1aa3ada5efe4f50ef0c67c0b9713637dca1c6da0a0f6ac09b104",
 		};
 		// Every family a start can resolve is pinned here, so the next family
 		// cannot be added without a literal digest.

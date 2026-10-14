@@ -251,3 +251,22 @@ test("help modal rows keep their line instead of overlapping when they overflow"
 	expect(frame).not.toContain("Actions");
 	t.renderer.destroy();
 });
+
+describe("artifact help section naming", () => {
+	it("names the artifact help section after the workflow's family", () => {
+		const debug = dashboardDetailKeybindCatalog({
+			artifactsVisible: true,
+			definitionId: "debug",
+		});
+		expect(debug.map((section) => section.title)).toContain(
+			"Debug report panel",
+		);
+		const openspec = dashboardDetailKeybindCatalog({
+			artifactsVisible: true,
+			definitionId: "openspec",
+		});
+		expect(openspec.map((section) => section.title)).toContain(
+			"OpenSpec panel",
+		);
+	});
+});

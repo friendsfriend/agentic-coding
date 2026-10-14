@@ -230,8 +230,12 @@ export function startArgs(input: {
 	// The rebase family runs in the repository checkout, like the sameCheckout
 	// families, but on the branch the launch selected rather than on the one that
 	// happens to be checked out — so it forces checkout mode and carries its two
-	// selected refs to the start boundary instead of setting `sameCheckout`.
+	// selected refs to the start boundary instead of setting `sameCheckout`. The
+	// debug family selects one branch the same way (for a detached worktree), so
+	// it must forward that branch too; without this the launcher drops the picker's
+	// value and the start guard refuses every dashboard/orchestrator debug start.
 	const rebase = requirements.has("rebase-refs");
+	const debug = requirements.has("branch");
 	return {
 		repo: research ? researchWorkflowTarget() : input.repo,
 		...(research && input.repo ? { repositoryContext: input.repo } : {}),
@@ -245,10 +249,10 @@ export function startArgs(input: {
 					mode: sameCheckout || rebase || verify ? "checkout" : input.mode,
 				}),
 		...(sameCheckout ? { sameCheckout: true } : {}),
-		...(rebase
+		...(rebase || debug
 			? {
 					sourceBranch: input.sourceBranch,
-					targetBranch: input.targetBranch,
+					...(rebase ? { targetBranch: input.targetBranch } : {}),
 				}
 			: {}),
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS

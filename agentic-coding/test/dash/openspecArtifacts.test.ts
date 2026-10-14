@@ -6,8 +6,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkflowState } from "../../src/contracts/workflow";
-import { openSpecArtifacts } from "../../src/server/operations/observations.ts";
+import {
+	openSpecArtifact,
+	openSpecArtifacts,
+} from "../../src/server/operations/observations.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
+import { artifactSurfaceLabel } from "../../src/tui/dash/projections.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -57,4 +61,37 @@ test("an archived change keeps listing its artifacts", () => {
 	expect(openSpecArtifacts(stateWithChange(root, "demo-change"))).toEqual([
 		"proposal.md",
 	]);
+});
+
+test("a debug workflow lists its report and renders it", () => {
+	const root = worktree();
+	const base = testDashboard().state;
+	const state: WorkflowState = {
+		...base,
+		workflowId: "wf-debug-artifact",
+		worktree: root,
+		repository: root,
+		changeId: "",
+		definition: { id: "debug", version: 806, digest: "d", label: "Debug" },
+	};
+	// Before the review, the report does not exist and the panel is empty.
+	expect(openSpecArtifacts(state)).toEqual([]);
+	const directory = join(root, ".herdr-workflow", "wf-debug-artifact");
+	mkdirSync(directory, { recursive: true });
+	writeFileSync(join(directory, "debug-report.md"), "# Summary\nfound it\n");
+	expect(openSpecArtifacts(state)).toEqual(["debug-report.md"]);
+	expect(openSpecArtifact(state, "debug-report.md")).toBe(
+		"# Summary\nfound it\n",
+	);
+	expect(() => openSpecArtifact(state, "proposal.md")).toThrow(
+		/not a listed Markdown file/,
+	);
+});
+
+test("the artifact surface is named for the workflow family", () => {
+	// The panel heading, the artifact viewer's title, and the `?` help section
+	// all share this one name, so a debug report is never titled "OpenSpec".
+	expect(artifactSurfaceLabel("debug")).toBe("Debug report");
+	expect(artifactSurfaceLabel("openspec")).toBe("OpenSpec");
+	expect(artifactSurfaceLabel(undefined)).toBe("OpenSpec");
 });

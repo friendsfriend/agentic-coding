@@ -844,12 +844,22 @@ export function resolveClassifierProvider(agents: AgentsConfig): string {
 	return agents.classifier?.provider ?? DEFAULT_CLASSIFIER_PROVIDER;
 }
 
-/** The ordered pool entries a preset declares for a step (empty if none). */
+/** The ordered pool entries a preset declares for a step (empty if none). A
+ * classifiable step the preset leaves unpooled falls back to the preset's own
+ * `default_profile`, so a new family's classifiable step (the debug family's
+ * `debug.investigate`) is runnable from any preset that names a default profile
+ * instead of failing coverage. A preset with no default profile keeps the
+ * historical hard requirement. */
 export function poolEntries(
 	preset: RoutingPreset | undefined,
 	stepId: string,
 ): readonly PoolEntry[] {
-	return ownValue(preset?.pools, stepId) ?? [];
+	const declared = ownValue(preset?.pools, stepId) ?? [];
+	if (declared.length === 0 && preset?.default_profile && stepId in POOL_STEPS)
+		return [
+			{ label: "default", profile: preset.default_profile, default: true },
+		];
+	return declared;
 }
 
 /** The entries tagged `default: true` for a step, in pool order. */

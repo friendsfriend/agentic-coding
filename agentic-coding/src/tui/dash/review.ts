@@ -1149,6 +1149,19 @@ export function createReviewFeature(
 			setReviewChangeIndex((index) => Math.max(0, index - 1));
 		else if (
 			reviewView() === "files" &&
+			key === "c" &&
+			reviewKind() === "developer" &&
+			data().state.definition?.id === "debug" &&
+			reviewVisibleChanges().length === 0
+		) {
+			// A report-only investigation has no diff to anchor a comment to. The
+			// follow-up is authored directly against the report, so the debug gate can
+			// still request one instead of silently approving.
+			setReviewCommentText("");
+			setReviewCommentMode(true);
+			setModalActive("review-comment");
+		} else if (
+			reviewView() === "files" &&
 			(key === "enter" || key === "return")
 		) {
 			if (

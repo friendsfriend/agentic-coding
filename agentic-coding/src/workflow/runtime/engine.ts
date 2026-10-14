@@ -62,8 +62,12 @@ import type {
 } from "./engine-types.ts";
 import {
 	changedFilesIn,
+	commitStagedArtifacts,
 	currentBranch,
+	debugHandoffArtifacts,
+	discardStagedArtifacts,
 	sourceContentFingerprint,
+	stageDebugArtifactFiles,
 	validateSourceBaseline,
 	validateStartEvidence,
 	wikiBaselineFor,
@@ -482,6 +486,12 @@ export class WorkflowEngine {
 				),
 				(error) =>
 					Effect.gen(function* () {
+						// A rejected handoff leaves only its staged temp files: remove them so
+						// the committed evidence entry keeps the bytes it was recorded with.
+						if (preparedHandoff?.pendingArtifacts?.length)
+							yield* Effect.sync(() =>
+								discardStagedArtifacts(preparedHandoff?.pendingArtifacts ?? []),
+							);
 						if (
 							error instanceof WorkflowRuntimeError &&
 							[
@@ -518,6 +528,16 @@ export class WorkflowEngine {
 						return yield* Effect.fail(error);
 					}),
 			);
+			// The debug handoff's bytes were staged before the transaction and are
+			// renamed over their targets now, after the command is durably committed.
+			// The rename is atomic within one filesystem and effectively infallible
+			// once the bytes are staged; a failure is surfaced rather than swallowed,
+			// because a committed evidence digest must not reference bytes that were
+			// never written.
+			if (preparedHandoff?.pendingArtifacts?.length)
+				yield* Effect.sync(() =>
+					commitStagedArtifacts(preparedHandoff?.pendingArtifacts ?? []),
+				);
 			// Post-commit scheduling/telemetry is separated from the committed
 			// command result: a continuation or notification failure here does not
 			// imply the durable mutation was rolled back.
@@ -1344,6 +1364,26 @@ export class WorkflowEngine {
 				? { changedFiles: changedFilesIn(observed) }
 				: {}),
 		};
+		// The debug family's handoff artifacts: the developer-readable markdown
+		// report and, when the detached worktree is dirty, the patch that preserves
+		// the edits past its removal. The report contract is parsed here (before the
+		// transaction), so a report missing a required heading is refused as an
+		// entry-guard failure rather than accepted and rendered.
+		if (preparedArtifact && observed.currentStep === "debug.investigate") {
+			const report = evidenceStep.output.parse(preparedArtifact.output) as {
+				report: string;
+			};
+			// Stage only, before the transaction: a staging failure fails the handoff
+			// with nothing committed, and the bytes are renamed over their targets
+			// only after the command commits. `debugChangesPatch` no longer marks
+			// intent-to-add, so a rejected attempt leaves no index mutation either.
+			const artifacts = debugHandoffArtifacts(observed, report.report);
+			preparedHandoff.preparedEvidence = artifacts.entries;
+			preparedHandoff.pendingArtifacts = stageDebugArtifactFiles(
+				artifacts.files,
+				command.runId,
+			);
+		}
 		if (sourceBaselineFingerprint) {
 			preparedHandoff.sourceFingerprint = sourceBaselineFingerprint;
 			const finalSourceFingerprint = sourceContentFingerprint(

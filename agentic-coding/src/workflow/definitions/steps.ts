@@ -9,6 +9,7 @@ import { AGENT_DEFINITIONS } from "../embedded.generated.ts";
 import type { Reduction, StepDefinition, StepReference } from "../registry.ts";
 import { stepBehavior } from "../steps/index.ts";
 import {
+	debugReport,
 	empty,
 	findings,
 	passthrough,
@@ -47,6 +48,9 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	// The `env-setup` family's one agent: its role brief is the only asset of
 	// the step it receives (instructionAssetForRole).
 	"setup.author": ["workflow-agent-protocol.md", "env-setup.md"],
+	// The debug family's one agent: its role brief is the only asset of the step
+	// it receives (instructionAssetForRole).
+	"debug.investigate": ["workflow-agent-protocol.md", "debug.md"],
 	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
@@ -253,6 +257,10 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		allowedEffects: ["model.classify"],
 		retryLimit: 3,
 	}),
+	step("core.route-debug", "Debug model routing", "system", ["complete"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
 	step("core.route-archive", "Archive model routing", "system", ["complete"], {
 		allowedEffects: ["model.classify"],
 		retryLimit: 3,
@@ -451,6 +459,26 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 			retryLimit: 3,
 		},
 	),
+	// --- debug family (add-debug-workflow) ------------------------------------
+	// The one agent of the family: it probes a running app and may edit code to
+	// prove a candidate fix. Its edits are captured as a `changes.patch`
+	// evidence entry at handoff, so it needs shell (its `env_*`/debug tools and
+	// git inspection) and edit.
+	step(
+		"debug.investigate",
+		"Debug investigation",
+		"agent",
+		["complete", "blocked", "failed"],
+		{
+			requirements: ["prompt", "run-environment", "observe", "shell", "edit"],
+			output: debugReport,
+			retryLimit: 3,
+		},
+	),
+	// The developer gate: approve the report, or ask for a bounded follow-up
+	// investigation with a comment. Its actions are the shared `approve-review`
+	// and `review-comments`, so the dashboard's review popup renders it unchanged.
+	step("debug.review", "Debug review", "developer", ["approve", "comments"]),
 	step("core.completed", "Completed", "developer", ["close", "create-pr"], {
 		allowedEffects: ["pull-request.create", "workspace.close"],
 	}),

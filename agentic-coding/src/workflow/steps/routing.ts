@@ -37,6 +37,7 @@ export const STEP_ROUTES: Readonly<Record<string, StepRoute>> = Object.freeze({
 	"core.route-triage": { target: "core.triage", phase: "apply" },
 	"core.route-verification": { target: "core.verification", phase: "apply" },
 	"core.route-wiki": { target: "core.wiki", phase: "apply" },
+	"core.route-debug": { target: "debug.investigate", phase: "apply" },
 	"core.route-archive": { target: "core.archive", phase: "apply" },
 	"core.route-research": { target: "core.research", phase: "apply" },
 });

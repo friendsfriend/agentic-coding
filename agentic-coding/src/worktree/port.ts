@@ -79,6 +79,12 @@ export interface WorktreeEnsureInput {
 	readonly path?: string;
 	/** Explicit layout; without it worktrunk's configured location is used. */
 	readonly location?: WorktreeLocation;
+	/** Create (or reuse) a worktree **detached** at `branch`'s head. The branch
+	 * stays wherever it already is; the worktree checks out no branch and the
+	 * caller may not commit to one implicitly. `path` or `location` must name
+	 * the target directory, since a detached worktree cannot be addressed by a
+	 * branch name. */
+	readonly detached?: boolean;
 }
 
 export interface WorktreeRemoveInput {

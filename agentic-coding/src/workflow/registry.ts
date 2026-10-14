@@ -90,7 +90,8 @@ export type WorkflowStartRequirement =
 	| "openspec-project"
 	| "openspec-change"
 	| "base-commit"
-	| "rebase-refs";
+	| "rebase-refs"
+	| "branch";
 /** Declarative replacement for the engine's per-family definition-id
  * comparisons (add-definition-family-traits): the properties `steps/`,
  * `runtime/`, `startup.ts`, and `effect-runner.ts` branch on today. Declared
@@ -152,6 +153,7 @@ const START_REQUIREMENTS: readonly WorkflowStartRequirement[] = [
 	"openspec-change",
 	"base-commit",
 	"rebase-refs",
+	"branch",
 ];
 /** Validate a declared family-traits block: enum membership, repository target
  * only, and structural consistency with the steps the graph actually contains.

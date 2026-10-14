@@ -472,7 +472,10 @@ export function createOrchestratorExtension(
 					),
 					ticket: Type.Optional(Type.String({ maxLength: 128 })),
 					sourceBranch: Type.Optional(
-						Type.String({ description: "rebase only: branch to rebase" }),
+						Type.String({
+							description:
+								"rebase and debug only: the branch to rebase, or the branch a debug workflow investigates in a detached worktree",
+						}),
 					),
 					targetBranch: Type.Optional(
 						Type.String({ description: "rebase only: ref to rebase onto" }),

@@ -694,7 +694,7 @@ test("openspec renders the task step before checkout mode and submits the task",
 	// here, and the checkout-mode choices do not exist yet.
 	const taskFrame = t.captureCharFrame();
 	expect(taskFrame).toContain(
-		"Task required for wiki, research, no OpenSpec, and solo",
+		"Task required for debug, wiki, research, no OpenSpec, and solo",
 	);
 	expect(taskFrame).not.toContain("worktree");
 	for (const character of "Classify the JEV plan")
@@ -1202,4 +1202,71 @@ test("the app step shows the reader while the catalog is still being read", asyn
 	expect(loaded).toContain("billing");
 	t.renderer.destroy();
 	rmSync(directory, { recursive: true, force: true });
+});
+
+test("the debug type selects a branch and a task and runs in worktree mode", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	useBranches({
+		current: "feature/topic",
+		local: ["feature/topic", "main"],
+		remote: ["origin/main"],
+		default: "origin/main",
+	});
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PROJECT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 130, height: 30 },
+	);
+	await t.flush();
+	// `debug` is the catalog's last entry.
+	for (let index = 0; index < 12; index++) handler?.(key("j"));
+	handler?.(key("enter"));
+	await t.flush();
+	expect(frameLine(t.captureCharFrame(), "Workflow type")).toContain("debug");
+	handler?.(key("enter")); // preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	for (const character of "debug-demo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter(); // workflow id
+	await t.flush();
+	// The branch picker opens on the checked-out branch and offers local branches
+	// only: a detached worktree is created at that branch's head.
+	const branchFrame = t.captureCharFrame();
+	expect(branchFrame).toContain("Branch to investigate");
+	expect(branchFrame).toContain("feature/topic");
+	expect(branchFrame).not.toContain("origin/main");
+	handler?.(key("enter")); // branch: feature/topic (the checked-out branch)
+	await t.flush();
+	// The summary and the confirm step name the debug branch the same way the
+	// picker does, never as the rebase family's "Branch to rebase".
+	const taskStepFrame = t.captureCharFrame();
+	expect(taskStepFrame).toContain("Branch to investigate");
+	expect(taskStepFrame).not.toContain("Branch to rebase");
+	// The task step then takes the reported behavior.
+	for (const character of "search returns nothing")
+		t.mockInput.pressKey(character);
+	t.mockInput.pressEnter({ meta: true });
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Confirm workflow");
+	handler?.(key("return"));
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]).toMatchObject({
+		workflowType: "debug",
+		mode: "worktree",
+		repo: PROJECT.repository,
+		sourceBranch: "feature/topic",
+		task: "search returns nothing",
+	});
+	t.renderer.destroy();
 });

@@ -151,6 +151,10 @@ export function validateStart(
 		if (dirty)
 			throw new Error("working tree must be clean before workflow start");
 	}
+	// The detached-worktree debug family selects the branch it investigates; the
+	// branch must already exist and is never created or switched.
+	if (requirements.has("branch"))
+		validateDebugBranch(repo, branches.sourceBranch);
 	if (requirements.has("task")) {
 		if (!task?.trim())
 			throw new Error(`${workflow} workflow requires non-empty task`);
@@ -219,6 +223,27 @@ function validateVerifyBase(repo: string, baseBranch?: string): void {
 		throw new Error(
 			`verify base branch has no common ancestor with HEAD: ${base}`,
 		);
+	}
+}
+
+/** The debug family's start rule: the selected branch must be an existing
+ * local branch. The detached worktree is created at that branch's head, so a
+ * missing branch would have nothing to check out. */
+function validateDebugBranch(repo: string, branch?: string): void {
+	const selected = branch?.trim();
+	if (!selected)
+		throw new Error(
+			"debug workflow requires --branch: the branch to investigate",
+		);
+	// A ref whose name begins with `-` would be read as a git option by the
+	// detached `git worktree add`; refuse it here with a named diagnostic instead
+	// of depending on git's option parsing.
+	if (selected.startsWith("-"))
+		throw new Error(`debug branch must not begin with '-': ${selected}`);
+	try {
+		runGit(repo, "rev-parse", "--verify", `refs/heads/${selected}`);
+	} catch {
+		throw new Error(`debug branch does not exist: ${selected}`);
 	}
 }
 
@@ -490,6 +515,10 @@ function prepareFromContext(
 	const rebase = requirements.has("rebase-refs");
 	const rebaseSource = rebase ? request.sourceBranch?.trim() : undefined;
 	const rebaseTarget = rebase ? request.targetBranch?.trim() : undefined;
+	// The detached-worktree debug family selects the branch it investigates; the
+	// branch arrives on the same `sourceBranch` field the rebase family uses.
+	const debug = requirements.has("branch");
+	const debugBranch = debug ? request.sourceBranch?.trim() : undefined;
 	// The verify-only family measures the current branch against the configured
 	// base branch. It runs in the checkout the branch is already on and never
 	// switches it, so it shares the checkout contract with `wiki`.
@@ -514,7 +543,7 @@ function prepareFromContext(
 			request.definitionId,
 			request.task,
 			{
-				sourceBranch: rebaseSource,
+				sourceBranch: rebaseSource ?? debugBranch,
 				targetBranch: rebaseTarget,
 				baseBranch: verifyBase,
 			},
@@ -576,14 +605,16 @@ function prepareFromContext(
 						runGit(ctx.repo, "merge-base", verifyBase ?? "", "HEAD")
 					: rebase
 						? runGit(ctx.repo, "rev-parse", `${rebaseTarget}^{commit}`)
-						: runGit(
-								ctx.repo,
-								"rev-parse",
-								`${config.workflow.base_branch}^{commit}`,
-							);
+						: debug
+							? runGit(ctx.repo, "rev-parse", `${debugBranch}^{commit}`)
+							: runGit(
+									ctx.repo,
+									"rev-parse",
+									`${config.workflow.base_branch}^{commit}`,
+								);
 	// A verify-only run may legitimately have no remote at all when its base
 	// branch is local, so the remote is not required for it.
-	if (!research && !wikiOnly && !sameCheckout && !rebase && !verify)
+	if (!research && !wikiOnly && !sameCheckout && !rebase && !verify && !debug)
 		runGit(ctx.repo, "remote", "get-url", config.workflow.remote);
 	const branch =
 		research || wikiOnly
@@ -592,9 +623,11 @@ function prepareFromContext(
 				? runGit(ctx.repo, "branch", "--show-current")
 				: rebase
 					? (rebaseSource ?? "")
-					: sameCheckout
-						? runGit(ctx.repo, "branch", "--show-current")
-						: `${config.workflow.branch_prefix}${ctx.workflowId}`;
+					: debug
+						? (debugBranch ?? "")
+						: sameCheckout
+							? runGit(ctx.repo, "branch", "--show-current")
+							: `${config.workflow.branch_prefix}${ctx.workflowId}`;
 	if (!research && !wikiOnly && (sameCheckout || verify) && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",

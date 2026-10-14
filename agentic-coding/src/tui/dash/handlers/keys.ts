@@ -23,7 +23,11 @@ import {
 	movePanel,
 	type PanelDirection,
 } from "../panel-grid.ts";
-import { classificationDetail, classificationEntries } from "../projections.ts";
+import {
+	artifactSurfaceLabel,
+	classificationDetail,
+	classificationEntries,
+} from "../projections.ts";
 
 /** The route props the handler reads. */
 export interface DashboardKeyProps {
@@ -519,7 +523,7 @@ export function createDashboardKeyHandler(
 				if (artifact) {
 					setVerdictRenderMarkdown(true);
 					setVerdict({
-						title: `OpenSpec · ${artifact}`,
+						title: `${artifactSurfaceLabel(data().state.definition?.id)} · ${artifact}`,
 						content: "Loading artifact…",
 					});
 					setVerdictOffset(0);
@@ -528,13 +532,13 @@ export function createDashboardKeyHandler(
 						.readArtifact(data().state, artifact)
 						.then((content) =>
 							setVerdict({
-								title: `OpenSpec · ${artifact}`,
+								title: `${artifactSurfaceLabel(data().state.definition?.id)} · ${artifact}`,
 								content,
 							}),
 						)
 						.catch((error) =>
 							setVerdict({
-								title: `OpenSpec · ${artifact}`,
+								title: `${artifactSurfaceLabel(data().state.definition?.id)} · ${artifact}`,
 								content: `Could not open ${artifact}: ${error instanceof Error ? error.message : String(error)}`,
 							}),
 						);

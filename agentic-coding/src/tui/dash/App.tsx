@@ -115,6 +115,7 @@ import {
 	agentMetricLine,
 	agentRuntimeModelLine,
 	approvalFor,
+	artifactSurfaceLabel,
 	classificationEntries,
 	type PhaseStatusState,
 	phaseStatus,
@@ -1256,7 +1257,10 @@ export function App(props: {
 		switch (requiredUserAction()?.key) {
 			case "developer-review":
 				return {
-					prompt: "Press Enter to review changed files",
+					prompt:
+						data().state.phase === "debug.review"
+							? "Press Enter to review the debug report"
+							: "Press Enter to review changed files",
 					action: "review",
 				};
 			case "plan-review":
@@ -1388,7 +1392,10 @@ export function App(props: {
 			} catch (error) {
 				content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
 			}
-			setVerdict({ title: `OpenSpec · ${item.value}`, content });
+			setVerdict({
+				title: `${artifactSurfaceLabel(data().state.definition?.id)} · ${item.value}`,
+				content,
+			});
 			setVerdictOffset(0);
 			props.keymap.setData("modal.active", "verdict");
 			return;
@@ -1603,6 +1610,7 @@ export function App(props: {
 			? agentSessionKeybindCatalog()
 			: dashboardDetailKeybindCatalog({
 					artifactsVisible: artifacts().length > 0,
+					definitionId: data().state.definition?.id,
 				}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
@@ -1924,7 +1932,10 @@ export function App(props: {
 				artifact,
 				artifactController?.signal,
 			);
-			setVerdict({ title: `OpenSpec · ${artifact}`, content: read ?? "" });
+			setVerdict({
+				title: `${artifactSurfaceLabel(data().state.definition?.id)} · ${artifact}`,
+				content: read ?? "",
+			});
 		},
 		switchWorkflowPreset,
 		runWorkflow,
@@ -2588,6 +2599,16 @@ export function App(props: {
 								]);
 							} else if (file)
 								notify("Could not map selected line to file line", "warning");
+							else if (
+								reviewKind() === "developer" &&
+								data().state.definition?.id === "debug"
+							)
+								// A report-only investigation has no changed file to anchor to: the
+								// comment is the follow-up itself, anchored to the report artifact.
+								setReviewComments((comments) => [
+									...comments,
+									{ filePath: "debug-report.md", line: 1, body },
+								]);
 							setReviewVisualMode(false);
 							setReviewCommentMode(false);
 							setReviewCommentText("");
@@ -3187,6 +3208,7 @@ export function App(props: {
 											artifacts={artifacts()}
 											active={activePanel() === 6}
 											selectedIndex={selectedArtifact()}
+											title={artifactSurfaceLabel(data().state.definition?.id)}
 										/>
 									</Show>
 									{/* Always rendered, empty state included: a newly started
