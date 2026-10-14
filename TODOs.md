@@ -17,10 +17,10 @@ Big ones:
  │ 5  │ add-workflow-evidence-store             │ —                                  │ Storage the browser needs. It has no dependencies, so it can also run in parallel with 1–4.                                     │ done
  │ 6  │ add-dashboard-evidence-panel            │ 5                                  │ Shows evidence in the dashboard before the agents start producing it.                                                           │ done
  │ 7  │ add-agent-browser-sessions              │ 3, 5                               │ Headless browser, screenshots and video.                                                                                        │ done
- │ 8  │ add-agent-debug-tools                   │ 1, 3                               │ OTel wiring and otel_query / db_query / http_request.                                                                           │
- │ 9  │ add-environment-setup-workflow          │ 1, 3, 8                            │ Agents write the run definitions, including the OTel wiring from 8.                                                             │
+ │ 8  │ add-agent-debug-tools                   │ 1, 3                               │ OTel wiring and otel_query / db_query / http_request.                                                                           │ done
+ │ 9  │ add-environment-setup-workflow          │ 1, 3, 8                            │ Agents write the run definitions, including the OTel wiring from 8.                                                             │ done
  │ —  │ Operational: one env-setup pass per app │ 9                                  │ Adds OTel wiring and a mock-auth profile to your existing apps, so the debug tools return useful data.                          │
- │ 10 │ add-debug-workflow                      │ 3, 5, 7, 8                         │ The debug role and the standalone debug workflow with your review step.                                                         │
+ │ 10 │ add-debug-workflow                      │ 3, 5, 7, 8                         │ The debug role and the standalone debug workflow with your review step.                                                         │ done
  │ 11 │ add-debug-subagent-requests             │ 10                                 │ Other agents can hand work to the debug agent asynchronously.                                                                   │
  │ 12 │ add-kubernetes-run-replicas             │ 1                                  │ Optional kind runs with multiple replicas. It only needs 1, so it can go anywhere after it; it's last because it matters least. │
 
@@ -33,6 +33,7 @@ Small ones:
 * Orchestrator 
   * Improve tool descriptions so that orchestrator instantly knows which data to request from the user first -> e.g model preset and so on
   * If no default is set in the menu -> Show message in transcript as red error for the user to select /model and /thinking before asking questions
+  * Orchestrator can decide about what he wants to get notified. Implement event system for workflows that orchestrator can subscribe to on demand
 * Improve mouse navigation. Many components currently dont support mouse clicking (agents panel, and so on)
 * Make the server be deployable on a server
   * User handling
