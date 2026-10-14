@@ -145,6 +145,58 @@ nothing dynamic to report for them.
 The holder's next call after a force release answers `released-by-developer`
 once and then starts cleanly.
 
+## Environment setup workflow
+
+The `env-setup` family authors an app's environment definitions as drafts and
+publishes them only after the developer approves them:
+
+```text
+agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
+  --app IDENT --workflow-id ID [--task TEXT]
+```
+
+- **Drafts, never the live files.** The author agent writes under
+  `<config>/.drafts/env-setup/<workflow-id>/`, mirroring the configuration
+  layout (`apps/build/*`, `apps/run/*`, `apps/compose/*`,
+  `apps/kubernetes/<app>-<profile>.k8s.json`, `infrastructure/definitions/*`,
+  `infrastructure/compose/*`). A draft file's relative path is the path it will
+  occupy once promoted. The app repository is read-only evidence; the drafts
+  live outside the checkout.
+- **Drafts are runnable while they are drafts.** A run held by
+  `workflow:<id>` resolves the drafts directory before the live configuration,
+  file by file: a draft replaces or adds one definition without touching the
+  live one, and an unrelated live definition is never shadowed. The agent's
+  `env_*` tools therefore start, build, test and debug exactly what it
+  authored, waiting for the app like any other owner.
+- **Write guard.** The live configuration directory and the checkout are
+  fingerprinted before the first author turn (`.drafts`/`.backups` excluded);
+  at every author handoff the guard compares them and a change outside the
+  drafts directory fails the guard, which parks the workflow in
+  `attention-required` with the violation named. The developer decides what
+  happens next.
+- **Deterministic validation.** `setup.validate` parses every draft, checks
+  that discovery resolves each drafted run target, compiles them, requires the
+  `AC_OTEL_*` wiring, refuses a host port another app already declares, lists
+  referenced `${VAR}`s the configuration `.env` lacks, and then starts every
+  drafted target (Docker always; script and Kubernetes targets only when a
+  draft defines them, and Kubernetes only when its cluster is reachable) and
+  waits for readiness. A failure returns the report to the author, bounded to
+  five rounds.
+- **Approval.** `setup.approval` shows the developer every new and modified
+  file as a unified diff against the live configuration, flags a change to an
+  existing shared service definition as *affects all apps*, and offers approve
+  (promote) or request changes with comments (back to the author).
+- **Atomic promotion.** `setup.promote` backs up every replaced live file to
+  `<config>/.backups/env-setup-<workflow-id>/`, writes each file through a
+  temporary sibling renamed over its target, reloads the environment catalog,
+  and moves the drafts aside. Any failure — a write or the reload — restores
+  every replaced file, removes every added one, and leaves the drafts in place
+  for the developer's retry.
+
+The workflow ends at `core.completed` with `close` only; closing releases the
+app slots through the same owner-bound `environment.teardown` effect every
+family uses.
+
 ## Developer-facing behavior
 
 - The TUI's run action checks the slot first: while an agent holds the app it

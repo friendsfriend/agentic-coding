@@ -16,6 +16,7 @@ import {
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { resolveConfigRoot } from "../../config-root.ts";
 import type { EvidenceManifest } from "../../contracts/environment.ts";
 import type {
 	LocalChange,
@@ -32,9 +33,15 @@ import type {
 	WorkflowOverview,
 	WorkflowState,
 } from "../../contracts/workflow";
-import type { WorkflowView } from "../../contracts/workflow.ts";
+import type {
+	WorkflowSnapshot,
+	WorkflowView,
+} from "../../contracts/workflow.ts";
 import { effectiveManifestPolicy } from "../../workflow/definitions.ts";
-import { sessionsReport } from "../../workflow/operations.ts";
+import {
+	sessionsReport,
+	engine as workflowEngine,
+} from "../../workflow/operations.ts";
 import {
 	fetchProjectCatalog,
 	loadProjectCatalog,
@@ -65,6 +72,13 @@ import {
 	snapshotList,
 	snapshotRead,
 } from "../../workflow/wiki.ts";
+import {
+	assertSetupDraftsDir,
+	type SetupDraftChange,
+	setupDraftChange,
+	setupDraftChanges,
+	setupDraftsDir,
+} from "../environment/setup-drafts.ts";
 import { listEvidence } from "../evidence/store.ts";
 import {
 	answerWorkflowQuestion,
@@ -89,6 +103,8 @@ export type DashboardObservation =
 	| { kind: "artifact-content"; state: WorkflowState; artifact: string }
 	| { kind: "wiki-changes"; repo: string; workflowId: string }
 	| { kind: "wiki-diff"; repo: string; workflowId: string; file: LocalChange }
+	| { kind: "setup-changes"; repo: string; workflowId: string }
+	| { kind: "setup-diff"; repo: string; workflowId: string; file: LocalChange }
 	| { kind: "local-changes"; repo: string; workflowId: string }
 	| {
 			kind: "local-diff";
@@ -146,6 +162,14 @@ export async function runLocalObservation(
 			return loadWikiSnapshotChanges(observation.repo, observation.workflowId);
 		case "wiki-diff":
 			return loadWikiSnapshotDiff(
+				observation.repo,
+				observation.workflowId,
+				observation.file.newPath,
+			);
+		case "setup-changes":
+			return loadSetupDraftChanges(observation.repo, observation.workflowId);
+		case "setup-diff":
+			return loadSetupDraftDiff(
 				observation.repo,
 				observation.workflowId,
 				observation.file.newPath,
@@ -1189,6 +1213,87 @@ export function loadLocalChanges(
 	}
 	return [...changes.values()].sort((a, b) =>
 		a.newPath.localeCompare(b.newPath),
+	);
+}
+
+/**
+ * The env-setup drafts as reviewable rows: one row per drafted file with its
+ * line counts against the live configuration. The rows are the approval gate's
+ * file list; each row's diff comes from `loadSetupDraftDiff`.
+ */
+export function loadSetupDraftChanges(
+	repo: string,
+	workflowId: string,
+): LocalChange[] {
+	const draftsDir = setupDraftsDirFor(repo, workflowId);
+	return setupDraftRows(setupDraftChanges(resolveConfigRoot(), draftsDir));
+}
+
+/** The approval popup's rows for a set of draft changes. Pure, so the mapping
+ * the popup consumes (`added` → `newFile`, one row per draft) is testable
+ * without the observation's authorization path. */
+export function setupDraftRows(
+	changes: readonly SetupDraftChange[],
+): LocalChange[] {
+	return changes.map((change) => ({
+		newPath: change.path,
+		oldPath: change.path,
+		linesAdded: change.linesAdded,
+		linesDeleted: change.linesDeleted,
+		newFile: change.status === "added",
+		deletedFile: false,
+		renamedFile: false,
+	}));
+}
+
+/** One drafted file's unified diff against the live configuration. */
+export function loadSetupDraftDiff(
+	repo: string,
+	workflowId: string,
+	filePath: string,
+): string {
+	const draftsDir = setupDraftsDirFor(repo, workflowId);
+	const change = setupDraftChange(resolveConfigRoot(), draftsDir, filePath);
+	if (!change) throw new Error(`no draft named ${JSON.stringify(filePath)}`);
+	return change.diff;
+}
+
+/**
+ * The drafts directory of one workflow, authorized through the workflow itself:
+ * the id must name a workflow this store knows in this repository (the same
+ * read every sibling observation goes through), and `setupDraftsDir` refuses an
+ * id that is not a plain `[a-z0-9-]` name, so the request can never name a
+ * directory outside `<config>/.drafts/env-setup`.
+ */
+function setupDraftsDirFor(repo: string, workflowId: string): string {
+	// The id is a lookup key first: it must resolve to a workflow this store
+	// knows, and the drafts root is then taken from that workflow's own pinned
+	// metadata — never from the request. `setupDraftsDir` shape-validates the id
+	// as a fallback for a snapshot that predates the pin, so `..`, an absolute
+	// path and an unknown workflow are all refused before a filesystem read.
+	const engine = workflowEngine();
+	// The repository the request names first, then every configured workflow
+	// target: the workflow must resolve to one this store knows, and its drafts
+	// root is then taken from that workflow's own pinned metadata.
+	for (const target of [repo, ...workflowTargets()]) {
+		let snapshot: WorkflowSnapshot;
+		try {
+			snapshot = engine.getSnapshot(target, workflowId);
+		} catch {
+			continue;
+		}
+		if (snapshot.workflowId !== workflowId) continue;
+		const pinned = snapshot.metadata.setupDraftsDir;
+		if (!pinned) return setupDraftsDir(resolveConfigRoot(), workflowId);
+		// The pinned value is untrusted on read — the store lives inside the
+		// workflow's own checkout — so a directory outside this configuration's
+		// drafts root is refused rather than read, exactly as the overlay resolver
+		// refuses it.
+		assertSetupDraftsDir(resolveConfigRoot(), pinned);
+		return pinned;
+	}
+	throw new Error(
+		`unknown workflow: ${JSON.stringify(workflowId)} in ${JSON.stringify(repo)}`,
 	);
 }
 

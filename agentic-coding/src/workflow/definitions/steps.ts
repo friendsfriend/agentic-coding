@@ -44,6 +44,9 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"wiki-openspec.md",
 		"wiki-research.md",
 	],
+	// The `env-setup` family's one agent: its role brief is the only asset of
+	// the step it receives (instructionAssetForRole).
+	"setup.author": ["workflow-agent-protocol.md", "env-setup.md"],
 	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
@@ -397,6 +400,57 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 	step("core.delivery", "Delivery", "system", ["complete", "failed"], {
 		allowedEffects: ["delivery.commit", "delivery.push"],
 	}),
+	// --- env-setup family (add-environment-setup-workflow) -------------------
+	// The one agent of the family: it writes drafts into the configuration
+	// directory's drafts root, so it needs shell (its `env_*` tools and git
+	// inspection) and edit. Its `environment.setup-guard` effects bracket the
+	// turn: a baseline before the first author turn and a check at every
+	// handoff.
+	step(
+		"setup.author",
+		"Environment authoring",
+		"agent",
+		["complete", "blocked", "failed"],
+		{
+			requirements: ["prompt", "run-environment", "observe", "shell", "edit"],
+			retryLimit: 6,
+			allowedEffects: [
+				"artifact.write",
+				"agent.launch",
+				"agent.prompt",
+				"agent.stop",
+				"environment.setup-guard",
+			],
+		},
+	),
+	// The deterministic gate: structural checks and a real start of every
+	// drafted target.
+	step(
+		"setup.validate",
+		"Environment validation",
+		"system",
+		["complete", "failed"],
+		{
+			allowedEffects: ["environment.validate"],
+			retryLimit: 3,
+		},
+	),
+	// The developer gate over the draft diff. Its actions are `approve-setup`
+	// and the shared `review-comments`.
+	step("setup.approval", "Environment approval", "developer", [
+		"approve",
+		"comments",
+	]),
+	step(
+		"setup.promote",
+		"Environment promotion",
+		"system",
+		["complete", "failed"],
+		{
+			allowedEffects: ["environment.setup-guard", "environment.promote"],
+			retryLimit: 3,
+		},
+	),
 	step("core.completed", "Completed", "developer", ["close", "create-pr"], {
 		allowedEffects: ["pull-request.create", "workspace.close"],
 	}),

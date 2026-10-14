@@ -217,6 +217,23 @@ describe("breaking workflow CLI surface", () => {
 		expect(
 			rebaseFailure instanceof Error ? rebaseFailure.message : rebaseFailure,
 		).not.toContain("unknown flag");
+		// The env-setup family's subject is part of the start surface too.
+		const appFailure = await run([
+			"start",
+			"--repo",
+			".",
+			"--workflow-id",
+			"x",
+			"--mode",
+			"checkout",
+			"--workflow",
+			"env-setup",
+			"--app",
+			"shop",
+		]).catch((error: unknown) => error);
+		expect(
+			appFailure instanceof Error ? appFailure.message : appFailure,
+		).not.toContain("unknown flag");
 	});
 	test("detached drain argv works in source-tree and compiled runners", () => {
 		const source = cliTest.detachedDrainArgv("/abs/src/cli.ts", "/repo", "c1");

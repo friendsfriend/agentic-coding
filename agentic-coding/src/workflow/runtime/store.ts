@@ -48,6 +48,9 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"workspace.close",
 	"workspace.cleanup",
 	"environment.teardown",
+	"environment.setup-guard",
+	"environment.validate",
+	"environment.promote",
 ]);
 
 export function nowIso(now: () => Date): string {
@@ -1534,7 +1537,9 @@ export function validateEffect(
 ): void {
 	if (!EFFECT_KINDS.has(row.kind as EffectKind))
 		throw new WorkflowRuntimeError(
-			"invalid-state",
+			// Its own code, so the claim path can park the owning workflow instead of
+			// failing the whole store read (`add-environment-setup-workflow`).
+			"unknown-effect-kind",
 			`unknown effect kind: ${row.kind}`,
 		);
 	const payload = JSON.parse(row.payload_json) as {

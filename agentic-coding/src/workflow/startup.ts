@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
+import { resolveConfigRoot } from "../config-root.ts";
 import type {
 	StartedBy,
 	WorkflowExecutionSettings,
 	WorkflowRouting,
 } from "../contracts/workflow.ts";
+import { setupDraftsDir } from "../server/environment/setup-drafts.ts";
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
@@ -77,6 +79,8 @@ export interface WorkflowStartRequest {
 	sourceBranch?: string;
 	/** The rebase family's selected target: the ref the branch is rebased onto. */
 	targetBranch?: string;
+	/** The configured app an `env-setup` workflow drafts definitions for. */
+	app?: string;
 	/** Pin the plan, developer, and wiki review gates to `always`. Set by the
 	 * server for orchestrator-started work, never from a wire request. */
 	enforceHumanReviewGates?: boolean;
@@ -516,6 +520,31 @@ function prepareFromContext(
 			},
 			definition,
 		);
+	// The env-setup family drafts definitions for exactly one configured app, so
+	// the app is required and pinned before anything runs. It is a plain
+	// configuration ident: a caller cannot name a path or another target.
+	const setupApp = definition.steps.includes("setup.author")
+		? request.app?.trim()
+		: undefined;
+	if (definition.steps.includes("setup.author") && !setupApp)
+		throw new Error(
+			"env-setup workflow requires --app: the configured app whose environment is drafted",
+		);
+	if (setupApp && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(setupApp))
+		throw new Error(
+			`env-setup app ident must be a plain configured app name, received ${JSON.stringify(setupApp)}`,
+		);
+	if (definition.steps.includes("setup.author")) {
+		// The drafts root is keyed by the workflow id alone, so a workflow started
+		// with an id whose predecessor was deleted would begin with that run's
+		// drafts still in place and treat them as its own work. Refuse instead,
+		// naming the directory so the developer can look at it first.
+		const drafts = setupDraftsDir(resolveConfigRoot(), ctx.workflowId);
+		if (fs.existsSync(drafts) && fs.readdirSync(drafts).length > 0)
+			throw new Error(
+				`env-setup drafts from an earlier workflow are still at ${drafts}; remove them or start with a new workflow id`,
+			);
+	}
 	// The families that run against the repository checkout itself
 	// (`policy.checkoutRequired`) rather than a worktree — the proposal-only
 	// flows and the repository-backed `wiki`. The verify-only family requires the
@@ -594,6 +623,7 @@ function prepareFromContext(
 				baseCommit,
 				...(request.task?.trim() ? { task: request.task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),
+				...(setupApp ? { app: setupApp } : {}),
 				...(request.preset ? { selectedPreset: request.preset } : {}),
 				// The gate table is resolved once, here, and pinned with the
 				// preset: a later edit to the config document must not change

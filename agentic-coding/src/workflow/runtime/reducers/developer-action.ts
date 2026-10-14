@@ -62,6 +62,34 @@ import {
  * capability is labelled, and an operator action keeps exactly the actor it has
  * always had (no `principal` key is added). The operator label is never written
  * because the absent field already reads as the operator. */
+/**
+ * The developer-step outcome an action id means. Exported so a test can assert
+ * that every action a registered step offers maps onto an outcome that step
+ * declares — the check that catches an approval action whose outcome the graph
+ * never accepts (`add-environment-setup-workflow`).
+ */
+export function outcomeForActionId(actionId: string): string {
+	switch (actionId) {
+		case "approve-plan":
+		case "approve-review":
+		case "approve-wiki":
+		// The env-setup approval gate's own action id: the developer approves with
+		// `approve-setup`, and its step declares the `approve` outcome.
+		case "approve-setup":
+			return "approve";
+		case "reject-plan":
+			return "reject";
+		case "review-comments":
+			return "comments";
+		case "close":
+			return "close";
+		case "create-pr":
+			return "create-pr";
+		default:
+			return actionId;
+	}
+}
+
 export function developerAction(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -522,20 +550,7 @@ function reduceDeveloperAction(
 			);
 		command.input = { reason: reason.trim() };
 	}
-	const outcome =
-		command.actionId === "approve-plan" ||
-		command.actionId === "approve-review" ||
-		command.actionId === "approve-wiki"
-			? "approve"
-			: command.actionId === "reject-plan"
-				? "reject"
-				: command.actionId === "review-comments"
-					? "comments"
-					: command.actionId === "close"
-						? "close"
-						: command.actionId === "create-pr"
-							? "create-pr"
-							: command.actionId;
+	const outcome = outcomeForActionId(command.actionId);
 	transition(db, snapshot, definition, outcome, command.input, registry, now);
 	return {
 		type: "developer.action",

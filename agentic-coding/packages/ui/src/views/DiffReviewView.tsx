@@ -68,6 +68,9 @@ export interface DiffReviewViewProps {
 	isDeletedFile?: boolean;
 	/** Wiki reviews only allow comments on the current/new side. */
 	currentSideOnly?: boolean;
+	/** Extra label rendered next to the file name (the env-setup approval gate's
+	 * "affects all apps" flag). */
+	flagLabel?: string;
 	/** Render diff content as Markdown instead of literal source text. */
 	renderMarkdown?: boolean;
 	commentMode: boolean; // Is comment input mode active
@@ -655,6 +658,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 					<text fg={uiColors.textPrimary}>
 						<b>{props.filePath}</b>
 					</text>
+					<Show when={props.flagLabel}>
+						<text fg={uiColors.warning}>{`· ${props.flagLabel}`}</text>
+					</Show>
 					<text fg={uiColors.textMuted}>
 						{"(" +
 							String(props.currentFileIndex + 1) +

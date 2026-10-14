@@ -93,4 +93,10 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			description:
 				"Verify the current branch against the base branch: triage, verifier roles, full test suite, then a findings review that hands the selected findings to a worker.",
 		}),
+		Object.freeze({
+			id: "env-setup",
+			label: "Environment setup",
+			description:
+				"Draft the build/test/run and infrastructure definitions for one configured app, validate them by running them, and promote them into the live configuration only after the developer approves the diff.",
+		}),
 	] as const);

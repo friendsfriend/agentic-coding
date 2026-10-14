@@ -40,10 +40,76 @@ export interface DiscoveryContext {
 	readonly localDir: string;
 	readonly action: AppAction;
 	readonly configDir: string;
+	/** A second config directory whose files shadow `configDir` file by file
+	 * (the `env-setup` workflow's drafts directory). A draft therefore replaces
+	 * or adds one definition without the live file being touched. */
+	readonly configOverlay?: string;
 	/** Platform, so the systemshell variant and interpreter names are pinned. */
 	readonly platform?: string;
 	/** PowerShell executable resolution. */
 	readonly powerShell?: () => string;
+}
+
+/**
+ * Per-file overlay resolution for a config-relative path: the overlay copy when
+ * a draft exists at the same relative path, the live config file otherwise.
+ * Resolution is per file, never per directory, so an unrelated live definition
+ * is never shadowed by the presence of the drafts directory.
+ */
+export function resolveConfigFilePath(
+	context: Pick<DiscoveryContext, "configDir" | "configOverlay">,
+	...segments: string[]
+): string {
+	const base = path.join(context.configDir, ...segments);
+	const overlay = context.configOverlay;
+	if (!overlay) return base;
+	const candidate = path.join(overlay, ...segments);
+	// A draft must be a plain file: a symbolic link in the overlay would let the
+	// system read — and run — content that the approval view never shows and the
+	// promotion never publishes, so the overlay simply does not apply to it.
+	return isOverlayFile(candidate) ? candidate : base;
+}
+
+/** Whether a candidate path is a plain file (never a symbolic link). */
+function isOverlayFile(candidate: string): boolean {
+	try {
+		const stats = fs.lstatSync(candidate);
+		return stats.isFile() && !stats.isSymbolicLink();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The files of a config-relative directory under the same per-file overlay: a
+ * name present in both directories resolves to the overlay file. Names are
+ * sorted, so the target list stays deterministic.
+ */
+export function configDirEntries(
+	context: Pick<DiscoveryContext, "configDir" | "configOverlay">,
+	...segments: string[]
+): Array<{ name: string; path: string }> {
+	const names = new Set<string>();
+	for (const dir of [context.configDir, context.configOverlay]) {
+		if (!dir) continue;
+		const target = path.join(dir, ...segments);
+		if (!dirExists(target)) continue;
+		for (const name of fs.readdirSync(target)) {
+			const candidate = path.join(target, name);
+			// The live configuration keeps its current behaviour (a real file); the
+			// overlay contributes only plain files.
+			if (
+				dir === context.configDir
+					? fileExists(candidate)
+					: isOverlayFile(candidate)
+			)
+				names.add(name);
+		}
+	}
+	return [...names].sort().map((name) => ({
+		name,
+		path: resolveConfigFilePath(context, ...segments, name),
+	}));
 }
 
 /**
@@ -161,8 +227,8 @@ function dirExists(dir: string): boolean {
 function discoverDockerBuildTestTarget(
 	context: DiscoveryContext,
 ): ActionTarget | undefined {
-	const sourcePath = path.join(
-		context.configDir,
+	const sourcePath = resolveConfigFilePath(
+		context,
 		"apps",
 		"build",
 		`${context.appIdent}-${context.action}.Dockerfile`,
@@ -204,8 +270,8 @@ function discoverScriptBuildTestTargets(
 			],
 		},
 	]) {
-		const sourcePath = path.join(
-			context.configDir,
+		const sourcePath = resolveConfigFilePath(
+			context,
 			"apps",
 			"build",
 			`${context.appIdent}-${context.action}${candidate.ext}`,
@@ -234,13 +300,13 @@ function discoverScriptBuildTestTargets(
 
 /** A compose file per profile, configured in `config/apps/compose`. */
 function discoverDockerRunTargets(context: DiscoveryContext): ActionTarget[] {
-	const composeDir = path.join(context.configDir, "apps", "compose");
-	if (!dirExists(composeDir)) return [];
 	const targets: ActionTarget[] = [];
 	const prefix = `${context.appIdent}-`;
-	for (const name of fs.readdirSync(composeDir).sort()) {
-		if (!fileExists(path.join(composeDir, name))) continue;
-		const sourcePath = path.join(composeDir, name);
+	for (const { name, path: sourcePath } of configDirEntries(
+		context,
+		"apps",
+		"compose",
+	)) {
 		const isDefault = COMPOSE_FILE_NAMES.some(
 			(extension) => name === `${context.appIdent}-compose${extension}`,
 		);
@@ -281,12 +347,10 @@ function discoverDockerRunTargets(context: DiscoveryContext): ActionTarget[] {
 
 /** Shell, PowerShell and system-shell run scripts in `config/apps/run`. */
 function discoverScriptRunTargets(context: DiscoveryContext): ActionTarget[] {
-	const runDir = path.join(context.configDir, "apps", "run");
-	if (!dirExists(runDir)) return [];
+	const entries = configDirEntries(context, "apps", "run");
 	const targets: ActionTarget[] = [];
 	const prefix = `${context.appIdent}-`;
-	for (const name of fs.readdirSync(runDir).sort()) {
-		if (!fileExists(path.join(runDir, name))) continue;
+	for (const { name, path: sourcePath } of entries) {
 		for (const candidate of [
 			{
 				ext: ".sh",
@@ -318,7 +382,6 @@ function discoverScriptRunTargets(context: DiscoveryContext): ActionTarget[] {
 				prefix.length,
 				name.length - candidate.ext.length,
 			);
-			const sourcePath = path.join(runDir, name);
 			const metadata = parseShellScriptMetadata(sourcePath, "tmux");
 			targets.push({
 				id: actionTargetId(context.appIdent, "run", candidate.runtime, profile),
@@ -336,7 +399,7 @@ function discoverScriptRunTargets(context: DiscoveryContext): ActionTarget[] {
 			});
 		}
 	}
-	targets.push(...discoverSystemShellRunTargets(context, runDir, prefix));
+	targets.push(...discoverSystemShellRunTargets(context, entries, prefix));
 	return targets;
 }
 
@@ -347,7 +410,7 @@ function discoverScriptRunTargets(context: DiscoveryContext): ActionTarget[] {
  */
 function discoverSystemShellRunTargets(
 	context: DiscoveryContext,
-	runDir: string,
+	entries: readonly { name: string; path: string }[],
 	prefix: string,
 ): ActionTarget[] {
 	const windows = platformOf(context) === "win32";
@@ -355,8 +418,7 @@ function discoverSystemShellRunTargets(
 	const command = windows ? powerShell(context) : "sh";
 	const labelPrefix = windows ? "System PowerShell" : "System Shell";
 	const targets: ActionTarget[] = [];
-	for (const name of fs.readdirSync(runDir).sort()) {
-		if (!fileExists(path.join(runDir, name))) continue;
+	for (const { name, path: sourcePath } of entries) {
 		if (
 			!name.startsWith(prefix) ||
 			!name.endsWith(extension) ||
@@ -365,7 +427,6 @@ function discoverSystemShellRunTargets(
 			continue;
 		}
 		const profile = name.slice(prefix.length, name.length - extension.length);
-		const sourcePath = path.join(runDir, name);
 		const metadata = parseShellScriptMetadata(sourcePath, "tmux");
 		targets.push({
 			id: actionTargetId(context.appIdent, "run", "systemshell", profile),
@@ -748,7 +809,13 @@ function discoverKubernetesRunTargets(
 		"k8s",
 		context.appIdent,
 	);
-	const configPath = path.join(configAppDir, KUBERNETES_CONFIG_FILE_NAME);
+	const configPath = resolveConfigFilePath(
+		context,
+		"apps",
+		"k8s",
+		context.appIdent,
+		KUBERNETES_CONFIG_FILE_NAME,
+	);
 	let hasExplicitConfig = false;
 	if (fileExists(configPath)) {
 		hasExplicitConfig = true;
@@ -769,6 +836,44 @@ function discoverKubernetesRunTargets(
 			if (!resolved.namespace) resolved.namespace = "default";
 			add(kubernetesActionTarget(context, resolved, configPath));
 		});
+	}
+
+	// Config-directory Kubernetes run configs: one file per app and profile,
+	// `<app>-<profile>.k8s.json` under `apps/kubernetes`. The file's profile is
+	// the target's profile, and `$APP` in its paths resolves to the checkout, so
+	// a k8s run config never has to live in the app repository. Drafts resolve
+	// through the same per-file overlay as every other config file.
+	const kubernetesPrefix = `${context.appIdent}-`;
+	const kubernetesSuffix = ".k8s.json";
+	for (const { name, path: kubernetesPath } of configDirEntries(
+		context,
+		"apps",
+		"kubernetes",
+	)) {
+		if (
+			!name.startsWith(kubernetesPrefix) ||
+			!name.endsWith(kubernetesSuffix) ||
+			name.length <= kubernetesPrefix.length + kubernetesSuffix.length
+		)
+			continue;
+		const fileProfile = name.slice(
+			kubernetesPrefix.length,
+			name.length - kubernetesSuffix.length,
+		);
+		for (const resolved of loadKubernetesTargetFile(
+			kubernetesPath,
+			context.localDir,
+			context.configDir,
+			fileProfile,
+		)) {
+			if (!resolved.release)
+				resolved.release = defaultKubernetesRelease(
+					context.appIdent,
+					resolved.profile ?? fileProfile,
+				);
+			if (!resolved.namespace) resolved.namespace = "default";
+			add(kubernetesActionTarget(context, resolved, kubernetesPath));
+		}
 	}
 
 	if (!hasExplicitConfig) {
@@ -855,16 +960,60 @@ export function defaultKubernetesRelease(
 	return `${appIdent}-${profile}`;
 }
 
+/**
+ * One config-directory Kubernetes run config (`<app>-<profile>.k8s.json`):
+ * either a `{ targets: [...] }` envelope or a single run-target object. The
+ * file name's profile is the default for entries that declare none.
+ */
+function loadKubernetesTargetFile(
+	configPath: string,
+	appDir: string,
+	configDir: string,
+	fileProfile: string,
+): KubernetesRunTargetConfig[] {
+	const { targets } = loadKubernetesConfigWithDefault(
+		configPath,
+		appDir,
+		configDir,
+		fileProfile,
+	);
+	return targets;
+}
+
 function loadKubernetesConfig(
 	configPath: string,
 	appDir: string,
 	configDir: string,
 ): { targets?: KubernetesRunTargetConfig[] } {
-	const parsed: unknown = JSON.parse(fs.readFileSync(configPath, "utf8"));
-	if (typeof parsed !== "object" || parsed === null) return {};
+	return loadKubernetesConfigWithDefault(configPath, appDir, configDir, "");
+}
+
+function loadKubernetesConfigWithDefault(
+	configPath: string,
+	appDir: string,
+	configDir: string,
+	defaultProfile: string,
+): { targets: KubernetesRunTargetConfig[] } {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	} catch (error) {
+		throw new Error(
+			`${configPath}: invalid Kubernetes run config: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		);
+	}
+	if (typeof parsed !== "object" || parsed === null) return { targets: [] };
 	const baseDir = path.dirname(configPath);
-	const raw = (parsed as { targets?: unknown }).targets;
-	if (!Array.isArray(raw)) return {};
+	const envelope = (parsed as { targets?: unknown }).targets;
+	// A file with no `targets` array is one run target: the config-directory
+	// convention is one file per app and profile.
+	const raw = Array.isArray(envelope)
+		? envelope
+		: envelope === undefined && "chart" in parsed
+			? [parsed]
+			: [];
 	const targets = raw
 		.filter(
 			(entry): entry is Record<string, unknown> =>
@@ -872,6 +1021,8 @@ function loadKubernetesConfig(
 		)
 		.map((entry) => {
 			const target = entry as unknown as KubernetesRunTargetConfig;
+			if (!target.profile && defaultProfile !== "")
+				target.profile = defaultProfile;
 			const identity = applyKubernetesIdentity(
 				target.provider,
 				target.cluster,

@@ -372,3 +372,43 @@ test("feature tracks draft comments and rejection state in its own signals", asy
 		dispose();
 	});
 });
+
+// The approval gate's shared-infrastructure flag is the setup review's own:
+// a developer review of a repository that happens to have an `infrastructure/`
+// tree must not claim that a source file affects every app's live
+// configuration (`add-environment-setup-workflow`).
+test("the affects-all-apps flag is derived for the setup review only", () => {
+	const row = (newPath: string, newFile: boolean) => ({
+		newPath,
+		oldPath: newPath,
+		linesAdded: 1,
+		linesDeleted: 1,
+		newFile,
+		deletedFile: false,
+		renamedFile: false,
+	});
+	const feature = createReviewFeature(context());
+	feature.setReviewKind("setup");
+	const shared = feature.reviewChangeForView(
+		row("infrastructure/definitions/postgres.json", false),
+	);
+	expect(shared.affects_all_apps).toBe(true);
+	// The path stays the identity a discussion is anchored to.
+	expect(shared.new_path).toBe("infrastructure/definitions/postgres.json");
+	expect(
+		feature.reviewChangeForView(row("apps/compose/shop-compose.yml", false))
+			.affects_all_apps,
+	).toBe(false);
+	expect(
+		feature.reviewChangeForView(
+			row("infrastructure/definitions/new-service.json", true),
+		).affects_all_apps,
+	).toBe(false);
+	// A developer review never carries the flag, whatever the path.
+	feature.setReviewKind("developer");
+	expect(
+		feature.reviewChangeForView(row("infrastructure/terraform/main.tf", false))
+			.affects_all_apps,
+	).toBe(false);
+	feature.dispose?.();
+});

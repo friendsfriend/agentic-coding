@@ -52,6 +52,8 @@ export async function runStart(
 		// the dashboard; on the command line they are the same two names.
 		sourceBranch: flag(rest, "branch"),
 		targetBranch: flag(rest, "onto"),
+		// The env-setup family's subject: the configured app it drafts for.
+		app: flag(rest, "app"),
 	});
 	if (application)
 		application.runSync(workflowEngine.startEffect(prepared.input));

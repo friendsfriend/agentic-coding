@@ -980,3 +980,226 @@ test("the verify type asks for no task and no checkout mode", async () => {
 	expect(completed[0]?.task).toBeUndefined();
 	t.renderer.destroy();
 });
+
+const BILLING_CONTEXT = {
+	kind: "project",
+	ident: "billing",
+	name: "Billing API",
+	repository: "/managed/billing",
+} as const;
+
+const OTHER_APP: ProjectOption = {
+	name: "Other API",
+	path: "/managed/other",
+	openspec: true,
+	ident: "other",
+	available: true,
+	availability: "available",
+};
+
+/** Walk the workflow-type list to the env-setup entry (the catalog's last) and
+ * select it. */
+function selectEnvSetup(handler?: (event: KeyEvent) => boolean): void {
+	// `env-setup` is the catalog's last entry.
+	for (let step = 0; step < 11; step++) handler?.(key("j"));
+	handler?.(key("enter"));
+}
+
+test("the env-setup type drafts for the app the launch context names", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	// The catalog order puts another app first: the launch context's own app must
+	// still be the default the form opens on.
+	useProjects([OTHER_APP, BILLING]);
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={BILLING_CONTEXT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await frameContaining(t, "openspec");
+	selectEnvSetup(handler);
+	await t.flush();
+	handler?.(key("enter")); // preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	for (const character of "wf-env-modal") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Configured app to set up");
+	// The context's app is the highlighted entry, labelled with the name the rest
+	// of the TUI shows while the ident stays the submitted value.
+	expect(t.captureCharFrame()).toContain("Billing API");
+	handler?.(key("enter"));
+	await t.flush();
+	// The task is optional: Alt+Enter advances without one.
+	t.mockInput.pressEnter({ meta: true });
+	await t.flush();
+	const confirm = t.captureCharFrame();
+	expect(confirm).toContain("Confirm workflow");
+	handler?.(key("return"));
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]?.workflowType).toBe("env-setup");
+	expect(completed[0]?.app).toBe("billing");
+	expect(completed[0]?.mode).toBe("checkout");
+	t.renderer.destroy();
+});
+
+test("the app step explains an empty catalog instead of showing no items", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	// A directory launch names no app of its own, so an empty catalog leaves the
+	// step with nothing to offer — the state the notice exists for.
+	const directory = mkdtempSync(join(tmpdir(), "env-setup-empty-"));
+	useProjects([]);
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={{ kind: "path", repository: directory }}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 140, height: 40 },
+	);
+	await frameContaining(t, "openspec");
+	handler?.(key("enter")); // repository: the opened directory
+	await t.flush();
+	selectEnvSetup(handler);
+	await t.flush();
+	handler?.(key("enter")); // preset
+	t.mockInput.pressEnter(); // ticket
+	for (const character of "wf-env-empty") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.flush();
+	// The read is asynchronous: poll until its verdict is on screen.
+	const frame = contentText(
+		await frameContaining(t, "No configured applications are available"),
+	);
+	expect(frame).toContain("Configured app to set up");
+	expect(frame).not.toContain("No items");
+	t.renderer.destroy();
+	rmSync(directory, { recursive: true, force: true });
+});
+
+test("the app step says a filter matched nothing instead of nothing configured", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	useProjects([BILLING]);
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={BILLING_CONTEXT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 140, height: 40 },
+	);
+	await frameContaining(t, "openspec");
+	selectEnvSetup(handler);
+	await t.flush();
+	handler?.(key("enter")); // preset
+	t.mockInput.pressEnter(); // ticket
+	for (const character of "wf-env-filter") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Configured app to set up");
+	handler?.(key("/")); // start filtering the app list
+	for (const character of "zzz") handler?.(key(character));
+	await t.flush();
+	const frame = contentText(
+		await frameContaining(t, 'No application matches "zzz"'),
+	);
+	expect(frame).toContain("Configured app to set up");
+	// The applications exist: the step must not claim otherwise.
+	expect(frame).not.toContain("No configured applications are available");
+	t.renderer.destroy();
+});
+
+test("the app step reports a failed catalog read instead of an empty configuration", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	useFailingProjects("catalog is down");
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={BILLING_CONTEXT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 160, height: 40 },
+	);
+	await frameContaining(t, "openspec");
+	selectEnvSetup(handler);
+	await t.flush();
+	handler?.(key("enter")); // preset
+	t.mockInput.pressEnter(); // ticket
+	for (const character of "wf-env-fail") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.flush();
+	const frame = contentText(
+		await frameContaining(t, "Configured applications could not be read"),
+	);
+	expect(frame).toContain("catalog is down");
+	expect(frame).not.toContain("No configured applications are available");
+	t.renderer.destroy();
+});
+
+test("the app step shows the reader while the catalog is still being read", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	// A read that has not answered yet: the step must not claim that nothing is
+	// configured while it is in flight.
+	const settle = useDeferredProjects();
+	const directory = mkdtempSync(join(tmpdir(), "env-setup-loading-"));
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={{ kind: "path", repository: directory }}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 140, height: 40 },
+	);
+	await frameContaining(t, "openspec");
+	handler?.(key("enter")); // repository: the opened directory
+	selectEnvSetup(handler);
+	handler?.(key("enter")); // preset
+	t.mockInput.pressEnter(); // ticket
+	for (const character of "wf-env-reading") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	const reading = contentText(
+		await frameContaining(t, "Reading configured applications"),
+	);
+	expect(reading).toContain("Configured app to set up");
+	expect(reading).toContain("Reading configured applications");
+	expect(reading).not.toContain("No configured applications are available");
+	// The read lands and the configured application appears.
+	settle([BILLING]);
+	await frameContaining(t, "billing");
+	const loaded = t.captureCharFrame();
+	expect(loaded).toContain("Billing API");
+	expect(loaded).toContain("billing");
+	t.renderer.destroy();
+	rmSync(directory, { recursive: true, force: true });
+});

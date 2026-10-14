@@ -314,6 +314,19 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
+	// The env-setup family's approval gate (`add-environment-setup-workflow`):
+	// the same trigger-only shape as the plan/wiki reviews — the action opens the
+	// draft-diff popup directly, so there are no selectable items here.
+	if (phase === "setup.approval") {
+		if (!hasAction("approve-setup")) return undefined;
+		return {
+			key: "setup-review",
+			title: "Action required · Environment approval",
+			prompt:
+				"Review the drafted environment definitions before they are promoted into the live configuration.",
+			items: [],
+		};
+	}
 	if (phase === "wiki-approval" || phase === "core.wiki-approval") {
 		if (!hasAction("approve-wiki")) return undefined;
 		return {

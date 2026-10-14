@@ -22,6 +22,8 @@ import {
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
 import {
+	type AcquireSlotsRequest,
+	acquireSlotsResultSchema,
 	type ConnectionState,
 	type EnvironmentTeardownResult,
 	type EventEnvelope,
@@ -52,6 +54,7 @@ import {
 	workflowViewSchema,
 } from "../contracts/workflow.ts";
 import { instanceTokenFileForUrl, readInstanceTokenFile } from "./auth.ts";
+import { ENVIRONMENT_OPERATION_PATH } from "./environment/private-api.ts";
 import { EVIDENCE_FILE_PREFIX, SERVER_API_VERSION } from "./protocol.ts";
 
 export interface BackendClientConfig {
@@ -427,6 +430,37 @@ export class BackendClient implements DashboardGateway {
 				{ owner },
 				signal,
 			),
+		);
+	}
+
+	/** Start every app one owner names through the slot controller, long-polling
+	 * for a grant. The owner comes from the request because the workflow runtime
+	 * — not an agent capability — is the caller: the drafts overlay a setup
+	 * workflow's runs resolve is the server's own owner-bound decision. */
+	async acquireSlots(
+		request: AcquireSlotsRequest,
+		signal?: AbortSignal,
+	): Promise<Record<string, unknown>> {
+		return this.decode<Record<string, unknown>>(
+			"server.environment.apps.acquire",
+			acquireSlotsResultSchema,
+			await this.request(
+				"POST",
+				"/api/v1/environment/apps/acquire",
+				request,
+				signal,
+			),
+		);
+	}
+
+	/** Ask the environment authority to re-read the definition files, so a
+	 * promotion's new definitions are live in the same process. */
+	async reloadEnvironmentConfig(signal?: AbortSignal): Promise<void> {
+		await this.request(
+			"POST",
+			ENVIRONMENT_OPERATION_PATH,
+			{ operation: "manager.loadConfig", params: {} },
+			signal,
 		);
 	}
 

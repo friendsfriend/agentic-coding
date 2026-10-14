@@ -666,6 +666,10 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "artifact-content", domain: "workflow" },
 	{ kind: "wiki-changes", domain: "wiki" },
 	{ kind: "wiki-diff", domain: "wiki" },
+	// The env-setup approval diff: the drafts against the live configuration.
+	// It belongs to the environment domain, which owns the configuration root.
+	{ kind: "setup-changes", domain: "environment" },
+	{ kind: "setup-diff", domain: "environment" },
 	{ kind: "local-changes", domain: "git" },
 	{ kind: "local-diff", domain: "git" },
 	{ kind: "changes", domain: "git" },

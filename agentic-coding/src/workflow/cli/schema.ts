@@ -82,6 +82,8 @@ const FLAG_SCHEMA: Record<
 			// ref it is rebased onto.
 			"branch",
 			"onto",
+			// The configured app an env-setup workflow drafts definitions for.
+			"app",
 		],
 		positionals: [0, 0],
 	},

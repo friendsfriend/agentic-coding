@@ -73,7 +73,9 @@ export function ReviewRoute(props: ReviewRouteProps) {
 							? "Plan review"
 							: reviewKind() === "wiki"
 								? "Wiki review"
-								: (props.fallbackTitle ?? "Developer review")
+								: reviewKind() === "setup"
+									? "Environment review"
+									: (props.fallbackTitle ?? "Developer review")
 					}
 					widthPercent={0.9}
 					heightPercent={0.75}
@@ -91,6 +93,7 @@ export function ReviewRoute(props: ReviewRouteProps) {
 						{ key: "/", action: "Search files" },
 						...(reviewKind() === "plan" ||
 						reviewKind() === "wiki" ||
+						reviewKind() === "setup" ||
 						developerReviewPhase()
 							? [{ key: "f", action: "Finish review" }]
 							: []),
@@ -159,7 +162,9 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					reviewOpen() &&
 					props.modalTop() === "review" &&
 					reviewView() === "diff" &&
-					(reviewKind() === "developer" || reviewKind() === "wiki") &&
+					(reviewKind() === "developer" ||
+						reviewKind() === "wiki" ||
+						reviewKind() === "setup") &&
 					reviewDiffFile()
 				}
 			>
@@ -175,7 +180,10 @@ export function ReviewRoute(props: ReviewRouteProps) {
 						forceSplitView={reviewSplitView()}
 						isNewFile={file().new_file}
 						isDeletedFile={file().deleted_file}
-						currentSideOnly={reviewKind() === "wiki"}
+						{...(file().affects_all_apps
+							? { flagLabel: "affects all apps" }
+							: {})}
+						currentSideOnly={reviewKind() !== "developer"}
 						renderMarkdown={reviewKind() === "wiki"}
 						commentMode={reviewCommentMode()}
 						commentText={reviewCommentText()}

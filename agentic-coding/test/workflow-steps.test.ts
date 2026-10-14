@@ -8837,6 +8837,7 @@ function expectedCandidateRoles(
 		return [definitionId === "research" ? "research-wiki" : "wiki"];
 	if (stepId === "core.research") return ["researcher"];
 	if (stepId === "core.archive") return ["archive"];
+	if (stepId === "setup.author") return ["env-setup"];
 	return [];
 }
 

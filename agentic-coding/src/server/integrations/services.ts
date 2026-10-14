@@ -5,6 +5,7 @@
 // Credentials are resolved here, on the Bun side, so a Git operation never
 // carries a token across the private adapter boundary.
 import path from "node:path";
+import { resolveConfigRoot } from "../../config-root.ts";
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { environmentInstanceIdleTtlMs } from "../../workflow/effects.ts";
 import { engine as workflowEngine } from "../../workflow/operations.ts";
@@ -22,6 +23,7 @@ import {
 import type { InfraService } from "../actions/targets.ts";
 import type { App } from "../environment/config.ts";
 import type { EnvironmentManager } from "../environment/manager.ts";
+import { assertSetupDraftsDir } from "../environment/setup-drafts.ts";
 import {
 	type AppFamilyServices,
 	createAppFamilyServices,
@@ -54,6 +56,48 @@ export interface WorkflowOwnerCheckoutResolverDependencies {
 		repository: string,
 		branch: string,
 	) => Promise<string | undefined>;
+}
+
+/**
+ * Resolve a workflow owner's drafts overlay (`add-environment-setup-workflow`):
+ * the drafts root a setup workflow pinned at start, or `undefined` for every
+ * other owner. A directory that no longer exists resolves to nothing usable on
+ * its own — the discovery boundary only reads files that are there — so a
+ * promoted workflow stops shadowing the live configuration without a second
+ * bookkeeping step.
+ */
+export function createWorkflowOwnerOverlayResolver(
+	dependencies: WorkflowOwnerCheckoutResolverDependencies = {},
+): (owner: `workflow:${string}`, app: App) => string | undefined {
+	const targets = dependencies.targets ?? workflowTargets;
+	const engine = workflowEngine();
+	const snapshot =
+		dependencies.snapshot ?? ((target, id) => engine.getSnapshot(target, id));
+	return (owner) => {
+		const workflowId = owner.slice("workflow:".length);
+		for (const target of targets()) {
+			let state: Pick<WorkflowSnapshot, "workflowId" | "metadata">;
+			try {
+				state = snapshot(target, workflowId);
+			} catch {
+				continue;
+			}
+			if (state.workflowId !== workflowId) continue;
+			const overlay = state.metadata.setupDraftsDir;
+			if (!overlay) continue;
+			// The store can be written by a build that predates this pin, so the
+			// value is treated as untrusted on read: an overlay that is not this
+			// configuration's drafts directory resolves to none, and discovery
+			// falls back to the live configuration.
+			try {
+				assertSetupDraftsDir(resolveConfigRoot(), overlay);
+			} catch {
+				continue;
+			}
+			return overlay;
+		}
+		return undefined;
+	};
 }
 
 /** Resolve a workflow id only through its recorded store and checkout metadata.
@@ -151,6 +195,13 @@ export interface IntegrationServicesOptions {
 		owner: `workflow:${string}`,
 		app: App,
 	) => string | undefined | Promise<string | undefined>;
+	/** Resolve a workflow owner's drafts overlay (`add-environment-setup-workflow`):
+	 * a setup workflow's app runs resolve the drafts before the live
+	 * configuration, and no request may name that directory. */
+	readonly resolveOwnerOverlay?: (
+		owner: `workflow:${string}`,
+		app: App,
+	) => string | undefined;
 	/** Container runtime selection for instance starts, when not preselected. */
 	readonly resolveDockerRuntime?: () => Promise<
 		import("../runtime/docker.ts").DockerRuntimeSelection | undefined
@@ -229,6 +280,11 @@ export function createIntegrationServices(
 	// workflow's own.
 	const ownerCheckoutResolver =
 		options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver();
+	// One resolver for every caller, like the checkout resolver: the slot
+	// controller's starts and the agent environment routes agree on which drafts
+	// directory (if any) a workflow's app runs resolve first.
+	const ownerOverlayResolver =
+		options.resolveOwnerOverlay ?? createWorkflowOwnerOverlayResolver();
 	const instances = hasInstanceStore
 		? new EnvironmentInstanceController({
 				state: options.state as unknown as EnvironmentInstanceState,
@@ -246,6 +302,7 @@ export function createIntegrationServices(
 						}
 					: {}),
 				resolveOwnerCheckout: ownerCheckoutResolver,
+				resolveOwnerOverlay: ownerOverlayResolver,
 				...(options.observation ? { observation: options.observation } : {}),
 				...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
 				// The idle TTL is configuration, not a constant: the reaper resolves
@@ -363,6 +420,7 @@ export function createIntegrationServices(
 		...(options.runtime ? { runtime: options.runtime } : {}),
 		...(instances ? { instances } : {}),
 		resolveOwnerCheckout: ownerCheckoutResolver,
+		resolveOwnerOverlay: ownerOverlayResolver,
 		...{
 			attachDashboardEvents: (publish) => {
 				dashboardEvents.publish = publish;

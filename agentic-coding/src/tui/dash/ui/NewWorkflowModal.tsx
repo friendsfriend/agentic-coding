@@ -174,10 +174,26 @@ export function NewWorkflowModal(props: {
 	 * being superseded. Only the read effect sets and clears it, so a cursor move
 	 * can never erase the one explanation for an otherwise empty picker. */
 	const [catalogNotice, setCatalogNotice] = createSignal<string | undefined>();
+	/** Whether the configured-catalog read is still in flight: the app step must
+	 * not claim nothing is configured before the read has answered. */
+	const [catalogLoading, setCatalogLoading] = createSignal(false);
 	/** Why the entry the cursor is on cannot be started. Transient: the next
 	 * cursor move or step change drops it. */
 	const [refusal, setRefusal] = createSignal<string | undefined>();
-	const notice = () => refusal() ?? branchNotice() ?? catalogNotice();
+	/** The app step's own empty state: with nothing configured there is no app to
+	 * draft for, and the generic "No items" placeholder would leave the user
+	 * without the remedy the other steps give. */
+	const appNotice = () =>
+		field() === "app" &&
+		choices().length === 0 &&
+		!filter() &&
+		!catalogLoading()
+			? "No configured applications are available — configure an application or library first; an environment setup workflow drafts for one configured app."
+			: undefined;
+	// The catalog read's own failure outranks the app step's "nothing is
+	// configured" notice: the remedy differs, and only one of the two is true.
+	const notice = () =>
+		refusal() ?? branchNotice() ?? catalogNotice() ?? appNotice();
 	const repository = () =>
 		props.context.kind === "project" || props.context.kind === "path"
 			? props.context.repository
@@ -275,13 +291,19 @@ export function NewWorkflowModal(props: {
 	// still offers the directory this form was opened with and a custom path;
 	// this effect re-runs once the composition root installs the gateway after
 	// first paint.
+	// The catalog is read for the steps that offer configured entries: the
+	// repository picker of a path target and the env-setup app step, which offers
+	// every configured app whatever the launch context.
+	const needsCatalog = () => pathTarget() || field() === "app";
 	createEffect(() => {
-		if (!pathTarget() || !gatewayReady()) {
+		if (!needsCatalog() || !gatewayReady()) {
 			setConfiguredProjects([]);
 			setCatalogNotice(undefined);
+			setCatalogLoading(false);
 			return;
 		}
 		const controller = new AbortController();
+		setCatalogLoading(true);
 		void (async () => {
 			try {
 				let projects = await discoverProjects(controller.signal);
@@ -298,7 +320,9 @@ export function NewWorkflowModal(props: {
 				if (controller.signal.aborted) return;
 				if (projects === undefined) {
 					setCatalogNotice(
-						"Configured projects could not be read: the read was superseded by a configuration change. Enter a custom path or use the current directory.",
+						field() === "app"
+							? "Configured applications could not be read: the read was superseded by a configuration change. Reopen the form to retry."
+							: "Configured projects could not be read: the read was superseded by a configuration change. Enter a custom path or use the current directory.",
 					);
 					return;
 				}
@@ -307,9 +331,13 @@ export function NewWorkflowModal(props: {
 			} catch (error) {
 				if (controller.signal.aborted) return;
 				setCatalogNotice(
-					`Configured projects could not be read: ${
-						error instanceof Error ? error.message : String(error)
-					}. Enter a custom path or use the current directory.`,
+					field() === "app"
+						? `Configured applications could not be read: ${
+								error instanceof Error ? error.message : String(error)
+							}. Reopen the form to retry.`
+						: `Configured projects could not be read: ${
+								error instanceof Error ? error.message : String(error)
+							}. Enter a custom path or use the current directory.`,
 				);
 			}
 		})();
@@ -319,7 +347,14 @@ export function NewWorkflowModal(props: {
 	const isProposal = (type: string) =>
 		type === "openspec-propose" || type === "openspec-fusion-propose";
 	const isRepositoryBacked = (type: string) =>
-		isProposal(type) || type === "wiki" || type === "rebase" || isVerify(type);
+		isProposal(type) ||
+		type === "wiki" ||
+		type === "rebase" ||
+		isVerify(type) ||
+		isEnvSetup(type);
+	/** The environment-setup type drafts definitions for one configured app, so
+	 * it needs that app's identity and no checkout-mode choice of its own. */
+	const isEnvSetup = (type: string) => type === "env-setup";
 	/** The rebase type's two extra steps: the branch that gets rebased and the
 	 * ref it is rebased onto, both chosen from the repository's branch list. */
 	const isRebase = (type: string) => type === "rebase";
@@ -356,6 +391,8 @@ export function NewWorkflowModal(props: {
 			"workflowId",
 		];
 		if (isVerify(values().workflowType)) return head;
+		// Environment setup names the app it drafts for before anything else.
+		if (isEnvSetup(values().workflowType)) return [...head, "app", "task"];
 		if (!TASK_TYPES.has(values().workflowType)) return [...head, "mode"];
 		// Repository-backed workflows and independent research own their checkout
 		// behavior, so only the remaining types show the explicit choice.
@@ -375,6 +412,7 @@ export function NewWorkflowModal(props: {
 		mode: "Checkout mode",
 		sourceBranch: "Branch to rebase",
 		targetBranch: "Branch to rebase onto",
+		app: "Configured app to set up",
 	};
 
 	const workflowTypeEntry = (choice: string) =>
@@ -431,6 +469,22 @@ export function NewWorkflowModal(props: {
 			return ["worktree", "checkout"].filter((item) =>
 				item.includes(filter().toLowerCase()),
 			);
+		if (f === "app") {
+			// The launch context's own app is always offered and opens first: a
+			// setup workflow started from an application page is about that
+			// application, and the catalog read may not have resolved yet.
+			const contextIdent =
+				props.context.kind === "project" ? props.context.ident : undefined;
+			const idents = [
+				...(contextIdent ? [contextIdent] : []),
+				...configuredProjects().map((project) => project.ident),
+			].filter(
+				(ident, index, all) =>
+					all.indexOf(ident) === index &&
+					ident.includes(filter().toLowerCase()),
+			);
+			return idents;
+		}
 		return [];
 	};
 
@@ -495,6 +549,7 @@ export function NewWorkflowModal(props: {
 		return (
 			f === "workflowType" ||
 			f === "preset" ||
+			f === "app" ||
 			(f === "workflowId" && values().workflowType === "openspec-apply") ||
 			f === "mode" ||
 			branchField() !== undefined
@@ -843,9 +898,37 @@ export function NewWorkflowModal(props: {
 								filterActive={filtering()}
 								filterQuery={filter()}
 								itemHeight={
-									field() === "workflowType" || field() === "repo" ? 2 : 1
+									field() === "workflowType" ||
+									field() === "repo" ||
+									field() === "app"
+										? 2
+										: 1
 								}
 								reservedHeight={3}
+								{...(field() === "app" && entries().length === 0
+									? {
+											// The list's own placeholder would repeat the header notice
+											// without its remedy, so the step supplies its own — and a
+											// query that matched nothing says so instead of claiming
+											// nothing is configured.
+											emptyContent: catalogLoading() ? (
+												// The read is in flight: saying nothing is configured
+												// would be false (and no animated reader, so the surface
+												// stays still while it lands).
+												<text fg={uiColors.textMuted}>
+													Reading configured applications…
+												</text>
+											) : filter() ? (
+												<text fg={uiColors.warning}>
+													{`No application matches "${filter()}"`}
+												</text>
+											) : (
+												<text fg={uiColors.warning}>
+													Configure an application or library first.
+												</text>
+											),
+										}
+									: {})}
 								header={
 									notice() ? (
 										// Three wrapped rows in the content column (a fixed row is cut at
@@ -908,6 +991,37 @@ export function NewWorkflowModal(props: {
 												</text>
 											</box>
 										);
+									if (field() === "app") {
+										// The configured *name* is what the rest of the TUI shows for
+										// this application; the ident stays the submitted value.
+										const project = configuredProjects().find(
+											(candidate) => candidate.ident === item,
+										);
+										return (
+											<box
+												width="100%"
+												flexShrink={0}
+												flexDirection="column"
+												height={2}
+												overflow="hidden"
+											>
+												<text
+													height={1}
+													flexShrink={0}
+													fg={
+														active() ? uiColors.primary : uiColors.textSecondary
+													}
+												>
+													{project?.name && project.name !== ""
+														? project.name
+														: item}
+												</text>
+												<text height={1} flexShrink={0} fg={uiColors.textMuted}>
+													{item}
+												</text>
+											</box>
+										);
+									}
 									if (field() !== "workflowType")
 										return (
 											<text

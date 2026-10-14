@@ -642,6 +642,13 @@ export interface IntegrationServices {
 		owner: `workflow:${string}`,
 		app: import("../environment/config.ts").App,
 	) => string | undefined | Promise<string | undefined>;
+	/** Resolves a workflow owner's drafts overlay, so a setup workflow's app runs
+	 * resolve the drafts before the live configuration. Optional: a fixture that
+	 * attaches no slot controller has no overlays to resolve. */
+	readonly resolveOwnerOverlay?: (
+		owner: `workflow:${string}`,
+		app: import("../environment/config.ts").App,
+	) => string | undefined;
 	/** The application/infrastructure family (`app` rows). */
 	readonly appFamily?: import("../runtime/app-routes.ts").AppFamilyServices;
 	/**

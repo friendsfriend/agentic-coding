@@ -4,20 +4,42 @@ import path from "node:path";
 import { Effect, Either } from "effect";
 import { environmentRunEnv } from "../agent-host/environment-capability.ts";
 import { hostLayout } from "../agent-host/layout.ts";
+import { resolveConfigRoot } from "../config-root.ts";
 import {
 	type AgentHandle,
 	type Assignment,
 	type EffectKind,
 	isRetryableFailure,
+	type JsonValue,
 	type RuntimeId,
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
+import type { ActionTarget } from "../server/actions/targets.ts";
 import {
 	BackendClientError,
 	backendClient,
 	backendClientFromEnv,
 } from "../server/client.ts";
+import {
+	fingerprintCheckout,
+	fingerprintDirectory,
+	readArmedBaseline,
+	setupBackupDir,
+	setupDraftsDir,
+	setupGuardViolations,
+} from "../server/environment/setup-drafts.ts";
+import {
+	promoteSetupDrafts,
+	setupPromotionLockPath,
+} from "../server/environment/setup-promote.ts";
+import {
+	declaredAppPorts,
+	defaultSetupTargetCompiler,
+	kubernetesClusterAvailable,
+	type SetupTargetStartResult,
+	validateSetupDrafts,
+} from "../server/environment/setup-validate.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
@@ -2132,7 +2154,273 @@ export function agentEffectHandlers(
 					return { owner, apps: outcome.right.apps };
 				}),
 		},
+		// The env-setup write guard (`add-environment-setup-workflow`): the first
+		// call arms the baseline the later ones compare against, and the baseline
+		// lives in the workflow's own persisted snapshot — engine-owned state the
+		// authoring agent has no path to, so the verdict cannot be forged by the
+		// process the guard monitors. A comparison that finds the live
+		// configuration or the checkout changed fails the effect permanently,
+		// which parks the workflow in `attention-required` with the violation
+		// named — the developer decides what happens next.
+		"environment.setup-guard": {
+			execute: (effect, _signal) =>
+				Effect.gen(function* () {
+					const payload = effect.payload as {
+						workflowId?: unknown;
+						phase?: unknown;
+						checkout?: unknown;
+						draftsDir?: unknown;
+					};
+					const workflowId =
+						typeof payload.workflowId === "string" ? payload.workflowId : "";
+					if (workflowId === "")
+						throw new PermanentFailure(
+							"environment.setup-guard needs a workflow id",
+						);
+					const snapshot = snapshotFor(effect);
+					// The run identity is pinned at start: a workflow id reused after the
+					// earlier workflow was deleted has its own identity, so it neither
+					// inherits nor conflicts with the earlier run's armed baseline.
+					const runId = snapshot.metadata.createdAt;
+					const configDir = resolveConfigRoot();
+					const checkoutDir =
+						typeof payload.checkout === "string" ? payload.checkout : "";
+					const phase = payload.phase === "check" ? "check" : "baseline";
+					const draftsDir =
+						typeof payload.draftsDir === "string" ? payload.draftsDir : "";
+					const exclusion = {
+						...(draftsDir ? { draftsDir } : {}),
+						backupDir: setupBackupDir(configDir, workflowId),
+						lockPath: setupPromotionLockPath(configDir),
+					};
+					const configFingerprint = yield* Effect.promise(() =>
+						Promise.resolve(fingerprintDirectory(configDir, exclusion)),
+					);
+					const checkoutFingerprint = yield* Effect.promise(() =>
+						Promise.resolve(fingerprintCheckout(checkoutDir)),
+					);
+					const armed = readArmedBaseline(
+						snapshot.metadata.setupGuardBaselines,
+						runId,
+					);
+					if (phase === "baseline") {
+						// Armed once per run: a replay of the baseline row (a re-claim after a
+						// lease expiry) must not absorb configuration writes that happened
+						// after the first arming, or the later check would compare against
+						// the very state it is supposed to catch.
+						if (armed) return { phase, armed: false, alreadyArmed: true };
+						return {
+							phase,
+							armed: true,
+							runId,
+							baseline: {
+								configDir,
+								checkoutDir,
+								configFingerprint,
+								checkoutFingerprint,
+							},
+						};
+					}
+					if (!armed)
+						throw new PermanentFailure(
+							"the env-setup write guard has no baseline; the author turn cannot be checked",
+						);
+					const violations = setupGuardViolations(armed, {
+						configDir,
+						checkoutDir,
+						configFingerprint,
+						checkoutFingerprint,
+					});
+					if (violations.length > 0)
+						throw new PermanentFailure(
+							`env-setup write guard: ${violations.join("; ")}`,
+						);
+					return { phase, ok: true };
+				}),
+		},
+		// The env-setup validation gate (`add-environment-setup-workflow`): the
+		// structural checks plus a real start of every drafted run target. Its
+		// report is the effect's data, which the step hands to the author as the
+		// next round's context (or to the approval step when it passed).
+		"environment.validate": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const subject = setupSubject(effect.payload);
+					if (subject.app === "")
+						throw new PermanentFailure(
+							"environment.validate needs the configured app to draft for",
+						);
+					const configDir = resolveConfigRoot();
+					const draftsDir =
+						subject.draftsDir !== ""
+							? subject.draftsDir
+							: setupDraftsDir(configDir, subject.workflowId);
+					const report = yield* Effect.promise(() =>
+						validateSetupDrafts({
+							configDir,
+							draftsDir,
+							appIdent: subject.app,
+							checkoutDir: subject.checkout,
+							startTarget: (target) =>
+								startSetupTarget(subject, target, signal),
+							compileTarget: defaultSetupTargetCompiler({
+								appIdent: subject.app,
+								checkoutDir: subject.checkout,
+								configDir,
+							}),
+							otherAppPorts: () => declaredAppPorts(configDir, subject.app),
+							clusterAvailable: (target) =>
+								kubernetesClusterAvailable(
+									target.kubernetes?.contextName ?? "",
+								),
+						}),
+					);
+					return report as unknown as JsonValue;
+				}),
+		},
+		// The env-setup promotion (`add-environment-setup-workflow`): atomic
+		// writes with a protected backup, a catalog reload, and a full rollback
+		// when any part of it fails.
+		"environment.promote": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const subject = setupSubject(effect.payload);
+					const snapshot = snapshotFor(effect);
+					const configDir = resolveConfigRoot();
+					const draftsDir =
+						subject.draftsDir !== ""
+							? subject.draftsDir
+							: setupDraftsDir(configDir, subject.workflowId);
+					const client = backendClientFromEnv() ?? backendClient();
+					const result = yield* Effect.promise(() =>
+						promoteSetupDrafts({
+							configDir,
+							draftsDir,
+							backupDir: setupBackupDir(configDir, subject.workflowId),
+							workflowId: subject.workflowId,
+							// The run identity and the journal's secret are both pinned in
+							// the workflow's own snapshot: the promotion's plan under
+							// `.backups` is only trusted when this workflow wrote it.
+							runId:
+								subject.runId !== ""
+									? subject.runId
+									: snapshot.metadata.createdAt,
+							...(snapshot.metadata.setupPromotionSecret
+								? { secret: snapshot.metadata.setupPromotionSecret }
+								: {}),
+							// The catalog reload goes through the environment authority when
+							// this process is attached to one; a rejection rolls the live
+							// configuration back before the effect returns.
+							...(client
+								? {
+										reload: () => client.reloadEnvironmentConfig(signal),
+									}
+								: {}),
+						}),
+					);
+					// A busy configuration root is infrastructure, not a defective draft:
+					// the durable outbox owns its backoff, instead of the step's bounded
+					// loop burning its attempts on a lock another workflow holds for
+					// milliseconds. Every other failure comes back as data for the step.
+					if (!result.ok && result.retryable)
+						throw new TransientFailure(
+							`env-setup promotion deferred: ${result.error ?? "unknown failure"}`,
+						);
+					return result as unknown as JsonValue;
+				}),
+		},
 	};
+}
+
+/** How long one drafted target may take to reach readiness before the gate
+ * reports it as a failure instead of holding the drain open. */
+const SETUP_START_TIMEOUT_MS = 5 * 60 * 1000;
+/** One long poll of the slot controller; the loop below re-polls it. */
+const SETUP_START_POLL_SEC = 30;
+
+/** What the three env-setup effects act on, as the step pinned it. */
+interface SetupEffectSubject {
+	readonly workflowId: string;
+	readonly runId: string;
+	readonly app: string;
+	readonly repository: string;
+	readonly checkout: string;
+	readonly draftsDir: string;
+}
+
+function setupSubject(payload: unknown): SetupEffectSubject {
+	const value =
+		typeof payload === "object" && payload !== null
+			? (payload as Record<string, unknown>)
+			: {};
+	const text = (key: string): string =>
+		typeof value[key] === "string" ? (value[key] as string) : "";
+	return {
+		workflowId: text("workflowId"),
+		runId: text("runId"),
+		app: text("app"),
+		repository: text("repository"),
+		checkout: text("checkout"),
+		draftsDir: text("draftsDir"),
+	};
+}
+
+/**
+ * Start one drafted run target for the setup workflow's own slot and wait for
+ * the grant. The server resolves the owner's drafts overlay, so the target the
+ * workflow validates is the definition it authored, and a second workflow
+ * holding the app is waited for exactly as an agent's `env_start` would.
+ */
+async function startSetupTarget(
+	subject: SetupEffectSubject,
+	target: ActionTarget,
+	signal?: AbortSignal,
+): Promise<SetupTargetStartResult> {
+	const client = backendClientFromEnv() ?? backendClient();
+	if (!client)
+		return {
+			ready: false,
+			detail:
+				"no environment server is attached to this process, so nothing can be started",
+		};
+	const deadline = Date.now() + SETUP_START_TIMEOUT_MS;
+	for (;;) {
+		if (signal?.aborted) return { ready: false, detail: "cancelled" };
+		let value: Record<string, unknown>;
+		try {
+			value = await client.acquireSlots(
+				{
+					owner: `workflow:${subject.workflowId}`,
+					apps: [subject.app],
+					target: target.id,
+					waitSec: SETUP_START_POLL_SEC,
+				},
+				signal,
+			);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			return { ready: false, detail };
+		}
+		const outcome = typeof value.outcome === "string" ? value.outcome : "";
+		if (outcome === "started" || outcome === "already-running")
+			return { ready: true };
+		if (outcome === "released-by-developer")
+			return {
+				ready: false,
+				detail: "the developer released the app before it started",
+			};
+		if (outcome === "deadlock")
+			return {
+				ready: false,
+				detail: typeof value.message === "string" ? value.message : "deadlock",
+			};
+		if (Date.now() >= deadline)
+			return {
+				ready: false,
+				detail: "the app is still held by another workflow",
+			};
+		await Bun.sleep(250);
+	}
 }
 
 async function currentBranch(

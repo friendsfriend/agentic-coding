@@ -1269,6 +1269,11 @@ export function App(props: {
 					prompt: "Press Enter to review wiki changes",
 					action: "wiki-review",
 				};
+			case "setup-review":
+				return {
+					prompt: "Press Enter to review the environment drafts",
+					action: "setup-review",
+				};
 		}
 		const actions = data().state.availableActions ?? [];
 		if (actions.length > 1 || actions[0]?.confirmation !== "none")
@@ -1334,7 +1339,11 @@ export function App(props: {
 			openDeveloperReview();
 			return true;
 		}
-		if (action.key === "plan-review" || action.key === "wiki-review") {
+		if (
+			action.key === "plan-review" ||
+			action.key === "wiki-review" ||
+			action.key === "setup-review"
+		) {
 			// Review gates open their popup directly; no empty generic selection list.
 			promptedUserActionKey = action.key;
 			openPlanReview();
@@ -2549,7 +2558,9 @@ export function App(props: {
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
 						const returnModal = () =>
-							reviewKind() === "plan" || reviewKind() === "wiki"
+							reviewKind() === "plan" ||
+							reviewKind() === "wiki" ||
+							reviewKind() === "setup"
 								? "plan-review"
 								: "developer-review";
 						if (key === "escape") {
@@ -3100,7 +3111,11 @@ export function App(props: {
 				openDeveloperReview();
 				return;
 			}
-			if (action.key === "plan-review" || action.key === "wiki-review") {
+			if (
+				action.key === "plan-review" ||
+				action.key === "wiki-review" ||
+				action.key === "setup-review"
+			) {
 				// Auto-open trigger-only review actions directly, not the generic
 				// ListViewModal (there are no selectable items).
 				openPlanReview();

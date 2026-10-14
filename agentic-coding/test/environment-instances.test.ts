@@ -251,6 +251,9 @@ function harness(options: {
 	otelReceiver?: () => OtelReceiverTarget | undefined;
 	/** Poll cadence; a small value with a small clock step exercises the wait loop. */
 	waitPollMs?: number;
+	/** The drafts overlay a workflow owner's runs resolve before the live
+	 * configuration (`add-environment-setup-workflow`). */
+	resolveOwnerOverlay?: () => string | undefined;
 }): Harness {
 	const calls: Harness["calls"] = [] as unknown as Harness["calls"];
 	const events: SlotEvent[] = [];
@@ -264,6 +267,9 @@ function harness(options: {
 		...(options.resolveDocker ? { resolveDocker: options.resolveDocker } : {}),
 		...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
 		...(options.otelReceiver ? { otelReceiver: options.otelReceiver } : {}),
+		...(options.resolveOwnerOverlay
+			? { resolveOwnerOverlay: options.resolveOwnerOverlay }
+			: {}),
 		observeRun:
 			options.observeRun ??
 			(async (candidate) =>
@@ -1693,4 +1699,56 @@ describe("app slot regressions", () => {
 		});
 		await big;
 	});
+});
+
+// The overlay's call site (`add-environment-setup-workflow`): the resolver is
+// covered on its own, and this is what proves the controller consumes it, so a
+// setup workflow's own `env_start` runs the drafts it just authored.
+test("a workflow owner's app run resolves the drafts overlay it is given", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-overlay-"));
+	const fixture = composeFixture(root);
+	const draftsDir = path.join(
+		fixture.configDir,
+		".drafts",
+		"env-setup",
+		"wf-1",
+	);
+	fs.mkdirSync(path.join(draftsDir, "apps", "compose"), { recursive: true });
+	const draftPath = path.join(draftsDir, "apps", "compose", "shop-compose.yml");
+	fs.writeFileSync(draftPath, 'services:\n  web:\n    image: "shop:draft"\n');
+	const store = tempState("overlay");
+	const slots = harness({
+		root,
+		configDir: fixture.configDir,
+		checkout: fixture.checkout,
+		apps: () => [app(fixture.checkout)],
+		store: store.store,
+		docker: dockerSelection(),
+		resolveOwnerOverlay: () => draftsDir,
+	});
+	track([
+		() => store.store.close(),
+		() => fs.rmSync(root, { recursive: true, force: true }),
+	]);
+	const granted = await slots.controller.acquire({
+		owner: "workflow:wf-1",
+		apps: ["shop"],
+	});
+	expect(granted.outcome).toBe("started");
+	// The row carries the overlay, and the run used the drafted compose file.
+	expect(
+		store.store.findEnvironmentInstance("workflow:wf-1", "shop")?.configOverlay,
+	).toBe(draftsDir);
+	const compose = slots.calls.find((call) => call.args.includes("-f"));
+	expect(compose?.args[compose.args.indexOf("-f") + 1]).toBe(draftPath);
+	// A human owner resolves no overlay at all.
+	await slots.controller.stopApp("shop");
+	const user = await slots.controller.acquire({
+		owner: "user",
+		apps: ["shop"],
+	});
+	expect(user.outcome).toBe("started");
+	expect(
+		store.store.findEnvironmentInstance("user", "shop")?.configOverlay,
+	).toBeUndefined();
 });

@@ -33,6 +33,19 @@ const observationSchema = Schema.Union(
 		workflowId: Schema.String,
 		file: localChangeSchema,
 	}),
+	// The env-setup approval gate's view: the drafts diffed against the live
+	// configuration (`add-environment-setup-workflow`).
+	Schema.Struct({
+		kind: Schema.Literal("setup-changes"),
+		repo: Schema.String,
+		workflowId: Schema.String,
+	}),
+	Schema.Struct({
+		kind: Schema.Literal("setup-diff"),
+		repo: Schema.String,
+		workflowId: Schema.String,
+		file: localChangeSchema,
+	}),
 	Schema.Struct({
 		kind: Schema.Literal("local-changes"),
 		repo: Schema.String,
@@ -166,6 +179,18 @@ export type EnvironmentTeardownResult =
 
 export type AcquireSlotsRequest = typeof acquireSlotsRequestSchema.Type;
 export type AppSlotOperationRequest = typeof appSlotOperationRequestSchema.Type;
+
+/**
+ * The slot controller's acquire answer as the client reports it: a grant, a
+ * wait (with the position and holder per app), a developer release or a
+ * deadlock. The record stays open — the answer carries the started instance's
+ * endpoints and grant id, and a caller reads the fields it needs — so this is
+ * a shape check, not a second copy of the controller's type.
+ */
+export const acquireSlotsResultSchema = Schema.Record({
+	key: Schema.String,
+	value: Schema.Unknown,
+});
 
 // ---------------------------------------------------------------------------
 // Agent environment requests (`add-agent-environment-tools`)

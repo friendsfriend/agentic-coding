@@ -229,6 +229,13 @@ export interface EnvironmentInstanceControllerOptions {
 	) => string | undefined | Promise<string | undefined>;
 	/** Run-target observation for the human-holder case. */
 	readonly observation?: RunObserver;
+	/** The drafts overlay a workflow owner's app runs resolve before the live
+	 * configuration (`add-environment-setup-workflow`). Paths never come
+	 * directly from a request: a start resolves the owner's own overlay. */
+	readonly resolveOwnerOverlay?: (
+		owner: `workflow:${string}`,
+		app: App,
+	) => string | undefined;
 	/** Test seam: replaces the built-in run observation. */
 	readonly observeRun?: (app: App) => Promise<RunObservationState>;
 	/**
@@ -379,6 +386,7 @@ export class EnvironmentInstanceController {
 	private readonly resolveDocker?: EnvironmentInstanceControllerOptions["resolveDocker"];
 	private dockerPromise?: Promise<DockerRuntimeSelection | undefined>;
 	private readonly resolveOwnerCheckout?: EnvironmentInstanceControllerOptions["resolveOwnerCheckout"];
+	private readonly resolveOwnerOverlay?: EnvironmentInstanceControllerOptions["resolveOwnerOverlay"];
 	private readonly observation?: RunObserver;
 	private readonly observeRun?: (app: App) => Promise<RunObservationState>;
 	private readonly scriptInfra: InstanceScriptLifecycle;
@@ -433,6 +441,7 @@ export class EnvironmentInstanceController {
 		this.resolveDocker = options.resolveDocker;
 		if (options.docker) this.dockerPromise = Promise.resolve(options.docker);
 		this.resolveOwnerCheckout = options.resolveOwnerCheckout;
+		this.resolveOwnerOverlay = options.resolveOwnerOverlay;
 		this.observation = options.observation;
 		this.observeRun = options.observeRun;
 		this.scriptInfra =
@@ -1164,7 +1173,9 @@ export class EnvironmentInstanceController {
 				503,
 				`no managed checkout is available for ${owner}`,
 			);
-		const targets = this.runTargetsFor(app, checkoutPath);
+		const configOverlay =
+			owner === "user" ? undefined : this.resolveOwnerOverlay?.(owner, app);
+		const targets = this.runTargetsFor(app, checkoutPath, configOverlay);
 		const selected = selectTarget(targets, request, docker !== undefined);
 		if (selected.runtime === "kubernetes")
 			throw new EnvironmentInstanceError(
@@ -1185,6 +1196,7 @@ export class EnvironmentInstanceController {
 			targetId: selected.id,
 			runtime: selected.runtime,
 			checkoutPath,
+			...(configOverlay ? { configOverlay } : {}),
 			imageTag:
 				owner === "user" ? "latest" : (previous?.imageTag ?? instanceId),
 			status: "starting",
@@ -2077,23 +2089,18 @@ export class EnvironmentInstanceController {
 		checkoutPath: string,
 		configOverlay?: string,
 	): ActionTarget[] {
-		const targets = discoverActionTargets({
+		// One discovery pass over the live config with the drafts directory as a
+		// per-file overlay: a drafted definition replaces the live file of the
+		// same relative path and adds a definition that has none, so an app run
+		// held by the setup workflow resolves its drafts before the live config
+		// without a second, merged target list (add-environment-setup-workflow).
+		return discoverActionTargets({
 			appIdent: app.ident,
 			localDir: checkoutPath,
 			action: "run",
 			configDir: this.configDir,
+			...(configOverlay ? { configOverlay } : {}),
 		});
-		if (!configOverlay) return targets;
-		const overlay = discoverActionTargets({
-			appIdent: app.ident,
-			localDir: checkoutPath,
-			action: "run",
-			configDir: configOverlay,
-		});
-		const byId = new Map<string, ActionTarget>();
-		for (const target of targets) byId.set(target.id, target);
-		for (const target of overlay) byId.set(target.id, target);
-		return [...byId.values()];
 	}
 
 	/**

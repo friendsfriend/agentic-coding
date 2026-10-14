@@ -19,6 +19,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
+import { resolveConfigRoot } from "../../config-root.ts";
 import {
 	decodeCommand,
 	type EffectKind,
@@ -27,6 +28,7 @@ import {
 	type WorkflowSnapshot,
 	type WorkflowView,
 } from "../../contracts/workflow.ts";
+import { setupDraftsDir } from "../../server/environment/setup-drafts.ts";
 import type { RoutingDecisionSummary } from "../classifiers.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
@@ -1116,6 +1118,23 @@ export class WorkflowEngine {
 				definition.id === "research"
 					? { wikiRoot: path.resolve(wikiRoot()) }
 					: {}),
+				// The env-setup family's drafts root is pinned like the wiki root: the
+				// author assignment, the write guard, the validation and the promotion
+				// all resolve the same directory from the pinned snapshot instead of
+				// re-deriving it (a mid-run config-root change cannot move it).
+				...(definition.steps.includes("setup.author")
+					? {
+							setupDraftsDir: path.resolve(
+								setupDraftsDir(resolveConfigRoot(), workflowId),
+							),
+							// The promotion's plan is a file under `.backups`, outside
+							// both the write guard's coverage and the approval gate's
+							// view: this per-run secret is what makes a plan this
+							// workflow wrote recognisable, and a hand-written one
+							// unusable (`setup-promote.ts`).
+							setupPromotionSecret: randomBytes(32).toString("base64url"),
+						}
+					: {}),
 			},
 			routing: input.routing,
 			evidence: [],
@@ -1742,7 +1761,50 @@ export class WorkflowEngine {
 			}
 			const runList = runs(db, snapshot.workflowId);
 			validateSnapshot(snapshot, definition, runList, this.registry);
-			validateEffect(row, snapshot, definition, runList, this.registry);
+			let unsupportedKind: WorkflowRuntimeError | undefined;
+			try {
+				validateEffect(row, snapshot, definition, runList, this.registry);
+			} catch (error) {
+				// A row whose kind this build does not know — a store written by a newer
+				// build — parks its own workflow instead of throwing out of the claim,
+				// which would block every newer workflow sharing the store.
+				if (
+					!(error instanceof WorkflowRuntimeError) ||
+					error.code !== "unknown-effect-kind"
+				)
+					throw error;
+				unsupportedKind = error;
+			}
+			if (unsupportedKind) {
+				const diagnostic = `effect ${row.kind} is not supported by this build: ${unsupportedKind.message}`;
+				db.query(
+					"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status IN ('pending','retry','running')",
+				).run(diagnostic, row.id);
+				snapshot.revision += 1;
+				snapshot.status = "attention-required";
+				snapshot.attention = [diagnostic];
+				snapshot.metadata.updatedAt = at.toISOString();
+				validateSnapshot(snapshot, definition, runList, this.registry);
+				writeSnapshot(db, snapshot);
+				db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+					snapshot.workflowId,
+					snapshot.revision,
+					"effect.unsupported-kind",
+					json({ kind: "system", effectId: row.id }),
+					json({ effectId: row.id, kind: row.kind, diagnostic }),
+					at.toISOString(),
+				);
+				exhausted.push({
+					snapshot: structuredClone(snapshot),
+					effectId: row.id,
+					kind: row.kind,
+					attempts: row.attempts,
+					maxAttempts: row.max_attempts,
+					diagnostic,
+					rollup: this.rollupPayload(db, snapshot),
+				});
+				continue;
+			}
 			const cancelledLaunch =
 				row.kind === "agent.launch" &&
 				(JSON.parse(row.payload_json) as { cancelRequested?: unknown })

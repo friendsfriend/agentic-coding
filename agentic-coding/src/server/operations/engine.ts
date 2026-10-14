@@ -205,6 +205,8 @@ export function startArgs(input: {
 	preset?: string;
 	sourceBranch?: string;
 	targetBranch?: string;
+	/** The configured app an env-setup launch drafts definitions for. */
+	app?: string;
 }) {
 	const definitionId =
 		input.workflowType === "quick"
@@ -252,6 +254,7 @@ export function startArgs(input: {
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
 			? { preset: input.preset }
 			: {}),
+		...(input.app ? { app: input.app } : {}),
 	};
 }
 /** The presets a launch may select, plus the reason the agents config could not
@@ -304,6 +307,7 @@ export async function startWorkflowInProcess(
 		preset: args.preset,
 		sourceBranch: args.sourceBranch,
 		targetBranch: args.targetBranch,
+		app: args.app,
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 		...(input.startedBy ? { startedBy: input.startedBy } : {}),
 	});

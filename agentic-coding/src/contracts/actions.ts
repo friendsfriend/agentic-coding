@@ -45,6 +45,9 @@ export const workflowStartRequestSchema = Schema.Struct({
 	 * ref it is rebased onto, both chosen from a branch list rather than typed. */
 	sourceBranch: Schema.optional(Schema.String),
 	targetBranch: Schema.optional(Schema.String),
+	/** Only the env-setup type reads this: the configured app whose environment
+	 * definitions the workflow drafts. */
+	app: Schema.optional(Schema.String),
 }).pipe(
 	Schema.filter(
 		(request) =>

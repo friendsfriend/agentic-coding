@@ -321,3 +321,88 @@ test("a new start resolves the family-traits definition tier", () => {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+// The env-setup family's start boundary (`add-environment-setup-workflow`,
+// task 2.3): the configured app is required and pinned, the launch is forced
+// into checkout mode, and the engine seeds the drafts root with it.
+describe("environment-setup startup", () => {
+	test("requires --app, pins it, and refuses a worktree launch", () => {
+		const repo = repository();
+		// The configuration lives outside the checkout: this family requires a
+		// clean worktree, and a config file inside it would break that rule.
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "env-setup-config-"),
+		);
+		const file = path.join(configDir, "config.toml");
+		fs.writeFileSync(file, config);
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			expect(() =>
+				prepareWorkflowStart({
+					workflowId: "env-setup-no-app",
+					definitionId: "env-setup",
+					repo,
+					mode: "checkout",
+				}),
+			).toThrow("requires --app");
+			expect(() =>
+				prepareWorkflowStart({
+					workflowId: "env-setup-app-ident",
+					definitionId: "env-setup",
+					repo,
+					mode: "checkout",
+					app: "../../etc",
+				}),
+			).toThrow("app ident");
+			// A family that writes outside the checkout never uses a worktree.
+			expect(() =>
+				prepareWorkflowStart({
+					workflowId: "env-setup-worktree",
+					definitionId: "env-setup",
+					repo,
+					mode: "worktree",
+					app: "shop",
+				}),
+			).toThrow("checkout mode");
+			// A workflow id whose predecessor was deleted leaves its drafts behind:
+			// the new start refuses them instead of adopting them as its own work.
+			const leftover = path.join(
+				process.env.AGENTIC_CODING_CONFIG_DIR ?? "",
+				".drafts",
+				"env-setup",
+				"env-setup-leftover",
+			);
+			fs.mkdirSync(leftover, { recursive: true });
+			fs.writeFileSync(path.join(leftover, "notes.md"), "old drafts\n");
+			expect(() =>
+				prepareWorkflowStart({
+					workflowId: "env-setup-leftover",
+					definitionId: "env-setup",
+					repo,
+					mode: "checkout",
+					app: "shop",
+				}),
+			).toThrow("earlier workflow");
+			fs.rmSync(leftover, { recursive: true, force: true });
+
+			const started = prepareWorkflowStart({
+				workflowId: "env-setup-pinned",
+				definitionId: "env-setup",
+				repo,
+				mode: "checkout",
+				app: " shop ",
+			});
+			expect(started.input.metadata.app).toBe("shop");
+			expect(started.input.definitionVersion).toBe(
+				definitionVersionForFamilyTraits(6),
+			);
+			expect(started.target).toBe(fs.realpathSync(repo));
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(repo, { recursive: true, force: true });
+			fs.rmSync(configDir, { recursive: true, force: true });
+		}
+	});
+});

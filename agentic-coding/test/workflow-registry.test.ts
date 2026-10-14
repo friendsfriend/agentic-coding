@@ -164,8 +164,15 @@ describe("workflow registry", () => {
 		expect(registry.definition("openspec-fusion", 1).steps).toContain(
 			"core.plan-approval",
 		);
+		// Every listed family is registered at the tier a new start resolves. A
+		// family introduced after the pre-`stepRefs` tiers (`env-setup`) exists
+		// only from the tiers that pin exact step references, so the catalog's
+		// claim — a listed family is startable — is checked where a start resolves
+		// it rather than at the legacy policy version.
 		for (const entry of PUBLIC_WORKFLOW_CATALOG)
-			expect(registry.definition(entry.id, 106)).toBeTruthy();
+			expect(
+				registry.definition(entry.id, definitionVersionForFamilyTraits(6)),
+			).toBeTruthy();
 		expect(
 			PUBLIC_WORKFLOW_CATALOG.find((entry) => entry.alias === "quick")?.id,
 		).toBe("no-openspec");
@@ -654,6 +661,7 @@ describe("family traits (add-definition-family-traits)", () => {
 		"solo",
 		"rebase",
 		"verify",
+		"env-setup",
 	];
 	const DOCUMENTATION_IDS: readonly string[] = [
 		"wiki",
@@ -894,6 +902,14 @@ describe("family traits (add-definition-family-traits)", () => {
 				startRequirements: ["base-commit"],
 				openspecVerifier: true,
 			},
+			"env-setup": {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["clean-tree"],
+				openspecVerifier: false,
+			},
 		};
 		for (const id of FAMILY_IDS)
 			expect([
@@ -989,7 +1005,12 @@ describe("family traits (add-definition-family-traits)", () => {
 				"bef26705cc29c22b887293dd85d6c930648ef60f46aa894713a86e10f58f53b2",
 			research:
 				"f66c5e0dfa29b6ca024766240f5cd2439c65e555878457cc369f8c1e32ecd8ec",
+			"env-setup":
+				"c2f9d544c53a97db36778d8ca74e9d962b0bac3afef551bddff90a5384c2ecf2",
 		};
+		// Every family a start can resolve is pinned here, so the next family
+		// cannot be added without a literal digest.
+		for (const id of FAMILY_IDS) expect(expected[id]).toBeTruthy();
 		for (const [id, digest] of Object.entries(expected))
 			expect([id, registry.definition(id, traitsVersion).digest]).toEqual([
 				id,

@@ -824,6 +824,35 @@ export function effectResult(
 			];
 		}
 	}
+	if (
+		command.outcome === "complete" &&
+		row.kind === "environment.setup-guard"
+	) {
+		// The guard's armed baseline lives in the workflow's own snapshot, not in a
+		// file under the configuration root: state the authoring agent can write
+		// would let the monitored process forge the verdict. One entry per
+		// workflow — the baseline belongs to the run identity that armed it.
+		const data =
+			command.data && typeof command.data === "object"
+				? (command.data as {
+						phase?: unknown;
+						runId?: unknown;
+						baseline?: unknown;
+					})
+				: {};
+		if (
+			data.phase === "baseline" &&
+			typeof data.runId === "string" &&
+			data.baseline !== null &&
+			typeof data.baseline === "object"
+		) {
+			snapshot.metadata.setupGuardBaselines = {
+				[data.runId]: data.baseline as NonNullable<
+					WorkflowSnapshot["metadata"]["setupGuardBaselines"]
+				>[string],
+			};
+		}
+	}
 	if (command.outcome === "complete" && row.kind === "workspace.setup") {
 		const data =
 			command.data && typeof command.data === "object"

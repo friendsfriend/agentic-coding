@@ -15,6 +15,8 @@ import {
 	loadArtifact,
 	loadLocalChanges,
 	loadLocalDiff,
+	loadSetupChanges,
+	loadSetupDiff,
 	loadWikiChanges,
 	loadWikiDiff,
 	type RefreshOptions,
@@ -67,6 +69,26 @@ export async function loadWikiDiffOrEmpty(
 	signal?: AbortSignal,
 ): Promise<string> {
 	return (await loadWikiDiff(repo, workflowId, file, signal)) ?? "";
+}
+
+/** The env-setup drafts (empty when the read was superseded). */
+export async function loadSetupChangesOrEmpty(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+	options: RefreshOptions = {},
+): Promise<LocalChange[]> {
+	return (await loadSetupChanges(repo, workflowId, signal, options)) ?? [];
+}
+
+/** One drafted file's diff against the live configuration. */
+export async function loadSetupDiffOrEmpty(
+	repo: string,
+	workflowId: string,
+	file: LocalChange,
+	signal?: AbortSignal,
+): Promise<string> {
+	return (await loadSetupDiff(repo, workflowId, file, signal)) ?? "";
 }
 
 /** One artifact body (empty when the read was superseded). */

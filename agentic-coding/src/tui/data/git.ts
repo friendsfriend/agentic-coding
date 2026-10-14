@@ -102,6 +102,44 @@ export async function loadWikiDiff(
 	);
 }
 
+/** The env-setup drafts of a workflow, as the approval gate's file list. */
+export async function loadSetupChanges(
+	repo: string,
+	workflowId: string,
+	signal?: Signal,
+	options: RefreshOptions = {},
+): Promise<LocalChange[] | undefined> {
+	return cache.load(
+		`${wikiKey(repo, workflowId)}:setup-changes`,
+		(signal) =>
+			gateway().observe<LocalChange[]>(
+				{ kind: "setup-changes", repo, workflowId },
+				localChangesSchema,
+				signal,
+			),
+		{ signal, ...options },
+	);
+}
+
+/** One drafted file's diff against the live configuration. */
+export async function loadSetupDiff(
+	repo: string,
+	workflowId: string,
+	file: LocalChange,
+	signal?: Signal,
+): Promise<string | undefined> {
+	return cache.load(
+		`${wikiKey(repo, workflowId)}:setup-diff:${file.newPath}`,
+		(signal) =>
+			gateway().observe<string>(
+				{ kind: "setup-diff", repo, workflowId, file },
+				diffBodySchema,
+				signal,
+			),
+		{ signal },
+	);
+}
+
 /** OpenSpec artifacts of a workflow state (change proposals and specs). */
 export async function loadArtifacts(
 	state: WorkflowState,

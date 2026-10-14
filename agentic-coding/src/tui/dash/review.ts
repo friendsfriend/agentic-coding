@@ -22,6 +22,8 @@ import {
 	loadLocalChangesOrEmpty,
 	loadLocalDiffOrEmpty,
 	loadReviewFindings,
+	loadSetupChangesOrEmpty,
+	loadSetupDiffOrEmpty,
 	loadWikiChangesOrEmpty,
 	loadWikiDiffOrEmpty,
 	runWorkflow,
@@ -49,6 +51,17 @@ export function reviewCommentsForEngine(
 			? { findingId: comment.findingId }
 			: {}),
 	}));
+}
+
+/** Whether a review row is a draft that replaces an existing shared service
+ * definition. Pure: the approval gate's own flag, derived from the row, so the
+ * file list and the diff header say which change affects every app
+ * (add-environment-setup-workflow). */
+export function sharedInfrastructureChange(change: {
+	readonly newPath: string;
+	readonly newFile: boolean;
+}): boolean {
+	return !change.newFile && change.newPath.startsWith("infrastructure/");
 }
 
 /** Placeholder content rendered for a finding anchor that no diff hunk covers;
@@ -146,8 +159,8 @@ export interface ReviewFeatureContext {
 export interface ReviewFeature {
 	reviewOpen: () => boolean;
 	setReviewOpen: Setter<boolean>;
-	reviewKind: () => "developer" | "plan" | "wiki";
-	setReviewKind: Setter<"developer" | "plan" | "wiki">;
+	reviewKind: () => "developer" | "plan" | "wiki" | "setup";
+	setReviewKind: Setter<"developer" | "plan" | "wiki" | "setup">;
 	reviewView: () => "files" | "diff";
 	setReviewView: Setter<"files" | "diff">;
 	reviewLoading: () => boolean;
@@ -244,6 +257,10 @@ export interface ReviewChangeForView {
 	lines_added: number;
 	lines_deleted: number;
 	review_finding_count: number;
+	/** The draft replaces an existing shared service definition, so the change
+	 * affects every app. Kept beside the path, never inside it: the path is the
+	 * identity every discussion is anchored to. */
+	affects_all_apps: boolean;
 }
 
 export function createReviewFeature(
@@ -292,7 +309,7 @@ export function createReviewFeature(
 
 	const [reviewOpen, setReviewOpen] = createSignal(false);
 	const [reviewKind, setReviewKind] = createSignal<
-		"developer" | "plan" | "wiki"
+		"developer" | "plan" | "wiki" | "setup"
 	>("developer");
 	const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
 	const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
@@ -339,7 +356,15 @@ export function createReviewFeature(
 	const reviewFile = () => reviewVisibleChanges()[reviewChangeIndex()];
 	const reviewChangeForView = (change: LocalChange, diff = "") => ({
 		old_path: change.oldPath ?? change.newPath,
+		// The path stays the raw anchor identity; the approval gate's "affects all
+		// apps" flag travels as its own field and is rendered in its own column
+		// (`add-environment-setup-workflow`). It is computed for the environment
+		// approval gate only: a developer review of a repository that has its own
+		// `infrastructure/` tree must not claim that a source file affects every
+		// app's live configuration.
 		new_path: change.newPath,
+		affects_all_apps:
+			reviewKind() === "setup" && sharedInfrastructureChange(change),
 		a_mode: "100644",
 		b_mode: "100644",
 		new_file: change.newFile,
@@ -387,7 +412,8 @@ export function createReviewFeature(
 		a.diff === b.diff &&
 		a.lines_added === b.lines_added &&
 		a.lines_deleted === b.lines_deleted &&
-		a.review_finding_count === b.review_finding_count;
+		a.review_finding_count === b.review_finding_count &&
+		a.affects_all_apps === b.affects_all_apps;
 	const reviewDiffFile = createMemo(
 		() => {
 			const file = reviewFile();
@@ -756,19 +782,28 @@ export function createReviewFeature(
 		reviewDiffController?.abort();
 		reviewDiffController = new AbortController();
 		try {
-			const wikiReview = requiredUserAction()?.key === "wiki-review";
-			const changes: LocalChange[] = wikiReview
-				? await loadWikiChangesOrEmpty(
+			const actionKey = requiredUserAction()?.key;
+			const setupReview = actionKey === "setup-review";
+			const wikiReview = actionKey === "wiki-review";
+			const changes: LocalChange[] = setupReview
+				? await loadSetupChangesOrEmpty(
 						repo,
 						workflowId,
 						reviewDiffController.signal,
 						{ refresh: true },
 					)
-				: profile === "test"
-					? demoPlanArtifacts()
-					: await loadPlanReviewChanges(reviewDiffController.signal);
+				: wikiReview
+					? await loadWikiChangesOrEmpty(
+							repo,
+							workflowId,
+							reviewDiffController.signal,
+							{ refresh: true },
+						)
+					: profile === "test"
+						? demoPlanArtifacts()
+						: await loadPlanReviewChanges(reviewDiffController.signal);
 			if (generation !== reviewGeneration) return;
-			setReviewKind(wikiReview ? "wiki" : "plan");
+			setReviewKind(setupReview ? "setup" : wikiReview ? "wiki" : "plan");
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);
@@ -810,12 +845,19 @@ export function createReviewFeature(
 								reviewRefreshController.signal,
 								{ refresh: force },
 							)
-						: await loadLocalChangesOrEmpty(
-								repo,
-								workflowId,
-								reviewRefreshController.signal,
-								{ refresh: force },
-							);
+						: kind === "setup"
+							? await loadSetupChangesOrEmpty(
+									repo,
+									workflowId,
+									reviewRefreshController.signal,
+									{ refresh: force },
+								)
+							: await loadLocalChangesOrEmpty(
+									repo,
+									workflowId,
+									reviewRefreshController.signal,
+									{ refresh: force },
+								);
 			if (generation !== reviewRefreshGeneration) return;
 			const currentPath = reviewFile()?.newPath;
 			const nextIndex = currentPath
@@ -839,17 +881,30 @@ export function createReviewFeature(
 		reviewDiffController?.abort();
 		reviewDiffController = new AbortController();
 		try {
-			const content =
-				reviewKind() === "wiki"
-					? await loadWikiDiffOrEmpty(repo, workflowId, file)
-					: profile === "test"
-						? demoPlanContent(file.newPath)
-						: await loadArtifactOrEmpty(
-								data().state,
-								file.newPath,
+			const kind = reviewKind();
+			setReviewDiff(
+				kind === "setup"
+					? await loadSetupDiffOrEmpty(
+							repo,
+							workflowId,
+							file,
+							reviewDiffController?.signal,
+						)
+					: kind === "wiki"
+						? await loadWikiDiffOrEmpty(
+								repo,
+								workflowId,
+								file,
 								reviewDiffController?.signal,
-							);
-			setReviewDiff(content);
+							)
+						: profile === "test"
+							? demoPlanContent(file.newPath)
+							: await loadArtifactOrEmpty(
+									data().state,
+									file.newPath,
+									reviewDiffController?.signal,
+								),
+			);
 			setReviewLine(0);
 			setReviewView("diff");
 		} catch {
@@ -867,29 +922,36 @@ export function createReviewFeature(
 		reviewDiffController = new AbortController();
 		try {
 			const content =
-				reviewKind() === "wiki"
-					? await loadWikiDiffOrEmpty(
+				reviewKind() === "setup"
+					? await loadSetupDiffOrEmpty(
 							repo,
 							workflowId,
 							file,
 							reviewDiffController.signal,
 						)
-					: reviewKind() === "plan"
-						? profile === "test"
-							? demoPlanContent(file.newPath)
-							: await loadArtifactOrEmpty(
-									data().state,
-									file.newPath,
-									reviewDiffController.signal,
-								)
-						: profile === "test"
-							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-							: await loadLocalDiffOrEmpty(
-									repo,
-									workflowId,
-									file,
-									reviewDiffController.signal,
-								);
+					: reviewKind() === "wiki"
+						? await loadWikiDiffOrEmpty(
+								repo,
+								workflowId,
+								file,
+								reviewDiffController.signal,
+							)
+						: reviewKind() === "plan"
+							? profile === "test"
+								? demoPlanContent(file.newPath)
+								: await loadArtifactOrEmpty(
+										data().state,
+										file.newPath,
+										reviewDiffController.signal,
+									)
+							: profile === "test"
+								? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
+								: await loadLocalDiffOrEmpty(
+										repo,
+										workflowId,
+										file,
+										reviewDiffController.signal,
+									);
 			setReviewChangeIndex(next);
 			setReviewVisualMode(false);
 			setReviewVisualStart(0);
@@ -937,14 +999,18 @@ export function createReviewFeature(
 	};
 	const finishPlanReview = async () => {
 		if (busy()) return;
-		const wikiReview = requiredUserAction()?.key === "wiki-review";
+		const actionKey = requiredUserAction()?.key;
+		const setupReview = actionKey === "setup-review";
+		const wikiReview = actionKey === "wiki-review";
 		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
 		setBusy(true);
 		setReviewFinishing(true);
 		setReviewFinishingMessage(
-			wikiReview
-				? "Saving comments and dispatching wiki review…"
-				: "Saving comments and dispatching plan review…",
+			setupReview
+				? "Saving comments and dispatching environment approval…"
+				: wikiReview
+					? "Saving comments and dispatching wiki review…"
+					: "Saving comments and dispatching plan review…",
 		);
 		try {
 			// Yield one macrotask so the progress overlay paints before any
@@ -957,9 +1023,11 @@ export function createReviewFeature(
 				await runWorkflow(
 					comments.length
 						? "review-comments"
-						: wikiReview
-							? "approve-wiki"
-							: "approve-plan",
+						: setupReview
+							? "approve-setup"
+							: wikiReview
+								? "approve-wiki"
+								: "approve-plan",
 					repo,
 					workflowId,
 					data().state.revision,
@@ -1059,7 +1127,11 @@ export function createReviewFeature(
 		) {
 			openPlanRejection();
 		} else if (key === "f" && !event.shift) {
-			if (reviewKind() === "plan" || reviewKind() === "wiki")
+			if (
+				reviewKind() === "plan" ||
+				reviewKind() === "wiki" ||
+				reviewKind() === "setup"
+			)
 				void finishPlanReview();
 			else void finishDeveloperReview();
 		} else if (
@@ -1079,7 +1151,11 @@ export function createReviewFeature(
 			reviewView() === "files" &&
 			(key === "enter" || key === "return")
 		) {
-			if (reviewKind() === "plan" || reviewKind() === "wiki")
+			if (
+				reviewKind() === "plan" ||
+				reviewKind() === "wiki" ||
+				reviewKind() === "setup"
+			)
 				openPlanMarkdown();
 			else openReviewDiff();
 		} else if (reviewView() === "diff" && key === "v") {

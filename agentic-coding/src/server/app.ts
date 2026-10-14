@@ -222,6 +222,9 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					resolveOwnerCheckout: options.integrations.resolveOwnerCheckout,
 				}
 			: {}),
+		...(options.integrations?.resolveOwnerOverlay
+			? { resolveOwnerOverlay: options.integrations.resolveOwnerOverlay }
+			: {}),
 	});
 
 	const browserDeps = (): BrowserRouteDeps => ({
@@ -256,6 +259,9 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			: {}),
 		...(options.integrations?.resolveOwnerCheckout
 			? { resolveOwnerCheckout: options.integrations.resolveOwnerCheckout }
+			: {}),
+		...(options.integrations?.resolveOwnerOverlay
+			? { resolveOwnerOverlay: options.integrations.resolveOwnerOverlay }
 			: {}),
 	});
 

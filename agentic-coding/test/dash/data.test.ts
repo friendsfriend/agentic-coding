@@ -787,6 +787,37 @@ test("required user actions keep plan review and approval inside modal flow", ()
 	).toBeUndefined();
 });
 
+test("the environment-setup approval gate opens its own review popup", () => {
+	const action = requiredUserActionFor("setup.approval", false, [], undefined, [
+		{
+			id: "approve-setup",
+			label: "Approve and promote",
+			confirmation: "confirm",
+		},
+		{
+			id: "review-comments",
+			label: "Request changes",
+			confirmation: "confirm",
+		},
+	]);
+	expect(action?.key).toBe("setup-review");
+	expect(action?.title).toContain("Environment approval");
+	// Trigger-only, exactly like the plan and wiki reviews: the key opens the
+	// draft-diff popup, so the generic modal has no selectable items.
+	expect(action?.items).toEqual([]);
+	// The engine's own action list decides availability: without the approval
+	// action the gate renders nothing rather than an undispatchable prompt.
+	expect(
+		requiredUserActionFor("setup.approval", false, [], undefined, [
+			{
+				id: "review-comments",
+				label: "Request changes",
+				confirmation: "confirm",
+			},
+		]),
+	).toBeUndefined();
+});
+
 test("required user actions expose developer review and completion commands", () => {
 	const review = requiredUserActionFor(
 		"developer-review",

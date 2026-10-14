@@ -144,6 +144,18 @@ const FAMILY_TRAITS: Readonly<Record<string, WorkflowFamilyTraits>> = {
 		startRequirements: ["base-commit"],
 		openspecVerifier: true,
 	},
+	// The env-setup family drafts environment definitions for one app and
+	// promotes them only after approval: it produces no OpenSpec artifact, no
+	// plan, and no delivery, and it runs against the repository checkout (the
+	// drafts live outside it, so the checkout must start clean).
+	"env-setup": {
+		changeArtifacts: "none",
+		planning: "none",
+		changeIdentity: "none",
+		delivery: "none",
+		startRequirements: ["clean-tree"],
+		openspecVerifier: false,
+	},
 };
 
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
@@ -215,6 +227,14 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	"wiki-comments": {
 		targetKind: "wiki",
 		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	// The env-setup family writes drafts under the configuration directory and
+	// never a worktree, so it runs against the repository checkout itself — the
+	// same contract the proposal-only flows and `wiki` declare.
+	"env-setup": {
+		targetKind: "repository",
+		checkoutRequired: true,
 		requiresReadOnlyResearcher: false,
 	},
 	research: {

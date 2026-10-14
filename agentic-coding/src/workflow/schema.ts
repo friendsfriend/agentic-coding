@@ -508,6 +508,25 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),
 		selectedPreset: Schema.optionalWith(boundedText(4096), { exact: true }),
+		/** The configured app an `env-setup` workflow drafts definitions for. */
+		app: Schema.optionalWith(boundedText(4096), { exact: true }),
+		/** The env-setup drafts root, pinned at start like `wikiRoot`. */
+		setupDraftsDir: Schema.optionalWith(text(4096), { exact: true }),
+		/** The promotion journal's per-run authentication secret. */
+		setupPromotionSecret: Schema.optionalWith(text(256), { exact: true }),
+		/** The write guard's armed baselines, keyed by the run identity. */
+		setupGuardBaselines: Schema.optionalWith(
+			Schema.Record({
+				key: text(256),
+				value: Schema.Struct({
+					configDir: text(4096),
+					checkoutDir: text(4096),
+					configFingerprint: text(4096),
+					checkoutFingerprint: text(4096),
+				}),
+			}),
+			{ exact: true },
+		),
 		/** Who started the workflow; absent on snapshots that predate the
 		 * attribution, which read as `developer`. */
 		startedBy: Schema.optionalWith(

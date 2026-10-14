@@ -174,7 +174,14 @@ export type EffectKind =
 	| "workspace.close"
 	| "workspace.cleanup"
 	/** Owner-bound release of every app one workflow holds (close and delete). */
-	| "environment.teardown";
+	| "environment.teardown"
+	/** The env-setup family's write guard: baseline before the first author
+	 * turn, comparison at every author handoff. */
+	| "environment.setup-guard"
+	/** Structural validation of the env-setup drafts plus a real start. */
+	| "environment.validate"
+	/** Atomic promotion of approved env-setup drafts, with rollback. */
+	| "environment.promote";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
 	| JsonPrimitive
@@ -261,6 +268,28 @@ export interface WorkflowMetadata {
 	wikiRoot?: string;
 	/** The preset selected for this workflow, when one was explicitly chosen. */
 	selectedPreset?: string;
+	/** The configured app an `env-setup` workflow drafts definitions for. */
+	app?: string;
+	/** The drafts root an `env-setup` workflow writes to and validates from,
+	 * pinned at start like `wikiRoot`. */
+	setupDraftsDir?: string;
+	/** The `env-setup` write guard's armed baselines, keyed by the run identity
+	 * (`createdAt`, pinned at start). Engine-owned state on purpose: a baseline
+	 * the authored files could reach would be a verdict the monitored process
+	 * can forge. One entry per workflow. */
+	/** The per-run secret the promotion's journal is authenticated with. Pinned
+	 * at start and engine-owned, so a plan an agent hand-writes under `.backups`
+	 * can never be adopted as this workflow's own. */
+	setupPromotionSecret?: string;
+	setupGuardBaselines?: Record<
+		string,
+		{
+			configDir: string;
+			checkoutDir: string;
+			configFingerprint: string;
+			checkoutFingerprint: string;
+		}
+	>;
 	/** Stage-gate policies resolved once at start and pinned for the run's
 	 * lifetime, so a mid-run config edit cannot change what may be skipped.
 	 * Absent on snapshots started before the gates existed; the mandatory

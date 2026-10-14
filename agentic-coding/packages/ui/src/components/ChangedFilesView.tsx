@@ -9,7 +9,12 @@ import type { ChangeRequestChange } from "../types";
 import { SelectionMarker } from "./SelectionMarker.tsx";
 
 /** The shell's review rows carry a finding count the env type does not declare. */
-type ReviewChange = ChangeRequestChange & { review_finding_count?: number };
+type ReviewChange = ChangeRequestChange & {
+	review_finding_count?: number;
+	/** The change replaces a shared definition and therefore affects every app
+	 * (the env-setup approval gate's flag). */
+	affects_all_apps?: boolean;
+};
 
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
@@ -85,8 +90,19 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 		hostChromeLines(LAYOUT_CHROME_LINES) + 2 + 2 + 1 + 1;
 
 	const pathWidth = () =>
-		(props.findings ? "52%" : "58%") as `${number}%` | number;
+		(props.findings
+			? hasShared()
+				? "42%"
+				: "52%"
+			: hasShared()
+				? "50%"
+				: "58%") as `${number}%` | number;
 	const statsWidth = () => "25%" as `${number}%` | number;
+	/** The approval gate's shared-infrastructure flag gets its own column: a
+	 * suffix on the path is truncated away in the list, which is the surface the
+	 * developer scans. */
+	const hasShared = () =>
+		props.changes.some((change) => change.affects_all_apps === true);
 
 	const content = (
 		<>
@@ -169,6 +185,15 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 							attributes={TextAttributes.BOLD}
 						/>
 					</box>
+					<Show when={hasShared()}>
+						<box style={{ width: "10%" }}>
+							<HighlightedText
+								text="Shared"
+								highlight="primary"
+								attributes={TextAttributes.BOLD}
+							/>
+						</box>
+					</Show>
 					<Show when={props.findings}>
 						<box style={{ width: "12%" }}>
 							<HighlightedText
@@ -250,6 +275,19 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 											</span>
 										</text>
 									</box>
+									<Show when={hasShared()}>
+										<box style={{ width: "10%" }}>
+											<text
+												fg={
+													change.affects_all_apps
+														? uiColors.warning
+														: highlightColor("secondary")
+												}
+											>
+												{change.affects_all_apps ? "shared" : ""}
+											</text>
+										</box>
+									</Show>
 									<Show when={props.findings}>
 										<box style={{ width: "12%" }}>
 											<text

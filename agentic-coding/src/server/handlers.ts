@@ -237,6 +237,7 @@ export function startWorkflow(
 		preset: request.preset,
 		sourceBranch: request.sourceBranch,
 		targetBranch: request.targetBranch,
+		app: request.app,
 	});
 }
 

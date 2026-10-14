@@ -546,3 +546,96 @@ describe("workflow store service", () => {
 		}
 	});
 });
+
+// Round-3 recheck of the persisted-vocabulary finding
+// (`add-environment-setup-workflow`): a pending row whose kind this build does
+// not know parks the workflow that owns it instead of stopping the store's
+// drain, so the rest of the store keeps running.
+describe("an outbox row of an unknown kind", () => {
+	test("parks its own workflow and leaves the rest of the store draining", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-unknown-kind-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			// The engine's own store lives inside the checkout: a second start in
+			// the same repository needs it ignored, exactly as a real repository has
+			// it (`.gitignore`).
+			fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow\n");
+			execFileSync("git", ["add", ".gitignore"], { cwd: repo });
+			execFileSync("git", ["commit", "-qm", "ignore engine state"], {
+				cwd: repo,
+			});
+			const profile = {
+				name: "test",
+				runtime: "pi-durable" as const,
+				executable: "sh",
+				tools: [],
+				extensions: [],
+				readOnly: false,
+				capabilities: ["prompt", "run-environment", "observe"] as const,
+				digest: "profile",
+			};
+			const engine = new WorkflowEngine(registerBuiltins());
+			for (const workflowId of ["unknown-kind", "healthy"]) {
+				engine.start({
+					repo,
+					workflowId,
+					definitionId: "no-openspec",
+					metadata: {
+						branch: "main",
+						baseBranch: "main",
+						baseCommit: "base",
+						task: "task",
+					},
+					routing: {
+						defaultProfile: "test",
+						routes: [
+							{ stepId: "core.implementation", role: "worker", profile },
+						],
+						diversity: [],
+					},
+				});
+			}
+			const db = new Database(canonicalStorePath(repo));
+			try {
+				db.query(
+					"INSERT INTO workflow_outbox (id, workflow_id, revision, kind, idempotency_key, payload_json, status, attempts, max_attempts) VALUES (?,?,?,?,?,?,?,?,?)",
+				).run(
+					"row-unknown",
+					"unknown-kind",
+					1,
+					"environment.from-a-newer-build",
+					"unknown:1",
+					"{}",
+					"pending",
+					0,
+					4,
+				);
+			} finally {
+				db.close();
+			}
+			// The claim does not throw: the unknown row is failed with a diagnostic
+			// and its workflow parks, while another workflow's work still claims.
+			const claimed = engine.claimEffects(repo, 8);
+			expect(claimed.length).toBeGreaterThan(0);
+			const parked = engine.status(repo, "unknown-kind");
+			expect(parked.status).toBe("attention-required");
+			expect(engine.status(repo, "healthy").status).toBe("active");
+			// The row records why, so the developer sees the diagnostic rather than
+			// a store that stopped draining.
+			const rows = new Database(canonicalStorePath(repo));
+			try {
+				const row = rows
+					.query(
+						"SELECT status, last_error FROM workflow_outbox WHERE id='row-unknown'",
+					)
+					.get() as { status: string; last_error: string } | null;
+				expect(row?.status).toBe("failed");
+				expect(row?.last_error).toContain("not supported by this build");
+			} finally {
+				rows.close();
+			}
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+});
