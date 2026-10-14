@@ -464,6 +464,180 @@ describe("buildAgentSessionView", () => {
 		]);
 	});
 
+	test("shows a streamed tool call as an in-progress block before it is committed", () => {
+		// The provider names the tool and streams its arguments long before the
+		// call is committed or executed: a big `write` must not look like a stuck
+		// agent while its content is still arriving.
+		const blocks = buildAgentSessionView({
+			entries: [],
+			docs: {
+				"pi.live": {
+					generation: {
+						attempt: 1,
+						message: {
+							content: [
+								{
+									type: "toolCall",
+									id: "c1",
+									name: "write",
+									arguments: { path: "src/a.ts", content: "a\nb\nc" },
+								},
+							],
+						},
+					},
+				},
+			},
+		});
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0]).toMatchObject({
+			kind: "tool",
+			pending: true,
+			live: true,
+			tone: "warning",
+			icon: "←",
+			text: "write path=src/a.ts",
+			tool: "write",
+			toolCall: {
+				name: "write",
+				args: { path: "src/a.ts", content: "a\nb\nc" },
+				callId: "c1",
+			},
+		});
+	});
+
+	test("names a streamed tool call whose arguments have not parsed yet", () => {
+		// A provider that streams the raw JSON payload: the name is known first,
+		// the arguments only once the payload parses.
+		const blocks = buildAgentSessionView({
+			entries: [],
+			docs: {
+				"pi.live": {
+					generation: {
+						attempt: 1,
+						message: {
+							content: [
+								{
+									type: "toolCall",
+									id: "c1",
+									name: "read",
+									arguments: '{"path":"src/a.ts"',
+								},
+							],
+						},
+					},
+				},
+			},
+		});
+		expect(blocks[0]).toMatchObject({
+			kind: "tool",
+			text: "read",
+			pending: true,
+			toolCall: { name: "read", args: {}, callId: "c1" },
+		});
+	});
+
+	test("marks the committed call running instead of adding a second row", () => {
+		// Two parallel calls of the same tool: the live slots carry the call id, so
+		// each one upgrades the call it started rather than pairing by name.
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "toolUse",
+							content: [
+								{
+									type: "toolCall",
+									id: "a",
+									name: "read",
+									arguments: { path: "a.ts" },
+								},
+								{
+									type: "toolCall",
+									id: "b",
+									name: "read",
+									arguments: { path: "b.ts" },
+								},
+							],
+						},
+					],
+				},
+			],
+			docs: {
+				"pi.live": {
+					tools: [
+						{
+							callId: "b",
+							name: "read",
+							status: "running",
+							output: "contents of b",
+						},
+						{
+							callId: "a",
+							name: "read",
+							status: "running",
+							output: "contents of a",
+						},
+					],
+				},
+			},
+		});
+		expect(blocks).toHaveLength(2);
+		expect(
+			blocks.map((block) => ({
+				callId: block.toolCall?.callId,
+				path: block.toolCall?.args.path,
+				pending: block.pending,
+				detail: block.detail,
+			})),
+		).toEqual([
+			{
+				callId: "a",
+				path: "a.ts",
+				pending: true,
+				detail: ["contents of a"],
+			},
+			{
+				callId: "b",
+				path: "b.ts",
+				pending: true,
+				detail: ["contents of b"],
+			},
+		]);
+	});
+
+	test("marks a tool call an aborted generation never ran", () => {
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "aborted",
+							content: [
+								{
+									type: "toolCall",
+									id: "c1",
+									name: "read",
+									arguments: { path: "a.ts" },
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(blocks[0]).toMatchObject({
+			kind: "tool",
+			tone: "warning",
+			aborted: true,
+			text: "read path=a.ts",
+		});
+	});
+
 	test("surfaces a failed generation as a red error block", () => {
 		const blocks = buildAgentSessionView({
 			entries: [
@@ -784,5 +958,38 @@ describe("reuseAgentSessionBlocks", () => {
 		const first = [result("success")];
 		const reused = reuseAgentSessionBlocks(first, [result("error")]);
 		expect(reused[0]).not.toBe(first[0]);
+	});
+
+	test("replaces a streaming call's block as its arguments grow", () => {
+		// The in-progress block is keyed by its arguments: a `write` names its path
+		// once and then streams the content, so the block must not be reused from
+		// the previous frame while the content is still arriving (its size line is
+		// what the reader watches).
+		const frame = (content: string) =>
+			buildAgentSessionView({
+				entries: [],
+				docs: {
+					"pi.live": {
+						generation: {
+							attempt: 1,
+							message: {
+								content: [
+									{
+										type: "toolCall",
+										id: "c1",
+										name: "write",
+										arguments: { path: "src/a.ts", content },
+									},
+								],
+							},
+						},
+					},
+				},
+			});
+		const first = frame("a");
+		const next = frame("a\nb");
+		expect(reuseAgentSessionBlocks(first, next)[0]).toBe(next[0]);
+		// A frame that changed nothing at all still reuses the array.
+		expect(reuseAgentSessionBlocks(next, frame("a\nb"))).toBe(next);
 	});
 });

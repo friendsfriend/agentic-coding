@@ -1183,6 +1183,196 @@ test("tool rows get a view from their call and result, and a generic default", a
 	}
 });
 
+test("a running tool shows an in-progress row that its result replaces in place", async () => {
+	const running: AgentSessionBlock[] = [
+		{
+			id: "t1",
+			kind: "tool",
+			text: "bash command=npm test",
+			tone: "warning",
+			icon: "$",
+			tool: "bash",
+			pending: true,
+			live: true,
+			toolCall: { name: "bash", args: { command: "npm test" }, callId: "c1" },
+			detail: ["compiling…"],
+		},
+	];
+	const finished: AgentSessionBlock[] = [
+		{
+			id: "t1",
+			kind: "tool",
+			text: "bash: all good",
+			tone: "success",
+			icon: "✓",
+			tool: "bash",
+			pending: false,
+			toolCall: {
+				name: "bash",
+				args: { command: "npm test" },
+				callId: "c1",
+				result: { lines: ["all good"], isError: false, notes: [] },
+			},
+			detail: ["all good"],
+		},
+	];
+	const [blocks, setBlocks] =
+		createSignal<readonly AgentSessionBlock[]>(running);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 80, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const pending = t.captureCharFrame();
+		// The call's subject appears as soon as it starts, with the running marker.
+		expect(pending).toContain("$ npm test");
+		expect(pending).toContain("running…");
+		// No result section yet: the answer is not on screen while the call runs.
+		expect(pending).not.toContain("all good");
+		expect(pending.match(/npm test/g)).toHaveLength(1);
+
+		// The output produced so far is there when the row is expanded, like a
+		// finished result's own rows.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("compiling…");
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+
+		// The result lands at the same position: one row, now the finished view.
+		setBlocks(finished);
+		await t.renderOnce();
+		await t.renderOnce();
+		const done = t.captureCharFrame();
+		expect(done).not.toContain("running…");
+		expect(done).toContain("▸ $ npm test");
+		expect(done).toContain("1 lines");
+		expect(done.match(/npm test/g)).toHaveLength(1);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a streaming write stays one compact line instead of its content", async () => {
+	const content = Array.from(
+		{ length: 400 },
+		(_, index) => `line ${index}`,
+	).join("\n");
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[
+					{
+						id: "w1",
+						kind: "tool",
+						text: "write path=src/a.ts",
+						tone: "warning",
+						icon: "←",
+						tool: "write",
+						pending: true,
+						live: true,
+						toolCall: {
+							name: "write",
+							args: { path: "src/a.ts", content },
+							callId: "c1",
+						},
+					},
+				]}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("← src/a.ts");
+		expect(frame).toContain("400 lines");
+		expect(frame).toContain("writing…");
+		// The content itself is measured, never laid out: only its size is shown.
+		expect(frame).not.toContain("line 399");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a tool call aborted before it ran is marked aborted", async () => {
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[
+					{
+						id: "t1",
+						kind: "tool",
+						text: "read path=src/a.ts",
+						tone: "warning",
+						icon: "→",
+						tool: "read",
+						aborted: true,
+						toolCall: {
+							name: "read",
+							args: { path: "src/a.ts" },
+							callId: "c1",
+						},
+					},
+				]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 80, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("→ src/a.ts");
+		expect(frame).toContain("aborted");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a codemode row lists its calls, and its script and output fold away", async () => {
 	const block: AgentSessionBlock = {
 		id: "c1",

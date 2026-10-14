@@ -69,6 +69,9 @@ export interface AgentSessionBlock {
 	readonly icon?: string;
 	/** A tool call still in flight: rendered in the warning color. */
 	readonly pending?: boolean;
+	/** A tool call whose generation was aborted before it ever ran: the call
+	 * keeps its own row, marked as aborted rather than looking finished. */
+	readonly aborted?: boolean;
 	/** The block is still being produced (an in-flight generation or a running
 	 * tool): its text grows with every watch frame. */
 	readonly live?: boolean;
@@ -249,6 +252,22 @@ function argsSummary(value: unknown): string {
 	return oneLine(`${key}=${String(entry)}`, 160);
 }
 
+/** A tool call's arguments as the transcript reads them: the record the source
+ * recorded, or the JSON string a streaming partial may still be carrying (a
+ * provider that streams the raw payload before it parses). */
+function toolArgs(value: unknown): Readonly<Record<string, unknown>> {
+	if (isRecord(value)) return value;
+	if (typeof value === "string") {
+		try {
+			const parsed: unknown = JSON.parse(value);
+			if (isRecord(parsed)) return parsed;
+		} catch {
+			/* a partial JSON string mid-stream: the name is known, the arguments are not */
+		}
+	}
+	return {};
+}
+
 /** Render one committed transcript entry as zero or more blocks. Unknown entry
  * kinds are skipped rather than guessed at. */
 function entryBlocks(
@@ -310,16 +329,21 @@ function entryBlocks(
 						typeof block.name === "string"
 					) {
 						const args = argsSummary(block.arguments);
+						// An aborted generation commits its partial with `stopReason:
+						// "aborted"`: the call never ran, so its row is marked rather than
+						// read as a finished call.
+						const aborted = message.stopReason === "aborted";
 						blocks.push({
 							id,
 							kind: "tool",
 							text: `${block.name}${args ? ` ${args}` : ""}`,
-							tone: "muted",
+							tone: aborted ? "warning" : "muted",
 							icon: toolIcon(block.name),
 							tool: block.name,
+							...(aborted ? { aborted: true } : {}),
 							toolCall: {
 								name: block.name,
-								args: isRecord(block.arguments) ? block.arguments : {},
+								args: toolArgs(block.arguments),
 								...(typeof block.id === "string" ? { callId: block.id } : {}),
 							},
 						});
@@ -414,6 +438,42 @@ function entryBlocks(
 	}
 }
 
+/** The tool calls a still-streaming generation has emitted. The partial carries
+ * each call as pi-ai builds it: the name as soon as the provider names the tool
+ * and the arguments as they parse, so a `write` shows its path and the size of
+ * the content it is producing long before the call is committed and executed.
+ * Each call carries its id, so it pairs with the committed call and the running
+ * slot that replace it instead of appearing beside them. */
+function partialToolBlocks(
+	message: Readonly<Record<string, unknown>>,
+): AgentSessionBlock[] {
+	if (!Array.isArray(message.content)) return [];
+	const blocks: AgentSessionBlock[] = [];
+	for (const block of message.content) {
+		if (!isRecord(block) || block.type !== "toolCall") continue;
+		if (typeof block.name !== "string") continue;
+		const name = block.name;
+		const args = toolArgs(block.arguments);
+		const summary = argsSummary(args);
+		blocks.push({
+			id: `live:toolcall:${blocks.length}`,
+			live: true,
+			kind: "tool",
+			text: summary ? `${name} ${summary}` : name,
+			tone: "warning",
+			icon: toolIcon(name),
+			pending: true,
+			tool: name,
+			toolCall: {
+				name,
+				args,
+				...(typeof block.id === "string" ? { callId: block.id } : {}),
+			},
+		});
+	}
+	return blocks;
+}
+
 /** The live in-flight generation and running tools, which the committed
  * transcript does not carry yet. */
 function liveBlocks(
@@ -425,6 +485,10 @@ function liveBlocks(
 	for (const [index, slot] of tools.entries()) {
 		if (!isRecord(slot) || slot.status === "done") continue;
 		const name = typeof slot.name === "string" ? slot.name : "tool";
+		// The call's own id pairs this running slot with the assistant call it
+		// started, so its row is the committed one upgraded to running (in place)
+		// instead of a second row beside it.
+		const callId = typeof slot.callId === "string" ? slot.callId : undefined;
 		const detail = outputLines(slot.output);
 		blocks.push({
 			id: `live:tool:${index}`,
@@ -435,6 +499,7 @@ function liveBlocks(
 			icon: toolIcon(name),
 			pending: true,
 			tool: name,
+			toolCall: { name, args: {}, ...(callId === undefined ? {} : { callId }) },
 			...(detail.length > 0 ? { detail } : {}),
 		});
 	}
@@ -484,6 +549,7 @@ function liveBlocks(
 					text,
 					tone: "base",
 				});
+			blocks.push(...partialToolBlocks(message));
 		}
 	}
 	const compactions = Array.isArray(live.compactions) ? live.compactions : [];
@@ -522,12 +588,32 @@ function blockKey(block: AgentSessionBlock): string {
 		block.text,
 		block.icon ?? "",
 		block.pending ? "pending" : "",
+		block.aborted ? "aborted" : "",
 		block.live ? "live" : "",
 		block.tool ?? "",
 		block.request ?? "",
 		block.durationMs ?? "",
+		liveArgsKey(block),
 		(block.detail ?? []).join("\u0000"),
 	].join("\u0001");
+}
+
+/** A live block's argument identity. A streaming call's arguments change every
+ * frame while its own text does not (a `write` names its path once and then
+ * streams the content), so without this the reuse pass would hand the previous
+ * frame's block back and the in-progress row would freeze. A long string is
+ * reduced to its length so the identity costs no more than the frame it
+ * describes. */
+function liveArgsKey(block: AgentSessionBlock): string {
+	if (block.live !== true || block.toolCall === undefined) return "";
+	return Object.entries(block.toolCall.args)
+		.map(([key, value]) => {
+			if (typeof value === "string") return `${key}#${value.length}`;
+			if (value === null || typeof value !== "object")
+				return `${key}=${String(value)}`;
+			return `${key}~${(JSON.stringify(value) ?? "").length}`;
+		})
+		.join(",");
 }
 
 /**
@@ -594,7 +680,7 @@ function mergeToolLifecycle(
 			const key = callKey(block);
 			const list = open.get(key);
 			if (block.pending && list !== undefined && list.length > 0) {
-				const index = list[0];
+				const index = list.shift();
 				if (index !== undefined) {
 					const call = out[index];
 					if (call) {

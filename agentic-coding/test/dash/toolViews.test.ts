@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionToolCall } from "../../src/tui/dash/agent-session.ts";
-import { toolView } from "../../src/tui/dash/ui/tool-views.ts";
+import { toolPendingView, toolView } from "../../src/tui/dash/ui/tool-views.ts";
 
 const call = (
 	name: string,
@@ -731,5 +731,145 @@ describe("toolView", () => {
 	test("keeps the generic row for a tool without a view", () => {
 		expect(toolView(call("grep", { pattern: "x" }))).toBeUndefined();
 		expect(toolView(call("agent_ask", { role: "planner" }))).toBeUndefined();
+	});
+});
+
+describe("toolPendingView", () => {
+	test("read names the file it is reading", () => {
+		expect(
+			toolPendingView(
+				call("read", { path: "src/a.ts", offset: 40, limit: 80 }),
+			),
+		).toEqual({
+			icon: "→",
+			summary: "src/a.ts",
+			hint: "from 40 · 80 lines · reading…",
+		});
+	});
+
+	test("write measures the content instead of rendering it", () => {
+		const view = toolPendingView(
+			call("write", { path: "src/a.ts", content: "a\nb\nc" }),
+		);
+		expect(view).toEqual({
+			icon: "←",
+			summary: "src/a.ts",
+			hint: "3 lines · 5 chars · writing…",
+		});
+		// A write whose content has not arrived yet still names the file.
+		expect(toolPendingView(call("write", { path: "src/a.ts" }))).toEqual({
+			icon: "←",
+			summary: "src/a.ts",
+			hint: "writing…",
+		});
+	});
+
+	test("edit counts the edits it is applying", () => {
+		expect(
+			toolPendingView(call("edit", { path: "src/a.ts", edits: [{}, {}] })).hint,
+		).toBe("2 edits · editing…");
+	});
+
+	test("bash names the command it is running", () => {
+		expect(toolPendingView(call("bash", { command: "npm test" }))).toEqual({
+			icon: "$",
+			summary: "npm test",
+			hint: "running…",
+		});
+	});
+
+	test("codemode names the script's first line and its size", () => {
+		expect(
+			toolPendingView(
+				call("codemode", { code: "// @options: {}\nconst x = 1;" }),
+			),
+		).toEqual({
+			icon: "λ",
+			summary: "const x = 1;",
+			hint: "2 lines · running…",
+		});
+	});
+
+	test("ask_jev names the questions it is judging", () => {
+		const view = toolPendingView(
+			call("ask_jev", {
+				questions: { leak: { type: "noul", instructions: "?" } },
+				paths: ["src/a.ts"],
+			}),
+		);
+		expect(view.summary).toBe("leak");
+		expect(view.hint).toBe("files (1) · judging…");
+	});
+
+	test("a dialogue question keeps the question it is asking", () => {
+		const view = toolPendingView(
+			call("developer_question", {
+				description: "Pick one",
+				options: [{ title: "A" }],
+			}),
+		);
+		expect(view.summary).toBe("Pick one");
+		expect(view.hint).toBe("asking · developer");
+		// A dialogue call with no question keeps the generic pending row.
+		expect(
+			toolPendingView(call("agent_ask", { role: "planner" })),
+		).toMatchObject({ summary: "planner", hint: "running…" });
+	});
+
+	test("search and fetch name their pattern and address", () => {
+		expect(
+			toolPendingView(call("grep", { pattern: "foo", path: "src" })),
+		).toEqual({ icon: "✱", summary: "foo", hint: "in src · searching…" });
+		expect(toolPendingView(call("webfetch", { url: "https://x" }))).toEqual({
+			icon: "%",
+			summary: "https://x",
+			hint: "fetching…",
+		});
+	});
+
+	test("an unknown tool keeps its glyph, name, and running marker", () => {
+		expect(toolPendingView(call("frobnicate"))).toEqual({
+			icon: "•",
+			summary: "frobnicate",
+			hint: "running…",
+		});
+		expect(toolPendingView(call("frobnicate", { target: "thing" }))).toEqual({
+			icon: "•",
+			summary: "thing",
+			hint: "running…",
+		});
+	});
+
+	test("attaches the output a running tool has produced as its rows", () => {
+		expect(
+			toolPendingView(call("bash", { command: "npm test" }), [
+				"compiling…",
+				"2 files",
+			]).rows,
+		).toEqual([
+			{ text: "compiling…", tone: "muted" },
+			{ text: "2 files", tone: "muted" },
+		]);
+	});
+
+	test("every tool gets an in-progress view", () => {
+		for (const name of [
+			"read",
+			"write",
+			"edit",
+			"bash",
+			"grep",
+			"find",
+			"ls",
+			"webfetch",
+			"websearch",
+			"codemode",
+			"ask_jev",
+			"developer_question",
+			"agent_ask",
+			"frobnicate",
+		]) {
+			expect(toolPendingView(call(name)).hint).toContain("…");
+		}
 	});
 });

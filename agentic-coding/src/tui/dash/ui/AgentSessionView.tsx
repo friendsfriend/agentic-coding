@@ -66,6 +66,7 @@ import { PromptPulse } from "./PromptPulse.tsx";
 import {
 	type ToolViewRow,
 	type ToolViewSection,
+	toolPendingView,
 	toolView,
 } from "./tool-views.ts";
 
@@ -499,9 +500,13 @@ function Block(props: {
 			</box>
 		);
 	// The tools a run leans on get a view built from their call and result; a
-	// tool without one keeps the generic row below (icon, name, argument).
+	// tool without one keeps the generic row below (icon, name, argument). A call
+	// still in flight takes the in-progress view instead, so its row appears the
+	// moment its name is known and only the arguments (not the answer) are shown.
 	const tool = props.block.toolCall
-		? toolView(props.block.toolCall)
+		? props.block.pending === true
+			? toolPendingView(props.block.toolCall, props.block.detail ?? [])
+			: toolView(props.block.toolCall)
 		: undefined;
 	if (tool && (props.block.kind === "tool" || props.block.kind === "result")) {
 		const expandable = () =>
@@ -536,7 +541,10 @@ function Block(props: {
 							truncate
 						>
 							{tool.summary}
-							{props.block.pending ? " …" : ""}
+							{/* The in-progress view carries its own running marker as the hint; a
+							    pending row without one (the generic fallback) still gets the
+							    ellipsis. */}
+							{props.block.pending && tool.hint === undefined ? " …" : ""}
 						</text>
 						<Show when={tool.hint}>
 							{(hint) => (
@@ -544,6 +552,11 @@ function Block(props: {
 									{` ${hint()}`}
 								</text>
 							)}
+						</Show>
+						<Show when={props.block.aborted}>
+							<text fg={uiColors.error} flexShrink={0}>
+								{" aborted"}
+							</text>
 						</Show>
 					</box>
 					<Show when={props.expanded}>

@@ -972,3 +972,225 @@ export function toolView(call: AgentSessionToolCall): ToolView | undefined {
 			return undefined;
 	}
 }
+
+// ---- In-progress views ------------------------------------------------
+//
+// A call is rendered from the moment its tool is named — while its arguments
+// still stream and while it runs — and replaced in place by the finished view
+// above when the result lands. The in-progress form is deliberately compact:
+// it names the call's subject and reports the size of what is arriving rather
+// than rendering the content itself, so a `write` of a large file stays one
+// line on every watch frame instead of re-laying out the whole file.
+
+/** The trailing marker every in-progress view carries, so a running call is
+ * never read as a finished one. */
+const RUNNING = "running…";
+
+/** The call's own facts plus the marker that says its answer has not landed. */
+function progressHint(
+	marker: string,
+	parts: readonly (string | undefined)[] = [],
+): string {
+	return [...parts, marker]
+		.filter((part): part is string => part !== undefined)
+		.join(" · ");
+}
+
+/** `340 chars`, `1.4K chars`: a size in the compact form a streaming argument's
+ * own summary uses. */
+function formatChars(count: number): string {
+	if (count >= 10_000) return `${Math.round(count / 1000)}K chars`;
+	if (count >= 1_000) return `${(count / 1000).toFixed(1)}K chars`;
+	return `${count} chars`;
+}
+
+/** The number of lines in `text`, counted without building the lines array: a
+ * streaming `write` re-measures its content on every frame. */
+function countLines(text: string): number {
+	if (text.length === 0) return 0;
+	let lines = 1;
+	for (let index = 0; index < text.length; index++)
+		if (text.charCodeAt(index) === 10) lines++;
+	return lines;
+}
+
+/** `read` in progress: the file it is reading, before a line comes back. */
+function readPendingView(call: AgentSessionToolCall): ToolView {
+	const path = stringArg(call.args, "path") ?? call.name;
+	const limit = numberArg(call.args, "limit");
+	const offset = numberArg(call.args, "offset");
+	return {
+		icon: "→",
+		summary: path,
+		hint: progressHint("reading…", [
+			offset !== undefined ? `from ${offset}` : undefined,
+			limit !== undefined ? `${limit} lines` : undefined,
+		]),
+	};
+}
+
+/** `write` in progress: the file and how much content has arrived. The content
+ * itself stays out of the rows — a streaming write is measured, not rendered. */
+function writePendingView(call: AgentSessionToolCall): ToolView {
+	const path = stringArg(call.args, "path") ?? call.name;
+	const content = stringArg(call.args, "content");
+	return {
+		icon: "←",
+		summary: path,
+		hint: progressHint(
+			"writing…",
+			content === undefined || content.length === 0
+				? []
+				: [`${countLines(content)} lines`, formatChars(content.length)],
+		),
+	};
+}
+
+/** `edit` in progress: the file and how many edits it is applying. */
+function editPendingView(call: AgentSessionToolCall): ToolView {
+	const path = stringArg(call.args, "path") ?? call.name;
+	const count = Array.isArray(call.args.edits) ? call.args.edits.length : 0;
+	return {
+		icon: "←",
+		summary: path,
+		hint: progressHint("editing…", [
+			count > 0 ? `${count} edit${count === 1 ? "" : "s"}` : undefined,
+		]),
+	};
+}
+
+/** `bash` in progress: the command, before any output comes back. */
+function bashPendingView(call: AgentSessionToolCall): ToolView {
+	return {
+		icon: "$",
+		summary: stringArg(call.args, "command") ?? call.name,
+		hint: progressHint("running…"),
+	};
+}
+
+/** `codemode` in progress: the script's first meaningful line and its size. */
+function codemodePendingView(call: AgentSessionToolCall): ToolView {
+	const code = stringArg(call.args, "code");
+	return {
+		icon: "λ",
+		summary: code ? oneLine(codemodeHeadline(code), 160) : call.name,
+		hint: progressHint("running…", [
+			code ? `${countLines(code)} lines` : undefined,
+		]),
+	};
+}
+
+/** `ask_jev` in progress: what it is judging, before a verdict comes back. */
+function jevPendingView(call: AgentSessionToolCall): ToolView {
+	const questions = jevQuestions(call.args.questions);
+	const sources = jevSources(call.args);
+	return {
+		icon: "◆",
+		summary:
+			questions.length > 0
+				? questions.map((question) => question.id).join(", ")
+				: call.name,
+		hint: progressHint("judging…", [sources]),
+	};
+}
+
+/** `grep`/`glob`/`find`/`ls`: the pattern it is searching for. */
+function searchPendingView(call: AgentSessionToolCall): ToolView {
+	const pattern =
+		stringArg(call.args, "pattern") ??
+		stringArg(call.args, "query") ??
+		call.name;
+	const where = stringArg(call.args, "path") ?? stringArg(call.args, "glob");
+	return {
+		icon: toolIcon(call.name),
+		summary: pattern,
+		hint: progressHint("searching…", [
+			where === undefined ? undefined : `in ${where}`,
+		]),
+	};
+}
+
+/** `webfetch`/`websearch`: the address or query it is asking for. */
+function webPendingView(call: AgentSessionToolCall): ToolView {
+	const subject =
+		stringArg(call.args, "url") ?? stringArg(call.args, "query") ?? call.name;
+	return {
+		icon: toolIcon(call.name),
+		summary: subject,
+		hint: progressHint("fetching…"),
+	};
+}
+
+/** The fallback for a tool without a view of its own: its glyph, its name or
+ * first argument, and the running marker. */
+function genericPendingView(call: AgentSessionToolCall): ToolView {
+	const primary = primaryArg(call.args);
+	return {
+		icon: toolIcon(call.name),
+		summary: primary === undefined ? call.name : oneLine(primary, 160),
+		hint: progressHint(RUNNING),
+	};
+}
+
+/** Attach the output a running tool has already produced as the row's own rows,
+ * shown when the reader expands it — the same fold a finished result uses, so a
+ * view opened mid-call still shows what the call has printed so far. */
+function withRunningOutput(
+	view: ToolView,
+	output: readonly string[],
+): ToolView {
+	if (output.length === 0) return view;
+	return {
+		...view,
+		rows: output.map((text) => ({ text, tone: "muted" as const })),
+	};
+}
+
+/** The in-progress view of a tool call: rendered from the call's arguments the
+ * moment the tool's name is known (a streamed tool call or a running tool
+ * slot), with a running marker and no answer yet — its rows, when it has any,
+ * are the output the call has produced so far. Every tool gets one — the
+ * specialized ones name their own subject, the rest keep the generic row — so
+ * a call in flight is never invisible. The finished view (`toolView`) replaces
+ * it in place when the result lands. */
+export function toolPendingView(
+	call: AgentSessionToolCall,
+	output: readonly string[] = [],
+): ToolView {
+	switch (call.name) {
+		case "read":
+			return withRunningOutput(readPendingView(call), output);
+		case "edit":
+			return withRunningOutput(editPendingView(call), output);
+		case "write":
+			return withRunningOutput(writePendingView(call), output);
+		case "bash":
+		case "shell":
+		case "execute":
+			return withRunningOutput(bashPendingView(call), output);
+		case "codemode":
+			return withRunningOutput(codemodePendingView(call), output);
+		case "ask_jev":
+			return withRunningOutput(jevPendingView(call), output);
+		case "developer_question":
+		case "agent_ask":
+			return withRunningOutput(
+				dialogueView(call) ?? genericPendingView(call),
+				output,
+			);
+		case "grep":
+		case "glob":
+		case "find":
+		case "ls":
+		case "search":
+			return withRunningOutput(searchPendingView(call), output);
+		case "webfetch":
+		case "websearch":
+		case "web_fetch":
+		case "web_search":
+		case "fetch":
+			return withRunningOutput(webPendingView(call), output);
+		default:
+			return withRunningOutput(genericPendingView(call), output);
+	}
+}
