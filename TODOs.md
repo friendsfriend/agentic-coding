@@ -21,7 +21,7 @@ Big ones:
  │ 9  │ add-environment-setup-workflow          │ 1, 3, 8                            │ Agents write the run definitions, including the OTel wiring from 8.                                                             │ done
  │ —  │ Operational: one env-setup pass per app │ 9                                  │ Adds OTel wiring and a mock-auth profile to your existing apps, so the debug tools return useful data.                          │
  │ 10 │ add-debug-workflow                      │ 3, 5, 7, 8                         │ The debug role and the standalone debug workflow with your review step.                                                         │ done
- │ 11 │ add-debug-subagent-requests             │ 10                                 │ Other agents can hand work to the debug agent asynchronously.                                                                   │
+ │ 11 │ add-debug-subagent-requests             │ 10                                 │ Other agents can hand work to the debug agent asynchronously.                                                                   │ done
  │ 12 │ add-kubernetes-run-replicas             │ 1                                  │ Optional kind runs with multiple replicas. It only needs 1, so it can go anywhere after it; it's last because it matters least. │
 
 Small ones: 
