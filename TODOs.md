@@ -38,3 +38,4 @@ Small ones:
 * Make the server be deployable on a server
   * User handling
   * Repository handling
+* Dont let workflows go to blocked when I use abort once -> Is never recontinued when I send a new message.
