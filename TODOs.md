@@ -26,3 +26,8 @@ Small ones:
   * User handling
   * Repository handling
 * Dont let workflows go to blocked when I use abort once -> Is never recontinued when I send a new message.
+* Multi Repository workflows for cross app testing
+
+
+* Environment setup:
+  * The worker agent for the env setup has no environment tools. That is not good. The agent should be able to list the available environments and test the created environment
