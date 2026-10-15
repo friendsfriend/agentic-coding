@@ -11,7 +11,7 @@ with the developer; so do developer questions from workflow agents.
 | --- | --- | --- |
 | Page | `src/tui/orchestrator/OrchestratorView.tsx` | The `orchestrator` route body: the shared `AgentSessionView` transcript, the `orchestrator.view` keymap field (`session` / `picker`), and `/new`. |
 | Host bootstrap | `src/tui/orchestrator/session.ts` | One host under `<config root>/orchestrator/agent-host/` started with `agent host --orchestrator`, the active session name (`session.json`), the run env with the orchestrator capability, and the configured model. |
-| Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_steps`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `validate_blueprint`, `start_workflow` (built-in type or blueprint), `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
+| Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_steps`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `validate_blueprint`, `start_workflow` (built-in type or blueprint, plus the `app` an `env-setup` workflow drafts for), `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
 | Capability | `src/server/auth.ts` `orchestratorTokenFor` | HMAC of the instance token. The server authenticates it as the `orchestrator` principal. |
 | Policy | `src/server/orchestrator-policy.ts` | Route allowlist, action allowlist, human-review step set. Enforced in `src/server/app.ts` before any operation runs. |
 | Model setting | `[agents.orchestrator] { model, thinking, monitor, limits }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation) edits `model`/`thinking`/`monitor`; `limits` is file-only and shown read-only. `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
@@ -38,6 +38,18 @@ inserted by the server, so the catalog never lists them.
   `metadata.blueprint = { label, rationale, digest }` on the workflow, and
   starts it through the same path a built-in type uses. The definition is
   content-addressed, so a retried start reuses the stored row.
+
+### Starting an `env-setup` workflow
+
+The `env-setup` family drafts the environment definitions of exactly one
+configured application, so its start carries an `app`: the ident
+`list_projects` reports for an `app` entry (`library` entries cannot be run and
+are never a subject). `start_workflow` forwards it in the start request exactly
+as the CLI's `workflow start --app IDENT` does, and
+`POST /api/v1/workflow/start` validates it against the configured applications
+before anything is written — an ident no configuration knows is answered
+`400 app-not-configured`, and the family's own start guard refuses an
+`env-setup` request without one.
 
 Because the compiler's human-review invariant applies to every blueprint, a
 shape that routes around plan approval, developer review or wiki approval is

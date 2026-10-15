@@ -240,6 +240,7 @@ const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk w
 - Default to acting yourself, immediately, with read/write/edit/bash: looking something up (files, directories, OpenSpec changes/specs, git state, logs, anything readable) is never a reason to start a workflow or to ask the developer first — read it and answer. The same goes for a small, well-understood edit you can make and verify yourself. Only reach for a workflow when the request needs planning, a developer/plan/findings/wiki review, several coordinated agent steps, or a durable record of the work; say briefly why a workflow fits when you choose one.
 - A workflow target (\`repo\`) is any existing path on this machine, not only one from list_projects or list_workflows; list_projects/list_workflows are for discovering what is already configured and running, not a restriction on where you may work or look.
 - Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows.
+- An \`env-setup\` workflow authors the environment definitions (run/build/test/infrastructure) for one configured application: name that application's ident as \`app\` when you start one — list_projects reports them with their \`kind\` (\`app\` runs, \`library\` does not). Every other type refuses an \`app\`.
 - Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
@@ -281,7 +282,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_projects",
 				description:
-					"List the configured projects (applications and libraries) workflows can run in: name, ident, repository path, OpenSpec support and availability.",
+					"List the configured projects (applications and libraries) workflows can run in: name, ident, repository path, kind (`app` runs, `library` does not), OpenSpec support and availability. An `app` entry's ident is the `app` value an `env-setup` workflow takes.",
 				replay: "safe",
 				parameters: Type.Object({}),
 				execute: run(async (_args, env) => {
@@ -291,6 +292,7 @@ export function createOrchestratorExtension(
 					return projects.map((project) => ({
 						ident: project.ident,
 						name: project.name,
+						kind: project.kind,
 						repository: project.path,
 						openspec: project.openspec,
 						available: project.available,
@@ -441,7 +443,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "start_workflow",
 				description:
-					"Start a workflow from exactly one of a built-in workflow type or a validated blueprint. Human reviews (plan approval, developer review, wiki review) are always kept for workflows you start.",
+					"Start a workflow from exactly one of a built-in workflow type or a validated blueprint. Human reviews (plan approval, developer review, wiki review) are always kept for workflows you start. An `env-setup` workflow drafts environment definitions for one configured application, so it requires `app` (the ident list_projects reports); the server refuses an `app` no configuration knows.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -470,6 +472,14 @@ export function createOrchestratorExtension(
 					preset: Type.Optional(
 						Type.String({ description: "Agent preset name" }),
 					),
+					app: Type.Optional(
+						Type.String({
+							minLength: 1,
+							maxLength: 128,
+							description:
+								"The configured application an `env-setup` workflow drafts definitions for, by the ident list_projects reports (`kind` `app`). Required for workflowType `env-setup`; refused for every other type.",
+						}),
+					),
 					ticket: Type.Optional(Type.String({ maxLength: 128 })),
 					sourceBranch: Type.Optional(
 						Type.String({
@@ -491,6 +501,7 @@ export function createOrchestratorExtension(
 							task: string;
 							mode?: "worktree" | "checkout";
 							preset?: string;
+							app?: string;
 							ticket?: string;
 							sourceBranch?: string;
 							targetBranch?: string;
@@ -514,6 +525,11 @@ export function createOrchestratorExtension(
 							task: args.task,
 							mode: args.mode ?? "worktree",
 							...(args.preset ? { preset: args.preset } : {}),
+							// The env-setup family's subject: the configured app whose environment
+							// definitions the workflow drafts. The server validates it against the
+							// configured applications, so an unknown ident is refused before a
+							// workflow exists.
+							...(args.app ? { app: args.app } : {}),
 							...(args.ticket ? { ticket: args.ticket } : {}),
 							...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
 							...(args.targetBranch ? { targetBranch: args.targetBranch } : {}),

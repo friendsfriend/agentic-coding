@@ -20,6 +20,7 @@ import {
 	ORCHESTRATOR_URL_ENV,
 } from "../src/agent-host/orchestrator-env.ts";
 import { orchestratorTokenFor } from "../src/server/auth.ts";
+import type { EnvironmentAuthority } from "../src/server/environment/private-api.ts";
 import type { ServerOperations } from "../src/server/handlers.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
 
@@ -356,6 +357,108 @@ describe("orchestrator host mode", () => {
 			expect(
 				(seen.start as { workflowType?: unknown }).workflowType,
 			).toBeUndefined();
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
+
+	test("starts an env-setup workflow with the configured app the server validates", async () => {
+		// The env-setup family drafts the environment of one configured
+		// application, and the orchestrator has no other way to name it: the tool
+		// forwards `app`, and the server refuses an ident no configuration knows
+		// before a workflow exists (fix-env-tools-for-all-runs).
+		const starts: unknown[] = [];
+		const server = await startWorkflowServer({
+			operations: {
+				start: async (request: unknown) => {
+					starts.push(request);
+					return "Workflow started: wf-env-setup";
+				},
+				loadAgents: () => ({
+					agents: {},
+					orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
+					orchestratorLimitsConfigured: false,
+				}),
+				orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
+			} as unknown as ServerOperations,
+			environment: {
+				manager: {
+					getAppByIdent: (ident: string) =>
+						ident === "shop" ? { ident: "shop" } : undefined,
+					getApps: () => [{ ident: "shop" }],
+				},
+			} as unknown as EnvironmentAuthority,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-env-setup-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			const start = (overrides: Record<string, unknown>) => ({
+				repo: "/repos/shop",
+				workflowId: "wf-env-setup",
+				workflowType: "env-setup",
+				task: "draft the environment definitions",
+				mode: "checkout",
+				app: "shop",
+				...overrides,
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("start_workflow", start({}))], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[
+						fauxToolCall(
+							"start_workflow",
+							start({ workflowId: "wf-unknown-app", app: "nope" }),
+						),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"set up the shop environment",
+				"req-setup",
+			);
+			const results = await waitForResults(host, "orchestrator", 2);
+			expect(results[0]).toContain("wf-env-setup");
+			expect(starts[0]).toMatchObject({
+				repo: "/repos/shop",
+				workflowId: "wf-env-setup",
+				workflowType: "env-setup",
+				mode: "checkout",
+				app: "shop",
+			});
+			// The unknown app never reaches the operation: the transport answers first.
+			expect(results[1]).toContain("is not a configured application");
+			expect(starts).toHaveLength(1);
 		} finally {
 			await host.shutdown();
 			await server.stop();

@@ -190,7 +190,7 @@ function payloadOf(result: CallResult): Record<string, unknown> {
 }
 
 describe("the agent environment routes are owner-scoped", () => {
-	test("the list reports holders, waiters and the app's targets", async () => {
+	test("the list reports holders, waiters, the app's targets and the configured infrastructure", async () => {
 		const controller = controllerDouble({
 			slots: [
 				{
@@ -207,6 +207,12 @@ describe("the agent environment routes are owner-scoped", () => {
 				instances: controller.instance,
 				apps: appsDouble([appOf("shop", "/repos/shop")]),
 				registry: registryDouble(),
+				// An env-setup author has to see the infrastructure a drafted app
+				// depends on, not only the apps.
+				infraServices: () => [
+					{ ident: "shop-db", type: "postgres" },
+					{ ident: "shop-cache" },
+				],
 			},
 			"GET",
 			"/api/v1/agent-env/list",
@@ -214,6 +220,10 @@ describe("the agent environment routes are owner-scoped", () => {
 		expect(result.status).toBe(200);
 		const value = payloadOf(result);
 		expect(value.owner).toBe(OWNER);
+		expect(value.infrastructure).toEqual([
+			{ ident: "shop-db", type: "postgres" },
+			{ ident: "shop-cache", type: null },
+		]);
 		const apps = value.apps as Array<Record<string, unknown>>;
 		expect(apps).toHaveLength(1);
 		expect(apps[0]).toMatchObject({

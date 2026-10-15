@@ -205,6 +205,15 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		...(options.environment?.manager
 			? { apps: options.environment.manager }
 			: {}),
+		// The `env_list` listing names the configured infrastructure too: an
+		// env-setup author sees the services its drafted app depends on, not only
+		// the apps (fix-env-tools-for-all-runs).
+		...(options.environment?.manager
+			? {
+					infraServices: () =>
+						options.environment?.manager.getInfraServices() ?? [],
+				}
+			: {}),
 		...(options.integrations?.instances
 			? { instances: options.integrations.instances }
 			: {}),
@@ -534,6 +543,23 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				"/api/v1/workflow/start",
 				await readJsonBody(request),
 			);
+			// An `env-setup` workflow drafts the environment definitions of one
+			// *configured* application, and the orchestrator has to be told which one
+			// (fix-env-tools-for-all-runs): an ident no configuration knows is refused
+			// here, before a workflow exists, instead of failing later in the start
+			// guard. A server with no environment authority cannot check, so it does
+			// not pretend to.
+			const requestedApp = decoded.app?.trim();
+			if (
+				requestedApp &&
+				options.environment &&
+				!options.environment.manager.getAppByIdent(requestedApp)
+			)
+				return errorResponse(
+					400,
+					"app-not-configured",
+					`app ${JSON.stringify(requestedApp)} is not a configured application`,
+				);
 			// The orchestrator's launch ceiling is counted immediately before the
 			// start and refused with its own code, so the session cannot talk its
 			// way past it. Operator starts are never limited or counted.

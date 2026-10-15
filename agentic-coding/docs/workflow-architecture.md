@@ -1021,6 +1021,44 @@ model validation at workflow start accepts a built-in provider's model on
 shape alone rather than enumerating pi-ai's full catalog (a locally configured
 custom provider's models are still validated exactly).
 
+### The environment capability handoff (fix-env-tools-for-all-runs)
+
+Every durable run receives `AGENTIC_ENV_URL` and `AGENTIC_ENV_TOKEN` in its run
+environment (`agent-host/environment-capability.ts`): the base URL of the
+unified server plus the capability `environmentTokenFor` derives for
+`workflow:<id>`, which the owner-scoped `/api/v1/agent-env/*` surface verifies.
+The `env_*`, `browser_*` and debug tools all present it, so a run whose run
+environment lacks it has no environment, browser or debug tools at all.
+
+The endpoint has two sources, in this order:
+
+1. the **in-process publication** (`publishEnvironmentServer`) the unified
+   server's composition root makes — the engine and the server are one process
+   when the shell or a headless `agentic-coding server` drains;
+2. the **discovery record**, `environment-server.json` under the configuration
+   root, written by `startWorkflowServer` when it was told which configuration
+   it serves (`mode 0600`, replaced atomically, removed on shutdown).
+
+`ensureEnvironmentServer()` resolves the record once per process, and every
+launch path calls it before it builds a run environment (the effect runner's
+`agent.launch` and its redelivery path; the CLI's `workflow start`, so the
+health an env-setup start records is decided from the real answer). This is what
+makes the capability reach runs launched by a process that is **not** the
+server: a `workflow start`/`workflow drain` in another repository, the
+per-repository `agent host`, or a workflow of a repository other than the one
+the shell was started for. A record is trusted only when it is loopback, mode
+0600, names a live pid, and the server at that URL answers `/api/health` with
+the recorded instance — so a stale or foreign record is ignored instead of
+handing a run an endpoint it cannot use. A discovered endpoint is used only for
+the configuration root this process resolves, so no run is ever handed a
+capability derived for a configuration it does not serve.
+
+When no server is reachable anywhere, today's behaviour is kept and made
+visible: the rendered assignment states that the environment tools are
+unavailable, and starting an `env-setup` workflow (which cannot do its job
+without them) records the same in the workflow's own `attention` health instead
+of launching an author run that can neither start nor build what it drafts.
+
 ### Developer-question lifecycle (asynchronous)
 
 The tool call is **not** the answer-delivery channel

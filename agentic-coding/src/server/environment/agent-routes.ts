@@ -97,6 +97,10 @@ export interface AgentEnvironmentDeps {
 	readonly configDir: string;
 	readonly instances?: EnvironmentInstanceController;
 	readonly apps?: Pick<EnvironmentManager, "getApps" | "getAppByIdent">;
+	/** The configured infrastructure services `env_list` reports and `env_logs`
+	 * reads: an env-setup author has to see the infrastructure a drafted app
+	 * depends on, not only the apps (fix-env-tools-for-all-runs). */
+	readonly infraServices?: () => readonly InfraLogSource[];
 	readonly registry?: ActionRegistry;
 	/** The action engine, for `env_build`/`env_test`. */
 	readonly actions?: ActionRouteContext;
@@ -455,6 +459,13 @@ async function environmentList(
 					targets: targets.get(app.ident) ?? [],
 				};
 			}),
+		// The configured infrastructure is part of what this run may act on (it
+		// has no slot of its own): `env_logs` takes an infra service ident, so
+		// the listing names the services and how each one is reached.
+		infrastructure: (deps.infraServices?.() ?? []).map((service) => ({
+			ident: service.ident,
+			type: service.type ?? null,
+		})),
 	};
 }
 

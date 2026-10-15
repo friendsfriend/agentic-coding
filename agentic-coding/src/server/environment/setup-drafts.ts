@@ -45,6 +45,14 @@ export interface SetupFingerprintExclusion {
 	readonly backupDir?: string;
 	/** The promotion's lock file. */
 	readonly lockPath?: string;
+	/** The running unified server's discovery record
+	 * (`server/environment-discovery.ts`). It lives in the configuration root
+	 * because that is what it hands off, and it appears, changes or disappears
+	 * when a server starts, restarts or stops — which is not a change to the
+	 * developer's configuration, so the guard excludes it by path like this
+	 * workflow's own bookkeeping rather than parking a correct workflow in
+	 * `attention-required`. */
+	readonly serverRecordPath?: string;
 }
 
 /** Bound on one fingerprinted tree, so a pathological config cannot make the
@@ -483,6 +491,11 @@ export function fingerprintDirectory(
 				`${path.resolve(value)}.promoted`,
 			]),
 	);
+	// The server's discovery record is a handoff, never configuration: it is
+	// excluded as the one path it is, so a static lookalike still counts as a
+	// change.
+	if (exclusion.serverRecordPath)
+		excluded.add(path.resolve(exclusion.serverRecordPath));
 	let visited = 0;
 	const walk = (dir: string, relative: string, depth: number): void => {
 		if (depth > FINGERPRINT_MAX_DEPTH || visited > FINGERPRINT_MAX_ENTRIES)

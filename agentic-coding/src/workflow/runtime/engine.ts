@@ -19,6 +19,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
+import { environmentToolsAvailable } from "../../agent-host/environment-capability.ts";
 import { resolveConfigRoot } from "../../config-root.ts";
 import {
 	decodeCommand,
@@ -218,6 +219,26 @@ const TERMINAL_STATUSES = new Set([
 	"attention-required",
 ]);
 const MAX_DIGEST_ATTRIBUTE = 16;
+
+/** What an `env-setup` workflow's health says when no server is reachable for
+ * its runs: the author step cannot start, build or test the definitions it
+ * drafts without the environment tools, so the workflow is visible as degraded
+ * from its first revision instead of launching an author run that cannot do its
+ * job (fix-env-tools-for-all-runs). */
+const SETUP_NO_ENVIRONMENT_TOOLS =
+	"env-setup has no environment capability: no agentic-coding server was reachable, so the author run cannot start, build or test the definitions it drafts. Start the server (the TUI, or `agentic-coding server`) and restart the workflow when the drafts must be validated by a real run.";
+
+/** Whether this definition's runs are the `env-setup` author's and the launching
+ * process has no environment capability to give them. Resolved when the
+ * workflow starts, which is why the CLI resolves discovery before it starts
+ * one. */
+function setupWithoutEnvironment(
+	definition: CompiledWorkflowDefinition,
+	workflowId: string,
+): boolean {
+	if (!definition.steps.includes("setup.author")) return false;
+	return !environmentToolsAvailable(workflowId);
+}
 
 /** Bounded error class: the store's own bounded-error text, never raw text from
  * an untrusted provider. */
@@ -1519,7 +1540,9 @@ export class WorkflowEngine {
 			routing: input.routing,
 			evidence: [],
 			loopCounts: {},
-			attention: [],
+			attention: setupWithoutEnvironment(definition, workflowId)
+				? [SETUP_NO_ENVIRONMENT_TOOLS]
+				: [],
 			developerDialogue: [],
 			...(wikiOnly || (researchTarget && repository)
 				? {

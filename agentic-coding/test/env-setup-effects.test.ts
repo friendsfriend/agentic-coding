@@ -17,6 +17,10 @@ import {
 	setupDraftsDir,
 } from "../src/server/environment/setup-drafts.ts";
 import { setupPromotionLockPath } from "../src/server/environment/setup-promote.ts";
+import {
+	publishEnvironmentDiscovery,
+	removeEnvironmentDiscovery,
+} from "../src/server/environment-discovery.ts";
 import { definitionVersionForFamilyTraits } from "../src/workflow/definitions/manifest-policy.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
@@ -282,6 +286,42 @@ describe("the write guard effect", () => {
 				path.join(draftsDir, "apps", "compose", "shop-compose.yml"),
 				DRAFT_COMPOSE,
 			);
+			const ok = await runHandler<{ ok?: boolean }>(
+				engine,
+				repoRoot,
+				GUARD,
+				subject(configDir, repoRoot, draftsDir, "check"),
+			);
+			expect(ok.ok).toBe(true);
+		});
+	});
+
+	test("a server starting, restarting or stopping during the turn writes no live configuration", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await armBaseline(
+				engine,
+				repoRoot,
+				subject(configDir, repoRoot, draftsDir, "baseline"),
+			);
+			// The unified server publishes and later removes its discovery record in
+			// the configuration root. That handoff is not a change to the
+			// developer's configuration, so the guard must not park a correct
+			// workflow (fix-env-tools-for-all-runs).
+			publishEnvironmentDiscovery(configDir, {
+				url: "http://127.0.0.1:4051",
+				token: "instance-token-a",
+				instance: "instance-a",
+				pid: process.pid,
+			});
+			publishEnvironmentDiscovery(configDir, {
+				url: "http://127.0.0.1:4051",
+				token: "instance-token-b",
+				instance: "instance-b",
+				pid: process.pid,
+			});
+			removeEnvironmentDiscovery(configDir, "instance-token-b");
 			const ok = await runHandler<{ ok?: boolean }>(
 				engine,
 				repoRoot,

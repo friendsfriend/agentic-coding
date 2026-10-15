@@ -16,6 +16,7 @@ import {
 	setupGuardViolations,
 	unifiedDiff,
 } from "../src/server/environment/setup-drafts.ts";
+import { environmentDiscoveryFile } from "../src/server/environment-discovery.ts";
 
 function tempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -116,6 +117,8 @@ describe("write guard", () => {
 		draftsDir: setupDraftsDir(configDir, "wf-1"),
 		backupDir: setupBackupDir(configDir, "wf-1"),
 		lockPath: path.join(configDir, ".backups", "env-setup-promote.lock"),
+		// The one path the running server publishes its endpoint at.
+		serverRecordPath: environmentDiscoveryFile(configDir),
 	});
 
 	test("the fingerprint ignores exactly this workflow's own state", () => {
@@ -169,6 +172,29 @@ describe("write guard", () => {
 			"other\n",
 		);
 		expect(fingerprintDirectory(configDir, exclusion)).not.toBe(withTools);
+	});
+
+	test("the running server's discovery record is a handoff, not a configuration change", () => {
+		const configDir = tempDir("env-setup-guard-");
+		const exclusion = ownState(configDir);
+		const before = fingerprintDirectory(configDir, exclusion);
+		// A server starting, restarting (a new token) or stopping must never read
+		// as a write outside the drafts directory.
+		writeFile(
+			exclusion.serverRecordPath,
+			'{"version":1,"url":"http://127.0.0.1:4051","token":"a"}\n',
+		);
+		expect(fingerprintDirectory(configDir, exclusion)).toBe(before);
+		writeFile(
+			exclusion.serverRecordPath,
+			'{"version":1,"url":"http://127.0.0.1:4051","token":"b"}\n',
+		);
+		expect(fingerprintDirectory(configDir, exclusion)).toBe(before);
+		fs.rmSync(exclusion.serverRecordPath);
+		expect(fingerprintDirectory(configDir, exclusion)).toBe(before);
+		// Another file, whatever its name, is still a change to the configuration.
+		writeFile(path.join(configDir, "environment-server.backup.json"), "{}\n");
+		expect(fingerprintDirectory(configDir, exclusion)).not.toBe(before);
 	});
 
 	test("a large file is fingerprinted by content, never by mtime", () => {

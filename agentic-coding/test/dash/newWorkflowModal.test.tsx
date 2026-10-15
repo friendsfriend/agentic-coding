@@ -62,6 +62,7 @@ const BILLING: ProjectOption = {
 	path: "/managed/billing",
 	openspec: true,
 	ident: "billing",
+	kind: "app",
 	available: true,
 	availability: "available",
 };
@@ -71,6 +72,7 @@ const BUN_LIB: ProjectOption = {
 	path: "/managed/bun-lib-starter",
 	openspec: false,
 	ident: "bun-lib",
+	kind: "library",
 	available: false,
 	availability: "missing",
 	detail: "checkout is missing",
@@ -993,6 +995,7 @@ const OTHER_APP: ProjectOption = {
 	path: "/managed/other",
 	openspec: true,
 	ident: "other",
+	kind: "app",
 	available: true,
 	availability: "available",
 };

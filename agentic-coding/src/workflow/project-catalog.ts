@@ -16,7 +16,11 @@ import {
 	ProjectCatalogError,
 	getProjectCatalog as requestProjectCatalog,
 } from "@devenv/core/src/projects-client.ts";
-import type { CatalogProject, ProjectCatalog } from "@devenv/types";
+import type {
+	CatalogProject,
+	ProjectCatalog,
+	ProjectKind,
+} from "@devenv/types";
 import { isCompiledBinary } from "../self-exec.ts";
 
 export type { CatalogProject, ProjectCatalog };
@@ -270,6 +274,10 @@ export interface ProjectOption {
 	path: string;
 	openspec: boolean;
 	ident: string;
+	/** `app` or `library`: only an application can be run, so a caller that
+	 * needs a runnable target (an `env-setup` start, a slot) can tell the two
+	 * apart without a second read. */
+	kind: ProjectKind;
 	available: boolean;
 	availability: CatalogProject["availability"];
 	canonicalRoot?: string;
@@ -284,6 +292,7 @@ export function projectOptions(catalog: ProjectCatalog): ProjectOption[] {
 		path: project.activeCheckout ?? project.canonicalRoot ?? "",
 		openspec: project.capabilities.openspec,
 		ident: project.ident,
+		kind: project.kind,
 		available: project.available,
 		availability: project.availability,
 		canonicalRoot: project.canonicalRoot,

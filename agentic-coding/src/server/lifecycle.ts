@@ -24,6 +24,10 @@ import {
 import { CredentialRegistry } from "./credentials.ts";
 import { TraceIndex } from "./debug/trace-index.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
+import {
+	publishEnvironmentDiscovery,
+	removeEnvironmentDiscovery,
+} from "./environment-discovery.ts";
 import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
 import type { IntegrationServices } from "./integrations/routes.ts";
@@ -197,6 +201,27 @@ export async function startWorkflowServer(
 	// Every durable run of this server's workflows gets its own owner-scoped
 	// environment capability derived from this endpoint and token.
 	publishEnvironmentServer({ url, token: authority.token });
+	// The same endpoint is published under the configuration root, so a process
+	// that is *not* this server — the workflow CLI's drain, the per-repository
+	// agent host, a workflow of another repository — discovers it and derives the
+	// same capability for the runs it launches
+	// (fix-env-tools-for-all-runs). Two conditions stay tight: only a server that
+	// was told which configuration root it serves publishes one (a fixture server
+	// must not write into a configuration it does not own), and only one whose
+	// agent environment surface can actually answer does — a server without the
+	// environment authority or the slot controller would otherwise be discovered
+	// and give every run a capability whose every call fails.
+	const discoveryConfigDir =
+		options.configDir && options.environment && options.integrations?.instances
+			? options.configDir
+			: undefined;
+	if (discoveryConfigDir)
+		publishEnvironmentDiscovery(discoveryConfigDir, {
+			url,
+			token: authority.token,
+			instance: authority.instance,
+			pid: process.pid,
+		});
 	let stopped = false;
 	return {
 		url,
@@ -210,6 +235,8 @@ export async function startWorkflowServer(
 			if (stopped) return;
 			stopped = true;
 			clearEnvironmentServer(authority.token);
+			if (discoveryConfigDir)
+				removeEnvironmentDiscovery(discoveryConfigDir, authority.token);
 			stopIdleReaper?.();
 			credentials.cancelAll();
 			events.closeAll();

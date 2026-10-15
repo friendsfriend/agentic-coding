@@ -5,6 +5,7 @@
 // CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
 import fs from "node:fs";
 import path from "node:path";
+import { ensureEnvironmentServer } from "../../../agent-host/environment-capability.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import { prepareWorkflowStart } from "../../startup.ts";
@@ -26,6 +27,13 @@ export async function runStart(
 	workflowEngine: WorkflowEngine,
 	application?: App,
 ): Promise<void> {
+	// A CLI start is usually not the server process (the TUI or a headless
+	// `agentic-coding server` owns that). Resolve the running server from the
+	// configuration root before the workflow is created, so the pins and the
+	// degraded-environment health it records are decided from the real answer
+	// rather than from "no server in this process"
+	// (fix-env-tools-for-all-runs).
+	await ensureEnvironmentServer();
 	// `--type` is the documented alias for `--workflow`: both name the
 	// definition the started workflow pins, and a disagreeing pair is refused
 	// rather than silently resolved in either direction.

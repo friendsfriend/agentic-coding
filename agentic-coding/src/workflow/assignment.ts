@@ -1,11 +1,25 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ENVIRONMENT_URL_ENV } from "../agent-host/environment-capability.ts";
 import type { Assignment } from "../contracts/workflow.ts";
 import { AGENT_DEF_DIR } from "./paths.ts";
 import type { StepDefinition, WorkflowFamilyTraits } from "./registry.ts";
 
 export const MAX_ASSIGNMENT_BYTES = 96 * 1024;
+
+/** What a run is told when it has no environment capability at all: no server
+ * was running for its configuration, so the `env_*`, `browser_*` and debug tools
+ * are registered but cannot act. Stated up front, with what to do about it, so a
+ * run never reports a start, a build or a test it could not have made
+ * (fix-env-tools-for-all-runs). */
+const NO_ENVIRONMENT_TOOLS = [
+	"## Environment tools: unavailable",
+	"",
+	"No agentic-coding server was reachable for this run's configuration, so the environment tools (`env_list`, `env_start`, `env_status`, `env_stop`, `env_build`, `env_test`, `env_logs`), the browser tools (`browser_*`) and the debug tools (`otel_query`, `db_query`, `http_request`) have no capability: every call to them fails.",
+	"Do not work around this by shelling out to `docker`/`kubectl` yourself or by reasoning about a run you did not make: say in your handoff that the environment tools were unavailable, and hand off `blocked` when the task cannot be done without them (an `env-setup` workflow cannot start, build or test the definitions it drafts).",
+].join("\n");
+
 export interface RenderedAssignment {
 	prompt: string;
 	digest: string;
@@ -156,6 +170,11 @@ export function renderAssignment(
 		"",
 		`Interaction: ${assignment.interaction}`,
 		"",
+		// An env-setup run without its tools cannot do the job it was assigned;
+		// every other role reads it as the ordinary degraded case.
+		...(!assignment.environment?.[ENVIRONMENT_URL_ENV]
+			? [NO_ENVIRONMENT_TOOLS, ""]
+			: []),
 		"## Inputs",
 		...(assignment.inputs.length
 			? assignment.inputs.map((item) => `- ${item}`)

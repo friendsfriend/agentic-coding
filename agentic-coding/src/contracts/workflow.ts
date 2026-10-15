@@ -607,6 +607,13 @@ export interface Assignment {
 				/** The delegated debug request this run is investigating, on the run a
 				 * caller workflow started for it (add-debug-subagent-requests). */
 				HERDR_DEBUG_REQUEST_ID?: string;
+				/** The owner-scoped agent environment capability the `env_*`, `browser_*`
+				 * and debug tools call the server with
+				 * (`agent-host/environment-capability.ts`). Absent when the launching
+				 * process could not reach any server, which the rendered assignment states
+				 * outright. */
+				AGENTIC_ENV_URL?: string;
+				AGENTIC_ENV_TOKEN?: string;
 			}>
 	>;
 }

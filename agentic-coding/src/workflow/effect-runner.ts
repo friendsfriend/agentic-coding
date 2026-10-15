@@ -2,7 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
-import { environmentRunEnv } from "../agent-host/environment-capability.ts";
+import {
+	ensureEnvironmentServer,
+	environmentRunEnv,
+} from "../agent-host/environment-capability.ts";
 import { hostLayout } from "../agent-host/layout.ts";
 import { resolveConfigRoot } from "../config-root.ts";
 import {
@@ -40,6 +43,7 @@ import {
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
+import { environmentDiscoveryFile } from "../server/environment-discovery.ts";
 import { listEvidence } from "../server/evidence/store.ts";
 import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
@@ -1522,6 +1526,13 @@ export function agentEffectHandlers(
 						run.stepId === "core.triage"
 							? yield* p(() => changedFilesInAsync(snapshot))
 							: [];
+					// The run environment this launch writes carries the owner-scoped
+					// environment capability. A process that is not the server (the CLI's
+					// drain, the per-repository agent host) discovers a running one from the
+					// configuration root's handoff file here, before the assignment is built:
+					// otherwise the run would start with `env_*`, `browser_*` and the debug
+					// tools that cannot act (fix-env-tools-for-all-runs).
+					yield* p(() => ensureEnvironmentServer());
 					const assignment = debugRequest
 						? debugRequestAssignment(
 								run,
@@ -2276,6 +2287,12 @@ export function agentEffectHandlers(
 						...(draftsDir ? { draftsDir } : {}),
 						backupDir: setupBackupDir(configDir, workflowId),
 						lockPath: setupPromotionLockPath(configDir),
+						// The running server's discovery record lives in the configuration
+						// root and changes when a server starts, restarts or stops. That is
+						// not a write to the developer's configuration, so it never parks a
+						// correct workflow in `attention-required`
+						// (fix-env-tools-for-all-runs).
+						serverRecordPath: environmentDiscoveryFile(configDir),
 					};
 					const configFingerprint = yield* Effect.promise(() =>
 						Promise.resolve(fingerprintDirectory(configDir, exclusion)),
@@ -3694,6 +3711,10 @@ async function renderedAssignmentAsync(
 	token: string,
 	captureContent = false,
 ) {
+	// Re-rendering rewrites the run environment file, so the capability has to be
+	// resolved exactly as it is for a launch: a redelivery must not strip a live
+	// run of its `env_*`/`browser_*`/debug tools.
+	await ensureEnvironmentServer();
 	const run = engine.getRun(repo, runId);
 	const snapshot = engine.getSnapshot(repo, run.workflowId);
 	// A delegated debug side run renders the debug family's own step: its
