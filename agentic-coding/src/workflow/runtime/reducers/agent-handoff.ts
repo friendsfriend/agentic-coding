@@ -172,10 +172,17 @@ export function agentHandoff(
 			);
 	}
 	const completedAt = nowIso(now);
+	// A developer abort parks a run whose session is still alive, so it keeps
+	// its capability and its `blocked` status can be reopened by the
+	// developer's next message (`agent.resume`). Every handoff a run makes
+	// itself — a real blocker, a question asker, a completion, a failure —
+	// clears it, so an unrelated message can never clear that park.
+	const aborted = command.outcome === "blocked" && command.aborted === true;
 	db.query(
-		"UPDATE workflow_runs SET status=?, capability_hash='', output_digest=?, completed_at=? WHERE id=? AND status IN ('pending','working')",
+		"UPDATE workflow_runs SET status=?, capability_hash=?, output_digest=?, completed_at=? WHERE id=? AND status IN ('pending','working')",
 	).run(
 		command.outcome === "complete" ? "completed" : command.outcome,
+		aborted ? run.capabilityHash : "",
 		outputDigest ?? null,
 		completedAt,
 		run.id,
@@ -237,6 +244,10 @@ export function agentHandoff(
 	return {
 		type: "agent.handoff",
 		actor: { kind: "agent", runId: run.id, role: run.role },
-		data: { outcome: command.outcome, outputDigest },
+		data: {
+			outcome: command.outcome,
+			outputDigest,
+			...(!aborted ? {} : { aborted: true }),
+		},
 	};
 }

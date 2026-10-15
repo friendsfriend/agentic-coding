@@ -12,6 +12,7 @@ import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
 } from "../dash/agent-session.ts";
+import { submissionStateNote } from "../dash/agent-session.ts";
 import { agentSessionKeybindCatalog } from "../dash/keybinds.ts";
 import { notify } from "../dash/notifications.ts";
 import {
@@ -184,7 +185,14 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		void (async () => {
 			try {
 				const { client: host, current } = await client();
-				await host.submit(current.runId, text, crypto.randomUUID(), "steer");
+				const response = await host.submit(
+					current.runId,
+					text,
+					crypto.randomUUID(),
+					"steer",
+				);
+				const note = submissionStateNote(response.workflowState);
+				if (note) notify(note.text, note.tone);
 			} catch (error) {
 				notify(
 					`Could not send message: ${error instanceof Error ? error.message : String(error)}`,

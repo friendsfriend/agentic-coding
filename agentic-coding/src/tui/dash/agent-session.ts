@@ -10,6 +10,7 @@
 // transcript (user prompt block, indented assistant text, tool rows with a
 // two-cell icon gutter, muted result output, red error rows); the renderer in
 // `ui/AgentSessionView.tsx` owns the actual styling.
+import type { SubmitWorkflowState } from "../../agent-host/protocol.ts";
 
 /** Semantic color role of one block; the view maps it to a theme color. */
 export type AgentSessionTone =
@@ -1347,4 +1348,25 @@ export function renderAgentSessionSummary(value: unknown): string {
 	return buildAgentSessionView(value)
 		.flatMap((block) => [block.text, ...(block.detail ?? [])])
 		.join("\n");
+}
+
+/** What one prompt did to its run's workflow state, as the durable host
+ * reports it back on the submission, rendered as one notification line. A
+ * normal prompt reconciles nothing, so it shows no notice at all. */
+export function submissionStateNote(
+	state: SubmitWorkflowState | undefined,
+): { readonly text: string; readonly tone: "success" | "warning" } | undefined {
+	if (state === "resumed")
+		return { text: "Workflow resumed after the abort", tone: "success" };
+	if (state === "finished")
+		return {
+			text: "The run already handed off; the message went to its session",
+			tone: "warning",
+		};
+	if (state === "stale")
+		return {
+			text: "The run is no longer its step's current attempt; the message went to its session",
+			tone: "warning",
+		};
+	return undefined;
 }

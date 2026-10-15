@@ -344,6 +344,7 @@ export async function handoff(
 		outcome: request.outcome,
 		...(artifact ? { artifact } : {}),
 		...(request.message ? { message: request.message } : {}),
+		...(request.aborted ? { aborted: true } : {}),
 	} as never);
 	if (request.drain !== false) await drainEffects(engine, request.repo);
 	return getWorkflowView(request.repo, identity.workflowId);

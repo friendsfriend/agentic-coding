@@ -129,6 +129,9 @@ export const agentHandoffRequestSchema = Schema.Struct({
 	outcome: Schema.Literal("complete", "blocked", "failed"),
 	artifact: Schema.optional(Schema.String),
 	message: Schema.optional(Schema.String),
+	/** Records the handoff as a developer abort: the parked run keeps its
+	 * capability so the developer's next message can reopen it. */
+	aborted: Schema.optional(Schema.Boolean),
 	drain: Schema.optional(Schema.Boolean),
 });
 

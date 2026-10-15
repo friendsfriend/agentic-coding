@@ -196,7 +196,9 @@ describe("aborted run handoff", () => {
 			}),
 		);
 		const invoked = fs.readFileSync(shim.log, "utf8").trim();
-		expect(invoked).toContain("workflow handoff --outcome blocked --no-drain");
+		expect(invoked).toContain(
+			"workflow handoff --outcome blocked --aborted --no-drain",
+		);
 	});
 
 	test("does not spawn a handoff for a run without a managed environment", async () => {

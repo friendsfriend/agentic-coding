@@ -5,6 +5,7 @@
 // `KEY='value'` line per variable, and lives under the workflow's run directory
 // so it never outlives the run.
 import path from "node:path";
+import { wikiWorkflowDataRoot } from "./runtime/targets.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -16,6 +17,25 @@ export interface AgentRunEnvInput {
 	runDirectory?: string;
 	runId: string;
 	environment: Record<string, string>;
+}
+
+/** The launch environment file a run was started with. The writer below owns
+ * it, `identity.ts`'s token refresh reads it, and the engine's `agent.resume`
+ * reducer verifies a run's own launch token against it - so the one formula
+ * lives here. Repository workflows keep their run directory in the workflow's
+ * worktree; repository-independent ones (wiki review, research) keep it under
+ * the wiki data root. */
+export function agentRunEnvironmentFile(input: {
+	worktree: string;
+	definitionId: string;
+	workflowId: string;
+	runId: string;
+}): string {
+	const runDirectory =
+		input.definitionId === "wiki-comments" || input.definitionId === "research"
+			? path.join(wikiWorkflowDataRoot(), input.workflowId, "runs")
+			: path.join(input.worktree, ".herdr-workflow");
+	return path.join(runDirectory, "runtime-bin", input.runId, "run.env");
 }
 
 function shQuote(value: string): string {

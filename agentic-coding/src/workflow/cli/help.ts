@@ -3,7 +3,7 @@
 export function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  define           Validate and store a custom workflow definition manifest\n  status           Print observational workflow view\n  drain            Explicitly execute due workflow effects\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  ask              Ask a completed peer agent a bounded question\n  answer           Answer a peer agent question (peer session only)\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  sessions-report  Print a deterministic agent-session efficiency report (JSON)\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies\n",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  define           Validate and store a custom workflow definition manifest\n  status           Print observational workflow view\n  drain            Explicitly execute due workflow effects\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  resume-run       Reopen the caller run parked by a developer abort\n  question         Ask the developer a bounded question\n  ask              Ask a completed peer agent a bounded question\n  answer           Answer a peer agent question (peer session only)\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  sessions-report  Print a deterministic agent-session efficiency report (JSON)\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies\n",
 		);
 		return;
 	}
@@ -18,7 +18,9 @@ export function help(command?: string): void {
 		action:
 			"action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]",
 		handoff:
-			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]",
+			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT] [--aborted]",
+		"resume-run":
+			"resume-run (caller run environment only; reopens the run a developer abort parked, and reports the run's state when it is not reopenable)",
 		question:
 			"question [--description TEXT | --questions JSON] [--context TEXT] [--options JSON] [--timeout MILLISECONDS]",
 		ask: "ask --role ROLE --description TEXT [--context TEXT] [--options JSON] [--timeout MILLISECONDS]",

@@ -46,8 +46,10 @@ import {
 	FrameReader,
 	type HostRequest,
 	type HostResponse,
+	normalizeSubmitMode,
 	PROTOCOL_VERSION,
 	type RunStatus,
+	type SubmitWorkflowState,
 	type ToolPolicy,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
@@ -60,8 +62,10 @@ import {
 	createSearchExtension,
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
+	type ResumedRunState,
 	type RunContextLookup,
 	recordAbortedRunHandoff,
+	recordResumedRunHandoff,
 	withoutDebugRequestTools,
 } from "./tools.ts";
 
@@ -235,6 +239,19 @@ export class DurableHost {
 		Record<string, EntryTiming>
 	>();
 	private readonly watchers = new Map<net.Socket, Set<() => void>>();
+	/** Runs whose `blocked` handoff this host recorded as a developer abort.
+	 * The developer's next message reconciles the workflow state for exactly
+	 * these runs (`workflow resume-run`), so a fresh run never pays for a
+	 * reconcile it cannot need. */
+	private readonly abortedRuns = new Set<string>();
+	/** Runs whose workflow state this host generation already reconciled once.
+	 * A park can outlive the host that recorded it (a restart, or a park an
+	 * older build recorded without the abort marker), so the first prompt of
+	 * each run asks the engine once - the engine's durable state decides. */
+	private readonly reconciledRuns = new Set<string>();
+	/** Per-conversation chain of the mutating operations (`submit`, `abort`,
+	 * `stopRun`). See {@link serialized}. */
+	private readonly operations = new Map<string, Promise<void>>();
 	/** Context windows by model ref (see `modelWindow`). */
 	private readonly modelWindows = new Map<string, number | undefined>();
 	private server: net.Server | undefined;
@@ -777,19 +794,100 @@ export class DurableHost {
 		runId: string,
 		text: string,
 		requestId: string,
-		whenBusy: "steer" | "followUp" = "followUp",
-	): Promise<{ submissionId: string }> {
+		whenBusy = "followUp",
+	): Promise<{
+		submissionId: string;
+		workflowState?: SubmitWorkflowState;
+		workflowNote?: string;
+	}> {
 		const record = this.requireConversation(runId);
-		const conversation = await this.harness.conversation(
-			record.conversationId,
-			BACKGROUND_CONTEXT,
+		// The mode is normalized, never rejected: `steer`/`overwrite` interrupt
+		// the running turn, everything else queues behind it, and an idle
+		// conversation starts the next turn either way (normalizeSubmitMode).
+		const mode = normalizeSubmitMode(whenBusy);
+		return this.serialized(record, async () => {
+			// The workflow follows the session: a run parked by a developer abort is
+			// reopened before the message lands, and a run that already finished is
+			// reported instead of being reopened.
+			const reconciled = await this.reconcileRunState(runId, record);
+			const conversation = await this.harness.conversation(
+				record.conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
+			const submission = await conversation.submit(
+				{ type: "input", content: text, requestId, whenBusy: mode },
+				BACKGROUND_CONTEXT,
+			);
+			return {
+				submissionId: String(submission.id),
+				...(reconciled
+					? {
+							workflowState: reconciled.state,
+							...(reconciled.reason ? { workflowNote: reconciled.reason } : {}),
+						}
+					: {}),
+			};
+		});
+	}
+
+	/** Serialize one conversation's mutating operations. A prompt that arrives
+	 * while the developer's abort is still tearing its turn down used to race
+	 * pi-durable's `abort`, which withdraws a queued input: the prompt vanished
+	 * with no visible error. Chaining makes it land after the abort settled,
+	 * where it is queued (or starts the next turn) exactly like any other
+	 * prompt. */
+	private serialized<T>(
+		record: RunRecord,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		const key = String(record.conversationId);
+		const previous = this.operations.get(key) ?? Promise.resolve();
+		const next = previous.then(operation, operation);
+		const settled = next.then(
+			() => undefined,
+			() => undefined,
 		);
-		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
-		const submission = await conversation.submit(
-			{ type: "input", content: text, requestId, whenBusy },
-			BACKGROUND_CONTEXT,
-		);
-		return { submissionId: String(submission.id) };
+		this.operations.set(key, settled);
+		void settled.then(() => {
+			if (this.operations.get(key) === settled) this.operations.delete(key);
+		});
+		return next;
+	}
+
+	/** Reconcile one run's workflow state before a prompt is delivered. A fresh
+	 * run is never parked, so the engine is asked once per run per host
+	 * generation and again after this host aborts that run; a reconcile that
+	 * cannot reach the engine never blocks the prompt - the developer's message
+	 * is the developer's, and the recorded state stays for a later attempt. */
+	private async reconcileRunState(
+		runId: string,
+		record: RunRecord,
+	): Promise<ResumedRunState | undefined> {
+		if (!this.abortedRuns.has(runId) && this.reconciledRuns.has(runId))
+			return undefined;
+		const context = this.contexts.get(record.conversationId);
+		if (!context) return undefined;
+		let state: ResumedRunState;
+		try {
+			state = await recordResumedRunHandoff(context);
+		} catch (error) {
+			this.log(
+				`run ${runId} workflow state not reconciled: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+			return undefined;
+		}
+		this.abortedRuns.delete(runId);
+		this.reconciledRuns.add(runId);
+		if (state.state !== "active")
+			this.log(
+				`run ${runId} workflow state ${state.state}${
+					state.reason ? `: ${state.reason}` : ""
+				}`,
+			);
+		return state;
 	}
 
 	async status(
@@ -912,7 +1010,11 @@ export class DurableHost {
 	}
 
 	async abort(runId: string): Promise<void> {
-		await this.stopConversation(runId, true);
+		const record = this.requireConversation(runId);
+		// The next message to this run reconciles its workflow state, so the run
+		// the developer aborted is the run that can be reopened.
+		this.abortedRuns.add(runId);
+		await this.serialized(record, () => this.stopConversation(runId, true));
 	}
 
 	/** Abort a run's conversation. A developer-initiated abort (`recordBlocked`)
@@ -948,14 +1050,18 @@ export class DurableHost {
 	async stopRun(runId: string): Promise<void> {
 		const record = this.runs.get(runId);
 		if (!record) return;
-		const conversation = await this.harness.conversation(
-			record.conversationId,
-			BACKGROUND_CONTEXT,
-		);
-		await conversation?.abort(BACKGROUND_CONTEXT);
-		this.runs.delete(runId);
-		this.contexts.delete(record.conversationId);
-		this.timings.delete(record.conversationId);
+		this.abortedRuns.delete(runId);
+		this.reconciledRuns.delete(runId);
+		await this.serialized(record, async () => {
+			const conversation = await this.harness.conversation(
+				record.conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			await conversation?.abort(BACKGROUND_CONTEXT);
+			this.runs.delete(runId);
+			this.contexts.delete(record.conversationId);
+			this.timings.delete(record.conversationId);
+		});
 	}
 
 	async watchRun(
@@ -1154,6 +1260,12 @@ export class DurableHost {
 						type: "submit",
 						runId: request.runId,
 						submissionId: result.submissionId,
+						...(result.workflowState
+							? { workflowState: result.workflowState }
+							: {}),
+						...(result.workflowNote
+							? { workflowNote: result.workflowNote }
+							: {}),
 					});
 					return;
 				}

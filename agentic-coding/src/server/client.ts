@@ -470,6 +470,8 @@ export class BackendClient implements DashboardGateway {
 		outcome: "complete" | "blocked" | "failed";
 		artifact?: string;
 		message?: string;
+		/** The handoff records a developer abort of a run that is still alive. */
+		aborted?: boolean;
 		drain?: boolean;
 	}): Promise<WorkflowView> {
 		return this.decode<WorkflowView>(

@@ -4,6 +4,7 @@
 // cli.ts (split-workflow-god-modules).
 import fs from "node:fs";
 import path from "node:path";
+import type { WorkflowRun } from "../../contracts/workflow.ts";
 import type { WorkflowApplication } from "../application.ts";
 import {
 	isResearchWorkflowTarget,
@@ -152,5 +153,58 @@ export function resolveHandoffIdentity(
 		stepId,
 		role,
 		...(run.outputPath ? { outputPath: run.outputPath } : {}),
+	};
+}
+
+/** Resolve the run a managed `resume-run` command speaks for.
+ *
+ * The run is deliberately **not** authorized here: a run parked by a developer
+ * abort is blocked by design, so the exact-run capability check above refuses
+ * it. The capability is validated inside the command transaction instead
+ * (`agent.resume`'s reducer), which is also where the parked state itself is
+ * checked. An unknown run id and a caller without a managed run environment
+ * still fail here, with a bounded message. */
+export function resolveResumableRunIdentity(
+	workflowEngine: WorkflowEngine,
+	repo: string,
+	application?: WorkflowApplication,
+	overrideEnvironment?: CallerEnvironment,
+): {
+	run: WorkflowRun;
+	workflowId: string;
+	stepId: string;
+	role: string;
+	token: string;
+} {
+	const environment = overrideEnvironment ?? callerEnvironment();
+	const workflowId = environment.HERDR_WORKFLOW_ID;
+	const stepId = environment.HERDR_STEP_ID;
+	const role = environment.HERDR_ROLE;
+	const runId = environment.HERDR_RUN_ID;
+	if (!workflowId || !stepId || !role || !runId)
+		throw new Error(
+			"resume-run requires an exact launch-bound run environment and capability",
+		);
+	// Like every other managed agent command, this is a mutating entry point:
+	// initialize so a legacy store is imported before the run is resolved.
+	if (application)
+		application.runSync(workflowEngine.initializeEffect(repo, workflowId));
+	else workflowEngine.initialize(repo, workflowId);
+	let run: WorkflowRun;
+	try {
+		run = application
+			? application.runSync(workflowEngine.getRunEffect(repo, runId))
+			: workflowEngine.getRun(repo, runId);
+	} catch (error) {
+		throw new Error(
+			`unknown run: ${runId} (${error instanceof Error ? error.message : String(error)})`,
+		);
+	}
+	return {
+		run,
+		workflowId,
+		stepId,
+		role,
+		token: environment.HERDR_RUN_TOKEN ?? "",
 	};
 }

@@ -29,6 +29,7 @@ import {
 	runAgentAsk,
 	runHandoff,
 	runQuestion,
+	runResumeRun,
 	validateQuestionTimeout,
 } from "./commands/dispatch-actions.ts";
 import { runMigrate, runRepair, runRepin } from "./commands/misc.ts";
@@ -127,6 +128,8 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 		runResearchHandoff(rest, workflowEngine, repo, application),
 	handoff: (rest, workflowEngine, _repo, application) =>
 		runHandoff(rest, workflowEngine, application),
+	"resume-run": (rest, workflowEngine, _repo, application) =>
+		runResumeRun(rest, workflowEngine, application),
 	repair: runRepair,
 	repin: runRepin,
 	migrate: runMigrate,

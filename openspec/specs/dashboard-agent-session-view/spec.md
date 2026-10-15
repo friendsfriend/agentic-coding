@@ -26,7 +26,7 @@ The agent session view SHALL attach to the workflow host and render the run's co
 - **THEN** the view SHALL show a bounded unavailable state without blocking the dashboard
 
 ### Requirement: Steering, follow-up and abort
-The agent session view SHALL let the user submit text that starts a turn when the run is idle and steers it when busy, queue a follow-up, and abort the run's current work. Submissions from the view SHALL be recorded in the run's transcript like engine submissions.
+The agent session view SHALL let the user submit text that starts a turn when the run is idle and steers it when busy, queue a follow-up, and abort the run's current work. Submissions from the view SHALL be recorded in the run's transcript like engine submissions. The mode a client sends SHALL only decide where the prompt lands: a prompt is never rejected or dropped because its mode is unknown to the host.
 
 #### Scenario: Steer a busy agent
 - **WHEN** the user submits text while the run is working
@@ -35,6 +35,14 @@ The agent session view SHALL let the user submit text that starts a turn when th
 #### Scenario: Abort
 - **WHEN** the user triggers abort
 - **THEN** the run's current work SHALL be aborted and the view SHALL show the run as idle
+
+#### Scenario: Prompt racing an abort
+- **WHEN** a prompt arrives while the run's abort is still tearing the turn down
+- **THEN** the host SHALL place it after the abort settled, queued like any other prompt, instead of letting the abort withdraw it
+
+#### Scenario: Mode the host does not know
+- **WHEN** a client submits a prompt whose busy mode is neither `steer` nor `followUp`
+- **THEN** the host SHALL accept the prompt as a follow-up and SHALL NOT reject the submission
 
 ### Requirement: Session view keybind help
 The session view's keybinds SHALL be declared in the dashboard keybind catalog with an agent-session context, shown in the footer for non-standard keys and listed in the `?` help modal; the view content SHALL NOT print keybinding instructions.

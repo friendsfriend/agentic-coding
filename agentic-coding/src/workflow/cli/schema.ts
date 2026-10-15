@@ -10,6 +10,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"drain",
 	"action",
 	"handoff",
+	"resume-run",
 	"question",
 	"ask",
 	"answer",
@@ -108,9 +109,10 @@ const FLAG_SCHEMA: Record<
 	},
 	handoff: {
 		values: ["outcome", "artifact", "message"],
-		booleans: ["no-drain"],
+		booleans: ["no-drain", "aborted"],
 		positionals: [0, 0],
 	},
+	"resume-run": { values: [], positionals: [0, 0] },
 	question: {
 		values: ["description", "context", "options", "questions", "timeout"],
 		positionals: [0, 0],

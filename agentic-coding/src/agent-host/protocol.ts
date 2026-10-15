@@ -36,7 +36,13 @@ export interface SubmitRequest {
 	readonly runId: string;
 	readonly text: string;
 	readonly requestId: string;
-	readonly whenBusy?: "steer" | "followUp";
+	/** How the prompt is placed when the conversation is busy. The wire value is
+	 * open on purpose: `steer` and `overwrite` (and `interrupt`) replace what the
+	 * agent is doing, anything else queues behind it, and a client whose mode this
+	 * build does not know still has its prompt accepted rather than dropped
+	 * ({@link normalizeSubmitMode}). An idle conversation always starts the next
+	 * turn, whatever the mode. */
+	readonly whenBusy?: string;
 }
 export interface StatusRequest {
 	readonly type: "status";
@@ -122,6 +128,34 @@ export interface SubmitResponse {
 	readonly type: "submit";
 	readonly runId: string;
 	readonly submissionId: string;
+	/** The run's workflow state as reconciled for this prompt
+	 * (`agent.resume`): `resumed` reopened a run parked by a developer abort,
+	 * `finished` names a run that already handed off, `blocked` a run parked by
+	 * its own blocked handoff, `stale` a parked run its step moved past. Absent
+	 * when the host had nothing to reconcile. The prompt itself is delivered in
+	 * every case. */
+	readonly workflowState?: SubmitWorkflowState;
+	readonly workflowNote?: string;
+}
+/** What reconciling one run's workflow state before a prompt reported. */
+export type SubmitWorkflowState =
+	| "resumed"
+	| "active"
+	| "blocked"
+	| "finished"
+	| "stale";
+
+/** Normalize one client's `whenBusy` mode to the two modes pi-durable queues
+ * with. `steer`/`overwrite`/`interrupt` interrupt the running turn, every other
+ * value (including `followUp` and any mode this build does not know) queues
+ * behind it. An unknown mode is never a reason to reject or drop a prompt: the
+ * mode only decides where it lands. */
+export function normalizeSubmitMode(value: unknown): "steer" | "followUp" {
+	if (typeof value !== "string") return "followUp";
+	const mode = value.trim().toLowerCase();
+	return mode === "steer" || mode === "overwrite" || mode === "interrupt"
+		? "steer"
+		: "followUp";
 }
 export interface StatusResponse {
 	readonly type: "status";

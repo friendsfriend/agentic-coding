@@ -81,6 +81,9 @@ describe("breaking workflow CLI surface", () => {
 			"drain",
 			"action",
 			"handoff",
+			// The durable host reconciles a run parked by a developer abort right
+			// before it delivers the developer's next prompt.
+			"resume-run",
 			"question",
 			"ask",
 			"answer",

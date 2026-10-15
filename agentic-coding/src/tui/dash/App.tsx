@@ -71,6 +71,7 @@ import { createAgentActivitySource } from "./agent-activity.ts";
 import {
 	createAgentSessionProjection,
 	streamAgentSessionProjection,
+	submissionStateNote,
 } from "./agent-session.ts";
 import { openDebugRequestReport } from "./debug-requests-open.ts";
 import {
@@ -847,7 +848,17 @@ export function App(props: {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
 				const client = new HostClient(session.hostSocket);
-				await client.submit(session.runId, text, crypto.randomUUID(), "steer");
+				const response = await client.submit(
+					session.runId,
+					text,
+					crypto.randomUUID(),
+					"steer",
+				);
+				// What the prompt did to the run's workflow state is part of the
+				// answer: an aborted run comes back active, a run that already handed
+				// off is reported instead of being quietly reopened.
+				const note = submissionStateNote(response.workflowState);
+				if (note) notify(note.text, note.tone);
 			} catch (error) {
 				notify(
 					"Could not send message: " +

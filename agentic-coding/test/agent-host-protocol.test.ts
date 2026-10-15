@@ -6,6 +6,7 @@ import {
 	type HostRequest,
 	type HostResponse,
 	MAX_FRAME_BYTES,
+	normalizeSubmitMode,
 	PROTOCOL_VERSION,
 } from "../src/agent-host/protocol.ts";
 
@@ -77,5 +78,17 @@ describe("agent host protocol framing", () => {
 		const reader = new FrameReader();
 		expect(reader.push("partial")).toEqual([]);
 		expect(reader.push(" line\n")).toEqual(["partial line"]);
+	});
+});
+
+describe("submit mode normalization", () => {
+	test("an interrupt-style mode steers and everything else follows up", () => {
+		expect(normalizeSubmitMode("steer")).toBe("steer");
+		expect(normalizeSubmitMode("overwrite")).toBe("steer");
+		expect(normalizeSubmitMode("Interrupt")).toBe("steer");
+		expect(normalizeSubmitMode("followUp")).toBe("followUp");
+		expect(normalizeSubmitMode("mystery-mode")).toBe("followUp");
+		expect(normalizeSubmitMode(undefined)).toBe("followUp");
+		expect(normalizeSubmitMode(7)).toBe("followUp");
 	});
 });

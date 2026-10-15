@@ -177,7 +177,7 @@ export class HostClient {
 		runId: string,
 		text: string,
 		requestId: string,
-		whenBusy?: "steer" | "followUp",
+		whenBusy?: string,
 	): Promise<SubmitResponse> {
 		const response = await sendRequest(
 			this.socketPath,

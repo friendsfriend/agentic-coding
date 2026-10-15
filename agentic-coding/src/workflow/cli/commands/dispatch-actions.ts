@@ -1,5 +1,6 @@
 import { watch } from "node:fs";
 import path from "node:path";
+import { DEVELOPER_ABORT_MESSAGE } from "../../../contracts/workflow.ts";
 import { backendClientFromEnv } from "../../../server/client.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import { drainEffects } from "../../operations.ts";
@@ -28,7 +29,10 @@ import {
 	managedWorkflowTarget,
 } from "../caller-environment.ts";
 import { scheduleDrain } from "../drain.ts";
-import { resolveHandoffIdentity } from "../identity.ts";
+import {
+	resolveHandoffIdentity,
+	resolveResumableRunIdentity,
+} from "../identity.ts";
 
 type App = WorkflowApplication;
 
@@ -589,6 +593,7 @@ export async function runHandoff(
 	)
 		throw new Error("handoff: invalid --outcome");
 	const target = managedWorkflowTarget();
+	const aborted = rest.includes("--aborted");
 	// Managed agent across the transport: forward the authenticated caller
 	// environment and let the server resolve the run identity and validate the
 	// capability, so the CLI never opens the store itself.
@@ -600,6 +605,7 @@ export async function runHandoff(
 			outcome: outcome as "complete" | "blocked" | "failed",
 			...(flag(rest, "artifact") ? { artifact: flag(rest, "artifact") } : {}),
 			...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+			...(aborted ? { aborted: true } : {}),
 			drain: !rest.includes("--no-drain"),
 		});
 		console.log(JSON.stringify(view, null, 2));
@@ -617,6 +623,7 @@ export async function runHandoff(
 				outcome,
 				...(artifact ? { artifact } : {}),
 				...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+				...(aborted ? { aborted: true } : {}),
 			}),
 		);
 	else
@@ -628,10 +635,141 @@ export async function runHandoff(
 			outcome,
 			...(artifact ? { artifact } : {}),
 			...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+			...(aborted ? { aborted: true } : {}),
 		});
 	if (!rest.includes("--no-drain")) await drainEffects(workflowEngine, target);
 	else scheduleDrain(target);
 	console.log(
 		JSON.stringify(workflowEngine.status(target, identity.workflowId), null, 2),
+	);
+}
+
+/** The bounded classification one `resume-run` call answers with. It is a
+ * report about the run's workflow state, never a state edit the caller may
+ * apply: the state transition itself is the `agent.resume` reducer.
+ *
+ * - `resumed`: the run was parked by a developer abort and is working again;
+ * - `active`: the run is already part of the live step, nothing changed;
+ * - `blocked`: the run is parked by its own `blocked` handoff (a real blocker
+ *   or a question asker), which an unrelated message must not clear;
+ * - `finished`: the run already handed off, failed or expired;
+ * - `stale`: the parked run is no longer the current attempt of its step. */
+export interface ResumeRunView {
+	readonly runId: string;
+	readonly workflowId: string;
+	readonly stepId: string;
+	readonly role: string;
+	readonly state: "resumed" | "active" | "blocked" | "finished" | "stale";
+	readonly reason?: string;
+	readonly revision?: number;
+}
+
+/** `resume-run`: reconcile one run's workflow state with a prompt the developer
+ * just sent to it. Called by the durable agent host immediately before it
+ * delivers a message, so an aborted run becomes active again while its session
+ * keeps working, and a run that already finished is reported instead of being
+ * reopened. Local by design (like the delegated debug commands): the caller is
+ * the run itself, resolves its own identity from its launch environment, and
+ * the reducer validates the retained capability inside the command transaction.
+ * Prints one JSON line (`ResumeRunView`) and never mutates state for a run it
+ * did not resume. */
+export function runResumeRun(
+	_rest: string[],
+	workflowEngine: WorkflowEngine,
+	application?: App,
+	/** The workflow target, resolved from the environment by default; explicit
+	 * so a focused test can name the checkout it built. */
+	target = managedWorkflowTarget(),
+): void {
+	const identity = resolveResumableRunIdentity(
+		workflowEngine,
+		target,
+		application,
+	);
+	const { run, workflowId, stepId, role, token } = identity;
+	const snapshot = application
+		? application.runSync(workflowEngine.getSnapshotEffect(target, workflowId))
+		: workflowEngine.getSnapshot(target, workflowId);
+	const base = {
+		runId: run.id,
+		workflowId,
+		stepId,
+		role,
+		revision: snapshot.revision,
+	};
+	if (
+		run.status === "completed" ||
+		run.status === "failed" ||
+		run.status === "expired"
+	) {
+		console.log(
+			JSON.stringify({
+				...base,
+				state: "finished",
+				reason: `run is ${run.status}`,
+			} satisfies ResumeRunView),
+		);
+		return;
+	}
+	// A reopenable park is a blocked run that kept its capability (the abort
+	// marker) or one whose workflow still owes developer input for exactly the
+	// abort message (a park recorded before that marker existed; the reducer
+	// then verifies the caller's launch token before touching anything).
+	const owesAbort =
+		snapshot.status === "attention-required" &&
+		snapshot.attention.includes(DEVELOPER_ABORT_MESSAGE);
+	if (run.status !== "blocked") {
+		console.log(
+			JSON.stringify({ ...base, state: "active" } satisfies ResumeRunView),
+		);
+		return;
+	}
+	if (!run.capabilityHash && !owesAbort) {
+		console.log(
+			JSON.stringify({
+				...base,
+				state: "blocked",
+				reason: "the run parked itself; the workflow keeps that park",
+			} satisfies ResumeRunView),
+		);
+		return;
+	}
+	const command = {
+		type: "agent.resume",
+		workflowId,
+		runId: run.id,
+		stepId,
+		role,
+		token,
+	} as const;
+	try {
+		if (application)
+			application.runSync(workflowEngine.dispatchEffect(target, command));
+		else workflowEngine.dispatch(target, command);
+	} catch (error) {
+		// A refused reopen changes nothing: the park is not this caller's to
+		// clear (`not-parked`) - the workflow keeps it - while any other refusal
+		// means the parked state moved on between the read and the command (a
+		// repair, a bumped attempt, a sibling run). Either way the caller still
+		// delivers the developer's message.
+		const refusal = error instanceof WorkflowRuntimeError ? error.code : "";
+		console.log(
+			JSON.stringify({
+				...base,
+				state: refusal === "not-parked" ? "blocked" : "stale",
+				reason: error instanceof Error ? error.message : String(error),
+			} satisfies ResumeRunView),
+		);
+		return;
+	}
+	const resumed = application
+		? application.runSync(workflowEngine.getSnapshotEffect(target, workflowId))
+		: workflowEngine.getSnapshot(target, workflowId);
+	console.log(
+		JSON.stringify({
+			...base,
+			state: "resumed",
+			revision: resumed.revision,
+		} satisfies ResumeRunView),
 	);
 }

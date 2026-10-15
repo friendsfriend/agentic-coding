@@ -7,6 +7,7 @@ import {
 	renderAgentSessionSummary,
 	reuseAgentSessionBlocks,
 	streamAgentSessionProjection,
+	submissionStateNote,
 } from "../../src/tui/dash/agent-session.ts";
 
 /** Blocks without their identity or structured tool payload: these assertions
@@ -1314,5 +1315,22 @@ describe("streamAgentSessionProjection", () => {
 		);
 		expect(scheduled).toBe(0);
 		stop();
+	});
+});
+
+describe("submissionStateNote", () => {
+	test("a normal prompt shows no notice", () => {
+		expect(submissionStateNote(undefined)).toBeUndefined();
+		expect(submissionStateNote("active")).toBeUndefined();
+		expect(submissionStateNote("blocked")).toBeUndefined();
+	});
+
+	test("a resumed workflow and a finished run are named", () => {
+		expect(submissionStateNote("resumed")).toEqual({
+			text: "Workflow resumed after the abort",
+			tone: "success",
+		});
+		expect(submissionStateNote("finished")?.tone).toBe("warning");
+		expect(submissionStateNote("stale")?.tone).toBe("warning");
 	});
 });

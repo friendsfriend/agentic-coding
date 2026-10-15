@@ -19,6 +19,7 @@ import {
 	section,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
 import {
 	MAX_FILE_BYTES,
 	MAX_OUTPUT_CHARS,
@@ -110,9 +111,12 @@ function runWorkflowCli(
 /** Record a developer-initiated abort as this run's `blocked` handoff
  * (make-developer-questions-asynchronous): a turn that was torn down can no
  * longer hand off itself, and without this the engine would keep the run
- * `working` with nothing left to finish it. Best-effort by design — a run that
- * already handed off or has no managed-agent environment is left unchanged, and
- * `--no-drain` keeps the abort response quick. */
+ * `working` with nothing left to finish it. `--aborted` marks it as an abort
+ * rather than the run's own blocked outcome, so the parked run keeps its
+ * capability and `recordResumedRunHandoff` can reopen it when the developer
+ * speaks to it again. Best-effort by design — a run that already handed off or
+ * has no managed-agent environment is left unchanged, and `--no-drain` keeps
+ * the abort response quick. */
 export async function recordAbortedRunHandoff(
 	context: DurableRunContext,
 ): Promise<void> {
@@ -123,14 +127,71 @@ export async function recordAbortedRunHandoff(
 			"handoff",
 			"--outcome",
 			"blocked",
+			"--aborted",
 			"--no-drain",
 			"--message",
-			"aborted by the developer",
+			DEVELOPER_ABORT_MESSAGE,
 		],
 		context,
 	);
 	if (result.exitCode !== 0)
 		throw new Error(result.stderr.trim() || "abort handoff was not recorded");
+}
+
+/** What reconciling a run's workflow state before a prompt reported
+ * (`workflow resume-run`). */
+export interface ResumedRunState {
+	readonly state: "resumed" | "active" | "blocked" | "finished" | "stale";
+	readonly reason?: string;
+}
+
+/** Reconcile the run's workflow state with a message the developer just sent to
+ * it: an abort parks the run `blocked`, and the engine reopens it here
+ * (`agent.resume`) so the workflow follows the session back to `working`. The
+ * command is the durable authority — it reports `active`/`blocked`/`finished`/
+ * `stale` for a run it must not touch — so the host never edits state itself
+ * and never drops the developer's message because of the answer. A run without
+ * a managed environment has no workflow state to reconcile. */
+export async function recordResumedRunHandoff(
+	context: DurableRunContext,
+): Promise<ResumedRunState> {
+	if (!context.env.HERDR_RUN_TOKEN) return { state: "active" };
+	const result = await runWorkflowCli(["workflow", "resume-run"], context);
+	if (result.exitCode !== 0)
+		throw new Error(result.stderr.trim() || "run state was not reconciled");
+	const reported = parseResumeRunView(result.stdout);
+	if (!reported) throw new Error("run state reconciliation returned no state");
+	return reported;
+}
+
+/** The one JSON line `workflow resume-run` prints, guarded at this boundary:
+ * an envelope this build cannot read is reported as an error instead of being
+ * mistaken for a state. */
+function parseResumeRunView(stdout: string): ResumedRunState | undefined {
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("{")) continue;
+		let value: unknown;
+		try {
+			value = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		if (!value || typeof value !== "object") continue;
+		const record = value as { state?: unknown; reason?: unknown };
+		if (
+			record.state === "resumed" ||
+			record.state === "active" ||
+			record.state === "blocked" ||
+			record.state === "finished" ||
+			record.state === "stale"
+		)
+			return {
+				state: record.state,
+				...(typeof record.reason === "string" ? { reason: record.reason } : {}),
+			};
+	}
+	return undefined;
 }
 
 const QuestionOption = Type.Object({

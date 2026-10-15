@@ -999,8 +999,8 @@ them:
 | `client.ts` | `HostClient` (typed request/response + `watch`) and `ensureHostRunning` (connect-or-spawn). The engine adapter (`PiDurableAdapter` in `workflow/adapters.ts`) and the dashboard session snapshot (`tui/dash/handlers/keys.ts`) depend on this module only. | No. |
 | `settings.ts` | The `agentHost` configuration section type and its one-time seeding from the global pi `settings.json`. | No. |
 | `credentials.ts` | `PiAuthCredentialStore`, a pi-ai `CredentialStore`-shaped adapter over the user's live `~/.pi/agent/auth.json` (no copying). | No (structurally compatible, not statically coupled). |
-| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and `recordAbortedRunHandoff` (the `blocked` handoff a developer abort records). | Yes. |
-| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, and records a developer abort as the run's `blocked` handoff (`abort`; never on teardown). | Yes. |
+| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and the CLI handoffs a developer's session drives: `recordAbortedRunHandoff` (the `blocked`, `--aborted` handoff an abort records) and `recordResumedRunHandoff` (the `resume-run` reconcile that reopens the parked run for the next prompt). | Yes. |
+| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, records a developer abort as the run's `blocked` handoff (`abort`; never on teardown), serializes a conversation's mutating requests so a prompt cannot race the abort's withdrawal, and reconciles the workflow state before delivering a prompt to an aborted run. | Yes. |
 | `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
 
 `src/cli.ts`'s `agent host` mode reaches `host-main.ts` through a dynamic
@@ -1082,9 +1082,22 @@ An orchestrator-routed question stays the orchestrator's first, but it is also
 listed in the developer's `pendingQuestions` and `answerQuestion` accepts the
 developer's answer (clearing the routing marker), so an orchestrator session
 that is off or idle cannot strand the workflow. A developer abort of a run is
-recorded by the host as that run's `blocked` handoff, so an interrupted turn
-parks the workflow rather than leaving a `working` run with no turn left to
-finish it.
+recorded by the host as that run's `blocked` handoff (`--aborted`), so an
+interrupted turn parks the workflow rather than leaving a `working` run with no
+turn left to finish it. An aborted run is parked only while nobody is working
+in it: the host reconciles the run's state with the engine through
+`workflow resume-run` right before it delivers the developer's next prompt, and
+the `agent.resume` reducer reopens exactly that run (working again, the abort's
+own attention entry removed, the workflow back to `active`) with an
+`agent.resumed` event. Only an abort is reopenable — the marker is the
+capability the abort keeps, which the run's own `blocked` handoff (a real
+blocker or a question asker) always clears — so an unrelated message never
+clears a park the agent created, and a run that already handed off is reported
+(`finished`/`stale`) instead of being reopened. A park recorded before the
+abort marker existed is recognized by the abort message the host recorded as
+the workflow's own attention, and reopened only for a caller that still holds
+the run's launch token (verified against the run's own `run.env`); the token is
+bound as the reopened run's capability so its continued turn can hand off.
 
 ## Source-layer boundaries (enforced)
 

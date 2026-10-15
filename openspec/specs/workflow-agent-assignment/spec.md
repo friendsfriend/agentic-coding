@@ -106,12 +106,12 @@ Pi, OpenCode, OpenCode V2, and future adapters SHALL transport the same rendered
 
 ### Requirement: A developer abort is recorded as a blocked handoff
 
-When the developer aborts a managed run from the dashboard or orchestrator session, the durable host SHALL record that run's `blocked` outcome with a bounded message naming the abort, before the run's turn is torn down. The handoff SHALL use the run's own launch-bound capability and SHALL be best-effort: a run that already handed off, or a handoff the engine rejects, SHALL leave the workflow unchanged and SHALL NOT fail the abort. A host teardown that stops runs without a developer abort (workflow close, deletion, host shutdown) SHALL NOT record a blocked handoff.
+When the developer aborts a managed run from the dashboard or orchestrator session, the durable host SHALL record that run's `blocked` outcome with a bounded message naming the abort, before the run's turn is torn down. The handoff SHALL use the run's own launch-bound capability, SHALL be marked as a developer abort (which keeps that capability as the durable marker of a reopenable park), and SHALL be best-effort: a run that already handed off, or a handoff the engine rejects, SHALL leave the workflow unchanged and SHALL NOT fail the abort. A host teardown that stops runs without a developer abort (workflow close, deletion, host shutdown) SHALL NOT record a blocked handoff.
 
 #### Scenario: Developer aborts a working run
 
 - **WHEN** the developer aborts a run whose conversation is mid-turn
-- **THEN** the run's capability SHALL record `blocked` with a bounded abort message
+- **THEN** the run's capability SHALL record `blocked`, marked as a developer abort, with a bounded abort message
 - **AND** the workflow SHALL show the step as `attention-required` instead of leaving the run `working`
 
 #### Scenario: Abort of a finished run
@@ -124,4 +124,34 @@ When the developer aborts a managed run from the dashboard or orchestrator sessi
 
 - **WHEN** the workflow closes, is deleted, or the host shuts down and stops its runs
 - **THEN** no `blocked` handoff SHALL be recorded for those runs
+
+### Requirement: An aborted run reopens for the developer's next message
+
+An aborted run SHALL be parked `blocked` only while nobody is working in it. Before the durable host delivers a prompt to a run it aborted, it SHALL reconcile that run's workflow state with the engine through the run's own launch-bound capability, and the engine SHALL reopen exactly that run when it is still the current attempt of its step: the run becomes `working` again, the abort's own attention entry is cleared, and the workflow returns to `active` — recorded as a durable `agent.resumed` event. Reopening SHALL NOT clear a park the agent itself recorded (`blocked` without the abort marker), SHALL NOT reopen a run that already handed off, failed, expired, or whose step moved on, and SHALL NOT change any state for such a run. The reconcile SHALL be best-effort: a failure to reach the engine SHALL leave the recorded state unchanged and SHALL NOT discard the developer's message. The usual handoff SHALL work again for the reopened run.
+
+#### Scenario: Developer speaks to an aborted run
+
+- **WHEN** the developer sends a message to a run the host aborted
+- **THEN** the engine SHALL reopen that run (`working`), clear the abort's attention entry, and set the workflow back to `active`
+- **AND** the transition SHALL be recorded as an `agent.resumed` event
+- **AND** the run's later handoff SHALL be accepted
+
+#### Scenario: Park recorded before the abort marker
+
+- **WHEN** the run was parked `blocked` with the bounded abort message by a host that predates the abort marker, so no capability is left
+- **THEN** the engine SHALL reopen it only for a caller that still holds the run's own launch token, verified against the run's launch environment file
+- **AND** it SHALL bind that token as the reopened run's capability, so the run's later handoff is accepted
+- **AND** an unverifiable caller SHALL be refused and the park SHALL remain
+
+#### Scenario: The message is unrelated to another park
+
+- **WHEN** a run handed off `blocked` itself (its own blocker, or a question asker) and the developer sends a message
+- **THEN** the engine SHALL refuse to reopen it and the workflow SHALL remain `attention-required`
+- **AND** the message SHALL still reach the run's session
+
+#### Scenario: The run already finished
+
+- **WHEN** the developer sends a message to a run that already handed off, failed or expired
+- **THEN** the engine SHALL report that state without changing it
+- **AND** the host SHALL report the state to the client together with the accepted submission
 

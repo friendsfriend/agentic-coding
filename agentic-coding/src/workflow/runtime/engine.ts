@@ -111,6 +111,7 @@ import {
 	expireQuestion,
 	expireQuestionTimer,
 } from "./reducers/agent-question.ts";
+import { agentResume } from "./reducers/agent-resume.ts";
 import {
 	debugRequestHandoff,
 	debugRequestReportPath,
@@ -2530,6 +2531,8 @@ export class WorkflowEngine {
 				this.registry,
 				this.now,
 			);
+		if (command.type === "agent.resume")
+			return agentResume(db, snapshot, definition, command, this.now);
 		if (command.type === "effect.result")
 			return effectResult(
 				db,

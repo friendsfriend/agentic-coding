@@ -194,6 +194,12 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
+/** The message a developer abort records as the parked run's `blocked`
+ * handoff. The engine clears exactly this attention entry when the run is
+ * reopened by the developer's next message (`agent.resume`), and the host
+ * records it, so both sides name the same bounded text. */
+export const DEVELOPER_ABORT_MESSAGE = "aborted by the developer";
+
 export interface DefinitionPin {
 	id: string;
 	version: number;
@@ -778,6 +784,19 @@ export type WorkflowCommand =
 			outcome: "complete" | "blocked" | "failed";
 			artifact?: string;
 			message?: string;
+			/** Records the handoff as a developer abort of a run that is still
+			 * alive: the parked run keeps its capability so the developer's next
+			 * message can reopen it through `agent.resume`, instead of the
+			 * `agent.handoff` a run makes itself (which clears it). */
+			aborted?: boolean;
+	  }
+	| {
+			type: "agent.resume";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
 	  }
 	| {
 			type: "agent.research-handoff";
@@ -1006,6 +1025,15 @@ const agentHandoffSchema = Schema.Struct({
 	outcome: Schema.Literal("complete", "blocked", "failed"),
 	artifact: Schema.optionalWith(text(4096), { exact: true }),
 	message: Schema.optionalWith(text(4096), { exact: true }),
+	aborted: Schema.optionalWith(Schema.Boolean, { exact: true }),
+});
+const agentResumeSchema = Schema.Struct({
+	type: Schema.Literal("agent.resume"),
+	workflowId: text(4096),
+	runId: text(4096),
+	stepId: text(4096),
+	role: text(4096),
+	token: text(1024),
 });
 const agentResearchHandoffSchema = Schema.Struct({
 	type: Schema.Literal("agent.research-handoff"),
@@ -1065,6 +1093,7 @@ export const WorkflowCommandSchema = Schema.Union(
 	agentAnswerSchema,
 	timerQuestionExpireSchema,
 	agentHandoffSchema,
+	agentResumeSchema,
 	agentResearchHandoffSchema,
 	effectResultSchema,
 	operatorRepairSchema,
