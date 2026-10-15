@@ -158,8 +158,17 @@ export function agentActivityFromValue(
 	}
 
 	const compactions = Array.isArray(live.compactions) ? live.compactions : [];
-	if (compactions.length > 0)
-		return { label: "compacting", active: true, tone: "working" };
+	if (compactions.length > 0) {
+		const reason = compactions.find(isRecord)?.reason;
+		// The reason travels in the badge itself (`add-agent-compaction`): a manual
+		// `/compact` and the harness's own threshold compaction read differently on
+		// the panel, which is the whole point of the indicator.
+		const label =
+			typeof reason === "string" && reason.length > 0
+				? `compacting (${reason})`
+				: "compacting";
+		return { label, active: true, tone: "working" };
+	}
 
 	const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
 	if (Array.isArray(inbox?.items) && inbox.items.length > 0)

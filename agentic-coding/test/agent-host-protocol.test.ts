@@ -3,6 +3,8 @@ import {
 	decodeFrame,
 	encodeFrame,
 	FrameReader,
+	type HostRequest,
+	type HostResponse,
 	MAX_FRAME_BYTES,
 	PROTOCOL_VERSION,
 } from "../src/agent-host/protocol.ts";
@@ -19,6 +21,26 @@ describe("agent host protocol framing", () => {
 		expect(frame.endsWith("\n")).toBe(true);
 		const decoded = decodeFrame(frame.slice(0, -1));
 		expect(decoded).toEqual({ ok: true, value: request });
+	});
+
+	test("round-trips a compact-run request and its structured answer", () => {
+		const request: HostRequest = {
+			type: "compactRun",
+			runId: "r1",
+			instructions: "focus on the open findings",
+		};
+		const decodedRequest = decodeFrame(encodeFrame(request).slice(0, -1));
+		expect(decodedRequest).toEqual({ ok: true, value: request });
+		const response: HostResponse = {
+			type: "compactRun",
+			runId: "r1",
+			status: "already-compacting",
+			reason: "manual",
+		};
+		expect(decodeFrame(encodeFrame(response).slice(0, -1))).toEqual({
+			ok: true,
+			value: response,
+		});
 	});
 
 	test("rejects a frame above the byte bound without throwing", () => {

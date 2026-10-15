@@ -10,6 +10,17 @@
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
 import {
+	COMPACTION_DEFAULTS,
+	COMPACTION_PERCENT_MAX,
+	COMPACTION_PERCENT_MIN,
+	COMPACTION_TOKEN_CEILING,
+	type CompactionFieldError,
+	type CompactionTokenField,
+	type CompactionTokenValue,
+	compactionFieldMinimum,
+	parseCompactionPercent,
+} from "../../workflow/compaction.ts";
+import {
 	DEFAULT_ORCHESTRATOR_LIMITS,
 	DEFAULT_ORCHESTRATOR_MONITOR,
 } from "../../workflow/profiles.ts";
@@ -38,6 +49,12 @@ export type SettingsAction =
 	| { kind: "browser-install" }
 	/** Stop an in-flight browser download. */
 	| { kind: "browser-install-cancel" }
+	/** Open the bounded numeric editor for one compaction token field
+	 * (`add-agent-compaction`): digits, optionally in the field's documented
+	 * percentage form, applied only on explicit confirmation. */
+	| { kind: "numeric-edit"; field: CompactionTokenField }
+	/** Flip the compaction enable switch. */
+	| { kind: "compaction-toggle" }
 	| { kind: "navigate"; route: Route };
 
 export interface SettingsItem {
@@ -99,6 +116,35 @@ export interface AgentStatus {
 	 * configuration, so the section shows it read-only. */
 	orchestratorLimits?: { maxActive: number; maxStartsPerDay: number };
 	orchestratorLimitsConfigured?: boolean;
+	/** The durable compaction policy the Compaction section renders. Absent
+	 * until the read resolves; the section then says so. */
+	compaction?: CompactionSettingsSnapshot;
+}
+
+/** Structural shape of the server's compaction read. Declared here rather than
+ * imported so the settings surface keeps no runtime dependency on the server
+ * module that owns the write path; the server's read is structurally
+ * compatible. */
+export interface CompactionSettingsSnapshot {
+	readonly configured: Record<string, unknown>;
+	readonly configuredIsDefault: boolean;
+	readonly effective: {
+		readonly enabled: boolean;
+		readonly reserveTokens: number;
+		readonly backgroundTokens: number;
+		readonly keepRecentTokens: number;
+	};
+	readonly source: "agentHost" | "agents" | "default";
+	readonly validation: readonly CompactionFieldError[];
+	readonly defaults?: {
+		readonly enabled: boolean;
+		readonly reserveTokens: number;
+		readonly backgroundTokens: number;
+		readonly keepRecentTokens: number;
+	};
+	/** The window a percentage resolved against, when the read knows one. The
+	 * host resolves the real one per run from its own models. */
+	readonly referenceWindow?: number;
 }
 
 export interface ProviderSnapshot {
@@ -372,6 +418,150 @@ function classifierSelectionLabel(
 	);
 }
 
+/** Where the effective compaction values came from. */
+export function compactionSourceLabel(
+	source: CompactionSettingsSnapshot["source"],
+): string {
+	switch (source) {
+		case "agentHost":
+			return "from the agentHost.compaction override (wins over [agents.compaction])";
+		case "agents":
+			return "from [agents.compaction] (user configuration)";
+		case "default":
+			return "documented defaults (nothing configured)";
+	}
+}
+
+/** One token field's row value: the configured form, the effective value the
+ * host uses when it knows no window, and whether a default applied. */
+export function compactionTokenValueLabel(
+	configured: CompactionTokenValue | undefined,
+	effective: number,
+): string {
+	if (configured === undefined) return `${effective} tokens (default)`;
+	const percent =
+		typeof configured === "string"
+			? parseCompactionPercent(configured)
+			: undefined;
+	return percent !== undefined
+		? `${configured} → ${effective} tokens without a known window`
+		: `${effective} tokens`;
+}
+
+/** The Compaction section (`add-agent-compaction`): the four values the durable
+ * host resolves, the effective value of each, where it came from, and the
+ * documented defaults. The reference window a percentage resolves against is
+ * per run — the host owns it — so the section states the rule instead of
+ * inventing a window this process cannot see. */
+function compactionItems(context: SettingsContext): SettingsItem[] {
+	const snapshot = context.agents.compaction;
+	if (!snapshot)
+		return [
+			{
+				id: "compaction.unavailable",
+				label: "Compaction",
+				value: "unavailable",
+				detail:
+					"the agents configuration could not be read; durable runs keep the defaults of the last valid configuration",
+				editable: true,
+				action: { kind: "retry" },
+			},
+		];
+	const defaults = snapshot.defaults ?? COMPACTION_DEFAULTS;
+	const source = compactionSourceLabel(snapshot.source);
+	const items: SettingsItem[] = [];
+	for (const error of snapshot.validation)
+		items.push({
+			id: `compaction.error.${error.field}`,
+			label: `${error.field} is not usable`,
+			value: error.message,
+			detail:
+				"the durable host falls back to the documented default for this field until it is fixed",
+			editable: false,
+			action: { kind: "none" },
+		});
+	items.push({
+		id: "compaction.enabled",
+		label: "Automatic compaction",
+		value: snapshot.effective.enabled ? "on" : "off",
+		detail: `${inventoryDetail("agents.compaction")} · ${source} · ${snapshot.effective.enabled ? "Enter turns it off" : "Enter turns it on"}; /compact in a session works either way`,
+		editable: true,
+		action: { kind: "compaction-toggle" },
+	});
+	const tokenRows: Array<{
+		field: CompactionTokenField;
+		label: string;
+		why: string;
+	}> = [
+		{
+			field: "reserveTokens",
+			label: "Reserve tokens",
+			why: `room kept free for the answer: a request above window − reserve waits for a summary (default ${defaults.reserveTokens}); the summarizer's own output budget is 0.8 × reserve`,
+		},
+		{
+			field: "backgroundTokens",
+			label: "Background starts",
+			why: `how far below the blocking threshold a summary starts in the background (default ${defaults.backgroundTokens}); 0 disables the background path`,
+		},
+		{
+			field: "keepRecentTokens",
+			label: "Kept verbatim",
+			why: `recent context a summary keeps word for word (default ${defaults.keepRecentTokens}); a percentage like "15%" scales with each run's own model window`,
+		},
+	];
+	const configured = snapshot.configured as Record<string, unknown>;
+	for (const row of tokenRows) {
+		const raw = configured[row.field];
+		const configuredValue =
+			typeof raw === "number" || typeof raw === "string" ? raw : undefined;
+		const percent =
+			typeof configuredValue === "string"
+				? parseCompactionPercent(configuredValue)
+				: undefined;
+		items.push({
+			id: `compaction.${row.field}`,
+			label: row.label,
+			value: compactionTokenValueLabel(
+				configuredValue,
+				snapshot.effective[row.field],
+			),
+			detail: [
+				source,
+				row.why,
+				percent !== undefined
+					? "the host resolves the percentage against the smallest context window its runs use"
+					: "",
+				`Enter edits (whole tokens, ${compactionFieldMinimum(row.field)}–${COMPACTION_TOKEN_CEILING}, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}%)`,
+			]
+				.filter(Boolean)
+				.join(" · "),
+			editable: true,
+			action: { kind: "numeric-edit", field: row.field },
+		});
+	}
+	items.push({
+		id: "compaction.reference-window",
+		label: "Reference window",
+		value:
+			snapshot.referenceWindow !== undefined
+				? `${snapshot.referenceWindow} tokens`
+				: "per run: the smallest model window its host tracks",
+		detail:
+			"a percentage resolves against it; with no known window the field's documented default applies · absolute values are used as written",
+		editable: false,
+		action: { kind: "none" },
+	});
+	items.push({
+		id: "compaction.applies",
+		label: "Applies to",
+		value: "every durable run, running ones included",
+		detail: `${inventoryDetail("agents.compaction")} · the host re-reads the policy at every generation, so a save reaches a run already in flight`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	return items;
+}
+
 function providerItems(context: SettingsContext): SettingsItem[] {
 	const providers = context.providers;
 	if (providers.state === "loading")
@@ -446,6 +636,8 @@ export function settingsItems(context: SettingsContext): SettingsItem[] {
 			return agentItems(context);
 		case "browser":
 			return browserItems(context);
+		case "compaction":
+			return compactionItems(context);
 		case "providers":
 			return providerItems(context);
 	}

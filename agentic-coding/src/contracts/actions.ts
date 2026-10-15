@@ -178,6 +178,10 @@ export const agentsListResponseSchema = Schema.Struct({
 	),
 	/** True when the user-level configuration set a bound. */
 	orchestratorLimitsConfigured: Schema.optional(Schema.Boolean),
+	/** The user-scope compaction policy read (`add-agent-compaction`): the
+	 * written section, its resolved effective values and the source. Opaque to
+	 * the transport; the Settings layer reads the fields it renders. */
+	compaction: Schema.optional(Schema.Unknown),
 });
 
 /** Classifier status read: provider selection plus local-model state. */

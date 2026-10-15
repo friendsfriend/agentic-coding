@@ -226,6 +226,18 @@ says where a value lives.
 | Key | File | Owner | Default |
 | --- | --- | --- | --- |
 | `environment.instances.idle_ttl_minutes` | `$AGENTIC_CODING_CONFIG_DIR/config.json` (the layered workflow configuration) | `src/workflow/effects.ts` parses it, `src/server/runtime/instances.ts` (the idle reaper) consumes it | `30` |
+| `agents.compaction` | `$AGENTIC_CODING_CONFIG_DIR/config.json` (the layered workflow configuration) | `src/workflow/compaction.ts` owns the shape, the validation and the resolution; `src/agent-host/host-main.ts` reads it for the durable host, `src/server/config.ts` reads and writes it for Settings | `{ enabled: true, reserveTokens: 32000, backgroundTokens: 32000, keepRecentTokens: 20000 }` |
+
+`agents.compaction` is the durable runs' compaction policy. It is **user scope**:
+the host resolves the user-level file (never a project overlay), the Settings
+write path is pinned to that same file, and a hand-written `agentHost.compaction`
+keeps precedence over it. Each token value is a whole count or a percentage of
+the model's context window (`"15%"`), which the host resolves against the
+smallest window among its tracked runs' models and falls back to that field's
+absolute default when no window is known. The full contract — defaults, floors,
+clamps, the two telemetry envelopes and the manual `/compact` command — is in
+[`settings-inventory.md`](settings-inventory.md) ("Compaction
+(`[agents.compaction]`)") and [`agent-session-telemetry.md`](agent-session-telemetry.md).
 
 `environment.instances.idle_ttl_minutes` is how many minutes an agent-held app
 may sit idle before the server's reaper stops it and frees its slot

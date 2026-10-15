@@ -65,6 +65,29 @@ criteria, free-form answers, and model output are never exported. Only bounded,
 redacted scalar metadata and the validated pool label/profile actually applied
 may leave the process.
 
+## Durable runtime envelopes (`pi-durable`)
+
+Durable runs are driven by `pi-durable`'s own agent-event stream
+(`src/agent-host/telemetry.ts`, `watchEvents`) rather than the bridges above, and
+tag every envelope `runtime: "pi-durable"`. Alongside `runtime.turn_started`,
+`runtime.usage`, `runtime.tool_start`, `runtime.tool`, `runtime.settled` and
+`runtime.task_failed`, one compaction is reported by two envelopes
+(`add-agent-compaction`):
+
+| Event | Fields |
+| --- | --- |
+| `runtime.compaction_start` | `reason` (`manual`, `threshold` or `overflow`), `blocking` (a generation waits for it), `attempt` |
+| `runtime.compaction` | `reason`, `blocking`, `attempts`, `durationMs`, `tokensBefore` / `tokensAfter` when measurable, `outcome` (`completed`, `failed` or `aborted`), and `pi.error.class` when it failed |
+
+The token movement is measured, never invented: `pi-durable` records no counters
+for a compaction, so `tokensBefore` is the newest request's prompt tokens
+(input + cache read/write) before it started and `tokensAfter` is attached only
+when a later generation's request is genuinely smaller. `outcome` is `failed`
+for a correlated `pi.compaction` `task_failed`, `completed` when a summary entry
+was placed, and `aborted` otherwise (a cancellation — `/abort` cancels a manual
+compaction, which is a non-background conversation-owned task — places no
+summary). No summary text ever reaches an envelope.
+
 ## Not captured
 
 - system prompts and thinking/reasoning parts

@@ -15,6 +15,35 @@ with the developer; so do developer questions from workflow agents.
 | Capability | `src/server/auth.ts` `orchestratorTokenFor` | HMAC of the instance token. The server authenticates it as the `orchestrator` principal. |
 | Policy | `src/server/orchestrator-policy.ts` | Route allowlist, action allowlist, human-review step set. Enforced in `src/server/app.ts` before any operation runs. |
 | Model setting | `[agents.orchestrator] { model, thinking, monitor, limits }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation) edits `model`/`thinking`/`monitor`; `limits` is file-only and shown read-only. `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
+| Session commands | `src/tui/dash/ui/AgentSessionView.tsx` | `/model`, `/thinking`, `/compact [instructions]`, `/abort`, `/hide`, plus the page's own `/new`. |
+
+## Session commands
+
+Typing one of these exact messages in a live agent session performs the named
+action instead of sending a prompt; they are listed in the prompt's autocomplete
+and described by `?` help. The dashboard's agent session view and this page both
+render the shared `AgentSessionView`, so the same commands reach either host.
+
+- `/model` / `/thinking` open the picker for the run's host catalog. They send a
+  `configureRun` request and apply to that session only.
+- `/compact [instructions]` asks the run's own agent host to summarize the
+  conversation's context. The free text after the command is passed to the
+  summarizer as its instructions; the host admits at most one compaction, keeps
+  the older messages in storage, and places the summary at the next turn
+  boundary. The outcome is reported as a notice — `started`,
+  `already-compacting` (naming the reason already in flight), `nothing-to-compact`
+  (the conversation holds no range a summary could replace), or "this run has
+  finished" when the host no longer tracks it — so "nothing to compact" is never
+  mistaken for a started compaction. The transcript shows the running compaction
+  with its reason (`manual` or `automatic`) and the finished one with the
+  measured tokens before and after when those are measurable.
+- `/abort` aborts the running turn **and any compaction in flight**: a manual
+  compaction is a non-background conversation-owned task, so aborting the run
+  cancels it and no summary is placed.
+
+The automatic thresholds behind all of this live in `[agents.compaction]`
+(`docs/settings-inventory.md` "Compaction") and apply to every durable run,
+running ones included.
 | Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
 
 ## Shaping workflows

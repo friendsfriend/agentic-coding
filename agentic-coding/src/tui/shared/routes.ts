@@ -32,6 +32,7 @@ export type PageId =
 	| "settings.appearance"
 	| "settings.agents"
 	| "settings.browser"
+	| "settings.compaction"
 	| "settings.providers"
 	| "environments"
 	| "environments.applications"
@@ -82,6 +83,7 @@ export const SETTINGS_SECTIONS = [
 	"appearance",
 	"agents",
 	"browser",
+	"compaction",
 	"providers",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -93,6 +95,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<
 	appearance: "Appearance",
 	agents: "Agent Presets",
 	browser: "Browser",
+	compaction: "Compaction",
 	providers: "Providers/credentials",
 };
 
@@ -103,6 +106,8 @@ export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
 	appearance: "Theme and client-local UI preferences",
 	agents: "Model profiles and configuration presets",
 	browser: "The opt-in headless browser agent runs drive",
+	compaction:
+		"When durable agent runs summarize their own context, and how much room they keep",
 	providers: "Git providers and protected credentials",
 };
 
@@ -196,6 +201,11 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	},
 	"settings.browser": {
 		label: SETTINGS_SECTION_LABELS.browser,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.compaction": {
+		label: SETTINGS_SECTION_LABELS.compaction,
 		parent: () => ({ page: "settings" }),
 		picker: true,
 	},

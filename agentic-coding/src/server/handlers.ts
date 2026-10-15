@@ -68,7 +68,9 @@ import {
 import {
 	type AgentsMutation,
 	applyAgentsMutation,
+	type CompactionSettingsRead,
 	loadAgentConfig,
+	loadCompactionSettings,
 	orchestratorLaunchCeiling,
 } from "./config.ts";
 import {
@@ -359,6 +361,7 @@ export function saveAgents(request: AgentsMutationRequest): void {
 			"delete-preset",
 			"set-classifier",
 			"set-orchestrator",
+			"set-compaction",
 		].includes(mutation.kind)
 	)
 		throw new Error("unknown agents mutation");
@@ -378,6 +381,11 @@ export interface AgentConfigRead extends ReturnType<typeof loadAgentConfig> {
 	/** True when the user-level configuration actually set a bound, so the
 	 * read-only row can mark a fully defaulted ceiling. */
 	readonly orchestratorLimitsConfigured: boolean;
+	/** The user-scope compaction policy the durable host resolves, resolved with
+	 * no reference window (a percentage then uses its documented default).
+	 * Optional in the shape so a gateway that predates the read still satisfies
+	 * the port; the server always populates it. */
+	readonly compaction?: CompactionSettingsRead;
 }
 
 /** Read the effective agents config server-side (no view reads the file). */
@@ -387,6 +395,7 @@ export function loadAgents(repository?: string): AgentConfigRead {
 		...loadAgentConfig(repository),
 		orchestratorLimits: ceiling.limits,
 		orchestratorLimitsConfigured: ceiling.configured,
+		compaction: loadCompactionSettings(),
 	};
 }
 

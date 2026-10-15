@@ -5,16 +5,17 @@
 // module stays trivially testable and reusable from the config loader and
 // from `src/agent-host/host.ts`.
 
+import type { CompactionConfig } from "../workflow/compaction.ts";
+
 export interface AgentHostSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: string;
-	compaction?: {
-		enabled?: boolean;
-		reserveTokens?: number;
-		keepRecentTokens?: number;
-		backgroundTokens?: number;
-	};
+	/** The hand-written escape hatch of the compaction policy: present, it wins
+	 * over `[agents.compaction]` (durable-agent-configuration: "Hand-written
+	 * override wins"). Its shape and defaults live in
+	 * `src/workflow/compaction.ts`. */
+	compaction?: CompactionConfig;
 	retry?: { maxRetries?: number };
 	/** `"all"` places every queued steer/follow-up at once instead of one per
 	 * turn (pi-durable `Settings.steeringMode`/`followUpMode`). */

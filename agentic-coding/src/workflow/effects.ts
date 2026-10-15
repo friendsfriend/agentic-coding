@@ -665,7 +665,10 @@ export function userConfigPaths(
 
 /** Resolve the config file that dashboard edits write back to (see
  * selectAgentsConfigPath for the precedence rules). */
-export function agentsConfigPath(repository?: string): string {
+export function agentsConfigPath(
+	repository?: string,
+	options: { userScope?: boolean } = {},
+): string {
 	const cwd = repository
 		? (repositoryConfigRoot(repository) ?? path.resolve(repository))
 		: process.cwd();
@@ -673,6 +676,8 @@ export function agentsConfigPath(repository?: string): string {
 		process.env.HERDR_WORKFLOW_CONFIG,
 		os.homedir(),
 		cwd,
+		resolveConfigRoot(),
+		options,
 	);
 }
 /** Resolve the write-back target for dashboard edits. The target must be the
@@ -696,6 +701,7 @@ export function selectAgentsConfigPath(
 	home: string,
 	cwd: string,
 	root: string = resolveConfigRoot(),
+	options: { userScope?: boolean } = {},
 ): string {
 	if (envPath) return envPath;
 	const baseCandidates = [
@@ -703,6 +709,14 @@ export function selectAgentsConfigPath(
 		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
 		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
 	];
+	// A user-scope write (the compaction policy) is pinned to the user-level
+	// files: a project overlay must not be able to capture an edit that the
+	// durable host reads from the user document.
+	if (options.userScope)
+		return (
+			baseCandidates.find((candidate) => fs.existsSync(candidate)) ??
+			baseCandidates[0]
+		);
 	const projectJson = path.join(cwd, ".pi", PROJECT_OVERLAY_FILE);
 	const projectToml = path.join(cwd, ".pi", LEGACY_PROJECT_OVERLAY_FILE);
 	if (fs.existsSync(projectJson) && "agents" in readConfigDocument(projectJson))
@@ -817,16 +831,21 @@ export function saveSidebarMode(
 export function saveAgentsSection(
 	mutate: (agents: Record<string, unknown>) => void,
 	repository?: string,
+	options: { userScope?: boolean } = {},
 ): void {
 	const cwd = repository
 		? (repositoryConfigRoot(repository) ?? path.resolve(repository))
 		: process.cwd();
-	const conflicts = conflictingAgentsFiles(os.homedir(), cwd);
+	// A user-scope write targets a base file by construction, so no project
+	// overlay can shadow it and the conflicting-definition guard does not apply.
+	const conflicts = options.userScope
+		? []
+		: conflictingAgentsFiles(os.homedir(), cwd);
 	if (conflicts.length)
 		throw new Error(
 			`[agents] is also defined in ${conflicts.join(", ")}; edit the layered sources separately`,
 		);
-	const file = agentsConfigPath(repository);
+	const file = agentsConfigPath(repository, options);
 	if (configFormat(file) === "toml")
 		throw new Error(
 			`${file} is a legacy TOML configuration read for compatibility; run \`agentic-coding config migrate\` (or convert the file explicitly) before editing it`,

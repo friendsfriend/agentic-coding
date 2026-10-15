@@ -753,6 +753,141 @@ describe("buildAgentSessionView", () => {
 	});
 });
 
+describe("compaction feedback", () => {
+	/** One committed assistant entry whose request carried `prompt` tokens. */
+	const assistant = (prompt: number) => ({
+		kind: "pi.assistant",
+		model: [
+			{
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "ok" }],
+				usage: { input: prompt, cacheRead: 0, cacheWrite: 0, output: 5 },
+			},
+		],
+	});
+
+	test("a live compaction names its reason, and a retry names the failure", () => {
+		expect(
+			blocksOf({
+				entries: [],
+				docs: {
+					"pi.live": {
+						compactions: [{ taskId: 1, reason: "manual", blocking: false }],
+					},
+				},
+			}).find((block) => block.kind === "compaction")?.text,
+		).toBe("Compacting context (manual)…");
+		expect(
+			blocksOf({
+				entries: [],
+				docs: {
+					"pi.live": {
+						compactions: [
+							{
+								taskId: 2,
+								reason: "threshold",
+								blocking: true,
+								retry: { at: 0, error: "provider unavailable" },
+							},
+						],
+					},
+				},
+			}).find((block) => block.kind === "compaction")?.text,
+		).toBe(
+			"Compacting context (automatic, threshold) · retrying: provider unavailable…",
+		);
+	});
+
+	test("a finished compaction measures the tokens before and after the summary", () => {
+		const text = blocksOf({
+			entries: [
+				assistant(120000),
+				{ kind: "pi.compaction", data: { reason: "manual" } },
+				assistant(30000),
+			],
+		}).find((block) => block.kind === "compaction")?.text;
+		expect(text).toBe("Compaction (manual) · 120.0K → 30.0K tokens");
+	});
+
+	test("the movement is omitted rather than invented when it cannot be measured", () => {
+		expect(
+			blocksOf({
+				entries: [
+					{ kind: "pi.compaction", data: { reason: "threshold" } },
+					assistant(30000),
+				],
+			}).find((block) => block.kind === "compaction")?.text,
+		).toBe("Compaction (automatic, threshold) · 30.0K tokens after");
+		expect(
+			blocksOf({
+				entries: [{ kind: "pi.compaction", data: { reason: "overflow" } }],
+			}).find((block) => block.kind === "compaction")?.text,
+		).toBe("Compaction (automatic, overflow)");
+	});
+
+	test("a client notice the frame cannot carry is appended to the transcript", () => {
+		// The aborted-compaction notice: `/abort` cancels a manual compaction and
+		// no summary is placed, which no document records — so the client that
+		// requested the abort states it in the transcript.
+		const blocks = buildAgentSessionView(
+			{ entries: [] },
+			{
+				notices: [
+					{
+						id: "local:compaction-aborted",
+						kind: "notice",
+						tone: "warning",
+						text: "Compaction aborted — a compaction in flight was cancelled and places no summary",
+					},
+				],
+			},
+		);
+		expect(blocks.map((block) => block.id)).toContain(
+			"local:compaction-aborted",
+		);
+		// Without a notice the same frame has no such block.
+		expect(
+			buildAgentSessionView({ entries: [] }).map((block) => block.id),
+		).not.toContain("local:compaction-aborted");
+	});
+
+	test("the status carries a reason-carrying compaction indicator", () => {
+		const info = readAgentSessionMetadata({
+			entries: [],
+			docs: {
+				"pi.live": {
+					run: { taskId: 1, inputs: [1] },
+					compactions: [{ taskId: 3, reason: "manual", blocking: false }],
+				},
+			},
+		});
+		expect(info.compacting).toEqual({ reason: "manual" });
+		expect(info.working).toBe(true);
+		expect(
+			readAgentSessionMetadata({
+				entries: [],
+				docs: {
+					"pi.live": {
+						compactions: [
+							{
+								taskId: 4,
+								reason: "threshold",
+								blocking: true,
+								retry: { at: 0, error: "no model" },
+							},
+						],
+					},
+				},
+			}).compacting,
+		).toEqual({ reason: "threshold", retrying: "no model" });
+		// No compaction in flight: no indicator at all.
+		expect(
+			readAgentSessionMetadata({ entries: [], docs: {} }).compacting,
+		).toBeUndefined();
+	});
+});
+
 describe("readAgentSessionMetadata", () => {
 	test("reads the model and thinking level from pi.agent", () => {
 		const info = readAgentSessionMetadata({

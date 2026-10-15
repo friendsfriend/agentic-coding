@@ -112,6 +112,64 @@ describe("HostClient over the control socket", () => {
 		await expect(client.stopRun("run-1")).resolves.toBeUndefined();
 	});
 
+	test("compactRun carries the instructions and returns a structured outcome", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		const seen: Array<Record<string, unknown>> = [];
+		server = fakeServer(layout.socketPath, (request) => {
+			if (request.type !== "compactRun")
+				return {
+					type: "error",
+					code: "invalid-request",
+					message: "unexpected request",
+				};
+			seen.push(request as unknown as Record<string, unknown>);
+			return request.instructions
+				? {
+						type: "compactRun",
+						runId: request.runId,
+						status: "started",
+						taskId: "7",
+					}
+				: {
+						type: "compactRun",
+						runId: request.runId,
+						status: "already-compacting",
+						reason: "threshold",
+					};
+		});
+		const client = new HostClient(layout.socketPath, 2_000);
+		const started = await client.compactRun("run-1", "focus on findings");
+		expect(started).toEqual({
+			type: "compactRun",
+			runId: "run-1",
+			status: "started",
+			taskId: "7",
+		});
+		// A bare request carries no instructions field at all.
+		const busy = await client.compactRun("run-1");
+		expect(busy.status).toBe("already-compacting");
+		expect(busy.reason).toBe("threshold");
+		expect(seen[0]).toEqual({
+			type: "compactRun",
+			runId: "run-1",
+			instructions: "focus on findings",
+		});
+		expect(seen[1]).toEqual({ type: "compactRun", runId: "run-1" });
+	});
+
+	test("an unknown run is the refusal a finished run maps to", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, () => ({
+			type: "error",
+			code: "unknown-run",
+			message: "unknown run: run-1",
+		}));
+		const client = new HostClient(layout.socketPath, 2_000);
+		await expect(client.compactRun("run-1")).rejects.toThrow(/unknown-run/);
+	});
+
 	test("an error response is surfaced as a rejected promise", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });

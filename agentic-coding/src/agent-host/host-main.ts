@@ -5,6 +5,11 @@
 // serves the control socket until shut down or signalled.
 import fs from "node:fs";
 import path from "node:path";
+import {
+	type CompactionConfig,
+	type CompactionSource,
+	resolveCompactionSection,
+} from "../workflow/compaction.ts";
 import { piAgentDir } from "./credentials.ts";
 import { DurableHost } from "./host.ts";
 import { hostLayout } from "./layout.ts";
@@ -61,6 +66,64 @@ export interface AgentHostMainOptions {
 	readonly globalSettingsPath: string;
 }
 
+/** The configuration file the compaction section is read from: the explicit
+ * replacement file when `HERDR_WORKFLOW_CONFIG` names one (that file replaces
+ * the whole configuration), otherwise the canonical user-level file the caller
+ * resolved. A project overlay is deliberately never consulted: the policy is a
+ * user-scope setting, so a repository cannot change how a workflow's own runs
+ * compact (design D1). */
+export function compactionConfigPath(configPath: string): string {
+	return process.env.HERDR_WORKFLOW_CONFIG?.trim() || configPath;
+}
+
+/** The effective compaction section of one configuration file, with
+ * `agentHost.compaction` taking precedence over `[agents.compaction]`. */
+export function loadCompactionSection(
+	configPath: string,
+	agentHost?: CompactionConfig,
+): { config: CompactionConfig; source: CompactionSource } {
+	const config = readJsonFile(configPath) ?? {};
+	const agents = config.agents;
+	const agentsCompaction =
+		agents && typeof agents === "object" && !Array.isArray(agents)
+			? (agents as Record<string, unknown>).compaction
+			: undefined;
+	return resolveCompactionSection(agentsCompaction, agentHost);
+}
+
+/**
+ * Live accessor for the effective compaction section. pi-durable reads
+ * `HarnessSettings` at every resolution and never copies them, so the host
+ * forwards this as a getter: a Settings save reaches a running conversation
+ * without restarting the host (design D4). The file is re-read only when its
+ * mtime or size changes, so the per-resolution getter stays a stat plus a pure
+ * computation.
+ */
+export function liveCompactionSection(
+	configPath: string,
+	agentHost?: CompactionConfig,
+): () => CompactionConfig {
+	let cached: { key: string; config: CompactionConfig } | undefined;
+	return () => {
+		// The explicit replacement file wins here too, so a caller cannot read one
+		// file while the rest of the configuration layer reads another.
+		const file = compactionConfigPath(configPath);
+		let key = `missing:${file}`;
+		try {
+			const stat = fs.statSync(file);
+			key = `${file}:${stat.mtimeMs}:${stat.size}`;
+		} catch {
+			/* an unreadable file is the same as an absent section */
+		}
+		if (!cached || cached.key !== key)
+			cached = {
+				key,
+				config: loadCompactionSection(file, agentHost).config,
+			};
+		return cached.config;
+	};
+}
+
 export async function runAgentHost(
 	argv: readonly string[],
 	options: AgentHostMainOptions,
@@ -76,6 +139,10 @@ export async function runAgentHost(
 	const host = await DurableHost.open({
 		layout,
 		settings,
+		compaction: liveCompactionSection(
+			compactionConfigPath(options.configPath),
+			settings.compaction,
+		),
 		globalAgentDir: piAgentDir(),
 		...(argv.includes("--orchestrator") ? { orchestrator: true } : {}),
 		// Test-only hook (unified-application-distribution: "Compiled executable

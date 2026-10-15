@@ -81,6 +81,8 @@ interface Calls {
 	execute?: unknown;
 	deleteWorkflow?: unknown;
 	saveAgents?: unknown;
+	/** The compaction mutation, recorded separately from the preset one. */
+	saveAgentsCompaction?: unknown;
 	observation?: unknown;
 }
 
@@ -141,7 +143,9 @@ function recordingOperations(calls: Calls): ServerOperations {
 		},
 		handoff: async () => view,
 		saveAgents: (request) => {
-			calls.saveAgents = request;
+			if ((request.mutation as { kind?: string })?.kind === "set-compaction")
+				calls.saveAgentsCompaction = request;
+			else calls.saveAgents = request;
 		},
 		loadAgents: () => ({
 			agents: { profiles: {} },
@@ -150,6 +154,25 @@ function recordingOperations(calls: Calls): ServerOperations {
 			revision: "stub-revision",
 			orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
 			orchestratorLimitsConfigured: false,
+			// The user-scope compaction read the Compaction section renders.
+			compaction: {
+				configured: {},
+				configuredIsDefault: true,
+				effective: {
+					enabled: true,
+					reserveTokens: 32000,
+					backgroundTokens: 32000,
+					keepRecentTokens: 20000,
+				},
+				source: "default",
+				validation: [],
+				defaults: {
+					enabled: true,
+					reserveTokens: 32000,
+					backgroundTokens: 32000,
+					keepRecentTokens: 20000,
+				},
+			},
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => view,
@@ -251,6 +274,17 @@ describe("dashboard mutations cross the typed backend API", () => {
 				repository: "/repo",
 				mutation: { kind: "delete-preset", name: "legacy" },
 			});
+			// The compaction policy travels the same mutation route: one field at a
+			// time, so a rejected value names exactly what to fix.
+			await backendClient()?.saveAgents({
+				repository: "/repo",
+				expectedRevision: "revision-1",
+				mutation: {
+					kind: "set-compaction",
+					field: "reserveTokens",
+					value: 45000,
+				},
+			});
 			expect(findings?.title).toBe("verifier-1");
 			expect(report?.content).toBe("PASS");
 			expect(calls.observation).toMatchObject({
@@ -287,6 +321,15 @@ describe("dashboard mutations cross the typed backend API", () => {
 			expect(calls.saveAgents).toMatchObject({
 				repository: "/repo",
 				mutation: { kind: "delete-preset", name: "legacy" },
+			});
+			expect(calls.saveAgentsCompaction).toMatchObject({
+				repository: "/repo",
+				expectedRevision: "revision-1",
+				mutation: {
+					kind: "set-compaction",
+					field: "reserveTokens",
+					value: 45000,
+				},
 			});
 		} finally {
 			await server.stop();

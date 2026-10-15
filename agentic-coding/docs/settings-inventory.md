@@ -39,6 +39,7 @@ unavailable or unauthorized server is a section error with a retry.
 | Headless browser | Browser | `src/server/browser/install.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/browsers` (Playwright's `PLAYWRIGHT_BROWSERS_PATH`); a detected system Chrome is used instead when present, and the opt-in Install row is the only download path in the application | no | immediate | yes (Settings → Browser → Install Chromium) |
 | Browser sessions | Browser | `src/workflow/effects.ts` | user | `browser.max_sessions`, `browser.idle_ttl_minutes` and `browser.viewport` in the layered workflow config | no | immediate | no (file-only bounds, shown read-only) |
 | Telemetry receiver binds | — | `src/workflow/effects.ts` | user | `telemetry.receiver.container_bind` in the layered workflow config: `auto` (the container bridge gateway, on a Linux engine), `off` (loopback only) or one explicit address; a wildcard address is never bound | no | next start | no (file-only; read when the receivers bind) |
+| Compaction | Compaction | `src/workflow/compaction.ts` (write through `src/server/config.ts`) | user | `[agents.compaction]` in the layered workflow config — `enabled`, `reserveTokens`, `backgroundTokens` and `keepRecentTokens`, each a whole token count or a percentage of the model's context window (`"15%"`); a present `agentHost.compaction` overrides the section, and a project overlay's `[agents]` is not read at all | no | immediate (the durable host re-reads the policy at every generation) | yes (bounded numeric editor / on-off row) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
 
@@ -53,6 +54,18 @@ unavailable or unauthorized server is a section error with a retry.
   effective `[agents]` section and refuses a write when another client changed
   it since, so a concurrent edit is detected instead of overwritten. Unrelated
   keys, unknown preset role tables and source precedence are preserved.
+- **Compaction** is user scope: a save is pinned to the user-level configuration
+  file (`saveAgentsSection(..., { userScope: true })`), so a project overlay's
+  `[agents]` section can neither capture the write nor change the effective
+  policy, and the durable host — which resolves the same user-level document —
+  reads exactly what the section shows. Its rows are edited one value at a time
+  with the bounded numeric editor (`src/tui/settings/NumberEditor.tsx`): digits
+  plus one trailing `%`, per-field bounds, an inline message when an entry is
+  refused, Enter to save and Escape to cancel. The percentage form is resolved
+  per run by the host against the smallest context window among the models its
+  tracked runs use (an absolute default applies when no window is known), which
+  is why the section states that rule and the effective fallback rather than a
+  single window.
 - **Providers and environments** are owned by the connected server. Settings
   reads provider status through the capability-bearing environment client
   (`Authorization: Bearer <instance token>`) and opens the existing environment
@@ -150,7 +163,56 @@ file, after which it is never overwritten by a later change to the global
 default — the same "seed once, then owned" pattern `config-root.ts` uses for
 the configuration root itself. No credential value is ever part of this
 section: provider auth is read live from `~/.pi/agent/auth.json` through
-`src/agent-host/credentials.ts`'s `PiAuthCredentialStore`, never copied.
+`src/agent-host/credentials.ts`'s `PiAuthCredentialStore`, never copied. The
+section's `compaction` table is the hand-written escape hatch for the policy
+below: when it is present it wins over `[agents.compaction]`.
+
+## Compaction (`[agents.compaction]`)
+
+Durable (`pi-durable`) runs summarize their own conversation context. The policy
+is the section below, resolved by the pure `src/workflow/compaction.ts` and read
+by the durable host at every resolution — a save reaches a run already in
+flight, without a host restart.
+
+```json
+{ "agents": { "compaction": {
+  "enabled": true,
+  "reserveTokens": 32000,
+  "backgroundTokens": 32000,
+  "keepRecentTokens": 20000
+} } }
+```
+
+| Value | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Gates threshold and overflow compaction only; `/compact` in a session works either way |
+| `reserveTokens` | `32000` | Room kept free for the answer: a request above `contextWindow - reserve` waits for a summary. It also bounds the summarizer's own output budget (`0.8 × reserve`) |
+| `backgroundTokens` | `32000` | How far below the blocking threshold a summary starts in the background; `0` disables the background path |
+| `keepRecentTokens` | `20000` | Recent context a summary keeps word for word |
+
+Each token value is either a whole number of tokens or a percentage of the
+model's context window (`"15%"`). Absolute values are used as written — the
+reserve and the background lead are already applied against the actual window,
+so they need no scaling — while a percentage is resolved against the smallest
+context window among the models the host's tracked runs use, falling back to
+that field's absolute default when no window is known. `keepRecentTokens` is the
+value most worth a percentage: a fixed 20 000 is 16% of a 128k window but 2% of a
+1M one.
+
+Resolution floors and clamps a bad configuration instead of letting it defeat
+itself: `reserveTokens` and `keepRecentTokens` are at least 4096,
+`backgroundTokens` at least 0, the reserve is at most half a known window, and
+the kept-verbatim tail at most `window - reserve - 1024`. Values are validated
+when they are written (a non-integer, a negative count, an out-of-range
+percentage), and a hand-edited file that fails validation falls back to the
+documented default for that field rather than failing a durable launch.
+
+Manual compaction is the `/compact [instructions]` command of an agent session
+(`docs/orchestrator.md`); its outcome vocabulary is `started`,
+`already-compacting` (naming the reason in flight) and `nothing-to-compact`, and
+a run the host no longer tracks is reported as finished. Both paths emit the
+`runtime.compaction_start` / `runtime.compaction` telemetry envelopes
+(`docs/agent-session-telemetry.md`).
 
 ## Credentials
 

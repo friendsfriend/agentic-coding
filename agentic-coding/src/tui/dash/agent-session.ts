@@ -224,6 +224,79 @@ function diagnosticsOf(entry: unknown): string[] {
 	);
 }
 
+/** The reason a compaction ran, as the transcript words it: pi-durable's
+ * `manual` is the developer's `/compact`, and both automatic reasons
+ * (`threshold` and `overflow`) are the harness's own decision. */
+export function compactionReasonLabel(reason: string | undefined): string {
+	switch (reason) {
+		case "manual":
+			return "manual";
+		case "threshold":
+			return "automatic, threshold";
+		case "overflow":
+			return "automatic, overflow";
+		default:
+			return "automatic";
+	}
+}
+
+/** One committed compaction entry's label, with the measured token movement
+ * when it can be measured: pi-durable records no counters for a compaction, so
+ * the movement is read from the conversation's own assistant usage around it and
+ * omitted rather than invented when either side is missing. */
+export function compactionLabel(
+	reason: string | undefined,
+	before?: number,
+	after?: number,
+): string {
+	const base = `Compaction (${compactionReasonLabel(reason)})`;
+	if (before !== undefined && after !== undefined)
+		return `${base} · ${formatTokenCount(before)} → ${formatTokenCount(after)} tokens`;
+	if (after !== undefined)
+		return `${base} · ${formatTokenCount(after)} tokens after`;
+	return base;
+}
+
+/** Prompt tokens one committed assistant entry's request carried, i.e. the
+ * context size at that point of the conversation. */
+function entryPromptTokens(entry: unknown): number | undefined {
+	if (!isRecord(entry) || entry.kind !== "pi.assistant") return undefined;
+	const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
+	if (!isRecord(message)) return undefined;
+	const usage = isRecord(message.usage) ? message.usage : undefined;
+	if (!usage) return undefined;
+	const total =
+		(finiteNumber(usage.input) ?? 0) +
+		(finiteNumber(usage.cacheRead) ?? 0) +
+		(finiteNumber(usage.cacheWrite) ?? 0);
+	return total > 0 ? total : undefined;
+}
+
+/** Full labels of every `pi.compaction` entry of one transcript, keyed by the
+ * entry's block key. */
+function compactionEntryLabels(
+	entries: readonly unknown[],
+): ReadonlyMap<string, string> {
+	const labels = new Map<string, string>();
+	entries.forEach((entry, index) => {
+		if (!isRecord(entry) || entry.kind !== "pi.compaction") return;
+		const data = isRecord(entry.data) ? entry.data : undefined;
+		const reason = typeof data?.reason === "string" ? data.reason : undefined;
+		let before: number | undefined;
+		for (let cursor = index - 1; cursor >= 0; cursor--) {
+			before = entryPromptTokens(entries[cursor]);
+			if (before !== undefined) break;
+		}
+		let after: number | undefined;
+		for (let cursor = index + 1; cursor < entries.length; cursor++) {
+			after = entryPromptTokens(entries[cursor]);
+			if (after !== undefined) break;
+		}
+		labels.set(entryId(entry, index), compactionLabel(reason, before, after));
+	});
+	return labels;
+}
+
 /** The primary argument of a tool call, chosen the way opencode v2 picks the
  * headline of an inline tool row. */
 const PRIMARY_ARGS = [
@@ -274,6 +347,9 @@ function entryBlocks(
 	entry: unknown,
 	timings: Readonly<Record<string, EntryTiming>>,
 	entryKey: string,
+	/** Full labels of this frame's compaction entries, keyed by block key: the
+	 * measurement needs the whole entry list, which a single entry does not have. */
+	compactionLabels: ReadonlyMap<string, string> = new Map(),
 ): AgentSessionBlock[] {
 	if (!isRecord(entry)) return [];
 	const model = Array.isArray(entry.model) ? entry.model : [];
@@ -415,15 +491,18 @@ function entryBlocks(
 					},
 				];
 			});
-		case "pi.compaction":
+		case "pi.compaction": {
+			const data = isRecord(entry.data) ? entry.data : undefined;
+			const reason = typeof data?.reason === "string" ? data.reason : undefined;
 			return [
 				{
 					id: `${entryKey}:compaction`,
 					kind: "compaction",
-					text: "Compaction",
+					text: compactionLabels.get(entryKey) ?? compactionLabel(reason),
 					tone: "muted",
 				},
 			];
+		}
 		case "pi.reset":
 			return [
 				{
@@ -554,14 +633,21 @@ function liveBlocks(
 	}
 	const compactions = Array.isArray(live.compactions) ? live.compactions : [];
 	for (const [index, compaction] of compactions.entries()) {
-		if (isRecord(compaction))
-			blocks.push({
-				id: `live:compaction:${index}`,
-				live: true,
-				kind: "compaction",
-				text: "Compacting context",
-				tone: "muted",
-			});
+		if (!isRecord(compaction)) continue;
+		const reason =
+			typeof compaction.reason === "string" ? compaction.reason : undefined;
+		// A retry backoff is the summarizer's own failure, and the only place
+		// pi-durable publishes it: the error is bounded to one line here.
+		const retry = isRecord(compaction.retry) ? compaction.retry : undefined;
+		const failure =
+			retry && typeof retry.error === "string" ? oneLine(retry.error, 200) : "";
+		blocks.push({
+			id: `live:compaction:${index}`,
+			live: true,
+			kind: "compaction",
+			text: `Compacting context (${compactionReasonLabel(reason)})${failure ? ` · retrying: ${failure}` : ""}…`,
+			tone: "muted",
+		});
 	}
 	return blocks;
 }
@@ -836,11 +922,24 @@ export interface AgentSessionProjection {
 	finish(): readonly AgentSessionBlock[];
 }
 
+/** What a caller adds on top of a frame's own projection: local notices the
+ * frame itself cannot carry because no document records them. A cancelled
+ * manual compaction is the one such notice today — `/abort` cancels it and no
+ * summary is placed, which is visible as a fact only to the client that
+ * requested the abort. */
+export interface AgentSessionProjectionOptions {
+	readonly notices?: readonly AgentSessionBlock[];
+}
+
 class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private readonly entries: readonly unknown[];
 	private readonly timings: Readonly<Record<string, EntryTiming>>;
 	private readonly live: Readonly<Record<string, unknown>> | undefined;
 	private readonly inboxItems: readonly unknown[];
+	private readonly notices: readonly AgentSessionBlock[];
+	/** Full labels of this frame's compaction entries (reason plus the measured
+	 * token movement), keyed by block key. */
+	private readonly compactionLabels: ReadonlyMap<string, string>;
 	/** Index of the oldest projected entry; entries `[start, length)` are in
 	 * `pending`, newest last. */
 	private start: number;
@@ -849,7 +948,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private published: readonly AgentSessionBlock[] = [];
 	private done = false;
 
-	constructor(value: unknown) {
+	constructor(value: unknown, options: AgentSessionProjectionOptions = {}) {
 		const record = isRecord(value) ? value : {};
 		const docs = isRecord(record.docs) ? record.docs : {};
 		this.live = isRecord(docs["pi.live"]) ? docs["pi.live"] : undefined;
@@ -857,8 +956,10 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 		this.timings = isRecord(record.timings)
 			? (record.timings as Record<string, EntryTiming>)
 			: {};
+		this.notices = options.notices ?? [];
 		const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
 		this.inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
+		this.compactionLabels = compactionEntryLabels(this.entries);
 		this.start = this.entries.length;
 		this.project(FIRST_PAINT_BLOCKS);
 	}
@@ -915,7 +1016,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private entryBlocksAt(index: number): AgentSessionBlock[] {
 		const entry = this.entries[index];
 		const key = entryId(entry, index);
-		const blocks = entryBlocks(entry, this.timings, key);
+		const blocks = entryBlocks(entry, this.timings, key, this.compactionLabels);
 		const summary = assistantSummaryBlock(entry, this.timings, key);
 		if (summary) blocks.push(summary);
 		return blocks;
@@ -929,6 +1030,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private publish(mayStopEarly: boolean): void {
 		const blocks: AgentSessionBlock[] = [...this.pending];
 		blocks.push(...liveBlocks(this.live));
+		blocks.push(...this.notices);
 		for (const [index, item] of this.inboxItems.entries()) {
 			if (
 				!isRecord(item) ||
@@ -958,8 +1060,9 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
  * the time this returns, and `step` grows the window older. */
 export function createAgentSessionProjection(
 	value: unknown,
+	options: AgentSessionProjectionOptions = {},
 ): AgentSessionProjection {
-	return new AgentSessionProjectionImpl(value);
+	return new AgentSessionProjectionImpl(value, options);
 }
 
 /** Runs `run` on a later turn and returns a canceller. Injected so the
@@ -1005,8 +1108,11 @@ export function streamAgentSessionProjection(
 
 /** The whole transcript projection for one host watch frame: the reference
  * build the incremental projection converges to. */
-export function buildAgentSessionView(value: unknown): AgentSessionBlock[] {
-	return [...createAgentSessionProjection(value).finish()];
+export function buildAgentSessionView(
+	value: unknown,
+	options: AgentSessionProjectionOptions = {},
+): AgentSessionBlock[] {
+	return [...createAgentSessionProjection(value, options).finish()];
 }
 
 /** The conversation's current model and thinking level, read from pi-durable's
@@ -1046,6 +1152,9 @@ export interface AgentSessionMetadata {
 	readonly outputTokens?: number;
 	/** Output tokens over the conversation's measured generation time. */
 	readonly tokensPerSecond?: number;
+	/** A compaction in flight, so the status line shows a reason-carrying
+	 * indicator (`add-agent-compaction`: "Compaction feedback"). */
+	readonly compacting?: { readonly reason: string; readonly retrying?: string };
 }
 
 /** The host's measured wall-clock timing for one committed assistant entry
@@ -1194,6 +1303,22 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 		tokens && tokens.output > 0 && generationMs !== undefined
 			? Math.round((tokens.output / (generationMs / 1000)) * 10) / 10
 			: undefined;
+	const liveCompactions = Array.isArray(live?.compactions)
+		? live.compactions
+		: [];
+	const runningCompaction = liveCompactions.find(isRecord);
+	const compactionReason =
+		runningCompaction && typeof runningCompaction.reason === "string"
+			? runningCompaction.reason
+			: undefined;
+	const compactionRetry =
+		runningCompaction && isRecord(runningCompaction.retry)
+			? runningCompaction.retry
+			: undefined;
+	const compactionRetryError =
+		compactionRetry && typeof compactionRetry.error === "string"
+			? oneLine(compactionRetry.error, 200)
+			: undefined;
 	return {
 		...(model ? { model } : {}),
 		...(thinking ? { thinking } : {}),
@@ -1205,6 +1330,14 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 			? { inputTokens: tokens.input, outputTokens: tokens.output }
 			: {}),
 		...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+		...(compactionReason
+			? {
+					compacting: {
+						reason: compactionReason,
+						...(compactionRetryError ? { retrying: compactionRetryError } : {}),
+					},
+				}
+			: {}),
 	};
 }
 

@@ -74,6 +74,10 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			text: "Starting the orchestrator…",
 		},
 	]);
+	/** Local transcript notices the host's documents cannot carry: an aborted
+	 * manual compaction places no summary, and only this client knows one was in
+	 * flight when it asked for the abort. */
+	const [notices, setNotices] = createSignal<readonly AgentSessionBlock[]>([]);
 	const [metadata, setMetadata] = createSignal<AgentSessionMetadata>({
 		working: false,
 	});
@@ -136,7 +140,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 				onFrame: (value) => {
 					if (session()?.runId !== opened.runId) return;
 					receivedFrame = true;
-					setBlocks(view.buildAgentSessionView(value));
+					setBlocks(view.buildAgentSessionView(value, { notices: notices() }));
 					setMetadata(view.readAgentSessionMetadata(value));
 				},
 				onState: (state) => {
@@ -212,8 +216,27 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		void (async () => {
 			try {
 				const { client: host, current } = await client();
+				const compacting = blocks().some(
+					(block) => block.kind === "compaction" && block.live === true,
+				);
 				await host.abort(current.runId);
-				notify("Abort requested", "info");
+				if (compacting) {
+					setNotices((current) => [
+						...current.filter(
+							(notice) => notice.id !== "local:compaction-aborted",
+						),
+						{
+							id: "local:compaction-aborted",
+							kind: "notice",
+							tone: "warning",
+							text: "Compaction aborted — a compaction in flight was cancelled and places no summary",
+						},
+					]);
+					notify(
+						"Abort requested — a compaction in flight is cancelled and places no summary",
+						"info",
+					);
+				} else notify("Abort requested", "info");
 			} catch (error) {
 				notify(
 					`Could not abort: ${error instanceof Error ? error.message : String(error)}`,
@@ -222,8 +245,47 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			}
 		})();
 	};
+	/** `/compact [instructions]`: the orchestrator's own host serves it through the
+	 * same protocol request the dashboard uses. */
+	const compact = (instructions?: string) => {
+		void (async () => {
+			try {
+				const { client: host, current } = await client();
+				const answer = await host.compactRun(current.runId, instructions);
+				switch (answer.status) {
+					case "started":
+						notify(
+							"Compaction started — the summary is placed at the next turn boundary",
+							"info",
+						);
+						return;
+					case "already-compacting":
+						notify(
+							`Already compacting (${answer.reason ?? "automatic"}) — no second summary was started`,
+							"warning",
+						);
+						return;
+					case "nothing-to-compact":
+						notify(
+							"Nothing to compact — this conversation holds no range a summary could replace",
+							"info",
+						);
+						return;
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				notify(
+					message.includes("unknown-run")
+						? "This session has finished; nothing was compacted"
+						: `Could not compact: ${message}`,
+					message.includes("unknown-run") ? "info" : "error",
+				);
+			}
+		})();
+	};
 	const startNewSession = () => {
 		setSession(undefined);
+		setNotices([]);
 		setBlocks([
 			{
 				id: "route:connecting",
@@ -338,6 +400,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			onAbort={abort}
 			onBack={props.onBack}
 			onConfigure={configure}
+			onCompact={compact}
 			onHelp={props.onHelp}
 			inputActive={() => props.active() && !props.overlay()}
 			extraCommands={[

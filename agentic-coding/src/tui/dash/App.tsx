@@ -658,6 +658,11 @@ export function App(props: {
 	const agentSessionContextWindows = overlays.agentSessionContextWindows;
 	const setAgentSessionMetadata = overlays.setAgentSessionMetadata;
 	const setAgentSessionDraft = overlays.setAgentSessionDraft;
+	/** Local transcript notices the host's documents cannot carry: today, an
+	 * aborted manual compaction (no summary is placed, and only the client that
+	 * requested the abort knows one was in flight). */
+	const agentSessionNotices = overlays.agentSessionNotices;
+	const setAgentSessionNotices = overlays.setAgentSessionNotices;
 	// Live session watch (add-pi-durable-runtime, dashboard-agent-session-view):
 	// at most one subscription at a time, torn down whenever the open session
 	// changes identity or the dashboard unmounts (going back to the grid keeps
@@ -716,7 +721,9 @@ export function App(props: {
 	const projectAgentSessionTranscript = (value: unknown) => {
 		agentSessionStopProjection();
 		agentSessionStopProjection = streamAgentSessionProjection(
-			createAgentSessionProjection(value),
+			createAgentSessionProjection(value, {
+				notices: agentSessionNotices(),
+			}),
 			(blocks) => setAgentSessionBlocks(blocks),
 		);
 	};
@@ -732,6 +739,7 @@ export function App(props: {
 		agentSessionStopWatch?.();
 		agentSessionStopWatch = undefined;
 		agentSessionStopProjection();
+		setAgentSessionNotices([]);
 		setAgentSessionDraft("");
 		setAgentSessionMetadata({ working: false });
 		setAgentSessionBlocks([
@@ -882,13 +890,77 @@ export function App(props: {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
 				const client = new HostClient(session.hostSocket);
+				// A manual compaction is a conversation-owned, non-background task, so
+				// the abort cancels it too: say so in the transcript instead of leaving a
+				// compaction block that will never produce a summary.
+				const compacting = agentSessionBlocks().some(
+					(block) => block.kind === "compaction" && block.live === true,
+				);
 				await client.abort(session.runId);
-				notify("Abort requested", "info");
+				if (compacting) {
+					setAgentSessionNotices((notices) => [
+						...notices.filter(
+							(notice) => notice.id !== "local:compaction-aborted",
+						),
+						{
+							id: "local:compaction-aborted",
+							kind: "notice",
+							tone: "warning",
+							text: "Compaction aborted — a compaction in flight was cancelled and places no summary",
+						},
+					]);
+					notify(
+						"Abort requested — a compaction in flight is cancelled and places no summary",
+						"info",
+					);
+				} else notify("Abort requested", "info");
 			} catch (error) {
 				notify(
 					"Could not abort the run: " +
 						(error instanceof Error ? error.message : String(error)),
 					"error",
+				);
+			}
+		})();
+	};
+	/** `/compact [instructions]`: the host admits one manual compaction and answers
+	 * with a structured outcome, which is reported as a notice so "nothing to
+	 * compact" is never mistaken for a started compaction. */
+	const compactAgentSession = (instructions?: string) => {
+		const session = agentSession();
+		if (!session) return;
+		void (async () => {
+			try {
+				const { HostClient } = await import("../../agent-host/client.ts");
+				const client = new HostClient(session.hostSocket);
+				const answer = await client.compactRun(session.runId, instructions);
+				switch (answer.status) {
+					case "started":
+						notify(
+							"Compaction started — the summary is placed at the next turn boundary",
+							"info",
+						);
+						return;
+					case "already-compacting":
+						notify(
+							`Already compacting (${answer.reason ?? "automatic"}) — no second summary was started`,
+							"warning",
+						);
+						return;
+					case "nothing-to-compact":
+						notify(
+							"Nothing to compact — this conversation holds no range a summary could replace",
+							"info",
+						);
+						return;
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				notify(
+					message.includes("unknown-run")
+						? "This run has finished; nothing was compacted"
+						: `Could not compact: ${message}`,
+					message.includes("unknown-run") ? "info" : "error",
 				);
 			}
 		})();
@@ -3404,6 +3476,7 @@ export function App(props: {
 									onAbort={abortAgentSession}
 									onBack={backAgentSession}
 									onConfigure={configureAgentSession}
+									onCompact={compactAgentSession}
 									// The prompt reads keys only while the dashboard owns the keyboard:
 									// the shell sidebar/overlay or a dashboard dialog parks the
 									// keymap, so the input must blur too instead of swallowing the

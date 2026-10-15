@@ -27,6 +27,7 @@ function Harness(props: {
 	onSubmit: (text: string) => void;
 	onAbort: () => void;
 	onBack: () => void;
+	onCompact?: (instructions?: string) => void;
 	history?: readonly string[];
 	inputActive?: () => boolean;
 }) {
@@ -53,6 +54,7 @@ function Harness(props: {
 			onAbort={props.onAbort}
 			onBack={props.onBack}
 			onConfigure={() => {}}
+			onCompact={props.onCompact ?? (() => {})}
 			inputActive={props.inputActive}
 		/>
 	);
@@ -109,6 +111,7 @@ test("renders a provider error block", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -225,6 +228,7 @@ test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async 
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -265,6 +269,7 @@ test("a live thinking block collapses, expands, and keeps streaming into it", as
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -322,6 +327,7 @@ test("a thinking block with a measured duration renders 'Thought: 1.6s'", async 
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -355,6 +361,7 @@ test("assistant text renders as markdown without a status box", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -393,6 +400,7 @@ test("renders the assistant footer and the context/cost meter", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -464,6 +472,7 @@ test("/model opens the picker and selecting applies the model override", async (
 				onConfigure={(change) => {
 					configured = change;
 				}}
+				onCompact={() => {}}
 				onPickerKeyReady={(value) => {
 					handler = value as unknown as (event: { name: string }) => boolean;
 				}}
@@ -480,6 +489,47 @@ test("/model opens the picker and selecting applies the model override", async (
 	handler?.({ name: "enter" });
 	expect(configured).toEqual({ model: "openai-codex/gpt-5.6-luna" });
 	t.renderer.destroy();
+});
+
+test("/compact is offered, forwards its instructions and never sends a prompt", async () => {
+	const compacted: Array<string | undefined> = [];
+	const submitted: string[] = [];
+	const t = await testRender(
+		() => (
+			<Harness
+				onSubmit={(text) => submitted.push(text)}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onCompact={(instructions) => compacted.push(instructions)}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		// `/com` autocompletes to the command, description included.
+		for (const character of "/com") t.mockInput.pressKey(character);
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("/compact");
+		expect(frame).toContain("Summarize the context");
+		// The bare command runs the compaction and asks for no instructions.
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(compacted).toEqual([undefined]);
+		expect(submitted).toEqual([]);
+
+		// Free text after the command is the summarizer's guidance; the prompt is
+		// cleared instead of being sent as a message.
+		for (const character of "/compact focus on the open findings")
+			t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(compacted).toEqual([undefined, "focus on the open findings"]);
+		expect(submitted).toEqual([]);
+	} finally {
+		t.renderer.destroy();
+	}
 });
 
 /** The route's `agent-session-picker` layer, built from the modal's own key
@@ -523,6 +573,7 @@ function PickerRoute(props: {
 			onAbort={() => {}}
 			onBack={() => {}}
 			onConfigure={props.onConfigure}
+			onCompact={() => {}}
 			onPickerKeyReady={(value) => {
 				handler = value;
 			}}
@@ -584,6 +635,7 @@ test("/thinking opens the picker and selecting applies the thinking override", a
 				onConfigure={(change) => {
 					configured = change;
 				}}
+				onCompact={() => {}}
 				onPickerKeyReady={(value) => {
 					handler = value as unknown as (event: { name: string }) => boolean;
 				}}
@@ -739,6 +791,7 @@ test("a frame that arrives while scrolled up leaves the viewport alone", async (
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onScrollBoxReady={(value) => {
 					box = value as unknown as typeof box;
 				}}
@@ -803,6 +856,7 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onScrollBoxReady={(value) => {
 					box = value as unknown as typeof box;
 				}}
@@ -871,6 +925,7 @@ test("reaching the top loads the older rows the window left out", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onScrollBoxReady={(value) => {
 					box = value as unknown as typeof box;
 				}}
@@ -921,6 +976,7 @@ test("the divider opens the newest run of the model's output", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 80, height: 20 },
@@ -1006,6 +1062,7 @@ test("an expanded block stays expanded when the window loads older rows", async 
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onScrollBoxReady={(value) => {
 					box = value as unknown as typeof box;
 				}}
@@ -1126,6 +1183,7 @@ test("tool rows get a view from their call and result, and a generic default", a
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 80, height: 18 },
@@ -1234,6 +1292,7 @@ test("a running tool shows an in-progress row that its result replaces in place"
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 80, height: 12 },
@@ -1308,6 +1367,7 @@ test("a streaming write stays one compact line instead of its content", async ()
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 12 },
@@ -1358,6 +1418,7 @@ test("a tool call aborted before it ran is marked aborted", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 80, height: 12 },
@@ -1420,6 +1481,7 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 70, height: 20 },
@@ -1522,6 +1584,7 @@ test("a script's call rows fold into their own tool view", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 80, height: 24 },
@@ -1613,6 +1676,7 @@ test("a developer question shows its context, options, and chosen answer", async
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 24 },
@@ -1702,6 +1766,7 @@ test("expanding a block keeps the reader's place", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onScrollBoxReady={(value) => {
 					box = value as unknown as typeof box;
 				}}
@@ -1752,6 +1817,7 @@ test("a streaming message holds its fenced code instead of re-drawing it", async
 					onAbort={() => {}}
 					onBack={() => {}}
 					onConfigure={() => {}}
+					onCompact={() => {}}
 				/>
 			),
 			{ width: 60, height: 14 },
@@ -1817,6 +1883,7 @@ test("a watch frame never blanks the transcript's markdown", async () => {
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -1907,6 +1974,7 @@ test("`?` on an empty prompt opens the shared help, and a typed `?` stays litera
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				onHelp={() => {
 					help++;
 				}}
@@ -1947,6 +2015,7 @@ test("the prompt's metadata row shows context, cost, tokens and tok/s", async ()
 				onAbort={() => {}}
 				onBack={() => {}}
 				onConfigure={() => {}}
+				onCompact={() => {}}
 				contextTokens={12_500}
 				contextWindow={100_000}
 				cost={0.42}

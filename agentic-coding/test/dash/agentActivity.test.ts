@@ -101,6 +101,19 @@ test("deferred and retrying generations are reported distinctly", () => {
 });
 
 test("compaction and queued input are activities too", () => {
+	// The badge carries the compaction's reason: a manual `/compact` and the
+	// harness's own threshold compaction read differently on the panel.
+	expect(
+		agentActivityFromValue(
+			liveFrame({ run: {}, compactions: [{ reason: "manual" }] }),
+		)?.label,
+	).toBe("compacting (manual)");
+	expect(
+		agentActivityFromValue(
+			liveFrame({ run: {}, compactions: [{ reason: "threshold" }] }),
+		)?.label,
+	).toBe("compacting (threshold)");
+	// A status without a reason still reads as compacting rather than vanishing.
 	expect(
 		agentActivityFromValue(liveFrame({ run: {}, compactions: [{}] }))?.label,
 	).toBe("compacting");

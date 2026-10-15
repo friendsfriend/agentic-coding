@@ -6,7 +6,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Storage } from "@earendil-works/pi-durable";
+import type {
+	CompactionResult,
+	Storage,
+	TaskId,
+} from "@earendil-works/pi-durable";
 import {
 	type Conversation,
 	type ConversationId,
@@ -20,6 +24,12 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import {
+	COMPACTION_MAX_INSTRUCTIONS,
+	type CompactionConfig,
+	type CompactionPolicy,
+	resolveCompactionPolicy,
+} from "../workflow/compaction.ts";
 import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
@@ -153,14 +163,50 @@ export interface EnsureRunInput {
 	readonly thinking?: string;
 }
 
+/** Shortest interval a manual compaction waits for a task that has nothing to
+ * summarize to leave the live list. pi-durable completes such a task
+ * immediately and reports no reason, so the task's absence — plus its receipt —
+ * is the only signal there is; waiting for it turns that race into a definite
+ * answer, and a real summarizer (a provider call) is always still listed. */
+const COMPACTION_SETTLE_MS = 250;
+const COMPACTION_SETTLE_POLL_MS = 10;
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface RunRecord {
 	conversationId: ConversationId;
 	readOnly: boolean;
+	/** The `provider/modelId` this run's conversation uses, tracked so a
+	 * percentage compaction threshold can be resolved against a real context
+	 * window. Absent when nothing named a model and `pi.agent` carries none. */
+	model?: string;
+}
+
+/** One manual compaction's outcome (durable-agent-compaction: "Manual
+ * compaction outcomes"). */
+export type CompactionRunStatus =
+	| "started"
+	| "already-compacting"
+	| "nothing-to-compact";
+
+export interface CompactRunResult {
+	readonly status: CompactionRunStatus;
+	/** The admitted compaction's task identity, for `started`. */
+	readonly taskId?: string;
+	/** The reason of the compaction already in flight, for `already-compacting`. */
+	readonly reason?: string;
 }
 
 export interface DurableHostOptions {
 	readonly layout: HostLayout;
 	readonly settings: AgentHostSettings;
+	/** The effective compaction section, read at every resolution (design D4):
+	 * `host-main.ts` supplies a file-backed accessor, tests supply a constant.
+	 * Absent, the static `settings.compaction` is used, and with neither the
+	 * documented defaults apply. */
+	readonly compaction?: () => CompactionConfig;
 	readonly globalAgentDir: string;
 	readonly credentialsPath?: string;
 	/** Orchestrator mode (`--orchestrator`): the host installs only the coding
@@ -189,6 +235,8 @@ export class DurableHost {
 		Record<string, EntryTiming>
 	>();
 	private readonly watchers = new Map<net.Socket, Set<() => void>>();
+	/** Context windows by model ref (see `modelWindow`). */
+	private readonly modelWindows = new Map<string, number | undefined>();
 	private server: net.Server | undefined;
 	private closing = false;
 
@@ -331,15 +379,23 @@ export class DurableHost {
 			options.storage ??
 			(await openNodeSqliteStorage(options.layout.storagePath));
 		const context: Context = BACKGROUND_CONTEXT;
+		const fallbackCompaction = resolveCompactionPolicy(
+			options.compaction?.() ?? options.settings.compaction ?? {},
+		);
 		const harness = await Harness.open(
 			storage,
 			{
 				models,
 				registry,
 				settings: {
-					...(options.settings.compaction
-						? { compaction: options.settings.compaction }
-						: {}),
+					// A getter, not a snapshot: `HarnessSettings` are "read at every
+					// resolution and never copied", so a saved configuration change reaches a
+					// *running* conversation without a host restart (design D4). The
+					// fallback keeps our documented defaults in place during `resume()`,
+					// before the run map exists.
+					get compaction() {
+						return host.instance?.compactionPolicy() ?? fallbackCompaction;
+					},
 					...(options.settings.retry ? { retry: options.settings.retry } : {}),
 					...(options.settings.steeringMode
 						? { steeringMode: options.settings.steeringMode }
@@ -429,7 +485,13 @@ export class DurableHost {
 			...(readJevBinding(envVars) ? { jev: readJevBinding(envVars) } : {}),
 		};
 		this.contexts.set(conversation.id, runContext);
-		this.runs.set(input.runId, { conversationId: conversation.id, readOnly });
+		const model =
+			(await this.conversationModelRef(conversation)) ?? input.model;
+		this.runs.set(input.runId, {
+			conversationId: conversation.id,
+			readOnly,
+			...(model ? { model } : {}),
+		});
 		if (!this.telemetry.has(conversation.id)) {
 			try {
 				const stop = await attachTelemetry(
@@ -523,10 +585,192 @@ export class DurableHost {
 		return entries;
 	}
 
+	/** Test-only: the policy `pi-durable` resolves right now, and the reference
+	 * window a percentage resolves against. Not part of the control protocol;
+	 * focused tests use these to confirm the live getter and the window
+	 * resolution (durable-agent-compaction). */
+	compactionPolicyForTest(): CompactionPolicy {
+		return this.compactionPolicy();
+	}
+
+	referenceWindowForTest(): number | undefined {
+		return this.referenceWindow();
+	}
+
 	private requireConversation(runId: string): RunRecord {
 		const found = this.runs.get(runId);
 		if (!found) throw new Error(`unknown run: ${runId}`);
 		return found;
+	}
+
+	/** One conversation's current model ref, from `pi.agent`: the document both
+	 * `ensureRun`'s model and a live `/model` override write. */
+	private async conversationModelRef(
+		conversation: Conversation,
+	): Promise<string | undefined> {
+		const state = await conversation.viewState(BACKGROUND_CONTEXT);
+		try {
+			const agent = state.value.docs["pi.agent"] as
+				| { model?: { provider?: unknown; modelId?: unknown } }
+				| undefined;
+			const model = agent?.model;
+			if (
+				!model ||
+				typeof model.provider !== "string" ||
+				typeof model.modelId !== "string"
+			)
+				return undefined;
+			return `${model.provider}/${model.modelId}`;
+		} finally {
+			state.dispose();
+		}
+	}
+
+	/** A model ref's context window from the host's catalog; cached because the
+	 * compaction policy is resolved on pi-durable's Session line. */
+	private modelWindow(ref: string): number | undefined {
+		if (this.modelWindows.has(ref)) return this.modelWindows.get(ref);
+		const separator = ref.indexOf("/");
+		const provider = separator < 0 ? ref : ref.slice(0, separator);
+		const id = separator < 0 ? "" : ref.slice(separator + 1);
+		let window: number | undefined;
+		for (const model of this.models?.getModels(provider) ?? []) {
+			if (model.id !== id) continue;
+			if (typeof model.contextWindow === "number") window = model.contextWindow;
+			break;
+		}
+		this.modelWindows.set(ref, window);
+		return window;
+	}
+
+	/** The smallest context window among the models the host's tracked runs use
+	 * (design D3). One harness-wide policy must stay safe for the smallest window
+	 * in play, so a percentage resolves against that one; `undefined` when no
+	 * tracked run names a model the catalog knows, which makes a percentage fall
+	 * back to its documented absolute default. */
+	private referenceWindow(): number | undefined {
+		let smallest: number | undefined;
+		for (const record of this.runs.values()) {
+			if (!record.model) continue;
+			const window = this.modelWindow(record.model);
+			if (window === undefined) continue;
+			if (smallest === undefined || window < smallest) smallest = window;
+		}
+		return smallest;
+	}
+
+	/** The policy pi-durable receives, resolved at every read: the effective
+	 * configuration section against the current reference window. */
+	private compactionPolicy(): CompactionPolicy {
+		const config =
+			this.options.compaction?.() ?? this.options.settings.compaction ?? {};
+		return resolveCompactionPolicy(config, this.referenceWindow());
+	}
+
+	/**
+	 * Admit one manual compaction for a run (durable-agent-compaction: "Manual
+	 * compaction outcomes"). At most one compaction is admitted per conversation:
+	 * a compaction already listed in `pi.live.compactions` is reported instead of
+	 * starting a second summarizer. `pi-durable` completes a compaction that can
+	 * select no range immediately and never lists it, so "nothing to compact" is
+	 * the absence of the task after admission — best-effort by construction, and
+	 * worded that way on every surface.
+	 *
+	 * A read-only run is served like any other: compaction rewrites conversation
+	 * context, never the repository. A run this host does not track (a finished
+	 * run, or one only a recovered watch still knows) is refused with the
+	 * `unknown run` error the protocol maps to `unknown-run`.
+	 */
+	async compactRun(
+		runId: string,
+		instructions?: string,
+	): Promise<CompactRunResult> {
+		const record = this.requireConversation(runId);
+		const text = instructions?.trim();
+		if (text && text.length > COMPACTION_MAX_INSTRUCTIONS)
+			throw new Error(
+				`invalid request: compaction instructions exceed ${COMPACTION_MAX_INSTRUCTIONS} characters`,
+			);
+		const conversation = await this.harness.conversation(
+			record.conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
+		const before = await this.liveCompactions(conversation);
+		if (before.length > 0) {
+			const reason = before[0]?.reason;
+			return {
+				status: "already-compacting",
+				...(reason ? { reason } : {}),
+			};
+		}
+		const taskId = await conversation.compact(
+			text || undefined,
+			BACKGROUND_CONTEXT,
+		);
+		// Give a task with nothing to summarize the moment it needs to finish and
+		// disappear: its absence plus a summary-less receipt is "nothing to
+		// compact", and anything else was genuinely admitted.
+		const deadline = Date.now() + COMPACTION_SETTLE_MS;
+		let listed = true;
+		while (Date.now() < deadline) {
+			await sleep(COMPACTION_SETTLE_POLL_MS);
+			listed = (await this.liveCompactions(conversation)).some(
+				(entry) => entry.taskId === String(taskId),
+			);
+			if (!listed) break;
+		}
+		if (listed) return { status: "started", taskId: String(taskId) };
+		return (await this.compactionPlacedSummary(taskId))
+			? { status: "started", taskId: String(taskId) }
+			: { status: "nothing-to-compact" };
+	}
+
+	/** Whether a finished compaction task actually placed a summary. pi-durable's
+	 * receipt carries an `entryId` (a blocking compaction's summary) or a
+	 * `submissionId` (a conversation-owned one); both absent means it selected no
+	 * range at all. Anything that failed or was aborted still counts as admitted,
+	 * because its outcome is reported by the transcript and the telemetry
+	 * envelope, not by the admission answer. */
+	private async compactionPlacedSummary(
+		taskId: TaskId<CompactionResult>,
+	): Promise<boolean> {
+		try {
+			const task = await this.harness.getTask(taskId, BACKGROUND_CONTEXT);
+			const state = task?.state;
+			if (state?.status !== "terminal") return true;
+			const outcome = state.outcome;
+			if (outcome.status !== "completed") return true;
+			const result = outcome.result as
+				| { entryId?: unknown; submissionId?: unknown }
+				| undefined;
+			return (
+				result?.entryId !== undefined || result?.submissionId !== undefined
+			);
+		} catch {
+			// A task the harness cannot read was admitted; never claim nothing was.
+			return true;
+		}
+	}
+
+	/** The live compactions of one conversation, as `pi.live.compactions`
+	 * publishes them. */
+	private async liveCompactions(
+		conversation: Conversation,
+	): Promise<Array<{ taskId: string; reason: string }>> {
+		const state = await conversation.viewState(BACKGROUND_CONTEXT);
+		try {
+			const live = state.value.docs["pi.live"] as
+				| { compactions?: Array<{ taskId?: unknown; reason?: unknown }> }
+				| undefined;
+			const list = Array.isArray(live?.compactions) ? live.compactions : [];
+			return list.map((entry) => ({
+				taskId: String(entry?.taskId ?? ""),
+				reason: typeof entry?.reason === "string" ? entry.reason : "",
+			}));
+		} finally {
+			state.dispose();
+		}
 	}
 
 	async submit(
@@ -601,6 +845,14 @@ export class DurableHost {
 			},
 			BACKGROUND_CONTEXT,
 		);
+		// Track the model this run now uses, so a percentage threshold resolves
+		// against the smallest window actually in play (design D3).
+		const model =
+			change.model ??
+			(await this.conversationModelRef(conversation)) ??
+			record.model;
+		if (model && model !== record.model)
+			this.runs.set(runId, { ...record, model });
 	}
 
 	/** Every chat model this host can run for the user's *configured*
@@ -917,6 +1169,14 @@ export class DurableHost {
 					});
 					send({ type: "ok" });
 					return;
+				case "compactRun": {
+					const result = await this.compactRun(
+						request.runId,
+						request.instructions,
+					);
+					send({ type: "compactRun", runId: request.runId, ...result });
+					return;
+				}
 				case "catalog": {
 					const catalog = await this.catalog();
 					send({
@@ -959,15 +1219,13 @@ export class DurableHost {
 					});
 			}
 		} catch (error) {
-			const code =
-				error instanceof Error && error.message.startsWith("unknown run")
-					? "unknown-run"
+			const message = error instanceof Error ? error.message : String(error);
+			const code = message.startsWith("unknown run")
+				? "unknown-run"
+				: message.startsWith("invalid request")
+					? "invalid-request"
 					: "internal";
-			send({
-				type: "error",
-				code,
-				message: error instanceof Error ? error.message : String(error),
-			});
+			send({ type: "error", code, message });
 		}
 	}
 }

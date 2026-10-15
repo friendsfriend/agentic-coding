@@ -47,6 +47,12 @@ import {
 } from "../../../contracts/telemetry.ts";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
+	type CompactionField,
+	type CompactionTokenValue,
+	formatCompactionValue,
+	resolveCompactionPolicy,
+} from "../../../workflow/compaction.ts";
+import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
 	GATE_STAGES,
@@ -65,6 +71,7 @@ import { App as DashApp } from "../../dash/App.tsx";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
+	reloadAgentConfigLocal,
 } from "../../dash/agent-config-cache.ts";
 import {
 	browserSnapshot,
@@ -99,7 +106,12 @@ import {
 } from "../../dash/theme-settings.ts";
 import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing.ts";
 import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal.tsx";
-import { gatewayReady } from "../../data/index.ts";
+import {
+	type AgentsMutation,
+	applyAgentsMutation,
+	saveAgentConfig,
+} from "../../data/agents.ts";
+import { gatewayOrUndefined, gatewayReady } from "../../data/index.ts";
 import type { WikiReviewComment } from "../../data/wiki.ts";
 import { deleteWorkflow, loadOverviews } from "../../data/workflow.ts";
 import {
@@ -111,11 +123,19 @@ import { startWorkflowMonitor } from "../../orchestrator/monitor.ts";
 import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
+	type CompactionSettingsSnapshot,
 	fileJudgmentSummaryLabel,
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
 } from "../../settings/items.ts";
+import {
+	acceptEditorKeystroke,
+	compactionEditorField,
+	NumberEditor,
+	type NumberEditorField,
+	readEditorDraft,
+} from "../../settings/NumberEditor.tsx";
 import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
 import {
 	refreshSettingsProjects,
@@ -1033,6 +1053,69 @@ export function App(props: {
 			(project) => project.ident === ident,
 		)?.repository;
 	};
+	/** The user-scope compaction policy the Compaction section renders. */
+	const settingsAgentsCompaction = (): CompactionSettingsSnapshot | undefined =>
+		agentConfigEntry(settingsAgentRepository()).compaction as
+			| CompactionSettingsSnapshot
+			| undefined;
+	// The bounded numeric editor's own state: the field being edited, its draft,
+	// the inline message and what the row showed before, so cancelling is
+	// visibly a no-op.
+	const [compactionTarget, setCompactionTarget] = createSignal<
+		NumberEditorField | undefined
+	>();
+	const [compactionDraft, setCompactionDraft] = createSignal("");
+	const [compactionOriginal, setCompactionOriginal] = createSignal("");
+	const [compactionError, setCompactionError] = createSignal<
+		string | undefined
+	>();
+	/** What the durable host would resolve from the current draft. */
+	const compactionResolved = (): string | undefined => {
+		const target = compactionTarget();
+		if (!target) return undefined;
+		const read = readEditorDraft(target.field, compactionDraft());
+		if (!read.ok) return undefined;
+		const resolved = resolveCompactionPolicy({ [target.field]: read.value });
+		return `${resolved[target.field]} tokens when no model window is known`;
+	};
+	/** Persist one compaction field through the server-owned `[agents]` write
+	 * path (user scope, revision-checked). A failure keeps the stored value and
+	 * is reported instead of pretending the write landed. */
+	const saveCompactionField = async (
+		field: CompactionField,
+		value: boolean | CompactionTokenValue,
+	): Promise<void> => {
+		const repository = settingsAgentRepository();
+		const entry = agentConfigEntry(repository);
+		const mutation: AgentsMutation = {
+			kind: "set-compaction",
+			field,
+			value,
+		};
+		try {
+			if (gatewayOrUndefined())
+				await saveAgentConfig({
+					repository,
+					...(entry.revision ? { expectedRevision: entry.revision } : {}),
+					mutation,
+				});
+			else {
+				applyAgentsMutation(mutation, repository, entry.revision);
+				reloadAgentConfigLocal(repository);
+			}
+			setSettingsAgentVersion((value) => value + 1);
+			notify(
+				`Compaction ${field} set to ${formatCompactionValue(value)} · durable runs re-read it at every generation`,
+				"success",
+			);
+		} catch (error) {
+			notify(
+				"Could not save the compaction setting: " +
+					(error instanceof Error ? error.message : String(error)),
+				"error",
+			);
+		}
+	};
 	const settingsContext = (): SettingsContext => {
 		// Re-read the agent cache after a refresh; the cache itself is not reactive.
 		settingsAgentVersion();
@@ -1161,6 +1244,15 @@ export function App(props: {
 		}, 1000);
 	});
 	onCleanup(stopBrowserPoll);
+	// The numeric editor's draft lives only while its dialog is the top overlay.
+	// Escape pops a shell-owned overlay before the dispatcher reaches the field's
+	// own key branch, so the draft is discarded here rather than left behind for
+	// the next open.
+	createEffect(() => {
+		if (nav.modal() === "compaction-value") return;
+		if (compactionTarget()) setCompactionTarget(undefined);
+		if (compactionError()) setCompactionError(undefined);
+	});
 	const settingsIndex = (): number =>
 		pages.viewState<number>(pages.current()) ?? 0;
 	const setSettingsIndex = (index: number): void => {
@@ -1234,6 +1326,37 @@ export function App(props: {
 					setSettingsBrowserVersion((value) => value + 1);
 				});
 				return;
+			case "compaction-toggle": {
+				const current = settingsAgentsCompaction();
+				if (!current) {
+					notify("Compaction settings are unavailable", "error");
+					return;
+				}
+				void saveCompactionField("enabled", !current.effective.enabled);
+				return;
+			}
+			case "numeric-edit": {
+				const field = item.action.field;
+				const snapshot = settingsAgentsCompaction();
+				const configured = snapshot?.configured as
+					| Record<string, unknown>
+					| undefined;
+				const raw = configured?.[field];
+				setCompactionTarget(compactionEditorField(field));
+				setCompactionOriginal(
+					typeof raw === "number" || typeof raw === "string"
+						? String(raw)
+						: String(snapshot?.effective[field] ?? ""),
+				);
+				setCompactionDraft(
+					typeof raw === "number" || typeof raw === "string"
+						? String(raw)
+						: String(snapshot?.effective[field] ?? ""),
+				);
+				setCompactionError(undefined);
+				nav.pushModal("compaction-value", "home");
+				return;
+			}
 			case "navigate":
 				pages.navigate(item.action.route);
 				return;
@@ -2241,6 +2364,39 @@ export function App(props: {
 				if (selected) {
 					saveThemeName(selected);
 					nav.popModal();
+				}
+			}
+			return;
+		}
+
+		if (nav.modal() === "compaction-value") {
+			// The bounded numeric editor (`add-agent-compaction`): only what can be
+			// part of a valid value is accepted, so the entry can never *become*
+			// invalid by typing; Enter saves, Esc cancels and discards the draft.
+			const target = compactionTarget();
+			if (!target) return;
+			if (key === "escape") {
+				setCompactionTarget(undefined);
+				setCompactionError(undefined);
+				nav.popModal();
+			} else if (key === "backspace") {
+				setCompactionDraft((draft) => draft.slice(0, -1));
+				setCompactionError(undefined);
+			} else if (key === "enter" || key === "return") {
+				const read = readEditorDraft(target.field, compactionDraft());
+				if (!read.ok) {
+					setCompactionError(read.message);
+					return;
+				}
+				setCompactionTarget(undefined);
+				setCompactionError(undefined);
+				nav.popModal();
+				void saveCompactionField(target.field, read.value);
+			} else {
+				const next = acceptEditorKeystroke(compactionDraft(), key);
+				if (next !== compactionDraft()) {
+					setCompactionDraft(next);
+					setCompactionError(undefined);
 				}
 			}
 			return;
@@ -3347,6 +3503,17 @@ export function App(props: {
 					themes={filteredThemes}
 					query={themeQuery}
 					filtering={themeFiltering}
+				/>
+			)}
+			{nav.modal() === "compaction-value" && compactionTarget() && (
+				<NumberEditor
+					target={compactionTarget() as NumberEditorField}
+					original={compactionOriginal()}
+					value={compactionDraft()}
+					{...(compactionError() ? { error: compactionError() } : {})}
+					{...(!compactionError() && compactionResolved()
+						? { resolved: compactionResolved() }
+						: {})}
 				/>
 			)}
 			{nav.modal() === "locations" && (

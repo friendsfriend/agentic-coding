@@ -54,6 +54,14 @@ export interface ConfigureRunRequest {
 export interface CatalogRequest {
 	readonly type: "catalog";
 }
+/** One manual compaction of a run's conversation (`/compact` in the agent
+ * session prompt). `instructions` is free-text guidance for the summarizer,
+ * bounded by the host; absent means no guidance. */
+export interface CompactRunRequest {
+	readonly type: "compactRun";
+	readonly runId: string;
+	readonly instructions?: string;
+}
 export interface AbortRequest {
 	readonly type: "abort";
 	readonly runId: string;
@@ -92,6 +100,7 @@ export type HostRequest =
 	| StatusRequest
 	| ConfigureRunRequest
 	| CatalogRequest
+	| CompactRunRequest
 	| AbortRequest
 	| StopRunRequest
 	| ShutdownRequest
@@ -131,6 +140,23 @@ export interface CatalogResponse {
 	/** Context window per `provider/modelId`, for the prompt's context meter. */
 	readonly contextWindows: Readonly<Record<string, number>>;
 }
+/** One compaction's structured outcome. `already-compacting` and
+ * `nothing-to-compact` are answers, not errors: the request was understood and
+ * nothing was admitted. */
+export type CompactionRunStatus =
+	| "started"
+	| "already-compacting"
+	| "nothing-to-compact";
+
+export interface CompactRunResponse {
+	readonly type: "compactRun";
+	readonly runId: string;
+	readonly status: CompactionRunStatus;
+	/** The admitted compaction task's identity, for `started`. */
+	readonly taskId?: string;
+	/** The reason of the compaction already in flight, for `already-compacting`. */
+	readonly reason?: string;
+}
 export interface ErrorResponse {
 	readonly type: "error";
 	readonly code:
@@ -154,6 +180,7 @@ export type HostResponse =
 	| SubmitResponse
 	| StatusResponse
 	| CatalogResponse
+	| CompactRunResponse
 	| OkResponse
 	| ErrorResponse
 	| WatchFrame;

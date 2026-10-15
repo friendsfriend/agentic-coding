@@ -59,6 +59,9 @@ export interface AgentsListResponse {
 	};
 	/** True when the user-level configuration set a bound. */
 	readonly orchestratorLimitsConfigured?: boolean;
+	/** The user-scope compaction policy the durable host resolves. Absent on a
+	 * gateway that predates the read. */
+	readonly compaction?: unknown;
 }
 
 /** One selectable classifier transport, for the Settings picker. */

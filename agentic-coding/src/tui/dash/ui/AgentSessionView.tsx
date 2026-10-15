@@ -92,6 +92,9 @@ export interface AgentSessionViewProps {
 	readonly outputTokens?: number;
 	/** Output tokens over the conversation's measured generation time. */
 	readonly tokensPerSecond?: number;
+	/** A compaction in flight, so the status line shows a reason-carrying
+	 * indicator (`add-agent-compaction`: "Compaction feedback"). */
+	readonly compacting?: { readonly reason: string; readonly retrying?: string };
 	/** Picker catalogs, from the host's `catalog` request. */
 	readonly models: readonly string[];
 	readonly thinkingLevels: readonly string[];
@@ -102,6 +105,10 @@ export interface AgentSessionViewProps {
 	readonly onBack: () => void;
 	/** Apply a live model / thinking override. */
 	readonly onConfigure: (change: { model?: string; thinking?: string }) => void;
+	/** Summarize this conversation's context on demand. The optional instructions
+	 * are the free text after `/compact`; the host answers with one structured
+	 * outcome the route reports as a notice. */
+	readonly onCompact: (instructions?: string) => void;
 	/** The transcript scroll box, so the route's keymap layer can scroll it. */
 	readonly onScrollBoxReady?: (box: ScrollBoxRenderable) => void;
 	/** The picker's key handler, registered while a picker is open. */
@@ -133,6 +140,10 @@ export const ABORT_COMMAND = "/abort";
 export const CLOSE_COMMAND = "/hide";
 export const MODEL_COMMAND = "/model";
 export const THINKING_COMMAND = "/thinking";
+/** Summarize the conversation's context (`add-agent-compaction`). An optional
+ * free-text argument is passed to the summarizer as its instructions, exactly
+ * as a `/model` or `/thinking` argument is passed to the host. */
+export const COMPACT_COMMAND = "/compact";
 
 interface SessionCommand {
 	readonly name: string;
@@ -144,6 +155,10 @@ interface SessionCommand {
 const SESSION_COMMANDS: readonly SessionCommand[] = [
 	{ name: MODEL_COMMAND, description: "Change the model for this run" },
 	{ name: THINKING_COMMAND, description: "Change the thinking level" },
+	{
+		name: COMPACT_COMMAND,
+		description: "Summarize the context (optional instructions)",
+	},
 	{ name: ABORT_COMMAND, description: "Abort the running turn" },
 	{ name: CLOSE_COMMAND, description: "Hide this session view" },
 ];
@@ -972,6 +987,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			);
 		if (props.tokensPerSecond !== undefined)
 			parts.push(`${props.tokensPerSecond} tok/s`);
+		if (props.compacting) {
+			// The compaction indicator carries its reason, so a manual `/compact`
+			// reads differently from the harness's own threshold compaction.
+			const reason =
+				props.compacting.reason === "manual" ? "manual" : "automatic";
+			parts.push(
+				`compacting (${reason}${props.compacting.retrying ? ", retrying" : ""})`,
+			);
+		}
 		return parts.join(" · ");
 	};
 
@@ -1060,7 +1084,16 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		historyIndex = 0;
 		if (name === MODEL_COMMAND) openPicker("model");
 		else if (name === THINKING_COMMAND) openPicker("thinking");
-		else if (name === ABORT_COMMAND) props.onAbort();
+		else if (
+			name === COMPACT_COMMAND ||
+			name.startsWith(`${COMPACT_COMMAND} `)
+		) {
+			// `/compact <instructions>`: the free text after the command is the
+			// summarizer's guidance. The bare command keeps exact-match behavior, like
+			// `/model` and `/thinking`.
+			const instructions = name.slice(COMPACT_COMMAND.length).trim();
+			props.onCompact(instructions || undefined);
+		} else if (name === ABORT_COMMAND) props.onAbort();
 		else if (name === CLOSE_COMMAND) props.onBack();
 		else {
 			const extra = props.extraCommands?.find(

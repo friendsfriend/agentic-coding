@@ -14,7 +14,9 @@ export type Modal =
 	| "environment"
 	| "locations"
 	| "new-workflow"
-	| "delete-workflow";
+	| "delete-workflow"
+	/** The bounded numeric editor for one compaction threshold. */
+	| "compaction-value";
 
 /**
  * Overlay kinds the shell handler itself owns. `environment` is deliberately
@@ -32,6 +34,9 @@ const SHELL_OWNED_OVERLAY_NAMES: readonly Modal[] = [
 	// Destructive confirmation: the shell owns the question and the delete
 	// boundary, so its answer keys are routed through the one shell dispatcher.
 	"delete-workflow",
+	// The bounded numeric editor: the shell owns its draft, its validation and
+	// its save boundary, so its keys are routed through the same dispatcher.
+	"compaction-value",
 ];
 
 /** Whether the current overlay kind is one the shell handler owns. */

@@ -31,6 +31,10 @@ const PURE_HELPER_EXCEPTIONS = [
 	/\/workflow\/run-projections\.ts$/,
 	/\/workflow\/project-catalog\.ts$/,
 	/\/workflow\/runtime\.ts$/,
+	// pure compaction policy: the shape, the documented defaults, the value
+	// validation and the resolution — no I/O (the host, the config reader and
+	// the Settings section all call these same functions)
+	/\/workflow\/compaction\.ts$/,
 ];
 
 function filesUnder(dir: string): string[] {

@@ -5,6 +5,7 @@
 import { backendClient } from "../../server/client.ts";
 import {
 	loadAgentConfig,
+	loadCompactionSettings,
 	orchestratorLaunchCeiling,
 } from "../../server/config.ts";
 import type {
@@ -25,6 +26,9 @@ export interface AgentConfigEntry {
 	orchestratorLimits?: OrchestratorLimits;
 	/** True when the user-level configuration set a bound. */
 	orchestratorLimitsConfigured?: boolean;
+	/** The user-scope compaction policy the durable host resolves, for the
+	 * Compaction section. Absent until the read resolves. */
+	compaction?: unknown;
 	error?: string;
 }
 
@@ -38,6 +42,7 @@ function readLocal(repository?: string): AgentConfigEntry {
 			...loadAgentConfig(repository),
 			orchestratorLimits: ceiling.limits,
 			orchestratorLimitsConfigured: ceiling.configured,
+			compaction: loadCompactionSettings(),
 		};
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
@@ -92,6 +97,9 @@ export async function refreshAgentConfig(
 				: {}),
 			...(value.orchestratorLimitsConfigured !== undefined
 				? { orchestratorLimitsConfigured: value.orchestratorLimitsConfigured }
+				: {}),
+			...(value.compaction !== undefined
+				? { compaction: value.compaction }
 				: {}),
 		};
 		cache.set(key(repository), entry);

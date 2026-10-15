@@ -1,0 +1,435 @@
+// Manual compaction and the live compaction policy of a durable host
+// (add-agent-compaction, tasks 2.1–2.4 and 3.1).
+//
+// Runs the experimental `pi-durable` surface for real against a scripted faux
+// provider and in-memory storage, exactly like `agent-host-faux-provider.test.ts`:
+// the outcome vocabulary, the reference window and the telemetry envelopes can
+// only be confirmed against the real harness.
+import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+	createModels,
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxText,
+} from "@earendil-works/pi-ai";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { DurableHost } from "../src/agent-host/host.ts";
+import { hostLayout } from "../src/agent-host/layout.ts";
+import type { CompactionConfig } from "../src/workflow/compaction.ts";
+import { COMPACTION_DEFAULTS } from "../src/workflow/compaction.ts";
+
+const MODELS = [
+	{ id: "wide", contextWindow: 1_000_000 },
+	{ id: "mid", contextWindow: 200_000 },
+	{ id: "narrow", contextWindow: 100_000 },
+];
+
+function tempWorkflowDir(): string {
+	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-compaction-"));
+}
+
+function writeRunEnv(dir: string, vars: Record<string, string>): string {
+	const file = path.join(dir, "run.env");
+	fs.writeFileSync(
+		file,
+		Object.entries(vars)
+			.map(([k, v]) => `${k}='${v}'`)
+			.join("\n"),
+	);
+	return file;
+}
+
+function modelRef(faux: ReturnType<typeof fauxProvider>, id: string): string {
+	const model = faux.getModel(id);
+	if (!model) throw new Error(`no faux model: ${id}`);
+	return `${model.provider}/${model.id}`;
+}
+
+/** A provider response that stays pending for `delayMs`, so a compaction task is
+ * observably in flight while the test looks at it. */
+function delayedResponse(delayMs: number) {
+	return async () => {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+		return fauxAssistantMessage([fauxText("summary of the older context")]);
+	};
+}
+
+async function openHost(options: {
+	dir: string;
+	models: ReturnType<typeof createModels>;
+	compaction?: () => CompactionConfig;
+}) {
+	return await DurableHost.open({
+		layout: hostLayout(options.dir),
+		settings: {},
+		globalAgentDir: options.dir,
+		storage: new MemoryStorage(),
+		models: options.models,
+		...(options.compaction ? { compaction: options.compaction } : {}),
+	});
+}
+
+async function waitFor(
+	predicate: () => Promise<boolean>,
+	attempts = 100,
+): Promise<void> {
+	for (let i = 0; i < attempts; i++) {
+		if (await predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error("waitFor timed out");
+}
+
+/** Poll until an envelope with this exact `event` name is on disk. */
+async function waitForLines(
+	telemetryPath: string,
+	name: string,
+	attempts = 100,
+): Promise<Array<Record<string, unknown>>> {
+	const read = () =>
+		fs.existsSync(telemetryPath)
+			? fs
+					.readFileSync(telemetryPath, "utf8")
+					.trim()
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => JSON.parse(line) as Record<string, unknown>)
+			: [];
+	for (let i = 0; i < attempts; i++) {
+		const lines = read();
+		if (lines.some((line) => line.event === name)) return lines;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	return read();
+}
+
+describe("compaction policy of a durable host", () => {
+	test("the documented defaults apply with no configuration, and a changed section is read live", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		let configured: CompactionConfig = {};
+		const host = await openHost({ dir, models, compaction: () => configured });
+		try {
+			expect(host.compactionPolicyForTest()).toEqual(COMPACTION_DEFAULTS);
+			// The getter is re-read on every resolution: a configuration change
+			// reaches an already-open host with no restart (design D4).
+			configured = { reserveTokens: 40000 };
+			expect(host.compactionPolicyForTest().reserveTokens).toBe(40000);
+			expect(host.compactionPolicyForTest().enabled).toBe(true);
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("the reference window is the smallest window among the tracked runs", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({ dir, models, compaction: () => ({}) });
+		try {
+			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-wide" });
+			await host.ensureRun({
+				runId: "run-wide",
+				name: "worker-wide",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "wide"),
+			});
+			expect(host.referenceWindowForTest()).toBe(1_000_000);
+
+			await host.ensureRun({
+				runId: "run-mid",
+				name: "worker-mid",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			expect(host.referenceWindowForTest()).toBe(200_000);
+
+			// A live `/model` override to a smaller window shrinks it again.
+			await host.configureRun("run-mid", { model: modelRef(faux, "narrow") });
+			expect(host.referenceWindowForTest()).toBe(100_000);
+
+			// And the percentage resolves against it.
+			const percentHost = await openHost({
+				dir,
+				models,
+				compaction: () => ({ keepRecentTokens: "15%" }),
+			});
+			try {
+				// No tracked run yet: no window, so the absolute default applies.
+				expect(percentHost.compactionPolicyForTest().keepRecentTokens).toBe(
+					COMPACTION_DEFAULTS.keepRecentTokens,
+				);
+			} finally {
+				await percentHost.shutdown();
+			}
+		} finally {
+			await host.shutdown();
+		}
+	});
+});
+
+describe("manual compaction outcomes", () => {
+	test("a conversation with nothing to summarize reports nothing-to-compact", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({ dir, models });
+		try {
+			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-empty" });
+			await host.ensureRun({
+				runId: "run-empty",
+				name: "worker-empty",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			expect(await host.compactRun("run-empty")).toEqual({
+				status: "nothing-to-compact",
+			});
+			// The host still serves a read-only run: compaction rewrites
+			// conversation context, not the repository.
+			const readOnlyEnv = writeRunEnv(dir, { HERDR_RUN_ID: "run-readonly" });
+			await host.ensureRun({
+				runId: "run-readonly",
+				name: "verifier-1",
+				cwd: dir,
+				runEnvPath: readOnlyEnv,
+				toolPolicy: "read-only",
+				model: modelRef(faux, "mid"),
+			});
+			expect(
+				await host.compactRun("run-readonly", "focus on findings"),
+			).toEqual({ status: "nothing-to-compact" });
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("an untracked run is refused and an over-long instruction is an invalid request", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({ dir, models });
+		try {
+			await expect(host.compactRun("ghost")).rejects.toThrow(/unknown run/);
+			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-1" });
+			await host.ensureRun({
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			await expect(host.compactRun("run-1", "x".repeat(2001))).rejects.toThrow(
+				/invalid request/,
+			);
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("over the control socket an unknown run is `unknown-run`, an over-long instruction is `invalid-request` and a served run answers structurally", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({ dir, models });
+		try {
+			await host.listen();
+			const { HostClient } = await import("../src/agent-host/client.ts");
+			const client = new HostClient(hostLayout(dir).socketPath, 5_000);
+			await expect(client.compactRun("ghost")).rejects.toThrow(/unknown-run/);
+			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-1" });
+			await host.ensureRun({
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			await expect(
+				client.compactRun("run-1", "x".repeat(2001)),
+			).rejects.toThrow(/invalid-request/);
+			// A served run answers with an outcome rather than an error.
+			expect(await client.compactRun("run-1")).toMatchObject({
+				type: "compactRun",
+				runId: "run-1",
+				status: "nothing-to-compact",
+			});
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("a compaction is admitted once, reported as already compacting while it runs, and places a summary", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		// A kept-verbatim tail at the floor makes a small conversation compactable,
+		// and a pending summarizer keeps the task observably in flight.
+		const host = await openHost({
+			dir,
+			models,
+			compaction: () => ({ keepRecentTokens: 4096 }),
+		});
+		try {
+			const telemetryPath = path.join(dir, "telemetry.jsonl");
+			const envPath = writeRunEnv(dir, {
+				HERDR_WORKFLOW_ID: "wf-1",
+				HERDR_RUN_ID: "run-1",
+				HERDR_ROLE: "worker",
+				HERDR_TELEMETRY_PATH: telemetryPath,
+			});
+			await host.ensureRun({
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			// A context larger than the kept tail, so a summarized range exists.
+			const big = "context worth summarizing. ".repeat(4000);
+			faux.setResponses([fauxAssistantMessage([fauxText("acknowledged")])]);
+			await host.submit("run-1", big, "req-1");
+			faux.appendResponses([delayedResponse(1500)]);
+			let working = await host.status("run-1");
+			for (let i = 0; i < 50 && working.status !== "idle"; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				working = await host.status("run-1");
+			}
+			expect(working.status).toBe("idle");
+
+			const started = await host.compactRun(
+				"run-1",
+				"focus on the open findings",
+			);
+			expect(started.status).toBe("started");
+			expect(started.taskId).toBeTruthy();
+
+			// A second compaction while the first is listed is reported, not admitted.
+			const second = await host.compactRun("run-1");
+			expect(second.status).toBe("already-compacting");
+			expect(second.reason).toBe("manual");
+
+			// The summary lands once the summarizer answers; the live status then
+			// disappears and the transcript carries the committed compaction entry.
+			let entries: readonly unknown[] = [];
+			for (let i = 0; i < 100; i++) {
+				entries = await host.entriesForTest("run-1");
+				if (
+					entries.some(
+						(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+					)
+				)
+					break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			expect(
+				entries.some(
+					(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+				),
+			).toBe(true);
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("the compaction envelopes carry the reason, the outcome and the measured token movement", async () => {
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({
+			dir,
+			models,
+			compaction: () => ({ keepRecentTokens: 4096 }),
+		});
+		try {
+			const telemetryPath = path.join(dir, "telemetry.jsonl");
+			const envPath = writeRunEnv(dir, {
+				HERDR_WORKFLOW_ID: "wf-1",
+				HERDR_RUN_ID: "run-1",
+				HERDR_ROLE: "worker",
+				HERDR_TELEMETRY_PATH: telemetryPath,
+			});
+			await host.ensureRun({
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "mid"),
+			});
+			const big = "context worth summarizing. ".repeat(4000);
+			faux.setResponses([fauxAssistantMessage([fauxText("acknowledged")])]);
+			await host.submit("run-1", big, "req-1");
+			faux.appendResponses([delayedResponse(200)]);
+			let working = await host.status("run-1");
+			for (let i = 0; i < 50 && working.status !== "idle"; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				working = await host.status("run-1");
+			}
+			expect(await host.compactRun("run-1")).toMatchObject({
+				status: "started",
+			});
+			// Wait for the summary to be placed: the committed `pi.compaction` entry
+			// is the receipt that the compaction ended.
+			await waitFor(async () =>
+				(await host.entriesForTest("run-1")).some(
+					(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+				),
+			);
+			// A generation after the placed summary measures the context it left.
+			faux.appendResponses([fauxAssistantMessage([fauxText("after")])]);
+			await host.submit("run-1", "and now?", "req-2");
+
+			const lines = await waitForLines(telemetryPath, "runtime.compaction");
+			const started = lines.find(
+				(line) => line.event === "runtime.compaction_start",
+			);
+			expect(started).toMatchObject({
+				reason: "manual",
+				blocking: false,
+				attempt: 1,
+			});
+			const finished = lines.find(
+				(line) => line.event === "runtime.compaction",
+			);
+			expect(finished).toMatchObject({
+				reason: "manual",
+				outcome: "completed",
+			});
+			expect(typeof finished?.durationMs).toBe("number");
+			expect(typeof finished?.tokensBefore).toBe("number");
+			// The measured request after the summary is genuinely smaller, so the
+			// movement is reported rather than invented.
+			expect(typeof finished?.tokensAfter).toBe("number");
+			expect(finished?.tokensAfter as number).toBeLessThan(
+				finished?.tokensBefore as number,
+			);
+			// No summary text ever reaches an envelope.
+			expect(JSON.stringify(lines)).not.toContain(
+				"summary of the older context",
+			);
+		} finally {
+			await host.shutdown();
+		}
+	});
+});

@@ -8,6 +8,7 @@ import net from "node:net";
 import type { HostLayout } from "./layout.ts";
 import {
 	type CatalogResponse,
+	type CompactRunResponse,
 	decodeFrame,
 	type EnsureRunRequest,
 	type EnsureRunResponse,
@@ -218,6 +219,26 @@ export class HostClient {
 			this.timeoutMs,
 		);
 		if (response.type !== "catalog") throw unexpected(response);
+		return response;
+	}
+
+	/** Admit one manual compaction of a run's conversation (`/compact`). The
+	 * host answers with a structured outcome; an untracked run is the
+	 * `unknown-run` error, which callers report as "the run has finished". */
+	async compactRun(
+		runId: string,
+		instructions?: string,
+	): Promise<CompactRunResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{
+				type: "compactRun",
+				runId,
+				...(instructions ? { instructions } : {}),
+			},
+			this.timeoutMs,
+		);
+		if (response.type !== "compactRun") throw unexpected(response);
 		return response;
 	}
 

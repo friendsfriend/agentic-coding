@@ -69,6 +69,8 @@ describe("home and category destinations", () => {
 		expect(settingsDestinations().map((entry) => entry.id)).toEqual([
 			"settings.appearance",
 			"settings.agents",
+			"settings.browser",
+			"settings.compaction",
 			"settings.providers",
 		]);
 	});
@@ -288,6 +290,8 @@ describe("every routed page has a definition and a label", () => {
 			"settings",
 			"settings.appearance",
 			"settings.agents",
+			"settings.browser",
+			"settings.compaction",
 			"settings.providers",
 			"environments",
 			"environments.applications",

@@ -139,6 +139,19 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		note: "File-only guard: the server enforces the ceiling, so Settings shows the effective value read-only.",
 	},
 	{
+		id: "agents.compaction",
+		section: "compaction",
+		label: "Compaction",
+		owner: "src/workflow/compaction.ts",
+		scope: "user",
+		storage:
+			"[agents.compaction] in the layered workflow config (user scope; a present agentHost.compaction overrides it)",
+		secret: false,
+		effect: "immediate",
+		editable: true,
+		items: ["compaction."],
+	},
+	{
 		id: "browser.install",
 		section: "browser",
 		label: "Headless browser",

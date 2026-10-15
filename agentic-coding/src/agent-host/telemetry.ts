@@ -79,6 +79,39 @@ export interface EntryTiming {
 	readonly thinkingMs?: number;
 }
 
+/** The task kind of pi-durable's built-in compaction task. */
+const COMPACTION_TASK_KIND = "pi.compaction";
+
+/** One compaction followed through the event stream, so its envelope can carry
+ * the measured duration, the token movement and an outcome. pi-durable records
+ * no counters for a compaction, so both token numbers are measured from the
+ * conversation's own assistant usage: the newest request's prompt tokens before
+ * the compaction started, and the first one after it ended. */
+interface TrackedCompaction {
+	reason: string;
+	blocking: boolean;
+	attempts: number;
+	startedAt: number;
+	tokensBefore?: number;
+	/** Set when the compaction's status disappeared: the task finished. */
+	endedAt?: number;
+	/** Set once a `pi.compaction` entry was appended, i.e. a summary was placed. */
+	summaryPlaced?: boolean;
+	/** Set when the task failed, with a bounded error class. */
+	failedClass?: string;
+	/** Set when the envelope was emitted, so it is emitted exactly once. */
+	emitted?: boolean;
+}
+
+/** Prompt tokens of one usage, i.e. the context size that request carried. */
+function promptTokens(usage: {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+}): number {
+	return usage.input + usage.cacheRead + usage.cacheWrite;
+}
+
 /** Attach agent-event telemetry for one conversation; returns a stop
  * function. Best-effort: a failure to attach must never fail the run it
  * would have been observing. `onTiming` additionally receives each committed
@@ -94,10 +127,80 @@ export async function attachTelemetry(
 	let generationStart: number | undefined;
 	let thinkingStart: number | undefined;
 	let thinkingMs = 0;
+	let lastPromptTokens: number | undefined;
+	const compactions = new Map<string, TrackedCompaction>();
+
+	/** Emit one compaction's completion envelope. `tokensAfter` is present only
+	 * when a later generation measured it; the envelope is emitted exactly once,
+	 * either when that measurement arrives or when the stream settles. */
+	const emitCompaction = (
+		taskId: string,
+		entry: TrackedCompaction,
+		tokensAfter: number | undefined,
+	): void => {
+		if (entry.emitted) return;
+		entry.emitted = true;
+		compactions.delete(taskId);
+		const outcome = entry.failedClass
+			? "failed"
+			: entry.summaryPlaced
+				? "completed"
+				: "aborted";
+		emit(identity, "runtime.compaction", {
+			reason: entry.reason,
+			blocking: entry.blocking,
+			attempts: entry.attempts,
+			...(entry.endedAt !== undefined
+				? { durationMs: entry.endedAt - entry.startedAt }
+				: {}),
+			...(entry.tokensBefore !== undefined
+				? { tokensBefore: entry.tokensBefore }
+				: {}),
+			...(tokensAfter !== undefined ? { tokensAfter } : {}),
+			outcome,
+			...(entry.failedClass ? { "pi.error.class": entry.failedClass } : {}),
+		});
+	};
+
+	/** Emit every finished compaction whose measurement is now available, or —
+	 * when the stream settles — every finished compaction, measured or not. An
+	 * exclamation mark of honesty: a measured flush never invents a "tokens
+	 * after" — it is attached only when the request is genuinely smaller than
+	 * the one before the compaction, which is what a placed summary does. */
+	const flushCompactions = (measured: boolean, tokensAfter?: number): void => {
+		for (const [taskId, entry] of [...compactions]) {
+			if (entry.emitted) continue;
+			if (entry.failedClass) {
+				emitCompaction(taskId, entry, undefined);
+				continue;
+			}
+			if (entry.endedAt === undefined) continue;
+			if (!measured) {
+				emitCompaction(taskId, entry, undefined);
+				continue;
+			}
+			const shrank =
+				tokensAfter !== undefined &&
+				entry.tokensBefore !== undefined &&
+				tokensAfter < entry.tokensBefore;
+			if (shrank) emitCompaction(taskId, entry, tokensAfter);
+		}
+	};
 	const closeThinking = (now: number) => {
 		if (thinkingStart === undefined) return;
 		thinkingMs += Math.max(0, now - thinkingStart);
 		thinkingStart = undefined;
+	};
+
+	/** Record that a summary was placed: pi-durable's receipt that separates a
+	 * successful compaction from one cancelled before it could place anything. */
+	const markSummaryPlaced = (): void => {
+		let newest: TrackedCompaction | undefined;
+		for (const entry of compactions.values()) {
+			if (entry.summaryPlaced) continue;
+			if (!newest || entry.startedAt >= newest.startedAt) newest = entry;
+		}
+		if (newest) newest.summaryPlaced = true;
 	};
 	const handle = (events: readonly AgentEvent[]) => {
 		for (const event of events) {
@@ -123,6 +226,11 @@ export async function attachTelemetry(
 				case "message_end": {
 					closeThinking(now);
 					const entry = event.entry;
+					// A placed summary is a committed `pi.compaction` entry. It carries a
+					// model message (the summary text), so pi-durable delivers it as a
+					// message rather than as an `entry_appended` event; both spellings are
+					// accepted here so the receipt is never missed.
+					if (entry.kind === "pi.compaction") markSummaryPlaced();
 					const assistant =
 						entry.kind === "pi.assistant" &&
 						entry.model?.[0]?.role === "assistant"
@@ -149,6 +257,17 @@ export async function attachTelemetry(
 						const cost = usage.cost?.total ?? 0;
 						const tokens =
 							usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+						// The request's own prompt size: the measured context the next
+						// compaction report compares against.
+						const prompt = promptTokens(usage);
+						if (prompt > 0) {
+							lastPromptTokens = prompt;
+							// A compaction that ended before this generation is now measured:
+							// its summary was placed and this request carried the reduced
+							// context, which is the only "tokens after" available (pi-durable
+							// records no counters for a compaction itself).
+							flushCompactions(true, prompt);
+						}
 						if (tokens > 0 || cost > 0)
 							emit(identity, "runtime.usage", {
 								inputTokens: usage.input,
@@ -194,12 +313,66 @@ export async function attachTelemetry(
 				}
 				case "run_end":
 					emit(identity, "runtime.settled");
+					// The run settled: a compaction that never got a measured follow-up
+					// generation still reports what is known (its reason, duration and
+					// before-tokens) instead of being dropped.
+					flushCompactions(false);
 					break;
-				case "task_failed":
+				case "entry_appended":
+					// A `pi.compaction` entry is the placed summary: the receipt that
+					// tells a successful compaction from one that was aborted before it
+					// could place anything.
+					if (event.entry.kind === "pi.compaction") markSummaryPlaced();
+					break;
+				case "compaction_start": {
+					const taskId = String(event.taskId);
+					const existing = compactions.get(taskId);
+					compactions.set(taskId, {
+						reason: event.reason,
+						blocking: event.blocking,
+						attempts: (existing?.attempts ?? 0) + 1,
+						startedAt: existing?.startedAt ?? now,
+						...(lastPromptTokens !== undefined
+							? { tokensBefore: lastPromptTokens }
+							: {}),
+					});
+					emit(identity, "runtime.compaction_start", {
+						reason: event.reason,
+						blocking: event.blocking,
+						attempt: 1,
+					});
+					break;
+				}
+				case "compaction_end": {
+					const taskId = String(event.taskId);
+					const entry = compactions.get(taskId) ?? {
+						reason: event.reason,
+						blocking: false,
+						attempts: 1,
+						startedAt: now,
+					};
+					entry.endedAt = now;
+					compactions.set(taskId, entry);
+					break;
+				}
+				case "task_failed": {
 					emit(identity, "runtime.task_failed", {
 						"pi.error.class": redact(event.message).slice(0, 160),
 					});
+					if (event.kind === COMPACTION_TASK_KIND) {
+						const taskId = String(event.taskId);
+						const entry = compactions.get(taskId) ?? {
+							reason: "unknown",
+							blocking: false,
+							attempts: 1,
+							startedAt: now,
+						};
+						entry.failedClass = redact(event.message).slice(0, 160);
+						compactions.set(taskId, entry);
+						emitCompaction(taskId, entry, undefined);
+					}
 					break;
+				}
 				default:
 					break;
 			}
@@ -207,6 +380,9 @@ export async function attachTelemetry(
 	};
 	stream.start(async (events) => handle(events));
 	return () => {
+		// Whatever compaction is still pending when the stream stops is reported
+		// with what is known, so telemetry never silently loses one.
+		flushCompactions(false);
 		void stream.stop();
 	};
 }

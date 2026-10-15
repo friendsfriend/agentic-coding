@@ -262,6 +262,12 @@ export interface OverlayState {
 	>;
 	readonly agentSessionDraft: () => string;
 	readonly setAgentSessionDraft: Setter<string>;
+	/** Local transcript notices the host's documents cannot carry: today, the
+	 * compaction a `/abort` cancelled (no summary is placed, and only the client
+	 * that asked for the abort knows one was in flight). Kept with the other
+	 * session state so a watch frame's projection can carry them. */
+	readonly agentSessionNotices: () => readonly AgentSessionBlock[];
+	readonly setAgentSessionNotices: Setter<readonly AgentSessionBlock[]>;
 	/** Client-local input history survives closing or switching agent views. */
 	readonly agentSessionHistory: () => readonly string[];
 	readonly setAgentSessionHistory: Setter<readonly string[]>;
@@ -359,6 +365,9 @@ export function createOverlayState(options: {
 	const [agentSessionContextWindows, setAgentSessionContextWindows] =
 		createSignal<Readonly<Record<string, number>>>({});
 	const [agentSessionDraft, setAgentSessionDraft] = createSignal("");
+	const [agentSessionNotices, setAgentSessionNotices] = createSignal<
+		readonly AgentSessionBlock[]
+	>([]);
 	const [agentSessionHistory, setAgentSessionHistory] = createSignal<
 		readonly string[]
 	>(options.promptHistory ?? []);
@@ -427,6 +436,8 @@ export function createOverlayState(options: {
 		setAgentSessionContextWindows,
 		agentSessionDraft,
 		setAgentSessionDraft,
+		agentSessionNotices,
+		setAgentSessionNotices,
 		agentSessionHistory,
 		setAgentSessionHistory,
 	};
