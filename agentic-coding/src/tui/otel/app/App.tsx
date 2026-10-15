@@ -53,11 +53,6 @@ import {
 	resolveCompactionPolicy,
 } from "../../../workflow/compaction.ts";
 import {
-	type AgentsConfig,
-	BUILTIN_PRESET_NAME,
-	GATE_STAGES,
-} from "../../../workflow/profiles.ts";
-import {
 	fetchProjectCatalog,
 	projectCanonicalRoots,
 } from "../../../workflow/project-catalog.ts";
@@ -124,7 +119,6 @@ import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
 	type CompactionSettingsSnapshot,
-	fileJudgmentSummaryLabel,
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
@@ -209,6 +203,11 @@ import {
 import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
 import { activeNotification, notify } from "./notifications.ts";
 import {
+	buildSettingsContext,
+	retrySettingsSection,
+	settingsAgentBackedSection,
+} from "./settings-context.ts";
+import {
 	cycleCursor,
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
@@ -261,50 +260,6 @@ function stripSpanSuffix(resourceId: string | undefined): string | undefined {
 	const separator = resourceId.lastIndexOf(":");
 	// A bare identity (no `:spanId` suffix) is already the trace id.
 	return separator > 0 ? resourceId.slice(0, separator) : resourceId;
-}
-
-/**
- * Read-only routing values for the Settings agent section: the agent settings a
- * preset editor does not own (default profile, per-step routes, role routes and
- * definition defaults). They are resolved into the agents snapshot so the
- * section's inventory stays complete; the actionable-only Agent Presets menu
- * does not render read-only rows, so these values have no menu surface.
- */
-function agentRoutingEntries(
-	agents: AgentsConfig,
-): Array<{ label: string; value: string }> {
-	const entries: Array<{ label: string; value: string }> = [
-		{
-			label: "Default profile",
-			value: agents.default_profile ?? "(unset)",
-		},
-	];
-	for (const [step, profile] of Object.entries(agents.routes ?? {}))
-		entries.push({ label: `Route ${step}`, value: profile });
-	for (const [step, roles] of Object.entries(agents.role_routes ?? {}))
-		for (const [role, profile] of Object.entries(roles))
-			entries.push({ label: `Role route ${step}.${role}`, value: profile });
-	for (const [definition, profile] of Object.entries(
-		agents.definition_defaults ?? {},
-	))
-		entries.push({ label: `Definition default ${definition}`, value: profile });
-	// The global stage-gate table has no bounded editor, so this read-only
-	// surface is the only place a user can confirm what a run falls back to
-	// for a stage its preset does not own.
-	for (const stage of GATE_STAGES)
-		entries.push({
-			label: `Stage gate ${stage}`,
-			value: agents.gates?.[stage] ?? "always (default)",
-		});
-	// The per-file judgment sweep is `[agents]` configuration with no bounded
-	// editor either, so its effective state is reported here. The label is built
-	// by the settings item builder so the inventory row stays testable without a
-	// terminal.
-	entries.push({
-		label: "File judgment sweep",
-		value: fileJudgmentSummaryLabel(agents.file_judgment),
-	});
-	return entries;
 }
 
 /**
@@ -1093,13 +1048,18 @@ export function App(props: {
 			value,
 		};
 		try {
-			if (gatewayOrUndefined())
+			if (gatewayOrUndefined()) {
 				await saveAgentConfig({
 					repository,
 					...(entry.revision ? { expectedRevision: entry.revision } : {}),
 					mutation,
 				});
-			else {
+				// Re-read what the server stored (the same follow-up the preset editor
+				// does): the response is not reactive, so without this the rows would keep
+				// showing the pre-write value and the next save would carry a stale
+				// revision.
+				await refreshAgentConfig(repository);
+			} else {
 				applyAgentsMutation(mutation, repository, entry.revision);
 				reloadAgentConfigLocal(repository);
 			}
@@ -1117,65 +1077,27 @@ export function App(props: {
 		}
 	};
 	const settingsContext = (): SettingsContext => {
-		// Re-read the agent cache after a refresh; the cache itself is not reactive.
+		// Re-read the caches after a refresh; the caches themselves are not
+		// reactive. Each version signal is read here rather than in the effects, so
+		// those run once per section change instead of re-arming on their own
+		// increment.
 		settingsAgentVersion();
-		// Re-read after a classifier-status refresh (the snapshot itself is not
-		// reactive).
 		settingsClassifierVersion();
-		// Re-read after a browser-status refresh, for the same reason.
 		settingsBrowserVersion();
+		const projectIdent = settingsProjectIdent();
 		const repository = settingsAgentRepository();
-		const entry = agentConfigEntry(repository);
-		const agents = entry.agents;
-		return {
+		return buildSettingsContext({
 			themes: themeNames,
 			activeTheme: getActiveThemeName(),
 			clientSettingsPath: themeSettingsPath(),
 			section: settingsSection() ?? "appearance",
-			agents: {
-				scope: settingsProjectIdent() ? "project" : "user",
-				...(settingsProjectIdent()
-					? { projectIdent: settingsProjectIdent() }
-					: {}),
-				...(repository ? { repository } : {}),
-				...(entry.provenance?.source
-					? { source: entry.provenance.source }
-					: {}),
-				files: entry.provenance?.files ?? [],
-				...(entry.provenance?.inactiveFiles?.length
-					? { inactiveFiles: entry.provenance.inactiveFiles }
-					: {}),
-				conflicts: entry.conflicts ?? [],
-				...(entry.error ? { error: entry.error } : {}),
-				profiles: Object.entries(agents?.profiles ?? {}).map(
-					([name, profile]) => ({
-						name,
-						value: [profile.runtime, profile.model].filter(Boolean).join(" · "),
-					}),
-				),
-				presets: Object.entries(agents?.presets ?? {})
-					.filter(([name]) => name !== BUILTIN_PRESET_NAME)
-					.map(([name, preset]) => ({
-						name,
-						value: `${Object.keys(preset.steps ?? {}).length} steps`,
-					})),
-				routing: agents ? agentRoutingEntries(agents) : [],
-				...(agents?.orchestrator ? { orchestrator: agents.orchestrator } : {}),
-				// The enforced ceiling comes from the server read, not the section's own
-				// scope: the server resolves it from the user-level configuration, so the
-				// read-only row cannot contradict what a start is checked against.
-				...(entry.orchestratorLimits
-					? {
-							orchestratorLimits: entry.orchestratorLimits,
-							orchestratorLimitsConfigured:
-								entry.orchestratorLimitsConfigured ?? false,
-						}
-					: {}),
-			},
+			...(projectIdent ? { projectIdent } : {}),
+			...(repository ? { repository } : {}),
+			entry: agentConfigEntry(repository),
 			providers: settingsProviders(),
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
 			...(browserSnapshot() ? { browser: browserSnapshot() } : {}),
-		};
+		});
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
 		if (!settingsSection()) return undefined;
@@ -1194,7 +1116,10 @@ export function App(props: {
 			void refreshSettingsProjects(props.environments?.serverUrl);
 	});
 	createEffect(() => {
-		if (settingsSection() !== "agents") return;
+		// The agents section and the Compaction section render the same read (the
+		// compaction policy rides in the agent-config entry), so opening Compaction
+		// directly must resolve it too instead of leaving the section unread.
+		if (!settingsAgentBackedSection(settingsSection())) return;
 		const repository = settingsAgentRepository();
 		void refreshAgentConfig(repository).then(() =>
 			setSettingsAgentVersion((value) => value + 1),
@@ -1272,17 +1197,24 @@ export function App(props: {
 				nav.pushModal("theme", "home");
 				return;
 			case "retry":
-				// Every section's retry re-reads what *its* rows come from: the
-				// browser section reads the server's install state, and a retry that
-				// only refreshed providers would leave its error row unchanged.
-				if (settingsSection() === "browser") {
-					void refreshBrowserStatus().then(() =>
-						setSettingsBrowserVersion((value) => value + 1),
-					);
-					return;
-				}
-				void refreshSettingsProviders(props.environments?.serverUrl);
-				void refreshSettingsProjects(props.environments?.serverUrl);
+				// Every section's retry re-reads what *its* rows come from: the browser
+				// section reads the server's install state, and the agents-backed
+				// sections (agents and Compaction) share the agent-config read, so a
+				// retry that only refreshed providers would leave their rows unchanged.
+				retrySettingsSection({
+					section: settingsSection(),
+					repository: settingsAgentRepository(),
+					refreshProviders: () => {
+						void refreshSettingsProviders(props.environments?.serverUrl);
+					},
+					refreshProjects: () => {
+						void refreshSettingsProjects(props.environments?.serverUrl);
+					},
+					refreshAgents: refreshAgentConfig,
+					refreshBrowser: refreshBrowserStatus,
+					bumpAgents: () => setSettingsAgentVersion((value) => value + 1),
+					bumpBrowser: () => setSettingsBrowserVersion((value) => value + 1),
+				});
 				return;
 			case "browser-install":
 				// The one download path in the application, and it runs only because

@@ -455,18 +455,24 @@ export function compactionTokenValueLabel(
  * inventing a window this process cannot see. */
 function compactionItems(context: SettingsContext): SettingsItem[] {
 	const snapshot = context.agents.compaction;
-	if (!snapshot)
+	if (!snapshot) {
+		// Before the first read resolves the row is loading, not unavailable, and a
+		// read that failed states its own error instead of the generic sentence.
+		// Either way Enter retries the read.
+		const error = context.agents.error;
 		return [
 			{
 				id: "compaction.unavailable",
 				label: "Compaction",
-				value: "unavailable",
-				detail:
-					"the agents configuration could not be read; durable runs keep the defaults of the last valid configuration",
+				value: error ?? "loading…",
+				detail: error
+					? "the agents configuration could not be read; durable runs keep the defaults of the last valid configuration"
+					: "reading the agents configuration; durable runs keep the defaults of the last valid configuration",
 				editable: true,
 				action: { kind: "retry" },
 			},
 		];
+	}
 	const defaults = snapshot.defaults ?? COMPACTION_DEFAULTS;
 	const source = compactionSourceLabel(snapshot.source);
 	const items: SettingsItem[] = [];
