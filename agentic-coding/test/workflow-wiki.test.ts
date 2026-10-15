@@ -53,6 +53,10 @@ afterEach(() => {
 		if (savedIdentity[key] === undefined) delete process.env[key];
 		else process.env[key] = savedIdentity[key];
 	}
+	// The bundle this case built is a real directory tree, and it is this file's
+	// to remove: without the sweep it left one `agentic-wiki-*` tree per case in
+	// the temp directory.
+	fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("OKF wiki bundle", () => {

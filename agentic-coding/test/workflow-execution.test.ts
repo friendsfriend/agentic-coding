@@ -467,11 +467,22 @@ test("credential Effect boundary classifies no-UI as permanent and removes the s
 		{ mode: 0o700 },
 	);
 	try {
-		const before = new Set(
-			fs
-				.readdirSync(os.tmpdir())
-				.filter((item) => item.startsWith("agentic-coding-askpass")),
-		);
+		// The shim's own root is a fixed directory (`installAskpassShim`'s default),
+		// and only the per-operation directory inside it is scoped to the call. The
+		// root itself is shared by every process on the machine, so listing
+		// `os.tmpdir()` for the prefix counted *another* process's shim — and a
+		// sandboxed `TMPDIR` (test/support/isolate-config-root.ts) made that root
+		// this test's own creation, which is a passing test turning into a failing
+		// one rather than a leak appearing.
+		const shimRoot = path.join(os.tmpdir(), "agentic-coding-askpass");
+		const shimEntries = (): string[] => {
+			try {
+				return fs.readdirSync(shimRoot);
+			} catch {
+				return [];
+			}
+		};
+		const before = new Set(shimEntries());
 		const outcome = await Effect.runPromise(
 			runGitWithCredentialsEffect(dir, ["x"], { executable: file }).pipe(
 				Effect.either,
@@ -482,10 +493,8 @@ test("credential Effect boundary classifies no-UI as permanent and removes the s
 		expect(outcome.left).toBeInstanceOf(PermanentFailure);
 		// The askpass shim/FIFOs are scoped to the operation: no new dir remains
 		// (secrets are never retained after the call).
-		const after = fs
-			.readdirSync(os.tmpdir())
-			.filter((item) => item.startsWith("agentic-coding-askpass"));
-		expect(after.filter((item) => !before.has(item)).length).toBe(0);
+		const after = shimEntries();
+		expect(after.filter((item) => !before.has(item))).toEqual([]);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

@@ -6,7 +6,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
 	assertSetupDraftsDir,
@@ -26,10 +25,12 @@ import { sharedInfrastructureChange } from "../src/tui/dash/review.ts";
 import { definitionVersionForFamilyTraits } from "../src/workflow/definitions/manifest-policy.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveTempDirs, tempDir } from "./support/temp-dirs.ts";
 
-function tempDir(prefix: string): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
+// Both the review fixtures and the `wf-observations*` repositories below are
+// real, workflow-bearing directories; the file-scoped sweep removes them when
+// this file ends (test/support/temp-dirs.ts).
+autoRemoveTempDirs();
 
 function writeFile(filePath: string, text: string): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });

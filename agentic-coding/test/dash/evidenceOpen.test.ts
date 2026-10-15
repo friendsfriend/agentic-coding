@@ -3,7 +3,6 @@
 // the refusals that keep a server-supplied name away from a launcher.
 import { expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { EvidenceEntry } from "../../src/contracts/environment.ts";
 import {
@@ -13,6 +12,11 @@ import {
 	openEvidenceExternally,
 } from "../../src/tui/dash/evidence-open.ts";
 import { systemOpenerSideApp } from "../../src/tui/shared/side-app.ts";
+import { autoRemoveTempDirs, tempDir } from "../support/temp-dirs.ts";
+
+// Every case here opens a file inside a real evidence root; the file-scoped
+// sweep removes them when this file ends (test/support/temp-dirs.ts).
+autoRemoveTempDirs();
 
 const STATE = { workflowId: "wf-1", worktree: "/repo" };
 
@@ -30,7 +34,7 @@ function entry(
 
 /** A workflow whose evidence root is a real temporary directory. */
 function fixture() {
-	const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-open-"));
+	const worktree = tempDir("evidence-open-");
 	return { worktree, state: { workflowId: "wf-1", worktree } };
 }
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveConfigRoot } from "../config-root.ts";
 import { loadConfig } from "./effects.ts";
 
 export type WikiFrontmatter = Record<string, unknown>;
@@ -388,12 +389,31 @@ function expand(value: string): string {
 	return value.replace(/^~(?=$|[\\/])/, os.homedir());
 }
 
-/** Resolve the shared wiki root without requiring a repository or workflow. */
+/**
+ * The bundle root a configuration that names none resolves: the `wiki`
+ * directory of the same configuration root every other consumer resolves
+ * (`AGENTIC_CODING_CONFIG_DIR`, then the deprecated `DEVENV_CONFIG_DIR`, then
+ * `~/.config/agentic-coding`).
+ *
+ * It is derived rather than written down because the alternative — a literal
+ * `~/.config/agentic-coding/wiki` — ignores the configuration root entirely: a
+ * relocated (or, in a test, a throwaway) configuration still wrote its wiki and
+ * the workflow data root beside it — `wikiWorkflowDataRoot()` is the wiki
+ * root's parent directory — into the developer's real state. For a normal user
+ * with no override this is still `~/.config/agentic-coding/wiki`.
+ */
+export function defaultWikiRoot(): string {
+	return path.join(resolveConfigRoot(), "wiki");
+}
+
+/** Resolve the shared wiki root without requiring a repository or workflow.
+ * Precedence is unchanged: `HERDR_WIKI_DIR`, then an explicit `[wiki] root`,
+ * then the configuration-root-derived default. */
 export function wikiRoot(ignoreEnvironment = false): string {
 	const configured = ignoreEnvironment
 		? loadConfig().wiki?.root
 		: process.env.HERDR_WIKI_DIR || loadConfig().wiki?.root;
-	return path.resolve(expand(configured || "~/.config/agentic-coding/wiki"));
+	return path.resolve(expand(configured || defaultWikiRoot()));
 }
 
 export function ensureBundle(root = wikiRoot()): string {

@@ -29,6 +29,7 @@ export {
 export {
 	recordWorkflowTarget,
 	targetMarkerReads,
+	targetRegistryDirectory,
 	workflowTargets,
 } from "./runtime/target-registry.ts";
 export {

@@ -325,9 +325,16 @@ export interface WorkflowConfig {
 	};
 }
 
-/** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
+/** Built-in fallback (mirror of pi/herdr-workflow.json) — used only when no
  * config file exists anywhere. Models are intentionally NOT defaulted: an
- * unconfigured step lets pi pick its own default model. */
+ * unconfigured step lets pi pick its own default model.
+ *
+ * `wiki.root` is intentionally absent: its default is not a fixed path but a
+ * function of the configuration root (`defaultWikiRoot()` in `./wiki.ts`), so
+ * writing it down here would pin every configuration — a relocated one
+ * included — to the developer's `~/.config/agentic-coding/wiki`. A configured
+ * `wiki.root` still wins, and resolves to the same path when the configuration
+ * root is the default one. */
 export const DEFAULT_CONFIG: WorkflowConfig = {
 	workflow: {
 		max_verification_rounds: 6,
@@ -340,7 +347,6 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 		theme: "catppuccin",
 		selection_height: 10,
 	},
-	wiki: { root: "~/.config/agentic-coding/wiki" },
 	environment: { instances: { idle_ttl_minutes: 30 } },
 	browser: {
 		max_sessions: 4,

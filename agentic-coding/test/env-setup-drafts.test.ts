@@ -3,7 +3,6 @@
 // guard's fingerprint and violation decision.
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
 	fingerprintCheckout,
@@ -17,10 +16,11 @@ import {
 	unifiedDiff,
 } from "../src/server/environment/setup-drafts.ts";
 import { environmentDiscoveryFile } from "../src/server/environment-discovery.ts";
+import { autoRemoveTempDirs, tempDir } from "./support/temp-dirs.ts";
 
-function tempDir(prefix: string): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
+// The checkout fixtures below are real Git repositories; the file-scoped sweep
+// removes them when this file ends (test/support/temp-dirs.ts).
+autoRemoveTempDirs();
 
 function writeFile(filePath: string, text: string): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });

@@ -10,6 +10,11 @@ import type { ServerOperations } from "../../src/server/handlers.ts";
 import { startWorkflowServer } from "../../src/server/lifecycle.ts";
 import type { TelemetryOperations } from "../../src/server/telemetry.ts";
 import { WorkflowRuntimeError } from "../../src/workflow/contracts.ts";
+import { autoRemoveTempDirs, trackTempDir } from "../support/temp-dirs.ts";
+
+// The empty repository below is a real Git repository; the file-scoped sweep
+// removes it when this file ends (test/support/temp-dirs.ts).
+autoRemoveTempDirs();
 
 /**
  * Gateway conformance (establish-opencode-boundaries, task 3.6): the HTTP
@@ -414,7 +419,9 @@ describe("in-process gateway over the real server operations", () => {
 			credentials: new CredentialRegistry(),
 			events: new EventBroker("conformance-real"),
 		});
-		const emptyRepo = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-real-"));
+		const emptyRepo = trackTempDir(
+			fs.mkdtempSync(path.join(os.tmpdir(), "gateway-real-")),
+		);
 		const { execFileSync } = await import("node:child_process");
 		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: emptyRepo });
 		// a repository with no started workflows lists the store view, not an error

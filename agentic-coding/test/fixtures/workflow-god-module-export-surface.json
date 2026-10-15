@@ -61,6 +61,7 @@
 		"runtimeTest",
 		"sourceContentFingerprint",
 		"targetMarkerReads",
+		"targetRegistryDirectory",
 		"validateChangeId",
 		"validateWorkflowId",
 		"wikiWorkflowDataRoot",

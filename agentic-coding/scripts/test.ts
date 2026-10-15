@@ -168,6 +168,17 @@ async function runJob(job: Job): Promise<void> {
 	// the wiki store and the workflow target registry — into the developer's real
 	// state instead of its own.
 	const wikiRoot = path.join(configRoot, "wiki");
+	// The home directory is pinned per job as well, and for a reason the preload
+	// cannot cover: Bun captures HOME when the process starts, so a later
+	// `process.env.HOME` is invisible to `os.homedir()` (measured). Every path
+	// derived from the home directory — `~/devenv/logs`, `~/.config/otel-tui`,
+	// `~/.pi/agent` — therefore needs the launcher to set it. The developer's own
+	// home travels along as AGENTIC_CODING_TEST_REAL_HOME, because a job whose
+	// HOME this runner replaced can no longer tell which home its parent had, and
+	// the preload's leak check has to name the real configuration directory.
+	const jobHome = path.join(configRoot, "home");
+	fs.mkdirSync(jobHome, { recursive: true });
+	const realHome = process.env.HOME ?? os.homedir();
 	const proc = Bun.spawn(
 		[process.execPath, "test", `--timeout=${TEST_TIMEOUT_MS}`, ...job.files],
 		{
@@ -177,6 +188,9 @@ async function runJob(job: Job): Promise<void> {
 				...process.env,
 				AGENTIC_CODING_CONFIG_DIR: configRoot,
 				HERDR_WIKI_DIR: wikiRoot,
+				HOME: jobHome,
+				AGENTIC_CODING_TEST_HOME: jobHome,
+				AGENTIC_CODING_TEST_REAL_HOME: realHome,
 			},
 		},
 	);

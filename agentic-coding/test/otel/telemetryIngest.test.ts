@@ -15,6 +15,11 @@ import {
 	parseTelemetryLine,
 } from "../../src/server/telemetry-parser";
 import { workflowTraceId } from "../../src/workflow/observability.ts";
+import { autoRemoveTempDirs, trackTempDir } from "../support/temp-dirs.ts";
+
+// Every workspace fixture below is a directory the watcher reads and writes; the
+// file-scoped sweep removes them when this file ends (test/support/temp-dirs.ts).
+autoRemoveTempDirs();
 
 const TELEMETRY = [
 	'{"schemaVersion":1,"at":"2026-09-11T09:14:15.921Z","layer":"engine","event":"effect.result","workflowId":"wf-1","stepId":"core.implementation","role":"worker","outcome":"error","durationMs":250,"traceparent":"00-a3bc231c2fb909c7dc3fdf4a55f6aa7e-dd7779c4a8490e79-01"}',
@@ -208,7 +213,9 @@ describe("TraceDb telemetry ingest", () => {
 		);
 
 	test("parses only the appended tail of a growing workspace file", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-tail-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-tail-")),
+		);
 		const path = join(dir, "telemetry.jsonl");
 		writeFileSync(path, `${envelopeAt(0)}\n${envelopeAt(1)}\n`);
 		const db = new TraceDb(join(dir, "db"));
@@ -238,7 +245,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("waits for the newline of a half-written line", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-partial-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-partial-")),
+		);
 		const path = join(dir, "telemetry.jsonl");
 		const second = envelopeAt(1);
 		// The writer is mid-line: only the complete first record is ingested, and the
@@ -262,7 +271,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("re-ingests from the start when the file is truncated or rotated", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-rotate-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-rotate-")),
+		);
 		const path = join(dir, "telemetry.jsonl");
 		writeFileSync(path, `${envelopeAt(0)}\n${envelopeAt(1)}\n`);
 		const db = new TraceDb(join(dir, "db"));
@@ -281,7 +292,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("an appended line costs the tail, not the whole file", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-cost-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-cost-")),
+		);
 		const path = join(dir, "telemetry.jsonl");
 		const lines = Array.from({ length: 12_000 }, (_, index) =>
 			envelopeAt(index % 60, `wf-${index}`),
@@ -315,7 +328,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("keeps the per-workflow span cap once a growing file passes it", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-cap-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-cap-")),
+		);
 		const path = join(dir, "telemetry.jsonl");
 		const lines = Array.from({ length: 50_000 }, (_, index) =>
 			envelopeAt(index % 60, "wf-cap"),
@@ -339,7 +354,7 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("ingests a workspace that only has telemetry.jsonl", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-db-"));
+		const dir = trackTempDir(mkdtempSync(join(tmpdir(), "otel-telemetry-db-")));
 		writeFileSync(join(dir, "telemetry.jsonl"), TELEMETRY);
 		const db = new TraceDb(join(dir, "db"));
 		try {
@@ -354,7 +369,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("picks the fresher source and never lets a stale legacy file mask new telemetry", () => {
-		const dir = mkdtempSync(join(tmpdir(), "otel-telemetry-both-"));
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-both-")),
+		);
 		const legacy = {
 			traceId: "0af7651916cd43dd8448eb211c80319c",
 			spanId: "b7ad6b7169203331",
@@ -389,7 +406,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("the watcher reads only the appended tail of a large workspace file", async () => {
-		const root = mkdtempSync(join(tmpdir(), "otel-telemetry-watch-tail-"));
+		const root = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-watch-tail-")),
+		);
 		const workflowDir = join(root, ".herdr-workflow", "wf-big");
 		mkdirSync(workflowDir, { recursive: true });
 		const path = join(workflowDir, "telemetry.jsonl");
@@ -421,7 +440,9 @@ describe("TraceDb telemetry ingest", () => {
 	});
 
 	test("watcher picks up a new telemetry workspace and reports its spans", async () => {
-		const root = mkdtempSync(join(tmpdir(), "otel-telemetry-watch-"));
+		const root = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-watch-")),
+		);
 		const workflowDir = join(root, ".herdr-workflow", "wf-3");
 		mkdirSync(workflowDir, { recursive: true });
 		const path = join(workflowDir, "telemetry.jsonl");

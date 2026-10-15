@@ -22,8 +22,9 @@ import {
 } from "./targets.ts";
 
 /** Markers live beside the shared store, in the workflow data root every
- * workflow already writes to. */
-function registryDirectory(): string {
+ * workflow already writes to. Exported so a test can assert the location the
+ * registry resolves instead of restating it (test/config-isolation.test.ts). */
+export function targetRegistryDirectory(): string {
 	return path.join(wikiWorkflowDataRoot(), "targets");
 }
 
@@ -38,7 +39,7 @@ export function recordWorkflowTarget(target: string): void {
 	)
 		return;
 	try {
-		const directory = registryDirectory();
+		const directory = targetRegistryDirectory();
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 		const file = path.join(
 			directory,
@@ -83,7 +84,7 @@ export function targetMarkerReads(): number {
  * ignored rather than failing the whole listing, and a target whose store has
  * since been removed is dropped by the caller's own store check. */
 export function workflowTargets(): string[] {
-	const directory = registryDirectory();
+	const directory = targetRegistryDirectory();
 	let names: string[];
 	try {
 		names = fs.readdirSync(directory);
