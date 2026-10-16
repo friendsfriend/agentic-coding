@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import {
-	definitionVersionForFamilyTraits,
+	definitionVersionForStagedRoot,
 	effectiveFamilyTraits,
 } from "../src/workflow/definitions/manifest-policy.ts";
 import { registerBuiltins } from "../src/workflow/definitions/registerBuiltins.ts";
@@ -25,7 +25,7 @@ function behavior(stepId: string): StepBehavior {
 }
 
 const registry = registerBuiltins(undefined, 6);
-const version = definitionVersionForFamilyTraits(6);
+const version = definitionVersionForStagedRoot(6);
 const definition = registry.definition("env-setup", version);
 
 function snapshot(overrides: Partial<WorkflowSnapshot> = {}): WorkflowSnapshot {
@@ -68,13 +68,16 @@ function snapshot(overrides: Partial<WorkflowSnapshot> = {}): WorkflowSnapshot {
 }
 
 describe("env-setup family registration", () => {
-	test("the family is registered at the newest tier with its four steps", () => {
+	test("the family is registered at the newest tier with its seven steps", () => {
 		expect(definition?.id).toBe("env-setup");
 		expect(definition?.steps).toEqual([
 			"setup.author",
 			"setup.validate",
 			"setup.approval",
 			"setup.promote",
+			"setup.smoke",
+			"setup.smoke.review",
+			"setup.rollback",
 			"core.completed",
 			"core.closed",
 		]);
@@ -117,6 +120,61 @@ describe("env-setup family registration", () => {
 	});
 });
 
+describe("the post-promotion smoke check cannot run before approval", () => {
+	/** Whether a step is reachable from the initial step without passing through
+	 * `gate`: a breadth-first walk over the compiled edges. */
+	const reachableWithout = (target: string, gate: string): boolean => {
+		const edges = (definition?.edges ?? []) as ReadonlyArray<{
+			from: string;
+			to: string;
+		}>;
+		const seen = new Set<string>(["setup.author"]);
+		const queue = ["setup.author"];
+		while (queue.length > 0) {
+			const step = queue.shift() as string;
+			if (step === target) return true;
+			for (const edge of edges) {
+				if (edge.from !== step) continue;
+				if (edge.to === gate || seen.has(edge.to)) continue;
+				seen.add(edge.to);
+				queue.push(edge.to);
+			}
+		}
+		return false;
+	};
+
+	test("the smoke step is only reachable through the approval edge", () => {
+		const edges = (definition?.edges ?? []) as ReadonlyArray<{
+			from: string;
+			to: string;
+			outcome: string;
+		}>;
+		const intoSmoke = edges.filter((edge) => edge.to === "setup.smoke");
+		expect(intoSmoke.map((edge) => `${edge.from}:${edge.outcome}`)).toEqual([
+			"setup.promote:complete",
+		]);
+		const intoPromote = edges.filter((edge) => edge.to === "setup.promote");
+		expect(
+			intoPromote.map((edge) => `${edge.from}:${edge.outcome}`).sort(),
+		).toEqual(["setup.approval:approve", "setup.promote:failed"]);
+		// And the walk agrees: without passing through the developer gate the
+		// smoke step (and the rollback behind it) is unreachable.
+		expect(reachableWithout("setup.smoke", "setup.approval")).toBe(false);
+		expect(reachableWithout("setup.rollback", "setup.approval")).toBe(false);
+	});
+
+	test("the smoke review offers rollback and keep, and both map to a declared outcome", () => {
+		const step = definition?.steps.includes("setup.smoke.review");
+		expect(step).toBe(true);
+		const actions = behavior("setup.smoke.review").developerActions?.(
+			{} as never,
+		);
+		const ids = (actions ?? []).map((action) => action.id);
+		expect(ids).toEqual(["rollback-promotion", "accept-smoke-failure"]);
+		for (const id of ids) expect(outcomeForActionId(id)).toBe(id);
+	});
+});
+
 describe("env-setup step behaviors", () => {
 	test("the author brackets its turn with the write guard and starts only after it", () => {
 		const enqueued: Array<{ kind: string; payload: unknown }> = [];
@@ -131,8 +189,15 @@ describe("env-setup step behaviors", () => {
 		// baseline exists could write before the fingerprint that catches it. The
 		// baseline's completion launches it.
 		expect(entry?.skipRoles).toEqual(["env-setup"]);
-		expect(enqueued).toHaveLength(1);
-		const guard = enqueued[0];
+		// The staged configuration root is materialized first, then the baseline:
+		// the author must write into a complete copy of the live configuration
+		// (`staged-env-setup-config-root`), and the baseline is still taken before
+		// the first author turn.
+		expect(enqueued.map((effect) => effect.kind)).toEqual([
+			"environment.setup-stage",
+			"environment.setup-guard",
+		]);
+		const guard = enqueued[1];
 		if (!guard) throw new Error("the author enqueued no guard effect");
 		expect(guard.kind).toBe("environment.setup-guard");
 		expect((guard.payload as { phase?: string }).phase).toBe("baseline");

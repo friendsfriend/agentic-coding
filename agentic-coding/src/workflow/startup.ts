@@ -8,6 +8,10 @@ import type {
 	WorkflowRouting,
 } from "../contracts/workflow.ts";
 import { setupDraftsDir } from "../server/environment/setup-drafts.ts";
+import {
+	setupStagedStateIds,
+	sweepStaleSetupState,
+} from "../server/environment/setup-staged.ts";
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
@@ -18,7 +22,7 @@ import {
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
-	definitionVersionForFamilyTraits,
+	definitionVersionForStagedRoot,
 	effectiveFamilyTraits,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";
@@ -57,6 +61,8 @@ import {
 	toRuntimeError,
 	WorkflowConfig as WorkflowConfigService,
 } from "./runtime/services.ts";
+import { knownWorkflowIds } from "./runtime/store.ts";
+import { workflowTargets } from "./runtime/target-registry.ts";
 import {
 	researchWorkflowTarget,
 	validateWorkflowId,
@@ -471,7 +477,7 @@ function prepareFromContext(
 	// Every family now declares its repository traits and selects its step
 	// models with the classifier, so a new start resolves the family-traits
 	// tier.
-	const definitionVersion = definitionVersionForFamilyTraits(
+	const definitionVersion = definitionVersionForStagedRoot(
 		config.workflow.max_verification_rounds,
 	);
 	const registry = registerBuiltins(
@@ -572,6 +578,58 @@ function prepareFromContext(
 			throw new Error(
 				`env-setup drafts from an earlier workflow are still at ${drafts}; remove them or start with a new workflow id`,
 			);
+		// Staged state whose workflow the store no longer knows — a crash, a
+		// `kill -9`, a deleted workflow — is a complete copy of the live
+		// configuration sitting on disk. It is reaped here, where every start
+		// passes, and only for ids the store does not list: a live workflow's state
+		// is never touched. A store that cannot be read sweeps nothing.
+		try {
+			// The state root is *configuration-global* (keyed by workflow id alone)
+			// while a store is per repository, so an id is known only when no store
+			// anywhere lists it as unknown: a repository-scoped answer would delete
+			// another repository's live staged root. Any store that cannot be read
+			// makes the question unanswerable, and nothing is swept.
+			// The store reads below are a full scan each, so they run only when there
+			// is something this start could sweep: state that is not its own.
+			const configRoot = resolveConfigRoot();
+			const candidates = setupStagedStateIds(configRoot).filter(
+				(id) => id !== ctx.workflowId,
+			);
+			if (candidates.length > 0) {
+				const stores = [...new Set([ctx.repo, ...workflowTargets()])];
+				let knownAll = true;
+				const knownIn: Set<string>[] = [];
+				for (const target of stores) {
+					const known = knownWorkflowIds(target);
+					if (!known) {
+						knownAll = false;
+						continue;
+					}
+					knownIn.push(known);
+				}
+				if (knownAll && knownIn.length > 0) {
+					// Housekeeping, not part of the start: the removals are asynchronous
+					// (`fs.promises.rm` over a complete configuration copy), so the
+					// start does not wait for them and the server's event loop is never
+					// blocked. A failure is nothing this start must act on.
+					void sweepStaleSetupState({
+						configDir: configRoot,
+						isKnownWorkflow: (id) => knownIn.some((known) => known.has(id)),
+					})
+						.then((swept) => {
+							for (const removed of swept.removed)
+								process.emitWarning?.(
+									`env-setup: removed stale staged state of an unknown workflow at ${removed}`,
+								);
+						})
+						.catch(() => {
+							// A sweep that cannot run leaves the state for the next start.
+						});
+				}
+			}
+		} catch {
+			// A sweep is housekeeping: it must never refuse a start.
+		}
 	}
 	// The families that run against the repository checkout itself
 	// (`policy.checkoutRequired`) rather than a worktree — the proposal-only

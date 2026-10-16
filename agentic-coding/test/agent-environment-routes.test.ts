@@ -10,6 +10,7 @@ import {
 	type ActionRouteContext,
 	type ActionRouteServices,
 	createActionRouteContext,
+	runAppBuildTestAction,
 } from "../src/server/actions/routes.ts";
 import { createServerApp } from "../src/server/app.ts";
 import {
@@ -233,6 +234,9 @@ describe("the agent environment routes are owner-scoped", () => {
 			waiters: [OWNER],
 			heldByYou: false,
 		});
+		// Each target carries the deterministic default marking
+		// (`staged-env-setup-config-root`): the `default` profile's own target per
+		// action, so the choice is visible instead of silently picked.
 		expect(apps[0]?.targets).toEqual([
 			{
 				id: "app/shop/action/run/docker/default",
@@ -240,6 +244,7 @@ describe("the agent environment routes are owner-scoped", () => {
 				runtime: "docker",
 				label: "Docker",
 				available: true,
+				default: true,
 			},
 			{
 				id: "app/shop/action/build/shell/default",
@@ -248,6 +253,7 @@ describe("the agent environment routes are owner-scoped", () => {
 				label: "Shell",
 				available: false,
 				reason: "no Dockerfile",
+				default: true,
 			},
 		]);
 	});
@@ -1139,4 +1145,205 @@ describe("the list and status report only real apps", () => {
 		expect(apps[0]?.heldByYou).toBe(true);
 		expect(apps[1]?.heldByYou).toBe(false);
 	});
+});
+
+// The deterministic default-target rule (`staged-env-setup-config-root`): the
+// motivating run left a Dockerfile build target beside a host-maven script
+// target for the same app/profile, and the build silently picked one. The rule
+// the environment tools go through is `agentTarget` — several candidates on the
+// default profile is an error naming every one of them, never a silent guess.
+describe("the build route refuses an ambiguous default target", () => {
+	function ambiguousFixture(): {
+		deps: AgentEnvironmentDeps;
+		checkout: string;
+		cleanup: () => void;
+		configDir: string;
+	} {
+		const root = tempRoot();
+		const configDir = path.join(root, "config");
+		const checkout = path.join(root, "workflow-checkout");
+		fs.mkdirSync(path.join(configDir, "apps", "build"), { recursive: true });
+		fs.mkdirSync(checkout, { recursive: true });
+		// The exact shape of the first real run: a Dockerfile target and a host
+		// script target, both on the default profile.
+		fs.writeFileSync(
+			path.join(configDir, "apps", "build", "shop-build.Dockerfile"),
+			"FROM scratch\n",
+		);
+		fs.writeFileSync(
+			path.join(configDir, "apps", "build", "shop-build.sh"),
+			"#!/bin/sh\ntrue\n",
+			{ mode: 0o755 },
+		);
+		const app = appOf("shop", path.join(root, "app-checkout"));
+		const services: ActionRouteServices = {
+			configDir,
+			homeDir: root,
+			apps: {
+				getAppByIdent: (ident: string) => (ident === "shop" ? app : undefined),
+				getApps: () => [app],
+			},
+			infraServices: [],
+			state: {
+				addActionEvent: () => {},
+				getActionEventsSince: () => [],
+				getActionEventsBetween: () => [],
+				addActionLogEvent: () => {},
+				getActionLogEvents: () => [],
+				getScriptArgsHistory: () => [],
+				addScriptArgsHistory: () => {},
+			},
+			publish: () => {},
+			logger: () => {},
+		};
+		const context = createActionRouteContext(services);
+		return {
+			deps: {
+				configDir,
+				instances: controllerDouble({}).instance,
+				apps: appsDouble([app]),
+				registry: registryDouble(),
+				actions: context,
+				resolveOwnerCheckout: () => checkout,
+			},
+			checkout,
+			configDir,
+			cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+		};
+	}
+
+	test("two default-profile build targets are an error naming both, not a silent pick", async () => {
+		const fixture = ambiguousFixture();
+		try {
+			await expect(
+				runAppBuildTestAction(fixture.deps.actions as ActionRouteContext, {
+					app: { ident: "shop" } as never,
+					action: "build",
+					checkoutDir: fixture.checkout,
+				}),
+			).rejects.toThrow(/offers several build targets/);
+			await expect(
+				runAppBuildTestAction(fixture.deps.actions as ActionRouteContext, {
+					app: { ident: "shop" } as never,
+					action: "build",
+					checkoutDir: fixture.checkout,
+				}),
+			).rejects.toThrow(/app\/shop\/build\/docker.*app\/shop\/build\/shell/);
+		} finally {
+			fixture.cleanup();
+		}
+	});
+});
+
+// `env_list` for an env-setup owner must describe what the owner's own tools
+// execute (`staged-env-setup-config-root`): the staged configuration root, with
+// the targets that came from it marked, instead of the server's live view.
+test("an owner with a staged configuration view lists the staged targets", async () => {
+	const root = tempRoot();
+	const configDir = path.join(root, "config");
+	const overlay = path.join(root, "staged-root");
+	const checkout = path.join(root, "workflow-checkout");
+	fs.mkdirSync(path.join(overlay, "apps", "build"), { recursive: true });
+	fs.mkdirSync(configDir, { recursive: true });
+	fs.mkdirSync(checkout, { recursive: true });
+	// A build target that exists only in the staged root: without the owner's
+	// configuration view it is not in `env_list` at all.
+	fs.writeFileSync(
+		path.join(overlay, "apps", "build", "shop-build.sh"),
+		"#!/bin/sh\ntrue\n",
+		{ mode: 0o755 },
+	);
+	const app = appOf("shop", path.join(root, "app-checkout"));
+	const deps: AgentEnvironmentDeps = {
+		configDir,
+		instances: controllerDouble({}).instance,
+		apps: appsDouble([app]),
+		registry: registryDouble(),
+		resolveOwnerCheckout: () => checkout,
+		resolveOwnerOverlay: () => overlay,
+	};
+	const result = payloadOf(
+		await call(deps, "GET", "/api/v1/agent-env/list"),
+	) as {
+		apps?: Array<{ app?: string; targets?: Array<Record<string, unknown>> }>;
+	};
+	const shop = result.apps?.find((entry) => entry.app === "shop");
+	const build = (shop?.targets ?? []).find(
+		(target) => target.action === "build",
+	);
+	expect(build).toBeDefined();
+	expect(build?.staged).toBe(true);
+	expect(build?.default).toBe(true);
+	// The same owner over the live configuration (no overlay) is unchanged: no
+	// target is marked staged.
+	const liveDeps: AgentEnvironmentDeps = {
+		...deps,
+		resolveOwnerOverlay: undefined,
+	};
+	const live = payloadOf(
+		await call(liveDeps, "GET", "/api/v1/agent-env/list"),
+	) as {
+		apps?: Array<{ app?: string; targets?: Array<Record<string, unknown>> }>;
+	};
+	expect(
+		(live.apps?.find((entry) => entry.app === "shop")?.targets ?? []).some(
+			(target) => target.staged === true,
+		),
+	).toBe(false);
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+// The staged view decides which target the tools run: a drafted target
+// supersedes the live one of the same action and profile, so the choice the
+// build route makes is the one the author validated (`staged-env-setup-config-root`).
+test("a staged build target supersedes the live one it replaces", async () => {
+	const root = tempRoot();
+	const configDir = path.join(root, "config");
+	const overlay = path.join(root, "staged-root");
+	const checkout = path.join(root, "workflow-checkout");
+	fs.mkdirSync(path.join(configDir, "apps", "build"), { recursive: true });
+	fs.mkdirSync(path.join(overlay, "apps", "build"), { recursive: true });
+	fs.mkdirSync(checkout, { recursive: true });
+	// The live configuration declares a Dockerfile target (the motivating case: it
+	// cannot build); the staged root holds the script target that can.
+	fs.writeFileSync(
+		path.join(configDir, "apps", "build", "shop-build.Dockerfile"),
+		"FROM scratch\n",
+	);
+	fs.writeFileSync(
+		path.join(overlay, "apps", "build", "shop-build.sh"),
+		"#!/bin/sh\ntrue\n",
+		{ mode: 0o755 },
+	);
+	const app = appOf("shop", path.join(root, "app-checkout"));
+	const services: ActionRouteServices = {
+		configDir,
+		homeDir: root,
+		apps: {
+			getAppByIdent: (ident: string) => (ident === "shop" ? app : undefined),
+			getApps: () => [app],
+		},
+		infraServices: [],
+		state: {
+			addActionEvent: () => {},
+			getActionEventsSince: () => [],
+			getActionEventsBetween: () => [],
+			addActionLogEvent: () => {},
+			getActionLogEvents: () => [],
+			getScriptArgsHistory: () => [],
+			addScriptArgsHistory: () => {},
+		},
+		publish: () => {},
+		logger: () => {},
+	};
+	const context = createActionRouteContext(services);
+	const result = await runAppBuildTestAction(context, {
+		app: app as never,
+		action: "build",
+		checkoutDir: checkout,
+		configOverlay: overlay,
+	});
+	// The staged script target, not the live (ambiguous with it) Dockerfile one.
+	expect(result.targetId).toContain("/shell");
+	fs.rmSync(root, { recursive: true, force: true });
 });

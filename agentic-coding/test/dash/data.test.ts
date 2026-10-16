@@ -1789,3 +1789,96 @@ test("the debug review gate routes to the shared review surface", () => {
 		requiredUserActionFor("debug.review", false, [], "debug", []),
 	).toBeUndefined();
 });
+
+// The env-setup developer gates (`staged-env-setup-config-root`): the prompts
+// state what the validation gate and the smoke check reported, from the step's
+// carried context, instead of pointing at a surface the dashboard never draws.
+const SETUP_APPROVAL_ACTIONS = [
+	{
+		id: "approve-setup",
+		label: "Approve and promote",
+		confirmation: "confirm",
+	},
+	{
+		id: "review-comments",
+		label: "Request changes",
+		confirmation: "confirm",
+	},
+];
+const SMOKE_REVIEW_ACTIONS = [
+	{
+		id: "rollback-promotion",
+		label: "Roll back the promotion",
+		confirmation: "confirm",
+	},
+	{
+		id: "accept-smoke-failure",
+		label: "Keep the promotion anyway",
+		confirmation: "confirm",
+	},
+];
+
+test("the approval prompt names every step, the default targets and the findings", () => {
+	const action = requiredUserActionFor(
+		"setup.approval",
+		false,
+		[],
+		"env-setup",
+		SETUP_APPROVAL_ACTIONS,
+		{
+			ok: false,
+			steps: [
+				{ step: "discover", action: "build", targetId: "", status: "ok" },
+				{
+					step: "build",
+					action: "build",
+					targetId: "app/shop/build/shell",
+					status: "failed",
+					exitCode: 2,
+				},
+			],
+			defaults: [
+				{
+					action: "build",
+					targetId: "app/shop/build/shell",
+					profile: "default",
+					runtime: "shell",
+				},
+			],
+			findings: [
+				{ check: "build", blocking: true },
+				{ check: "no-test-target", blocking: false },
+			],
+		},
+	);
+	expect(action?.key).toBe("setup-review");
+	expect(action?.prompt).toContain("build app/shop/build/shell failed");
+	expect(action?.prompt).toContain(
+		"Default targets — build: app/shop/build/shell",
+	);
+	expect(action?.prompt).toContain("1 blocking finding(s)");
+});
+
+test("the smoke review prompt names the failed start", () => {
+	const action = requiredUserActionFor(
+		"setup.smoke.review",
+		false,
+		[],
+		"env-setup",
+		SMOKE_REVIEW_ACTIONS,
+		{
+			ok: false,
+			app: "shop",
+			started: "failed",
+			build: "skipped (proven identical by the gate)",
+			detail: "the container exited immediately",
+		},
+	);
+	expect(action?.key).toBe("setup-smoke-review");
+	// The reason is derived from what actually failed, and the substance (the
+	// start, the build, the detail) is carried in the same prompt.
+	expect(action?.prompt).toContain("default target did not start");
+	expect(action?.prompt).toContain("live start of shop reported failed");
+	expect(action?.prompt).toContain("the container exited immediately");
+	expect(action?.prompt).toContain("previous files are restored");
+});

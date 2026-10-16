@@ -592,6 +592,7 @@ export function App(props: {
 			artifacts(),
 			data().state.definition?.id,
 			data().state.availableActions,
+			data().state.stepContext,
 		),
 	);
 	const [userActionOpen, setUserActionOpen] = createSignal(false);

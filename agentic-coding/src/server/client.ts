@@ -27,6 +27,7 @@ import {
 	type ConnectionState,
 	type EnvironmentTeardownResult,
 	type EventEnvelope,
+	environmentOwnerActionResultSchema,
 	environmentTeardownResultSchema,
 	type ObservationRequest,
 	wireEnvelopeSchema,
@@ -455,7 +456,40 @@ export class BackendClient implements DashboardGateway {
 
 	/** Ask the environment authority to re-read the definition files, so a
 	 * promotion's new definitions are live in the same process. */
-	async reloadEnvironmentConfig(signal?: AbortSignal): Promise<void> {
+	async runOwnerAction(
+		request: {
+			owner: string;
+			app: string;
+			action: "build" | "test";
+			target?: string;
+			profile?: string;
+		},
+		signal?: AbortSignal,
+	): Promise<{
+		status: string;
+		targetId: string;
+		runtime: string;
+		exitCode: number | null;
+		output: string;
+		truncated: boolean;
+		error?: string;
+	}> {
+		return this.decode(
+			"server.environment.apps.action",
+			environmentOwnerActionResultSchema,
+			await this.request(
+				"POST",
+				"/api/v1/environment/apps/action",
+				request,
+				signal,
+			),
+		);
+	}
+
+	/** Ask the environment authority to re-read the definition files, so a
+	 * promotion's new definitions are live in the same process. */ async reloadEnvironmentConfig(
+		signal?: AbortSignal,
+	): Promise<void> {
 		await this.request(
 			"POST",
 			ENVIRONMENT_OPERATION_PATH,

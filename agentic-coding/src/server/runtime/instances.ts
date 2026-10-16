@@ -2715,10 +2715,21 @@ function selectTarget(
 	for (const runtime of order) {
 		const matching = candidates.filter((target) => target.runtime === runtime);
 		if (matching.length === 0) continue;
-		const defaultTarget = matching.find(
+		// Deterministic and visible (`staged-env-setup-config-root`): the
+		// `default` profile's own target, and never a silent guess between
+		// several default-profile candidates.
+		const defaultTargets = matching.filter(
 			(target) => (target.profile ?? "default") === "default",
 		);
-		if (defaultTarget) return defaultTarget;
+		if (defaultTargets.length === 1) return defaultTargets[0] as ActionTarget;
+		if (defaultTargets.length > 1)
+			throw new EnvironmentInstanceError(
+				"profile-required",
+				400,
+				`several ${runtime} run targets share the default profile (${defaultTargets
+					.map((target) => target.id)
+					.join(", ")}); specify a target or profile`,
+			);
 		if (matching.length === 1) return matching[0] as ActionTarget;
 		throw new EnvironmentInstanceError(
 			"profile-required",

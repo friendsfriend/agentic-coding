@@ -24,6 +24,7 @@ import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import type {
 	AcquireSlotsRequest,
 	AppSlotOperationRequest,
+	EnvironmentOwnerActionRequest,
 	EnvironmentTeardownRequest,
 	ObserveRequest,
 } from "../contracts/environment.ts";
@@ -35,6 +36,7 @@ import type {
 	TelemetryWatchRequest,
 } from "../contracts/telemetry.ts";
 import { WorkflowRuntimeError } from "../workflow/contracts.ts";
+import { runAppBuildTestAction } from "./actions/routes.ts";
 import {
 	AuthorizationError,
 	assertBoundedText,
@@ -435,6 +437,76 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				return json({ ok: true, value: await appSlots.acquire(decoded) });
 			} catch (error) {
 				return instanceErrorResponse(error);
+			}
+		}
+
+		if (method === "POST" && path === "/api/v1/environment/apps/action") {
+			// The workflow runtime's own build/test call
+			// (`staged-env-setup-config-root`): the owner is named by the request
+			// because the caller is the runtime, not an agent capability, and the
+			// server resolves that owner's configuration view and checkout so the
+			// env-setup validation gate runs the real `env_build`/`env_test` path
+			// against the staged configuration root instead of a second
+			// implementation of it.
+			const actions = options.integrations?.actions;
+			if (!actions)
+				return errorResponse(
+					503,
+					"actions-unavailable",
+					"the environment action engine is not attached",
+				);
+			const decoded = decodeRouteRequest<EnvironmentOwnerActionRequest>(
+				path,
+				await readJsonBody(request),
+			);
+			const configured = options.integrations?.apps?.getAppByIdent(decoded.app);
+			if (!configured)
+				return errorResponse(
+					404,
+					"app-not-found",
+					`app ${JSON.stringify(decoded.app)} is not configured`,
+				);
+			const owner = decoded.owner as `workflow:${string}`;
+			const configuredApp =
+				configured as unknown as import("./environment/config.ts").App;
+			const overlay = options.integrations?.resolveOwnerOverlay?.(
+				owner,
+				configuredApp,
+			);
+			const checkout = await options.integrations?.resolveOwnerCheckout?.(
+				owner,
+				configuredApp,
+			);
+			if (!checkout)
+				return errorResponse(
+					409,
+					"owner-checkout-unavailable",
+					`no managed checkout is available for ${decoded.owner}`,
+				);
+			try {
+				const value = await runAppBuildTestAction(actions, {
+					app: configured,
+					action: decoded.action,
+					checkoutDir: checkout,
+					...(overlay ? { configOverlay: overlay } : {}),
+					...(decoded.target ? { target: decoded.target } : {}),
+					...(decoded.profile ? { profile: decoded.profile } : {}),
+				});
+				return json({
+					ok: true,
+					value: {
+						owner: decoded.owner,
+						app: configured.ident,
+						action: decoded.action,
+						...value,
+					},
+				});
+			} catch (error) {
+				return errorResponse(
+					500,
+					"action-failed",
+					error instanceof Error ? error.message : String(error),
+				);
 			}
 		}
 

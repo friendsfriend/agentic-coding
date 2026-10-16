@@ -852,6 +852,24 @@ export function effectResult(
 			};
 		}
 	}
+	if (command.outcome === "complete" && row.kind === "environment.validate") {
+		// The reviewed digests are the bytes the developer approves: recorded in the
+		// workflow's own snapshot (never in a file under the staged root the
+		// authoring agent can write), so the promotion can refuse anything else.
+		const data =
+			command.data && typeof command.data === "object"
+				? (command.data as { reviewed?: unknown })
+				: {};
+		if (data.reviewed && typeof data.reviewed === "object") {
+			const reviewed: Record<string, string> = {};
+			for (const [path, digest] of Object.entries(
+				data.reviewed as Record<string, unknown>,
+			).slice(0, 2000))
+				if (typeof digest === "string")
+					reviewed[path.slice(0, 4096)] = digest.slice(0, 128);
+			snapshot.metadata.setupReviewedDrafts = reviewed;
+		}
+	}
 	if (command.outcome === "complete" && row.kind === "workspace.setup") {
 		const data =
 			command.data && typeof command.data === "object"

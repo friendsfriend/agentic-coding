@@ -24,10 +24,16 @@ import fs from "node:fs";
 import path from "node:path";
 import {
 	assertSetupDraftsDir,
+	draftSourceRoot,
+	hasStagedRoot,
 	isAllowedDraftPath,
-	listDraftEntries,
+	listSetupDraftEntries,
 	liveConfigPath,
+	readStagedBase,
+	reviewedDigest,
 	setupPromotedDraftsDir,
+	stagedBasePathOf,
+	stagedFileDigest,
 } from "./setup-drafts.ts";
 
 /** File mode of a replaced file when the live mode cannot be read (or the file
@@ -89,8 +95,16 @@ export interface SetupPromotionOptions {
 	readonly runId?: string;
 	/** The per-run secret the journal is authenticated with (pinned at start,
 	 * engine-owned). Without it — or when it does not match — a journal this
-	 * promotion did not write is ignored rather than adopted. */
+	 * promotion did not write is ignored rather than adopted. It also
+	 * authenticates the staged base snapshot. */
 	readonly secret?: string;
+	/** The reviewed digest of every drafted file, as `environment.validate`
+	 * recorded them at the approval gate. A staged root is only promoted when
+	 * every path still holds exactly the bytes the gate built, started and the
+	 * developer approved: the window between the gate and the promotion is
+	 * unbounded (the developer's approval can take hours) and the authoring agent
+	 * holds `shell`/`edit` inside that very tree. */
+	readonly reviewed?: Readonly<Record<string, string>>;
 	/** Catalog reload; invoked once after the writes and once more when a
 	 * rollback had to restore files, so the catalog is never left pointing at a
 	 * configuration that is no longer on disk. */
@@ -110,6 +124,10 @@ export interface SetupPromotionFile {
 export interface SetupPromotionResult {
 	readonly ok: boolean;
 	readonly files: SetupPromotionFile[];
+	/** Paths whose live content no longer matches the base snapshot the staged
+	 * root was taken from: the developer changed them after the draft was
+	 * authored, and nothing was written for them. */
+	readonly conflicts?: string[];
 	/** True when every path this promotion changed was restored from a backup
 	 * that predates it (and the catalog was reloaded again). */
 	readonly rolledBack: boolean;
@@ -133,6 +151,10 @@ interface SetupPromotionJournalEntry {
 	readonly backupDigest?: string;
 	/** Digest of the content this promotion wrote to the live path. */
 	readonly writtenDigest?: string;
+	/** Mode the live path had before this promotion replaced it, so a rollback
+	 * restores exactly the previous file rather than the backup's private
+	 * 0o600. */
+	readonly mode?: number;
 }
 
 interface SetupPromotionJournal {
@@ -295,7 +317,24 @@ async function promote(
 		error,
 	});
 
-	const listed = listDraftEntries(options.draftsDir);
+	// The mode is bound to the *authenticated snapshot*, not to the presence of a
+	// writable directory. `hasStagedRoot` alone would let the authoring agent
+	// delete `root/` and fall back to the legacy listing, where the base snapshot
+	// and the conflict check do not apply; `base.json` surviving marks the run as
+	// staged, and a run that deletes both has no drafts left to promote.
+	const staged =
+		hasStagedRoot(options.draftsDir) ||
+		io.exists(stagedBasePathOf(options.draftsDir));
+	const baseDigests = staged
+		? readStagedBase(options.draftsDir, options.secret)
+		: undefined;
+	if (staged && !baseDigests)
+		return refused(
+			"the staged root's base snapshot is missing or not authenticated by this run; the promotion cannot tell what the developer changed and writes nothing",
+		);
+
+	const listed = listSetupDraftEntries(options.draftsDir, options.secret);
+	const sourceRoot = draftSourceRoot(options.draftsDir);
 	const nonRegular = listed.filter((entry) => entry.kind !== "file");
 	if (nonRegular.length > 0)
 		return refused(
@@ -339,6 +378,91 @@ async function promote(
 			`refusing drafts outside the configuration layout: ${outsideLayout.join(", ")}`,
 		);
 
+	// Conflict detection leads the writes: a path whose live content no longer
+	// matches the base snapshot the staged copy was taken from was changed by the
+	// developer in the meantime. The promotion refuses it *before writing
+	// anything*, names every conflicting path, and has nothing to roll back. The
+	// snapshot is authoritative in both directions: a drafted path that was not
+	// live when the staged root was taken, and a live path the snapshot recorded
+	// that has since disappeared, are conflicts too — never a silent replace.
+	const conflicts = drafts.filter((relative) => {
+		// A legacy state directory (no staged root) keeps today's behaviour: there
+		// is no base snapshot to compare against.
+		if (!staged || !baseDigests) return false;
+		const livePath = liveConfigPath(options.configDir, relative);
+		const baseDigest = baseDigests.get(relative);
+		const liveExists = io.exists(livePath);
+		const known = entries.get(relative);
+		// A live file this run already wrote (an interrupted attempt) is not a
+		// conflict: the journal recognises it and the attempt continues.
+		const alreadyWritten =
+			known !== undefined &&
+			known.writtenDigest !== undefined &&
+			liveExists &&
+			contentDigest(io.readFile(livePath)) === known.writtenDigest;
+		if (alreadyWritten) return false;
+		if (!baseDigest) {
+			// The staged root was taken from a configuration where this path did not
+			// exist.
+			return liveExists;
+		}
+		if (baseDigest.kind === "file") {
+			if (!liveExists) return true;
+			// The base records the *live* file's digest (the copy is byte-identical),
+			// so the comparison is against the file itself.
+			return stagedFileDigest(livePath) !== baseDigest.liveDigest;
+		}
+		// A symlink or directory the snapshot recorded: the live entry must still
+		// be the same kind of thing.
+		return liveExists !== true;
+	});
+	if (conflicts.length > 0)
+		return {
+			...refused(
+				`refusing to overwrite live files the developer changed after the drafts were authored: ${conflicts.join(", ")}`,
+			),
+			conflicts,
+		};
+
+	// The reviewed bytes are the authored bytes. `environment.validate` recorded
+	// the digest of every drafted file the developer then approved; a path whose
+	// staged content no longer matches that record (or one the review never saw)
+	// is refused before anything is written, so the approval gate authorises the
+	// bytes that become live and not merely a path list.
+	// The reviewed binding does not depend on the mode: it applies whenever the
+	// caller carries a review (the validation effect always does now, in every
+	// mode — `setup-validate.ts` records the digest of the content it read). A
+	// caller that carries none (the promotion module's own tests, a pre-change
+	// snapshot) keeps the pre-existing behaviour, but the *production* path is
+	// always bound, so deleting `root/` to fall back to the legacy listing cannot
+	// switch the binding off.
+	if (!options.reviewed && staged)
+		return refused(
+			"the staged root was not reviewed by the validation gate, so there is nothing the developer approved; no promotion is performed",
+		);
+	if (options.reviewed) {
+		const reviewed = options.reviewed;
+		const unreviewed = drafts.filter((relative) => {
+			const expected = reviewed[relative];
+			if (expected === undefined) return true;
+			const file = path.join(sourceRoot, ...relative.split("/"));
+			try {
+				return reviewedDigest(io.readFile(file)) !== expected;
+			} catch {
+				return true;
+			}
+		});
+		for (const relative of Object.keys(reviewed))
+			if (!drafts.includes(relative)) unreviewed.push(relative);
+		if (unreviewed.length > 0)
+			return {
+				...refused(
+					`refusing to promote drafts whose content differs from the reviewed content (${[...new Set(unreviewed)].sort().join(", ")}); write them again and let the gate validate them`,
+				),
+				conflicts: [...new Set(unreviewed)].sort(),
+			};
+	}
+
 	const files: SetupPromotionFile[] = [];
 	const createdDirectories = new Set<string>(
 		sameRun && !previous.complete ? previous.directories : [],
@@ -350,9 +474,18 @@ async function promote(
 	});
 	try {
 		for (const relative of drafts) {
-			const draftPath = path.join(options.draftsDir, ...relative.split("/"));
+			const draftPath = path.join(sourceRoot, ...relative.split("/"));
 			const livePath = liveConfigPath(options.configDir, relative);
 			const draftText = io.readFile(draftPath);
+			// The bytes that become live are the bytes that were checked: this is the
+			// digest of the very string the write below publishes, compared with the
+			// content the gate read, so no re-read window is left at all.
+			const expectedReview = options.reviewed?.[relative];
+			if (
+				expectedReview !== undefined &&
+				contentDigest(draftText) !== expectedReview
+			)
+				throw new ReviewChangedFailure(relative);
 			const liveExists = io.exists(livePath);
 			const liveText = liveExists ? io.readFile(livePath) : undefined;
 			const digest = contentDigest(draftText);
@@ -391,6 +524,7 @@ async function promote(
 			// inherited entry's live content is this promotion's own earlier write,
 			// not a pre-promotion original, so "backing it up" would make the
 			// rollback restore the draft.
+			let backupMode: number | undefined;
 			if (!backup && liveExists && inherited === undefined) {
 				// A file that merely sits at the canonical backup path was not written
 				// by this promotion (the directory is outside the write guard's
@@ -402,7 +536,14 @@ async function promote(
 				io.mkdir(path.dirname(target), BACKUP_DIRECTORY_MODE);
 				const content = liveText ?? io.readFile(livePath);
 				io.writeFile(target, content, BACKUP_FILE_MODE);
-				backup = { backupPath: target, backupDigest: contentDigest(content) };
+				// The backup itself stays private (0600); the mode the live path had
+				// before is journaled beside it, because a rollback must restore exactly
+				// the previous file — content and permissions.
+				backupMode = io.mode(livePath) ?? DEFAULT_FILE_MODE;
+				backup = {
+					backupPath: target,
+					backupDigest: contentDigest(content),
+				};
 			}
 			// Already promoted by an earlier attempt (or identical content): the
 			// plan records it, the live file is left alone.
@@ -414,6 +555,14 @@ async function promote(
 				path: relative,
 				status,
 				...(backup ? backup : {}),
+				// A replay must not lose the mode an earlier attempt recorded: this
+				// entry is rebuilt from scratch every attempt, and `backupMode` is
+				// only set on the attempt that took the fresh backup.
+				...(backupMode !== undefined
+					? { mode: backupMode }
+					: inherited?.mode !== undefined
+						? { mode: inherited.mode }
+						: {}),
 				writtenDigest: digest,
 			});
 			files.push({
@@ -481,6 +630,41 @@ async function promote(
 		)
 			throw new LockLostFailure();
 	} catch (error) {
+		if (error instanceof ReviewChangedFailure) {
+			// The loop may already have published earlier paths: this refusal has the
+			// same duty as any other failure, so the attempt is rolled back before it
+			// reports (an unreviewed draft must not stay half-promoted).
+			const rolledBack = await rollback(
+				options,
+				io,
+				entries,
+				createdDirectories,
+			);
+			return {
+				ok: false,
+				files,
+				rolledBack,
+				draftsMoved: false,
+				alreadyPromoted: false,
+				retryable: false,
+				error: `${message(error)}${rolledBack ? "" : " (rollback incomplete)"}`,
+				conflicts: [...files.map((file) => file.path)].sort(),
+			};
+		}
+		// The lost-lock path must not touch the live configuration: the promotion
+		// that stole the lock owns the root now, and its own rollback (or its
+		// completed promotion) is the corrective action. Writing here would race it
+		// and could put stale bytes over a finished promotion.
+		if (error instanceof LockLostFailure)
+			return {
+				ok: false,
+				files,
+				rolledBack: false,
+				draftsMoved: false,
+				alreadyPromoted: false,
+				retryable: true,
+				error: `${message(error)}; the live configuration was left to the promotion that owns the root`,
+			};
 		const rolledBack = await rollback(options, io, entries, createdDirectories);
 		return {
 			ok: false,
@@ -585,7 +769,8 @@ async function rollback(
 					complete = false;
 					continue;
 				}
-				const mode = io.mode(entry.backupPath) ?? DEFAULT_FILE_MODE;
+				const mode =
+					entry.mode ?? io.mode(entry.backupPath) ?? DEFAULT_FILE_MODE;
 				const temporary = `${livePath}.rollback`;
 				io.writeFile(temporary, content, mode);
 				io.rename(temporary, livePath);
@@ -643,6 +828,15 @@ function recordCreatedDirectories(
 }
 
 /** The promotion's own write: a lost lock aborts instead of racing the winner. */
+class ReviewChangedFailure extends Error {
+	constructor(relative: string) {
+		super(
+			`the staged content of ${relative} changed after the developer's review; the promotion wrote nothing for it`,
+		);
+		this.name = "ReviewChangedFailure";
+	}
+}
+
 class LockLostFailure extends Error {
 	constructor() {
 		super(
@@ -904,6 +1098,95 @@ function isTransient(error: unknown): boolean {
 
 function contentDigest(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * Restore the live configuration from this run's own promotion journal, and put
+ * the staged root back where the author left it (it was moved aside by the
+ * promotion). Driven by the *authenticated* journal only: a rollback acts on
+ * exactly the paths the promotion of this run wrote and proved the backup of,
+ * never on a plan an agent could have written under `.backups`.
+ *
+ * A rollback that cannot prove a restoration reports it, rather than claiming
+ * one it did not perform.
+ */
+export async function rollbackPromotion(
+	options: SetupPromotionOptions,
+): Promise<{
+	readonly ok: boolean;
+	readonly restored: string[];
+	readonly removed: string[];
+	readonly stagedRestored: boolean;
+	readonly error?: string;
+}> {
+	const io: SetupPromotionIo = { ...defaultIo, ...options.io };
+	assertSetupDraftsDir(options.configDir, options.draftsDir);
+	const runId = options.runId ?? "";
+	const journal = readJournal(
+		io,
+		setupPromotionJournalPath(options.backupDir),
+		options.secret,
+	);
+	if (
+		!journal ||
+		runId === "" ||
+		journal.workflowId !== options.workflowId ||
+		journal.runId !== runId
+	)
+		return {
+			ok: false,
+			restored: [],
+			removed: [],
+			stagedRestored: false,
+			error:
+				"no authenticated promotion journal of this run exists; there is nothing to roll back",
+		};
+	const entries = new Map<string, SetupPromotionJournalEntry>();
+	for (const entry of journal.entries) entries.set(entry.path, entry);
+	const restored = [...entries.values()]
+		.filter((entry) => entry.backupPath !== undefined)
+		.map((entry) => entry.path);
+	const removed = [...entries.values()]
+		.filter((entry) => entry.status === "added")
+		.map((entry) => entry.path);
+	const complete = await rollback(
+		options,
+		io,
+		entries,
+		new Set(journal.directories),
+	);
+	// Put the staged root back: the author resumes in it after a rolled-back
+	// promotion, so the drafts must be where they left them.
+	let stagedRestored = false;
+	const promoted = setupPromotedDraftsDir(
+		options.configDir,
+		options.workflowId,
+	);
+	try {
+		if (io.exists(promoted) && !io.exists(options.draftsDir)) {
+			io.moveDirectory(promoted, options.draftsDir);
+			stagedRestored = true;
+		}
+	} catch {
+		stagedRestored = false;
+	}
+	// The journal described a promotion that is no longer live; leaving it would
+	// let a later attempt adopt a plan whose files it just restored.
+	try {
+		io.remove(setupPromotionJournalPath(options.backupDir));
+	} catch {
+		// A journal that cannot be removed is not a failed rollback: the
+		// promotion re-proves every recorded value against the filesystem anyway.
+	}
+	return {
+		ok: complete,
+		restored,
+		removed,
+		stagedRestored,
+		...(complete
+			? {}
+			: { error: "some paths could not be proven restored (see the journal)" }),
+	};
 }
 
 function message(error: unknown): string {

@@ -26,6 +26,7 @@ import {
 	definitionVersionForFamilyTraits,
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
+	definitionVersionForStagedRoot,
 	definitionVersionForStageGates,
 	definitionVersionForStepRouting,
 	definitionVersionForTriageRouting,
@@ -54,6 +55,10 @@ const EFFECTS: EffectKind[] = [
 	"environment.setup-guard",
 	"environment.validate",
 	"environment.promote",
+	"environment.setup-stage",
+	"environment.setup-smoke",
+	"environment.setup-rollback",
+	"environment.setup-cleanup",
 	// The delegated debug request lifecycle (add-debug-subagent-requests). Both
 	// are emitted outside a step's own contract: by the request command, and by
 	// the delegated run's handoff.
@@ -289,6 +294,41 @@ export function registerBuiltins(
 			...verifyManifests(rounds, version, true),
 			...researchManifests(version, true),
 			...envSetupManifests(version),
+			...debugManifests(version),
+		]) {
+			const catalogPolicy = withPerStepRouting(withManifestPolicy(definition));
+			const pinnedBase =
+				definition.id === "research"
+					? withFullToolResearchPolicy(catalogPolicy)
+					: withFamilyTraits(catalogPolicy);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps, {
+					"core.triage-route": 2,
+				}),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// The staged-configuration-root tier (`staged-env-setup-config-root`): the
+	// family-traits tier plus the env-setup family's post-promotion smoke check,
+	// its developer review and the rollback behind it. It is a new tier rather
+	// than an edit to the traits tier, because a manifest's digest covers the
+	// whole document: editing a registered version would strand every in-flight
+	// workflow pinned to the old one (`registry.ts`'s `digest()`).
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForStagedRoot(rounds);
+		for (const definition of [
+			...openspecManifests(rounds, version, true, true, true, true),
+			...noOpenspecManifests(rounds, version, true, true, true),
+			...fusionManifests(rounds, version, true, true, true, true),
+			...wikiManifests(version, true),
+			...soloManifests(version),
+			...rebaseManifests(version),
+			...verifyManifests(rounds, version, true),
+			...researchManifests(version, true),
+			...envSetupManifests(version, true),
 			...debugManifests(version),
 		]) {
 			const catalogPolicy = withPerStepRouting(withManifestPolicy(definition));

@@ -612,15 +612,16 @@ describe("workflow registry", () => {
 			// behavior-pin tier (rounds + 300), full-tool research tier
 			// (rounds + 400), and family-traits tier (rounds + 800) also carry
 			// policy blocks.
-			const policyBearing = registry
-				.definitions()
-				.filter(
-					(definition) =>
-						(definition.version >= 201 && definition.version <= 220) ||
-						(definition.version >= 301 && definition.version <= 320) ||
-						(definition.version >= 401 && definition.version <= 420) ||
-						(definition.version >= 801 && definition.version <= 820),
-				);
+			const policyBearing = registry.definitions().filter(
+				(definition) =>
+					(definition.version >= 201 && definition.version <= 220) ||
+					(definition.version >= 301 && definition.version <= 320) ||
+					(definition.version >= 401 && definition.version <= 420) ||
+					(definition.version >= 801 && definition.version <= 820) ||
+					// The staged-configuration-root tier
+					// (`staged-env-setup-config-root`).
+					(definition.version >= 901 && definition.version <= 920),
+			);
 			expect(policyBearing.length).toBeGreaterThan(0);
 			for (const definition of policyBearing)
 				expect(definition.policy).toBeTruthy();
@@ -641,7 +642,8 @@ describe("workflow registry", () => {
 						(definition.version < 501 || definition.version > 520) &&
 						(definition.version < 601 || definition.version > 620) &&
 						(definition.version < 701 || definition.version > 720) &&
-						(definition.version < 801 || definition.version > 820),
+						(definition.version < 801 || definition.version > 820) &&
+						(definition.version < 901 || definition.version > 920),
 				))
 				expect(definition.policy).toBeUndefined();
 		});
@@ -1014,8 +1016,12 @@ describe("family traits (add-definition-family-traits)", () => {
 				"bef26705cc29c22b887293dd85d6c930648ef60f46aa894713a86e10f58f53b2",
 			research:
 				"f66c5e0dfa29b6ca024766240f5cd2439c65e555878457cc369f8c1e32ecd8ec",
+			// `setup.author`'s contract gained the staged-root effect, and a
+			// definition's digest covers the contracts of the steps it uses, so the
+			// family's digest moves at every tier even though the graph itself is
+			// flagged (`envSetupManifests(version, smoke)`).
 			"env-setup":
-				"c2f9d544c53a97db36778d8ca74e9d962b0bac3afef551bddff90a5384c2ecf2",
+				"25a073d79983e250fc8259bd5d59f290dc7bef9519416460bd75f42145fbb2a6",
 			debug: "84964700a71a1aa3ada5efe4f50ef0c67c0b9713637dca1c6da0a0f6ac09b104",
 		};
 		// Every family a start can resolve is pinned here, so the next family

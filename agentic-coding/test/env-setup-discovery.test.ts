@@ -172,10 +172,14 @@ describe("drafts overlay", () => {
 	});
 });
 
-// Round-2 finding: the overlay contributes plain files only, so a symbolic link
-// an author leaves in the drafts tree can never become a run target the system
-// executes without the approval view or the promotion ever seeing it.
-test("a symbolic link in the drafts overlay does not resolve a target", () => {
+// The staged configuration root (`staged-env-setup-config-root`) recreates the
+// live configuration's own symlinks, so a symlinked compose file resolves from
+// the overlay exactly as it does live. The property the old rule protected is
+// preserved elsewhere and tested there: the gate reports a *changed* symlink as
+// a `non-regular-file` draft and the promotion refuses to publish it, so what
+// the approval view does not show is never published — and a preserved live
+// symlink is not a draft at all.
+test("a preserved symlink in the overlay resolves, and is never a published draft", () => {
 	const configDir = tempDir("env-setup-overlay-");
 	const draftsDir = tempDir("env-setup-drafts-");
 	const checkout = tempDir("env-setup-checkout-");
@@ -190,8 +194,7 @@ test("a symbolic link in the drafts overlay does not resolve a target", () => {
 		configDir,
 		configOverlay: draftsDir,
 	});
-	expect(targets.some((target) => target.sourcePath === linked)).toBe(false);
-	expect(targets).toHaveLength(0);
+	expect(targets.some((target) => target.sourcePath === linked)).toBe(true);
 	// The live configuration keeps its own behaviour for a real file.
 	writeFile(path.join(configDir, "apps", "run", "shop-api.sh"), "echo api\n");
 	const withLive = runTargets({

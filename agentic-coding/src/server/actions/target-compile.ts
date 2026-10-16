@@ -1107,6 +1107,23 @@ function kubernetesSteps(
 
 // --- docker build pipeline ------------------------------------------------
 
+/**
+ * Resolve a container tool's `-f` source to its real path. BuildKit reads a
+ * Dockerfile relative to the build context, so a configuration file that is a
+ * symlink escaping the context (`apps/build/<app>-build.Dockerfile` →
+ * `~/devenv-config/devenv/apps/build/...`) fails as
+ * `failed to read dockerfile: ... no such file or directory` unless the real
+ * path is passed. A link that cannot be resolved falls back to its lexical path
+ * so the tool reports the file by name instead of a path that does not exist.
+ */
+export function resolveBuildSourcePath(sourcePath: string): string {
+	try {
+		return fs.realpathSync(sourcePath);
+	} catch {
+		return path.resolve(sourcePath);
+	}
+}
+
 function dockerBuildSteps(
 	id: string,
 	appIdent: string,
@@ -1148,9 +1165,13 @@ function dockerBuildSteps(
 		options.tempDir,
 		`devenv-templates-${appIdent}-${id}`,
 	);
+	const markerDirectory = path.dirname(templateMarker);
 
 	// Copy templates (for example .dockerignore) before the build so the build
-	// context does not carry large directories such as node_modules.
+	// context does not carry large directories such as node_modules. The marker's
+	// directory is created first: without it the shell reports
+	// `devenv-templates-...: No such file or directory` on every build even
+	// though nothing is wrong — the stderr noise the first real run hit.
 	const prepare = step(
 		"prepare-build-context",
 		"Prepare build context",
@@ -1160,7 +1181,7 @@ function dockerBuildSteps(
 		command: "sh",
 		args: [
 			"-c",
-			`ls -1A ${templatesDir}/ > ${templateMarker} 2>/dev/null; cp -r ${templatesDir}/. . 2>/dev/null; true`,
+			`mkdir -p ${markerDirectory} 2>/dev/null; ls -1A ${templatesDir}/ > ${templateMarker} 2>/dev/null; cp -r ${templatesDir}/. . 2>/dev/null; true`,
 		],
 		dir,
 	};
@@ -1168,7 +1189,14 @@ function dockerBuildSteps(
 	const imageName = `devenv-${appIdent}:latest`;
 	build.configuration = {
 		command: runtimeCommand,
-		args: ["build", "-f", target.sourcePath, "-t", imageName, "."],
+		args: [
+			"build",
+			"-f",
+			resolveBuildSourcePath(target.sourcePath),
+			"-t",
+			imageName,
+			".",
+		],
 		dir,
 		setValues: { "image.ref": imageName },
 	};

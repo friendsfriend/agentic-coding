@@ -8,7 +8,22 @@
 // checkout, in the configuration directory's `.drafts/env-setup/<id>`.
 import type { WorkflowManifest } from "../../registry.ts";
 
-export function envSetupManifests(version: number): WorkflowManifest[] {
+/**
+ * The family's manifests. `smoke` adds the post-promotion smoke check, its
+ * developer review and the rollback behind it
+ * (`staged-env-setup-config-root`).
+ *
+ * The flag exists because a manifest's digest covers the whole document:
+ * changing this graph unconditionally would move every *registered* env-setup
+ * version's digest and strand every workflow already pinned to one
+ * (`registry.ts`'s `digest()`), so the new steps arrive as a new tier
+ * (`definitionVersionForStagedRoot`) while every earlier tier keeps the graph it
+ * published.
+ */
+export function envSetupManifests(
+	version: number,
+	smoke = false,
+): WorkflowManifest[] {
 	return [
 		{
 			id: "env-setup",
@@ -21,6 +36,9 @@ export function envSetupManifests(version: number): WorkflowManifest[] {
 				"setup.validate",
 				"setup.approval",
 				"setup.promote",
+				...(smoke
+					? ["setup.smoke", "setup.smoke.review", "setup.rollback"]
+					: []),
 				"core.completed",
 				"core.closed",
 			],
@@ -88,11 +106,21 @@ export function envSetupManifests(version: number): WorkflowManifest[] {
 					to: "setup.author",
 					loop: { maxAttempts: 6 },
 				},
-				{
-					from: "setup.promote",
-					outcome: "complete",
-					to: "core.completed",
-				},
+				...(smoke
+					? [
+							{
+								from: "setup.promote",
+								outcome: "complete" as const,
+								to: "setup.smoke",
+							},
+						]
+					: [
+							{
+								from: "setup.promote",
+								outcome: "complete" as const,
+								to: "core.completed",
+							},
+						]),
 				// A promotion failure restores the live configuration and retries through
 				// the bounded loop; when the budget is spent the engine parks the
 				// workflow for the developer with the rollback result.
@@ -102,6 +130,50 @@ export function envSetupManifests(version: number): WorkflowManifest[] {
 					to: "setup.promote",
 					loop: { maxAttempts: 3 },
 				},
+				// The smoke check is only reachable from the promotion's success edge,
+				// which is only reachable from the approval edge: nothing here can run
+				// before the developer approved. The developer either rolls the promotion
+				// back (the live configuration is restored from its own backup and the
+				// author resumes) or keeps it with the failed check recorded.
+				...(smoke
+					? [
+							{
+								from: "setup.smoke",
+								outcome: "complete" as const,
+								to: "core.completed",
+							},
+							{
+								from: "setup.smoke",
+								outcome: "failed" as const,
+								to: "setup.smoke.review",
+							},
+							{
+								from: "setup.smoke.review",
+								outcome: "rollback-promotion" as const,
+								to: "setup.rollback",
+							},
+							{
+								from: "setup.smoke.review",
+								outcome: "accept-smoke-failure" as const,
+								to: "core.completed",
+							},
+							// A rollback returns the author to its staged root with the rollback
+							// report as context (bounded); a rollback that cannot be proven retries
+							// a bounded number of times and then parks the workflow.
+							{
+								from: "setup.rollback",
+								outcome: "complete" as const,
+								to: "setup.author",
+								loop: { maxAttempts: 5 },
+							},
+							{
+								from: "setup.rollback",
+								outcome: "failed" as const,
+								to: "setup.rollback",
+								loop: { maxAttempts: 3 },
+							},
+						]
+					: []),
 				{ from: "core.completed", outcome: "close", to: "core.closed" },
 			] as const,
 		},

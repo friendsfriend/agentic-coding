@@ -41,8 +41,8 @@ export interface DiscoveryContext {
 	readonly action: AppAction;
 	readonly configDir: string;
 	/** A second config directory whose files shadow `configDir` file by file
-	 * (the `env-setup` workflow's drafts directory). A draft therefore replaces
-	 * or adds one definition without the live file being touched. */
+	 * (the `env-setup` workflow's staged configuration root). A draft therefore
+	 * replaces or adds one definition without the live file being touched. */
 	readonly configOverlay?: string;
 	/** Platform, so the systemshell variant and interpreter names are pinned. */
 	readonly platform?: string;
@@ -64,17 +64,20 @@ export function resolveConfigFilePath(
 	const overlay = context.configOverlay;
 	if (!overlay) return base;
 	const candidate = path.join(overlay, ...segments);
-	// A draft must be a plain file: a symbolic link in the overlay would let the
-	// system read — and run — content that the approval view never shows and the
-	// promotion never publishes, so the overlay simply does not apply to it.
-	return isOverlayFile(candidate) ? candidate : base;
+	// A draft must be a plain file or a preserved symlink. The staged root
+	// recreates the live configuration's own symlinks (a symlinked compose file
+	// must resolve from the staged root exactly as it does live), while the
+	// approval view and the promotion still refuse a *changed* symlink as a
+	// non-regular draft, so nothing the approval view does not show is ever run
+	// from a draft.
+	return isOverlayEntry(candidate) ? candidate : base;
 }
 
-/** Whether a candidate path is a plain file (never a symbolic link). */
-function isOverlayFile(candidate: string): boolean {
+/** Whether a candidate path is a plain file or a symlink (never a directory). */
+function isOverlayEntry(candidate: string): boolean {
 	try {
 		const stats = fs.lstatSync(candidate);
-		return stats.isFile() && !stats.isSymbolicLink();
+		return stats.isFile() || stats.isSymbolicLink();
 	} catch {
 		return false;
 	}
@@ -97,11 +100,11 @@ export function configDirEntries(
 		for (const name of fs.readdirSync(target)) {
 			const candidate = path.join(target, name);
 			// The live configuration keeps its current behaviour (a real file); the
-			// overlay contributes only plain files.
+			// overlay contributes a plain file or a preserved symlink.
 			if (
 				dir === context.configDir
 					? fileExists(candidate)
-					: isOverlayFile(candidate)
+					: isOverlayEntry(candidate)
 			)
 				names.add(name);
 		}

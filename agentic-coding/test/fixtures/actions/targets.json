@@ -644,7 +644,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
                   ],
                   "command": "sh",
                   "dir": "{{ROOT}}/apps/api"
@@ -857,7 +857,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
                   ],
                   "command": "sh",
                   "dir": "{{ROOT}}/apps/api"
@@ -1092,7 +1092,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
                   ],
                   "command": "sh",
                   "dir": "{{ROOT}}/apps/api"
@@ -1127,7 +1127,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
                   ],
                   "command": "sh",
                   "dir": "{{ROOT}}/apps/api"

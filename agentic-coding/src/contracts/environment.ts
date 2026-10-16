@@ -175,6 +175,41 @@ export const appSlotOperationRequestSchema = Schema.Struct({}).pipe(
 );
 
 /**
+ * Body of the workflow-API build/test route: the *workflow runtime* is the
+ * caller (not an agent capability), exactly as with `acquire`, so the owner and
+ * the app are named by the request and the server resolves the owner's own
+ * configuration view and checkout for them. `staged-env-setup-config-root` uses
+ * it so the validation gate can run the real `env_build`/`env_test` path against
+ * the staged configuration root.
+ */
+export const environmentOwnerActionRequestSchema = Schema.Struct({
+	owner: safeInstanceText.pipe(Schema.minLength(1)),
+	app: safeInstanceText.pipe(Schema.minLength(1)),
+	action: Schema.Literal("build", "test"),
+	target: Schema.optional(safeInstanceText),
+	profile: Schema.optional(safeInstanceText),
+});
+
+export type EnvironmentOwnerActionRequest =
+	typeof environmentOwnerActionRequestSchema.Type;
+
+export const environmentOwnerActionResultSchema = Schema.Struct({
+	owner: Schema.String,
+	app: Schema.String,
+	action: Schema.String,
+	status: Schema.String,
+	targetId: Schema.String,
+	runtime: Schema.String,
+	exitCode: Schema.Union(Schema.Number, Schema.Null),
+	output: Schema.String,
+	truncated: Schema.Boolean,
+	error: Schema.optional(Schema.String),
+});
+
+export type EnvironmentOwnerActionResult =
+	typeof environmentOwnerActionResultSchema.Type;
+
+/**
  * Body of the owner teardown route: a workflow's durable `environment.teardown`
  * effect names the owner whose apps it releases. The owner is the only input —
  * which apps an owner holds is the server's own state, never a request's claim.

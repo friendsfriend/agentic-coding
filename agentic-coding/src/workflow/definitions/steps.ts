@@ -427,6 +427,7 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 				"agent.launch",
 				"agent.prompt",
 				"agent.stop",
+				"environment.setup-stage",
 				"environment.setup-guard",
 			],
 		},
@@ -459,6 +460,36 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 			retryLimit: 3,
 		},
 	),
+	// The post-promotion smoke check: the real default target is started once
+	// against the live configuration, and a failure offers rollback instead of
+	// leaving a broken live configuration.
+	step(
+		"setup.smoke",
+		"Environment smoke check",
+		"system",
+		["complete", "failed"],
+		{
+			allowedEffects: ["environment.setup-smoke"],
+			retryLimit: 2,
+		},
+	),
+	// The developer's choice after a failed smoke check. Its actions are
+	// `rollback-promotion` and `accept-smoke-failure`, and both are only offered
+	// once the smoke report exists (the step is only reachable from it).
+	step("setup.smoke.review", "Environment smoke review", "developer", [
+		"rollback-promotion",
+		"accept-smoke-failure",
+	]),
+	step(
+		"setup.rollback",
+		"Environment rollback",
+		"system",
+		["complete", "failed"],
+		{
+			allowedEffects: ["environment.setup-rollback"],
+			retryLimit: 3,
+		},
+	),
 	// --- debug family (add-debug-workflow) ------------------------------------
 	// The one agent of the family: it probes a running app and may edit code to
 	// prove a candidate fix. Its edits are captured as a `changes.patch`
@@ -483,6 +514,12 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		allowedEffects: ["pull-request.create", "workspace.close"],
 	}),
 	step("core.closed", "Closed", "system", ["closed"], {
+		// `environment.setup-cleanup` is deliberately not listed here: it is one of
+		// the lifecycle effects the store treats as step-independent (like
+		// `environment.teardown`), because the close path emits it outside the
+		// contract of whatever step the workflow happens to be in. Adding it here
+		// would move every registered definition's digest and strand every
+		// in-flight workflow (`registry.ts`'s `digest()`).
 		allowedEffects: ["workspace.close", "workspace.cleanup"],
 	}),
 ];

@@ -120,6 +120,11 @@ export async function loadDashboardSeed(
 		phase: view.currentStep.id,
 		stepId: view.currentStep.id,
 		stepLabel: view.currentStep.label,
+		// The step's carried context (the env-setup validation report at an
+		// approval, the smoke report at a smoke review): the decision prompt states
+		// what the gate or the live start reported instead of promising a view that
+		// does not exist.
+		stepContext: view.currentStep.context,
 		revision: view.revision,
 		definition: view.definition,
 		...(view.definitionOrigin

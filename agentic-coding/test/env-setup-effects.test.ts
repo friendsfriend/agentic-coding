@@ -118,6 +118,10 @@ function environment(options: { configDir: string; repoRoot: string }) {
 			baseCommit: "base",
 			app: "shop",
 			setupDraftsDir: draftsDir,
+			// The promotion secret is pinned at start (`engine.ts`); the handlers
+			// supply it to the base snapshot's authentication and to the journal, so
+			// the tests below exercise that wiring rather than handing it in.
+			setupPromotionSecret: "pinned-promotion-secret",
 		},
 		routing: {
 			defaultProfile: "test",
@@ -451,7 +455,9 @@ describe("the validation effect", () => {
 			expect(report.targets).toHaveLength(1);
 			expect(report.targets?.[0]?.drafted).toBe(true);
 			expect(
-				[...new Set(report.findings?.map((finding) => finding.check))].sort(),
+				[...new Set(report.findings?.map((finding) => finding.check))]
+					.filter((check) => check !== "no-test-target")
+					.sort(),
 			).toEqual(["otel", "start"]);
 			expect(report.findings?.some((finding) => finding.check === "otel")).toBe(
 				true,
@@ -648,4 +654,645 @@ describe("effect failure channels", () => {
 			expect(engine.status(repoRoot, WORKFLOW_ID).status).toBe("active");
 		});
 	});
+});
+
+describe("the staged-root effect lifecycle", () => {
+	const STAGED_DRAFT = DRAFT_COMPOSE;
+
+	/** The reviewed digests the validation gate records for a staged root: the
+	 * content of every drafted file at approval time. */
+	async function reviewedFor(
+		draftsDir: string,
+	): Promise<Record<string, string>> {
+		const { listSetupDraftFiles, reviewedDigest } = await import(
+			"../src/server/environment/setup-drafts.ts"
+		);
+		const reviewed: Record<string, string> = {};
+		for (const relative of listSetupDraftFiles(draftsDir))
+			reviewed[relative] = reviewedDigest(
+				fs.readFileSync(
+					path.join(draftsDir, "root", ...relative.split("/")),
+					"utf8",
+				),
+			);
+		return reviewed;
+	}
+
+	test("environment.setup-stage materializes the staged root under the workflow's draftsDir", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			const result = await runHandler<{
+				ok?: boolean;
+				staged?: boolean;
+				entries?: number;
+			}>(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			expect(result.ok).toBe(true);
+			expect(result.staged).toBe(true);
+			// The complete copy is materialized at the state directory's `root/`,
+			// with a base snapshot authenticated by the run's pinned secret.
+			expect(
+				fs.existsSync(
+					path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				),
+			).toBe(true);
+			const base = fs.readFileSync(path.join(draftsDir, "base.json"), "utf8");
+			expect(JSON.parse(base)).toMatchObject({ version: 1 });
+			expect(base).toContain("mac");
+		});
+	});
+
+	test("a configuration that cannot be materialized fails the effect permanently", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			// The state directory's parent cannot be created (a file stands where the
+			// workflow's state family has to be): materialization cannot complete and
+			// the effect fails permanently with a bounded message instead of looping.
+			fs.mkdirSync(path.dirname(draftsDir), { recursive: true });
+			fs.writeFileSync(draftsDir, "not a directory\n");
+			const failure = await handlerFailure(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			expect(failure).toContain(
+				"the staged configuration root could not be materialized",
+			);
+			expect(failure).toContain("is not a directory");
+		});
+	});
+
+	test("a promotion whose staged bytes changed after the review is refused", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				STAGED_DRAFT,
+			);
+			const reviewed = await reviewedFor(draftsDir);
+			// The authored file is rewritten after the gate reviewed it: the window
+			// between the gate and the developer's approval is unbounded, and the
+			// promotion must not publish bytes nobody approved.
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				`${STAGED_DRAFT}# rewritten after the review\n`,
+			);
+			const result = await runHandler<{ ok?: boolean; conflicts?: string[] }>(
+				engine,
+				repoRoot,
+				"environment.promote",
+				{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+			);
+			expect(result.ok).toBe(false);
+			expect(result.conflicts).toEqual(["apps/compose/shop-compose.yml"]);
+			expect(
+				fs.readFileSync(
+					path.join(configDir, "apps", "compose", "shop-compose.yml"),
+					"utf8",
+				),
+			).toBe(LIVE_COMPOSE);
+		});
+	});
+
+	test("a reviewed promotion can be rolled back through the handlers, byte for byte", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				STAGED_DRAFT,
+			);
+			const reviewed = await reviewedFor(draftsDir);
+			const promoted = await runHandler<{
+				ok?: boolean;
+				draftsMoved?: boolean;
+			}>(engine, repoRoot, "environment.promote", {
+				...subject(configDir, repoRoot, draftsDir),
+				reviewed,
+			});
+			expect(promoted.ok).toBe(true);
+			expect(
+				fs.readFileSync(
+					path.join(configDir, "apps", "compose", "shop-compose.yml"),
+					"utf8",
+				),
+			).toBe(STAGED_DRAFT);
+
+			const rolledBack = await runHandler<{
+				ok?: boolean;
+				stagedRestored?: boolean;
+			}>(
+				engine,
+				repoRoot,
+				"environment.setup-rollback",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			expect(rolledBack.ok).toBe(true);
+			// The previous file comes back exactly, and the author's staged root is
+			// where it left it so it can resume.
+			expect(
+				fs.readFileSync(
+					path.join(configDir, "apps", "compose", "shop-compose.yml"),
+					"utf8",
+				),
+			).toBe(LIVE_COMPOSE);
+			expect(rolledBack.stagedRestored).toBe(true);
+		});
+	});
+
+	test("a smoke check with no environment server fails instead of reporting a pass", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			const failure = await handlerFailure(
+				engine,
+				repoRoot,
+				"environment.setup-smoke",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			expect(failure).toContain("no environment server is attached");
+			// The staged state is not deleted: nothing proved the live configuration
+			// works, so a rollback still has something to restore.
+			expect(fs.existsSync(path.join(draftsDir, "root"))).toBe(true);
+		});
+	});
+
+	test("the close path removes the staged state and keeps the backup", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			fs.mkdirSync(setupBackupDir(configDir, WORKFLOW_ID), { recursive: true });
+			const result = await runHandler<{
+				workflowId?: string;
+				removed?: string[];
+			}>(engine, repoRoot, "environment.setup-cleanup", {
+				workflowId: WORKFLOW_ID,
+				draftsDir,
+			});
+			expect(result.workflowId).toBe(WORKFLOW_ID);
+			expect(result.removed?.some((entry) => entry.endsWith("/root"))).toBe(
+				true,
+			);
+			expect(fs.existsSync(path.join(draftsDir, "root"))).toBe(false);
+			expect(fs.existsSync(setupBackupDir(configDir, WORKFLOW_ID))).toBe(true);
+		});
+	});
+});
+
+describe("the base snapshot's authentication and the smoke success path", () => {
+	async function stage(
+		engine: WorkflowEngine,
+		repoRoot: string,
+		configDir: string,
+		draftsDir: string,
+	) {
+		await runHandler(
+			engine,
+			repoRoot,
+			"environment.setup-stage",
+			subject(configDir, repoRoot, draftsDir),
+		);
+	}
+
+	test("a base snapshot this run did not authenticate is never adopted", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await stage(engine, repoRoot, configDir, draftsDir);
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				DRAFT_COMPOSE,
+			);
+			const { listSetupDraftFiles, reviewedDigest } = await import(
+				"../src/server/environment/setup-drafts.ts"
+			);
+			const reviewed: Record<string, string> = {};
+			for (const relative of listSetupDraftFiles(draftsDir))
+				reviewed[relative] = reviewedDigest(
+					fs.readFileSync(
+						path.join(draftsDir, "root", ...relative.split("/")),
+						"utf8",
+					),
+				);
+
+			// (a) the tag is dropped: a hand-written snapshot is not adopted.
+			const basePath = path.join(draftsDir, "base.json");
+			const document = JSON.parse(fs.readFileSync(basePath, "utf8")) as {
+				mac?: string;
+			};
+			delete document.mac;
+			fs.writeFileSync(basePath, JSON.stringify(document));
+			const withoutMac = await runHandler<{ ok?: boolean; error?: string }>(
+				engine,
+				repoRoot,
+				"environment.promote",
+				{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+			);
+			expect(withoutMac.ok).toBe(false);
+			expect(withoutMac.error).toContain("not authenticated");
+			expect(
+				fs.readFileSync(
+					path.join(configDir, "apps", "compose", "shop-compose.yml"),
+					"utf8",
+				),
+			).toBe(LIVE_COMPOSE);
+
+			// (b) a tag from another secret: same refusal.
+			fs.writeFileSync(
+				basePath,
+				JSON.stringify({ ...document, mac: "0".repeat(64) }),
+			);
+			const foreignMac = await runHandler<{ ok?: boolean; error?: string }>(
+				engine,
+				repoRoot,
+				"environment.promote",
+				{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+			);
+			expect(foreignMac.ok).toBe(false);
+			expect(foreignMac.error).toContain("not authenticated");
+
+			// The refusal is a property of the snapshot and not of the path: discarding
+			// the tampered state and staging again produces a run-authenticated
+			// snapshot, and the promotion then proceeds.
+			fs.rmSync(path.join(draftsDir, "root"), { recursive: true, force: true });
+			fs.rmSync(basePath, { force: true });
+			await runHandler(engine, repoRoot, "environment.setup-stage", {
+				...subject(configDir, repoRoot, draftsDir),
+			});
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				DRAFT_COMPOSE,
+			);
+			const restagedReviewed: Record<string, string> = {};
+			for (const relative of listSetupDraftFiles(draftsDir))
+				restagedReviewed[relative] = reviewedDigest(
+					fs.readFileSync(
+						path.join(draftsDir, "root", ...relative.split("/")),
+						"utf8",
+					),
+				);
+			const restored = await runHandler<{ ok?: boolean; error?: string }>(
+				engine,
+				repoRoot,
+				"environment.promote",
+				{
+					...subject(configDir, repoRoot, draftsDir),
+					reviewed: restagedReviewed,
+				},
+			);
+			expect(restored.error ?? "").toBe("");
+			expect(restored.ok).toBe(true);
+		});
+	});
+
+	test("a smoke check that starts the live target reports the gate's proof and removes the staged state", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		const clientModule = await import("../src/server/client.ts");
+		const configured = clientModule.configureBackendClient({
+			baseUrl: "http://127.0.0.1:9",
+			token: "test-token",
+			ownerId: "test",
+		});
+		const original = configured.acquireSlots.bind(configured);
+		const originalReload = configured.reloadEnvironmentConfig.bind(configured);
+		configured.acquireSlots = (async () => ({
+			outcome: "already-running",
+		})) as typeof configured.acquireSlots;
+		// A configured client makes the promotion reload the catalog through the
+		// server; this test has no server, so the reload is a no-op here.
+		configured.reloadEnvironmentConfig =
+			(async () => {}) as typeof configured.reloadEnvironmentConfig;
+		try {
+			await withConfigRoot(configDir, async () => {
+				await stage(engine, repoRoot, configDir, draftsDir);
+				writeFile(
+					path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+					DRAFT_COMPOSE,
+				);
+				const { listSetupDraftFiles, reviewedDigest } = await import(
+					"../src/server/environment/setup-drafts.ts"
+				);
+				const reviewed: Record<string, string> = {};
+				for (const relative of listSetupDraftFiles(draftsDir))
+					reviewed[relative] = reviewedDigest(
+						fs.readFileSync(
+							path.join(draftsDir, "root", ...relative.split("/")),
+							"utf8",
+						),
+					);
+				const promoted = await runHandler<{ ok?: boolean }>(
+					engine,
+					repoRoot,
+					"environment.promote",
+					{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+				);
+				expect(promoted.ok).toBe(true);
+				// The staged root is gone (moved aside by the promotion), but the
+				// reviewed digests are what the smoke check compares the promoted
+				// bytes against.
+				const smoke = await runHandler<{
+					ok?: boolean;
+					started?: string;
+					build?: string;
+					buildProvenIdentical?: boolean;
+					stagedStateRemoved?: string[];
+				}>(engine, repoRoot, "environment.setup-smoke", {
+					...subject(configDir, repoRoot, draftsDir),
+					reviewed,
+				});
+				expect(smoke.ok).toBe(true);
+				expect(smoke.started).toBe("ready");
+				expect(smoke.buildProvenIdentical).toBe(true);
+				expect(smoke.build).toContain("proven identical by the gate");
+				expect(smoke.stagedStateRemoved?.length).toBeGreaterThan(0);
+				expect(fs.existsSync(path.join(draftsDir, "root"))).toBe(false);
+				expect(fs.existsSync(setupBackupDir(configDir, WORKFLOW_ID))).toBe(
+					true,
+				);
+			});
+		} finally {
+			configured.acquireSlots = original;
+			configured.reloadEnvironmentConfig = originalReload;
+			clientModule.clearBackendClient();
+		}
+	});
+});
+
+test("a promoted definition that differs from the reviewed one is rebuilt and reported", async () => {
+	const { configDir, repoRoot } = (() => {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "env-setup-smoke-diverge-"),
+		);
+		track(() => fs.rmSync(configDir, { recursive: true, force: true }));
+		writeFile(
+			path.join(configDir, "apps", "compose", "shop-compose.yml"),
+			LIVE_COMPOSE,
+		);
+		return { configDir, repoRoot: repo() };
+	})();
+	const { engine, draftsDir } = environment({ configDir, repoRoot });
+	const clientModule = await import("../src/server/client.ts");
+	const configured = clientModule.configureBackendClient({
+		baseUrl: "http://127.0.0.1:9",
+		token: "test-token",
+		ownerId: "test",
+	});
+	const originalAcquire = configured.acquireSlots.bind(configured);
+	const originalReload = configured.reloadEnvironmentConfig.bind(configured);
+	const originalAction = configured.runOwnerAction.bind(configured);
+	configured.acquireSlots = (async () => ({
+		outcome: "already-running",
+	})) as typeof configured.acquireSlots;
+	configured.reloadEnvironmentConfig =
+		(async () => {}) as typeof configured.reloadEnvironmentConfig;
+	const built: string[] = [];
+	configured.runOwnerAction = (async (request: { action: string }) => {
+		built.push(request.action);
+		return {
+			status: "completed",
+			targetId: "app/shop/action/build/shell",
+			runtime: "shell",
+			exitCode: 0,
+			output: "built-again",
+			truncated: false,
+		};
+	}) as typeof configured.runOwnerAction;
+	try {
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			writeFile(
+				path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+				DRAFT_COMPOSE,
+			);
+			const reviewed = await (async () => {
+				const { listSetupDraftFiles, reviewedDigest } = await import(
+					"../src/server/environment/setup-drafts.ts"
+				);
+				const map: Record<string, string> = {};
+				for (const relative of listSetupDraftFiles(draftsDir))
+					map[relative] = reviewedDigest(
+						fs.readFileSync(
+							path.join(draftsDir, "root", ...relative.split("/")),
+							"utf8",
+						),
+					);
+				return map;
+			})();
+			const promoted = await runHandler<{ ok?: boolean }>(
+				engine,
+				repoRoot,
+				"environment.promote",
+				{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+			);
+			expect(promoted.ok).toBe(true);
+			// The live file is changed after the promotion (the divergence the
+			// conditional rebuild exists for).
+			writeFile(
+				path.join(configDir, "apps", "compose", "shop-compose.yml"),
+				`${DRAFT_COMPOSE}# changed after the promotion\n`,
+			);
+			const smoke = await runHandler<{
+				ok?: boolean;
+				build?: string;
+				buildProvenIdentical?: boolean;
+				buildLogTail?: string;
+			}>(engine, repoRoot, "environment.setup-smoke", {
+				...subject(configDir, repoRoot, draftsDir),
+				reviewed,
+			});
+			expect(smoke.buildProvenIdentical).toBe(false);
+			expect(smoke.build).toContain("rebuilt");
+			expect(smoke.ok).toBe(true);
+			expect(built).toEqual(["build"]);
+			expect(smoke.buildLogTail).toBe("built-again");
+		});
+	} finally {
+		configured.acquireSlots = originalAcquire;
+		configured.reloadEnvironmentConfig = originalReload;
+		configured.runOwnerAction = originalAction;
+		clientModule.clearBackendClient();
+	}
+});
+
+test("a smoke check whose live start never comes up fails and keeps the staged state", async () => {
+	const { configDir, repoRoot } = fixture();
+	const { engine, draftsDir } = environment({ configDir, repoRoot });
+	const clientModule = await import("../src/server/client.ts");
+	const configured = clientModule.configureBackendClient({
+		baseUrl: "http://127.0.0.1:9",
+		token: "test-token",
+		ownerId: "test",
+	});
+	const originalAcquire = configured.acquireSlots.bind(configured);
+	configured.acquireSlots = (async () => ({
+		outcome: "deadlock",
+		message: "shop is held by workflow:other and waiting for it",
+	})) as typeof configured.acquireSlots;
+	try {
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			const smoke = await runHandler<{
+				ok?: boolean;
+				started?: string;
+				detail?: string;
+				stagedStateRemoved?: string[];
+			}>(engine, repoRoot, "environment.setup-smoke", {
+				...subject(configDir, repoRoot, draftsDir),
+				reviewed: {},
+			});
+			expect(smoke.ok).toBe(false);
+			expect(smoke.started).toBe("failed");
+			expect(smoke.detail ?? "").toContain("held by workflow:other");
+			expect(smoke.stagedStateRemoved ?? []).toEqual([]);
+			expect(fs.existsSync(path.join(draftsDir, "root"))).toBe(true);
+		});
+	} finally {
+		configured.acquireSlots = originalAcquire;
+		clientModule.clearBackendClient();
+	}
+});
+
+test("a rebuild that fails, and one that cannot run, are reported as smoke failures", async () => {
+	for (const stub of [
+		async () => {
+			throw new Error("the environment server refused the rebuild");
+		},
+		async () => ({
+			status: "completed",
+			targetId: "app/shop/action/build/shell",
+			runtime: "shell",
+			exitCode: 1,
+			output: "make: *** [Makefile:3: build] Error 2",
+			truncated: false,
+		}),
+	]) {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "env-setup-rebuild-fail-"),
+		);
+		track(() => fs.rmSync(configDir, { recursive: true, force: true }));
+		writeFile(
+			path.join(configDir, "apps", "compose", "shop-compose.yml"),
+			LIVE_COMPOSE,
+		);
+		const repoRoot = repo();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		const clientModule = await import("../src/server/client.ts");
+		const configured = clientModule.configureBackendClient({
+			baseUrl: "http://127.0.0.1:9",
+			token: "test-token",
+			ownerId: "test",
+		});
+		const originalAcquire = configured.acquireSlots.bind(configured);
+		const originalReload = configured.reloadEnvironmentConfig.bind(configured);
+		const originalAction = configured.runOwnerAction.bind(configured);
+		configured.acquireSlots = (async () => ({
+			outcome: "already-running",
+		})) as typeof configured.acquireSlots;
+		configured.reloadEnvironmentConfig =
+			(async () => {}) as typeof configured.reloadEnvironmentConfig;
+		configured.runOwnerAction =
+			stub as unknown as typeof configured.runOwnerAction;
+		try {
+			await withConfigRoot(configDir, async () => {
+				await runHandler(
+					engine,
+					repoRoot,
+					"environment.setup-stage",
+					subject(configDir, repoRoot, draftsDir),
+				);
+				writeFile(
+					path.join(draftsDir, "root", "apps", "compose", "shop-compose.yml"),
+					DRAFT_COMPOSE,
+				);
+				const { listSetupDraftFiles, reviewedDigest } = await import(
+					"../src/server/environment/setup-drafts.ts"
+				);
+				const reviewed: Record<string, string> = {};
+				for (const relative of listSetupDraftFiles(draftsDir))
+					reviewed[relative] = reviewedDigest(
+						fs.readFileSync(
+							path.join(draftsDir, "root", ...relative.split("/")),
+							"utf8",
+						),
+					);
+				const promoted = await runHandler<{ ok?: boolean }>(
+					engine,
+					repoRoot,
+					"environment.promote",
+					{ ...subject(configDir, repoRoot, draftsDir), reviewed },
+				);
+				expect(promoted.ok).toBe(true);
+				writeFile(
+					path.join(configDir, "apps", "compose", "shop-compose.yml"),
+					`${DRAFT_COMPOSE}# diverged\n`,
+				);
+				const smoke = await runHandler<{
+					ok?: boolean;
+					buildFailure?: string;
+					stagedStateRemoved?: string[];
+				}>(engine, repoRoot, "environment.setup-smoke", {
+					...subject(configDir, repoRoot, draftsDir),
+					reviewed,
+				});
+				expect(smoke.ok).toBe(false);
+				expect(smoke.buildFailure ?? "").not.toBe("");
+				// A failed check keeps the staged state, so the rollback the developer
+				// is offered still has something to restore.
+				expect(smoke.stagedStateRemoved ?? []).toEqual([]);
+				// The promotion moved the state directory aside; a failed smoke check
+				// leaves that state where the rollback can still restore it.
+				expect(fs.existsSync(path.join(`${draftsDir}.promoted`, "root"))).toBe(
+					true,
+				);
+			});
+		} finally {
+			configured.acquireSlots = originalAcquire;
+			configured.reloadEnvironmentConfig = originalReload;
+			configured.runOwnerAction = originalAction;
+			clientModule.clearBackendClient();
+		}
+	}
 });

@@ -7,7 +7,7 @@
 // `infrastructure/compose/*`), so a draft file's configuration-relative path is
 // the path it will occupy once promoted. Nothing here executes anything: this
 // module reads and hashes files and produces bounded text.
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { validateWorkflowId } from "../../workflow/runtime/targets.ts";
@@ -45,6 +45,18 @@ export interface SetupFingerprintExclusion {
 	readonly backupDir?: string;
 	/** The promotion's lock file. */
 	readonly lockPath?: string;
+	/** The whole `.drafts/env-setup` family root: every workflow's staged state
+	 * lives there, and every one of them is a full configuration copy that this
+	 * workflow's guard must not hash (a sibling workflow's materialization would
+	 * otherwise park a correct workflow in `attention-required`, and one sibling
+	 * copy can exhaust the walk budget before the live configuration is
+	 * reached). */
+	readonly draftsRoot?: string;
+	/** The `.backups/env-setup` family root: every promotion's journal and its
+	 * private copies of replaced live files live there, and another workflow's
+	 * promotion must not move this workflow's fingerprint (it would park a correct
+	 * workflow in `attention-required` for someone else's promotion). */
+	readonly backupsRoot?: string;
 	/** The running unified server's discovery record
 	 * (`server/environment-discovery.ts`). It lives in the configuration root
 	 * because that is what it hands off, and it appears, changes or disappears
@@ -141,6 +153,348 @@ export function setupPromotedDraftsDir(
 	return `${setupDraftsDir(configDir, workflowId)}.promoted`;
 }
 
+/**
+ * The staged configuration root (`staged-env-setup-config-root`): a complete
+ * copy of the live configuration, living *inside* this workflow's state
+ * directory, in which the author drafts files at their final relative paths.
+ *
+ * The state directory itself stays the value pinned at start
+ * (`metadata.setupDraftsDir`), so every pinned-value check, the write guard and
+ * the leftover-start refusal keep working unchanged; the staged root is derived
+ * from it.
+ */
+export const SETUP_STAGED_ROOT_NAME = "root";
+/** The base snapshot taken at materialization, compared against to derive the
+ * changed files. Holds digests and symlink targets, never secret content. */
+export const SETUP_STAGED_BASE_NAME = "base.json";
+
+/** The staged configuration root of one workflow's state directory. */
+export function stagedRootOf(draftsDir: string): string {
+	return path.join(draftsDir, SETUP_STAGED_ROOT_NAME);
+}
+
+/** The base snapshot path of one workflow's state directory. */
+export function stagedBasePathOf(draftsDir: string): string {
+	return path.join(draftsDir, SETUP_STAGED_BASE_NAME);
+}
+
+/** Whether the state directory already holds a materialized staged root. */
+export function hasStagedRoot(draftsDir: string): boolean {
+	try {
+		return fs.statSync(stagedRootOf(draftsDir)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Where a workflow's drafts really live: the staged root when one was
+ * materialized, the state directory otherwise. A snapshot that predates this
+ * change (or a promoted workflow whose root was moved aside) keeps the legacy
+ * per-file `draftsDir` behaviour.
+ */
+export function draftSourceRoot(draftsDir: string): string {
+	return hasStagedRoot(draftsDir) ? stagedRootOf(draftsDir) : draftsDir;
+}
+
+/** One entry of the base snapshot: what the live configuration held at the
+ * moment the staged root was materialized. */
+export interface StagedBaseEntry {
+	readonly kind: "file" | "symlink" | "dir";
+	/** Content digest of the *staged copy* (never secret content, only its hash):
+	 * the baseline the change set is derived from. */
+	readonly digest?: string;
+	/** Content digest of the live file the copy was taken from: the promotion's
+	 * conflict check asks "did the developer change this after we staged it?"
+	 * about the live file, which is a different fact from the copy's digest. */
+	readonly liveDigest?: string;
+	/** Resolved absolute target of a symlink. */
+	readonly target?: string;
+}
+
+/**
+ * The base snapshot's authentication tag, keyed by the run's pinned promotion
+ * secret, over the canonical body. The snapshot is the trust anchor of the
+ * change set and of the conflict check, and it sits inside the author's own
+ * write area (the guard's fingerprint deliberately excludes the whole state
+ * family), so a snapshot written by hand must not be adopted.
+ */
+export function stagedBaseMac(secret: string, body: unknown): string {
+	return createHmac("sha256", secret).update(canonicalJson(body)).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value && typeof value === "object")
+		return `{${Object.entries(value as Record<string, unknown>)
+			.sort(([a], [b]) => (a < b ? -1 : 1))
+			.map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+			.join(",")}}`;
+	return JSON.stringify(value) ?? "null";
+}
+
+/** Top-level entries exposed to a staged run but never published: private
+ * read-only copies, so a write inside the staged tree can never reach the live
+ * credential store. The change set skips them (they are outside every allowed
+ * prefix anyway, and counting them would let a configuration at the entry bound
+ * pass materialization and then look truncated here). */
+export const SETUP_STAGED_READONLY_NAMES: readonly string[] = [
+	".env",
+	"providers",
+];
+
+/** The base snapshot's entries, or `undefined` when there is no readable one —
+ * or (when a secret is supplied) when its authentication tag does not match. */
+export function readStagedBase(
+	draftsDir: string,
+	secret?: string,
+): Map<string, StagedBaseEntry> | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(stagedBasePathOf(draftsDir), "utf8"));
+	} catch {
+		return undefined;
+	}
+	if (typeof parsed !== "object" || parsed === null) return undefined;
+	const document = parsed as {
+		version?: unknown;
+		configDir?: unknown;
+		entries?: unknown;
+		mac?: unknown;
+	};
+	if (document.version !== 1) return undefined;
+	if (typeof document.entries !== "object" || document.entries === null)
+		return undefined;
+	if (secret !== undefined) {
+		// Fail closed: an absent, tampered or foreign snapshot is not adopted, so
+		// neither the change set nor the conflict check trusts a hand-written file.
+		if (typeof document.mac !== "string") return undefined;
+		const body = {
+			version: 1 as const,
+			configDir: String(document.configDir ?? ""),
+			entries: document.entries,
+		};
+		if (document.mac !== stagedBaseMac(secret, body)) return undefined;
+	}
+	const entries = new Map<string, StagedBaseEntry>();
+	for (const [key, value] of Object.entries(
+		document.entries as Record<string, unknown>,
+	)) {
+		if (typeof value !== "object" || value === null) continue;
+		const kind = (value as { kind?: unknown }).kind;
+		if (kind !== "file" && kind !== "symlink" && kind !== "dir") continue;
+		const digest = (value as { digest?: unknown }).digest;
+		const liveDigest = (value as { liveDigest?: unknown }).liveDigest;
+		const target = (value as { target?: unknown }).target;
+		entries.set(key, {
+			kind,
+			...(typeof digest === "string" ? { digest } : {}),
+			...(typeof liveDigest === "string" ? { liveDigest } : {}),
+			...(typeof target === "string" ? { target } : {}),
+		});
+	}
+	return entries;
+}
+
+/** A drafted file the staged root changed relative to the base snapshot. */
+export interface StagedDraftEntry {
+	readonly relative: string;
+	readonly kind: "file" | "symlink" | "other";
+	readonly status: "added" | "modified";
+}
+
+/** What the staged root changed: the drafted entries, the paths the author
+ * deleted (never published) and the non-regular entries (never published). */
+export interface StagedChangeSet {
+	readonly entries: StagedDraftEntry[];
+	readonly deletions: string[];
+	readonly findings: string[];
+}
+
+function entryKind(entry: fs.Dirent | fs.Stats): "file" | "symlink" | "other" {
+	if (entry.isSymbolicLink()) return "symlink";
+	if (entry.isFile()) return "file";
+	return "other";
+}
+
+function symlinkDigestTarget(filePath: string): string {
+	try {
+		return path.resolve(path.dirname(filePath), fs.readlinkSync(filePath));
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Derive the changed files by comparing the staged root against the base
+ * snapshot: an entry whose kind, content digest or symlink target equals the
+ * base is unchanged and is *not* a draft — which is what keeps the live
+ * configuration's own symlinks (78 of them in the motivating case) from reading
+ * as drafts. Only the documented configuration prefixes are considered.
+ */
+export function stagedChangeSet(
+	draftsDir: string,
+	secret?: string,
+): StagedChangeSet {
+	const root = stagedRootOf(draftsDir);
+	const base = readStagedBase(draftsDir, secret);
+	if (!base)
+		return {
+			entries: [],
+			deletions: [],
+			findings: [
+				`the staged root of ${draftsDir} has no readable base snapshot`,
+			],
+		};
+	const entries: StagedDraftEntry[] = [];
+	const findings: string[] = [];
+	const seen = new Set<string>();
+	let visited = 0;
+	// The walk's own accounting, over the same set and with the same bound the
+	// materializer applies (the read-only exposures are skipped on both sides),
+	// so a configuration materialization accepted cannot look truncated here.
+	let complete = true;
+	const walk = (dir: string, relative: string, depth: number): void => {
+		if (depth > FINGERPRINT_MAX_DEPTH) {
+			complete = false;
+			return;
+		}
+		let children: fs.Dirent[];
+		try {
+			children = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			// A directory that cannot be read is a walk that did not complete: an
+			// unread path must never be reported as a deletion the author made.
+			complete = false;
+			return;
+		}
+		for (const child of children.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			const childPath = path.join(dir, child.name);
+			const childRelative =
+				relative === "" ? child.name : `${relative}/${child.name}`;
+			if (depth === 0 && SETUP_STAGED_READONLY_NAMES.includes(child.name)) {
+				seen.add(childRelative);
+				continue;
+			}
+			if (++visited > FINGERPRINT_MAX_ENTRIES) {
+				complete = false;
+				return;
+			}
+			if (child.isDirectory()) {
+				seen.add(childRelative);
+				walk(childPath, childRelative, depth + 1);
+				continue;
+			}
+			seen.add(childRelative);
+			if (!isAllowedDraftPath(childRelative)) continue;
+			const kind = entryKind(child);
+			const known = base.get(childRelative);
+			const unchanged =
+				known !== undefined &&
+				known.kind === kind &&
+				(kind === "file"
+					? known.digest === stagedFileDigest(childPath)
+					: kind === "symlink"
+						? known.target === symlinkDigestTarget(childPath)
+						: true);
+			if (unchanged) continue;
+			entries.push({
+				relative: childRelative,
+				kind,
+				status: known === undefined ? "added" : "modified",
+			});
+			if (kind !== "file")
+				findings.push(`${childRelative}: drafts must be plain files (${kind})`);
+		}
+	};
+	walk(root, "", 0);
+	const deletions: string[] = [];
+	if (complete) {
+		for (const relative of base.keys()) {
+			if (!isAllowedDraftPath(relative)) continue;
+			if (seen.has(relative)) continue;
+			deletions.push(relative);
+			findings.push(
+				`${relative}: a path of the live configuration is missing from the staged root (deletions are not published)`,
+			);
+		}
+	} else {
+		// An incomplete walk cannot tell "the author deleted it" from "the walk
+		// stopped", so a per-path deletion report would be a fabricated finding.
+		findings.push(
+			"the staged root could not be compared completely (the walk hit its bound or a directory was unreadable); no deletion is reported",
+		);
+	}
+	return {
+		entries: entries.sort((a, b) => (a.relative < b.relative ? -1 : 1)),
+		deletions: deletions.sort(),
+		findings: findings.sort(),
+	};
+}
+
+/**
+ * The drafts of a workflow's state directory, staged-aware: the staged root's
+ * changed files when one was materialized, the legacy per-file listing
+ * otherwise. Every consumer (diff, validation, promotion) goes through this, so
+ * "which drafts exist" has one answer.
+ */
+export function listSetupDraftEntries(
+	draftsDir: string,
+	secret?: string,
+): Array<{ relative: string; kind: "file" | "symlink" | "other" }> {
+	if (!hasStagedRoot(draftsDir)) return listDraftEntries(draftsDir);
+	return stagedChangeSet(draftsDir, secret).entries.map((entry) => ({
+		relative: entry.relative,
+		kind: entry.kind,
+	}));
+}
+
+/** Configuration-relative paths of every plain drafted file, sorted. */
+export function listSetupDraftFiles(
+	draftsDir: string,
+	secret?: string,
+): string[] {
+	return listSetupDraftEntries(draftsDir, secret)
+		.filter((entry) => entry.kind === "file")
+		.map((entry) => entry.relative);
+}
+
+/**
+ * The drafted files whose content no longer matches the review the validation
+ * gate recorded, plus the reviewed paths that are gone. A non-empty answer means
+ * "the tree changed since the gate ran": the promotion refuses, and the approval
+ * view says so instead of rendering content the gate never validated.
+ */
+export function setupReviewDrift(
+	draftsDir: string,
+	reviewed: Readonly<Record<string, string>> | undefined,
+): string[] {
+	if (!reviewed) return [];
+	const root = draftSourceRoot(draftsDir);
+	const drift: string[] = [];
+	for (const [relative, digest] of Object.entries(reviewed)) {
+		const file = path.join(root, ...relative.split("/"));
+		try {
+			if (reviewedDigest(fs.readFileSync(file, "utf8")) !== digest)
+				drift.push(relative);
+		} catch {
+			drift.push(relative);
+		}
+	}
+	for (const relative of listSetupDraftFiles(draftsDir))
+		if (reviewed[relative] === undefined) drift.push(relative);
+	return [...new Set(drift)].sort();
+}
+
+/** Non-regular drafts and staged deletions, as bounded findings. */
+export function setupDraftSourceFindings(
+	draftsDir: string,
+	secret?: string,
+): string[] {
+	if (!hasStagedRoot(draftsDir)) return [];
+	return stagedChangeSet(draftsDir, secret).findings;
+}
+
 /** The protected backup directory of one setup workflow's promotion. */
 export function setupBackupDir(configDir: string, workflowId: string): string {
 	return path.join(
@@ -229,7 +583,7 @@ export interface SetupDraftChange {
  * climbs out with `..` is refused instead of being read.
  */
 export function draftPathWithin(draftsDir: string, relative: string): string {
-	const root = path.resolve(draftsDir);
+	const root = path.resolve(draftSourceRoot(draftsDir));
 	const normalized = relative.replaceAll("\\", "/");
 	// An absolute path or one that climbs out is refused outright; the
 	// containment and real-path checks below are the belt to this brace.
@@ -271,7 +625,7 @@ export function setupDraftChanges(
 ): SetupDraftChange[] {
 	assertSetupDraftsDir(configDir, draftsDir);
 	const changes: SetupDraftChange[] = [];
-	for (const relative of listDraftFiles(draftsDir)) {
+	for (const relative of listSetupDraftFiles(draftsDir)) {
 		const change = setupDraftChange(configDir, draftsDir, relative);
 		if (change) changes.push(change);
 	}
@@ -480,6 +834,17 @@ export function fingerprintDirectory(
 	root: string,
 	exclusion: SetupFingerprintExclusion = {},
 ): string {
+	return fingerprintDirectoryDetailed(root, exclusion).digest;
+}
+
+/** The fingerprint and whether the bounded walk completed. A walk that hit its
+ * entry or depth bound saw only a prefix of the tree, so a comparison against it
+ * proves nothing: `truncated` lets the guard fail closed instead of accepting a
+ * truncated view as "unchanged". */
+export function fingerprintDirectoryDetailed(
+	root: string,
+	exclusion: SetupFingerprintExclusion = {},
+): { digest: string; truncated: boolean } {
 	const entries: string[] = [];
 	const excluded = new Set(
 		[exclusion.draftsDir, exclusion.backupDir, exclusion.lockPath]
@@ -497,9 +862,21 @@ export function fingerprintDirectory(
 	if (exclusion.serverRecordPath)
 		excluded.add(path.resolve(exclusion.serverRecordPath));
 	let visited = 0;
+	let truncated = false;
+	const familyRoots = [exclusion.draftsRoot, exclusion.backupsRoot]
+		.filter(
+			(value): value is string => typeof value === "string" && value !== "",
+		)
+		.map((value) => path.resolve(value));
 	const walk = (dir: string, relative: string, depth: number): void => {
-		if (depth > FINGERPRINT_MAX_DEPTH || visited > FINGERPRINT_MAX_ENTRIES)
+		if (depth > FINGERPRINT_MAX_DEPTH) {
+			truncated = true;
 			return;
+		}
+		if (visited > FINGERPRINT_MAX_ENTRIES) {
+			truncated = true;
+			return;
+		}
 		let names: string[];
 		try {
 			names = fs.readdirSync(dir).sort();
@@ -511,7 +888,10 @@ export function fingerprintDirectory(
 			const childRelative = relative === "" ? name : `${relative}/${name}`;
 			// This workflow's own state is the only thing hidden, and it is hidden
 			// by path: another workflow's drafts, or a live file whose name merely
-			// looks like this workflow's state, still counts.
+			// looks like this workflow's state, still counts. The whole
+			// `.drafts/env-setup` family is skipped, because every state directory
+			// in it now holds a complete configuration copy.
+			if (familyRoots.includes(path.resolve(child))) continue;
 			if (excluded.has(path.resolve(child))) continue;
 			if (SETUP_WALKED_ONLY_DIRECTORIES.includes(childRelative)) {
 				walk(child, childRelative, depth + 1);
@@ -536,7 +916,31 @@ export function fingerprintDirectory(
 		}
 	};
 	walk(root, "", 0);
-	return createHash("sha256").update(entries.join("\n")).digest("hex");
+	return {
+		digest: createHash("sha256").update(entries.join("\n")).digest("hex"),
+		truncated,
+	};
+}
+
+/**
+ * The digest the review binds a drafted file to: the *content* the gate read,
+ * not a path it can re-read. `stagedFileDigest` is bounded (head and tail of a
+ * large file) and reads the path again, which leaves a writer that keeps
+ * rewriting the file a window between the check and the write; this is the full
+ * hash of the exact string the promotion publishes.
+ */
+export function reviewedDigest(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
+}
+
+/** The content digest of a file, resolved from its own path: the staged root's
+ * comparison and the promotion's conflict check both use this one answer. */
+export function stagedFileDigest(filePath: string): string {
+	try {
+		return fileContentDigest(filePath, fs.statSync(filePath).size);
+	} catch {
+		return "-";
+	}
 }
 
 /**
@@ -604,6 +1008,9 @@ export interface SetupGuardBaseline {
 	readonly checkoutDir: string;
 	readonly configFingerprint: string;
 	readonly checkoutFingerprint: string;
+	/** The configuration walk hit its bound: the fingerprint is a prefix, so it
+	 * proves nothing and the guard must not accept it as "unchanged". */
+	readonly truncated?: boolean;
 }
 
 /**
@@ -650,9 +1057,13 @@ export function setupGuardViolations(
 		violations.push(
 			`the configuration root moved from ${baseline.configDir} to ${current.configDir}`,
 		);
-	else if (baseline.configFingerprint !== current.configFingerprint)
+	else if (
+		baseline.truncated === true ||
+		current.truncated === true ||
+		baseline.configFingerprint !== current.configFingerprint
+	)
 		violations.push(
-			`the live configuration changed outside the drafts directory (${current.configDir})`,
+			`the live configuration changed outside the drafts directory (${current.configDir})${current.truncated === true ? ", or could not be read completely" : ""}`,
 		);
 	if (baseline.checkoutDir !== current.checkoutDir)
 		violations.push(

@@ -87,7 +87,15 @@ describe("env-setup validation", () => {
 				]),
 			}),
 		);
-		expect(report.findings).toEqual([]);
+		// The gate now also states what it could not exercise: an app with no test
+		// target gets a non-blocking `no-test-target` finding rather than a silent
+		// pass, and no blocking finding is present here.
+		expect(report.findings.filter((item) => item.blocking !== false)).toEqual(
+			[],
+		);
+		expect(report.findings.map((item) => item.check)).toEqual([
+			"no-test-target",
+		]);
 		expect(report.ok).toBe(true);
 		expect(started).toHaveLength(1);
 		expect(report.targets[0]?.drafted).toBe(true);
@@ -413,8 +421,13 @@ describe("env-setup validation boundaries", () => {
 		expect(report.targets).toHaveLength(1);
 		expect(report.targets[0]?.started).toBe("skipped");
 		expect(report.targets[0]?.detail).toContain("not reachable");
-		expect(report.findings.some((item) => item.check === "start")).toBe(false);
-		expect(report.ok).toBe(true);
+		// A start the machine cannot run is a finding the developer sees, and it
+		// fails the gate: a target that never started must not be promoted as
+		// validated, so the report says so instead of reporting a pass.
+		const skipped = report.findings.find((item) => item.check === "skipped");
+		expect(skipped?.subject).toBe(report.targets[0]?.id);
+		expect(skipped?.message).toContain("not reachable");
+		expect(report.ok).toBe(false);
 	});
 
 	test("a drafted build definition is discovered and its absence reported", async () => {

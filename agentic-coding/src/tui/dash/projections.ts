@@ -288,17 +288,88 @@ export function artifactSurfaceLabel(definitionId?: string): string {
 	return definitionId === "debug" ? "Debug report" : "OpenSpec";
 }
 
+/** A one-line summary of the env-setup validation report the approval step
+ * carries, so the developer reads what the gate actually ran where they decide:
+ * every step and its status, the default target per action, and how many blocking
+ * findings remain. */
+function setupValidationSummary(context: unknown): string | undefined {
+	if (typeof context !== "object" || context === null) return undefined;
+	const report = context as {
+		steps?: Array<{ step?: unknown; targetId?: unknown; status?: unknown }>;
+		defaults?: Array<{ action?: unknown; targetId?: unknown }>;
+		findings?: Array<{ blocking?: unknown }>;
+	};
+	const steps = Array.isArray(report.steps) ? report.steps : [];
+	if (steps.length === 0) return undefined;
+	const ran = steps
+		.map(
+			(entry) =>
+				`${String(entry.step)}${entry.targetId ? ` ${String(entry.targetId)}` : ""} ${String(entry.status)}`,
+		)
+		.join("; ");
+	const defaults = (Array.isArray(report.defaults) ? report.defaults : [])
+		.map((entry) => {
+			const superseded = Array.isArray(
+				(entry as { superseded?: unknown }).superseded,
+			)
+				? ((entry as { superseded?: unknown[] }).superseded ?? []).map(String)
+				: [];
+			return [
+				`${String(entry.action)}: ${String(entry.targetId)}`,
+				superseded.length > 0
+					? `(superseded: ${superseded.join(", ")} — still in the configuration, so remove it or give it a non-default profile if it must not remain)`
+					: "",
+			]
+				.filter(Boolean)
+				.join(" ");
+		})
+		.join(", ");
+	const blocking = (
+		Array.isArray(report.findings) ? report.findings : []
+	).filter((finding) => finding.blocking !== false).length;
+	return [
+		`The validation gate ran: ${ran}.`,
+		defaults ? `Default targets — ${defaults}.` : "",
+		blocking > 0 ? `${blocking} blocking finding(s) remain.` : "",
+	]
+		.filter(Boolean)
+		.join(" ");
+}
+
+/** The smoke report the rollback decision rests on. */
+function setupSmokeSummary(context: unknown): string | undefined {
+	if (typeof context !== "object" || context === null) return undefined;
+	const report = context as {
+		app?: unknown;
+		started?: unknown;
+		build?: unknown;
+		detail?: unknown;
+	};
+	if (report.started === undefined && report.detail === undefined)
+		return undefined;
+	return [
+		`The live start of ${String(report.app ?? "the app")} reported ${String(report.started ?? "no result")}.`,
+		report.build ? `Build: ${String(report.build)}.` : "",
+		report.detail ? `Detail: ${String(report.detail)}.` : "",
+	]
+		.filter(Boolean)
+		.join(" ");
+}
+
 export function requiredUserActionFor(
 	phase: string,
 	prCreated = false,
 	_artifacts: string[] = [],
 	definitionId?: string,
+	actions?: Array<{ id: string; label: string; confirmation: string }>,
+	/** The step's carried context (`WorkflowView.currentStep.context`), so the
+	 * decision prompt can state what the gate or the smoke check reported. */
+	context?: unknown,
 	/** The engine view's available actions for the current step. `undefined`
 	 * means no view carries this information at all (this dashboard's demo
 	 * fixture, or a pre-engine store) and the legacy phase-derived set below
 	 * applies. A present-but-empty array is authoritative and renders no
 	 * action. */
-	actions?: Array<{ id: string; label: string; confirmation: string }>,
 ): RequiredUserAction | undefined {
 	const later = { label: "Not now", kind: "dismiss" } as const;
 	if (actions !== undefined && actions.length === 0) return undefined;
@@ -327,11 +398,47 @@ export function requiredUserActionFor(
 	// draft-diff popup directly, so there are no selectable items here.
 	if (phase === "setup.approval") {
 		if (!hasAction("approve-setup")) return undefined;
+		const summary = setupValidationSummary(context);
 		return {
 			key: "setup-review",
 			title: "Action required · Environment approval",
-			prompt:
-				"Review the drafted environment definitions before they are promoted into the live configuration.",
+			prompt: [
+				"Review the drafted environment definitions before they are promoted.",
+				summary ??
+					"The validation gate built, started and tested the default targets against the staged configuration root; open the diff to review the drafted files.",
+			].join(" "),
+			items: [],
+		};
+	}
+	// The post-promotion smoke check's developer decision
+	// (`staged-env-setup-config-root`): the promoted configuration started from
+	// the live files but did not come up, and the developer chooses between
+	// restoring the previous files and keeping the promotion.
+	if (phase === "setup.smoke.review") {
+		if (!hasAction("rollback-promotion")) return undefined;
+		const smoke = (
+			typeof context === "object" && context !== null ? context : {}
+		) as { started?: unknown; buildFailure?: unknown };
+		// The reason is derived, not assumed: a smoke check can fail because the
+		// start did not come up *or* because the promoted definition had to be
+		// rebuilt and that build failed.
+		const reason =
+			smoke.started === "failed"
+				? "The promoted configuration's default target did not start."
+				: smoke.buildFailure !== undefined
+					? "The promoted configuration had to be rebuilt and that build failed."
+					: "The promotion's smoke check reported a failure.";
+		const summary = setupSmokeSummary(context);
+		return {
+			key: "setup-smoke-review",
+			title: "Action required · Environment smoke check",
+			prompt: [
+				reason,
+				summary ?? "",
+				"Roll the promotion back (the previous files are restored) or keep it.",
+			]
+				.filter(Boolean)
+				.join(" "),
 			items: [],
 		};
 	}

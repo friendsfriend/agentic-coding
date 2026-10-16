@@ -37,6 +37,7 @@ import {
 	agentHttpRequestSchema,
 	agentOtelQuerySchema,
 	appSlotOperationRequestSchema,
+	environmentOwnerActionRequestSchema,
 	environmentTeardownRequestSchema,
 	evidenceAttachRequestSchema,
 	type ObservationRequest,
@@ -337,6 +338,14 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		owner: "bun",
 		domain: "environment",
 	},
+	// The workflow runtime's own build/test call (`staged-env-setup-config-root`)
+	// is an exact path like the teardown route, so the manifest names it exactly.
+	{
+		method: "POST",
+		path: "/api/v1/environment/apps/action",
+		owner: "bun",
+		domain: "environment",
+	},
 	{
 		method: "POST",
 		path: "/api/v1/environment/apps/*",
@@ -421,6 +430,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/environment/apps/teardown",
 		schemaId: "server.environment.apps.teardown",
 		schema: environmentTeardownRequestSchema,
+	},
+	{
+		path: "/api/v1/environment/apps/action",
+		schemaId: "server.environment.apps.action",
+		schema: environmentOwnerActionRequestSchema,
 	},
 	{
 		path: "/api/v1/environment/apps/{app}/release",

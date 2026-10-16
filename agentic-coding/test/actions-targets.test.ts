@@ -70,7 +70,13 @@ const LIMITED_TOOLS: ToolSet = {
 };
 
 function createLayout(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "devenv-action-fixture-"));
+	// The real path matters: a container tool's `-f` source is resolved through
+	// `fs.realpathSync` (`staged-env-setup-config-root`), so the fixture root is
+	// resolved the same way and every `{{ROOT}}` path in the fixture stays
+	// comparable (on macOS the temp directory itself is a symlink).
+	const root = fs.realpathSync(
+		fs.mkdtempSync(path.join(os.tmpdir(), "devenv-action-fixture-")),
+	);
 	fs.mkdirSync(path.join(root, "home", ".config", "devenv"), {
 		recursive: true,
 	});

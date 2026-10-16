@@ -21,9 +21,13 @@ import type { ActionTarget, AppAction } from "../actions/targets.ts";
 import { checkToolAvailability } from "../actions/toolcheck.ts";
 import {
 	assertSetupDraftsDir,
+	draftSourceRoot,
+	hasStagedRoot,
 	isAllowedDraftPath,
-	listDraftEntries,
-	listDraftFiles,
+	listSetupDraftEntries,
+	listSetupDraftFiles,
+	reviewedDigest,
+	stagedChangeSet,
 } from "./setup-drafts.ts";
 
 /**
@@ -50,6 +54,7 @@ export interface SetupValidationFinding {
 	readonly check:
 		| "no-drafts"
 		| "non-regular-file"
+		| "staged-deletion"
 		| "unexpected-path"
 		| "unparsable"
 		| "empty-file"
@@ -59,10 +64,19 @@ export interface SetupValidationFinding {
 		| "otel"
 		| "port-collision"
 		| "missing-variable"
-		| "start";
+		| "start"
+		| "build"
+		| "test"
+		| "infra"
+		| "no-default-target"
+		| "no-test-target"
+		| "skipped";
 	readonly message: string;
 	/** Configuration-relative draft path or target id, when the finding has one. */
 	readonly subject?: string;
+	/** False for a finding the developer must see but that does not fail the
+	 * gate (an app that genuinely declares no test target). Defaults to true. */
+	readonly blocking?: boolean;
 }
 
 export interface SetupTargetStartResult {
@@ -75,6 +89,83 @@ export type SetupTargetStarter = (
 	target: ActionTarget,
 ) => Promise<SetupTargetStartResult>;
 
+/** The outcome of one build or test run of a target. A step the machine cannot
+ * run (no docker daemon, no tool) is `skipped` with a reason, never a pass. */
+export interface SetupTargetRunResult {
+	readonly ok: boolean;
+	readonly skipped?: boolean;
+	readonly exitCode?: number | null;
+	readonly logTail?: string;
+	readonly detail?: string;
+}
+
+/** Builds or tests one target; a thrown error is reported as a failed step. */
+export type SetupTargetRunner = (
+	target: ActionTarget,
+) => Promise<SetupTargetRunResult>;
+
+/** Parses one modified shared infrastructure definition; the real one is
+ * `docker compose -f <staged> config -q`. */
+export type SetupInfrastructureParser = (relative: string) => Promise<{
+	readonly ok: boolean;
+	readonly skipped?: boolean;
+	readonly exitCode?: number | null;
+	readonly detail?: string;
+	readonly logTail?: string;
+}>;
+
+/** Per-step deadlines and the whole-gate wall-clock budget. A step that runs
+ * past its deadline is reported as `skipped` with the reason and fails the
+ * gate: a hung build must never hold the workflow, and it is never a pass. */
+export interface SetupValidationTimeouts {
+	readonly compileMs?: number;
+	readonly buildMs?: number;
+	readonly startMs?: number;
+	readonly testMs?: number;
+	readonly infraMs?: number;
+	readonly budgetMs?: number;
+}
+
+const DEFAULT_TIMEOUTS: Required<SetupValidationTimeouts> = {
+	compileMs: 2 * 60 * 1000,
+	buildMs: 15 * 60 * 1000,
+	startMs: 10 * 60 * 1000,
+	testMs: 10 * 60 * 1000,
+	infraMs: 60 * 1000,
+	budgetMs: 45 * 60 * 1000,
+};
+
+/** A step that ran past its deadline. */
+class StepTimeout extends Error {
+	constructor() {
+		super("the step exceeded its deadline");
+		this.name = "StepTimeout";
+	}
+}
+
+/** Runs one step under a deadline; a timeout is data, never a thrown defect. */
+async function boundedStep<T>(
+	work: Promise<T>,
+	ms: number,
+): Promise<{ readonly timedOut: boolean; readonly value?: T }> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const value = await Promise.race([
+			work,
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => reject(new StepTimeout()), ms);
+				(timer as { unref?: () => void }).unref?.();
+			}),
+		]);
+		return { timedOut: false, value };
+	} catch (error) {
+		if (error instanceof StepTimeout) return { timedOut: true };
+		throw error;
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 /** Compiles one target; a compile failure is thrown and reported as a finding. */
 export type SetupTargetCompiler = (target: ActionTarget) => Promise<void>;
 
@@ -86,6 +177,19 @@ export interface SetupValidationContext {
 	readonly platform?: string;
 	readonly startTarget: SetupTargetStarter;
 	readonly compileTarget?: SetupTargetCompiler;
+	/** The real default build/test run (`env_build`/`env_test`). Absent means the
+	 * gate states the step as skipped rather than pretending it passed. */
+	readonly buildTarget?: SetupTargetRunner;
+	readonly testTarget?: SetupTargetRunner;
+	/** Parses every modified shared infrastructure definition. Absent means the
+	 * step is stated as skipped rather than pretended. */
+	readonly parseInfrastructure?: SetupInfrastructureParser;
+	readonly timeouts?: SetupValidationTimeouts;
+	/** The run's pinned promotion secret: it authenticates the staged base
+	 * snapshot, so a `base.json` written by hand is not adopted. */
+	readonly secret?: string;
+	/** Released after the gate unless the workflow keeps the app. */
+	readonly releaseTarget?: () => Promise<void>;
 	/** Host ports the *other* apps already declare, keyed by port. */
 	readonly otherAppPorts?: () => Map<number, string>;
 	/** Whether a Kubernetes cluster the target names is reachable. */
@@ -113,6 +217,124 @@ export interface SetupValidationReport {
 	readonly findings: SetupValidationFinding[];
 	readonly variables: { readonly used: string[]; readonly missing: string[] };
 	readonly otel: Array<{ readonly target: string; readonly ok: boolean }>;
+	/** The real path the gate ran, step by step: discover, compile, the default
+	 * build, start and the default test, with each step's outcome. */
+	readonly steps: SetupValidationStepReport[];
+	/** The default target the gate chose per action, so a draft with two
+	 * default-profile candidates cannot silently pass. */
+	readonly defaults: SetupValidationDefault[];
+	/** The digest of every drafted file the gate validated, in declaration order:
+	 * the promotion refuses to publish anything else, so the approval authorises
+	 * the bytes that become live and not merely a path list. */
+	readonly reviewed: Record<string, string>;
+}
+
+export interface SetupValidationStepReport {
+	/** `discover`, `compile`, `build`, `start` or `test`. */
+	readonly step: string;
+	readonly action: string;
+	readonly targetId: string;
+	readonly status: "ok" | "failed" | "skipped";
+	readonly exitCode?: number | null;
+	readonly durationMs: number;
+	readonly logTail?: string;
+	readonly detail?: string;
+	/** The target ids the step saw (the discover step). */
+	readonly targetsSeen?: string[];
+}
+
+export interface SetupValidationDefault {
+	readonly action: "build" | "run" | "test";
+	readonly targetId: string;
+	readonly profile: string;
+	readonly runtime: string;
+	/** Live target ids this draft supersedes (same action and profile): a draft
+	 * cannot delete a live definition, so the file it writes is the one the app
+	 * means to use, and the report says which live target it displaces. */
+	readonly superseded?: string[];
+}
+
+/** Log tail of one step: the last 40 lines, at most 8 KiB. */
+export function boundedStepLog(text: string | undefined): string | undefined {
+	if (text === undefined) return undefined;
+	const lines = text.split("\n");
+	const tail = lines.slice(Math.max(0, lines.length - 40)).join("\n");
+	return tail.length > 8192 ? tail.slice(tail.length - 8192) : tail;
+}
+
+/** The default target of one action: the `default` profile's own target, and
+ * never a silent guess between several candidates (mirrors `agentTarget`). */
+export function defaultTargetOf(targets: readonly ActionTarget[]): {
+	readonly target?: ActionTarget;
+	readonly ambiguous?: ActionTarget[];
+} {
+	if (targets.length === 0) return {};
+	const preferred = targets.filter(
+		(candidate) => (candidate.profile ?? "default") === "default",
+	);
+	if (preferred.length === 1) return { target: preferred[0] as ActionTarget };
+	if (preferred.length > 1)
+		return {
+			ambiguous: [...preferred].sort((a, b) => (a.id < b.id ? -1 : 1)),
+		};
+	if (targets.length === 1) return { target: targets[0] as ActionTarget };
+	return { ambiguous: [...targets].sort((a, b) => (a.id < b.id ? -1 : 1)) };
+}
+
+/**
+ * The effective target set for the default choice: a *drafted* target supersedes
+ * every live target of the same action and profile.
+ *
+ * The staged root is a copy of the live configuration, so the superseded
+ * definition is discovered whether or not the author drafts the replacing file,
+ * and a draft cannot remove it (deletions are never published). The motivating
+ * case is exactly this: a live `apps/build/<app>-build.Dockerfile` that cannot
+ * build beside a drafted `apps/build/<app>-build.sh` that works. Treating the
+ * draft as the successor is the semantics the change promises ("a drafted build
+ * target for the same app/profile should replace the one it supersedes"), and the
+ * report names what it displaced.
+ */
+export function supersededTargets(
+	targets: readonly ActionTarget[],
+	draftedPaths: ReadonlySet<string>,
+): ActionTarget[] {
+	const drafted = targets.filter((target) =>
+		draftedPaths.has(target.sourcePath),
+	);
+	if (drafted.length === 0) return [...targets];
+	const key = (target: ActionTarget): string =>
+		`${target.action}|${target.profile ?? "default"}`;
+	const draftedKeys = new Set(drafted.map(key));
+	return targets.filter(
+		(target) =>
+			draftedPaths.has(target.sourcePath) || !draftedKeys.has(key(target)),
+	);
+}
+
+/** The superseded live target ids for one drafted choice, for the report. */
+export function supersededIds(
+	targets: readonly ActionTarget[],
+	effective: readonly ActionTarget[],
+): string[] {
+	const kept = new Set(effective.map((target) => target.id));
+	return targets
+		.filter((target) => !kept.has(target.id))
+		.map((target) => target.id)
+		.sort();
+}
+
+/** The run target the platform would start by default: Docker, then a script,
+ * then Kubernetes — the same precedence `selectTarget` applies. */
+export function preferredRunTarget(
+	targets: readonly ActionTarget[],
+): ActionTarget | undefined {
+	for (const runtime of ["docker", "shell", "systemshell", "kubernetes"]) {
+		const matching = targets.filter((target) => target.runtime === runtime);
+		if (matching.length === 0) continue;
+		const preferred = defaultTargetOf(matching);
+		return preferred.target ?? (matching[0] as ActionTarget);
+	}
+	return targets[0];
 }
 
 /**
@@ -124,14 +346,24 @@ export interface SetupValidationReport {
 export async function validateSetupDrafts(
 	context: SetupValidationContext,
 ): Promise<SetupValidationReport> {
+	const steps: SetupValidationStepReport[] = [];
+	const defaults: SetupValidationDefault[] = [];
 	const findings: SetupValidationFinding[] = [];
+	const reviewed: Record<string, string> = {};
+	const timeouts = { ...DEFAULT_TIMEOUTS, ...context.timeouts };
+	const gateStartedAt = Date.now();
+	const budgetLeft = (): number =>
+		timeouts.budgetMs - (Date.now() - gateStartedAt);
+	const report = (
+		value: Omit<SetupValidationReport, "steps" | "defaults" | "reviewed">,
+	): SetupValidationReport => ({ ...value, steps, defaults, reviewed });
 	// The drafts directory arrives from the workflow's pinned metadata: a value
 	// that is not this configuration's drafts root is a named finding, never a
 	// discovery over an unknown tree.
 	try {
 		assertSetupDraftsDir(context.configDir, context.draftsDir);
 	} catch (error) {
-		return {
+		return report({
 			ok: false,
 			app: context.appIdent,
 			drafts: [],
@@ -139,22 +371,58 @@ export async function validateSetupDrafts(
 			findings: [{ check: "unexpected-path", message: message(error) }],
 			variables: { used: [], missing: [] },
 			otel: [],
-		};
+		});
 	}
-	// Only plain files may be published, so a symbolic link or special file in
-	// the drafts tree is reported instead of being silently skipped (which is
-	// what let discovery resolve a target the approval view never showed).
+	// The staged configuration root is where a draft really lives
+	// (`staged-env-setup-config-root`): a complete copy of the live configuration
+	// at its own relative layout, so a draft's `include:` and relative mounts
+	// resolve exactly as they will after promotion. A state directory without a
+	// staged root keeps the legacy per-file behaviour.
+	const sourceRoot = draftSourceRoot(context.draftsDir);
+	// The change set is derived once and every later decision reads it: the draft
+	// list, the non-regular and deletion findings (one walk, one answer).
+	const changed = hasStagedRoot(context.draftsDir)
+		? stagedChangeSet(context.draftsDir, context.secret)
+		: undefined;
 	const nonRegularDrafts = new Set<string>();
-	for (const entry of listDraftEntries(context.draftsDir))
-		if (entry.kind !== "file") {
-			nonRegularDrafts.add(entry.relative);
+	if (changed) {
+		for (const entry of changed.entries)
+			if (entry.kind !== "file") {
+				nonRegularDrafts.add(entry.relative);
+				findings.push({
+					check: "non-regular-file",
+					message: `${entry.relative}: drafts must be plain files (${entry.kind})`,
+					subject: entry.relative,
+				});
+			}
+		for (const relative of changed.deletions)
 			findings.push({
-				check: "non-regular-file",
-				message: `${entry.relative}: drafts must be plain files (${entry.kind})`,
-				subject: entry.relative,
+				check: "staged-deletion",
+				message: `${relative}: a live configuration path is missing from the staged root; deletions are never published`,
+				subject: relative,
 			});
-		}
-	const drafts = listDraftFiles(context.draftsDir);
+	} else {
+		for (const entry of listSetupDraftEntries(context.draftsDir))
+			if (entry.kind !== "file") {
+				nonRegularDrafts.add(entry.relative);
+				findings.push({
+					check: "non-regular-file",
+					message: `${entry.relative}: drafts must be plain files (${entry.kind})`,
+					subject: entry.relative,
+				});
+			}
+	}
+	const drafts = (changed?.entries ?? [])
+		.filter((entry) => entry.kind === "file")
+		.map((entry) => entry.relative);
+	const legacyDrafts = changed ? [] : listSetupDraftFiles(context.draftsDir);
+	for (const relative of legacyDrafts) drafts.push(relative);
+	// The reviewed digest of every drafted file, taken from the directory the
+	// promotion writes from (`sourceRoot`): the promotion refuses to publish
+	// anything else, so the developer's approval covers the bytes that become live
+	// and not merely a path list (the authoring agent can write into this tree
+	// while the approval waits). Recorded in every mode, so a run whose staged
+	// root disappears cannot present an empty review.
 	if (drafts.length === 0)
 		findings.push({
 			check: "no-drafts",
@@ -163,7 +431,7 @@ export async function validateSetupDrafts(
 
 	const draftTexts = new Map<string, string>();
 	for (const relative of drafts) {
-		const filePath = path.join(context.draftsDir, ...relative.split("/"));
+		const filePath = path.join(sourceRoot, ...relative.split("/"));
 		let text: string;
 		try {
 			text = fs.readFileSync(filePath, "utf8");
@@ -206,7 +474,14 @@ export async function validateSetupDrafts(
 		}
 	}
 
-	// Discovery resolves the drafts through the same per-file overlay a held
+	for (const relative of drafts) {
+		const text = draftTexts.get(relative);
+		// The digest of the *content the gate read and validated*: the promotion
+		// compares it with the bytes it is about to write, so a rewrite between the
+		// two cannot be published un-reviewed.
+		if (text !== undefined) reviewed[relative] = reviewedDigest(text);
+	}
+	// Discovery resolves the staged root through the same per-file overlay a held
 	// app run uses, so what validates is exactly what would run. It throws on a
 	// malformed definition (for example a `x-devenv.requires` block that is not
 	// inline JSON), which is a finding the author must see — never a defect that
@@ -222,7 +497,7 @@ export async function validateSetupDrafts(
 				localDir: context.checkoutDir,
 				action,
 				configDir: context.configDir,
-				configOverlay: context.draftsDir,
+				configOverlay: sourceRoot,
 				...(context.platform ? { platform: context.platform } : {}),
 			});
 		} catch (error) {
@@ -242,12 +517,12 @@ export async function validateSetupDrafts(
 			relative.startsWith(entry.prefix),
 		).map((entry) => entry.action);
 		if (actions.length === 0) continue;
-		const absolute = path.join(context.draftsDir, ...relative.split("/"));
+		const absolute = path.join(sourceRoot, ...relative.split("/"));
 		draftedPaths.add(absolute);
 		draftedActions.set(absolute, actions);
 	}
 	for (const [draftPath, actions] of draftedActions) {
-		const relative = relativeOfDraft(context.draftsDir, draftPath);
+		const relative = relativeOfDraft(sourceRoot, draftPath);
 		if (
 			actions.some((action) =>
 				discovered(action).some((target) => target.sourcePath === draftPath),
@@ -273,7 +548,7 @@ export async function validateSetupDrafts(
 	const otel: Array<{ target: string; ok: boolean }> = [];
 	for (const target of draftedRunTargets) {
 		let text: string | undefined = draftTexts.get(
-			relativeOfDraft(context.draftsDir, target.sourcePath),
+			relativeOfDraft(sourceRoot, target.sourcePath),
 		);
 		if (text === undefined) {
 			try {
@@ -287,7 +562,7 @@ export async function validateSetupDrafts(
 		if (!wired)
 			findings.push({
 				check: "otel",
-				message: `${relativeOfDraft(context.draftsDir, target.sourcePath)}: the drafted target does not reference any AC_OTEL_* variable`,
+				message: `${relativeOfDraft(sourceRoot, target.sourcePath)}: the drafted target does not reference any AC_OTEL_* variable`,
 				subject: target.id,
 			});
 	}
@@ -315,17 +590,279 @@ export async function validateSetupDrafts(
 			message: `${name} is referenced by the drafts but is not set in the configuration .env`,
 		});
 
+	// --- the real developer path --------------------------------------------
+	// Discover → compile → the default build → start with readiness → the default
+	// test. Every step is reported, and a step the machine cannot run is a
+	// `skipped` finding the developer sees, never a pass.
+	const byAction = (action: AppAction): ActionTarget[] => discovered(action);
+	for (const action of ["build", "run", "test"] as AppAction[]) {
+		const seen = byAction(action);
+		steps.push({
+			step: "discover",
+			action,
+			targetId: "",
+			status: seen.length > 0 ? "ok" : "skipped",
+			durationMs: 0,
+			targetsSeen: seen.map((target) => target.id),
+			...(seen.length === 0
+				? { detail: `the app declares no ${action} target` }
+				: {}),
+		});
+		if (action === "run") {
+			// A run target is resolved by runtime precedence
+			// (`selectTarget`): an app with a compose file and a script target that
+			// the developer starts fine must not fail the gate, so no ambiguity is
+			// raised for `run` — the resolved default is reported instead.
+			const preferred = preferredRunTarget(seen);
+			if (preferred)
+				defaults.push({
+					action: "run",
+					targetId: preferred.id,
+					profile: preferred.profile ?? "default",
+					runtime: preferred.runtime,
+				});
+		} else {
+			const effective = supersededTargets(seen, draftedPaths);
+			const superseded = supersededIds(seen, effective);
+			const resolved = defaultTargetOf(effective);
+			if (resolved.ambiguous)
+				findings.push({
+					check: "no-default-target",
+					message: `${context.appIdent} declares several default-profile ${action} targets (${resolved.ambiguous
+						.map((candidate) => candidate.id)
+						.join(
+							", ",
+						)}); give one of them a non-default profile, or draft the replacement so the draft supersedes it`,
+				});
+			else if (resolved.target)
+				defaults.push({
+					action: action as "build" | "run" | "test",
+					targetId: resolved.target.id,
+					profile: resolved.target.profile ?? "default",
+					runtime: resolved.target.runtime,
+					...(superseded.length > 0 ? { superseded } : {}),
+				});
+		}
+	}
+
 	const compiler = context.compileTarget ?? (() => Promise.resolve());
 	for (const target of draftedTargets) {
+		const startedAt = Date.now();
 		try {
-			await compiler(target);
+			const bounded = await boundedStep(compiler(target), timeouts.compileMs);
+			if (bounded.timedOut)
+				throw new Error(
+					`the compile exceeded its ${Math.round(timeouts.compileMs / 60000)} min deadline and was stopped`,
+				);
+			steps.push({
+				step: "compile",
+				action: target.action,
+				targetId: target.id,
+				status: "ok",
+				durationMs: Date.now() - startedAt,
+			});
 		} catch (error) {
 			findings.push({
 				check: "compile",
 				message: `${target.id}: ${message(error)}`,
 				subject: target.id,
 			});
+			steps.push({
+				step: "compile",
+				action: target.action,
+				targetId: target.id,
+				status: "failed",
+				durationMs: Date.now() - startedAt,
+				detail: message(error),
+			});
 		}
+	}
+
+	const runTargets = discovered("run");
+	// The default run target is always part of the real path: an app whose run
+	// target is a script must not be silently dropped from the gate just because
+	// only its build/test definitions were drafted.
+	const defaultRun = preferredRunTarget(runTargets);
+	const reports: SetupValidationTargetReport[] = [];
+	/** Records a step the whole-gate budget prevented from running at all. */
+	const budgetExhausted = (
+		step: string,
+		action: string,
+		targetId: string,
+	): void => {
+		steps.push({
+			step,
+			action,
+			targetId,
+			status: "skipped",
+			durationMs: 0,
+			detail: `the gate's wall-clock budget (${Math.round(timeouts.budgetMs / 60000)} min) was spent before this step`,
+		});
+		findings.push({
+			check: "skipped",
+			message: `${targetId || action}: the ${step} was not run (the gate's wall-clock budget was spent before this step)`,
+			subject: targetId || undefined,
+		});
+	};
+	const runStep = async (
+		step: "build" | "test",
+		target: ActionTarget | undefined,
+		runner: SetupTargetRunner | undefined,
+	): Promise<void> => {
+		if (!target) {
+			steps.push({
+				step,
+				action: step,
+				targetId: "",
+				status: "skipped",
+				durationMs: 0,
+				detail:
+					step === "test"
+						? "the app declares no test target"
+						: "the app declares no build target",
+			});
+			if (step === "test")
+				findings.push({
+					check: "no-test-target",
+					message: `${context.appIdent} declares no test target`,
+					blocking: false,
+				});
+			return;
+		}
+		if (budgetLeft() <= 0) {
+			budgetExhausted(step, step, target.id);
+			return;
+		}
+		const startedAt = Date.now();
+		if (!runner) {
+			steps.push({
+				step,
+				action: step,
+				targetId: target.id,
+				status: "skipped",
+				durationMs: Date.now() - startedAt,
+				detail: `the ${step} was not run (no environment server is attached)`,
+			});
+			findings.push({
+				check: "skipped",
+				message: `${target.id}: the ${step} was not run (no environment server is attached)`,
+				subject: target.id,
+			});
+			return;
+		}
+		const deadline = Math.min(
+			step === "build" ? timeouts.buildMs : timeouts.testMs,
+			Math.max(1, budgetLeft()),
+		);
+		let result: SetupTargetRunResult;
+		try {
+			const bounded = await boundedStep(runner(target), deadline);
+			result = bounded.timedOut
+				? {
+						ok: false,
+						skipped: true,
+						detail: `the ${step} exceeded its ${Math.round(deadline / 60000)} min deadline and was stopped`,
+					}
+				: (bounded.value as SetupTargetRunResult);
+		} catch (error) {
+			result = { ok: false, detail: message(error) };
+		}
+		const status = result.skipped ? "skipped" : result.ok ? "ok" : "failed";
+		steps.push({
+			step,
+			action: step,
+			targetId: target.id,
+			status,
+			durationMs: Date.now() - startedAt,
+			...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+			...(boundedStepLog(result.logTail)
+				? { logTail: boundedStepLog(result.logTail) }
+				: {}),
+			...(result.detail ? { detail: result.detail } : {}),
+		});
+		if (status === "skipped")
+			findings.push({
+				check: "skipped",
+				message: `${target.id}: the ${step} was not run (${result.detail ?? "the machine cannot run it"})`,
+				subject: target.id,
+			});
+		else if (status === "failed")
+			findings.push({
+				check: step,
+				message: `${target.id} ${step} failed${result.exitCode !== undefined && result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}${result.detail ? `: ${result.detail}` : ""}`,
+				subject: target.id,
+			});
+	};
+
+	// The default build runs first: a draft whose default build fails must never
+	// reach the developer's review.
+	const buildSeen = discovered("build");
+	if (buildSeen.length > 0) {
+		const chosen = defaultTargetOf(buildSeen);
+		if (!chosen.ambiguous)
+			await runStep("build", chosen.target, context.buildTarget);
+	}
+
+	// Every *changed* shared infrastructure definition must at least parse: an
+	// infra draft whose paths or includes resolve nowhere must not reach the
+	// developer's review as if it were runnable.
+	for (const relative of drafts.filter((path) =>
+		path.startsWith("infrastructure/compose/"),
+	)) {
+		const startedAt = Date.now();
+		if (!context.parseInfrastructure) {
+			steps.push({
+				step: "infra",
+				action: "infra",
+				targetId: relative,
+				status: "skipped",
+				durationMs: 0,
+				detail:
+					"the infrastructure definition was not parsed (no docker CLI is available)",
+			});
+			findings.push({
+				check: "skipped",
+				message: `${relative}: the infrastructure definition was not parsed (no docker CLI is available)`,
+				subject: relative,
+			});
+			continue;
+		}
+		const bounded = await boundedStep(
+			context.parseInfrastructure(relative),
+			timeouts.infraMs,
+		);
+		const parsed = bounded.timedOut
+			? {
+					ok: false,
+					skipped: true,
+					detail: `parsing exceeded its ${Math.round(timeouts.infraMs / 60000)} min deadline`,
+				}
+			: (bounded.value as {
+					ok: boolean;
+					skipped?: boolean;
+					exitCode?: number | null;
+					detail?: string;
+					logTail?: string;
+				});
+		const status = parsed.skipped ? "skipped" : parsed.ok ? "ok" : "failed";
+		steps.push({
+			step: "infra",
+			action: "infra",
+			targetId: relative,
+			status,
+			durationMs: Date.now() - startedAt,
+			...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
+			...(boundedStepLog(parsed.logTail)
+				? { logTail: boundedStepLog(parsed.logTail) }
+				: {}),
+			...(parsed.detail ? { detail: parsed.detail } : {}),
+		});
+		if (status !== "ok")
+			findings.push({
+				check: status === "skipped" ? "skipped" : "infra",
+				message: `${relative}: the infrastructure definition ${status === "skipped" ? "was not parsed" : "does not parse"}${parsed.detail ? ` (${parsed.detail})` : ""}`,
+				subject: relative,
+			});
 	}
 
 	// One probe per cluster context, not per target: every target naming the
@@ -343,13 +880,12 @@ export async function validateSetupDrafts(
 		return reachable;
 	};
 
-	const runTargets = discovered("run");
-	const reports: SetupValidationTargetReport[] = [];
 	for (const target of runTargets) {
 		const drafted = draftedPaths.has(target.sourcePath);
 		const docker = target.runtime === "docker";
-		if (!drafted && !docker) continue;
-		if (target.runtime === "kubernetes" && !drafted) continue;
+		const isDefaultRun = target.id === defaultRun?.id;
+		if (!drafted && !docker && !isDefaultRun) continue;
+		if (target.runtime === "kubernetes" && !drafted && !isDefaultRun) continue;
 		if (target.runtime === "kubernetes" && !clusterReachable(target)) {
 			reports.push({
 				id: target.id,
@@ -360,15 +896,28 @@ export async function validateSetupDrafts(
 				started: "skipped",
 				detail: "the Kubernetes cluster is not reachable",
 			});
+			steps.push({
+				step: "start",
+				action: "run",
+				targetId: target.id,
+				status: "skipped",
+				durationMs: 0,
+				detail: "the Kubernetes cluster is not reachable",
+			});
+			// A start the machine cannot run is a finding the developer sees, never
+			// a pass: a target that never started must not be promoted as validated.
+			findings.push({
+				check: "skipped",
+				message: `${target.id}: the start was not run (the Kubernetes cluster ${target.kubernetes?.contextName ?? ""} is not reachable)`,
+				subject: target.id,
+			});
 			continue;
 		}
 		// A target that resolves from a non-regular draft is never run: what the
 		// approval gate shows and the promotion publishes is plain files only.
 		if (
 			target.action === "run" &&
-			nonRegularDrafts.has(
-				relativeOfDraft(context.draftsDir, target.sourcePath),
-			)
+			nonRegularDrafts.has(relativeOfDraft(sourceRoot, target.sourcePath))
 		) {
 			reports.push({
 				id: target.id,
@@ -379,11 +928,29 @@ export async function validateSetupDrafts(
 				started: "skipped",
 				detail: "the draft is not a plain file",
 			});
+			steps.push({
+				step: "start",
+				action: "run",
+				targetId: target.id,
+				status: "skipped",
+				durationMs: 0,
+				detail: "the draft is not a plain file",
+			});
 			continue;
 		}
+		const startedAt = Date.now();
 		let started: SetupTargetStartResult;
 		try {
-			started = await context.startTarget(target);
+			const bounded = await boundedStep(
+				context.startTarget(target),
+				Math.min(timeouts.startMs, Math.max(1, budgetLeft())),
+			);
+			started = bounded.timedOut
+				? {
+						ready: false,
+						detail: `the start exceeded its ${Math.round(timeouts.startMs / 60000)} min deadline and was stopped`,
+					}
+				: (bounded.value as SetupTargetStartResult);
 		} catch (error) {
 			started = { ready: false, detail: message(error) };
 		}
@@ -396,6 +963,14 @@ export async function validateSetupDrafts(
 			started: started.ready ? "ready" : "failed",
 			...(started.detail ? { detail: started.detail } : {}),
 		});
+		steps.push({
+			step: "start",
+			action: "run",
+			targetId: target.id,
+			status: started.ready ? "ok" : "failed",
+			durationMs: Date.now() - startedAt,
+			...(started.detail ? { detail: started.detail } : {}),
+		});
 		if (!started.ready)
 			findings.push({
 				check: "start",
@@ -404,17 +979,38 @@ export async function validateSetupDrafts(
 			});
 	}
 
-	return {
+	// The default test runs once, after the app is up: a test target that exists
+	// and fails is a finding, and an app with no test target is stated.
+	const testSeen = discovered("test");
+	{
+		const chosen = defaultTargetOf(testSeen);
+		if (!chosen.ambiguous)
+			await runStep("test", chosen.target, context.testTarget);
+	}
+
+	// The app the gate started is released again unless the workflow keeps it:
+	// the gate is a check, not a hold.
+	if (context.releaseTarget)
+		try {
+			await context.releaseTarget();
+		} catch {
+			// A release that fails is the slot controller's business, not a finding
+			// that changes whether the draft is valid.
+		}
+
+	const blocking = findings.filter((finding) => finding.blocking !== false);
+	return report({
 		ok:
-			findings.length === 0 &&
-			reports.every((report) => report.started !== "failed"),
+			blocking.length === 0 &&
+			reports.every((entry) => entry.started !== "failed") &&
+			steps.every((entry) => entry.status !== "failed"),
 		app: context.appIdent,
 		drafts,
 		targets: reports,
 		findings,
 		variables,
 		otel,
-	};
+	});
 }
 
 /** The variables the drafts reference and the ones the environment lacks. */

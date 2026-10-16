@@ -25,21 +25,33 @@ import {
 	backendClientFromEnv,
 } from "../server/client.ts";
 import {
+	draftSourceRoot,
 	fingerprintCheckout,
-	fingerprintDirectory,
+	fingerprintDirectoryDetailed,
+	liveConfigPath,
 	readArmedBaseline,
+	reviewedDigest,
+	SETUP_BACKUPS_DIRECTORY,
+	SETUP_WORKFLOW_ID,
 	setupBackupDir,
 	setupDraftsDir,
+	setupDraftsRoot,
 	setupGuardViolations,
 } from "../server/environment/setup-drafts.ts";
 import {
 	promoteSetupDrafts,
+	rollbackPromotion,
 	setupPromotionLockPath,
 } from "../server/environment/setup-promote.ts";
+import {
+	materializeStagedRoot,
+	removeSetupStagedState,
+} from "../server/environment/setup-staged.ts";
 import {
 	declaredAppPorts,
 	defaultSetupTargetCompiler,
 	kubernetesClusterAvailable,
+	type SetupTargetRunResult,
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
@@ -2286,6 +2298,19 @@ export function agentEffectHandlers(
 						...(draftsDir ? { draftsDir } : {}),
 						backupDir: setupBackupDir(configDir, workflowId),
 						lockPath: setupPromotionLockPath(configDir),
+						// Every env-setup workflow's staged state lives here, and each one
+						// is a complete configuration copy: hashing a sibling's would park
+						// this workflow in `attention-required` for another workflow's
+						// materialization and could exhaust the walk budget.
+						draftsRoot: setupDraftsRoot(configDir),
+						// Another workflow's promotion writes its journal and its
+						// private backup copies under `.backups/env-setup-<id>/`; that
+						// is not a change to this workflow's live configuration.
+						backupsRoot: path.join(
+							configDir,
+							SETUP_BACKUPS_DIRECTORY,
+							SETUP_WORKFLOW_ID,
+						),
 						// The running server's discovery record lives in the configuration
 						// root and changes when a server starts, restarts or stops. That is
 						// not a write to the developer's configuration, so it never parks a
@@ -2293,9 +2318,7 @@ export function agentEffectHandlers(
 						// (fix-env-tools-for-all-runs).
 						serverRecordPath: environmentDiscoveryFile(configDir),
 					};
-					const configFingerprint = yield* Effect.promise(() =>
-						Promise.resolve(fingerprintDirectory(configDir, exclusion)),
-					);
+					const configWalk = fingerprintDirectoryDetailed(configDir, exclusion);
 					const checkoutFingerprint = yield* Effect.promise(() =>
 						Promise.resolve(fingerprintCheckout(checkoutDir)),
 					);
@@ -2316,8 +2339,9 @@ export function agentEffectHandlers(
 							baseline: {
 								configDir,
 								checkoutDir,
-								configFingerprint,
+								configFingerprint: configWalk.digest,
 								checkoutFingerprint,
+								truncated: configWalk.truncated,
 							},
 						};
 					}
@@ -2328,8 +2352,9 @@ export function agentEffectHandlers(
 					const violations = setupGuardViolations(armed, {
 						configDir,
 						checkoutDir,
-						configFingerprint,
+						configFingerprint: configWalk.digest,
 						checkoutFingerprint,
+						truncated: configWalk.truncated,
 					});
 					if (violations.length > 0)
 						throw new PermanentFailure(
@@ -2473,6 +2498,45 @@ export function agentEffectHandlers(
 						subject.draftsDir !== ""
 							? subject.draftsDir
 							: setupDraftsDir(configDir, subject.workflowId);
+					// The gate runs the real developer path through the owner-scoped
+					// environment surface the agent itself uses, so "what the gate ran" is
+					// literally `env_build`/`env_test`/`env_start` against the staged root.
+					const client = backendClientFromEnv() ?? backendClient();
+					const owner = `workflow:${subject.workflowId}`;
+					let runtimeProbe: Promise<boolean> | undefined;
+					const runOwnerAction = async (
+						target: ActionTarget,
+						action: "build" | "test",
+					): Promise<SetupTargetRunResult> => {
+						if (!client)
+							return {
+								ok: false,
+								skipped: true,
+								detail: "no environment server is attached",
+							};
+						try {
+							const result = await client.runOwnerAction(
+								{
+									owner,
+									app: subject.app,
+									action,
+									target: target.id,
+								},
+								signal,
+							);
+							return {
+								ok: result.exitCode === 0,
+								exitCode: result.exitCode,
+								logTail: result.output,
+								...(result.error ? { detail: result.error } : {}),
+							};
+						} catch (error) {
+							return {
+								ok: false,
+								detail: error instanceof Error ? error.message : String(error),
+							};
+						}
+					};
 					const report = yield* Effect.promise(() =>
 						validateSetupDrafts({
 							configDir,
@@ -2481,6 +2545,11 @@ export function agentEffectHandlers(
 							checkoutDir: subject.checkout,
 							startTarget: (target) =>
 								startSetupTarget(subject, target, signal),
+							buildTarget: (target) => runOwnerAction(target, "build"),
+							testTarget: (target) => runOwnerAction(target, "test"),
+							releaseTarget: async () => {
+								if (client) await client.stopByOwner(owner, signal);
+							},
 							compileTarget: defaultSetupTargetCompiler({
 								appIdent: subject.app,
 								checkoutDir: subject.checkout,
@@ -2491,9 +2560,267 @@ export function agentEffectHandlers(
 								kubernetesClusterAvailable(
 									target.kubernetes?.contextName ?? "",
 								),
+							secret: snapshotFor(effect).metadata.setupPromotionSecret,
+							// Every modified shared infrastructure definition must at least
+							// parse: an infra draft whose paths resolve nowhere must not reach
+							// the developer's review as if it were runnable. A machine without
+							// the docker CLI records a `skipped` finding instead.
+							parseInfrastructure: async (relative) => {
+								const file = path.join(
+									draftSourceRoot(draftsDir),
+									...relative.split("/"),
+								);
+								const runtime =
+									process.env.DEVENV_CONTAINER_RUNTIME ?? "docker";
+								// One asynchronous probe per gate run, cached: a synchronous
+								// `--version` spawn per modified definition would block the
+								// event loop N times, and the answer cannot change mid-run.
+								runtimeProbe ??= (async () => {
+									try {
+										// Only the exit status is consumed: no pipe to drain and
+										// no buffer to leak. The probe is bounded and killed, so a
+										// wedged CLI cannot leave a child behind for the server's
+										// lifetime.
+										const child = Bun.spawn([runtime, "--version"], {
+											stdout: "ignore",
+											stderr: "ignore",
+										});
+										const deadline = setTimeout(
+											() => child.kill(),
+											RUNTIME_PROBE_TIMEOUT_MS,
+										);
+										try {
+											return (await child.exited) === 0;
+										} finally {
+											clearTimeout(deadline);
+										}
+									} catch {
+										return false;
+									}
+								})();
+								if (!(await runtimeProbe))
+									return {
+										ok: false,
+										skipped: true,
+										detail: `the ${runtime} CLI is not available`,
+									};
+								// An asynchronous spawn: a synchronous one would freeze the
+								// server (and every other workflow's requests) for as long as
+								// the parse takes, and the gate's own deadline could not
+								// interrupt it.
+								const child = Bun.spawn(
+									[runtime, "compose", "-f", file, "config", "-q"],
+									{ cwd: configDir, stdout: "pipe", stderr: "pipe" },
+								);
+								const exitCode = await child.exited;
+								const stderr = await new Response(child.stderr).text();
+								return {
+									ok: exitCode === 0,
+									exitCode,
+									...(stderr ? { logTail: stderr } : {}),
+								};
+							},
 						}),
 					);
 					return report as unknown as JsonValue;
+				}),
+		},
+		// The staged configuration root (`staged-env-setup-config-root`): the live
+		// configuration is copied into this workflow's own state directory at its
+		// own relative layout, so a drafted compose file's `include:` and its
+		// relative mounts resolve exactly as they will after promotion. It runs
+		// before the write guard's baseline and before the author's first turn.
+		"environment.setup-stage": {
+			execute: (effect, _signal) =>
+				Effect.gen(function* () {
+					const subject = setupSubject(effect.payload);
+					if (subject.workflowId === "")
+						throw new PermanentFailure(
+							"environment.setup-stage needs a workflow id",
+						);
+					const configDir = resolveConfigRoot();
+					const draftsDir =
+						subject.draftsDir !== ""
+							? subject.draftsDir
+							: setupDraftsDir(configDir, subject.workflowId);
+					// The base snapshot is authenticated with the run's pinned secret, so
+					// a `base.json` written by hand under `.drafts` is never adopted. A
+					// run that cannot authenticate its own state must not stage one at
+					// all: an unauthenticated snapshot is one the promotion cannot trust.
+					const stageSecret =
+						snapshotFor(effect).metadata.setupPromotionSecret ?? undefined;
+					if (!stageSecret)
+						throw new PermanentFailure(
+							"environment.setup-stage needs the run's pinned promotion secret; the staged base snapshot cannot be authenticated without it",
+						);
+					const result = yield* Effect.promise(async () =>
+						materializeStagedRoot({
+							configDir,
+							draftsDir,
+							secret: stageSecret,
+						}),
+					);
+					if (!result.ok)
+						throw new PermanentFailure(
+							`the staged configuration root could not be materialized: ${result.error ?? "unknown failure"}`,
+						);
+					return result as unknown as JsonValue;
+				}),
+		},
+		// The post-promotion smoke check: the real default target is started once
+		// against the live configuration (the staged root was moved aside by the
+		// promotion), and the workflow's staged state is removed once the live
+		// configuration proved itself. Nothing here is reachable before the
+		// developer approved the promotion.
+		"environment.setup-smoke": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const subject = setupSubject(effect.payload);
+					const client = backendClientFromEnv() ?? backendClient();
+					if (!client)
+						throw new PermanentFailure(
+							"no environment server is attached, so the promoted configuration cannot be started",
+						);
+					const configDir = resolveConfigRoot();
+					// The promoted bytes are proved to be the reviewed ones before the
+					// build is reported as unnecessary: the gate built exactly these
+					// digests, so "proven identical by the gate" is a checked statement
+					// and not an assumption.
+					const diverged = Object.entries(subject.reviewed ?? {}).filter(
+						([relative, digest]) => {
+							const live = liveConfigPath(configDir, relative);
+							try {
+								return reviewedDigest(fs.readFileSync(live, "utf8")) !== digest;
+							} catch {
+								return true;
+							}
+						},
+					);
+					const started = yield* Effect.promise(() =>
+						startSetupTarget(subject, undefined, signal),
+					);
+					// The staged state has served its purpose once the live configuration
+					// has started; the promotion backup is deliberately kept. A failed
+					// start keeps the staged root, so the rollback can put it back.
+					// The design's conditional rebuild: a promoted definition that no
+					// longer matches what the gate built is built here and its result is
+					// reported, so a divergence is verified rather than asserted away.
+					let buildFailure: string | undefined;
+					let buildLogTail: string | undefined;
+					if (diverged.length > 0) {
+						// A refused or unreachable build is a *result* of the smoke check
+						// (the developer is offered the rollback), never a workflow defect.
+						const attempted = yield* Effect.either(
+							Effect.tryPromise({
+								try: () =>
+									client.runOwnerAction(
+										{
+											owner: `workflow:${subject.workflowId}`,
+											app: subject.app,
+											action: "build",
+										},
+										signal,
+									),
+								catch: (error) =>
+									error instanceof Error ? error : new Error(String(error)),
+							}),
+						);
+						if (Either.isLeft(attempted)) {
+							buildFailure = `the default build of the promoted definition could not run: ${attempted.left.message}`;
+						} else {
+							const built = attempted.right;
+							buildLogTail = built.output
+								? built.output.split("\n").slice(-40).join("\n")
+								: undefined;
+							if (built.exitCode !== 0)
+								buildFailure = `the default build of the promoted definition failed (exit ${built.exitCode ?? "unknown"})`;
+						}
+					}
+					const removed =
+						started.ready && !buildFailure
+							? yield* Effect.promise(() =>
+									removeSetupStagedState({
+										configDir,
+										workflowId: subject.workflowId,
+									}),
+								)
+							: [];
+					return {
+						ok: started.ready && !buildFailure,
+						app: subject.app,
+						// The gate already built the same definition against the staged root,
+						// and the digests above prove the promoted file is that definition;
+						// a divergence is rebuilt here and reported instead.
+						build:
+							diverged.length === 0
+								? "skipped (proven identical by the gate)"
+								: `rebuilt: the promoted definition differed from the reviewed one (${diverged
+										.map(([relative]) => relative)
+										.join(", ")})`,
+						buildProvenIdentical: diverged.length === 0,
+						...(buildFailure ? { buildFailure } : {}),
+						...(buildLogTail ? { buildLogTail } : {}),
+						started: started.ready ? "ready" : "failed",
+						...(started.detail ? { detail: started.detail } : {}),
+						stagedStateRemoved: removed,
+					} as unknown as JsonValue;
+				}),
+		},
+		// A closed env-setup workflow removes its staged configuration root and its
+		// `.promoted` sibling; the promotion's `.backups/env-setup-<id>/` is kept as
+		// the rollback evidence. Another workflow's state is never touched.
+		"environment.setup-cleanup": {
+			execute: (effect, _signal) =>
+				Effect.promise(async () => {
+					const payload = effect.payload as {
+						workflowId?: unknown;
+					};
+					const workflowId =
+						typeof payload.workflowId === "string" ? payload.workflowId : "";
+					if (workflowId === "")
+						throw new PermanentFailure(
+							"environment.setup-cleanup needs a workflow id",
+						);
+					const removed = await removeSetupStagedState({
+						configDir: resolveConfigRoot(),
+						workflowId,
+					});
+					return { workflowId, removed } as unknown as JsonValue;
+				}),
+		},
+		// Roll a promotion back from its own authenticated journal: the live
+		// configuration is restored from the backup the promotion took and the
+		// staged root is put back for the author.
+		"environment.setup-rollback": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const subject = setupSubject(effect.payload);
+					const snapshot = snapshotFor(effect);
+					const configDir = resolveConfigRoot();
+					const draftsDir =
+						subject.draftsDir !== ""
+							? subject.draftsDir
+							: setupDraftsDir(configDir, subject.workflowId);
+					const client = backendClientFromEnv() ?? backendClient();
+					const result = yield* Effect.promise(() =>
+						rollbackPromotion({
+							configDir,
+							draftsDir,
+							backupDir: setupBackupDir(configDir, subject.workflowId),
+							workflowId: subject.workflowId,
+							runId:
+								subject.runId !== ""
+									? subject.runId
+									: snapshot.metadata.createdAt,
+							...(snapshot.metadata.setupPromotionSecret
+								? { secret: snapshot.metadata.setupPromotionSecret }
+								: {}),
+							...(client
+								? { reload: () => client.reloadEnvironmentConfig(signal) }
+								: {}),
+						}),
+					);
+					return result as unknown as JsonValue;
 				}),
 		},
 		// The env-setup promotion (`add-environment-setup-workflow`): atomic
@@ -2510,12 +2837,21 @@ export function agentEffectHandlers(
 							? subject.draftsDir
 							: setupDraftsDir(configDir, subject.workflowId);
 					const client = backendClientFromEnv() ?? backendClient();
+					const promotionSecret =
+						snapshot.metadata.setupPromotionSecret ?? undefined;
+					if (!promotionSecret)
+						throw new PermanentFailure(
+							"environment.promote needs the run's pinned promotion secret; a promotion that cannot authenticate its journal and base snapshot is not performed",
+						);
 					const result = yield* Effect.promise(() =>
 						promoteSetupDrafts({
 							configDir,
 							draftsDir,
 							backupDir: setupBackupDir(configDir, subject.workflowId),
 							workflowId: subject.workflowId,
+							// The reviewed digests are what the developer approved: the promotion
+							// refuses any byte that differs from them.
+							...(subject.reviewed ? { reviewed: subject.reviewed } : {}),
 							// The run identity and the journal's secret are both pinned in
 							// the workflow's own snapshot: the promotion's plan under
 							// `.backups` is only trusted when this workflow wrote it.
@@ -2523,9 +2859,7 @@ export function agentEffectHandlers(
 								subject.runId !== ""
 									? subject.runId
 									: snapshot.metadata.createdAt,
-							...(snapshot.metadata.setupPromotionSecret
-								? { secret: snapshot.metadata.setupPromotionSecret }
-								: {}),
+							secret: promotionSecret,
 							// The catalog reload goes through the environment authority when
 							// this process is attached to one; a rejection rolls the live
 							// configuration back before the effect returns.
@@ -2550,6 +2884,9 @@ export function agentEffectHandlers(
 	};
 }
 
+/** How long the container-runtime probe may take before it is killed: a wedged
+ * CLI must not leave a child behind for the life of the server process. */
+const RUNTIME_PROBE_TIMEOUT_MS = 5000;
 /** How long one drafted target may take to reach readiness before the gate
  * reports it as a failure instead of holding the drain open. */
 const SETUP_START_TIMEOUT_MS = 5 * 60 * 1000;
@@ -2564,6 +2901,7 @@ interface SetupEffectSubject {
 	readonly repository: string;
 	readonly checkout: string;
 	readonly draftsDir: string;
+	readonly reviewed?: Record<string, string>;
 }
 
 function setupSubject(payload: unknown): SetupEffectSubject {
@@ -2573,6 +2911,13 @@ function setupSubject(payload: unknown): SetupEffectSubject {
 			: {};
 	const text = (key: string): string =>
 		typeof value[key] === "string" ? (value[key] as string) : "";
+	const reviewedValue = value.reviewed;
+	const reviewed: Record<string, string> = {};
+	if (typeof reviewedValue === "object" && reviewedValue !== null)
+		for (const [key, digest] of Object.entries(
+			reviewedValue as Record<string, unknown>,
+		))
+			if (typeof digest === "string") reviewed[key] = digest;
 	return {
 		workflowId: text("workflowId"),
 		runId: text("runId"),
@@ -2580,6 +2925,7 @@ function setupSubject(payload: unknown): SetupEffectSubject {
 		repository: text("repository"),
 		checkout: text("checkout"),
 		draftsDir: text("draftsDir"),
+		...(Object.keys(reviewed).length > 0 ? { reviewed } : {}),
 	};
 }
 
@@ -2591,7 +2937,7 @@ function setupSubject(payload: unknown): SetupEffectSubject {
  */
 async function startSetupTarget(
 	subject: SetupEffectSubject,
-	target: ActionTarget,
+	target: ActionTarget | undefined,
 	signal?: AbortSignal,
 ): Promise<SetupTargetStartResult> {
 	const client = backendClientFromEnv() ?? backendClient();
@@ -2610,7 +2956,7 @@ async function startSetupTarget(
 				{
 					owner: `workflow:${subject.workflowId}`,
 					apps: [subject.app],
-					target: target.id,
+					...(target ? { target: target.id } : {}),
 					waitSec: SETUP_START_POLL_SEC,
 				},
 				signal,

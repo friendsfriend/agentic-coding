@@ -946,6 +946,10 @@ export interface AgentActionRequest {
 	readonly action: "build" | "test";
 	/** The caller's checkout: the action runs there, not in the app's own. */
 	readonly checkoutDir: string;
+	/** A second config directory whose files shadow `configDir` file by file
+	 * (the `env-setup` workflow's staged configuration root). A draft therefore
+	 * replaces or adds one definition without the live file being touched. */
+	readonly configOverlay?: string;
 	readonly target?: string;
 	readonly profile?: string;
 	readonly signal?: AbortSignal;
@@ -980,6 +984,30 @@ function agentTarget(
 			`${request.action} target ${JSON.stringify(request.target)} not found for ${request.app.ident}`,
 		);
 	if (named) return named;
+	// A staged definition supersedes the live one it replaces: the defect the
+	// motivating run hit was a live Dockerfile target that cannot build beside a
+	// drafted script target that works, with the build action silently picking the
+	// broken one. For an owner with a staged configuration view the drafted target
+	// of the same action and profile is the successor, so the choice is
+	// deterministic *and* the one the author validated.
+	if (request.configOverlay) {
+		const overlayPrefix = `${request.configOverlay}${path.sep}`;
+		const stagedCandidates = targets.filter((candidate) =>
+			candidate.sourcePath.startsWith(overlayPrefix),
+		);
+		const keys = new Set(
+			stagedCandidates.map(
+				(candidate) => `${candidate.action}|${candidate.profile ?? "default"}`,
+			),
+		);
+		const effective = targets.filter(
+			(candidate) =>
+				candidate.sourcePath.startsWith(overlayPrefix) ||
+				!keys.has(`${candidate.action}|${candidate.profile ?? "default"}`),
+		);
+		if (effective.length !== targets.length)
+			return agentTarget(effective, request);
+	}
 	let candidates = [...targets];
 	if (request.profile)
 		candidates = candidates.filter(
@@ -991,10 +1019,20 @@ function agentTarget(
 		throw new Error(
 			`no ${request.action} target of ${request.app.ident} matches profile ${JSON.stringify(request.profile)}`,
 		);
-	const preferred = candidates.find(
+	const preferred = candidates.filter(
 		(candidate) => (candidate.profile ?? "default") === "default",
 	);
-	if (preferred) return preferred;
+	// Deterministic and visible (`staged-env-setup-config-root`): the `default`
+	// profile's own target, and never a silent guess between several. Two
+	// default-profile build targets (a Dockerfile and a host-maven script) must
+	// be named by the author or given distinct profiles, not picked by accident.
+	if (preferred.length === 1) return preferred[0] as ActionTarget;
+	if (preferred.length > 1)
+		throw new Error(
+			`${request.app.ident} offers several ${request.action} targets for the default profile (${preferred
+				.map((candidate) => candidate.id)
+				.join(", ")}); name one with target or profile`,
+		);
 	if (candidates.length === 1) return candidates[0] as ActionTarget;
 	throw new Error(
 		`${request.app.ident} offers several ${request.action} targets (${candidates
@@ -1025,6 +1063,7 @@ export async function runAppBuildTestAction(
 		localDir: request.checkoutDir,
 		action: request.action,
 		configDir: services.configDir,
+		...(request.configOverlay ? { configOverlay: request.configOverlay } : {}),
 		platform: process.platform,
 	});
 	if (targets.length === 0)

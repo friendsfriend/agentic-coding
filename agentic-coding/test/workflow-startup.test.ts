@@ -8,7 +8,7 @@ import type {
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
 import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
-import { definitionVersionForFamilyTraits } from "../src/workflow/definitions/manifest-policy.ts";
+import { definitionVersionForStagedRoot } from "../src/workflow/definitions/manifest-policy.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
 	executionSettings,
@@ -264,7 +264,7 @@ describe("shared workflow startup", () => {
 	});
 });
 
-test("a new start resolves the family-traits definition tier", () => {
+test("a new start resolves the staged-configuration-root definition tier", () => {
 	const repo = repository();
 	execFileSync("git", ["remote", "add", "origin", repo], { cwd: repo });
 	execFileSync("git", ["fetch", "-q", "origin"], { cwd: repo });
@@ -298,7 +298,7 @@ test("a new start resolves the family-traits definition tier", () => {
 				repo,
 				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForFamilyTraits(6));
+		).toBe(definitionVersionForStagedRoot(6));
 		expect(
 			prepareWorkflowStart({
 				workflowId: "research-tier",
@@ -306,7 +306,7 @@ test("a new start resolves the family-traits definition tier", () => {
 				task: "research tier",
 				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForFamilyTraits(6));
+		).toBe(definitionVersionForStagedRoot(6));
 	} finally {
 		if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 		else process.env.HERDR_WORKFLOW_CONFIG = previous;
@@ -318,7 +318,7 @@ test("a new start resolves the family-traits definition tier", () => {
 // task 2.3): the configured app is required and pinned, the launch is forced
 // into checkout mode, and the engine seeds the drafts root with it.
 describe("environment-setup startup", () => {
-	test("requires --app, pins it, and refuses a worktree launch", () => {
+	test("requires --app, pins it, and refuses a worktree launch", async () => {
 		const repo = repository();
 		// The configuration lives outside the checkout: this family requires a
 		// clean worktree, and a config file inside it would break that rule.
@@ -378,6 +378,28 @@ describe("environment-setup startup", () => {
 			).toThrow("earlier workflow");
 			fs.rmSync(leftover, { recursive: true, force: true });
 
+			// Stale state of a workflow no store knows is swept on the next start
+			// (housekeeping runs off the start's path, so the removal is awaited
+			// here with a bounded poll).
+			const stale = path.join(
+				process.env.AGENTIC_CODING_CONFIG_DIR ?? "",
+				".drafts",
+				"env-setup",
+				"env-setup-deleted",
+			);
+			fs.mkdirSync(path.join(stale, "root", "apps"), { recursive: true });
+			fs.writeFileSync(path.join(stale, "base.json"), "{}\n");
+			prepareWorkflowStart({
+				workflowId: "env-setup-sweep",
+				definitionId: "env-setup",
+				repo,
+				mode: "checkout",
+				app: "shop",
+			});
+			for (let attempt = 0; attempt < 100 && fs.existsSync(stale); attempt++)
+				await Bun.sleep(20);
+			expect(fs.existsSync(stale)).toBe(false);
+
 			const started = prepareWorkflowStart({
 				workflowId: "env-setup-pinned",
 				definitionId: "env-setup",
@@ -387,7 +409,7 @@ describe("environment-setup startup", () => {
 			});
 			expect(started.input.metadata.app).toBe("shop");
 			expect(started.input.definitionVersion).toBe(
-				definitionVersionForFamilyTraits(6),
+				definitionVersionForStagedRoot(6),
 			);
 			expect(started.target).toBe(fs.realpathSync(repo));
 		} finally {

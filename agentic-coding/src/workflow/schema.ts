@@ -517,8 +517,18 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 					checkoutDir: text(4096),
 					configFingerprint: text(4096),
 					checkoutFingerprint: text(4096),
+					truncated: Schema.optionalWith(Schema.Boolean, { exact: true }),
 				}),
 			}),
+			{ exact: true },
+		),
+		/** The reviewed digest of every drafted file, recorded when the validation
+		 * gate passed: the promotion refuses to publish anything else, so the
+		 * developer's approval authorises the bytes that become live and not merely
+		 * a path list (the authoring agent can write into the staged root while the
+		 * approval waits). Bounded, and never secret content. */
+		setupReviewedDrafts: Schema.optionalWith(
+			Schema.Record({ key: text(4096), value: text(128) }),
 			{ exact: true },
 		),
 		/** Who started the workflow; absent on snapshots that predate the

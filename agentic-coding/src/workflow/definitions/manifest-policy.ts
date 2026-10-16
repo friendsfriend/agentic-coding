@@ -60,6 +60,15 @@ export function definitionVersionForFamilyTraits(rounds: number): number {
 	return rounds + 800;
 }
 
+/** The staged-configuration-root tier (`staged-env-setup-config-root`): the
+ * family-traits graphs plus the env-setup family's post-promotion smoke check,
+ * its developer review and the rollback behind it. A new tier rather than an
+ * edit to the traits tier, because a manifest's digest covers the whole document
+ * and an in-flight workflow pinned to the old one would fail `pin-mismatch`. */
+export function definitionVersionForStagedRoot(rounds: number): number {
+	return rounds + 900;
+}
+
 /** The declared family traits, per repository code-change family
  * (add-definition-family-traits). This table is both the source of the traits
  * tier's manifests and the fallback `effectiveFamilyTraits` reads for a

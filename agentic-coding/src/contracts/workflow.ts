@@ -182,6 +182,15 @@ export type EffectKind =
 	| "environment.validate"
 	/** Atomic promotion of approved env-setup drafts, with rollback. */
 	| "environment.promote"
+	/** Materializes the env-setup staged configuration root
+	 * (staged-env-setup-config-root). */
+	| "environment.setup-stage"
+	/** Post-promotion smoke check of the real default target. */
+	| "environment.setup-smoke"
+	/** Rolls a promotion back from its own authenticated journal. */
+	| "environment.setup-rollback"
+	/** Removes a setup workflow's staged state at close (staged-env-setup-config-root). */
+	| "environment.setup-cleanup"
 	/** Starts one delegated debug request's run: captures the baseline and
 	 * enqueues the run's own launch (add-debug-subagent-requests). */
 	| "debug.request.run"
@@ -300,8 +309,16 @@ export interface WorkflowMetadata {
 			checkoutDir: string;
 			configFingerprint: string;
 			checkoutFingerprint: string;
+			/** The configuration walk hit its bound: a truncated fingerprint proves
+			 * nothing and the guard treats it as a violation. */
+			truncated?: boolean;
 		}
 	>;
+	/** The reviewed digest of every drafted file, recorded when the validation
+	 * gate passed, so the promotion can refuse to publish anything the developer
+	 * did not approve. Engine-owned (the store), never a file under the staged
+	 * root the authoring agent can write. */
+	setupReviewedDrafts?: Record<string, string>;
 	/** Stage-gate policies resolved once at start and pinned for the run's
 	 * lifetime, so a mid-run config edit cannot change what may be skipped.
 	 * Absent on snapshots started before the gates existed; the mandatory
@@ -662,6 +679,9 @@ export interface WorkflowView {
 		label: string;
 		attempt: number;
 		enteredAt: string;
+		/** The step's carried context: the validation report at an env-setup
+		 * approval, the smoke report at a smoke review. Read-side only. */
+		context?: JsonValue;
 	};
 	runs: Array<{
 		id: string;
@@ -1236,6 +1256,10 @@ export interface WorkflowState {
 	phase: string;
 	stepId?: string;
 	stepLabel?: string;
+	/** The current step's carried context (`WorkflowView.currentStep.context`):
+	 * the env-setup validation report at an approval, the smoke report at a smoke
+	 * review, so the decision prompt can state what was run. */
+	stepContext?: unknown;
 	revision: number;
 	definition?: { id: string; version: number; digest: string; label: string };
 	status: string;
@@ -1657,6 +1681,7 @@ export const workflowViewSchema = Schema.Struct({
 		label: Schema.String,
 		attempt: nonNegativeInt,
 		enteredAt: Schema.String,
+		context: Schema.optional(Schema.Unknown),
 	}),
 	runs: Schema.Array(workflowRunResponseSchema),
 	routing: Schema.Unknown,

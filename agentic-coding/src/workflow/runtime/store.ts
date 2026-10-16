@@ -53,6 +53,10 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"environment.setup-guard",
 	"environment.validate",
 	"environment.promote",
+	"environment.setup-stage",
+	"environment.setup-smoke",
+	"environment.setup-rollback",
+	"environment.setup-cleanup",
 	"debug.request.run",
 	"debug.request.deliver",
 ]);
@@ -767,6 +771,30 @@ export function openStore(repo: string): Database {
 	return openStoreWithMode(repo, false);
 }
 
+/** The ids of every workflow the store still knows, read without creating,
+ * locking or converting storage. `undefined` means the store could not be read
+ * at all, so a caller that sweeps state by workflow id must not conclude that
+ * nothing is known. */
+export function knownWorkflowIds(repo: string): Set<string> | undefined {
+	if (!fs.existsSync(canonicalStorePath(repo))) return new Set();
+	let db: Database | undefined;
+	try {
+		db = openReadStore(repo);
+		const rows = db
+			.query<{ id: string }, []>("SELECT id FROM workflow_instances")
+			.all();
+		return new Set(rows.map((row) => row.id));
+	} catch {
+		return undefined;
+	} finally {
+		try {
+			db?.close();
+		} catch {
+			// A store that cannot be closed still answered.
+		}
+	}
+}
+
 /** Open a validated store without taking SQLite's writer lock or running any
  * schema/import work. Observation must use this boundary. */
 export function openReadStore(repo: string): Database {
@@ -1332,6 +1360,10 @@ export function validateEffect(
 	const stepIndependent =
 		row.kind === "agent.stop" ||
 		row.kind === "environment.teardown" ||
+		// The env-setup family's close removes its staged configuration root: a
+		// complete copy of the live configuration that must not outlive the
+		// workflow that owns it.
+		row.kind === "environment.setup-cleanup" ||
 		// The debug-request lifecycle is emitted by the CLI and by the delegated
 		// run's own handoff, neither of which moves the caller's step.
 		isDebugRequestEffect(row.kind);

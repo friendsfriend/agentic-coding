@@ -26,12 +26,14 @@ import type {
 	AgentEnvironmentBuild,
 } from "../../contracts/environment.ts";
 import { loadEnvFile } from "../../env-file.ts";
+import { discoverActionTargets } from "../actions/discovery.ts";
 import type { ActionRegistry } from "../actions/registry.ts";
 import {
 	ActionConflictError,
 	type ActionRouteContext,
 	runAppBuildTestAction,
 } from "../actions/routes.ts";
+import type { ActionTarget } from "../actions/targets.ts";
 import { readJsonBody } from "../auth.ts";
 import {
 	AGENT_ACQUIRE_PATH,
@@ -111,6 +113,15 @@ export interface AgentEnvironmentDeps {
 		owner: `workflow:${string}`,
 		app: App,
 	) => string | undefined | Promise<string | undefined>;
+	/** Resolves the owner's configuration view: the staged configuration root an
+	 * env-setup workflow pinned (`staged-env-setup-config-root`), or nothing for
+	 * every other owner. `env_build`/`env_test`/`env_list` resolve through it, so
+	 * "the drafts are what runs" holds for the whole `env_*` surface and not only
+	 * for `env_start`. */
+	readonly resolveOwnerOverlay?: (
+		owner: `workflow:${string}`,
+		app: App,
+	) => string | undefined;
 	readonly logger?: (message: string) => void;
 }
 
@@ -397,9 +408,164 @@ function claimedApps(apps: string | readonly string[]): string[] {
 	return unique;
 }
 
-/** The configured app's run/build/test actions, as the compiled registry knows
- * them: what it offers, on which runtime, and whether it can run right now. */
-function targetsByApp(
+const DEFAULT_RUNTIME_PREFERENCE: readonly string[] = [
+	"docker",
+	"shell",
+	"podman",
+	"systemshell",
+	"tmux",
+	"command-shell",
+	"command-powershell",
+	"kubernetes",
+];
+/** `build`/`test` run synchronously: the plain command rendering is the default,
+ * not the `tmux` window one. A `run` keeps the window first, which is the
+ * interactive default. */
+const SYNCHRONOUS_RUNTIME_PREFERENCE: readonly string[] = [
+	"docker",
+	"shell",
+	"podman",
+	"systemshell",
+	"command-shell",
+	"command-powershell",
+	"tmux",
+	"kubernetes",
+];
+
+/**
+ * Mark the deterministic default target per action, so the choice between two
+ * default-profile candidates is visible instead of silently picked
+ * (`staged-env-setup-config-root`).
+ *
+ * The renderings of *one* target are not a choice: a shell target compiles into
+ * a `tmux` variant beside its plain command, and a docker target into a `podman`
+ * dialect when podman is present, so a naive "every id ending in `/default`"
+ * would mark every shell app ambiguous. Candidates are grouped by their runtime
+ * family (container / script / kubernetes), and the action's default is the
+ * first rendering in the platform's preference order within the single family
+ * that has a default-profile candidate; several *families* is the ambiguous
+ * case the author must resolve.
+ */
+function markDefaultTargets(
+	targets: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+	const family = (runtime: unknown): string => {
+		const value = String(runtime ?? "");
+		if (value === "docker" || value === "podman") return "container";
+		if (value.startsWith("tmux") || value.startsWith("command"))
+			return "script";
+		return value;
+	};
+	const preferred = (target: Record<string, unknown>): boolean => {
+		const profile = String(target.profile ?? "");
+		return (
+			profile === "" ||
+			profile === "default" ||
+			String(target.id).endsWith("/default")
+		);
+	};
+	for (const action of ["build", "test", "run"]) {
+		const preference =
+			action === "run"
+				? DEFAULT_RUNTIME_PREFERENCE
+				: SYNCHRONOUS_RUNTIME_PREFERENCE;
+		const candidates = targets
+			.filter((target) => target.action === action && preferred(target))
+			.sort((a, b) => {
+				const index = (value: Record<string, unknown>): number => {
+					const position = preference.indexOf(String(value.runtime ?? ""));
+					return position === -1 ? 99 : position;
+				};
+				return index(a) - index(b);
+			});
+		if (candidates.length === 0) continue;
+		const families = new Set(
+			candidates.map((target) => family(target.runtime)),
+		);
+		if (families.size === 1) {
+			(candidates[0] as Record<string, unknown>).default = true;
+			continue;
+		}
+		for (const candidate of candidates) candidate.defaultAmbiguous = true;
+	}
+	return targets;
+}
+
+/** The targets `env_list` reports for one owner.
+ *
+ * For an owner without a configuration view this is the compiled registry's live
+ * list: what the app offers, on which runtime, and whether it can run right now.
+ * An `env-setup` run resolves its staged configuration root instead, and that
+ * root is what `env_start`/`env_build`/`env_test` execute — so the listing is
+ * rediscovered against the same overlay those tools use (a complete copy of the
+ * live configuration, so nothing is lost) and every target that came from the
+ * staged root is marked `staged: true`. Without this the tool an author uses to
+ * see "what exists" contradicts the tools that run it. */
+async function targetsByApp(
+	deps: AgentEnvironmentDeps,
+	owner: string,
+): Promise<Map<string, Array<Record<string, unknown>>>> {
+	const byApp = liveTargetsByApp(deps);
+	for (const app of deps.apps?.getApps() ?? []) {
+		const overlay = deps.resolveOwnerOverlay?.(
+			owner as `workflow:${string}`,
+			app,
+		);
+		if (!overlay) continue;
+		const checkout =
+			(await deps.resolveOwnerCheckout?.(owner as `workflow:${string}`, app)) ??
+			"";
+		if (checkout === "") continue;
+		const discovered: ActionTarget[] = [];
+		for (const action of ["build", "test", "run"] as const) {
+			try {
+				discovered.push(
+					...discoverActionTargets({
+						appIdent: app.ident,
+						localDir: checkout,
+						action,
+						configDir: deps.configDir,
+						configOverlay: overlay,
+					}),
+				);
+			} catch (error) {
+				// A staged definition that cannot be discovered is the validation
+				// gate's finding to report, not a reason to hide the whole listing.
+				deps.logger?.(
+					`env_list: discovery over the staged root failed for ${app.ident}: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			}
+		}
+		const prefix = `${overlay}${path.sep}`;
+		const staged = discovered.filter((target) =>
+			target.sourcePath.startsWith(prefix),
+		);
+		if (staged.length === 0) continue;
+		byApp.set(
+			app.ident,
+			markDefaultTargets(
+				staged.map((target) => ({
+					id: target.id,
+					action: target.action,
+					runtime: target.runtime,
+					label: target.label,
+					profile: target.profile ?? "",
+					// Availability is the compiled registry's judgement (it probes the
+					// tools); the staged view rediscovers definitions without probing, so
+					// it states what it knows and leaves `available` to the live half
+					// rather than claiming every staged target can run right now.
+					staged: true,
+				})),
+			),
+		);
+	}
+	return byApp;
+}
+
+/** The compiled registry's live targets, keyed by app. */
+function liveTargetsByApp(
 	deps: AgentEnvironmentDeps,
 ): Map<string, Array<Record<string, unknown>>> {
 	const byApp = new Map<string, Array<Record<string, unknown>>>();
@@ -426,6 +592,7 @@ function targetsByApp(
 		});
 		byApp.set(definition.owner.id, list);
 	}
+	for (const [app, list] of byApp) byApp.set(app, markDefaultTargets(list));
 	return byApp;
 }
 
@@ -436,7 +603,7 @@ async function environmentList(
 	const instances = requireInstances(deps);
 	const slots = await instances.slots();
 	const byApp = new Map(slots.map((slot) => [slot.app, slot]));
-	const targets = targetsByApp(deps);
+	const targets = await targetsByApp(deps, owner);
 	// Reading the environment is using it: the apps this owner holds stay live.
 	noteUse(
 		instances,
@@ -645,10 +812,18 @@ async function environmentBuildTest(
 			409,
 			`no managed checkout is available for ${owner}; ${action} runs in the workflow's own checkout`,
 		);
+	const overlay = deps.resolveOwnerOverlay?.(
+		owner as `workflow:${string}`,
+		app,
+	);
 	const result = await runAppBuildTestAction(deps.actions, {
 		app,
 		action,
 		checkoutDir: checkout,
+		// The owner's own configuration view: an env-setup run builds and tests the
+		// definition it staged, not the live one
+		// (`staged-env-setup-config-root`).
+		...(overlay ? { configOverlay: overlay } : {}),
 		...(body.target ? { target: body.target } : {}),
 		...(body.profile ? { profile: body.profile } : {}),
 	});

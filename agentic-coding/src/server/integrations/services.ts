@@ -23,7 +23,11 @@ import {
 import type { InfraService } from "../actions/targets.ts";
 import type { App } from "../environment/config.ts";
 import type { EnvironmentManager } from "../environment/manager.ts";
-import { assertSetupDraftsDir } from "../environment/setup-drafts.ts";
+import {
+	assertSetupDraftsDir,
+	hasStagedRoot,
+	stagedRootOf,
+} from "../environment/setup-drafts.ts";
 import {
 	type AppFamilyServices,
 	createAppFamilyServices,
@@ -94,7 +98,14 @@ export function createWorkflowOwnerOverlayResolver(
 			} catch {
 				continue;
 			}
-			return overlay;
+			// The staged configuration root is what a run must resolve
+			// (`staged-env-setup-config-root`): it is a complete copy of the live
+			// configuration, so `include:`, relative mounts and `docker -f`
+			// behave exactly as they will after promotion. A state directory
+			// without a staged root (an in-flight workflow of an older build, or
+			// one whose drafts were promoted and moved aside) keeps the legacy
+			// per-file behaviour.
+			return hasStagedRoot(overlay) ? stagedRootOf(overlay) : overlay;
 		}
 		return undefined;
 	};

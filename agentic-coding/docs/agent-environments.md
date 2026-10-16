@@ -187,43 +187,87 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
   --app IDENT --workflow-id ID [--task TEXT]
 ```
 
-- **Drafts, never the live files.** The author agent writes under
-  `<config>/.drafts/env-setup/<workflow-id>/`, mirroring the configuration
-  layout (`apps/build/*`, `apps/run/*`, `apps/compose/*`,
-  `apps/kubernetes/<app>-<profile>.k8s.json`, `infrastructure/definitions/*`,
-  `infrastructure/compose/*`). A draft file's relative path is the path it will
-  occupy once promoted. The app repository is read-only evidence; the drafts
-  live outside the checkout.
-- **Drafts are runnable while they are drafts.** A run held by
-  `workflow:<id>` resolves the drafts directory before the live configuration,
-  file by file: a draft replaces or adds one definition without touching the
-  live one, and an unrelated live definition is never shadowed. The agent's
-  `env_*` tools therefore start, build, test and debug exactly what it
-  authored, waiting for the app like any other owner.
+- **A staged configuration root, never the live files.** At the first author
+  turn the system materializes a complete working configuration root at
+  `<config>/.drafts/env-setup/<workflow-id>/root`: the live configuration
+  copied at its own relative layout (`apps/build/*`, `apps/run/*`,
+  `apps/compose/*`, `apps/kubernetes/<app>-<profile>.k8s.json`,
+  `infrastructure/definitions/*`, `infrastructure/compose/*`), with the
+  author's files written at their final paths. The app repository is read-only
+  evidence; the staged root lives outside the checkout.
+  - Live **symlinks are preserved** as absolute symlinks to the same target
+    (`apps/build/<app>-build.Dockerfile` → `~/devenv-config/...`), so the gate
+    exercises production's symlink behaviour instead of papering over it.
+  - `.env` and `providers/` are exposed **read-only**: private copies (mode
+    0o400) inside the workflow's own 0o700 state directory, never symlinks and
+    never in the repository. A symlink would be write-through — a stray write
+    from a drafted script would rewrite the developer's live `.env` before
+    approval — and the promotion's prefix allow-list makes them unpublishable
+    either way. `base.json` records per-path digests and symlink targets, never
+    secret content, and is authenticated with the run's pinned promotion
+    secret.
+  - `wiki`, `telemetry`, `snapshots`, `.drafts` and `.backups` are not copied;
+    the walk is bounded (20 000 entries, depth 12) and a configuration above
+    the size bound refuses the start instead of filling the disk.
+- **Drafts are runnable and promotable as drafts.** Discovery, compose/docker
+  invocation and every `env_*` tool of the workflow's runs resolve the staged
+  root as if it were the configuration root, so a draft written with
+  `include: ../../infrastructure/compose/x.yml` works exactly as it will after
+  promotion. The **changed files** are derived by comparing the staged root
+  with the base snapshot, so the live configuration's own 78 symlinks never
+  read as drafts; a changed symlink is a non-regular finding and a deleted path
+  is a finding that is never published.
 - **Write guard.** The live configuration directory and the checkout are
   fingerprinted before the first author turn (`.drafts`/`.backups` excluded);
   at every author handoff the guard compares them and a change outside the
-  drafts directory fails the guard, which parks the workflow in
+  staged root fails the guard, which parks the workflow in
   `attention-required` with the violation named. The developer decides what
   happens next.
-- **Deterministic validation.** `setup.validate` parses every draft, checks
-  that discovery resolves each drafted run target, compiles them, requires the
-  `AC_OTEL_*` wiring, refuses a host port another app already declares, lists
-  referenced `${VAR}`s the configuration `.env` lacks, and then starts every
-  drafted target (Docker always; script and Kubernetes targets only when a
-  draft defines them, and Kubernetes only when its cluster is reachable) and
-  waits for readiness. A failure returns the report to the author, bounded to
-  five rounds.
+- **Deterministic validation of the real path.** `setup.validate` parses every
+  draft, checks that discovery resolves each drafted run target, compiles them,
+  requires the `AC_OTEL_*` wiring, refuses a host port another app already
+  declares, lists referenced `${VAR}`s the configuration `.env` lacks, and then
+  runs the real developer path **against the staged root**: the **default
+  build**, the app's **default run target** to readiness, the **default test**
+  when one exists, and `docker compose config -q` on every modified shared
+  infrastructure definition. Every step is reported with its exit status and a
+  bounded log tail, the default target per action is named, and two candidates
+  for one default-profile build/test target are an explicit `no-default-target`
+  finding rather than a silent pick. A step the machine cannot run (no docker
+  daemon, no `docker` CLI, an unreachable Kubernetes cluster) is a visible
+  `skipped` finding and fails the gate, never a pass. Each step also has a
+  deadline and the gate a wall-clock budget: a hung build is stopped and
+  reported, and the step that spent the budget is named. A failure returns the
+  report to the author, bounded to five rounds. The gate records the digest of
+  every drafted file it validated in the workflow's own snapshot, so the
+  promotion refuses to publish anything else.
 - **Approval.** `setup.approval` shows the developer every new and modified
   file as a unified diff against the live configuration, flags a change to an
   existing shared service definition as *affects all apps*, and offers approve
   (promote) or request changes with comments (back to the author).
-- **Atomic promotion.** `setup.promote` backs up every replaced live file to
-  `<config>/.backups/env-setup-<workflow-id>/`, writes each file through a
-  temporary sibling renamed over its target, reloads the environment catalog,
-  and moves the drafts aside. Any failure — a write or the reload — restores
-  every replaced file, removes every added one, and leaves the drafts in place
-  for the developer's retry.
+- **Atomic promotion, conflict-safe.** `setup.promote` backs up every replaced
+  live file to `<config>/.backups/env-setup-<workflow-id>/`, writes each file
+  through a temporary sibling renamed over its target, reloads the environment
+  catalog, and moves the staged state aside. A live file the developer changed
+  after the staged copy was taken is **refused before anything is written**, and
+  the conflict names the path. Any other failure — a write or the reload —
+  restores every replaced file, removes every added one, and leaves the drafts
+  in place for the retry.
+- **Post-promotion smoke check.** After a promotion, `setup.smoke` starts the
+  real default target once against the live configuration; it first proves that
+  every promoted file still holds the digest the gate recorded, so
+  `build: skipped (proven identical by the gate)` is a checked statement. A
+  failure offers the developer rollback (`rollback-promotion`, which restores
+  exactly the previous files — content and mode — from the promotion's own
+  backup and puts the staged root back for the author) or keeping the promotion
+  with the failed check recorded. Neither runs before approval: the smoke step
+  is only reachable from the promotion's success edge, which is only reachable
+  from the approval edge. When the check passes the workflow's staged state is
+  removed and the promotion backup is kept; a workflow that never reaches a
+  successful smoke check has its staged state removed when it is closed (the
+  `environment.setup-cleanup` effect the close behavior enqueues for this
+  family). A stale staged root of a workflow the store no longer knows is
+  removed by `sweepStaleSetupState`, which the server's startup sweep calls.
 
 The workflow ends at `core.completed` with `close` only; closing releases the
 app slots through the same owner-bound `environment.teardown` effect every

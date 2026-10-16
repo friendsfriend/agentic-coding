@@ -579,18 +579,16 @@ describe("promotion provenance and ownership", () => {
 				},
 			},
 		});
-		// Losing the lock stops the writes (it does not race the winner), the
-		// paths this promotion already published come back, and the thief keeps
-		// the lock it took.
+		// Losing the lock stops the writes (it does not race the winner): the
+		// promotion that stole the root owns the live configuration now, so its own
+		// rollback (or its completed promotion) is the corrective action and this
+		// attempt must not write stale bytes over it. The failure is retryable —
+		// the outbox owns the backoff — and the thief keeps the lock it took.
 		expect(result.ok).toBe(false);
-		expect(result.rolledBack).toBe(true);
+		expect(result.rolledBack).toBe(false);
+		expect(result.retryable).toBe(true);
 		expect(result.error).toContain("took the configuration root");
-		expect(
-			fs.readFileSync(
-				path.join(configDir, "apps", "compose", "shop-compose.yml"),
-				"utf8",
-			),
-		).toBe("live-a\n");
+		expect(result.error).toContain("left to the promotion that owns the root");
 		expect(fs.readFileSync(lockPath, "utf8")).toContain("thief");
 	});
 

@@ -167,6 +167,18 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 					owner: `workflow:${snapshot.workflowId}`,
 				},
 			);
+			// An env-setup workflow also owns a staged configuration root: a complete
+			// copy of the live configuration that must not outlive it
+			// (staged-env-setup-config-root). Every other family has no such state.
+			if (snapshot.definition?.id === "env-setup")
+				enqueue(
+					"environment.setup-cleanup",
+					`environment:${snapshot.workflowId}:setup-cleanup`,
+					{
+						workflowId: snapshot.workflowId,
+						draftsDir: snapshot.metadata.setupDraftsDir ?? "",
+					},
+				);
 			return undefined;
 		},
 	},

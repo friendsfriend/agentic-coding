@@ -88,6 +88,7 @@ import {
 	setupDraftChange,
 	setupDraftChanges,
 	setupDraftsDir,
+	setupReviewDrift,
 } from "../environment/setup-drafts.ts";
 import { listEvidence } from "../evidence/store.ts";
 import {
@@ -1344,7 +1345,51 @@ export function loadSetupDraftChanges(
 	workflowId: string,
 ): LocalChange[] {
 	const draftsDir = setupDraftsDirFor(repo, workflowId);
+	const drift = setupReviewDrift(
+		draftsDir,
+		setupReviewedDraftsFor(repo, workflowId),
+	);
+	if (drift.length > 0) {
+		// The approval view is served *from* the recorded review: when the staged
+		// tree no longer holds what the gate validated, the developer is told
+		// instead of being shown content nobody validated (and that the promotion
+		// will refuse to publish).
+		return [
+			{
+				// A short label, not a pseudo path: the row is a notice, and the detail
+				// belongs to the diff view (`loadSetupDraftDiff` renders the sentence).
+				newPath: "<the staged drafts changed after the validation gate ran>",
+				oldPath: `${drift.length} file(s): ${drift.join(", ")}`,
+				linesAdded: 0,
+				linesDeleted: 0,
+				newFile: false,
+				deletedFile: false,
+				renamedFile: false,
+			},
+		];
+	}
 	return setupDraftRows(setupDraftChanges(resolveConfigRoot(), draftsDir));
+}
+
+/** The reviewed digests the validation gate recorded for one workflow, or
+ * `undefined` when the store knows nothing (a snapshot that predates the
+ * record). */
+function setupReviewedDraftsFor(
+	repo: string,
+	workflowId: string,
+): Record<string, string> | undefined {
+	const engine = workflowEngine();
+	for (const target of [repo, ...workflowTargets()]) {
+		try {
+			const snapshot = engine.getSnapshot(target, workflowId);
+			if (snapshot.workflowId !== workflowId) continue;
+			// Absent means no gate has recorded a review for this workflow yet: the
+			// view then renders the drafts as they are (there is nothing to compare
+			// against and no approval to make).
+			return snapshot.metadata.setupReviewedDrafts;
+		} catch {}
+	}
+	return undefined;
 }
 
 /** The approval popup's rows for a set of draft changes. Pure, so the mapping
@@ -1371,6 +1416,16 @@ export function loadSetupDraftDiff(
 	filePath: string,
 ): string {
 	const draftsDir = setupDraftsDirFor(repo, workflowId);
+	const drift = setupReviewDrift(
+		draftsDir,
+		setupReviewedDraftsFor(repo, workflowId),
+	);
+	if (drift.length > 0)
+		return [
+			`The staged drafts changed after the validation gate ran: ${drift.join(", ")}.`,
+			"What is shown here is not what the gate built, started and tested, and the promotion will refuse it.",
+			"Ask the author for another round (the gate then runs again) before approving.",
+		].join("\n");
 	const change = setupDraftChange(resolveConfigRoot(), draftsDir, filePath);
 	if (!change) throw new Error(`no draft named ${JSON.stringify(filePath)}`);
 	return change.diff;
