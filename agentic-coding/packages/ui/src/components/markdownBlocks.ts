@@ -132,6 +132,39 @@ export function markdownBlockParts(content: string): MarkdownBlockPart[] {
 	return partOffsets(content).parts;
 }
 
+/**
+ * The source a document's streaming tail part is drawn from.
+ *
+ * Everything before the tail is settled, but the tail ends at the text that has
+ * arrived, so its last line is still unfinished — and the renderer draws the raw
+ * source verbatim, so an unfinished trailing line is a row of its own until the
+ * next character lands:
+ *
+ * - a document-ending newline (`body\n`) draws an empty row that the following
+ *   blank line or block takes back;
+ * - a bare list marker (`- `) is tokenized with a synthesized line break, so its
+ *   item row appears and then merges into the item the next character starts;
+ * - a partly typed closing code fence (a line of backticks shorter than the
+ *   fence that closes it) is swallowed as code content, so its row disappears
+ *   once the fence closes.
+ *
+ * A transcript that follows its newest output then grows a row and immediately
+ * loses it, which reads as the live message flickering a line up and down. The
+ * unfinished trailing line is therefore held back until it is finished: it comes
+ * back on the frame the next character arrives, and only whitespace or a fence
+ * marker that the renderer conceals anyway is withheld in the meantime.
+ *
+ * The settled parts are left alone: their trailing blank line is the spacing
+ * between blocks, and the plain part source is what draws it.
+ */
+export function streamingTailSource(part: MarkdownBlockPart): string {
+	const finished = part.source.replace(/\s+$/, "");
+	// Only a fenced block swallows a trailing marker line as content; in prose a
+	// line of backticks is the text the model wrote. The block's own opening
+	// fence (the first line of the part) is not a marker being closed.
+	return part.code ? finished.replace(/\n[ \t]*[`~]+$/, "") : finished;
+}
+
 /** The parts of a document being streamed, and what a later frame can reuse. */
 export interface StreamingMarkdownBlockParts {
 	/** The text these parts were parsed from. */

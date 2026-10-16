@@ -42,6 +42,7 @@ import {
 	ScrollableContent,
 	type StreamingMarkdownBlockParts,
 	streamingMarkdownBlockParts,
+	streamingTailSource,
 	uiColors,
 } from "@ui";
 import {
@@ -284,6 +285,11 @@ type MarkdownPartsFor = (
  * landed yet — every paragraph, or (with the streaming preview on) every code
  * block — so code draws as a code block and prose as a streaming preview, and
  * neither waits to become visible.
+ *
+ * Only the last part is still growing. It is drawn from its text with the
+ * unfinished trailing line held back (see `streamingTailSource`), so a message
+ * arriving character by character never grows a row and takes it back on the
+ * next character.
  */
 function AssistantMarkdown(props: {
 	transcript: MarkdownPartsFor;
@@ -302,7 +308,11 @@ function AssistantMarkdown(props: {
 			<For each={parts()}>
 				{(part, index) => (
 					<MarkdownViewer
-						content={part.source}
+						content={
+							index() === parts().length - 1
+								? streamingTailSource(part)
+								: part.source
+						}
 						fg={uiColors.textPrimary}
 						// Prose always takes the streaming preview: it draws the text
 						// concealed, so it never re-flashes its own markers. A fenced

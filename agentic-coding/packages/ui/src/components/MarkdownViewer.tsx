@@ -27,6 +27,11 @@ export interface MarkdownViewerProps {
 	 * flashes. Telling the renderable the content is still streaming makes it
 	 * lay the text out with markdown-derived styling first and let the highlight
 	 * refine it in place.
+	 *
+	 * This only draws the text it is given: a caller that streams a document
+	 * into this renderer re-renders it on every frame, so it hands the growing
+	 * tail through `streamingTailSource` and keeps the block from gaining a row
+	 * and taking it back on the next character (see `markdownBlocks.ts`).
 	 */
 	streaming?: boolean;
 	/** Blank rows under the document, as the block flow gives a code block. */

@@ -1,10 +1,19 @@
 import { expect, test } from "bun:test";
 import {
 	blockSelectionToLines,
+	type MarkdownBlockPart,
 	markdownBlockParts,
 	parseMarkdownBlocks,
 	streamingMarkdownBlockParts,
+	streamingTailSource,
 } from "@ui";
+
+/** The one part a document here renders as; every document below has one. */
+function onlyPart(content: string): MarkdownBlockPart {
+	const part = markdownBlockParts(content)[0];
+	if (!part) throw new Error(`no part for ${JSON.stringify(content)}`);
+	return part;
+}
 
 test("parses top-level blocks with exact source-line ranges", () => {
 	const doc = `# Heading
@@ -160,4 +169,39 @@ test("an empty document has no parts and no tail", () => {
 	expect(streamingMarkdownBlockParts(empty, "hello").parts).toEqual(
 		markdownBlockParts("hello"),
 	);
+});
+
+test("holds back an unfinished trailing line of a streamed part", () => {
+	// A document-ending newline and the trailing space of a bare list marker are
+	// what the next character takes back; drawing them costs a row for a frame.
+	expect(streamingTailSource(onlyPart("body\n"))).toBe("body");
+	const list = onlyPart("- one\n- ");
+	expect(list.code).toBe(false);
+	expect(streamingTailSource(list)).toBe("- one\n-");
+	// Trailing blank lines go too: the next frame's block starts there.
+	expect(streamingTailSource(onlyPart("body\n\n"))).toBe("body");
+});
+
+test("holds back a partly typed closing code fence", () => {
+	const open = onlyPart("```ts\nconst x = 1;\n``");
+	expect(open.code).toBe(true);
+	expect(streamingTailSource(open)).toBe("```ts\nconst x = 1;");
+	// A block's own opening fence is not a marker being closed, so a block that
+	// has only just opened keeps its row.
+	const opening = onlyPart("```");
+	expect(opening.code).toBe(true);
+	expect(streamingTailSource(opening)).toBe("```");
+	// In prose a line of backticks is text the model wrote: only a fenced block
+	// swallows a trailing marker line as its own content.
+	const prose = onlyPart("body\n``");
+	expect(prose.code).toBe(false);
+	expect(streamingTailSource(prose)).toBe("body\n``");
+});
+
+test("leaves a settled part untouched", () => {
+	const parts = markdownBlockParts("body\n\n- one\n- two\n");
+	// The blank line after the paragraph is the spacing to the next block, so
+	// it stays on a part that is no longer growing.
+	expect(parts[0]?.source).toBe("body\n");
+	expect(parts[1]?.source).toBe("- one\n- two\n");
 });
