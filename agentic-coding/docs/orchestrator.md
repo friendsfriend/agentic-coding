@@ -125,6 +125,18 @@ instead of trusting what it holds. The whole pipeline is idle when `monitor` is
 `off`, and an unreadable workflow keeps its previous projection: an event is
 never invented from a miss.
 
+An event that names **only a repository** (the refresh hub's progress listener
+carries no workflow id — one per committed effect of a drain) coalesces into one
+re-list of that repository per window instead of being dropped: the listing
+diffs every workflow the bus already holds a projection for, so a transition no
+workflow-id-carrying event ever named is still reported, and a repository's
+first listing still only establishes its baseline. A last safety net covers a
+writer this process never hears from at all (a handoff committed by another
+process, the CLI, a second TUI): every `[agents.orchestrator]
+reconcile_seconds` (default 30, file-only) the bus re-lists the repositories it
+tracks that still hold an `active` or `attention-required` workflow, and costs
+no store read for a repository whose work is done or when `monitor` is `off`.
+
 The catalog lives in `src/contracts/workflow-events.ts` (version 1, stable ids)
 and covers the workflow lifecycle (`workflow.started`/`completed`/`closed`/
 `failed`), steps, the four developer reviews (`review.waiting`/`resolved`),
@@ -160,6 +172,28 @@ own, `all`; or `workflowIds`/`repositories`), events (`eventIds` or
 default 5 minutes) or `silent` (recorded and readable, never delivered). It
 always carries a label and an expiry (default now + 24 h, at most 30 days) and
 may end early with `untilWorkflowClosed` or `remainingEvents`.
+
+Severities decide what a `minSeverity` filter keeps, and the completion events
+sit at the bottom of the scale: `workflow.started`, `workflow.completed`,
+`workflow.closed`, `step.*`, `run.started`, `run.completed`,
+`review.resolved`, `question.routed`, `question.answered`, `attention.cleared`,
+`delivery.push`, `pull-request.state`, `compaction`, `gate.decided` and
+`openspec.task-progress` are `info`; `workflow.failed`, `attention.raised`,
+`run.blocked`, `run.aborted`, `run.stalled`, `limit.hit`, `review.waiting`,
+`question.pending` and `verification.finished` are `warning` (a
+`verification.finished` with critical findings, and an `effect.failed` after
+three attempts, are `critical`). So `minSeverity: "warning"` **excludes** the
+completion a "tell me when it finishes" subscription is waiting for: name the
+event ids (`workflow.completed`, `workflow.failed`, `workflow.closed`, …) or
+pass `minSeverity: "info"` instead. `untilWorkflowClosed` is deliberately NOT a
+filter widening — it only prunes the record once that workflow is `completed`
+or `closed` (through the server's durable closed list, so the pruning works
+even while the filter matches nothing) — because widening would silently turn
+"warnings about this workflow" into "every event from it". The event that
+reaches the condition still reaches the subscription: the server matches an
+event against the subscriptions as they were before that event's own pruning
+applies, so the completion a "tell me when it finishes" subscription waits for
+is delivered to it, and the record is pruned immediately afterwards.
 
 Subscriptions are owned by the orchestrator session and persisted next to its
 conversation state in `<config root>/orchestrator/event-subscriptions.json`
@@ -215,7 +249,11 @@ removes one.
 
 `[agents.orchestrator] stall_minutes` (default 30, file-only) is how long a
 tracked `active` workflow may make no progress before one `run.stalled` event is
-recorded for it (and not a second one until it changes again).
+recorded for it (and not a second one until it changes again). A stall is
+claimed only after a fresh read confirms the workflow is still `active` and
+unchanged: a workflow that completed, closed or blocked since the last
+observation updates its projection instead, so a stale projection can never
+produce a `run.stalled` for a workflow that is already finished.
 
 ## Launch limits
 

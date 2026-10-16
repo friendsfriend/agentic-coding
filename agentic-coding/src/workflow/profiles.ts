@@ -126,12 +126,24 @@ export interface OrchestratorConfig {
 	/** Minutes without progress before a tracked active workflow is reported as
 	 * stalled (`run.stalled`). File-only, like `limits`. */
 	stall_minutes?: number;
+	/** Seconds between two reconciliation passes of the server-side workflow
+	 * event bus, which re-lists the repositories it tracks while they still hold
+	 * an active workflow. File-only, like `limits`. */
+	reconcile_seconds?: number;
 }
 
 /** The stall threshold an absent `stall_minutes` key means. */
 export const DEFAULT_ORCHESTRATOR_STALL_MINUTES = 30;
 /** The upper bound a configured threshold must stay inside. */
 export const MAX_ORCHESTRATOR_STALL_MINUTES = 24 * 60;
+
+/** The reconciliation interval an absent `reconcile_seconds` key means: a low
+ * frequency pass over the tracked repositories, so a change no event in this
+ * process signalled (another process' handoff, the CLI, a second TUI) is still
+ * reported within about half a minute. */
+export const DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS = 30;
+/** The upper bound a configured interval must stay inside. */
+export const MAX_ORCHESTRATOR_RECONCILE_SECONDS = 60 * 60;
 
 /** The `[agents.orchestrator] limits` table as it is written: both keys are
  * optional, so an unset key resolves to its default at read time. */
@@ -183,6 +195,18 @@ export function orchestratorStallMinutes(
 ): number {
 	return (
 		agents?.orchestrator?.stall_minutes ?? DEFAULT_ORCHESTRATOR_STALL_MINUTES
+	);
+}
+
+/** The effective workflow-event reconciliation interval in seconds, defaulting
+ * to 30 so a configuration that says nothing still notices a change no event
+ * carried (the server-side safety net for other-process writers). */
+export function orchestratorReconcileSeconds(
+	agents: AgentsConfig | undefined,
+): number {
+	return (
+		agents?.orchestrator?.reconcile_seconds ??
+		DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS
 	);
 }
 
@@ -400,8 +424,9 @@ function validateGates(
 }
 
 /** Validate `[agents.orchestrator]`: an optional model, thinking level, monitor
- * mode and launch `limits` table. Unknown keys are refused so a typo is not
- * silently ignored. */
+ * mode, launch `limits` table and the two file-only event bounds
+ * (`stall_minutes`, `reconcile_seconds`). Unknown keys are refused so a typo is
+ * not silently ignored. */
 function validateOrchestrator(
 	value: unknown,
 	where: string,
@@ -419,7 +444,8 @@ function validateOrchestrator(
 			key !== "thinking" &&
 			key !== "monitor" &&
 			key !== "limits" &&
-			key !== "stall_minutes"
+			key !== "stall_minutes" &&
+			key !== "reconcile_seconds"
 		)
 			throw new Error(`${location}: unsupported key ${key}`);
 	for (const key of ["model", "thinking"] as const)
@@ -444,6 +470,18 @@ function validateOrchestrator(
 				`${location}.stall_minutes must be a positive integer at most ${MAX_ORCHESTRATOR_STALL_MINUTES}`,
 			);
 	}
+	if (table.reconcile_seconds !== undefined) {
+		const raw = table.reconcile_seconds;
+		if (
+			typeof raw !== "number" ||
+			!Number.isInteger(raw) ||
+			raw <= 0 ||
+			raw > MAX_ORCHESTRATOR_RECONCILE_SECONDS
+		)
+			throw new Error(
+				`${location}.reconcile_seconds must be a positive integer at most ${MAX_ORCHESTRATOR_RECONCILE_SECONDS}`,
+			);
+	}
 	return {
 		...(table.model !== undefined ? { model: table.model as string } : {}),
 		...(table.thinking !== undefined
@@ -454,6 +492,9 @@ function validateOrchestrator(
 			: {}),
 		...(table.stall_minutes !== undefined
 			? { stall_minutes: table.stall_minutes as number }
+			: {}),
+		...(table.reconcile_seconds !== undefined
+			? { reconcile_seconds: table.reconcile_seconds as number }
 			: {}),
 		...(table.limits !== undefined
 			? {

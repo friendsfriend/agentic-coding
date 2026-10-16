@@ -154,6 +154,42 @@ with `unsubscribe_events`.
 - **WHEN** `unsubscribe_events` names a subscription twice
 - **THEN** the second call SHALL succeed and change nothing
 
+### Requirement: Severity is stated where a filter is chosen
+
+The `subscribe_events` tool description and the orchestrator system prompt SHALL
+state that the completion and progress events (`workflow.completed`,
+`workflow.started`, `run.completed`, `run.started`, `step.*`) carry severity
+`info`, so `minSeverity: "warning"` excludes them, and that a subscription meant
+to report a finished workflow SHALL therefore name `eventIds`
+(`workflow.completed`, `workflow.failed`, `workflow.closed`, `attention.raised`,
+`review.waiting`, `question.pending`, `effect.failed`, `run.blocked`) or use
+`minSeverity: "info"`. An `untilWorkflowClosed` condition SHALL NOT widen the
+filter a subscription names: it only prunes the record once that workflow is
+`closed` or `completed`, and the event that reaches the condition SHALL still be
+matched against the subscription before that pruning applies.
+
+#### Scenario: A subscription that should report a finish
+
+- **WHEN** the orchestrator wants to be told when a workflow it started
+  finishes
+- **THEN** the tool description SHALL tell it to name the terminal event ids or
+  use `minSeverity: "info"`, because `minSeverity: "warning"` excludes them
+
+#### Scenario: untilWorkflowClosed does not widen
+
+- **WHEN** a subscription names `untilWorkflowClosed` and a filter that excludes
+  the terminal events
+- **THEN** it SHALL still be pruned when that workflow closes or completes, and
+  its filter SHALL match exactly what it named
+
+#### Scenario: The completion that ends a subscription reaches it
+
+- **WHEN** a subscription names `untilWorkflowClosed` for a workflow and a
+  filter that matches that workflow's `workflow.completed`
+- **THEN** the completion SHALL be delivered to that subscription (the match is
+  taken before the pruning the same event causes), and the subscription SHALL be
+  pruned immediately afterwards
+
 ### Requirement: Subscription visibility is bounded to what the orchestrator may see
 
 A subscription SHALL NOT widen the orchestrator's visibility: it observes the

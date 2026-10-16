@@ -29,6 +29,7 @@ interface Harness {
 	readonly broker: EventBroker;
 	readonly views: Map<string, WorkflowView>;
 	readonly reads: string[];
+	readonly listings: string[];
 	readonly frames: WorkflowEventDeliveryFrame[];
 	readonly runtimeDir: string;
 	readonly listing: (repo: string) => readonly WorkflowView[];
@@ -44,6 +45,8 @@ function view(
 		startedBy?: WorkflowView["startedBy"];
 		task?: string;
 		attention?: string[];
+		runs?: Array<{ id: string; status: string }>;
+		questions?: string[];
 	} = {},
 ): WorkflowView {
 	const step = overrides.step ?? "core.implementation";
@@ -54,7 +57,17 @@ function view(
 		startedBy: overrides.startedBy ?? "orchestrator",
 		task: overrides.task ?? "add a feature",
 		currentStep: { id: step, label: step, attempt: 1, enteredAt: "" },
-		runs: [],
+		runs: (overrides.runs ?? []).map((run) => ({
+			id: run.id,
+			role: "worker",
+			stepId: step,
+			attempt: 1,
+			status: run.status,
+		})),
+		pendingQuestions: (overrides.questions ?? []).map((id) => ({
+			id,
+			role: "developer",
+		})),
 		effects: [],
 		health: { valid: true, attention: overrides.attention ?? [] },
 		availableActions: [],
@@ -66,12 +79,14 @@ function harness(
 		mode?: "wake" | "notify" | "off";
 		capacity?: number;
 		chargeFlushMs?: number;
+		reconcileMs?: number;
 	} = {},
 ): Harness {
 	const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-events-"));
 	const broker = new EventBroker("test");
 	const views = new Map<string, WorkflowView>();
 	const reads: string[] = [];
+	const listings: string[] = [];
 	const frames: WorkflowEventDeliveryFrame[] = [];
 	const state = {
 		clock: Date.parse("2026-01-01T00:00:00.000Z"),
@@ -90,16 +105,21 @@ function harness(
 			if (!found) throw new Error("no such workflow");
 			return found;
 		},
-		listViews: (repository) =>
-			[...views.entries()]
+		listViews: (repository) => {
+			listings.push(repository);
+			return [...views.entries()]
 				.filter(([key]) => key.startsWith(`${repository}\u0000`))
-				.map(([, value]) => value),
+				.map(([, value]) => value);
+		},
 		monitorMode: () => state.mode,
 		stallMinutes: () => state.stallMinutes,
 		now: () => state.clock,
 		runtimeDir,
 		debounceMs: 5,
 		stallTickMs: 20,
+		...(options.reconcileMs !== undefined
+			? { reconcileMs: () => options.reconcileMs ?? 0 }
+			: {}),
 		...(options.capacity ? { logCapacity: options.capacity } : {}),
 		...(options.chargeFlushMs ? { chargeFlushMs: options.chargeFlushMs } : {}),
 	});
@@ -108,6 +128,7 @@ function harness(
 		broker,
 		views,
 		reads,
+		listings,
 		frames,
 		runtimeDir,
 		listing: (repository: string) =>
@@ -246,6 +267,205 @@ describe("derivation driver", () => {
 			current: 5,
 			maximum: 5,
 		});
+		harnessed.bus.stop();
+	});
+});
+
+describe("repository-level refresh", () => {
+	/** The refresh hub's progress listener publishes `workflow.updated` naming the
+	 * repository and no workflow id at all (src/server/subscriptions.ts). A drain
+	 * emits one per committed effect, so a repo-level event is the common case. */
+	function progress(harnessed: Harness, repository = "/repo"): void {
+		harnessed.broker.publish({
+			domain: "workflow",
+			kind: "workflow.updated",
+			resource: repository,
+		});
+	}
+
+	test("a run and workflow completion the store made silently is reported", async () => {
+		const harnessed = harness();
+		put(
+			harnessed,
+			"/repo",
+			view("wf-1", { runs: [{ id: "run-1", status: "running" }] }),
+		);
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		await sleep(20);
+		expect(harnessed.bus.readEvents().events).toEqual([]);
+		// The store advances - the run finished and the workflow completed - and
+		// nothing carrying a workflow id is published: this is the live bug.
+		put(
+			harnessed,
+			"/repo",
+			view("wf-1", {
+				status: "completed",
+				runs: [{ id: "run-1", status: "completed" }],
+			}),
+		);
+		progress(harnessed);
+		await waitUntil(() => harnessed.bus.readEvents().events.length > 0);
+		expect(harnessed.bus.readEvents().events.map((event) => event.id)).toEqual([
+			"workflow.completed",
+			"run.completed",
+		]);
+		harnessed.bus.stop();
+	});
+
+	test("attention, a waiting review and a pending question are reported", async () => {
+		const harnessed = harness();
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		await sleep(20);
+		put(
+			harnessed,
+			"/repo",
+			view("wf-1", {
+				step: "core.developer-review",
+				attention: ["review needed"],
+				questions: ["q-1"],
+			}),
+		);
+		progress(harnessed);
+		await waitUntil(() => harnessed.bus.readEvents().events.length > 0);
+		expect(harnessed.bus.readEvents().events.map((event) => event.id)).toEqual([
+			"step.entered",
+			"step.completed",
+			"review.waiting",
+			"question.pending",
+			"attention.raised",
+		]);
+		harnessed.bus.stop();
+	});
+
+	test("a burst of repo-level updates is one re-list, per repository", async () => {
+		const harnessed = harness();
+		put(harnessed, "/repo", view("wf-1"));
+		put(harnessed, "/other", view("wf-2"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		harnessed.bus.noteWorkflowUpdated("/other", "wf-2");
+		await waitUntil(() => harnessed.reads.length === 2);
+		await sleep(20);
+		harnessed.listings.length = 0;
+		for (let index = 0; index < 8; index += 1) progress(harnessed);
+		progress(harnessed, "/other");
+		await waitUntil(() => harnessed.listings.length > 0);
+		await sleep(40);
+		expect([...harnessed.listings].sort()).toEqual(["/other", "/repo"]);
+		harnessed.bus.stop();
+	});
+});
+
+describe("stall correctness", () => {
+	test("a workflow that finished with no event updates its projection instead of stalling", async () => {
+		const harnessed = harness();
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		(harnessed as unknown as { stallMinutes: number }).stallMinutes = 30;
+		harnessed.clock += 40 * 60_000;
+		// The live false-stall: the workflow completed in the store and nothing
+		// published it, so the bus's projection is still `active` when the stall
+		// threshold passes.
+		put(harnessed, "/repo", view("wf-1", { status: "completed" }));
+		await waitUntil(() =>
+			harnessed.bus
+				.readEvents()
+				.events.some((event) => event.id === "workflow.completed"),
+		);
+		await sleep(80);
+		expect(
+			harnessed.bus
+				.readEvents()
+				.events.filter((event) => event.id === "run.stalled"),
+		).toEqual([]);
+		harnessed.bus.stop();
+	});
+
+	test("a workflow the store no longer answers for is not reported as stalled", async () => {
+		const harnessed = harness();
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		(harnessed as unknown as { stallMinutes: number }).stallMinutes = 0;
+		harnessed.clock += 5 * 60_000;
+		// Nothing can confirm the workflow is still there, so nothing is claimed.
+		harnessed.views.clear();
+		await sleep(80);
+		expect(
+			harnessed.bus
+				.readEvents()
+				.events.filter((event) => event.id === "run.stalled"),
+		).toEqual([]);
+		harnessed.bus.stop();
+	});
+});
+
+describe("reconciliation tick", () => {
+	test("a change no event signalled is picked up within one tick", async () => {
+		const harnessed = harness({ reconcileMs: 15 });
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		await sleep(20);
+		expect(harnessed.bus.readEvents().events).toEqual([]);
+		// Another process (a handoff in the per-repository agent host, the CLI, a
+		// second TUI) advances the store and nothing is published here at all.
+		put(harnessed, "/repo", view("wf-1", { status: "completed" }));
+		await waitUntil(() =>
+			harnessed.bus
+				.readEvents()
+				.events.some((event) => event.id === "workflow.completed"),
+		);
+		expect(harnessed.bus.readEvents().events.map((event) => event.id)).toEqual([
+			"workflow.completed",
+		]);
+		harnessed.bus.stop();
+	});
+
+	test("an idle bus does no store reads, and off does nothing", async () => {
+		const harnessed = harness({ reconcileMs: 15 });
+		// A tracked repository whose only workflow is done: nothing can change, so
+		// the tick lists nothing at all.
+		put(harnessed, "/repo", view("wf-1", { status: "completed" }));
+		harnessed.bus.noteRepositoryListed("/repo");
+		let reads = harnessed.reads.length;
+		await sleep(80);
+		expect(harnessed.listings).toEqual(["/repo"]);
+		expect(harnessed.reads.length).toBe(reads);
+
+		// A bus that never observed anything reads nothing either.
+		const untouched = harness({ reconcileMs: 15 });
+		await sleep(60);
+		expect(untouched.listings).toEqual([]);
+		expect(untouched.reads).toEqual([]);
+
+		// `off` observes nothing, tick included.
+		const off = harness({ mode: "off", reconcileMs: 15 });
+		put(off, "/repo", view("wf-1"));
+		off.bus.noteWorkflowUpdated("/repo", "wf-1");
+		reads = off.reads.length;
+		await sleep(60);
+		expect(off.listings).toEqual([]);
+		expect(off.reads.length).toBe(reads);
+
+		harnessed.bus.stop();
+		untouched.bus.stop();
+		off.bus.stop();
+	});
+
+	test("reconcileMs 0 disables the tick entirely", async () => {
+		const harnessed = harness({ reconcileMs: 0 });
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		const reads = harnessed.reads.length;
+		put(harnessed, "/repo", view("wf-1", { status: "completed" }));
+		await sleep(80);
+		expect(harnessed.reads.length).toBe(reads);
+		expect(harnessed.bus.readEvents().events).toEqual([]);
 		harnessed.bus.stop();
 	});
 });
@@ -472,6 +692,37 @@ describe("delivery frames", () => {
 		expect(review?.subscriptions).toEqual([
 			{ id: expect.any(String), label: "silent", mode: "silent" },
 		]);
+		harnessed.bus.stop();
+	});
+
+	test("an untilWorkflowClosed subscription receives the completion that ends it", async () => {
+		const harnessed = harness();
+		const created = harnessed.bus.subscribe({
+			label: "finish",
+			filter: { scope: "mine", eventIds: ["workflow.completed"] },
+			untilWorkflowClosed: "wf-1",
+		} as never);
+		put(harnessed, "/repo", view("wf-1"));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		await waitUntil(() => harnessed.reads.length === 1);
+		harnessed.frames.length = 0;
+		put(harnessed, "/repo", view("wf-1", { status: "completed" }));
+		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
+		// The event that closes the workflow is the last one the subscription is
+		// waiting for, so it must still name it before its own pruning applies.
+		await waitUntil(() =>
+			harnessed.frames.some((frame) => frame.event.id === "workflow.completed"),
+		);
+		const completed = harnessed.frames.find(
+			(frame) => frame.event.id === "workflow.completed",
+		);
+		expect(completed?.subscriptions.map((match) => match.label)).toEqual([
+			"finish",
+		]);
+		// Pruned straight after, exactly once the condition is reached.
+		expect(
+			harnessed.bus.listSubscriptions().map((subscription) => subscription.id),
+		).not.toContain(created.id);
 		harnessed.bus.stop();
 	});
 

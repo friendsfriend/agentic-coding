@@ -131,12 +131,12 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		owner: "src/workflow/profiles.ts",
 		scope: "user",
 		storage:
-			"[agents.orchestrator] limits (max_active, max_starts_per_day) and stall_minutes in the layered workflow config",
+			"[agents.orchestrator] limits (max_active, max_starts_per_day), stall_minutes and reconcile_seconds in the layered workflow config",
 		secret: false,
 		effect: "next-start",
 		editable: false,
 		items: ["agents.launch-limits"],
-		note: "File-only guard: the server enforces the ceiling, so Settings shows the effective value read-only. `stall_minutes` (default 30) is the same kind of file-only bound: how long a tracked active workflow may make no progress before one `run.stalled` event is recorded.",
+		note: "File-only bounds: the server enforces the ceiling, so Settings shows the effective value read-only. `stall_minutes` (default 30) is how long a tracked active workflow may make no progress before one `run.stalled` event is recorded, and `reconcile_seconds` (default 30) is how often the server re-lists a tracked repository that still holds an active workflow, so a change no event carried is still reported.",
 	},
 	{
 		id: "agents.compaction",

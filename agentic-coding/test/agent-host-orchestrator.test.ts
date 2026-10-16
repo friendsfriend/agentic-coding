@@ -117,6 +117,34 @@ describe("orchestrator host mode", () => {
 			"belong to the developer",
 		);
 	});
+
+	test("subscribe_events names the severity trap that hides completion events", () => {
+		const extension = createOrchestratorExtension(() => undefined);
+		const description =
+			(extension.tools ?? []).find((tool) => tool.name === "subscribe_events")
+				?.description ?? "";
+		// The mistake that silenced the orchestrator: `minSeverity: "warning"`
+		// excludes the `info` completion and progress events, so a "tell me when it
+		// finishes" subscription must name the terminal ids instead (or read
+		// everything).
+		expect(description).toContain("minSeverity");
+		expect(description).toContain("info");
+		expect(description).toContain("EXCLUDES");
+		expect(description).toContain("eventIds");
+		for (const id of [
+			"workflow.completed",
+			"workflow.failed",
+			"workflow.closed",
+			"run.blocked",
+		])
+			expect(description).toContain(id);
+		// `untilWorkflowClosed` prunes the record; it never widens the filter.
+		expect(description).toContain("untilWorkflowClosed");
+		expect(description).toContain("never widens");
+		// The system prompt carries the same rule.
+		expect(ORCHESTRATOR_PROMPT).toContain("minSeverity");
+		expect(ORCHESTRATOR_PROMPT).toContain("workflow.completed");
+	});
 	test("serves only the orchestrator policy and calls the server with its capability", async () => {
 		const observed: unknown[] = [];
 		const server = await startWorkflowServer({

@@ -361,13 +361,15 @@ describe("orchestrator monitor configuration", () => {
 		});
 	});
 
-	test("a session edit preserves the file-only launch limits", () => {
+	test("a session edit preserves the file-only bounds", () => {
 		withConfig(
 			{
 				agents: {
 					...BASE_CONFIG.agents,
 					orchestrator: {
 						limits: { max_active: 1, max_starts_per_day: 2 },
+						stall_minutes: 45,
+						reconcile_seconds: 60,
 					},
 				},
 			},
@@ -380,12 +382,14 @@ describe("orchestrator monitor configuration", () => {
 					undefined,
 					loadAgentConfig().revision,
 				);
-				// The ceiling has no editor here, so an unrelated session edit must not
+				// None of these has an editor here, so an unrelated session edit must not
 				// drop the developer's guard from the configuration file.
 				expect(loadAgentConfig().agents.orchestrator).toEqual({
 					model: "vendor/m",
 					thinking: "high",
 					limits: { max_active: 1, max_starts_per_day: 2 },
+					stall_minutes: 45,
+					reconcile_seconds: 60,
 				});
 			},
 		);

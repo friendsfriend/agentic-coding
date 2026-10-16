@@ -2,11 +2,15 @@
 // tasks 2.1-2.5). The server turns its existing `workflow.updated` stream into
 // catalog events: debounced per workflow → one view read → a pure projection
 // diff → the bounded event log, the delivery frame on the broker, and the
-// durable, session-owned subscription registry.
+// durable, session-owned subscription registry. An event that names only a
+// repository (the hub's progress listener carries no workflow id) coalesces
+// into one re-list of that repository instead, so a change nothing else
+// signalled is still reported.
 //
 // Nothing here is a second source of truth: the workflow view of the one
-// workflow an event names is the only input, and an unreadable view keeps its
-// previous projection instead of inventing an event.
+// workflow an event names (or the listing of the one repository it names) is
+// the only input, and an unreadable view keeps its previous projection instead
+// of inventing an event.
 import fs from "node:fs";
 import path from "node:path";
 import type { EventEnvelope } from "../contracts/environment.ts";
@@ -67,9 +71,16 @@ const MAX_TRACKED_REPOS = 64;
 const MAX_CLOSED_WORKFLOWS = 200;
 /** How many worktrees of one repository the source caches are released for. */
 const MAX_WORKTREES_PER_REPO = 64;
+/** How many repositories may hold a pending coalesced refresh: one stream can
+ * name more repositories than the bus tracks, and every pending timer is
+ * memory this process holds. */
+const MAX_PENDING_REPO_REFRESHES = 64;
 /** How often buffered delivery charges reach the store: a delivered event must
  * not rewrite the subscription file synchronously. */
 const CHARGE_FLUSH_MS = 5_000;
+/** How often the bus reconciles when no configuration names an interval
+ * (`[agents.orchestrator] reconcile_seconds`, default 30). */
+const DEFAULT_RECONCILE_MS = 30_000;
 
 export class MonitorOffError extends Error {
 	constructor() {
@@ -149,6 +160,13 @@ export interface WorkflowEventBusOptions {
 	readonly runtimeDir?: string;
 	readonly debounceMs?: number;
 	readonly stallTickMs?: number;
+	/** How often a tracked repository with a live workflow is re-listed without
+	 * any event: the safety net for a writer this process never hears from (a
+	 * handoff in another process, the CLI, a second TUI). Read per pass like
+	 * `stallMinutes`, so an edit applies without a restart; the configured
+	 * `[agents.orchestrator] reconcile_seconds` (default 30 s), and `0` disables
+	 * the pass. */
+	readonly reconcileMs?: () => number;
 	/** The bounded extra reads a few events need. A missing source yields
 	 * nothing, so the derivation emits no event instead of failing. */
 	readonly enrich?: (input: {
@@ -207,6 +225,7 @@ export function createWorkflowEventBus(
 	const now = options.now ?? (() => Date.now());
 	const runtimeDir = options.runtimeDir ?? orchestratorRuntimeDir();
 	const debounceMs = options.debounceMs ?? 250;
+	const reconcileMsOf = () => options.reconcileMs?.() ?? DEFAULT_RECONCILE_MS;
 	const logCapacity = options.logCapacity ?? EVENT_LOG_CAPACITY;
 	const report = options.onError ?? (() => {});
 	const modeOf = () => options.monitorMode();
@@ -234,6 +253,9 @@ export function createWorkflowEventBus(
 	const worktreesByRepo = new Map<string, Set<string>>();
 	const trackedRepos = new Set<string>();
 	const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** One pending coalesced repository refresh per repository named by a
+	 * runId-less `workflow.updated` (the hub's progress listener). */
+	const repoTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Workflow ids observed as `closed` or `completed`, so an until-condition is
 	 * pruned without a store read. Seeded from the durable store and persisted. */
 	const closedWorkflows = new Set<string>();
@@ -705,15 +727,20 @@ export function createWorkflowEventBus(
 	function deliver(event: WorkflowEventRecord): void {
 		const mode = modeOf();
 		if (mode === "off") return;
+		// Match the subscriptions as they are *before* this event closes any of
+		// them: the completion or close of the workflow an `untilWorkflowClosed`
+		// subscription waits for is the last event it must still receive. The
+		// pruning itself is unchanged - the next delivery no longer names it - and
+		// the filter is never widened to make that happen.
+		const subscriptions = effectiveSubscriptions();
+		const matched = subscriptions.filter((subscription) =>
+			matchesSubscriptionFilter(subscription.filter, event),
+		);
 		let closedChanged = false;
 		if (event.id === "workflow.closed" || event.id === "workflow.completed") {
 			closedChanged = rememberClosed(event.workflowId);
 			if (closedChanged) closedDirty = true;
 		}
-		const subscriptions = effectiveSubscriptions();
-		const matched = subscriptions.filter((subscription) =>
-			matchesSubscriptionFilter(subscription.filter, event),
-		);
 		const deliverable = matched.some(
 			(subscription) =>
 				subscription.mode === "wake" || subscription.mode === "digest",
@@ -820,22 +847,46 @@ export function createWorkflowEventBus(
 		}
 	}
 
-	function readWorkflow(repository: string, workflowId: string): void {
-		if (modeOf() === "off") return;
+	/** Read one workflow and fold it into its projection. `false` means nothing
+	 * was observed (the monitor is `off`, or the view is unreadable), so a caller
+	 * that needs fresh state knows it did not get any. */
+	function readWorkflow(repository: string, workflowId: string): boolean {
+		if (modeOf() === "off") return false;
 		let view: WorkflowView;
 		try {
 			view = options.view(repository, workflowId);
 		} catch {
 			// An unreadable workflow keeps its previous projection: an event is
 			// never invented from a miss.
-			return;
+			return false;
 		}
 		observeView(repository, view);
+		return true;
+	}
+
+	/** True while one of this repository's tracked workflows is still capable of
+	 * changing (`active` or `attention-required` in the projection): only those
+	 * can produce a new event, so a repository whose work is done costs the
+	 * reconciliation tick no store read. */
+	function hasLiveWorkflow(repository: string): boolean {
+		const prefix = `${repository}\u0000`;
+		for (const [key, projection] of projections) {
+			if (!key.startsWith(prefix)) continue;
+			if (
+				projection.status === "active" ||
+				projection.status === "attention-required"
+			)
+				return true;
+		}
+		return false;
 	}
 
 	/** The repository listing: the first one is that repository's baseline and
 	 * emits nothing; a later one emits exactly one `workflow.started` for each id
-	 * it did not hold before. */
+	 * it did not hold before. Every listed workflow the bus already holds a
+	 * projection for is observed exactly as a `workflow.updated` would observe it,
+	 * which is what reports a transition (a completion, a raised attention, a
+	 * waiting review) that no workflow-id-carrying event ever named. */
 	function noteListing(repository: string): void {
 		if (modeOf() === "off") return;
 		let views: readonly WorkflowView[];
@@ -850,28 +901,27 @@ export function createWorkflowEventBus(
 		for (const view of views) {
 			if (!view?.workflowId) continue;
 			seen.add(view.workflowId);
-			workflowIndex.set(view.workflowId, repository);
-			rememberWorktree(repository, view.worktree);
+			// A start is the one event a listing adds: the workflow is new to a
+			// repository the bus already baselined.
 			if (baselined && !previous.has(view.workflowId))
 				recordStart(repository, view);
-			// A listing is a baseline: it records the projection without reporting
-			// the edges of a workflow whose history the bus did not watch.
-			if (!baselined)
-				projections.set(
-					keyOf(repository, view.workflowId),
-					projectWorkflowEvents(view),
-				);
+			// A listing is a baseline for an id the bus has never observed (the
+			// observation records the projection and reports nothing), and a diff
+			// for one it has.
+			observeView(repository, view);
 		}
-		if (baselined) {
-			for (const gone of previous)
-				if (!seen.has(gone)) {
-					const key = keyOf(repository, gone);
-					forgetWorktree(repository, projections.get(key)?.worktree);
-					projections.delete(key);
-					lastChangedAt.delete(key);
-					stalledAt.delete(key);
-					workflowIndex.delete(gone);
-				}
+		// An id no longer in the listing is gone from the repository: its
+		// projection is dropped, whoever observed it before.
+		for (const key of [...projections.keys()]) {
+			const separator = key.indexOf("\u0000");
+			if (key.slice(0, separator) !== repository) continue;
+			const workflowId = key.slice(separator + 1);
+			if (seen.has(workflowId)) continue;
+			forgetWorktree(repository, projections.get(key)?.worktree);
+			projections.delete(key);
+			lastChangedAt.delete(key);
+			stalledAt.delete(key);
+			workflowIndex.delete(workflowId);
 		}
 		knownWorkflows.set(repository, seen);
 		baselinedRepos.add(repository);
@@ -905,6 +955,34 @@ export function createWorkflowEventBus(
 		);
 	}
 
+	/** A `workflow.updated` naming only a repository (the refresh hub's progress
+	 * listener) is coalesced into one re-list of that repository per debounce
+	 * window: a drain publishes one per committed effect, and listing per event
+	 * would read every workflow of the repository on each of them. */
+	function scheduleRepoRefresh(repository: string): void {
+		if (modeOf() === "off") return;
+		const existing = repoTimers.get(repository);
+		if (existing !== undefined) clearTimeout(existing);
+		repoTimers.delete(repository);
+		repoTimers.set(
+			repository,
+			setTimeout(() => {
+				repoTimers.delete(repository);
+				noteListing(repository);
+			}, debounceMs),
+		);
+		// The oldest pending refresh is dropped rather than letting one stream grow
+		// the map without bound; the repository it named is refreshed the next time
+		// something names it.
+		while (repoTimers.size > MAX_PENDING_REPO_REFRESHES) {
+			const oldest = repoTimers.keys().next().value;
+			if (oldest === undefined || oldest === repository) break;
+			const timer = repoTimers.get(oldest);
+			if (timer !== undefined) clearTimeout(timer);
+			repoTimers.delete(oldest);
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// Stream subscription, stall tick
 	// -----------------------------------------------------------------------
@@ -915,7 +993,15 @@ export function createWorkflowEventBus(
 			if (event.domain !== "workflow") return;
 			if (event.kind !== "workflow.updated" && event.kind !== "workflow.start")
 				return;
-			if (!event.resource || !event.runId) return;
+			if (!event.resource) return;
+			// No workflow id: the event is about the repository as a whole (a
+			// committed effect of a drain), so the repository is re-listed once the
+			// burst settles. The repo-level refresh is what reports a change no
+			// workflow-id-carrying event ever named.
+			if (!event.runId) {
+				scheduleRepoRefresh(event.resource);
+				return;
+			}
 			schedule(event.resource, event.runId);
 		},
 		() => {
@@ -929,23 +1015,35 @@ export function createWorkflowEventBus(
 		if (modeOf() === "off") return;
 		const at = now();
 		const thresholdMs = stallMinutesOf() * 60_000;
-		for (const [key, projection] of projections) {
-			if (projection.status !== "active") continue;
+		for (const key of [...projections.keys()]) {
+			const projection = projections.get(key);
+			if (projection?.status !== "active") continue;
+			if (stalledAt.has(key)) continue;
 			const changedAt = lastChangedAt.get(key) ?? at;
 			if (at - changedAt < thresholdMs) continue;
-			if (stalledAt.has(key)) continue;
-			stalledAt.set(key, at);
 			const separator = key.indexOf("\u0000");
 			const repository = key.slice(0, separator);
 			const workflowId = key.slice(separator + 1);
+			// A stall is claimed only on a fresh read. A workflow that completed,
+			// closed or blocked since the last observation must update its projection
+			// instead - that transition is the news - and an unreadable workflow
+			// confirms nothing at all, so neither may produce `run.stalled`.
+			if (!readWorkflow(repository, workflowId)) continue;
+			const fresh = projections.get(key);
+			if (fresh?.status !== "active") continue;
+			// Read again after the observation: a workflow whose state changed moves
+			// its own progress clock, and a change is not a stall.
+			const freshChangedAt = lastChangedAt.get(key) ?? at;
+			if (at - freshChangedAt < thresholdMs) continue;
+			stalledAt.set(key, at);
 			recordDrafts(
 				[
 					{
 						id: "run.stalled",
 						payload: {
-							stepId: projection.stepId,
-							stepLabel: projection.stepLabel,
-							minutes: Math.max(1, Math.floor((at - changedAt) / 60_000)),
+							stepId: fresh.stepId,
+							stepLabel: fresh.stepLabel,
+							minutes: Math.max(1, Math.floor((at - freshChangedAt) / 60_000)),
 						},
 					},
 				],
@@ -954,15 +1052,48 @@ export function createWorkflowEventBus(
 					workflowId,
 					// The workflow's own owner, not the bus's: a `mine`-scoped
 					// subscription must never be woken by a developer's stalled work.
-					startedBy: projection.startedBy,
-					stepId: projection.stepId,
-					stepLabel: projection.stepLabel,
+					startedBy: fresh.startedBy,
+					stepId: fresh.stepId,
+					stepLabel: fresh.stepLabel,
 				},
 			);
 		}
 	}, options.stallTickMs ?? 60_000);
 	// A background tick must never keep the process alive on its own.
 	stallTimer.unref?.();
+
+	/** The reconciliation pass: the repositories the bus tracks that still hold
+	 * an `active` or `attention-required` workflow in its projection are
+	 * re-listed, so a change no event in this process signalled is still
+	 * reported. A repository with nothing live costs no store read at all, and
+	 * the master switch `off` stops the whole pass. */
+	function reconcileRepositories(): void {
+		if (modeOf() === "off") return;
+		for (const repository of [...trackedRepos]) {
+			if (!hasLiveWorkflow(repository)) continue;
+			noteListing(repository);
+		}
+	}
+
+	/** Re-arm the reconciliation timer with the interval read now, so a
+	 * configuration edit applies at the next pass without a restart. */
+	let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+	function armReconcile(): void {
+		const interval = reconcileMsOf();
+		if (!(interval > 0)) return;
+		reconcileTimer = setTimeout(() => {
+			try {
+				reconcileRepositories();
+			} catch (error) {
+				// A background timer must never throw into the process.
+				report(error);
+			}
+			armReconcile();
+		}, interval);
+		// A background tick must never keep the process alive on its own.
+		reconcileTimer.unref?.();
+	}
+	armReconcile();
 
 	// -----------------------------------------------------------------------
 	// Filter validation
@@ -1244,9 +1375,13 @@ export function createWorkflowEventBus(
 		stop(): void {
 			streamSubscription.unsubscribe();
 			clearInterval(stallTimer);
+			if (reconcileTimer !== undefined) clearTimeout(reconcileTimer);
+			reconcileTimer = undefined;
 			clearInterval(chargeTimer);
 			for (const timer of readTimers.values()) clearTimeout(timer);
 			readTimers.clear();
+			for (const timer of repoTimers.values()) clearTimeout(timer);
+			repoTimers.clear();
 			flushCharges();
 			clearWorkflowEventSources();
 		},

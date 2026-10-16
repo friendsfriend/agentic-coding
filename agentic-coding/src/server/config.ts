@@ -202,18 +202,24 @@ export function applyAgentsMutation(
 					return;
 				}
 				case "set-orchestrator": {
-					// `limits` is file-only and has no editor here, so a session edit
-					// preserves whatever ceiling the developer wrote instead of dropping
-					// it with the rest of the table.
+					// The file-only bounds (`limits`, `stall_minutes`,
+					// `reconcile_seconds`) have no editor here, so a session edit preserves
+					// whatever the developer wrote instead of dropping it with the rest of
+					// the table.
 					const existing = section.orchestrator;
 					const next: Record<string, unknown> = {};
 					if (
 						existing &&
 						typeof existing === "object" &&
-						!Array.isArray(existing) &&
-						Object.hasOwn(existing, "limits")
+						!Array.isArray(existing)
 					)
-						next.limits = (existing as Record<string, unknown>).limits;
+						for (const key of [
+							"limits",
+							"stall_minutes",
+							"reconcile_seconds",
+						] as const)
+							if (Object.hasOwn(existing, key))
+								next[key] = (existing as Record<string, unknown>)[key];
 					for (const key of ["model", "thinking"] as const) {
 						const value = mutation.orchestrator[key];
 						if (value === undefined || value === "") continue;

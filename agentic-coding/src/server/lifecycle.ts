@@ -14,8 +14,10 @@ import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
 import {
 	type AgentsConfig,
 	DEFAULT_ORCHESTRATOR_MONITOR,
+	DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS,
 	DEFAULT_ORCHESTRATOR_STALL_MINUTES,
 	orchestratorMonitorMode,
+	orchestratorReconcileSeconds,
 	orchestratorStallMinutes,
 } from "../workflow/profiles.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
@@ -199,6 +201,11 @@ export async function startWorkflowServer(
 			stallMinutes: memoizedAgents(
 				orchestratorStallMinutes,
 				DEFAULT_ORCHESTRATOR_STALL_MINUTES,
+			),
+			// Seconds in the configuration, milliseconds on the bus's own clock.
+			reconcileMs: memoizedAgents(
+				(agents) => orchestratorReconcileSeconds(agents) * 1_000,
+				DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS * 1_000,
 			),
 			enrich: (input) => enrichWorkflowEvent(input),
 			...(options.configDir

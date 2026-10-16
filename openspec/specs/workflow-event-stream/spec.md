@@ -101,8 +101,11 @@ current count and the maximum, from the server path that refuses the start (the
 one event not derived from a projection). A tracked workflow that is `active`
 and has made no progress for longer than the configured
 `[agents.orchestrator] stall_minutes` (default 30) SHALL emit `run.stalled`
-naming the step and the elapsed minutes, and SHALL NOT emit a second
-`run.stalled` for the same unchanged workflow.
+naming the step and the elapsed minutes, and only after a fresh read of that
+workflow confirms it is still `active` and unchanged: a workflow that completed,
+closed or blocked since the last observation SHALL update its projection instead
+(its transition is what is reported) and SHALL NOT produce `run.stalled`.
+`run.stalled` SHALL NOT be emitted twice for the same unchanged workflow.
 
 #### Scenario: Orchestrator launch ceiling reached
 
@@ -114,8 +117,22 @@ naming the step and the elapsed minutes, and SHALL NOT emit a second
 #### Scenario: A stalled run
 
 - **WHEN** a tracked `active` workflow has not changed for longer than the
-  configured stall threshold
+  configured stall threshold and a fresh read confirms it is unchanged
 - **THEN** one `run.stalled` event SHALL be recorded for it
+
+#### Scenario: A finished workflow never stalls
+
+- **WHEN** a workflow completed, closed or blocked without any event reaching
+  the server, and its projection is still `active` when the stall threshold
+  passes
+- **THEN** the fresh read SHALL update the projection and record that
+  transition, and NO `run.stalled` SHALL be recorded for it
+
+#### Scenario: An unreadable workflow confirms nothing
+
+- **WHEN** a workflow whose projection is still `active` cannot be read when the
+  stall threshold passes
+- **THEN** no `run.stalled` SHALL be recorded for it
 
 ### Requirement: Bounded, cursor-addressed event log
 
@@ -146,10 +163,11 @@ retained sequence, never as a silent gap.
 
 The server SHALL derive events only for the workflow an event names, SHALL
 debounce repeated events per workflow into one read, SHALL NOT read every
-workflow of a repository except when rebuilding a baseline after a stream gap,
-and SHALL derive nothing at all when `[agents.orchestrator] monitor` is `off`.
-An unreadable workflow SHALL keep its previous projection and SHALL NOT emit an
-event.
+workflow of a repository except when a repository-level observation is
+answered (a stream gap, a runId-less `workflow.updated`, the reconciliation
+tick) and SHALL derive nothing at all when `[agents.orchestrator] monitor` is
+`off`. An unreadable workflow SHALL keep its previous projection and SHALL NOT
+emit an event.
 
 #### Scenario: A burst of updates is one read
 
@@ -168,4 +186,69 @@ event.
 - **WHEN** a workflow's view cannot be read
 - **THEN** no event SHALL be emitted for it and its previous projection SHALL be
   kept
+
+### Requirement: Repository-level derivation
+
+The server SHALL NOT drop a `workflow.updated` naming only a repository (the
+refresh hub publishes one per committed effect of a drain, without a workflow
+id): it SHALL coalesce into at most one re-list of that repository per debounce
+window, bounded to a fixed number of pending repositories and released when the
+bus stops. The listing SHALL report a `workflow.started` for an id a
+baselined repository did not hold before, SHALL observe every listed workflow
+the bus already holds a projection for exactly as a `workflow.updated` would
+(so a completion, a raised attention, a waiting review or a pending question no
+workflow-id-carrying event named is still derived), SHALL drop the projection of
+an id the listing no longer holds, and SHALL NOT emit a start or a transition
+for the first listing of a repository.
+
+#### Scenario: A completion nothing named
+
+- **WHEN** a workflow's run completes and the workflow completes in the store,
+  and only a runId-less `workflow.updated` for its repository arrives
+- **THEN** `run.completed` and `workflow.completed` SHALL be recorded for it
+
+#### Scenario: A burst of repository events
+
+- **WHEN** a drain publishes eight runId-less `workflow.updated` events for one
+  repository inside one debounce window
+- **THEN** the server SHALL list that repository once
+
+#### Scenario: The first listing of a repository is silent
+
+- **WHEN** the bus lists a repository for the first time
+- **THEN** no `workflow.started` and no transition SHALL be emitted for the
+  workflows it holds; only their baseline SHALL be recorded
+
+### Requirement: Reconciliation of unobserved changes
+
+The server SHALL re-list, at most once per
+`[agents.orchestrator] reconcile_seconds` (default 30), only the repositories it
+tracks that still hold an `active` or `attention-required` workflow in its
+projection, so a change committed without any event in this process (a handoff
+in another process, the CLI, a second TUI) is reported within about one
+interval. A repository with no such workflow, a bus that has observed nothing,
+and `monitor` = `off` SHALL each cost no store read at all.
+
+#### Scenario: A change without an event
+
+- **WHEN** a tracked workflow's view changes in the store and nothing is
+  published
+- **THEN** the next reconciliation pass SHALL read it and record its transition
+
+#### Scenario: A change committed by another process
+
+- **WHEN** a handoff in another process advances a tracked workflow and no
+  event reaches this server
+- **THEN** the reconciliation pass SHALL re-list that repository and report the
+  change
+
+#### Scenario: An idle bus
+
+- **WHEN** every workflow the bus tracks is `completed` or `closed`
+- **THEN** the reconciliation pass SHALL read no workflow
+
+#### Scenario: Monitor off
+
+- **WHEN** `monitor` is `off`
+- **THEN** the reconciliation pass SHALL read no workflow
 
