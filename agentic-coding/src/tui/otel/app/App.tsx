@@ -33,6 +33,7 @@ import {
 	useTerminalDimensions,
 } from "@ui";
 import {
+	batch,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -1269,19 +1270,23 @@ export function App(props: {
 					| Record<string, unknown>
 					| undefined;
 				const raw = configured?.[field];
-				setCompactionTarget(compactionEditorField(field));
-				setCompactionOriginal(
+				const shown =
 					typeof raw === "number" || typeof raw === "string"
 						? String(raw)
-						: String(snapshot?.effective[field] ?? ""),
-				);
-				setCompactionDraft(
-					typeof raw === "number" || typeof raw === "string"
-						? String(raw)
-						: String(snapshot?.effective[field] ?? ""),
-				);
-				setCompactionError(undefined);
-				nav.pushModal("compaction-value", "home");
+						: String(snapshot?.effective[field] ?? "");
+				// One batch, deliberately: every write below flushes its effects before
+				// the next statement otherwise, and the draft-clearing effect above reads
+				// the modal — so setting the target while the overlay is still closed
+				// cleared it again and the editor never rendered, leaving the shell with
+				// an overlay whose draft was gone (every key swallowed). The target and
+				// the overlay it belongs to therefore have to become visible together.
+				batch(() => {
+					setCompactionTarget(compactionEditorField(field));
+					setCompactionOriginal(shown);
+					setCompactionDraft(shown);
+					setCompactionError(undefined);
+					nav.pushModal("compaction-value", "home");
+				});
 				return;
 			}
 			case "navigate":
@@ -2301,7 +2306,12 @@ export function App(props: {
 			// part of a valid value is accepted, so the entry can never *become*
 			// invalid by typing; Enter saves, Esc cancels and discards the draft.
 			const target = compactionTarget();
-			if (!target) return;
+			// A draft-less editor overlay is never left standing: without this every
+			// key of the shell would be swallowed by an overlay that cannot render.
+			if (!target) {
+				nav.popModal();
+				return;
+			}
 			if (key === "escape") {
 				setCompactionTarget(undefined);
 				setCompactionError(undefined);

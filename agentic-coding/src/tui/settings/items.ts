@@ -10,13 +10,14 @@
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
 import {
-	COMPACTION_DEFAULTS,
+	COMPACTION_DEFAULT_TRIGGER_PERCENT,
 	COMPACTION_PERCENT_MAX,
 	COMPACTION_PERCENT_MIN,
 	COMPACTION_TOKEN_CEILING,
 	type CompactionFieldError,
 	type CompactionTokenField,
 	type CompactionTokenValue,
+	compactionFieldDefaultForm,
 	compactionFieldMinimum,
 	parseCompactionPercent,
 } from "../../workflow/compaction.ts";
@@ -456,7 +457,6 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 			},
 		];
 	}
-	const defaults = snapshot.defaults ?? COMPACTION_DEFAULTS;
 	const source = compactionSourceLabel(snapshot.source);
 	const items: SettingsItem[] = [];
 	for (const error of snapshot.validation)
@@ -485,17 +485,17 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 		{
 			field: "reserveTokens",
 			label: "Reserve tokens",
-			why: `room kept free for the answer: a request above window − reserve waits for a summary (default ${defaults.reserveTokens}); the summarizer's own output budget is 0.8 × reserve`,
+			why: `room kept free for the answer: a request above window − reserve waits for a summary (default ${compactionFieldDefaultForm("reserveTokens")}, so automatic compaction starts at ${COMPACTION_DEFAULT_TRIGGER_PERCENT}% of the run's own window); the summarizer's own output budget is 0.8 × reserve`,
 		},
 		{
 			field: "backgroundTokens",
 			label: "Background starts",
-			why: `how far below the blocking threshold a summary starts in the background (default ${defaults.backgroundTokens}); 0 disables the background path`,
+			why: `how far below the blocking threshold a summary starts in the background (default ${compactionFieldDefaultForm("backgroundTokens")}); 0 disables the background path`,
 		},
 		{
 			field: "keepRecentTokens",
 			label: "Kept verbatim",
-			why: `recent context a summary keeps word for word (default ${defaults.keepRecentTokens}); a percentage like "15%" scales with each run's own model window`,
+			why: `recent context a summary keeps word for word (default ${compactionFieldDefaultForm("keepRecentTokens")}); a percentage like "15%" scales with each run's own model window`,
 		},
 	];
 	const configured = snapshot.configured as Record<string, unknown>;

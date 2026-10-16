@@ -83,6 +83,18 @@ async function waitFor(
 	throw new Error("waitFor timed out");
 }
 
+async function waitForIdle(
+	host: DurableHost,
+	runId: string,
+	attempts = 300,
+): Promise<void> {
+	for (let i = 0; i < attempts; i++) {
+		if ((await host.status(runId)).status === "idle") return;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error(`run ${runId} never became idle`);
+}
+
 /** Poll until an envelope with this exact `event` name is on disk. */
 async function waitForLines(
 	telemetryPath: string,
@@ -172,6 +184,74 @@ describe("compaction policy of a durable host", () => {
 			} finally {
 				await percentHost.shutdown();
 			}
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("a run on a 1M-token window compacts automatically, far below the old absolute threshold", async () => {
+		// The regression this file exists for: the documented default reserve is
+		// window-relative, because an absolute 32000 put the blocking threshold at
+		// 968000 tokens on the models the presets actually run (opencode-go's
+		// deepseek-v4.1-flash and gpt-6-luna, kimi-coding's k3), which a real run
+		// never reaches. Roughly 810000 estimated tokens of context — 3240000
+		// characters at pi-ai's 4-chars-per-token estimate — is above the 700000
+		// trigger and well below that threshold.
+		const dir = tempWorkflowDir();
+		const faux = fauxProvider({ models: MODELS });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await openHost({ dir, models });
+		try {
+			const telemetryPath = path.join(dir, "telemetry.jsonl");
+			const envPath = writeRunEnv(dir, {
+				HERDR_WORKFLOW_ID: "wf-1",
+				HERDR_RUN_ID: "run-1",
+				HERDR_ROLE: "worker",
+				HERDR_TELEMETRY_PATH: telemetryPath,
+			});
+			await host.ensureRun({
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				runEnvPath: envPath,
+				toolPolicy: "default",
+				model: modelRef(faux, "wide"),
+			});
+			expect(host.referenceWindowForTest()).toBe(1_000_000);
+			// 30% of the window: automatic compaction starts at 70% of it.
+			expect(host.compactionPolicyForTest().reserveTokens).toBe(300_000);
+
+			// A first, small turn, so the huge one has a verbatim tail to keep.
+			faux.setResponses([fauxAssistantMessage([fauxText("ok")])]);
+			await host.submit("run-1", "hello", "req-0");
+			await waitForIdle(host, "run-1");
+
+			faux.appendResponses([
+				fauxAssistantMessage([fauxText("summary of the older context")]),
+				fauxAssistantMessage([fauxText("acknowledged")]),
+			]);
+			await host.submit(
+				"run-1",
+				"context worth summarizing. ".repeat(120_000),
+				"req-1",
+			);
+			await waitForIdle(host, "run-1");
+
+			const entries = await host.entriesForTest("run-1");
+			expect(
+				entries.some(
+					(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+				),
+			).toBe(true);
+			// The reason says it was the threshold, not an overflow recovery.
+			const lines = await waitForLines(telemetryPath, "runtime.compaction");
+			expect(
+				lines.find((line) => line.event === "runtime.compaction_start"),
+			).toMatchObject({ reason: "threshold", blocking: true });
+			expect(
+				lines.find((line) => line.event === "runtime.compaction"),
+			).toMatchObject({ reason: "threshold", outcome: "completed" });
 		} finally {
 			await host.shutdown();
 		}

@@ -13,14 +13,27 @@ context window, and a percentage SHALL resolve against a reference window when
 one is known and fall back to that field's documented absolute default when it
 is not. The resolved policy SHALL always carry `enabled`, `reserveTokens`,
 `keepRecentTokens` and `backgroundTokens`. The documented defaults SHALL be
-`enabled: true`, `reserveTokens: 32000`, `backgroundTokens: 32000` and
-`keepRecentTokens: 20000`, and the resolved policy SHALL be reported to the
-developer (Settings shows the effective values and the reference window).
+`enabled: true`, `reserveTokens: max(32000, 30% of the reference window)`,
+`backgroundTokens: 32000` and `keepRecentTokens: 20000`, and the resolved policy
+SHALL be reported to the developer (Settings shows the effective values, each
+field's documented default and the reference window).
+
+The reserve SHALL be the larger of its absolute default and 30% of a known
+reference window, so automatic compaction starts when a request would exceed 70%
+of the model's context window rather than at an absolute count only; with no
+known window it SHALL resolve to the absolute 32000. The other two token fields
+SHALL default to their absolute values.
 
 #### Scenario: No configuration present
 
 - **WHEN** neither `agents.compaction` nor `agentHost.compaction` is configured
-- **THEN** the resolved policy SHALL be the documented defaults
+- **THEN** the resolved policy SHALL be the documented defaults, with
+  `reserveTokens` resolved to 32000 when no reference window is known
+
+#### Scenario: A real 1M-token window with no configuration
+
+- **WHEN** a run uses a model whose context window is 1000000 tokens and no compaction value is configured
+- **THEN** the resolved `reserveTokens` SHALL be 300000 and threshold compaction SHALL start above 700000 estimated context tokens, `backgroundTokens` SHALL remain 32000 and `keepRecentTokens` SHALL remain 20000
 
 #### Scenario: Percentage value with a known reference window
 

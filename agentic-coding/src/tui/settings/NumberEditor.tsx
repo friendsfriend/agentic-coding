@@ -160,10 +160,14 @@ export function NumberEditor(props: NumberEditorProps) {
 			<box style={{ flexDirection: "column", width: "100%" }}>
 				<text fg={uiColors.textMuted}>{props.target.description}</text>
 				<box style={{ height: 1 }} />
-				<text fg={uiColors.textPrimary}>
-					{props.value}
+				{/* The draft and its cursor are two siblings in a row: a nested
+				    `<text>` inside a `<text>` is not a renderable node on this
+				    OpenTUI version (it threw "TextNodeRenderable only accepts
+				    strings…" and took the whole Settings page down with it). */}
+				<box style={{ flexDirection: "row", height: 1 }}>
+					<text fg={uiColors.textPrimary}>{props.value}</text>
 					<text fg={uiColors.accent}>█</text>
-				</text>
+				</box>
 				<box style={{ height: 1 }} />
 				<Show when={props.error}>
 					{(message) => <text fg={uiColors.error}>{message()}</text>}

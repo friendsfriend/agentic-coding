@@ -186,18 +186,28 @@ flight, without a host restart.
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Gates threshold and overflow compaction only; `/compact` in a session works either way |
-| `reserveTokens` | `32000` | Room kept free for the answer: a request above `contextWindow - reserve` waits for a summary. It also bounds the summarizer's own output budget (`0.8 × reserve`) |
+| `reserveTokens` | `max(32000, 30% of the run's window)` | Room kept free for the answer: a request above `contextWindow - reserve` waits for a summary — 70% of the model's window with the default. It also bounds the summarizer's own output budget (`0.8 × reserve`) |
 | `backgroundTokens` | `32000` | How far below the blocking threshold a summary starts in the background; `0` disables the background path |
 | `keepRecentTokens` | `20000` | Recent context a summary keeps word for word |
 
 Each token value is either a whole number of tokens or a percentage of the
-model's context window (`"15%"`). Absolute values are used as written — the
-reserve and the background lead are already applied against the actual window,
-so they need no scaling — while a percentage is resolved against the smallest
-context window among the models the host's tracked runs use, falling back to
-that field's absolute default when no window is known. `keepRecentTokens` is the
-value most worth a percentage: a fixed 20 000 is 16% of a 128k window but 2% of a
-1M one.
+model's context window (`"15%"`). An absolute value is used as written, and a
+percentage is resolved against the smallest context window among the models the
+host's tracked runs use, falling back to that field's absolute default when no
+window is known.
+
+The reserve's default is the one that is *not* absolute, because it is the value
+that decides when automatic compaction fires: every model the presets run
+declares a 1M-token window (`opencode-go`'s `deepseek-v4.1-flash` and
+`gpt-6-luna`, `kimi-coding`'s `k3`), where a fixed 32 000-token reserve put the
+blocking threshold at 968 000 tokens and the background threshold at 936 000 —
+context a run never reaches, so it never compacted. The default is therefore
+`max(32000, 30% of the window)`: automatic compaction starts at 70% of the
+model's window, and the absolute 32 000 remains the no-window fallback and the
+floor for a small window. `backgroundTokens` stays absolute (one large turn's
+lead below the blocking threshold), and `keepRecentTokens` is left to the
+operator's percentage form when the verbatim tail should scale: a fixed 20 000
+is 16% of a 128k window but 2% of a 1M one.
 
 Resolution floors and clamps a bad configuration instead of letting it defeat
 itself: `reserveTokens` and `keepRecentTokens` are at least 4096,

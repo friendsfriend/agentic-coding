@@ -11,15 +11,25 @@
 // Why these defaults (see `openspec/changes/add-agent-compaction/proposal.md`):
 // `enabled` gates threshold/overflow compaction and never manual compaction, and
 // a run that outgrows its window dies without it, so it defaults to on. The
-// reserve is naturally window-relative already (the blocking threshold is
-// `contextWindow - reserveTokens`) and it also bounds the summarizer's own
-// output budget (0.8 × reserve), so it is an absolute count — 32000 covers
-// about two harness-bounded tool results. `backgroundTokens` leads the blocking
-// threshold by one large turn, so the background summary usually lands before
-// anybody blocks. `keepRecentTokens` is the one value whose meaning drifts with
-// the window (16% of 128k but 2% of 1M), so it is the value offered as a
-// percentage; its absolute default keeps a workable verbatim tail on the
-// 128k–200k windows in normal use.
+// reserve is what decides *when* automatic compaction starts — the blocking
+// threshold is `contextWindow - reserveTokens` — so it cannot be an absolute
+// count: every model the presets actually run declares a 1M-token window
+// (`opencode-go/deepseek-v4.1-flash` and `gpt-6-luna`, `kimi-coding/k3`, the
+// Anthropic long-context models), where pi-durable's package default of 16384
+// and our first default of 32000 put the trigger at 96.8% of the window and
+// 936k-token backgrounds — a run reaches neither. The documented default is
+// therefore window-relative, `max(32000, 30% of the window)`, i.e. a request
+// above 70% of the model's window waits for a summary, with the absolute 32000
+// as the fallback when no run's window is known (a percentage form with no
+// window uses the same fallback). The reserve still bounds the summarizer's own
+// output budget (0.8 × reserve), and the summarizer's *input* — the summarized
+// range, below 70% of the window — always fits the window it summarizes for.
+// `backgroundTokens` leads the blocking threshold by one large turn, which is an
+// absolute quantity, so it stays 32000 (0 disables the background path).
+// `keepRecentTokens` is the one value whose meaning drifts with the window (16%
+// of 128k but 2% of 1M), so it is the value offered as a percentage; its
+// absolute default keeps a workable verbatim tail on the 128k–200k windows in
+// normal use.
 
 /** The token-valued fields of the policy, in Settings display order. */
 export const COMPACTION_TOKEN_FIELDS = [
@@ -58,13 +68,36 @@ export interface CompactionPolicy {
 /** Where the effective policy came from, so Settings can name it. */
 export type CompactionSource = "agentHost" | "agents" | "default";
 
-/** The documented defaults (proposal "Recommended defaults"). */
+/** The documented defaults (proposal "Recommended defaults"). The token values
+ * are the *absolute* defaults: what a field resolves to when nothing is
+ * configured or when no run's context window is known. `reserveTokens` is
+ * additionally window-relative (see {@link COMPACTION_WINDOW_DEFAULT_PERCENT}).
+ */
 export const COMPACTION_DEFAULTS: CompactionPolicy = {
 	enabled: true,
 	reserveTokens: 32000,
 	keepRecentTokens: 20000,
 	backgroundTokens: 32000,
 };
+
+/** The share of the model's context window automatic compaction starts at (see
+ * `openspec/specs/durable-agent-compaction`). The reserve is the room kept free
+ * above that line, so the two add up to 100%. */
+export const COMPACTION_DEFAULT_TRIGGER_PERCENT = 70;
+
+/** The reserve's share of the window that puts the trigger at
+ * {@link COMPACTION_DEFAULT_TRIGGER_PERCENT}. */
+export const COMPACTION_DEFAULT_RESERVE_PERCENT =
+	100 - COMPACTION_DEFAULT_TRIGGER_PERCENT;
+
+/** The documented default *form* of each token field, for the fields whose
+ * sensible value scales with the window: the field resolves to
+ * `max(documented absolute default, this share of the reference window)`. A
+ * field without an entry is absolute. Only the reserve is here, because only
+ * the reserve moves the trigger point. */
+export const COMPACTION_WINDOW_DEFAULT_PERCENT: Readonly<
+	Partial<Record<CompactionTokenField, number>>
+> = { reserveTokens: COMPACTION_DEFAULT_RESERVE_PERCENT };
 
 /** Smallest accepted absolute value of a kept-verbatim field. Below this a
  * summary would drop so much context that the run cannot continue usefully. */
@@ -94,6 +127,19 @@ export function compactionFieldMinimum(field: CompactionTokenField): number {
 /** The documented absolute default of one token field. */
 export function compactionFieldDefault(field: CompactionTokenField): number {
 	return COMPACTION_DEFAULTS[field];
+}
+
+/** One field's documented default as a single line, for Settings and the docs:
+ * `32000 tokens`, or `max(32000 tokens, 30% of the run's window)` for a field
+ * whose default scales with the window. */
+export function compactionFieldDefaultForm(
+	field: CompactionTokenField,
+): string {
+	const absolute = `${compactionFieldDefault(field)} tokens`;
+	const percent = COMPACTION_WINDOW_DEFAULT_PERCENT[field];
+	return percent === undefined
+		? absolute
+		: `max(${absolute}, ${percent}% of the run's window)`;
 }
 
 /** One rejected field of a compaction section. `field` is the key path below
@@ -232,6 +278,15 @@ function resolveField(
 				? Math.round((window * percent) / 100)
 				: compactionFieldDefault(field);
 	}
+	// Nothing configured: the documented default applies, and for a field whose
+	// default scales with the window it is the *larger* of the two forms — so a
+	// 1M-token window does not inherit a reserve sized for a 128k one.
+	const percent = COMPACTION_WINDOW_DEFAULT_PERCENT[field];
+	if (percent !== undefined && window !== undefined)
+		return Math.max(
+			compactionFieldDefault(field),
+			Math.round((window * percent) / 100),
+		);
 	return compactionFieldDefault(field);
 }
 
@@ -239,7 +294,9 @@ function resolveField(
  * Resolve the written section into the policy pi-durable receives. Every field
  * is absolute in the result: a percentage is resolved against `referenceWindow`
  * when one is known and falls back to that field's documented absolute default
- * when it is not. Floors and clamps are applied afterwards, so a bad
+ * when it is not, and a field whose documented default scales with the window
+ * ({@link COMPACTION_WINDOW_DEFAULT_PERCENT}) uses the larger of its two
+ * default forms. Floors and clamps are applied afterwards, so a bad
  * configuration can never produce a policy that selects no range:
  *
  * - `reserveTokens` and `keepRecentTokens` are at least 4096, and

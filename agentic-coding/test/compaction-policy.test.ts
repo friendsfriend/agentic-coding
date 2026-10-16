@@ -18,6 +18,7 @@ import {
 } from "../src/server/config.ts";
 import { saveAgents } from "../src/server/handlers.ts";
 import {
+	COMPACTION_DEFAULT_TRIGGER_PERCENT,
 	COMPACTION_DEFAULTS,
 	COMPACTION_PERCENT_MAX,
 	COMPACTION_TOKEN_CEILING,
@@ -61,6 +62,34 @@ describe("compaction policy resolution", () => {
 			keepRecentTokens: 20000,
 			backgroundTokens: 32000,
 		});
+	});
+
+	test("the default reserve scales with the window, so the trigger fires at 70%", () => {
+		// Every model the presets run declares a ~1M-token window. An absolute
+		// 32000-token reserve put the blocking threshold at 968000 tokens, which a
+		// real run never reaches, so the documented default is the larger of the
+		// absolute default and 30% of the window.
+		const wide = resolveCompactionPolicy({}, 1_000_000);
+		expect(wide.reserveTokens).toBe(300_000);
+		expect(1_000_000 - wide.reserveTokens).toBe(700_000);
+		expect(100 - COMPACTION_DEFAULT_TRIGGER_PERCENT).toBe(30);
+		// The absolute default stays the no-window fallback and the floor of the
+		// window-relative form: a smaller window keeps the 32000 reserve.
+		expect(resolveCompactionPolicy({}).reserveTokens).toBe(
+			COMPACTION_DEFAULTS.reserveTokens,
+		);
+		expect(resolveCompactionPolicy({}, 100_000).reserveTokens).toBe(32000);
+		// The fields whose default does not move the trigger stay absolute.
+		expect(wide.backgroundTokens).toBe(COMPACTION_DEFAULTS.backgroundTokens);
+		expect(wide.keepRecentTokens).toBe(COMPACTION_DEFAULTS.keepRecentTokens);
+		// A configured value still wins over both default forms.
+		expect(
+			resolveCompactionPolicy({ reserveTokens: 50000 }, 1_000_000)
+				.reserveTokens,
+		).toBe(50000);
+		expect(
+			resolveCompactionPolicy({ reserveTokens: "5%" }, 1_000_000).reserveTokens,
+		).toBe(50000);
 	});
 
 	test("a percentage resolves against a known reference window", () => {
