@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 import { writeDataset } from "../../scripts/efficiency/lib/dataset.ts";
 import { extractTables } from "../../scripts/efficiency/lib/extract.ts";
 import { QUERIES } from "../../scripts/efficiency/lib/queries.ts";
@@ -69,6 +71,73 @@ describe("ready-made queries", () => {
 			for (const row of rows) expect(row.gap_seconds).not.toBeNull();
 		} finally {
 			db.close();
+		}
+	});
+
+	test("orientation-cost counts a run without an artifact as no orientation, not all of it", () => {
+		const query = QUERIES.find((entry) => entry.name === "orientation-cost");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						role: string | null;
+						runs: number;
+						runs_with_artifact: number;
+						turns_before: number;
+						cost_before: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			// No fixture run writes an artifact, so every run contributes nothing to
+			// the orientation half rather than being counted as all orientation.
+			for (const row of rows) {
+				expect(row.runs_with_artifact).toBe(0);
+				expect(row.turns_before).toBe(0);
+				expect(row.cost_before).toBe(0);
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+	test("orientation-cost splits a run that writes an artifact after some turns", () => {
+		const query = QUERIES.find((entry) => entry.name === "orientation-cost");
+		const out = makeTempDir("efficiency-orientation-");
+		const copy = path.join(out.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy, { readwrite: true });
+		try {
+			// run-span-a has two turns; a write at turn 1 makes turn 0 the orientation.
+			db.run(
+				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, turn_index, dedupe_key, tool, ok, confidence, preferred)
+				 VALUES ('run-span-a', null, null, 'herdr.main-store', 190, 1, 'synthetic-write', 'write', 1, 'exact', 1)`,
+			);
+			const row = db
+				.query<
+					{
+						role: string | null;
+						runs_with_artifact: number;
+						turns_before: number;
+						cost_before: number;
+						cost_share_before: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all()
+				.find((entry) => entry.role === "worker");
+			expect(row).toBeDefined();
+			expect(row?.runs_with_artifact).toBe(1);
+			expect(row?.turns_before).toBe(1);
+			expect(row?.cost_before).toBeGreaterThan(0);
+			expect(row?.cost_share_before).toBeGreaterThan(0);
+			expect(row?.cost_share_before).toBeLessThan(1);
+		} finally {
+			db.close();
+			out.cleanup();
 		}
 	});
 

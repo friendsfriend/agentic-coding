@@ -196,6 +196,63 @@ HAVING COUNT(*) > 1
 ORDER BY result_bytes DESC`,
 	},
 	{
+		name: "orientation-cost",
+		summary:
+			"How much of a role's turns and cost is spent before it writes its first artifact (a write/edit call).",
+		example:
+			"bun run scripts/efficiency/analyze.ts orientation-cost --dataset ~/ev/dataset-2026",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"role",
+			"step_id",
+			"runs",
+			"runs_with_artifact",
+			"avg_first_artifact_turn",
+			"turns",
+			"turns_before",
+			"turn_share_before",
+			"cost",
+			"cost_before",
+			"cost_share_before",
+		],
+		sql: `WITH per_run AS (
+	SELECT
+		r.run_id AS run_id,
+		r.role AS role,
+		COALESCE(NULLIF(r.step_id, ''), '(none)') AS step_id,
+		(SELECT COUNT(*) FROM v_turns t WHERE t.run_id = r.run_id) AS turns,
+		(SELECT COALESCE(SUM(t.cost), 0) FROM v_turns t WHERE t.run_id = r.run_id) AS cost,
+		(SELECT MIN(c.turn_index) FROM v_tool_calls c
+			WHERE c.run_id = r.run_id AND c.tool IN ('write', 'edit')) AS first_artifact_turn
+	FROM v_runs r
+),
+split AS (
+	SELECT
+		p.*,
+		(SELECT COUNT(*) FROM v_turns t
+			WHERE t.run_id = p.run_id AND t.turn_index < p.first_artifact_turn) AS turns_before,
+		(SELECT COALESCE(SUM(t.cost), 0) FROM v_turns t
+			WHERE t.run_id = p.run_id AND t.turn_index < p.first_artifact_turn) AS cost_before
+	FROM per_run p
+)
+SELECT
+	role,
+	step_id,
+	COUNT(*) AS runs,
+	SUM(CASE WHEN first_artifact_turn IS NOT NULL THEN 1 ELSE 0 END) AS runs_with_artifact,
+	ROUND(AVG(first_artifact_turn), 1) AS avg_first_artifact_turn,
+	SUM(turns) AS turns,
+	SUM(turns_before) AS turns_before,
+	ROUND(1.0 * SUM(turns_before) / NULLIF(SUM(turns), 0), 3) AS turn_share_before,
+	ROUND(SUM(cost), 4) AS cost,
+	ROUND(SUM(cost_before), 4) AS cost_before,
+	ROUND(1.0 * SUM(cost_before) / NULLIF(SUM(cost), 0), 3) AS cost_share_before
+FROM split
+GROUP BY role, step_id
+ORDER BY SUM(cost) IS NULL, SUM(cost) DESC, runs DESC`,
+	},
+	{
 		name: "calls-per-turn",
 		summary: "Distribution of tool calls per turn.",
 		example:
