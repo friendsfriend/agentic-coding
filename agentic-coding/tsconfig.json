@@ -26,6 +26,12 @@
 			"typebox": ["./node_modules/typebox"]
 		}
 	},
-	"include": ["src/**/*", "test/**/*", "scripts/test.ts", "packages/**/*"],
+	"include": [
+		"src/**/*",
+		"test/**/*",
+		"scripts/test.ts",
+		"scripts/efficiency/**/*",
+		"packages/**/*"
+	],
 	"exclude": ["test/fixtures/source-layer-boundaries/**/*"]
 }

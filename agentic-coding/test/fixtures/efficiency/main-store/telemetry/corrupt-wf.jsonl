@@ -1,0 +1,5 @@
+{"at":"2026-01-03T08:00:00.000Z","event":"workflow.started","role":"worker","herdr.repository":"/repo/agentic-coding","herdr.definition.id":"solo"}
+this line is not json at all
+{"at":"2026-01-03T08:00:01.000Z","event":"runtime.usage","workflowId":"corrupt-wf","runId":"run-corrupt","role":"worker","inputTokens":5,"outputTokens":1,"totalTokens":6,"cost":0.0
+[1,2,3]
+{"at":"2026-01-03T08:00:02.000Z","role":"worker"}
