@@ -44,14 +44,18 @@ export class SubscriberQueue {
 
 	push(event: EventEnvelope): void {
 		if (this.closed) return;
-		if (this.queue.length >= this.capacity) {
+		// A live subscriber always receives the event: dropping it here would stop
+		// delivery for a subscriber that never drains the queue, which is every
+		// subscriber in this process. The retained buffer stays bounded, and an
+		// eviction still marks the subscriber as needing an authoritative resync
+		// for whatever it did not keep.
+		this.onEvent(event);
+		this.queue.push(event);
+		if (this.queue.length > this.capacity) {
 			this.queue.shift();
 			this.needsSnapshot = true;
 			this.onOverflow();
-			return;
 		}
-		this.queue.push(event);
-		this.onEvent(event);
 	}
 
 	drain(): EventEnvelope[] {
@@ -101,7 +105,11 @@ export class EventBroker {
 		};
 		this.ring.push(event);
 		if (this.ring.length > this.capacity) this.ring.shift();
-		for (const subscriber of this.subscribers) subscriber.queue.push(event);
+		// A snapshot: a subscriber's callback may subscribe or unsubscribe (the
+		// shell re-opens from its cursor on an overflow), and the loop that
+		// triggered it must not visit a subscriber it just added.
+		for (const subscriber of [...this.subscribers])
+			subscriber.queue.push(event);
 		return event;
 	}
 

@@ -45,6 +45,7 @@ describe("dashboard data layer", () => {
 			"evidence.ts",
 			"git.ts",
 			"index.ts",
+			"orchestrator-events.ts",
 			"review.ts",
 			"telemetry.ts",
 			"wiki.ts",

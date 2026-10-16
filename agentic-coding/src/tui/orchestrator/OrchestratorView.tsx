@@ -14,6 +14,7 @@ import {
 	onMount,
 	untrack,
 } from "solid-js";
+import type { WorkflowEventSubscription } from "../../contracts/workflow-events.ts";
 import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
@@ -27,15 +28,25 @@ import {
 } from "../dash/ui/AgentSessionView.tsx";
 import { loadAgentConfig } from "../data/agents.ts";
 import {
+	loadEventSubscriptions,
+	removeEventSubscription,
+} from "../data/orchestrator-events.ts";
+import {
 	loadPromptHistory,
 	MAX_PROMPT_HISTORY,
 	savePromptHistory,
 } from "../shared/preferences.ts";
+import { configuredMonitorMode } from "./monitor.ts";
 import type { OrchestratorModel, OrchestratorSession } from "./session.ts";
 import {
 	guardOrchestratorSubmit,
 	refreshOrchestratorGateBlocks,
 } from "./submission.ts";
+import {
+	orchestratorSubscriptionCommands,
+	removalNotice,
+	subscriptionsNotice,
+} from "./subscription-commands.ts";
 
 export interface OrchestratorViewProps {
 	readonly keymap: Keymap<Renderable, KeyEvent>;
@@ -107,10 +118,25 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		loadPromptHistory(),
 	);
 	const [pickerOpen, setPickerOpen] = createSignal(false);
+	/** The active event subscriptions, so `/subscriptions` can list and remove
+	 * them without the view performing the I/O itself. */
+	const [subscriptions, setSubscriptions] = createSignal<
+		readonly WorkflowEventSubscription[]
+	>([]);
+	/** Why the last subscription read failed, so a failed read is reported as a
+	 * failure instead of rendered as an empty list. */
+	const [subscriptionsError, setSubscriptionsError] = createSignal<
+		string | undefined
+	>();
 	let stopWatch: (() => void) | undefined;
 	let scrollBox: ScrollBoxRenderable | undefined;
 	let pickerHandler: ((event: KeyEvent) => boolean) | undefined;
 	let disposed = false;
+
+	/** The effective master switch (`[agents.orchestrator] monitor`), read when
+	 * the listing is built: a listed `wake` mode must never imply delivery the
+	 * switch forbids. */
+	const monitorMode = (): "wake" | "notify" | "off" => configuredMonitorMode();
 
 	const client = async () => {
 		const current = session();
@@ -194,6 +220,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 
 	onMount(() => {
 		void connect();
+		void refreshSubscriptions();
 	});
 
 	createEffect(() => {
@@ -209,6 +236,99 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			setBlocks((current) => refreshOrchestratorGateBlocks(current, selection));
 		});
 	});
+
+	/** Re-read the session's event subscriptions (through the data layer). A
+	 * failed read is kept, so the listing can say the list may be stale instead
+	 * of claiming there is nothing. */
+	const refreshSubscriptions = async (): Promise<void> => {
+		try {
+			const loaded = await loadEventSubscriptions({ refresh: true });
+			if (disposed) return;
+			// A superseded read (a newer read for the same key started first) is
+			// "nothing new", not "nothing there": keep the list and the error state.
+			if (loaded === undefined) return;
+			setSubscriptions([...loaded]);
+			setSubscriptionsError(undefined);
+		} catch (error) {
+			if (disposed) return;
+			setSubscriptionsError(
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+	};
+
+	/** Write (or replace) the transcript's `local:subscriptions` block from the
+	 * current signals. Returns the read's failure message when the last read
+	 * failed, so a caller can report it instead of rendering a stale list. */
+	const renderSubscriptions = (): string | undefined => {
+		const failure = subscriptionsError();
+		if (failure !== undefined) {
+			setNotices((notice) => [
+				...notice.filter((block) => block.id !== "local:subscriptions"),
+				{
+					id: "local:subscriptions",
+					kind: "error",
+					tone: "error",
+					text: `Could not read the event subscriptions: ${failure} — the list could not be refreshed; any remove command shown in the prompt palette comes from the last successful read`,
+				},
+			]);
+			return failure;
+		}
+		const current = subscriptions();
+		setNotices((notice) => [
+			...notice.filter((block) => block.id !== "local:subscriptions"),
+			{
+				id: "local:subscriptions",
+				kind: "notice",
+				tone: "muted",
+				text: `Event subscriptions:\n${subscriptionsNotice(current, monitorMode())}`,
+			},
+		]);
+		return undefined;
+	};
+
+	/** `/subscriptions`: list them compactly in the transcript, with the master
+	 * switch that decides whether any of them can deliver. */
+	const listSubscriptions = () => {
+		void (async () => {
+			await refreshSubscriptions();
+			const failure = renderSubscriptions();
+			if (failure !== undefined) {
+				notify(`Could not read the event subscriptions: ${failure}`, "error");
+				return;
+			}
+			const current = subscriptions();
+			notify(
+				current.length === 0
+					? "No event subscription is active"
+					: `${current.length} event subscription${current.length === 1 ? "" : "s"} listed in the transcript`,
+				"info",
+			);
+		})();
+	};
+
+	/** Remove one subscription from the list. The listing is rebuilt from the
+	 * refreshed signal, so the transcript and the confirmation agree; the
+	 * removal notice is the only toast this path adds. */
+	const unsubscribe = (subscriptionId: string) => {
+		void (async () => {
+			try {
+				const removed = await removeEventSubscription(subscriptionId);
+				await refreshSubscriptions();
+				renderSubscriptions();
+				notify(
+					removalNotice(subscriptionId, removed),
+					removed ? "success" : "info",
+				);
+			} catch (error) {
+				notify(
+					`Could not remove ${subscriptionId}: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+			}
+		})();
+	};
+
 	const submit = (text: string) => {
 		guardOrchestratorSubmit(
 			text,
@@ -459,6 +579,11 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 					description: "Start a new orchestrator session",
 					run: startNewSession,
 				},
+				...orchestratorSubscriptionCommands({
+					subscriptions: subscriptions(),
+					onList: listSubscriptions,
+					onRemove: unsubscribe,
+				}),
 			]}
 			onScrollBoxReady={(box) => {
 				scrollBox = box;

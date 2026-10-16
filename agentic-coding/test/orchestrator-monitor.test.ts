@@ -1,102 +1,262 @@
-// Shell workflow monitor (add-orchestrator-workflow-monitoring, tasks 2.1 and
-// 2.2). One injected gateway emits events and serves views, so the monitor is
-// exercised exactly as the shell wires it — minus the durable orchestrator
-// host, whose delivery entry point is injected.
-
+// Workflow event delivery: the pure planner and the shell monitor
+// (add-orchestrator-event-subscriptions, tasks 4.1-4.3). The planner is
+// exercised with an explicit clock; the monitor with an injected gateway, so
+// neither depends on a real wait for a cadence boundary.
 import { describe, expect, test } from "bun:test";
 import type { EventEnvelope } from "../src/contracts/environment.ts";
 import type {
 	DashboardGateway,
 	GatewayEventHandlers,
 } from "../src/contracts/gateway.ts";
-import type { WorkflowView } from "../src/contracts/workflow.ts";
-import { startWorkflowMonitor } from "../src/tui/orchestrator/monitor.ts";
+import type {
+	WorkflowEventDeliveryMatch,
+	WorkflowEventRecord,
+	WorkflowEventSeverity,
+} from "../src/contracts/workflow-events.ts";
+import {
+	DELIVERY_TIMINGS,
+	DeliveryPlanner,
+	formatNote,
+} from "../src/tui/orchestrator/delivery.ts";
+import {
+	MONITOR_TIMINGS,
+	startWorkflowMonitor,
+} from "../src/tui/orchestrator/monitor.ts";
 
-/** Contract-only view fixture: what the monitor reads, and nothing else. */
-function view(
-	workflowId: string,
-	overrides: {
-		status?: WorkflowView["status"];
-		step?: string;
-		startedBy?: WorkflowView["startedBy"];
-		pendingQuestions?: number;
-	} = {},
-): WorkflowView {
-	const step = overrides.step ?? "core.implementation";
+function event(
+	overrides: Partial<WorkflowEventRecord> = {},
+): WorkflowEventRecord {
 	return {
-		workflowId,
-		status: overrides.status ?? "active",
-		startedBy: overrides.startedBy ?? "orchestrator",
-		currentStep: { id: step, label: step, attempt: 1, enteredAt: "" },
-		effects: [],
-		pendingQuestions: Array.from(
-			{ length: overrides.pendingQuestions ?? 0 },
-			(_, index) => ({ id: `q-${index}` }),
-		),
-		availableActions: [],
-	} as unknown as WorkflowView;
+		sequence: 1,
+		id: "review.waiting",
+		repository: "/repo",
+		workflowId: "wf-1",
+		startedBy: "orchestrator",
+		stepId: "core.developer-review",
+		stepLabel: "core.developer-review",
+		severity: "warning" as WorkflowEventSeverity,
+		humanNeeded: true,
+		at: "2026-01-01T00:00:00.000Z",
+		payload: {
+			review: "developer",
+			stepId: "core.developer-review",
+			stepLabel: "core.developer-review",
+		},
+		...overrides,
+	};
 }
 
-const keyOf = (repo: string, workflowId: string) =>
-	`${repo}\u0000${workflowId}`;
+const subscription = (
+	label: string,
+	mode: WorkflowEventDeliveryMatch["mode"] = "wake",
+): WorkflowEventDeliveryMatch & {
+	coalesceMs?: number;
+	digestMinutes?: number;
+} => ({
+	id: `sub-${label}`,
+	label,
+	mode,
+});
+
+const EMPTY = { ...DELIVERY_TIMINGS, maxBacklog: 200 };
+
+describe("delivery planner", () => {
+	test("events inside the coalescing window become one note", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 10,
+			minNoteIntervalMs: 0,
+		});
+		planner.record(event({ sequence: 1 }), [subscription("default")], 0);
+		planner.record(
+			event({ sequence: 2, workflowId: "wf-2" }),
+			[subscription("default")],
+			0,
+		);
+		expect(planner.flush(5)).toBeUndefined();
+		const note = planner.flush(10);
+		expect(note?.split("\n")).toHaveLength(3);
+		expect(note?.startsWith("[workflow-monitor] subs=default\n")).toBe(true);
+		expect(planner.pendingCount).toBe(0);
+	});
+
+	test("one event matched by two subscriptions is one line naming both labels", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		planner.record(
+			event({ sequence: 7 }),
+			[subscription("default"), subscription("awaiting-review")],
+			0,
+		);
+		const note = planner.flush(0);
+		expect(note?.split("\n")).toHaveLength(2);
+		expect(note).toContain("subs=default,awaiting-review");
+	});
+
+	test("the per-minute bound merges overflow forward", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 60_000,
+		});
+		planner.record(event({ sequence: 1 }), [subscription("default")], 0);
+		expect(planner.flush(0)).toContain("wf-1");
+		planner.record(
+			event({ sequence: 2, workflowId: "wf-2" }),
+			[subscription("default")],
+			1,
+		);
+		expect(planner.flush(1)).toBeUndefined();
+		expect(planner.pendingCount).toBe(1);
+		expect(planner.nextDueAt(1)).toBe(60_000);
+		expect(planner.flush(60_000)).toContain("wf-2");
+	});
+
+	test("a digest subscription accumulates to its own interval", () => {
+		const planner = new DeliveryPlanner({ ...EMPTY, digestMs: 300_000 });
+		planner.record(
+			event({ sequence: 1 }),
+			[subscription("digest", "digest")],
+			0,
+		);
+		planner.record(
+			event({ sequence: 2 }),
+			[subscription("digest", "digest")],
+			0,
+		);
+		expect(planner.flush(120_000)).toBeUndefined();
+		const note = planner.flush(300_000);
+		expect(note?.split("\n")).toHaveLength(3);
+	});
+
+	test("a subscription's own digestMinutes overrides the default window", () => {
+		const planner = new DeliveryPlanner({ ...EMPTY, digestMs: 300_000 });
+		planner.record(
+			event({ sequence: 1 }),
+			[{ ...subscription("digest", "digest"), digestMinutes: 1 }],
+			0,
+		);
+		expect(planner.flush(30_000)).toBeUndefined();
+		expect(planner.flush(60_000)).toContain("wf-1");
+	});
+
+	test("a subscription's own minIntervalMs floors how soon it contributes again", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		const patient = { ...subscription("patient"), minIntervalMs: 120_000 };
+		planner.record(event({ sequence: 1 }), [patient], 0);
+		expect(planner.flush(0)).toContain("wf-1");
+		planner.record(event({ sequence: 2, workflowId: "wf-2" }), [patient], 1);
+		expect(planner.flush(1)).toBeUndefined();
+		expect(planner.nextDueAt(1)).toBe(120_000);
+		expect(planner.flush(120_000)).toContain("wf-2");
+	});
+
+	test("a silent-only match is never delivered", () => {
+		const planner = new DeliveryPlanner(EMPTY);
+		planner.record(event(), [subscription("silent", "silent")], 0);
+		expect(planner.pendingCount).toBe(0);
+		expect(planner.flush(10_000)).toBeUndefined();
+	});
+
+	test("a note elides past the line bound, and the backlog drops the oldest", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+			maxNoteLines: 2,
+			maxBacklog: 4,
+		});
+		for (let index = 1; index <= 6; index += 1)
+			planner.record(event({ sequence: index }), [subscription("default")], 0);
+		const note = planner.flush(0);
+		const lines = note?.split("\n") ?? [];
+		expect(lines).toHaveLength(4);
+		expect(lines[3]).toBe("… +4 more");
+	});
+
+	test("the hard note cap keeps the rest queued", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+			maxNotesPerHour: 1,
+		});
+		planner.record(event({ sequence: 1 }), [subscription("default")], 0);
+		expect(planner.flush(0)).toBeDefined();
+		planner.record(event({ sequence: 2 }), [subscription("default")], 1);
+		expect(planner.flush(1)).toBeUndefined();
+		expect(planner.nextDueAt(1)).toBe(60 * 60 * 1000);
+		expect(planner.flush(60 * 60 * 1000)).toBeDefined();
+	});
+
+	test("formatNote names no label when nothing matched", () => {
+		expect(
+			formatNote(
+				[
+					{
+						event: event({
+							workflowId: "",
+							stepId: "",
+							id: "limit.hit",
+							payload: { limit: "max_active", current: 5, maximum: 5 },
+						}),
+						labels: [],
+						dueAt: 0,
+					},
+				],
+				EMPTY,
+			),
+		).toBe("[workflow-monitor]\n- limit max_active reached (5/5)");
+	});
+});
 
 /** The slice of the gateway port the monitor uses. */
 class FakeGateway {
 	handlers: GatewayEventHandlers | undefined;
-	readonly views = new Map<string, WorkflowView>();
-	readonly viewCalls: string[] = [];
-	readonly listCalls: string[] = [];
 	subscribes = 0;
 	unsubscribes = 0;
+	/** Subscriptions that are open right now. */
+	live = 0;
+	/** Report an unsatisfiable cursor synchronously from inside `subscribe`,
+	 * exactly as the in-process adapter does. */
+	resyncOnCursor = false;
 
-	subscribe(handlers: GatewayEventHandlers): () => void {
+	subscribe(handlers: GatewayEventHandlers, cursor?: number): () => void {
 		this.subscribes += 1;
 		this.handlers = handlers;
+		this.live += 1;
+		if (cursor !== undefined && this.resyncOnCursor)
+			handlers.onResync("cursor outside the retained event window");
 		return () => {
 			this.unsubscribes += 1;
-			this.handlers = undefined;
+			this.live -= 1;
+			if (this.handlers === handlers) this.handlers = undefined;
 		};
 	}
 
-	async view(repo: string, workflowId: string): Promise<WorkflowView> {
-		this.viewCalls.push(keyOf(repo, workflowId));
-		const found = this.views.get(keyOf(repo, workflowId));
-		if (!found) throw new Error(`no such workflow: ${workflowId}`);
-		return found;
-	}
-
-	async listViews(repo: string): Promise<WorkflowView[]> {
-		this.listCalls.push(repo);
-		return [...this.views.entries()]
-			.filter(([key]) => key.startsWith(`${repo}\u0000`))
-			.map(([, value]) => value);
-	}
-
-	put(repo: string, value: WorkflowView): void {
-		this.views.set(keyOf(repo, value.workflowId), value);
-	}
-
-	/** One `workflow.updated` envelope, addressed exactly like the server's. */
-	event(repo: string, workflowId: string): void {
+	frame(payload: unknown): void {
 		this.handlers?.onEvent({
 			instance: "test",
 			sequence: 1,
-			domain: "workflow",
-			kind: "workflow.updated",
-			resource: repo,
-			runId: workflowId,
+			domain: "workflow-event",
+			kind: "event",
 			at: new Date().toISOString(),
-			payload: null,
+			payload,
 		} satisfies EventEnvelope);
 	}
 
-	resync(reason = "gap"): void {
-		this.handlers?.onResync(reason);
+	resync(): void {
+		this.handlers?.onResync("gap");
 	}
 }
 
-/** Poll until `condition` holds or the deadline passes, so a timing assertion
- * is never a race against a loaded machine. */
 async function waitUntil(
 	condition: () => boolean,
 	timeoutMs = 2_000,
@@ -109,13 +269,15 @@ async function waitUntil(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Short windows: the production cadence is pinned separately below. */
-const FAST = { debounceMs: 5, coalesceMs: 20, minNoteIntervalMs: 60 };
+const FAST = { coalesceMs: 10, minNoteIntervalMs: 60, digestMs: 30 };
 
 function harness(
 	options: {
 		mode?: "wake" | "notify" | "off";
 		timings?: Partial<typeof FAST>;
+		/** An injected clock the caller advances, so a burst can be recorded in one
+		 * instant and its window closed deliberately instead of by racing it. */
+		clock?: { at: number };
 	} = {},
 ) {
 	const gateway = new FakeGateway();
@@ -125,6 +287,7 @@ function harness(
 		gateway: gateway as unknown as DashboardGateway,
 		mode: options.mode ?? "wake",
 		timings: { ...FAST, ...options.timings },
+		...(options.clock ? { now: () => options.clock?.at ?? 0 } : {}),
 		notify: (message) => notifications.push(message),
 		deliver: async (note) => {
 			notes.push(note);
@@ -133,104 +296,55 @@ function harness(
 	return { gateway, notes, notifications, monitor };
 }
 
-describe("monitor subscription", () => {
+describe("monitor delivery", () => {
 	test("off observes nothing at all", () => {
-		const { gateway, notifications, notes, monitor } = harness({ mode: "off" });
+		const { gateway, notes, notifications, monitor } = harness({ mode: "off" });
 		expect(gateway.subscribes).toBe(0);
-		gateway.put("/repo", view("wf-1", { step: "core.plan-approval" }));
-		// Even a hand-driven event reaches no handler: nothing is subscribed.
-		gateway.event("/repo", "wf-1");
-		expect(notifications).toEqual([]);
 		expect(notes).toEqual([]);
+		expect(notifications).toEqual([]);
 		monitor.stop();
+	});
+
+	test("the production cadence is the designed one", () => {
+		expect(MONITOR_TIMINGS.coalesceMs).toBe(10_000);
+		expect(MONITOR_TIMINGS.minNoteIntervalMs).toBe(60_000);
+		expect(MONITOR_TIMINGS.digestMs).toBe(5 * 60_000);
 	});
 
 	test("stop unsubscribes and drops a pending note", async () => {
 		const { gateway, notes, monitor } = harness();
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		gateway.put("/repo", view("wf-1", { step: "core.developer-review" }));
-		gateway.event("/repo", "wf-1");
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [subscription("default")],
+		});
 		monitor.stop();
 		expect(gateway.unsubscribes).toBe(1);
 		await sleep(40);
 		expect(notes).toEqual([]);
 	});
 
-	test("the production cadence is the designed one", async () => {
-		const { MONITOR_TIMINGS } = await import(
-			"../src/tui/orchestrator/monitor.ts"
-		);
-		expect(MONITOR_TIMINGS.coalesceMs).toBe(10_000);
-		expect(MONITOR_TIMINGS.minNoteIntervalMs).toBe(60_000);
-	});
-});
-
-describe("monitor reads", () => {
-	test("events are debounced per workflow: a burst is one read", async () => {
-		const { gateway, monitor } = harness();
-		gateway.put("/repo", view("wf-1"));
-		for (let index = 0; index < 8; index += 1) gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
+	test("a burst coalesces into one note, and a human-needed event notifies once per workflow", async () => {
+		// An injected clock: all three frames are recorded in one instant, and the
+		// window is closed by advancing the clock rather than by racing it.
+		const clock = { at: 0 };
+		const { gateway, notes, notifications, monitor } = harness({
+			timings: { coalesceMs: 10, minNoteIntervalMs: 0 },
+			clock,
+		});
+		for (const [index, id] of ["wf-1", "wf-2", "wf-3"].entries())
+			gateway.frame({
+				event: event({ sequence: index + 1, workflowId: id }),
+				subscriptions: [subscription("default")],
+			});
 		await sleep(30);
-		expect(gateway.viewCalls).toEqual([keyOf("/repo", "wf-1")]);
-		monitor.stop();
-	});
-
-	test("only workflows the orchestrator started are observed", async () => {
-		const { gateway, notes, notifications, monitor } = harness();
-		gateway.put("/repo", view("dev-1", { startedBy: "developer" }));
-		gateway.put(
-			"/repo",
-			view("wf-1", { step: "core.plan-approval", startedBy: "orchestrator" }),
-		);
-		gateway.event("/repo", "dev-1");
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 2);
-		await sleep(40);
-		// The orchestrator-started workflow is only a baseline on first sight; the
-		// developer-started one is never even baselined.
 		expect(notes).toEqual([]);
-		expect(notifications).toEqual([]);
-		monitor.stop();
-	});
-
-	test("an unreadable view keeps the baseline instead of inventing a transition", async () => {
-		const { gateway, notes, monitor } = harness();
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		// The workflow is gone before the next read.
-		gateway.views.clear();
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 2);
-		await sleep(40);
-		expect(notes).toEqual([]);
-		monitor.stop();
-	});
-});
-
-describe("coalesced notes", () => {
-	test("three transitions in one window produce one note listing all three", async () => {
-		const { gateway, notes, notifications, monitor } = harness();
-		for (const id of ["wf-1", "wf-2", "wf-3"]) {
-			gateway.put("/repo", view(id));
-			gateway.event("/repo", id);
-		}
-		await waitUntil(() => gateway.viewCalls.length === 3);
-		for (const id of ["wf-1", "wf-2", "wf-3"]) {
-			gateway.put("/repo", view(id, { step: "core.developer-review" }));
-			gateway.event("/repo", id);
-		}
-		await waitUntil(() => notes.length === 1, 3_000);
+		clock.at = 10;
+		await waitUntil(() => notes.length === 1);
 		expect(notes).toHaveLength(1);
 		const lines = (notes[0] ?? "").split("\n");
-		expect(lines[0]).toBe("[workflow-monitor]");
+		expect(lines[0]).toBe("[workflow-monitor] subs=default");
 		expect(lines).toHaveLength(4);
-		for (const id of ["wf-1", "wf-2", "wf-3"])
-			expect(notes[0]).toContain(`${id} → core.developer-review`);
-		// Each waiting review raises its own notification.
+		for (const id of ["wf-1", "wf-2", "wf-3"]) expect(notes[0]).toContain(id);
 		expect(notifications).toEqual([
 			"wf-1: developer review waiting (core.developer-review)",
 			"wf-2: developer review waiting (core.developer-review)",
@@ -239,31 +353,61 @@ describe("coalesced notes", () => {
 		monitor.stop();
 	});
 
-	test("a burst beyond the per-minute bound is merged into the next note", async () => {
-		const { gateway, notes, monitor } = harness({
-			timings: { coalesceMs: 10, minNoteIntervalMs: 120 },
+	test("today's default delivery is the golden note", async () => {
+		const { gateway, notes, monitor } = harness();
+		gateway.frame({
+			event: event({
+				id: "workflow.completed",
+				humanNeeded: false,
+				severity: "info",
+				stepId: "core.completed",
+				payload: { stepId: "core.completed", stepLabel: "core.completed" },
+			}),
+			subscriptions: [subscription("default")],
 		});
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		// First transition: one note after the coalescing window.
-		gateway.put("/repo", view("wf-1", { step: "core.developer-review" }));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => notes.length === 1, 3_000);
-		expect(notes).toHaveLength(1);
-		// A second transition inside the per-minute bound must not produce a note
-		// of its own; it waits, and the third joins it.
-		gateway.put("/repo", view("wf-1", { status: "attention-required" }));
-		gateway.event("/repo", "wf-1");
+		await waitUntil(() => notes.length === 1);
+		expect(notes[0]).toBe(
+			"[workflow-monitor] subs=default\n- wf-1 → core.completed (completed)",
+		);
+		monitor.stop();
+	});
+
+	test("a silent subscription delivers no note but still notifies on a human-needed event", async () => {
+		const { gateway, notes, notifications, monitor } = harness();
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [subscription("quiet", "silent")],
+		});
 		await sleep(40);
-		expect(notes).toHaveLength(1);
-		gateway.put("/repo", view("wf-1", { status: "completed" }));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => notes.length === 2, 3_000);
-		expect(notes).toHaveLength(2);
-		expect(notes[1]?.split("\n")).toHaveLength(3);
-		expect(notes[1]).toContain("attention required");
-		expect(notes[1]).toContain("completed");
+		expect(notes).toEqual([]);
+		expect(notifications).toHaveLength(1);
+		monitor.stop();
+	});
+
+	test("a developer-started workflow never notifies", async () => {
+		const { gateway, notes, notifications, monitor } = harness();
+		gateway.frame({
+			event: event({ startedBy: "developer" }),
+			subscriptions: [subscription("default")],
+		});
+		await waitUntil(() => notes.length === 1);
+		expect(notifications).toEqual([]);
+		monitor.stop();
+	});
+
+	test("a frame without a matching subscription delivers nothing", async () => {
+		const { gateway, notes, monitor } = harness();
+		gateway.frame({ event: event(), subscriptions: [] });
+		await sleep(40);
+		expect(notes).toEqual([]);
+		monitor.stop();
+	});
+
+	test("a malformed frame is dropped, never delivered", async () => {
+		const { gateway, notes, monitor } = harness();
+		gateway.frame({ event: { id: "review.waiting" }, subscriptions: [] });
+		await sleep(40);
+		expect(notes).toEqual([]);
 		monitor.stop();
 	});
 
@@ -271,86 +415,109 @@ describe("coalesced notes", () => {
 		const { gateway, notes, notifications, monitor } = harness({
 			mode: "notify",
 		});
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		gateway.put("/repo", view("wf-1", { status: "attention-required" }));
-		gateway.event("/repo", "wf-1");
-		await sleep(60);
+		gateway.frame({
+			event: event({
+				id: "attention.raised",
+				humanNeeded: false,
+				payload: { reasons: ["boom"] },
+			}),
+			subscriptions: [subscription("default")],
+		});
+		await sleep(40);
 		expect(notes).toEqual([]);
-		// attention-required is not a human decision, so it raises no notification
-		// either: the session note is what would have reported it.
 		expect(notifications).toEqual([]);
-		// A review does notify in this mode.
-		gateway.put("/repo", view("wf-1", { step: "core.plan-approval" }));
-		gateway.event("/repo", "wf-1");
+		gateway.frame({
+			event: event({ sequence: 2 }),
+			subscriptions: [subscription("default")],
+		});
 		await waitUntil(() => notifications.length === 1);
 		expect(notes).toEqual([]);
 		monitor.stop();
 	});
-});
 
-describe("resync", () => {
-	test("re-reads the orchestrator-started set of every known repository", async () => {
-		const { gateway, notes, monitor } = harness();
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		// A workflow that started while the shell was outside the replay window,
-		// and a state change on one it already knew.
-		gateway.put("/repo", view("wf-2", { step: "core.plan-approval" }));
-		gateway.put("/repo", view("wf-1", { step: "core.developer-review" }));
-		gateway.resync();
-		await waitUntil(() => notes.length === 1, 3_000);
-		expect(gateway.listCalls).toEqual(["/repo"]);
-		// wf-2 is a first observation (silent); wf-1's review is the one transition.
-		expect(notes).toHaveLength(1);
-		expect(notes[0]?.split("\n")).toHaveLength(2);
-		expect(notes[0]).toContain("wf-1 → core.developer-review");
-		monitor.stop();
-	});
-
-	test("a repository no event has named is never listed", async () => {
-		const { gateway, monitor } = harness();
-		gateway.resync();
-		await sleep(30);
-		expect(gateway.listCalls).toEqual([]);
-		monitor.stop();
-	});
-});
-
-describe("delivery", () => {
-	test("a note goes to the session as one follow-up, and a stopped monitor is silent", async () => {
-		// The default delivery is the durable host; assert the seam the shell
-		// relies on instead of spawning one: `deliver` receives one note per
-		// coalescing window.
-		const delivered: string[] = [];
-		const gateway = new FakeGateway();
-		const monitor = startWorkflowMonitor({
-			gateway: gateway as unknown as DashboardGateway,
-			mode: "wake",
-			timings: { debounceMs: 5, coalesceMs: 10, minNoteIntervalMs: 0 },
-			notify: () => {},
-			deliver: async (note) => {
-				delivered.push(note);
-			},
+	test("a resync keeps the pending backlog and still delivers it", async () => {
+		// A resync is reported for a transport overflow as well as for a genuine
+		// gap, and the events are already scheduled with their own due times: the
+		// backlog is kept rather than thrown away.
+		const { gateway, notes, monitor } = harness({
+			timings: { coalesceMs: 60, minNoteIntervalMs: 0 },
 		});
-		gateway.put("/repo", view("wf-1"));
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => gateway.viewCalls.length === 1);
-		gateway.put(
-			"/repo",
-			view("wf-1", { status: "completed", step: "core.completed" }),
-		);
-		gateway.event("/repo", "wf-1");
-		await waitUntil(() => delivered.length === 1, 3_000);
-		expect(delivered[0]).toBe(
-			"[workflow-monitor]\n- wf-1 → core.completed (completed)",
-		);
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [subscription("default")],
+		});
+		gateway.resync();
+		await waitUntil(() => notes.length === 1);
+		expect(notes).toHaveLength(1);
+		expect(notes[0]).toContain("wf-1");
 		monitor.stop();
-		const before = delivered.length;
-		gateway.event("/repo", "wf-1");
-		await sleep(30);
-		expect(delivered).toHaveLength(before);
+	});
+
+	test("a resync delivered inside subscribe leaves exactly one live subscription", async () => {
+		const { gateway, notifications, monitor } = harness();
+		gateway.resyncOnCursor = true;
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [subscription("default")],
+		});
+		for (let attempt = 0; attempt < 5; attempt += 1) gateway.resync();
+		await sleep(50);
+		expect(gateway.live).toBe(1);
+		expect(notifications).toHaveLength(1);
+		monitor.stop();
+		expect(gateway.live).toBe(0);
+	});
+
+	test("a subscription's own coalescing window travels on the frame", async () => {
+		const { gateway, notes, monitor } = harness({
+			timings: { coalesceMs: 5, minNoteIntervalMs: 0 },
+		});
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [{ ...subscription("patient"), coalesceMs: 300 }],
+		});
+		await sleep(80);
+		expect(notes).toEqual([]);
+		await waitUntil(() => notes.length === 1);
+		expect(notes).toHaveLength(1);
+		monitor.stop();
+	});
+
+	test("a burst beyond the per-minute bound merges into the next note", async () => {
+		const { gateway, notes, monitor } = harness({
+			timings: { coalesceMs: 5, minNoteIntervalMs: 80 },
+		});
+		gateway.frame({
+			event: event({ sequence: 1 }),
+			subscriptions: [subscription("default")],
+		});
+		await waitUntil(() => notes.length === 1);
+		gateway.frame({
+			event: event({
+				sequence: 2,
+				id: "attention.raised",
+				humanNeeded: false,
+				payload: { reasons: ["boom"] },
+			}),
+			subscriptions: [subscription("default")],
+		});
+		await sleep(40);
+		expect(notes).toHaveLength(1);
+		gateway.frame({
+			event: event({
+				sequence: 3,
+				id: "workflow.completed",
+				humanNeeded: false,
+				severity: "info",
+				stepId: "core.completed",
+				payload: { stepId: "core.completed", stepLabel: "core.completed" },
+			}),
+			subscriptions: [subscription("default")],
+		});
+		await waitUntil(() => notes.length === 2);
+		expect(notes[1]?.split("\n")).toHaveLength(3);
+		expect(notes[1]).toContain("attention required: boom");
+		expect(notes[1]).toContain("completed");
+		monitor.stop();
 	});
 });

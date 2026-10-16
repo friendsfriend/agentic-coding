@@ -6,7 +6,7 @@
 // the token is written into the session's private run environment and stripped
 // from the host process environment.
 import fs from "node:fs";
-import path from "node:path";
+
 import { ensureHostRunning, HostClient } from "../../agent-host/client.ts";
 import { hostLayout } from "../../agent-host/layout.ts";
 import {
@@ -14,7 +14,11 @@ import {
 	ORCHESTRATOR_URL_ENV,
 } from "../../agent-host/orchestrator-env.ts";
 import { resolveDevenvHome } from "../../backend/home.ts";
-import { resolveConfigRoot } from "../../config-root.ts";
+import {
+	currentSessionName,
+	orchestratorRuntimeDir,
+	saveOrchestratorSessionName,
+} from "../../orchestrator-state.ts";
 import { selfExecEntry } from "../../self-exec.ts";
 import { orchestratorTokenFor } from "../../server/auth.ts";
 import { writeAgentRunEnv } from "../../workflow/run-env.ts";
@@ -38,35 +42,10 @@ const STRIPPED_ENV = [
 	"AGENTIC_WORKFLOW_URL",
 ] as const;
 
-export function orchestratorRuntimeDir(root = resolveConfigRoot()): string {
-	return path.join(root, "orchestrator");
-}
+/** Re-exported so every existing caller keeps importing this module. */
+export { currentSessionName, orchestratorRuntimeDir };
 
-const sessionFile = (runtimeDir: string) =>
-	path.join(runtimeDir, "session.json");
-
-/** The persisted active session name, or the first one. */
-export function currentSessionName(runtimeDir: string): string {
-	try {
-		const parsed = JSON.parse(
-			fs.readFileSync(sessionFile(runtimeDir), "utf8"),
-		) as { name?: unknown };
-		if (
-			typeof parsed.name === "string" &&
-			/^orchestrator[\w-]*$/.test(parsed.name)
-		)
-			return parsed.name;
-	} catch {
-		/* first use */
-	}
-	return "orchestrator";
-}
-
-function saveSessionName(runtimeDir: string, name: string): void {
-	fs.writeFileSync(sessionFile(runtimeDir), JSON.stringify({ name }), {
-		mode: 0o600,
-	});
-}
+const saveSessionName = saveOrchestratorSessionName;
 
 /** The child environment for the orchestrator host: the parent's, minus every
  * operator capability. */
@@ -97,7 +76,7 @@ export async function openOrchestratorSession(
 	fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
 	const name = options.fresh
 		? `orchestrator-${Date.now().toString(36)}`
-		: currentSessionName(runtimeDir);
+		: (currentSessionName(runtimeDir) ?? "orchestrator");
 	if (options.fresh) saveSessionName(runtimeDir, name);
 	const layout = hostLayout(runtimeDir);
 	const cwd = resolveDevenvHome();

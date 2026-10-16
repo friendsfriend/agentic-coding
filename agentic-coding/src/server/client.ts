@@ -54,6 +54,11 @@ import {
 	workflowViewListSchema,
 	workflowViewSchema,
 } from "../contracts/workflow.ts";
+import type { WorkflowEventSubscription } from "../contracts/workflow-events.ts";
+import {
+	workflowEventSubscriptionsResponseSchema,
+	workflowEventUnsubscribeResponseSchema,
+} from "../contracts/workflow-events.ts";
 import { instanceTokenFileForUrl, readInstanceTokenFile } from "./auth.ts";
 import { ENVIRONMENT_OPERATION_PATH } from "./environment/private-api.ts";
 import { EVIDENCE_FILE_PREFIX, SERVER_API_VERSION } from "./protocol.ts";
@@ -636,6 +641,36 @@ export class BackendClient implements DashboardGateway {
 			await this.request("GET", "/api/v1/telemetry/workspaces", undefined),
 		);
 		return value.workspaces;
+	}
+
+	/** The active orchestrator event subscriptions, the implicit default
+	 * included (add-orchestrator-event-subscriptions). */
+	async eventSubscriptions(
+		signal?: AbortSignal,
+	): Promise<WorkflowEventSubscription[]> {
+		const value = this.decode<{ subscriptions: WorkflowEventSubscription[] }>(
+			"core.orchestrator-subscriptions",
+			workflowEventSubscriptionsResponseSchema,
+			await this.request(
+				"GET",
+				"/api/v1/orchestrator/subscriptions",
+				undefined,
+				signal,
+			),
+		);
+		return [...value.subscriptions];
+	}
+
+	/** Remove one subscription; idempotent. */
+	async removeEventSubscription(subscriptionId: string): Promise<boolean> {
+		const value = this.decode<{ removed: boolean }>(
+			"core.orchestrator-unsubscribe",
+			workflowEventUnsubscribeResponseSchema,
+			await this.request("POST", "/api/v1/orchestrator/subscriptions/delete", {
+				subscriptionId,
+			}),
+		);
+		return value.removed;
 	}
 
 	/** One page of the trace list (workflows, newest first). */

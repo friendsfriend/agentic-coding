@@ -112,39 +112,110 @@ review-free graph defines it explicitly with `workflow define`.
 
 The orchestrator only learned about a workflow when the developer asked. The
 shell now observes the workflows the orchestrator started for as long as the
-shell runs, independent of whether the page is open:
+shell runs, independent of whether the page is open, through a typed workflow
+event catalog.
 
-- The server publishes `workflow.*` events; the monitor re-reads only the
-  workflow an event names (debounced per workflow, so a streaming run is one
-  read per window) and diffs the small projection `transitions.ts` owns. A
-  `resync` gap re-reads the authoritative list of every repository the monitor
-  has seen instead of trusting what it holds.
-- Only `startedBy: "orchestrator"` workflows are observed — the monitor is the
-  orchestrator's ears, not a second dashboard.
-- The **first** observation of a workflow only establishes its baseline: a
-  workflow already waiting at plan approval when the shell starts is the
-  developer's situation, not news.
-- A transition is a review step entered, a pending developer question, the
-  workflow becoming `attention-required`, a newly failed effect, or completion.
+**The server derives the events; the shell delivers them.** The unified server
+turns its existing `workflow.*` stream into catalog events: it re-reads only the
+workflow an event names (debounced per workflow, 250 ms, so a streaming run is
+one read per window), diffs a small projection (`src/server/workflow-events.ts`)
+and records the result in a bounded, cursor-addressed log (500 events, one
+monotonic sequence). A `resync` gap re-lists every repository it has seen
+instead of trusting what it holds. The whole pipeline is idle when `monitor` is
+`off`, and an unreadable workflow keeps its previous projection: an event is
+never invented from a miss.
 
-What a transition does depends on `[agents.orchestrator] monitor`:
+The catalog lives in `src/contracts/workflow-events.ts` (version 1, stable ids)
+and covers the workflow lifecycle (`workflow.started`/`completed`/`closed`/
+`failed`), steps, the four developer reviews (`review.waiting`/`resolved`),
+developer questions (`question.pending`/`routed`/`answered`), attention,
+effects, delivery, runs, verification findings, compaction, gate decisions, the
+orchestrator launch ceiling (`limit.hit`) and OpenSpec task progress. Only
+`review.waiting` and `question.pending` are **human-needed**: they raise the
+shell notification. Every payload is a bounded, secret-free summary — no
+credential, no raw transcript, no task text beyond a bounded summary.
+
+The **first** observation of a workflow only establishes its baseline: a
+workflow already waiting at plan approval when the shell starts is the
+developer's situation, not news. `workflow.started` is the one exception and
+comes from the repository listing (an id a baselined repository did not hold
+before).
+
+### Subscriptions
+
+The orchestrator decides what it hears about with four tools, all served from
+the typed `/api/v1` surface:
+
+| Piece | What it does |
+| --- | --- |
+| `subscribe_events` | Stores one subscription: a filter, a mode, an expiry and a label |
+| `unsubscribe_events` | Removes one by id (idempotent) |
+| `list_subscriptions` | Shows label, id, filter, mode, expiry and last delivery |
+| `read_events` | Pulls recorded events since a cursor (max 200 per page) instead of being woken |
+
+A subscription's filter names workflows (`scope`: `mine` = the orchestrator's
+own, `all`; or `workflowIds`/`repositories`), events (`eventIds` or
+`categories`) and conditions (`reasons` — attention reason substrings, `roles`,
+`minSeverity`). Its mode is `wake` (notes), `digest` (one note per interval,
+default 5 minutes) or `silent` (recorded and readable, never delivered). It
+always carries a label and an expiry (default now + 24 h, at most 30 days) and
+may end early with `untilWorkflowClosed` or `remainingEvents`.
+
+Subscriptions are owned by the orchestrator session and persisted next to its
+conversation state in `<config root>/orchestrator/event-subscriptions.json`
+(atomic write, `0o600`); they are pruned on expiry, on a named workflow
+closing, on a spent event budget and when the session is no longer the active
+one (`/new`). No workflow store is touched, so `STORE_SCHEMA_VERSION` stays 6.
+
+With no explicit subscription the server treats one implicit **`default`**
+subscription as active — the events the monitor delivered before this change
+(`review.waiting`, `question.pending`, `question.routed`, `attention.raised`,
+`workflow.failed`, `effect.failed`, `workflow.completed`) for the orchestrator's
+own workflows, in `wake` mode. `list_subscriptions` shows it and any explicit
+subscription replaces it.
+
+What a subscription does depends on `[agents.orchestrator] monitor`, which stays
+the master switch:
 
 | Mode | Shell notification | Note to the active session |
 | --- | --- | --- |
-| `wake` (default) | yes, for review/question transitions | yes |
-| `notify` | yes, for review/question transitions | no |
-| `off` | no — nothing is observed at all | no |
+| `wake` (default) | yes, for human-needed events | yes, per subscription |
+| `notify` | yes, for human-needed events | no |
+| `off` | no — nothing is observed at all, and every subscription tool is refused | no |
 
-Notes are submitted to the active session as `whenBusy: "followUp"` input:
-transitions inside a 10 s window become one `[workflow-monitor]` note with one
-line per transition, the session receives at most one note per minute, and
-everything beyond that bound is merged into the next note. The host is ensured
-on the first note, so a wake-up works without the page having been opened; a
-note that cannot be delivered is dropped rather than retried, because the
-workflow's state is still visible in the sidebar.
+Notes are submitted to the active session as `whenBusy: "followUp"` input. The
+first line is `[workflow-monitor] subs=<labels>`, naming every subscription that
+asked for the note, followed by one line per event,
+`- <workflowId> → <stepId> (<what changed>)`. Events inside a 10 s coalescing
+window become one note, the session receives at most one note per minute, and
+everything beyond that bound is merged into the next note. One event matched by
+several subscriptions is one line listing all their labels. A note lists at most
+20 event lines, the pending backlog holds at most 200 events (the oldest dropped
+and counted in the next note elision) and a session receives at most 20 notes in
+a trailing hour. The host is ensured on the first note, so a wake-up works
+without the page having been opened; a note that cannot be delivered is dropped
+rather than retried, because the workflow's state is still visible in the
+sidebar. A stream gap — and a transport overflow, which the stream reports the
+same way — keeps the pending backlog and re-arms the timer: anything the server
+recorded but the shell never saw is still readable with `read_events`, and a
+burst that filled the queue is still delivered.
 
-Notifications never depend on the session: a review waiting on the developer is
-reported in both `wake` and `notify` mode.
+A subscription's own `coalesceMs`, `minIntervalMs` and `digestMinutes` override
+the defaults, an absent `filter.scope` reads as `mine`, `remainingEvents` counts
+the events it matched while it was live (a record budget, so a `silent`
+subscription ends by count too), and `/subscriptions` prefixes the listing
+with the effective master switch, so a listed `wake` mode never implies a
+delivery the switch forbids. A subscription's `lastDeliveredAt` is stamped by
+the server when it publishes that subscription's delivery frame.
+
+Notifications never depend on the session or on any subscription: a review
+waiting on the developer is reported in both `wake` and `notify` mode, and
+`/subscriptions` on the Orchestrator page lists the active subscriptions and
+removes one.
+
+`[agents.orchestrator] stall_minutes` (default 30, file-only) is how long a
+tracked `active` workflow may make no progress before one `run.stalled` event is
+recorded for it (and not a second one until it changes again).
 
 ## Launch limits
 

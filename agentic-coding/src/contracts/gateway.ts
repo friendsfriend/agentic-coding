@@ -30,6 +30,7 @@ import type {
 } from "./environment.ts";
 import type { TraceSummaryPage } from "./telemetry.ts";
 import type { WorkflowView } from "./workflow.ts";
+import type { WorkflowEventSubscription } from "./workflow-events.ts";
 
 /** Which adapter is in use. Presentation never switches on this: it exists for
  * diagnostics, connection banners and tests. */
@@ -188,6 +189,15 @@ export interface DashboardGateway {
 	telemetryWatch(repo: string): Promise<void>;
 	telemetryScan(repo: string): Promise<number>;
 	telemetryPrune(days?: number): Promise<number>;
+
+	// -- event subscriptions --------------------------------------------------
+	/** The active orchestrator event subscriptions, the implicit default
+	 * included, with each record's label, filter, mode and expiry. */
+	eventSubscriptions(
+		signal?: AbortSignal,
+	): Promise<WorkflowEventSubscription[]>;
+	/** Remove one subscription; idempotent. `true` when a record was removed. */
+	removeEventSubscription(subscriptionId: string): Promise<boolean>;
 
 	// -- events --------------------------------------------------------------
 	/** Subscribe to the bounded event stream. Returns an unsubscribe function. */

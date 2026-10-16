@@ -339,7 +339,8 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 		action: { kind: "none" },
 	});
 	// The ceiling is a server-enforced guard with no bounded editor: the section
-	// names the effective value and says where the file-only key lives.
+	// names the effective value and says where the file-only keys live
+	// (`stall_minutes` is the same kind of file-only bound).
 	items.push({
 		id: "agents.launch-limits",
 		label: "Orchestrator launch limits",

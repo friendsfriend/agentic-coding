@@ -1023,6 +1023,22 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		);
 	};
 
+	/** The palette renders at most this many rows and follows the selection, so a
+	 * route that adds one command per record (the orchestrator's subscriptions)
+	 * cannot grow the palette past the page it lives in. Every command stays in
+	 * the list the Enter key and the filter read. */
+	const AUTOCOMPLETE_ROWS = 8;
+	const visibleAutocompleteItems = () => {
+		const items = autocompleteItems();
+		if (items.length <= AUTOCOMPLETE_ROWS) return { items, offset: 0 };
+		const half = Math.floor(AUTOCOMPLETE_ROWS / 2);
+		const offset = Math.min(
+			Math.max(0, autocompleteIndex() - half),
+			items.length - AUTOCOMPLETE_ROWS,
+		);
+		return { items: items.slice(offset, offset + AUTOCOMPLETE_ROWS), offset };
+	};
+
 	const pickerItems = () => {
 		const state = picker();
 		if (!state) return [];
@@ -1243,7 +1259,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							borderColor={uiColors.accent}
 							backgroundColor={uiColors.bgMantle}
 						>
-							<For each={autocompleteItems()}>
+							<For each={visibleAutocompleteItems().items}>
 								{(command, index) => (
 									<box
 										flexDirection="row"
@@ -1251,7 +1267,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 										paddingLeft={2}
 										paddingRight={1}
 										backgroundColor={
-											index() === autocompleteIndex()
+											visibleAutocompleteItems().offset + index() ===
+											autocompleteIndex()
 												? uiColors.selectionBg
 												: undefined
 										}
@@ -1260,7 +1277,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											width={14}
 											flexShrink={0}
 											fg={
-												index() === autocompleteIndex()
+												visibleAutocompleteItems().offset + index() ===
+												autocompleteIndex()
 													? uiColors.selectionText
 													: uiColors.textPrimary
 											}
@@ -1269,7 +1287,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 										</text>
 										<text
 											fg={
-												index() === autocompleteIndex()
+												visibleAutocompleteItems().offset + index() ===
+												autocompleteIndex()
 													? uiColors.selectionText
 													: uiColors.textMuted
 											}
@@ -1279,6 +1298,19 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 									</box>
 								)}
 							</For>
+							<Show
+								when={
+									autocompleteItems().length >
+									visibleAutocompleteItems().items.length
+								}
+							>
+								<text paddingLeft={2} fg={uiColors.textMuted}>
+									{`… +${
+										autocompleteItems().length -
+										visibleAutocompleteItems().items.length
+									} more`}
+								</text>
+							</Show>
 						</box>
 					</Show>
 					{/* opencode v2's prompt: a left-bordered raised block holding the

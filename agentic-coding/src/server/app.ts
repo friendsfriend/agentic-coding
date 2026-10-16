@@ -35,6 +35,11 @@ import type {
 	TelemetryTracesRequest,
 	TelemetryWatchRequest,
 } from "../contracts/telemetry.ts";
+import type {
+	WorkflowEventSubscribeRequest,
+	WorkflowEventSubscriptionFilter,
+	WorkflowEventUnsubscribeRequest,
+} from "../contracts/workflow-events.ts";
 import { WorkflowRuntimeError } from "../workflow/contracts.ts";
 import { runAppBuildTestAction } from "./actions/routes.ts";
 import {
@@ -91,6 +96,14 @@ import {
 import { EnvironmentInstanceError } from "./runtime/instances.ts";
 import type { WorkflowEventHub } from "./subscriptions.ts";
 import type { TelemetryOperations } from "./telemetry.ts";
+import {
+	MonitorOffError,
+	StoreUnreadableError,
+	SubscriptionLimitError,
+	UnknownSessionError,
+	UnknownWorkflowError,
+	type WorkflowEventBus,
+} from "./workflow-event-bus.ts";
 
 export interface ServerAppOptions {
 	readonly authority: InstanceAuthority;
@@ -111,6 +124,10 @@ export interface ServerAppOptions {
 	readonly telemetry?: TelemetryOperations;
 	/** Server-owned workflow refresh subscriptions. */
 	readonly hub?: WorkflowEventHub;
+	/** Server-owned workflow event catalog and subscription registry
+	 * (add-orchestrator-event-subscriptions). Absent: the event routes answer
+	 * that the stream is not attached. */
+	readonly eventBus?: WorkflowEventBus;
 	/** The browser runtime (installer + pool). Absent: the process-wide one for
 	 * the server's own configuration directory is used. */
 	readonly browser?: BrowserRuntime;
@@ -136,6 +153,10 @@ export interface ServerApp {
 	 * register a repository exactly like the HTTP routes do, instead of the
 	 * dashboard waiting on the periodic safety resync for every status change. */
 	readonly hub?: WorkflowEventHub;
+	/** The server-owned workflow event catalog and subscription registry
+	 * (add-orchestrator-event-subscriptions), so the in-process gateway answers
+	 * the subscription reads over the same instance the routes serve. */
+	readonly eventBus?: WorkflowEventBus;
 	fetch(request: Request): Promise<Response>;
 	/** A `CredentialPrompt`-compatible function bound to one client owner. */
 	credentialPrompt(
@@ -175,9 +196,75 @@ function safeMessage(error: unknown): string {
 	return String(error).slice(0, 512);
 }
 
+/** Decode the workflow-event read filters from the query string. Absent fields
+ * mean "every event in scope", exactly like the subscription filter. */
+function filterFromQuery(
+	url: URL,
+): WorkflowEventSubscriptionFilter | undefined {
+	const list = (key: string): string[] | undefined => {
+		const raw = url.searchParams.get(key);
+		if (raw === null || raw === "") return undefined;
+		return raw
+			.split(",")
+			.map((item) => item.trim())
+			.filter(Boolean);
+	};
+	const scope = url.searchParams.get("scope");
+	const minSeverity = url.searchParams.get("minSeverity");
+	const fields = [
+		"workflowIds",
+		"repositories",
+		"eventIds",
+		"categories",
+		"reasons",
+		"roles",
+	];
+	// A query with no recognised field at all is an unfiltered read; every other
+	// answer keeps the fields it was given, so no field is silently dropped.
+	if (
+		scope === null &&
+		minSeverity === null &&
+		!fields.some((field) => list(field) !== undefined)
+	)
+		return undefined;
+	return {
+		// An absent scope is the documented `mine` default, so naming only ids
+		// can never widen a read into every workflow.
+		scope: scope === "all" ? "all" : "mine",
+		...(list("workflowIds") ? { workflowIds: list("workflowIds") } : {}),
+		...(list("repositories") ? { repositories: list("repositories") } : {}),
+		...(list("eventIds") ? { eventIds: list("eventIds") } : {}),
+		...(list("categories") ? { categories: list("categories") } : {}),
+		...(list("reasons") ? { reasons: list("reasons") } : {}),
+		...(list("roles") ? { roles: list("roles") } : {}),
+		...(minSeverity === "info" ||
+		minSeverity === "warning" ||
+		minSeverity === "critical"
+			? { minSeverity }
+			: {}),
+	};
+}
+
+/** One error vocabulary for the event surface, so a tool can tell "the monitor
+ * is off" from "that workflow does not exist" from "too many subscriptions". */
+function eventErrorResponse(error: unknown): Response {
+	if (error instanceof MonitorOffError)
+		return errorResponse(409, "monitor-off", error.message);
+	if (error instanceof StoreUnreadableError)
+		return errorResponse(409, "store-unreadable", error.message);
+	if (error instanceof UnknownSessionError)
+		return errorResponse(409, "session-unknown", error.message);
+	if (error instanceof UnknownWorkflowError)
+		return errorResponse(400, "unknown-workflow", error.message);
+	if (error instanceof SubscriptionLimitError)
+		return errorResponse(400, "subscription-limit", error.message);
+	return errorResponse(400, "bad-request", safeMessage(error));
+}
+
 export function createServerApp(options: ServerAppOptions): ServerApp {
 	const { authority, events, credentials } = options;
 	const operations = options.operations ?? serverOperations;
+	const eventBus = options.eventBus;
 	const telemetryWatchers = new Map<string, () => void>();
 	// One browser runtime per server process: one Chromium, one session cap, one
 	// opt-in install, shared by every run this server hosts.
@@ -583,6 +670,89 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			return json({ ok: true, value: operations.view(repo, workflowId) });
 		}
 
+		// The typed workflow event catalog and the orchestrator's own
+		// subscriptions (add-orchestrator-event-subscriptions): a cursor read of the
+		// recorded events, and the subscription registry the orchestrator tools
+		// manage. The orchestrator capability's allowlist names all three paths.
+		if (method === "GET" && path === "/api/v1/workflow/events") {
+			if (!eventBus)
+				return errorResponse(
+					503,
+					"event-stream-unavailable",
+					"this server does not own the workflow event stream",
+				);
+			try {
+				const after = url.searchParams.get("after");
+				const limit = url.searchParams.get("limit");
+				const filter = filterFromQuery(url);
+				return json({
+					ok: true,
+					value: eventBus.readEvents({
+						...(after === null ? {} : { after: Number(after) }),
+						...(limit === null ? {} : { limit: Number(limit) }),
+						...(filter ? { filter } : {}),
+					}),
+				});
+			} catch (error) {
+				return eventErrorResponse(error);
+			}
+		}
+
+		if (method === "GET" && path === "/api/v1/orchestrator/subscriptions") {
+			if (!eventBus)
+				return errorResponse(
+					503,
+					"event-stream-unavailable",
+					"this server does not own the workflow event stream",
+				);
+			return json({
+				ok: true,
+				value: { subscriptions: eventBus.listSubscriptions() },
+			});
+		}
+
+		if (method === "POST" && path === "/api/v1/orchestrator/subscriptions") {
+			if (!eventBus)
+				return errorResponse(
+					503,
+					"event-stream-unavailable",
+					"this server does not own the workflow event stream",
+				);
+			const decoded = decodeRouteRequest<WorkflowEventSubscribeRequest>(
+				path,
+				await readJsonBody(request, 64 * 1024),
+			);
+			try {
+				return json({ ok: true, value: eventBus.subscribe(decoded) });
+			} catch (error) {
+				return eventErrorResponse(error);
+			}
+		}
+
+		if (
+			method === "POST" &&
+			path === "/api/v1/orchestrator/subscriptions/delete"
+		) {
+			if (!eventBus)
+				return errorResponse(
+					503,
+					"event-stream-unavailable",
+					"this server does not own the workflow event stream",
+				);
+			const decoded = decodeRouteRequest<WorkflowEventUnsubscribeRequest>(
+				path,
+				await readJsonBody(request, 64 * 1024),
+			);
+			try {
+				return json({
+					ok: true,
+					value: { removed: eventBus.unsubscribe(decoded.subscriptionId) },
+				});
+			} catch (error) {
+				return eventErrorResponse(error);
+			}
+		}
+
 		if (method === "POST" && path === "/api/v1/workflow/action") {
 			const decoded = decodeRouteRequest<WorkflowActionRequest>(
 				"/api/v1/workflow/action",
@@ -646,7 +816,24 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					recent: counts.recent,
 					skipped: counts.skipped,
 				});
-				if (refusal) return errorResponse(409, "orchestrator-limit", refusal);
+				if (refusal) {
+					// The launch ceiling is the one catalog event not derived from a
+					// projection: it is recorded here, where the start is refused.
+					const exceeded =
+						counts.active.length >= limits.maxActive
+							? {
+									limit: "max_active",
+									current: counts.active.length,
+									maximum: limits.maxActive,
+								}
+							: {
+									limit: "max_starts_per_day",
+									current: counts.recent.length,
+									maximum: limits.maxStartsPerDay,
+								};
+					options.eventBus?.recordLimitHit(exceeded);
+					return errorResponse(409, "orchestrator-limit", refusal);
+				}
 			}
 			// Orchestrator-started work keeps every human review: the server pins
 			// the plan, developer and wiki gates to `always`, whatever the preset.
@@ -1123,6 +1310,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		operations,
 		telemetry: options.telemetry,
 		...(options.hub ? { hub: options.hub } : {}),
+		...(eventBus ? { eventBus } : {}),
 		fetch: handle,
 		credentialPrompt: (ownerId) => async (prompt, signal) => {
 			const answer = credentials.request(ownerId, signal);

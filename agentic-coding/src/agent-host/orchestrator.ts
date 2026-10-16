@@ -251,6 +251,7 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - Plan approval, developer review, findings review and wiki review always belong to the developer. When a workflow waits on one, tell the developer what is waiting and where; never try to decide it.
 - Developer questions from the workflows you started are routed to you first and appear as \`orchestratorQuestions\` in workflow_status. Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
+- Workflow events: the monitor delivers subscribed events to you as notes whose first line is "[workflow-monitor] subs=<labels>" followed by one line per event, "- <workflowId> → <stepId> (<what changed>)". The subs= list names the subscriptions that asked for the note; if you have no subscription of your own it reads subs=default, the monitor's own default, which list_subscriptions shows. The notifications the developer needs (a review waiting, a pending developer question) always reach the shell whatever you subscribe to. Use subscribe_events to choose what wakes you (mode wake for immediate coalesced notes, digest for one note per interval, silent to record without delivering), list_subscriptions to see them, unsubscribe_events to remove one, and read_events to pull recorded events since a cursor when you would rather poll than be woken. Every subscription expires, so give it a label, a reason and an expiry or an until-condition.
 - Report what you did and the resulting workflow status. Be concise.`;
 
 /** The orchestrator extension: workflow tools plus the orchestrator prompt. */
@@ -612,6 +613,247 @@ export function createOrchestratorExtension(
 							workflowId: args.workflowId,
 						});
 						return "execution requested";
+					},
+				),
+			}),
+			// The workflow event subscription tools (add-orchestrator-event-
+			// subscriptions), appended so a concurrent change to the tools above merges
+			// cleanly.
+			defineTool({
+				name: "subscribe_events",
+				description:
+					"Subscribe this session to workflow events in the mode you want them: `wake` delivers coalesced notes, `digest` one note per interval, `silent` records without delivering (read them with read_events). The filter picks workflows (`scope` `mine` = yours (the default), `all` = every workflow; or `workflowIds`/`repositories`), events (`eventIds` or `categories`) and conditions (`reasons` = attention reason substrings, `roles`, `minSeverity`). `coalesceMs`/`minIntervalMs` override wake mode's own window and `digestMinutes` the digest interval. Every subscription needs a label, expires (default 24h, at most 30 days) and can end early with `untilWorkflowClosed` or `remainingEvents` (which counts the events it matched).",
+				parameters: Type.Object({
+					label: Type.String({
+						minLength: 1,
+						maxLength: 40,
+						description: "Short label the notes name (`subs=<label>`)",
+					}),
+					reason: Type.Optional(
+						Type.String({
+							maxLength: 200,
+							description: "Why you want these events; the developer reads it",
+						}),
+					),
+					scope: Type.Optional(
+						Type.Union([Type.Literal("mine"), Type.Literal("all")], {
+							description:
+								"`mine` (default): only the workflows you started; `all` widens it",
+						}),
+					),
+					workflowIds: Type.Optional(
+						Type.Array(WorkflowIdParameter, { maxItems: 20 }),
+					),
+					repositories: Type.Optional(
+						Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 8 }),
+					),
+					eventIds: Type.Optional(
+						Type.Array(Type.String({ maxLength: 64 }), { maxItems: 32 }),
+					),
+					categories: Type.Optional(
+						Type.Array(Type.String({ maxLength: 32 }), { maxItems: 13 }),
+					),
+					reasons: Type.Optional(Type.Array(Type.String({ maxLength: 256 }))),
+					roles: Type.Optional(Type.Array(Type.String({ maxLength: 128 }))),
+					minSeverity: Type.Optional(
+						Type.Union([
+							Type.Literal("info"),
+							Type.Literal("warning"),
+							Type.Literal("critical"),
+						]),
+					),
+					mode: Type.Optional(
+						Type.Union([
+							Type.Literal("wake"),
+							Type.Literal("digest"),
+							Type.Literal("silent"),
+						]),
+					),
+					expiresAt: Type.Optional(
+						Type.String({ description: "ISO instant; default now + 24h" }),
+					),
+					untilWorkflowClosed: Type.Optional(
+						Type.String({
+							description: "Prune once this workflow is closed/completed",
+						}),
+					),
+					remainingEvents: Type.Optional(
+						Type.Integer({
+							minimum: 1,
+							description: "Prune once this many matched events were recorded",
+						}),
+					),
+					digestMinutes: Type.Optional(
+						Type.Number({
+							minimum: 0,
+							description: "digest mode: minutes between notes",
+						}),
+					),
+					coalesceMs: Type.Optional(
+						Type.Integer({
+							minimum: 1,
+							description: "wake mode: the coalescing window in ms",
+						}),
+					),
+					minIntervalMs: Type.Optional(
+						Type.Integer({
+							minimum: 1,
+							description:
+								"wake mode: the shortest gap between two notes it contributes to",
+						}),
+					),
+				}),
+				execute: run(
+					async (
+						args: {
+							label: string;
+							reason?: string;
+							scope: "mine" | "all";
+							workflowIds?: string[];
+							repositories?: string[];
+							eventIds?: string[];
+							categories?: string[];
+							reasons?: string[];
+							roles?: string[];
+							minSeverity?: "info" | "warning" | "critical";
+							mode?: "wake" | "digest" | "silent";
+							expiresAt?: string;
+							untilWorkflowClosed?: string;
+							remainingEvents?: number;
+							digestMinutes?: number;
+							coalesceMs?: number;
+							minIntervalMs?: number;
+						},
+						env,
+					) => {
+						const {
+							scope,
+							label,
+							reason,
+							mode,
+							expiresAt,
+							untilWorkflowClosed,
+							remainingEvents,
+							digestMinutes,
+							coalesceMs,
+							minIntervalMs,
+							...conditions
+						} = args;
+						return call(env, "POST", "/api/v1/orchestrator/subscriptions", {
+							label,
+							...(reason ? { reason } : {}),
+							...(mode ? { mode } : {}),
+							...(expiresAt ? { expiresAt } : {}),
+							...(untilWorkflowClosed ? { untilWorkflowClosed } : {}),
+							...(remainingEvents !== undefined ? { remainingEvents } : {}),
+							...(digestMinutes !== undefined ? { digestMinutes } : {}),
+							...(coalesceMs !== undefined ? { coalesceMs } : {}),
+							...(minIntervalMs !== undefined ? { minIntervalMs } : {}),
+							filter: { scope: scope ?? "mine", ...conditions },
+						});
+					},
+				),
+			}),
+			defineTool({
+				name: "unsubscribe_events",
+				description:
+					"Remove one of your event subscriptions by id (list_subscriptions reports the ids). Idempotent.",
+				parameters: Type.Object({
+					subscriptionId: Type.String({ minLength: 1, maxLength: 128 }),
+				}),
+				execute: run(async (args: { subscriptionId: string }, env) => {
+					const value = (await call(
+						env,
+						"POST",
+						"/api/v1/orchestrator/subscriptions/delete",
+						{ subscriptionId: args.subscriptionId },
+					)) as { removed?: boolean };
+					return value?.removed
+						? `removed ${args.subscriptionId}`
+						: `${args.subscriptionId} was not subscribed`;
+				}),
+			}),
+			defineTool({
+				name: "list_subscriptions",
+				description:
+					"List this session's event subscriptions: label, id, filter, mode, expiry, until-condition and last delivery. With no subscription of your own it reports the implicit `default` subscription the monitor delivers with.",
+				parameters: Type.Object({}),
+				execute: run(async (_args, env) => {
+					const value = (await call(
+						env,
+						"GET",
+						"/api/v1/orchestrator/subscriptions",
+					)) as { subscriptions?: unknown[] };
+					return value?.subscriptions ?? [];
+				}),
+			}),
+			defineTool({
+				name: "read_events",
+				description:
+					"Pull recorded workflow events since a cursor instead of being woken: returns at most `limit` (max 200) matching events with the cursor to resume from. Filters are the same as subscribe_events. A cursor older than the retained window answers `cursorExpired` with the oldest retained sequence, so re-baseline from the newest events instead of guessing.",
+				parameters: Type.Object({
+					after: Type.Optional(
+						Type.Integer({
+							minimum: 0,
+							description: "Cursor from the last read",
+						}),
+					),
+					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+					scope: Type.Optional(
+						Type.Union([Type.Literal("mine"), Type.Literal("all")], {
+							description: "`mine` (default): only the workflows you started",
+						}),
+					),
+					workflowIds: Type.Optional(Type.Array(WorkflowIdParameter)),
+					repositories: Type.Optional(
+						Type.Array(Type.String({ maxLength: 4096 })),
+					),
+					eventIds: Type.Optional(Type.Array(Type.String({ maxLength: 64 }))),
+					categories: Type.Optional(Type.Array(Type.String({ maxLength: 32 }))),
+					reasons: Type.Optional(Type.Array(Type.String({ maxLength: 256 }))),
+					roles: Type.Optional(Type.Array(Type.String({ maxLength: 128 }))),
+					minSeverity: Type.Optional(
+						Type.Union([
+							Type.Literal("info"),
+							Type.Literal("warning"),
+							Type.Literal("critical"),
+						]),
+					),
+				}),
+				execute: run(
+					async (
+						args: {
+							after?: number;
+							limit?: number;
+							scope?: "mine" | "all";
+							workflowIds?: string[];
+							repositories?: string[];
+							eventIds?: string[];
+							categories?: string[];
+							reasons?: string[];
+							roles?: string[];
+							minSeverity?: "info" | "warning" | "critical";
+						},
+						env,
+					) => {
+						const query = new URLSearchParams();
+						if (args.after !== undefined)
+							query.set("after", String(args.after));
+						if (args.limit !== undefined)
+							query.set("limit", String(args.limit));
+						for (const [key, value] of Object.entries(args))
+							if (Array.isArray(value) && value.length > 0)
+								query.set(key, value.join(","));
+						// Always sent: an absent scope is the documented `mine` default, so
+						// the server never has to guess whether a narrowed read was meant.
+						query.set("scope", args.scope ?? "mine");
+						if (args.minSeverity) query.set("minSeverity", args.minSeverity);
+						const suffix = query.toString();
+						return call(
+							env,
+							"GET",
+							`/api/v1/workflow/events${suffix ? `?${suffix}` : ""}`,
+						);
 					},
 				),
 			}),

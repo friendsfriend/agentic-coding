@@ -13,6 +13,7 @@
 // reducer restricts `answer-question` to questions still marked for the
 // orchestrator, and `forward-question` hands them back to the developer.
 
+import type { WorkflowReviewKind } from "../contracts/workflow-events.ts";
 import type { OrchestratorLimits } from "../workflow/profiles.ts";
 import type { OrchestratorLaunch } from "../workflow/runtime/orchestrator-launches.ts";
 
@@ -29,6 +30,13 @@ const ALLOWED_ROUTES: ReadonlySet<string> = new Set([
 	"GET /api/v1/config/agents",
 	"GET /api/v1/classifier/status",
 	"GET /api/v1/events",
+	// The workflow event catalog and its subscriptions
+	// (add-orchestrator-event-subscriptions): the orchestrator pulls recorded
+	// events by cursor and manages its own subscriptions.
+	"GET /api/v1/workflow/events",
+	"GET /api/v1/orchestrator/subscriptions",
+	"POST /api/v1/orchestrator/subscriptions",
+	"POST /api/v1/orchestrator/subscriptions/delete",
 ]);
 
 export function orchestratorRouteAllowed(
@@ -38,14 +46,31 @@ export function orchestratorRouteAllowed(
 	return ALLOWED_ROUTES.has(`${method.toUpperCase()} ${pathname}`);
 }
 
+/** The four developer-review steps, named by the review kind an event payload
+ * carries. The step *behaviour* stays with the step definitions; this map only
+ * gives the review kinds a stable vocabulary, and `HUMAN_REVIEW_STEPS` is
+ * derived from its keys so there is exactly one table. */
+export const REVIEW_STEPS_BY_KIND = {
+	plan: "core.plan-approval",
+	developer: "core.developer-review",
+	findings: "core.findings-review",
+	wiki: "core.wiki-approval",
+} as const satisfies Record<WorkflowReviewKind, string>;
+
 /** Steps whose decision belongs to the developer. While a workflow sits on one
  * of these, the orchestrator may only run the recovery actions below. */
-export const HUMAN_REVIEW_STEPS: ReadonlySet<string> = new Set([
-	"core.plan-approval",
-	"core.developer-review",
-	"core.findings-review",
-	"core.wiki-approval",
-]);
+export const HUMAN_REVIEW_STEPS: ReadonlySet<string> = new Set(
+	Object.values(REVIEW_STEPS_BY_KIND),
+);
+
+/** The review kind of a step, or undefined for every other step. */
+export function reviewKindForStep(
+	stepId: string,
+): WorkflowReviewKind | undefined {
+	for (const [kind, step] of Object.entries(REVIEW_STEPS_BY_KIND))
+		if (step === stepId) return kind as WorkflowReviewKind;
+	return undefined;
+}
 
 /** Recovery actions that never decide a review: resume a paused workflow,
  * retry a failed effect, or switch the preset for future runs. */

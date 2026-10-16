@@ -1,23 +1,28 @@
-// Shell-owned workflow monitor (add-orchestrator-workflow-monitoring, task 2.1
-// and 2.2).
+// Shell-owned workflow event delivery (add-orchestrator-event-subscriptions,
+// task 4.2; formerly add-orchestrator-workflow-monitoring task 2.1/2.2).
 //
-// The server publishes `workflow.*` events on its bounded stream; events carry
-// only a repository and a workflow id, so the monitor re-reads that one
-// workflow (debounced per workflow) and diffs the projection the pure detector
-// owns. Only workflows the orchestrator started are observed: the monitor is the
-// orchestrator's ears, not a second dashboard.
+// The server derives the catalog events from the one workflow each event names
+// and publishes a delivery frame on its stream; the shell does the half that
+// needs the durable host client: it raises the developer notification for the
+// human-needed events and submits a subscribed note to the active orchestrator
+// session. The shell reads no workflow view and derives no transition itself.
 //
 // Delivery is deliberately asymmetric:
-//   * a transition that owes the developer a decision raises a shell
-//     notification immediately, in `wake` and in `notify` mode;
-//   * in `wake` mode every transition also becomes a note to the active
-//     orchestrator session. Notes are coalesced into one 10 s window and the
-//     session receives at most one per minute, with overflow merged forward, so
-//     a burst of workflow state can never become a wake-up storm.
+//   * a human-needed event of a workflow the orchestrator started raises a
+//     shell notification immediately, in `wake` and in `notify` mode;
+//   * in `wake` mode a subscribed event becomes a note to the active session,
+//     coalesced by the pure planner so a burst can never be a wake-up storm.
 //
-// `off` observes nothing at all: no subscription, no reads, no notifications.
+// `off` observes nothing at all: no subscription, no notification, no note.
+
+import { decodeContract } from "../../contracts/decode.ts";
+import type { EventEnvelope } from "../../contracts/environment.ts";
 import type { DashboardGateway } from "../../contracts/gateway.ts";
-import type { WorkflowView } from "../../contracts/workflow.ts";
+import {
+	describeWorkflowEvent,
+	type WorkflowEventDeliveryFrame,
+	workflowEventDeliveryFrameSchema,
+} from "../../contracts/workflow-events.ts";
 import { loadAgentConfig } from "../../server/config.ts";
 import {
 	DEFAULT_ORCHESTRATOR_MONITOR,
@@ -26,33 +31,28 @@ import {
 } from "../../workflow/profiles.ts";
 import { gatewayOrUndefined } from "../data/index.ts";
 import { notify as shellNotify } from "../otel/app/notifications.ts";
-import {
-	describeTransition,
-	detectTransitions,
-	formatMonitorNote,
-	isHumanNeeded,
-	projectWorkflow,
-	type WorkflowProjection,
-	type WorkflowTransition,
-} from "./transitions.ts";
+import { DELIVERY_TIMINGS, DeliveryPlanner } from "./delivery.ts";
+
+/** How many times a resync may re-open the stream without an event arriving: a
+ * cursor the server cannot satisfy must not become a resubscribe loop. */
+const MAX_RESYNC_ATTEMPTS = 3;
 
 export interface MonitorTimings {
-	/** Per-workflow debounce: repeated events for one workflow collapse into one
-	 * re-read. */
-	readonly debounceMs: number;
-	/** Transitions inside this window become one note. */
+	/** Events inside this window become one note. */
 	readonly coalesceMs: number;
 	/** At most one note per session in this interval; overflow merges forward. */
 	readonly minNoteIntervalMs: number;
+	/** A digest subscription's default accumulation window. */
+	readonly digestMs: number;
 }
 
-/** The production cadence: 10 s of coalescing, one note per minute. The
- * debounce is short enough that an approval the developer is waiting to see
- * reported is never held. */
+/** The production cadence: 10 s of coalescing, one note per minute, a five
+ * minute digest. The server debounces its own per-workflow read, so nothing here
+ * waits on a read. */
 export const MONITOR_TIMINGS: MonitorTimings = {
-	debounceMs: 250,
-	coalesceMs: 10_000,
-	minNoteIntervalMs: 60_000,
+	coalesceMs: DELIVERY_TIMINGS.coalesceMs,
+	minNoteIntervalMs: DELIVERY_TIMINGS.minNoteIntervalMs,
+	digestMs: DELIVERY_TIMINGS.digestMs,
 };
 
 export interface WorkflowMonitorOptions {
@@ -68,6 +68,8 @@ export interface WorkflowMonitorOptions {
 	readonly deliver?: (note: string) => Promise<void>;
 	/** Timings; tests shorten the windows. */
 	readonly timings?: Partial<MonitorTimings>;
+	/** Clock, so a test needs no sleep to reach a cadence boundary. */
+	readonly now?: () => number;
 }
 
 export interface WorkflowMonitor {
@@ -101,10 +103,26 @@ async function deliverToOrchestratorSession(note: string): Promise<void> {
 	await client.submit(session.runId, note, crypto.randomUUID(), "followUp");
 }
 
-/** The message a human-needed transition shows: the workflow and the step it
+/** The message a human-needed event shows: the workflow and the step it
  * reached, so the developer knows what to open. */
-export function notificationFor(transition: WorkflowTransition): string {
-	return `${transition.workflowId}: ${describeTransition(transition)} (${transition.stepId})`;
+export function notificationFor(frame: WorkflowEventDeliveryFrame): string {
+	return `${frame.event.workflowId}: ${describeWorkflowEvent(frame.event)} (${frame.event.stepId})`;
+}
+
+/** Decode one delivery frame off the shell's stream. A malformed payload is
+ * dropped, never forwarded into a note. */
+export function decodeDeliveryFrame(
+	payload: unknown,
+): WorkflowEventDeliveryFrame | undefined {
+	try {
+		return decodeContract<WorkflowEventDeliveryFrame>(
+			"workflow-event.frame",
+			workflowEventDeliveryFrameSchema,
+			payload,
+		);
+	} catch {
+		return undefined;
+	}
 }
 
 export function startWorkflowMonitor(
@@ -114,166 +132,127 @@ export function startWorkflowMonitor(
 	const gateway = options.gateway ?? gatewayOrUndefined();
 	if (mode === "off" || !gateway) return { stop: () => {} };
 	const timings: MonitorTimings = { ...MONITOR_TIMINGS, ...options.timings };
+	const now = options.now ?? (() => Date.now());
 	const notify =
 		options.notify ?? ((message: string) => shellNotify(message, "warning"));
 	const deliver = options.deliver ?? deliverToOrchestratorSession;
+	const planner = new DeliveryPlanner({
+		...DELIVERY_TIMINGS,
+		coalesceMs: timings.coalesceMs,
+		minNoteIntervalMs: timings.minNoteIntervalMs,
+		digestMs: timings.digestMs,
+	});
 
-	/** Last projection per workflow, keyed by repository + workflow id. Absent
-	 * means the next observation is that workflow's baseline. */
-	const projections = new Map<string, WorkflowProjection>();
-	/** The orchestrator-started workflows of each repository the monitor read. */
-	const tracked = new Map<string, Set<string>>();
-	/** Repositories an event has named: the set a `resync` re-reads. */
-	const repos = new Set<string>();
-	const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-	let pending: WorkflowTransition[] = [];
-	let noteTimer: ReturnType<typeof setTimeout> | undefined;
-	let lastNoteAt = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	let stopped = false;
+	/** The highest event sequence the shell has seen, and how many times a resync
+	 * has re-opened the stream without an event arriving in between. */
+	let lastSequence: number | undefined;
+	let resyncAttempts = 0;
+	/** Bumped per subscription, so a nested relink can tell which one won. */
+	let generation = 0;
+	let detach: () => void = () => {};
 
-	const keyOf = (repo: string, workflowId: string): string =>
-		`${repo}\u0000${workflowId}`;
-
-	const armNote = (delayMs: number): void => {
-		noteTimer = setTimeout(() => {
-			noteTimer = undefined;
-			flushNote();
-		}, delayMs);
+	const clearTimer = (): void => {
+		if (timer !== undefined) clearTimeout(timer);
+		timer = undefined;
 	};
 
-	/** Send the pending transitions as one note, or merge them into the next one
-	 * when the per-minute bound has not elapsed yet. */
-	const flushNote = (): void => {
-		if (pending.length === 0) return;
-		const now = Date.now();
-		const wait = timings.minNoteIntervalMs - (now - lastNoteAt);
-		if (wait > 0) {
-			armNote(wait);
-			return;
-		}
-		const note = formatMonitorNote(pending);
-		pending = [];
-		lastNoteAt = now;
-		void deliver(note).catch(() => {
-			// A wake-up that could not be delivered is never retried: the developer
-			// still sees the workflow's state in the sidebar, and a retry loop would
-			// cost more than the note is worth.
-		});
+	/** Send the note the planner says is due, then re-arm for whatever merged
+	 * forward. A note that cannot be delivered is dropped, as before: the
+	 * workflow's state is visible in the sidebar, and a retry loop would cost
+	 * more than the note is worth. */
+	const flush = (): void => {
+		clearTimer();
+		if (stopped) return;
+		const note = planner.flush(now());
+		if (note !== undefined)
+			void deliver(note).catch(() => {
+				/* best effort, exactly as before this change */
+			});
+		arm();
 	};
 
-	/** Notify the developer and queue the note, in that order: the notification
-	 * is independent of the mode and of whether the session can be reached. */
-	const record = (transitions: readonly WorkflowTransition[]): void => {
-		for (const transition of transitions)
-			if (isHumanNeeded(transition.kind)) notify(notificationFor(transition));
+	const arm = (): void => {
+		if (stopped) return;
+		clearTimer();
+		const due = planner.nextDueAt(now());
+		if (due === undefined) return;
+		timer = setTimeout(flush, Math.max(0, due - now()));
+	};
+
+	const record = (frame: WorkflowEventDeliveryFrame): void => {
+		// The developer notification is independent of every subscription and of
+		// the mode (except `off`, which never starts this monitor), so it is
+		// raised before anything is queued.
+		if (frame.event.humanNeeded && frame.event.startedBy === "orchestrator")
+			notify(notificationFor(frame));
 		if (mode !== "wake") return;
-		pending = [...pending, ...transitions];
-		if (noteTimer === undefined) armNote(timings.coalesceMs);
+		planner.record(frame.event, frame.subscriptions, now());
+		arm();
 	};
 
-	const applyView = (repo: string, view: WorkflowView): void => {
-		const workflowId = view.workflowId;
-		if (!workflowId) return;
-		const key = keyOf(repo, workflowId);
-		if (view.startedBy !== "orchestrator") {
-			// Not the orchestrator's work: keep no baseline.
-			projections.delete(key);
-			tracked.get(repo)?.delete(workflowId);
-			return;
-		}
-		let ids = tracked.get(repo);
-		if (!ids) {
-			ids = new Set();
-			tracked.set(repo, ids);
-		}
-		ids.add(workflowId);
-		const next = projectWorkflow(view);
-		const previous = projections.get(key);
-		projections.set(key, next);
-		const transitions = detectTransitions(previous, next, workflowId);
-		if (transitions.length > 0) record(transitions);
-	};
-
-	const readOne = async (repo: string, workflowId: string): Promise<void> => {
-		let view: WorkflowView;
-		try {
-			view = await gateway.view(repo, workflowId);
-		} catch {
-			// A read that failed keeps the previous projection: the next event or
-			// resync re-reads it, and a transition is never invented from a miss.
-			return;
-		}
-		if (stopped) return;
-		applyView(repo, view);
-	};
-
-	/** A gap means events were missed, so re-read the authoritative list of each
-	 * repository the monitor has seen and rebuild the orchestrator-started set. */
-	const readRepo = async (repo: string): Promise<void> => {
-		let views: readonly WorkflowView[];
-		try {
-			views = await gateway.listViews(repo);
-		} catch {
-			return;
-		}
-		if (stopped) return;
-		const seen = new Set<string>();
-		for (const view of views) {
-			if (view.startedBy !== "orchestrator") continue;
-			if (!view.workflowId) continue;
-			seen.add(view.workflowId);
-			applyView(repo, view);
-		}
-		// A workflow the store no longer lists is gone: drop its baseline so a
-		// re-created id starts from its own first observation.
-		const ids = tracked.get(repo);
-		if (!ids) return;
-		for (const workflowId of [...ids])
-			if (!seen.has(workflowId)) {
-				ids.delete(workflowId);
-				projections.delete(keyOf(repo, workflowId));
-			}
-	};
-
-	/** Debounce one workflow's re-read: a streaming workflow produced many
-	 * `workflow.updated` events per second, and each is one event, not one read. */
-	const schedule = (repo: string, workflowId: string): void => {
-		repos.add(repo);
-		const key = keyOf(repo, workflowId);
-		const existing = readTimers.get(key);
-		if (existing !== undefined) clearTimeout(existing);
-		readTimers.set(
-			key,
-			setTimeout(() => {
-				readTimers.delete(key);
-				void readOne(repo, workflowId);
-			}, timings.debounceMs),
-		);
-	};
-
-	const unsubscribe = gateway.subscribe({
-		onEvent: (event) => {
-			if (stopped || event.domain !== "workflow") return;
-			if (!event.resource || !event.runId) return;
-			schedule(event.resource, event.runId);
+	const streamHandlers = {
+		onEvent: (event: EventEnvelope) => {
+			if (stopped || event.domain !== "workflow-event") return;
+			// The highest sequence the shell has seen: the cursor a resync re-opens
+			// from, so an overflow of the transport queue costs a replay instead of
+			// silence.
+			lastSequence = event.sequence;
+			resyncAttempts = 0;
+			const frame = decodeDeliveryFrame(event.payload);
+			if (frame) record(frame);
 		},
 		onResync: () => {
+			// A resync is reported for an overflow of the transport queue as well as
+			// for a genuine cursor gap. The pending events stay (they are already
+			// scheduled with their own due times) and the stream is re-opened from
+			// the last sequence the shell saw, so everything the server still
+			// retains after it is replayed; a genuine gap is answered by the
+			// server's own log through `read_events`. Bounded, so a server that
+			// cannot satisfy the cursor is not asked in a loop.
 			if (stopped) return;
-			for (const repo of repos) void readRepo(repo);
+			arm();
+			if (lastSequence === undefined || resyncAttempts >= MAX_RESYNC_ATTEMPTS)
+				return;
+			resyncAttempts += 1;
+			relink(lastSequence);
 		},
-	});
+	};
+
+	// Captured after the `off`/undefined guard: a hoisted function declaration does
+	// not inherit that narrowing, and `relink` needs a definitely-defined gateway.
+	const stream = gateway;
+
+	/** Re-open the stream from a cursor: `gateway.subscribe` replays everything
+	 * the server still retains after it. The old handle is cleared *before* the
+	 * new subscription exists, so a resync delivered synchronously inside
+	 * `subscribe` detaches a placeholder instead of the live subscription. */
+	const relink = (after: number): void => {
+		const mine = ++generation;
+		const previous = detach;
+		detach = () => {};
+		previous();
+		const next = stream.subscribe(streamHandlers, after);
+		// A resync delivered synchronously inside `subscribe` re-enters this
+		// function: that nested call owns the newest subscription, so this frame
+		// closes the one it just opened instead of leaving it live.
+		if (generation !== mine) {
+			next();
+			return;
+		}
+		detach = next;
+	};
+
+	detach = stream.subscribe(streamHandlers);
 
 	return {
 		stop() {
 			if (stopped) return;
 			stopped = true;
-			unsubscribe();
-			for (const timer of readTimers.values()) clearTimeout(timer);
-			readTimers.clear();
-			if (noteTimer !== undefined) clearTimeout(noteTimer);
-			noteTimer = undefined;
-			pending = [];
+			detach();
+			clearTimer();
+			planner.reset();
 		},
 	};
 }

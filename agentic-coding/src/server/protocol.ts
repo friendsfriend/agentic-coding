@@ -50,6 +50,10 @@ import {
 	telemetryTracesRequestSchema,
 	telemetryWatchRequestSchema,
 } from "../contracts/telemetry.ts";
+import {
+	workflowEventSubscribeRequestSchema,
+	workflowEventUnsubscribeRequestSchema,
+} from "../contracts/workflow-events.ts";
 
 /** Bumped whenever a breaking wire change lands; clients send it back. */
 export const SERVER_API_VERSION = "v1";
@@ -95,6 +99,15 @@ export const AGENT_DEBUG_PREFIX = `${AGENT_ENVIRONMENT_PREFIX}debug/`;
 export const AGENT_OTEL_QUERY_PATH = `${AGENT_DEBUG_PREFIX}otel`;
 export const AGENT_DB_QUERY_PATH = `${AGENT_DEBUG_PREFIX}db`;
 export const AGENT_HTTP_REQUEST_PATH = `${AGENT_DEBUG_PREFIX}http`;
+
+/** The typed workflow event surface (add-orchestrator-event-subscriptions):
+ * the recorded event log read by cursor, and the orchestrator's own
+ * subscription registry. Declared here with the rest of the manifest. */
+export const WORKFLOW_EVENTS_PATH = "/api/v1/workflow/events";
+export const ORCHESTRATOR_SUBSCRIPTIONS_PATH =
+	"/api/v1/orchestrator/subscriptions";
+export const ORCHESTRATOR_SUBSCRIPTIONS_DELETE_PATH =
+	"/api/v1/orchestrator/subscriptions/delete";
 
 /** The instance-authenticated browser install surface, read and driven by the
  * Settings section. No route here is a download on its own: only `install`
@@ -276,6 +289,33 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		domain: "browser",
 	},
 	{ method: "GET", path: "/api/v1/events", owner: "bun", domain: "events" },
+	// The workflow event catalog and the orchestrator's subscriptions.
+	{
+		method: "GET",
+		path: WORKFLOW_EVENTS_PATH,
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "GET",
+		path: ORCHESTRATOR_SUBSCRIPTIONS_PATH,
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: ORCHESTRATOR_SUBSCRIPTIONS_PATH,
+		owner: "bun",
+		domain: "workflow",
+	},
+	// The subscription removal is served as its own exact path; the manifest
+	// documents the prefix so its wording does not depend on the formatter.
+	{
+		method: "POST",
+		path: "/api/v1/orchestrator/subscriptions/*",
+		owner: "bun",
+		domain: "workflow",
+	},
 	{
 		method: "GET",
 		path: "/api/v1/telemetry/workspaces",
@@ -650,6 +690,16 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: BROWSER_INSTALL_CANCEL_PATH,
 		schemaId: "server.browser.install.cancel",
 		schema: browserInstallRequestSchema,
+	},
+	{
+		path: ORCHESTRATOR_SUBSCRIPTIONS_PATH,
+		schemaId: "server.orchestrator.subscriptions.create",
+		schema: workflowEventSubscribeRequestSchema,
+	},
+	{
+		path: ORCHESTRATOR_SUBSCRIPTIONS_DELETE_PATH,
+		schemaId: "server.orchestrator.subscriptions.delete",
+		schema: workflowEventUnsubscribeRequestSchema,
 	},
 ];
 

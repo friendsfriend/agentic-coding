@@ -71,8 +71,9 @@ export type WorkflowFailure =
  * digest/hex identifiers intact — only values adjacent to secret key words
  * (and `Bearer` tokens) are masked. Bare `key=`/`nonce=`/`hash=` labels are
  * included so credential-shaped values are masked even without a secret
- * keyword prefix. */
-function redactSecrets(message: string): string {
+ * keyword prefix. Exported so every bounded event payload uses the one masking
+ * helper (add-orchestrator-event-subscriptions). */
+export function redactSecrets(message: string): string {
 	return message
 		.replace(
 			/(token|secret|password|credential|authorization|api[_-]?key|key|nonce|hash)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi,

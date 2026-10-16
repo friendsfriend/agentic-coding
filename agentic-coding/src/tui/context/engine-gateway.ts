@@ -18,7 +18,7 @@ import type { TelemetryOperations } from "../../server/telemetry.ts";
 export interface InProcessInputs {
 	readonly operations: ServerOperations;
 	readonly telemetry: TelemetryOperations;
-	readonly app: Pick<ServerApp, "credentials" | "events" | "hub">;
+	readonly app: Pick<ServerApp, "credentials" | "events" | "hub" | "eventBus">;
 }
 
 /** The HTTP adapter for an attached server. */
@@ -34,6 +34,7 @@ export function inProcessGateway(inputs: InProcessInputs): DashboardGateway {
 		credentials: inputs.app.credentials,
 		events: inputs.app.events,
 		hub: inputs.app.hub,
+		eventBus: inputs.app.eventBus,
 	});
 }
 

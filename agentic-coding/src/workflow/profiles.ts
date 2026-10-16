@@ -123,7 +123,15 @@ export interface OrchestratorConfig {
 	thinking?: string;
 	monitor?: OrchestratorMonitorMode;
 	limits?: OrchestratorLimitsConfig;
+	/** Minutes without progress before a tracked active workflow is reported as
+	 * stalled (`run.stalled`). File-only, like `limits`. */
+	stall_minutes?: number;
 }
+
+/** The stall threshold an absent `stall_minutes` key means. */
+export const DEFAULT_ORCHESTRATOR_STALL_MINUTES = 30;
+/** The upper bound a configured threshold must stay inside. */
+export const MAX_ORCHESTRATOR_STALL_MINUTES = 24 * 60;
 
 /** The `[agents.orchestrator] limits` table as it is written: both keys are
  * optional, so an unset key resolves to its default at read time. */
@@ -165,6 +173,17 @@ export function orchestratorLaunchLimits(
 		maxStartsPerDay:
 			limits?.max_starts_per_day ?? DEFAULT_ORCHESTRATOR_LIMITS.maxStartsPerDay,
 	};
+}
+
+/** The effective stalled-run threshold in minutes, defaulting to 30 so a
+ * configuration that says nothing still reports a workflow that stopped
+ * progressing. */
+export function orchestratorStallMinutes(
+	agents: AgentsConfig | undefined,
+): number {
+	return (
+		agents?.orchestrator?.stall_minutes ?? DEFAULT_ORCHESTRATOR_STALL_MINUTES
+	);
 }
 
 /** The per-file judgment sweep (`[agents.file_judgment]`). The provider and the
@@ -399,7 +418,8 @@ function validateOrchestrator(
 			key !== "model" &&
 			key !== "thinking" &&
 			key !== "monitor" &&
-			key !== "limits"
+			key !== "limits" &&
+			key !== "stall_minutes"
 		)
 			throw new Error(`${location}: unsupported key ${key}`);
 	for (const key of ["model", "thinking"] as const)
@@ -412,6 +432,18 @@ function validateOrchestrator(
 		throw new Error(
 			`${location}.monitor must be one of ${ORCHESTRATOR_MONITOR_MODES.join(", ")}`,
 		);
+	if (table.stall_minutes !== undefined) {
+		const raw = table.stall_minutes;
+		if (
+			typeof raw !== "number" ||
+			!Number.isInteger(raw) ||
+			raw <= 0 ||
+			raw > MAX_ORCHESTRATOR_STALL_MINUTES
+		)
+			throw new Error(
+				`${location}.stall_minutes must be a positive integer at most ${MAX_ORCHESTRATOR_STALL_MINUTES}`,
+			);
+	}
 	return {
 		...(table.model !== undefined ? { model: table.model as string } : {}),
 		...(table.thinking !== undefined
@@ -419,6 +451,9 @@ function validateOrchestrator(
 			: {}),
 		...(table.monitor !== undefined
 			? { monitor: table.monitor as OrchestratorMonitorMode }
+			: {}),
+		...(table.stall_minutes !== undefined
+			? { stall_minutes: table.stall_minutes as number }
 			: {}),
 		...(table.limits !== undefined
 			? {

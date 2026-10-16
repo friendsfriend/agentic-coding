@@ -9,7 +9,15 @@ import {
 	clearEnvironmentServer,
 	publishEnvironmentServer,
 } from "../agent-host/environment-capability.ts";
+import { orchestratorRuntimeDir } from "../orchestrator-state.ts";
 import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
+import {
+	type AgentsConfig,
+	DEFAULT_ORCHESTRATOR_MONITOR,
+	DEFAULT_ORCHESTRATOR_STALL_MINUTES,
+	orchestratorMonitorMode,
+	orchestratorStallMinutes,
+} from "../workflow/profiles.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
 import {
 	createInstanceAuthority,
@@ -21,6 +29,7 @@ import {
 	selectedClassifierProvider,
 	startSelectedLocalClassifier,
 } from "./classifier.ts";
+import { loadAgentConfig } from "./config.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import { TraceIndex } from "./debug/trace-index.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
@@ -30,6 +39,7 @@ import {
 } from "./environment-discovery.ts";
 import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
+import { serverOperations } from "./handlers.ts";
 import type { IntegrationServices } from "./integrations/routes.ts";
 import { rebuildActionDefinitions } from "./integrations/services.ts";
 import type { SignalRouter } from "./receivers/index";
@@ -43,6 +53,11 @@ import {
 	type WorkflowEventHub,
 } from "./subscriptions.ts";
 import { type TelemetryOperations, TelemetryService } from "./telemetry.ts";
+import {
+	createWorkflowEventBus,
+	type WorkflowEventBus,
+} from "./workflow-event-bus.ts";
+import { enrichWorkflowEvent } from "./workflow-event-sources.ts";
 
 export const DEFAULT_WORKFLOW_SERVER_PORT = 4051;
 
@@ -82,6 +97,9 @@ export interface StartWorkflowServerOptions {
 	readonly environment?: EnvironmentAuthority;
 	/** Injected workflow refresh hub (transport tests). */
 	readonly hub?: WorkflowEventHub;
+	/** Injected workflow event catalog + subscription registry (transport tests).
+	 * Absent: the server builds the production one. */
+	readonly eventBus?: WorkflowEventBus;
 	/** Bun-served legacy integration families (Git, providers, repository
 	 * search): the whole legacy `/api/*` surface. */
 	readonly integrations?: IntegrationServices;
@@ -99,6 +117,38 @@ export interface OwnedWorkflowServer {
 	readonly operations: ServerOperations;
 	readonly telemetry?: TelemetryOperations;
 	stop(): Promise<void>;
+}
+
+/** How long a resolved `[agents.orchestrator]` value is reused. The bus reads the
+ * master switch per delivered event and per debounced read, and resolving it is
+ * a layered read + deep merge of every configuration document; one second of
+ * staleness is the price of not doing that per event, and an edit still applies
+ * without a restart. */
+const AGENTS_CACHE_TTL_MS = 1_000;
+
+/** Memoize a read of `[agents.orchestrator]` for a short window, so the bus can
+ * re-read the setting without re-resolving the whole layered configuration on
+ * every event. */
+function memoizedAgents<T>(
+	read: (agents: AgentsConfig | undefined) => T,
+	fallback: T,
+): () => T {
+	let cache: { at: number; value: T } | undefined;
+	return () => {
+		const at = Date.now();
+		if (cache && at - cache.at < AGENTS_CACHE_TTL_MS) return cache.value;
+		try {
+			const value = read(loadAgentConfig().agents);
+			cache = { at, value };
+			return value;
+		} catch {
+			// A broken configuration is cached too, so re-reading it costs one
+			// attempt per window instead of one per event; the fallback is still
+			// adopted within the window once the document becomes readable.
+			cache = { at, value: fallback };
+			return fallback;
+		}
+	};
 }
 
 /** Start the loopback workflow/telemetry server. `port: 0` lets the OS assign
@@ -131,6 +181,31 @@ export async function startWorkflowServer(
 	const traceIndex =
 		options.receivers && options.signalSink ? new TraceIndex() : undefined;
 	const hub = options.hub ?? startWorkflowEventHub(events);
+	const operations = options.operations ?? serverOperations;
+	// The workflow event catalog (add-orchestrator-event-subscriptions): the
+	// server derives catalog events from the same `workflow.updated` stream the
+	// refresh hub publishes, so nothing here is a second source of truth. The
+	// master switch is read lazily, so an edit applies without a restart.
+	const eventBus =
+		options.eventBus ??
+		createWorkflowEventBus({
+			events,
+			view: (repo, workflowId) => operations.view(repo, workflowId),
+			listViews: (repo) => operations.listViews(repo),
+			monitorMode: memoizedAgents(
+				orchestratorMonitorMode,
+				DEFAULT_ORCHESTRATOR_MONITOR,
+			),
+			stallMinutes: memoizedAgents(
+				orchestratorStallMinutes,
+				DEFAULT_ORCHESTRATOR_STALL_MINUTES,
+			),
+			enrich: (input) => enrichWorkflowEvent(input),
+			...(options.configDir
+				? { runtimeDir: orchestratorRuntimeDir(options.configDir) }
+				: {}),
+		});
+	const ownedEventBus = options.eventBus ? undefined : eventBus;
 	// Slot waits and grants are dashboard envelopes: the broker they publish on
 	// exists here, after the integration services were built.
 	options.integrations?.attachDashboardEvents?.((event) => {
@@ -157,6 +232,7 @@ export async function startWorkflowServer(
 		...(options.version ? { version: options.version } : {}),
 		...(options.operations ? { operations: options.operations } : {}),
 		...(options.integrations ? { integrations: options.integrations } : {}),
+		eventBus,
 	});
 	const listener = Bun.serve({
 		hostname: options.hostname ?? "127.0.0.1",
@@ -241,6 +317,7 @@ export async function startWorkflowServer(
 			credentials.cancelAll();
 			events.closeAll();
 			hub.stop();
+			ownedEventBus?.stop();
 			removeInstanceToken(tokenFile, authority.token);
 			await ownedReceivers?.stop();
 			ownedTelemetry?.close();

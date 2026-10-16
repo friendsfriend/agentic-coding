@@ -17,7 +17,6 @@ import type {
 	DashboardGateway,
 	GatewayEventHandlers,
 } from "../../src/contracts/gateway.ts";
-import type { WorkflowView } from "../../src/contracts/workflow.ts";
 import { TraceDb } from "../../src/server/telemetry-db.ts";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
@@ -54,28 +53,13 @@ function useNotifyModeConfig(): void {
 	process.env.HERDR_WORKFLOW_CONFIG = file;
 }
 
-function view(workflowId: string, step: string): WorkflowView {
-	return {
-		workflowId,
-		status: "active",
-		startedBy: "orchestrator",
-		currentStep: { id: step, label: step, attempt: 1, enteredAt: "" },
-		effects: [],
-		pendingQuestions: [],
-		availableActions: [],
-	} as unknown as WorkflowView;
-}
-
-const keyOf = (repo: string, workflowId: string) =>
-	`${repo}\u0000${workflowId}`;
-
 /** A gateway slice: the shell's subscriptions plus the views they re-read. The
  * shell owns more than one (the workflow monitor and the app-slot toasts), so
  * events fan out to every subscriber like the real gateway. */
 class ShellGateway {
 	handlers = new Set<GatewayEventHandlers>();
 	subscribes = 0;
-	readonly views = new Map<string, WorkflowView>();
+	sequence = 1;
 
 	readonly gateway = {
 		kind: "in-process" as const,
@@ -87,32 +71,48 @@ class ShellGateway {
 				this.handlers.delete(handlers);
 			};
 		},
-		view: async (repo: string, workflowId: string) => {
-			const found = this.views.get(keyOf(repo, workflowId));
-			if (!found) throw new Error("no such workflow");
-			return found;
-		},
-		listViews: async (repo: string) =>
-			[...this.views.entries()]
-				.filter(([key]) => key.startsWith(`${repo}\u0000`))
-				.map(([, value]) => value),
 		observe: async () => [],
 	} as unknown as DashboardGateway;
 
-	put(repo: string, value: WorkflowView): void {
-		this.views.set(keyOf(repo, value.workflowId), value);
-	}
-
-	event(repo: string, workflowId: string): void {
+	/** One delivery frame, the shape the server's bus publishes
+	 * (add-orchestrator-event-subscriptions): the shell reads no view of its
+	 * own, so every event the monitor acts on arrives as `workflow-event`. */
+	frame(
+		repo: string,
+		workflowId: string,
+		step: string,
+		humanNeeded = true,
+	): void {
 		const envelope = {
 			instance: "test",
-			sequence: 1,
-			domain: "workflow",
-			kind: "workflow.updated",
+			sequence: this.sequence++,
+			domain: "workflow-event",
+			kind: "event",
 			resource: repo,
 			runId: workflowId,
 			at: new Date().toISOString(),
-			payload: null,
+			payload: {
+				event: {
+					sequence: this.sequence,
+					id: humanNeeded ? "review.waiting" : "step.entered",
+					repository: repo,
+					workflowId,
+					startedBy: "orchestrator",
+					stepId: step,
+					stepLabel: step,
+					severity: "warning",
+					humanNeeded,
+					at: new Date().toISOString(),
+					payload: humanNeeded
+						? {
+								review: "developer",
+								stepId: step,
+								stepLabel: step,
+							}
+						: { stepId: step, stepLabel: step, attempt: 1 },
+				},
+				subscriptions: [{ id: "default", label: "default", mode: "wake" }],
+			},
 		} satisfies EventEnvelope;
 		for (const handlers of this.handlers) handlers.onEvent?.(envelope);
 	}
@@ -160,16 +160,14 @@ test("the shell monitors orchestrator-started workflows while their page is clos
 	// own another.
 	expect(gateway.subscribes).toBe(2);
 
-	// Baseline: the workflow is seen first while it runs.
-	gateway.put("/demo", view("wf-1", "core.implementation"));
-	gateway.event("/demo", "wf-1");
-	await waitFor(() => gateway.handlers.size > 0);
-	await new Promise((resolve) => setTimeout(resolve, 400));
+	// The shell reads no workflow view of its own: a frame that owes the developer
+	// nothing raises nothing.
+	gateway.frame("/demo", "wf-1", "core.implementation", false);
+	await new Promise((resolve) => setTimeout(resolve, 200));
 	expect(activeNotification()).toBeUndefined();
 
-	// It enters plan approval: the developer is told, naming workflow and step.
-	gateway.put("/demo", view("wf-1", "core.plan-approval"));
-	gateway.event("/demo", "wf-1");
+	// A review enters: the developer is told, naming workflow and step.
+	gateway.frame("/demo", "wf-1", "core.plan-approval");
 	await waitFor(() => activeNotification() !== undefined);
 	expect(activeNotification()?.message).toBe(
 		"wf-1: developer review waiting (core.plan-approval)",

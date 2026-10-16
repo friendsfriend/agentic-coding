@@ -38,12 +38,14 @@ import type {
 } from "../../contracts/gateway.ts";
 import type { TraceSummaryPage } from "../../contracts/telemetry.ts";
 import type { WorkflowView } from "../../contracts/workflow.ts";
+import type { WorkflowEventSubscription } from "../../contracts/workflow-events.ts";
 import type { CredentialRegistry } from "../credentials.ts";
 import type { EventBroker } from "../events.ts";
 import { readEvidenceBytes } from "../evidence/routes.ts";
 import type { ServerOperations } from "../handlers.ts";
 import type { WorkflowEventHub } from "../subscriptions.ts";
 import type { TelemetryOperations } from "../telemetry.ts";
+import type { WorkflowEventBus } from "../workflow-event-bus.ts";
 
 export interface InProcessGatewayOptions {
 	/** The server's application operations: the same object the HTTP routes call. */
@@ -56,6 +58,9 @@ export interface InProcessGatewayOptions {
 	 * server's execution-coordinator events reach the dashboard instead of
 	 * leaving it to recover on the periodic safety resync. */
 	readonly hub?: WorkflowEventHub;
+	/** The server-owned workflow event catalog and subscription registry. Absent:
+	 * the subscription reads answer with the implicit default only. */
+	readonly eventBus?: WorkflowEventBus;
 	/** Aborts an in-flight call when the caller's signal fires. */
 	readonly abortError?: (signal: AbortSignal) => Error;
 }
@@ -376,6 +381,17 @@ export function createInProcessGateway(
 
 		async telemetryPrune(days?: number): Promise<number> {
 			return telemetry.prune(days);
+		},
+
+		// -- event subscriptions ------------------------------------------------
+		async eventSubscriptions(
+			_signal?: AbortSignal,
+		): Promise<WorkflowEventSubscription[]> {
+			return [...(options.eventBus?.listSubscriptions() ?? [])];
+		},
+
+		async removeEventSubscription(subscriptionId: string): Promise<boolean> {
+			return options.eventBus?.unsubscribe(subscriptionId) ?? false;
 		},
 
 		// -- events ------------------------------------------------------------
