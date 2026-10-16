@@ -622,6 +622,147 @@ ORDER BY count DESC`,
 FROM v_run_summary
 ORDER BY workflow_id, started_at`,
 	},
+	{
+		name: "edit-latency",
+		summary:
+			"Orientation cost per run: how many calls and result bytes come before the first edit.",
+		example:
+			"bun run scripts/efficiency/analyze.ts edit-latency --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"role",
+			"calls",
+			"first_edit_call",
+			"pre_edit_calls",
+			"pre_edit_call_pct",
+			"pre_edit_result_bytes",
+			"pre_edit_reads",
+			"pre_edit_bash",
+		],
+		sql: `WITH ranked AS (
+	SELECT
+		c.run_id AS run_id,
+		c.tool AS tool,
+		COALESCE(c.result_bytes, 0) AS bytes,
+		ROW_NUMBER() OVER (
+			PARTITION BY c.run_id
+			ORDER BY COALESCE(c.turn_index, 1000000), c.started_at, c.id
+		) AS rn
+	FROM v_tool_calls c
+), first_edit AS (
+	SELECT run_id, MIN(rn) AS edit_at
+	FROM ranked
+	WHERE tool IN ('edit', 'write')
+	GROUP BY run_id
+), scoped AS (
+	SELECT
+		x.run_id AS run_id,
+		x.tool AS tool,
+		x.bytes AS bytes,
+		(f.edit_at IS NULL OR x.rn < f.edit_at) AS is_pre
+	FROM ranked x
+	LEFT JOIN first_edit f ON f.run_id = x.run_id
+)
+SELECT
+	s.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	r.role AS role,
+	COUNT(*) AS calls,
+	MAX(f.edit_at) AS first_edit_call,
+	SUM(CASE WHEN s.is_pre THEN 1 ELSE 0 END) AS pre_edit_calls,
+	ROUND(100.0 * SUM(CASE WHEN s.is_pre THEN 1 ELSE 0 END) / COUNT(*), 1) AS pre_edit_call_pct,
+	SUM(CASE WHEN s.is_pre THEN s.bytes ELSE 0 END) AS pre_edit_result_bytes,
+	SUM(CASE WHEN s.is_pre AND s.tool IN ('read', 'grep') THEN 1 ELSE 0 END) AS pre_edit_reads,
+	SUM(CASE WHEN s.is_pre AND s.tool = 'bash' THEN 1 ELSE 0 END) AS pre_edit_bash
+FROM scoped s
+JOIN v_runs r ON r.run_id = s.run_id
+LEFT JOIN first_edit f ON f.run_id = s.run_id
+GROUP BY s.run_id
+ORDER BY pre_edit_result_bytes DESC, s.run_id`,
+	},
+	{
+		name: "bash-vs-tools",
+		summary:
+			"Where a run's arguments survive: bash calls that a dedicated read/grep tool already covers.",
+		example:
+			"bun run scripts/efficiency/analyze.ts bash-vs-tools --dataset ~/ev/dataset-2026",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"profile",
+			"bash_calls",
+			"shell_for_a_tool",
+			"shell_share_pct",
+			"read_tool",
+			"grep_tool",
+		],
+		sql: `SELECT
+	c.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	COALESCE(r.profile, '(unset)') AS profile,
+	SUM(CASE WHEN c.tool = 'bash' THEN 1 ELSE 0 END) AS bash_calls,
+	SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IN (
+		'bash grep', 'bash rg', 'bash sed', 'bash cat', 'bash head',
+		'bash tail', 'bash ls', 'bash find', 'bash awk', 'bash wc'
+	) THEN 1 ELSE 0 END) AS shell_for_a_tool,
+	ROUND(
+		100.0 * SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IN (
+			'bash grep', 'bash rg', 'bash sed', 'bash cat', 'bash head',
+			'bash tail', 'bash ls', 'bash find', 'bash awk', 'bash wc'
+		) THEN 1 ELSE 0 END)
+		/ NULLIF(SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IS NOT NULL THEN 1 ELSE 0 END), 0),
+		1
+	) AS shell_share_pct,
+	SUM(CASE WHEN c.tool = 'read' THEN 1 ELSE 0 END) AS read_tool,
+	SUM(CASE WHEN c.tool = 'grep' THEN 1 ELSE 0 END) AS grep_tool
+FROM v_tool_calls c
+JOIN v_runs r ON r.run_id = c.run_id
+WHERE c.args_digest IS NOT NULL
+GROUP BY c.run_id
+ORDER BY shell_for_a_tool DESC, c.run_id`,
+	},
+	{
+		name: "stalled-runs",
+		summary:
+			"Runs that were started and produced two turns or fewer: engine and queue waste.",
+		example:
+			"bun run scripts/efficiency/analyze.ts stalled-runs --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"run_label",
+			"role",
+			"profile",
+			"status",
+			"turns",
+			"calls",
+			"started_at",
+		],
+		sql: `SELECT
+	r.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	r.run_label AS run_label,
+	r.role AS role,
+	COALESCE(r.profile, '(unset)') AS profile,
+	r.status AS status,
+	COALESCE(t.turns, 0) AS turns,
+	COALESCE(c.calls, 0) AS calls,
+	r.started_at AS started_at
+FROM v_runs r
+LEFT JOIN (SELECT run_id, COUNT(*) AS turns FROM v_turns GROUP BY run_id) t
+	ON t.run_id = r.run_id
+LEFT JOIN (SELECT run_id, COUNT(*) AS calls FROM v_tool_calls GROUP BY run_id) c
+	ON c.run_id = r.run_id
+WHERE COALESCE(t.turns, 0) <= 2
+ORDER BY r.started_at, r.run_id`,
+	},
 ];
 
 export function queryByName(name: string): AnalysisQuery | undefined {

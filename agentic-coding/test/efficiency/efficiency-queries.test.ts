@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeDataset } from "../../scripts/efficiency/lib/dataset.ts";
 import { extractTables } from "../../scripts/efficiency/lib/extract.ts";
-import { QUERIES } from "../../scripts/efficiency/lib/queries.ts";
+import { QUERIES, queryByName } from "../../scripts/efficiency/lib/queries.ts";
 import {
 	type FixtureEvidence,
 	makeFixtureEvidence,
@@ -154,6 +154,74 @@ describe("ready-made queries", () => {
 			expect(isB.map((row) => row.turns).sort()).toEqual([1, 1, 2]);
 			const isA = rows.filter((row) => row.run_id === "run-span-a");
 			expect(new Set(isA.map((row) => row.turns)).size).toBe(1);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("edit-latency treats a run without an edit as all orientation", () => {
+		const query = queryByName("edit-latency");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						run_id: string;
+						calls: number;
+						first_edit_call: number | null;
+						pre_edit_calls: number;
+						pre_edit_call_pct: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const start = rows.find((row) => row.run_id === "run-span-a");
+			expect(start?.first_edit_call).toBeNull();
+			expect(start?.pre_edit_calls).toBe(start?.calls);
+			expect(start?.pre_edit_call_pct).toBe(100);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("bash-vs-tools counts only arguments that survived into a digest", () => {
+		const query = queryByName("bash-vs-tools");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						run_id: string;
+						bash_calls: number;
+						shell_for_a_tool: number;
+						shell_share_pct: number;
+						read_tool: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const hit = rows.find((row) => row.run_id === "run-span-a");
+			expect(hit?.bash_calls).toBe(1);
+			expect(hit?.shell_for_a_tool).toBe(1);
+			expect(hit?.shell_share_pct).toBe(100);
+			expect(hit?.read_tool).toBe(1);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("stalled-runs reports only runs at or below two turns", () => {
+		const query = queryByName("stalled-runs");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<{ run_id: string; turns: number; calls: number }, []>(
+					`${query?.sql}`,
+				)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			for (const row of rows) expect(row.turns).toBeLessThanOrEqual(2);
+			expect(rows.some((row) => row.run_id === "run-span-b")).toBe(true);
 		} finally {
 			db.close();
 		}
