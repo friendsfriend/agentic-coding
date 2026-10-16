@@ -171,6 +171,33 @@ describe("ready-made queries", () => {
 						first_edit_call: number | null;
 						pre_edit_calls: number;
 						pre_edit_call_pct: number;
+	test("verifier-rounds groups verifiers dispatched together into one round", () => {
+		const query = QUERIES.find((entry) => entry.name === "verifier-rounds");
+		expect(query).toBeDefined();
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE v_runs (run_id TEXT, workflow_id TEXT, role TEXT, started_at TEXT);
+				CREATE TABLE v_turns (run_id TEXT, cost REAL);
+				CREATE TABLE v_tool_calls (run_id TEXT);
+				INSERT INTO v_runs VALUES
+					('r1', 'wf-a', 'quality-verifier', '2026-01-01T10:00:00.000Z'),
+					('r2', 'wf-a', 'security-verifier', '2026-01-01T10:00:03.000Z'),
+					('r3', 'wf-a', 'quality-verifier', '2026-01-01T10:40:00.000Z'),
+					('r4', 'wf-a', 'worker', '2026-01-01T11:00:00.000Z');
+				INSERT INTO v_turns VALUES ('r1', 0.5), ('r1', 0.5), ('r2', 1.0), ('r3', 0.25);
+				INSERT INTO v_tool_calls VALUES ('r1'), ('r2'), ('r2'), ('r3');
+			`);
+			const rows = db
+				.query<
+					{
+						workflow_id: string;
+						round_index: number;
+						roles: number;
+						runs: number;
+						turns: number;
+						tool_calls: number;
+						cost: number;
 					},
 					[]
 				>(`${query?.sql}`)
@@ -222,6 +249,17 @@ describe("ready-made queries", () => {
 			expect(rows.length).toBeGreaterThan(0);
 			for (const row of rows) expect(row.turns).toBeLessThanOrEqual(2);
 			expect(rows.some((row) => row.run_id === "run-span-b")).toBe(true);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
+			expect(rows[0]).toMatchObject({
+				workflow_id: "wf-a",
+				roles: 2,
+				runs: 2,
+				turns: 3,
+				tool_calls: 3,
+				cost: 2,
+			});
+			expect(rows[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
 		} finally {
 			db.close();
 		}

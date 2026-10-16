@@ -610,6 +610,62 @@ GROUP BY workflow_id, role, severity
 ORDER BY count DESC`,
 	},
 	{
+		name: "verifier-rounds",
+		summary:
+			"Verifier rounds reconstructed from run timing (20-minute gap), with roles, runs, turns, calls and cost per round. Runs without a start time are excluded.",
+		example:
+			"bun run scripts/efficiency/analyze.ts verifier-rounds --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"workflow_id",
+			"round_index",
+			"roles",
+			"runs",
+			"turns",
+			"tool_calls",
+			"cost",
+		],
+		sql: `WITH verifier_runs AS (
+	SELECT
+		r.workflow_id AS workflow_id,
+		r.started_at AS started_at,
+		r.role AS role,
+		(SELECT COUNT(*) FROM v_turns t WHERE t.run_id = r.run_id) AS turns,
+		(SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = r.run_id) AS tool_calls,
+		COALESCE((SELECT SUM(cost) FROM v_turns t WHERE t.run_id = r.run_id), 0) AS cost
+	FROM v_runs r
+	WHERE r.role LIKE '%verifier%' AND r.started_at IS NOT NULL
+),
+marked AS (
+	SELECT
+		*,
+		CASE
+			WHEN julianday(started_at) - julianday(LAG(started_at) OVER (PARTITION BY workflow_id ORDER BY started_at)) > (20.0 / 1440.0)
+			THEN 1
+			ELSE 0
+		END AS new_round
+	FROM verifier_runs
+),
+numbered AS (
+	SELECT
+		*,
+		SUM(new_round) OVER (PARTITION BY workflow_id ORDER BY started_at) + 1 AS round_index
+	FROM marked
+)
+SELECT
+	workflow_id AS workflow_id,
+	round_index AS round_index,
+	COUNT(DISTINCT role) AS roles,
+	COUNT(*) AS runs,
+	SUM(turns) AS turns,
+	SUM(tool_calls) AS tool_calls,
+	ROUND(SUM(cost), 4) AS cost
+FROM numbered
+GROUP BY workflow_id, round_index
+ORDER BY cost DESC`,
+	},
+	{
 		name: "runs",
 		summary:
 			"Per-run rollup straight from the dataset, for eyeballing one workflow.",
