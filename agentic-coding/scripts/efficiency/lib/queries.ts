@@ -871,6 +871,20 @@ LEFT JOIN (SELECT run_id, COUNT(*) AS calls FROM v_tool_calls GROUP BY run_id) c
 WHERE COALESCE(t.turns, 0) <= 2
 ORDER BY r.started_at, r.run_id`,
 	},
+	{
+		name: "source-gaps",
+		summary:
+			"Snapshot files the build parsed into zero rows: a whole source can be lost while every workflow count still looks plausible.",
+		example:
+			"bun run scripts/efficiency/analyze.ts source-gaps --dataset ~/ev/dataset-2026",
+		limitable: true,
+		limit: 50,
+		columns: ["source", "path", "kind", "records", "parsed", "skipped", "note"],
+		sql: `SELECT source, path, kind, records, parsed, skipped, note
+FROM source_files
+WHERE parsed = 0
+ORDER BY source, path`,
+	},
 ];
 
 export function queryByName(name: string): AnalysisQuery | undefined {

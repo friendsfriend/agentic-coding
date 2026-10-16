@@ -77,21 +77,14 @@ describe("ready-made queries", () => {
 	test("orientation-cost counts a run without an artifact as no orientation, not all of it", () => {
 		const query = QUERIES.find((entry) => entry.name === "orientation-cost");
 		expect(query).toBeDefined();
-	test("cache-expiry buckets every measurable gap and never loses a turn", () => {
-		const query = QUERIES.find((entry) => entry.name === "cache-expiry");
 		const db = new Database(datasetPath, { readonly: true });
 		try {
 			const rows = db
 				.query<
 					{
-						role: string | null;
-						runs: number;
 						runs_with_artifact: number;
 						turns_before: number;
 						cost_before: number;
-						idle_bucket: string;
-						turns: number;
-						avg_gap_seconds: number;
 					},
 					[]
 				>(`${query?.sql}`)
@@ -104,6 +97,41 @@ describe("ready-made queries", () => {
 				expect(row.turns_before).toBe(0);
 				expect(row.cost_before).toBe(0);
 			}
+		} finally {
+			db.close();
+		}
+	});
+
+	test("cache-expiry buckets every measurable gap and never loses a turn", () => {
+		const query = QUERIES.find((entry) => entry.name === "cache-expiry");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						idle_bucket: string;
+						turns: number;
+						avg_gap_seconds: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			// Buckets are disjoint and ordered by their lower bound.
+			expect(rows.map((row) => row.idle_bucket)).toEqual([
+				...new Set(rows.map((row) => row.idle_bucket)),
+			]);
+			// Every bucketed turn carries a real gap.
+			for (const row of rows) expect(row.avg_gap_seconds).toBeGreaterThan(0);
+			// The same turns the `turn-gaps` query measures, counted once.
+			const gaps = db
+				.query<{ gap_seconds: number }, []>(
+					`${QUERIES.find((entry) => entry.name === "turn-gaps")?.sql}`,
+				)
+				.all();
+			expect(rows.reduce((total, row) => total + row.turns, 0)).toBe(
+				gaps.filter((gap) => gap.gap_seconds > 0).length,
+			);
 		} finally {
 			db.close();
 		}
@@ -143,24 +171,6 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
-			// Buckets are disjoint and ordered by their lower bound.
-			expect(rows.map((row) => row.idle_bucket)).toEqual([
-				...new Set(rows.map((row) => row.idle_bucket)),
-			]);
-			expect(rows.length).toBeGreaterThan(0);
-			// Every bucketed turn carries a real gap.
-			for (const row of rows) expect(row.avg_gap_seconds).toBeGreaterThan(0);
-			// The same turns the `turn-gaps` query measures, counted once.
-			const gaps = db
-				.query<{ gap_seconds: number }, []>(
-					`${QUERIES.find((entry) => entry.name === "turn-gaps")?.sql}`,
-				)
-				.all();
-			expect(rows.reduce((total, row) => total + row.turns, 0)).toBe(
-				gaps.filter((gap) => gap.gap_seconds > 0).length,
-			);
-		} finally {
-			db.close();
 		}
 	});
 
@@ -194,6 +204,19 @@ describe("ready-made queries", () => {
 						first_edit_call: number | null;
 						pre_edit_calls: number;
 						pre_edit_call_pct: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const start = rows.find((row) => row.run_id === "run-span-a");
+			expect(start?.first_edit_call).toBeNull();
+			expect(start?.pre_edit_calls).toBe(start?.calls);
+			expect(start?.pre_edit_call_pct).toBe(100);
+		} finally {
+			db.close();
+		}
+	});
+
 	test("verifier-rounds groups verifiers dispatched together into one round", () => {
 		const query = QUERIES.find((entry) => entry.name === "verifier-rounds");
 		expect(query).toBeDefined();
@@ -225,10 +248,17 @@ describe("ready-made queries", () => {
 					[]
 				>(`${query?.sql}`)
 				.all();
-			const start = rows.find((row) => row.run_id === "run-span-a");
-			expect(start?.first_edit_call).toBeNull();
-			expect(start?.pre_edit_calls).toBe(start?.calls);
-			expect(start?.pre_edit_call_pct).toBe(100);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
+			expect(rows[0]).toMatchObject({
+				workflow_id: "wf-a",
+				roles: 2,
+				runs: 2,
+				turns: 3,
+				tool_calls: 3,
+				cost: 2,
+			});
+			expect(rows[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
 		} finally {
 			db.close();
 		}
@@ -272,19 +302,39 @@ describe("ready-made queries", () => {
 			expect(rows.length).toBeGreaterThan(0);
 			for (const row of rows) expect(row.turns).toBeLessThanOrEqual(2);
 			expect(rows.some((row) => row.run_id === "run-span-b")).toBe(true);
-			expect(rows).toHaveLength(2);
-			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
-			expect(rows[0]).toMatchObject({
-				workflow_id: "wf-a",
-				roles: 2,
-				runs: 2,
-				turns: 3,
-				tool_calls: 3,
-				cost: 2,
-			});
-			expect(rows[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
 		} finally {
 			db.close();
+		}
+	});
+
+	test("source-gaps reports a file that parsed nothing and stays quiet about the rest", () => {
+		const query = queryByName("source-gaps");
+		expect(query).toBeDefined();
+		const out = makeTempDir("efficiency-source-gaps-");
+		const copy = path.join(out.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy, { readwrite: true });
+		try {
+			// The fixture parses every file it ships, so the query is empty until a
+			// source goes missing the way a read-only open of a WAL snapshot does.
+			expect(
+				db.query<{ path: string }, []>(`${query?.sql}`).all(),
+			).toHaveLength(0);
+			db.run(
+				`INSERT INTO source_files (source, path, kind, records, parsed, skipped, note)
+				 VALUES ('harness.wiki', 'wiki-workflows/harness.sqlite', 'harness', 0, 0, 0, 'unreadable: unable to open database file')`,
+			);
+			const rows = db
+				.query<{ source: string; path: string; note: string | null }, []>(
+					`${query?.sql}`,
+				)
+				.all();
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.source).toBe("harness.wiki");
+			expect(rows[0]?.note).toContain("unreadable");
+		} finally {
+			db.close();
+			out.cleanup();
 		}
 	});
 });
