@@ -241,6 +241,67 @@ describe("the staged configuration root", () => {
 			expect(fs.existsSync(path.join(root, name))).toBe(false);
 		}
 	});
+
+	test("server state and caches are not copied into the staged root", async () => {
+		const { configDir } = liveConfig("env-setup-staged-state-");
+		// The live state the server owns and mutates while the workflow runs: a
+		// classifier install (342 MB in the motivating configuration), the agent
+		// host's database and log, the orchestrator's subscriptions, this
+		// workflow's own data root and the product's browser install.
+		writeFile(
+			path.join(configDir, "classifier", "laya", "model.bin"),
+			"x".repeat(4096),
+		);
+		writeFile(path.join(configDir, "classifier-maintenance.json"), "{}\n");
+		writeFile(
+			path.join(configDir, "orchestrator", "agent-host", "harness.sqlite"),
+			"sqlite\n",
+		);
+		writeFile(
+			path.join(configDir, "orchestrator", "agent-host", "host.log"),
+			"log\n",
+		);
+		writeFile(
+			path.join(
+				configDir,
+				".agentic-coding-workflow",
+				".herdr-workflow",
+				"harness.sqlite",
+			),
+			"sqlite\n",
+		);
+		writeFile(
+			path.join(configDir, "browsers", "chromium-1248", "chrome", "binary"),
+			"binary\n",
+		);
+		writeFile(path.join(configDir, "tui.json"), "{}\n");
+		const draftsDir = setupDraftsDir(configDir, "wf-1");
+		const result = await materializeStagedRoot({ configDir, draftsDir });
+		// `tui.json` is a small client preference file, not definition state, and
+		// copying it is harmless: what must never be copied is the state above.
+		expect(result.ok).toBe(true);
+		const root = stagedRootOf(draftsDir);
+		for (const name of [
+			"classifier",
+			"classifier-maintenance.json",
+			"orchestrator",
+			".agentic-coding-workflow",
+			"browsers",
+		])
+			expect(fs.existsSync(path.join(root, name))).toBe(false);
+		// The definitions beside them are copied as usual.
+		expect(
+			fs.existsSync(path.join(root, "apps", "compose", "shop-compose.yml")),
+		).toBe(true);
+		expect(
+			fs.existsSync(
+				path.join(root, "infrastructure", "compose", "network.yml"),
+			),
+		).toBe(true);
+		// The change set is unaffected: the dropped state is outside every prefix
+		// a draft may publish into, so a fresh staged root still holds no drafts.
+		expect(listSetupDraftFiles(draftsDir)).toEqual([]);
+	});
 });
 
 describe("the base snapshot and the changed files", () => {
@@ -471,6 +532,68 @@ describe("the promotion's conflict check and rollback", () => {
 			false,
 		);
 		expect(fs.existsSync(stagedRootOf(draftsDir))).toBe(true);
+	});
+
+	test("a drafted replacement of a live symlink publishes a regular file, never the target", async () => {
+		const { configDir, linkTarget, dockerfileLink } = liveConfig(
+			"env-setup-staged-symlink-",
+		);
+		const draftsDir = setupDraftsDir(configDir, "wf-1");
+		await materializeStagedRoot({
+			configDir,
+			draftsDir,
+			secret: PROMOTION_SECRET,
+		});
+		// The staged root preserved the live symlink (production's behaviour), so
+		// the path the author writes is a link into the developer's own
+		// repository. The documented hygiene is to delete the staged link and
+		// write a regular file — never to write through it.
+		const stagedLink = path.join(
+			stagedRootOf(draftsDir),
+			"apps",
+			"build",
+			"shop-build.Dockerfile",
+		);
+		expect(fs.lstatSync(stagedLink).isSymbolicLink()).toBe(true);
+		const targetBefore = fs.readFileSync(linkTarget, "utf8");
+		fs.rmSync(stagedLink);
+		writeFile(stagedLink, "FROM alpine\n");
+		const promoted = await promoteSetupDrafts({
+			configDir,
+			draftsDir,
+			backupDir: setupBackupDir(configDir, "wf-1"),
+			workflowId: "wf-1",
+			runId: "run-1",
+			secret: PROMOTION_SECRET,
+			reviewed: reviewedFor(draftsDir),
+		});
+		expect(promoted.ok).toBe(true);
+		expect(promoted.files).toEqual([
+			expect.objectContaining({
+				path: "apps/build/shop-build.Dockerfile",
+				status: "replaced",
+				replacesSymlink: linkTarget,
+			}),
+		]);
+		// The live path is the drafted regular file, and the developer's own file
+		// behind the link is byte-unchanged.
+		expect(fs.lstatSync(dockerfileLink).isSymbolicLink()).toBe(false);
+		expect(fs.readFileSync(dockerfileLink, "utf8")).toBe("FROM alpine\n");
+		expect(fs.readFileSync(linkTarget, "utf8")).toBe(targetBefore);
+		// A rollback puts the symlink back exactly, and the target is untouched
+		// throughout.
+		const rolledBack = await rollbackPromotion({
+			configDir,
+			draftsDir,
+			backupDir: setupBackupDir(configDir, "wf-1"),
+			workflowId: "wf-1",
+			runId: "run-1",
+			secret: PROMOTION_SECRET,
+		});
+		expect(rolledBack.ok).toBe(true);
+		expect(fs.lstatSync(dockerfileLink).isSymbolicLink()).toBe(true);
+		expect(fs.readlinkSync(dockerfileLink)).toBe(linkTarget);
+		expect(fs.readFileSync(linkTarget, "utf8")).toBe(targetBefore);
 	});
 });
 

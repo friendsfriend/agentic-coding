@@ -310,9 +310,23 @@ export interface WorkflowMetadata {
 			checkoutDir: string;
 			configFingerprint: string;
 			checkoutFingerprint: string;
-			/** The configuration walk hit its bound: a truncated fingerprint proves
+			/** The fingerprint algorithm that armed this baseline
+			 * (`SETUP_GUARD_SCOPE`). Absent on a baseline an older build armed, which
+			 * the guard reports instead of comparing. */
+			scope?: string;
+			/** The definition-tree scan hit its bound: a truncated fingerprint proves
 			 * nothing and the guard treats it as a violation. */
 			truncated?: boolean;
+			/** The scanned definition entries the fingerprint was taken from, so a
+			 * violation names what changed. Digests and symlink targets only, never
+			 * secret content. */
+			entries?: Array<{
+				path: string;
+				kind: "d" | "f" | "l";
+				size?: number;
+				digest?: string;
+				target?: string;
+			}>;
 		}
 	>;
 	/** The reviewed digest of every drafted file, recorded when the validation

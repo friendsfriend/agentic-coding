@@ -74,6 +74,12 @@ Environment tool results SHALL be bounded in size and SHALL replace values from 
 - **WHEN** an `env-setup` run lists an app whose run and build targets were staged
 - **THEN** those targets SHALL be marked as staged, and the target the tools would run by default SHALL be marked as the default
 
+#### Scenario: A staged definition is a symlink
+
+- **WHEN** the owner's staged root holds a definition file that is a symlink to a file outside it
+- **THEN** `env_list` SHALL report that staged path and the target it points at, so the author deletes the link and writes a regular file instead of writing through it
+- **AND** an owner without a staged configuration view SHALL report no such entry
+
 #### Scenario: Ambiguous default is reported
 
 - **WHEN** an app declares two build targets for the same default profile

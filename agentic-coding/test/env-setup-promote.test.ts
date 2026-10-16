@@ -8,6 +8,7 @@ import path from "node:path";
 import { setupDraftsDir } from "../src/server/environment/setup-drafts.ts";
 import {
 	promoteSetupDrafts,
+	rollbackPromotion,
 	type SetupPromotionIo,
 	setupPromotionJournalPath,
 	setupPromotionLockPath,
@@ -754,5 +755,67 @@ describe("promotion provenance and ownership", () => {
 		// One refresh per promoted path: a live-but-slow promotion is never
 		// stolen from, because staleness means "no progress".
 		expect(refreshes.length).toBeGreaterThanOrEqual(3);
+	});
+	test("a live symlink is replaced by a regular file, and a rollback restores the link", async () => {
+		const configDir = tempDir("env-setup-promote-");
+		const draftsDir = setupDraftsDir(configDir, "wf-1");
+		const backupDir = tempDir("env-setup-promote-backup-");
+		// The developer's own repository the live definition is a symlink into
+		// (`~/devenv-config` in the motivating configuration).
+		const target = path.join(
+			tempDir("env-setup-promote-devenv-"),
+			"devenv",
+			"apps",
+			"compose",
+			"shop-compose.yml",
+		);
+		writeFile(target, "live-a\n");
+		const livePath = path.join(
+			configDir,
+			"apps",
+			"compose",
+			"shop-compose.yml",
+		);
+		fs.mkdirSync(path.dirname(livePath), { recursive: true });
+		fs.symlinkSync(target, livePath);
+		// What the author does instead of writing through the link: delete the
+		// staged symlink and write a regular file at the same relative path.
+		writeFile(
+			path.join(draftsDir, "apps", "compose", "shop-compose.yml"),
+			"draft-a\n",
+		);
+		const promoted = await promoteSetupDrafts({
+			configDir,
+			draftsDir,
+			backupDir,
+			workflowId: "wf-1",
+			runId: RUN_ID,
+			secret: SECRET,
+		});
+		expect(promoted.ok).toBe(true);
+		// The approval diff and the promotion report state what happened to the
+		// link, so the developer sees a replacement rather than a write-through.
+		expect(promoted.files[0]?.status).toBe("replaced");
+		expect(promoted.files[0]?.replacesSymlink).toBe(target);
+		// The live path is a regular file holding the draft ...
+		expect(fs.lstatSync(livePath).isSymbolicLink()).toBe(false);
+		expect(fs.readFileSync(livePath, "utf8")).toBe("draft-a\n");
+		// ... and the developer's own file is byte-unchanged.
+		expect(fs.readFileSync(target, "utf8")).toBe("live-a\n");
+		const rolled = await rollbackPromotion({
+			configDir,
+			draftsDir,
+			backupDir,
+			workflowId: "wf-1",
+			runId: RUN_ID,
+			secret: SECRET,
+		});
+		expect(rolled.ok).toBe(true);
+		expect(rolled.restored).toEqual(["apps/compose/shop-compose.yml"]);
+		// The rollback restores the symlink exactly, not the target's bytes as a
+		// regular file.
+		expect(fs.lstatSync(livePath).isSymbolicLink()).toBe(true);
+		expect(fs.readlinkSync(livePath)).toBe(target);
+		expect(fs.readFileSync(target, "utf8")).toBe("live-a\n");
 	});
 });

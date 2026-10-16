@@ -45,19 +45,42 @@ import {
 } from "./setup-drafts.ts";
 
 /** Top-level configuration entries the staged root drops outright: they are
- * large, irrelevant to a definition, or the workflow's own bookkeeping. */
+ * large, irrelevant to a definition, or the workflow's own bookkeeping. The
+ * server's own live state is here for the same reason it is outside the write
+ * guard's fingerprint: it changes while a workflow runs, it is not configuration,
+ * and copying it would put a 342 MB classifier install and a deep browser
+ * install into every workflow's state directory. */
 export const SETUP_STAGED_DROPPED_NAMES: readonly string[] = [
 	SETUP_DRAFTS_DIRECTORY,
 	".backups",
 	"wiki",
 	"telemetry",
 	"snapshots",
+	// The server's live state: the agent host's database and log, the
+	// orchestrator's subscriptions, and this workflow's own data root.
+	"orchestrator",
+	".agentic-coding-workflow",
+	// The product's own Playwright install (`PLAYWRIGHT_BROWSERS_PATH`): the
+	// server owns it, and the staged root is never the browser path.
+	"browsers",
 	// The running server's discovery record hands off a URL and a bearer token:
 	// copying it would duplicate a live credential into every state directory
 	// (`environment-setup-workflow`: "the server's discovery record SHALL NOT be
 	// copied").
 	ENVIRONMENT_DISCOVERY_FILE,
 ];
+/** Top-level entries dropped by prefix, not by exact name: the classifier's
+ * install and its sidecar state files (`classifier`, `classifier-*.json`) are
+ * server state whatever they are called. */
+export const SETUP_STAGED_DROPPED_PREFIXES: readonly string[] = ["classifier"];
+
+/** Whether a top-level configuration entry is one the staged root drops. */
+export function isDroppedStagedEntry(name: string): boolean {
+	return (
+		SETUP_STAGED_DROPPED_NAMES.includes(name) ||
+		SETUP_STAGED_DROPPED_PREFIXES.some((prefix) => name.startsWith(prefix))
+	);
+}
 /** Top-level entries exposed to the staged runs but never published: private
  * read-only *copies*, so a write into the staged tree can never reach the live
  * credential store (the promotion's prefix allow-list excludes them too). */
@@ -226,7 +249,7 @@ export async function materializeStagedRoot(
 					.relative(options.configDir, from)
 					.split(path.sep)
 					.join("/");
-				if (depth === 0 && SETUP_STAGED_DROPPED_NAMES.includes(child.name)) {
+				if (depth === 0 && isDroppedStagedEntry(child.name)) {
 					excluded.push(`${relative}/`);
 					continue;
 				}

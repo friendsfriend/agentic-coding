@@ -369,6 +369,57 @@ describe("the write guard effect", () => {
 			// waits for the developer.
 			const status = engine.status(repoRoot, WORKFLOW_ID);
 			expect(status.status).toBe("attention-required");
+			// The attention text the TUI, the dashboard and the orchestrator status
+			// show names what changed: "the live configuration changed" alone left the
+			// cause to be found by hand.
+			const attention = status.health.attention.join(" ");
+			expect(attention).toContain("apps/compose/shop-compose.yml");
+			expect(attention).toContain("1 definition changed");
+			// ... and it does not blame a bound the scan never hit.
+			expect(attention).not.toContain("could not be read completely");
+		});
+	});
+
+	test("server-owned state and a browser install landing during the turn do not park the workflow", async () => {
+		const { configDir, repoRoot } = fixture();
+		const { engine, draftsDir } = environment({ configDir, repoRoot });
+		await withConfigRoot(configDir, async () => {
+			await armBaseline(
+				engine,
+				repoRoot,
+				subject(configDir, repoRoot, draftsDir, "baseline"),
+			);
+			// The state the live run really mutated while the author worked, plus the
+			// browser install the product itself performs (depth 19, well over the
+			// walk's entry bound): neither is a change to the developer's
+			// configuration, and failing closed on them parked every run.
+			for (const relative of [
+				"orchestrator/agent-host/harness.sqlite",
+				"orchestrator/agent-host/host.log",
+				"orchestrator/event-subscriptions.json",
+				"tui.json",
+				".agentic-coding-workflow/.herdr-workflow/agent-host/harness.sqlite-shm",
+				"classifier/laya/state.json",
+				"wiki/index.md",
+			])
+				writeFile(path.join(configDir, relative), "{}\n");
+			for (let index = 0; index < 1_600; index++)
+				writeFile(
+					path.join(
+						configDir,
+						"browsers",
+						"chromium-1248",
+						`chrome-mac-arm64/level-${index % 19}/entry-${index}`,
+					),
+					"binary\n",
+				);
+			const ok = await runHandler<{ ok?: boolean }>(
+				engine,
+				repoRoot,
+				GUARD,
+				subject(configDir, repoRoot, draftsDir, "check"),
+			);
+			expect(ok.ok).toBe(true);
 		});
 	});
 

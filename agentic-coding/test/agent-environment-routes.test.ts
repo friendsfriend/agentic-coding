@@ -1293,6 +1293,69 @@ test("an owner with a staged configuration view lists the staged targets", async
 	fs.rmSync(root, { recursive: true, force: true });
 });
 
+// A staged definition file that is a symlink points at the developer's own file,
+// so the author has to be told which ones they are before writing anything: a
+// write to the link reaches the developer's repository, not the staged root
+// (`staged-env-setup-config-root`).
+test("an owner with a staged configuration view is told which staged definitions are symlinks", async () => {
+	const root = tempRoot();
+	const configDir = path.join(root, "config");
+	const overlay = path.join(root, "staged-root");
+	const checkout = path.join(root, "workflow-checkout");
+	const devenv = path.join(root, "devenv-config");
+	fs.mkdirSync(path.join(overlay, "apps", "compose"), { recursive: true });
+	fs.mkdirSync(path.join(overlay, "apps", "run"), { recursive: true });
+	fs.mkdirSync(configDir, { recursive: true });
+	fs.mkdirSync(checkout, { recursive: true });
+	fs.mkdirSync(path.join(devenv, "devenv", "apps", "compose"), {
+		recursive: true,
+	});
+	// The developer keeps the compose file in their own repository and links it
+	// into the configuration; the staged root preserved the link.
+	const target = path.join(
+		devenv,
+		"devenv",
+		"apps",
+		"compose",
+		"shop-compose.yml",
+	);
+	fs.writeFileSync(target, "services: {}\n");
+	fs.symlinkSync(
+		target,
+		path.join(overlay, "apps", "compose", "shop-compose.yml"),
+	);
+	fs.writeFileSync(
+		path.join(overlay, "apps", "run", "shop-run.sh"),
+		"#!/bin/sh\ntrue\n",
+		{ mode: 0o755 },
+	);
+	const app = appOf("shop", path.join(root, "app-checkout"));
+	const deps: AgentEnvironmentDeps = {
+		configDir,
+		instances: controllerDouble({}).instance,
+		apps: appsDouble([app]),
+		registry: registryDouble(),
+		resolveOwnerCheckout: () => checkout,
+		resolveOwnerOverlay: () => overlay,
+	};
+	const result = payloadOf(
+		await call(deps, "GET", "/api/v1/agent-env/list"),
+	) as { stagedSymlinks?: Array<{ path?: string; target?: string }> };
+	expect(result.stagedSymlinks).toEqual([
+		{ path: "apps/compose/shop-compose.yml", target },
+	]);
+	// The live view of the same owner reports no staged symlinks.
+	const live = payloadOf(
+		await call(
+			{ ...deps, resolveOwnerOverlay: undefined },
+			"GET",
+			"/api/v1/agent-env/list",
+		),
+	) as { stagedSymlinks?: unknown };
+	expect(live.stagedSymlinks).toBeUndefined();
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
 // The staged view decides which target the tools run: a drafted target
 // supersedes the live one of the same action and profile, so the choice the
 // build route makes is the one the author validated (`staged-env-setup-config-root`).

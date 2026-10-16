@@ -62,6 +62,7 @@ import {
 import type { App } from "./config.ts";
 import { parseEnvironmentOwner } from "./instances/model.ts";
 import type { EnvironmentManager } from "./manager.ts";
+import { stagedSymlinkedDefinitions } from "./setup-drafts.ts";
 
 /** The infrastructure-service fields the log reader needs. The configured and
  * runtime models both carry them, so the reader accepts either rather than
@@ -491,7 +492,8 @@ function markDefaultTargets(
 	return targets;
 }
 
-/** The targets `env_list` reports for one owner.
+/** The targets `env_list` reports for one owner, plus the staged definition files
+ * that are symlinks into the developer's own files.
  *
  * For an owner without a configuration view this is the compiled registry's live
  * list: what the app offers, on which runtime, and whether it can run right now.
@@ -501,17 +503,29 @@ function markDefaultTargets(
  * live configuration, so nothing is lost) and every target that came from the
  * staged root is marked `staged: true`. Without this the tool an author uses to
  * see "what exists" contradicts the tools that run it. */
+interface OwnerStagedView {
+	readonly targets: Map<string, Array<Record<string, unknown>>>;
+	/** The staged definition files that are symlinks, with their targets. */
+	readonly symlinks: Array<{ path: string; target: string }>;
+}
+
 async function targetsByApp(
 	deps: AgentEnvironmentDeps,
 	owner: string,
-): Promise<Map<string, Array<Record<string, unknown>>>> {
+): Promise<OwnerStagedView> {
 	const byApp = liveTargetsByApp(deps);
+	const symlinks = new Map<string, Array<{ path: string; target: string }>>();
 	for (const app of deps.apps?.getApps() ?? []) {
 		const overlay = deps.resolveOwnerOverlay?.(
 			owner as `workflow:${string}`,
 			app,
 		);
 		if (!overlay) continue;
+		// A staged path that is a symlink points at the developer's real file, so
+		// the author must know which ones those are before writing anything
+		// (`staged-env-setup-config-root`): scanned once per overlay, then reported.
+		if (!symlinks.has(overlay))
+			symlinks.set(overlay, stagedSymlinkedDefinitions(overlay));
 		const checkout =
 			(await deps.resolveOwnerCheckout?.(owner as `workflow:${string}`, app)) ??
 			"";
@@ -561,7 +575,12 @@ async function targetsByApp(
 			),
 		);
 	}
-	return byApp;
+	return {
+		targets: byApp,
+		symlinks: [...symlinks.values()]
+			.flat()
+			.sort((a, b) => (a.path < b.path ? -1 : 1)),
+	};
 }
 
 /** The compiled registry's live targets, keyed by app. */
@@ -603,7 +622,8 @@ async function environmentList(
 	const instances = requireInstances(deps);
 	const slots = await instances.slots();
 	const byApp = new Map(slots.map((slot) => [slot.app, slot]));
-	const targets = await targetsByApp(deps, owner);
+	const stagedView = await targetsByApp(deps, owner);
+	const targets = stagedView.targets;
 	// Reading the environment is using it: the apps this owner holds stay live.
 	noteUse(
 		instances,
@@ -626,6 +646,15 @@ async function environmentList(
 					targets: targets.get(app.ident) ?? [],
 				};
 			}),
+		// A staged definition file that is a symlink *is* the developer's real
+		// file: a write to it writes through the link (the motivating run
+		// overwrote a file in the developer's own repository that way). The
+		// listing names them, and where they point, so the author deletes the
+		// staged link and writes a regular file instead
+		// (`staged-env-setup-config-root`).
+		...(stagedView.symlinks.length > 0
+			? { stagedSymlinks: stagedView.symlinks }
+			: {}),
 		// The configured infrastructure is part of what this run may act on (it
 		// has no slot of its own): `env_logs` takes an infra service ident, so
 		// the listing names the services and how each one is reached.

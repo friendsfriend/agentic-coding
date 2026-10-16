@@ -100,6 +100,7 @@ export const envSetupBehaviors: Readonly<Record<string, StepBehavior>> = {
 			return {
 				introLines: [
 					`Staged configuration root: ${subject.draftsDir ? `${subject.draftsDir}/root` : "<config>/.drafts/env-setup/<workflowId>/root"} — a complete copy of the live configuration at its own relative layout. Write every definition at its final relative path there (apps/build/*, apps/run/*, apps/compose/*, apps/kubernetes/<app>-<profile>.k8s.json, infrastructure/definitions/*, infrastructure/compose/*), never into the live configuration.`,
+					"A staged path that is a symlink points at the developer's real file (the staged root preserves the live symlinks, and `env_list` lists them under `stagedSymlinks` with their targets): delete the staged symlink and write a regular file at that path instead, never write through it.",
 					`App under setup: ${subject.app || "unnamed"}; its checkout is ${subject.checkout}.`,
 					"Because the staged root is a complete layout, a draft's `include:` and its relative mounts resolve exactly as they will after promotion: author the file you mean to promote, not a version rewritten to fit a partial drafts tree.",
 					"The app repository is read-only evidence: every definition you author is a draft, and nothing becomes live until the developer approves it.",

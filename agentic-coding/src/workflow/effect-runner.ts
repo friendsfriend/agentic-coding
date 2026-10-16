@@ -27,21 +27,18 @@ import {
 import {
 	draftSourceRoot,
 	fingerprintCheckout,
-	fingerprintDirectoryDetailed,
+	fingerprintDefinitions,
 	liveConfigPath,
 	readArmedBaseline,
 	reviewedDigest,
-	SETUP_BACKUPS_DIRECTORY,
-	SETUP_WORKFLOW_ID,
+	SETUP_GUARD_SCOPE,
 	setupBackupDir,
 	setupDraftsDir,
-	setupDraftsRoot,
 	setupGuardViolations,
 } from "../server/environment/setup-drafts.ts";
 import {
 	promoteSetupDrafts,
 	rollbackPromotion,
-	setupPromotionLockPath,
 } from "../server/environment/setup-promote.ts";
 import {
 	materializeStagedRoot,
@@ -55,7 +52,6 @@ import {
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
-import { environmentDiscoveryFile } from "../server/environment-discovery.ts";
 import { listEvidence } from "../server/evidence/store.ts";
 import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
@@ -2292,33 +2288,12 @@ export function agentEffectHandlers(
 					const checkoutDir =
 						typeof payload.checkout === "string" ? payload.checkout : "";
 					const phase = payload.phase === "check" ? "check" : "baseline";
-					const draftsDir =
-						typeof payload.draftsDir === "string" ? payload.draftsDir : "";
-					const exclusion = {
-						...(draftsDir ? { draftsDir } : {}),
-						backupDir: setupBackupDir(configDir, workflowId),
-						lockPath: setupPromotionLockPath(configDir),
-						// Every env-setup workflow's staged state lives here, and each one
-						// is a complete configuration copy: hashing a sibling's would park
-						// this workflow in `attention-required` for another workflow's
-						// materialization and could exhaust the walk budget.
-						draftsRoot: setupDraftsRoot(configDir),
-						// Another workflow's promotion writes its journal and its
-						// private backup copies under `.backups/env-setup-<id>/`; that
-						// is not a change to this workflow's live configuration.
-						backupsRoot: path.join(
-							configDir,
-							SETUP_BACKUPS_DIRECTORY,
-							SETUP_WORKFLOW_ID,
-						),
-						// The running server's discovery record lives in the configuration
-						// root and changes when a server starts, restarts or stops. That is
-						// not a write to the developer's configuration, so it never parks a
-						// correct workflow in `attention-required`
-						// (fix-env-tools-for-all-runs).
-						serverRecordPath: environmentDiscoveryFile(configDir),
-					};
-					const configWalk = fingerprintDirectoryDetailed(configDir, exclusion);
+					// The subject still carries the workflow's state directory
+					// (`payload.draftsDir`) for the other effects of the family; the guard
+					// itself needs no exclusion for it, because it fingerprints the
+					// configuration's *definition* trees only and the state directory
+					// sits outside every one of them.
+					const configWalk = fingerprintDefinitions(configDir);
 					const checkoutFingerprint = yield* Effect.promise(() =>
 						Promise.resolve(fingerprintCheckout(checkoutDir)),
 					);
@@ -2341,7 +2316,9 @@ export function agentEffectHandlers(
 								checkoutDir,
 								configFingerprint: configWalk.digest,
 								checkoutFingerprint,
+								scope: SETUP_GUARD_SCOPE,
 								truncated: configWalk.truncated,
+								entries: configWalk.entries,
 							},
 						};
 					}
@@ -2354,7 +2331,9 @@ export function agentEffectHandlers(
 						checkoutDir,
 						configFingerprint: configWalk.digest,
 						checkoutFingerprint,
+						scope: SETUP_GUARD_SCOPE,
 						truncated: configWalk.truncated,
+						entries: configWalk.entries,
 					});
 					if (violations.length > 0)
 						throw new PermanentFailure(

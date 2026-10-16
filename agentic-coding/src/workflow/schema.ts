@@ -508,7 +508,10 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		setupDraftsDir: Schema.optionalWith(text(4096), { exact: true }),
 		/** The promotion journal's per-run authentication secret. */
 		setupPromotionSecret: Schema.optionalWith(text(256), { exact: true }),
-		/** The write guard's armed baselines, keyed by the run identity. */
+		/** The write guard's armed baselines, keyed by the run identity. The scope
+		 * marker and the scanned entries are optional so a baseline an older build
+		 * armed still decodes (and is then reported as needing a restart) rather
+		 * than being dropped as an unreadable snapshot. */
 		setupGuardBaselines: Schema.optionalWith(
 			Schema.Record({
 				key: text(256),
@@ -517,7 +520,20 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 					checkoutDir: text(4096),
 					configFingerprint: text(4096),
 					checkoutFingerprint: text(4096),
+					scope: Schema.optionalWith(boundedText(128), { exact: true }),
 					truncated: Schema.optionalWith(Schema.Boolean, { exact: true }),
+					entries: Schema.optionalWith(
+						Schema.Array(
+							Schema.Struct({
+								path: boundedText(4096),
+								kind: Schema.Literal("d", "f", "l"),
+								size: Schema.optionalWith(integer(0), { exact: true }),
+								digest: Schema.optionalWith(boundedText(128), { exact: true }),
+								target: Schema.optionalWith(boundedText(4096), { exact: true }),
+							}),
+						),
+						{ exact: true },
+					),
 				}),
 			}),
 			{ exact: true },

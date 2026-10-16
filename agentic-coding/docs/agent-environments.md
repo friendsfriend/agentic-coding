@@ -197,7 +197,12 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
   evidence; the staged root lives outside the checkout.
   - Live **symlinks are preserved** as absolute symlinks to the same target
     (`apps/build/<app>-build.Dockerfile` → `~/devenv-config/...`), so the gate
-    exercises production's symlink behaviour instead of papering over it.
+    exercises production's symlink behaviour instead of papering over it. A
+    staged path that is a symlink therefore *is* the developer's own file: the
+    author instructions say to delete the staged link and write a regular file
+    rather than write through it, and `env_list` reports those paths and their
+    targets (`stagedSymlinks`) so the choice is visible before anything is
+    written.
   - `.env` and `providers/` are exposed **read-only**: private copies (mode
     0o400) inside the workflow's own 0o700 state directory, never symlinks and
     never in the repository. A symlink would be write-through — a stray write
@@ -206,9 +211,13 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
     either way. `base.json` records per-path digests and symlink targets, never
     secret content, and is authenticated with the run's pinned promotion
     secret.
-  - `wiki`, `telemetry`, `snapshots`, `.drafts` and `.backups` are not copied;
-    the walk is bounded (20 000 entries, depth 12) and a configuration above
-    the size bound refuses the start instead of filling the disk.
+  - `wiki`, `telemetry`, `snapshots`, `.drafts` and `.backups` are not copied,
+    and neither is the server's own live state and caches — `orchestrator/`,
+    `.agentic-coding-workflow/`, `classifier*` (a 342 MB classifier install in
+    the motivating configuration) and `browsers/` (the product's Playwright
+    install). The walk is bounded (20 000 entries, depth 12) and a
+    configuration above the size bound refuses the start instead of filling the
+    disk.
 - **Drafts are runnable and promotable as drafts.** Discovery, compose/docker
   invocation and every `env_*` tool of the workflow's runs resolve the staged
   root as if it were the configuration root, so a draft written with
@@ -217,12 +226,22 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
   with the base snapshot, so the live configuration's own 78 symlinks never
   read as drafts; a changed symlink is a non-regular finding and a deleted path
   is a finding that is never published.
-- **Write guard.** The live configuration directory and the checkout are
-  fingerprinted before the first author turn (`.drafts`/`.backups` excluded);
-  at every author handoff the guard compares them and a change outside the
-  staged root fails the guard, which parks the workflow in
-  `attention-required` with the violation named. The developer decides what
-  happens next.
+- **Write guard.** The configuration's *definition* trees (`apps/`,
+  `infrastructure/`, `libraries/` — every tree a draft may publish into, plus
+  the library definitions) and the checkout are fingerprinted before the first
+  author turn; at every author handoff the guard compares them and a change
+  inside those trees fails the guard, which parks the workflow in
+  `attention-required` with the violation naming the changed paths (bounded)
+  and how many changed. The developer decides what happens next. The scope is
+  the fix for the first real run: fingerprinting the whole configuration
+  directory failed closed on the server's own state (`orchestrator/**`,
+  `classifier/**`, `.agentic-coding-workflow/**`, `tui.json`) and on the
+  product's browser install, whose tree is deeper than the walk's bound, so a
+  correct workflow parked every time. A symlink inside a checked tree also
+  records its resolved target *and* the digest of what that target holds, so a
+  write through it into the developer's own repository is caught and named.
+  Inputs are fingerprinted, not just paths: a byte-identical restore (the
+  promotion's own rollback, a `touch`) is not a change.
 - **Deterministic validation of the real path.** `setup.validate` parses every
   draft, checks that discovery resolves each drafted run target, compiles them,
   requires the `AC_OTEL_*` wiring, refuses a host port another app already
@@ -248,11 +267,15 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
 - **Atomic promotion, conflict-safe.** `setup.promote` backs up every replaced
   live file to `<config>/.backups/env-setup-<workflow-id>/`, writes each file
   through a temporary sibling renamed over its target, reloads the environment
-  catalog, and moves the staged state aside. A live file the developer changed
-  after the staged copy was taken is **refused before anything is written**, and
-  the conflict names the path. Any other failure — a write or the reload —
-  restores every replaced file, removes every added one, and leaves the drafts
-  in place for the retry.
+  catalog, and moves the staged state aside. A replaced path that is a symlink
+  into the developer's own repository is never written through: the rename puts
+  a regular file at the live path, the target stays byte-unchanged, the link's
+  target is recorded, and a rollback puts the link itself back (the approval
+  diff says "replaces the symlink -> <target> with a regular file"). A live file
+  the developer changed after the staged copy was taken is **refused before
+  anything is written**, and the conflict names the path. Any other failure — a
+  write or the reload — restores every replaced file, removes every added one,
+  and leaves the drafts in place for the retry.
 - **Post-promotion smoke check.** After a promotion, `setup.smoke` starts the
   real default target once against the live configuration; it first proves that
   every promoted file still holds the digest the gate recorded, so

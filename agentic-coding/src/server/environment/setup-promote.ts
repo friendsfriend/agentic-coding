@@ -82,6 +82,13 @@ export interface SetupPromotionIo {
 	removeDirectory(directory: string): void;
 	/** Remove an empty directory; a non-empty one is left alone. */
 	rmdir(directory: string): void;
+	/** The literal target of a symlink, or `undefined` when the path is not one.
+	 * A live definition that is a symlink points into the developer's own
+	 * repository, so the promotion must replace the *link* rather than write
+	 * through it, and a rollback must put the link back. */
+	readLink(filePath: string): string | undefined;
+	/** Create a symlink at `linkPath`. */
+	symlink(target: string, linkPath: string): void;
 }
 
 export interface SetupPromotionOptions {
@@ -119,6 +126,10 @@ export interface SetupPromotionFile {
 	readonly status: "added" | "replaced";
 	readonly sharedInfrastructure: boolean;
 	readonly backupPath?: string;
+	/** The live path was this symlink's target when the promotion replaced it
+	 * with a regular file: the approval diff and the promotion report state it,
+	 * and a rollback restores the link exactly. */
+	readonly replacesSymlink?: string;
 }
 
 export interface SetupPromotionResult {
@@ -155,6 +166,10 @@ interface SetupPromotionJournalEntry {
 	 * restores exactly the previous file rather than the backup's private
 	 * 0o600. */
 	readonly mode?: number;
+	/** The literal target of the symlink this promotion replaced, so a rollback
+	 * restores the link itself instead of writing the developer's file back as
+	 * a regular file. */
+	readonly linkTarget?: string;
 }
 
 interface SetupPromotionJournal {
@@ -230,6 +245,15 @@ const defaultIo: SetupPromotionIo = {
 			// Not empty (or already gone): leaving it is correct.
 		}
 	},
+	readLink: (filePath) => {
+		try {
+			return fs.readlinkSync(filePath);
+		} catch {
+			// A regular file (`EINVAL`) or a path that is gone: not a symlink.
+			return undefined;
+		}
+	},
+	symlink: (target, linkPath) => fs.symlinkSync(target, linkPath),
 };
 
 /**
@@ -487,7 +511,24 @@ async function promote(
 			)
 				throw new ReviewChangedFailure(relative);
 			const liveExists = io.exists(livePath);
-			const liveText = liveExists ? io.readFile(livePath) : undefined;
+			// A live definition that is a symlink points at the developer's own
+			// file (the motivating configuration symlinks its compose files into a
+			// separate repository). It is read *through* the link — that content is
+			// what an untouched link shows — but never written through it: the
+			// write below is a temporary sibling plus an atomic rename, which
+			// replaces the link with a regular file, and a rollback puts the link
+			// itself back from `linkTarget`.
+			const liveLinkTarget = liveExists ? io.readLink(livePath) : undefined;
+			let liveText: string | undefined;
+			if (liveExists) {
+				try {
+					liveText = io.readFile(livePath);
+				} catch (error) {
+					// A symlink whose target is gone reads no content; the link is what
+					// this promotion replaces, and `linkTarget` is what restores it.
+					if (liveLinkTarget === undefined) throw error;
+				}
+			}
 			const digest = contentDigest(draftText);
 			const known = entries.get(relative);
 			const backupPath = path.join(options.backupDir, ...relative.split("/"));
@@ -503,6 +544,9 @@ async function promote(
 				liveText !== undefined &&
 				contentDigest(liveText) === known.writtenDigest;
 			const inherited = recorded ? known : undefined;
+			// The link this path held before this run's first write (a replay finds a
+			// regular file and keeps the recorded target).
+			const linkTarget = liveLinkTarget ?? inherited?.linkTarget;
 			const status: "added" | "replaced" = inherited
 				? inherited.status
 				: liveExists
@@ -534,7 +578,9 @@ async function promote(
 					? `${backupPath}.${token}.bak`
 					: backupPath;
 				io.mkdir(path.dirname(target), BACKUP_DIRECTORY_MODE);
-				const content = liveText ?? io.readFile(livePath);
+				// A link with no target has no content to keep; the rollback restores
+				// its `linkTarget` rather than this private copy.
+				const content = liveText ?? "";
 				io.writeFile(target, content, BACKUP_FILE_MODE);
 				// The backup itself stays private (0600); the mode the live path had
 				// before is journaled beside it, because a rollback must restore exactly
@@ -563,6 +609,7 @@ async function promote(
 					: inherited?.mode !== undefined
 						? { mode: inherited.mode }
 						: {}),
+				...(linkTarget !== undefined ? { linkTarget } : {}),
 				writtenDigest: digest,
 			});
 			files.push({
@@ -571,6 +618,7 @@ async function promote(
 				sharedInfrastructure:
 					status === "replaced" && relative.startsWith("infrastructure/"),
 				...(backup ? { backupPath: backup.backupPath } : {}),
+				...(linkTarget !== undefined ? { replacesSymlink: linkTarget } : {}),
 			});
 			writeJournal(io, journalPath, options, runId, entries, {
 				complete: false,
@@ -761,6 +809,18 @@ async function rollback(
 				continue;
 			}
 			if (entry.backupPath && io.exists(entry.backupPath)) {
+				if (entry.linkTarget !== undefined) {
+					// The path this promotion replaced was a symlink into the developer's
+					// own file. Restoring the backup's *content* would leave a regular file
+					// holding the target's bytes — a change to the configuration the
+					// developer never made — so the link itself goes back, replaced
+					// atomically like every other write here.
+					const temporary = `${livePath}.rollback-link`;
+					io.remove(temporary);
+					io.symlink(entry.linkTarget, temporary);
+					io.rename(temporary, livePath);
+					continue;
+				}
 				const content = io.readFile(entry.backupPath);
 				if (
 					entry.backupDigest !== undefined &&
@@ -980,12 +1040,21 @@ function readJournal(
 			runId: String(parsed.runId ?? ""),
 			complete: parsed.complete === true,
 			movePending: parsed.movePending === true,
-			entries: parsed.entries.filter(
-				(entry): entry is SetupPromotionJournalEntry =>
-					typeof entry === "object" &&
-					entry !== null &&
-					typeof (entry as { path?: unknown }).path === "string",
-			),
+			entries: parsed.entries
+				.filter(
+					(entry): entry is SetupPromotionJournalEntry =>
+						typeof entry === "object" &&
+						entry !== null &&
+						typeof (entry as { path?: unknown }).path === "string",
+				)
+				// `linkTarget` is state the promotion recorded to be able to restore a
+				// replaced symlink; an unauthenticated or foreign journal never reaches
+				// here (the tag above refuses it), so a string is taken as recorded.
+				.map((entry) =>
+					typeof entry.linkTarget === "string"
+						? { ...entry, linkTarget: entry.linkTarget }
+						: entry,
+				),
 			directories: Array.isArray(parsed.directories)
 				? parsed.directories.filter(
 						(entry): entry is string => typeof entry === "string",

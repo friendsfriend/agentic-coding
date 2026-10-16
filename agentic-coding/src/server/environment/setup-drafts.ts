@@ -19,58 +19,17 @@ const SETUP_FAMILY_DIRECTORY = path.join(
 	SETUP_DRAFTS_DIRECTORY,
 	SETUP_WORKFLOW_ID,
 );
-/**
- * Configuration-relative directories that exist only because the workflow runs,
- * so their own creation contributes no fingerprint line — while what they hold
- * does. The family directory is here too: this workflow's drafts appear inside
- * it, and its own existence must not read as a change to the configuration.
- */
-export const SETUP_WALKED_ONLY_DIRECTORIES: readonly string[] = [
-	SETUP_DRAFTS_DIRECTORY,
-	SETUP_BACKUPS_DIRECTORY,
-	SETUP_FAMILY_DIRECTORY,
-];
-
-/**
- * The paths one workflow's own state occupies inside the configuration root.
- * The fingerprint excludes exactly these — by *path*, never by name — so the
- * guard hides the drafts the author is allowed to write and the promotion's
- * own bookkeeping, and nothing else: a file whose name merely looks like the
- * workflow's state is still a change to the live configuration.
- */
-export interface SetupFingerprintExclusion {
-	/** This workflow's drafts directory (its promoted sibling too). */
-	readonly draftsDir?: string;
-	/** This workflow's promotion backup directory. */
-	readonly backupDir?: string;
-	/** The promotion's lock file. */
-	readonly lockPath?: string;
-	/** The whole `.drafts/env-setup` family root: every workflow's staged state
-	 * lives there, and every one of them is a full configuration copy that this
-	 * workflow's guard must not hash (a sibling workflow's materialization would
-	 * otherwise park a correct workflow in `attention-required`, and one sibling
-	 * copy can exhaust the walk budget before the live configuration is
-	 * reached). */
-	readonly draftsRoot?: string;
-	/** The `.backups/env-setup` family root: every promotion's journal and its
-	 * private copies of replaced live files live there, and another workflow's
-	 * promotion must not move this workflow's fingerprint (it would park a correct
-	 * workflow in `attention-required` for someone else's promotion). */
-	readonly backupsRoot?: string;
-	/** The running unified server's discovery record
-	 * (`server/environment-discovery.ts`). It lives in the configuration root
-	 * because that is what it hands off, and it appears, changes or disappears
-	 * when a server starts, restarts or stops — which is not a change to the
-	 * developer's configuration, so the guard excludes it by path like this
-	 * workflow's own bookkeeping rather than parking a correct workflow in
-	 * `attention-required`. */
-	readonly serverRecordPath?: string;
-}
 
 /** Bound on one fingerprinted tree, so a pathological config cannot make the
- * guard walk forever. */
+ * guard walk forever. Both bounds apply *per scanned definition prefix*, so a
+ * deep tree the server owns elsewhere cannot exhaust them. */
 const FINGERPRINT_MAX_ENTRIES = 20_000;
 const FINGERPRINT_MAX_DEPTH = 12;
+/** How many of a symlinked directory's entries its target digest covers: the
+ * target is outside the configuration, so it is never walked in full. */
+const FINGERPRINT_SYMLINK_ENTRIES = 200;
+/** How many changed paths a violation message names before it counts the rest. */
+const FINGERPRINT_NAMED_PATHS = 10;
 /** Bytes of a large file that are hashed: its first and last block, so content
  * decides at every size while the read stays bounded. */
 const FINGERPRINT_HASH_MAX_BYTES = 64 * 1024;
@@ -96,11 +55,47 @@ export const SETUP_DRAFT_PREFIXES: readonly string[] = [
 	"infrastructure/compose/",
 ];
 
+/**
+ * The configuration-relative trees the write guard fingerprints: the
+ * configuration's *definition* trees, and nothing else.
+ *
+ * The guard used to fingerprint the whole configuration directory, which made
+ * every realistic run fail: the product's own browser install
+ * (`browsers/chromium-<version>/...`, ~1,600 entries deeper than the walk's
+ * bound) and
+ * the server's live state (`orchestrator/**`, `classifier/**`,
+ * `.agentic-coding-workflow/**`, `tui.json`) change while a workflow runs, and
+ * neither is a change to the developer's configuration. Failing closed on them
+ * parked correct workflows in `attention-required` (and a truncated walk made
+ * the guard refuse every run, retry included).
+ *
+ * Every tree a draft may publish into is covered — derived from
+ * `SETUP_DRAFT_PREFIXES`, so the guard's scope can never be narrower than the
+ * promotion's — plus `libraries/definitions/*.json`, which is a definition tree
+ * of the configuration (`EnvironmentManager.librariesDirPath`) even though no
+ * draft may name it. Inside these trees the guard stays fail-closed: every
+ * entry counts, and a walk that could not read all of one is reported.
+ */
+export const SETUP_DEFINITION_ROOTS: readonly string[] = [
+	...new Set(
+		SETUP_DRAFT_PREFIXES.map((prefix) =>
+			prefix.slice(0, prefix.indexOf("/") + 1),
+		),
+	),
+	"libraries/",
+].sort();
+
 /** Whether a configuration-relative path is one a draft may publish. */
 export function isAllowedDraftPath(relative: string): boolean {
 	const normalized = relative.replaceAll("\\", "/");
 	if (normalized.includes("..") || normalized.startsWith("/")) return false;
 	return SETUP_DRAFT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/** Whether a configuration-relative path lies inside a fingerprinted tree. */
+export function isDefinitionPath(relative: string): boolean {
+	const normalized = relative.replaceAll("\\", "/").replace(/^\.\//, "");
+	return SETUP_DEFINITION_ROOTS.some((root) => normalized.startsWith(root));
 }
 
 /** The drafts root every workflow's drafts directory lives under. */
@@ -560,6 +555,67 @@ export function listDraftFiles(draftsDir: string): string[] {
 		.map((entry) => entry.relative);
 }
 
+/** How many symlinked staged definitions the `env_list` answer names. */
+const STAGED_SYMLINK_REPORT_LIMIT = 20;
+/** Bound on the sweep that finds them, so a pathological tree cannot turn a
+ * listing into a full walk. */
+const STAGED_SYMLINK_SCAN_ENTRIES = 2_000;
+
+/**
+ * The staged definition *files* that are symlinks, with where they point.
+ *
+ * The staged root preserves the live configuration's symlinks on purpose (a
+ * symlinked Dockerfile exercises production's behaviour), which means a staged
+ * path that is a symlink *is* the developer's own live file: a write to it goes
+ * straight through into the developer's repository. `env_list` reports them, so
+ * the author deletes the staged link and writes a regular file instead. Bounded
+ * in paths reported and in entries visited.
+ */
+export function stagedSymlinkedDefinitions(
+	root: string,
+	limit = STAGED_SYMLINK_REPORT_LIMIT,
+): Array<{ path: string; target: string }> {
+	const found: Array<{ path: string; target: string }> = [];
+	let visited = 0;
+	const walk = (dir: string, relative: string, depth: number): void => {
+		if (found.length >= limit || depth > FINGERPRINT_MAX_DEPTH) return;
+		let children: fs.Dirent[];
+		try {
+			children = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const child of children.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			if (found.length >= limit || ++visited > STAGED_SYMLINK_SCAN_ENTRIES)
+				return;
+			const childPath = path.join(dir, child.name);
+			const childRelative =
+				relative === "" ? child.name : `${relative}/${child.name}`;
+			if (child.isSymbolicLink()) {
+				found.push({
+					path: childRelative,
+					target: symlinkDigestTarget(childPath),
+				});
+				continue;
+			}
+			if (child.isDirectory()) walk(childPath, childRelative, depth + 1);
+		}
+	};
+	for (const prefix of SETUP_DRAFT_PREFIXES) {
+		const relative = prefix.replace(/\/$/, "");
+		const dir = path.resolve(root, ...relative.split("/"));
+		let exists = false;
+		try {
+			exists = fs.statSync(dir).isDirectory();
+		} catch {
+			exists = false;
+		}
+		if (!exists) continue;
+		walk(dir, relative, 1);
+	}
+	return found.sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
 /** A shared service every app depends on: a draft under `infrastructure/`. */
 export function isSharedInfrastructurePath(relative: string): boolean {
 	return relative.startsWith("infrastructure/");
@@ -575,6 +631,10 @@ export interface SetupDraftChange {
 	readonly linesDeleted: number;
 	/** Unified diff against the live file (`/dev/null` for an addition). */
 	readonly diff: string;
+	/** The live path is this symlink's target, and the promotion replaces the
+	 * link with a regular file rather than writing through it into the
+	 * developer's own file. Stated in the diff the developer approves. */
+	readonly replacesSymlink?: string;
 }
 
 /**
@@ -660,6 +720,19 @@ export function setupDraftChange(
 			? addedFileDiff(relative, draftText)
 			: unifiedDiff(relative, liveText, draftText);
 	const counts = diffLineCounts(diff);
+	// A live definition that is a symlink points at the developer's own file, and
+	// the promotion replaces the *link* with a regular file instead of writing
+	// through it: the developer has to see that before approving.
+	let linkTarget: string | undefined;
+	try {
+		linkTarget = fs.readlinkSync(livePath);
+	} catch {
+		linkTarget = undefined;
+	}
+	const notice =
+		linkTarget === undefined || status === "added"
+			? ""
+			: `# replaces the symlink -> ${linkTarget} with a regular file\n`;
 	return {
 		path: relative,
 		status,
@@ -667,7 +740,10 @@ export function setupDraftChange(
 			status === "modified" && isSharedInfrastructurePath(relative),
 		linesAdded: counts.added,
 		linesDeleted: counts.removed,
-		diff,
+		diff: `${notice}${diff}`,
+		...(linkTarget !== undefined && status === "modified"
+			? { replacesSymlink: linkTarget }
+			: {}),
 	};
 }
 
@@ -821,105 +897,204 @@ function lcsDiff(
 	return out;
 }
 
-/**
- * A deterministic fingerprint of a directory tree. Every entry contributes its
- * path, size and — for files up to the hash bound — its *content* hash; only a
- * file too large to hash contributes its mtime as well. Content is what the
- * guard decides on: an edit, an addition and a delete all change the digest,
- * while a byte-identical restore (the promotion's own rollback, a `touch`)
- * does not — which is what keeps the guard from condemning the workflow's own
- * work.
- */
-export function fingerprintDirectory(
-	root: string,
-	exclusion: SetupFingerprintExclusion = {},
-): string {
-	return fingerprintDirectoryDetailed(root, exclusion).digest;
+/** One recorded entry of the guard's fingerprint: what one path of a
+ * configuration definition tree was when the fingerprint was taken. */
+export interface SetupGuardEntry {
+	/** Configuration-relative path, forward-slashed. */
+	readonly path: string;
+	readonly kind: "d" | "f" | "l";
+	/** A regular file's size; a symlink records its target's size. */
+	readonly size?: number;
+	/** The bounded content digest: a regular file's own content, or — for a
+	 * symlink — the digest of what its realpath target holds, so a write
+	 * *through* the link into a file outside the configuration changes the
+	 * fingerprint. */
+	readonly digest?: string;
+	/** A symlink's resolved target path, so a violation can name where the write
+	 * really landed. */
+	readonly target?: string;
 }
 
-/** The fingerprint and whether the bounded walk completed. A walk that hit its
- * entry or depth bound saw only a prefix of the tree, so a comparison against it
- * proves nothing: `truncated` lets the guard fail closed instead of accepting a
- * truncated view as "unchanged". */
-export function fingerprintDirectoryDetailed(
+/** The guard's fingerprint of the configuration's definition trees, the entries
+ * it was taken from, and whether the bounded scan completed. */
+export interface SetupDefinitionFingerprint {
+	readonly digest: string;
+	/** A scanned tree hit its entry or depth bound, or an entry inside one could
+	 * not be read: the digest covers a prefix of the tree, so a comparison against
+	 * it proves nothing about the part that was not read. */
+	readonly truncated: boolean;
+	/** The recorded entries, sorted by path: the guard names the paths that
+	 * changed from them. */
+	readonly entries: readonly SetupGuardEntry[];
+}
+
+/**
+ * A deterministic fingerprint of the configuration's *definition* trees
+ * (`SETUP_DEFINITION_ROOTS`), never of the whole configuration directory.
+ *
+ * Each entry contributes its path, kind, size and — for files within the hash
+ * bound — its *content* hash, and a symlink additionally contributes its
+ * resolved target and the bounded digest of what that target holds. Content is
+ * what the guard decides on: an edit, an addition and a delete all change the
+ * digest, while a byte-identical restore (the promotion's own rollback, a
+ * `touch`) does not — which is what keeps the guard from condemning the
+ * workflow's own work.
+ *
+ * The bounds apply per scanned tree, so a deep tree the server owns elsewhere
+ * (a browser install) can neither exhaust them nor make the scan look
+ * truncated.
+ */
+export function fingerprintDefinitions(
 	root: string,
-	exclusion: SetupFingerprintExclusion = {},
-): { digest: string; truncated: boolean } {
-	const entries: string[] = [];
-	const excluded = new Set(
-		[exclusion.draftsDir, exclusion.backupDir, exclusion.lockPath]
-			.filter(
-				(value): value is string => typeof value === "string" && value !== "",
-			)
-			.flatMap((value) => [
-				path.resolve(value),
-				`${path.resolve(value)}.promoted`,
-			]),
-	);
-	// The server's discovery record is a handoff, never configuration: it is
-	// excluded as the one path it is, so a static lookalike still counts as a
-	// change.
-	if (exclusion.serverRecordPath)
-		excluded.add(path.resolve(exclusion.serverRecordPath));
+	options: { readonly maxEntries?: number; readonly maxDepth?: number } = {},
+): SetupDefinitionFingerprint {
+	const maxEntries = options.maxEntries ?? FINGERPRINT_MAX_ENTRIES;
+	const maxDepth = options.maxDepth ?? FINGERPRINT_MAX_DEPTH;
+	const entries: SetupGuardEntry[] = [];
 	let visited = 0;
 	let truncated = false;
-	const familyRoots = [exclusion.draftsRoot, exclusion.backupsRoot]
-		.filter(
-			(value): value is string => typeof value === "string" && value !== "",
-		)
-		.map((value) => path.resolve(value));
 	const walk = (dir: string, relative: string, depth: number): void => {
-		if (depth > FINGERPRINT_MAX_DEPTH) {
+		if (depth > maxDepth) {
 			truncated = true;
 			return;
 		}
-		if (visited > FINGERPRINT_MAX_ENTRIES) {
-			truncated = true;
-			return;
-		}
-		let names: string[];
+		let children: fs.Dirent[];
 		try {
-			names = fs.readdirSync(dir).sort();
+			children = fs.readdirSync(dir, { withFileTypes: true });
 		} catch {
+			// An entry that exists but cannot be read is a scan that did not
+			// complete, and the caller must not read that as "nothing changed".
+			truncated = true;
 			return;
 		}
-		for (const name of names) {
-			const child = path.join(dir, name);
-			const childRelative = relative === "" ? name : `${relative}/${name}`;
-			// This workflow's own state is the only thing hidden, and it is hidden
-			// by path: another workflow's drafts, or a live file whose name merely
-			// looks like this workflow's state, still counts. The whole
-			// `.drafts/env-setup` family is skipped, because every state directory
-			// in it now holds a complete configuration copy.
-			if (familyRoots.includes(path.resolve(child))) continue;
-			if (excluded.has(path.resolve(child))) continue;
-			if (SETUP_WALKED_ONLY_DIRECTORIES.includes(childRelative)) {
-				walk(child, childRelative, depth + 1);
+		for (const child of children.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			if (++visited > maxEntries) {
+				truncated = true;
+				return;
+			}
+			const childPath = path.join(dir, child.name);
+			const childRelative = `${relative}/${child.name}`;
+			if (child.isSymbolicLink()) {
+				entries.push(symlinkEntry(childPath, childRelative));
 				continue;
 			}
-			let stats: fs.Stats;
+			if (child.isDirectory()) {
+				entries.push({ path: childRelative, kind: "d" });
+				walk(childPath, childRelative, depth + 1);
+				continue;
+			}
+			// A fifo, a socket or a device is not a definition, and hashing one
+			// would block: only a regular file and a symbolic link are recorded.
+			if (!child.isFile()) continue;
+			let size: number;
 			try {
-				stats = fs.statSync(child);
+				size = fs.statSync(childPath).size;
 			} catch {
+				truncated = true;
 				continue;
 			}
-			visited++;
-			if (stats.isDirectory()) {
-				entries.push(`d ${childRelative}`);
-				walk(child, childRelative, depth + 1);
-				continue;
-			}
-			if (!stats.isFile()) continue;
-			entries.push(
-				`f ${childRelative} ${stats.size} ${fileContentDigest(child, stats.size)}`,
-			);
+			entries.push({
+				path: childRelative,
+				kind: "f",
+				size,
+				digest: fileContentDigest(childPath, size),
+			});
 		}
 	};
-	walk(root, "", 0);
+	for (const prefix of SETUP_DEFINITION_ROOTS) {
+		const dir = path.resolve(root, ...prefix.split("/").filter(Boolean));
+		let exists = false;
+		try {
+			exists = fs.statSync(dir).isDirectory();
+		} catch {
+			exists = false;
+		}
+		// A definition tree that does not exist is simply empty; the tree is
+		// recorded the moment it appears, so creating one is a change.
+		if (!exists) continue;
+		entries.push({ path: prefix.replace(/\/$/, ""), kind: "d" });
+		walk(dir, prefix.replace(/\/$/, ""), 1);
+	}
+	const sorted = entries.sort((a, b) => (a.path < b.path ? -1 : 1));
 	return {
-		digest: createHash("sha256").update(entries.join("\n")).digest("hex"),
+		digest: createHash("sha256")
+			.update(canonicalEntryLines(sorted))
+			.digest("hex"),
 		truncated,
+		entries: sorted,
 	};
+}
+
+/** The canonical text a fingerprint digest is taken over: one stable line per
+ * entry, so the digest never depends on key order or on a path's characters. */
+function canonicalEntryLines(entries: readonly SetupGuardEntry[]): string {
+	return entries
+		.map((entry) =>
+			[
+				entry.path,
+				entry.kind,
+				entry.size ?? "",
+				entry.digest ?? "",
+				entry.target ?? "",
+			]
+				.map((field) => JSON.stringify(field))
+				.join(" "),
+		)
+		.join("\n");
+}
+
+/** One symlink of a scanned tree: its resolved target and a bounded digest of
+ * what that target holds. The target is outside the configuration as often as
+ * not (the motivating case: `apps/compose/<app>-compose.yml` points into the
+ * developer's own repository), and a write through the link lands there — which
+ * only a digest of the target can see. */
+function symlinkEntry(linkPath: string, relative: string): SetupGuardEntry {
+	let target = "";
+	try {
+		target = path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath));
+	} catch {
+		return { path: relative, kind: "l", digest: "-unreadable" };
+	}
+	return {
+		path: relative,
+		kind: "l",
+		target,
+		digest: symlinkTargetDigest(target),
+	};
+}
+
+/** A bounded signature of what a symlink's target holds: a regular file's
+ * content digest, or a symlinked directory's immediate entries. A broken or
+ * unreadable target is recorded as such, so breaking the link is a change. */
+function symlinkTargetDigest(target: string): string {
+	try {
+		const stats = fs.statSync(target);
+		if (stats.isFile()) return fileContentDigest(target, stats.size);
+		if (!stats.isDirectory()) return "-other";
+		const lines = fs
+			.readdirSync(target)
+			.sort()
+			.slice(0, FINGERPRINT_SYMLINK_ENTRIES)
+			.map((name) => {
+				try {
+					const entry = fs.lstatSync(path.join(target, name));
+					const kind = entry.isSymbolicLink()
+						? "l"
+						: entry.isFile()
+							? "f"
+							: "d";
+					return `${name} ${kind} ${entry.size}`;
+				} catch {
+					return `${name} ?`;
+				}
+			});
+		return createHash("sha256")
+			.update(`dir\n${lines.join("\n")}`)
+			.digest("hex")
+			.slice(0, 32);
+	} catch {
+		return "-missing";
+	}
 }
 
 /**
@@ -1003,14 +1178,26 @@ export function fingerprintCheckout(checkoutDir: string): string {
 		.digest("hex");
 }
 
+/** The fingerprint algorithm a baseline was armed with. A baseline without this
+ * marker was armed by the guard's previous, whole-configuration algorithm: its
+ * digest is not comparable with a definition-prefix digest, so it is reported
+ * as needing a restart instead of being silently accepted or mis-compared. */
+export const SETUP_GUARD_SCOPE = "definition-prefixes-v1";
+
 export interface SetupGuardBaseline {
 	readonly configDir: string;
 	readonly checkoutDir: string;
 	readonly configFingerprint: string;
 	readonly checkoutFingerprint: string;
-	/** The configuration walk hit its bound: the fingerprint is a prefix, so it
+	/** Which fingerprint algorithm armed this baseline (`SETUP_GUARD_SCOPE`).
+	 * Absent on a baseline an older build armed. */
+	readonly scope?: string;
+	/** The definition-tree scan hit its bound: the fingerprint is a prefix, so it
 	 * proves nothing and the guard must not accept it as "unchanged". */
 	readonly truncated?: boolean;
+	/** The scanned definition entries the fingerprint was taken from, so a
+	 * violation names what changed rather than only that something did. */
+	readonly entries?: readonly SetupGuardEntry[];
 }
 
 /**
@@ -1025,7 +1212,9 @@ export type SetupGuardBaselines = Readonly<
 	Record<string, SetupGuardBaseline | undefined>
 >;
 
-/** One armed baseline as the snapshot stores it. */
+/** One armed baseline as the snapshot stores it. A baseline that names no scope
+ * is still returned: the guard reports it as armed by an older version (which
+ * is actionable) instead of failing as "no baseline" (which is not). */
 export function readArmedBaseline(
 	baselines: SetupGuardBaselines | undefined,
 	runId: string,
@@ -1042,29 +1231,95 @@ export function readArmedBaseline(
 	return armed;
 }
 
+/** The paths whose recorded entry changed between two scans, with the entry it
+ * *is* now (or was), bounded: what a violation message names. */
+export function changedDefinitionEntries(
+	baseline: readonly SetupGuardEntry[] | undefined,
+	current: readonly SetupGuardEntry[] | undefined,
+	limit = FINGERPRINT_NAMED_PATHS,
+): { readonly entries: SetupGuardEntry[]; readonly total: number } {
+	if (!baseline || !current) return { entries: [], total: 0 };
+	const before = new Map(baseline.map((entry) => [entry.path, entry]));
+	const after = new Map(current.map((entry) => [entry.path, entry]));
+	const paths = [...new Set([...before.keys(), ...after.keys()])].sort();
+	const changed: SetupGuardEntry[] = [];
+	let total = 0;
+	for (const entryPath of paths) {
+		const was = before.get(entryPath);
+		const is = after.get(entryPath);
+		if (was && is && canonicalEntryLines([was]) === canonicalEntryLines([is]))
+			continue;
+		total++;
+		if (changed.length >= limit) continue;
+		if (is) changed.push(is);
+		else if (was) changed.push(was);
+	}
+	return { entries: changed, total };
+}
+
+/** One changed entry as a violation names it: its path, its kind, and — for a
+ * symlink — the target a write through it would reach. */
+function describeDefinitionEntry(entry: SetupGuardEntry): string {
+	if (entry.kind === "d") return `${entry.path}/ (directory)`;
+	if (entry.kind === "l")
+		return `${entry.path} (symlink -> ${entry.target ?? "<unreadable>"})`;
+	return entry.path;
+}
+
 /**
  * What changed since the baseline was taken, as bounded human-readable
- * violations. Empty means the drafts directory was the only thing the author
- * wrote — the condition the workflow needs before it validates anything. Pure,
- * so the guard's decision is testable without an engine.
+ * violations. Empty means the definition trees were the only thing the author
+ * left alone — the condition the workflow needs before it validates anything.
+ * Pure, so the guard's decision is testable without an engine.
  */
 export function setupGuardViolations(
 	baseline: SetupGuardBaseline,
 	current: SetupGuardBaseline,
 ): string[] {
 	const violations: string[] = [];
-	if (baseline.configDir !== current.configDir)
+	if (baseline.configDir !== current.configDir) {
 		violations.push(
 			`the configuration root moved from ${baseline.configDir} to ${current.configDir}`,
 		);
-	else if (
+	} else if (baseline.scope !== SETUP_GUARD_SCOPE) {
+		// A baseline the previous algorithm armed cannot be compared with a
+		// definition-prefix fingerprint: one clear, actionable violation instead of
+		// a mis-comparison nobody can act on.
+		violations.push(
+			`the write guard's baseline of ${current.configDir} was armed by an older version of the guard (${baseline.scope ?? "whole-configuration fingerprint"}); restart the workflow so a baseline of the definition trees is taken`,
+		);
+	} else if (
 		baseline.truncated === true ||
 		current.truncated === true ||
 		baseline.configFingerprint !== current.configFingerprint
-	)
+	) {
+		const changed = changedDefinitionEntries(baseline.entries, current.entries);
+		const named = changed.entries.map(describeDefinitionEntry);
+		const more =
+			changed.total > named.length
+				? ` (+${changed.total - named.length} more)`
+				: "";
+		// The *count* leads the list on purpose: the message becomes the
+		// workflow's attention text, which is bounded again on its way to the
+		// store, and a reader must never lose "how much changed" to a long path.
+		const what =
+			baseline.entries === undefined || current.entries === undefined
+				? "the changed paths were not recorded in the baseline"
+				: changed.total === 1
+					? `1 definition changed: ${named.join("; ")}`
+					: `${changed.total} definitions changed: ${named.join("; ")}${more}`;
+		// The truncation clause is only added when a scan inside the definition
+		// trees really was incomplete: it used to be appended on a fingerprint
+		// mismatch of any kind, which pointed the reader at a bound that the real
+		// cause (server-owned state outside the trees) never touched.
+		const truncated =
+			baseline.truncated === true || current.truncated === true
+				? "; the definition trees could not be read completely"
+				: "";
 		violations.push(
-			`the live configuration changed outside the drafts directory (${current.configDir})${current.truncated === true ? ", or could not be read completely" : ""}`,
+			`the live configuration changed outside the drafts directory (${current.configDir}) — ${what}${truncated}; these files are the developer's configuration, and only the staged root may be written before the developer approves a promotion`,
 		);
+	}
 	if (baseline.checkoutDir !== current.checkoutDir)
 		violations.push(
 			`the checkout moved from ${baseline.checkoutDir} to ${current.checkoutDir}`,
