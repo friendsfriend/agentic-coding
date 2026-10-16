@@ -9,8 +9,6 @@ Big ones:
 * Introduce dependency upgrade and migration workflow
 
 Small ones: 
-* Implement compaction feature 
-  * Compaction doenst trigger and settings cant be changed via ui...
 * Improve agent steering based on recent runs (observability first)
 * JEV:
   * Use jev to block bash commands that should be blocked
