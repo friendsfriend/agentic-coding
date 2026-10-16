@@ -392,8 +392,7 @@ function expand(value: string): string {
 /**
  * The bundle root a configuration that names none resolves: the `wiki`
  * directory of the same configuration root every other consumer resolves
- * (`AGENTIC_CODING_CONFIG_DIR`, then the deprecated `DEVENV_CONFIG_DIR`, then
- * `~/.config/agentic-coding`).
+ * (`AGENTIC_CODING_CONFIG_DIR`, then `~/.config/agentic-coding`).
  *
  * It is derived rather than written down because the alternative — a literal
  * `~/.config/agentic-coding/wiki` — ignores the configuration root entirely: a

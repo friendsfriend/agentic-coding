@@ -157,12 +157,10 @@ if (!process.env.AGENTIC_CODING_TEST_TEMPLATE_ROOT)
 		realTemporaryDirectory,
 		"agentic-coding-repo-templates",
 	);
-// An explicit full-replacement configuration bypasses the isolated root entirely,
-// and the deprecated alias selects the same root by a second name. Both are
-// cleared unconditionally, for the reason above: an ambient value must not decide
-// what a test sees. A test that needs either sets it itself after this preload.
+// An explicit full-replacement configuration bypasses the isolated root entirely.
+// It is cleared unconditionally, for the reason above: an ambient value must not
+// decide what a test sees. A test that needs it sets it itself after this preload.
 delete process.env.HERDR_WORKFLOW_CONFIG;
-delete process.env.DEVENV_CONFIG_DIR;
 
 // The workflow runner also exports the authenticated server handoff to every
 // managed child, so a test process started by a workflow inherits

@@ -1,249 +1,67 @@
-# Configuration inventory (unify-json-configuration-directory)
+# Configuration inventory
 
-Implementation acceptance artifact for tasks 1.1–1.3. It records what exists
-today so the canonical resolver, JSON adapters, `.env` contract and migration
-operate on measured behavior rather than assumptions. Every credential field and
-path classification below is an inventory result, not a proposal; anything not
-listed here must not be guessed or silently dropped.
+What the application reads and writes today, and who owns each file. The
+canonical resolver, the JSON adapters and the `.env` contract are the whole
+configuration surface: there is no configuration migration, no second root and
+no obsolete file that a reader falls back to.
 
-## 1. Predecessor status (task 1.1)
+## 1. Root resolution
 
-`centralize-application-settings` is **archived**
-(`openspec/changes/archive/2026-09-16-centralize-application-settings`), so
-Settings exists and is authoritative for source/scope labels
-(`docs/settings-inventory.md`, `src/tui/settings/catalog.ts`). Its
-`unified-ui-preferences` deltas are already applied against the **legacy**
-`$DEVENV_CONFIG_DIR` root, and its storage labels for
-`src/tui/settings/catalog.ts:165` still say `apps/**.toml` for JSON definition
-files. This change supersedes those path/format examples while keeping its
-client/server ownership rules (attached client edits the owning server, never
-its own similarly named root).
+One resolver, `src/config-root.ts`, decides the application-owned global
+configuration root:
 
-## 2. Root resolution today (task 1.1)
+| Precedence | Input |
+| --- | --- |
+| 1 | an explicit config-dir argument (health checks, embedded callers) |
+| 2 | `AGENTIC_CODING_CONFIG_DIR` |
+| 3 | `~/.config/agentic-coding` |
 
-There is no single resolver. Five independent decisions exist:
+`DEVENV_HOME` is a different setting: it selects the managed environment
+runtime root (`db/`, `logs/`, `scripts/`, worktrees), not the configuration
+root. `DEVENV_CONFIG_DIR` no longer selects anything. The root's own `.env`
+cannot select the root: a root-selecting key inside it is ignored and reported.
 
-| # | Site | Precedence | Default |
+## 2. Files under the configuration root
+
+| Asset | Format | Owner | Notes |
 | --- | --- | --- | --- |
-| 1 | `src/backend/home.ts:resolveConfigDir()` | `DEVENV_CONFIG_DIR` | `~/.config/devenv` |
-| 2 | `src/tui/shared/preferences.ts:configDir()` | `DEVENV_CONFIG_DIR` | `~/.config/devenv` (duplicate of 1) |
-| 3 | `packages/devenv/core/src/logger.ts:resolveDevenvHome()` | `DEVENV_HOME` → `DEVENV_HOME` in `<configDir>/.env` | `~/devenv`, with an inline third copy of the `DEVENV_CONFIG_DIR`/`~/.config/devenv` pair |
-| 4 | `src/workflow/paths.ts:CONFIG` + `effects.ts:loadConfigWithProvenance()` | `HERDR_WORKFLOW_CONFIG` → first existing base | `~/.config/agentic-coding/config.toml`, legacy `~/.pi/agent/herdr-workflow.toml` |
-| 5 | `src/workflow/wiki.ts:wikiRoot()` | `HERDR_WIKI_DIR` → `[wiki] root` | `~/.config/agentic-coding/wiki` |
+| `config.json` | JSON | `src/workflow/effects.ts`, `src/server/config.ts` | Global workflow/agents/wiki/telemetry/ui configuration. The only global workflow configuration file. |
+| `tui.json` | JSON | `src/tui/shared/preferences.ts` | The one UI-preferences authority (active theme, custom-theme selection). Unrelated JSON keys are preserved; writes are atomic. |
+| `themes/` | JSON | `src/tui/shared/preferences.ts` | Custom themes, loaded beside the built-in set. |
+| `.env` | env file | `src/env-file.ts`, `src/backend/home.ts` | Secret/endpoint references. Reads only the named variables. |
+| `providers/*.json` | JSON | `src/server/integrations/provider-store.ts` | `${VAR}` placeholders only; written 0600. |
+| `apps/definitions/*.json`, `libraries/definitions/*.json`, `infrastructure/definitions/*.json` | JSON | `src/server/environment/manager.ts`, `config.ts` | `${CONFIG}`/`$CONFIG` placeholder expansion. |
+| `scripts/**` | native | `src/server/environment/example-config.ts` | Stay in their own formats. |
+| `environment-server.json` | JSON | environment authority | Server handoff for a spawned backend. |
+| `wiki/` | OKF markdown | `src/workflow/wiki.ts` | Knowledge bundle; `HERDR_WIKI_DIR` overrides its location. |
 
-Root environment variables and override flags in use:
+`HERDR_WORKFLOW_CONFIG` selects a full-replacement workflow configuration file:
+it keeps replacement semantics and skips the repository overlay.
 
-- `DEVENV_CONFIG_DIR` — env/provider/preferences root (sites 1–3).
-- `DEVENV_HOME` — managed runtime root (`db/`, `logs/`, `scripts/`); retained
-  and **not** renamed by this change.
-- `HERDR_WORKFLOW_CONFIG` — explicit full replacement of workflow config; skips
-  repository overlays (`effects.ts:328`).
-- `HERDR_WIKI_DIR` — wiki bundle root; independent of cwd/project.
-- `HERDR_AGENT_DEF_DIR` — agent definitions; unrelated to this change.
-- `AGENTIC_CODING_CONFIG_DIR` — **does not exist yet**.
-- No `--config-dir` CLI flag exists today. The resolver gains an explicit
-  argument for migration `--source`/`--target`, not a new user-facing flag.
+## 3. Repository overlay
 
-Workflow config precedence (`effects.ts:loadConfigWithProvenance`): explicit
-replacement file, else first existing of `~/.config/agentic-coding/config.toml`
-then `~/.pi/agent/herdr-workflow.toml`, then a deep-merged repository overlay at
-`<repo-root>/.pi/herdr-workflow.toml`. Write-back target
-(`selectAgentsConfigPath`): explicit replacement > project file containing
-`[agents]` > first existing base > project file > canonical base. Conflict
-detection (`conflictingAgentsFiles`) fires only when the target is the project
-overlay and a base also supplies `[agents]`. `userConfigPaths` deliberately
-excludes project overlays and the explicit replacement because
-a server-wide `ui` flag is never read from a project overlay.
+A repository supplies `<repo-root>/.pi/herdr-workflow.json`, deep-merged over the
+global base. That merge is the only project scope: a TOML overlay is not read,
+and a project overlay never captures a user-scope write. Write-back
+(`selectAgentsConfigPath`) targets the explicit replacement file, else the
+project overlay when it supplies `agents`, else the canonical `config.json`.
 
-## 3. Configuration consumers and formats (task 1.1)
+## 4. Obsolete formats
 
-| Asset | Format | Owner / site | Notes |
-| --- | --- | --- | --- |
-| `config.toml` (workflow/agents/wiki/telemetry/ui) | TOML | `src/workflow/effects.ts`, `src/server/config.ts` | TOML read via `Bun.TOML.parse`; written via a local TOML serializer (`effects.ts:130-191`) |
-| `~/.pi/agent/herdr-workflow.toml` | TOML | same, "legacy" provenance | read-only compatibility input after migration |
-| `<repo>/.pi/herdr-workflow.toml` | TOML | same, "project" provenance | repository overlay; not copied into global defaults |
-| `pi/herdr-workflow.toml` | TOML | repository portable template | copied by installer; contains `use-default-model` preset plus portable defaults |
-| `apps/definitions/*.json`, `libraries/definitions/*.json`, `infrastructure/definitions/*.json` | JSON | `src/server/environment/manager.ts`, `config.ts` | already JSON; `${CONFIG}`/`$CONFIG` placeholder expansion at `config.ts:150-162` |
-| `scripts/**` | shell/ps1/py/ts | `src/server/environment/example-config.ts` | native formats, stay native |
-| Compose/chart/values assets | YAML | `example-config.ts` | native, stay native |
-| `providers/*.json` | JSON | `src/server/integrations/provider-store.ts` | holds `${VAR}` placeholders only; 0600 on write |
-| `.env` | env file | `src/backend/home.ts`, `packages/devenv/core/src/logger.ts`, `src/server/integrations/env-file.ts` | three parsers, one preserving writer |
-| `tui.json` | JSON | `src/tui/shared/preferences.ts` | client-local active theme; atomic temp+rename |
-| `themes/*.json` | JSON | `src/tui/shared/preferences.ts` | client-local custom themes; loaded at startup |
-| example config tree | mixed | `src/server/environment/example-config.ts` | refuses non-empty dirs; preserves `.env`, `providers/`, `tui.json` |
+Only the files above are read. An obsolete configuration file (for example a
+leftover `config.toml` or `~/.pi/agent/herdr-workflow.toml`) is ignored: it is
+neither merged, nor reported as a shadowed source, nor rewritten, and nothing
+copies it into the canonical root. A configuration document that is not JSON is
+refused by name (`failed to parse config <file>: only the current JSON
+configuration format is supported`) rather than interpreted.
 
-Consumers of the root: `src/server-command.ts` (`resolveConfigDir` +
-`resolveDevenvHome` at 92), `src/server/catalog-command.ts:16`,
-`src/server/integrations/services.ts:76-78` (`providers` + `.env`),
-`src/server/environment/authority.ts` (`configDir`, `homeDir`),
-`src/tui/shared/preferences.ts`, `packages/devenv/core/src/logger.ts`, and the
-installer scripts
-(`scripts/stow.sh`, `scripts/test-stow.sh`, `scripts/test-herdr-workflow.sh`).
+Converting historical configuration is therefore an out-of-band step performed
+with the older build; this build has no `config migrate` command and no
+migration journal, backup or rollback machinery.
 
-## 4. Credentials, `.env` and interpolation (task 1.2)
+## 5. Diagnostics
 
-### Credential-bearing fields
-
-- **Provider files** (`providers/*.json`): `username`, `token`. A non-placeholder
-  literal is already refused as `clear-text-credentials`
-  (`provider-store.ts:clearTextCredentialError`). Env keys are derived as
-  `DEVENV_PROVIDER_<NAME>_USERNAME` / `_TOKEN` (`providerCredentialEnvKeys`).
-- **Workflow config sections**: TOML workflow/agents/wiki/telemetry/ui currently
-  carry **no** credential field and no `${VAR}` reference. Workflow credentials
-  today are not config fields at all — they arrive through the askpass relay
-  (below). No workflow JSON credential field is invented by this change; the
-  resolution layer is written for schema-declared reference-capable fields and
-  is exercised by the provider fields until a workflow field is inventoried.
-- **`.env` bootstrap**: `DEVENV_HOME` only (read by `resolveDevenvHome`).
-- **Runtime env forwarding**: telemetry bridges receive `HERDR_*` identity,
-  `OTEL_EXPORTER_OTLP_*`, `HERDR_TELEMETRY_PATH`, and `HERDR_CAPTURE_CONTENT`
-  (the `telemetry.capture_content` opt-in for session content, see
-  [`agent-session-telemetry.md`](agent-session-telemetry.md)) — never resolved
-  secrets.
-- **Askpass shim** (`src/workflow/credentials.ts`): ephemeral, single-owner,
-  FIFO-relayed prompt answers; never persisted. **Task 3.4 keeps this as-is.**
-- **`CredentialRegistry`** (`src/server/credentials.ts`): ephemeral server-side
-  prompt broker (`/api/v1/credentials/respond`); never persisted.
-- **External harness auth** (pi/opencode credential stores, `~/.pi`,
-  `~/.config/opencode`): not imported, not migrated.
-
-### Interpolation today — the raw-JSON defect
-
-`src/server/integrations/provider-store.ts:load()` calls
-`substituteVarsWithWarnings(rawJsonText, envVars)` from
-`src/server/integrations/env-file.ts`, i.e. it substitutes into the **raw JSON
-source text** and only then parses it. A secret containing `"`, `\` or a newline
-therefore corrupts or mis-parses the document. This is the exact behavior task
-3.2 replaces with parse-then-resolve-on-fields. The pattern is
-`/\$\{([^}]*)\}/g`; an empty name is left untouched, an unknown name is reported
-in `missingVars` and the placeholder survives.
-
-Reference precedence for the replacement layer must become: explicitly supplied
-process environment first (including an explicit empty value), then the selected
-root `.env`. Today `loadEnvFile` is the only source, so process overrides are
-never consulted for provider credentials.
-
-### `.env` syntax actually supported (parser union)
-
-| Feature | `backend/home.ts` | `core/logger.ts` | `integrations/env-file.ts` |
-| --- | --- | --- | --- |
-| `#` comments, blank lines | yes | yes | yes |
-| `KEY=value`, whitespace trimmed | yes | yes | yes |
-| `export KEY=value` | yes | yes | **no** |
-| single/double quoted values | naive quote strip | naive quote strip | quote-aware with `\\`/`\'` unescape |
-| `$HOME`/`${HOME}` expansion | yes | yes | **no** |
-| preserves unrelated lines on write | no write | no write | yes (`upsertEnvFile`, `removeEnvFileKeys`) |
-| 0600 enforcement | no | no | yes (`writeEnvLines`) |
-| shell evaluation | never | never | never |
-| implicit cwd `.env` load | never | never | never |
-
-Task 3.1 must union these: `export` input and `$HOME` expansion **and**
-quote-aware escaping **and** preserving 0600 writes, with the union tested.
-
-### Permissions and redaction boundaries
-
-- `writeEnvLines` enforces `0600` and re-`chmod`s on every write.
-- Provider files are written `0600`; the providers directory is `0755`.
-- Askpass shim dir and shim are `0700`; FIFOs `0600`.
-- `src/workflow/secure-fs.ts` provides `O_NOFOLLOW` descriptor-relative open,
-  atomic private write and rename — the primitive to reuse for
-  secret-bearing atomic storage (task 3.3) instead of inventing a second one.
-- Redaction today: the telemetry bridges redact by pattern
-  (`SECRET_PATTERN` in `embedded.generated.ts`), and Settings shows provider
-  presence (`has_token`) only. There is no redaction layer over migration
-  reports or config provenance — tasks 3.3 and 4.1 must add it.
-
-## 5. Asset vs runtime classification (task 1.3)
-
-**Configuration (moves to the canonical root):**
-
-- `config.json` (from the workflow TOML), `providers/`, `tui.json`, `themes/`,
-  `apps/definitions/`, `libraries/definitions/`, `infrastructure/definitions/`,
-  `infrastructure/scripts/`, `apps/**` assets referenced through `$CONFIG`.
-- Assets referenced by `$CONFIG`/`${CONFIG}` are rebased by re-pointing
-  `$CONFIG` at the resolved root; the field values themselves do not change.
-
-**Runtime / state (must NOT relocate):**
-
-- `wiki/` — **already lives under `~/.config/agentic-coding/wiki`** by default
-  (`effects.ts:252`, `wiki.ts:396`). It shares the target root but is knowledge
-  data, not configuration. Migration must not treat it as a config file.
-- `$DEVENV_HOME/db/state.db` — environment state database
-  (`environmentStateDir`).
-- `$DEVENV_HOME/logs/` — logger output (`core/logger.ts`).
-- `$CONFIG/logs/infrastructure/*.log` — script/infra logs
-  (`defaultScriptLogPath`, `runtime/script-infrastructure.ts:382`). These live
-  under the config root today; they stay where they are and are not migrated.
-- Checkouts, worktrees, `.herdr-workflow/` run directories, outbox/durable
-  workflow state, pins and provenance: absolute paths preserved verbatim.
-
-### Path-bearing fields
-
-- **Absolute**: repository/checkout paths, `cwd`, runtime/state paths, log
-  destinations, wiki root when absolute, `HERDR_HOME`-style values.
-- **Config-relative**: `$CONFIG`-prefixed definition fields
-  (`chartPath`, `values[]`, `cwd`, script paths), `[wiki] root` when it is the
-  default `~/.config/agentic-coding/wiki` (already canonical — no rebase), and
-  the default `config.toml` → `config.json` rename at the root.
-- **Tilde**: `~/...` values are expanded at read time, stored verbatim.
-
-### Representative migration fixtures
-
-Derived from the above and used by tasks 6.1–6.4:
-
-1. Fresh machine: no `~/.config/agentic-coding/config.*`, no
-   `~/.config/devenv` → defaults only.
-2. Legacy-only workflow root: `~/.config/agentic-coding/config.toml` present →
-   convert to `config.json`, preserve profiles/presets/routes and UI settings.
-3. Legacy-only env root: `~/.config/devenv/{.env,providers,apps,...}` present →
-   move into the canonical root.
-4. Both roots present with overlapping definitions → explicit conflicts, no
-   deep merge, no last-write-wins.
-5. Both scopes for one `.env` key with different values → secret conflict
-   requiring resolution, values never printed.
-6. Canonical `config.json` already exists plus a legacy TOML → canonical wins,
-   migration reports the conflict instead of merging.
-7. Duplicate definition `ident` across `apps/`/`libraries/` → conflict entry.
-8. `~/.config/agentic-coding/wiki/` present with knowledge data → untouched.
-9. Target path is a symlink → refuse to replace/retarget.
-10. Unsupported TOML value (date, non-finite) → explicit diagnostic, no
-    lossy conversion.
-11. Interrupted publication (journal present, partial staged files) → startup
-    refuses, resume completes, rollback restores.
-12. Rerun of a completed migration → idempotent, no duplicate definitions, later
-    canonical edits preserved.
-13. Custom roots via explicit `--source`/`--target`.
-14. Failed write / unwritable directory → live files unchanged.
-
-All fixtures run against temporary directories; no test touches real user
-configuration or secrets.
-
-## 6. Configuration added after this inventory
-
-Keys added by later changes, recorded here so the file stays the one place that
-says where a value lives.
-
-| Key | File | Owner | Default |
-| --- | --- | --- | --- |
-| `environment.instances.idle_ttl_minutes` | `$AGENTIC_CODING_CONFIG_DIR/config.json` (the layered workflow configuration) | `src/workflow/effects.ts` parses it, `src/server/runtime/instances.ts` (the idle reaper) consumes it | `30` |
-| `agents.compaction` | `$AGENTIC_CODING_CONFIG_DIR/config.json` (the layered workflow configuration) | `src/workflow/compaction.ts` owns the shape, the validation and the resolution; `src/agent-host/host-main.ts` reads it for the durable host, `src/server/config.ts` reads and writes it for Settings | `{ enabled: true, reserveTokens: 32000, backgroundTokens: 32000, keepRecentTokens: 20000 }` |
-
-`agents.compaction` is the durable runs' compaction policy. It is **user scope**:
-the host resolves the user-level file (never a project overlay), the Settings
-write path is pinned to that same file, and a hand-written `agentHost.compaction`
-keeps precedence over it. Each token value is a whole count or a percentage of
-the model's context window (`"15%"`), which the host resolves against the
-smallest window among its tracked runs' models and falls back to that field's
-absolute default when no window is known. The full contract — defaults, floors,
-clamps, the two telemetry envelopes and the manual `/compact` command — is in
-[`settings-inventory.md`](settings-inventory.md) ("Compaction
-(`[agents.compaction]`)") and [`agent-session-telemetry.md`](agent-session-telemetry.md).
-
-`environment.instances.idle_ttl_minutes` is how many minutes an agent-held app
-may sit idle before the server's reaper stops it and frees its slot
-(`add-environment-instance-lifecycle`). It is **file-only**: the server resolves
-it on every reap pass, a missing or unusable value falls back to the 30-minute
-default instead of disabling the lifecycle, and Settings exposes no editor for
-it. The lifecycle it drives — owner-bound `environment.teardown`, activity
-coalescing, the reap event — is documented in
-[`agent-environments.md`](agent-environments.md).
+`configDiagnostic()` reports to an installed diagnostic sink (a TUI toast or
+blocking dialog) and falls back to stderr on headless surfaces. Diagnostics are
+value-free: they name files and variables, never configuration values or
+secrets. A failed load is reported as an error and still throws.

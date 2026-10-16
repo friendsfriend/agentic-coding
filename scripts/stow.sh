@@ -46,25 +46,12 @@ for legacy_template in herdr-workflow.toml herdr-workflow.json; do
     fi
 done
 
-# Initialize the JSON config once. Fresh defaults are copied only when nothing
-# applicable exists: an existing target (regular file or symlink), or any legacy
-# user configuration that fresh defaults would silently shadow, requires
-# explicit migration instead.
+# Initialize the JSON config once. Fresh defaults are copied only when the
+# target does not exist: an obsolete configuration file is not an applicable
+# source, so it never shadows the canonical JSON and is left untouched.
 config_dest="$HOME/.config/agentic-coding/config.json"
-legacy_configs=(
-    "$HOME/.config/agentic-coding/config.toml"
-    "$HOME/.pi/agent/herdr-workflow.toml"
-)
 if [[ ! -e "$config_dest" && ! -L "$config_dest" ]]; then
-    legacy_present=""
-    for legacy in "${legacy_configs[@]}"; do
-        [[ -e "$legacy" || -L "$legacy" ]] && legacy_present="$legacy"
-    done
-    if [[ -n "$legacy_present" ]]; then
-        printf 'Existing configuration found at %s; keeping it and skipping fresh defaults.\nRun `agentic-coding config migrate` to convert it to %s.\n' "$legacy_present" "$config_dest" >&2
-    else
-        cp "$root/pi/herdr-workflow.json" "$config_dest"
-    fi
+    cp "$root/pi/herdr-workflow.json" "$config_dest"
 fi
 
 # Remove stale herdr agent definition symlinks from global pi discovery

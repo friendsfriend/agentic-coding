@@ -32,7 +32,7 @@ import {
 	runResumeRun,
 	validateQuestionTimeout,
 } from "./commands/dispatch-actions.ts";
-import { runMigrate, runRepair, runRepin } from "./commands/misc.ts";
+import { runRepair, runRepin } from "./commands/misc.ts";
 import { runResearchHandoff } from "./commands/research-handoff.ts";
 import { parseMode, runStart } from "./commands/start.ts";
 import { runWiki } from "./commands/wiki.ts";
@@ -132,7 +132,6 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 		runResumeRun(rest, workflowEngine, application),
 	repair: runRepair,
 	repin: runRepin,
-	migrate: runMigrate,
 	"debug-request": runDebugRequest,
 	"debug-result": (rest, workflowEngine) =>
 		runDebugResult(rest, workflowEngine),

@@ -16,18 +16,9 @@ Installer never installs agent runtimes, providers, or credentials. Configure Gi
 ./scripts/install.sh
 ```
 
-Configuration installs at `~/.config/agentic-coding/config.json`. The shipped [`pi/herdr-workflow.json`](pi/herdr-workflow.json) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration). All other application configuration (`.env`, `providers/`, `tui.json`, `themes/`, `apps/`, `libraries/`, `infrastructure/`) lives in the same directory; `AGENTIC_CODING_CONFIG_DIR` overrides it, and `DEVENV_CONFIG_DIR` still selects that one root as a deprecated alias.
+Configuration installs at `~/.config/agentic-coding/config.json`. The shipped [`pi/herdr-workflow.json`](pi/herdr-workflow.json) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration). All other application configuration (`.env`, `providers/`, `tui.json`, `themes/`, `apps/`, `libraries/`, `infrastructure/`) lives in the same directory; `AGENTIC_CODING_CONFIG_DIR` overrides it.
 
-For an existing installation, preview and then apply the configuration migration. It is explicit, previews by default, keeps a protected backup of every original file and never relocates runtime data (checkouts, databases, logs, the knowledge wiki):
-
-```bash
-agentic-coding config migrate            # dry run, prints the plan
-agentic-coding config migrate --apply    # needs stopped writers
-```
-
-Migration converts `config.toml` to `config.json`, moves the legacy `~/.config/devenv` configuration into the canonical root, and leaves legacy sources in place as inactive files. Run it before updating this checkout or running the installer.
-
-> New engine migrates recognized legacy workflows on first access. Legacy rows/files remain preserved, but old engine must not resume workflow after new revisions/effects exist. Restore recorded pre-migration repository/worktree backup before binary rollback.
+This build reads and writes the current formats only: `config.json` and `tui.json` under that directory, workflow stores at schema version 6, and environment state at its current version. An obsolete configuration file, an older workflow or environment database, or an old TUI preference file is ignored or refused with a clear error and is never converted or rewritten. Convert such data with the older build before updating this checkout.
 
 ## Surfaces
 
@@ -168,8 +159,8 @@ per start and never rewrites global defaults. Resolution order: preset role →
 preset step → preset default → existing chain. Profiles and presets can be
 created, edited, and deleted from the home dashboard's model configuration
 modal (`m`); edits are written back to the JSON config file that supplied the
-agents section. A legacy `.pi/herdr-workflow.toml` overlay is read for
-compatibility but must be converted before it can be edited. Because
+agents section. Repository overlays use `.pi/herdr-workflow.json`; a TOML
+overlay is not read by this build. Because
 project-level `.pi/herdr-workflow.json` is merged over
 the user config, a committed agent configuration is trusted and executed as
 code: profile `executable`, `model`, `tools`, and preset routes from a cloned

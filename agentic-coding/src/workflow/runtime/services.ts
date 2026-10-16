@@ -51,13 +51,13 @@ export interface WorkflowStoreShape {
 		repo: string,
 		fn: (db: Database) => A,
 	) => Effect.Effect<A, WorkflowRuntimeError>;
-	/** Autocommit scoped write used only outside command transactions (legacy
-	 * import owns its own transaction control). */
+	/** Autocommit scoped write for work that owns its own transaction control
+	 * and must not run inside the command transaction. */
 	readonly write: <A>(
 		repo: string,
 		fn: (db: Database) => A,
 	) => Effect.Effect<A, WorkflowRuntimeError>;
-	/** Initialize the canonical store (and import legacy rows) exactly once. */
+	/** Initialize the canonical store at its current schema version. */
 	readonly initialize: (
 		repo: string,
 	) => Effect.Effect<void, WorkflowRuntimeError>;

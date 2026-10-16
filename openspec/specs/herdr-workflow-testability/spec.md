@@ -90,19 +90,6 @@ Tests SHALL inject failure before/after transaction commit and during every exte
 - **THEN** all distinct valid results SHALL persist
 - **AND** successor effect SHALL enqueue once
 
-### Requirement: Legacy migration is tested
-Migration tests SHALL cover every recognized legacy workflow type and operational state, equivalent mirrors, conflicting mirrors, malformed rows, and active-agent reissue.
-
-#### Scenario: Valid legacy row migrates
-- **WHEN** fixture loads recognized legacy state
-- **THEN** resulting snapshot SHALL satisfy current schema and pinned definition
-- **AND** migration audit event SHALL identify source version
-
-#### Scenario: Ambiguous row fails closed
-- **WHEN** fixture mirrors conflict or phase evidence is inconsistent
-- **THEN** workflow view SHALL require repair
-- **AND** no agent/effect SHALL launch
-
 ### Requirement: Runtime adapters share contract tests
 Pi, OpenCode, and OpenCode V2 adapters SHALL pass same launch/prompt/status/stop and assignment semantics suite, with runtime-specific argument assertions and conditional live smoke tests.
 
@@ -161,4 +148,15 @@ Final agent guidance SHALL provide production-backed, type-checked examples for 
 - **WHEN** an evaluated agent implementation retries a mutating handler outside persisted attempt accounting
 - **THEN** the focused correctness check/review SHALL reject that implementation
 - **AND** the evaluation SHALL record the required correction rather than count an unchecked generated patch as success
+
+### Requirement: Unsupported persisted formats are tested without mutation
+Focused persistence tests SHALL invoke production readers with disposable fixtures and SHALL verify unsupported workflow, config, environment and telemetry formats are rejected or ignored without being rewritten.
+
+#### Scenario: Historical workflow store is refused
+- **WHEN** a disposable non-v6 workflow database is opened
+- **THEN** the test SHALL assert the exact unsupported-version error and unchanged schema/data/version
+
+#### Scenario: Current configuration fixture remains loadable
+- **WHEN** a copied sanitized current JSON configuration is loaded under temporary HOME and config-root overrides
+- **THEN** current config consumers SHALL resolve expected values without reading the real config directory
 

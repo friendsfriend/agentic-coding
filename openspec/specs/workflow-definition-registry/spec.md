@@ -108,7 +108,7 @@ A registered step or workflow extension SHALL affect only definitions that expli
 - **AND** newly started workflows SHALL resolve a definition version whose graph includes the new step
 
 ### Requirement: Definition pinning
-Each workflow SHALL pin its exact workflow-definition identifier, version, and digest for its lifetime unless a validated migration changes that pin. New-definition pins SHALL also determine exact executable step and behavior compatibility versions. Supported legacy pins SHALL resolve through explicit compatibility mappings, never an implicit current-version fallback. A new definition version tier SHALL be the default resolved version for new starts, and an already pinned workflow SHALL NOT be re-pinned to it implicitly.
+Each workflow SHALL pin its exact workflow-definition identifier, version, and digest for its lifetime. Persisted v6 pins SHALL resolve only to their exact registered definition and executable step/behavior identities; the engine SHALL NOT reinterpret them or implicitly repin them. A new definition version tier SHALL be the default resolved version for new starts, and an already pinned v6 workflow SHALL keep resolving its own registered version. No semantic migration command or implicit migration path SHALL change a persisted pin.
 
 #### Scenario: Workflow starts
 - **WHEN** a start command accepts a workflow definition
@@ -118,27 +118,12 @@ Each workflow SHALL pin its exact workflow-definition identifier, version, and d
 #### Scenario: Registry definition changes
 - **WHEN** a registered definition digest or required semantic compatibility identity no longer matches an active workflow pin
 - **THEN** the workflow SHALL be blocked before further mutation or effect execution
-- **AND** the engine SHALL require matching implementation restoration or validated migration rather than reinterpret state
-
-#### Scenario: Supported legacy workflow is loaded
-- **WHEN** an existing step-ID-only definition has a declared supported baseline mapping
-- **THEN** the engine SHALL resolve that baseline without rewriting its historical digest
-- **AND** missing or incompatible mappings SHALL fail closed with a compatibility diagnostic
-
-#### Scenario: Semantic migration is accepted
-- **WHEN** an operator confirms a compatible migration with current revision, reason, and a preview of affected runs/effects
-- **THEN** the engine SHALL validate the target state, expire incompatible ownership, and atomically record old/new pins and the migration event
-- **AND** an ordinary digest-only repin SHALL not bypass these checks
-
-#### Scenario: Semantic migration fails
-- **WHEN** target compatibility, evidence, revision, or persistence validation fails
-- **THEN** the prior pins, run ownership, state, and pending effects SHALL remain unchanged
+- **AND** the engine SHALL require restoration of the exact implementation rather than reinterpret or migrate the pin
 
 #### Scenario: New version tier becomes the start default
 - **WHEN** a newer definition version tier is registered for a workflow family
 - **THEN** new starts SHALL resolve that tier's definition
-- **AND** a workflow already pinned to an earlier tier SHALL keep resolving its
-  own registered version without operator action
+- **AND** a workflow already pinned to an earlier v6 tier SHALL keep resolving its own registered version without operator action
 
 ### Requirement: Plugin-grade built-in registry seam
 

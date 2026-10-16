@@ -187,31 +187,33 @@ Opening each retained fixture database through the packaged server:
 
 | Fixture | Result |
 | --- | --- |
-| `v1`, `v3`, `v5`, `v6`, `current` | health `200`, `/api/apps` answered — each version migrates or is already current |
+| `current` | health `200`, `/api/apps` answered — the database is already at the supported schema version |
 | `partial-v4` (interrupted upgrade) | completes idempotently on the next open (`test/environment-state.test.ts`) |
 | `future` (schema 99) | exits `1`: "database schema 99 is newer than the supported 7; refusing to modify it", no backup written, data untouched |
 
 Workflow definitions, pins/digests, historical snapshots and config/data formats
 are unchanged by this cleanup: no schema, no workflow store and no telemetry
-database is rewritten, and the workflow-pin and migration suites
-(`test/workflow-migration.test.ts`, `test/workflow-registry.test.ts`) still pass.
+database is rewritten, an older workflow or environment database is refused
+rather than converted, and the workflow-pin suite
+(`test/workflow-registry.test.ts`) still passes.
 
 **Upgrade procedure**
 
 1. Stop every writer (TUI/server) through its owned shutdown path — the last
    writer to exit must be the one that owns the listener.
-2. Back up `$DEVENV_HOME` and `$DEVENV_CONFIG_DIR` (or rely on the automatic
-   `state.db.backup-v<N>` the upgrade writes with `VACUUM INTO`).
-3. Start the new release: it migrates the environment schema forward and writes
-   the backup before the first write.
+2. Back up `$DEVENV_HOME` (and the configuration root) yourself: this build
+   reads the current environment schema and writes no backup of its own.
+3. Start the new release: it opens the current environment schema, and refuses
+   any other version instead of converting it.
 4. Verify with `GET /api/health`, `GET /api/projects` and the workflow list.
 
 **Rollback procedure**
 
-1. Stop the server (quiescent boundary; no in-flight action, run or migration).
+1. Stop the server (quiescent boundary; no in-flight action or run).
 2. Restore the previous release artifact.
-3. If that release writes an older environment schema, restore the verified
-   pre-upgrade `state.db` (or `state.db.backup-v<N>`) **before** starting it.
+3. If that release writes an older environment schema, restore a `state.db`
+   you backed up yourself **before** starting it: this build neither writes an
+   upgrade backup nor converts a database it does not recognize.
 4. Start it and verify health/catalog. Two releases must never run as writers
    over one database; a newer schema is never downgraded automatically.
 
@@ -242,10 +244,10 @@ binary or a second application server process.
 - Flags: `--devenv-port`/`-p`, `--devenv-url`, `--attach-url`, `--attach-token`,
   `--token` (server), `--workflow-port` (deprecated alias for the single port),
   telemetry receiver ports, `--repo`, `--workflow-id`, `--json`, `--profile`.
-- Environment: `DEVENV_HOME`, `DEVENV_CONFIG_DIR`, `AGENTIC_DEVENV_URL`,
+- Environment: `DEVENV_HOME`, `AGENTIC_CODING_CONFIG_DIR`, `AGENTIC_DEVENV_URL`,
   `DEVENV_URL`, `AGENTIC_WORKFLOW_URL`, `AGENTIC_WORKFLOW_TOKEN`,
   `AGENTIC_DEVENV_TOKEN`.
-- Data: environment config files, `state.db` (v1-v7 with forward migration),
+- Data: environment config files, `state.db` (current schema only),
   workflow store and pins, telemetry database, provider/credential files.
 
 **Compatibility changed (deliberately)**

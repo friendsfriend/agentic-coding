@@ -32,14 +32,18 @@ Supported optional gRPC and other telemetry receivers SHALL run under the Bun se
 - **AND** no separate permanent gRPC backend process SHALL be required
 
 ### Requirement: Compatibility outlives internal bridges
-Supported workflow definitions/pins, data/config formats and public CLI aliases SHALL remain compatible after internal bridge deletion. Removed legacy phase-specific workflow verbs SHALL remain removed.
+Current workflow schema v6, current environment schema v9, current JSON config/preferences and current product operations SHALL remain usable after internal bridge deletion. Historical persisted formats SHALL NOT be retained as compatibility shims: they are refused or ignored, never imported or upgraded. The unversioned `/api/*` surface is the current first-party product API rather than an old-format reader, so this change neither renames, removes nor aliases any route.
 
-#### Scenario: Historical workflow is opened after retirement
-- **WHEN** a supported old workflow references a retained definition/behavior identity
-- **THEN** the application SHALL read it under existing validation/migration rules without dropping its pin for cleanup convenience
+#### Scenario: Current workflow is opened after cleanup
+- **WHEN** the application opens a current v6 workflow store with an exact registered definition pin
+- **THEN** it SHALL read and operate on that current-format state without rewriting its schema or pin
 
-#### Scenario: Operator rolls back artifact
-- **WHEN** rollback requires an older schema writer
-- **THEN** documentation SHALL require quiescent ownership and a verified compatible/pre-upgrade database
-- **AND** the application SHALL NOT automatically downgrade live data
+#### Scenario: Historical data is refused without mutation
+- **WHEN** the application encounters an unsupported workflow or environment schema
+- **THEN** it SHALL report or ignore the unsupported format without importing, upgrading, or modifying it
+
+#### Scenario: Current product routes keep serving
+- **WHEN** an in-repository caller uses an operation on the unversioned `/api/*` surface
+- **THEN** the operation SHALL keep its current behavior, authorization and ordering
+- **AND** the surface SHALL stay the current first-party API rather than a compatibility shim for an older data format
 

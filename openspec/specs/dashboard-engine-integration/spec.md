@@ -78,7 +78,7 @@ Dashboard SHALL consume one typed workflow view containing revision, pinned defi
 - **AND** the engine SHALL NOT be required to supply user-facing presentation strings
 
 ### Requirement: Dashboard actions are dispatchable
-Every action the dashboard offers SHALL be an action the engine can dispatch for the workflow's current revision and step. The dashboard SHALL NOT present an action identifier the engine does not define.
+Every action the dashboard offers SHALL be an action the engine can dispatch for the workflow's current revision and step. The dashboard SHALL NOT present an action identifier the engine does not define, and SHALL NOT infer actions from an old view shape.
 
 #### Scenario: Terminal action set matches the engine
 - **WHEN** a completed workflow whose lifecycle produces no reviewable code change is presented
@@ -90,13 +90,8 @@ Every action the dashboard offers SHALL be an action the engine can dispatch for
 - **THEN** every item that dispatches to the engine SHALL carry an action identifier present in the view's available actions
 - **AND** an item whose identifier has no engine action SHALL NOT be rendered
 
-#### Scenario: Legacy view without actions
-- **WHEN** a workflow view carries no available-actions array
-- **THEN** the dashboard SHALL fall back to its legacy phase-derived action set
-- **AND** the fallback SHALL be limited to views that carry no actions array
-
 ### Requirement: Observational workflow reads
-CLI status, workflow list/snapshot/view reads, dashboard refresh, and dashboard JSON rendering SHALL not create or migrate workflow stores, import legacy rows, expire questions/runs, claim effects, or initiate external workflow work. Missing or incompatible stores SHALL produce read-only absent or migration-required diagnostics.
+CLI status, workflow list/snapshot/view reads, dashboard refresh, and dashboard JSON rendering SHALL not create current workflow stores, import rows, upgrade schemas, expire questions/runs, claim effects, or initiate external workflow work. Missing stores SHALL remain absent; existing non-v6 stores SHALL surface the current store's unsupported-version diagnostic without modification.
 
 #### Scenario: Pending effect is observed
 - **WHEN** a caller repeatedly reads a workflow with pending or retryable effects
@@ -108,9 +103,9 @@ CLI status, workflow list/snapshot/view reads, dashboard refresh, and dashboard 
 - **THEN** the view SHALL represent its elapsed deadline without requiring a persisted expiry mutation
 - **AND** the read SHALL not append an event or increment revision
 
-#### Scenario: Old or missing store is observed
-- **WHEN** home listing or status encounters an absent or unsupported legacy schema
-- **THEN** it SHALL return an appropriate diagnostic without creating files or modifying schema/source records
+#### Scenario: Unsupported or missing store is observed
+- **WHEN** home listing or status encounters an absent store or an existing non-v6 schema
+- **THEN** it SHALL leave storage unchanged and identify the absent state or exact unsupported version
 
 ### Requirement: Dashboard execution has explicit lifecycle ownership
 The server SHALL own at most one execution coordinator per open repository, separate from client view refresh. Explicit dashboard commands SHALL carry displayed action ID and revision through the typed client to server-side engine dispatch. Runner failures SHALL remain visible.

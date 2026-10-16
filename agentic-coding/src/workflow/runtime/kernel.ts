@@ -1,15 +1,14 @@
-// The shared step-transition primitives used by migration, every reducer,
-// and the engine's own start/dispatch paths: enqueueing an effect, applying
+// The shared step-transition primitives used by every reducer and by the
+// engine's own start/dispatch paths: enqueueing an effect, applying
 // a step's reduction, creating a run, entering a step, and transitioning
 // across an edge. Also the small pure step-shape helpers these primitives
 // need (freshStep, resolveArrivalContext) and the fusion-specific helpers
 // (validateFusionRouting, fusionPlannerRoles, fusionDraftInputs) and
 // run-expiry helpers (expireRuns, expireSiblingRuns).
-// Grouped separately from engine.ts because migration.ts and every
-// reducers/*.ts module need these without needing the WorkflowEngine class
-// itself — importing engine.ts from either would close the cycle
-// `engine.ts -> reducers/migration -> engine.ts`. Moved verbatim out of
-// runtime.ts (split-workflow-god-modules).
+// Grouped separately from engine.ts because every reducers/*.ts module needs
+// these without needing the WorkflowEngine class itself — importing engine.ts
+// from a reducer would close the cycle `engine.ts -> reducers/* ->
+// engine.ts`. Moved verbatim out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -828,7 +827,6 @@ export function expireRuns(
 	db: Database,
 	snapshot: WorkflowSnapshot,
 	now: () => Date,
-	preserveSetup = false,
 	preserveRunningLaunches = false,
 ): void {
 	const runIds = [...snapshot.step.activeRunIds];
@@ -849,7 +847,7 @@ export function expireRuns(
 			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry') AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
 		).run(snapshot.workflowId, id);
 	}
-	if (snapshot.definition.id === "research" && !preserveSetup)
+	if (snapshot.definition.id === "research")
 		db.query(
 			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind='workspace.setup'",
 		).run(snapshot.workflowId);

@@ -4,17 +4,20 @@
 TBD - created by archiving change unify-terminal-ui-primitives. Update Purpose after archive.
 ## Requirements
 ### Requirement: One UI preference authority
-All feature surfaces SHALL share one local UI preferences adapter and active theme store. The adapter SHALL use `tui.json` under the shared canonical configuration root, defaulting to `~/.config/agentic-coding/tui.json`, and SHALL keep workflow execution configuration separate.
+All feature surfaces SHALL share one local UI preferences adapter and active theme store. The adapter SHALL use only `tui.json` under the shared canonical configuration root, defaulting to `~/.config/agentic-coding/tui.json`, and SHALL keep workflow execution configuration separate. It SHALL NOT import preferences from a workflow config or historical file.
 
 #### Scenario: Existing selection takes precedence
-- **WHEN** canonical UI preferences already contain a valid theme and legacy workflow preferences differ
+- **WHEN** canonical `tui.json` contains a valid theme and another file contains a different theme
 - **THEN** the canonical selection SHALL win for every feature
 - **AND** startup SHALL NOT overwrite either source file merely to read the selection
 
-#### Scenario: Legacy theme is imported
-- **WHEN** no canonical selection exists and explicit migration finds a valid legacy UI selection
-- **THEN** the explicit migration SHALL import that selection without losing unrelated canonical preference keys
-- **AND** subsequent saves SHALL use the canonical file atomically
+#### Scenario: Old preference is ignored
+- **WHEN** no canonical selection exists and an old workflow config contains a theme
+- **THEN** startup SHALL use the normal current default and SHALL NOT import or persist the old selection
+
+#### Scenario: Canonical saves remain atomic
+- **WHEN** a preference is changed
+- **THEN** subsequent saves SHALL use the canonical file atomically and preserve unrelated current JSON keys
 
 ### Requirement: Theme assets and custom names have one registry
 The application SHALL have one built-in asset set, one custom-theme loader and one picker. Custom theme errors and name conflicts SHALL be handled without destructive overwrite; `system` SHALL remain reserved for successful terminal capture.

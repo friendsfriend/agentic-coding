@@ -1,15 +1,11 @@
 // One local UI preferences adapter for every feature surface. The canonical
 // file is `<config root>/tui.json`, where the root comes from the shared
-// resolver: `AGENTIC_CODING_CONFIG_DIR`, then the deprecated
-// `DEVENV_CONFIG_DIR`, then `~/.config/agentic-coding`.
+// resolver: `AGENTIC_CODING_CONFIG_DIR`, then `~/.config/agentic-coding`.
 // A canonical `theme` value always wins, even when it is not currently
-// registered; only a canonical file with no `theme` key imports the legacy
-// agentic-coding `[ui] theme` selection, once. Unrelated canonical keys are
-// always preserved and writes are atomic so a failed save never corrupts the
-// last good file. Workflow execution settings stay in their own
-// provenance-aware config and are not touched here.
+// registered. Unrelated canonical keys are always preserved and writes are
+// atomic so a failed save never corrupts the last good file. Workflow execution
+// settings stay in their own provenance-aware config and are not touched here.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
 	isThemeJson,
@@ -30,14 +26,6 @@ export function themeSettingsPath(): string {
 	return path.join(configDir(), "tui.json");
 }
 
-/** Legacy agentic-coding selection source, read only for one-time import. */
-function legacyConfigPath(): string {
-	return (
-		process.env.HERDR_WORKFLOW_CONFIG ??
-		path.join(os.homedir(), "dotfiles", "pi", "herdr-workflow.toml")
-	);
-}
-
 /** Built-in names captured before any custom theme is registered. */
 const BUILTIN_THEME_NAMES = new Set(themeNames);
 
@@ -54,17 +42,10 @@ function readJsonSettings(): Record<string, unknown> {
 	}
 }
 
-/** Read the legacy `[ui] theme` value from the agentic-coding config. */
-function readLegacyThemeName(): string | undefined {
-	try {
-		const parsed = Bun.TOML.parse(
-			fs.readFileSync(legacyConfigPath(), "utf8"),
-		) as { ui?: { theme?: unknown } };
-		const theme = parsed.ui?.theme;
-		return typeof theme === "string" ? theme : undefined;
-	} catch {
-		return undefined;
-	}
+/** Read the canonical `theme` value from `tui.json`, or undefined when the
+ * file, or the key, is absent. */
+function readCanonicalThemeName(): unknown {
+	return readJsonSettings().theme;
 }
 
 /**
@@ -101,31 +82,15 @@ export function isValidThemeName(name: unknown): name is string {
 }
 
 /**
- * Resolve the active theme without modifying either settings file. A canonical
- * selection always wins over legacy, even when it is not currently registered
- * (e.g. a persisted `system` before capture, or a removed custom theme) so
- * startup never overwrites it. Only a canonical file with no `theme` key
- * imports the legacy selection, once, preserving unrelated canonical keys.
- * Otherwise the default `catppuccin` is returned.
+ * Resolve the active theme without modifying the settings file. A canonical
+ * selection always wins, even when it is not currently registered (e.g. a
+ * persisted `system` before capture, or a removed custom theme) so startup
+ * never overwrites it. Otherwise the default `catppuccin` is returned.
  */
 export function loadThemeName(): string {
-	const canonical = readJsonSettings();
-	if (canonical.theme !== undefined) {
-		return isValidThemeName(canonical.theme) ? canonical.theme : "catppuccin";
-	}
-
-	const legacy = readLegacyThemeName();
-	if (isValidThemeName(legacy)) {
-		try {
-			writeSettingsAtomically({ ...canonical, theme: legacy });
-			return legacy;
-		} catch {
-			// An unwritable settings dir must not block startup or the import.
-			return legacy;
-		}
-	}
-
-	return "catppuccin";
+	const canonical = readCanonicalThemeName();
+	if (canonical === undefined) return "catppuccin";
+	return isValidThemeName(canonical) ? canonical : "catppuccin";
 }
 
 /** Apply an already-validated theme name to the shared store. */
@@ -165,7 +130,7 @@ export function savePromptHistory(history: readonly string[]): void {
 }
 
 /**
- * Load every custom theme from `$DEVENV_CONFIG_DIR/themes`. Files that fail to
+ * Load every custom theme from `<config root>/themes`. Files that fail to
  * decode, reserved `system`, and names that collide with built-ins are
  * reported and skipped so no bundled theme (or `system`) is overwritten.
  */

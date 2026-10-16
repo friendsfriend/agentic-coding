@@ -90,7 +90,6 @@ describe("breaking workflow CLI surface", () => {
 			"research-handoff",
 			"repair",
 			"repin",
-			"migrate",
 			"projects",
 			"sessions-report",
 			"config",

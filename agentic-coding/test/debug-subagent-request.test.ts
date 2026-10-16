@@ -428,7 +428,7 @@ function claimDelegatedLaunch(
 	);
 }
 
-test("the store carries the v6 debug request table and migrates a v5 store", () => {
+test("the store carries the debug request table at the current schema version", () => {
 	const root = createTempRepoFixture("debug-request-store-", {
 		files: { "README.md": "test\n" },
 	});
@@ -440,27 +440,8 @@ test("the store carries the v6 debug request table and migrates a v5 store", () 
 			user_version: number;
 		};
 		expect(version.user_version).toBe(STORE_SCHEMA_VERSION);
-		// The historical shape: a v5 store is exactly this one without the table.
-		db.exec("DROP TABLE debug_requests");
-		db.exec("PRAGMA user_version = 5");
-		db.close();
-		initializeStore(root);
-		const migrated = openStore(root);
-		try {
-			expect(tableExists(migrated, "debug_requests")).toBe(true);
-			const after = migrated.query("PRAGMA user_version").get() as {
-				user_version: number;
-			};
-			expect(after.user_version).toBe(STORE_SCHEMA_VERSION);
-		} finally {
-			migrated.close();
-		}
 	} finally {
-		try {
-			db.close();
-		} catch {
-			/* already closed */
-		}
+		db.close();
 	}
 });
 

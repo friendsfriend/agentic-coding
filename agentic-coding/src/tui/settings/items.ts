@@ -100,9 +100,6 @@ export interface AgentStatus {
 	/** Effective source and the files it was resolved from. */
 	source?: string;
 	files: readonly string[];
-	/** Legacy sources left in place but not read, because a canonical JSON file
-	 * wins at this scope. Reported so the operator can finish the migration. */
-	inactiveFiles?: readonly string[];
 	conflicts: string[];
 	error?: string;
 	profiles: Array<{ name: string; value: string }>;
@@ -284,22 +281,7 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "navigate", route: settingsRoute("agents") },
 		});
 	}
-	if (agents.inactiveFiles?.length) {
-		for (const file of agents.inactiveFiles) {
-			items.push({
-				id: `agents.inactive.${file}`,
-				label: "Inactive legacy configuration",
-				value: file,
-				detail: detailFor(
-					agents.scope,
-					`${file} is read-only compatibility input; JSON is the active format`,
-					"next-start",
-				),
-				editable: false,
-				action: { kind: "none" },
-			});
-		}
-	}
+
 	if (agents.error) {
 		items.push({
 			id: "agents.error",

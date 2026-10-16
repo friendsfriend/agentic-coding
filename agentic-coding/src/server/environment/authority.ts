@@ -12,8 +12,6 @@ export interface EnvironmentAuthorityOptions {
 	/** Injected store (tests, or a read-only observation). */
 	readonly store?: EnvironmentStateStore;
 	readonly logger?: (message: string) => void;
-	/** Take a consistent pre-upgrade backup before the first write. */
-	readonly backup?: boolean;
 	/**
 	 * `owner` refreshes branches and backfills missing runtime columns (this
 	 * process is the writer); `catalog` is the bounded read-only load that never
@@ -28,18 +26,16 @@ export function environmentStateDir(homeDir: string): string {
 
 /**
  * Open the environment authority and publish its first snapshot. This is the
- * single environment state/config owner: the mixed-runtime rollback switch
- * (`DEVENV_ENVIRONMENT_OWNER=go`) is gone with the Go backend, and a rollback
- * is a deliberate restore of a verified pre-upgrade database.
+ * single environment state/config owner: a database of another schema version
+ * is refused rather than converted, so any change of state format is a
+ * deliberate out-of-band restore.
  */
 export function createEnvironmentAuthority(
 	options: EnvironmentAuthorityOptions,
 ): EnvironmentAuthority {
 	const store =
 		options.store ??
-		EnvironmentStateStore.open(environmentStateDir(options.homeDir), {
-			backup: options.backup,
-		});
+		EnvironmentStateStore.open(environmentStateDir(options.homeDir));
 	const manager = new EnvironmentManager({
 		homeDir: options.homeDir,
 		configDir: options.configDir,

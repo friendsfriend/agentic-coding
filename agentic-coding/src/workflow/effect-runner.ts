@@ -1268,7 +1268,6 @@ export function agentEffectHandlers(
 						});
 						const agents = parseAgentsConfig(
 							loaded.config.agents,
-							loaded.config,
 							loaded.provenance.files.join(", ") || undefined,
 						);
 						const preset = snapshot.metadata.selectedPreset
@@ -3592,7 +3591,6 @@ function loadClassifierAgents(snapshot: WorkflowSnapshot) {
 	});
 	return parseAgentsConfig(
 		loaded.config.agents,
-		loaded.config,
 		loaded.provenance.files.join(", ") || undefined,
 	);
 }

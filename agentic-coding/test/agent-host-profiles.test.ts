@@ -91,16 +91,6 @@ describe("pi-durable preflight (no external executable)", () => {
 			expect(profile.runtime).toBe("pi-durable");
 		},
 	);
-
-	test("a legacy TOML migration's implicit preset also defaults to pi-durable, independent of its explicit pi-default profile", () => {
-		const config = parseAgentsConfig(undefined, {
-			models: { worker_default: "anthropic/claude-sonnet-4-5" },
-			thinking: { worker_default: "high" },
-		});
-		expect(config.profiles["pi-default"]?.runtime).toBe("pi-durable");
-		const profile = resolveProfile(BUILTIN_PRESET_NAME, config);
-		expect(profile.runtime).toBe("pi-durable");
-	});
 });
 
 describe("pi-durable model enumeration (durable-agent-configuration)", () => {

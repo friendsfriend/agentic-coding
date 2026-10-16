@@ -47,13 +47,13 @@ export function resolveHandoffIdentity(
 			"handoff requires an exact launch-bound run environment and capability",
 		);
 	// Managed handoff/question commands are mutating entry points. Initialize
-	// before resolving the run so legacy stores can be imported explicitly,
-	// while ordinary status/list observation remains side-effect free. When an
-	// application root is supplied the run executes there (cutover seam).
+	// before resolving the run, while ordinary status/list observation remains
+	// side-effect free. When an application root is supplied the run executes
+	// there (cutover seam).
 	if (application) {
-		application.runSync(workflowEngine.initializeEffect(repo, workflowId));
+		application.runSync(workflowEngine.initializeEffect(repo));
 	} else {
-		workflowEngine.initialize(repo, workflowId);
+		workflowEngine.initialize(repo);
 	}
 	const callerRun = application
 		? application.runSync(workflowEngine.getRunEffect(repo, runId))
@@ -186,10 +186,9 @@ export function resolveResumableRunIdentity(
 			"resume-run requires an exact launch-bound run environment and capability",
 		);
 	// Like every other managed agent command, this is a mutating entry point:
-	// initialize so a legacy store is imported before the run is resolved.
-	if (application)
-		application.runSync(workflowEngine.initializeEffect(repo, workflowId));
-	else workflowEngine.initialize(repo, workflowId);
+	// initialize before the run is resolved.
+	if (application) application.runSync(workflowEngine.initializeEffect(repo));
+	else workflowEngine.initialize(repo);
 	let run: WorkflowRun;
 	try {
 		run = application

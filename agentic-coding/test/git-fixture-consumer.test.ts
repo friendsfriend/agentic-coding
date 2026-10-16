@@ -4,7 +4,7 @@
 // That defect was a teardown registered by the shared fixture module: it is
 // file-scoped when registered by an imported module, so it fired after the first
 // file in the process and reclaimed a template the second file still needed.
-// `bun test test/workflow-migration.test.ts test/canonical-repository.test.ts`
+// `bun test test/workflow-store-version.test.ts test/canonical-repository.test.ts`
 // went from 22 pass to 4 pass / 18 fail, in both argument orders.
 //
 // This file materialises a repository at module scope, before any test runs, so

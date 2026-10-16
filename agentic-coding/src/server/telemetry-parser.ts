@@ -135,16 +135,6 @@ export function parseLine(line: string): SpanData | undefined {
 	}
 }
 
-export function parseJsonl(text: string): SpanData[] {
-	const spans: SpanData[] = [];
-	for (const line of text.split(/\r?\n/)) {
-		if (!line.trim()) continue;
-		const span = parseLine(line);
-		if (span) spans.push(span);
-	}
-	return spans;
-}
-
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/i;
 
 /** Envelope keys consumed structurally rather than mapped to an attribute. */

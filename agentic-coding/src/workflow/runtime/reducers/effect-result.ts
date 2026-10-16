@@ -152,7 +152,6 @@ export function applyClassifierRouting(
 		});
 		const agents = parseAgentsConfig(
 			loaded.config.agents,
-			loaded.config,
 			loaded.provenance.files.join(", ") || undefined,
 		);
 		const preset = snapshot.metadata.selectedPreset

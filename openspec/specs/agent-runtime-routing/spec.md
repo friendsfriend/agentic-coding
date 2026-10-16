@@ -146,22 +146,17 @@ Workflow startup and related configuration reads/edits SHALL resolve project ove
 - **AND** the UI SHALL identify that source without treating repository executable settings as untrusted inert data
 
 ### Requirement: Pinned non-secret execution settings
-Workflow creation SHALL persist the accepted non-secret settings required by later configuration-sensitive effects, including the delivery remote and PR executable selection or its explicit unavailability. Later effects SHALL use those settings rather than rereading the drainer's ambient configuration. Credentials SHALL not be persisted in this record.
+Workflow creation SHALL persist the accepted non-secret settings required by later configuration-sensitive effects, including the delivery remote and PR executable selection or its explicit unavailability. Later effects SHALL use those settings rather than rereading the drainer's ambient configuration. Credentials SHALL not be persisted in this record. The runtime SHALL NOT adopt or migrate missing settings from an older workflow format.
 
 #### Scenario: Delivery configuration changes after start
 - **WHEN** configuration changes or another process drains an already-started workflow from another directory
 - **THEN** delivery and PR effects SHALL retain that workflow's accepted settings
 - **AND** no new remote or executable SHALL be selected implicitly
 
-#### Scenario: Legacy workflow lacks execution settings
-- **WHEN** a workflow without accepted execution settings reaches a configuration-sensitive effect
-- **THEN** that effect SHALL stop with an actionable settings-adoption diagnostic
-- **AND** status SHALL remain readable without choosing settings on the user's behalf
-
-#### Scenario: Operator adopts legacy settings
-- **WHEN** an operator previews and confirms validated settings against the current workflow revision through repair or migration
-- **THEN** the engine SHALL atomically record the accepted settings and an audit event
-- **AND** a stale or invalid adoption SHALL leave settings and effects unchanged
+#### Scenario: Current workflow settings are absent
+- **WHEN** a current-format workflow lacks a required execution setting
+- **THEN** the affected effect SHALL stop with a clear validation diagnostic
+- **AND** status SHALL remain readable without choosing or persisting settings on the user's behalf
 
 ### Requirement: Classifier pool routing for classifiable steps
 

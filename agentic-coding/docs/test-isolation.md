@@ -17,7 +17,7 @@ value never decides what a test sees:
 | `HERDR_WIKI_DIR` | `<sandbox>/wiki` | The wiki bundle *and* the workflow data root, which is the bundle's parent directory plus `.agentic-coding-workflow`. This is the location the workflow store and the workflow target registry live in — the registry the dashboard reads on every refresh. |
 | `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` | `<sandbox>/home` | `~/devenv/logs`, `~/.config/otel-tui`, `~/.local/share/*`, `~/.pi/agent`. |
 | `TMPDIR` | `<sandbox>/tmp` | Every `mkdtempSync(os.tmpdir(), …)`, so a temporary repository a test forgets to remove is swept with the sandbox. |
-| `HERDR_WORKFLOW_CONFIG`, `DEVENV_CONFIG_DIR`, `AGENTIC_WORKFLOW_URL`, `AGENTIC_WORKFLOW_TOKEN` | deleted | An explicit replacement configuration bypasses the isolated root, and the runner exports a *live* server handoff to the children it manages. |
+| `HERDR_WORKFLOW_CONFIG`, `AGENTIC_WORKFLOW_URL`, `AGENTIC_WORKFLOW_TOKEN` | deleted | An explicit replacement configuration bypasses the isolated root, and the runner exports a *live* server handoff to the children it manages. |
 
 One gap is stated rather than papered over. Bun captures `HOME` when the process
 starts, so a later `process.env.HOME` is invisible to `os.homedir()`

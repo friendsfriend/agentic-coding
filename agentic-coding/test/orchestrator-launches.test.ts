@@ -1,7 +1,7 @@
 // Orchestrator launch counting across workflow targets
 // (cap-orchestrator-launches, task 2.1): the bounded read behind the server's
 // launch ceiling. A real multi-target fixture — one store per repository, the
-// shared wiki/research store, a migration-required store and a broken store —
+// shared wiki/research store, an unsupported-version store and a broken store —
 // pins what is counted, what is skipped, and that operator work and terminal
 // workflows never spend the orchestrator's budget.
 
@@ -303,7 +303,7 @@ describe("orchestrator launch counting", () => {
 		});
 	});
 
-	test("a migration-required store is skipped and left untouched", () => {
+	test("an unsupported-version store is skipped and left untouched", () => {
 		withDataRoot((tmp) => {
 			const repo = createRepoFixture(path.join(tmp, "migrating"), {
 				excludeWorkflowState: true,

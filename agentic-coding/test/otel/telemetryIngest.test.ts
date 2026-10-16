@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import {
 	mkdirSync,
@@ -368,43 +369,57 @@ describe("TraceDb telemetry ingest", () => {
 		}
 	});
 
-	test("picks the fresher source and never lets a stale legacy file mask new telemetry", () => {
+	test("a telemetry database from an earlier schema is refused by name", () => {
+		const dir = trackTempDir(
+			mkdtempSync(join(tmpdir(), "otel-telemetry-old-schema-")),
+		);
+		// The shape an earlier release wrote: the trace table without its
+		// materialized columns. It is refused with an actionable message instead of
+		// dying on the first statement with `no such column`.
+		const raw = new Database(join(dir, "traces.sqlite"));
+		raw.run(
+			"CREATE TABLE traces (id INTEGER PRIMARY KEY AUTOINCREMENT, change_id TEXT NOT NULL, span TEXT NOT NULL, ingested_at TEXT NOT NULL DEFAULT (datetime('now')))",
+		);
+		raw.close();
+		expect(() => new TraceDb(dir)).toThrow(/predates the current trace schema/);
+	});
+
+	test("reads the current telemetry source and ignores an obsolete trace file", () => {
 		const dir = trackTempDir(
 			mkdtempSync(join(tmpdir(), "otel-telemetry-both-")),
 		);
-		const legacy = {
+		const obsolete = {
 			traceId: "0af7651916cd43dd8448eb211c80319c",
 			spanId: "b7ad6b7169203331",
-			name: "legacy.span",
+			name: "obsolete.span",
 			startTimeUnixNano: "1000000",
 			endTimeUnixNano: "2000000",
 			status: { code: 0 },
 			attributes: { "service.name": "herdr-agent" },
 		};
-		const legacyPath = join(dir, "traces.jsonl");
+		const obsoletePath = join(dir, "traces.jsonl");
 		const telemetryPath = join(dir, "telemetry.jsonl");
-		writeFileSync(legacyPath, `${JSON.stringify(legacy)}\n`);
+		writeFileSync(obsoletePath, `${JSON.stringify(obsolete)}\n`);
 		writeFileSync(telemetryPath, TELEMETRY);
-		const ago = (ms: number) => new Date(Date.now() - ms);
-		utimesSync(legacyPath, ago(120_000), ago(120_000));
-		utimesSync(telemetryPath, ago(60_000), ago(60_000));
+		// The obsolete file is the fresher one and is still not read.
+		const now = new Date();
+		utimesSync(obsoletePath, now, now);
+		utimesSync(
+			telemetryPath,
+			new Date(Date.now() - 60_000),
+			new Date(Date.now() - 60_000),
+		);
 		const db = new TraceDb(join(dir, "db"));
 		try {
-			// Fresh telemetry beats the hour-old legacy snapshot.
 			expect(db.ingestWorkspace(dir, "wf-2")).toBe(2);
 			expect(db.loadSpans("wf-2").map((span) => span.name)).toEqual([
 				"effect.result",
 				"runtime.usage",
 			]);
-			// A source switch re-ingests when the other file becomes the fresher one.
-			utimesSync(legacyPath, ago(0), ago(0));
-			expect(db.ingestWorkspace(dir, "wf-2")).toBe(1);
-			expect(db.loadSpans("wf-2")[0]?.name).toBe("legacy.span");
 		} finally {
 			db.close();
 		}
 	});
-
 	test("the watcher reads only the appended tail of a large workspace file", async () => {
 		const root = trackTempDir(
 			mkdtempSync(join(tmpdir(), "otel-telemetry-watch-tail-")),

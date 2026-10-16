@@ -266,63 +266,41 @@ describe("UI preferences", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("canonical selection takes precedence over the legacy file", () => {
+	it("loads the canonical selection and ignores an obsolete replacement file", () => {
 		writeFileSync(themeSettingsPath(), JSON.stringify({ theme: "nord" }));
-		const legacy = join(dir, "herdr-workflow.toml");
-		writeFileSync(legacy, '[ui]\ntheme = "dracula"\n');
-		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		const obsolete = join(dir, "herdr-workflow.toml");
+		writeFileSync(obsolete, '[ui]\ntheme = "dracula"\n');
+		process.env.HERDR_WORKFLOW_CONFIG = obsolete;
 		expect(loadThemeName()).toBe("nord");
+		// The obsolete file is not a preferences source and is not rewritten.
+		expect(String(readFileSync(obsolete))).toBe('[ui]\ntheme = "dracula"\n');
 	});
 
-	it("imports a valid legacy selection preserving unrelated keys", () => {
+	it("ignores an obsolete selection file and keeps the canonical file intact", () => {
 		const canonical = join(dir, "tui.json");
 		writeFileSync(canonical, JSON.stringify({ fontSize: 13 }));
-		const legacy = join(dir, "herdr-workflow.toml");
-		writeFileSync(legacy, `[ui]\ntheme = "dracula"\n`);
-		process.env.HERDR_WORKFLOW_CONFIG = legacy;
-		expect(loadThemeName()).toBe("dracula");
+		const obsolete = join(dir, "herdr-workflow.toml");
+		writeFileSync(obsolete, `[ui]\ntheme = "dracula"\n`);
+		process.env.HERDR_WORKFLOW_CONFIG = obsolete;
+		expect(loadThemeName()).toBe("catppuccin");
 		expect(JSON.parse(String(readFileSync(canonical)))).toEqual({
 			fontSize: 13,
-			theme: "dracula",
 		});
+		expect(String(readFileSync(obsolete))).toBe(`[ui]\ntheme = "dracula"\n`);
 	});
 
-	it("defaults to catppuccin with no canonical or legacy selection", () => {
-		// Point the legacy path at a file that cannot exist so the assertion is
-		// independent of the developer's real ~/dotfiles config.
-		process.env.HERDR_WORKFLOW_CONFIG = join(dir, "missing-legacy.toml");
+	it("defaults to catppuccin when nothing is selected", () => {
 		expect(loadThemeName()).toBe("catppuccin");
 	});
 
 	it("keeps a persisted system selection that is not captured yet", () => {
 		// `system` is only registered after a successful capture, but a saved
-		// selection must survive a capture failure instead of being replaced by
-		// the legacy file.
+		// selection must survive a capture failure instead of being replaced.
 		writeFileSync(themeSettingsPath(), JSON.stringify({ theme: "system" }));
-		const legacy = join(dir, "herdr-workflow.toml");
-		writeFileSync(legacy, '[ui]\ntheme = "dracula"\n');
-		process.env.HERDR_WORKFLOW_CONFIG = legacy;
 		expect(loadThemeName()).toBe("catppuccin");
 		expect(JSON.parse(String(readFileSync(themeSettingsPath())))).toEqual({
 			theme: "system",
 		});
-	});
-
-	it("ignores a legacy `theme` key outside the [ui] table", () => {
-		const legacy = join(dir, "herdr-workflow.toml");
-		writeFileSync(
-			legacy,
-			'[ui]\nfontSize = 12\n\n[workflow]\ntheme = "dracula"\n',
-		);
-		process.env.HERDR_WORKFLOW_CONFIG = legacy;
-		expect(loadThemeName()).toBe("catppuccin");
-	});
-
-	it("ignores a legacy `system` name that was never captured", () => {
-		const legacy = join(dir, "herdr-workflow.toml");
-		writeFileSync(legacy, '[ui]\ntheme = "system"\n');
-		process.env.HERDR_WORKFLOW_CONFIG = legacy;
-		expect(loadThemeName()).toBe("catppuccin");
 	});
 
 	it("saves atomically while preserving unrelated keys", () => {

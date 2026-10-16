@@ -3,6 +3,7 @@
 // envelope is now the server's own in-process state/config boundary, so these
 // tests assert the contract the routes depend on — authorization, bounds, one
 // logical operation per request and no recursion into a second runtime.
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +15,10 @@ import {
 	environmentOperationSchema,
 	executeEnvironmentOperation,
 } from "../src/server/environment/private-api.ts";
-import { SCHEMA_VERSION } from "../src/server/environment/state-store.ts";
+import {
+	EnvironmentStateStore,
+	SCHEMA_VERSION,
+} from "../src/server/environment/state-store.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
 import { routeOwner } from "../src/server/protocol.ts";
 
@@ -306,9 +310,9 @@ describe("rollback and ownership preconditions", () => {
 		expect(authoritySource).not.toMatch(/bunOwnsEnvironment|process\.env\./);
 	});
 
-	test("a newer schema fails closed and leaves the verified backup untouched", async () => {
-		// The rollback gate: an upgrade refuses to run against a database written
-		// by a newer release, so an older writer is never started on newer state.
+	test("a newer schema fails closed without writing a rollback copy", async () => {
+		// A database written by a newer release is never opened for writing, so an
+		// older writer is never started on newer state.
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-rollback-"));
 		const home = path.join(dir, "home");
 		const configDir = path.join(dir, "config");
@@ -321,7 +325,7 @@ describe("rollback and ownership preconditions", () => {
 		try {
 			expect(() =>
 				createEnvironmentAuthority({ homeDir: home, configDir }),
-			).toThrow(/newer than the supported/);
+			).toThrow(/is not the supported/);
 			// No upgrade backup was written for an unsupported version.
 			expect(
 				fs
@@ -333,38 +337,38 @@ describe("rollback and ownership preconditions", () => {
 		}
 	});
 
-	test("an interrupted upgrade is completed before the authority serves reads", () => {
-		// A partial-v4 database is the interrupted-upgrade case: the authority
-		// completes it (and keeps a verified backup at the old version) instead of
-		// failing or serving a half-migrated schema.
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-interrupted-"));
+	test("an older schema is refused before the authority serves reads", () => {
+		// There is no in-place upgrade: a database of another schema version is
+		// refused without being modified, and no rollback copy is written.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-older-"));
 		const home = path.join(dir, "home");
 		const configDir = path.join(dir, "config");
 		fs.mkdirSync(path.join(home, "db"), { recursive: true });
 		fs.cpSync(path.join(FIXTURES, "config", "worktree-apps"), configDir, {
 			recursive: true,
 		});
-		fs.copyFileSync(
-			path.join(FIXTURES, "partial-v4", "state.db"),
-			path.join(home, "db", "state.db"),
-		);
+		const dbPath = path.join(home, "db", "state.db");
+		EnvironmentStateStore.open(path.dirname(dbPath)).close();
+		const db = new Database(dbPath);
 		try {
-			const recovered = createEnvironmentAuthority({
-				homeDir: home,
-				configDir,
-			});
-			try {
-				expect(recovered.state.schemaVersion).toBe(SCHEMA_VERSION);
-				expect(recovered.state.getAppState("half-migrated-app")).toMatchObject({
-					branch: "main",
-					mainWorktreeBranch: "main",
-				});
-				expect(fs.existsSync(path.join(home, "db", "state.db.backup-v3"))).toBe(
-					true,
-				);
-			} finally {
-				recovered.state.close();
-			}
+			db.exec("PRAGMA busy_timeout=5000");
+			db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'version'").run(
+				String(SCHEMA_VERSION - 1),
+			);
+		} finally {
+			db.close();
+		}
+		const before = fs.readFileSync(dbPath);
+		try {
+			expect(() =>
+				createEnvironmentAuthority({ homeDir: home, configDir }),
+			).toThrow(/is not the supported/);
+			expect(fs.readFileSync(dbPath).equals(before)).toBe(true);
+			expect(
+				fs
+					.readdirSync(path.join(home, "db"))
+					.filter((entry) => entry.includes("backup")),
+			).toEqual([]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

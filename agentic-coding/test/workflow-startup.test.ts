@@ -32,30 +32,22 @@ function repository(): string {
 	});
 }
 
-const config = `[workflow]
-remote = "selected-remote"
-pr_tool = "missing-pr-tool"
-
-[agents]
-default_profile = "p"
-
-[agents.profiles.p]
-runtime = "pi-durable"
-executable = "/bin/true"
-
-[agents.presets.fixed]
-default_profile = "p"
-
-[[agents.presets.fixed.pools."core.wiki"]]
-label = "only"
-profile = "p"
-default = true
-
-[[agents.presets.fixed.pools."core.research"]]
-label = "only"
-profile = "p"
-default = true
-`;
+const config = `${JSON.stringify({
+	workflow: { remote: "selected-remote", pr_tool: "missing-pr-tool" },
+	agents: {
+		default_profile: "p",
+		profiles: { p: { runtime: "pi-durable", executable: "/bin/true" } },
+		presets: {
+			fixed: {
+				default_profile: "p",
+				pools: {
+					"core.wiki": [{ label: "only", profile: "p", default: true }],
+					"core.research": [{ label: "only", profile: "p", default: true }],
+				},
+			},
+		},
+	},
+})}\n`;
 
 /** A coverage-validating preset over the keys the started definitions ask
  * about: every classifiable step needs a pool, so a family that never had one
@@ -142,7 +134,7 @@ describe("classifier provider pinning", () => {
 describe("shared workflow startup", () => {
 	test("normalizes repository-backed startup and pins config provenance", () => {
 		const repo = repository();
-		const file = path.join(repo, "config.toml");
+		const file = path.join(repo, "config.json");
 		fs.writeFileSync(file, config);
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
 		process.env.HERDR_WORKFLOW_CONFIG = file;
@@ -190,7 +182,7 @@ describe("shared workflow startup", () => {
 
 	test("pins who started the workflow, defaulting to the operator", () => {
 		const repo = repository();
-		const file = path.join(repo, "config.toml");
+		const file = path.join(repo, "config.json");
 		fs.writeFileSync(file, config);
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
 		process.env.HERDR_WORKFLOW_CONFIG = file;
@@ -227,8 +219,8 @@ describe("shared workflow startup", () => {
 		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-config-"));
 		const project = path.join(repo, ".pi");
 		fs.mkdirSync(project, { recursive: true });
-		const file = path.join(project, "herdr-workflow.toml");
-		fs.writeFileSync(file, '[workflow]\nremote = "project-remote"\n');
+		const file = path.join(project, "herdr-workflow.json");
+		fs.writeFileSync(file, '{ "workflow": { "remote": "project-remote" } }\n');
 		const envFile = path.join(repo, "selected-config.json");
 		fs.writeFileSync(envFile, '{ "agents": {} }\n');
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
@@ -333,7 +325,7 @@ describe("environment-setup startup", () => {
 		const configDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "env-setup-config-"),
 		);
-		const file = path.join(configDir, "config.toml");
+		const file = path.join(configDir, "config.json");
 		fs.writeFileSync(file, config);
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
 		process.env.HERDR_WORKFLOW_CONFIG = file;
@@ -413,7 +405,7 @@ describe("environment-setup startup", () => {
 describe("debug startup", () => {
 	test("requires an existing branch, forwards it, and keeps worktree mode", () => {
 		const repo = repository();
-		const file = path.join(repo, "config.toml");
+		const file = path.join(repo, "config.json");
 		fs.writeFileSync(file, config);
 		const current = Bun.spawnSync([
 			"git",

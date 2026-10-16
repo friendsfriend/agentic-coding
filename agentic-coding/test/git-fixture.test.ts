@@ -4,7 +4,7 @@
 // template root from a hook registered by this imported module, which is
 // file-scoped (measured: it fires after the first file that imported it), so the
 // second file in the same process found its template deleted and failed with
-// ENOENT. `bun test test/workflow-migration.test.ts test/canonical-repository.test.ts`
+// ENOENT. `bun test test/workflow-store-version.test.ts test/canonical-repository.test.ts`
 // went from 22 pass to 4 pass / 18 fail.
 //
 // This file points the template store at a root of its own. It must not delete

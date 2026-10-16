@@ -25,8 +25,6 @@ import {
 } from "../workflow/project-catalog.ts";
 import {
 	jsonlLines,
-	parseJsonl,
-	parseLine as parseJsonlLine,
 	parseTelemetryJsonlFrom,
 	parseTelemetryLine,
 } from "./telemetry-parser";
@@ -104,35 +102,16 @@ interface IngestWatermark {
 	readonly lineIndex: number;
 }
 
-/** Pick the span source for a workflow directory. The current engine only
- * appends `telemetry.jsonl`, so a stale legacy `traces.jsonl` must not mask new
- * events: when both exist the fresher file wins (telemetry breaks a tie), and
- * a workspace with only one file uses it. */
+/** The span source for a workflow directory: the current engine appends
+ * `telemetry.jsonl`, and no other file is read as telemetry. */
 function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
-	const legacyPath = join(herdrPath, "traces.jsonl");
 	const telemetryPath = join(herdrPath, "telemetry.jsonl");
-	const legacyExists = existsSync(legacyPath);
-	const telemetryExists = existsSync(telemetryPath);
-	if (legacyExists && telemetryExists) {
-		const legacyMtime = statSync(legacyPath).mtimeMs;
-		const telemetryMtime = statSync(telemetryPath).mtimeMs;
-		return telemetryMtime >= legacyMtime
-			? {
-					path: telemetryPath,
-					parse: parseTelemetryJsonlFrom,
-					parseLine: parseTelemetryLine,
-				}
-			: { path: legacyPath, parse: parseJsonl, parseLine: parseJsonlLine };
-	}
-	if (telemetryExists)
-		return {
-			path: telemetryPath,
-			parse: parseTelemetryJsonlFrom,
-			parseLine: parseTelemetryLine,
-		};
-	if (legacyExists)
-		return { path: legacyPath, parse: parseJsonl, parseLine: parseJsonlLine };
-	return undefined;
+	if (!existsSync(telemetryPath)) return undefined;
+	return {
+		path: telemetryPath,
+		parse: parseTelemetryJsonlFrom,
+		parseLine: parseTelemetryLine,
+	};
 }
 
 const NEWLINE_BYTE = 0x0a;
@@ -244,6 +223,40 @@ function parseSpanNames(value: string | null): string[] {
 	}
 }
 
+/** Columns each trace table gained after the first release of this index. A
+ * database whose tables predate them is not this build's trace schema. */
+const TRACE_SCHEMA_COLUMNS: ReadonlyArray<
+	readonly [string, readonly string[]]
+> = [
+	["traces", ["start_nanos", "end_nanos", "status_code", "role", "name"]],
+	[
+		"workspace_files",
+		["parser_version", "file_size", "ingest_offset", "line_index"],
+	],
+];
+
+/** Refuse a trace database that is not at the current schema instead of failing
+ * later with a raw SQLite error. Nothing is rewritten: the trace index is
+ * derived data and deleting the file rebuilds it. */
+function assertCurrentTraceSchema(db: Database, file: string): void {
+	for (const [table, columns] of TRACE_SCHEMA_COLUMNS) {
+		const present = new Set(
+			(
+				db.query(`PRAGMA table_info(${table})`).all() as Array<{
+					name: string;
+				}>
+			).map((column) => column.name),
+		);
+		// An absent table is created by this constructor.
+		if (!present.size) continue;
+		const missing = columns.filter((column) => !present.has(column));
+		if (missing.length)
+			throw new Error(
+				`telemetry database ${file} predates the current trace schema (${table} is missing ${missing.join(", ")}); delete it to rebuild the derived trace index`,
+			);
+	}
+}
+
 export class TraceDb {
 	private db: Database;
 	private readonly ingesting = new Set<string>();
@@ -260,40 +273,37 @@ export class TraceDb {
 	constructor(dbPath?: string) {
 		const dir = dbPath ?? join(homedir(), ".config", "otel-tui");
 		mkdirSync(dir, { recursive: true });
-		this.db = new Database(join(dir, "traces.sqlite"));
+		const file = join(dir, "traces.sqlite");
+		const existed = existsSync(file);
+		this.db = new Database(file);
+		// A database written before the current trace schema is refused by name
+		// instead of dying on the first statement with `no such column`. The trace
+		// cache is derived data, so the operator's remedy is to delete it.
+		if (existed) assertCurrentTraceSchema(this.db, file);
+		// Aggregated list columns. The trace list is paged and ordered by start
+		// time, which a `json_extract` over every span row cannot do within a
+		// request budget, so the fields the aggregation needs are materialized at
+		// ingest and indexed.
 		this.db.run(`CREATE TABLE IF NOT EXISTS traces (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       change_id TEXT NOT NULL,
       span TEXT NOT NULL,
-      ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+      ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+      start_nanos INTEGER,
+      end_nanos INTEGER,
+      status_code INTEGER,
+      role TEXT,
+      name TEXT
     )`);
 		this.db.run(
 			`CREATE INDEX IF NOT EXISTS idx_traces_change ON traces(change_id)`,
 		);
-		// Aggregated list columns. The trace list is paged and ordered by start
-		// time, which a `json_extract` over every span row cannot do within a
-		// request budget, so the fields the aggregation needs are materialized at
-		// ingest and indexed. Existing rows are backfilled once below.
-		for (const column of [
-			"start_nanos INTEGER",
-			"end_nanos INTEGER",
-			"status_code INTEGER",
-			"role TEXT",
-			"name TEXT",
-		]) {
-			try {
-				this.db.run(`ALTER TABLE traces ADD COLUMN ${column}`);
-			} catch (error) {
-				if (!String(error).includes("duplicate column name")) throw error;
-			}
-		}
 		this.db.run(
 			`CREATE INDEX IF NOT EXISTS idx_traces_start ON traces(start_nanos)`,
 		);
 		this.db.run(
 			`CREATE INDEX IF NOT EXISTS idx_traces_change_start ON traces(change_id, start_nanos)`,
 		);
-		this.backfillTraceColumns();
 		this.db.run(`CREATE TABLE IF NOT EXISTS workspace_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       change_id TEXT UNIQUE NOT NULL,
@@ -304,21 +314,6 @@ export class TraceDb {
       ingest_offset INTEGER NOT NULL DEFAULT 0,
       line_index INTEGER NOT NULL DEFAULT 0
     )`);
-		// The watermark columns arrived after the table did: an existing database
-		// gains them here (and re-ingests once, because its rows still carry the
-		// old parser version).
-		for (const column of [
-			"parser_version INTEGER NOT NULL DEFAULT 1",
-			"file_size INTEGER NOT NULL DEFAULT 0",
-			"ingest_offset INTEGER NOT NULL DEFAULT 0",
-			"line_index INTEGER NOT NULL DEFAULT 0",
-		]) {
-			try {
-				this.db.run(`ALTER TABLE workspace_files ADD COLUMN ${column}`);
-			} catch (error) {
-				if (!String(error).includes("duplicate column name")) throw error;
-			}
-		}
 		this.db.run(`CREATE TABLE IF NOT EXISTS metrics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       change_id TEXT NOT NULL,
@@ -380,9 +375,8 @@ export class TraceDb {
 		mtime: number,
 		known: WorkspaceFileState | undefined,
 	): IngestPlan | undefined {
-		// A parser upgrade or a source switch (a legacy snapshot versus the
-		// workflow's own telemetry) invalidates the stored offsets: both re-ingest
-		// from zero instead of resuming at a watermark they did not write.
+		// A parser upgrade invalidates the stored offsets: it re-ingests from zero
+		// instead of resuming at a watermark it did not write.
 		if (
 			known &&
 			known.parser_version >= PARSER_VERSION &&
@@ -440,45 +434,6 @@ export class TraceDb {
 			$change_id: changeId,
 			$keep: MAX_TELEMETRY_SPANS,
 		});
-	}
-
-	/** One-time materialization of the aggregated columns for rows ingested
-	 * before they existed. Batched and transactional, and advanced by row id, so
-	 * an interrupted run resumes at the next batch and a malformed span that
-	 * cannot be materialized is processed once instead of re-selected forever. */
-	private backfillTraceColumns(): void {
-		// Mirror `traceColumns`: a row needs backfill when a materialized column
-		// is missing and the span JSON carries a value the writer accepts.
-		// `json_type(..., '$.name') = 'text'` is exactly the string the writer
-		// materializes, so a non-string name is left as raw telemetry and cannot
-		// trap the loop. Matching `id > $lastId` also makes termination hold for
-		// the pre-existing `start_nanos IS NULL` clause when a malformed span has
-		// no valid start time.
-		const needsBackfill =
-			"start_nanos IS NULL OR (name IS NULL AND json_type(span, '$.name') = 'text')";
-		const update = this.db.prepare(
-			"UPDATE traces SET start_nanos=$start_nanos, end_nanos=$end_nanos, status_code=$status_code, role=$role, name=$name WHERE id=$id",
-		);
-		let lastId = 0;
-		for (;;) {
-			const rows = this.db
-				.query(
-					`SELECT id, span FROM traces
-           WHERE id > $lastId AND (${needsBackfill})
-           ORDER BY id LIMIT 5000`,
-				)
-				.all({ $lastId: lastId }) as Array<{ id: number; span: string }>;
-			if (!rows.length) return;
-			lastId = rows[rows.length - 1]?.id ?? lastId;
-			const batch = this.db.transaction(() => {
-				for (const row of rows) {
-					const { $span, ...columns } = traceColumns(JSON.parse(row.span));
-					void $span;
-					update.run({ $id: row.id, ...columns });
-				}
-			});
-			batch();
-		}
 	}
 
 	/** One page of trace summaries — one entry per workflow (change id), newest

@@ -204,6 +204,6 @@ pinned is asserted directly in `test/integration-private-api.test.ts`. See
 There is no per-family owner to flip and no forwarding hook to clear: one
 process serves every family. Rolling back is a deliberate artifact swap — stop
 the server at a quiescent boundary, run the previous release — and it needs the
-verified pre-upgrade database only if that release's environment schema is
-older. No provider credential, worktree pin, workflow pin or durable state is
+state database you backed up before upgrading, and only if that release's
+environment schema is older. No provider credential, worktree pin, workflow pin or durable state is
 rewritten by this cleanup.

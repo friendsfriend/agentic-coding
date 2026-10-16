@@ -17,7 +17,6 @@ export const SUBCOMMANDS: readonly string[] = [
 	"research-handoff",
 	"repair",
 	"repin",
-	"migrate",
 	"projects",
 	"sessions-report",
 	"config",
@@ -37,7 +36,6 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	action: ["repo", "workflow-id", "revision"],
 	repair: ["repo", "workflow-id", "revision", "step"],
 	repin: ["repo", "workflow-id"],
-	migrate: ["repo", "workflow-id", "revision", "target-version", "reason"],
 	handoff: ["outcome"],
 	question: ["description"],
 	ask: ["role", "description"],
@@ -136,11 +134,6 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	repin: { values: ["repo", "workflow-id", "revision"], positionals: [0, 0] },
-	migrate: {
-		values: ["repo", "workflow-id", "revision", "target-version", "reason"],
-		booleans: ["confirm"],
-		positionals: [0, 0],
-	},
 	sidebar: { values: ["repo"], booleans: ["disable"], positionals: [0, 0] },
 	"debug-request": {
 		values: ["goal", "context", "apps"],

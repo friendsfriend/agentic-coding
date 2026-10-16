@@ -49,16 +49,12 @@ test("the devenv alias maps onto unified modes, including its own name marker", 
 });
 
 test("the environment roots resolve from a config dir with no .env", () => {
-	const configDir = process.env.DEVENV_CONFIG_DIR;
 	const canonicalConfigDir = process.env.AGENTIC_CODING_CONFIG_DIR;
 	const home = process.env.DEVENV_HOME;
 	const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "home-resolution-"));
 	try {
 		delete process.env.DEVENV_HOME;
-		// This test covers the deprecated alias, so the canonical variable must not
-		// decide the root: the resolver prefers it, and the test preload sets it.
-		delete process.env.AGENTIC_CODING_CONFIG_DIR;
-		process.env.DEVENV_CONFIG_DIR = isolated;
+		process.env.AGENTIC_CODING_CONFIG_DIR = isolated;
 		// No .env in the isolated config dir, so the home falls back to ~/devenv
 		// instead of whatever the developer's own config chooses.
 		expect(resolveConfigDir()).toBe(isolated);
@@ -66,12 +62,12 @@ test("the environment roots resolve from a config dir with no .env", () => {
 		process.env.DEVENV_HOME = "/tmp/devenv-home-test";
 		expect(resolveDevenvHome()).toBe("/tmp/devenv-home-test");
 	} finally {
-		if (configDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
-		else process.env.DEVENV_CONFIG_DIR = configDir;
-		if (canonicalConfigDir !== undefined)
-			process.env.AGENTIC_CODING_CONFIG_DIR = canonicalConfigDir;
+		if (canonicalConfigDir === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = canonicalConfigDir;
 		if (home === undefined) delete process.env.DEVENV_HOME;
 		else process.env.DEVENV_HOME = home;
+		fs.rmSync(isolated, { recursive: true, force: true });
 	}
 });
 

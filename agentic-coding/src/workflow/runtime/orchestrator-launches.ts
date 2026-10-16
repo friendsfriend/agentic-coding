@@ -126,7 +126,7 @@ export function countOrchestratorLaunches(
 		try {
 			db = openReadStore(target);
 		} catch {
-			// Absent, migration-required, unsupported or unreadable: counted as
+			// Absent, an unsupported store version, or unreadable: counted as
 			// zero and named, never initialized by this read.
 			skipped.push(target);
 			continue;

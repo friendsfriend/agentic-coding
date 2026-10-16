@@ -98,37 +98,29 @@ for a repository outside the environment home.
 
 ### Store lifecycle
 
-`initializeStore()` is the only schema-writing boundary. It takes SQLite's
-migration lock, rereads `PRAGMA user_version`, and applies ordered native
-migrations atomically. Store versions 1–5 are supported: version 1 adds run
-ownership columns, version 2 adopts nullable workflow identity, version 3
-repairs rebuilt child foreign keys, version 4 is the pre-definition schema,
-and version 5 adds the content-addressed `workflow_definitions` table that
-stores custom workflow definitions beside the workflows that pin them
-(`custom-workflow-definitions`); the v4 → v5 step is purely additive. Version
-5 is the current validated schema, and the final migration step validates the
-resulting shape inside its own transaction, so a store this build cannot accept
-is rejected at its old version instead of being version-bumped. Unsupported
-future versions fail closed. An unversioned store is
-classified by shape: the canonical tables, columns, indexes, foreign keys and
-statement structure must match a known version, while a table this build does
-not know is stepped over when it is empty (another feature or build may share
-the file without versioning it) and fails closed when it holds rows — unknown
-data is never migrated over. The absence of `workflow_definitions` is the one
-structural difference a historical store may carry; an unversioned store that
-already has it is adopted at v5. Statement text is compared structurally, so a
-legacy DDL written with different spacing is the same schema, not drift.
-Mutating engine entry points initialize before their command transaction and
-may then import legacy `workflows` rows. Status and list do not initialize or
-import: absent and old stores are presented as migration-required diagnostics. The explicit drain
-command accepts bounded `--limit` and `--wait-ms` values for retry progress
-without disguising execution as observation. Back up persistent stores with
-SQLite's consistent backup mechanism before upgrades, and stop old schema
-writers while a migration is in progress. Migration commits are
-independent, so a later command rejection does not undo a successful schema
-transition. There are no automatic down migrations; rollback to an older
-binary requires a verified pre-upgrade backup or explicit support in that
-binary.
+`initializeStore()` is the only schema-writing boundary, and it writes
+exactly one schema: version 6, which stores custom workflow definitions
+beside the workflows that pin them (`custom-workflow-definitions`) and
+carries the delegated `debug_requests` table
+(`add-debug-subagent-requests`). A genuinely empty database is created
+directly with that DDL and its `PRAGMA user_version`, inside one
+`BEGIN IMMEDIATE` transaction, so two runtimes racing a first creation
+serialize on the SQLite write lock and the loser adopts the committed schema.
+A store with any other persisted version is refused before any DDL,
+transaction or row write, with
+`unsupported workflow store version N; this build only reads version 6`;
+the store is left byte-identical, so converting it needs the older build.
+An existing version 6 store is opened without changing its schema, rows or
+pragma: the canonical tables, columns, indexes, foreign keys and statement
+structure are validated, and a table this build does not know is stepped over
+when it is empty (another feature or build may share the file without
+versioning it) and fails closed when it holds rows. Statement text is compared
+structurally, so a DDL written with different spacing is the same schema, not
+drift. Mutating engine entry points initialize before their command
+transaction. Status and list never initialize or write: an absent store stays
+observationally absent and an unreadable one is reported as a diagnostic view.
+The explicit drain command accepts bounded `--limit` and `--wait-ms` values
+for retry progress without disguising execution as observation.
 
 ### Evidence store
 
@@ -166,7 +158,7 @@ A workflow pins `definition: { id, version, digest }`. Built-in definitions
 resolve from the process-lifetime registry; a **custom** definition resolves
 from the target store's `workflow_definitions` table (store v5) through
 `runtime/definitions.ts`. That resolver is the one definition lookup every
-caller uses — `engine.ts`, `view.ts`, `store.ts`, `migration.ts`,
+caller uses — `engine.ts`, `view.ts`, `store.ts`,
 `effect-runner.ts`, and `startup.ts`: it answers from the built-in registry
 first, and for the reserved `custom.` namespace it reads the stored row from the
 target store, recompiles its manifest against the current step catalog
@@ -918,8 +910,7 @@ row):
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
 | `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`, including the developer's backstop answer for an orchestrator-routed record), finding the record an answer event names (`answeredQuestionRecord`), and marking questions expired (`expireQuestions`). The agent-facing wait (`AGENT_QUESTION_WAIT_MS`) and the durable lifetime (`QUESTION_WAIT_MS`) live here as separate constants. Needs only the clock. |
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
-| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, `resumeBlockedAsker`/`resumeAskerAfterAnswer` (re-issue the run that asked a question once its answer is recorded), plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
-| `migration.ts` | Legacy `workflows`-table discovery, phase-to-step mapping, legacy evidence conversion, migration diagnostics. **Thinnest test coverage in the package** (`test/workflow-migration.test.ts` is the only oracle) — moved verbatim with no signature change beyond taking `registry`/`now` as explicit parameters. |
+| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, `resumeBlockedAsker`/`resumeAskerAfterAnswer` (re-issue the run that asked a question once its answer is recorded), plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because every `reducers/*.ts` module needs these without needing the `WorkflowEngine` class itself — importing `engine.ts` from a reducer would close the cycle `engine.ts -> reducer -> engine.ts`. |
 | `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
 | `reducers/*.ts` | One file per `reduce()` command branch (or a small explicitly-grouped set: `agent-question.ts` holds both `agent.question` and `agent.question-expire`; `repair.ts` holds `operator.repair`, `operator.repin`, and `operator.resume`). Each reducer receives `registry`/`now` as explicit parameters and the already-open `db`/`snapshot` — it runs inside the kernel's existing transaction, never opening its own. |
 | `engine.ts` | The `WorkflowEngine` class: `start`, `dispatch`, the `reduce()` command-type dispatch table, `claimEffects`, `telemetry`, `locate`, and thin public-API delegates to the modules above. The residue once every leaf/feature/reducer is moved out. |
@@ -1332,7 +1323,7 @@ functions now live in `runtime/kernel.ts` (`transition`, `enterStep`,
 (`agentHandoff`), `runtime/reducers/effect-result.ts` (`effectResult`),
 `runtime/reducers/developer-action.ts` (`developerAction`),
 `runtime/reducers/research-handoff.ts` (`recordResearchHandoff`),
-`runtime/migration.ts` (`migrateLegacy`), `runtime/store.ts` (`validateEffect`),
+`runtime/store.ts` (`validateEffect`),
 and `runtime/kernel.ts` (`createRun`) rather than directly in `runtime.ts`.
 
 Stage D also resolved two live divergences between the engine's action list

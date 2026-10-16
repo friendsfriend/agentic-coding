@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change implement-model-configuration-and-invalid-model-detection. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Agent configuration presets
 
 Configuration SHALL support named custom agent configuration presets that assign user-defined agent profiles to workflow steps through per-step model pools, optionally with a preset-level fallback profile. A custom preset SHALL declare at least one pool, and every pool entry SHALL reference an existing custom profile. Configuration SHALL be valid without `agents.default_profile`, profiles, routes, or custom presets. A preset that still carries the removed flat `easy`/`medium`/`hard`/`critical` keys or a `roles["core.verification"]` table SHALL be rejected. The built-in `use-default-model` preset SHALL not require a persisted profile reference and SHALL allow its harness to be configured as `pi`, `opencode`, or `opencode-v2` without a model. Custom presets SHALL be stored in an explicitly supplied effective user/project agents configuration, but the repository's default configuration SHALL NOT ship custom presets or profiles and custom entries SHALL NOT require a repository commit.
@@ -132,24 +130,6 @@ A contextually started fusion workflow SHALL resolve its planner roster and cons
 - **WHEN** a user starts a non-fusion workflow with a selected preset
 - **THEN** routing SHALL resolve from each classifiable step's pool and non-classifiable precedence rules
 
-### Requirement: Preset pool hard-break migration and notification
-
-Configuration migration SHALL detect persisted custom presets and strip them (keeping profiles, `default_profile`, routes, `role_routes`, and `definition_defaults`), using the existing preview/apply, backup, journal, and staged-rename machinery and remaining idempotent. The migration report SHALL state the number of presets removed and direct the user to recreate them as model pools in Settings → Presets. The TUI SHALL show a persistent banner while the effective configuration has no custom presets, and a classifier-routed start without a preset SHALL repeat the Settings → Presets hint.
-
-#### Scenario: Migration strips presets
-- **WHEN** configuration migration is applied to a configuration containing custom presets
-- **THEN** the published configuration SHALL contain no custom presets and SHALL retain profiles, default profile, routes, role routes, and definition defaults
-- **AND** the report SHALL state how many presets were removed and point at Settings → Presets
-
-#### Scenario: Migration is idempotent
-- **WHEN** migration is applied again after presets were stripped
-- **THEN** it SHALL report no preset removal and SHALL not modify unrelated configuration
-
-#### Scenario: Effective config has no custom presets
-- **WHEN** the TUI is shown an effective configuration with no custom presets
-- **THEN** it SHALL show a persistent banner explaining that model pools must be recreated in Settings → Presets
-- **AND** the built-in `use-default-model` preset SHALL remain selectable
-
 ### Requirement: Stage gate policy resolution
 
 A custom preset SHALL accept an optional `gates` table with one entry per stage
@@ -239,3 +219,4 @@ changing the existing configuration.
 - **WHEN** persisting the edited preset fails
 - **THEN** Settings SHALL report the failure and the existing configuration SHALL
   be left unchanged
+

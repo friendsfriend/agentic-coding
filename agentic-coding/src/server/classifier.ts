@@ -25,7 +25,6 @@ export function selectedClassifierProvider(repository?: string): string {
 		const loaded = loadConfigWithProvenance({ repository });
 		const agents = parseAgentsConfig(
 			loaded.config.agents,
-			loaded.config,
 			loaded.provenance.files.join(", ") || undefined,
 		);
 		return resolveClassifierProvider(agents);

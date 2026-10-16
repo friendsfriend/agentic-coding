@@ -177,7 +177,6 @@ function reduceDeveloperAction(
 		});
 		const agents = parseAgentsConfig(
 			loaded.config.agents,
-			loaded.config,
 			loaded.provenance.files.join(", ") || undefined,
 		);
 		const preset = selected ? resolvePreset(agents, selected) : undefined;
@@ -246,7 +245,7 @@ function reduceDeveloperAction(
 		else delete snapshot.metadata.selectedPreset;
 		// Retire the old run and its launch/prompt effects, then enter the same
 		// step so its active roles are created with the newly selected profiles.
-		expireRuns(db, snapshot, now, false, true);
+		expireRuns(db, snapshot, now, true);
 		enterStep(db, snapshot, definition, registry, now);
 		return {
 			type: "developer.action",

@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change consolidate-workflow-to-typescript. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: TypeScript engine binary surface
 The workflow engine SHALL be provided by `agentic-coding workflow` with developer/agent mutation surface limited to `start`, `action`, `handoff`, `question`, and `repair`, read-only `status`, `projects`, and `config`, separately named `agent-extension` management, and explicit repository-scoped `drain` maintenance execution. `start` SHALL accept a user-supplied workflow identifier (not a change identifier); the change identifier is chosen later by the planner. Running workflows SHALL be addressed by that workflow identifier. The `question` operation SHALL be available only to an authenticated managed agent and SHALL return the answer to its own pending question; developer responses SHALL use the existing revision-bound action channel.
 
@@ -54,22 +52,17 @@ The engine SHALL separate pure domain definitions/step behavior, transactional c
 - **AND** transaction-bound authorization and atomic persistence SHALL remain runtime-owned
 
 ### Requirement: Persisted state excludes terminal layout
-Durable workflow snapshot SHALL contain workflow-meaningful state and run handles but SHALL NOT use pane/tab geometry or observed runtime status as lifecycle authority.
+Durable workflow snapshots SHALL contain workflow-meaningful state and run handles but SHALL NOT use pane/tab geometry or observed runtime status as lifecycle authority. The runtime SHALL decode the current persisted contract only and SHALL NOT import or translate historical snapshot shapes.
 
 #### Scenario: Layout fields absent from saved state
-- **WHEN** engine persists workflow
-- **THEN** snapshot SHALL omit transient verification pane order and spare-pane geometry
+- **WHEN** the engine persists a workflow
+- **THEN** the snapshot SHALL omit transient verification pane order and spare-pane geometry
 - **AND** current step completion SHALL derive only from committed commands, not pane state
 
-#### Scenario: Legacy state still loads
-- **WHEN** recognized legacy state contains removed layout fields
-- **THEN** migration SHALL ignore transient geometry while preserving validated workflow evidence
-- **AND** resulting canonical snapshot SHALL omit those fields
-
 #### Scenario: Runtime layout is reconstructed
-- **WHEN** dashboard or adapter needs terminal layout
+- **WHEN** the dashboard or adapter needs terminal layout
 - **THEN** it SHALL query live Herdr state or non-authoritative runtime records
-- **AND** missing pane SHALL not corrupt workflow snapshot
+- **AND** a missing pane SHALL not corrupt the workflow snapshot
 
 ### Requirement: Plan approval review comments route to the planner
 The plan approval gate SHALL accept a bounded `review-comments` developer action whose `comments` outcome returns the workflow to the planning step with the comments carried as planner step input, so the planner can adjust the plan against the feedback. The feedback loop SHALL be capped by the same retry bound as plan rejection.
@@ -108,7 +101,7 @@ Committed effects and timer-based commands SHALL be scheduled by explicit mutati
 - **AND** explicit drain or startup/resume recovery SHALL be able to continue it without relying on status side effects
 
 ### Requirement: Effect-native workflow application operations
-Workflow initialization, start, dispatch, read projections, repair/migration previews, capability operations, and effect ownership operations SHALL expose Effect programs with typed expected failures and explicit concrete service requirements. Production and test dependencies SHALL be provided at application composition boundaries, not constructed within domain decisions.
+Workflow initialization, start, dispatch, read projections, current-state repair previews, capability operations, and effect ownership operations SHALL expose Effect programs with typed expected failures and explicit concrete service requirements. Production and test dependencies SHALL be provided at application composition boundaries, not constructed within domain decisions.
 
 #### Scenario: Caller composes startup and dispatch
 - **WHEN** an application caller composes workflow operations
@@ -199,3 +192,12 @@ CLI, dashboard, and internal workflow starts SHALL use one application-level sta
 #### Scenario: Direct engine caller bypasses preparation
 - **WHEN** a direct engine call violates a start-time state or capability invariant
 - **THEN** the engine SHALL still reject it without relying solely on application preflight
+
+### Requirement: Workflow semantic migration command is absent
+The workflow CLI and engine SHALL NOT expose `workflow migrate`, `operator.migrate`, or a semantic migration preview/effect. All other current workflow commands and current-state repair operations SHALL retain their existing behavior.
+
+#### Scenario: Migration command is rejected
+- **WHEN** a caller invokes `agentic-coding workflow migrate`
+- **THEN** the CLI SHALL report an unsupported command
+- **AND** it SHALL NOT preview or mutate workflow state
+

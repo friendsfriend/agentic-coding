@@ -36,6 +36,7 @@ import {
 	settingsSectionPage,
 } from "../src/tui/shared/routes.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
+import { saveAgentsSection, saveSidebarMode } from "../src/workflow/effects.ts";
 import {
 	parseAgentsConfig,
 	resolvePreset,
@@ -88,15 +89,13 @@ function updateConfig(
 }
 
 describe("settings inventory", () => {
-	test("a leftover legacy configuration is surfaced as an inactive source", () => {
+	test("a leftover obsolete configuration is ignored, not surfaced", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-legacy-"));
 		try {
 			const root = path.join(dir, "agentic-coding");
 			fs.mkdirSync(root, { recursive: true });
-			fs.writeFileSync(
-				path.join(root, "config.toml"),
-				'[agents]\ndefault_profile = "legacy"\n',
-			);
+			const obsolete = path.join(root, "config.toml");
+			fs.writeFileSync(obsolete, '[agents]\ndefault_profile = "legacy"\n');
 			fs.writeFileSync(
 				path.join(root, "config.json"),
 				`${JSON.stringify({
@@ -109,36 +108,16 @@ describe("settings inventory", () => {
 			process.env.AGENTIC_CODING_CONFIG_DIR = root;
 			try {
 				const resolved = loadAgentConfig();
-				// The canonical JSON wins and the leftover TOML is reported, not merged.
+				// The canonical JSON is the only source: the obsolete file is neither
+				// merged nor reported, and it is left byte-identical.
 				expect(resolved.agents.default_profile).toBe("current");
 				expect(resolved.provenance.source).toBe("user");
-				expect(resolved.provenance.inactiveFiles).toEqual([
-					path.join(root, "config.toml"),
+				expect(resolved.provenance.files).toEqual([
+					path.join(root, "config.json"),
 				]);
-
-				const items = settingsItems({
-					themes: ["catppuccin"],
-					activeTheme: "catppuccin",
-					clientSettingsPath: "/tmp/tui.json",
-					section: "agents",
-					agents: {
-						scope: "user",
-						source: resolved.provenance.source,
-						files: resolved.provenance.files,
-						inactiveFiles: resolved.provenance.inactiveFiles,
-						conflicts: [],
-						profiles: [],
-						presets: [],
-						routing: [],
-					},
-					providers: { state: "ready", providers: [] },
-				});
-				const inactive = items.find((item) =>
-					item.id.startsWith("agents.inactive."),
+				expect(fs.readFileSync(obsolete, "utf8")).toBe(
+					'[agents]\ndefault_profile = "legacy"\n',
 				);
-				expect(inactive?.value).toBe(path.join(root, "config.toml"));
-				expect(inactive?.detail).toContain("read-only compatibility");
-				expect(inactive?.editable).toBe(false);
 			} finally {
 				delete process.env.AGENTIC_CODING_CONFIG_DIR;
 			}
@@ -572,6 +551,29 @@ describe("section items surface every inventoried setting", () => {
 });
 
 describe("settings writes and reads fail safely", () => {
+	test("an obsolete write target is refused before anything is created", () => {
+		// An explicit replacement file pointing at an obsolete path must not be
+		// materialized with JSON contents: the reader would then reject it, and a
+		// write into a path the previous build refused would be silent.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-write-target-"));
+		const obsolete = path.join(dir, "herdr-workflow.toml");
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = obsolete;
+		try {
+			expect(() => saveAgentsSection(() => {})).toThrow(
+				/is not the current JSON configuration format/,
+			);
+			expect(() => saveSidebarMode("permanent")).toThrow(
+				/is not the current JSON configuration format/,
+			);
+			expect(fs.existsSync(obsolete)).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("an unauthorized server read is reported, never replaced by local state", async () => {
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -636,7 +638,7 @@ describe("settings writes and reads fail safely", () => {
 
 	test("a failed theme save leaves the last valid preference file intact", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-perms-"));
-		process.env.DEVENV_CONFIG_DIR = dir;
+		process.env.AGENTIC_CODING_CONFIG_DIR = dir;
 		const file = path.join(dir, "tui.json");
 		fs.writeFileSync(file, `${JSON.stringify({ theme: "catppuccin" })}\n`);
 		try {
@@ -647,7 +649,7 @@ describe("settings writes and reads fail safely", () => {
 			expect(fs.readFileSync(file, "utf8")).toContain("catppuccin");
 		} finally {
 			fs.chmodSync(dir, 0o700);
-			delete process.env.DEVENV_CONFIG_DIR;
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});

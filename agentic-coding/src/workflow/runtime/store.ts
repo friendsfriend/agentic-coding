@@ -92,15 +92,11 @@ export function tableExists(db: Database, name: string): boolean {
 
 export const STORE_SCHEMA_VERSION = 6;
 
-/** The content-addressed custom workflow definitions (store v5). The table is
- * additive: it is created by the v4 -> v5 migration and never read by a
- * read-only observation of an older store. */
+/** The content-addressed custom workflow definitions (store v6). */
 const DEFINITIONS_DDL =
 	"CREATE TABLE IF NOT EXISTS workflow_definitions(digest TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL CHECK(version = 1), manifest_json TEXT NOT NULL, origin_json TEXT NOT NULL, created_at TEXT NOT NULL)";
 
-/** The delegated debug requests (store v6). The table is additive: it is
- * created by the v5 -> v6 migration and never read by a read-only observation
- * of an older store. */
+/** The delegated debug requests (store v6). */
 const DEBUG_REQUESTS_DDL =
 	"CREATE TABLE IF NOT EXISTS debug_requests(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), caller_run_id TEXT NOT NULL, caller_role TEXT NOT NULL, goal TEXT NOT NULL, context TEXT, apps_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')), debug_run_id TEXT, baseline_ref TEXT, baseline_files_json TEXT, report_path TEXT, changed_files_json TEXT, created_at TEXT NOT NULL, finished_at TEXT, delivered_at TEXT)";
 
@@ -125,125 +121,19 @@ const REQUIRED_TABLES = [
 	"workflow_security_audit",
 	"workflow_migration_diagnostics",
 ];
-/** The v5 definition table. It is optional for shape validation because a v4
- * store predates it; its absence is exactly what the v4 -> v5 migration adds. */
+/** The v6 definition table. */
 const DEFINITIONS_TABLE = "workflow_definitions";
-/** The v6 debug-request table. Optional for shape validation for the same
- * reason: a v5 store predates it, and its absence is exactly what the v5 -> v6
- * migration adds. */
+/** The v6 debug-request table. */
 const DEBUG_REQUESTS_TABLE = "debug_requests";
 const KNOWN_TABLES = [
 	...REQUIRED_TABLES,
 	DEFINITIONS_TABLE,
 	DEBUG_REQUESTS_TABLE,
 ];
-const CURRENT_COLUMNS: Record<string, string[]> = {
-	workflow_instances: [
-		"id",
-		"change_id",
-		"repository",
-		"worktree",
-		"definition_id",
-		"definition_version",
-		"definition_digest",
-		"revision",
-		"status",
-		"current_step",
-		"snapshot_json",
-		"created_at",
-		"updated_at",
-	],
-	workflow_runs: [
-		"id",
-		"workflow_id",
-		"step_id",
-		"role",
-		"generation",
-		"attempt",
-		"status",
-		"profile_json",
-		"issued_revision",
-		"allowed_outcomes_json",
-		"capability_hash",
-		"capability_expires_at",
-		"assignment_path",
-		"output_path",
-		"output_schema_id",
-		"output_schema_version",
-		"output_digest",
-		"handle_json",
-		"created_at",
-		"completed_at",
-	],
-	workflow_events: [
-		"workflow_id",
-		"revision",
-		"type",
-		"actor_json",
-		"data_json",
-		"at",
-	],
-	workflow_outbox: [
-		"id",
-		"workflow_id",
-		"revision",
-		"kind",
-		"idempotency_key",
-		"payload_json",
-		"status",
-		"attempts",
-		"max_attempts",
-		"lease",
-		"lease_expires_at",
-		"next_attempt_at",
-		"last_error",
-	],
-	workflow_security_audit: [
-		"id",
-		"workflow_id",
-		"kind",
-		"subject",
-		"diagnostic",
-		"at",
-	],
-	workflow_migration_diagnostics: [
-		"change_id",
-		"repository",
-		"diagnostic",
-		"source_json",
-		"created_at",
-	],
-	workflow_definitions: [
-		"digest",
-		"id",
-		"version",
-		"manifest_json",
-		"origin_json",
-		"created_at",
-	],
-	debug_requests: [
-		"id",
-		"workflow_id",
-		"caller_run_id",
-		"caller_role",
-		"goal",
-		"context",
-		"apps_json",
-		"status",
-		"debug_run_id",
-		"baseline_ref",
-		"baseline_files_json",
-		"report_path",
-		"changed_files_json",
-		"created_at",
-		"finished_at",
-		"delivered_at",
-	],
-};
 
 /**
- * Leaves WAL mode on a store the previous runtime wrote. SQLite derives its
- * `-wal`/`-shm` paths from the filename it is handed, so a store opened through
+ * Pins a store to the MEMORY journal mode. SQLite derives its `-wal`/`-shm`
+ * paths from the filename it is handed, so a store opened through
  * `/dev/fd/<n>` can never reach them and a WAL store fails every guarded open
  * with SQLite's `unable to open database file`. One connection through the
  * store's real path checkpoints it and pins it to MEMORY, the journal mode the
@@ -251,13 +141,17 @@ const CURRENT_COLUMNS: Record<string, string[]> = {
  * observation cannot convert a store, so it reports the store instead of
  * passing SQLite's message through.
  */
-function leaveLegacyWal(file: string, guard: number, readonly: boolean): void {
+function adoptMemoryJournal(
+	file: string,
+	guard: number,
+	readonly: boolean,
+): void {
 	const header = Buffer.alloc(2);
 	if (fs.readSync(guard, header, 0, 2, 18) !== 2) return;
 	if (header[0] !== 0x02 || header[1] !== 0x02) return;
 	if (readonly)
 		throw new WorkflowRuntimeError(
-			"migration-required",
+			"invalid-state",
 			`workflow store ${JSON.stringify(file)} is still in WAL mode; it has to be opened for writing before it can be observed`,
 		);
 	const db = new Database(file, { create: true });
@@ -281,7 +175,7 @@ function guardedDatabase(
 	);
 	try {
 		const guardedStat = fs.fstatSync(guard);
-		leaveLegacyWal(file, guard, options.readonly === true);
+		adoptMemoryJournal(file, guard, options.readonly === true);
 		// Keep SQLite on descriptor's stable inode. Hard-link aliases make SQLite
 		// race journal/shared-memory files on macOS (`SQLITE_IOERR_VNODE`).
 		const db = new Database(
@@ -336,13 +230,6 @@ function pragmaVersion(db: Database): number {
 function setPragmaVersion(db: Database, version: number): void {
 	db.exec(`PRAGMA user_version = ${version}`);
 }
-function columns(db: Database, table: string): Set<string> {
-	return new Set(
-		(
-			db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-		).map((column) => column.name),
-	);
-}
 function tableNames(db: Database): Set<string> {
 	return new Set(
 		(
@@ -380,52 +267,66 @@ function tableSql(db: Database, table: string): string {
 			.toUpperCase()
 	);
 }
+/** Fold the historical DEFAULT clauses of the two run columns onto the current
+ * DDL text. A store an earlier build migrated carries
+ * `issued_revision INTEGER NOT NULL DEFAULT 0` and
+ * `allowed_outcomes_json TEXT NOT NULL DEFAULT '["COMPLETE","BLOCKED","FAILED"]'`;
+ * the columns are the same columns, so the store opens unchanged instead of
+ * being refused. */
+function foldLegacyRunDefaults(sql: string): string {
+	return sql
+		.replace(
+			/ISSUED_REVISION INTEGER NOT NULL DEFAULT 0/g,
+			"ISSUED_REVISION INTEGER NOT NULL",
+		)
+		.replace(
+			/ALLOWED_OUTCOMES_JSON TEXT NOT NULL DEFAULT '\[COMPLETE,BLOCKED,FAILED\]'/g,
+			"ALLOWED_OUTCOMES_JSON TEXT NOT NULL",
+		);
+}
+
+/** Tables written by this build's own retired paths. Their rows are import
+ * residue no reader in this build touches, so they are stepped over whatever
+ * they hold: a version-6 store that went through the retired legacy import
+ * carries a populated `workflows` table and must keep opening. */
+const RETIRED_TABLES = new Set(["workflows"]);
+
+/** The legacy `workflows` DDL the retired import wrote. A tolerated table that
+ * is not this shape is a foreign table wearing a known name, and fails closed. */
+const RETIRED_WORKFLOWS_DDL =
+	"CREATE TABLE WORKFLOWS(CHANGE_ID TEXT PRIMARY KEY,STATE TEXT NOT NULL)";
+
 /** Tables this build does not know but can safely step over: not part of the
- * canonical schema and holding no rows, so no migration can misread them. Only
- * a store that already carries the canonical schema can step over anything — a
- * file without it is not this build's store, whatever else it contains. */
+ * canonical schema and holding no rows, so nothing can misread them — plus the
+ * retired tables above. Only a store that already carries the canonical schema
+ * can step over anything; a file without it is not this build's store, whatever
+ * else it contains. */
 function ignorableTables(db: Database, names: Set<string>): Set<string> {
 	if (REQUIRED_TABLES.some((table) => !names.has(table))) return new Set();
-	const allowed = new Set([...KNOWN_TABLES, "workflows"]);
-	return new Set(
-		[...names].filter((name) => !allowed.has(name) && !tableHasRows(db, name)),
-	);
+	const tolerated = new Set<string>();
+	for (const name of names) {
+		if (KNOWN_TABLES.includes(name)) continue;
+		if (RETIRED_TABLES.has(name)) {
+			// The retired table keeps its own DDL: anything else under that name is
+			// not the residue this build wrote.
+			if (tableSql(db, name) !== RETIRED_WORKFLOWS_DDL)
+				throw new WorkflowRuntimeError(
+					"unsupported-version",
+					`unsupported table definition in ${name}`,
+				);
+			tolerated.add(name);
+			continue;
+		}
+		if (!tableHasRows(db, name)) tolerated.add(name);
+	}
+	return tolerated;
 }
-/** Validate a store's canonical shape.
+/** Validate a store's canonical shape against the current schema.
  *
- * `allowHistorical` tolerates the additively-introduced objects a store of an
- * older version legitimately lacks (the v5 definition table, the v6
- * debug-request table) and the pre-v3 legacy shapes. `compareObjects` additionally
- * compares the store's `sqlite_master` objects against the current reference DDL,
- * which is only valid for a store at the current version: an intermediate
- * migration step legitimately lacks indexes a later step recreates. Structural
- * checks (columns, types, primary keys, constraints, foreign keys) always run. */
-function validateCanonicalShape(
-	db: Database,
-	allowHistorical = false,
-	compareObjects = true,
-): void {
-	const instanceSql = tableSql(db, "workflow_instances");
-	const legacyIdentity = /CHANGE_ID\s+TEXT\s+NOT\s+NULL\s+UNIQUE/.test(
-		instanceSql,
-	);
-	// A v4 store predates the definition table; its absence is the one object
-	// difference the historical classification may step over.
-	const legacyDefinitions =
-		allowHistorical && !tableExists(db, DEFINITIONS_TABLE);
-	// A v5 store predates the debug-request table, exactly as a v4 store predates
-	// the definition table.
-	const legacyDebugRequests =
-		allowHistorical && !tableExists(db, DEBUG_REQUESTS_TABLE);
-	const legacyChildren = [
-		"workflow_runs",
-		"workflow_events",
-		"workflow_outbox",
-	].some((table) => /WORKFLOW_INSTANCES_LEGACY/.test(tableSql(db, table)));
-	const runColumns = columns(db, "workflow_runs");
-	const legacyRuns =
-		!runColumns.has("issued_revision") &&
-		!runColumns.has("allowed_outcomes_json");
+ * A store this build did not write — a drifted DDL, a missing object, a foreign
+ * table holding rows — is refused rather than interpreted: there is no
+ * historical shape to step over. */
+function validateCanonicalShape(db: Database): void {
 	const reference = new Database(":memory:");
 	try {
 		reference.exec(SCHEMA_DDL);
@@ -448,7 +349,7 @@ function validateCanonicalShape(
 				sql: object.sql?.replace(/\s+/g, " ").toUpperCase() ?? null,
 			}));
 		const actualObjects = objects(db);
-		const expectedObjects = compareObjects ? objects(reference) : [];
+		const expectedObjects = objects(reference);
 		// An empty table from another feature (or another build) is not part of
 		// the schema under validation, so neither it nor its indexes take part in
 		// the object comparison. A table with rows stays in and fails the set
@@ -460,112 +361,32 @@ function validateCanonicalShape(
 		const compared = actualObjects.filter(
 			(object) => !ignored.has(object.tbl_name),
 		);
-		const legacyObject = actualObjects.find(
-			(object) => object.type === "table" && object.name === "workflows",
-		);
-		if (
-			legacyObject &&
-			tableSql(db, "workflows") !==
-				"CREATE TABLE WORKFLOWS(CHANGE_ID TEXT PRIMARY KEY,STATE TEXT NOT NULL)"
-		)
-			throw new WorkflowRuntimeError(
-				"migration-required",
-				"unsupported legacy workflows table",
-			);
 		const objectKey = (object: ReturnType<typeof objects>[number]) =>
 			`${object.type}:${object.name}`;
-		// An intermediate migration step is checked structurally only: its own
-		// version legitimately lacks objects a later step adds (the v1 -> v2 step has
-		// no run-status index yet), so the object comparison belongs to the step
-		// that lands on the current schema.
-		const actualKeys = compareObjects ? compared.map(objectKey) : [];
-		const expectedKeys = compareObjects
-			? expectedObjects
-					.filter(
-						(object) =>
-							!(
-								legacyDefinitions &&
-								object.type === "table" &&
-								object.name === DEFINITIONS_TABLE
-							),
-					)
-					.map(objectKey)
-			: [];
-		if (legacyObject && !expectedKeys.includes("table:workflows"))
-			expectedKeys.push("table:workflows");
-		// A historical store may legitimately lack either additive table.
-		for (const [absent, table] of [
-			[legacyDefinitions, DEFINITIONS_TABLE],
-			[legacyDebugRequests, DEBUG_REQUESTS_TABLE],
-		] as const)
-			if (absent) {
-				const index = expectedKeys.indexOf(`table:${table}`);
-				if (index >= 0) expectedKeys.splice(index, 1);
-			}
-		expectedKeys.sort();
+		const actualKeys = compared.map(objectKey).sort();
+		const expectedKeys = expectedObjects.map(objectKey).sort();
 		if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys))
 			throw new WorkflowRuntimeError(
-				"migration-required",
-				"unsupported unversioned schema objects",
+				"unsupported-version",
+				"unsupported workflow store schema objects",
 			);
-		for (const table of compareObjects
-			? [...REQUIRED_TABLES, DEFINITIONS_TABLE, DEBUG_REQUESTS_TABLE]
-			: []) {
-			// A real v4 store predates the definition table, a v5 store the
-			// debug-request table.
-			if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
-			if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
-			const expectedSql = tableSql(reference, table);
-			const actualSql = tableSql(db, table);
-			const normalizedMigratedRunSql = actualSql
-				.replace(
-					/ISSUED_REVISION INTEGER NOT NULL DEFAULT 0/,
-					"ISSUED_REVISION INTEGER NOT NULL",
-				)
-				.replace(
-					/ALLOWED_OUTCOMES_JSON TEXT NOT NULL DEFAULT '["COMPLETE","BLOCKED","FAILED"]'/,
-					"ALLOWED_OUTCOMES_JSON TEXT NOT NULL",
-				);
-			const normalizedLegacyRunSql = expectedSql
-				.replace(", ISSUED_REVISION INTEGER NOT NULL", "")
-				.replace(", ALLOWED_OUTCOMES_JSON TEXT NOT NULL", "");
-			const normalizedLegacySql = actualSql.replace(
-				/CHANGE_ID\s+TEXT\s+NOT\s+NULL\s+UNIQUE/,
-				"CHANGE_ID TEXT NULL",
-			);
+		// A store migrated by an earlier build can carry the run DDL that build
+		// wrote: the two columns with their historical DEFAULT clauses. Folding
+		// those defaults onto the current DDL accepts the store without
+		// rewriting it.
+		for (const table of [
+			...REQUIRED_TABLES,
+			DEFINITIONS_TABLE,
+			DEBUG_REQUESTS_TABLE,
+		])
 			if (
-				actualSql !== expectedSql &&
-				!(
-					allowHistorical &&
-					table === "workflow_instances" &&
-					legacyIdentity &&
-					normalizedLegacySql === expectedSql
-				) &&
-				!(
-					(allowHistorical &&
-						table === "workflow_runs" &&
-						legacyRuns &&
-						actualSql === normalizedLegacyRunSql) ||
-					(table === "workflow_runs" &&
-						normalizedMigratedRunSql === expectedSql)
-				) &&
-				!(
-					allowHistorical &&
-					legacyChildren &&
-					["workflow_runs", "workflow_events", "workflow_outbox"].includes(
-						table,
-					) &&
-					actualSql.replace(
-						/WORKFLOW_INSTANCES_LEGACY/g,
-						"WORKFLOW_INSTANCES",
-					) === expectedSql
-				)
+				foldLegacyRunDefaults(tableSql(db, table)) !==
+				tableSql(reference, table)
 			)
 				throw new WorkflowRuntimeError(
-					"migration-required",
+					"unsupported-version",
 					`unsupported table definition in ${table}`,
 				);
-		}
 	} finally {
 		reference.close();
 	}
@@ -673,46 +494,31 @@ function validateCanonicalShape(
 		},
 	};
 	for (const [table, expected] of Object.entries(types)) {
-		// The two additive tables are absent from a store that predates them.
-		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
-		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		const info = db.query(`PRAGMA table_info(${table})`).all() as Array<{
 			name: string;
 			type: string;
 			pk: number;
 		}>;
-		const optional =
-			table === "workflow_runs"
-				? new Set(["issued_revision", "allowed_outcomes_json"])
-				: new Set<string>();
 		const actualNames = info.map((column) => column.name);
-		const expectedNames = Object.keys(expected).filter(
-			(name) =>
-				!optional.has(name) || info.some((column) => column.name === name),
-		);
+		const expectedNames = Object.keys(expected);
 		if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames))
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported column order in ${table}`,
 			);
 		const actual = new Map(info.map((column) => [column.name, column]));
 		for (const [name, type] of Object.entries(expected)) {
 			const column = actual.get(name);
-			if (!column && optional.has(name)) continue;
 			if (!column || column.type.toUpperCase() !== type)
 				throw new WorkflowRuntimeError(
-					"migration-required",
-					`unsupported unversioned column definition: ${table}.${name}`,
+					"unsupported-version",
+					`unsupported column definition: ${table}.${name}`,
 				);
 		}
-		const missing = Object.keys(expected).filter((name) => !actual.has(name));
-		if (
-			missing.some((name) => !optional.has(name)) ||
-			actual.size !== Object.keys(expected).length - missing.length
-		)
+		if (actual.size !== Object.keys(expected).length)
 			throw new WorkflowRuntimeError(
-				"migration-required",
-				`unsupported unversioned columns in ${table}`,
+				"unsupported-version",
+				`unsupported columns in ${table}`,
 			);
 	}
 	const primaryKeys = [
@@ -726,8 +532,6 @@ function validateCanonicalShape(
 		["debug_requests", "id"],
 	];
 	for (const [table, ...names] of primaryKeys) {
-		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
-		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		const actual = (
 			db.query(`PRAGMA table_info(${table})`).all() as Array<{
 				name: string;
@@ -739,7 +543,7 @@ function validateCanonicalShape(
 			.map((column) => column.name);
 		if (JSON.stringify(actual) !== JSON.stringify(names))
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported primary key in ${table}`,
 			);
 	}
@@ -766,11 +570,9 @@ function validateCanonicalShape(
 		],
 	};
 	for (const [table, rules] of Object.entries(signatures)) {
-		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
-		if (legacyDebugRequests && table === DEBUG_REQUESTS_TABLE) continue;
 		if (rules.some((rule) => !rule.test(tableSql(db, table))))
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported constraints in ${table}`,
 			);
 	}
@@ -783,38 +585,32 @@ function validateCanonicalShape(
 				(key) =>
 					key.from === "workflow_id" &&
 					key.to === "id" &&
-					["workflow_instances", "workflow_instances_legacy"].includes(
-						key.table,
-					),
+					key.table === "workflow_instances",
 			)
 		)
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported foreign key in ${table}`,
 			);
 	}
-	// The two canonical indexes are recreated by the v3 -> v4 step, so an earlier
-	// intermediate step legitimately does not carry them yet.
-	for (const [table, index, expectedColumns] of (compareObjects
-		? [
-				[
-					"workflow_runs",
-					"workflow_runs_workflow_status",
-					["workflow_id", "status"],
-				],
-				[
-					"workflow_outbox",
-					"workflow_outbox_ready",
-					["status", "next_attempt_at", "lease_expires_at"],
-				],
-			]
-		: []) as ReadonlyArray<readonly [string, string, readonly string[]]>) {
+	for (const [table, index, expectedColumns] of [
+		[
+			"workflow_runs",
+			"workflow_runs_workflow_status",
+			["workflow_id", "status"],
+		],
+		[
+			"workflow_outbox",
+			"workflow_outbox_ready",
+			["status", "next_attempt_at", "lease_expires_at"],
+		],
+	] as ReadonlyArray<readonly [string, string, readonly string[]]>) {
 		const indexes = db.query(`PRAGMA index_list(${table})`).all() as Array<{
 			name: string;
 		}>;
 		if (!indexes.some((item) => item.name === index))
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported index in ${table}`,
 			);
 		const actualColumns = (
@@ -827,296 +623,117 @@ function validateCanonicalShape(
 			.map((item) => item.name);
 		if (JSON.stringify(actualColumns) !== JSON.stringify(expectedColumns))
 			throw new WorkflowRuntimeError(
-				"migration-required",
+				"unsupported-version",
 				`unsupported index columns in ${table}`,
 			);
 	}
 }
-function classifyUnversioned(db: Database): number {
-	const names = tableNames(db);
-	const allowed = new Set([...KNOWN_TABLES, "workflows"]);
-	const unknown = [...names].filter((name) => !allowed.has(name));
-	const ignorable = ignorableTables(db, names);
-	if (unknown.length) {
-		// An unversioned store may carry tables this build does not know: another
-		// feature (or another build) can share the file without versioning it.
-		// Empty orphans are harmless — the canonical tables are still validated
-		// strictly below, and nothing here touches the extra table — so they are
-		// left in place instead of blocking every start. A table that holds rows
-		// fails closed: its data belongs to a schema this build cannot interpret
-		// and no migration may silently carry it forward.
-		const populated = unknown.filter((name) => !ignorable.has(name));
-		if (populated.length)
-			throw new WorkflowRuntimeError(
-				"migration-required",
-				`unsupported unversioned store tables: ${populated.join(", ")}`,
-			);
-	}
-	if (names.size === 0) return 0;
-	if (names.size === 1 && names.has("workflows")) {
-		const legacyColumns = columns(db, "workflows");
-		if (
-			legacyColumns.size !== 2 ||
-			!legacyColumns.has("change_id") ||
-			!legacyColumns.has("state") ||
-			!/(?:CHANGE_ID\s+TEXT\s+PRIMARY KEY|PRIMARY KEY\s*\(\s*CHANGE_ID\s*\))/i.test(
-				tableSql(db, "workflows"),
-			)
-		)
-			throw new WorkflowRuntimeError(
-				"migration-required",
-				"unsupported legacy workflows table",
-			);
-		return 0;
-	}
-	if (REQUIRED_TABLES.some((table) => !names.has(table)))
-		throw new WorkflowRuntimeError(
-			"migration-required",
-			"unversioned store has an incomplete canonical schema",
-		);
-	validateCanonicalShape(db, true);
-	const hasDefinitions = names.has(DEFINITIONS_TABLE);
-	const hasDebugRequests = names.has(DEBUG_REQUESTS_TABLE);
-	for (const [table, expected] of Object.entries(CURRENT_COLUMNS)) {
-		// An additive table its predecessor predates is simply absent here; the
-		// migration that adds it is chosen from the inferred version below.
-		if (!names.has(table)) continue;
-		const actual = columns(db, table);
-		const missing = expected.filter((column) => !actual.has(column));
-		const supportedMissing =
-			table === "workflow_runs"
-				? ["issued_revision", "allowed_outcomes_json"]
-				: [];
-		if (missing.some((column) => !supportedMissing.includes(column)))
-			throw new WorkflowRuntimeError(
-				"migration-required",
-				`unsupported unversioned columns in ${table}`,
-			);
-		if (actual.size > expected.length)
-			throw new WorkflowRuntimeError(
-				"migration-required",
-				`unsupported unversioned columns in ${table}`,
-			);
-	}
-	const runColumns = columns(db, "workflow_runs");
-	if (
-		!runColumns.has("issued_revision") ||
-		!runColumns.has("allowed_outcomes_json")
-	)
-		return 1;
-	const instanceSql =
-		(
-			db
-				.query(
-					"SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_instances'",
-				)
-				.get() as { sql?: string } | null
-		)?.sql ?? "";
-	const childSql = ["workflow_runs", "workflow_events", "workflow_outbox"].map(
-		(table) =>
-			(
-				db
-					.query("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
-					.get(table) as { sql?: string } | null
-			)?.sql ?? "",
-	);
-	const hasLegacyChild = childSql.some((sql) =>
-		/workflow_instances_legacy/i.test(sql),
-	);
-	if (/change_id\s+TEXT\s+NULL/i.test(instanceSql) && !hasLegacyChild) {
-		foreignKeyCheck(db);
-		// The version is inferred from the additive tables the store carries: the
-		// definition table arrived at v5, the debug-request table at v6. A store
-		// that carries neither is a v4 store and is migrated through both steps,
-		// so an unversioned store is never adopted at a version whose schema it
-		// does not have.
-		if (!hasDefinitions) return 4;
-		return hasDebugRequests ? STORE_SCHEMA_VERSION : 5;
-	}
-	return 2;
-}
-
 function foreignKeyCheck(db: Database): void {
 	const invalid = db.query("PRAGMA foreign_key_check").all();
 	if (invalid.length)
 		throw new WorkflowRuntimeError(
-			"migration-required",
+			"unsupported-version",
 			`foreign-key check failed (${invalid.length} invalid references)`,
 		);
 }
 
-function migrateVersion(db: Database, from: number): void {
-	if (from === 1) {
-		db.exec("DROP INDEX IF EXISTS workflow_runs_workflow_status");
-		db.exec("ALTER TABLE workflow_runs RENAME TO workflow_runs_legacy");
-		db.exec(
-			"CREATE TABLE workflow_runs(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), step_id TEXT NOT NULL, role TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0), attempt INTEGER NOT NULL CHECK(attempt > 0), status TEXT NOT NULL CHECK(status IN ('pending','working','completed','blocked','failed','expired')), profile_json TEXT NOT NULL, issued_revision INTEGER NOT NULL, allowed_outcomes_json TEXT NOT NULL, capability_hash TEXT NOT NULL, capability_expires_at TEXT NOT NULL, assignment_path TEXT NOT NULL, output_path TEXT, output_schema_id TEXT, output_schema_version INTEGER, output_digest TEXT, handle_json TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workflow_id,id,generation))",
-		);
-		db.exec(
-			'INSERT INTO workflow_runs (id,workflow_id,step_id,role,generation,attempt,status,profile_json,issued_revision,allowed_outcomes_json,capability_hash,capability_expires_at,assignment_path,output_path,output_schema_id,output_schema_version,output_digest,handle_json,created_at,completed_at) SELECT id,workflow_id,step_id,role,generation,attempt,status,profile_json,0,\'["complete","blocked","failed"]\',capability_hash,capability_expires_at,assignment_path,output_path,output_schema_id,output_schema_version,output_digest,handle_json,created_at,completed_at FROM workflow_runs_legacy',
-		);
-		db.exec("DROP TABLE workflow_runs_legacy");
-		return;
-	}
-	if (from === 2) {
-		const sql =
-			(
-				db
-					.query(
-						"SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_instances'",
-					)
-					.get() as { sql?: string } | null
-			)?.sql ?? "";
-		if (/change_id\s+TEXT\s+NULL/i.test(sql)) return;
-		db.exec(
-			`CREATE TABLE workflow_instances_new(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-		);
-		db.exec(
-			"INSERT INTO workflow_instances_new (id,change_id,repository,worktree,definition_id,definition_version,definition_digest,revision,status,current_step,snapshot_json,created_at,updated_at) SELECT id,change_id,repository,worktree,definition_id,definition_version,definition_digest,revision,status,current_step,snapshot_json,created_at,updated_at FROM workflow_instances",
-		);
-		db.exec("DROP TABLE workflow_instances");
-		db.exec("ALTER TABLE workflow_instances_new RENAME TO workflow_instances");
-		return;
-	}
-	if (from === 3) {
-		const children = {
-			workflow_runs:
-				"id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), step_id TEXT NOT NULL, role TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0), attempt INTEGER NOT NULL CHECK(attempt > 0), status TEXT NOT NULL CHECK(status IN ('pending','working','completed','blocked','failed','expired')), profile_json TEXT NOT NULL, issued_revision INTEGER NOT NULL, allowed_outcomes_json TEXT NOT NULL, capability_hash TEXT NOT NULL, capability_expires_at TEXT NOT NULL, assignment_path TEXT NOT NULL, output_path TEXT, output_schema_id TEXT, output_schema_version INTEGER, output_digest TEXT, handle_json TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workflow_id,id,generation)",
-			workflow_events:
-				"workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, type TEXT NOT NULL, actor_json TEXT NOT NULL, data_json TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(workflow_id,revision)",
-			workflow_outbox:
-				"id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','retry','completed','failed','expired')), attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL CHECK(max_attempts > 0), lease TEXT, lease_expires_at TEXT, next_attempt_at TEXT, last_error TEXT",
-		};
-		for (const [table, ddl] of Object.entries(children)) {
-			const sql =
-				(
-					db
-						.query(
-							"SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-						)
-						.get(table) as { sql?: string } | null
-				)?.sql ?? "";
-			if (!/workflow_instances_legacy/i.test(sql)) continue;
-			db.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`);
-			db.exec(`CREATE TABLE ${table}(${ddl})`);
-			const mappings: Record<string, string> = {
-				workflow_runs:
-					"id,workflow_id,step_id,role,generation,attempt,status,profile_json,issued_revision,allowed_outcomes_json,capability_hash,capability_expires_at,assignment_path,output_path,output_schema_id,output_schema_version,output_digest,handle_json,created_at,completed_at",
-				workflow_events: "workflow_id,revision,type,actor_json,data_json,at",
-				workflow_outbox:
-					"id,workflow_id,revision,kind,idempotency_key,payload_json,status,attempts,max_attempts,lease,lease_expires_at,next_attempt_at,last_error",
-			};
-			const mapping = mappings[table];
-			if (!mapping) throw new Error(`missing migration mapping for ${table}`);
-			db.exec(
-				`INSERT INTO ${table} (${mapping}) SELECT ${mapping} FROM ${table}_legacy`,
-			);
-			db.exec(`DROP TABLE ${table}_legacy`);
-		}
-		db.exec(
-			"CREATE INDEX IF NOT EXISTS workflow_runs_workflow_status ON workflow_runs(workflow_id,status)",
-		);
-		db.exec(
-			"CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_attempt_at,lease_expires_at)",
-		);
-		return;
-	}
-	if (from === 4) {
-		// Additive v5: every workflow keeps its snapshot and pin; only the
-		// definition table is new (persist-custom-workflow-definitions).
-		db.exec(DEFINITIONS_DDL);
-		foreignKeyCheck(db);
-		return;
-	}
-	if (from === 5) {
-		// Additive v6: the delegated debug requests
-		// (add-debug-subagent-requests).
-		db.exec(DEBUG_REQUESTS_DDL);
-		foreignKeyCheck(db);
-		return;
-	}
-	throw new WorkflowRuntimeError(
+/** The one refusal every store this build cannot read produces, raised before
+ * any DDL, transaction or row write. */
+export function unsupportedStoreVersion(version: number): WorkflowRuntimeError {
+	return new WorkflowRuntimeError(
 		"unsupported-version",
-		`unsupported workflow store version: ${from}`,
+		`unsupported workflow store version ${version}; this build only reads version ${STORE_SCHEMA_VERSION}`,
 	);
+}
+
+/** The persisted `PRAGMA user_version`, read straight from the SQLite file
+ * header so a store this build refuses is never opened — and therefore never
+ * mutated. `undefined` means the file is absent or too small to carry a
+ * version. */
+function fileVersion(file: string): number | undefined {
+	let fd: number;
+	try {
+		fd = fs.openSync(file, "r");
+	} catch {
+		return undefined;
+	}
+	try {
+		const header = Buffer.alloc(4);
+		return fs.readSync(fd, header, 0, 4, 60) === 4
+			? header.readUInt32BE(0)
+			: undefined;
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+/** Whether an existing file carries any schema at all, read without opening it
+ * for writing: a genuinely empty file is initialized, a file with tables is a
+ * store this build did not write. */
+function fileHasSchema(file: string): boolean {
+	const db = new Database(file, { readonly: true });
+	try {
+		return tableNames(db).size > 0;
+	} finally {
+		db.close();
+	}
 }
 
 export function initializeStore(repo: string): void {
 	const file = canonicalStorePath(repo);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const persisted = fileVersion(file);
+	if (
+		persisted !== undefined &&
+		persisted !== 0 &&
+		persisted !== STORE_SCHEMA_VERSION
+	)
+		throw unsupportedStoreVersion(persisted);
+	// A store written without a version is not this build's format either: it
+	// is refused rather than classified and adopted. A probe that cannot read
+	// the schema at all (a WAL store without a writable `-shm`, a non-SQLite
+	// file, or a concurrent writer holding the lock) is not a genuinely empty
+	// store, so it is refused with the same one message instead of surfacing
+	// SQLite's error.
+	if (persisted === 0) {
+		let empty = false;
+		try {
+			empty = !fileHasSchema(file);
+		} catch {
+			empty = false;
+		}
+		if (!empty) throw unsupportedStoreVersion(0);
+	}
 	const db = guardedDatabase(repo, file, { create: true });
 	db.exec("PRAGMA busy_timeout=10000");
 	try {
 		verifyCanonicalStorePath(repo, file);
-		const initialVersion = pragmaVersion(db);
-		if (initialVersion > STORE_SCHEMA_VERSION)
-			throw new WorkflowRuntimeError(
-				"unsupported-version",
-				`unsupported workflow store version: ${initialVersion}`,
-			);
 		for (;;) {
 			const observed = pragmaVersion(db);
-			if (observed > STORE_SCHEMA_VERSION)
-				throw new WorkflowRuntimeError(
-					"unsupported-version",
-					`unsupported workflow store version: ${observed}`,
-				);
 			if (observed === STORE_SCHEMA_VERSION) {
 				validateCanonicalShape(db);
 				foreignKeyCheck(db);
 				return;
 			}
-			if (observed === 0) {
-				db.exec("BEGIN IMMEDIATE");
-				try {
-					const locked = pragmaVersion(db);
-					if (locked !== 0) {
-						db.exec("COMMIT");
-						continue;
-					}
-					const baseline = classifyUnversioned(db);
-					if (baseline === 0) {
-						db.exec(SCHEMA_DDL);
-						setPragmaVersion(db, STORE_SCHEMA_VERSION);
-					} else setPragmaVersion(db, baseline);
-					foreignKeyCheck(db);
-					db.exec("COMMIT");
-				} catch (error) {
-					rollback(db);
-					throw error;
-				}
-				continue;
-			}
-			const foreignKeysOff = observed === 2 || observed === 3;
-			if (foreignKeysOff) db.exec("PRAGMA foreign_keys=OFF");
+			if (observed !== 0) throw unsupportedStoreVersion(observed);
+			db.exec("BEGIN IMMEDIATE");
 			try {
-				db.exec("BEGIN IMMEDIATE");
 				const locked = pragmaVersion(db);
-				if (locked !== observed) {
+				if (locked !== 0) {
 					db.exec("COMMIT");
 					continue;
 				}
-				migrateVersion(db, observed);
-				// The store must not be version-bumped into a shape this build then
-				// rejects: validate every migration's result before committing it, so
-				// a rejected store stays byte-identical at its old version. The last
-				// step validates the current schema strictly; an earlier step validates
-				// against the shape its own version has, which is what tolerates the
-				// additive tables a later step introduces.
-				if (observed + 1 === STORE_SCHEMA_VERSION) validateCanonicalShape(db);
-				// An intermediate step is validated structurally: its own version
-				// legitimately lacks the objects a later step adds (the v1 -> v2 step
-				// has no run-status index yet), so the object comparison belongs to the
-				// step that lands on the current schema.
-				else validateCanonicalShape(db, true, false);
-				setPragmaVersion(db, observed + 1);
+				// Re-check under the writer lock: two initializers can both read
+				// version 0 before either commits, and the loser must not overwrite
+				// the winner's schema.
+				if (tableNames(db).size > 0) throw unsupportedStoreVersion(0);
+				db.exec(SCHEMA_DDL);
+				setPragmaVersion(db, STORE_SCHEMA_VERSION);
 				foreignKeyCheck(db);
 				db.exec("COMMIT");
 			} catch (error) {
 				rollback(db);
 				throw error;
-			} finally {
-				if (foreignKeysOff) db.exec("PRAGMA foreign_keys=ON");
 			}
 		}
 	} finally {
@@ -1128,7 +745,7 @@ function openStoreWithMode(repo: string, readonly: boolean): Database {
 	const file = canonicalStorePath(repo);
 	if (!fs.existsSync(file))
 		throw new WorkflowRuntimeError(
-			"migration-required",
+			"not-found",
 			"workflow store is absent; initialize the store before writing",
 		);
 	const db = guardedDatabase(repo, file, { readonly });
@@ -1138,12 +755,7 @@ function openStoreWithMode(repo: string, readonly: boolean): Database {
 		verifyCanonicalStorePath(repo, file);
 		const version = pragmaVersion(db);
 		if (version !== STORE_SCHEMA_VERSION)
-			throw new WorkflowRuntimeError(
-				version > STORE_SCHEMA_VERSION
-					? "unsupported-version"
-					: "migration-required",
-				`workflow store requires initialization (version ${version})`,
-			);
+			throw unsupportedStoreVersion(version);
 		return db;
 	} catch (error) {
 		db.close();
@@ -1163,24 +775,18 @@ export function openReadStore(repo: string): Database {
 
 export interface ObservedStore {
 	version: number;
-	legacyChangeIds: string[];
 }
+/** The store file's persisted version without opening it: an observation never
+ * creates, locks or converts storage. */
 export function observedStore(repo: string): ObservedStore | undefined {
 	const file = canonicalStorePath(repo);
 	if (!fs.existsSync(file)) return undefined;
-	const db = guardedDatabase(repo, file, { readonly: true });
-	try {
-		verifyCanonicalStorePath(repo, file);
-		const version = pragmaVersion(db);
-		return { version, legacyChangeIds: [] };
-	} finally {
-		db.close();
-	}
+	return { version: fileVersion(file) ?? 0 };
 }
 
 // Lease heartbeats run frequently while an effect is active. Reuse the
-// already-initialized store schema without repeating openStore's migration and
-// DDL bootstrap on every heartbeat.
+// already-initialized store schema without repeating openStore's schema/import
+// work on every heartbeat.
 function openLeaseStore(repo: string): Database {
 	const file = canonicalStorePath(repo);
 	if (!fs.existsSync(file))
@@ -1395,29 +1001,12 @@ export function effects(db: Database, id: string): WorkflowEffect[] {
 /** Delete one workflow and every row that belongs to it, children first so the
  * foreign keys never see a dangling reference. Returns the number of instances
  * removed: 0 means the workflow was already gone, which a caller reports as
- * not-found instead of silently succeeding. The migration diagnostics table is
- * keyed by change id and describes the legacy import, not this workflow, so it
- * is left alone. */
+ * not-found instead of silently succeeding. The migration-diagnostics table is
+ * keyed by change id and describes no current workflow, so it is left alone. */
 export function deleteWorkflowRows(db: Database, id: string): number {
-	// A legacy-imported workflow's source row lives in the pre-migration
-	// `workflows` table keyed by change id, and the engine's legacy import
-	// re-creates every instance row it cannot find: without this, deleting such
-	// a workflow is silently undone by the next store open.
-	if (tableExists(db, "workflows")) {
-		const rows = db
-			.query("SELECT change_id FROM workflow_instances WHERE id=?")
-			.all(id) as Array<{ change_id: string | null }>;
-		for (const row of rows)
-			if (row.change_id)
-				db.query("DELETE FROM workflows WHERE change_id=?").run(row.change_id);
-		db.query("DELETE FROM workflows WHERE change_id=?").run(id);
-	}
 	db.query("DELETE FROM workflow_events WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_runs WHERE workflow_id=?").run(id);
-	// A legacy store opened before the v6 migration owns no debug-request table
-	// yet; its rows cannot exist, so the delete is skipped rather than failing.
-	if (tableExists(db, "debug_requests"))
-		db.query("DELETE FROM debug_requests WHERE workflow_id=?").run(id);
+	db.query("DELETE FROM debug_requests WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_outbox WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_security_audit WHERE workflow_id=?").run(id);
 	return Number(

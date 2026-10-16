@@ -152,8 +152,7 @@ digests) are not migration shims and remain.
   every operation as a public Effect program (`startEffect`, `dispatchEffect`,
   `statusEffect`, `listEffect`, `getRunEffect`, `getSnapshotEffect`,
   `authorizeExactRunCapabilityEffect`, `authorizeAgentCapabilityEffect`,
-  `activeRunForRoleEffect`, `previewRepairEffect`, `previewMigrationEffect`,
-  `claimEffectsEffect`, `renewEffectEffect`, `effectIsLiveEffect`,
+  `activeRunForRoleEffect`, `previewRepairEffect`, `claimEffectsEffect`, `renewEffectEffect`, `effectIsLiveEffect`,
   `issueRunCapabilityEffect`, `initializeEffect`), with the synchronous
   methods delegating. CLI command modules (`run.ts` status/drain,
   `identity.ts` handoff identity gate, `dispatch-actions.ts` action/question/

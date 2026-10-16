@@ -231,32 +231,9 @@ const DEFAULT_CAPABILITIES: AdapterCapability[] = [
 ];
 export function parseAgentsConfig(
 	value: unknown,
-	legacy?: {
-		models?: Record<string, string>;
-		thinking?: Record<string, string>;
-	},
 	source?: string,
 ): AgentsConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		const model = legacy?.models?.worker_default;
-		if (model || legacy?.thinking?.worker_default) {
-			return {
-				default_profile: "pi-default",
-				profiles: {
-					"pi-default": {
-						runtime: "pi-durable",
-						...(model ? { model } : {}),
-						thinking: legacy?.thinking?.worker_default,
-					},
-				},
-				// The built-in preset's own runtime stays unset here too (falls through
-				// to `builtinRuntime`'s "pi-durable" default): a legacy TOML migration
-				// sets up an explicit "pi-default" named profile for `default_profile`,
-				// but a workflow that separately selects `use-default-model` gets the
-				// same sitewide default as a fresh installation.
-				presets: { [BUILTIN_PRESET_NAME]: {} },
-			};
-		}
 		return {
 			profiles: {},
 			presets: { [BUILTIN_PRESET_NAME]: {} },

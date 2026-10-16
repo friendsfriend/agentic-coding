@@ -432,7 +432,7 @@ describe("write-back target selection", () => {
 		envPath: string | undefined,
 		home: string,
 		cwd: string,
-	) => selectAgentsConfigPath(envPath, home, cwd, rootFor(home));
+	) => selectAgentsConfigPath(envPath, cwd, rootFor(home));
 
 	test("agentsConfigPath prefers files that actually supply [agents]", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-target-"));
@@ -477,26 +477,28 @@ describe("write-back target selection", () => {
 			// base defines agents but project does not supply one -> base is target
 			fs.rmSync(projectFile);
 			expect(selectTarget(undefined, home, dir)).toBe(noAgents);
-			// QUALITY-001 regression: legacy supplies [agents] while the winning
-			// base (canonical JSON config) does not — loadConfig never reads the
-			// legacy file in that setup, so edits must go to the canonical file
-			const legacyFile = path.join(home, ".pi", "agent", "herdr-workflow.toml");
-			fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
-			fs.writeFileSync(legacyFile, '[agents]\ndefault_profile = "legacy"\n');
+			// An obsolete file that supplies [agents] is not an effective source at
+			// all, so it is never the write-back target.
+			const obsoleteFile = path.join(
+				home,
+				".pi",
+				"agent",
+				"herdr-workflow.toml",
+			);
+			fs.mkdirSync(path.dirname(obsoleteFile), { recursive: true });
+			fs.writeFileSync(obsoleteFile, '[agents]\ndefault_profile = "legacy"\n');
 			expect(selectTarget(undefined, home, dir)).toBe(noAgents);
-			// A legacy TOML overlay supplying [agents] is still the effective
-			// source, so it is selected — and then refused by the writer.
-			const legacyOverlay = path.join(
+			const obsoleteOverlay = path.join(
 				dir,
 				"repo",
 				".pi",
 				"herdr-workflow.toml",
 			);
-			fs.writeFileSync(legacyOverlay, '[agents]\ndefault_profile = "p"\n');
+			fs.writeFileSync(obsoleteOverlay, '[agents]\ndefault_profile = "p"\n');
 			expect(selectTarget(undefined, home, path.join(dir, "repo"))).toBe(
-				legacyOverlay,
+				noAgents,
 			);
-			fs.rmSync(legacyOverlay);
+			fs.rmSync(obsoleteOverlay);
 			// explicit env always wins
 			expect(
 				selectTarget("/custom/config.json", home, path.join(dir, "repo")),
@@ -545,7 +547,7 @@ describe("write-back target selection", () => {
 		}
 	});
 
-	test("a legacy TOML write target is refused, never silently converted", () => {
+	test("a non-JSON write target is refused, never silently converted", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-toml-refuse-"));
 		const file = path.join(dir, "config.toml");
 		fs.writeFileSync(file, '[agents]\ndefault_profile = "p"\n');
@@ -553,7 +555,7 @@ describe("write-back target selection", () => {
 		try {
 			expect(agentsConfigPath()).toBe(file);
 			expect(() => saveAgentsSection(() => {})).toThrow(
-				/legacy TOML configuration read for compatibility/,
+				/only the current JSON configuration format is supported/,
 			);
 			expect(fs.readFileSync(file, "utf8")).toBe(
 				'[agents]\ndefault_profile = "p"\n',
@@ -608,10 +610,17 @@ describe("config source conflicts", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-replace-"));
 		const prevCwd = process.cwd();
 		try {
-			const envFile = path.join(dir, "config.toml");
+			const envFile = path.join(dir, "config.json");
 			fs.writeFileSync(
 				envFile,
-				'[workflow]\nmax_verification_rounds = 3\nremote = "env-origin"\nbranch_prefix = "feature/"\nbase_branch = "origin/HEAD"\n',
+				`${JSON.stringify({
+					workflow: {
+						max_verification_rounds: 3,
+						remote: "env-origin",
+						branch_prefix: "feature/",
+						base_branch: "origin/HEAD",
+					},
+				})}\n`,
 			);
 			fs.mkdirSync(path.join(dir, "repo", ".pi"), { recursive: true });
 			fs.writeFileSync(

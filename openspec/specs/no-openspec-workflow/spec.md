@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change introduce-no-openspec-workflow. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: No-openspec workflow creation
 The system SHALL support pinned `no-openspec` workflow definition starting at implementation from non-empty task without requiring or creating OpenSpec artifacts. The per-round verifier role selection of that definition SHALL NOT ask about the OpenSpec verifier role, and its implementation loop SHALL still route through the role-selection step before triage.
 
@@ -36,17 +34,12 @@ The system SHALL support pinned `no-openspec` workflow definition starting at im
 - **AND** no planning or archive step SHALL run
 
 ### Requirement: Default workflow type preserves existing behavior
-The system SHALL default start to the pinned `openspec-full` definition when no workflow definition is supplied.
+The system SHALL default start to the pinned `openspec-full` definition when no workflow definition is supplied. The default SHALL be based on the request, not inferred or repaired from historical workflow state.
 
 #### Scenario: Default start is standard
-- **WHEN** developer starts workflow without `--workflow`
-- **THEN** engine SHALL validate the `openspec-full` definition and begin planning run
-- **AND** it SHALL not infer workflow type from presence of modules or phases
-
-#### Scenario: Legacy workflow backward compatibility
-- **WHEN** valid legacy state has no workflow type or modules
-- **THEN** migration SHALL map it to the pinned `openspec-full` definition only when phase/evidence are consistent
-- **AND** otherwise expose repair-required state
+- **WHEN** a developer starts a new workflow without `--workflow`
+- **THEN** the engine SHALL validate the `openspec-full` definition and begin a planning run
+- **AND** it SHALL not infer a workflow type from repository artifacts, modules, or phases
 
 ### Requirement: Dashboard displays no-openspec workflow
 Dashboard SHALL display pinned no-OpenSpec definition and engine-provided step/run/action view, using the `No OpenSpec` UI label and its workflow description.
@@ -122,3 +115,4 @@ The new-workflow modal SHALL retain `quick` as the selectable alias that starts 
 - **WHEN** a user selects the quick/no-OpenSpec workflow and submits the wizard
 - **THEN** dashboard startup SHALL pass `no-openspec` to the workflow engine
 - **AND** the modal SHALL not display any parenthesized text in labels, options, or workflow display values
+

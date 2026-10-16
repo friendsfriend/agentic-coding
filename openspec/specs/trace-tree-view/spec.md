@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change otel-ui-improvements. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: OpenTUI trace tree viewer application
 The system SHALL provide an `otel-tui` TUI application built with OpenTUI/Solid that reads normalized trace JSONL files and renders a tree-based trace browser.
 
@@ -137,25 +135,20 @@ The viewer SHALL preserve the scalar type of telemetry attributes, SHALL display
 - **AND** filter matching SHALL compare against its textual form
 
 ### Requirement: Telemetry spans group by workflow and session
-
-The viewer SHALL group telemetry spans by workflow and SHALL make engine events and runtime events of the same run and runtime session navigable as one trace, using the workflow identity for grouping and the runtime session identity for correlation.
+The viewer SHALL group current-format telemetry spans by workflow and SHALL make current engine events and runtime events of the same run and runtime session navigable as one trace, using workflow identity for grouping and runtime session identity for correlation. It SHALL read the current telemetry source and SHALL NOT fall back to historical trace files or legacy event shapes.
 
 #### Scenario: Engine and runtime events share a workflow
-
-- **WHEN** a trace contains engine events and runtime bridge events for the same workflow
+- **WHEN** a current-format trace contains engine events and runtime bridge events for the same workflow
 - **THEN** the viewer SHALL group them into the same workflow trace
 
 #### Scenario: Events of the same run and session are inspected
-
-- **WHEN** the developer inspects a run whose engine and runtime events carry the same runtime session id
+- **WHEN** the developer inspects a run whose current events carry the same runtime session id
 - **THEN** the viewer SHALL make the correlation visible in the span attributes
 - **AND** it SHALL NOT require neighboring files or manual time correlation
 
-#### Scenario: Telemetry file mixes layers and legacy records
-
-- **WHEN** a telemetry file contains engine, adapter, runtime, and legacy events without a layer field
-- **THEN** the viewer SHALL load all valid rows
-- **AND** each span SHALL report the layer or runtime it could resolve, and a fallback service name otherwise
+#### Scenario: Historical source is not loaded
+- **WHEN** a workspace contains only `traces.jsonl` or legacy-only event records
+- **THEN** the viewer SHALL not load them as current telemetry or rewrite the source
 
 ### Requirement: Classifier routing events group under one trace-tree category
 
@@ -178,3 +171,4 @@ attributes, exactly as it does for engine, adapter, and runtime events.
 - **WHEN** a telemetry event family is not in the category catalog
 - **THEN** the viewer SHALL group it under a node named after that family
 - **AND** it SHALL NOT drop the event
+

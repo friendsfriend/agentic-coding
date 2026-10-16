@@ -360,7 +360,6 @@ export function loadAgentConfig(
 	return {
 		agents: parseAgentsConfig(
 			resolved.config.agents,
-			resolved.config,
 			resolved.provenance.files.join(", ") || undefined,
 		),
 		provenance: resolved.provenance,

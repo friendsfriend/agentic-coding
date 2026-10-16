@@ -55,9 +55,8 @@ reachable and covered.
 | `ask` | Ask a completed peer agent a bounded question | agentic-coding | unchanged | `test/workflow-agent-consult.test.ts` | present, unmigrated |
 | `answer` | Answer a peer agent question | agentic-coding | unchanged | `test/workflow-question.test.ts` | present, unmigrated |
 | `research-handoff` | Record structured handoff and start wiki drafting | agentic-coding | unchanged | `test/workflow-plan-*`, `test/pi/*` | present, unmigrated |
-| `repair` | Repair to a compatible step | agentic-coding | unchanged | `test/workflow-migration.test.ts` | present, unmigrated |
-| `repin` | Re-pin to the current definition digest | agentic-coding | unchanged | `test/workflow-migration.test.ts` | present, unmigrated |
-| `migrate` | Preview/apply a revision-bound semantic migration | agentic-coding | unchanged | `test/workflow-migration.test.ts` | present, unmigrated |
+| `repair` | Repair to a compatible step | agentic-coding | unchanged | `test/workflow-runtime.test.ts` | present, unmigrated |
+| `repin` | Re-pin to the current definition digest | agentic-coding | unchanged | `test/workflow-runtime.test.ts` | present, unmigrated |
 | `projects` | List configured projects | agentic-coding | change 4 replaces discovery | `test/workflow-config-root-cache.test.ts` | present, migration pending |
 | `config` | Print resolved configuration | agentic-coding | unchanged | `test/workflow-config-root-cache.test.ts` | present, unmigrated |
 | `agent-extension` | Manage Pi agent extensions | agentic-coding | unchanged | `test/workflow-assets.test.ts` | present, unmigrated |

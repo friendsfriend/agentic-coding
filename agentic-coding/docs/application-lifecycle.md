@@ -39,8 +39,8 @@ child to identify, no extraction directory and no second runtime to reconcile.
 An explicit `--devenv-url`/`attach` URL means another process owns the listener,
 so this one never stops it. `GET /api/health` still reports the instance id and
 the effective `homeDir` (`DEVENV_HOME` resolution) and `configDir`
-(`DEVENV_CONFIG_DIR` resolution), which is how an operator confirms which
-install a listener belongs to.
+(`AGENTIC_CODING_CONFIG_DIR` resolution), which is how an operator confirms
+which install a listener belongs to.
 
 Consequences:
 

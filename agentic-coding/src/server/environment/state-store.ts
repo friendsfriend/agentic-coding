@@ -2,15 +2,15 @@
 //
 // Ported from `server/pkg/state/store.go` (`port-project-catalog-and-state-to-bun`,
 // tasks 2.3-2.6). The on-disk schema, identity semantics, history ordering,
-// retention and lease persistence are preserved exactly; the whole migration
-// runs in one immediate transaction so an interrupted upgrade yields either the
-// old committed schema or the new one, never a partial mixture.
+// retention and lease persistence are preserved exactly. A genuinely empty
+// database is created directly with the current DDL in one immediate
+// transaction; any other persisted version is refused before the journal mode,
+// schema or rows are touched, and there is no upgrade step.
 //
 // The workflow (`herdr.db`) and telemetry databases are separate domains and
 // are never opened here.
 
 import { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -152,176 +152,42 @@ function mapEnvironmentInstanceRow(
 	};
 }
 
-export interface StoreOptions {
-	/** Take a consistent backup before the first write to an older schema.
-	 * Disabled only by callers that already hold a verified backup. */
-	backup?: boolean;
-	/** Overridable for tests that must not depend on the wall clock. */
-	now?: () => Date;
-}
-
 /** Timestamp format Go writes for `since`/`before` comparisons. */
 export function actionEventTimestamp(at: Date): string {
 	return `${at.toISOString().slice(0, 23)}Z`;
 }
 
-// ---- Migrations ----
+// ---- Current schema ----
 //
-// The DDL is the historical Go migration sequence verbatim, so a database
-// created by any supported Go release continues to migrate identically.
+// The one schema this build writes. A genuinely empty database is created
+// directly with it; an existing database is opened only when it already
+// carries this version, so no historical step is ever replayed.
 
-interface Migration {
-	version: number;
-	apply: (db: Database) => void;
-}
-
-function columnExists(db: Database, table: string, column: string): boolean {
-	const rows = db.query(`PRAGMA table_info(${table})`).all() as Array<{
-		name: string;
-	}>;
-	return rows.some((row) => row.name === column);
-}
-
-/** `ALTER TABLE ... ADD COLUMN` is only replayed when the column is missing,
- * so a database interrupted between the ALTER statements and the version write
- * still migrates to the current schema instead of failing. */
-function addColumnIfMissing(db: Database, column: string): void {
-	const name = column.split(" ")[0] ?? "";
-	if (columnExists(db, "app_state", name)) return;
-	db.exec(`ALTER TABLE app_state ADD COLUMN ${column}`);
-}
-
-const MIGRATIONS: Migration[] = [
-	{
-		version: 1,
-		apply: (db) =>
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS app_state (
-					ident           TEXT PRIMARY KEY,
-					branch          TEXT NOT NULL DEFAULT '',
-					active_worktree TEXT NOT NULL DEFAULT '',
-					updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-				)
-			`),
-	},
-	{
-		version: 2,
-		apply: (db) =>
-			addColumnIfMissing(db, "main_worktree_branch TEXT NOT NULL DEFAULT ''"),
-	},
-	{
-		version: 3,
-		apply: (db) => {
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS script_args_history (
-					id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-					script_relative_path TEXT NOT NULL,
-					args_json            TEXT NOT NULL,
-					created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-				)
-			`);
-			db.exec(`
-				CREATE INDEX IF NOT EXISTS idx_script_args_history_path_id
-				ON script_args_history(script_relative_path, id DESC)
-			`);
-		},
-	},
-	{
-		version: 4,
-		apply: (db) => {
-			for (const column of [
-				"run_target_runtime TEXT NOT NULL DEFAULT ''",
-				"run_target_launch_mode TEXT NOT NULL DEFAULT ''",
-				"run_target_label TEXT NOT NULL DEFAULT ''",
-				"run_target_profile TEXT NOT NULL DEFAULT ''",
-				"run_target_id TEXT NOT NULL DEFAULT ''",
-				"run_target_source_path TEXT NOT NULL DEFAULT ''",
-				"run_target_started_at TEXT NOT NULL DEFAULT ''",
-				"run_target_display TEXT NOT NULL DEFAULT ''",
-			])
-				addColumnIfMissing(db, column);
-		},
-	},
-	{
-		version: 5,
-		apply: (db) => {
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS action_events (
+const CURRENT_SCHEMA_DDL = `
+CREATE TABLE IF NOT EXISTS schema_meta (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);
+CREATE TABLE action_events (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					event_json TEXT NOT NULL,
 					created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-				)
-			`);
-			db.exec(
-				`CREATE INDEX IF NOT EXISTS idx_action_events_id ON action_events(id)`,
-			);
-		},
-	},
-	{
-		version: 6,
-		apply: (db) =>
-			db.exec(
-				`CREATE TABLE IF NOT EXISTS dependency_leases (target_id TEXT NOT NULL, owner_run_id TEXT NOT NULL, owner_app TEXT NOT NULL, lifecycle TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(target_id, owner_run_id))`,
-			),
-	},
-	{
-		version: 7,
-		apply: (db) => {
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS action_log_events (
+				);
+CREATE TABLE action_log_events (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					run_id TEXT NOT NULL,
 					step_id TEXT NOT NULL,
 					event_json TEXT NOT NULL,
 					created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-				)
-			`);
-			db.exec(
-				`CREATE INDEX IF NOT EXISTS idx_action_log_events_run_step_id ON action_log_events(run_id, step_id, id)`,
-			);
-			const rows = db
-				.query(
-					`SELECT id, event_json, created_at FROM action_events ORDER BY id`,
-				)
-				.all() as Array<{
-				id: number;
-				event_json: string;
-				created_at: string;
-			}>;
-			for (const row of rows) {
-				let event: {
-					type?: string;
-					properties?: { runId?: string; stepId?: string };
-				};
-				try {
-					event = JSON.parse(row.event_json) as typeof event;
-				} catch {
-					continue;
-				}
-				if (
-					(event.type !== "action.command.output" &&
-						event.type !== "action.step.output") ||
-					!event.properties?.runId ||
-					!event.properties.stepId
-				)
-					continue;
-				db.prepare(
-					`INSERT INTO action_log_events (run_id, step_id, event_json, created_at) VALUES (?, ?, ?, ?)`,
-				).run(
-					event.properties.runId,
-					event.properties.stepId,
-					row.event_json,
-					row.created_at,
 				);
-				db.prepare(`DELETE FROM action_events WHERE id = ?`).run(row.id);
-			}
-		},
-	},
-	{
-		version: 8,
-		apply: (db) => {
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS env_instances (
+CREATE TABLE app_state (
+					ident           TEXT PRIMARY KEY,
+					branch          TEXT NOT NULL DEFAULT '',
+					active_worktree TEXT NOT NULL DEFAULT '',
+					updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+				, main_worktree_branch TEXT NOT NULL DEFAULT '', run_target_runtime TEXT NOT NULL DEFAULT '', run_target_launch_mode TEXT NOT NULL DEFAULT '', run_target_label TEXT NOT NULL DEFAULT '', run_target_profile TEXT NOT NULL DEFAULT '', run_target_id TEXT NOT NULL DEFAULT '', run_target_source_path TEXT NOT NULL DEFAULT '', run_target_started_at TEXT NOT NULL DEFAULT '', run_target_display TEXT NOT NULL DEFAULT '');
+CREATE TABLE dependency_leases (target_id TEXT NOT NULL, owner_run_id TEXT NOT NULL, owner_app TEXT NOT NULL, lifecycle TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(target_id, owner_run_id));
+CREATE TABLE env_instances (
 					id TEXT PRIMARY KEY,
 					owner TEXT NOT NULL,
 					app TEXT NOT NULL,
@@ -334,69 +200,49 @@ const MIGRATIONS: Migration[] = [
 					created_at TEXT NOT NULL,
 					last_activity_at TEXT NOT NULL,
 					UNIQUE(owner, app)
-				)
-			`);
-			db.exec(`
-				CREATE TABLE IF NOT EXISTS port_allocations (
-					instance_id TEXT NOT NULL REFERENCES env_instances(id) ON DELETE CASCADE,
-					name TEXT NOT NULL,
-					port INTEGER NOT NULL UNIQUE,
-					PRIMARY KEY(instance_id, name)
-				)
-			`);
-		},
-	},
-	{
-		version: 9,
-		apply: (db) => {
-			// The parallel era allocated a host port per instance; static ports are
-			// the definition's own now, so the allocator table has no reader left.
-			db.exec(`DROP TABLE IF EXISTS port_allocations`);
-			// One active row per app. A v8 database may hold several active rows for
-			// one app, each with its own `<app>-<instance>` compose project. The
-			// database alone cannot confirm such a run is gone, so this migration
-			// never writes `stopped`: the rows it retires become `superseded`, and
-			// `reconcile()` (which observes the runtime) confirms them as stopped.
-			// The statuses below are frozen literals, like every earlier migration:
-			// the on-disk schema of version 9 must not depend on which build applied
-			// it. A future status change needs its own migration that recreates
-			// idx_env_instances_active_app.
-			const apps = db
-				.query(
-					`SELECT DISTINCT app FROM env_instances
-					 WHERE status IN ('starting', 'running', 'stopping', 'unknown')`,
-				)
-				.all() as Array<{ app: string }>;
-			const retireRow = db.prepare(
-				`UPDATE env_instances SET status = 'superseded' WHERE id = ?`,
-			);
-			const setStatus = db.prepare(
-				`UPDATE env_instances SET status = ? WHERE id = ?`,
-			);
-			for (const { app } of apps) {
-				const rows = db
-					.query(
-						`SELECT id, status FROM env_instances
-						 WHERE app = ? AND status IN ('starting', 'running', 'stopping', 'unknown')
-						 ORDER BY created_at DESC, id DESC`,
-					)
-					.all(app) as Array<{ id: string; status: string }>;
-				if (rows.length <= 1) continue;
-				const running = rows.find((row) => row.status === "running");
-				const keep = running ?? (rows[0] as { id: string; status: string });
-				for (const row of rows) if (row.id !== keep.id) retireRow.run(row.id);
-				// Without an observed run the kept row blocks the slot as `unknown`
-				// until reconcile or force release decides.
-				if (!running) setStatus.run("unknown", keep.id);
-			}
-			db.exec(
-				`CREATE UNIQUE INDEX IF NOT EXISTS idx_env_instances_active_app
+				);
+CREATE TABLE script_args_history (
+					id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+					script_relative_path TEXT NOT NULL,
+					args_json            TEXT NOT NULL,
+					created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+				);
+CREATE INDEX idx_action_events_id ON action_events(id);
+CREATE INDEX idx_action_log_events_run_step_id ON action_log_events(run_id, step_id, id);
+CREATE UNIQUE INDEX idx_env_instances_active_app
 				 ON env_instances(app)
-				 WHERE status IN ('starting', 'running', 'stopping', 'unknown')`,
-			);
-		},
-	},
-];
+				 WHERE status IN ('starting', 'running', 'stopping', 'unknown');
+CREATE INDEX idx_script_args_history_path_id
+				ON script_args_history(script_relative_path, id DESC);
+`;
+
+/** Whether a database carries no schema at all: an empty file, or one written
+ * before this build ever versioned it. */
+function isEmptyDatabase(db: Database): boolean {
+	const tables = db
+		.query(
+			`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+		)
+		.all() as Array<{ name: string }>;
+	return tables.length === 0;
+}
+
+/** The persisted schema version read through a read-only handle, or `undefined`
+ * when the file is absent or cannot be read read-only (a WAL store without a
+ * writable `-shm`). The caller then opens for writing and applies the same
+ * guard before any write. */
+function probeSchemaVersion(dbPath: string): number | undefined {
+	if (!fs.existsSync(dbPath)) return undefined;
+	let db: Database | undefined;
+	try {
+		db = new Database(dbPath, { readonly: true });
+		return readSchemaVersion(db);
+	} catch {
+		return undefined;
+	} finally {
+		db?.close();
+	}
+}
 
 function readSchemaVersion(db: Database): number {
 	try {
@@ -411,37 +257,21 @@ function readSchemaVersion(db: Database): number {
 	}
 }
 
-function ensureSchemaMeta(db: Database): void {
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS schema_meta (
-			key   TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`);
-}
-
-function integrityCheck(db: Database): void {
+function integrityCheck(db: Database, dbPath: string): void {
 	const rows = db.query(`PRAGMA integrity_check`).all() as Array<{
 		integrity_check?: string;
 	}>;
 	const result = rows.map((row) => row.integrity_check ?? "").join(",");
 	if (result !== "ok")
 		throw new EnvironmentStateError(
-			`state: integrity check failed after migration: ${result}`,
+			`state: integrity check failed for ${dbPath}: ${result}; this build cannot repair it, restore the state database from a backup`,
 		);
-}
-
-/** Path of the verified pre-upgrade backup for `fromVersion`. */
-export function backupPathFor(dbPath: string, fromVersion: number): string {
-	return `${dbPath}.backup-v${fromVersion}`;
 }
 
 export class EnvironmentStateStore {
 	private readonly db: Database;
 	private readonly dbPath: string;
 	readonly schemaVersion: number;
-	/** Consistent pre-upgrade backup this open took, when it migrated. */
-	readonly backupPath?: string;
 	readonly readOnly: boolean;
 
 	private constructor(
@@ -449,25 +279,22 @@ export class EnvironmentStateStore {
 		dbPath: string,
 		schemaVersion: number,
 		readOnly: boolean,
-		backupPath?: string,
 	) {
 		this.db = db;
 		this.dbPath = dbPath;
 		this.schemaVersion = schemaVersion;
 		this.readOnly = readOnly;
-		this.backupPath = backupPath;
 	}
 
 	/**
-	 * Open (creating if needed) `dbDir/state.db` and migrate it to the current
-	 * schema. The migration transaction is `BEGIN IMMEDIATE`, so two runtimes
-	 * racing a first upgrade serialize on the SQLite write lock and the second
-	 * one re-reads the committed version instead of replaying migrations.
+	 * Open (creating if needed) `dbDir/state.db` at the current schema version.
+	 * A genuinely empty database is created directly with the current DDL inside
+	 * one `BEGIN IMMEDIATE` transaction, so two runtimes racing a first creation
+	 * serialize on the SQLite write lock and the loser adopts the committed
+	 * schema instead of recreating it. Any other persisted version is refused
+	 * before the journal mode, schema or rows are touched.
 	 */
-	static open(
-		dbDir: string,
-		options: StoreOptions = {},
-	): EnvironmentStateStore {
+	static open(dbDir: string): EnvironmentStateStore {
 		const dbPath = path.join(dbDir, "state.db");
 		try {
 			fs.mkdirSync(dbDir, { recursive: true, mode: 0o755 });
@@ -478,8 +305,19 @@ export class EnvironmentStateStore {
 				}`,
 			);
 		}
-		const existed = fs.existsSync(dbPath);
-		let db: Database;
+		// Probe the persisted version through a read-only handle first, so a
+		// database this build refuses is never opened for writing: a read-write
+		// open would let SQLite run hot-journal rollback or WAL recovery on it. A
+		// probe that cannot read the file (absent, or a store whose journal
+		// sidecars are not reachable read-only) falls through to the read-write
+		// open, which applies the same guard before any write.
+		const probed = probeSchemaVersion(dbPath);
+		if (probed !== undefined && probed !== 0 && probed !== SCHEMA_VERSION)
+			throw new EnvironmentStateVersionError(
+				probed,
+				`state: database schema ${probed} is not the supported ${SCHEMA_VERSION}; refusing to modify it`,
+			);
+		let db: Database | undefined;
 		try {
 			db = new Database(dbPath, { create: true, readwrite: true });
 		} catch (error) {
@@ -503,12 +341,34 @@ export class EnvironmentStateStore {
 			);
 		}
 
-		const initial = readSchemaVersion(db);
-		if (initial > SCHEMA_VERSION) {
+		// Read before any write: the version guard is byte-preserving for a
+		// database this build cannot read.
+		let initial: number;
+		let empty: boolean;
+		try {
+			initial = readSchemaVersion(db);
+			empty = initial === 0 && isEmptyDatabase(db);
+		} catch (error) {
+			db.close();
+			throw new EnvironmentStateError(
+				`state: failed to read database schema ${JSON.stringify(dbPath)}: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				{ cause: error },
+			);
+		}
+		if (initial !== 0 && initial !== SCHEMA_VERSION) {
 			db.close();
 			throw new EnvironmentStateVersionError(
 				initial,
-				`state: database schema ${initial} is newer than the supported ${SCHEMA_VERSION}; refusing to modify it`,
+				`state: database schema ${initial} is not the supported ${SCHEMA_VERSION}; refusing to modify it`,
+			);
+		}
+		if (initial === 0 && !empty) {
+			db.close();
+			throw new EnvironmentStateVersionError(
+				0,
+				"state: database has no schema version and is not empty; refusing to modify it",
 			);
 		}
 		try {
@@ -521,52 +381,35 @@ export class EnvironmentStateStore {
 				}`,
 			);
 		}
-
-		let backupPath: string | undefined;
-		if (
-			initial > 0 &&
-			initial < SCHEMA_VERSION &&
-			options.backup !== false &&
-			existed
-		) {
+		if (initial === 0) {
 			try {
-				backupPath = takeBackup(db, dbPath, initial);
-			} catch (error) {
-				// Another opener may have completed this migration after `initial`
-				// was read but while VACUUM INTO was producing its backup. In that
-				// case there is no v7 migration left for this opener to protect.
-				if (readSchemaVersion(db) < SCHEMA_VERSION) {
-					db.close();
-					throw new EnvironmentStateError(
-						`state: failed to write pre-upgrade backup: ${error instanceof Error ? error.message : String(error)}`,
-						{ cause: error },
-					);
+				db.exec("BEGIN IMMEDIATE");
+				// Re-read under the writer lock: another runtime may have created
+				// the schema while this one was waiting.
+				if (readSchemaVersion(db) === 0) {
+					db.exec(CURRENT_SCHEMA_DDL);
+					db.prepare(
+						`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
+						 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+					).run(String(SCHEMA_VERSION));
 				}
-			}
-		}
-
-		if (initial < SCHEMA_VERSION) {
-			try {
-				migrate(db);
+				db.exec("COMMIT");
 			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {}
 				db.close();
 				throw error instanceof EnvironmentStateError
 					? error
 					: new EnvironmentStateError(
-							`state: schema migration failed: ${
+							`state: schema creation failed: ${
 								error instanceof Error ? error.message : String(error)
 							}`,
 						);
 			}
 		}
-		integrityCheck(db);
-		return new EnvironmentStateStore(
-			db,
-			dbPath,
-			SCHEMA_VERSION,
-			false,
-			backupPath,
-		);
+		integrityCheck(db, dbPath);
+		return new EnvironmentStateStore(db, dbPath, SCHEMA_VERSION, false);
 	}
 
 	/**
@@ -593,10 +436,10 @@ export class EnvironmentStateStore {
 		}
 		db.exec("PRAGMA query_only=1");
 		const version = readSchemaVersion(db);
-		if (version < SCHEMA_VERSION) {
+		if (version !== SCHEMA_VERSION) {
 			db.close();
 			throw new EnvironmentStateReadOnlyError(
-				`state: read-only observation requires a current schema (database schema ${version} is older than ${SCHEMA_VERSION})`,
+				`state: read-only observation requires the current schema (database schema ${version} is not ${SCHEMA_VERSION})`,
 			);
 		}
 		return new EnvironmentStateStore(db, dbPath, version, true);
@@ -1200,144 +1043,4 @@ export class EnvironmentStateStore {
 function clampLimit(limit: number, fallback: number, max: number): number {
 	if (!Number.isFinite(limit) || limit <= 0) return fallback;
 	return Math.min(Math.trunc(limit), max);
-}
-
-/** Validate the existing backup before advertising or reusing it. */
-function verifiedBackup(file: string, fromVersion: number): boolean {
-	let backup: Database | undefined;
-	try {
-		const stat = fs.lstatSync(file);
-		if (!stat.isFile() || stat.isSymbolicLink()) return false;
-		backup = new Database(file, { readonly: true });
-		if (readSchemaVersion(backup) !== fromVersion) return false;
-		integrityCheck(backup);
-		return true;
-	} catch {
-		return false;
-	} finally {
-		backup?.close();
-	}
-}
-
-function removeBlockingBackupDirectory(file: string): void {
-	try {
-		const stat = fs.lstatSync(file);
-		if (stat.isDirectory() && !stat.isSymbolicLink()) fs.rmdirSync(file);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-}
-
-/** Consistent pre-upgrade backup via `VACUUM INTO` (safe with WAL and other
- * connections, unlike a file copy). The final name is published only after
- * integrity and schema-version verification, so a crash cannot leave a partial
- * file that a later open mistakes for the rollback copy. */
-function takeBackup(db: Database, dbPath: string, fromVersion: number): string {
-	const target = backupPathFor(dbPath, fromVersion);
-	if (verifiedBackup(target, fromVersion)) return target;
-	try {
-		const stat = fs.lstatSync(target);
-		if (stat.isDirectory() && !stat.isSymbolicLink())
-			removeBlockingBackupDirectory(target);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-	const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-	try {
-		db.prepare(`VACUUM INTO ?`).run(temporary);
-		if (!verifiedBackup(temporary, fromVersion))
-			throw new EnvironmentStateError(
-				`state: pre-upgrade backup failed verification for schema ${fromVersion}`,
-			);
-		fs.renameSync(temporary, target);
-		if (!verifiedBackup(target, fromVersion))
-			throw new EnvironmentStateError(
-				`state: published pre-upgrade backup failed verification for schema ${fromVersion}`,
-			);
-		return target;
-	} catch (error) {
-		fs.rmSync(temporary, { force: true });
-		throw error;
-	}
-}
-
-/**
- * Materialize the schema of one earlier release on an empty database.
- *
- * Fixture tests use it so a hand-built database of an older version cannot
- * drift from the frozen migration sequence (the shipped open path always
- * migrates to the current version). It is deliberately strict: the durable
- * version marker is only ever written for an empty database, inside the same
- * immediate transaction `migrate()` uses.
- *
- * @internal Test-only helper; never call it on a database in use.
- */
-export function migrateToVersion(db: Database, version: number): void {
-	if (version > SCHEMA_VERSION || version < 1)
-		throw new EnvironmentStateError(
-			`state: cannot migrate to version ${version} (supported 1-${SCHEMA_VERSION})`,
-		);
-	if (readSchemaVersion(db) !== 0)
-		throw new EnvironmentStateError(
-			"state: migrateToVersion requires a database without a schema version",
-		);
-	const tables = db
-		.query(
-			`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-		)
-		.all() as Array<{ name: string }>;
-	if (tables.length > 0)
-		throw new EnvironmentStateError(
-			`state: migrateToVersion requires an empty database; found ${tables
-				.map((table) => table.name)
-				.slice(0, 8)
-				.join(", ")}`,
-		);
-	db.exec("BEGIN IMMEDIATE");
-	try {
-		ensureSchemaMeta(db);
-		for (const migration of MIGRATIONS) {
-			if (migration.version > version) break;
-			migration.apply(db);
-		}
-		db.prepare(
-			`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		).run(String(version));
-		db.exec("COMMIT");
-	} catch (error) {
-		try {
-			db.exec("ROLLBACK");
-		} catch {}
-		throw error;
-	}
-}
-
-function migrate(db: Database): void {
-	db.exec("BEGIN IMMEDIATE");
-	try {
-		ensureSchemaMeta(db);
-		// Re-read inside the write transaction: another runtime may have
-		// committed the migration while this one was waiting for the lock.
-		const version = readSchemaVersion(db);
-		if (version > SCHEMA_VERSION)
-			throw new EnvironmentStateVersionError(
-				version,
-				`state: database schema ${version} is newer than the supported ${SCHEMA_VERSION}; refusing to modify it`,
-			);
-		for (const migration of MIGRATIONS) {
-			if (migration.version <= version) continue;
-			migration.apply(db);
-		}
-		db.prepare(
-			`INSERT INTO schema_meta (key, value) VALUES ('version', ?)
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		).run(String(SCHEMA_VERSION));
-		db.exec("COMMIT");
-	} catch (error) {
-		try {
-			db.exec("ROLLBACK");
-		} catch {}
-		throw error;
-	}
 }

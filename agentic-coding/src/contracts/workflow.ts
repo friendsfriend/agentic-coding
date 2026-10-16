@@ -512,12 +512,6 @@ export interface WorkflowSnapshot {
 		concepts: Array<{ id: string; digest: string }>;
 	};
 	repaired?: { reason: string; fromStep: string; at: string };
-	migrated?: {
-		from: DefinitionPin;
-		to: DefinitionPin;
-		reason: string;
-		at: string;
-	};
 	repinned?: { fromDigest: string; at: string };
 }
 export interface WorkflowRun {
@@ -824,13 +818,6 @@ export type WorkflowCommand =
 			reason: string;
 	  }
 	| { type: "operator.repin"; workflowId: string; revision: number }
-	| {
-			type: "operator.migrate";
-			workflowId: string;
-			revision: number;
-			targetVersion: number;
-			reason: string;
-	  }
 	| { type: "operator.resume"; workflowId: string; revision: number };
 
 // ---------------------------------------------------------------------------
@@ -1069,16 +1056,6 @@ const operatorRepinSchema = Schema.Struct({
 	workflowId: text(4096),
 	revision: integer(),
 });
-const operatorMigrateSchema = Schema.Struct({
-	type: Schema.Literal("operator.migrate"),
-	workflowId: text(4096),
-	revision: integer(),
-	targetVersion: integer(1),
-	reason: Schema.optionalWith(boundedText(2048), {
-		exact: true,
-		default: () => "",
-	}),
-});
 const operatorResumeSchema = Schema.Struct({
 	type: Schema.Literal("operator.resume"),
 	workflowId: text(4096),
@@ -1098,7 +1075,6 @@ export const WorkflowCommandSchema = Schema.Union(
 	effectResultSchema,
 	operatorRepairSchema,
 	operatorRepinSchema,
-	operatorMigrateSchema,
 	operatorResumeSchema,
 );
 
@@ -1269,7 +1245,7 @@ export interface WorkflowState {
 	worktree: string;
 	branch: string;
 	/** The pinned definition's origin; absent only on a workflow whose definition
-	 * could not be resolved (a pin mismatch or a legacy diagnostic view). */
+	 * could not be resolved (a pin mismatch or an unavailable-store view). */
 	definitionOrigin?: WorkflowDefinitionOrigin;
 	/** The blueprint rationale pinned at start, when the workflow was started
 	 * from a blueprint; absent for built-in and operator-defined starts. */

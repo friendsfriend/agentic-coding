@@ -276,7 +276,6 @@ export function presetCatalog(repository?: string): PresetCatalog {
 	try {
 		const agents = parseAgentsConfig(
 			resolved.config.agents,
-			resolved.config,
 			resolved.provenance.files.join(", ") || undefined,
 		);
 		return { names: Object.keys(agents.presets ?? {}).sort() };

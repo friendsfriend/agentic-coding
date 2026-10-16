@@ -126,7 +126,7 @@ describe("retired runtime and bridges", () => {
 				env: {
 					...process.env,
 					DEVENV_HOME: home,
-					DEVENV_CONFIG_DIR: configDir,
+					AGENTIC_CODING_CONFIG_DIR: configDir,
 					PATH: [
 						barePath,
 						path.dirname(process.execPath),

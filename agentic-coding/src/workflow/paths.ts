@@ -33,8 +33,8 @@ export const AGENT_DEF_DIR =
 
 // The workflow configuration file lives under the shared configuration root
 // (unify-json-configuration-directory, task 2.1) and is JSON
-// (task 2.2). `HERDR_WORKFLOW_CONFIG` stays an explicit full replacement and may
-// still name a legacy TOML file, which is read for compatibility only.
+// (task 2.2). `HERDR_WORKFLOW_CONFIG` stays an explicit full replacement and
+// must name a JSON document; any other file is refused by the reader.
 export const CONFIG =
 	process.env.HERDR_WORKFLOW_CONFIG ||
 	path.join(resolveConfigRoot(), "config.json");

@@ -225,12 +225,6 @@ const repairedSchema = Schema.Struct({
 	fromStep: text(4096),
 	at: text(4096),
 });
-const migratedSchema = Schema.Struct({
-	from: definitionPinSchema,
-	to: definitionPinSchema,
-	reason: boundedText(4096),
-	at: text(4096),
-});
 const repinnedSchema = Schema.Struct({
 	fromDigest: text(4096),
 	at: text(4096),
@@ -595,6 +589,5 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 	sourceBaseline: Schema.optionalWith(sourceBaselineSchema, { exact: true }),
 	wikiBaseline: Schema.optionalWith(wikiBaselineSchema, { exact: true }),
 	repaired: Schema.optionalWith(repairedSchema, { exact: true }),
-	migrated: Schema.optionalWith(migratedSchema, { exact: true }),
 	repinned: Schema.optionalWith(repinnedSchema, { exact: true }),
 });

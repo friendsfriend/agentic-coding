@@ -58,7 +58,7 @@ if (surface === "__catalog") {
 	process.exit(2);
 } else if (surface === "--help" || surface === "-h" || surface === "help") {
 	console.log(
-		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  config     Preview or apply configuration migration (`config migrate [--apply|--resume|--rollback]`).\n  home       Unified shell, home route. `manager` is an alias.\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",
+		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  home       Unified shell, home route. `manager` is an alias.\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",
 	);
 } else if (surface === "agent") {
 	// Hidden internal mode: the headless durable agent host
@@ -76,11 +76,6 @@ if (surface === "__catalog") {
 	}
 } else if (surface === "workflow") {
 	await workflowMain(rest);
-} else if (surface === "config") {
-	// Explicit, preview-first configuration migration. A bare invocation and
-	// `--dry-run` only report the plan; `--apply` publishes it.
-	const { runConfigCommand } = await import("./config-command.ts");
-	process.exit(await runConfigCommand(rest));
 } else if (
 	!surface ||
 	surface === "home" ||
@@ -95,7 +90,7 @@ if (surface === "__catalog") {
 	await main();
 } else {
 	console.error(
-		`unknown agentic-coding command: ${surface}. Known commands: workflow, config, home, manager, server, attach`,
+		`unknown agentic-coding command: ${surface}. Known commands: workflow, home, manager, server, attach`,
 	);
 	process.exit(1);
 }

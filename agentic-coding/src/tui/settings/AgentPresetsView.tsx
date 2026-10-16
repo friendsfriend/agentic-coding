@@ -421,8 +421,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 
 	// The two editable options lead the menu; every editable informational row
 	// (reset-to-user-scope) follows so its action stays reachable. Read-only
-	// rows (scope, project checkout, routing, inactive legacy config, read
-	// errors, conflicts) are not actionable here and are dropped.
+	// rows (scope, project checkout, routing, read errors, conflicts) are not
+	// actionable here and are dropped.
 	const menuEntries = (): MenuEntry[] => {
 		const profiles = props.items?.find((item) => item.id === "agents.profiles");
 		const presets = props.items?.find((item) => item.id === "agents.presets");
@@ -469,7 +469,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		// Every other inventoried row follows, read-only ones included: an
 		// inventoried setting that is never shown is a promise the section does not
 		// keep, and the read-only rows (scope, project checkout, routing, the launch
-		// ceiling, inactive legacy config, read errors, conflicts) are exactly the
+		// ceiling, read errors, conflicts) are exactly the
 		// effective values the section exists to state. They carry no action, so
 		// Enter on them is inert; the title marks them read-only.
 		const info: MenuEntry[] = agentMenuInformationalItems(

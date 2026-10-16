@@ -2,34 +2,30 @@
 
 ## Purpose
 TBD - created by archiving change introduce-other-workflows. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Direct-apply workflow creation
-
-The system SHALL support starting the pinned `openspec-apply` workflow definition at the `core.route-apply` classification step after validating pre-authored OpenSpec proposal, design, tasks, and scenarios. Classification SHALL resolve the apply-phase pools before the implementation step launches.
+The system SHALL support starting the pinned `openspec-apply` workflow definition at the `core.route-apply` classification step after validating pre-authored OpenSpec proposal, design, tasks, and scenarios. Classification SHALL resolve the apply-phase pools before the implementation step launches. Historical workflow state SHALL NOT be translated into the direct-apply definition.
 
 #### Scenario: CLI creates direct-apply workflow
-- **GIVEN** pre-authored OpenSpec artifacts exist for change
-- **WHEN** developer runs `agentic-coding workflow start --repo <repo> --change <change> --workflow openspec-apply ...`
-- **THEN** engine SHALL validate artifacts and definition entry guards before creating workflow
-- **AND** current step SHALL be `core.route-apply` with no planning run
+- **GIVEN** pre-authored OpenSpec artifacts exist for a change
+- **WHEN** a developer runs `agentic-coding workflow start --repo <repo> --change <change> --workflow openspec-apply ...`
+- **THEN** the engine SHALL validate artifacts and definition entry guards before creating the workflow
+- **AND** the current step SHALL be `core.route-apply` with no planning run
 - **AND** after classification the implementation run SHALL use the routed pool profile
 
 #### Scenario: Default workflow type preserves existing behavior
-- **WHEN** developer starts workflow without `--workflow`
-- **THEN** engine SHALL select the pinned `openspec` definition
-- **AND** initial run SHALL be planning rather than direct implementation
+- **WHEN** a developer starts a workflow without `--workflow`
+- **THEN** the engine SHALL select the pinned `openspec` definition
+- **AND** the initial run SHALL be planning rather than direct implementation
 
 #### Scenario: Direct apply artifacts are invalid
-- **WHEN** required artifact is missing, empty, malformed, has no scenario, or has no actionable task
-- **THEN** start SHALL fail before workflow row, workspace, pane, or agent is created
-- **AND** diagnostic SHALL identify invalid artifact
+- **WHEN** a required artifact is missing, empty, malformed, has no scenario, or has no actionable task
+- **THEN** start SHALL fail before a workflow row, workspace, pane, or agent is created
+- **AND** the diagnostic SHALL identify the invalid artifact
 
-#### Scenario: Legacy workflow backward compatibility
-- **WHEN** valid legacy direct-apply state is first accessed
-- **THEN** the renamed implementation MAY reject the old technical ID rather than mapping it to `openspec-apply`
-- **AND** ambiguous state SHALL become repair-required rather than guessed
+#### Scenario: Historical workflow identifiers are not translated
+- **WHEN** a current build encounters an old direct-apply workflow identifier or state shape
+- **THEN** it SHALL refuse the unsupported format without translating or repairing it
 
 ### Requirement: Dashboard displays module-aware workflow
 Dashboard SHALL display pinned `openspec-apply` definition, current step, resolved runtime profile, and available actions without assuming planner or phase list.
@@ -63,3 +59,4 @@ The `openspec-apply` definition SHALL sequence classification, implementation, t
 - **WHEN** verifier output contains critical finding
 - **THEN** definition SHALL return to implementation fix run with validated findings input
 - **AND** next verification attempt SHALL use same pinned routing unless repaired
+

@@ -1,6 +1,6 @@
 // Sidebar mode persistence (workspace sidebar): the expand/permanent toggle
-// writes `ui.sidebar_mode` back to the winning user configuration, preserving
-// every other key, and refuses a legacy TOML target instead of converting it.
+// writes `ui.sidebar_mode` back to the canonical user configuration, preserving
+// every other key. An obsolete configuration file is never a write target.
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -54,10 +54,32 @@ test("saveSidebarMode writes ui.sidebar_mode and preserves every other key", () 
 	);
 });
 
-test("saveSidebarMode refuses a legacy TOML target and leaves it untouched", () => {
-	withConfigFile("config.toml", 'ui = { theme = "catppuccin" }\n', (file) => {
-		const before = fs.readFileSync(file, "utf8");
-		expect(() => saveSidebarMode("permanent")).toThrow(/legacy TOML/);
-		expect(fs.readFileSync(file, "utf8")).toBe(before);
-	});
+test("an obsolete configuration file is never the write target", () => {
+	// Only an obsolete file exists: the explicit replacement file is absent, so
+	// the canonical JSON config under the resolved root is written instead and
+	// the obsolete file is left byte-identical.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-mode-"));
+	const root = path.join(dir, "agentic-coding");
+	fs.mkdirSync(root, { recursive: true });
+	const obsolete = path.join(root, "config.toml");
+	fs.writeFileSync(obsolete, 'ui = { theme = "catppuccin" }\n');
+	const previous = process.env.AGENTIC_CODING_CONFIG_DIR;
+	const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+	process.env.AGENTIC_CODING_CONFIG_DIR = root;
+	delete process.env.HERDR_WORKFLOW_CONFIG;
+	try {
+		saveSidebarMode("permanent");
+		expect(fs.readFileSync(obsolete, "utf8")).toBe(
+			'ui = { theme = "catppuccin" }\n',
+		);
+		expect(
+			JSON.parse(fs.readFileSync(path.join(root, "config.json"), "utf8")),
+		).toEqual({ ui: { sidebar_mode: "permanent" } });
+	} finally {
+		if (previous === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
+		if (previousConfig === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

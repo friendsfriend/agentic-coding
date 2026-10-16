@@ -102,16 +102,16 @@ test("rejected configuration is not retryable", async () => {
 function isolateEnvironment(): () => void {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-bounded-"));
 	const home = process.env.DEVENV_HOME;
-	const configDir = process.env.DEVENV_CONFIG_DIR;
+	const configDir = process.env.AGENTIC_CODING_CONFIG_DIR;
 	fs.mkdirSync(path.join(dir, "home"), { recursive: true });
 	fs.mkdirSync(path.join(dir, "config"), { recursive: true });
 	process.env.DEVENV_HOME = path.join(dir, "home");
-	process.env.DEVENV_CONFIG_DIR = path.join(dir, "config");
+	process.env.AGENTIC_CODING_CONFIG_DIR = path.join(dir, "config");
 	return () => {
 		if (home === undefined) delete process.env.DEVENV_HOME;
 		else process.env.DEVENV_HOME = home;
-		if (configDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
-		else process.env.DEVENV_CONFIG_DIR = configDir;
+		if (configDir === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
 		fs.rmSync(dir, { recursive: true, force: true });
 	};
 }

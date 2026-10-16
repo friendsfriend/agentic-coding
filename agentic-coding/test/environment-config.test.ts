@@ -198,11 +198,10 @@ describe("home, config and environment precedence", () => {
 	test("DEVENV_HOME wins, then the config .env, then ~/devenv", () => {
 		const previous = {
 			home: process.env.DEVENV_HOME,
-			config: process.env.DEVENV_CONFIG_DIR,
+			config: process.env.AGENTIC_CODING_CONFIG_DIR,
 		};
 		try {
 			delete process.env.DEVENV_HOME;
-			delete process.env.DEVENV_CONFIG_DIR;
 			delete process.env.AGENTIC_CODING_CONFIG_DIR;
 			// No config-dir override: the documented canonical root fallback.
 			expect(resolveConfigDir()).toBe(
@@ -211,7 +210,7 @@ describe("home, config and environment precedence", () => {
 
 			withTempDir("env-config-", (dir) => {
 				// No override and no readable .env here: ~/devenv is used.
-				process.env.DEVENV_CONFIG_DIR = dir;
+				process.env.AGENTIC_CODING_CONFIG_DIR = dir;
 				expect(resolveDevenvHome()).toBe(path.join(os.homedir(), "devenv"));
 
 				// The fixture .env sets DEVENV_HOME with $HOME expansion.
@@ -231,8 +230,9 @@ describe("home, config and environment precedence", () => {
 		} finally {
 			if (previous.home === undefined) delete process.env.DEVENV_HOME;
 			else process.env.DEVENV_HOME = previous.home;
-			if (previous.config === undefined) delete process.env.DEVENV_CONFIG_DIR;
-			else process.env.DEVENV_CONFIG_DIR = previous.config;
+			if (previous.config === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previous.config;
 		}
 	});
 

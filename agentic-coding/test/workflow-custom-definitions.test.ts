@@ -547,7 +547,7 @@ describe("custom workflow definitions", () => {
 		}
 	});
 
-	test("define validates the manifest before it migrates or writes the store", () => {
+	test("define validates the manifest before it writes the store", () => {
 		const root = repo("custom-order-");
 		try {
 			initializeStore(root);
@@ -573,19 +573,16 @@ describe("custom workflow definitions", () => {
 					.get(),
 			).toBeNull();
 			unchanged.close();
-			// The same store accepts a valid manifest, migrating it on the write.
-			const stored = define(root, noOpenspec());
-			const migrated = new Database(canonicalStorePath(root));
-			expect(migrated.query("PRAGMA user_version").get()).toEqual({
-				user_version: STORE_SCHEMA_VERSION,
+			// The same store is a version this build does not read, so the valid
+			// manifest is refused too and the store stays untouched.
+			expect(() => define(root, noOpenspec())).toThrow(
+				/unsupported workflow store version 4/,
+			);
+			const stillOld = new Database(canonicalStorePath(root));
+			expect(stillOld.query("PRAGMA user_version").get()).toEqual({
+				user_version: 4,
 			});
-			expect(
-				migrated
-					.query("SELECT count(*) AS count FROM workflow_definitions")
-					.get(),
-			).toEqual({ count: 1 });
-			migrated.close();
-			expect(stored.id).toBe(customDefinitionId(stored.digest));
+			stillOld.close();
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

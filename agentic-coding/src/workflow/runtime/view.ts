@@ -18,7 +18,7 @@ import {
 	resolveDefinitionWithOrigin,
 } from "./definitions.ts";
 import { ORCHESTRATOR_QUESTION_TARGET } from "./dialogue.ts";
-import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
+import type { RepairPreview } from "./engine-types.ts";
 import {
 	ACTIVE_RUN,
 	actions,
@@ -29,6 +29,7 @@ import {
 	openReadStore,
 	runs,
 	STORE_SCHEMA_VERSION,
+	unsupportedStoreVersion,
 	validateSnapshot,
 } from "./store.ts";
 
@@ -136,14 +137,14 @@ export function diagnosticView(
 	diagnostic: string,
 ): WorkflowView {
 	return {
-		workflowId: `legacy:${changeId}`,
+		workflowId: changeId,
 		changeId,
 		revision: 0,
 		definition: {
-			id: "migration-required",
+			id: "unavailable",
 			version: 0,
 			digest: "",
-			label: "Migration required",
+			label: "Unavailable",
 		},
 		status: "attention-required",
 		repository: "",
@@ -153,8 +154,8 @@ export function diagnosticView(
 		createdAt: "",
 		updatedAt: "",
 		currentStep: {
-			id: "repair-required",
-			label: "Repair required",
+			id: "unavailable",
+			label: "Unavailable",
 			attempt: 0,
 			enteredAt: "",
 		},
@@ -433,18 +434,13 @@ export function status(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
-	// One store open per read: the legacy-migration pre-check that used to open
-	// the store a second time can never fire (`observedStore` reports no legacy
-	// change ids), and the same diagnostic is still reached below from
-	// `workflow_migration_diagnostics` when the instance row is missing.
+	// One store open per read: a store this build cannot read is reported as a
+	// diagnostic view rather than thrown at the caller.
 	let db: Database;
 	try {
 		db = openReadStore(repo);
 	} catch (error) {
-		if (
-			error instanceof WorkflowRuntimeError &&
-			["migration-required", "unsupported-version"].includes(error.code)
-		)
+		if (error instanceof WorkflowRuntimeError)
 			return diagnosticView(workflowId, error.message);
 		throw error;
 	}
@@ -456,18 +452,11 @@ export function status(
 			row = db
 				.query("SELECT id FROM workflow_instances WHERE change_id=?")
 				.get(workflowId) as { id: string } | null;
-		if (!row) {
-			const diagnostic = db
-				.query(
-					"SELECT diagnostic FROM workflow_migration_diagnostics WHERE change_id=?",
-				)
-				.get(workflowId) as { diagnostic: string } | null;
-			if (diagnostic) return diagnosticView(workflowId, diagnostic.diagnostic);
+		if (!row)
 			throw new WorkflowRuntimeError(
 				"not-found",
 				`workflow not found: ${workflowId}`,
 			);
-		}
 		return view(db, row.id, registry, now);
 	} finally {
 		db.close();
@@ -487,26 +476,13 @@ export function list(
 				"workflow store is absent; initialize the store before writing",
 			),
 		];
-	if (
-		observed.version === STORE_SCHEMA_VERSION &&
-		observed.legacyChangeIds.length
-	)
-		return observed.legacyChangeIds.map((id) =>
+	if (observed.version !== STORE_SCHEMA_VERSION)
+		return [
 			diagnosticView(
-				id,
-				"workflow store has unimported legacy workflows; initialize the target before observing",
+				"store",
+				unsupportedStoreVersion(observed.version).message,
 			),
-		);
-	if (observed.version !== STORE_SCHEMA_VERSION) {
-		const ids = observed.legacyChangeIds.length
-			? observed.legacyChangeIds
-			: ["store"];
-		const diagnostic =
-			observed.version > STORE_SCHEMA_VERSION
-				? `unsupported workflow store version: ${observed.version}`
-				: `workflow store requires initialization (version ${observed.version})`;
-		return ids.map((id) => diagnosticView(id, diagnostic));
-	}
+		];
 	let db: Database;
 	try {
 		db = openReadStore(repo);
@@ -519,161 +495,11 @@ export function list(
 		];
 	}
 	try {
-		const views = (
+		return (
 			db
 				.query("SELECT id FROM workflow_instances ORDER BY updated_at DESC")
 				.all() as Array<{ id: string }>
 		).map((row) => view(db, row.id, registry, now));
-		const diagnostics = (
-			db
-				.query(
-					"SELECT change_id,diagnostic FROM workflow_migration_diagnostics",
-				)
-				.all() as Array<{ change_id: string; diagnostic: string }>
-		).map((row) => diagnosticView(row.change_id, row.diagnostic));
-		return [...views, ...diagnostics];
-	} finally {
-		db.close();
-	}
-}
-
-const MIGRATION_RUN_EFFECT_KINDS = new Set([
-	"artifact.write",
-	"agent.launch",
-	"agent.prompt",
-]);
-function migrationExpiresEffect(
-	effect: ReturnType<typeof effects>[number],
-	runIds: ReadonlySet<string>,
-): boolean {
-	if (!MIGRATION_RUN_EFFECT_KINDS.has(effect.kind)) return false;
-	if (
-		typeof effect.payload !== "object" ||
-		effect.payload === null ||
-		Array.isArray(effect.payload)
-	)
-		return false;
-	const runId = (effect.payload as { runId?: unknown }).runId;
-	return typeof runId === "string" && runIds.has(runId);
-}
-
-export function previewMigration(
-	repo: string,
-	workflowId: string,
-	targetVersion: number,
-	registry: WorkflowRegistry,
-): MigrationPreview {
-	const db = openReadStore(repo);
-	try {
-		const row = instance(db, workflowId);
-		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
-		const current = resolveDefinition(
-			registry,
-			db,
-			snapshot.definition.id,
-			snapshot.definition.version,
-			snapshot.definition.digest,
-		);
-		let target: ReturnType<WorkflowRegistry["definition"]> | undefined;
-		let diagnostic: string | undefined;
-		try {
-			target = resolveDefinition(
-				registry,
-				db,
-				snapshot.definition.id,
-				targetVersion,
-			);
-		} catch (error) {
-			diagnostic = String((error as Error).message);
-		}
-		const refs = (definition: typeof current) =>
-			new Map(
-				(
-					definition.stepRefs ??
-					definition.steps.map((id) => ({
-						id,
-						version: 1,
-						behaviorVersion: 1,
-					}))
-				).map((ref) => [ref.id, ref]),
-			);
-		const before = new Map(
-			(
-				snapshot.definition.stepRefs ??
-				current.steps.map((id) => ({
-					id,
-					version: 1,
-					behaviorVersion: 1,
-				}))
-			).map((ref) => [ref.id, ref]),
-		);
-		const after = target ? refs(target) : new Map();
-		const semanticChanges = [...new Set([...before.keys(), ...after.keys()])]
-			.map((stepId) => {
-				const from = before.get(stepId);
-				const to = after.get(stepId);
-				return from?.version !== to?.version ||
-					from?.behaviorVersion !== to?.behaviorVersion
-					? {
-							stepId,
-							from: from
-								? {
-										version: from.version,
-										behaviorVersion: from.behaviorVersion,
-									}
-								: null,
-							to: to
-								? { version: to.version, behaviorVersion: to.behaviorVersion }
-								: null,
-						}
-					: undefined;
-			})
-			.filter((change) => change !== undefined);
-		const runsList = runs(db, workflowId).filter((run) =>
-			ACTIVE_RUN.has(run.status),
-		);
-		const effectsList = effects(db, workflowId).filter((effect) =>
-			["pending", "retry", "running"].includes(effect.status),
-		);
-		const activeRunIds = new Set(snapshot.step.activeRunIds);
-		const expiringEffects = effectsList.filter((effect) =>
-			migrationExpiresEffect(effect, activeRunIds),
-		);
-		const graphCompatible =
-			target !== undefined &&
-			JSON.stringify(current.steps) === JSON.stringify(target.steps) &&
-			JSON.stringify(current.edges) === JSON.stringify(target.edges) &&
-			current.initial === target.initial &&
-			JSON.stringify(current.terminal) === JSON.stringify(target.terminal);
-		const semanticPinsAvailable = target?.stepRefs !== undefined;
-		const compatible =
-			!diagnostic &&
-			graphCompatible &&
-			semanticPinsAvailable &&
-			targetVersion !== snapshot.definition.version;
-		return {
-			workflowId,
-			revision: snapshot.revision,
-			from: snapshot.definition,
-			to: target
-				? { id: target.id, version: target.version, digest: target.digest }
-				: { id: snapshot.definition.id, version: targetVersion, digest: "" },
-			semanticChanges,
-			expiresRuns: runsList
-				.filter((run) => activeRunIds.has(run.id))
-				.map((run) => run.id),
-			expiresEffects: expiringEffects.map((effect) => effect.id),
-			compatible,
-			...(compatible
-				? {}
-				: {
-						diagnostic:
-							diagnostic ??
-							(!graphCompatible || !semanticPinsAvailable
-								? "migration target changes workflow shape or has no semantic pins"
-								: "migration target must use another version"),
-					}),
-		};
 	} finally {
 		db.close();
 	}

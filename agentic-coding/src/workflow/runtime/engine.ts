@@ -77,7 +77,6 @@ import {
 import type {
 	ClaimedEffect,
 	DispatchResult,
-	MigrationPreview,
 	RepairPreview,
 	StartWorkflowInput,
 } from "./engine-types.ts";
@@ -100,7 +99,6 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
-import { type LegacyMigrationTelemetry, migrateLegacy } from "./migration.ts";
 import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
@@ -118,7 +116,7 @@ import {
 } from "./reducers/debug-request.ts";
 import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
-import { migrate, repair, repin, resume } from "./reducers/repair.ts";
+import { repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
 import type { WorkflowClock } from "./services.ts";
 import {
@@ -149,7 +147,6 @@ import {
 	getRun as storeGetRun,
 	getSnapshot as storeGetSnapshot,
 	renewEffect as storeRenewEffect,
-	tableExists,
 	validateEffect,
 	validateSnapshot,
 	writeSnapshot,
@@ -165,7 +162,6 @@ import {
 import {
 	viewById,
 	list as viewList,
-	previewMigration as viewPreviewMigration,
 	previewRepair as viewPreviewRepair,
 	status as viewStatus,
 } from "./view.ts";
@@ -350,80 +346,24 @@ export class WorkflowEngine {
 		}
 		throw new WorkflowRuntimeError("unavailable", Cause.pretty(exit.cause));
 	}
-	/** Initialize the canonical store and, when addressed, import its legacy
-	 * workflow outside any command transaction. */
-	initialize(repo: string, workflowId?: string): void {
-		this.run(this.initializeEffect(repo, workflowId));
+	/** Initialize the canonical store at its current schema version. */
+	initialize(repo: string): void {
+		this.run(this.initializeEffect(repo));
 	}
-	/** Effect program for initializing the canonical store (and importing a
-	 * legacy workflow when addressed); run at the named application
-	 * composition root (complete-workflow-effect-cutover, task 2.1). */
+	/** Effect program for initializing the canonical store; run at the named
+	 * application composition root (complete-workflow-effect-cutover, task
+	 * 2.1). */
 	initializeEffect(
 		repo: string,
-		workflowId?: string,
-	): Effect.Effect<
-		void,
-		WorkflowRuntimeError,
-		WorkflowStore | WorkflowTelemetry
-	> {
-		return this.initializeProgram(repo, workflowId);
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+		return this.initializeProgram(repo);
 	}
 	private initializeProgram(
 		repo: string,
-		workflowId?: string,
-	): Effect.Effect<
-		void,
-		WorkflowRuntimeError,
-		WorkflowStore | WorkflowTelemetry
-	> {
-		const self = this;
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
 		return Effect.gen(function* () {
 			const store = yield* WorkflowStore;
 			yield* store.initialize(repo);
-			if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) return;
-			// Legacy import runs outside any command transaction: it owns its own
-			// SQLite transaction control and must not run inside the service's
-			// transaction primitive.
-			const migrated = yield* store.write(repo, (db) => {
-				const results: LegacyMigrationTelemetry[] = [];
-				if (!tableExists(db, "workflows")) return results;
-				const ids = workflowId
-					? [workflowId]
-					: (
-							db.query("SELECT change_id FROM workflows").all() as Array<{
-								change_id: string;
-							}>
-						).map((row) => row.change_id);
-				for (const changeId of ids) {
-					if (
-						db
-							.query("SELECT 1 FROM workflow_instances WHERE id=?")
-							.get(changeId) ||
-						db
-							.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
-							.get(changeId)
-					)
-						continue;
-					const item = migrateLegacy(
-						db,
-						canonicalRepository(repo),
-						changeId,
-						self.registry,
-						self.now,
-					);
-					if (item) results.push(item);
-				}
-				return results;
-			});
-			for (const item of migrated)
-				yield* self.telemetryEffect(item.snapshot, "legacy.migrated", {
-					stepId: item.snapshot.currentStep,
-					payload: {
-						"herdr.source.version": item.sourceVersion,
-						"herdr.migration.phase": item.phase,
-						"herdr.workflow.type": item.workflowType,
-					},
-				});
 		});
 	}
 	start(input: StartWorkflowInput): DispatchResult {
@@ -489,12 +429,9 @@ export class WorkflowEngine {
 				try: () => decodeCommand(raw),
 				catch: toRuntimeError,
 			});
-			// Legacy domain import is a write operation and intentionally happens
-			// outside the command transaction. Observation never performs it.
-			yield* self.initializeProgram(
-				repo,
-				"workflowId" in command ? command.workflowId : undefined,
-			);
+			// Storage is initialized before the command transaction: a store this
+			// build cannot read is refused before any command is applied.
+			yield* self.initializeProgram(repo);
 			// Read and validate bounded agent evidence before opening the writer
 			// transaction. The reducer repeats the final integrity check after
 			// reload so replacement during the race window is rejected.
@@ -717,8 +654,7 @@ export class WorkflowEngine {
 	// ------------------------------------------------------------------
 
 	/** One workflow's delegated debug requests, oldest first. A read-only store
-	 * read: observation never initializes or migrates the store, and an older
-	 * store without the v6 table answers with no requests at all. */
+	 * read: observation never initializes the store. */
 	debugRequests(repo: string, workflowId: string): DebugRequest[] {
 		let db: ReturnType<typeof openReadStore>;
 		try {
@@ -727,7 +663,6 @@ export class WorkflowEngine {
 			return [];
 		}
 		try {
-			if (!tableExists(db, "debug_requests")) return [];
 			return debugRequestsForWorkflow(db, workflowId);
 		} finally {
 			db.close();
@@ -1049,26 +984,6 @@ export class WorkflowEngine {
 	): Effect.Effect<RepairPreview[], WorkflowRuntimeError, never> {
 		return Effect.try({
 			try: () => viewPreviewRepair(repo, workflowId, this.registry),
-			catch: toRuntimeError,
-		});
-	}
-	previewMigration(
-		repo: string,
-		workflowId: string,
-		targetVersion: number,
-	): MigrationPreview {
-		return this.run(
-			this.previewMigrationEffect(repo, workflowId, targetVersion),
-		);
-	}
-	previewMigrationEffect(
-		repo: string,
-		workflowId: string,
-		targetVersion: number,
-	): Effect.Effect<MigrationPreview, WorkflowRuntimeError, never> {
-		return Effect.try({
-			try: () =>
-				viewPreviewMigration(repo, workflowId, targetVersion, this.registry),
 			catch: toRuntimeError,
 		});
 	}
@@ -1899,7 +1814,6 @@ export class WorkflowEngine {
 		const repin =
 			command.type === "operator.repin" ||
 			(command.type === "developer.action" && command.actionId === "re-pin");
-		const migration = command.type === "operator.migrate";
 		const definition = repin
 			? resolveDefinition(
 					this.registry,
@@ -1914,14 +1828,6 @@ export class WorkflowEngine {
 					snapshot.definition.version,
 					snapshot.definition.digest,
 				);
-		const targetDefinition = migration
-			? resolveDefinition(
-					this.registry,
-					db,
-					snapshot.definition.id,
-					command.targetVersion,
-				)
-			: definition;
 		if (
 			repin &&
 			((snapshot.definition.stepRefs !== undefined &&
@@ -1931,7 +1837,7 @@ export class WorkflowEngine {
 		)
 			throw new WorkflowRuntimeError(
 				"pin-mismatch",
-				"semantic step pin changed; use validated migration instead of repin",
+				"semantic step pin changed; repin only restores an identical definition",
 			);
 		const runList = runs(db, snapshot.workflowId);
 		if (!repin) validateSnapshot(snapshot, definition, runList, this.registry);
@@ -1948,7 +1854,7 @@ export class WorkflowEngine {
 		snapshot.metadata.updatedAt = nowIso(this.now);
 		validateSnapshot(
 			snapshot,
-			targetDefinition,
+			definition,
 			runs(db, snapshot.workflowId),
 			this.registry,
 		);
@@ -2105,14 +2011,6 @@ export class WorkflowEngine {
 		if (command.type === "operator.repair") {
 			telemetry.payload["herdr.step.from"] = stepBefore;
 			telemetry.payload["herdr.step.to"] = snapshot.currentStep;
-			telemetry.payload["herdr.reason.length"] = command.reason.length;
-		}
-		if (command.type === "operator.migrate") {
-			// The reducer has already assigned the target pin, so the source
-			// version comes from the recorded migration fact (QUAL-005).
-			telemetry.payload["herdr.version.from"] =
-				snapshot.migrated?.from.version ?? command.targetVersion;
-			telemetry.payload["herdr.version.to"] = command.targetVersion;
 			telemetry.payload["herdr.reason.length"] = command.reason.length;
 		}
 		if (
@@ -2544,21 +2442,6 @@ export class WorkflowEngine {
 			);
 		if (command.type === "operator.repair")
 			return repair(db, snapshot, definition, command, this.registry, this.now);
-		if (command.type === "operator.migrate")
-			return migrate(
-				db,
-				snapshot,
-				definition,
-				resolveDefinition(
-					this.registry,
-					db,
-					snapshot.definition.id,
-					command.targetVersion,
-				),
-				command,
-				this.registry,
-				this.now,
-			);
 		if (command.type === "operator.repin")
 			return repin(db, snapshot, definition, command, this.registry, this.now);
 		if (command.type === "operator.resume")

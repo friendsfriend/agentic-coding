@@ -65,10 +65,12 @@ cursor contracts depend on (`ageEventTimestampsToNow`).
   active-checkout resolution.
 - `src/server/environment/catalog-observer.ts` — bounded read-only filesystem
   and Git boundary for the projection.
-- `src/server/environment/state-store.ts` — `bun:sqlite` store with the
-  `BEGIN IMMEDIATE` migration transaction, version re-read under the write lock,
-  fail-closed future schema, `VACUUM INTO` pre-upgrade backup and
-  post-migration integrity check.
+- `src/server/environment/state-store.ts` — `bun:sqlite` store that creates an
+  empty database directly at the current schema version inside one
+  `BEGIN IMMEDIATE` transaction, re-reads the version under the write lock,
+  refuses every other persisted version before writing anything and runs an
+  integrity check after opening. There is no in-place upgrade, backup or
+  rollback: a state database of another version is converted out of band.
 - `src/server/environment/manager.ts` — definition loading/writing, runtime
   state overlay, explicit initialization backfill and branch refresh.
 - `src/server/environment/authority.ts` — composition root of the single

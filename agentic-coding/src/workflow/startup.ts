@@ -492,7 +492,6 @@ function prepareFromContext(
 	);
 	const agents = parseAgentsConfig(
 		config.agents,
-		config,
 		provenance.files.join(", ") || undefined,
 	);
 	const routing = resolveRoutingForStart(

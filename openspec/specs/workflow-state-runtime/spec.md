@@ -119,34 +119,6 @@ The system SHALL validate stored schema version, required fields, definition pin
 - **THEN** transaction SHALL roll back
 - **AND** engine SHALL report reducer contract failure
 
-### Requirement: Safe legacy migration
-The system SHALL automatically import recognized legacy workflow rows into the canonical schema on explicit initialization/import or mutating workflow access, while preserving valid domain data and recording a migration event. Observational status/list/view access SHALL report migration-required instead of importing or issuing fresh runs.
-
-#### Scenario: Equivalent legacy mirrors exist
-- **WHEN** explicit initialization/import or mutating access targets a valid legacy workflow with equivalent repository and worktree rows
-- **THEN** the engine SHALL map phase and verification state to the pinned built-in step definition
-- **AND** commit the canonical migrated snapshot with revision and migration audit event
-- **AND** stop relying on the legacy mirror
-
-#### Scenario: Active legacy agent cannot use new protocol
-- **WHEN** migration maps active legacy work to an agent step
-- **THEN** the engine SHALL expire legacy agent ownership and enqueue fresh run assignment using the new protocol
-- **AND** stale legacy completion SHALL NOT mutate the migrated workflow
-
-#### Scenario: Legacy sources conflict or cannot map
-- **WHEN** legacy mirrors disagree or legacy data cannot map unambiguously to valid step state
-- **THEN** migration SHALL fail closed into a repair-required view
-- **AND** the engine SHALL preserve source data for diagnosis rather than choosing an arbitrary version
-
-#### Scenario: Legacy workflow is only observed
-- **WHEN** status or list encounters a workflow requiring import
-- **THEN** it SHALL expose a migration-required diagnostic without changing source rows, schema, revisions, or outbox entries
-
-#### Scenario: Two callers import the same workflow
-- **WHEN** separate processes attempt supported legacy import concurrently
-- **THEN** at most one canonical import and migration event SHALL commit for that source workflow
-- **AND** both SHALL preserve the legacy source for diagnosis
-
 ### Requirement: Run-bound artifact validation
 Agent-produced output SHALL be accepted only from declared output path for active run and after size, schema, run identity, and content digest validation. Plan-step completion SHALL additionally validate that the planner-declared primary change directory exists and is complete before recording it as the workflow's change identifier.
 
@@ -198,45 +170,6 @@ The serial runner SHALL claim an effect only when it can begin processing it. Lo
 - **WHEN** an external operation completes but its owner exits before committing the result
 - **THEN** a permitted recovery attempt SHALL observe existing completion before executing again
 - **AND** uncertain or exhausted recovery SHALL require attention rather than assuming success
-
-### Requirement: Versioned store initialization
-Canonical SQLite schema evolution SHALL use ordered migrations recorded in PRAGMA user_version. Initialization SHALL acquire the migration lock and reread the version before deciding which transitions to apply. Each migration SHALL atomically commit its schema/data changes and version advancement, preserving foreign-key integrity.
-
-#### Scenario: Supported unversioned store is initialized
-- **WHEN** initialization encounters a recognized historical user_version=0 schema
-- **THEN** it SHALL safely identify and migrate that supported shape while preserving workflows, events, runs, capabilities, and outbox identities
-- **AND** it SHALL not treat an unknown nonempty schema as a fresh empty store
-
-#### Scenario: Initializers race
-- **WHEN** two processes initialize the same old store concurrently
-- **THEN** the second lock holder SHALL reread the committed version and skip already-applied migrations
-- **AND** duplicate DDL, duplicate imported state, or partial version advancement SHALL not occur
-
-#### Scenario: Migration is interrupted
-- **WHEN** a migration fails or its process exits before that migration commits
-- **THEN** its DDL/data changes and version advancement SHALL roll back together
-- **AND** later initialization SHALL resume from the last committed version
-
-#### Scenario: Rebuilt schema has invalid references
-- **WHEN** a migration rebuilding parent or child tables fails foreign-key validation
-- **THEN** it SHALL roll back instead of advancing user_version
-- **AND** the prior data SHALL remain recoverable with foreign-key enforcement restored on the connection
-
-#### Scenario: Newer unsupported schema is opened
-- **WHEN** the store version exceeds the binary's supported migration range
-- **THEN** initialization and mutation SHALL fail closed without altering the database
-- **AND** the diagnostic SHALL identify the unsupported version
-
-### Requirement: Ordinary reads do not initialize storage
-Observational store connections SHALL not run creation DDL, schema repair, or legacy import. Supported initialized stores SHALL be opened using a version check rather than per-open schema-shape inference.
-
-#### Scenario: Current store is read repeatedly
-- **WHEN** status/list/view opens a current supported store
-- **THEN** it SHALL not create, alter, or rebuild tables or probe historical DDL shapes to decide migrations
-
-#### Scenario: Absent or old store is read
-- **WHEN** a read encounters a missing store or one requiring initialization
-- **THEN** it SHALL return an absent or migration-required diagnostic without creating or migrating the store
 
 ### Requirement: Prepared evidence retains transactional authorization
 Expensive external evidence collection SHALL occur outside the canonical writer transaction where equivalent integrity can be maintained. Prepared evidence SHALL be bound to the workflow, exact run generation or developer revision, relevant source baseline, and validated artifact content. The command transaction SHALL reload current state and reauthorize authority, legality, and evidence bindings before acceptance. Necessary final integrity checks SHALL not be removed merely to shorten the transaction.
@@ -334,9 +267,9 @@ Effect-based evidence preparation SHALL preserve existing bounded artifact captu
 - **WHEN** another valid parallel run advances the revision while evidence is prepared
 - **THEN** the current run SHALL be reauthorized against current state and its active generation rather than rejected solely for the sibling's revision change
 
-#### Scenario: Observer accesses an old store
-- **WHEN** an Effect status/list/view operation opens an absent or unsupported-old store
-- **THEN** it SHALL return the established absent or migration-required diagnostic without initialization, import, expiry mutation, or effect claims
+#### Scenario: Observer accesses an absent or unsupported store
+- **WHEN** an Effect status/list/view operation opens an absent store or a store whose schema version is not the supported one
+- **THEN** it SHALL return the absent diagnostic or `unsupported workflow store version N; this build only reads version 6` without initialization, import, expiry mutation, or effect claims
 
 ### Requirement: Scoped execution supervises lease renewal
 Each claimed outbox execution SHALL have one Effect-owned scope supervising observation, execution, and lease renewal. The serial runner SHALL claim only immediately executable work. Renewal rejection or failure SHALL stop new external work and interrupt owned operations; completion SHALL still require transactional validation of the current unexpired lease.
@@ -407,4 +340,26 @@ Workflow wiki roots and child execution settings SHALL be supplied explicitly or
 #### Scenario: Secure path is replaced with a symlink
 - **WHEN** an attacker substitutes a protected runtime path component during file acquisition/publication
 - **THEN** the Effect filesystem boundary SHALL retain the established no-follow and descriptor-relative protections rather than follow the substituted path
+
+### Requirement: Current workflow store version boundary
+The workflow runtime SHALL create a genuinely empty store directly in the frozen schema version 6 and SHALL open an existing version 6 store without altering its schema, rows, or version pragma. Every other existing version SHALL be refused without mutation.
+
+#### Scenario: Fresh store is created at version 6
+- **WHEN** the workflow runtime initializes a new empty store
+- **THEN** it SHALL create the current version 6 tables, columns, indexes, and constraints directly
+- **AND** it SHALL set `PRAGMA user_version` to 6
+
+#### Scenario: Existing v6 store opens unchanged
+- **WHEN** a v6 store with current workflow data is opened
+- **THEN** the runtime SHALL preserve every existing table, column, index, row, and pragma
+- **AND** current reads and writes SHALL continue to work
+
+#### Scenario: Any other existing version is rejected without writes
+- **WHEN** a nonempty store has a user version other than 6
+- **THEN** the runtime SHALL fail with `unsupported workflow store version N; this build only reads version 6`
+- **AND** its schema, rows, and file contents SHALL remain unchanged
+
+#### Scenario: Absent store remains observationally absent
+- **WHEN** a status or list read encounters no workflow database
+- **THEN** it SHALL report the absent state without creating a file or initializing a database
 

@@ -182,12 +182,12 @@ Known gaps, kept explicit rather than silently dropped:
 There is no runtime fallback: this process is the only backend. Rollback is a
 deliberate artifact/data operation at a quiescent boundary — stop the TUI/server
 stack through the owned resource registry (the one listener releases last), then
-restore the previous release and, if its schema is older, the verified
-pre-upgrade database. No workflow pin, workflow store or durable workflow data is
+restore the previous release and, if its schema is older, a state database you
+backed up yourself before the upgrade. No workflow pin, workflow store or durable workflow data is
 changed by the runtime cleanup, so an older revision reads the same stores. The
 procedure and its preconditions are in [`go-retirement.md`](go-retirement.md).
 
-For environment state specifically: an upgrade writes a `state.db.backup-v<N>`
+For environment state specifically: this build writes no backup; a `state.db.backup-v<N>`
 with `VACUUM INTO`, a newer schema fails closed without modification, and an
 interrupted migration is committed or rolled back as a whole — never a mix of
 both.

@@ -18,11 +18,7 @@ import type {
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { artifact, tokenMatches } from "../capability.ts";
-import {
-	type DebugRequest,
-	debugRequestForRun,
-	updateDebugRequest,
-} from "../debug-requests.ts";
+import { debugRequestForRun, updateDebugRequest } from "../debug-requests.ts";
 import { debugRequestReportPathFor } from "../evidence-store.ts";
 import { enqueue } from "../kernel.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";

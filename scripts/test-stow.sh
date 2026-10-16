@@ -44,15 +44,18 @@ HOME="$home" "$root/scripts/stow.sh"
 [[ "$(readlink "$config")" == "$symlink_target" ]]
 [[ "$(cat "$symlink_target")" == 'user-owned config' ]]
 
-# A legacy TOML user config must not be shadowed by fresh JSON defaults.
+# An obsolete TOML user config is not an applicable source: it is left untouched
+# and the canonical JSON defaults are still installed.
 rm "$config"
 legacy_config="$home/.config/agentic-coding/config.toml"
 printf '[agents]\ndefault_profile = "legacy"\n' > "$legacy_config"
 legacy_copy=$(mktemp)
 cp "$legacy_config" "$legacy_copy"
 HOME="$home" "$root/scripts/stow.sh" 2>/dev/null
-[[ ! -e "$config" ]]
+[[ -e "$config" ]]
+[[ ! -L "$config" ]]
 cmp "$legacy_copy" "$legacy_config"
+rm "$config"
 rm "$legacy_config" "$legacy_copy"
 
 # Simulate stale herdr symlinks from previous install
