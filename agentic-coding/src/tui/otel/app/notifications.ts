@@ -28,6 +28,13 @@ export function notify(message: string, type: NotificationType = "info") {
 	}, 3000);
 }
 
+/** Dismiss the mounted toast now (a pointer tap), reusing the expiry path. */
+export function dismissNotification() {
+	clearTimeout(timer);
+	timer = undefined;
+	setActiveNotification();
+}
+
 /** Clear any mounted toast and its pending auto-clear timer (test isolation). */
 export function resetNotifications() {
 	clearTimeout(timer);

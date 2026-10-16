@@ -5,7 +5,7 @@
 // terminals while keeping the current location and the focused ancestor
 // readable.
 import { TextAttributes } from "@opentui/core";
-import { uiColors, useTerminalDimensions } from "@ui";
+import { uiColors, useTap, useTerminalDimensions } from "@ui";
 import { For, Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs.ts";
@@ -46,7 +46,7 @@ export function BreadcrumbRow(props: BreadcrumbRowProps) {
 							<text fg={uiColors.textMuted}>{BREADCRUMB_SEPARATOR}</text>
 						</Show>
 						<box
-							onMouseUp={() => {
+							{...useTap(() => {
 								const route = segment.route;
 								if (!route) {
 									// Collapsed placeholder: reveal its first ancestor and let
@@ -57,7 +57,7 @@ export function BreadcrumbRow(props: BreadcrumbRowProps) {
 								const target = props.ancestors.indexOf(route);
 								if (target >= 0) props.onSelectIndex?.(target);
 								props.onNavigate?.(route);
-							}}
+							})}
 							style={{ flexShrink: 0 }}
 						>
 							<text

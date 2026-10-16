@@ -25,6 +25,7 @@ export function ErrorDialog(props: ErrorDialogProps) {
 			])}
 			widthPercent={0.4}
 			heightPercent={0.3}
+			dismissKind="error-dialog"
 			onBackdropClick={props.onClose}
 			customHeader={
 				<SearchHeader>

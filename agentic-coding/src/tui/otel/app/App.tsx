@@ -19,6 +19,7 @@ import {
 	HelpModal,
 	HighlightedText,
 	handleModalHelpKey,
+	helpModalRowCount,
 	type KeybindSection,
 	ModalHelpOverlay,
 	modalHelpOpen,
@@ -346,13 +347,7 @@ export function App(props: {
 	const helpLines = () =>
 		Math.max(5, Math.floor(dimensions().height * 0.78) - 5);
 	const helpMaxOffset = () =>
-		Math.max(
-			0,
-			activeKeybindCatalog().reduce(
-				(count, section) => count + section.keybinds.length + 1,
-				0,
-			) - helpLines(),
-		);
+		Math.max(0, helpModalRowCount(activeKeybindCatalog()) - helpLines());
 	// Page route authority (replace-nested-tabs-with-page-navigation, task 2.3):
 	// one typed location, structural parents and chronological Back replace the
 	// per-feature stacks and single cross-feature origin.
@@ -3260,6 +3255,10 @@ export function App(props: {
 														setNodeExpanded(path, !node.expanded)
 													}
 													onSelect={selectTree}
+													onSelectIndex={(index) => {
+														setTreeIndex(index);
+														setSelectedSpan(flatTree()[index]?.node);
+													}}
 												/>
 											</box>
 										</box>
@@ -3423,10 +3422,20 @@ export function App(props: {
 					spanTypeIndex={filterSpanTypeIndex}
 					workspaces={workspaces}
 					spanTypes={traceSpanTypes}
+					onSelectParameter={setFilterCriterion}
+					onSelectValue={(index) => {
+						if (filterCriterion() === 0) setFilterStatusIndex(index);
+						else if (filterCriterion() === 1) setFilterWorkspaceIndex(index);
+						else setFilterSpanTypeIndex(index);
+					}}
 				/>
 			)}
 			{nav.modal() === "sort" && (
-				<SortModal selected={sortIndex} criteria={sortDraft} />
+				<SortModal
+					selected={sortIndex}
+					criteria={sortDraft}
+					onSelectRow={setSortIndex}
+				/>
 			)}
 			{nav.modal() === "theme" && (
 				<ThemePickerModal
@@ -3435,6 +3444,7 @@ export function App(props: {
 					themes={filteredThemes}
 					query={themeQuery}
 					filtering={themeFiltering}
+					onSelect={setThemeIndex}
 				/>
 			)}
 			{nav.modal() === "compaction-value" && compactionTarget() && (
@@ -3466,6 +3476,7 @@ export function App(props: {
 				<HelpModal
 					title="Keybindings"
 					offset={helpOffset()}
+					onScrollOffset={setHelpOffset}
 					lines={helpLines()}
 				/>
 			)}

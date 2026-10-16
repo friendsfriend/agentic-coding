@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines how the terminal UIs (dash and otel/trace) copy selected text to the system clipboard on each supported platform, and how they report success or failure to the user.
-
 ## Requirements
-
 ### Requirement: Linux clipboard copy supports Wayland and X11 clipboard tools
 On Linux, copying text to the system clipboard SHALL attempt both a Wayland clipboard tool (`wl-copy`) and X11 clipboard tools (`xclip`, `xsel`), succeeding if any one of them successfully receives the text. macOS and Windows copy behavior (`pbcopy`, `clip`) SHALL be unaffected.
 
@@ -44,3 +42,28 @@ Every user-facing selection-copy action in the dash TUI and the otel/trace TUI S
 - **WHEN** the user copies the current selection in the otel/trace TUI and the underlying clipboard write fails
 - **THEN** the otel TUI SHALL show a copy-failed notification
 - **AND** the otel TUI SHALL NOT show a copy-succeeded notification for that action
+
+### Requirement: A pointer drag is never a row interaction
+
+A pointer interaction SHALL count as a row tap only when the press and the
+release land on the same row at the same cell. A drag SHALL keep its existing
+meaning — selecting text — and SHALL NOT select, activate, focus or dismiss
+anything, including when the release lands on a different row than the press.
+
+#### Scenario: Dragging across rows selects text
+
+- **WHEN** the developer presses on one row, moves the pointer over other rows and releases
+- **THEN** the pointer SHALL NOT change the selected row
+- **AND** the released gesture SHALL remain available to the selection-copy path
+
+#### Scenario: Copying a selection still works after a drag
+
+- **WHEN** the developer drags a selection inside a transcript or markdown view and invokes copy
+- **THEN** the copied text SHALL be the dragged selection
+- **AND** no click handler SHALL have consumed the gesture
+
+#### Scenario: A press and release on the same row is a tap
+
+- **WHEN** the developer presses and releases on the same row at the same cell
+- **THEN** the gesture SHALL be treated as a row tap
+

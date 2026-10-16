@@ -24,6 +24,7 @@ import {
 	type MarkdownBlock,
 	parseMarkdownBlocks,
 } from "../components/markdownBlocks.ts";
+import { useTap } from "../components/mouse/useTap.ts";
 import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
@@ -734,6 +735,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 			heightPercent={(dimensions().height - 4) / dimensions().height} // Full height minus 4 lines
 			customHeader={customHeader()}
 			customFooter={customFooter()}
+			dismissKind="artifact-preview"
 			onBackdropClick={props.onClose}
 		>
 			{/* Scrollable wrapper for diff content with line selection. */}
@@ -856,11 +858,11 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														flexDirection="row"
 														backgroundColor={bgColor()}
 														paddingRight={1}
-														onMouseUp={() => {
+														{...useTap(() => {
 															if (selectableIndex >= 0) {
 																props.onSelectedLineChange(selectableIndex);
 															}
-														}}
+														})}
 													>
 														<SelectionMarker
 															selected={isSelected()}
@@ -1020,9 +1022,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 													flexDirection="row"
 													backgroundColor={bgColor()}
 													paddingRight={1}
-													onMouseUp={() => {
-														props.onSelectedLineChange(unitIndex);
-													}}
+													{...useTap(() =>
+														props.onSelectedLineChange(unitIndex),
+													)}
 												>
 													<SelectionMarker
 														selected={isSelected()}
@@ -1144,11 +1146,11 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 													id={`line-${selectableIndex}`}
 													flexDirection="row"
 													backgroundColor={uiColors.diffContextBg}
-													onMouseUp={() => {
+													{...useTap(() => {
 														if (selectableIndex >= 0) {
 															props.onSelectedLineChange(selectableIndex);
 														}
-													}}
+													})}
 												>
 													<SelectionMarker
 														selected={isSelected()}
@@ -1376,9 +1378,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																: uiColors.diffContextBg
 														}
 														paddingRight={1}
-														onMouseUp={() =>
-															props.onSelectedLineChange(index())
-														}
+														{...useTap(() =>
+															props.onSelectedLineChange(index()),
+														)}
 													>
 														<SelectionMarker
 															selected={isSelected()}

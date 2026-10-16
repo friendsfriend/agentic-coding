@@ -21,6 +21,7 @@ import {
 	TestResultsDetailView,
 	TimelineView,
 	uiColors,
+	useKeyDispatch,
 } from "@ui";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides/index.ts";
@@ -31,6 +32,10 @@ import { StartupSplash } from "./startup-splash.tsx";
 import type { ContentRouterProps } from "./types.ts";
 
 export function ContentRouter(props: ContentRouterProps) {
+	// Pointer parity for the tables: a tap selects a row, a tap on the
+	// already-selected row opens its detail by dispatching the table's own
+	// `Enter`, so the environment key layer stays the only activation.
+	const dispatch = useKeyDispatch();
 	const {
 		appStore,
 		issueStore,
@@ -249,9 +254,6 @@ export function ContentRouter(props: ContentRouterProps) {
 																											node,
 																											idx,
 																										) => {
-																											console.error(
-																												`[HANDLER] key=${node.key}`,
-																											);
 																											appDetailStore.setAppDetailPanelIndex(
 																												2,
 																											);
@@ -645,6 +647,7 @@ export function ContentRouter(props: ContentRouterProps) {
 																			columns={tableColumns()}
 																			selectedIndex={appStore.selectedIndex()}
 																			onSelect={appStore.setSelectedIndex}
+																			onActivate={() => dispatch("Enter")}
 																			showBorder={true}
 																			availableLines={availableTableLines}
 																			searchMode={appStore.tableSearchMode()}
@@ -663,6 +666,7 @@ export function ContentRouter(props: ContentRouterProps) {
 																	<SlotsView
 																		rows={slotStore.visible()}
 																		selectedIndex={appStore.selectedIndex()}
+																		onSelectIndex={appStore.setSelectedIndex}
 																		nowMs={nowMs()}
 																		height={availableTableLines}
 																		loading={slotStore.loading()}
@@ -676,6 +680,7 @@ export function ContentRouter(props: ContentRouterProps) {
 																columns={tableColumns()}
 																selectedIndex={appStore.selectedIndex()}
 																onSelect={appStore.setSelectedIndex}
+																onActivate={() => dispatch("Enter")}
 																showBorder={true}
 																availableLines={availableTableLines}
 																searchMode={appStore.tableSearchMode()}
@@ -693,6 +698,7 @@ export function ContentRouter(props: ContentRouterProps) {
 														columns={tableColumns()}
 														selectedIndex={appStore.selectedIndex()}
 														onSelect={appStore.setSelectedIndex}
+														onActivate={() => dispatch("Enter")}
 														showBorder={true}
 														availableLines={availableTableLines}
 														searchMode={appStore.tableSearchMode()}

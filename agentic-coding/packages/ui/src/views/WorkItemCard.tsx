@@ -9,6 +9,7 @@ import {
 import { Badge } from "../components/Badge";
 import type { Highlight } from "../components/Highlight";
 import { MatchedText } from "../components/MatchedText";
+import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { RunningText } from "../components/RunningText";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
@@ -41,7 +42,10 @@ export interface WorkItemCardProps {
 	statusSuffixColor?: string;
 	rightMetadata?: string;
 	rightMetadataColor?: string;
+	/** A tap on the row (`select`); the legacy "row was clicked" handler. */
 	onMouseUp?: () => void;
+	/** The row's activation (`Enter`); a tap on the selected row runs it. */
+	onActivate?: () => void;
 	runningTextEnabled?: boolean;
 	runningTextOffset?: number;
 }
@@ -149,6 +153,14 @@ export function WorkItemCard(props: WorkItemCardProps) {
 
 	const bgColor = () =>
 		props.selected ? uiColors.bgSurface0 : uiColors.bgMantle;
+	// The shared tap rule: select on a tap, activate a tap on the selected row
+	// (or a double tap), never a drag or a non-primary button.
+	const mouse = useRowMouse({
+		selectedIndex: () => (props.selected ? 0 : 1),
+		activatable: () => props.onActivate !== undefined,
+		onSelect: () => props.onMouseUp?.(),
+		onActivate: () => (props.onActivate ?? props.onMouseUp)?.(),
+	});
 	const statusAnimation = () =>
 		props.statusAnimationIntent
 			? statusAnimationModel(props.statusAnimationIntent)
@@ -162,7 +174,7 @@ export function WorkItemCard(props: WorkItemCardProps) {
 	return (
 		<box
 			backgroundColor={bgColor()}
-			onMouseUp={props.onMouseUp}
+			{...mouse}
 			style={{
 				width: "100%",
 				flexDirection: "row",

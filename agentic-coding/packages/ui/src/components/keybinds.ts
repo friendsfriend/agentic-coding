@@ -120,3 +120,47 @@ export function activeKeybindCatalog(): KeybindCatalog {
 export function activeKeybindContext(): string | undefined {
 	return activeContext();
 }
+
+/**
+ * The `?` help modal's own pointer note, stated once for every surface
+ * (`tui-mouse-interaction`): the pointer drives the same actions the keys do.
+ * It is a section, not key text inside a body, and the modal lists it last so a
+ * short terminal clips it first.
+ */
+export const HELP_MOUSE_SECTION: KeybindSection = {
+	title: "Mouse",
+	keybinds: [
+		{ key: "tap", action: "Select a row, panel or tab" },
+		{ key: "tap again", action: "Open the selected row (same as Enter)" },
+		{ key: "wheel", action: "Scroll the pane under the pointer" },
+	],
+};
+
+/** One rendered row of the `?` help modal: a section title or a keybind. */
+export type HelpModalRow = { title: string } | Keybind;
+
+/**
+ * The rows the `?` help modal paints for a catalog, in order. Callers that
+ * clamp the help scroll offset read this instead of counting the catalog
+ * themselves, so the clamp can never drift from what the modal renders.
+ */
+export function helpModalRows(
+	sections: readonly KeybindSection[],
+): HelpModalRow[] {
+	return [...sections, HELP_MOUSE_SECTION].flatMap((section) => [
+		{ title: section.title },
+		...section.keybinds,
+	]);
+}
+
+/** The row count of {@link helpModalRows}. */
+export function helpModalRowCount(sections: readonly KeybindSection[]): number {
+	return (
+		sections.reduce(
+			(count, section) => count + section.keybinds.length + 1,
+			0,
+		) +
+		HELP_MOUSE_SECTION.keybinds.length +
+		1
+	);
+}

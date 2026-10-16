@@ -5,6 +5,7 @@ import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { useModalContentLines } from "./GenericModal.tsx";
 import { hostBodyLines } from "./hostChrome.ts";
+import { type RowGestureState, useRowMouse } from "./mouse/useRowMouse.ts";
 import { ScrollableList } from "./ScrollableList.tsx";
 
 /** A value or a reactive getter for it; both dash (plain values) and
@@ -26,15 +27,33 @@ export function Selectable(props: {
 	backgroundColor?: string;
 	indicatorColor?: string;
 	height?: number;
+	/** A tap on the row (`select`): the legacy "row was clicked" handler. */
 	onMouseUp?: () => void;
+	/**
+	 * The row's activation (`Enter`): when it is bound, a tap on the
+	 * *already-selected* row activates instead of re-selecting. A row without
+	 * one keeps its old behavior and runs `onMouseUp` on every tap.
+	 */
+	onActivate?: () => void;
+	/** The list's gesture holder, so a recreated row still completes its tap. */
+	gesture?: RowGestureState;
 }) {
 	const background = () =>
 		props.selected
 			? uiColors.bgSurface0
 			: (props.backgroundColor ?? uiColors.bgMantle);
+	// One tap rule for every row in the TUI (`tui-mouse-interaction`): select on a
+	// tap, activate a tap on the selected row, ignore drags and other buttons.
+	const mouse = useRowMouse({
+		...(props.gesture ? { gesture: props.gesture } : {}),
+		selectedIndex: () => (props.selected ? 0 : 1),
+		activatable: () => props.onActivate !== undefined,
+		onSelect: () => props.onMouseUp?.(),
+		onActivate: () => (props.onActivate ?? props.onMouseUp)?.(),
+	});
 	return (
 		<box
-			onMouseUp={props.onMouseUp}
+			{...mouse}
 			width="100%"
 			flexDirection="row"
 			flexShrink={0}
@@ -83,6 +102,12 @@ export interface SelectableListProps<T> {
 	 * whose rows vary from two to five lines fills its height instead of
 	 * rendering `height / estimate` rows and leaving the rest empty. */
 	itemHeights?: number[];
+	/** Activation of a row (`Enter`): a tap on the selected row runs it. */
+	onActivate?: (index: number) => void;
+	/** Whether a row has an activation; defaults to "onActivate is bound". */
+	activatable?: (item: T, index: number) => boolean;
+	/** Whether the wheel may move this list's cursor (see `ScrollableList`). */
+	wheelMovesCursor?: boolean;
 }
 
 /**
@@ -114,10 +139,15 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 			estimatedItemHeight={props.estimatedItemHeight ?? itemHeight()}
 			{...(props.itemHeights ? { itemHeights: props.itemHeights } : {})}
 			showScrollIndicator={false}
+			{...(props.onSelect ? { onSelect: props.onSelect } : {})}
+			{...(props.onActivate ? { onActivate: props.onActivate } : {})}
+			{...(props.activatable ? { activatable: props.activatable } : {})}
+			{...(props.wheelMovesCursor !== undefined
+				? { wheelMovesCursor: props.wheelMovesCursor }
+				: {})}
 			renderItem={(item, isSelected, index) => (
 				<Selectable
 					height={props.itemHeight}
-					onMouseUp={() => props.onSelect?.(index)}
 					selected={isSelected()}
 					backgroundColor={props.backgroundColor?.(item, index)}
 				>

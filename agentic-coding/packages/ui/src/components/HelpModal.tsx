@@ -3,7 +3,13 @@ import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
-import { activeKeybindCatalog, type KeybindSection } from "./keybinds.ts";
+import {
+	activeKeybindCatalog,
+	helpModalRows,
+	type KeybindSection,
+} from "./keybinds.ts";
+import { useModalBackdrop } from "./mouse/useModalBackdrop.ts";
+import { useWheelScroll } from "./mouse/useWheelScroll.ts";
 
 /**
  * Shared `?` help modal: renders the active surface's full keybind catalog
@@ -17,16 +23,35 @@ export function HelpModal(props: {
 	sections?: KeybindSection[];
 	/** Portal z-order when the help stacks above another modal. */
 	zIndex?: number;
+	/** Backdrop dismissal; defaults to dispatching this dialog's own `Esc`. */
+	onBackdropClick?: () => void;
+	/**
+	 * Pointer: the wheel moves the offset the caller owns. The help modal is the
+	 * surface built for reading a long list, so it scrolls under the pointer like
+	 * the keys it advertises.
+	 */
+	onScrollOffset?: (offset: number) => void;
 }) {
+	const backdrop = useModalBackdrop({
+		kind: "help",
+		...(props.onBackdropClick ? { dismiss: props.onBackdropClick } : {}),
+	});
 	const sections = () => props.sections ?? activeKeybindCatalog();
-	const rows = () =>
-		sections().flatMap((section) => [
-			{ title: section.title },
-			...section.keybinds,
-		]);
+	const rows = () => helpModalRows(sections());
 	const visible = () => rows().slice(props.offset, props.offset + props.lines);
+	const wheel = useWheelScroll({
+		enabled: () =>
+			props.onScrollOffset !== undefined && rows().length > props.lines,
+		onScroll: (direction, delta) => {
+			if (!props.onScrollOffset) return;
+			const max = Math.max(0, rows().length - props.lines);
+			const step = direction === "up" ? -delta : delta;
+			props.onScrollOffset(Math.max(0, Math.min(max, props.offset + step)));
+		},
+	});
 	return (
 		<GenericModal
+			{...backdrop}
 			title={props.title}
 			widthPercent={0.72}
 			heightPercent={0.78}
@@ -37,7 +62,7 @@ export function HelpModal(props: {
 			]}
 			helpSections={false}
 		>
-			<box width="100%" flexDirection="column" overflow="hidden">
+			<box {...wheel} width="100%" flexDirection="column" overflow="hidden">
 				<For each={visible()}>
 					{(row) =>
 						"title" in row ? (

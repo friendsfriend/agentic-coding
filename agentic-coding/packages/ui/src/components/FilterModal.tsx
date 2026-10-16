@@ -1,9 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { For } from "solid-js";
+import { For, type JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
+import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
+import { useRowMouse } from "./mouse/useRowMouse.ts";
 
 export interface FilterValueOption {
 	value: string;
@@ -38,6 +40,51 @@ export interface FilterModalProps {
 	parameterHeading?: string;
 	/** Heading of the value column when no parameter is selected. Default `"Values"`. */
 	valueHeading?: string;
+	/** Pointer: a tap selects a parameter row (the keyboard's `j`/`k`). */
+	onSelectParameter?: (index: number) => void;
+	/** Pointer: a tap selects a value row; a tap on the selected row applies it. */
+	onSelectValue?: (index: number) => void;
+	/**
+	 * The stroke a tap on the selected row runs. Default `"Enter"` (the value pane
+	 * applies); the environment surface applies with `Space`, where `Enter` closes
+	 * the dialog, so it passes its own key.
+	 */
+	activateKey?: string;
+}
+
+/**
+ * One filter row: a tap selects it, and a tap on the selected row runs the
+ * dialog's own `Enter` (apply the filter / move to the value pane) through the
+ * keymap, so the row activates exactly what the key activates. `activatable`
+ * names the pane's own gate — a row whose pane has no selection callback stays
+ * select-only instead of borrowing the other pane's behaviour.
+ */
+function FilterRow(props: {
+	index: number;
+	selectedIndex: number;
+	activatable: boolean;
+	activateKey: string;
+	backgroundColor?: string;
+	style?: Record<string, unknown>;
+	onSelect?: (index: number) => void;
+	children: JSX.Element;
+}) {
+	const dispatch = useKeyDispatch();
+	const mouse = useRowMouse({
+		index: () => props.index,
+		selectedIndex: () => props.selectedIndex,
+		activatable: () => props.activatable && props.onSelect !== undefined,
+		onSelect: (index) => props.onSelect?.(index),
+		onActivate: (index) => {
+			props.onSelect?.(index);
+			dispatch(props.activateKey);
+		},
+	});
+	return (
+		<box {...mouse} backgroundColor={props.backgroundColor} style={props.style}>
+			{props.children}
+		</box>
+	);
 }
 
 export function FilterModal(props: FilterModalProps) {
@@ -88,11 +135,18 @@ export function FilterModal(props: FilterModalProps) {
 							const count = () =>
 								props.activeFilters[parameter.key]?.length ?? 0;
 							return (
-								<box
+								<FilterRow
+									index={index()}
+									selectedIndex={props.selectedParameterIndex}
+									activatable={props.onSelectParameter !== undefined}
+									activateKey={props.activateKey ?? "Enter"}
 									backgroundColor={
 										selected() ? selectionBg("parameter") : undefined
 									}
 									style={{ height: 1, paddingLeft: 1 }}
+									{...(props.onSelectParameter
+										? { onSelect: props.onSelectParameter }
+										: {})}
 								>
 									<text
 										fg={selected() ? uiColors.primary : uiColors.textSecondary}
@@ -100,7 +154,7 @@ export function FilterModal(props: FilterModalProps) {
 										{parameter.label}
 										{count() ? ` (${count()})` : ""}
 									</text>
-								</box>
+								</FilterRow>
 							);
 						}}
 					</For>
@@ -123,10 +177,17 @@ export function FilterModal(props: FilterModalProps) {
 							const active = () =>
 								isMarked(selectedParameter()?.key ?? "", option.value, index());
 							return (
-								<box
+								<FilterRow
+									index={index()}
+									selectedIndex={props.selectedValueIndex}
+									activatable={props.onSelectValue !== undefined}
+									activateKey={props.activateKey ?? "Enter"}
 									backgroundColor={
 										selected() ? selectionBg("value") : undefined
 									}
+									{...(props.onSelectValue
+										? { onSelect: props.onSelectValue }
+										: {})}
 									style={{ height: 1, paddingLeft: 1, flexDirection: "row" }}
 								>
 									<text fg={active() ? uiColors.success : uiColors.textMuted}>
@@ -144,7 +205,7 @@ export function FilterModal(props: FilterModalProps) {
 											{option.count !== undefined ? String(option.count) : ""}
 										</text>
 									</box>
-								</box>
+								</FilterRow>
 							);
 						}}
 					</For>

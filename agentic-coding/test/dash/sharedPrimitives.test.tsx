@@ -240,6 +240,9 @@ test("selection copy registry is shared: a devenv modal dialog click invokes the
 					widthPercent={0.5}
 					heightPercent={0.4}
 					helpText=""
+					// The backdrop policy is fail-closed: a dialog names its kind,
+					// and an unnamed one keeps its own control (tui-mouse-interaction).
+					dismissKind="help"
 					onBackdropClick={onBackdropClick}
 				>
 					<text>dialog body</text>

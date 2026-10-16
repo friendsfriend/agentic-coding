@@ -38,6 +38,8 @@ export interface ChangePanelProps {
 	readonly data: DashboardData;
 	readonly active: boolean;
 	readonly onScrollBoxReady?: (box: unknown) => void;
+	/** Pointer: a tap anywhere in the panel focuses it (`J/K/H/L`). */
+	readonly onFocusRequest?: () => void;
 }
 
 export function ChangePanel(props: ChangePanelProps) {
@@ -51,6 +53,9 @@ export function ChangePanel(props: ChangePanelProps) {
 			title={`Change (${props.data.age} ago)`}
 			accent={uiColors.primary}
 			active={props.active}
+			{...(props.onFocusRequest
+				? { onFocusRequest: props.onFocusRequest }
+				: {})}
 			style={{ width: "100%", flexGrow: 1, minHeight: 0 }}
 		>
 			<ScrollableContent

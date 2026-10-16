@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+	backdropDismiss,
+	classifyPointerGesture,
 	AnimatedStatusText as DevenvAnimatedStatusText,
 	Badge as DevenvBadge,
 	CenteredState as DevenvCenteredState,
@@ -30,6 +32,11 @@ import {
 	setGlobalSelectionMouseUpHandler as devenvSetSelectionMouseUpHandler,
 	statusAnimationModel as devenvStatusAnimationModel,
 	themeColor as devenvThemeColor,
+	isPrimaryPointerButton,
+	keybindChipRunnable,
+	moveRowIndex,
+	parseChipKey,
+	resolveRowInteraction,
 	AnimatedStatusText as SharedAnimatedStatusText,
 	Badge as SharedBadge,
 	CenteredState as SharedCenteredState,
@@ -45,6 +52,8 @@ import {
 	ScrollableList as SharedScrollableList,
 	SearchHeader as SharedSearchHeader,
 	auroraColor as sharedAuroraColor,
+	backdropDismiss as sharedBackdropDismiss,
+	classifyPointerGesture as sharedClassifyPointerGesture,
 	colors as sharedColors,
 	createAuroraPalette as sharedCreateAuroraPalette,
 	createTonePalette as sharedCreateTonePalette,
@@ -53,12 +62,23 @@ import {
 	getActiveThemeName as sharedGetActiveThemeName,
 	getMarkdownSyntaxStyle as sharedGetMarkdownSyntaxStyle,
 	invokeGlobalSelectionMouseUpHandler as sharedInvokeSelectionMouseUpHandler,
+	isPrimaryPointerButton as sharedIsPrimaryPointerButton,
+	keybindChipRunnable as sharedKeybindChipRunnable,
+	moveRowIndex as sharedMoveRowIndex,
+	parseChipKey as sharedParseChipKey,
 	parseMarkdownBlocks as sharedParseMarkdownBlocks,
+	resolveRowInteraction as sharedResolveRowInteraction,
 	setActiveThemeName as sharedSetActiveThemeName,
 	setGlobalSelectionMouseUpHandler as sharedSetSelectionMouseUpHandler,
 	statusAnimationModel as sharedStatusAnimationModel,
 	themeColor as sharedThemeColor,
-} from "@ui";
+	useRowMouse as sharedUseRowMouse,
+	useTap as sharedUseTap,
+	useWheelScroll as sharedUseWheelScroll,
+	useRowMouse,
+	useTap,
+	useWheelScroll,
+} from "../../packages/devenv/cli/src/tui/ui";
 import { focusSoon as sharedFocusSoon } from "../../packages/ui/src/components/utils/focusSoon";
 import { calculateVisibleItems as sharedCalculateVisibleItems } from "../../packages/ui/src/components/utils/virtualScroll";
 
@@ -101,6 +121,18 @@ test("environment primitive entry points are the shared implementations", () => 
 		[DevenvLogView, SharedLogView],
 		[devenvGetMarkdownSyntaxStyle, sharedGetMarkdownSyntaxStyle],
 		[dashParseMarkdownBlocks, sharedParseMarkdownBlocks],
+		// The shared mouse layer is one implementation for every family: the same
+		// function objects, never a per-surface copy of the tap or wheel rule.
+		[classifyPointerGesture, sharedClassifyPointerGesture],
+		[resolveRowInteraction, sharedResolveRowInteraction],
+		[isPrimaryPointerButton, sharedIsPrimaryPointerButton],
+		[moveRowIndex, sharedMoveRowIndex],
+		[backdropDismiss, sharedBackdropDismiss],
+		[keybindChipRunnable, sharedKeybindChipRunnable],
+		[parseChipKey, sharedParseChipKey],
+		[useRowMouse, sharedUseRowMouse],
+		[useTap, sharedUseTap],
+		[useWheelScroll, sharedUseWheelScroll],
 	];
 	for (const [environment, shared] of identities)
 		expect(environment).toBe(shared);

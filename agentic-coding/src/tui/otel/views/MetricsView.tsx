@@ -1,8 +1,10 @@
 import {
 	HighlightedText,
+	type RowGestureState,
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
+	useRowMouse,
 } from "@ui";
 import { createMemo, For } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline.tsx";
@@ -21,6 +23,8 @@ export function MetricsView(props: {
 	onSelectIndex: (index: number) => void;
 	onOpen: (name: string, serviceName: string) => void;
 }) {
+	/** One holder per list: a row the store replaced still completes its press. */
+	const gesture: RowGestureState = {};
 	const streams = createMemo(() => props.store.getStreams());
 
 	return (
@@ -34,6 +38,20 @@ export function MetricsView(props: {
 						{(stream, index) => {
 							const selected = () => index() === props.selectedIndex();
 							const agg = props.store.aggregate(stream);
+							// Shared tap rule: a tap selects the stream, a tap on the selected
+							// one opens its detail (a drag or another button does neither).
+							const mouse = useRowMouse({
+								gesture,
+								// The stream list re-sorts under stable instances.
+								index,
+								selectedIndex: () => props.selectedIndex(),
+								activatable: () => true,
+								onSelect: (row: number) => props.onSelectIndex(row),
+								onActivate: (row: number) => {
+									props.onSelectIndex(row);
+									props.onOpen(stream.name, stream.serviceName);
+								},
+							});
 							return (
 								<box
 									height={3}
@@ -43,10 +61,7 @@ export function MetricsView(props: {
 									backgroundColor={
 										selected() ? uiColors.bgSurface1 : uiColors.bgMantle
 									}
-									onMouseUp={() => {
-										props.onSelectIndex(index());
-										props.onOpen(stream.name, stream.serviceName);
-									}}
+									{...mouse}
 								>
 									<box
 										width={1}

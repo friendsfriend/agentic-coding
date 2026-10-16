@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { RGBA, TextAttributes } from "@opentui/core";
+import { type MouseEvent, RGBA, TextAttributes } from "@opentui/core";
 import { Portal } from "@opentui/solid";
 import {
 	createContext,
@@ -22,6 +22,16 @@ import {
 	registerModalHelp,
 	withModalHelpKeybind,
 } from "./modalHelp.ts";
+import {
+	classifyPointerGesture,
+	isPrimaryPointerButton,
+	type PointerSample,
+} from "./mouse/clickSemantics.ts";
+import {
+	backdropDismiss,
+	type DialogDismissKind,
+} from "./mouse/dismissPolicy.ts";
+import { useKeybindChips } from "./mouse/useKeybindChips.ts";
 import { SearchHeader } from "./SearchHeader.tsx";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 
@@ -200,6 +210,20 @@ export interface GenericModalProps {
 	zIndex?: number;
 	/** Click handler for backdrop */
 	onBackdropClick?: () => void;
+	/**
+	 * Which dialog this is, for the shared backdrop policy (design D5). A dialog
+	 * that wants a backdrop tap to dismiss names an escape-parity kind; an
+	 * unnamed one is treated as `confirm` (explicit), so the backdrop does
+	 * nothing until the kind is named — a missing label can only ever be too
+	 * strict.
+	 */
+	dismissKind?: DialogDismissKind;
+	/** True while a dismissal would discard a draft or a running operation. */
+	dismissBlocked?: boolean | (() => boolean);
+	/** Chip activation for the modal footer (design D6). */
+	onHelpKeybindActivate?: (keybind: Keybind) => void;
+	/** Whether a footer chip is a pointer target at all. */
+	helpKeybindActivatable?: (keybind: Keybind) => boolean;
 	/** Dialog background alpha (0-1); feature wrappers pin their look */
 	dialogAlpha?: number;
 	/** Stop dialog clicks from bubbling to the backdrop close handler */
@@ -218,6 +242,7 @@ export interface GenericModalProps {
  */
 export function GenericModal(props: GenericModalProps) {
 	const dimensions = useTerminalDimensions();
+	const chips = useKeybindChips();
 	const width = () =>
 		Math.floor(
 			dimensions().width *
@@ -330,6 +355,58 @@ export function GenericModal(props: GenericModalProps) {
 	const footerHelpLineCount = () =>
 		helpEntryLines()?.length ?? helpStringLines()?.length ?? 1;
 	const helpLines = () => helpStringLines() ?? [""];
+	const dismissBlocked = () =>
+		typeof props.dismissBlocked === "function"
+			? props.dismissBlocked()
+			: props.dismissBlocked === true;
+	/**
+	 * The backdrop dismisses only where `Escape` is a non-destructive dismissal:
+	 * the dialog names its kind and the shared policy decides (design D5).
+	 */
+	const backdropClick = (): boolean => {
+		if (!props.onBackdropClick) return false;
+		// Fail-closed: a dialog that does not name an escape-parity kind keeps its
+		// own control, so a missing label can only ever be too strict (design D5).
+		const kind = props.dismissKind ?? "confirm";
+		if (!backdropDismiss(kind, { hasDraft: dismissBlocked() })) return false;
+		props.onBackdropClick();
+		return true;
+	};
+	/** A press or release that *landed on* the backdrop (not inside the dialog). */
+	const onBackdropArea = (event: MouseEvent) =>
+		event.target === undefined || event.target === event.currentTarget;
+	let backdropDown: PointerSample | undefined;
+	const backdropMouseDown = (event: MouseEvent) => {
+		backdropDown = undefined;
+		if (!isPrimaryPointerButton(event.button)) return;
+		if (!onBackdropArea(event)) return;
+		backdropDown = { x: event.x, y: event.y };
+	};
+	const backdropMouseUp = (event: MouseEvent) => {
+		const start = backdropDown;
+		backdropDown = undefined;
+		if (!isPrimaryPointerButton(event.button)) return;
+		if (!onBackdropArea(event)) return;
+		if (classifyPointerGesture(start, { x: event.x, y: event.y }) !== "tap")
+			return;
+		if (!backdropClick()) return;
+		event.stopPropagation?.();
+	};
+	const helpChips = () => {
+		if (props.onHelpKeybindActivate)
+			return {
+				onActivate: props.onHelpKeybindActivate,
+				...(props.helpKeybindActivatable
+					? { activatable: props.helpKeybindActivatable }
+					: {}),
+			};
+		// Every footer chip is a pointer target by default: it dispatches the key
+		// it advertises, so the keymap decides what is available (design D6).
+		return {
+			onActivate: chips.onActivate,
+			activatable: chips.activatable,
+		};
+	};
 	// Only an explicit searchMode (devenv live-search) shows the trailing
 	// input cursor; the legacy dash `search` prop maps to the display-only
 	// "/ <query>" header the removed dash SearchHeader rendered.
@@ -377,7 +454,8 @@ export function GenericModal(props: GenericModalProps) {
 					justifyContent="center"
 					alignItems="center"
 					backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-					onMouseUp={() => props.onBackdropClick?.()}
+					onMouseDown={backdropMouseDown}
+					onMouseUp={backdropMouseUp}
 				>
 					<box
 						backgroundColor={hexToRgba(
@@ -516,7 +594,7 @@ export function GenericModal(props: GenericModalProps) {
 							>
 								{helpEntryLines() ? (
 									<For each={helpEntryLines() ?? []}>
-										{(line) => <HelpText entries={line} />}
+										{(line) => <HelpText entries={line} {...helpChips()} />}
 									</For>
 								) : (
 									<For each={helpLines()}>

@@ -810,6 +810,15 @@ test("the title-row glyph pins the sidebar open, the collapsed glyph expands it"
 		expect(t.captureCharFrame()).toContain("wf-active");
 		expect(persistedSidebarMode()).toBe("permanent");
 
+		// A right click and a drag on the glyph are not taps: the mode is
+		// unchanged (the shared rule gates every click-only control).
+		await t.mockMouse.click(32, 1, 2);
+		await advance(t, 4, 60);
+		expect(persistedSidebarMode()).toBe("permanent");
+		await t.mockMouse.drag(32, 1, 33, 2);
+		await advance(t, 4, 60);
+		expect(persistedSidebarMode()).toBe("permanent");
+
 		// Expanded title row: clicking the glyph returns it to auto-collapse.
 		await t.mockMouse.click(32, 1);
 		await advance(t, 4, 60);

@@ -4,6 +4,8 @@ import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
+import { useKeyDispatch } from "../components/mouse/useKeybindChips.ts";
+import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
 import type { ScriptParameter } from "../types";
 
@@ -18,9 +20,19 @@ export interface TaskArgsModalProps {
 	historyIndex: number;
 	historyTotal: number;
 	error: string | null;
+	/** Pointer: a tap selects a parameter row (the keyboard's `j`/`k`). */
+	onSelectParameter?: (index: number) => void;
+	/** Pointer: a tap selects a value row. */
+	onSelectValue?: (index: number) => void;
+	/**
+	 * Pointer: a tap in a pane focuses it, so `j`/`k` afterwards moves the list the
+	 * developer clicked (the dialog's keys branch on the focused pane).
+	 */
+	onFocusPane?: (pane: "parameter" | "value") => void;
 }
 
 export function TaskArgsModal(props: TaskArgsModalProps) {
+	const dispatch = useKeyDispatch();
 	const selectedParameterIndex = () =>
 		Math.max(
 			0,
@@ -111,8 +123,24 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 							{(param, index) => {
 								const selected = () => index() === selectedParameterIndex();
 								const value = () => valueFor(param);
+								const mouse = useRowMouse({
+									index,
+									selectedIndex: () => selectedParameterIndex(),
+									activatable: () => props.onSelectParameter !== undefined,
+									onSelect: (row) => {
+										props.onFocusPane?.("parameter");
+										props.onSelectParameter?.(row);
+									},
+									// A tap on the selected row runs the dialog's own `Enter`
+									// (focus the value pane / run the task), never a no-op.
+									onActivate: (row) => {
+										props.onSelectParameter?.(row);
+										dispatch("Enter");
+									},
+								});
 								return (
 									<box
+										{...mouse}
 										backgroundColor={
 											selected() ? selectionBg("parameter") : undefined
 										}
@@ -155,6 +183,19 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 						<box style={{ height: 1 }} />
 						<For each={valueOptionsFor(selectedParameter())}>
 							{(option, index) => {
+								const valueMouse = useRowMouse({
+									index,
+									selectedIndex: () => props.selectedValueIndex,
+									activatable: () => props.onSelectValue !== undefined,
+									onSelect: (row) => {
+										props.onFocusPane?.("value");
+										props.onSelectValue?.(row);
+									},
+									onActivate: (row) => {
+										props.onSelectValue?.(row);
+										dispatch("Enter");
+									},
+								});
 								const param = () => selectedParameter();
 								const selected = () => index() === props.selectedValueIndex;
 								const active = () => {
@@ -171,6 +212,7 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 								};
 								return (
 									<box
+										{...valueMouse}
 										backgroundColor={
 											selected() ? selectionBg("value") : undefined
 										}

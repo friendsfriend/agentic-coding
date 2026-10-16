@@ -2,7 +2,6 @@
 // materialized columns, not a json_extract over every span, and rows ingested
 // before those columns existed are backfilled once.
 
-import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -57,11 +57,15 @@ export function DestinationPage(props: DestinationPageProps) {
 					availableLines={hostBodyLines(dimensions().height)}
 					estimatedItemHeight={itemHeight}
 					showScrollIndicator={false}
-					renderItem={(entry, isSelected, index) => (
+					onSelect={props.onSelectIndex}
+					onActivate={(index) => {
+						const entry = props.entries[index];
+						if (entry) props.onOpen(entry);
+					}}
+					renderItem={(entry, isSelected) => (
 						<Card
 							height={itemHeight}
 							selected={isSelected()}
-							onMouseUp={() => props.onSelectIndex(index)}
 							title={entry.label}
 							cells={
 								entry.description

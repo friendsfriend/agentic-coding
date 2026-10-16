@@ -12,6 +12,7 @@ import {
 	statusAnimationIntentForText,
 	statusAnimationModel,
 	uiColors,
+	useTap,
 } from "@ui";
 import {
 	createEffect,
@@ -165,6 +166,7 @@ export function ActionRunModal(props: {
 			helpText={helpText()}
 			widthPercent={0.9}
 			heightPercent={0.9}
+			dismissKind="action-run"
 			onBackdropClick={props.onClose}
 		>
 			<box
@@ -248,10 +250,10 @@ export function ActionRunModal(props: {
 										return (
 											<box
 												id={`action-node-${node.key}`}
-												onMouseUp={() => {
+												{...useTap(() => {
 													props.store.focusTreeNode(node);
 													props.store.setFocusedPanel(0);
-												}}
+												})}
 												backgroundColor={
 													activeSelection() ? uiColors.bgSurface0 : undefined
 												}
@@ -308,7 +310,7 @@ export function ActionRunModal(props: {
 						style={{ width: "62%", height: "100%", flexDirection: "column" }}
 					>
 						<box
-							onMouseUp={() => props.store.setFocusedPanel(1)}
+							{...useTap(() => props.store.setFocusedPanel(1))}
 							style={{
 								width: "100%",
 								height: "100%",

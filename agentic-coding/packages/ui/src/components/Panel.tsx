@@ -5,6 +5,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
+import { useRowMouse } from "./mouse/useRowMouse.ts";
 
 export interface PanelProps {
 	title: string;
@@ -16,11 +17,27 @@ export interface PanelProps {
 	/** Optional element right-aligned in the title row (a control glyph); the
 	 * caller owns its behaviour and colour. */
 	accessory?: JSX.Element;
+	/** A tap anywhere in the panel takes focus, as `J/K/H/L` would give it. */
+	onFocusRequest?: () => void;
+	/** Gate for a panel that is mounted but hidden behind another page. */
+	focusable?: boolean | (() => boolean);
 }
 
 export function Panel(props: PanelProps) {
+	const focusable = () =>
+		typeof props.focusable === "function"
+			? props.focusable()
+			: props.focusable !== false;
+	// A panel region has no "selection": any tap in it is a focus request, so the
+	// row rule's select branch is the whole gesture and a drag stays inert.
+	const mouse = useRowMouse({
+		onSelect: () => {
+			if (focusable()) props.onFocusRequest?.();
+		},
+	});
 	return (
 		<box
+			{...(props.onFocusRequest ? mouse : {})}
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", overflow: "hidden", ...props.style }}
 		>

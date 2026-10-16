@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { KeyEvent } from "@opentui/core";
-import { GenericModal, SelectableList, uiColors } from "@ui";
+import { GenericModal, SelectableList, uiColors, useModalBackdrop } from "@ui";
 import { createSignal, onCleanup, onMount } from "solid-js";
 
 export interface PresetChoice {
@@ -40,11 +40,24 @@ export function PresetSwitcherModal(props: {
 		}
 		return true;
 	};
+	// Pointer parity: the same two steps the key takes — select, then an explicit
+	// activation on the selected row switches the preset. The backdrop tap is the
+	// `Esc` cancel, which is a non-destructive dismissal here.
+	const backdrop = useModalBackdrop({
+		kind: "settings-picker",
+		dismiss: () => props.onCancel(),
+	});
+	const activateRow = (index: number) => {
+		setSelectedIndex(index);
+		const preset = items()[index];
+		if (preset) props.onSelect(preset.value);
+	};
 	onMount(() => props.onKeyReady(handler));
 	onCleanup(() => props.onKeyReady(() => true));
 
 	return (
 		<GenericModal
+			{...backdrop}
 			title="Switch agent preset"
 			fieldLabel={`Current: ${props.selected ?? "Config defaults"}`}
 			helpSections={false}
@@ -58,6 +71,8 @@ export function PresetSwitcherModal(props: {
 				<SelectableList
 					items={items()}
 					selectedIndex={selectedIndex()}
+					onSelect={setSelectedIndex}
+					onActivate={activateRow}
 					renderItem={(item, active) => (
 						<text fg={active ? uiColors.primary : uiColors.textSecondary}>
 							{item.value === props.selected

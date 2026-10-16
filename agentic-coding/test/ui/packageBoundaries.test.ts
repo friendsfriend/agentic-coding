@@ -98,3 +98,53 @@ describe("packages/ui has no application dependency", () => {
 		);
 	});
 });
+
+/**
+ * The mouse layer is one implementation for every family
+ * (`tui-shared-primitives`). The environment package renders `@ui` directly; a
+ * forked `useRowMouse`/`useTap`/row handler there would reintroduce the
+ * divergence the shared layer removed, so the source is asserted, not just the
+ * barrel's `toBe` identity in `test/dash/devenvUiPrimitives.test.ts`.
+ */
+describe("the environment package carries no forked pointer layer", () => {
+	const files = filesUnder(join("packages/devenv", "cli", "src"));
+
+	test("no local pointer-layer declaration exists", () => {
+		const offenders: string[] = [];
+		for (const file of files) {
+			const source = readFileSync(file, "utf8");
+			for (const declaration of [
+				/\bfunction\s+useRowMouse\b/,
+				/\bconst\s+useRowMouse\s*=/,
+				/\bfunction\s+useTap\b/,
+				/\bconst\s+useTap\s*=/,
+				/\bclassifyPointerGesture\b\s*\(/,
+				/\bbackdropDismiss\b\s*\(/,
+			])
+				if (declaration.test(source)) offenders.push(relative(".", file));
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("pointer primitives are imported from the shared package", () => {
+		const offenders: string[] = [];
+		for (const file of files) {
+			for (const spec of importsOf(readFileSync(file, "utf8"))) {
+				if (
+					!/(useRowMouse|useTap|useWheelScroll|clickSemantics|dismissPolicy)/.test(
+						spec,
+					)
+				)
+					continue;
+				if (
+					spec === "@ui" ||
+					spec.endsWith("/tui/ui.ts") ||
+					spec.endsWith("/tui/ui")
+				)
+					continue;
+				offenders.push(`${relative(".", file)} -> ${spec}`);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+});

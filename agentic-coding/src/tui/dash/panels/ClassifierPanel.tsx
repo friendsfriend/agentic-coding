@@ -21,6 +21,12 @@ export interface ClassifierPanelProps {
 	readonly active: boolean;
 	readonly selectedIndex: number;
 	readonly visibleRows?: number;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
+	readonly onSelectIndex?: (index: number) => void;
+	/** Pointer: a tap on the selected row activates it (the keyboard's `Enter`). */
+	readonly onActivateRow?: (index: number) => void;
+	/** Pointer: a tap anywhere in the panel focuses it (`J/K/H/L`). */
+	readonly onFocusRequest?: () => void;
 }
 
 export function ClassifierPanel(props: ClassifierPanelProps) {
@@ -34,6 +40,9 @@ export function ClassifierPanel(props: ClassifierPanelProps) {
 			title="Classifications"
 			accent={uiColors.accent}
 			active={props.active}
+			{...(props.onFocusRequest
+				? { onFocusRequest: props.onFocusRequest }
+				: {})}
 			style={{ width: "100%", height: rows() + 1, flexShrink: 0 }}
 		>
 			<Show
@@ -48,6 +57,8 @@ export function ClassifierPanel(props: ClassifierPanelProps) {
 					items={items()}
 					availableLines={rows()}
 					selectedIndex={props.active ? props.selectedIndex : -1}
+					{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+					{...(props.onActivateRow ? { onActivate: props.onActivateRow } : {})}
 					renderItem={(row, selected) => (
 						<box height={1}>
 							<text

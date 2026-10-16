@@ -152,6 +152,7 @@ export function TestDetailModal(props: TestDetailModalProps) {
 			heightPercent={0.9}
 			customHeader={customHeader()}
 			customFooter={customFooter()}
+			dismissKind="artifact-preview"
 			onBackdropClick={props.onClose}
 		>
 			<box

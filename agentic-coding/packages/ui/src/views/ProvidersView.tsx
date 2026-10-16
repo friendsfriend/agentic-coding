@@ -4,7 +4,8 @@ import { TextAttributes } from "@opentui/core";
 import { For, Show } from "solid-js";
 import { CenteredState } from "../components/CenteredState";
 import { GenericModal } from "../components/GenericModal";
-import { formatHelpText } from "../components/HelpText.tsx";
+import { useKeyDispatch } from "../components/mouse/useKeybindChips.ts";
+import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
 import type { Provider } from "../types";
 
@@ -14,9 +15,12 @@ interface ProvidersViewProps {
 	error?: string;
 	onClose: () => void;
 	selectedProviderIndex?: number;
+	/** Pointer: a tap selects a provider row (the keyboard's `j`/`k`). */
+	onSelectIndex?: (index: number) => void;
 }
 
 export function ProvidersView(props: ProvidersViewProps) {
+	const dispatch = useKeyDispatch();
 	const renderSecret = (provider: Provider): string => {
 		if (provider.invalid) return "Blocked";
 		return provider.has_token ? "••••••••" : "Not configured";
@@ -30,15 +34,16 @@ export function ProvidersView(props: ProvidersViewProps) {
 	return (
 		<GenericModal
 			title="Providers"
-			helpText={formatHelpText([
+			help={[
 				{ key: "j/k", action: "Navigate" },
 				{ key: "a", action: "Add" },
 				{ key: "e", action: "Edit" },
 				{ key: "d", action: "Delete" },
 				{ key: "Esc", action: "Close" },
-			])}
+			]}
 			widthPercent={0.65}
 			heightPercent={0.55}
+			dismissKind="list-picker"
 			onBackdropClick={props.onClose}
 		>
 			<Show when={props.loading}>
@@ -88,8 +93,21 @@ export function ProvidersView(props: ProvidersViewProps) {
 								(props.selectedProviderIndex ?? -1) === idx();
 							const typeIcon = provider.type === "github" ? "" : "";
 
+							const mouse = useRowMouse({
+								index: idx(),
+								selectedIndex: () => props.selectedProviderIndex ?? -1,
+								// A tap on the selected row runs the dialog's own `e` (edit),
+								// so the key handler stays the one edit path.
+								activatable: () => true,
+								onSelect: (index: number) => props.onSelectIndex?.(index),
+								onActivate: (index) => {
+									props.onSelectIndex?.(index);
+									dispatch("e");
+								},
+							});
 							return (
 								<box
+									{...mouse}
 									style={{
 										width: "100%",
 										flexDirection: "row",

@@ -13,6 +13,7 @@ import {
 	ListViewModal,
 	ProgressModal,
 	uiColors,
+	useKeyDispatch,
 } from "@ui";
 import {
 	createEffect,
@@ -544,6 +545,9 @@ export function NewWorkflowModal(props: {
 	};
 
 	/** The entries of the current step. */
+	// Pointer parity: a tap selects an option; a second tap on the selected
+	// option dispatches the wizard's own plain `Enter` (advance/create).
+	const dispatch = useKeyDispatch();
 	const entries = (): StepEntry[] =>
 		field() === "repo" ? repoEntries() : choices();
 
@@ -841,6 +845,7 @@ export function NewWorkflowModal(props: {
 							when={listStep()}
 							fallback={
 								<GenericModal
+									dismissKind="new-workflow"
 									title="New workflow"
 									customHeader={
 										pathTarget() ? (
@@ -923,6 +928,17 @@ export function NewWorkflowModal(props: {
 							<ListViewModal
 								sizing="cap"
 								title="New workflow"
+								dismissKind="new-workflow"
+								onSelect={(index) => {
+									const entry = entries()[index];
+									if (entry) setCursor(entryKey(entry));
+								}}
+								onActivate={(index) => {
+									const entry = entries()[index];
+									if (entry) setCursor(entryKey(entry));
+									// The wizard's own plain Enter stays the only activation.
+									dispatch("Enter");
+								}}
 								fieldLabel={labelFor(field())}
 								summary={summary()}
 								items={entries()}
@@ -1096,6 +1112,7 @@ export function NewWorkflowModal(props: {
 					}
 				>
 					<GenericModal
+						dismissKind="new-workflow"
 						title="Confirm workflow"
 						summary={summary()}
 						summaryOnly

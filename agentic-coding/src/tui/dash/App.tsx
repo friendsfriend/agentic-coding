@@ -10,6 +10,7 @@ import {
 	findModal,
 	getActiveThemeName,
 	handleModalHelpKey,
+	helpModalRowCount,
 	Layout,
 	modalHelpOpen,
 	registerFocusRestorer,
@@ -18,6 +19,7 @@ import {
 	showErrorModal,
 	themeNames,
 	uiColors,
+	useKeyDispatch,
 	useTerminalDimensions,
 } from "@ui";
 import {
@@ -109,6 +111,7 @@ import { workflowGraphRows } from "./modals/WorkflowGraphModal.tsx";
 import { notify } from "./notifications.ts";
 import { openFindingInEditor } from "./open-finding.ts";
 import { CLASSIFIER_PANEL, EVIDENCE_PANEL } from "./panel-grid.ts";
+import { panelPointerHandlers } from "./panel-pointer.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
 import { ClassifierPanel } from "./panels/ClassifierPanel.tsx";
@@ -280,6 +283,19 @@ export function App(props: {
 	const setSelectedDecision = panels.setDecision;
 	const selectedEvidence = panels.evidence;
 	const setSelectedEvidence = panels.setEvidence;
+	// Pointer parity (`tui-mouse-interaction`): a tap focuses the panel the way
+	// `J/K/H/L` does, and activating a row dispatches the key the panel's own
+	// `Enter` binding maps to, so the keymap keeps deciding what is available and
+	// no panel needs a second activation table. The grid is mounted behind the
+	// agent-session page, so a hidden panel never takes a focus request.
+	const dispatchKey = useKeyDispatch();
+	const { focusPanelFromPointer, activatePanelRow } = panelPointerHandlers({
+		setActivePanel,
+		dispatchKey,
+		// Read lazily: the agent-session page's signal is declared further down.
+		agentSessionOpen: () => agentSessionOpen(),
+	});
+
 	const artifacts = panels.artifacts;
 	const setArtifacts = panels.setArtifacts;
 	let artifactGeneration = 0;
@@ -1812,10 +1828,8 @@ export function App(props: {
 	const helpMaxOffset = () =>
 		Math.max(
 			0,
-			keybindCatalog().reduce(
-				(count, section) => count + section.keybinds.length + 1,
-				0,
-			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
+			helpModalRowCount(keybindCatalog()) -
+				Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
 		);
 	const verdictLines = createMemo(() =>
 		Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
@@ -3419,6 +3433,7 @@ export function App(props: {
 									<ChangePanel
 										data={data()}
 										active={activePanel() === 0}
+										onFocusRequest={() => focusPanelFromPointer(0)}
 										onScrollBoxReady={(box) => {
 											changeScroll = box as ScrollBoxRenderable;
 										}}
@@ -3429,6 +3444,9 @@ export function App(props: {
 											active={activePanel() === 6}
 											selectedIndex={selectedArtifact()}
 											title={artifactSurfaceLabel(data().state.definition?.id)}
+											onSelectIndex={setSelectedArtifact}
+											onActivateRow={activatePanelRow(setSelectedArtifact)}
+											onFocusRequest={() => focusPanelFromPointer(6)}
 										/>
 									</Show>
 									{/* Always rendered, empty state included: a newly started
@@ -3437,6 +3455,11 @@ export function App(props: {
 										entries={classifications()}
 										active={activePanel() === CLASSIFIER_PANEL}
 										selectedIndex={selectedDecision()}
+										onSelectIndex={setSelectedDecision}
+										onActivateRow={activatePanelRow(setSelectedDecision)}
+										onFocusRequest={() =>
+											focusPanelFromPointer(CLASSIFIER_PANEL)
+										}
 									/>
 								</box>
 								<AgentsPanel
@@ -3445,6 +3468,9 @@ export function App(props: {
 									selectedIndex={selectedAgent()}
 									narrow={dimensions().width < 90}
 									activity={agentActivity.activity}
+									onSelectIndex={setSelectedAgent}
+									onActivateRow={activatePanelRow(setSelectedAgent)}
+									onFocusRequest={() => focusPanelFromPointer(1)}
 								/>
 							</box>
 							{/* Read-only, and always rendered with its empty state: the
@@ -3460,6 +3486,10 @@ export function App(props: {
 								height={evidencePanelHeight()}
 								state={evidenceState()}
 								error={evidenceError()}
+								onSelectIndex={setSelectedEvidence}
+								onActivateRow={activatePanelRow(setSelectedEvidence)}
+								wheelMovesCursor={false}
+								onFocusRequest={() => focusPanelFromPointer(EVIDENCE_PANEL)}
 							/>
 						</box>
 						<Show when={agentSessionOpen() && agentSession()}>
@@ -3588,6 +3618,7 @@ export function App(props: {
 						? {
 								reasons: planRejectionReasons,
 								selected: planRejectionSelection(),
+								onSelectIndex: setPlanRejectionSelection,
 							}
 						: undefined
 				}

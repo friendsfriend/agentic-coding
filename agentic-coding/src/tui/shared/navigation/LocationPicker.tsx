@@ -36,6 +36,7 @@ export function LocationPicker(props: LocationPickerProps) {
 			heightPercent={0.6}
 			searchQuery={props.query}
 			searchResultCount={matches().length}
+			dismissKind="location-picker"
 			onBackdropClick={props.onClose}
 			stopDialogClick
 		>
@@ -53,6 +54,9 @@ export function LocationPicker(props: LocationPickerProps) {
 						selectedIndex={props.selectedIndex}
 						estimatedItemHeight={2}
 						showScrollIndicator={false}
+						// The wheel scrolls the picker under the pointer (the list has no
+						// scroll box of its own, so the cursor moves as `j`/`k` does).
+						onSelect={props.onSelectIndex}
 						renderItem={(entry, isSelected, index) => (
 							<Card
 								height={2}

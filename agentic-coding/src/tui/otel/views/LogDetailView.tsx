@@ -45,12 +45,7 @@ export function LogDetailView(props: {
 
 			{/* Trace/span link */}
 			{log()?.traceId && (
-				<box
-					height={1}
-					flexDirection="row"
-					paddingLeft={1}
-					onMouseUp={() => {}}
-				>
+				<box height={1} flexDirection="row" paddingLeft={1}>
 					<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
 						Trace:{" "}
 					</text>

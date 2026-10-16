@@ -9,11 +9,14 @@ export interface ThemePickerViewProps {
 	filterQuery?: string;
 	filterActive?: boolean;
 	themes?: string[];
+	/** Pointer: a tap selects a theme row (the keyboard's `j`/`k`). */
+	onSelectIndex?: (index: number) => void;
 }
 
 export function ThemePickerView(props: ThemePickerViewProps) {
 	return (
 		<ThemePicker
+			{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
 			selected={props.selectedIndex}
 			active={props.activeTheme}
 			themes={props.themes}

@@ -24,6 +24,7 @@ export function FrontmatterModal(props: FrontmatterModalProps) {
 			helpText={formatHelpText([{ key: "Esc", action: "Close" }])}
 			widthPercent={0.7}
 			heightPercent={0.7}
+			dismissKind="artifact-preview"
 			onBackdropClick={props.onClose}
 		>
 			<ScrollableContent axes={["y"]}>

@@ -4,6 +4,8 @@ import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
+import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
+import { useRowMouse } from "./mouse/useRowMouse.ts";
 
 export type SortDirection = "asc" | "desc" | "none";
 
@@ -21,6 +23,30 @@ export interface SortModalProps {
 	directionLabels?: { asc: string; desc: string; none: string };
 	/** Skip the direction marker entirely for parameters that ignore it. */
 	hideDirection?: (parameter: SortParameterOption) => boolean;
+	/** Pointer: a tap selects a row; a tap on the selected row applies it. */
+	onSelectRow?: (index: number) => void;
+	/** The stroke a tap on the selected row runs. Default `"Enter"`. */
+	activateKey?: string;
+}
+
+/** The shared tap rule for one sort row: select, then activate the selected. */
+function sortRowMouse(
+	props: SortModalProps,
+	index: () => number,
+	selectedIndex: () => number,
+) {
+	const dispatch = useKeyDispatch();
+	return useRowMouse({
+		// The row can move under a stable instance: resolve it per event.
+		index,
+		selectedIndex,
+		activatable: () => props.onSelectRow !== undefined,
+		onSelect: (row) => props.onSelectRow?.(row),
+		onActivate: (row) => {
+			props.onSelectRow?.(row);
+			dispatch(props.activateKey ?? "Enter");
+		},
+	});
 }
 
 export function SortModal(props: SortModalProps) {
@@ -81,6 +107,7 @@ export function SortModal(props: SortModalProps) {
 						const selected = () => index() === props.selectedIndex;
 						return (
 							<box
+								{...sortRowMouse(props, index, () => props.selectedIndex)}
 								backgroundColor={selected() ? uiColors.bgSurface2 : undefined}
 								style={{
 									height: 1,

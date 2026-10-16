@@ -21,7 +21,10 @@ export interface CardProps {
 	selected?: boolean | (() => boolean);
 	/** Block selector colour while selected. Defaults to `highlight`. */
 	accent?: string;
+	/** A tap on the card (`select`); the legacy "card was clicked" handler. */
 	onMouseUp?: () => void;
+	/** The card's activation (`Enter`); a tap on the selected card runs it. */
+	onActivate?: () => void;
 	/** Fixed height in rows; when omitted the card is as tall as its content. */
 	height?: number;
 	style?: Record<string, unknown>;
@@ -51,6 +54,7 @@ export function Card(props: CardProps) {
 			selected={selected()}
 			indicatorColor={props.accent}
 			onMouseUp={props.onMouseUp}
+			onActivate={props.onActivate}
 			height={props.height}
 		>
 			<box

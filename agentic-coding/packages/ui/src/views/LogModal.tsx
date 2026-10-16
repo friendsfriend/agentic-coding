@@ -206,6 +206,7 @@ export function LogModal(props: LogModalProps) {
 				widthPercent={0.92}
 				heightPercent={(dimensions().height - 4) / dimensions().height}
 				customHeader={customHeader()}
+				dismissKind="artifact-preview"
 				onBackdropClick={props.onClose}
 			>
 				<ScrollableContent

@@ -52,6 +52,10 @@ export function FilterModal(props: {
 	spanTypeIndex: () => number;
 	workspaces: () => Workspace[];
 	spanTypes: () => string[];
+	/** Pointer: a tap selects a criterion row. */
+	onSelectParameter?: (index: number) => void;
+	/** Pointer: a tap selects a value row; a tap on the selected row applies it. */
+	onSelectValue?: (index: number) => void;
 }) {
 	const workspaceValues = () => [
 		{ changeId: "all", spanCount: 0 },
@@ -110,6 +114,10 @@ export function FilterModal(props: {
 				spanTypeParameter(),
 			]}
 			activeFilters={{}}
+			{...(props.onSelectParameter
+				? { onSelectParameter: props.onSelectParameter }
+				: {})}
+			{...(props.onSelectValue ? { onSelectValue: props.onSelectValue } : {})}
 		/>
 	);
 }
@@ -117,6 +125,8 @@ export function FilterModal(props: {
 export function SortModal(props: {
 	selected: () => number;
 	criteria: () => SortCriterion[];
+	/** Pointer: a tap selects a row; a tap on the selected row applies it. */
+	onSelectRow?: (index: number) => void;
 }) {
 	const parameters = (): SortParameterOption[] =>
 		props.criteria().map((criterion) => ({
@@ -131,6 +141,7 @@ export function SortModal(props: {
 			selectedIndex={props.selected()}
 			parameters={parameters()}
 			directionLabels={{ asc: "↑ ASC", desc: "↓ DESC", none: "— NONE" }}
+			{...(props.onSelectRow ? { onSelectRow: props.onSelectRow } : {})}
 		/>
 	);
 }

@@ -2,6 +2,7 @@
 import { TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import { uiColors } from "../theme/colors";
+import { useTap } from "./mouse/useTap.ts";
 
 export type SharedNotification = {
 	message: string;
@@ -15,7 +16,16 @@ export type SharedNotification = {
  */
 export function NotificationOverlay(props: {
 	active: () => SharedNotification | undefined;
+	/**
+	 * Pointer: a tap dismisses the toast through the surface's own dismiss path
+	 * (the same clear its auto-expiry runs, design D2/`tui-mouse-interaction`).
+	 * A toast that carries a required developer action is not rendered here.
+	 */
+	onDismiss?: () => void;
 }) {
+	// A tap dismisses: the shared rule drops drags and non-primary buttons, so a
+	// text selection over the toast never dismisses it.
+	const tap = useTap(() => props.onDismiss?.());
 	return (
 		<Show when={props.active()} keyed>
 			{(item) => {
@@ -44,6 +54,7 @@ export function NotificationOverlay(props: {
 						paddingLeft={2}
 						paddingRight={2}
 						backgroundColor={bg}
+						{...tap}
 					>
 						<text fg={uiColors.bgBase} attributes={TextAttributes.BOLD}>
 							{icon}

@@ -2,6 +2,7 @@
 
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
+import { useTap } from "../components/mouse/useTap.ts";
 import { uiColors } from "../theme/colors";
 
 export interface ModalTabItem {
@@ -27,7 +28,7 @@ export function ModalTabs(props: ModalTabsProps): JSX.Element {
 					return (
 						<box
 							style={{ flexDirection: "row", marginRight: 2 }}
-							onMouseUp={() => props.onChange?.(tab.id)}
+							{...useTap(() => props.onChange?.(tab.id))}
 						>
 							<text
 								fg={active() ? uiColors.primary : uiColors.textMuted}

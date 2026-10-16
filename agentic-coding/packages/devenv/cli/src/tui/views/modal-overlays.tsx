@@ -64,6 +64,7 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 					providers={providerStore.providers()}
 					loading={providerStore.providersLoading()}
 					error={providerStore.providersError()}
+					onSelectIndex={providerStore.setSelectedProviderIndex}
 					selectedProviderIndex={providerStore.selectedProviderIndex()}
 					onClose={() => {
 						appStore.setViewMode("table");
@@ -87,6 +88,7 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 			<Show when={uiStore.showThemePicker()}>
 				<ThemePickerView
 					selectedIndex={uiStore.themePickerSelectedIndex()}
+					onSelectIndex={uiStore.setThemePickerSelectedIndex}
 					activeTheme={uiStore.activeThemeName()}
 					filterQuery={uiStore.themePickerFilterQuery()}
 					filterActive={uiStore.themePickerFilterActive()}
@@ -116,6 +118,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<FilterModal
 					parameters={appStore.tableFilterParameters()}
 					selectedParameterIndex={appStore.tableFilterParameterIndex()}
+					onSelectParameter={appStore.setTableFilterParameterIndex}
+					activateKey="Space"
+					onSelectValue={appStore.setTableFilterValueIndex}
 					selectedValueIndex={appStore.tableFilterValueIndex()}
 					focusedPane={appStore.tableFilterFocusedPane()}
 					activeFilters={appStore.tableFilters()}
@@ -126,6 +131,8 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<SortModal
 					parameters={appStore.tableSortRules()}
 					selectedIndex={appStore.tableSortSelectedIndex()}
+					activateKey="Space"
+					onSelectRow={appStore.setTableSortSelectedIndex}
 				/>
 			</Show>
 
@@ -192,6 +199,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<FilterModal
 					parameters={issueStore.issueListFilterParameters()}
 					selectedParameterIndex={issueStore.issueListFilterParameterIndex()}
+					onSelectParameter={issueStore.setIssueListFilterParameterIndex}
+					activateKey="Space"
+					onSelectValue={issueStore.setIssueListFilterValueIndex}
 					selectedValueIndex={issueStore.issueListFilterValueIndex()}
 					focusedPane={issueStore.issueListFilterFocusedPane()}
 					activeFilters={issueStore.issueListFilters()}
@@ -202,6 +212,8 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<SortModal
 					parameters={issueStore.issueListSortRules()}
 					selectedIndex={issueStore.issueListSortSelectedIndex()}
+					activateKey="Space"
+					onSelectRow={issueStore.setIssueListSortSelectedIndex}
 				/>
 			</Show>
 
@@ -209,6 +221,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<FilterModal
 					parameters={changeRequestStore.crListFilterParameters()}
 					selectedParameterIndex={changeRequestStore.crListFilterParameterIndex()}
+					onSelectParameter={changeRequestStore.setCrListFilterParameterIndex}
+					activateKey="Space"
+					onSelectValue={changeRequestStore.setCrListFilterValueIndex}
 					selectedValueIndex={changeRequestStore.crListFilterValueIndex()}
 					focusedPane={changeRequestStore.crListFilterFocusedPane()}
 					activeFilters={changeRequestStore.crListFilters()}
@@ -219,6 +234,8 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<SortModal
 					parameters={changeRequestStore.crListSortRules()}
 					selectedIndex={changeRequestStore.crListSortSelectedIndex()}
+					activateKey="Space"
+					onSelectRow={changeRequestStore.setCrListSortSelectedIndex}
 				/>
 			</Show>
 
@@ -226,6 +243,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<FilterModal
 					parameters={changeRequestStore.listFilterParameters()}
 					selectedParameterIndex={changeRequestStore.listFilterParameterIndex()}
+					onSelectParameter={changeRequestStore.setListFilterParameterIndex}
+					activateKey="Space"
+					onSelectValue={changeRequestStore.setListFilterValueIndex}
 					selectedValueIndex={changeRequestStore.listFilterValueIndex()}
 					focusedPane={changeRequestStore.listFilterFocusedPane()}
 					activeFilters={changeRequestStore.currentListFilters()}
@@ -236,6 +256,8 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<SortModal
 					parameters={changeRequestStore.currentListSortRules()}
 					selectedIndex={changeRequestStore.listSortSelectedIndex()}
+					activateKey="Space"
+					onSelectRow={changeRequestStore.setListSortSelectedIndex}
 				/>
 			</Show>
 
@@ -243,6 +265,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<FilterModal
 					parameters={issueStore.referenceFilterParameters()}
 					selectedParameterIndex={issueStore.referenceFilterParameterIndex()}
+					onSelectParameter={issueStore.setReferenceFilterParameterIndex}
+					activateKey="Space"
+					onSelectValue={issueStore.setReferenceFilterValueIndex}
 					selectedValueIndex={issueStore.referenceFilterValueIndex()}
 					focusedPane={issueStore.referenceFilterFocusedPane()}
 					activeFilters={issueStore.referenceFilters()}
@@ -253,6 +278,8 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 				<SortModal
 					parameters={issueStore.referenceSortRules()}
 					selectedIndex={issueStore.referenceSortSelectedIndex()}
+					activateKey="Space"
+					onSelectRow={issueStore.setReferenceSortSelectedIndex}
 				/>
 			</Show>
 
@@ -522,6 +549,9 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 					historyIndex={uiStore.taskArgsHistoryCursor()}
 					historyTotal={uiStore.taskArgsHistoryForCurrent().length}
 					error={uiStore.taskArgsError()}
+					onSelectParameter={uiStore.setTaskArgsSelectedIndex}
+					onSelectValue={uiStore.setTaskArgsSelectedValueIndex}
+					onFocusPane={uiStore.setTaskArgsFocusedPane}
 				/>
 			</Show>
 

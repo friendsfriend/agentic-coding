@@ -17,6 +17,8 @@ import {
 	ListViewModal,
 	ThemePickerModal,
 	uiColors,
+	useKeyDispatch,
+	useModalBackdrop,
 	VerdictModal,
 } from "@ui";
 import { Show } from "solid-js";
@@ -69,6 +71,8 @@ export interface FindingsOverlay {
 export interface PlanRejectionOverlay {
 	readonly reasons: readonly string[];
 	readonly selected: number;
+	/** Pointer: a tap selects a reason (the keyboard's `j`/`k`). */
+	readonly onSelectIndex: (index: number) => void;
 }
 
 export interface CostOverlay {
@@ -107,8 +111,14 @@ export interface OverlaysState {
 	readonly actionReason: () => string;
 	readonly userActionSelection: () => number;
 	readonly helpOffset: () => number;
+	/** Pointer: the help modal's wheel moves this offset. */
+	readonly setHelpOffset: (offset: number) => void;
 	readonly workflowGraphOffset: () => number;
+	/** Pointer: the graph dialog's wheel moves this offset. */
+	readonly setWorkflowGraphOffset: (offset: number) => void;
 	readonly themeIndex: () => number;
+	/** Pointer: a tap on a theme row selects it. */
+	readonly setThemeIndex: (index: number) => void;
 	readonly themeQuery: () => string;
 	readonly themeFiltering: () => boolean;
 	readonly selectedFinding: () => number;
@@ -117,6 +127,15 @@ export interface OverlaysState {
 	readonly costOffset: () => number;
 	readonly debugRequestsSelection: () => number;
 	readonly debugRequestsOffset: () => number;
+	/** Pointer: the debug-request report pane's wheel moves this offset. */
+	readonly setDebugRequestsOffset: (offset: number) => void;
+	/** Pointer selection setters, next to the accessors above. */
+	readonly setRepairSelection: (index: number) => void;
+	readonly setCompletedSelection: (index: number) => void;
+	readonly setUserActionSelection: (index: number) => void;
+	readonly setSelectedFinding: (index: number) => void;
+	readonly setCostSelection: (index: number) => void;
+	readonly setDebugRequestsSelection: (index: number) => void;
 	readonly presetSwitcherChoices: () => readonly PresetChoice[];
 	readonly presetSwitcherHandler: () =>
 		| ((event: KeyEvent) => boolean)
@@ -162,16 +181,33 @@ export interface OverlaysProps {
 }
 
 export function Overlays(props: OverlaysProps) {
+	// Activating a row is the dialog's own `Enter`: dispatching it keeps one
+	// activation path (the open dialog's keymap layer) instead of a second table.
+	const dispatch = useKeyDispatch();
+	const activateRow = () => dispatch("Enter");
+	// A backdrop tap is the dialog's `Esc`, never its confirmation: these four
+	// pickers confirm irreversible work (repair, run, start, reject) and their
+	// `Esc` is Cancel, so the shared backdrop binding dispatches that key and the
+	// keymap's own layer decides what happens (design D2/D5).
+	const repairBackdrop = useModalBackdrop({ kind: "repair-target" });
+	const completedBackdrop = useModalBackdrop({
+		kind: "completed-action-picker",
+	});
+	const userActionBackdrop = useModalBackdrop({ kind: "user-action" });
+	const planRejectionBackdrop = useModalBackdrop({ kind: "plan-rejection" });
 	return (
 		<>
 			<Show when={props.repair}>
 				{(repair) => (
 					<ListViewModal
 						sizing="cap"
+						{...repairBackdrop}
 						title={`Repair r${repair().revision} · ENTER repairs`}
 						fieldLabel="Compatible target"
 						items={[...repair().items]}
 						selectedIndex={props.state.repairSelection()}
+						onSelect={props.state.setRepairSelection}
+						onActivate={() => activateRow()}
 						help={[
 							{ key: "j/k", action: "Target" },
 							{ key: "Enter", action: "Repair" },
@@ -190,10 +226,13 @@ export function Overlays(props: OverlaysProps) {
 			<Show when={props.completedPicker}>
 				{(picker) => (
 					<ListViewModal
+						{...completedBackdrop}
 						title={`Choose workflow action · ${props.state.actionReason() || props.pickerHint || ""}`}
 						fieldLabel="Action"
 						items={[...picker().items]}
 						selectedIndex={props.state.completedSelection()}
+						onSelect={props.state.setCompletedSelection}
+						onActivate={() => activateRow()}
 						helpSections={false}
 						help={[
 							{ key: "j/k", action: "Navigate" },
@@ -219,10 +258,13 @@ export function Overlays(props: OverlaysProps) {
 			<Show when={props.userAction}>
 				{(action) => (
 					<ListViewModal
+						{...userActionBackdrop}
 						title={`⚠ ${action().title}`}
 						fieldLabel={action().prompt}
 						items={[...action().items]}
 						selectedIndex={props.state.userActionSelection()}
+						onSelect={props.state.setUserActionSelection}
+						onActivate={() => activateRow()}
 						heightPercent={0.5}
 						help={[
 							{ key: "j/k", action: "Navigate" },
@@ -244,6 +286,7 @@ export function Overlays(props: OverlaysProps) {
 				<HelpModal
 					title="Dashboard keybindings"
 					offset={props.state.helpOffset()}
+					onScrollOffset={props.state.setHelpOffset}
 					lines={props.helpLines}
 				/>
 			</Show>
@@ -256,6 +299,7 @@ export function Overlays(props: OverlaysProps) {
 						themes={[...theme().themes]}
 						query={props.state.themeQuery()}
 						filtering={props.state.themeFiltering()}
+						onSelect={props.state.setThemeIndex}
 					/>
 				)}
 			</Show>
@@ -265,6 +309,7 @@ export function Overlays(props: OverlaysProps) {
 						title={result().title}
 						events={result().events}
 						selected={props.state.selectedFinding()}
+						onSelectIndex={props.state.setSelectedFinding}
 						onDetailScrollBoxReady={result().onDetailScrollBoxReady}
 					/>
 				)}
@@ -272,10 +317,13 @@ export function Overlays(props: OverlaysProps) {
 			<Show when={props.planRejection}>
 				{(rejection) => (
 					<ListViewModal
+						{...planRejectionBackdrop}
 						title="Reject plan"
 						fieldLabel="Choose a rejection reason"
 						items={[...rejection().reasons]}
 						selectedIndex={rejection().selected}
+						onSelect={rejection().onSelectIndex}
+						onActivate={() => activateRow()}
 						help={[
 							{ key: "j/k", action: "Navigate" },
 							{ key: "Enter", action: "Reject plan" },
@@ -292,7 +340,13 @@ export function Overlays(props: OverlaysProps) {
 				)}
 			</Show>
 			<Show when={props.debugRequests}>
-				{(overlay) => <DebugRequestsModal {...overlay()} />}
+				{(overlay) => (
+					<DebugRequestsModal
+						{...overlay()}
+						onSelectIndex={props.state.setDebugRequestsSelection}
+						onOffsetChange={props.state.setDebugRequestsOffset}
+					/>
+				)}
 			</Show>
 			<Show when={props.cost}>
 				{(cost) => (
@@ -301,6 +355,7 @@ export function Overlays(props: OverlaysProps) {
 						selected={props.state.costSelection()}
 						agent={props.state.costAgent()}
 						offset={props.state.costOffset()}
+						onSelectIndex={props.state.setCostSelection}
 					/>
 				)}
 			</Show>
@@ -329,6 +384,7 @@ export function Overlays(props: OverlaysProps) {
 			<Show when={props.workflowGraph}>
 				{(graph) => (
 					<WorkflowGraphModal
+						onOffsetChange={props.state.setWorkflowGraphOffset}
 						definition={graph().definition}
 						origin={graph().origin}
 						graph={graph().graph}

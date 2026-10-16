@@ -9,6 +9,7 @@ import {
 	DiffReviewView as DiffViewModal,
 	GenericModal,
 	MarkdownReviewView as MarkdownViewModal,
+	useModalBackdrop,
 } from "@ui";
 import { Show } from "solid-js";
 import type { createReviewFeature } from "../review.ts";
@@ -24,6 +25,10 @@ export interface ReviewRouteProps {
 }
 
 export function ReviewRoute(props: ReviewRouteProps) {
+	// A backdrop tap is this dialog's own `Esc`, so the review's ladder decides:
+	// the search box first, then an applied query, then the diff view, and only
+	// last the postpone. A direct close would discard the developer's filter.
+	const reviewFilesBackdrop = useModalBackdrop({ kind: "review-files" });
 	const {
 		developerReviewPhase,
 		reviewOpen,
@@ -106,10 +111,7 @@ export function ReviewRoute(props: ReviewRouteProps) {
 							: []),
 						{ key: "Esc", action: "Postpone" },
 					]}
-					onBackdropClick={() => {
-						setReviewOpen(false);
-						props.setModalActive("none");
-					}}
+					{...reviewFilesBackdrop}
 				>
 					<ChangedFilesView
 						findings

@@ -7,6 +7,7 @@ import {
 	SearchHeader,
 	SelectableList,
 	uiColors,
+	useKeyDispatch,
 	useTerminalDimensions,
 } from "@ui";
 import type { TraceSummary } from "../../../contracts/telemetry.ts";
@@ -35,6 +36,7 @@ export function TraceListView(props: {
 	totalPages: () => number;
 	loading: () => boolean;
 }) {
+	const dispatch = useKeyDispatch();
 	const size = useTerminalDimensions();
 	// The view's own search header takes one row above the list.
 	const listLines = () => Math.max(1, hostBodyLines(size().height) - 1);
@@ -57,6 +59,7 @@ export function TraceListView(props: {
 					availableLines={listLines()}
 					selectedIndex={props.selectedIndex}
 					onSelect={props.onSelect}
+					onActivate={() => dispatch("Enter")}
 					renderItem={(summary, selected) => {
 						const root = summary.rootSpans[0];
 						const workspace = attribute(root, "herdr.change.id");

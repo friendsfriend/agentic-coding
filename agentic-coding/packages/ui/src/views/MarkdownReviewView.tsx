@@ -10,6 +10,7 @@ import {
 	type MarkdownBlock,
 	parseMarkdownBlocks,
 } from "../components/markdownBlocks.ts";
+import { useTap } from "../components/mouse/useTap.ts";
 import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
@@ -264,9 +265,7 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 									flexDirection="row"
 									backgroundColor={bgColor()}
 									paddingRight={1}
-									onMouseUp={() => {
-										props.onSelectedLineChange(index());
-									}}
+									{...useTap(() => props.onSelectedLineChange(index()))}
 								>
 									<SelectionMarker
 										selected={isSelected()}
@@ -340,6 +339,7 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 			heightPercent={(dimensions().height - 4) / dimensions().height}
 			customHeader={customHeader()}
 			customFooter={customFooter()}
+			dismissKind="artifact-preview"
 			onBackdropClick={props.onClose}
 		>
 			{blocks()}

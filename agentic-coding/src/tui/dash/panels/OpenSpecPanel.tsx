@@ -15,6 +15,12 @@ export interface OpenSpecPanelProps {
 	 * the debug family's report is not an OpenSpec artifact, so its panel is
 	 * titled for what it holds. */
 	readonly title?: string;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
+	readonly onSelectIndex?: (index: number) => void;
+	/** Pointer: a tap on the selected row activates it (the keyboard's `Enter`). */
+	readonly onActivateRow?: (index: number) => void;
+	/** Pointer: a tap anywhere in the panel focuses it (`J/K/H/L`). */
+	readonly onFocusRequest?: () => void;
 }
 
 export function OpenSpecPanel(props: OpenSpecPanelProps) {
@@ -24,6 +30,9 @@ export function OpenSpecPanel(props: OpenSpecPanelProps) {
 			title={props.title ?? "OpenSpec"}
 			accent={uiColors.accent}
 			active={props.active}
+			{...(props.onFocusRequest
+				? { onFocusRequest: props.onFocusRequest }
+				: {})}
 			style={{
 				width: "100%",
 				height: rows() + 1,
@@ -34,6 +43,8 @@ export function OpenSpecPanel(props: OpenSpecPanelProps) {
 				items={[...props.artifacts]}
 				availableLines={rows()}
 				selectedIndex={props.active ? props.selectedIndex : -1}
+				{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+				{...(props.onActivateRow ? { onActivate: props.onActivateRow } : {})}
 				renderItem={(artifact, selected) => (
 					<box height={1}>
 						<text

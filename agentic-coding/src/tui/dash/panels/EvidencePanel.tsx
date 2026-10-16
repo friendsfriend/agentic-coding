@@ -83,6 +83,18 @@ export interface EvidencePanelProps {
 	readonly state?: EvidencePanelState;
 	/** The reason to show when `state` is "error". */
 	readonly error?: string;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
+	readonly onSelectIndex?: (index: number) => void;
+	/**
+	 * Whether the wheel may move this list's cursor. Default true; the route
+	 * turns it off here because *selection* triggers the preview read, and the
+	 * wheel must not issue one read per event (`tui-input-responsiveness`).
+	 */
+	readonly wheelMovesCursor?: boolean;
+	/** Pointer: a tap on the selected row activates it (the keyboard's `Enter`). */
+	readonly onActivateRow?: (index: number) => void;
+	/** Pointer: a tap anywhere in the panel focuses it (`J/K/H/L`). */
+	readonly onFocusRequest?: () => void;
 }
 
 export function EvidencePanel(props: EvidencePanelProps) {
@@ -213,10 +225,17 @@ export function EvidencePanel(props: EvidencePanelProps) {
 							<SelectableList
 								items={rows()}
 								availableLines={bodyLines()}
+								wheelMovesCursor={props.wheelMovesCursor !== false}
 								// A row that opens a debug request's group spends a second line
 								// on its heading.
 								itemHeights={rows().map((row) => (row.header ? 2 : 1))}
 								selectedIndex={props.active ? props.selectedIndex : -1}
+								{...(props.onSelectIndex
+									? { onSelect: props.onSelectIndex }
+									: {})}
+								{...(props.onActivateRow
+									? { onActivate: props.onActivateRow }
+									: {})}
 								renderItem={(row, selectedRow) => (
 									<box
 										width="100%"

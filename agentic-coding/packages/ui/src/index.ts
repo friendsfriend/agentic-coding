@@ -46,6 +46,7 @@ export * from "./components/markdownBlocks.ts";
 export * from "./components/markdownSyntax.ts";
 export * from "./components/modalHelp.ts";
 export * from "./components/modalStack.ts";
+export * from "./components/mouse/index.ts";
 export * from "./components/Notification.tsx";
 export * from "./components/Panel.tsx";
 export * from "./components/ProgressModal.tsx";

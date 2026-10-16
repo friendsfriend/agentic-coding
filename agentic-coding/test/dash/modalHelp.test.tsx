@@ -127,3 +127,42 @@ test("the help overlay stacks above a higher-zIndex dialog", async () => {
 	expect(closed).toContain("High dialog");
 	t.renderer.destroy();
 });
+
+test("a dialog's `?` help can scroll to the appended Mouse rows", async () => {
+	// A catalog longer than the overlay's line budget, so the clamp is what
+	// decides whether the shared Mouse section is reachable at all.
+	const entries = Array.from({ length: 20 }, (_, index) => ({
+		key: `k${index}`,
+		action: `action ${index}`,
+	}));
+	function LongProbe() {
+		keyLayer({ onKey: (key) => handleModalHelpKey(key) });
+		return (
+			<>
+				<GenericModal
+					title="Long dialog"
+					help={entries}
+					widthPercent={0.9}
+					heightPercent={0.9}
+				>
+					<text>body</text>
+				</GenericModal>
+				<ModalHelpOverlay />
+			</>
+		);
+	}
+	const t = await testRender(() => <LongProbe />, { width: 80, height: 14 });
+	await t.flush();
+	t.mockInput.pressKey("?");
+	await t.waitForFrame((frame) => frame.includes("Actions"));
+	// Scroll to the end: the last rows are the shared Mouse section, and the
+	// clamp counts them (helpModalRowCount), so they must be reachable.
+	for (let index = 0; index < 40; index += 1) {
+		t.mockInput.pressKey("j");
+		await t.flush();
+	}
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Mouse");
+	expect(frame).toContain("wheel");
+	t.renderer.destroy();
+});

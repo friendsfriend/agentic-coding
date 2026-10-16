@@ -28,6 +28,7 @@ import {
 	setActiveKeybindCatalog,
 	showErrorModal,
 	uiColors,
+	useKeyDispatch,
 	useTerminalDimensions,
 } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
@@ -194,6 +195,10 @@ interface PoolClipboard {
 }
 
 export function AgentPresetsView(props: AgentPresetsViewProps) {
+	// Pointer parity: every list selects on a tap (`j`/`k`) and activates the
+	// selected row by dispatching the view's own `Enter`, so the keymap layer
+	// still decides what the row's action is (design D2/D6).
+	const dispatch = useKeyDispatch();
 	const dimensions = useTerminalDimensions();
 	const contentLines = () =>
 		Math.max(1, dimensions().height - hostChromeLines(LAYOUT_CHROME_LINES) - 1);
@@ -1697,6 +1702,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					<ScrollableList
 						items={orchestratorOptions()}
 						selectedIndex={orchestratorIndex()}
+						onSelect={setOrchestratorIndex}
+						onActivate={() => dispatch("Enter")}
 						availableLines={Math.max(1, contentLines() - 3)}
 						estimatedItemHeight={1}
 						showScrollIndicator={false}
@@ -1743,6 +1750,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					<ScrollableList
 						items={classifierOptions()}
 						selectedIndex={providerIndex()}
+						onSelect={setProviderIndex}
+						onActivate={() => dispatch("Enter")}
 						availableLines={Math.max(1, contentLines() - 3)}
 						estimatedItemHeight={3}
 						showScrollIndicator={false}
@@ -1765,6 +1774,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				<ScrollableList
 					items={menuEntries()}
 					selectedIndex={menuIndex()}
+					onSelect={setMenuIndex}
+					onActivate={() => dispatch("Enter")}
 					availableLines={contentLines()}
 					estimatedItemHeight={3}
 					showScrollIndicator={false}
@@ -1794,6 +1805,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					<ScrollableList
 						items={listItems()}
 						selectedIndex={listIndex()}
+						onSelect={setListIndex}
+						onActivate={() => dispatch("Enter")}
 						availableLines={contentLines()}
 						estimatedItemHeight={3}
 						showScrollIndicator={false}
@@ -1876,6 +1889,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 											<ScrollableList
 												items={poolEntries(step())}
 												selectedIndex={poolIndex()}
+												onSelect={setPoolIndex}
+												onActivate={() => dispatch("Enter")}
 												availableLines={Math.max(1, contentLines() - 4)}
 												estimatedItemHeight={3}
 												showScrollIndicator={false}

@@ -65,6 +65,7 @@ export function CredentialsModal(props: {
 }) {
 	return (
 		<GenericModal
+			dismissKind="credentials"
 			title="SSH credential required"
 			fieldLabel={props.prompt}
 			widthPercent={0.6}

@@ -6,6 +6,8 @@ import {
 	ScrollableContent,
 	SelectableList,
 	uiColors,
+	useKeyDispatch,
+	useModalBackdrop,
 	useTerminalDimensions,
 } from "@ui";
 import { createEffect, Show } from "solid-js";
@@ -20,7 +22,11 @@ export function CostModal(props: {
 	selected: number;
 	agent: string | null;
 	offset: number;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
+	onSelectIndex?: (index: number) => void;
 }) {
+	const dispatch = useKeyDispatch();
+	const backdrop = useModalBackdrop({ kind: "cost" });
 	const dimensions = useTerminalDimensions();
 	const contentWidth = () =>
 		Math.max(40, Math.floor(dimensions().width * 0.7) - 8);
@@ -30,6 +36,7 @@ export function CostModal(props: {
 	const selectedRow = () => props.rows[props.selected];
 	return (
 		<GenericModal
+			{...backdrop}
 			title={
 				props.agent
 					? `Cost breakdown · ${props.agent}`
@@ -99,6 +106,10 @@ export function CostModal(props: {
 					<SelectableList
 						items={props.rows}
 						selectedIndex={props.selected}
+						{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+						{...(props.onSelectIndex
+							? { onActivate: () => dispatch("Enter") }
+							: {})}
 						renderItem={(row, selected) => (
 							<box width="100%" height={1} flexDirection="row" paddingRight={1}>
 								<text

@@ -55,7 +55,6 @@ import {
 	initializeStore,
 	insertDefinition,
 	openStore,
-	STORE_SCHEMA_VERSION,
 	storedDefinition,
 } from "../src/workflow/runtime/store.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";

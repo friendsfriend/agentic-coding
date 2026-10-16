@@ -1,6 +1,10 @@
 import { createSignal } from "solid-js";
 import { hostKeybind } from "./hostKeys.ts";
-import type { Keybind, KeybindSection } from "./keybinds.ts";
+import {
+	helpModalRowCount,
+	type Keybind,
+	type KeybindSection,
+} from "./keybinds.ts";
 
 /**
  * Automatic `?` help entry for modal footers. Modals advertise it exactly like
@@ -19,14 +23,6 @@ export function withModalHelpKeybind(
 	if (entries.length === 0) return entries;
 	if (entries.some((entry) => entry.key === "?")) return entries;
 	return [...entries, MODAL_HELP_KEYBIND];
-}
-
-/** One help section's rows, matching the `?` modal's title row + key rows. */
-function rowCount(sections: readonly KeybindSection[]): number {
-	return sections.reduce(
-		(count, section) => count + section.keybinds.length + 1,
-		0,
-	);
 }
 
 /**
@@ -80,7 +76,7 @@ export function modalHelpOffset(): number {
 export function modalHelpMaxOffset(): number {
 	const active = activeModalHelp();
 	if (!active) return 0;
-	return Math.max(0, rowCount(active.sections()) - active.lines());
+	return Math.max(0, helpModalRowCount(active.sections()) - active.lines());
 }
 
 export function openModalHelp(): boolean {

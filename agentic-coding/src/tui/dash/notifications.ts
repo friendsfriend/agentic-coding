@@ -23,6 +23,14 @@ export function notify(message: string, type: Notification["type"] = "info") {
 	);
 }
 
+/** Dismiss the mounted toast now (a pointer tap), reusing the expiry path:
+ * the pending auto-clear timer is cleared with it. */
+export function dismissNotification() {
+	clearTimeout(timer);
+	timer = undefined;
+	setNotification(undefined);
+}
+
 /** Clear any mounted notification and its pending auto-clear timer. Exists so
  * tests can isolate: bun runs all files in one process and this signal is
  * module-global, so a toast from an earlier file would bleed into later ones. */

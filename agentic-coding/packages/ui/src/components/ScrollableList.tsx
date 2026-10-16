@@ -5,6 +5,9 @@ import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { AnimatedStatusText } from "./AnimatedStatusText.tsx";
 import { useModalContentLines } from "./GenericModal.tsx";
+import { moveRowIndex } from "./mouse/clickSemantics.ts";
+import { type RowGestureState, useRowMouse } from "./mouse/useRowMouse.ts";
+import { useWheelScroll } from "./mouse/useWheelScroll.ts";
 import { focusSoon } from "./utils/focusSoon.ts";
 import { calculateVisibleItems } from "./utils/virtualScroll.ts";
 
@@ -171,6 +174,26 @@ export interface ScrollableListProps<T> {
 		direction: "up" | "down" | "left" | "right",
 		delta: number,
 	) => void;
+
+	// ── Pointer (shared mouse layer) ───────────────────────────────────────────
+	/**
+	 * Select a row on a tap (the keyboard's `j`/`k`). When neither `onSelect`
+	 * nor `onActivate` is given, the rows carry no pointer handler at all: the
+	 * wheel then bubbles to an outer scroll owner instead of being swallowed by
+	 * a list that cannot scroll itself.
+	 */
+	onSelect?: (index: number) => void;
+	/** Activate the tapped row (the keyboard's `Enter`). */
+	onActivate?: (index: number) => void;
+	/** Whether a row has an activation; defaults to "onActivate is bound". */
+	activatable?: (item: T, index: number) => boolean;
+	/**
+	 * Whether the wheel may move this list's cursor. Default true, which is what
+	 * `j`/`k` do. Set it false on a list whose *selection* triggers I/O (the
+	 * evidence preview): the wheel then leaves the pane inert instead of issuing
+	 * a read per wheel event (`tui-input-responsiveness`).
+	 */
+	wheelMovesCursor?: boolean;
 }
 
 /**
@@ -327,6 +350,43 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 		return Math.max(1, Math.ceil((listAreaLines() * visible) / total));
 	});
 
+	/**
+	 * One gesture holder per list: a windowed list recreates its row instances when
+	 * the window moves, so a press must not belong to a row instance that a
+	 * recompute can discard mid-gesture (design D3/D4).
+	 */
+	const canMouseRows = () =>
+		props.onSelect !== undefined || props.onActivate !== undefined;
+	const gesture: RowGestureState = {};
+
+	/**
+	 * The wheel scrolls the pane under the pointer, not the focused one: an
+	 * explicit `onScroll` wins, otherwise a list whose keyboard scroll moves the
+	 * cursor moves it here too (design D7).
+	 */
+	const wheel = useWheelScroll({
+		// The pane only swallows the wheel when it can actually act; otherwise the
+		// event bubbles to an enclosing scroll owner.
+		enabled: () =>
+			props.onScroll !== undefined ||
+			(props.wheelMovesCursor !== false &&
+				props.onSelect !== undefined &&
+				props.items.length > 0),
+		onScroll: (direction, delta) => {
+			if (props.onScroll) {
+				props.onScroll(direction, delta);
+				return;
+			}
+			// A list whose selection triggers I/O keeps the wheel off its cursor.
+			if (props.wheelMovesCursor === false) return;
+			if (!props.onSelect) return;
+			const count = props.items.length;
+			if (count === 0) return;
+			const next = moveRowIndex(props.selectedIndex, direction, delta, count);
+			if (next !== props.selectedIndex) props.onSelect(next);
+		},
+	});
+
 	return (
 		<>
 			{/* ── Filter bar ──────────────────────────────────────────────────────── */}
@@ -425,16 +485,7 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 					 * The scrollbar is 1 char wide and only rendered when items overflow.
 					 */}
 					<box
-						onMouseScroll={(event) => {
-							const direction = event.scroll?.direction;
-							if (!direction) return;
-							props.onScroll?.(
-								direction,
-								Math.max(1, Math.round(Math.abs(event.scroll?.delta ?? 1))),
-							);
-							event.preventDefault?.();
-							event.stopPropagation?.();
-						}}
+						{...wheel}
 						style={{
 							width: "100%",
 							height: listAreaLines(),
@@ -459,10 +510,40 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 								{(visibleItem) => {
 									const isSelected = () =>
 										visibleItem.absoluteIndex === props.selectedIndex;
-									return props.renderItem(
-										visibleItem.item,
-										isSelected,
-										visibleItem.absoluteIndex,
+									const row = () =>
+										props.renderItem(
+											visibleItem.item,
+											isSelected,
+											visibleItem.absoluteIndex,
+										);
+									if (!canMouseRows()) return row();
+									// The renderer hands the row its absolute index, so a scrolled
+									// window selects the row the developer sees (design D4).
+									const mouse = useRowMouse({
+										gesture,
+										index: visibleItem.absoluteIndex,
+										selectedIndex: () => props.selectedIndex,
+										activatable: () =>
+											props.activatable
+												? props.activatable(
+														visibleItem.item,
+														visibleItem.absoluteIndex,
+													)
+												: props.onActivate !== undefined,
+										onSelect: (index) => props.onSelect?.(index),
+										onActivate: (index) => props.onActivate?.(index),
+									});
+									return (
+										<box
+											{...mouse}
+											style={{
+												width: "100%",
+												flexShrink: 0,
+												flexDirection: "column",
+											}}
+										>
+											{row()}
+										</box>
 									);
 								}}
 							</For>

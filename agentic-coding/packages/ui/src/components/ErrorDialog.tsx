@@ -27,6 +27,7 @@ export function ErrorDialog(props: {
 			widthPercent={0.7}
 			heightPercent={0.55}
 			zIndex={props.zIndex ?? 1}
+			dismissKind="error-dialog"
 			onBackdropClick={props.onClose}
 		>
 			<box

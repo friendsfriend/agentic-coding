@@ -16,6 +16,7 @@ import {
 	activeKeybindContext,
 	footerKeybinds,
 } from "./keybinds.ts";
+import { useKeybindChips } from "./mouse/useKeybindChips.ts";
 import { RunningText } from "./RunningText.tsx";
 
 export type { Keybind };
@@ -36,10 +37,15 @@ export interface StatusBarProps {
 	lines?: number;
 	runningTextEnabled?: boolean;
 	runningTextOffset?: number;
+	/** Chip activation: run the key a footer chip advertises (design D6). */
+	onKeybindActivate?: (keybind: Keybind) => void;
+	/** Whether a chip is a pointer target at all. */
+	keybindActivatable?: (keybind: Keybind) => boolean;
 }
 
 export function StatusBar(props: StatusBarProps) {
 	const dimensions = useTerminalDimensions();
+	const chipRunner = useKeybindChips();
 	const lines = () => Math.max(1, props.lines ?? 1);
 	const keybinds = () =>
 		props.keybinds
@@ -48,6 +54,20 @@ export function StatusBar(props: StatusBarProps) {
 	const help = () =>
 		keybinds().find((keybind) => keybind.key === "?") ?? FALLBACK_HELP;
 	const entries = () => keybinds().filter((keybind) => keybind.key !== "?");
+	/** Chip (pointer) props for the help renderer: the surface's own runner, or
+	 * the shared one that dispatches the key a chip advertises (design D6). */
+	const chips = () =>
+		props.onKeybindActivate
+			? {
+					onActivate: props.onKeybindActivate,
+					...(props.keybindActivatable
+						? { activatable: props.keybindActivatable }
+						: {}),
+				}
+			: {
+					onActivate: chipRunner.onActivate,
+					activatable: chipRunner.activatable,
+				};
 
 	/**
 	 * Wrap the keybinds into the available rows, keeping each `key action` pair
@@ -138,7 +158,7 @@ export function StatusBar(props: StatusBarProps) {
 							paddingRight: 1,
 						}}
 					>
-						<HelpText entries={row} />
+						<HelpText entries={row} {...chips()} />
 					</box>
 				))}
 			</box>
@@ -171,13 +191,13 @@ export function StatusBar(props: StatusBarProps) {
 					</text>
 				</Show>
 				{lines() === 1 ? (
-					<HelpText entries={entries()} />
+					<HelpText entries={entries()} {...chips()} />
 				) : (
-					wrapped().map((row) => <HelpText entries={row} />)
+					wrapped().map((row) => <HelpText entries={row} {...chips()} />)
 				)}
 			</box>
 			<box style={{ flexShrink: 0, marginLeft: 1 }}>
-				<HelpText entries={[help()]} />
+				<HelpText entries={[help()]} {...chips()} />
 			</box>
 		</box>
 	);

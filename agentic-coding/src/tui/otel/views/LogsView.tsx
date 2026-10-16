@@ -38,6 +38,8 @@ export function LogsView(props: {
 					items={logs()}
 					availableLines={listLines()}
 					selectedIndex={props.selectedIndex}
+					onSelect={props.onSelectIndex}
+					onActivate={(index) => props.onOpen(index)}
 					renderItem={(log) => (
 						<box
 							height={1}
@@ -68,10 +70,6 @@ export function LogsView(props: {
 							</box>
 						</box>
 					)}
-					onSelect={(index) => {
-						props.onSelectIndex(index);
-						props.onOpen(index);
-					}}
 				/>
 			)}
 			{logs().length === 0 && (

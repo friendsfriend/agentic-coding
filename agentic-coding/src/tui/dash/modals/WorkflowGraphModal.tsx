@@ -7,7 +7,7 @@
  * the row projection below is pure so a test can pin the order without a
  * terminal. */
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors } from "@ui";
+import { GenericModal, uiColors, useModalBackdrop, useWheelScroll } from "@ui";
 import { createMemo, For, Show } from "solid-js";
 import {
 	decodeWorkflowDefinitionGraph,
@@ -105,6 +105,8 @@ export function WorkflowGraphModal(props: {
 	readonly currentStep: string;
 	readonly offset: number;
 	readonly lines: number;
+	/** Pointer: the wheel moves the offset the dashboard owns. */
+	readonly onOffsetChange?: (offset: number) => void;
 }) {
 	// The aggregate dashboard observation is decoded as Schema.Unknown; validate
 	// the one graph this dialog consumes before projecting rows, so malformed or
@@ -118,15 +120,27 @@ export function WorkflowGraphModal(props: {
 	};
 	// The window is clamped here as well as in the key handler: a refresh that
 	// shrinks the graph must not leave the dialog scrolled past its own end.
+	const maxLines = () => Math.max(1, props.lines);
 	const start = () =>
-		Math.max(
-			0,
-			Math.min(props.offset, rows().length - Math.max(1, props.lines)),
-		);
-	const visible = () =>
-		rows().slice(start(), start() + Math.max(1, props.lines));
+		Math.max(0, Math.min(props.offset, rows().length - maxLines()));
+	const visible = () => rows().slice(start(), start() + maxLines());
+	// Read-only dialog: a backdrop tap is the same dismissal `Esc` performs.
+	const backdrop = useModalBackdrop({ kind: "workflow-graph" });
+	// The dialog windows its own rows, so the wheel scrolls exactly what `j`/`k`
+	// scroll (the caller owns the offset).
+	const wheel = useWheelScroll({
+		enabled: () =>
+			props.onOffsetChange !== undefined && rows().length > maxLines(),
+		onScroll: (direction, delta) => {
+			if (!props.onOffsetChange) return;
+			const max = Math.max(0, rows().length - maxLines());
+			const step = direction === "up" ? -delta : delta;
+			props.onOffsetChange(Math.max(0, Math.min(max, props.offset + step)));
+		},
+	});
 	return (
 		<GenericModal
+			{...backdrop}
 			title={workflowGraphTitle(props.origin)}
 			widthPercent={0.72}
 			heightPercent={0.78}
@@ -135,7 +149,7 @@ export function WorkflowGraphModal(props: {
 				{ key: "Esc", action: "Close" },
 			]}
 		>
-			<box width="100%" flexDirection="column" overflow="hidden">
+			<box {...wheel} width="100%" flexDirection="column" overflow="hidden">
 				<box width="100%" height={1} flexShrink={0} overflow="hidden">
 					<text
 						fg={uiColors.textSecondary}

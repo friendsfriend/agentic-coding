@@ -5,6 +5,7 @@ import {
 	activeModalHelp,
 	modalHelpOffset,
 	modalHelpOpen,
+	scrollModalHelp,
 } from "./modalHelp.ts";
 
 /**
@@ -24,6 +25,7 @@ export function ModalHelpOverlay(props: { zIndex?: number }) {
 			<HelpModal
 				title="Keybindings"
 				offset={modalHelpOffset()}
+				onScrollOffset={(offset) => scrollModalHelp(offset - modalHelpOffset())}
 				lines={lines()}
 				sections={sections()}
 				zIndex={props.zIndex}

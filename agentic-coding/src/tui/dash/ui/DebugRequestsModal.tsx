@@ -14,7 +14,17 @@
  * paints are always the same number: a fixed budget would leave the tail of a
  * long report unreachable on a short terminal and blank rows on a tall one. */
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors, useModalContentLines } from "@ui";
+import {
+	GenericModal,
+	type RowGestureState,
+	uiColors,
+	useKeyDispatch,
+	useModalBackdrop,
+	useModalContentLines,
+	useRowMouse,
+	useWheelScroll,
+	wheelSelectsRow,
+} from "@ui";
 import { createMemo, For, Show } from "solid-js";
 import type { DebugRequestView } from "../../../contracts/environment.ts";
 import {
@@ -42,6 +52,10 @@ export interface DebugRequestsModalProps {
 	readonly selectedIndex: number;
 	/** How far the detail pane is scrolled, in lines. */
 	readonly offset: number;
+	/** Pointer: a tap selects a request (the keyboard's `j`/`k`). */
+	readonly onSelectIndex?: (index: number) => void;
+	/** Pointer: the wheel scrolls the report pane (the keyboard's `J`/`K`). */
+	readonly onOffsetChange?: (offset: number) => void;
 }
 
 /** The list/detail body height before the dialog reports its own geometry (the
@@ -49,6 +63,10 @@ export interface DebugRequestsModalProps {
 const FALLBACK_CONTENT_LINES = 12;
 
 export function DebugRequestsModal(props: DebugRequestsModalProps) {
+	/** One holder per list: a row the store replaced still completes its press. */
+	const gesture: RowGestureState = {};
+	const dispatch = useKeyDispatch();
+	const backdrop = useModalBackdrop({ kind: "debug-requests" });
 	const contentLines = useModalContentLines();
 	const lines = () => Math.max(1, contentLines?.() ?? FALLBACK_CONTENT_LINES);
 	const selected = createMemo(() => props.requests[props.selectedIndex]);
@@ -62,6 +80,24 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 	const listRows = createMemo(() =>
 		debugRequestListWindow(props.requests, props.selectedIndex, lines()),
 	);
+	// The wheel scrolls the pane the pointer is over: the report here, the list
+	// beside it, and neither one changes focus (design D7).
+	const reportWheel = useWheelScroll({
+		enabled: () => props.onOffsetChange !== undefined,
+		onScroll: (direction, delta) => {
+			if (!props.onOffsetChange) return;
+			const maxOffset = Math.max(0, detailLines().length - lines());
+			const step = direction === "up" ? -delta : delta;
+			props.onOffsetChange(
+				Math.max(0, Math.min(maxOffset, props.offset + step)),
+			);
+		},
+	});
+	const listWheel = wheelSelectsRow({
+		selectedIndex: () => props.selectedIndex,
+		count: () => props.requests.length,
+		onSelect: (index) => props.onSelectIndex?.(index),
+	});
 	const bodyMessage = () => {
 		if (props.state === "error")
 			return props.error
@@ -76,6 +112,7 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 			: "Debug requests";
 	return (
 		<GenericModal
+			{...backdrop}
 			title={title()}
 			widthPercent={0.84}
 			heightPercent={0.82}
@@ -122,6 +159,7 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 						}}
 					>
 						<box
+							{...listWheel}
 							style={{
 								width: "38%",
 								minWidth: 0,
@@ -133,8 +171,16 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 							<For each={listRows()}>
 								{(request) => {
 									const index = () => props.requests.indexOf(request);
+									const mouse = useRowMouse({
+										gesture,
+										index: index(),
+										selectedIndex: () => props.selectedIndex,
+										activatable: () => props.onSelectIndex !== undefined,
+										onSelect: (row: number) => props.onSelectIndex?.(row),
+										onActivate: () => dispatch("Enter"),
+									});
 									return (
-										<box width="100%" height={1} overflow="hidden">
+										<box {...mouse} width="100%" height={1} overflow="hidden">
 											<text
 												fg={
 													index() === props.selectedIndex
@@ -157,6 +203,7 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 							</For>
 						</box>
 						<box
+							{...reportWheel}
 							style={{
 								flexGrow: 1,
 								flexBasis: 0,

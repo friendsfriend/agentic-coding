@@ -151,6 +151,7 @@ export function NumberEditor(props: NumberEditorProps) {
 		`${props.target.min}–${props.target.max} tokens, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}% of the run's window`;
 	return (
 		<GenericModal
+			dismissKind="number-editor"
 			title={`${props.target.label} · compaction`}
 			widthPercent={0.6}
 			heightLines={9}

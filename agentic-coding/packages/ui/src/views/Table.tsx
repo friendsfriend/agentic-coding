@@ -10,6 +10,7 @@ import { CenteredState } from "../components/CenteredState";
 import { FilterStatusBar } from "../components/FilterStatusBar";
 import { HighlightedText } from "../components/Highlight";
 import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
+import { useTap } from "../components/mouse/useTap.ts";
 import {
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
@@ -48,6 +49,12 @@ export interface TableProps<T = string> {
 	columns: TableColumn[];
 	selectedIndex: number;
 	onSelect?: (index: number) => void;
+	/**
+	 * Pointer: a tap on the already-selected row opens the row's detail, the
+	 * keyboard's `Enter`. The surface passes the same handler its `Enter` runs;
+	 * without it a tap only selects (`tui-mouse-interaction`).
+	 */
+	onActivate?: (index: number) => void;
 	showBorder?: boolean; // Optional: show border around table (default true)
 
 	// Optional tabs feature
@@ -339,7 +346,7 @@ function WorkItemTable<T = string>(
 									backgroundColor={
 										isActive() ? uiColors.bgSurface0 : uiColors.bgMantle
 									}
-									onMouseUp={() => props.onTabChange?.(tab.id)}
+									{...useTap(() => props.onTabChange?.(tab.id))}
 									style={{
 										paddingLeft: 2,
 										paddingRight: 2,
@@ -413,6 +420,8 @@ function WorkItemTable<T = string>(
 				<ScrollableList<TableRow>
 					items={props.apps}
 					selectedIndex={props.selectedIndex}
+					{...(props.onSelect ? { onSelect: props.onSelect } : {})}
+					{...(props.onActivate ? { onActivate: props.onActivate } : {})}
 					availableLines={scrollableLines()}
 					reservedLines={
 						props.availableLines === undefined ? reservedLines() : undefined
@@ -457,7 +466,6 @@ function WorkItemTable<T = string>(
 								index={index}
 								runningTextEnabled={props.runningTextEnabled}
 								runningTextOffset={props.runningTextOffset}
-								onMouseUp={() => props.onSelect?.(index)}
 							/>
 						);
 					}}

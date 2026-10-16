@@ -44,6 +44,9 @@ import {
 	streamingMarkdownBlockParts,
 	streamingTailSource,
 	uiColors,
+	useModalBackdrop,
+	useRowMouse,
+	useTap,
 } from "@ui";
 import {
 	createEffect,
@@ -373,9 +376,7 @@ function ToolRow(props: {
 		<box flexDirection="column">
 			<box
 				flexDirection="row"
-				{...(detail().length > 0
-					? { onMouseUp: () => props.onToggleRow(key()) }
-					: {})}
+				{...(detail().length > 0 ? useTap(() => props.onToggleRow(key())) : {})}
 			>
 				<Show when={detail().length > 0}>
 					<text width={2} flexShrink={0} fg={uiColors.textMuted}>
@@ -497,7 +498,7 @@ function Block(props: {
 				paddingRight={1}
 				flexDirection="column"
 				flexShrink={0}
-				onMouseUp={() => props.onToggle(props.block.id)}
+				{...useTap(() => props.onToggle(props.block.id))}
 			>
 				<text
 					fg={props.block.live === true ? uiColors.textMuted : uiColors.warning}
@@ -548,7 +549,7 @@ function Block(props: {
 				<box flexDirection="column">
 					<box
 						flexDirection="row"
-						onMouseUp={() => props.onToggle(props.block.id)}
+						{...useTap(() => props.onToggle(props.block.id))}
 					>
 						{/* The fold glyph leads the row, so a list of tool rows reads as
 						    a list of folds rather than a ragged right edge. */}
@@ -612,7 +613,7 @@ function Block(props: {
 										<box flexDirection="column">
 											<box
 												flexDirection="row"
-												onMouseUp={() => props.onToggleSection(key)}
+												{...useTap(() => props.onToggleSection(key))}
 											>
 												<text fg={uiColors.textMuted} wrapMode="none" truncate>
 													{open() ? "▾" : "▸"} {section.label}{" "}
@@ -654,7 +655,7 @@ function Block(props: {
 					<box flexDirection="column">
 						<box
 							flexDirection="row"
-							onMouseUp={() => props.onToggle(props.block.id)}
+							{...useTap(() => props.onToggle(props.block.id))}
 						>
 							<text width={2} flexShrink={0} fg={color()}>
 								{props.block.icon ?? "•"}
@@ -907,6 +908,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		setAnchor(rows[Math.max(0, start - TRANSCRIPT_PAGE)]);
 	};
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
+	// The picker is a read-only dialog: a backdrop tap is the `Esc` its own
+	// handler already implements (closing the filter first, then the picker).
+	const pickerBackdrop = useModalBackdrop({ kind: "agent-session-picker" });
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
 	// Which thinking blocks are expanded, by block id: collapsed by default so a
 	// long reasoning block is one line until asked for, and an entry keeps its
@@ -1272,6 +1276,24 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 												? uiColors.selectionBg
 												: undefined
 										}
+										{...useRowMouse({
+											// The filtered list keeps the same command objects, so a row
+											// instance survives a reorder: the index must be live.
+											index: () => index(),
+											selectedIndex: autocompleteIndex,
+											activatable: () => true,
+											onSelect: (row) =>
+												setAutocompleteIndex(
+													Math.max(
+														0,
+														Math.min(row, autocompleteItems().length - 1),
+													),
+												),
+											onActivate: () => {
+												historyIndex = 0;
+												setPrompt(command.name);
+											},
+										})}
 									>
 										<text
 											width={14}
@@ -1496,6 +1518,16 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				{(state) => (
 					<ListViewModal
 						sizing="cap"
+						{...pickerBackdrop}
+						onSelect={(index) => {
+							const current = picker();
+							if (current) setPicker({ ...current, selected: index });
+						}}
+						onActivate={(index) => {
+							const current = picker();
+							if (current) setPicker({ ...current, selected: index });
+							selectPicker();
+						}}
 						title={
 							state().kind === "model"
 								? "Select model"

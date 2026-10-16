@@ -10,6 +10,7 @@ import {
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
 	uiColors,
+	useKeyDispatch,
 	useTerminalDimensions,
 } from "@ui";
 import { Show } from "solid-js";
@@ -34,6 +35,11 @@ function itemTitle(item: SettingsItem): string {
 }
 
 export function SettingsSectionView(props: SettingsSectionViewProps) {
+	// Pointer parity: a tap selects a section row (`j`/`k`), a tap on the selected
+	// row activates it by dispatching the dialog's own `Enter` (the shell's key
+	// layer decides what that is for this row), and the wheel moves the cursor
+	// exactly as `j`/`k` does.
+	const dispatch = useKeyDispatch();
 	// A windowed list, not a scroll box: the shell's chrome already says where the
 	// page is, so the section only needs to know how many rows it may paint. The
 	// scroll box in the shared selection list re-clamps its own offset whenever a
@@ -64,6 +70,8 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 					availableLines={availableLines()}
 					estimatedItemHeight={3}
 					showScrollIndicator={false}
+					onSelect={props.onSelectIndex}
+					onActivate={() => dispatch("Enter")}
 					renderItem={(item, isSelected) => (
 						<Card
 							height={3}

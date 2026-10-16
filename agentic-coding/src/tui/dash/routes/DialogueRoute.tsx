@@ -42,6 +42,8 @@ export function DialogueRoute(props: DialogueRouteProps) {
 						activeIndex={dialogue().tab()}
 						promptOffset={dialogue().promptOffset()}
 						selected={dialogue().selection()}
+						onSelectIndex={dialogue().setSelection}
+						onSelectTab={dialogue().setTab}
 						custom={dialogue().custom()}
 						customText={dialogue().customText()}
 						responseState={props.pendingGroup.map((item) =>

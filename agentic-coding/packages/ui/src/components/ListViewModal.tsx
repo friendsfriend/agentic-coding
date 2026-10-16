@@ -21,6 +21,7 @@ import type { SummaryEntry } from "./GenericModal.tsx";
 import { GenericModal } from "./GenericModal.tsx";
 import { formatHelpTextLines, wrapHelpEntries } from "./HelpText.tsx";
 import type { Keybind, KeybindSection } from "./keybinds.ts";
+import type { DialogDismissKind } from "./mouse/dismissPolicy.ts";
 import { ScrollableList } from "./ScrollableList.tsx";
 
 export type ListViewModalSizing = "content" | "cap";
@@ -47,6 +48,21 @@ export interface ListViewModalProps<T> {
 	search?: string;
 	/** Default `"content"`. */
 	sizing?: ListViewModalSizing;
+
+	// ── Pointer (shared mouse layer) ───────────────────────────────────────────
+	/** Select a row on a tap (the keyboard's `j`/`k`). */
+	onSelect?: (index: number) => void;
+	/** Activate a tap on the selected row (the keyboard's `Enter`). */
+	onActivate?: (index: number) => void;
+	/** Whether a row has an activation; defaults to "onActivate is bound". */
+	activatable?: (item: T, index: number) => boolean;
+	/** Backdrop dismissal; the shared policy decides whether it may run. */
+	onBackdropClick?: () => void;
+	dismissKind?: DialogDismissKind;
+	dismissBlocked?: boolean | (() => boolean);
+	/** Footer chips run their key (design D6). */
+	onHelpKeybindActivate?: (keybind: Keybind) => void;
+	helpKeybindActivatable?: (keybind: Keybind) => boolean;
 
 	// ── Layout budget ──────────────────────────────────────────────────────────
 	estimatedItemHeight?: number;
@@ -152,6 +168,19 @@ export function ListViewModal<T>(props: ListViewModalProps<T>): JSX.Element {
 			widthPercent={props.widthPercent}
 			heightLines={dialogHeight()}
 			{...(props.search !== undefined ? { search: props.search } : {})}
+			{...(props.onBackdropClick
+				? { onBackdropClick: props.onBackdropClick }
+				: {})}
+			{...(props.dismissKind ? { dismissKind: props.dismissKind } : {})}
+			{...(props.dismissBlocked !== undefined
+				? { dismissBlocked: props.dismissBlocked }
+				: {})}
+			{...(props.onHelpKeybindActivate
+				? { onHelpKeybindActivate: props.onHelpKeybindActivate }
+				: {})}
+			{...(props.helpKeybindActivatable
+				? { helpKeybindActivatable: props.helpKeybindActivatable }
+				: {})}
 			searchMode={props.filterPlaceholder ? props.filterActive : undefined}
 			searchQuery={
 				props.filterPlaceholder
@@ -167,6 +196,9 @@ export function ListViewModal<T>(props: ListViewModalProps<T>): JSX.Element {
 			<ScrollableList<T>
 				items={props.items}
 				selectedIndex={props.selectedIndex}
+				{...(props.onSelect ? { onSelect: props.onSelect } : {})}
+				{...(props.onActivate ? { onActivate: props.onActivate } : {})}
+				{...(props.activatable ? { activatable: props.activatable } : {})}
 				renderItem={(item, isSelected, absoluteIndex) => (
 					<box
 						backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}

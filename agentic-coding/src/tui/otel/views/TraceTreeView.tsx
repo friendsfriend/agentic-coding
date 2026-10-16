@@ -2,9 +2,14 @@
 import { TextAttributes } from "@opentui/core";
 import {
 	HighlightedText,
+	moveRowIndex,
+	type RowGestureState,
 	Selectable,
 	uiColors,
+	useKeyDispatch,
+	useTap,
 	useTerminalDimensions,
+	useWheelScroll,
 } from "@ui";
 import { createMemo, For } from "solid-js";
 import type { TreeNode } from "../../../contracts/telemetry.ts";
@@ -55,7 +60,33 @@ export function TraceTreeView(props: {
 	selectedIndex: () => number;
 	onToggle: (node: TreeNode, path: number[]) => void;
 	onSelect: (path: number[]) => void;
+	/**
+	 * The wheel's O(1) path: it already knows the flat index, so the parent can
+	 * move the cursor exactly as `j`/`k` does instead of resolving a path.
+	 */
+	onSelectIndex?: (index: number) => void;
 }) {
+	/** One holder per list: a row the store replaced still completes its press. */
+	const gesture: RowGestureState = {};
+	// Pointer parity: a tap on the selected span row dispatches the view's own
+	// `Enter` (open the span detail) through the keymap.
+	const dispatch = useKeyDispatch();
+	// The wheel moves the tree cursor, which is what the keys scroll here.
+	const wheel = useWheelScroll({
+		enabled: () => data().items.length > 0,
+		onScroll: (direction, delta) => {
+			const items = data().items;
+			const next = moveRowIndex(
+				props.selectedIndex(),
+				direction,
+				delta,
+				items.length,
+			);
+			if (!items[next]) return;
+			if (props.onSelectIndex) props.onSelectIndex(next);
+			else props.onSelect(items[next]?.path ?? []);
+		},
+	});
 	const size = useTerminalDimensions();
 	const barWidth = () => Math.max(4, size().width - 67);
 	const data = createMemo(() => {
@@ -136,13 +167,14 @@ export function TraceTreeView(props: {
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
-			{data().items.length > 0 && (
-				<box
-					flexGrow={1}
-					minHeight={0}
-					overflow="hidden"
-					flexDirection="column"
-				>
+			<box
+				{...wheel}
+				flexGrow={1}
+				minHeight={0}
+				overflow="hidden"
+				flexDirection="column"
+			>
+				{data().items.length > 0 && (
 					<For each={rows().items}>
 						{(item, index) => {
 							const fullIndex = () => rows().start + index();
@@ -175,9 +207,11 @@ export function TraceTreeView(props: {
 							const bar = `${" ".repeat(offset)}${"━".repeat(Math.min(width, Math.max(0, barWidth() - offset)))}`;
 							return (
 								<Selectable
+									gesture={gesture}
 									selected={selected()}
 									height={1}
 									onMouseUp={() => props.onSelect(path)}
+									onActivate={() => dispatch("Enter")}
 								>
 									<box height={1} flexDirection="row">
 										<box
@@ -190,9 +224,16 @@ export function TraceTreeView(props: {
 											<box
 												width={2}
 												flexShrink={0}
-												onMouseUp={() =>
-													node.children.length > 0 && props.onToggle(node, path)
-												}
+												{...useTap(
+													() => {
+														props.onSelect(path);
+														if (node.children.length > 0)
+															props.onToggle(node, path);
+													},
+													// One tap, one action: the row must not also resolve a gesture (and
+													// dispatch `Enter`), so the glyph consumes its tap.
+													{ stopPropagation: true },
+												)}
 											>
 												<HighlightedText
 													text={childMark}
@@ -239,13 +280,13 @@ export function TraceTreeView(props: {
 							);
 						}}
 					</For>
-				</box>
-			)}
-			{data().items.length === 0 && (
-				<box paddingLeft={1}>
-					<text fg={uiColors.textMuted}>Select a trace to view tree</text>
-				</box>
-			)}
+				)}
+				{data().items.length === 0 && (
+					<box paddingLeft={1}>
+						<text fg={uiColors.textMuted}>Select a trace to view tree</text>
+					</box>
+				)}
+			</box>
 		</box>
 	);
 }

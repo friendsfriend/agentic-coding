@@ -1,12 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createMemo, For } from "solid-js";
+import { createMemo, For, type JSX } from "solid-js";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { themeColorForTheme, themeNames } from "../theme/theme";
 import { GenericModal } from "./GenericModal.tsx";
 import { formatHelpText } from "./HelpText.tsx";
 import { highlightColor } from "./Highlight.tsx";
+import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
+import { useRowMouse } from "./mouse/useRowMouse.ts";
 
 /** A prop that may be a plain value or a Solid accessor. */
 export type Readable<T> = T | (() => T);
@@ -33,6 +35,36 @@ export interface ThemePickerProps {
 	searchMode?: "live" | "display";
 	/** Advertise the `/` filter keybind in the footer and `?` help catalog. */
 	showFilterKeybind?: boolean;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`/`↑`/`↓`). */
+	onSelect?: (index: number) => void;
+}
+
+/**
+ * One theme row: a tap selects it, a tap on the selected row applies it (the
+ * picker's own `Enter`), and a drag or a non-primary button does nothing.
+ */
+function ThemeRow(props: {
+	index: number;
+	selectedIndex: () => number;
+	onSelect?: (index: number) => void;
+	children: JSX.Element;
+}) {
+	const dispatch = useKeyDispatch();
+	const mouse = useRowMouse({
+		index: props.index,
+		selectedIndex: props.selectedIndex,
+		activatable: () => props.onSelect !== undefined,
+		onSelect: (index) => props.onSelect?.(index),
+		onActivate: (index) => {
+			props.onSelect?.(index);
+			dispatch("Enter");
+		},
+	});
+	return (
+		<box {...mouse} style={{ flexDirection: "row", width: "100%" }}>
+			{props.children}
+		</box>
+	);
 }
 
 const label = (name: string) =>
@@ -129,30 +161,36 @@ export function ThemePicker(props: ThemePickerProps) {
 						const color = (key: string, fallback: string) =>
 							themeColorForTheme(item.name, key, fallback);
 						return (
-							<box
-								style={{
-									flexDirection: "row",
-									width: "100%",
-									height: 1,
-									backgroundColor: selected()
-										? uiColors.selectionBgActive
-										: undefined,
-								}}
+							<ThemeRow
+								index={item.index}
+								selectedIndex={selectedIndex}
+								{...(props.onSelect ? { onSelect: props.onSelect } : {})}
 							>
-								<text
-									fg={
-										selected() ? uiColors.selectionText : uiColors.textPrimary
-									}
+								<box
+									style={{
+										flexDirection: "row",
+										width: "100%",
+										height: 1,
+										backgroundColor: selected()
+											? uiColors.selectionBgActive
+											: undefined,
+									}}
 								>
-									{nameColumn(item.name, active())}
-								</text>
-								<text fg={color("primary", uiColors.primary)}> ▬▬▬</text>
-								<text fg={color("secondary", uiColors.primaryDim)}>▬▬▬</text>
-								<text fg={color("accent", uiColors.accent)}>▬▬▬</text>
-								<text fg={color("success", uiColors.success)}>▬▬▬</text>
-								<text fg={color("warning", uiColors.warning)}>▬▬▬</text>
-								<text fg={color("error", uiColors.error)}>▬▬▬</text>
-							</box>
+									<text
+										fg={
+											selected() ? uiColors.selectionText : uiColors.textPrimary
+										}
+									>
+										{nameColumn(item.name, active())}
+									</text>
+									<text fg={color("primary", uiColors.primary)}> ▬▬▬</text>
+									<text fg={color("secondary", uiColors.primaryDim)}>▬▬▬</text>
+									<text fg={color("accent", uiColors.accent)}>▬▬▬</text>
+									<text fg={color("success", uiColors.success)}>▬▬▬</text>
+									<text fg={color("warning", uiColors.warning)}>▬▬▬</text>
+									<text fg={color("error", uiColors.error)}>▬▬▬</text>
+								</box>
+							</ThemeRow>
 						);
 					}}
 				</For>

@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
 import { type Highlight, highlightColor } from "../components/Highlight";
+import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
 import type { ActionTarget, DependencyRef } from "../types";
 
@@ -201,12 +202,13 @@ export function DependencyTreeView(props: DependencyTreeViewProps) {
 						return (
 							<box
 								backgroundColor={rowBg()}
-								onMouseUp={() => {
-									console.error(
-										`[TREE CLICK] node=${row.node.key}, idx=${idx()}`,
-									);
-									props.onNodeClick?.(row.node, idx());
-								}}
+								{...useRowMouse({
+									index: idx(),
+									selectedIndex: () => props.selectedIndex ?? -1,
+									activatable: () => props.onNodeClick !== undefined,
+									onSelect: () => props.onNodeClick?.(row.node, idx()),
+									onActivate: () => props.onNodeClick?.(row.node, idx()),
+								})}
 								style={{
 									width: "100%",
 									height: 1,

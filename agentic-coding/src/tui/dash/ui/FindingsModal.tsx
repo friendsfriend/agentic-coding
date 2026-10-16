@@ -9,6 +9,8 @@ import {
 	ScrollableContent,
 	SelectableList,
 	uiColors,
+	useKeyDispatch,
+	useModalBackdrop,
 	useTerminalDimensions,
 } from "@ui";
 import { createEffect, Show } from "solid-js";
@@ -30,7 +32,11 @@ export function FindingsModal(props: {
 	events: FindingEvent[];
 	selected: number;
 	onDetailScrollBoxReady: (scrollBox: ScrollBoxRenderable) => void;
+	/** Pointer: a tap selects a finding (the keyboard's `j`/`k`). */
+	onSelectIndex?: (index: number) => void;
 }) {
+	const dispatch = useKeyDispatch();
+	const backdrop = useModalBackdrop({ kind: "findings" });
 	// Verdict is engine-derived: any critical finding fails the round.
 	const verdict = () =>
 		props.events.some((event) => event.severity === "critical")
@@ -62,6 +68,7 @@ export function FindingsModal(props: {
 	};
 	return (
 		<GenericModal
+			{...backdrop}
 			title={props.title}
 			widthPercent={0.78}
 			heightPercent={0.8}
@@ -84,6 +91,10 @@ export function FindingsModal(props: {
 				estimatedItemHeight={2}
 				availableLines={Math.min(8, Math.max(2, findings().length * 2))}
 				selectedIndex={props.selected}
+				{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+				{...(props.onSelectIndex
+					? { onActivate: () => dispatch("Enter") }
+					: {})}
 				renderItem={(event) => (
 					<box width="100%" height={2} flexDirection="column" paddingRight={1}>
 						<box flexDirection="row">

@@ -24,6 +24,12 @@ export interface AgentsPanelProps {
 	/** What a durable run is doing right now, from its host watch. Absent (or
 	 * nothing in flight) keeps the workflow status badge. */
 	readonly activity?: (role: string) => AgentActivity | undefined;
+	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
+	readonly onSelectIndex?: (index: number) => void;
+	/** Pointer: a tap on the selected row activates it (the keyboard's `Enter`). */
+	readonly onActivateRow?: (index: number) => void;
+	/** Pointer: a tap anywhere in the panel focuses it (`J/K/H/L`). */
+	readonly onFocusRequest?: () => void;
 }
 
 export function AgentsPanel(props: AgentsPanelProps) {
@@ -55,6 +61,9 @@ export function AgentsPanel(props: AgentsPanelProps) {
 			title="Agents"
 			accent={uiColors.accent}
 			active={props.active}
+			{...(props.onFocusRequest
+				? { onFocusRequest: props.onFocusRequest }
+				: {})}
 			style={{
 				flexGrow: 1,
 				flexBasis: 0,
@@ -80,6 +89,8 @@ export function AgentsPanel(props: AgentsPanelProps) {
 					availableLines={bodyLines()}
 					itemHeights={rowHeights()}
 					selectedIndex={props.active ? props.selectedIndex : -1}
+					{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
+					{...(props.onActivateRow ? { onActivate: props.onActivateRow } : {})}
 					renderItem={(agent, _selected) => {
 						const timeline = () =>
 							props.data.verifierTimeline.find(

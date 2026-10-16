@@ -8,6 +8,7 @@ import { GenericModal } from "./GenericModal.tsx";
 import { MarkdownBlockView } from "./MarkdownViewer.tsx";
 import { parseMarkdownBlocks } from "./markdownBlocks.ts";
 import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+import { useModalBackdrop } from "./mouse/useModalBackdrop.ts";
 import { ScrollableContent } from "./ScrollableContent.tsx";
 
 export function VerdictModal(props: {
@@ -22,6 +23,7 @@ export function VerdictModal(props: {
 	 */
 	renderMarkdown?: boolean;
 }) {
+	const backdrop = useModalBackdrop({ kind: "markdown-viewer" });
 	const dimensions = useTerminalDimensions();
 	const contentWidth = () =>
 		Math.max(40, Math.floor(dimensions().width * 0.7) - 8);
@@ -32,6 +34,7 @@ export function VerdictModal(props: {
 	createEffect(() => scrollbox?.scrollTo(props.offset));
 	return (
 		<GenericModal
+			{...backdrop}
 			title={props.title}
 			widthPercent={0.7}
 			heightPercent={0.75}

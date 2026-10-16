@@ -32,6 +32,7 @@ observability feature module.
 | Animated badge variant, animation palettes, inline progress, animated status text | `Badge.tsx`, `animationColors.ts`, `InlineProgressAnimation.tsx`, `AnimatedStatusText.tsx` | `dash/ui/animationColors.ts`, `dash/devenv-ui/components/*`, `packages/devenv/ui/components/*` |
 | Keybind contract, catalog store, `?` help modal | `keybinds.ts`, `HelpModal.tsx` | `dash/ui/HelpModal.tsx` |
 | Modal `?` help catalog + overlay | `modalHelp.ts`, `ModalHelpOverlay.tsx` | (surfaces render `ModalHelpOverlay`) |
+| Shared mouse interaction layer (tap/drag/wheel/dismiss semantics, row hooks, chip runner) | `packages/ui/src/components/mouse/` (`clickSemantics.ts`, `useRowMouse.ts`, `useTap.ts`, `useWheelScroll.ts`, `dismissPolicy.ts`, `useModalBackdrop.ts`, `useKeybindChips.ts`) | exported once from the `@ui` barrel; every surface family imports it instead of carrying its own click resolution |
 | Corner toast overlay | `Notification.tsx` | `dash/ui/Notification.tsx`, `otel/components/Notification.tsx` |
 
 Family entry points are thin re-exports/wrappers. Wrappers pin a family's
@@ -122,3 +123,24 @@ that the theme store is one instance across surfaces.
   content nor the summary becomes inaccessible at half-split widths.
 - The progress-bar animation effect is gated to modals that actually render
   the bar (`step` provided); other modal opens start no animation timer.
+
+## Mouse interaction layer
+
+`packages/ui/src/components/mouse/` is the single owner of pointer behavior
+(`tui-mouse-interaction`), and `tui-mouse-navigation` is the change that
+introduced it. One definition per gesture, no per-surface handler:
+
+| Module | Owns |
+| --- | --- |
+| `clickSemantics.ts` | The pure rules: primary-button check, tap vs drag (same cell *and* same renderable), the double-tap window, select-vs-activate resolution, the wheel step and the clamped cursor move. No renderer, no timer. |
+| `useRowMouse.ts` | The Solid binding for a list row: `onMouseDown`/`onMouseUp` from the pure rules, no signal, no pointer-move handler. |
+| `useWheelScroll.ts` | The wheel binding for a pane's own scroll owner; an unhandled wheel bubbles instead of being swallowed, so a list never leaves wheel input dead. |
+| `useTap.ts` | The binding for a click-only control (an expander glyph, a tab chip, a footer chip, a toast): one tap runs its handler; a drag or a non-primary button does nothing. |
+| `dismissPolicy.ts` | The data table of dialog kinds and `backdropDismiss(kind, state)`: a backdrop tap dismisses exactly where `Esc` is a non-destructive dismissal. |
+| `useModalBackdrop.ts` | The dialog-side binding: a read-only dialog's backdrop tap dispatches its own `Esc` through the keymap. |
+| `useKeybindChips.ts` | Key chips as pointer targets: `parseChipKey` refuses a label that is not a single stroke, and an accepted chip dispatches that key through the renderer's key handler so the keymap decides availability. |
+
+Primitives that compose it: `ScrollableList` (row mouse + wheel + cursor move),
+`SelectableList`, `Selectable`, `Card`, `WorkItemCard`, `Panel`
+(`onFocusRequest`), `GenericModal` (`dismissKind`), `ListViewModal`,
+`HelpText`/`StatusBar` (chips).

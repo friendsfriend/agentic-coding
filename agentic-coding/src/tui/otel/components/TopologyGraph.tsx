@@ -1,6 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { HighlightedText, ScrollableContent, uiColors } from "@ui";
+import {
+	HighlightedText,
+	ScrollableContent,
+	uiColors,
+	useKeyDispatch,
+	useTap,
+} from "@ui";
 import { createMemo, For } from "solid-js";
 import type { LayoutNode } from "../model/topologyStore.ts";
 
@@ -12,6 +18,9 @@ export function TopologyGraph(props: {
 	selected: () => string | undefined;
 	onSelect: (id: string) => void;
 }) {
+	// A tap on a node selects it; a tap on the selected node is the view's `Enter`
+	// (the service detail), dispatched through the keymap like any other key.
+	const dispatch = useKeyDispatch();
 	const layers = createMemo(() => {
 		const map = new Map<number, LayoutNode[]>();
 		for (const node of props.layout()) {
@@ -72,7 +81,11 @@ export function TopologyGraph(props: {
 												backgroundColor={
 													selected() ? uiColors.bgSurface1 : uiColors.bgMantle
 												}
-												onMouseUp={() => props.onSelect(ln.id)}
+												{...useTap(() =>
+													selected()
+														? dispatch("Enter")
+														: props.onSelect(ln.id),
+												)}
 											>
 												<box
 													width={1}

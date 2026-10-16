@@ -5,10 +5,13 @@ import {
 	catalogKeybinds,
 	footerKeybinds,
 	HelpModal,
+	helpModalRowCount,
+	helpModalRows,
 	setActiveKeybindCatalog,
 	specialKeybinds,
 	wrapHelpEntries,
 } from "@ui";
+import { createSignal } from "solid-js";
 import {
 	agentSessionKeybindCatalog,
 	dashboardDetailKeybindCatalog,
@@ -269,4 +272,90 @@ describe("artifact help section naming", () => {
 			"OpenSpec panel",
 		);
 	});
+});
+
+test("the help row contract counts what the modal paints, Mouse section last", () => {
+	const sections = [
+		{ title: "Navigation", keybinds: [{ key: "j/k", action: "select" }] },
+		{
+			title: "Actions",
+			keybinds: [
+				{ key: "Enter", action: "open" },
+				{ key: "Esc", action: "close" },
+			],
+		},
+	];
+	// The count the scroll clamps use and the rows the modal paints are one
+	// contract: a section appended to one is appended to the other.
+	expect(helpModalRowCount(sections)).toBe(helpModalRows(sections).length);
+	expect(helpModalRows(sections)[0]).toEqual({ title: "Navigation" });
+	expect(helpModalRows(sections).at(-1)).toEqual({
+		key: "wheel",
+		action: "Scroll the pane under the pointer",
+	});
+});
+
+test("the `?` modal renders the Mouse section and its rows", async () => {
+	const t = await testRender(
+		() => (
+			<HelpModal
+				title="Keybindings"
+				offset={0}
+				lines={40}
+				sections={[
+					{ title: "Actions", keybinds: [{ key: "Enter", action: "open" }] },
+				]}
+			/>
+		),
+		{ width: 90, height: 30 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Mouse");
+	expect(frame).toContain("tap");
+	expect(frame).toContain("again");
+	expect(frame).toContain("wheel");
+	t.renderer.destroy();
+});
+
+test("the `?` help modal scrolls under the wheel through the caller's offset", async () => {
+	const offsets: number[] = [];
+	const [offset, setOffset] = createSignal(3);
+	const t = await testRender(
+		() => (
+			<HelpModal
+				title="Keybindings"
+				offset={offset()}
+				lines={5}
+				onScrollOffset={(next) => {
+					offsets.push(next);
+					setOffset(next);
+				}}
+				sections={[
+					{
+						title: "Actions",
+						keybinds: Array.from({ length: 20 }, (_, index) => ({
+							key: `k${index}`,
+							action: `action ${index}`,
+						})),
+					},
+				]}
+			/>
+		),
+		{ width: 90, height: 20 },
+	);
+	await t.flush();
+	// The dialog is centred: its rows start inside its padding, so scroll over the
+	// painted rows rather than over the dialog's own padding.
+	const lines = t.captureCharFrame().split("\n");
+	const rowY = lines.findIndex((line) => line.includes("k3"));
+	expect(rowY).toBeGreaterThan(0);
+	await t.mockMouse.scroll(30, rowY, "down");
+	await t.flush();
+	// One notch moves the offset the caller owns by one row.
+	expect(offsets.at(-1)).toBe(4);
+	await t.mockMouse.scroll(30, rowY, "up");
+	await t.flush();
+	expect(offsets.at(-1)).toBe(3);
+	t.renderer.destroy();
 });

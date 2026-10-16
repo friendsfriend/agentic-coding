@@ -10,6 +10,7 @@ import {
 	Selectable,
 	showErrorModal,
 	uiColors,
+	useKeyDispatch,
 	useTerminalDimensions,
 } from "@ui";
 import {
@@ -80,6 +81,9 @@ export const wikiCommentEntryActive = () => wikiCommentEntry();
 
 /** Home-mode browser for the centralized OKF wiki and its temporary review. */
 export function WikiView(props: WikiViewProps) {
+	// Pointer parity: a tree row selects on a tap, a tap on the selected row
+	// dispatches the view's own `Enter` (open/expand) through the keymap.
+	const dispatch = useKeyDispatch();
 	const size = useTerminalDimensions();
 	const [state, setState] = createSignal<WikiLoadState>({ kind: "loading" });
 	const [selected, setSelected] = createSignal(0);
@@ -456,6 +460,8 @@ export function WikiView(props: WikiViewProps) {
 						<ScrollableList
 							items={rows()}
 							selectedIndex={selected()}
+							// The wheel moves the tree cursor exactly as `j`/`k` do.
+							onSelect={setSelected}
 							availableLines={hostBodyLines(size().height)}
 							estimatedItemHeight={1}
 							showScrollIndicator={false}
@@ -464,6 +470,7 @@ export function WikiView(props: WikiViewProps) {
 									height={1}
 									selected={isSelected()}
 									onMouseUp={() => setSelected(index)}
+									onActivate={() => dispatch("Enter")}
 								>
 									<box height={1}>
 										<text fg={uiColors.textPrimary}>

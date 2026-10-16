@@ -20,3 +20,28 @@ modules below never import each other's feature implementations.
 Dependency direction is one-way: `types` ← `projections` ← `observations` ←
 `review`/`App`; `demo` and `data` sit above the leaves. Review submission and
 observation ownership never live in the root.
+## Pointer input (tui-mouse-navigation)
+
+Mouse handling is additive: no key binding changed and the keyboard remains the
+first input. The semantics live once in `@ui`
+(`packages/ui/src/components/mouse/`) and the dashboard only composes them:
+
+- a tap on a panel title or body focuses that panel (the `J/K/H/L` equivalent),
+  a tap on a list row selects it, a tap on the already-selected row runs the
+  row's `Enter` action, and a double tap selects then activates once;
+- the panel grid, the detail panels and every dialog pass `onSelect`/
+  `onActivate`; activation not otherwise reachable is expressed as the surface's
+  own key (`useKeyDispatch`) so the keymap keeps deciding what is available;
+- the wheel moves the cursor of the windowed list under the pointer (the pane
+  the pointer is over, never the focused one); transcript/detail scroll boxes
+  scroll natively;
+- a dialog names its `dismissKind`, and the shared policy decides whether a
+  backdrop tap may dismiss it (read-only dialogs yes, a wizard, secret, typed
+  draft or irreversible confirmation no);
+- footer and modal key chips dispatch the key they advertise
+  (`useKeybindChips`); a chip whose label is not a single stroke (`j/k`) stays
+  inert.
+
+`test/dash/mouseInteraction.test.tsx` asserts the tap/drag/wheel/dismiss rules
+at the renderer boundary; `test/ui/mouseInteraction.test.ts` asserts the pure
+rules.

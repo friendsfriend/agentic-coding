@@ -9,9 +9,11 @@ import {
 	ScrollableContent,
 	SelectableList,
 	uiColors,
+	useKeyDispatch,
+	useTap,
 	useTerminalDimensions,
 } from "@ui";
-import { createEffect, Show, untrack } from "solid-js";
+import { createEffect, For, Show, untrack } from "solid-js";
 import {
 	type DeveloperDialogueRecord,
 	resolveDeveloperQuestionOption,
@@ -28,11 +30,18 @@ export function DeveloperQuestionModal(props: {
 	activeIndex: number;
 	promptOffset: number;
 	selected: number;
+	/** Pointer: a tap selects an option (the keyboard's up/down). */
+	onSelectIndex?: (index: number) => void;
+	/** Pointer: a tap on a question tab switches to it (Tab/Shift+Tab). */
+	onSelectTab?: (index: number) => void;
 	custom: boolean;
 	customText: string;
 	responseState: string[];
 	onCustomTextChange: (value: string) => void;
 }) {
+	// The shared tap rule for the option rows: select on a tap, activate a tap
+	// on the selected row by dispatching this dialog's own `Enter`.
+	const dispatch = useKeyDispatch();
 	const question = () =>
 		props.questions[props.activeIndex] ?? props.questions[0];
 	let textarea: TextareaRenderable | undefined;
@@ -92,7 +101,8 @@ export function DeveloperQuestionModal(props: {
 		const label = (item.ident ?? item.description).replace(/\s+/g, " ").trim();
 		return label.length > 16 ? `${label.slice(0, 16)}…` : label;
 	};
-	const tabHeader = () => {
+	/** The windowed tab strip: `start` items from `start`, at most `count`. */
+	const tabWindow = () => {
 		const count = Math.max(
 			1,
 			Math.min(3, Math.floor((dimensions().width * 0.78 - 4) / 28)),
@@ -101,16 +111,23 @@ export function DeveloperQuestionModal(props: {
 			Math.max(0, props.activeIndex - 1),
 			Math.max(0, props.questions.length - count),
 		);
-		const tabs = props.questions
-			.slice(start, start + count)
-			.map((item, offset) => {
-				const index = start + offset;
-				return `${index === props.activeIndex ? ">" : " "}[${index + 1} ${shortLabel(item)} ${props.responseState[index] === "answered" ? "✓" : "·"}]`;
-			});
-		return `${start > 0 ? "… " : ""}${tabs.join(" ")}${start + count < props.questions.length ? " …" : ""}`;
+		return { start, count };
+	};
+	/** One tab's text, exactly as the joined header rendered it. */
+	const tabLabel = (index: number, text: string) =>
+		`${index === props.activeIndex ? ">" : " "}${text}`;
+	const tabText = (index: number, item: DeveloperDialogueRecord) =>
+		`[${index + 1} ${shortLabel(item)} ${props.responseState[index] === "answered" ? "✓" : "·"}]`;
+	const tabEntries = () => {
+		const { start, count } = tabWindow();
+		return props.questions.slice(start, start + count).map((item, offset) => ({
+			index: start + offset,
+			text: tabText(start + offset, item),
+		}));
 	};
 	return (
 		<GenericModal
+			dismissKind="developer-question"
 			title={`Developer input · ${question()?.role ?? "agent"}`}
 			fieldLabel="Questionnaire"
 			widthPercent={0.78}
@@ -161,10 +178,37 @@ export function DeveloperQuestionModal(props: {
 		>
 			<box width="100%" flexDirection="column" gap={extremeCompact() ? 0 : 1}>
 				<Show when={!extremeCompact()} fallback={<box />}>
-					<box width="100%" overflow="hidden">
-						<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-							{tabHeader()}
-						</text>
+					<box width="100%" flexDirection="row" overflow="hidden">
+						<Show when={tabWindow().start > 0}>
+							<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
+								{"… "}
+							</text>
+						</Show>
+						<For each={tabEntries()}>
+							{(entry, position) => (
+								<box
+									flexDirection="row"
+									flexShrink={0}
+									{...useTap(() => props.onSelectTab?.(entry.index))}
+								>
+									<text
+										fg={uiColors.textPrimary}
+										attributes={TextAttributes.BOLD}
+									>
+										{`${position() > 0 ? " " : ""}${tabLabel(entry.index, entry.text)}`}
+									</text>
+								</box>
+							)}
+						</For>
+						<Show
+							when={
+								tabEntries().length + tabWindow().start < props.questions.length
+							}
+						>
+							<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
+								{" …"}
+							</text>
+						</Show>
 					</box>
 				</Show>
 				<Show when={question()} fallback={<box />}>
@@ -222,6 +266,12 @@ export function DeveloperQuestionModal(props: {
 												items={rows()}
 												selectedIndex={props.selected}
 												availableLines={optionLines()}
+												{...(props.onSelectIndex
+													? { onSelect: props.onSelectIndex }
+													: {})}
+												{...(props.onSelectIndex
+													? { onActivate: () => dispatch("Enter") }
+													: {})}
 												renderItem={(row) => (
 													<box paddingLeft={1} height={1}>
 														<text

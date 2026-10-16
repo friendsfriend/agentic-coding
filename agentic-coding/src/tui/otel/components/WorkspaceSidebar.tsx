@@ -14,12 +14,12 @@
 // compact strip is the whole collapsed view and neither its rows nor the columns
 // it frees may wait on an animation.
 
-import type { MouseEvent } from "@opentui/core";
 import {
 	Panel,
 	Selectable,
 	SelectableList,
 	uiColors,
+	useTap,
 	useTerminalDimensions,
 } from "@ui";
 import {
@@ -269,18 +269,21 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	const collapseGlyph = () => (props.side === "left" ? "«" : "»");
 	const toggleGlyph = () =>
 		props.mode === "permanent" ? collapseGlyph() : openGlyph();
-	const toggleMode = (event: MouseEvent): void => {
-		event.stopPropagation();
+	const toggleMode = (): void => {
 		props.onFocus();
 		props.onToggleMode();
 	};
+	// The glyphs are click-only controls nested in the strip: the shared tap rule
+	// drops drags and non-primary buttons, and the tap stops here so the strip's
+	// own focus handler does not run twice.
+	const toggleModeTap = () => useTap(toggleMode, { stopPropagation: true });
 	return (
 		<box
 			width={panel().width}
 			flexShrink={0}
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", minHeight: 0, overflow: "hidden" }}
-			onMouseUp={() => props.onFocus()}
+			{...useTap(() => props.onFocus())}
 		>
 			<Show
 				when={panel().expanded}
@@ -297,7 +300,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 								paddingLeft: 1,
 								flexDirection: "row",
 							}}
-							onMouseUp={toggleMode}
+							{...toggleModeTap()}
 						>
 							<text fg={uiColors.textMuted}>{openGlyph()}</text>
 						</box>
@@ -370,7 +373,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 					accessory={
 						<text
 							fg={props.active ? uiColors.primary : uiColors.textMuted}
-							onMouseUp={toggleMode}
+							{...toggleModeTap()}
 						>
 							{toggleGlyph()}
 						</text>
@@ -381,10 +384,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 							{(entry) => (
 								<box
 									style={{ marginRight: 1 }}
-									onMouseUp={() => {
+									{...useTap(() => {
 										props.onFocus();
 										props.onFilterChange(entry.id);
-									}}
+									})}
 								>
 									<text
 										fg={
