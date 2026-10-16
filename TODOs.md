@@ -13,10 +13,8 @@ Small ones:
   * Compaction doenst trigger and settings cant be changed via ui...
 * Improve agent steering based on recent runs (observability first)
 * JEV:
-  * Compaction hints
   * Use jev to block bash commands that should be blocked
   * Improve jev quality by using better input
-* Improve mouse navigation. Many components currently dont support mouse clicking (agents panel, and so on)
 * Make the server be deployable on a server
   * User handling
   * Repository handling
