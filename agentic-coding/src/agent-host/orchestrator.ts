@@ -235,11 +235,15 @@ const BlueprintParameter = Type.Object(
 	},
 );
 
-const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer, make direct edits with your own coding tools (read/write/edit/bash) and launch, monitor and manage coding workflows through your other tools.
+const START_WORKFLOW_CHECKLIST =
+	"repository/project → task (goal, constraints, acceptance) → workflow type and why → agent preset/model profile → mode (worktree or checkout) → branch/base → ticket → `app` for env-setup";
+
+export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer, make direct edits with your own coding tools (read/write/edit/bash) and launch, monitor and manage coding workflows through your other tools.
 
 - Default to acting yourself, immediately, with read/write/edit/bash: looking something up (files, directories, OpenSpec changes/specs, git state, logs, anything readable) is never a reason to start a workflow or to ask the developer first — read it and answer. The same goes for a small, well-understood edit you can make and verify yourself. Only reach for a workflow when the request needs planning, a developer/plan/findings/wiki review, several coordinated agent steps, or a durable record of the work; say briefly why a workflow fits when you choose one.
 - A workflow target (\`repo\`) is any existing path on this machine, not only one from list_projects or list_workflows; list_projects/list_workflows are for discovering what is already configured and running, not a restriction on where you may work or look.
 - Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows.
+- Before you start a workflow, establish with the developer in this order: ${START_WORKFLOW_CHECKLIST}. list_agent_config shows preset/model-profile choices; respect an existing developer default and ask only if none is set or the request implies a different choice. Read project lists, branches, workflow state and presets yourself; do not ask the developer for facts you can read.
 - An \`env-setup\` workflow authors the environment definitions (run/build/test/infrastructure) for one configured application: name that application's ident as \`app\` when you start one — list_projects reports them with their \`kind\` (\`app\` runs, \`library\` does not). Every other type refuses an \`app\`.
 - Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
@@ -282,7 +286,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_projects",
 				description:
-					"List the configured projects (applications and libraries) workflows can run in: name, ident, repository path, kind (`app` runs, `library` does not), OpenSpec support and availability. An `app` entry's ident is the `app` value an `env-setup` workflow takes.",
+					"Use to discover configured targets before choosing a repository or an `env-setup` app; returns each app/library's name, ident, path, kind, OpenSpec support and availability. An `env-setup` app must be a configured `app` ident from this list.",
 				replay: "safe",
 				parameters: Type.Object({}),
 				execute: run(async (_args, env) => {
@@ -303,7 +307,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_workflow_types",
 				description:
-					"List the workflow types that can be started, with what each one runs.",
+					"Use to choose a built-in workflow before shaping a blueprint; returns each startable type's id, label and purpose.",
 				replay: "safe",
 				parameters: Type.Object({}),
 				execute: run(async () =>
@@ -317,7 +321,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_agent_config",
 				description:
-					"List the agent presets (model pools per step, stage gates) and model profiles, optionally as a project's configuration resolves them.",
+					"Use to inspect preset/model-profile choices before selecting a workflow preset; returns the default profile, profiles, presets and gates, optionally resolved for `repository`.",
 				replay: "safe",
 				parameters: Type.Object({
 					repository: Type.Optional(RepoParameter),
@@ -342,7 +346,8 @@ export function createOrchestratorExtension(
 			}),
 			defineTool({
 				name: "list_branches",
-				description: "List the local and remote branches of a repository.",
+				description:
+					"Use before choosing a branch or base for a workflow; returns the repository's local and remote branch refs.",
 				replay: "safe",
 				parameters: Type.Object({ repo: RepoParameter }),
 				execute: run(async (args: { repo: string }, env) =>
@@ -352,7 +357,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_workflows",
 				description:
-					"List every durable workflow with its target, status, current step, and agents.",
+					"Use to find existing workflows before starting or managing one; returns each target, id/type, status, current step, task, branch, owner, attention, actions and agents.",
 				replay: "safe",
 				parameters: Type.Object({}),
 				execute: run(async (_args, env) => {
@@ -384,7 +389,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "sessions_report",
 				description:
-					"Read a deterministic efficiency report over the agent sessions of every workflow in a time window (default 7d). Per role × model-profile × family: turns, tools, batching ratio (tools per turn), tool failures, blocked and abandoned runs, and cost; plus a ranked, content-free finding list. Each finding is tagged prompt | config | engine | task: `prompt` means the issue reproduced across ≥2 model profiles for that role (a brief to fix), `config` means it was seen under a single model (the model is not ruled out — consider routing, not a prompt edit). No session content, task text, or command text is included. Use it to answer how recent runs went and what to improve.",
+					"Use to diagnose agent efficiency over recent runs (default 7d); returns role/profile/family aggregates for turns, tools, failures, blocked/abandoned runs and cost, plus ranked content-free findings. Findings distinguish prompt, config, engine and task issues; no session or task text is included.",
 				replay: "safe",
 				parameters: Type.Object({
 					since: Type.Optional(
@@ -401,7 +406,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_status",
 				description:
-					"Read one workflow in detail: status, current step, runs, failed effects, pending developer questions, and available actions.",
+					"Use to inspect one workflow or before an action; returns status, current revision/step, runs, failed effects, pending questions and available actions.",
 				replay: "safe",
 				parameters: Type.Object({
 					repo: RepoParameter,
@@ -421,7 +426,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_steps",
 				description:
-					"List the logical steps a blueprint may compose: id, label, actor, outcomes and what the step does. The server inserts routing, triage-routing and gate steps itself.",
+					"Use when no built-in type fits and you are shaping a blueprint; returns composable step ids, labels, actors, outcomes and descriptions. The server inserts routing and gates.",
 				replay: "safe",
 				parameters: Type.Object({}),
 				execute: run(async (_args, env) =>
@@ -431,7 +436,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "validate_blueprint",
 				description:
-					"Compile a blueprint without side effects and report its compiled summary and digest, or the diagnostics that refused it. Validate before starting a blueprint.",
+					"Use to validate every candidate blueprint before starting it; compiles without side effects and returns its digest/summary or refusal diagnostics. A blueprint must be validated first.",
 				replay: "safe",
 				parameters: Type.Object({ blueprint: BlueprintParameter }),
 				execute: run(async (args: { blueprint: unknown }, env) =>
@@ -442,8 +447,7 @@ export function createOrchestratorExtension(
 			}),
 			defineTool({
 				name: "start_workflow",
-				description:
-					"Start a workflow from exactly one of a built-in workflow type or a validated blueprint. Human reviews (plan approval, developer review, wiki review) are always kept for workflows you start. An `env-setup` workflow drafts environment definitions for one configured application, so it requires `app` (the ident list_projects reports); the server refuses an `app` no configuration knows.",
+				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase and a configured app for env-setup; returns the start result with human reviews retained.`,
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -454,23 +458,27 @@ export function createOrchestratorExtension(
 					workflowType: Type.Optional(
 						Type.String({
 							description:
-								"A workflow type id from list_workflow_types; mutually exclusive with blueprint",
+								"A built-in workflow type id from list_workflow_types; mutually exclusive with blueprint. Rebase requires sourceBranch and targetBranch.",
 						}),
 					),
 					blueprint: Type.Optional(BlueprintParameter),
 					task: Type.String({
 						minLength: 1,
 						maxLength: 16_000,
-						description: "The task the workflow's agents work on",
+						description:
+							"Task agreed with the developer: goal, constraints and acceptance criteria.",
 					}),
 					mode: Type.Optional(
 						Type.Union([Type.Literal("worktree"), Type.Literal("checkout")], {
 							description:
-								"worktree (default) isolates the work; checkout uses the repository checkout",
+								"Choose `worktree` (default) for isolation or `checkout` to use the repository checkout.",
 						}),
 					),
 					preset: Type.Optional(
-						Type.String({ description: "Agent preset name" }),
+						Type.String({
+							description:
+								"Agent preset name; list_agent_config shows presets and the model profiles they use. Omit to use configured workflow defaults.",
+						}),
 					),
 					app: Type.Optional(
 						Type.String({
@@ -480,15 +488,24 @@ export function createOrchestratorExtension(
 								"The configured application an `env-setup` workflow drafts definitions for, by the ident list_projects reports (`kind` `app`). Required for workflowType `env-setup`; refused for every other type.",
 						}),
 					),
-					ticket: Type.Optional(Type.String({ maxLength: 128 })),
+					ticket: Type.Optional(
+						Type.String({
+							maxLength: 128,
+							description:
+								"Optional ticket or issue reference for the workflow.",
+						}),
+					),
 					sourceBranch: Type.Optional(
 						Type.String({
 							description:
-								"rebase and debug only: the branch to rebase, or the branch a debug workflow investigates in a detached worktree",
+								"For rebase, the source branch being rebased (required with targetBranch); for debug, the branch to investigate.",
 						}),
 					),
 					targetBranch: Type.Optional(
-						Type.String({ description: "rebase only: ref to rebase onto" }),
+						Type.String({
+							description:
+								"For rebase, the target ref to rebase onto (required with sourceBranch).",
+						}),
 					),
 				}),
 				execute: run(
@@ -541,12 +558,21 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_action",
 				description:
-					"Run a management action on a workflow: resume, retry-effect:<id>, switch-preset (input {preset}), close, create-pr, answer-question (answer a developer question routed to you; input is the question answer), or forward-question (hand a routed question to the developer; input {questionId} or {groupId}). Read the current revision with workflow_status first. Review decisions are refused.",
+					"Use after workflow_status, passing its current revision, to resume, retry-effect, switch-preset, close, create-pr or answer/forward a routed question; returns the updated workflow view. Approval, rejection and review decisions are refused and belong to the developer.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,
-					revision: Type.Integer({ minimum: 0 }),
-					actionId: Type.String({ minLength: 1, maxLength: 256 }),
+					revision: Type.Integer({
+						minimum: 0,
+						description:
+							"Current revision returned by workflow_status; stale revisions are refused.",
+					}),
+					actionId: Type.String({
+						minLength: 1,
+						maxLength: 256,
+						description:
+							"Management action id from workflow_status; review decisions are not allowed.",
+					}),
 					input: Type.Optional(Type.Unknown()),
 				}),
 				execute: run(
@@ -574,7 +600,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "drain_workflow",
 				description:
-					"Ask the server to execute a workflow's pending effects now (launch agents, run deliveries).",
+					"Use to execute a workflow's pending effects now (for example, launch agents or run delivery); returns an execution-requested acknowledgement, not a final workflow status.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,

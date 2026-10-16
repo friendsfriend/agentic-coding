@@ -41,10 +41,32 @@ render the shared `AgentSessionView`, so the same commands reach either host.
   compaction is a non-background conversation-owned task, so aborting the run
   cancels it and no summary is placed.
 
+An ordinary prompt is sent only when the active Orchestrator conversation has
+both an effective model and thinking level. Missing settings produce a red
+transcript error naming the missing choice and the command to select it. The
+blocked prompt is retained as a user row in the transcript (and prompt history),
+not sent to the host; after using `/model` and/or `/thinking`, resend it from
+history or type it again. Picker commands and workflow-run presets are not
+blocked. Configured user/project defaults populate the conversation and bypass
+the gate.
+
 The automatic thresholds behind all of this live in `[agents.compaction]`
 (`docs/settings-inventory.md` "Compaction") and apply to every durable run,
 running ones included.
 | Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
+
+## Before starting a workflow
+
+The Orchestrator should establish these choices with the developer, in order:
+repository/project; task (goal, constraints, acceptance); workflow type and why;
+agent preset/model profile; mode (`worktree` or `checkout`); branch/base; ticket;
+and `app` for `env-setup`. `list_agent_config` shows preset/profile choices: use
+a configured developer default without asking, and ask about a profile only if
+none is set or the request implies a different one. Read project lists, branches,
+workflow state and presets with tools rather than asking the developer for
+readable facts. A rebase start needs both `sourceBranch` and `targetBranch`;
+`env-setup` needs the configured app ident from `list_projects`; validate a
+blueprint before starting it.
 
 ## Shaping workflows
 

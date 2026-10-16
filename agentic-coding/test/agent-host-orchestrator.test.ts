@@ -16,6 +16,10 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import {
+	createOrchestratorExtension,
+	ORCHESTRATOR_PROMPT,
+} from "../src/agent-host/orchestrator.ts";
+import {
 	ORCHESTRATOR_TOKEN_ENV,
 	ORCHESTRATOR_URL_ENV,
 } from "../src/agent-host/orchestrator-env.ts";
@@ -56,6 +60,63 @@ async function waitForResults(
 }
 
 describe("orchestrator host mode", () => {
+	test("tool hints and the prompt carry the ordered workflow-start checklist", () => {
+		const extension = createOrchestratorExtension(() => undefined);
+		const tools = extension.tools ?? [];
+		const descriptions = new Map(
+			tools.map((tool) => [tool.name, tool.description]),
+		);
+		const start = descriptions.get("start_workflow") ?? "";
+		const orderedItems = [
+			"repository/project",
+			"task (goal, constraints, acceptance)",
+			"workflow type and why",
+			"agent preset/model profile",
+			"mode (worktree or checkout)",
+			"branch/base",
+			"ticket",
+			"`app` for env-setup",
+		];
+		for (const text of [start, ORCHESTRATOR_PROMPT]) {
+			let previous = -1;
+			for (const item of orderedItems) {
+				const index = text.indexOf(item);
+				expect(index).toBeGreaterThan(previous);
+				previous = index;
+			}
+		}
+		expect(start).toContain("list_agent_config");
+		expect(start).toContain("developer default");
+		expect(start).toContain("yourself");
+		expect(start).toContain("validate blueprints first");
+		expect(start).toContain("sourceBranch and targetBranch");
+		expect(start).toContain("configured app for env-setup");
+		expect(start).toContain("human reviews retained");
+		expect(ORCHESTRATOR_PROMPT).toContain("Before you start a workflow");
+
+		for (const name of [
+			"list_projects",
+			"list_workflow_types",
+			"list_agent_config",
+			"list_branches",
+			"list_workflows",
+			"list_steps",
+			"validate_blueprint",
+			"start_workflow",
+			"workflow_status",
+			"workflow_action",
+			"drain_workflow",
+			"sessions_report",
+		]) {
+			const description = descriptions.get(name)?.toLowerCase() ?? "";
+			expect(description).toContain("use");
+			expect(description).toContain("return");
+		}
+		expect(descriptions.get("workflow_action")).toContain("current revision");
+		expect(descriptions.get("workflow_action")).toContain(
+			"belong to the developer",
+		);
+	});
 	test("serves only the orchestrator policy and calls the server with its capability", async () => {
 		const observed: unknown[] = [];
 		const server = await startWorkflowServer({

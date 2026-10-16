@@ -7,7 +7,13 @@
 import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { setActiveKeybindCatalog, useTerminalDimensions } from "@ui";
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	onCleanup,
+	onMount,
+	untrack,
+} from "solid-js";
 import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
@@ -26,6 +32,10 @@ import {
 	savePromptHistory,
 } from "../shared/preferences.ts";
 import type { OrchestratorModel, OrchestratorSession } from "./session.ts";
+import {
+	guardOrchestratorSubmit,
+	refreshOrchestratorGateBlocks,
+} from "./submission.ts";
 
 export interface OrchestratorViewProps {
 	readonly keymap: Keymap<Renderable, KeyEvent>;
@@ -67,6 +77,9 @@ async function configuredModel(): Promise<OrchestratorModel> {
 export function OrchestratorView(props: OrchestratorViewProps) {
 	const dimensions = useTerminalDimensions();
 	const [session, setSession] = createSignal<OrchestratorSession>();
+	/** Wait for the host snapshot before accepting input, so configured defaults
+	 * are known before the submit gate judges the conversation. */
+	const [sessionReady, setSessionReady] = createSignal(false);
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
 		{
 			id: "route:connecting",
@@ -108,6 +121,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 
 	/** (Re)connect: ensure the host and session, then stream its transcript. */
 	const connect = async (fresh = false) => {
+		setSessionReady(false);
 		stopWatch?.();
 		stopWatch = undefined;
 		try {
@@ -143,6 +157,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 					receivedFrame = true;
 					setBlocks(view.buildAgentSessionView(value, { notices: notices() }));
 					setMetadata(view.readAgentSessionMetadata(value));
+					setSessionReady(true);
 				},
 				onState: (state) => {
 					if (session()?.runId !== opened.runId) return;
@@ -181,31 +196,58 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		void connect();
 	});
 
+	createEffect(() => {
+		// The session snapshot includes configured defaults as well as live picker
+		// choices. Keep any local error accurate while a partial selection changes,
+		// and remove it as soon as both settings are available, retaining blocked
+		// user messages so the developer can resend them.
+		const selection = metadata();
+		untrack(() => {
+			setNotices((current) =>
+				refreshOrchestratorGateBlocks(current, selection),
+			);
+			setBlocks((current) => refreshOrchestratorGateBlocks(current, selection));
+		});
+	});
 	const submit = (text: string) => {
-		void (async () => {
-			try {
-				const { client: host, current } = await client();
-				const response = await host.submit(
-					current.runId,
-					text,
-					crypto.randomUUID(),
-					"steer",
-				);
-				const note = submissionStateNote(response.workflowState);
-				if (note) notify(note.text, note.tone);
-			} catch (error) {
-				notify(
-					`Could not send message: ${error instanceof Error ? error.message : String(error)}`,
-					"error",
-				);
-			}
-		})();
+		guardOrchestratorSubmit(
+			text,
+			metadata(),
+			`local:orchestrator-model-gate:${crypto.randomUUID()}`,
+			{
+				onSubmit: (message) => {
+					void (async () => {
+						try {
+							const { client: host, current } = await client();
+							const response = await host.submit(
+								current.runId,
+								message,
+								crypto.randomUUID(),
+								"steer",
+							);
+							const note = submissionStateNote(response.workflowState);
+							if (note) notify(note.text, note.tone);
+						} catch (error) {
+							notify(
+								`Could not send message: ${error instanceof Error ? error.message : String(error)}`,
+								"error",
+							);
+						}
+					})();
+				},
+				onBlocked: (localBlocks) => {
+					setNotices((current) => [...current, ...localBlocks]);
+					setBlocks((current) => [...current, ...localBlocks]);
+				},
+			},
+		);
 	};
 	const configure = (change: { model?: string; thinking?: string }) => {
 		void (async () => {
 			try {
 				const { client: host, current } = await client();
 				await host.configureRun(current.runId, change);
+				setMetadata((current) => ({ ...current, ...change }));
 				notify(
 					change.model
 						? `Model set to ${change.model} for this session`
@@ -410,7 +452,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			onConfigure={configure}
 			onCompact={compact}
 			onHelp={props.onHelp}
-			inputActive={() => props.active() && !props.overlay()}
+			inputActive={() => props.active() && !props.overlay() && sessionReady()}
 			extraCommands={[
 				{
 					name: "/new",

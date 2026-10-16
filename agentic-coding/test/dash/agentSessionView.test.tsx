@@ -15,6 +15,7 @@ import {
 	AgentSessionView,
 	SESSION_PICKER_KEYS,
 } from "../../src/tui/dash/ui/AgentSessionView.tsx";
+import { guardOrchestratorSubmit } from "../../src/tui/orchestrator/submission.ts";
 
 const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 	{ id: "b1", kind: "user", text: "fix the parser", tone: "accent" },
@@ -119,6 +120,90 @@ test("renders a provider error block", async () => {
 	await t.flush();
 	const frame = t.captureCharFrame();
 	expect(frame).toContain("Error: 400: MissingSessionID");
+	const errorSpan = t
+		.captureSpans()
+		.lines.flatMap((line) => line.spans)
+		.find((span) => span.text.includes("Error: 400: MissingSessionID"));
+	const actual = (
+		errorSpan?.fg as { buffer?: Record<number, number> } | undefined
+	)?.buffer;
+	const expectedColor = parseColor(uiColors.error) as unknown as {
+		r: number;
+		g: number;
+		b: number;
+	};
+	if (!actual) throw new Error("error row has no foreground color");
+	expect(
+		[actual[0] ?? -1, actual[1] ?? -1, actual[2] ?? -1].map(Math.round),
+	).toEqual(
+		[expectedColor.r, expectedColor.g, expectedColor.b].map((part) =>
+			Math.round(part * 255),
+		),
+	);
+	t.renderer.destroy();
+});
+
+test("renders a blocked Orchestrator message with a red model-selection error", async () => {
+	let blocks: readonly AgentSessionBlock[] = [];
+	guardOrchestratorSubmit(
+		"please fix this",
+		{},
+		"local:orchestrator-model-gate:test",
+		{
+			onSubmit: () => {},
+			onBlocked: (next) => {
+				blocks = next;
+			},
+		},
+	);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="orchestrator"
+				history={[]}
+				onHistoryAppend={() => {}}
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("please fix this");
+	expect(frame).toContain("Error: No model and no thinking level are selected");
+	expect(frame).toContain("/thinking, then send your message again.");
+	const errorSpan = t
+		.captureSpans()
+		.lines.flatMap((line) => line.spans)
+		.find((span) =>
+			span.text.includes("Error: No model and no thinking level are selected"),
+		);
+	const actual = (
+		errorSpan?.fg as { buffer?: Record<number, number> } | undefined
+	)?.buffer;
+	const expectedColor = parseColor(uiColors.error) as unknown as {
+		r: number;
+		g: number;
+		b: number;
+	};
+	if (!actual) throw new Error("gate error row has no foreground color");
+	expect(
+		[actual[0] ?? -1, actual[1] ?? -1, actual[2] ?? -1].map(Math.round),
+	).toEqual(
+		[expectedColor.r, expectedColor.g, expectedColor.b].map((part) =>
+			Math.round(part * 255),
+		),
+	);
 	t.renderer.destroy();
 });
 
@@ -609,6 +694,67 @@ test("the picker layer selects on the terminal's Enter spelling", async () => {
 		t.mockInput.pressEnter();
 		await t.renderOnce();
 		expect(submitted).toEqual(["carry on"]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("model and thinking slash commands remain available while prompts are gated", async () => {
+	const configured: Array<{ model?: string; thinking?: string }> = [];
+	const blocked: AgentSessionBlock[][] = [];
+	let pickerHandler: ((event: { name: string }) => boolean) | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="orchestrator"
+				blocks={[]}
+				working={false}
+				history={[]}
+				onHistoryAppend={() => {}}
+				models={["provider/model"]}
+				thinkingLevels={["off", "high"]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={(text) =>
+					guardOrchestratorSubmit(text, {}, "gate-test", {
+						onSubmit: () => {},
+						onBlocked: (blocks) => blocked.push([...blocks]),
+					})
+				}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={(change) => configured.push(change)}
+				onCompact={() => {}}
+				onPickerKeyReady={(handler) => {
+					pickerHandler = handler as unknown as (event: {
+						name: string;
+					}) => boolean;
+				}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		for (const command of ["/model", "/thinking"]) {
+			for (const character of command) t.mockInput.pressKey(character);
+			t.mockInput.pressEnter();
+			await t.renderOnce();
+			expect(t.captureCharFrame()).toContain(
+				command === "/model" ? "Select model" : "Select thinking level",
+			);
+			pickerHandler?.({ name: "enter" });
+			await t.renderOnce();
+		}
+		expect(configured).toEqual([
+			{ model: "provider/model" },
+			{ thinking: "off" },
+		]);
+		expect(blocked).toEqual([]);
+		for (const character of "plain prompt") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(blocked[0]?.[0]?.text).toBe("plain prompt");
 	} finally {
 		t.renderer.destroy();
 	}
