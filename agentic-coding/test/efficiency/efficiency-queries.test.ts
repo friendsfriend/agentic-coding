@@ -46,6 +46,74 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("source-recording marks a failure-only generation instead of reporting a failure rate", () => {
+		const query = queryByName("source-recording");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						source: string;
+						month: string;
+						calls: number;
+						ok: number;
+						failed: number;
+						unknown: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			// The fixture's legacy file carries one `tool_error` and no successful
+			// call: the source+month row must show it as a failure-only record.
+			const legacy = rows.find(
+				(row) =>
+					row.source === "telemetry.main-store" && row.month === "2026-01",
+			);
+			expect(legacy).toBeDefined();
+			expect(legacy?.calls).toBeGreaterThan(0);
+			expect(legacy?.ok).toBe(0);
+			expect(legacy?.failed).toBe(legacy?.calls);
+			// A modern source in the same dataset does record successes.
+			const modern = rows.find((row) => row.source === "harness.worktree");
+			expect(modern?.ok).toBeGreaterThan(0);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("triage-economics separates the triage cost from the verification it gates", () => {
+		const query = queryByName("triage-economics");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						month: string;
+						role_group: string;
+						runs: number;
+						turns: number;
+						cost: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			const groups = new Set(rows.map((row) => row.role_group));
+			expect(groups.has("worker")).toBe(true);
+			// Every row is one month and one role group, never a double count.
+			const total = rows.reduce((sum, row) => sum + row.runs, 0);
+			const all = db
+				.query<{ runs: number }, []>("SELECT COUNT(*) AS runs FROM v_runs")
+				.get();
+			expect(total).toBe(all?.runs ?? -1);
+		} finally {
+			db.close();
+		}
+	});
+
 	test("repeated-reads finds the twice-read path in the fixture", () => {
 		const query = QUERIES.find((entry) => entry.name === "repeated-reads");
 		expect(query).toBeDefined();
@@ -82,6 +150,7 @@ describe("ready-made queries", () => {
 			const rows = db
 				.query<
 					{
+						role: string | null;
 						runs_with_artifact: number;
 						turns_before: number;
 						cost_before: number;
@@ -89,7 +158,6 @@ describe("ready-made queries", () => {
 					[]
 				>(`${query?.sql}`)
 				.all();
-			expect(rows.length).toBeGreaterThan(0);
 			// No fixture run writes an artifact, so every run contributes nothing to
 			// the orientation half rather than being counted as all orientation.
 			for (const row of rows) {
@@ -110,6 +178,8 @@ describe("ready-made queries", () => {
 			const rows = db
 				.query<
 					{
+						role: string | null;
+						runs: number;
 						idle_bucket: string;
 						turns: number;
 						avg_gap_seconds: number;

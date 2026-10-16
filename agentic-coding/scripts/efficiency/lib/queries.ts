@@ -1004,6 +1004,69 @@ JOIN turn_window w ON w.run_id = r.run_id
 WHERE r.completed_at IS NOT NULL
 	AND julianday(w.last_turn_at) - julianday(r.completed_at) > (1.0 / 1440.0)
 ORDER BY tail_seconds DESC, r.run_id`,
+		name: "source-recording",
+		summary:
+			"Per source and month: recorded calls with their outcomes, plus how many runs recorded only failures — the recording-bias trap in one table.",
+		example:
+			"bun run scripts/efficiency/analyze.ts source-recording --dataset ~/ev/dataset-2026",
+		columns: [
+			"source",
+			"month",
+			"calls",
+			"ok",
+			"failed",
+			"unknown",
+			"runs",
+			"runs_all_failed",
+		],
+		sql: `WITH per_run AS (
+	SELECT
+		c.source AS source,
+		COALESCE(NULLIF(SUBSTR(c.started_at, 1, 7), ''), '(no date)') AS month,
+		c.run_id AS run_id,
+		COUNT(*) AS calls,
+		SUM(CASE WHEN c.ok = 1 THEN 1 ELSE 0 END) AS ok,
+		SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END) AS failed,
+		SUM(CASE WHEN c.ok IS NULL THEN 1 ELSE 0 END) AS unknown
+	FROM v_tool_calls c
+	GROUP BY 1, 2, 3
+)
+SELECT
+	p.source AS source,
+	p.month AS month,
+	SUM(p.calls) AS calls,
+	SUM(p.ok) AS ok,
+	SUM(p.failed) AS failed,
+	SUM(p.unknown) AS unknown,
+	COUNT(*) AS runs,
+	SUM(CASE WHEN p.calls >= 3 AND p.failed = p.calls THEN 1 ELSE 0 END) AS runs_all_failed
+FROM per_run p
+GROUP BY 1, 2
+ORDER BY p.source, p.month`,
+	},
+	{
+		name: "triage-economics",
+		summary:
+			"Triage, verifier and other cost side by side per month, so what triage costs against the verification it gates is visible.",
+		example:
+			"bun run scripts/efficiency/analyze.ts triage-economics --dataset ~/ev/dataset-2026",
+		columns: ["month", "role_group", "runs", "turns", "calls", "cost"],
+		sql: `SELECT
+	COALESCE(NULLIF(SUBSTR(COALESCE(started_at, completed_at), 1, 7), ''), '(no date)') AS month,
+	CASE
+		WHEN role = 'triage' THEN 'triage'
+		WHEN role LIKE '%verifier%' THEN 'verifier'
+		WHEN role IN ('planner', 'planner-1', 'planner-2', 'planner-3', 'consolidator') THEN 'planner'
+		WHEN role = 'worker' THEN 'worker'
+		ELSE COALESCE(role, '(unset)')
+	END AS role_group,
+	COUNT(*) AS runs,
+	SUM(turns) AS turns,
+	SUM(tool_calls) AS calls,
+	ROUND(SUM(cost), 3) AS cost
+FROM v_run_summary
+GROUP BY 1, 2
+ORDER BY month, role_group`,
 	},
 ];
 
