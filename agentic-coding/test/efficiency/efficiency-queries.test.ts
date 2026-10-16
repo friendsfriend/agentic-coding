@@ -104,6 +104,7 @@ describe("ready-made queries", () => {
 
 	test("cache-expiry buckets every measurable gap and never loses a turn", () => {
 		const query = QUERIES.find((entry) => entry.name === "cache-expiry");
+		expect(query).toBeDefined();
 		const db = new Database(datasetPath, { readonly: true });
 		try {
 			const rows = db
@@ -121,6 +122,7 @@ describe("ready-made queries", () => {
 			expect(rows.map((row) => row.idle_bucket)).toEqual([
 				...new Set(rows.map((row) => row.idle_bucket)),
 			]);
+			expect(rows.length).toBeGreaterThan(0);
 			// Every bucketed turn carries a real gap.
 			for (const row of rows) expect(row.avg_gap_seconds).toBeGreaterThan(0);
 			// The same turns the `turn-gaps` query measures, counted once.
@@ -251,6 +253,9 @@ describe("ready-made queries", () => {
 			expect(rows).toHaveLength(2);
 			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
 			expect(rows[0]).toMatchObject({
+			const rounds = rows.filter((row) => row.workflow_id === "wf-a");
+			expect(rounds.map((row) => row.round_index)).toEqual([1, 2]);
+			expect(rounds[0]).toMatchObject({
 				workflow_id: "wf-a",
 				roles: 2,
 				runs: 2,
@@ -259,6 +264,7 @@ describe("ready-made queries", () => {
 				cost: 2,
 			});
 			expect(rows[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
+			expect(rounds[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
 		} finally {
 			db.close();
 		}
@@ -335,6 +341,134 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
+	test("delivery-timeline measures the latencies it has and leaves the rest null", () => {
+		const query = queryByName("delivery-timeline");
+		const copy = makeTempDir("efficiency-delivery-");
+		const file = path.join(copy.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, file);
+		const db = new Database(file);
+		try {
+			const insert = db.query(
+				`INSERT INTO events (workflow_id, source, source_rank, at, event, event_class, step_id, confidence, preferred)
+				 VALUES (?, 'test', 1, ?, ?, ?, ?, 'exact', 1)`,
+			);
+			const rows: readonly [string, string, string, string, string][] = [
+				[
+					"wf-delivery",
+					"2026-08-01T09:30:00.000Z",
+					"agent.handoff",
+					"handoff",
+					"core.wiki-approval",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:00:00.000Z",
+					"archive_started",
+					"delivery",
+					"",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:00:20.000Z",
+					"archive_completed",
+					"delivery",
+					"",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:00:20.100Z",
+					"git_operations_started",
+					"delivery",
+					"",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:00:23.100Z",
+					"git_operations_pushed",
+					"delivery",
+					"",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:10:23.100Z",
+					"workflow_closed",
+					"delivery",
+					"",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:30:00.000Z",
+					"developer.action",
+					"gate",
+					"core.archive",
+				],
+				[
+					"wf-delivery",
+					"2026-08-01T10:00:21.000Z",
+					"effect.result",
+					"effect",
+					"",
+				],
+				[
+					"wf-failed",
+					"2026-08-02T09:00:00.000Z",
+					"git_operations_started",
+					"delivery",
+					"",
+				],
+				[
+					"wf-failed",
+					"2026-08-02T09:00:01.000Z",
+					"git_operations_failed",
+					"delivery",
+					"",
+				],
+				[
+					"wf-failed",
+					"2026-08-02T09:00:12.000Z",
+					"git_operations_started",
+					"delivery",
+					"",
+				],
+				[
+					"wf-failed",
+					"2026-08-02T09:00:13.000Z",
+					"git_operations_failed",
+					"delivery",
+					"",
+				],
+			];
+			for (const [workflow, at, event, eventClass, stepId] of rows)
+				insert.run(workflow, at, event, eventClass, stepId);
+			const measured = db
+				.query<
+					{
+						workflow_id: string;
+						archive_seconds: number | null;
+						push_seconds: number | null;
+						pushed_to_closed_minutes: number | null;
+						wiki_approval_to_archive_minutes: number | null;
+						effect_results: number;
+						git_failures: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const ok = measured.find((row) => row.workflow_id === "wf-delivery");
+			expect(ok?.archive_seconds).toBe(20);
+			expect(ok?.push_seconds).toBe(3);
+			expect(ok?.pushed_to_closed_minutes).toBe(10);
+			expect(ok?.wiki_approval_to_archive_minutes).toBe(60);
+			expect(ok?.effect_results).toBe(1);
+			expect(ok?.git_failures).toBe(0);
+			const failed = measured.find((row) => row.workflow_id === "wf-failed");
+			expect(failed?.archive_seconds).toBeNull();
+			expect(failed?.push_seconds).toBeNull();
+			expect(failed?.wiki_approval_to_archive_minutes).toBeNull();
+			expect(failed?.git_failures).toBe(2);
+		} finally {
+			db.close();
+			copy.cleanup();
 		}
 	});
 });

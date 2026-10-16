@@ -884,6 +884,81 @@ ORDER BY r.started_at, r.run_id`,
 FROM source_files
 WHERE parsed = 0
 ORDER BY source, path`,
+		name: "delivery-timeline",
+		summary:
+			"Per workflow: the archive and push latencies the delivery events record, the developer wait after a push and after a wiki approval, and the effect/git failure counts beside them.",
+		example:
+			"bun run scripts/efficiency/analyze.ts delivery-timeline --dataset ~/ev/dataset-2026",
+		columns: [
+			"workflow_id",
+			"archive_started_at",
+			"archive_seconds",
+			"push_seconds",
+			"pushed_to_closed_minutes",
+			"wiki_approval_at",
+			"wiki_approval_to_archive_minutes",
+			"archive_runs",
+			"wiki_runs",
+			"effect_results",
+			"git_failures",
+		],
+		sql: `WITH phase AS (
+	SELECT
+		workflow_id AS workflow_id,
+		MIN(CASE WHEN event = 'archive_started' THEN substr(at, 1, 23) END) AS archive_started_at,
+		MIN(CASE WHEN event = 'archive_completed' THEN substr(at, 1, 23) END) AS archive_completed_at,
+		MIN(CASE WHEN event = 'git_operations_started' THEN substr(at, 1, 23) END) AS git_started_at,
+		MIN(CASE WHEN event = 'git_operations_pushed' THEN substr(at, 1, 23) END) AS pushed_at,
+		MIN(CASE WHEN event = 'workflow_closed' THEN substr(at, 1, 23) END) AS closed_at,
+		SUM(CASE WHEN event = 'git_operations_failed' THEN 1 ELSE 0 END) AS git_failures,
+		SUM(CASE WHEN event_class = 'effect' THEN 1 ELSE 0 END) AS effect_results
+	FROM v_events
+	GROUP BY workflow_id
+),
+approval AS (
+	SELECT
+		workflow_id AS workflow_id,
+		MIN(CASE WHEN event = 'agent.handoff' AND step_id = 'core.wiki-approval' THEN substr(at, 1, 23) END) AS wiki_approval_at
+	FROM v_events
+	GROUP BY workflow_id
+),
+next_archive_action AS (
+	SELECT e.workflow_id AS workflow_id, MIN(substr(e.at, 1, 23)) AS at
+	FROM v_events e
+	JOIN approval a ON a.workflow_id = e.workflow_id
+	WHERE e.event = 'developer.action'
+		AND e.step_id IN ('core.archive', 'core.route-archive')
+		AND a.wiki_approval_at IS NOT NULL
+		AND substr(e.at, 1, 23) >= a.wiki_approval_at
+	GROUP BY e.workflow_id
+),
+role_runs AS (
+	SELECT workflow_id AS workflow_id,
+		SUM(CASE WHEN role = 'archive' THEN 1 ELSE 0 END) AS archive_runs,
+		SUM(CASE WHEN role = 'wiki' THEN 1 ELSE 0 END) AS wiki_runs
+	FROM v_runs
+	GROUP BY workflow_id
+)
+SELECT
+	p.workflow_id AS workflow_id,
+	p.archive_started_at AS archive_started_at,
+	ROUND((julianday(p.archive_completed_at) - julianday(p.archive_started_at)) * 86400.0, 1) AS archive_seconds,
+	ROUND((julianday(p.pushed_at) - julianday(p.git_started_at)) * 86400.0, 1) AS push_seconds,
+	ROUND((julianday(p.closed_at) - julianday(p.pushed_at)) * 1440.0, 1) AS pushed_to_closed_minutes,
+	a.wiki_approval_at AS wiki_approval_at,
+	ROUND((julianday(n.at) - julianday(a.wiki_approval_at)) * 1440.0, 1) AS wiki_approval_to_archive_minutes,
+	COALESCE(r.archive_runs, 0) AS archive_runs,
+	COALESCE(r.wiki_runs, 0) AS wiki_runs,
+	p.effect_results AS effect_results,
+	p.git_failures AS git_failures
+FROM phase p
+LEFT JOIN approval a ON a.workflow_id = p.workflow_id
+LEFT JOIN next_archive_action n ON n.workflow_id = p.workflow_id
+LEFT JOIN role_runs r ON r.workflow_id = p.workflow_id
+WHERE p.archive_started_at IS NOT NULL
+	OR p.git_started_at IS NOT NULL
+	OR a.wiki_approval_at IS NOT NULL
+ORDER BY p.closed_at, p.workflow_id`,
 	},
 ];
 
