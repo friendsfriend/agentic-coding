@@ -256,6 +256,10 @@ describe("ready-made queries", () => {
 			const rounds = rows.filter((row) => row.workflow_id === "wf-a");
 			expect(rounds.map((row) => row.round_index)).toEqual([1, 2]);
 			expect(rounds[0]).toMatchObject({
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows).toHaveLength(2);
+			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
+			expect(rows[0]).toMatchObject({
 				workflow_id: "wf-a",
 				roles: 2,
 				runs: 2,
@@ -317,6 +321,10 @@ describe("ready-made queries", () => {
 		const query = queryByName("source-gaps");
 		expect(query).toBeDefined();
 		const out = makeTempDir("efficiency-source-gaps-");
+	test("run-window-drift reports a session that outlived its run window", () => {
+		const query = queryByName("run-window-drift");
+		expect(query).toBeDefined();
+		const out = makeTempDir("efficiency-window-drift-");
 		const copy = path.join(out.path, "dataset.sqlite");
 		fs.copyFileSync(datasetPath, copy);
 		const db = new Database(copy, { readwrite: true });
@@ -469,6 +477,36 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			copy.cleanup();
+			const target = db
+				.query<{ run_id: string }, []>(
+					`SELECT t.run_id AS run_id
+					FROM v_turns t JOIN v_runs r ON r.run_id = t.run_id
+					WHERE t.started_at IS NOT NULL AND r.completed_at IS NOT NULL
+					GROUP BY t.run_id
+					HAVING COUNT(*) > 1
+					LIMIT 1`,
+				)
+				.get();
+			if (!target) throw new Error("fixture has no run with turns");
+			const clean = db
+				.query<{ run_id: string; tail_seconds: number }, []>(`${query?.sql}`)
+				.all();
+			expect(clean.some((row) => row.run_id === target.run_id)).toBe(false);
+			// A run whose recorded completion precedes its own last turn is a session
+			// that outlived the run identity the telemetry kept attributing to it.
+			db.run("UPDATE runs SET completed_at = ? WHERE run_id = ?", [
+				"2000-01-01T00:00:00.000Z",
+				target.run_id,
+			]);
+			const rows = db
+				.query<{ run_id: string; tail_seconds: number }, []>(`${query?.sql}`)
+				.all();
+			const hit = rows.find((row) => row.run_id === target.run_id);
+			expect(hit).toBeDefined();
+			expect(hit?.tail_seconds).toBeGreaterThan(0);
+		} finally {
+			db.close();
+			out.cleanup();
 		}
 	});
 });

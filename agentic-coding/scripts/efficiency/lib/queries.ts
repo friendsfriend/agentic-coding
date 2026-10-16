@@ -959,6 +959,51 @@ WHERE p.archive_started_at IS NOT NULL
 	OR p.git_started_at IS NOT NULL
 	OR a.wiki_approval_at IS NOT NULL
 ORDER BY p.closed_at, p.workflow_id`,
+		name: "run-window-drift",
+		summary:
+			"Runs whose turns continue well past the run's own recorded window: a resumed session still attributed to a finished run.",
+		example:
+			"bun run scripts/efficiency/analyze.ts run-window-drift --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"role",
+			"status",
+			"run_started_at",
+			"run_completed_at",
+			"turns",
+			"first_turn_at",
+			"last_turn_at",
+			"tail_seconds",
+		],
+		sql: `WITH turn_window AS (
+	SELECT
+		t.run_id AS run_id,
+		MIN(t.started_at) AS first_turn_at,
+		MAX(COALESCE(t.ended_at, t.started_at)) AS last_turn_at,
+		COUNT(*) AS turns
+	FROM v_turns t
+	WHERE t.started_at IS NOT NULL
+	GROUP BY t.run_id
+)
+SELECT
+	r.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	COALESCE(r.role, '(unset)') AS role,
+	COALESCE(r.status, '(unset)') AS status,
+	r.started_at AS run_started_at,
+	r.completed_at AS run_completed_at,
+	w.turns AS turns,
+	w.first_turn_at AS first_turn_at,
+	w.last_turn_at AS last_turn_at,
+	CAST((julianday(w.last_turn_at) - julianday(r.completed_at)) * 86400 AS INTEGER) AS tail_seconds
+FROM v_runs r
+JOIN turn_window w ON w.run_id = r.run_id
+WHERE r.completed_at IS NOT NULL
+	AND julianday(w.last_turn_at) - julianday(r.completed_at) > (1.0 / 1440.0)
+ORDER BY tail_seconds DESC, r.run_id`,
 	},
 ];
 
