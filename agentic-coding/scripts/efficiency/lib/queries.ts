@@ -464,6 +464,58 @@ WHERE input_tokens IS NOT NULL OR cache_read_tokens IS NOT NULL
 ORDER BY cache_hit_rate IS NULL, cache_hit_rate ASC`,
 	},
 	{
+		name: "cache-expiry",
+		summary:
+			"Turns bucketed by the idle gap before them, with their cache reads/writes and cost: a provider prompt cache expires between turns, so a gapped turn re-writes the whole prefix at the write rate instead of reading it.",
+		example:
+			"bun run scripts/efficiency/analyze.ts cache-expiry --dataset ~/ev/dataset-2026",
+		limit: 10,
+		columns: [
+			"idle_bucket",
+			"turns",
+			"avg_gap_seconds",
+			"cache_write_tokens",
+			"cache_read_tokens",
+			"cost",
+		],
+		sql: `WITH ordered AS (
+	SELECT
+		run_id AS run_id,
+		turn_index AS turn_index,
+		started_at AS started_at,
+		cost AS cost,
+		input_tokens AS input_tokens,
+		cache_read_tokens AS cache_read_tokens,
+		cache_write_tokens AS cache_write_tokens,
+		LAG(ended_at) OVER (PARTITION BY run_id ORDER BY turn_index) AS previous_end
+	FROM v_turns
+	WHERE started_at IS NOT NULL
+),
+gapped AS (
+	SELECT
+		*,
+		CAST((julianday(started_at) - julianday(previous_end)) * 86400 AS INTEGER) AS gap_seconds
+	FROM ordered
+	WHERE previous_end IS NOT NULL
+)
+SELECT
+	CASE
+		WHEN gap_seconds < 60 THEN '<1m'
+		WHEN gap_seconds < 300 THEN '1-5m'
+		WHEN gap_seconds < 600 THEN '5-10m'
+		WHEN gap_seconds < 3600 THEN '10-60m'
+		ELSE '>1h'
+	END AS idle_bucket,
+	COUNT(*) AS turns,
+	CAST(AVG(gap_seconds) AS INTEGER) AS avg_gap_seconds,
+	SUM(cache_write_tokens) AS cache_write_tokens,
+	SUM(cache_read_tokens) AS cache_read_tokens,
+	ROUND(SUM(cost), 4) AS cost
+FROM gapped
+GROUP BY idle_bucket
+ORDER BY MIN(gap_seconds)`,
+	},
+	{
 		name: "coverage",
 		summary:
 			"The per-workflow coverage matrix: which sources exist and what they carry.",

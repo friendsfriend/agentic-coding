@@ -77,6 +77,8 @@ describe("ready-made queries", () => {
 	test("orientation-cost counts a run without an artifact as no orientation, not all of it", () => {
 		const query = QUERIES.find((entry) => entry.name === "orientation-cost");
 		expect(query).toBeDefined();
+	test("cache-expiry buckets every measurable gap and never loses a turn", () => {
+		const query = QUERIES.find((entry) => entry.name === "cache-expiry");
 		const db = new Database(datasetPath, { readonly: true });
 		try {
 			const rows = db
@@ -87,6 +89,9 @@ describe("ready-made queries", () => {
 						runs_with_artifact: number;
 						turns_before: number;
 						cost_before: number;
+						idle_bucket: string;
+						turns: number;
+						avg_gap_seconds: number;
 					},
 					[]
 				>(`${query?.sql}`)
@@ -138,6 +143,24 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
+			// Buckets are disjoint and ordered by their lower bound.
+			expect(rows.map((row) => row.idle_bucket)).toEqual([
+				...new Set(rows.map((row) => row.idle_bucket)),
+			]);
+			expect(rows.length).toBeGreaterThan(0);
+			// Every bucketed turn carries a real gap.
+			for (const row of rows) expect(row.avg_gap_seconds).toBeGreaterThan(0);
+			// The same turns the `turn-gaps` query measures, counted once.
+			const gaps = db
+				.query<{ gap_seconds: number }, []>(
+					`${QUERIES.find((entry) => entry.name === "turn-gaps")?.sql}`,
+				)
+				.all();
+			expect(rows.reduce((total, row) => total + row.turns, 0)).toBe(
+				gaps.filter((gap) => gap.gap_seconds > 0).length,
+			);
+		} finally {
+			db.close();
 		}
 	});
 
