@@ -10,8 +10,7 @@ Big ones:
 
 Small ones: 
 * Implement compaction feature 
-  * Use pi durable compaction range to allow the agent to decide when to compact
-  * Make compaction triggerable manually from the chat
+  * Compaction doenst trigger and settings cant be changed via ui...
 * Improve agent steering based on recent runs (observability first)
 * JEV:
   * Compaction hints
@@ -25,9 +24,8 @@ Small ones:
 * Make the server be deployable on a server
   * User handling
   * Repository handling
-* Dont let workflows go to blocked when I use abort once -> Is never recontinued when I send a new message.
 * Multi Repository workflows for cross app testing
-
 
 * Environment setup:
   * The worker agent for the env setup has no environment tools. That is not good. The agent should be able to list the available environments and test the created environment
+  * The draft folder is an issue. It doenst allow to test the setup properly with the real deal. New concept is required
