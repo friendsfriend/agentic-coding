@@ -38,6 +38,11 @@ import {
 	startSelectedLocalClassifier,
 } from "../server/classifier.ts";
 import { backendClient, configureBackendClient } from "../server/client.ts";
+import {
+	diagnosticsSection,
+	startProcessDiagnostics,
+	stopProcessDiagnostics,
+} from "../server/diagnostics/instance.ts";
 import { createEnvironmentAuthority } from "../server/environment/authority.ts";
 import type { OtelReceiverTarget } from "../server/environment/instances/variables.ts";
 import { createIntegrationServices } from "../server/integrations/services.ts";
@@ -45,6 +50,7 @@ import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
 } from "../server/lifecycle.ts";
+import { cachedTextEntryCount } from "../server/operations/file-cache.ts";
 import {
 	defaultContainerGateway,
 	planReceiverBinds,
@@ -99,6 +105,7 @@ import {
 	setStepActive,
 	setStepDone,
 } from "./lifecycle.ts";
+import { noteDiagnosticsChange } from "./otel/app/diagnostics-status.ts";
 import { notify, notify as notifyShell } from "./otel/app/notifications.ts";
 import { LogStore } from "./otel/model/logStore.ts";
 import { MetricStore } from "./otel/model/metricStore.ts";
@@ -475,10 +482,32 @@ export async function main(): Promise<void> {
 	const logStore = new LogStore();
 	const topologyStore = new TopologyStore();
 
+	// Permanent main-thread diagnostics (fix-tui-freezes-and-memory): an
+	// event-loop lag ticker, a memory/cache sample a minute, and the section
+	// timings of the work this process does on the main thread — into one
+	// bounded, rotating log under the configuration root. Cheap enough to leave
+	// on, and the reason the next freeze is diagnosable instead of guessed at.
+	// `agentic-coding diagnostics` reads that log; SIGUSR2 makes this process
+	// write a summary into it without a heap snapshot.
+	startProcessDiagnostics({
+		onChange: noteDiagnosticsChange,
+		caches: () => [
+			{ name: "telemetry.spans", entries: traceStore.spanCount_ },
+			{ name: "telemetry.logs", entries: logStore.logCount_ },
+			{ name: "telemetry.metrics", entries: metricStore.metricCount_ },
+			{ name: "operations.file-text", entries: cachedTextEntryCount() },
+		],
+	});
+
 	const signalRouter = {
-		pushTraces: (spans: SpanData[]) => traceStore.pushBatch(spans),
-		pushMetrics: (metrics: MetricData[]) => metricStore.pushBatch(metrics),
-		pushLogs: (logs: LogData[]) => logStore.pushBatch(logs),
+		pushTraces: (spans: SpanData[]) =>
+			diagnosticsSection("telemetry.spans", () => traceStore.pushBatch(spans)),
+		pushMetrics: (metrics: MetricData[]) =>
+			diagnosticsSection("telemetry.metrics", () =>
+				metricStore.pushBatch(metrics),
+			),
+		pushLogs: (logs: LogData[]) =>
+			diagnosticsSection("telemetry.logs", () => logStore.pushBatch(logs)),
 	};
 
 	const explicitRepos = Array.from(new Set([repo]));
@@ -602,7 +631,10 @@ export async function main(): Promise<void> {
 
 	// Owning modes run the one shutdown flow for keys and every signal. Dash
 	// (no owned stack) only releases its renderer/client resources.
-	registerStopSequence(() => stopOwnedStack());
+	registerStopSequence(async () => {
+		await stopOwnedStack();
+		stopProcessDiagnostics();
+	});
 	globalThis.__requestShutdown = () => requestShutdown();
 	registerActiveWork({
 		describe: () => {

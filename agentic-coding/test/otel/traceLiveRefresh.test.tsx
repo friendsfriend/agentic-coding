@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { advance } from "../app/support/terminal.ts";
 
 function span(workspace: string, id: string): SpanData {
 	return {
@@ -52,9 +53,12 @@ test("traces tab reflects store loads and live pushes after mount", async () => 
 	traceStore.loadFile([span("initial-wf", "a1")]);
 	await t.waitForFrame((value) => value.includes("initial-wf"));
 
-	// Live OTLP receiver pushes use the same path.
+	// Live OTLP receiver pushes use the same path. The store coalesces its
+	// notification per window (fix-tui-freezes-and-memory), so the frame lands
+	// after that wall-clock window rather than on the next render pass.
 	traceStore.pushBatch([span("live-wf", "b2")]);
-	await t.waitForFrame((value) => value.includes("live-wf"));
+	await advance(t, 4, 60);
+	expect(t.captureCharFrame()).toContain("live-wf");
 
 	t.renderer.destroy();
 	db.close();

@@ -82,6 +82,7 @@ import {
 	snapshotList,
 	snapshotRead,
 } from "../../workflow/wiki.ts";
+import { diagnosticsAsyncSection } from "../diagnostics/instance.ts";
 import {
 	assertSetupDraftsDir,
 	type SetupDraftChange,
@@ -165,7 +166,11 @@ export async function runLocalObservation(
 		case "projects":
 			return discoverProjects();
 		case "dashboard":
-			return loadDashboard(observation.repo, observation.workflowId);
+			// Timed for the diagnostics log: the dashboard observation re-reads run
+			// outputs, telemetry and Git state on every refresh.
+			return diagnosticsAsyncSection("read.dashboard", () =>
+				loadDashboard(observation.repo, observation.workflowId),
+			);
 		case "artifacts":
 			return openSpecArtifacts(observation.state);
 		case "artifact-content":

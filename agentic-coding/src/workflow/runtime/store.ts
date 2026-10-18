@@ -827,6 +827,10 @@ function openLeaseStore(repo: string): Database {
 export interface InstanceRow {
 	id: string;
 	change_id: string;
+	/** The repository and worktree the instance was started in: `SELECT *`
+	 * returns them, and the diagnostic a view falls back to names them. */
+	repository: string;
+	worktree: string;
 	definition_id: string;
 	definition_version: number;
 	definition_digest: string;
@@ -1280,13 +1284,18 @@ export function validateStructure(
 			"non-agent step has active runs",
 		);
 }
-export function validateSnapshot(
+/** The snapshot invariants that do not depend on the value having just been
+ * decoded: the pinned digest and step references, every step's behaviour, and
+ * the structural rules. Split out of `validateSnapshot` so a reader that has
+ * already decoded this exact snapshot does not pay for a second decode of it:
+ * the decode is a pure validation of the bytes (its result is discarded), so a
+ * caller holding the decoded value has already made that check. */
+export function validateDecodedSnapshot(
 	snapshot: WorkflowSnapshot,
 	definition: CompiledWorkflowDefinition,
 	runs: WorkflowRun[],
 	registry: WorkflowRegistry,
 ): void {
-	decodeSnapshot(JSON.parse(json(snapshot)));
 	if (snapshot.definition.digest !== definition.digest)
 		throw new WorkflowRuntimeError(
 			"pin-mismatch",
@@ -1303,6 +1312,21 @@ export function validateSnapshot(
 	for (const stepId of definition.steps)
 		registry.stepForDefinition(definition, stepId);
 	validateStructure(snapshot, definition, runs, registry);
+}
+
+/** A snapshot that arrived as bytes: decode it (which is itself the schema
+ * check) and then apply the cross-field invariants. A caller that decoded the
+ * snapshot already calls `validateDecodedSnapshot` directly. */
+export function validateSnapshot(
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	runs: WorkflowRun[],
+	registry: WorkflowRegistry,
+): void {
+	// The decode is a round trip through JSON on purpose: validation must see
+	// the value as the store would read it back, not the caller's object graph.
+	decodeSnapshot(JSON.parse(json(snapshot)));
+	validateDecodedSnapshot(snapshot, definition, runs, registry);
 }
 export function validateEffect(
 	row: EffectRow,

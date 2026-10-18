@@ -8,6 +8,25 @@ import {
 } from "../../../contracts/telemetry.ts";
 import { parseLine } from "../../../server/telemetry-parser";
 
+/** Live spans kept beyond the trace the view has open. A receiver pushing a
+ * few thousand spans per second used to grow this store's array for the life of
+ * the process — nothing ever dropped a span — while every push re-derived what
+ * the mounted view shows. The cap bounds both: the open trace is kept whole and
+ * only the live tail beyond it is trimmed, oldest first. */
+export const MAX_LIVE_SPANS = 20_000;
+
+/** How long live pushes may accumulate before the store notifies its
+ * subscribers once. A receiver delivering thousands of spans per second sent
+ * one notification per batch, so a mounted tree re-derived on every batch of
+ * every stream; one notification per interval is imperceptibly later for a
+ * reader and bounded for the renderer. */
+export const LIVE_NOTIFY_MS = 100;
+
+export interface TraceStoreOptions {
+	/** Notification coalescing window; `0` notifies synchronously (tests). */
+	readonly notifyIntervalMs?: number;
+}
+
 export type SortField = "received" | "latency" | "name" | "service";
 export type SortDir = "asc" | "desc";
 export type SortMode = SortDir | "none";
@@ -80,8 +99,16 @@ export class TraceStore {
 	 * workflow. The distinct values come from the loaded page's summaries. */
 	private spanTypeFilter = "all";
 	private readonly listeners = new Set<() => void>();
+	/** How many leading spans are the loaded/open trace, which trimming never
+	 * drops; everything after them is the live tail. */
+	private loadedSpanCount = 0;
+	private readonly notifyIntervalMs: number;
+	private notifyTimer: ReturnType<typeof setTimeout> | undefined;
+	/** A local list is regrouped by the coalesced notification, not per push. */
+	private localDirty = false;
 
-	constructor(initial: SpanData[] = []) {
+	constructor(initial: SpanData[] = [], options: TraceStoreOptions = {}) {
+		this.notifyIntervalMs = options.notifyIntervalMs ?? LIVE_NOTIFY_MS;
 		if (initial.length) this.loadFile(initial);
 	}
 
@@ -98,9 +125,36 @@ export class TraceStore {
 		for (const listener of this.listeners) listener();
 	}
 
+	/** Notify at most once per window. The store's own reads see a pushed span
+	 * immediately; only the subscribers wait, which is what keeps a burst of
+	 * batches from turning into a burst of re-derivations. */
+	private scheduleNotify(): void {
+		if (this.notifyIntervalMs <= 0) {
+			this.flushNotify();
+			return;
+		}
+		if (this.notifyTimer !== undefined) return;
+		this.notifyTimer = setTimeout(() => {
+			this.notifyTimer = undefined;
+			this.flushNotify();
+		}, this.notifyIntervalMs);
+		// A background push must never keep the process alive on its own.
+		this.notifyTimer.unref?.();
+	}
+
+	/** Deliver the deferred notification, regrouping a local list first. */
+	private flushNotify(): void {
+		if (this.localDirty) {
+			this.localDirty = false;
+			this.summaries = this.groupSummaries(this.spans);
+		}
+		this.notify();
+	}
+
 	/** Local/demo mode: load a span file and derive the list from it. */
 	loadFile(spans: SpanData[]): void {
 		this.spans = spans;
+		this.loadedSpanCount = spans.length;
 		this.summaries = this.groupSummaries(spans);
 		this.listIsLocal = true;
 		this.pageState = {
@@ -129,6 +183,7 @@ export class TraceStore {
 	/** Spans of the trace now shown in the tree (fetched per trace). */
 	setTraceSpans(spans: SpanData[]): void {
 		this.spans = spans;
+		this.loadedSpanCount = spans.length;
 		this.notify();
 	}
 
@@ -155,10 +210,21 @@ export class TraceStore {
 	pushBatch(spans: SpanData[]): void {
 		if (!spans.length) return;
 		this.spans.push(...spans);
+		this.trimLiveTail();
 		// A locally loaded list is derived from the spans it holds; a paged list is
-		// owned by the database and only the page read changes it.
-		if (this.listIsLocal) this.summaries = this.groupSummaries(this.spans);
-		this.notify();
+		// owned by the database and only the page read changes it. The regroup runs
+		// on the coalesced notification, so a burst of batches regroups once.
+		if (this.listIsLocal) this.localDirty = true;
+		this.scheduleNotify();
+	}
+
+	/** Drop the oldest live spans once the live tail exceeds its cap. The
+	 * loaded/open trace is never trimmed: it comes first in the array and every
+	 * span of it stays addressable. */
+	private trimLiveTail(): void {
+		const excess = this.spans.length - this.loadedSpanCount - MAX_LIVE_SPANS;
+		if (excess <= 0) return;
+		this.spans.splice(this.loadedSpanCount, excess);
 	}
 
 	/** Whether the list is derived from locally loaded spans (no page reads). */

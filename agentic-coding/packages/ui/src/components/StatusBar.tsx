@@ -33,6 +33,10 @@ export interface StatusBarProps {
 	left?: string;
 	center?: string;
 	right?: string;
+	/** A one-line status fact pinned next to `?` help (the shell's diagnostics
+	 * summary: the worst recent main-thread lag the process observed). It is
+	 * plain text — a surface owns its wording and never smuggles styling in. */
+	status?: string;
 	/** Rows the footer may use. Default 1 (the shell footer). */
 	lines?: number;
 	runningTextEnabled?: boolean;
@@ -196,6 +200,13 @@ export function StatusBar(props: StatusBarProps) {
 					wrapped().map((row) => <HelpText entries={row} {...chips()} />)
 				)}
 			</box>
+			<Show when={props.status}>
+				<box style={{ flexShrink: 0, marginLeft: 1 }}>
+					<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
+						{props.status}
+					</text>
+				</box>
+			</Show>
 			<box style={{ flexShrink: 0, marginLeft: 1 }}>
 				<HelpText entries={[help()]} {...chips()} />
 			</box>

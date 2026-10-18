@@ -38,6 +38,7 @@ import {
 import { loadAgentConfig } from "./config.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import { TraceIndex } from "./debug/trace-index.ts";
+import { diagnosticsSection } from "./diagnostics/instance.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import {
 	publishEnvironmentDiscovery,
@@ -196,8 +197,15 @@ export async function startWorkflowServer(
 		options.eventBus ??
 		createWorkflowEventBus({
 			events,
-			view: (repo, workflowId) => operations.view(repo, workflowId),
-			listViews: (repo) => operations.listViews(repo),
+			// Timed for the diagnostics log: these are the synchronous store reads
+			// every reconcile tick and every debounced repository refresh pays, and
+			// the first thing to suspect when the process blocks.
+			view: (repo, workflowId) =>
+				diagnosticsSection("store.view", () =>
+					operations.view(repo, workflowId),
+				),
+			listViews: (repo) =>
+				diagnosticsSection("store.listViews", () => operations.listViews(repo)),
 			monitorMode: memoizedAgents(
 				orchestratorMonitorMode,
 				DEFAULT_ORCHESTRATOR_MONITOR,
@@ -211,16 +219,20 @@ export async function startWorkflowServer(
 				(agents) => orchestratorReconcileSeconds(agents) * 1_000,
 				DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS * 1_000,
 			),
-			// The per-workflow event budget and its window: the bus's storm guard,
-			// read per use like the rest of `[agents.orchestrator]`.
+			// The per-workflow event budget and its window: the bus's storm guard.
+			// The bus reads both once, at construction, so the value is resolved
+			// here; a configuration edit applies at the next start. Passing the
+			// memoized getter itself left the guard comparing a count against a
+			// function - never true, so every window was fresh and the guard never
+			// fired (and the wiring did not type-check).
 			maxEventsPerWindow: memoizedAgents(
 				orchestratorEventBurstLimit,
 				DEFAULT_ORCHESTRATOR_EVENT_BURST_LIMIT,
-			),
+			)(),
 			eventWindowMs: memoizedAgents(
 				(agents) => orchestratorEventBurstWindowSeconds(agents) * 1_000,
 				DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS * 1_000,
-			),
+			)(),
 			enrich: (input) => enrichWorkflowEvent(input),
 			...(options.configDir
 				? { runtimeDir: orchestratorRuntimeDir(options.configDir) }

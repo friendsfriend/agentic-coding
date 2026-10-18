@@ -4,6 +4,8 @@
 import type { Database } from "bun:sqlite";
 import type {
 	WorkflowDefinitionGraph,
+	WorkflowEffect,
+	WorkflowRun,
 	WorkflowView,
 } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
@@ -23,14 +25,19 @@ import {
 	ACTIVE_RUN,
 	actions,
 	boundedError,
+	type EffectRow,
+	effectFromRow,
 	effects,
+	type InstanceRow,
 	instance,
 	observedStore,
 	openReadStore,
+	type RunRow,
+	runFromRow,
 	runs,
 	STORE_SCHEMA_VERSION,
 	unsupportedStoreVersion,
-	validateSnapshot,
+	validateDecodedSnapshot,
 } from "./store.ts";
 
 /** The compiled graph of a pinned definition, in walk order: a breadth-first
@@ -172,23 +179,62 @@ export function diagnosticView(
 	};
 }
 
+/** The rows one view is built from, as thunks: a single read stays lazy in
+ * exactly the order this path has always read (the row first, runs only after
+ * the definition resolved, effects only after validation), while a listing that
+ * already holds every workflow's rows hands them over without a query per
+ * workflow. */
+export interface ViewRows {
+	/** The id the view is for: the requested one for a single read, the row's own
+	 * for a listing. The fallback view names it when nothing else is readable. */
+	readonly workflowId: string;
+	/** Absent when the instance is gone: that reads as the generic unavailable
+	 * view, never as a thrown error a caller could not act on. */
+	readonly row: () => InstanceRow | undefined;
+	readonly runs: () => WorkflowRun[];
+	readonly effects: () => WorkflowEffect[];
+}
+
 export function view(
 	db: Database,
 	id: string,
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
-	const source = db
-		.query(
-			"SELECT change_id,repository,worktree FROM workflow_instances WHERE id=?",
-		)
-		.get(id) as {
-		change_id: string;
-		repository: string;
-		worktree: string;
-	} | null;
+	return viewFromRows(
+		db,
+		{
+			workflowId: id,
+			row: () => {
+				try {
+					return instance(db, id);
+				} catch {
+					return undefined;
+				}
+			},
+			runs: () => runs(db, id),
+			effects: () => effects(db, id),
+		},
+		registry,
+		now,
+	);
+}
+
+/** One `WorkflowView` from rows a caller already holds. The read path is the
+ * same one `view` always ran; only where its rows come from differs. */
+export function viewFromRows(
+	db: Database,
+	rows: ViewRows,
+	registry: WorkflowRegistry,
+	now: () => Date,
+): WorkflowView {
 	try {
-		const row = instance(db, id);
+		const row = rows.row();
+		if (!row)
+			throw new WorkflowRuntimeError(
+				"not-found",
+				`workflow not found: ${rows.workflowId}`,
+			);
 		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 		const resolved = resolveDefinitionWithOrigin(
 			registry,
@@ -198,9 +244,11 @@ export function view(
 			snapshot.definition.digest,
 		);
 		const definition = resolved.definition;
-		const runList = runs(db, id);
-		validateSnapshot(snapshot, definition, runList, registry);
-		const effectList = effects(db, id);
+		const runList = rows.runs();
+		// The snapshot was decoded above: the schema check `validateSnapshot`
+		// performs by decoding it again is already made for these exact bytes.
+		validateDecodedSnapshot(snapshot, definition, runList, registry);
+		const effectList = rows.effects();
 		const failedActions = effectList
 			.filter((effect) => effect.status === "failed")
 			.map((effect) => ({
@@ -317,7 +365,12 @@ export function view(
 		const diagnostic = boundedError(error);
 		if (/pin mismatch/.test(diagnostic)) {
 			try {
-				const row = instance(db, id);
+				const row = rows.row();
+				if (!row)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						"instance row unreadable",
+					);
 				const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 				return {
 					workflowId: snapshot.workflowId,
@@ -378,8 +431,13 @@ export function view(
 				/* fall through to generic unavailable */
 			}
 		}
+		// The row the view could not be built from, when it was readable at all:
+		// the generic fallback names what the instance is, never a guess.
+		// The row the view could not be built from, when it was readable at all:
+		// the generic fallback names the instance, never a guess.
+		const source = rows.row();
 		return {
-			workflowId: id,
+			workflowId: rows.workflowId,
 			changeId: source?.change_id ?? "unknown",
 			revision: 0,
 			definition: {
@@ -495,14 +553,69 @@ export function list(
 		];
 	}
 	try {
-		return (
-			db
-				.query("SELECT id FROM workflow_instances ORDER BY updated_at DESC")
-				.all() as Array<{ id: string }>
-		).map((row) => view(db, row.id, registry, now));
+		// One query per table rather than four per workflow. A listing of ~150
+		// workflows asked SQLite for each instance, its runs, its effects and (for
+		// the fallback view only) its identifying columns one workflow at a time:
+		// roughly 600 statements per listing, paid by the event bus on every
+		// reconcile tick and on every debounced repository refresh.
+		const instances = db
+			.query("SELECT * FROM workflow_instances ORDER BY updated_at DESC")
+			.all() as InstanceRow[];
+		if (instances.length === 0) return [];
+		// The child reads stay lazy, exactly as the per-workflow path read them:
+		// nothing is fetched until a view actually needs runs or effects, and the
+		// grouping is built once for the whole listing when it does.
+		let runsByWorkflow: Map<string, WorkflowRun[]> | undefined;
+		const runsFor = (workflowId: string): WorkflowRun[] => {
+			runsByWorkflow ??= groupByWorkflow(
+				db
+					.query("SELECT * FROM workflow_runs ORDER BY rowid")
+					.all() as RunRow[],
+				runFromRow,
+			);
+			return runsByWorkflow.get(workflowId) ?? [];
+		};
+		let effectsByWorkflow: Map<string, WorkflowEffect[]> | undefined;
+		const effectsFor = (workflowId: string): WorkflowEffect[] => {
+			effectsByWorkflow ??= groupByWorkflow(
+				db
+					.query("SELECT * FROM workflow_outbox ORDER BY rowid")
+					.all() as EffectRow[],
+				effectFromRow,
+			);
+			return effectsByWorkflow.get(workflowId) ?? [];
+		};
+		return instances.map((row) =>
+			viewFromRows(
+				db,
+				{
+					workflowId: row.id,
+					row: () => row,
+					runs: () => runsFor(row.id),
+					effects: () => effectsFor(row.id),
+				},
+				registry,
+				now,
+			),
+		);
 	} finally {
 		db.close();
 	}
+}
+
+/** Group child rows by the workflow they belong to, keeping the row order one
+ * workflow's own query returned (rowid order). */
+function groupByWorkflow<Row extends { workflow_id: string }, Value>(
+	rows: readonly Row[],
+	map: (row: Row) => Value,
+): Map<string, Value[]> {
+	const grouped = new Map<string, Value[]>();
+	for (const row of rows) {
+		const values = grouped.get(row.workflow_id);
+		if (values) values.push(map(row));
+		else grouped.set(row.workflow_id, [map(row)]);
+	}
+	return grouped;
 }
 
 export function previewRepair(

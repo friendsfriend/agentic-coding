@@ -2,6 +2,9 @@ import type { MetricData } from "../../../contracts/telemetry.ts";
 
 export type MetricSortKey = "name" | "type" | "service" | "unit";
 
+/** Metric records retained after the newest ones (see `MAX_LOGS`). */
+export const MAX_METRICS = 20_000;
+
 export class MetricStore {
 	private metrics: MetricData[] = [];
 	private filtered: MetricData[] = [];
@@ -27,6 +30,10 @@ export class MetricStore {
 				this.throttleTimer = null;
 				this.metrics.push(...this.pendingBatch);
 				this.pendingBatch = [];
+				// The same retention bound the log store keeps: a receiver pushing
+				// metrics for hours must not grow this list for the life of the process.
+				if (this.metrics.length > MAX_METRICS)
+					this.metrics = this.metrics.slice(this.metrics.length - MAX_METRICS);
 				this.rebuild();
 			}, 500);
 		}

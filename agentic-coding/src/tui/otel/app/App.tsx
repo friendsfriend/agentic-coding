@@ -197,6 +197,10 @@ import { TraceListView } from "../views/TraceListView.tsx";
 import { TraceTreeView } from "../views/TraceTreeView.tsx";
 import { WikiView, wikiCommentEntryActive } from "../views/WikiView.tsx";
 import {
+	diagnosticsSection,
+	diagnosticsStatusText,
+} from "./diagnostics-status.ts";
+import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
 	workspaceSidebarKeybindCatalog,
@@ -1882,7 +1886,12 @@ export function App(props: {
 			: undefined;
 		// The initial history load and live OTLP receiver pushes mutate the store
 		// directly (shell-owned), so refresh the mounted views on every change.
-		const unsubscribeTraceStore = traceStore.onChange(refresh);
+		// Timed, and under the section name the diagnostics log reports: the
+		// refresh re-derives every mounted observability view, which is one of the
+		// main-thread sections a freeze can be spent in.
+		const unsubscribeTraceStore = traceStore.onChange(() =>
+			diagnosticsSection("render.telemetry-refresh", refresh),
+		);
 		// Raw input recording for the `Alt+D` diagnostics report: the keymap layers
 		// consume most keys before the shell dispatcher sees them, so the report has
 		// to record what the terminal delivered, not what reached this handler.
@@ -3418,8 +3427,10 @@ export function App(props: {
 					</Show>
 				</box>
 
-				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent. */}
-				<StatusBar />
+				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent.
+				    The trailing cell is the diagnostics summary: the worst recent
+				    main-thread lag this process observed, when there was one. */}
+				<StatusBar status={diagnosticsStatusText()} />
 			</box>
 			<NotificationOverlay active={activeNotification} />
 			<ErrorModalOverlay keymap={props.dashboard?.keymap} />
