@@ -809,26 +809,42 @@ ORDER BY pre_edit_result_bytes DESC, s.run_id`,
 			"read_tool",
 			"grep_tool",
 		],
-		sql: `SELECT
+		sql: `WITH calls AS (
+	SELECT
+		c.run_id AS run_id,
+		c.tool AS tool,
+		c.args_digest AS args_digest,
+		-- The program a bash call runs: the digest's first word, which is the
+		-- command head for every recording (a digest only ever grows past the
+		-- program name), so an old "bash grep" and a new row classify alike.
+		CASE
+			WHEN c.tool <> 'bash' OR c.args_digest IS NULL THEN NULL
+			ELSE SUBSTR(
+				TRIM(SUBSTR(c.args_digest, 6)),
+				1,
+				INSTR(TRIM(SUBSTR(c.args_digest, 6)) || ' ', ' ') - 1
+			)
+		END AS shell_head
+	FROM v_tool_calls c
+)
+SELECT
 	c.run_id AS run_id,
 	r.workflow_id AS workflow_id,
 	COALESCE(r.profile, '(unset)') AS profile,
 	SUM(CASE WHEN c.tool = 'bash' THEN 1 ELSE 0 END) AS bash_calls,
-	SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IN (
-		'bash grep', 'bash rg', 'bash sed', 'bash cat', 'bash head',
-		'bash tail', 'bash ls', 'bash find', 'bash awk', 'bash wc'
+	SUM(CASE WHEN c.shell_head IN (
+		'grep', 'rg', 'sed', 'cat', 'head', 'tail', 'ls', 'find', 'awk', 'wc'
 	) THEN 1 ELSE 0 END) AS shell_for_a_tool,
 	ROUND(
-		100.0 * SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IN (
-			'bash grep', 'bash rg', 'bash sed', 'bash cat', 'bash head',
-			'bash tail', 'bash ls', 'bash find', 'bash awk', 'bash wc'
+		100.0 * SUM(CASE WHEN c.shell_head IN (
+			'grep', 'rg', 'sed', 'cat', 'head', 'tail', 'ls', 'find', 'awk', 'wc'
 		) THEN 1 ELSE 0 END)
 		/ NULLIF(SUM(CASE WHEN c.tool = 'bash' AND c.args_digest IS NOT NULL THEN 1 ELSE 0 END), 0),
 		1
 	) AS shell_share_pct,
 	SUM(CASE WHEN c.tool = 'read' THEN 1 ELSE 0 END) AS read_tool,
 	SUM(CASE WHEN c.tool = 'grep' THEN 1 ELSE 0 END) AS grep_tool
-FROM v_tool_calls c
+FROM calls c
 JOIN v_runs r ON r.run_id = c.run_id
 WHERE c.args_digest IS NOT NULL
 GROUP BY c.run_id
@@ -1012,16 +1028,25 @@ ORDER BY tail_seconds DESC, r.run_id`,
 	{
 		name: "source-recording",
 		summary:
-			"Per source and month: recorded calls with their outcomes, plus how many runs recorded only failures — the recording-bias trap in one table.",
+			"Per source, month and recording: recorded calls with their outcomes, the share that carries an argument digest, a result size, a duration and a failure kind, plus how many runs recorded only failures — the recording-bias trap and the recording completeness in one table. For the newest recording the four shares are 100.",
 		example:
 			"bun run scripts/efficiency/analyze.ts source-recording --dataset ~/ev/dataset-2026",
 		columns: [
 			"source",
 			"month",
+			"recording",
 			"calls",
 			"ok",
 			"failed",
 			"unknown",
+			"with_args",
+			"with_result_size",
+			"with_duration",
+			"failed_with_kind",
+			"args_pct",
+			"result_size_pct",
+			"duration_pct",
+			"failure_kind_pct",
 			"runs",
 			"runs_all_failed",
 		],
@@ -1029,26 +1054,125 @@ ORDER BY tail_seconds DESC, r.run_id`,
 	SELECT
 		c.source AS source,
 		COALESCE(NULLIF(SUBSTR(c.started_at, 1, 7), ''), '(no date)') AS month,
+		c.recording AS recording,
 		c.run_id AS run_id,
 		COUNT(*) AS calls,
 		SUM(CASE WHEN c.ok = 1 THEN 1 ELSE 0 END) AS ok,
 		SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END) AS failed,
-		SUM(CASE WHEN c.ok IS NULL THEN 1 ELSE 0 END) AS unknown
+		SUM(CASE WHEN c.ok IS NULL THEN 1 ELSE 0 END) AS unknown,
+		SUM(CASE WHEN c.args_hash IS NOT NULL THEN 1 ELSE 0 END) AS with_args,
+		SUM(CASE WHEN c.result_bytes IS NOT NULL THEN 1 ELSE 0 END) AS with_result_size,
+		SUM(CASE WHEN c.duration_ms IS NOT NULL THEN 1 ELSE 0 END) AS with_duration,
+		SUM(CASE WHEN c.failure_kind IS NOT NULL THEN 1 ELSE 0 END) AS failed_with_kind
 	FROM v_tool_calls c
-	GROUP BY 1, 2, 3
+	GROUP BY 1, 2, 3, 4
 )
 SELECT
 	p.source AS source,
 	p.month AS month,
+	p.recording AS recording,
 	SUM(p.calls) AS calls,
 	SUM(p.ok) AS ok,
 	SUM(p.failed) AS failed,
 	SUM(p.unknown) AS unknown,
+	SUM(p.with_args) AS with_args,
+	SUM(p.with_result_size) AS with_result_size,
+	SUM(p.with_duration) AS with_duration,
+	SUM(p.failed_with_kind) AS failed_with_kind,
+	ROUND(100.0 * SUM(p.with_args) / NULLIF(SUM(p.calls), 0), 1) AS args_pct,
+	ROUND(100.0 * SUM(p.with_result_size) / NULLIF(SUM(p.calls), 0), 1) AS result_size_pct,
+	ROUND(100.0 * SUM(p.with_duration) / NULLIF(SUM(p.calls), 0), 1) AS duration_pct,
+	ROUND(100.0 * SUM(p.failed_with_kind) / NULLIF(SUM(p.failed), 0), 1) AS failure_kind_pct,
 	COUNT(*) AS runs,
 	SUM(CASE WHEN p.calls >= 3 AND p.failed = p.calls THEN 1 ELSE 0 END) AS runs_all_failed
 FROM per_run p
-GROUP BY 1, 2
-ORDER BY p.source, p.month`,
+GROUP BY 1, 2, 3
+ORDER BY p.source, p.month, p.recording`,
+	},
+	{
+		name: "failure-kinds",
+		summary:
+			"Failed calls per 100 calls by machine-readable failure kind, per role and tool: the failure vocabulary the old recording could not express.",
+		example:
+			"bun run scripts/efficiency/analyze.ts failure-kinds --dataset ~/ev/dataset-2026",
+		limitable: true,
+		limit: 200,
+		columns: [
+			"role",
+			"tool",
+			"failure_kind",
+			"calls",
+			"failed",
+			"failures_per_100_calls",
+		],
+		sql: `SELECT
+	COALESCE(r.role, '(unset)') AS role,
+	c.tool AS tool,
+	COALESCE(c.failure_kind, '(unrecorded)') AS failure_kind,
+	COUNT(*) AS calls,
+	SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END) AS failed,
+	ROUND(100.0 * SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END) / COUNT(*), 2) AS failures_per_100_calls
+FROM v_tool_calls c
+JOIN v_runs r ON r.run_id = c.run_id
+WHERE c.failure_kind IS NOT NULL
+GROUP BY 1, 2, 3
+ORDER BY failures_per_100_calls DESC, failed DESC`,
+	},
+	{
+		name: "repeats-per-run",
+		summary:
+			"Exact repeats per run (same tool + args_hash): the extra calls they cost and the result bytes they duplicated, per 100 calls.",
+		example:
+			"bun run scripts/efficiency/analyze.ts repeats-per-run --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 200,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"role",
+			"calls",
+			"with_args",
+			"repeat_groups",
+			"repeated_calls",
+			"repeated_calls_per_100",
+			"wasted_result_bytes",
+		],
+		sql: `WITH grouped AS (
+	SELECT
+		c.run_id AS run_id,
+		c.tool AS tool,
+		c.args_hash AS args_hash,
+		COUNT(*) AS calls,
+		SUM(COALESCE(c.result_bytes, 0)) AS result_bytes,
+		MAX(COALESCE(c.result_bytes, 0)) AS biggest_result
+	FROM v_tool_calls c
+	WHERE c.args_hash IS NOT NULL
+	GROUP BY c.run_id, c.tool, c.args_hash
+),
+per_run AS (
+	SELECT
+		run_id AS run_id,
+		SUM(calls) AS calls_with_args,
+		SUM(CASE WHEN calls > 1 THEN 1 ELSE 0 END) AS repeat_groups,
+		SUM(CASE WHEN calls > 1 THEN calls - 1 ELSE 0 END) AS repeated_calls,
+		SUM(CASE WHEN calls > 1 THEN result_bytes - biggest_result ELSE 0 END) AS wasted_result_bytes
+	FROM grouped
+	GROUP BY run_id
+)
+SELECT
+	p.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	COALESCE(r.role, '(unset)') AS role,
+	(SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = p.run_id) AS calls,
+	p.calls_with_args AS with_args,
+	p.repeat_groups AS repeat_groups,
+	p.repeated_calls AS repeated_calls,
+	ROUND(100.0 * p.repeated_calls / NULLIF(p.calls_with_args, 0), 1) AS repeated_calls_per_100,
+	p.wasted_result_bytes AS wasted_result_bytes
+FROM per_run p
+LEFT JOIN v_runs r ON r.run_id = p.run_id
+WHERE p.repeated_calls > 0
+ORDER BY p.wasted_result_bytes DESC, p.repeated_calls DESC`,
 	},
 	{
 		name: "triage-economics",

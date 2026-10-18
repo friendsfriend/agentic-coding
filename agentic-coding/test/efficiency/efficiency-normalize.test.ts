@@ -87,6 +87,51 @@ describe("normalizeRecord", () => {
 		expect(JSON.stringify(captured)).not.toContain("curl -H");
 	});
 
+	test("reads the recorded argument digest, result size and failure kind of a call", () => {
+		const event = normalizeRecord({
+			...SPAN,
+			"pi.tool.args_hash": "0123456789abcdef",
+			"pi.tool.args_digest": "bash git status --short",
+			"pi.tool.argument_bytes": 42,
+			"pi.tool.ok": false,
+			"pi.tool.result_lines": 3,
+			"pi.tool.result_truncated": true,
+			"pi.tool.failure_kind": "no-match",
+			"pi.turn.index": 4,
+			"herdr.run.generation": 2,
+		});
+		expect(event?.toolInput).toEqual({
+			hash: "0123456789abcdef",
+			digest: "bash git status --short",
+			bytes: 42,
+		});
+		expect(event?.toolOk).toBe(false);
+		expect(event?.toolResultLines).toBe(3);
+		expect(event?.toolResultTruncated).toBe(true);
+		expect(event?.toolFailureKind).toBe("no-match");
+		expect(event?.turnIndex).toBe(4);
+		expect(event?.runGeneration).toBe(2);
+	});
+
+	test("refuses a failure kind outside the recorded vocabulary", () => {
+		const event = normalizeRecord({
+			...SPAN,
+			"pi.tool.failure_kind": "the file was missing somehow",
+		});
+		expect(event?.toolFailureKind).toBeUndefined();
+	});
+
+	test("redacts and bounds a recorded digest instead of trusting it", () => {
+		const event = normalizeRecord({
+			...SPAN,
+			"pi.tool.args_hash": "0123456789abcdef",
+			"pi.tool.args_digest":
+				"bash curl -H Authorization: Bearer sk-live-abcdefghijklmnop",
+		});
+		expect(event?.toolInput?.digest).toContain("«redacted");
+		expect(JSON.stringify(event)).not.toContain("sk-live");
+	});
+
 	test("a non-tool event's status is not an error class", () => {
 		const finding = normalizeRecord({
 			name: "verification_finding",

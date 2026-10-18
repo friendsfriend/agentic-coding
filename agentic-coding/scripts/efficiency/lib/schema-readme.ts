@@ -61,10 +61,15 @@ say).
 
 One row per (run, source, call). \`args_hash\` is the full argument JSON hashed,
 so two identical calls join exactly; \`args_digest\` is a short, secret-free
-summary (a path, or a command head). No argument text is stored.
-\`result_bytes\`/\`result_lines\` are sizes, \`result_truncated\` is a heuristic
-flag from the result text. \`ok\` is 1/0/null (null = the call never reported an
-outcome).
+summary (a path, a search path and pattern, or a command head). No argument text
+is stored. \`result_bytes\`/\`result_lines\` are sizes, \`result_truncated\` is the
+flag the recording reported (or the transcript's own truncation flag). \`ok\` is
+1/0/null (null = the call never reported an outcome). \`failure_kind\` is the
+machine-readable failure vocabulary (\`not-found\`, \`no-match\`, \`denied\`,
+\`host-error\`, \`timeout\`, \`aborted\`, \`invalid-args\`, \`other\`) and stays NULL
+where the recording had none. \`recording\` names which recording the row came
+from: \`legacy\`, \`span\` or \`harness\` — the axis the \`source-recording\` query
+reports per-generation completeness on.
 
 ### events
 

@@ -437,13 +437,17 @@ function buildTelemetryToolCalls(
 		tool: string,
 		callId: string | null,
 		order: number,
+		event: NormalizedEvent,
 	): ToolCallRow => ({
 		run_id: runId,
 		run_label: runLabel,
 		workflow_id: workflowId,
 		source,
 		source_rank: sourceRank(source),
-		turn_index: turnIndexByOrder.get(order) ?? null,
+		// The event's own turn index is a fallback only: the turn table numbers
+		// turns by position in the same file, and a call must not point at a turn
+		// index that file never allocated.
+		turn_index: turnIndexByOrder.get(order) ?? event.turnIndex ?? null,
 		call_id: callId,
 		dedupe_key: callId ?? `${tool}#${sequence++}`,
 		tool,
@@ -452,12 +456,14 @@ function buildTelemetryToolCalls(
 		duration_ms: null,
 		ok: null,
 		error_class: null,
+		failure_kind: null,
 		args_hash: null,
 		args_digest: null,
 		args_bytes: null,
 		result_bytes: null,
 		result_lines: null,
 		result_truncated: null,
+		recording: event.format === "legacy" ? "legacy" : "span",
 		confidence: "exact",
 		preferred: 0,
 	});
@@ -468,7 +474,7 @@ function buildTelemetryToolCalls(
 		const callId = sanitizeCallId(event.callId);
 		switch (event.event) {
 			case "runtime.tool_start": {
-				const row = base(tool, callId, entry.order);
+				const row = base(tool, callId, entry.order, event);
 				row.started_at = iso(event.at);
 				if (event.toolInput !== undefined) {
 					row.args_hash = event.toolInput.hash;
@@ -481,30 +487,30 @@ function buildTelemetryToolCalls(
 			}
 			case "runtime.tool": {
 				const existing = callId === null ? undefined : pending.get(callId);
-				const row = existing ?? base(tool, callId, entry.order);
+				const row = existing ?? base(tool, callId, entry.order, event);
 				row.tool = tool;
 				row.ended_at = iso(event.at) ?? row.ended_at;
 				row.duration_ms = event.toolDurationMs ?? row.duration_ms;
 				if (event.toolArgumentBytes !== undefined)
 					row.args_bytes = row.args_bytes ?? event.toolArgumentBytes;
 				row.result_bytes = event.toolResultBytes ?? row.result_bytes;
-				row.ok =
-					event.toolOutcome === undefined
-						? row.ok
-						: OK_TOOL_OUTCOMES.has(event.toolOutcome)
-							? 1
-							: 0;
+				row.result_lines = event.toolResultLines ?? row.result_lines;
+				if (event.toolResultTruncated !== undefined)
+					row.result_truncated = event.toolResultTruncated ? 1 : 0;
+				row.ok = toolOkValue(event, row.ok);
+				row.failure_kind = event.toolFailureKind ?? row.failure_kind;
 				row.error_class = errorClassOf(event) ?? row.error_class;
 				if (event.toolInput !== undefined && row.args_hash === null) {
 					row.args_hash = event.toolInput.hash;
 					row.args_digest = event.toolInput.digest;
+					row.args_bytes = row.args_bytes ?? event.toolInput.bytes;
 				}
 				if (existing === undefined) rows.push(row);
 				if (callId !== null) pending.delete(callId);
 				break;
 			}
 			case "tool_error": {
-				const row = base(tool, null, entry.order);
+				const row = base(tool, null, entry.order, event);
 				row.started_at = iso(event.at);
 				row.ended_at = iso(event.at);
 				row.ok = 0;
@@ -517,6 +523,19 @@ function buildTelemetryToolCalls(
 		}
 	}
 	return rows;
+}
+
+/** The call's outcome. The envelope's explicit `ok` wins over the outcome
+ * spelling: it is what the runtime measured, including a failed call whose
+ * result entry survived (which the old `ok`/`error` fallback read as a
+ * success). A recording that states neither leaves the previous value alone. */
+function toolOkValue(
+	event: NormalizedEvent,
+	current: number | null,
+): number | null {
+	if (event.toolOk !== undefined) return event.toolOk ? 1 : 0;
+	if (event.toolOutcome === undefined) return current;
+	return OK_TOOL_OUTCOMES.has(event.toolOutcome) ? 1 : 0;
 }
 
 function errorClassOf(event: NormalizedEvent): string | null {
@@ -589,6 +608,9 @@ function harnessToolCalls(
 						: null,
 				ok: result === undefined ? null : result.isError ? 0 : 1,
 				error_class: result?.isError === true ? "tool_error" : null,
+				// A transcript states that a call failed but names no kind: the
+				// runtime's vocabulary is not reconstructed from result text here.
+				failure_kind: null,
 				args_hash: call.argsDigest.hash,
 				args_digest: call.argsDigest.digest,
 				args_bytes: call.argsDigest.bytes,
@@ -596,6 +618,7 @@ function harnessToolCalls(
 				result_lines: result?.lines ?? null,
 				result_truncated:
 					result === undefined ? null : result.truncated ? 1 : 0,
+				recording: "harness",
 				confidence: result === undefined ? "heuristic" : "exact",
 				preferred: 0,
 			});
@@ -876,6 +899,15 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 		const rank = sourceRank(entry.source);
 		accumulator.fields.set("workflow_id", entry.event.workflowId, rank);
 		accumulator.fields.set("step_id", entry.event.stepId, rank);
+		// The run's generation when the envelope carries one, so a telemetry-only
+		// run states which attempt it was instead of staying NULL.
+		accumulator.fields.set(
+			"generation",
+			entry.event.runGeneration === undefined
+				? undefined
+				: String(entry.event.runGeneration),
+			rank,
+		);
 		accumulator.fields.set("role", entry.event.role, rank);
 		accumulator.fields.set("profile", entry.event.profile, rank);
 		accumulator.fields.set("model", entry.event.model, rank);

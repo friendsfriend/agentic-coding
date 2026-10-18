@@ -521,6 +521,9 @@ export class DurableHost {
 						stepId: envVars.HERDR_STEP_ID,
 						role: envVars.HERDR_ROLE,
 						profile: envVars.HERDR_PROFILE,
+						generation: Number.isFinite(Number(envVars.HERDR_RUN_GENERATION))
+							? Number(envVars.HERDR_RUN_GENERATION)
+							: undefined,
 						telemetryPath: envVars.HERDR_TELEMETRY_PATH,
 						captureContent: envVars.HERDR_CAPTURE_CONTENT === "1",
 					},

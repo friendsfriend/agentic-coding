@@ -17,7 +17,11 @@ import {
 	type TurnRow,
 } from "./types.ts";
 
-export const DATASET_SCHEMA_VERSION = 1;
+// 2: `tool_calls` gained `failure_kind` and `recording` (the telemetry shape
+// the runtime records since tool-call telemetry stopped being name-only). A
+// dataset built from an older-only snapshot simply carries NULL/legacy values
+// in the new columns, so old rows stay readable.
+export const DATASET_SCHEMA_VERSION = 2;
 export const DATASET_FILE = "dataset.sqlite";
 
 const TABLES_DDL = `
@@ -131,12 +135,14 @@ CREATE TABLE tool_calls (
 	duration_ms INTEGER,
 	ok INTEGER,
 	error_class TEXT,
+	failure_kind TEXT,
 	args_hash TEXT,
 	args_digest TEXT,
 	args_bytes INTEGER,
 	result_bytes INTEGER,
 	result_lines INTEGER,
 	result_truncated INTEGER,
+	recording TEXT NOT NULL,
 	confidence TEXT NOT NULL,
 	preferred INTEGER NOT NULL DEFAULT 0,
 	UNIQUE (run_id, source, dedupe_key)
@@ -145,6 +151,7 @@ CREATE INDEX idx_tool_calls_run ON tool_calls(run_id);
 CREATE INDEX idx_tool_calls_workflow ON tool_calls(workflow_id);
 CREATE INDEX idx_tool_calls_tool ON tool_calls(tool);
 CREATE INDEX idx_tool_calls_hash ON tool_calls(args_hash);
+CREATE INDEX idx_tool_calls_failure ON tool_calls(failure_kind);
 
 CREATE TABLE events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,6 +279,10 @@ SELECT
 		WHERE c.workflow_id = w.id AND c.duration_ms IS NOT NULL
 	) AS has_call_durations,
 	EXISTS(
+		SELECT 1 FROM tool_calls c
+		WHERE c.workflow_id = w.id AND c.failure_kind IS NOT NULL
+	) AS has_failure_kinds,
+	EXISTS(
 		SELECT 1 FROM events e WHERE e.workflow_id = w.id AND e.event_class = 'verifier'
 	) AS has_verifier_events,
 	EXISTS(
@@ -366,8 +377,8 @@ function insertAll(
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const toolStatement = db.prepare(
-		`INSERT OR REPLACE INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, turn_index, call_id, dedupe_key, tool, started_at, ended_at, duration_ms, ok, error_class, args_hash, args_digest, args_bytes, result_bytes, result_lines, result_truncated, confidence, preferred)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, turn_index, call_id, dedupe_key, tool, started_at, ended_at, duration_ms, ok, error_class, failure_kind, args_hash, args_digest, args_bytes, result_bytes, result_lines, result_truncated, recording, confidence, preferred)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const eventStatement = db.prepare(
 		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, detail, detail_hash, detail_bytes, confidence, preferred)
@@ -475,12 +486,14 @@ function insertAll(
 			call.duration_ms,
 			call.ok,
 			call.error_class,
+			call.failure_kind,
 			call.args_hash,
 			call.args_digest,
 			call.args_bytes,
 			call.result_bytes,
 			call.result_lines,
 			call.result_truncated,
+			call.recording,
 			call.confidence,
 			call.preferred,
 		);

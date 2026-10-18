@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { writeDataset } from "../../scripts/efficiency/lib/dataset.ts";
 import { extractTables } from "../../scripts/efficiency/lib/extract.ts";
 import { queryByName } from "../../scripts/efficiency/lib/queries.ts";
@@ -371,5 +373,319 @@ describe("events and redaction", () => {
 		)[0];
 		expect(row?.args_digest).toBe("bash curl");
 		expect(row?.args_hash).toHaveLength(16);
+	});
+});
+
+// The round trip the tool-call telemetry shape exists for: one synthetic
+// telemetry file written the way the runtime writes it, through the extractor
+// into the dataset, with the secret-looking value checked at both ends.
+describe("a synthetic new-generation telemetry file round-trips into the dataset", () => {
+	const SECRET = "sk-live-abcdefghijklmnop";
+	let root: string;
+	let out: { path: string; cleanup(): void };
+	let roundTripPath = "";
+
+	beforeAll(() => {
+		root = fs.mkdtempSync(
+			path.join(fs.realpathSync(os.tmpdir()), "efficiency-round-trip-"),
+		);
+		fs.writeFileSync(
+			path.join(root, "MANIFEST.md"),
+			"# synthetic\n\nOne workflow, one run, three calls.\n",
+		);
+		const telemetryDir = path.join(root, "main-store", "telemetry");
+		fs.mkdirSync(telemetryDir, { recursive: true });
+		const envelope = (fields: Record<string, unknown>) =>
+			JSON.stringify({
+				schemaVersion: 1,
+				layer: "runtime",
+				runtime: "pi-durable",
+				workflowId: "round-trip-wf",
+				runId: "run-round-trip",
+				stepId: "core.implementation",
+				role: "worker",
+				profile: "pi-opencode-go-deepseek-flash",
+				"herdr.run.generation": 3,
+				...fields,
+			});
+		const lines = [
+			envelope({
+				event: "runtime.turn_started",
+				at: "2026-02-01T10:00:00.000Z",
+			}),
+			envelope({
+				event: "runtime.tool_start",
+				at: "2026-02-01T10:00:01.000Z",
+				"pi.tool.name": "read",
+				"pi.tool.call_id": "call-1",
+				"pi.tool.args_hash": "0123456789abcdef",
+				"pi.tool.args_digest": "read src/missing.ts",
+				"pi.tool.argument_bytes": 26,
+				"pi.turn.index": 0,
+			}),
+			envelope({
+				event: "runtime.tool",
+				at: "2026-02-01T10:00:02.000Z",
+				outcome: "error",
+				"pi.tool.name": "read",
+				"pi.tool.call_id": "call-1",
+				"pi.tool.outcome": "error",
+				"pi.tool.ok": false,
+				"pi.tool.duration_ms": 41,
+				"pi.tool.result_bytes": 128,
+				"pi.tool.result_lines": 4,
+				"pi.tool.result_truncated": false,
+				"pi.tool.failure_kind": "not-found",
+				"pi.turn.index": 0,
+			}),
+			envelope({
+				event: "runtime.tool_start",
+				at: "2026-02-01T10:00:03.000Z",
+				"pi.tool.name": "bash",
+				"pi.tool.call_id": "call-2",
+				"pi.tool.args_hash": "fedcba9876543210",
+				// A digest as a leaking writer *could* have written it: the dataset
+				// redacts it again, so no secret reaches the file whatever the runtime
+				// did.
+				"pi.tool.args_digest": `bash curl -H Authorization: Bearer ${SECRET} https://x/y`,
+				"pi.tool.argument_bytes": 90,
+				"pi.turn.index": 0,
+			}),
+			envelope({
+				event: "runtime.tool",
+				at: "2026-02-01T10:00:04.000Z",
+				outcome: "ok",
+				"pi.tool.name": "bash",
+				"pi.tool.call_id": "call-2",
+				"pi.tool.outcome": "ok",
+				"pi.tool.ok": true,
+				"pi.tool.duration_ms": 7,
+				"pi.tool.result_bytes": 12,
+				"pi.tool.result_lines": 1,
+				"pi.tool.result_truncated": true,
+				"pi.turn.index": 0,
+			}),
+			// A third call with the same argument hash as the first: an exact
+			// repeat, which the repeat query has to find.
+			envelope({
+				event: "runtime.tool_start",
+				at: "2026-02-01T10:00:05.000Z",
+				"pi.tool.name": "read",
+				"pi.tool.call_id": "call-3",
+				"pi.tool.args_hash": "0123456789abcdef",
+				"pi.tool.args_digest": "read src/missing.ts",
+				"pi.tool.argument_bytes": 26,
+				"pi.turn.index": 0,
+			}),
+			envelope({
+				event: "runtime.tool",
+				at: "2026-02-01T10:00:06.000Z",
+				outcome: "error",
+				"pi.tool.name": "read",
+				"pi.tool.call_id": "call-3",
+				"pi.tool.outcome": "error",
+				"pi.tool.ok": false,
+				"pi.tool.duration_ms": 39,
+				"pi.tool.result_bytes": 128,
+				"pi.tool.result_lines": 4,
+				"pi.tool.failure_kind": "not-found",
+				"pi.turn.index": 0,
+			}),
+		];
+		fs.writeFileSync(
+			path.join(telemetryDir, "round-trip-wf.jsonl"),
+			`${lines.join("\n")}\n`,
+		);
+		out = makeTempDir("efficiency-round-trip-out-");
+		roundTripPath = writeDataset({
+			outDir: out.path,
+			tables: extractTables({ evidenceDir: root }).tables,
+			meta: { builtAt: "test", evidenceDir: root },
+		}).path;
+	});
+
+	afterAll(() => {
+		fs.rmSync(root, { recursive: true, force: true });
+		out.cleanup();
+	});
+
+	test("keeps every recorded field of every call", () => {
+		const db = new Database(roundTripPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						call_id: string;
+						tool: string;
+						recording: string;
+						ok: number;
+						failure_kind: string | null;
+						duration_ms: number;
+						result_bytes: number;
+						result_lines: number;
+						result_truncated: number;
+						args_hash: string;
+						args_digest: string;
+						args_bytes: number;
+						turn_index: number;
+					},
+					[]
+				>(
+					"SELECT call_id, tool, recording, ok, failure_kind, duration_ms, result_bytes, result_lines, result_truncated, args_hash, args_digest, args_bytes, turn_index FROM tool_calls WHERE preferred = 1 ORDER BY call_id",
+				)
+				.all();
+			expect(rows.map((row) => row.call_id)).toEqual([
+				"call-1",
+				"call-2",
+				"call-3",
+			]);
+			const failed = rows[0];
+			expect(failed?.tool).toBe("read");
+			expect(failed?.recording).toBe("span");
+			expect(failed?.ok).toBe(0);
+			expect(failed?.failure_kind).toBe("not-found");
+			expect(failed?.duration_ms).toBe(41);
+			expect(failed?.result_bytes).toBe(128);
+			expect(failed?.result_lines).toBe(4);
+			expect(failed?.result_truncated).toBe(0);
+			expect(failed?.args_hash).toBe("0123456789abcdef");
+			expect(failed?.args_digest).toBe("read src/missing.ts");
+			expect(failed?.args_bytes).toBe(26);
+			expect(failed?.turn_index).toBe(0);
+			const ok = rows[1];
+			expect(ok?.ok).toBe(1);
+			expect(ok?.failure_kind).toBeNull();
+			expect(ok?.result_truncated).toBe(1);
+			// The recorded digest is kept as the runtime wrote it, and never
+			// rebuilt from a captured payload.
+			expect(ok?.args_digest).toContain("«redacted");
+			expect(ok?.args_digest).not.toContain("sk-live");
+		} finally {
+			db.close();
+		}
+	});
+
+	test("records the run's generation from the envelope", () => {
+		const db = new Database(roundTripPath, { readonly: true });
+		try {
+			const row = db
+				.query<{ generation: number }, []>(
+					"SELECT generation FROM runs WHERE run_id = 'run-round-trip'",
+				)
+				.get();
+			expect(row?.generation).toBe(3);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("names the failure kind and the repeat in the analysis queries", () => {
+		const db = new Database(roundTripPath, { readonly: true });
+		try {
+			const kinds = db
+				.query<
+					{
+						role: string;
+						tool: string;
+						failure_kind: string;
+						calls: number;
+						failed: number;
+						failures_per_100_calls: number;
+					},
+					[]
+				>(`${queryByName("failure-kinds")?.sql ?? ""}`)
+				.all();
+			expect(kinds).toEqual([
+				{
+					role: "worker",
+					tool: "read",
+					failure_kind: "not-found",
+					calls: 2,
+					failed: 2,
+					failures_per_100_calls: 100,
+				},
+			]);
+
+			const repeats = db
+				.query<
+					{
+						run_id: string;
+						with_args: number;
+						repeat_groups: number;
+						repeated_calls: number;
+						wasted_result_bytes: number;
+					},
+					[]
+				>(`${queryByName("repeats-per-run")?.sql ?? ""}`)
+				.all();
+			expect(repeats).toHaveLength(1);
+			expect(repeats[0]?.run_id).toBe("run-round-trip");
+			expect(repeats[0]?.with_args).toBe(3);
+			expect(repeats[0]?.repeat_groups).toBe(1);
+			expect(repeats[0]?.repeated_calls).toBe(1);
+			expect(repeats[0]?.wasted_result_bytes).toBe(128);
+
+			const recording = db
+				.query<
+					{
+						recording: string;
+						calls: number;
+						with_args: number;
+						with_result_size: number;
+						with_duration: number;
+						failed_with_kind: number;
+						args_pct: number;
+						result_size_pct: number;
+						duration_pct: number;
+						failure_kind_pct: number;
+						unknown: number;
+					},
+					[]
+				>(`${queryByName("source-recording")?.sql ?? ""}`)
+				.all();
+			expect(recording).toHaveLength(1);
+			expect(recording[0]?.recording).toBe("span");
+			expect(recording[0]?.calls).toBe(3);
+			expect(recording[0]?.unknown).toBe(0);
+			expect(recording[0]?.args_pct).toBe(100);
+			expect(recording[0]?.result_size_pct).toBe(100);
+			expect(recording[0]?.duration_pct).toBe(100);
+			expect(recording[0]?.failure_kind_pct).toBe(100);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("no secret-looking value survives into the dataset or its meta", () => {
+		const bytes = fs.readFileSync(roundTripPath);
+		expect(bytes.includes(SECRET)).toBe(false);
+		const db = new Database(roundTripPath, { readonly: true });
+		try {
+			for (const table of [
+				"runs",
+				"turns",
+				"tool_calls",
+				"events",
+				"source_files",
+				"meta",
+			]) {
+				const columns = db
+					.query<{ name: string; type: string }, []>(
+						`PRAGMA table_info(${table})`,
+					)
+					.all()
+					.filter((column) => column.type === "TEXT");
+				if (columns.length === 0) continue;
+				const list = columns.map((column) => column.name).join(", ");
+				for (const row of db
+					.query<Record<string, unknown>, []>(`SELECT ${list} FROM ${table}`)
+					.all())
+					for (const value of Object.values(row))
+						if (typeof value === "string")
+							expect(value).not.toContain("sk-live");
+			}
+		} finally {
+			db.close();
+		}
 	});
 });

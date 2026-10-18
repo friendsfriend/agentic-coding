@@ -24,6 +24,20 @@ import {
 
 export type TelemetryFormat = "legacy" | "span";
 
+/** The machine-readable failure vocabulary the runtime records. A file that
+ * carries anything else keeps the failure kind NULL rather than storing an
+ * uninterpretable string. */
+export const TOOL_FAILURE_KINDS: ReadonlySet<string> = new Set([
+	"not-found",
+	"no-match",
+	"denied",
+	"host-error",
+	"timeout",
+	"aborted",
+	"invalid-args",
+	"other",
+]);
+
 /** Tool outcomes that mean the call succeeded. Anything else (including the
  * legacy `error` spelling) counts as a failure. */
 export const OK_TOOL_OUTCOMES: ReadonlySet<string> = new Set(["ok", "success"]);
@@ -55,14 +69,23 @@ export interface NormalizedEvent {
 	baseCommit?: string;
 	/** OTel trace id when the record came from a span (never from JSONL). */
 	traceId?: string;
+	/** The run's generation (attempt counter) when the envelope carries one. */
+	runGeneration?: number;
 
 	turnIndex?: number;
 	toolName?: string;
 	callId?: string;
 	toolOutcome?: string;
+	/** The envelope's explicit `pi.tool.ok`, when the generation records one. */
+	toolOk?: boolean;
 	toolDurationMs?: number;
 	toolArgumentBytes?: number;
 	toolResultBytes?: number;
+	toolResultLines?: number;
+	toolResultTruncated?: boolean;
+	/** `not-found`, `no-match`, `denied`, `host-error`, `timeout`, `aborted`,
+	 * `invalid-args` or `other` — a code, never prose. */
+	toolFailureKind?: string;
 	toolInput?: ArgsDigest;
 	errorClass?: string;
 
@@ -117,6 +140,15 @@ function num(value: unknown): number | undefined {
 
 function bool(value: unknown): boolean | undefined {
 	if (typeof value === "boolean") return value;
+	return undefined;
+}
+
+/** A flag an older writer spelled as 0/1 or "true"/"false". */
+function boolish(value: unknown): boolean | undefined {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+	if (value === "true") return true;
+	if (value === "false") return false;
 	return undefined;
 }
 
@@ -208,6 +240,7 @@ export function normalizeRecord(
 		workflowType: str(record["herdr.workflow.type"]),
 		baseCommit: str(record["herdr.base.commit"]),
 		traceId: str(record.traceId),
+		runGeneration: num(record["herdr.run.generation"]),
 
 		turnIndex: num(record["pi.turn.index"]),
 		toolName: str(pick(record, "pi.tool.name", "tool")),
@@ -217,9 +250,18 @@ export function normalizeRecord(
 				? pick(record, "pi.tool.outcome", "outcome")
 				: record["pi.tool.outcome"],
 		),
+		toolOk: boolish(record["pi.tool.ok"]),
 		toolDurationMs: num(pick(record, "pi.tool.duration_ms", "durationMs")),
 		toolArgumentBytes: num(record["pi.tool.argument_bytes"]),
 		toolResultBytes: num(record["pi.tool.result_bytes"]),
+		toolResultLines: num(record["pi.tool.result_lines"]),
+		toolResultTruncated: boolish(record["pi.tool.result_truncated"]),
+		toolFailureKind: (() => {
+			const kind = str(record["pi.tool.failure_kind"]);
+			return kind !== undefined && TOOL_FAILURE_KINDS.has(kind)
+				? kind
+				: undefined;
+		})(),
 		errorClass,
 
 		inputTokens: num(pick(record, "inputTokens", "input")),
@@ -272,7 +314,19 @@ export function normalizeRecord(
 		normalized.errorClass =
 			normalized.errorClass ?? normalized.toolOutcome ?? event;
 
-	if (rawToolInput !== undefined) {
+	// The recorded digest wins over one derived here: it is what the runtime
+	// actually saw, and re-deriving it from a captured payload would both lose
+	// fields the runtime recorded and require the payload to exist at all.
+	const recordedHash = str(record["pi.tool.args_hash"]);
+	const recordedDigest = str(record["pi.tool.args_digest"]);
+	if (recordedHash !== undefined) {
+		normalized.toolInput = {
+			hash: recordedHash,
+			digest:
+				recordedDigest === undefined ? "" : redactBounded(recordedDigest, 200),
+			bytes: normalized.toolArgumentBytes ?? 0,
+		};
+	} else if (rawToolInput !== undefined) {
 		let parsed: unknown = rawToolInput;
 		try {
 			parsed = JSON.parse(rawToolInput);

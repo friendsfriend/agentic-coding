@@ -13,6 +13,11 @@ import {
 	type Harness,
 	watchEvents,
 } from "@earendil-works/pi-durable";
+import {
+	classifyToolFailure,
+	toolArgsTelemetry,
+	toolResultTelemetry,
+} from "./tool-telemetry.ts";
 
 export interface TelemetryIdentity {
 	readonly workflowId?: string;
@@ -20,6 +25,10 @@ export interface TelemetryIdentity {
 	readonly stepId?: string;
 	readonly role?: string;
 	readonly profile?: string;
+	/** The run's generation (its attempt counter), when the run environment
+	 * carries one: the index a later analysis needs to tell a re-launched run
+	 * from its predecessors. */
+	readonly generation?: number;
 	readonly telemetryPath?: string;
 	readonly captureContent?: boolean;
 }
@@ -47,6 +56,9 @@ function emit(
 		stepId: identity.stepId,
 		role: identity.role,
 		profile: identity.profile,
+		...(identity.generation !== undefined
+			? { "herdr.run.generation": identity.generation }
+			: {}),
 		...fields,
 	};
 	const output = identity.telemetryPath;
@@ -129,6 +141,16 @@ export async function attachTelemetry(
 	let thinkingMs = 0;
 	let lastPromptTokens: number | undefined;
 	const compactions = new Map<string, TrackedCompaction>();
+	// Every tool call of this conversation: its measured duration, the turn it
+	// belongs to and the argument digest, so the end envelope can carry the
+	// fields that make the call measurable (tool-call telemetry shape).
+	const toolCalls = new Map<
+		string,
+		{ startedAt: number; turnIndex: number | undefined }
+	>();
+	/** `turn_start` events seen so far; -1 while the conversation has not started
+	 * a turn, so a call before the first turn records no index rather than 0. */
+	let turnIndex = -1;
 
 	/** Emit one compaction's completion envelope. `tokensAfter` is present only
 	 * when a later generation measured it; the envelope is emitted exactly once,
@@ -286,12 +308,24 @@ export async function attachTelemetry(
 					break;
 				}
 				case "turn_start":
+					turnIndex += 1;
 					emit(identity, "runtime.turn_started");
 					break;
-				case "tool_execution_start":
+				case "tool_execution_start": {
+					const args = toolArgsTelemetry(event.toolName, event.args);
+					toolCalls.set(event.toolCallId, {
+						startedAt: now,
+						turnIndex: turnIndex < 0 ? undefined : turnIndex,
+					});
 					emit(identity, "runtime.tool_start", {
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
+						// What was asked, never the payload: the hash joins exact repeats,
+						// the digest identifies the call and carries no secret.
+						"pi.tool.args_hash": args.hash,
+						"pi.tool.args_digest": args.digest,
+						"pi.tool.argument_bytes": args.bytes,
+						...(turnIndex >= 0 ? { "pi.turn.index": turnIndex } : {}),
 						...(identity.captureContent
 							? {
 									"herdr.content.tool_input": redact(
@@ -301,13 +335,39 @@ export async function attachTelemetry(
 							: {}),
 					});
 					break;
+				}
 				case "tool_execution_end": {
-					const isError = event.entry === undefined;
+					const tracked = toolCalls.get(event.toolCallId);
+					toolCalls.delete(event.toolCallId);
+					const result = toolResultTelemetry(event.entry);
+					// A result entry that never survived is a host error (the tool task
+					// faulted or was orphaned); a surviving one states its own error flag,
+					// so a failed `edit` is no longer recorded as a success.
+					const isError = event.entry === undefined || result?.isError === true;
+					const turn =
+						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
 					emit(identity, "runtime.tool", {
 						outcome: isError ? "error" : "ok",
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
 						"pi.tool.outcome": isError ? "error" : "ok",
+						// The explicit `ok` the recording needs: every call states its
+						// outcome, successful or not.
+						"pi.tool.ok": !isError,
+						...(tracked !== undefined
+							? { "pi.tool.duration_ms": Math.max(0, now - tracked.startedAt) }
+							: {}),
+						...(result !== undefined
+							? {
+									"pi.tool.result_bytes": result.bytes,
+									"pi.tool.result_lines": result.lines,
+									"pi.tool.result_truncated": result.truncated,
+								}
+							: {}),
+						...(isError
+							? { "pi.tool.failure_kind": classifyToolFailure(event.entry) }
+							: {}),
+						...(turn !== undefined ? { "pi.turn.index": turn } : {}),
 					});
 					break;
 				}

@@ -196,6 +196,11 @@ export interface TurnRow {
 	preferred: number;
 }
 
+/** Which recording a tool call came from. The telemetry generations differ in
+ * what they carry, so a per-generation share is the only honest way to say
+ * "unknown = 0" for the newest one. */
+export type ToolCallRecording = "legacy" | "span" | "harness";
+
 export interface ToolCallRow {
 	run_id: string;
 	run_label: string | null;
@@ -212,12 +217,17 @@ export interface ToolCallRow {
 	/** 1 ok, 0 failed, null unknown. */
 	ok: number | null;
 	error_class: string | null;
+	/** Machine-readable failure kind (`not-found`, `no-match`, `denied`,
+	 * `host-error`, `timeout`, `aborted`, `invalid-args`, `other`), null when the
+	 * recording has no vocabulary for the failure. */
+	failure_kind: string | null;
 	args_hash: string | null;
 	args_digest: string | null;
 	args_bytes: number | null;
 	result_bytes: number | null;
 	result_lines: number | null;
 	result_truncated: number | null;
+	recording: ToolCallRecording;
 	confidence: Confidence;
 	preferred: number;
 }

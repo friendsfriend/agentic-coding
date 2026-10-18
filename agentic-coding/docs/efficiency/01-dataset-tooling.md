@@ -5,10 +5,12 @@ builds the evidence and says what it can and cannot answer; it makes **no**
 judgement about useless calls or any other inefficiency. The measurements live
 in [`00-data-inventory.md`](./00-data-inventory.md), which is generated.
 
-Everything here is read-only with respect to the product: nothing under `src/`
-changes, the store schema stays at version 6, and the dataset is written
-**outside the repository**. The only file these tools write into the repo is the
-generated inventory markdown.
+The tooling is read-only with respect to the product: it never runs the
+app/server/TUI, opens the live stores read-only, changes nothing under `src/`
+and leaves the store schema at version 6. The dataset is written **outside the
+repository**; the only files these tools write into the repo are the generated
+inventory markdown. What the runtime *records* is a separate change: the tool
+envelopes now carry the bounded fields below, which this tooling ingests.
 
 ## Building the dataset
 
@@ -43,15 +45,19 @@ bun run scripts/efficiency/build-dataset.ts \
 | --- | --- | --- |
 | `herdr.main-store`, `herdr.backend` | durable workflow store (`workflow_instances`, `workflow_runs`, `workflow_events`) | run identity, attempt, generation, status, agent-handle name |
 | `harness.*` | pi-durable transcript store (`conversations`, `entries`, `documents`) | stop reason, thinking tokens, argument bodies, result sizes, truncation |
-| `telemetry.worktree`, `telemetry.backend`, `telemetry.main-store` | per-workflow `telemetry.jsonl` | lifecycle, handoffs, effects, gate decisions, captured tool inputs |
+| `telemetry.worktree`, `telemetry.backend`, `telemetry.main-store` | per-workflow `telemetry.jsonl` | lifecycle, handoffs, effects, gate decisions, and (current generation) the argument digest, result size, duration, `ok` and failure kind of every tool call |
 | `traces.otel-tui` | OTel span store | the widest coverage (495 workflows) and the older tool metrics |
 
-The telemetry files come in three generations (a legacy envelope with no run id,
-a span envelope with tool metrics, and the newest minimal span envelope). Both
-the JSONL files and the OTel spans are normalized by one function
+The telemetry files come in several generations (a legacy envelope with no run
+id, a span envelope with tool metrics, a minimal span envelope that kept only
+names and outcomes, and the current one, which records the bounded tool-call
+fields). Both the JSONL files and the OTel spans are normalized by one function
 (`scripts/efficiency/lib/normalize.ts`), field by field, so a field a generation
-does not carry stays `NULL` rather than becoming a guess. The inventory's section
-9.6 records the schema of each source as it was found.
+does not carry stays `NULL` rather than becoming a guess — `recording` names the
+generation each call row came from, and `source-recording` reports the share of
+calls that carry an argument digest, a result size, a duration and a failure
+kind per generation. The inventory's section 9.6 records the schema of each
+source as it was found.
 
 ## Tables
 
@@ -66,8 +72,12 @@ does not carry stays `NULL` rather than becoming a guess. The inventory's sectio
 - `turns` holds one row per (run, source, turn index) with tokens, cost, stop
   reason, thinking tokens and the turn's call count.
 - `tool_calls` holds one row per (run, source, call) with `args_hash` (the full
-  argument JSON, hashed), `args_digest` (a bounded path or command head),
-  `args_bytes`, `result_bytes`, `result_lines`, `result_truncated` and `ok`.
+  argument JSON, hashed), `args_digest` (a bounded path, search pattern or
+  command head), `args_bytes`, `result_bytes`, `result_lines`,
+  `result_truncated`, `ok`, `failure_kind` (the machine-readable vocabulary:
+  `not-found`, `no-match`, `denied`, `host-error`, `timeout`, `aborted`,
+  `invalid-args`, `other`) and `recording` (`legacy`, `span` or `harness` —
+  which recording the call came from).
 - `events` holds one row per noteworthy engine/adapter event with an
   `event_class` (`handoff`, `effect`, `gate`, `verifier`, `triage`, `compaction`,
   `delivery`, `routing`, `lifecycle`, `other`).
@@ -97,8 +107,10 @@ totals, and the base tables only for reconciliation.
 Nothing raw reaches the dataset:
 
 - tool arguments are hashed (`args_hash`) and reduced to a bounded digest
-  (`args_digest`) — a path for a file tool, a command head for a shell tool,
-  never the arguments themselves;
+  (`args_digest`) — a path for a file tool, a search path and pattern, or the
+  first 120 characters of a shell command, redacted at the runtime and passed
+  through `redactText` again here, so a digest a leaking writer emitted cannot
+  reach the dataset either;
 - free text (an error class, a finding description, a compaction summary) is
   replaced by a hash and a byte count;
 - every stored short text passes through `redactText`, which removes private
@@ -108,7 +120,15 @@ Nothing raw reaches the dataset:
   and drops the payload.
 
 `test/efficiency/efficiency-dataset.test.ts` asserts that no text column of the
-built dataset contains a secret-shaped or transcript-shaped value.
+built dataset contains a secret-shaped or transcript-shaped value, and a
+synthetic new-generation telemetry file is round-tripped through the extractor
+into a dataset to prove the new columns, the repeat and failure-kind queries and
+the redaction of a digest that leaked a token.
+
+`test/agent-host-tool-telemetry.test.ts` covers the runtime side: the bounded
+digest, the credential shapes it redacts and the failure vocabulary; and
+`test/agent-host-telemetry.test.ts` runs a real durable host turn and asserts
+that the emitted envelopes carry the new fields and never the result text.
 
 ## Analysis queries
 
@@ -125,7 +145,9 @@ Every query reads the preferred rows and runs in a second or less.
 | `roles` | usage, cost and call volume per role and step | `analyze.ts roles --dataset <out>` |
 | `tools` | tool-call frequency per role, with failures and result volume | `analyze.ts tools --dataset <out> --limit 40` |
 | `repeated-calls` | identical calls inside one run (same tool + `args_hash`), with the result bytes a repeat cost | `analyze.ts repeated-calls --dataset <out> --limit 20` |
+| `repeats-per-run` | exact repeats rolled up per run: the extra calls and the duplicated result bytes, per 100 calls | `analyze.ts repeats-per-run --dataset <out> --limit 20` |
 | `repeated-reads` | the same path read more than once inside one run | `analyze.ts repeated-reads --dataset <out> --limit 20` |
+| `failure-kinds` | failed calls per 100 calls by machine-readable failure kind, per role and tool | `analyze.ts failure-kinds --dataset <out>` |
 | `calls-per-turn` | distribution of tool calls per turn | `analyze.ts calls-per-turn --dataset <out>` |
 | `failed-chains` | runs whose failures cluster into consecutive chains | `analyze.ts failed-chains --dataset <out>` |
 | `turn-gaps` | idle gaps between consecutive turns, largest first | `analyze.ts turn-gaps --dataset <out> --limit 20` |
@@ -140,6 +162,7 @@ Every query reads the preferred rows and runs in a second or less.
 | `effect-failures` | effect results that did not succeed | `analyze.ts effect-failures --dataset <out>` |
 | `verifier-findings` | verifier findings by severity and role | `analyze.ts verifier-findings --dataset <out>` |
 | `runs` | per-run rollup for eyeballing one workflow | `analyze.ts runs --dataset <out> --limit 20` |
+| `source-recording` | per source, month and recording: outcomes, the share of calls with an argument digest, result size, duration and failure kind, and failure-only runs | `analyze.ts source-recording --dataset <out>` |
 
 A query that a later step needs and this list does not have belongs in
 `scripts/efficiency/lib/queries.ts` (name, summary, SQL, columns, one example),
@@ -166,7 +189,8 @@ reconciliation queries, and that every documented query runs.
 
 ## Constraints the tooling respects
 
-- no change to `src/`, no store schema change (still 6), no app/server/TUI run;
+- no store schema change (still 6), no app/server/TUI run, and no change to the
+  product beyond the runtime recording it is built to read;
 - the snapshot is opened read-only (`readonly: true`) and never modified;
 - the dataset is written outside the repository and is never committed;
 - the live stores (`~/.config/agentic-coding`, the live `.herdr-workflow` store)

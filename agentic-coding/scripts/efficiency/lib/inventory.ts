@@ -332,11 +332,13 @@ ${table(
 - **full (transcript + args)** — a pi-durable transcript exists, so per-turn
   usage, stop reasons, thinking tokens, per-call argument digests, result sizes
   and truncation flags are all available.
-- **calls with args** — a telemetry file captured the tool input
-  (\`herdr.content.tool_input\`), so a call can be de-duplicated by arguments, but
-  there is no transcript and usually no result size.
+- **calls with args** — a call carries a recorded argument digest, so it can be
+  de-duplicated by arguments; a recording that also carries the measured result
+  size, duration and failure kind is analysable byte by byte (see
+  \`source-recording\` for the per-generation share of each field).
 - **calls only** — tool names and outcomes only: frequency and failure chains are
-  analysable, repeat detection by argument is not.
+  analysable, repeat detection by argument is not, and the failure vocabulary is
+  whichever the recording had (\`failure_kind\` stays NULL where it had none).
 - **turns only** — usage/cost per turn, but no call-level detail.
 - **stub** — the workflow exists in some index (a \`workflow.started\` line, a
   span id) but nothing about its work survives.
@@ -657,12 +659,16 @@ ${
   attribute (the OpenSpec change name), which is used as the fallback id. The
   \`logs\` and \`metrics\` tables are empty in this snapshot, so there is no log or
   metric telemetry. \`workspace_files\` only marks how far each file was ingested.
-- **\`*/telemetry/*.jsonl\`** — three generations of the same stream: a legacy
+- **\`*/telemetry/*.jsonl\`** — generations of the same stream: a legacy
   envelope (\`model_usage\`, \`provider_response\`, \`tool_error\`, \`pi_agent_*\`,
   \`verification_finding\`) with no run id, the span envelope that adds
-  \`pi.tool.duration_ms\`/\`pi.tool.result_bytes\`/\`herdr.content.tool_input\`, and
-  the newest envelope that keeps only tool names and outcomes. All three are
-  normalized field-by-field; a field a generation does not carry stays NULL.
+  \`pi.tool.duration_ms\`/\`pi.tool.result_bytes\`/\`herdr.content.tool_input\`, the
+  envelope that kept only tool names and outcomes, and the current one, which
+  records for every call \`pi.tool.args_hash\`, a bounded secret-free
+  \`pi.tool.args_digest\`, \`pi.tool.argument_bytes\`, \`pi.tool.duration_ms\`,
+  \`pi.tool.result_bytes\`/\`result_lines\`/\`result_truncated\`, \`pi.tool.ok\` and a
+  machine-readable \`pi.tool.failure_kind\` — never payload text. All generations
+  are normalized field-by-field; a field a generation does not carry stays NULL.
 - **\`harness.sqlite\`** — pi-durable: \`conversations\`, \`entries\`, \`tasks\`,
   \`documents\`, \`document_revisions\`. An \`entries.record\` is a JSON object with
   a \`kind\` (\`pi.assistant\`, \`pi.tool-result\`, \`pi.user\`, \`pi.system\`,

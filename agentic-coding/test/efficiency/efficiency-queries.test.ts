@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeDataset } from "../../scripts/efficiency/lib/dataset.ts";
 import { extractTables } from "../../scripts/efficiency/lib/extract.ts";
+import { TOOL_FAILURE_KINDS } from "../../scripts/efficiency/lib/normalize.ts";
 import { QUERIES, queryByName } from "../../scripts/efficiency/lib/queries.ts";
 import {
 	type FixtureEvidence,
@@ -66,10 +67,14 @@ describe("ready-made queries", () => {
 				.all();
 			expect(rows.length).toBeGreaterThan(0);
 			// The fixture's legacy file carries one `tool_error` and no successful
-			// call: the source+month row must show it as a failure-only record.
+			// call: the source+month+recording row must show it as a failure-only
+			// record. The recording is part of the key, so the same source and month
+			// in the span generation is a separate row rather than a tie.
 			const legacy = rows.find(
 				(row) =>
-					row.source === "telemetry.main-store" && row.month === "2026-01",
+					row.source === "telemetry.main-store" &&
+					row.month === "2026-01" &&
+					row.recording === "legacy",
 			);
 			expect(legacy).toBeDefined();
 			expect(legacy?.calls).toBeGreaterThan(0);
@@ -78,6 +83,100 @@ describe("ready-made queries", () => {
 			// A modern source in the same dataset does record successes.
 			const modern = rows.find((row) => row.source === "harness.worktree");
 			expect(modern?.ok).toBeGreaterThan(0);
+			expect(modern?.recording).toBe("harness");
+		} finally {
+			db.close();
+		}
+	});
+
+	test("source-recording reports the per-generation share of the recorded fields", () => {
+		const query = queryByName("source-recording");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						source: string;
+						recording: string;
+						calls: number;
+						with_args: number;
+						with_result_size: number;
+						with_duration: number;
+						args_pct: number;
+					}[]
+				>(`${query?.sql}`)
+				.all();
+			// The harness generation records every field of every call.
+			const harness = rows.find((row) => row.recording === "harness");
+			expect(harness).toBeDefined();
+			expect(harness?.with_args).toBe(harness?.calls);
+			expect(harness?.with_duration).toBe(harness?.calls);
+			expect(harness?.args_pct).toBe(100);
+			// The fixture's legacy generation records neither arguments nor sizes:
+			// the share is the honest 0, not an assumed 100.
+			const legacy = rows.find((row) => row.recording === "legacy");
+			expect(legacy?.with_args).toBe(0);
+			expect(legacy?.args_pct).toBe(0);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("failure-kinds reports failures per 100 calls for the kinds it can name", () => {
+		const query = queryByName("failure-kinds");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						role: string;
+						tool: string;
+						failure_kind: string;
+						calls: number;
+						failed: number;
+						failures_per_100_calls: number;
+					}[]
+				>(`${query?.sql}`)
+				.all();
+			for (const row of rows) {
+				expect(row.failures_per_100_calls).toBeGreaterThan(0);
+				expect(row.failures_per_100_calls).toBeLessThanOrEqual(100);
+				expect(row.failed).toBeLessThanOrEqual(row.calls);
+				// Only the documented vocabulary ever reaches the column.
+				expect(TOOL_FAILURE_KINDS.has(row.failure_kind)).toBe(true);
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+	test("repeats-per-run counts the extra calls of an exact repeat", () => {
+		const query = queryByName("repeats-per-run");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<
+					{
+						run_id: string;
+						with_args: number;
+						repeat_groups: number;
+						repeated_calls: number;
+						repeated_calls_per_100: number;
+					}[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.length).toBeGreaterThan(0);
+			for (const row of rows) {
+				expect(row.repeated_calls).toBeGreaterThan(0);
+				expect(row.repeated_calls).toBeLessThan(row.with_args);
+				expect(row.repeated_calls_per_100).toBeGreaterThan(0);
+				expect(row.repeated_calls_per_100).toBeLessThan(100);
+			}
+			// The twice-read path of the fixture is one repeat group.
+			const twice = rows.find((row) => row.repeated_calls === 1);
+			expect(twice).toBeDefined();
 		} finally {
 			db.close();
 		}
@@ -218,8 +317,8 @@ describe("ready-made queries", () => {
 		try {
 			// run-span-a has two turns; a write at turn 1 makes turn 0 the orientation.
 			db.run(
-				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, turn_index, dedupe_key, tool, ok, confidence, preferred)
-				 VALUES ('run-span-a', null, null, 'herdr.main-store', 190, 1, 'synthetic-write', 'write', 1, 'exact', 1)`,
+				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, turn_index, dedupe_key, tool, ok, recording, confidence, preferred)
+				 VALUES ('run-span-a', null, null, 'herdr.main-store', 190, 1, 'synthetic-write', 'write', 1, 'harness', 'exact', 1)`,
 			);
 			const row = db
 				.query<

@@ -88,6 +88,39 @@ was placed, and `aborted` otherwise (a cancellation — `/abort` cancels a manua
 compaction, which is a non-background conversation-owned task — places no
 summary). No summary text ever reaches an envelope.
 
+### Tool-call fields (`runtime.tool_start` / `runtime.tool`)
+
+Every durable tool call is measurable without a payload. `tool_start` states
+what was asked and `tool` states how it ended; both carry fixed-size fields only
+(`src/agent-host/tool-telemetry.ts` builds them):
+
+| Envelope | Field | Meaning |
+| --- | --- | --- |
+| both | `pi.tool.name`, `pi.tool.call_id` | which tool, which call (the pair joins the two envelopes) |
+| `tool_start` | `pi.tool.args_hash` | the argument JSON, SHA-256 hashed to 16 hex characters: exact repeats join on it |
+| `tool_start` | `pi.tool.args_digest` | the call's identity in at most 200 characters: a path for a file tool, a search path and pattern, or a shell command's first 120 characters, each secret-free |
+| `tool_start` | `pi.tool.argument_bytes` | byte length of the argument JSON — a size, not the content |
+| both | `pi.turn.index` | the turn of this conversation the call belongs to (absent before the first turn) |
+| `tool` | `pi.tool.ok` | the explicit outcome: `true` or `false` for every call, successful or not |
+| `tool` | `pi.tool.duration_ms` | wall-clock time between the call's start and end |
+| `tool` | `pi.tool.result_bytes`, `pi.tool.result_lines`, `pi.tool.result_truncated` | the size of the text the model received and whether the harness retained only part of it |
+| `tool` | `pi.tool.failure_kind` | on failure only: `not-found`, `no-match`, `denied`, `host-error`, `timeout`, `aborted`, `invalid-args` or `other` |
+
+Every envelope of a `pi-durable` run additionally carries `herdr.run.generation`
+when the run environment names one, so a re-launched run is identifiable.
+
+`pi.tool.failure_kind` is derived from the tool result's own text and diagnostic
+codes and is a code, never prose: `host-error` means no result entry survived at
+all (the tool task faulted or was orphaned), which the older `tool_error`/
+`error` vocabulary could not separate from a missing file or a failed edit. The
+argument digest is redacted at the point it is built — environment-assignment
+values, `Authorization` headers, bearer/`sk-`/`ghp_`/`AKIA` style tokens, URL
+userinfo and `-p`/`--password`/`--token` values — and the result text is read
+only to classify it: no tool argument, command, file content or result text ever
+enters an envelope. The optional raw `herdr.content.tool_input` capture is
+unchanged and still requires `HERDR_CAPTURE_CONTENT=1`; the digest is emitted
+whether or not content capture is on, so the shape survives capture being off.
+
 ## Not captured
 
 - system prompts and thinking/reasoning parts
