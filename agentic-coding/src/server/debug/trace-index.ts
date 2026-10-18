@@ -22,8 +22,13 @@ import type {
 	SpanEvent,
 } from "../../contracts/telemetry.ts";
 
-/** Newest traces the index holds; older ones are evicted first. */
+/** Newest traces the index holds; a background trace is evicted before a
+ * request trace, and the oldest of that class first. */
 export const MAX_INDEXED_TRACES = 200;
+/** Evicted trace ids one owner is remembered by, newest kept: enough to tell a
+ * span tree "this trace was here and was evicted" from "this trace never
+ * arrived". */
+export const MAX_REMEMBERED_EVICTIONS = 500;
 /** Spans one retained trace may hold; a runaway trace is cut, not kept whole. */
 export const MAX_INDEXED_SPANS_PER_TRACE = 500;
 /** Spans one span-tree answer may carry. */
@@ -92,8 +97,22 @@ export interface TraceListResult {
 	readonly indexTruncated: boolean;
 	/** Matching traces the default noise ordering pushed out of the answer. */
 	readonly noiseDropped: number;
-	/** How to see them, when any were dropped. */
+	/** Traces of this owner the filters were applied to, before any of them
+	 * removed one. */
+	readonly considered: number;
+	/** How many of `considered` each active filter rejected on its own. Every
+	 * active filter appears (a `0` included), so an answer with `matched: 0`
+	 * names the filter that removed the traces instead of leaving a bare zero. */
+	readonly filtered: Readonly<Record<string, number>>;
+	/** How to see the dropped traces, and which filter removed what, when either
+	 * needs saying. */
 	readonly notice?: string;
+}
+
+/** A trace id is an opaque hex string; the receiver lowercases it, and a caller
+ * that pastes it back with different case must still find its trace. */
+function normalizeTraceId(value: string): string {
+	return value.trim().toLowerCase();
 }
 
 /** One node of a span tree. */
@@ -245,6 +264,52 @@ function isBackgroundTrace(spans: readonly SpanData[]): boolean {
 	return kindOf(only) !== "server";
 }
 
+/**
+ * The HTTP identity strings one span offers a `http` filter: the method, every
+ * route/target/url attribute (`http.route`, `http.target`, `http.url`,
+ * `url.path`, `http.path`, `url.full`) and the span's own name — a
+ * semantic-convention HTTP span is named `METHOD <route>`, so the name alone
+ * matches `"POST /grid-allocation-api/v1/requests"`.
+ *
+ * The span name is included because a framework may name the server span after
+ * the route while the route attribute sits on a child span, and the method is
+ * prepended to each path so `"POST /path"` matches even when the span is named
+ * after the route only.
+ */
+function httpIdentity(span: SpanData): string[] {
+	const attributes = span.attributes ?? [];
+	const method = (
+		attributeValue(attributes, "http.request.method") ??
+		attributeValue(attributes, "http.method") ??
+		""
+	).toLowerCase();
+	const paths = [
+		"http.route",
+		"http.target",
+		"http.url",
+		"url.path",
+		"url.full",
+		"http.path",
+	]
+		.map((key) => attributeValue(attributes, key))
+		.filter((entry): entry is string => entry !== undefined && entry !== "")
+		.map((entry) => entry.toLowerCase());
+	const identity = [...paths, span.name.toLowerCase()];
+	if (method !== "")
+		for (const path of paths) identity.push(`${method} ${path}`);
+	return identity;
+}
+
+/** Whether any span of a trace carries an HTTP identity containing the filter
+ * (a case-insensitive substring, with or without a leading `METHOD `). Matching
+ * every span rather than the root only is deliberate: an instrumented server
+ * may root a trace in a middleware span while the route lives one level down. */
+function matchesHttp(spans: readonly SpanData[], filter: string): boolean {
+	return spans.some((span) =>
+		httpIdentity(span).some((identity) => identity.includes(filter)),
+	);
+}
+
 function truncate(value: string, max: number): string {
 	return value.length > max ? `${value.slice(0, max)}…` : value;
 }
@@ -349,6 +414,17 @@ function summarize(traceId: string, spans: readonly SpanData[]): TraceRow {
 	};
 }
 
+/** One trace as the list evaluates it: the spans the index holds, plus the
+ * derived values the filters and the row share. */
+interface TraceCandidate {
+	readonly traceId: string;
+	readonly spans: readonly SpanData[];
+	row?: TraceRow;
+	root?: SpanData;
+	noise?: boolean;
+	http?: boolean;
+}
+
 /**
  * The spans one workflow exported, newest traces first and bounded on every
  * axis. Nothing here is durable: it is the live view of what the receivers
@@ -356,10 +432,13 @@ function summarize(traceId: string, spans: readonly SpanData[]): TraceRow {
  */
 export class TraceIndex {
 	private readonly byOwner = new Map<string, Map<string, SpanData[]>>();
-	/** Trace insertion order, so eviction is oldest-first. */
+	/** Trace insertion order, so eviction is oldest-first within its class. */
 	private readonly order: Array<{ owner: string; traceId: string }> = [];
 	/** Traces this index dropped per owner, so an answer can say so. */
 	private readonly evicted = new Map<string, number>();
+	/** The ids this index dropped per owner, newest kept, so a span-tree lookup
+	 * can answer "it was evicted" instead of "it never arrived". */
+	private readonly evictedIds = new Map<string, string[]>();
 
 	/** Index every span that names its owner. Returns how many were indexed. */
 	push(spans: readonly SpanData[]): number {
@@ -367,16 +446,17 @@ export class TraceIndex {
 		for (const span of spans) {
 			const owner = resourceAttribute(span, AC_OWNER_ATTRIBUTE);
 			if (owner === undefined || span.traceId === "") continue;
+			const traceId = normalizeTraceId(span.traceId);
 			let traces = this.byOwner.get(owner);
 			if (!traces) {
 				traces = new Map<string, SpanData[]>();
 				this.byOwner.set(owner, traces);
 			}
-			let bucket = traces.get(span.traceId);
+			let bucket = traces.get(traceId);
 			if (!bucket) {
 				bucket = [];
-				traces.set(span.traceId, bucket);
-				this.order.push({ owner, traceId: span.traceId });
+				traces.set(traceId, bucket);
+				this.order.push({ owner, traceId });
 			}
 			bucket.push(span);
 			if (bucket.length > MAX_INDEXED_SPANS_PER_TRACE)
@@ -387,16 +467,58 @@ export class TraceIndex {
 		return indexed;
 	}
 
+	/**
+	 * Bound the retained traces the way the caller's own list is ordered: a
+	 * single-span background trace (a poller's query) goes before a request
+	 * trace, and the oldest trace of that class first.
+	 *
+	 * Insertion order alone was the defect behind a request trace that the list
+	 * showed and the span-tree lookup could not find: a backend that polls its
+	 * database twice a second produces ~120 single-span traces a minute, so the
+	 * 200-trace window rolled over about every hundred seconds and the request
+	 * trace — the one trace the caller asked about — was evicted while a hundred
+	 * poller traces stayed.
+	 */
 	private evict(): void {
 		while (this.order.length > MAX_INDEXED_TRACES) {
-			const oldest = this.order.shift();
+			const index = this.nextEviction();
+			if (index < 0) return;
+			const oldest = this.order.splice(index, 1)[0];
 			if (!oldest) return;
 			const traces = this.byOwner.get(oldest.owner);
-			if (!traces) continue;
-			traces.delete(oldest.traceId);
+			traces?.delete(oldest.traceId);
+			if (traces && traces.size === 0) this.byOwner.delete(oldest.owner);
 			this.evicted.set(oldest.owner, (this.evicted.get(oldest.owner) ?? 0) + 1);
-			if (traces.size === 0) this.byOwner.delete(oldest.owner);
+			this.rememberEviction(oldest.owner, oldest.traceId);
 		}
+	}
+
+	/** The insertion-order slot to evict: the oldest background trace this index
+	 * holds, else the oldest trace of any kind. */
+	private nextEviction(): number {
+		for (let index = 0; index < this.order.length; index += 1) {
+			const entry = this.order[index];
+			if (!entry) continue;
+			const spans = this.byOwner.get(entry.owner)?.get(entry.traceId);
+			if (spans && isBackgroundTrace(spans)) return index;
+		}
+		return this.order.length > 0 ? 0 : -1;
+	}
+
+	private rememberEviction(owner: string, traceId: string): void {
+		const ids = this.evictedIds.get(owner) ?? [];
+		if (!ids.includes(traceId)) ids.push(traceId);
+		if (ids.length > MAX_REMEMBERED_EVICTIONS)
+			ids.splice(0, ids.length - MAX_REMEMBERED_EVICTIONS);
+		this.evictedIds.set(owner, ids);
+	}
+
+	/** Whether this index received the trace and then dropped it (the retained
+	 * traces bound), rather than never seeing it at all. */
+	evictedTrace(owner: string, traceId: string): boolean {
+		return (this.evictedIds.get(owner) ?? []).includes(
+			normalizeTraceId(traceId),
+		);
 	}
 
 	/** Traces this index holds for one owner. */
@@ -429,54 +551,92 @@ export class TraceIndex {
 			query.includeNoise === true ||
 			minSpans !== undefined ||
 			exclude !== undefined;
-		const rows: TraceRow[] = [];
-		const background = new Set<string>();
+		const candidates: TraceCandidate[] = [];
 		for (const [traceId, spans] of this.byOwner.get(owner) ?? []) {
 			if (spans.length === 0) continue;
-			if (
-				app !== undefined &&
-				app !== "" &&
-				sharedAttribute(spans, AC_APP_ATTRIBUTE) !== app
-			)
-				continue;
-			if (
-				name !== undefined &&
-				name !== "" &&
-				!spans.some((span) => span.name.toLowerCase().includes(name))
-			)
-				continue;
-			if (minSpans !== undefined && spans.length < minSpans) continue;
-			if (exclude !== undefined && exclude !== "") {
+			candidates.push({ traceId, spans });
+		}
+		const rowOf = (candidate: TraceCandidate): TraceRow =>
+			(candidate.row ??= summarize(candidate.traceId, candidate.spans));
+		const rootOfCandidate = (candidate: TraceCandidate): SpanData =>
+			(candidate.root ??= rootOf(candidate.spans));
+		const isNoise = (candidate: TraceCandidate): boolean =>
+			(candidate.noise ??= isBackgroundTrace(candidate.spans));
+		const httpMatches = (candidate: TraceCandidate): boolean =>
+			(candidate.http ??= matchesHttp(candidate.spans, http ?? ""));
+		// Every filter is one predicate, so the same evaluation both decides the
+		// answer and counts what each filter removed on its own. A `matched: 0` is
+		// then explainable instead of a bare zero.
+		const filters: Array<{
+			readonly name: string;
+			readonly rejects: (candidate: TraceCandidate) => boolean;
+		}> = [];
+		if (app !== undefined && app !== "")
+			filters.push({
+				name: "app",
+				rejects: (candidate) =>
+					sharedAttribute(candidate.spans, AC_APP_ATTRIBUTE) !== app,
+			});
+		if (name !== undefined && name !== "")
+			filters.push({
+				name: "name",
+				rejects: (candidate) =>
+					!candidate.spans.some((span) =>
+						span.name.toLowerCase().includes(name),
+					),
+			});
+		if (minSpans !== undefined)
+			filters.push({
+				name: "minSpans",
+				rejects: (candidate) => candidate.spans.length < minSpans,
+			});
+		if (exclude !== undefined && exclude !== "")
+			filters.push({
+				name: "excludeNames",
 				// A poller's traces repeat one statement: a trace whose *every* span
 				// names it is that poller's and nothing else.
-				if (spans.every((span) => span.name.toLowerCase().includes(exclude)))
-					continue;
-			}
-			const root = rootOf(spans);
-			if (
-				rootKind !== undefined &&
-				rootKind !== "" &&
-				kindOf(root) !== rootKind
-			)
-				continue;
-			if (http !== undefined && http !== "") {
-				const target = [
-					attributeValue(root.attributes ?? [], "http.route"),
-					attributeValue(root.attributes ?? [], "http.target"),
-					attributeValue(root.attributes ?? [], "http.url"),
-					root.name,
-				]
-					.filter((entry): entry is string => entry !== undefined)
-					.join(" ")
-					.toLowerCase();
-				if (!target.includes(http)) continue;
-			}
-			const row = summarize(traceId, spans);
-			if (since !== undefined && Date.parse(row.startedAt) < since) continue;
-			if (query.status === "error" && row.status !== "error") continue;
-			if (query.status === "success" && row.status === "error") continue;
-			if (!ranked && isBackgroundTrace(spans)) background.add(traceId);
-			rows.push(row);
+				rejects: (candidate) =>
+					candidate.spans.every((span) =>
+						span.name.toLowerCase().includes(exclude),
+					),
+			});
+		if (rootKind !== undefined && rootKind !== "")
+			filters.push({
+				name: "rootKind",
+				rejects: (candidate) => kindOf(rootOfCandidate(candidate)) !== rootKind,
+			});
+		if (http !== undefined && http !== "")
+			filters.push({
+				name: "http",
+				rejects: (candidate) => !httpMatches(candidate),
+			});
+		if (since !== undefined)
+			filters.push({
+				name: "since",
+				rejects: (candidate) => Date.parse(rowOf(candidate).startedAt) < since,
+			});
+		if (query.status === "error")
+			filters.push({
+				name: "status",
+				rejects: (candidate) => rowOf(candidate).status !== "error",
+			});
+		else if (query.status === "success")
+			filters.push({
+				name: "status",
+				rejects: (candidate) => rowOf(candidate).status === "error",
+			});
+		const filtered: Record<string, number> = {};
+		for (const filter of filters) filtered[filter.name] = 0;
+		for (const candidate of candidates)
+			for (const filter of filters)
+				if (filter.rejects(candidate))
+					filtered[filter.name] = (filtered[filter.name] ?? 0) + 1;
+		const rows: TraceRow[] = [];
+		const background = new Set<string>();
+		for (const candidate of candidates) {
+			if (filters.some((filter) => filter.rejects(candidate))) continue;
+			if (!ranked && isNoise(candidate)) background.add(candidate.traceId);
+			rows.push(rowOf(candidate));
 		}
 		rows.sort(
 			(left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
@@ -494,6 +654,17 @@ export class TraceIndex {
 			background.has(row.traceId),
 		).length;
 		const noiseDropped = background.size - keptBackground;
+		const notices: string[] = [];
+		if (noiseDropped > 0)
+			notices.push(
+				`${noiseDropped} of ${rows.length} matching traces are single-span background traffic (a poller's query, for example) and are ranked after the request traces; pass includeNoise: true, minSpans: 1 or excludeNames to rank or drop them yourself`,
+			);
+		if (rows.length === 0 && filters.length > 0)
+			notices.push(
+				`no trace of ${owner} passed every filter; of ${candidates.length} indexed traces each active filter rejected this many on its own — ${filters
+					.map((filter) => `${filter.name} ${filtered[filter.name] ?? 0}`)
+					.join(", ")}`,
+			);
 		return {
 			owner,
 			traces,
@@ -501,11 +672,9 @@ export class TraceIndex {
 			truncated: ordered.length > limit,
 			indexTruncated: (this.evicted.get(owner) ?? 0) > 0,
 			noiseDropped,
-			...(noiseDropped > 0
-				? {
-						notice: `${noiseDropped} of ${rows.length} matching traces are single-span background traffic (a poller's query, for example) and are ranked after the request traces; pass includeNoise: true, minSpans: 1 or excludeNames to rank or drop them yourself`,
-					}
-				: {}),
+			considered: candidates.length,
+			filtered,
+			...(notices.length > 0 ? { notice: notices.join(". ") } : {}),
 		};
 	}
 
@@ -514,7 +683,8 @@ export class TraceIndex {
 	 * that also carries another workflow's spans answers with only this one's.
 	 */
 	tree(owner: string, traceId: string): TraceTreeResult | undefined {
-		const spans = this.byOwner.get(owner)?.get(traceId);
+		const key = normalizeTraceId(traceId);
+		const spans = this.byOwner.get(owner)?.get(key);
 		if (!spans || spans.length === 0) return undefined;
 		const kept = [...spans]
 			.sort((left, right) => {
@@ -558,7 +728,7 @@ export class TraceIndex {
 		const run = sharedAttribute(kept, AC_RUN_ATTRIBUTE);
 		return {
 			owner,
-			traceId,
+			traceId: key,
 			...(app === undefined ? {} : { app }),
 			...(run === undefined ? {} : { run }),
 			spans: roots.map((id) => nodes.get(id) as SpanNode),
@@ -626,7 +796,11 @@ export class LogIndex {
 		const limit = boundLogLimit(query.limit);
 		const rows: LogRow[] = [];
 		for (const log of this.byOwner.get(owner) ?? []) {
-			if (traceId !== undefined && traceId !== "" && log.traceId !== traceId)
+			if (
+				traceId !== undefined &&
+				traceId !== "" &&
+				(log.traceId ?? "").toLowerCase() !== traceId
+			)
 				continue;
 			if (
 				severity !== undefined &&

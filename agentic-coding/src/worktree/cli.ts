@@ -236,6 +236,39 @@ export function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** One `git worktree list --porcelain` entry: the path git has registered and,
+ * when git considers the registration stale, why. */
+export interface GitWorktreeEntry {
+	readonly path: string;
+	readonly prunable?: string;
+}
+
+/**
+ * Decode `git worktree list --porcelain`: one blank-line-separated block per
+ * worktree, starting with `worktree <path>`, with `prunable <reason>` on a
+ * registration whose directory or per-worktree gitdir is gone.
+ *
+ * This is git's own view, which the detached create needs as a second opinion:
+ * worktrunk's list is the reuse check, while this one tells a registration that
+ * must be pruned from a directory that merely sits at the target path.
+ */
+export function decodeGitWorktreeList(raw: string): GitWorktreeEntry[] {
+	const entries: GitWorktreeEntry[] = [];
+	let current: { path: string; prunable?: string } | undefined;
+	for (const line of raw.split("\n")) {
+		if (line.startsWith("worktree ")) {
+			if (current) entries.push(current);
+			current = { path: line.slice("worktree ".length).trim() };
+			continue;
+		}
+		if (!current) continue;
+		if (line.startsWith("prunable"))
+			current.prunable = line.slice("prunable".length).trim() || "prunable";
+	}
+	if (current) entries.push(current);
+	return entries;
+}
+
 /** Parse `wt v0.80.0` (or `wt 0.80.0`) into comparable numeric parts. */
 export function parseWorktrunkVersion(output: string): number[] | undefined {
 	const match = /v?(\d+)\.(\d+)\.(\d+)/.exec(output);

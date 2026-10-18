@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { Effect, Either } from "effect";
 import { resolveActiveWorktreePath } from "../src/server/environment/config.ts";
+import { TelemetrySink } from "../src/workflow/observability.ts";
 import {
 	classifyWorktreeFailure,
 	MIN_WORKTRUNK_VERSION,
@@ -265,9 +266,19 @@ describe("worktree argv", () => {
 		expect(ref.created).toBe(true);
 		expect(ref.path).toBe(target);
 		// No worktrunk subcommand is involved: worktrunk cannot create a detached
-		// worktree, so the port's git fallback does, at the branch head.
+		// worktree, so the port's git fallback does, at the branch head. git's own
+		// registration list is asked first, which is what tells a stale record from a
+		// directory that merely sits at the path.
 		expect(calls[0]).toEqual(["wt", "-C", "/repo", "list", "--format", "json"]);
 		expect(calls[1]).toEqual([
+			"git",
+			"-C",
+			"/repo",
+			"worktree",
+			"list",
+			"--porcelain",
+		]);
+		expect(calls[2]).toEqual([
 			"git",
 			"-C",
 			"/repo",
@@ -279,30 +290,39 @@ describe("worktree argv", () => {
 			"feature/x",
 		]);
 
-		// A second ensure finds the detached worktree by path and reuses it.
+		// A second ensure finds the detached worktree by path and reuses it. The
+		// path exists, which is what a live worktree means: a registered entry whose
+		// directory is gone is a stale record, not a checkout to reuse.
+		const existingPath = fs.mkdtempSync(
+			path.join(os.tmpdir(), "detached-reuse-"),
+		);
 		const detachedList = JSON.stringify({
 			schema: 2,
 			items: [
 				{
 					branch: null,
-					worktree: { path: target, main: false, detached: true },
+					worktree: { path: existingPath, main: false, detached: true },
 				},
 			],
 		});
 		const reuse = scripted((argv) =>
 			argv.includes("list") ? { stdout: detachedList } : { stdout: "{}" },
 		);
-		const reused = await run(
-			reuse.adapter.ensure({
-				repo: "/repo",
-				branch: "feature/x",
-				detached: true,
-				location: { root: "/home/u/.devenv", ident: "api" },
-			} satisfies EnsureInput),
-		);
-		expect(reused.created).toBe(false);
-		expect(reused.path).toBe(target);
-		expect(reuse.calls).toHaveLength(1);
+		try {
+			const reused = await run(
+				reuse.adapter.ensure({
+					repo: "/repo",
+					branch: "feature/x",
+					detached: true,
+					path: existingPath,
+				} satisfies EnsureInput),
+			);
+			expect(reused.created).toBe(false);
+			expect(reused.path).toBe(fs.realpathSync(existingPath));
+			expect(reuse.calls).toHaveLength(1);
+		} finally {
+			fs.rmSync(existingPath, { recursive: true, force: true });
+		}
 	});
 
 	test("a detached create that loses the race is rescued by a relist", async () => {
@@ -318,12 +338,15 @@ describe("worktree argv", () => {
 		});
 		let lists = 0;
 		const { adapter } = scripted((argv) => {
-			if (argv.includes("list")) {
+			// Only worktrunk's own list is counted: the port also asks git for its
+			// registrations, and that reply is porcelain, not JSON.
+			if (argv[0] === "wt" && argv.includes("list")) {
 				lists += 1;
 				return lists <= 1
 					? { stdout: JSON.stringify({ schema: 2, items: [] }) }
 					: { stdout: detachedList };
 			}
+			if (argv.includes("list")) return { stdout: "" };
 			if (argv.includes("prune")) return { stdout: "" };
 			return {
 				error: new WorktreeError(
@@ -593,5 +616,212 @@ describe.skipIf(Bun.which("wt") === null)(
 				fs.rmSync(root, { recursive: true, force: true });
 			}
 		}, 60_000);
+	},
+);
+
+// ---------------------------------------------------------------------------
+// A second workflow on the same branch (`fix-otel-query-and-debug-worktree`)
+//
+// The reported defect: a debug workflow on `develop` closed — its detached
+// worktree was removed — and a leftover directory containing only
+// `.herdr-workflow/<workflow-id>/telemetry.jsonl` was written afterwards, so the
+// next workflow on `develop` failed `workspace.setup` with
+// `fatal: '<path>' already exists`. These tests drive the real port (and the
+// real telemetry sink) against real temporary repositories.
+describe.skipIf(Bun.which("wt") === null)(
+	"detached worktree setup and what an earlier workflow left behind",
+	() => {
+		interface Fixture {
+			readonly root: string;
+			readonly repo: string;
+			readonly target: string;
+			readonly git: (cwd: string, args: string[]) => string;
+			readonly adapter: WorktreeAdapter;
+		}
+
+		/** A real repository on `main`, plus the target path a `debug` workflow
+		 * would select for its branch. */
+		function fixture(name: string): Fixture {
+			const root = fs.realpathSync(
+				fs.mkdtempSync(path.join(os.tmpdir(), `worktree-${name}-`)),
+			);
+			const git = (cwd: string, args: string[]): string => {
+				const result = Bun.spawnSync(["git", "-C", cwd, ...args], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				if (result.exitCode !== 0)
+					throw new Error(
+						`git ${args.join(" ")}: ${result.stderr.toString().trim()}`,
+					);
+				return result.stdout.toString().trim();
+			};
+			const repo = path.join(root, "demo", "demo");
+			fs.mkdirSync(repo, { recursive: true });
+			git(root, ["init", "-q", "-b", "main", repo]);
+			git(repo, ["config", "user.email", "a@b.c"]);
+			git(repo, ["config", "user.name", "a"]);
+			fs.writeFileSync(path.join(repo, "f.txt"), "one\n");
+			git(repo, ["add", "f.txt"]);
+			git(repo, ["commit", "-qm", "c1"]);
+			return {
+				root,
+				repo,
+				target: path.join(root, "worktrees", "demo", "demo.develop"),
+				git,
+				adapter: new WorktreeAdapter({ binPath: "wt" }),
+			};
+		}
+
+		test("a leftover directory holding only harness data is reclaimed", async () => {
+			const f = fixture("harness-leftover");
+			try {
+				// Exactly what the first workflow left: one 452-byte telemetry
+				// envelope in its own data directory, nothing else.
+				const leftover = path.join(f.target, ".herdr-workflow", "wf-1");
+				fs.mkdirSync(leftover, { recursive: true });
+				fs.writeFileSync(path.join(leftover, "telemetry.jsonl"), "{}\n");
+				const ref = await run(
+					f.adapter.ensure({
+						repo: f.repo,
+						branch: "main",
+						detached: true,
+						path: f.target,
+					}),
+				);
+				expect(ref.created).toBe(true);
+				expect(ref.path).toBe(f.target);
+				// It is a real worktree now, and the leftover data directory is gone.
+				expect(f.git(f.target, ["branch", "--show-current"])).toBe("");
+				expect(fs.existsSync(path.join(f.target, ".git"))).toBe(true);
+				expect(fs.existsSync(path.join(f.target, ".herdr-workflow"))).toBe(
+					false,
+				);
+			} finally {
+				fs.rmSync(f.root, { recursive: true, force: true });
+			}
+		}, 60_000);
+
+		test("a leftover directory with content is refused by name", async () => {
+			const f = fixture("user-content");
+			try {
+				const occupied = path.join(f.root, "occupied-develop");
+				fs.mkdirSync(path.join(occupied, ".herdr-workflow", "wf-1"), {
+					recursive: true,
+				});
+				fs.writeFileSync(path.join(occupied, "notes.md"), "mine\n");
+				const outcome = await Effect.runPromise(
+					Effect.either(
+						f.adapter.ensure({
+							repo: f.repo,
+							branch: "main",
+							detached: true,
+							path: occupied,
+						}),
+					),
+				);
+				expect(Either.isLeft(outcome)).toBe(true);
+				if (Either.isLeft(outcome)) {
+					expect(outcome.left.kind).toBe("conflict");
+					expect(outcome.left.message).toContain(occupied);
+					expect(outcome.left.message).toContain("notes.md");
+				}
+				// Nothing was deleted: the developer's file is still there.
+				expect(fs.readFileSync(path.join(occupied, "notes.md"), "utf8")).toBe(
+					"mine\n",
+				);
+			} finally {
+				fs.rmSync(f.root, { recursive: true, force: true });
+			}
+		}, 60_000);
+
+		test("a stale registration is pruned before the create", async () => {
+			const f = fixture("stale-registration");
+			try {
+				const first = await run(
+					f.adapter.ensure({
+						repo: f.repo,
+						branch: "main",
+						detached: true,
+						path: f.target,
+					}),
+				);
+				expect(first.created).toBe(true);
+				// The directory is deleted outside the port (the reported crash: the
+				// worktree was removed but git was never told).
+				fs.rmSync(f.target, { recursive: true, force: true });
+				expect(
+					f
+						.git(f.repo, ["worktree", "list", "--porcelain"])
+						.includes("prunable"),
+				).toBe(true);
+				const second = await run(
+					f.adapter.ensure({
+						repo: f.repo,
+						branch: "main",
+						detached: true,
+						path: f.target,
+					}),
+				);
+				expect(second.created).toBe(true);
+				expect(second.path).toBe(f.target);
+				expect(fs.existsSync(path.join(f.target, "f.txt"))).toBe(true);
+			} finally {
+				fs.rmSync(f.root, { recursive: true, force: true });
+			}
+		}, 60_000);
+
+		test("two debug workflows on the same branch in sequence", async () => {
+			const f = fixture("double-run");
+			try {
+				// Workflow 1 sets its worktree up, then closes: the port removes it.
+				const first = await run(
+					f.adapter.ensure({
+						repo: f.repo,
+						branch: "main",
+						detached: true,
+						path: f.target,
+					}),
+				);
+				expect(first.created).toBe(true);
+				await run(f.adapter.remove({ repo: f.repo, path: f.target }));
+				expect(fs.existsSync(f.target)).toBe(false);
+				// Its last telemetry envelopes are written after the removal. The
+				// writer must not bring the worktree back...
+				new TelemetrySink(path.join(f.target, ".herdr-workflow", "wf-1")).emit({
+					schemaVersion: 1,
+					at: new Date().toISOString(),
+					layer: "engine",
+					event: "effect.result",
+					workflowId: "wf-1",
+				});
+				expect(fs.existsSync(f.target)).toBe(false);
+				// ... and a leftover that an older build did leave (harness data only)
+				// is reclaimed by workflow 2's setup instead of failing it.
+				const leftover = path.join(f.target, ".herdr-workflow", "wf-1");
+				fs.mkdirSync(leftover, { recursive: true });
+				fs.writeFileSync(path.join(leftover, "telemetry.jsonl"), "{}\n");
+				const second = await run(
+					f.adapter.ensure({
+						repo: f.repo,
+						branch: "main",
+						detached: true,
+						path: f.target,
+					}),
+				);
+				expect(second.created).toBe(true);
+				expect(second.path).toBe(f.target);
+				// A detached checkout of the branch head, not a branch checkout.
+				expect(f.git(f.target, ["branch", "--show-current"])).toBe("");
+				expect(f.git(f.target, ["rev-parse", "HEAD"])).toBe(
+					f.git(f.repo, ["rev-parse", "main"]),
+				);
+				expect(fs.existsSync(path.join(f.target, ".herdr-workflow"))).toBe(
+					false,
+				);
+			} finally {
+				fs.rmSync(f.root, { recursive: true, force: true });
+			}
+		}, 90_000);
 	},
 );

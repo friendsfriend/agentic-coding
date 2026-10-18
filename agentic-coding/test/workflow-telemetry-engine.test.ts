@@ -484,3 +484,87 @@ test("engine effect error class redacts credentials", () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+/** The telemetry one workflow wrote into a workspace of its own (a worktree
+ * rather than the repository checkout). */
+function readWorkspaceTelemetry(
+	worktree: string,
+	workflowId: string,
+): TelemetryEvent[] {
+	const file = path.join(
+		worktree,
+		".herdr-workflow",
+		workflowId,
+		"telemetry.jsonl",
+	);
+	if (!fs.existsSync(file)) return [];
+	return fs
+		.readFileSync(file, "utf8")
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => JSON.parse(line) as TelemetryEvent);
+}
+
+test("a telemetry write never recreates a removed worktree", () => {
+	// The reported defect: a workflow closed, `workspace.cleanup` removed its
+	// worktree, and the telemetry written afterwards recreated the directory —
+	// one 452-byte envelope in `.herdr-workflow/<id>/telemetry.jsonl` and nothing
+	// else. The next workflow on the same branch then failed `workspace.setup`
+	// with `fatal: '<path>' already exists`.
+	const base = fs.mkdtempSync(
+		path.join(os.tmpdir(), "engine-closed-workspace-"),
+	);
+	const root = repository(path.join(base, "demo"));
+	const worktree = path.join(base, "worktrees", "demo", "demo.develop");
+	fs.mkdirSync(worktree, { recursive: true });
+	try {
+		const engine = new WorkflowEngine(
+			registerBuiltins(),
+			() => new Date("2026-01-01T00:00:00Z"),
+		);
+		engine.start({
+			repo: root,
+			workflowId: "closed-workspace",
+			definitionId: "no-openspec",
+			worktree,
+			metadata: {
+				branch: "develop",
+				baseBranch: "main",
+				baseCommit: "abc123",
+				task: "investigate",
+			},
+			routing: routing(),
+		});
+		// While the worktree is there, its telemetry is written into it.
+		expect(
+			readWorkspaceTelemetry(worktree, "closed-workspace").map(
+				(event) => event.event,
+			),
+		).toContain("workflow.started");
+
+		// The workspace close removes the worktree; the commands that follow it
+		// are still observed.
+		fs.rmSync(worktree, { recursive: true, force: true });
+		const launch = engine
+			.claimEffects(root)
+			.find((effect) => effect.kind === "agent.launch");
+		if (!launch) throw new Error("expected an agent.launch effect");
+		engine.dispatch(root, {
+			type: "effect.result",
+			effectId: launch.id,
+			lease: launch.lease ?? "",
+			outcome: "complete",
+			data: { runtime: "pi-durable", name: "worker" },
+			durationMs: 12,
+		});
+		// The removal was observed, and observing it did not undo it.
+		expect(fs.existsSync(worktree)).toBe(false);
+		// Nothing was rerouted into the repository checkout either: the envelope a
+		// removed workspace cannot hold is dropped, never filed somewhere else.
+		expect(
+			fs.existsSync(path.join(root, ".herdr-workflow", "closed-workspace")),
+		).toBe(false);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
+});

@@ -34,6 +34,19 @@ is a no-op because the workflow's own durable status is its only lifecycle, and
 `workspace.cleanup` still removes the worktree. `notification.show` is an
 explicit no-op — the shell surfaces workflow state in its own UI.
 
+A detached-worktree family (`debug`) addresses its worktree by path, so a
+second workflow on the same branch meets whatever the first left there. Two
+leftovers are handled by the worktree port rather than failing the setup: git's
+registration of a worktree whose directory is gone (pruned first, or `git
+worktree add` refuses it as "missing but already registered worktree"), and a
+directory holding nothing but this engine's own `.herdr-workflow` data — the
+worktree a closed workflow removed and a late telemetry write recreated. A
+`TelemetrySink` therefore writes only while the workspace it belongs to still
+exists (`telemetryWorkspaceRemoved`, `src/workflow/observability.ts`), which the
+agent host's runtime bridge applies to its own `HERDR_TELEMETRY_PATH` too.
+Anything else at the target path is content: the setup fails naming the path and
+what it holds, and never deletes it.
+
 The OpenTUI shell is the workspace surface: its workspace sidebar
 (`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
 lists the durable workflows from the workflow store (SQLite-backed, so rows

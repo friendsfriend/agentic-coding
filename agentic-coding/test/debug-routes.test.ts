@@ -1144,3 +1144,95 @@ describe("readOnlyStatements", () => {
 		expect(calls[calls.length - 1]?.statement).toBe("ROLLBACK");
 	});
 });
+
+// `fix-otel-query-and-debug-worktree`, defect 1a: a request trace the list
+// showed could not be resolved as a span tree seconds later, because the index
+// evicted strictly by insertion order — a backend that polls twice a second
+// rolls the 200-trace window over in about a hundred seconds and took the one
+// trace the caller cared about with it.
+describe("otel_query keeps a request trace while a poller rolls the window over", () => {
+	const base = Date.parse("2026-01-01T00:00:00.000Z");
+
+	/** The poller's traffic: one span per query, more traces than the index
+	 * retains. */
+	function poll(index: TraceIndex, count: number, fromMs: number): void {
+		for (let i = 0; i < count; i += 1) {
+			index.push([
+				span({
+					traceId: `poll-${String(i).padStart(4, "0")}`,
+					spanId: `poll-${i}-1`,
+					name: "SELECT 1",
+					owner: OWNER,
+					startMs: fromMs + i,
+					kind: 1,
+				}),
+			]);
+		}
+	}
+
+	test("the oldest poller trace is evicted before the request trace", async () => {
+		const index = new TraceIndex();
+		index.push(requestTrace({ traceId: "req-1", owner: OWNER, startMs: base }));
+		poll(index, MAX_INDEXED_TRACES + 40, base + 1_000);
+		// The window rolled over...
+		expect(index.size(OWNER)).toBe(MAX_INDEXED_TRACES);
+		expect(index.evictedTrace(OWNER, "poll-0000")).toBe(true);
+		// ... and the request trace is still listable and still resolvable.
+		expect(index.evictedTrace(OWNER, "req-1")).toBe(false);
+		const listed = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {});
+		expect(listed.status).toBe(200);
+		expect(valueIn(listed.json).indexTruncated).toBe(true);
+		expect(
+			(valueIn(listed.json).traces as Array<{ traceId: string }>)[0],
+		).toMatchObject({ traceId: "req-1", rootKind: "server" });
+		const tree = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+			traceId: "req-1",
+		});
+		expect(tree.status).toBe(200);
+		expect(valueIn(tree.json)).toMatchObject({ mode: "tree", spanCount: 2 });
+	});
+
+	test("an evicted trace answers trace-evicted, one never received answers trace-unknown", async () => {
+		const index = new TraceIndex();
+		index.push(
+			requestTrace({ traceId: "req-old", owner: OWNER, startMs: base }),
+		);
+		// Enough *request-level* traces to push the oldest one out: background
+		// traces go first, so this is what has to be flooded to lose a request.
+		for (let i = 0; i <= MAX_INDEXED_TRACES; i += 1) {
+			index.push(
+				requestTrace({
+					traceId: `req-new-${i}`,
+					owner: OWNER,
+					startMs: base + 1_000 + i,
+				}),
+			);
+		}
+		expect(index.evictedTrace(OWNER, "req-old")).toBe(true);
+		const evicted = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+			traceId: "req-old",
+		});
+		expect(evicted.status).toBe(410);
+		expect(errorOf(evicted.json).code).toBe("trace-evicted");
+		expect(errorOf(evicted.json).message).toContain("evicted");
+		// An id this workflow's runs never exported is a different finding, and it
+		// is the only one a re-run can fix.
+		const unknown = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+			traceId: "req-never-exported",
+		});
+		expect(unknown.status).toBe(404);
+		expect(errorOf(unknown.json).code).toBe("trace-unknown");
+	});
+
+	test("a span-tree lookup finds a trace whose id arrives in another case", async () => {
+		const index = new TraceIndex();
+		index.push(
+			requestTrace({ traceId: "abcdef0123", owner: OWNER, startMs: base }),
+		);
+		const tree = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+			traceId: "ABCDEF0123",
+		});
+		expect(tree.status).toBe(200);
+		expect(valueIn(tree.json).traceId).toBe("abcdef0123");
+	});
+});

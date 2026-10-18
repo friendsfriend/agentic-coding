@@ -13,6 +13,7 @@ import {
 	type Harness,
 	watchEvents,
 } from "@earendil-works/pi-durable";
+import { telemetryWorkspaceRemoved } from "../workflow/observability.ts";
 import {
 	classifyToolFailure,
 	toolArgsTelemetry,
@@ -62,7 +63,12 @@ function emit(
 		...fields,
 	};
 	const output = identity.telemetryPath;
-	if (output) {
+	// The run environment pins this path inside the run's own worktree. That
+	// worktree is removed when the workflow closes, and a session that outlives it
+	// (or an event that lands after the removal) must not recreate it: the leftover
+	// directory would make the next workflow on the same branch fail
+	// `workspace.setup` with `fatal: '<path>' already exists`.
+	if (output && !telemetryWorkspaceRemoved(path.dirname(output))) {
 		try {
 			fs.mkdirSync(path.dirname(output), { recursive: true });
 			fs.appendFileSync(output, `${JSON.stringify(envelope)}\n`);

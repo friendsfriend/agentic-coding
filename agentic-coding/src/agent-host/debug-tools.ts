@@ -179,7 +179,7 @@ const OtelQueryParameters = Type.Object({
 	http: Type.Optional(
 		Type.String({
 			description:
-				"Only traces whose root span names this HTTP route/target/URL",
+				"Only traces whose root span carries this HTTP method, route, target or URL, or whose span name contains it (a case-insensitive substring, with or without a leading `METHOD `)",
 		}),
 	),
 	excludeNames: Type.Optional(
@@ -306,8 +306,9 @@ export function createDebugExtension(
 				description: [
 					"Read the traces this workflow's own runs exported to the local receiver: a bounded list of recent traces, one trace's span tree, or (`mode: \"logs\"`) the log records of the same runs.",
 					"App telemetry is attributed by resource attributes (`ac.app`, `ac.owner`, `ac.run`), so a previous holder's spans and logs are never returned even though its host and port are identical.",
-					"Without `traceId` the answer is up to `limit` rows `{traceId, root, rootKind, durationMs, status, errorCount, startedAt, app, run, spanCount}`; with one it is the span tree of that trace, with the `http.*`/`db.*` attributes and exception events of each span.",
-					"A backend that polls its database exports one span per query, so single-span traces that are not `server` spans are ranked after the request traces and the answer reports how many were dropped: pass `includeNoise`, `minSpans`, `excludeNames` or `http` to see them or to narrow the list.",
+					"Without `traceId` the answer is up to `limit` rows `{traceId, root, rootKind, durationMs, status, errorCount, startedAt, app, run, spanCount}`, plus `considered` and `filtered` (how many of them each active filter rejected on its own, so an empty `matched` names the filter that removed the traces); with one it is the span tree of that trace, with the `http.*`/`db.*` attributes and exception events of each span. `trace-evicted` says the index received the trace and has since dropped it (it retains the newest 200 traces, background traces first); `trace-unknown` says no run of this workflow exported that id — only the second is worth re-running the request for.",
+					"A backend that polls its database exports one span per query, so single-span traces that are not `server` spans are ranked after the request traces, are evicted from the index before a request trace, and the answer reports how many were dropped: pass `includeNoise`, `minSpans`, `excludeNames` or `http` to see them or to narrow the list.",
+					'`http` matches the method, the route/target/URL attributes and the span name of any span of the trace, case-insensitively and as a substring, with or without a leading `METHOD `, so `"/grid-allocation-api/v1/requests"` and `"POST /grid-allocation-api/v1/requests"` both match the same request.',
 					'`mode: "logs"` returns `{at, severity, body, service, traceId, spanId, attributes}` rows, bounded like a span; filter them with `traceId` (the log lines of one request), `severity`, `text` and `since`.',
 					"Nothing is returned when the app is not exporting to the receiver: check that it carries the `AC_OTEL_*` variables of its run definition.",
 				].join(" "),

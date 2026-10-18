@@ -5,12 +5,31 @@ TBD - created by archiving change add-debug-workflow. Update Purpose after archi
 ## Requirements
 ### Requirement: Debug workflow runs on a detached worktree
 
-The `debug` family SHALL require a branch and a task, create a detached worktree at the branch head, and SHALL NOT create, switch or commit to any branch.
+The `debug` family SHALL require a branch and a task, create a detached worktree at the branch head, and SHALL NOT create, switch or commit to any branch. Setting that worktree up SHALL tolerate what an earlier workflow on the same branch left at the target path: a stale git registration SHALL be pruned, a directory holding nothing but the engine's own `.herdr-workflow` data SHALL be reclaimed, and any other content SHALL fail the setup with a message naming the path and what it holds, never being deleted.
 
 #### Scenario: Branch checked out elsewhere
 
 - **WHEN** a debug workflow starts on the branch currently checked out in the main checkout
 - **THEN** the workflow SHALL start in a detached worktree and the main checkout SHALL be unchanged
+
+#### Scenario: A second debug workflow on the same branch
+
+- **WHEN** a debug workflow on branch `develop` closes and a later one starts on `develop`
+- **THEN** the second SHALL set its worktree up successfully, whatever the first workflow's telemetry writes left behind
+
+#### Scenario: A leftover directory with content
+
+- **WHEN** the target path exists, is not a registered worktree, and holds files that are not the engine's own harness data
+- **THEN** the setup SHALL fail naming the path and the entries it holds, and SHALL NOT delete anything
+
+### Requirement: A closed workflow's telemetry never recreates its workspace
+
+A telemetry write whose directory lives inside a workspace that no longer exists SHALL be dropped instead of creating that directory: a closed worktree-mode workflow is removed by `workspace.cleanup`, and an observation of that same command (or a runtime bridge envelope that lands later) must not bring the worktree path back.
+
+#### Scenario: The cleanup command is observed after the worktree is gone
+
+- **WHEN** `workspace.cleanup` removes the workflow's worktree and its own telemetry envelope is emitted afterwards
+- **THEN** the removed worktree path SHALL NOT exist again, and the next workflow on that branch SHALL set its worktree up without `fatal: '<path>' already exists`
 
 ### Requirement: Investigation ends in a structured report
 

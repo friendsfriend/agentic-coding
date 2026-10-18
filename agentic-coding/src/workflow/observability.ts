@@ -160,20 +160,67 @@ export function workflowTraceContext(workflowId: string): TraceContext {
 export function traceparent(context: TraceContext): string {
 	return `00-${context.traceId}-${context.spanId}-${context.flags}`;
 }
+/** The directory name that marks a workspace's workflow data root:
+ * `<workspace>/.herdr-workflow/<workflowId>/telemetry.jsonl` is one workflow's
+ * telemetry, written where its runs live. */
+export const HERDR_WORKFLOW_DIRECTORY = ".herdr-workflow";
+
+/** The workspace a workflow telemetry directory belongs to — the directory that
+ * holds its `.herdr-workflow` container — or `undefined` when the directory is
+ * not inside one (the shared wiki/research data root, which lives as long as the
+ * configuration does). */
+export function telemetryWorkspace(
+	telemetryDirectory: string,
+): string | undefined {
+	const parts = path.normalize(telemetryDirectory).split(path.sep);
+	const index = parts.lastIndexOf(HERDR_WORKFLOW_DIRECTORY);
+	if (index <= 0) return undefined;
+	return parts.slice(0, index).join(path.sep);
+}
+
+/**
+ * Whether writing into a telemetry directory would recreate a workspace that is
+ * gone.
+ *
+ * The engine removes a closed workflow's worktree (`workspace.cleanup`), and the
+ * very command that removed it is observed: the sink's `mkdirSync` recreated
+ * `<removed worktree>/.herdr-workflow/<workflowId>/telemetry.jsonl`, leaving a
+ * directory behind whose only content was one 452-byte envelope. The next
+ * workflow on the same branch then failed `workspace.setup` with
+ * `fatal: '<path>' already exists`.
+ *
+ * Telemetry is observational and a worktree workflow's own directory is deleted
+ * with it, so there is nothing to preserve: the late envelopes are dropped
+ * rather than the workspace recreated.
+ */
+export function telemetryWorkspaceRemoved(telemetryDirectory: string): boolean {
+	const workspace = telemetryWorkspace(telemetryDirectory);
+	if (workspace === undefined) return false;
+	try {
+		return !fs.statSync(workspace).isDirectory();
+	} catch {
+		return true;
+	}
+}
+
 export class TelemetrySink {
 	constructor(
 		private readonly directory: string,
 		private readonly exportUrl?: string,
 	) {}
 	emit(envelope: TelemetryEnvelope): void {
-		try {
-			fs.mkdirSync(this.directory, { recursive: true });
-			fs.appendFileSync(
-				path.join(this.directory, "telemetry.jsonl"),
-				`${JSON.stringify(envelope)}\n`,
-			);
-		} catch {
-			/* observational */
+		// A late observation of a workflow whose workspace was removed must not
+		// bring the workspace back (`telemetryWorkspaceRemoved`).
+		if (!telemetryWorkspaceRemoved(this.directory)) {
+			try {
+				fs.mkdirSync(this.directory, { recursive: true });
+				fs.appendFileSync(
+					path.join(this.directory, "telemetry.jsonl"),
+					`${JSON.stringify(envelope)}\n`,
+				);
+			} catch {
+				/* observational */
+			}
 		}
 		if (this.exportUrl)
 			void fetch(this.exportUrl, {

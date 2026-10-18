@@ -49,6 +49,7 @@ import {
 import { callEndpoint, endpointUrl, HttpRequestError } from "./http.ts";
 import {
 	type LogIndex,
+	MAX_INDEXED_TRACES,
 	type TraceIndex,
 	TraceIndexError,
 } from "./trace-index.ts";
@@ -250,12 +251,23 @@ function otelQuery(
 	}
 	if (traceId !== undefined && traceId !== "") {
 		const tree = index.tree(owner, traceId);
-		if (!tree)
+		if (!tree) {
+			// A trace the index received and then dropped answers with its own code:
+			// "the span tree is gone" and "this workflow never exported it" are two
+			// different findings, and a caller that only sees `trace-unknown` for both
+			// re-runs a request that is already lost.
+			if (index.evictedTrace(owner, traceId))
+				throw new DebugRouteError(
+					"trace-evicted",
+					`trace ${JSON.stringify(traceId)} was received for ${owner} and has since been evicted from this server's live index, which retains the newest ${MAX_INDEXED_TRACES} traces (background single-span traces first); list the traces again, or re-run the request and query it while it is quiet`,
+					410,
+				);
 			throw new DebugRouteError(
 				"trace-unknown",
 				`no span of ${owner} was received for trace ${JSON.stringify(traceId)}; list the traces first to see which ones this workflow has`,
 				404,
 			);
+		}
 		return { mode: "tree", ...tree };
 	}
 	const http = body.http?.trim();

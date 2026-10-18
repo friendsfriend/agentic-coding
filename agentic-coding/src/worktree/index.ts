@@ -6,12 +6,17 @@
 // `./cli.ts`, and every invocation disables hooks, directory changes and
 // prompts, so nothing a repository configures can run because an environment
 // action or a workflow asked for a worktree.
+import fs from "node:fs";
+import path from "node:path";
 import { Effect, Either } from "effect";
+import { HERDR_WORKFLOW_DIRECTORY } from "../workflow/observability.ts";
 import {
 	classifyWorktreeFailure,
+	decodeGitWorktreeList,
 	decodeWorktrunkList,
 	decodeWorktrunkSwitch,
 	errorText,
+	type GitWorktreeEntry,
 	MIN_WORKTRUNK_VERSION,
 	meetsMinimumVersion,
 	parseWorktrunkVersion,
@@ -170,14 +175,28 @@ export class WorktreeAdapter implements WorktreePort {
 		return linkedWorktreePath(i.location.root, i.location.ident, i.branch);
 	}
 
-	/** Create a **detached** worktree at `branch`'s head (validate-worktree-
+	/**
+	 * Create a **detached** worktree at `branch`'s head (validate-worktree-
 	 * detached). worktrunk cannot create one, so this goes through git directly;
 	 * the branch itself is never checked out, created, or switched. The lookup
 	 * first makes a retried ensure reuse the worktree the previous attempt
 	 * created. A create that loses a race to a sibling attempt is treated as
 	 * reuse too: the worktree is re-listed (after a best-effort prune) and
 	 * returned when it now exists, so only a target that is genuinely still
-	 * absent fails. A detached worktree is addressed by path, never by branch. */
+	 * absent fails. A detached worktree is addressed by path, never by branch.
+	 *
+	 * A branch is selected by name, and a workflow on the same branch runs
+	 * sequentially, so a second workflow finds whatever the first left at the
+	 * target path. Two leftovers are real and are handled here rather than by
+	 * failing the setup: git's own registration of a worktree whose directory is
+	 * gone (pruned first, or `git worktree add` refuses it as "missing but
+	 * already registered"), and a directory holding nothing but this engine's own
+	 * `.herdr-workflow` data — the bug this guard exists for: the first
+	 * workflow's telemetry writer recreated its removed worktree, and the next
+	 * workflow on that branch then failed with `fatal: '<path>' already exists`.
+	 * Anything else at that path is the developer's content and is refused by
+	 * name, never deleted.
+	 */
 	private ensureDetached(
 		i: WorktreeEnsureInput,
 	): Effect.Effect<WorktreeRef, WorktreeError> {
@@ -187,7 +206,33 @@ export class WorktreeAdapter implements WorktreePort {
 			const atTarget = (refs: readonly WorktreeRef[]) =>
 				refs.find((ref) => ref.path === target);
 			const existing = atTarget(yield* this.list(i.repo));
-			if (existing) return { ...existing, created: false };
+			const present = fs.existsSync(target);
+			// A registered worktree whose directory is gone is a stale record, not a
+			// worktree to reuse: answering with that path would hand the workflow a
+			// checkout that is not there, and `git worktree add` refuses it as
+			// "missing but already registered worktree" until it is pruned.
+			if (existing && !existing.prunable && present)
+				return { ...existing, created: false };
+			// git's own view decides what the path is: a live registration (reuse it),
+			// a stale one (prune the record), or a directory git knows nothing about
+			// (reclaimed when it holds only harness data, refused otherwise).
+			const registered = (yield* this.gitWorktrees(i.repo)).find(
+				(entry) => realpathOrSelf(entry.path) === target,
+			);
+			if (registered && !registered.prunable && present)
+				return {
+					path: target,
+					branch: "",
+					isMain: false,
+					detached: true,
+					created: false,
+				};
+			if (registered || existing?.prunable || (existing && !present))
+				yield* this.run(["git", "-C", i.repo, "worktree", "prune"]);
+			// Whatever is left at the target path is not a worktree git knows: a
+			// leftover of an earlier workflow at the same path, or content this port
+			// must not delete.
+			yield* this.reclaimLeftover(target);
 			const outcome = yield* Effect.either(
 				this.run([
 					"git",
@@ -221,6 +266,63 @@ export class WorktreeAdapter implements WorktreePort {
 				detached: true,
 				created: true,
 			};
+		});
+	}
+
+	/** `git worktree list --porcelain`: git's own registrations, which decide
+	 * whether a target path must be pruned, reclaimed or left alone. */
+	private gitWorktrees(
+		repo: string,
+	): Effect.Effect<readonly GitWorktreeEntry[], WorktreeError> {
+		return this.command(
+			["git", "-C", repo, "worktree", "list", "--porcelain"],
+			decodeGitWorktreeList,
+		);
+	}
+
+	/**
+	 * Reclaim a directory that sits at the target path of a detached worktree but
+	 * is not a worktree git knows.
+	 *
+	 * Only this engine's own harness data may be inside it — `.herdr-workflow`
+	 * (where its telemetry and run files live) and a `.git` *file* (git's pointer
+	 * of a linked worktree whose registration is gone) — and then it is removed,
+	 * because it is the leftover of an earlier workflow that would otherwise fail
+	 * the setup with `fatal: '<path>' already exists`. A `.git` **directory** is a
+	 * repository checkout and never harness data. Anything else is the
+	 * developer's content: the failure names the path and what it holds instead
+	 * of deleting it.
+	 */
+	private reclaimLeftover(target: string): Effect.Effect<void, WorktreeError> {
+		return Effect.try({
+			try: () => {
+				let entries: string[];
+				try {
+					entries = fs.readdirSync(target);
+				} catch {
+					// Nothing is at the path: there is nothing to reclaim.
+					return;
+				}
+				const foreign = entries.filter(
+					(entry) =>
+						entry !== HARNESS_DATA_DIRECTORY &&
+						!(entry === ".git" && !isDirectory(path.join(target, entry))),
+				);
+				if (foreign.length > 0)
+					throw new WorktreeError(
+						"conflict",
+						`the worktree path ${target} exists and is not a registered git worktree; it holds ${describeEntries(entries)} — remove it by hand, or start the workflow on another branch`,
+					);
+				fs.rmSync(target, { recursive: true, force: true });
+			},
+			catch: (error) =>
+				error instanceof WorktreeError
+					? error
+					: new WorktreeError(
+							"conflict",
+							`the leftover worktree path ${target} could not be reclaimed: ${errorText(error)}`,
+							{ cause: error },
+						),
 		});
 	}
 
@@ -305,6 +407,28 @@ export class WorktreeAdapter implements WorktreePort {
 			);
 		});
 	}
+}
+
+/** The harness directory a leftover worktree may hold: the engine's own
+ * `.herdr-workflow` data (its telemetry and run files), the one entry that is
+ * never the developer's content. */
+const HARNESS_DATA_DIRECTORY = HERDR_WORKFLOW_DIRECTORY;
+
+function isDirectory(target: string): boolean {
+	try {
+		return fs.statSync(target).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** The entry names of a refused leftover path, bounded so a directory holding
+ * thousands of entries cannot make the failure unreadable. */
+function describeEntries(entries: readonly string[]): string {
+	const shown = entries.slice(0, 8).map((entry) => JSON.stringify(entry));
+	return entries.length > shown.length
+		? `${shown.join(", ")} (and ${entries.length - shown.length} more)`
+		: shown.join(", ");
 }
 
 /** Failing loudly beats a missing-binary stack trace: the worktrunk executable

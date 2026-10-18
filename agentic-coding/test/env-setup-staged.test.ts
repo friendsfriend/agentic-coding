@@ -698,8 +698,12 @@ describe("a symlinked Dockerfile builds", () => {
 		// configuration that has none gets neither the copy nor the cleanup, so
 		// nothing is written into the checkout and nothing can complain about a
 		// directory that does not exist (`fix-default-target-after-promotion`).
-		expect(findStep(definitions, "/step/prepare-build-context")).toBeUndefined();
-		expect(findStep(definitions, "/step/cleanup-build-context")).toBeUndefined();
+		expect(
+			findStep(definitions, "/step/prepare-build-context"),
+		).toBeUndefined();
+		expect(
+			findStep(definitions, "/step/cleanup-build-context"),
+		).toBeUndefined();
 		expect(fs.readdirSync(checkout)).toEqual([]);
 	});
 
@@ -709,10 +713,7 @@ describe("a symlinked Dockerfile builds", () => {
 			path.join(configDir, "templates", ".dockerignore"),
 			"node_modules\n",
 		);
-		writeFile(
-			path.join(configDir, "templates", "sub", "keep.txt"),
-			"keep\n",
-		);
+		writeFile(path.join(configDir, "templates", "sub", "keep.txt"), "keep\n");
 		const checkout = tempDir("env-setup-templates-checkout-");
 		// A pre-existing file of the developer's own checkout: the cleanup removes
 		// what the overlay copied, never what was already there.
@@ -764,7 +765,9 @@ describe("a symlinked Dockerfile builds", () => {
 		expect(cleaned.exitCode).toBe(0);
 		expect(fs.existsSync(path.join(checkout, ".dockerignore"))).toBe(false);
 		expect(fs.existsSync(path.join(checkout, "sub"))).toBe(false);
-		expect(fs.readFileSync(path.join(checkout, "src.txt"), "utf8")).toBe("mine\n");
+		expect(fs.readFileSync(path.join(checkout, "src.txt"), "utf8")).toBe(
+			"mine\n",
+		);
 	});
 
 	test("a templates copy that cannot run fails instead of reporting success", () => {
@@ -786,13 +789,14 @@ describe("a symlinked Dockerfile builds", () => {
 			ALL_TOOLS,
 			{ checkoutDir: checkout, configDir, tempDir: path.join(checkout, "tmp") },
 		);
-		const configuration = findStep(
-			definitions,
-			"/step/prepare-build-context",
-		)?.configuration as { command?: string; args?: string[] };
+		const configuration = findStep(definitions, "/step/prepare-build-context")
+			?.configuration as { command?: string; args?: string[] };
 		// The templates directory disappears between compilation and the build: the
 		// step must say so, not exit 0 having copied nothing.
-		fs.rmSync(path.join(configDir, "templates"), { recursive: true, force: true });
+		fs.rmSync(path.join(configDir, "templates"), {
+			recursive: true,
+			force: true,
+		});
 		const failed = Bun.spawnSync(
 			[configuration.command ?? "sh", ...(configuration.args ?? [])],
 			{ cwd: checkout, stdout: "pipe", stderr: "pipe" },

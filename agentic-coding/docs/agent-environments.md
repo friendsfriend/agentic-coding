@@ -344,10 +344,20 @@ the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
   `env_status` accepts an infrastructure ident; `env_start`/`env_stop` refuse one
   and name the app whose requirement starts it when a live dependency lease
   names it.
-- **`otel_query` ranks requests before poller traffic** and reports the count it
-  ranked out, and its logs mode answers the OTLP log records of the same runs by
-  trace id — the receivers decode `/v1/logs` with the same `ac.owner`
-  attribution the spans carry.
+- **`otel_query` ranks requests before poller traffic**, reports the count it
+  ranked out, and evicts a poller's single-span trace from its live index before
+  a request trace — insertion order alone let a backend that polls twice a
+  second push the request trace out of the 200-trace window about a hundred
+  seconds after it was listed. A span-tree lookup distinguishes the two ways a
+  trace can be missing: `trace-evicted` (received, then dropped from the live
+  index) and `trace-unknown` (no run of this workflow exported it). Its `http`
+  filter matches the method, the route/target/URL attributes and the span name
+  of any span of the trace, with or without a leading `METHOD `, and an answer
+  with `matched: 0` carries `considered` plus how many traces each active filter
+  rejected on its own, so the filter that removed the trace is named instead of
+  the answer being a bare zero. Its logs mode answers the OTLP log records of
+  the same runs by trace id — the receivers decode `/v1/logs` with the same
+  `ac.owner` attribution the spans carry.
 - **The browser tools need no configured service.** The server drives one
   locally launched Playwright browser (a system Chrome, or the Chromium installed
   under this configuration) rather than the `playwright-server` infrastructure,
