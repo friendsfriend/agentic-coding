@@ -5,21 +5,16 @@
 // no companion runtime.
 
 import { resolveConfigDir, resolveDevenvHome } from "./backend/home.ts";
-import { recordCommandlessRun } from "./server/actions/routes.ts";
 import { createEnvironmentAuthority } from "./server/environment/authority.ts";
-import { createIntegrationServices } from "./server/integrations/services.ts";
+import { createEnvironmentStack } from "./server/environment-stack.ts";
 import {
 	DEFAULT_ENVIRONMENT_PORT,
 	type OwnedWorkflowServer,
 	startWorkflowServer,
 } from "./server/lifecycle.ts";
-import { RunObservation } from "./server/runtime/run-observation.ts";
-import { ScriptInfrastructure } from "./server/runtime/script-infrastructure.ts";
-import {
-	createRuntimeServices,
-	type RuntimeServices,
-} from "./server/runtime/services.ts";
-import { startStatusPollers } from "./server/runtime/status-broadcast.ts";
+import type { LegacyRuntimeEvent } from "./server/runtime/routes.ts";
+import type { RuntimeServices } from "./server/runtime/services.ts";
+import type { StatusEvent } from "./server/runtime/status-broadcast.ts";
 import { APP_VERSION } from "./version.ts";
 
 function arg(args: string[], ...flags: string[]): string | undefined {
@@ -109,89 +104,38 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 			configDir,
 			logger: (message) => process.stderr.write(`${message}\n`),
 		});
-		// The runtime families and the action engine are mutually dependent (the
-		// route records a commandless run; the engine's event stream is the
-		// runtime's fan-out), so both wires are late-bound through one holder
-		// instead of duplicating either owner.
-		const actionWire: {
-			context?: ReturnType<typeof createIntegrationServices>["actions"];
-		} = {};
 		const authority = environmentAuthority;
-		// The script lifecycle owner decides how a script service launches
-		// (logged, or a tmux window when the server runs inside tmux) and reports
-		// its status; the action engine's process handler defers to it.
-		const observation = new RunObservation({
-			store: authority.state,
-			logger: (message) => process.stderr.write(`${message}\n`),
-		});
-		const scriptInfra = new ScriptInfrastructure({
-			runCommand: (command, args) =>
-				new Promise((resolve) => {
-					const child = Bun.spawn([command, ...args], {
-						stdout: "pipe",
-						stderr: "pipe",
-					});
-					let output = "";
-					void (async () => {
-						for await (const chunk of child.stdout)
-							output += new TextDecoder().decode(chunk);
-						for await (const chunk of child.stderr)
-							output += new TextDecoder().decode(chunk);
-					})();
-					child.exited.then((code) =>
-						resolve({
-							output,
-							...(code === 0
-								? {}
-								: {
-										error: new Error(
-											`${command} ${args.join(" ")}: exit ${code}`,
-										),
-									}),
-						}),
-					);
-				}),
-			logger: (message) => process.stderr.write(`${message}\n`),
-		});
-		runtimeServices = await createRuntimeServices({
-			scriptInfra,
-			observation,
-			apps: () => authority.manager.getApps(),
-			infraServices: () => authority.manager.getInfraServices(),
-			stream: {
-				publish: (event) => actionWire.context?.stream.publish(event as never),
-			},
-			publish: (event) => actionWire.context?.services.publish(event as never),
-			recordCommandlessRun: (input) => {
-				if (actionWire.context) recordCommandlessRun(actionWire.context, input);
-			},
-			logger: (message) => process.stderr.write(`${message}\n`),
-		});
-		const integrations = createIntegrationServices({
+		// One composition for the whole environment stack (`environment-stack.ts`),
+		// shared with the TUI's own listener: the runtime families, the script
+		// lifecycle, run observation and the integration services are assembled in
+		// exactly one place, so an attachable capability (the container runtime the
+		// agent environment routes read) cannot exist in one root and not the other.
+		// The two late-bound sinks are handed over through this holder because the
+		// action engine's stream exists only once the stack is built.
+		const wires: {
+			legacy?: (event: LegacyRuntimeEvent) => void;
+			status?: (event: StatusEvent) => void;
+		} = {};
+		const stack = await createEnvironmentStack({
 			manager: authority.manager,
 			state: authority.state,
 			configDir,
 			homeDir,
+			legacyStream: (event) => wires.legacy?.(event),
+			publish: (event) => wires.status?.(event),
 			logger: (message) => process.stderr.write(`${message}\n`),
-			runtime: runtimeServices.routes,
-			runtimeOperation: runtimeServices.dispatch,
 		});
-		actionWire.context = integrations.actions;
+		runtimeServices = stack.runtime;
+		const integrations = stack.integrations;
+		wires.legacy = (event) =>
+			integrations.actions?.stream.publish(event as never);
 		// The status pollers share the runtime scope's signal, so a shutdown stops
 		// the listeners, watchers, prune poller and status pollers as one unit and
 		// schedules nothing else.
-		const appFamily = integrations.appFamily;
-		if (appFamily) {
-			startStatusPollers({
-				services: appFamily,
-				signal: runtimeServices.signal,
-				publish: (event) => {
-					actionWire.context?.stream.publish(event as never);
-					actionWire.context?.services.publish(event as never);
-				},
-				logger: (message) => process.stderr.write(`${message}\n`),
-			});
-		}
+		wires.status = (event) => {
+			integrations.actions?.stream.publish(event as never);
+			integrations.actions?.services.publish(event as never);
+		};
 		workflow = await startWorkflowServer({
 			port: serverPort,
 			instance,

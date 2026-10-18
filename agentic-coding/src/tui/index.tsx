@@ -45,7 +45,8 @@ import {
 } from "../server/diagnostics/instance.ts";
 import { createEnvironmentAuthority } from "../server/environment/authority.ts";
 import type { OtelReceiverTarget } from "../server/environment/instances/variables.ts";
-import { createIntegrationServices } from "../server/integrations/services.ts";
+import { createEnvironmentStack } from "../server/environment-stack.ts";
+import type { createIntegrationServices } from "../server/integrations/services.ts";
 import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
@@ -545,6 +546,9 @@ export async function main(): Promise<void> {
 	// devenv surface.
 	let workflowServer: OwnedWorkflowServer | undefined;
 	let integrations: ReturnType<typeof createIntegrationServices> | undefined;
+	let environmentStack:
+		| import("../server/environment-stack.ts").EnvironmentStack
+		| undefined;
 	let environmentAuthority:
 		| ReturnType<typeof createEnvironmentAuthority>
 		| undefined;
@@ -804,8 +808,14 @@ export async function main(): Promise<void> {
 							}),
 					});
 					// Git/provider families and the action/runtime engine are served from
-					// the same configuration authority this server owns.
-					integrations = createIntegrationServices({
+					// the same configuration authority this server owns. The whole
+					// environment stack (the runtime families, the script lifecycle, run
+					// observation) is built by the one composition the headless server
+					// uses too: that composition is what attaches the container runtime
+					// the agent environment routes read, so `env_logs` of a docker app
+					// and an infrastructure service's state are answered by this
+					// listener as well (`fix-env-tools-round-2`).
+					environmentStack = await createEnvironmentStack({
 						manager: environmentAuthority.manager,
 						state: environmentAuthority.state,
 						configDir: resolveConfigDir(),
@@ -815,10 +825,11 @@ export async function main(): Promise<void> {
 						logger: (message) =>
 							traceTui("tui.process.startup", {
 								surface: "process",
-								action: "integration-services",
+								action: "environment-stack",
 								instance: message,
 							}),
 					});
+					integrations = environmentStack.integrations;
 				}
 				workflowServer = await startWorkflowServer({
 					version: APP_VERSION,
@@ -898,6 +909,9 @@ export async function main(): Promise<void> {
 					stop: async () => {
 						delete process.env.AGENTIC_WORKFLOW_URL;
 						delete process.env.AGENTIC_WORKFLOW_TOKEN;
+						// The environment stack's own scope (listeners, watchers, prune and
+						// status pollers) is stopped with the listener it belongs to.
+						environmentStack?.stop();
 						await workflowServer?.stop();
 					},
 				});

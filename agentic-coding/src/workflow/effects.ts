@@ -292,6 +292,19 @@ export interface WorkflowConfig {
 		instances?: {
 			/** Minutes an agent-held app may sit idle before it is released. */
 			idle_ttl_minutes?: number;
+			/**
+			 * Seconds a run may take to reach the readiness its definition declares
+			 * (a compose healthcheck, a published port, a `devenv:ready=` endpoint)
+			 * before the start answers `starting` instead of `running`
+			 * (`fix-env-tools-round-2`). Defaults to 120.
+			 */
+			readiness_timeout_seconds?: number;
+			/**
+			 * Seconds a run target that declares no readiness of its own must stay up
+			 * before its start counts as a start. Defaults to 2 (the settle window
+			 * `RUN_SETTLE_MS` the shell start always had).
+			 */
+			run_settle_seconds?: number;
 		};
 	};
 	/**
@@ -506,6 +519,16 @@ export function receiverContainerBind(
 /** Built-in idle TTL for an agent-held app: 30 minutes. */
 export const DEFAULT_ENVIRONMENT_IDLE_TTL_MS = 30 * 60 * 1000;
 
+/** Built-in readiness bound of one start: two minutes. Long enough for a
+ * container whose application serves in tens of seconds, bounded so a start can
+ * never hang the tool call. */
+export const DEFAULT_ENVIRONMENT_READINESS_MS = 120 * 1000;
+/** The settle window a run target with no declared readiness must survive; the
+ * value the slot controller always had. */
+export const DEFAULT_RUN_SETTLE_MS = 2 * 1000;
+/** Hard ceiling of either bound, whatever the configuration says (an hour). */
+export const MAX_ENVIRONMENT_READINESS_SECONDS = 3600;
+
 /** Built-in browser session bounds (`browser.*`). */
 export const DEFAULT_BROWSER_MAX_SESSIONS = 4;
 export const DEFAULT_BROWSER_IDLE_TTL_MS = 15 * 60 * 1000;
@@ -565,6 +588,34 @@ export function resolvedBrowserSettings(
 }
 
 /**
+ * How long a run may take to reach the readiness its definition declares, from
+ * the layered configuration's `environment.instances.readiness_timeout_seconds`
+ * (`fix-env-tools-round-2`). A missing or unusable value falls back to two
+ * minutes: a start that waits too long is a slow tool call, a start that does
+ * not wait at all reports a run as running while the application serves
+ * nothing.
+ */
+export function environmentInstanceReadinessMs(
+	config: WorkflowConfig = loadConfig(),
+): number {
+	const seconds = config.environment?.instances?.readiness_timeout_seconds;
+	if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0)
+		return DEFAULT_ENVIRONMENT_READINESS_MS;
+	return Math.min(seconds, MAX_ENVIRONMENT_READINESS_SECONDS) * 1_000;
+}
+
+/** How long a run target with no declared readiness must stay up, from the
+ * layered configuration's `environment.instances.run_settle_seconds`. */
+export function environmentInstanceRunSettleMs(
+	config: WorkflowConfig = loadConfig(),
+): number {
+	const seconds = config.environment?.instances?.run_settle_seconds;
+	if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0)
+		return DEFAULT_RUN_SETTLE_MS;
+	return Math.min(seconds, MAX_ENVIRONMENT_READINESS_SECONDS) * 1_000;
+}
+
+/**
  * How long an agent-held app may sit idle before the server's reaper stops it,
  * from the layered configuration's `environment.instances.idle_ttl_minutes`.
  * Resolved per reap pass, so an edit applies to the next pass. A missing or
@@ -579,7 +630,6 @@ export function environmentInstanceIdleTtlMs(
 		return DEFAULT_ENVIRONMENT_IDLE_TTL_MS;
 	return minutes * 60_000;
 }
-
 /** Resolve one secret from process environment or selected config-root `.env`.
  * Explicit process values win, matching provider credential resolution. */
 export function configEnvValue(name: string): string | undefined {

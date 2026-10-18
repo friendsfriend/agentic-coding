@@ -7,7 +7,11 @@
 import path from "node:path";
 import { resolveConfigRoot } from "../../config-root.ts";
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
-import { environmentInstanceIdleTtlMs } from "../../workflow/effects.ts";
+import {
+	environmentInstanceIdleTtlMs,
+	environmentInstanceReadinessMs,
+	environmentInstanceRunSettleMs,
+} from "../../workflow/effects.ts";
 import { engine as workflowEngine } from "../../workflow/operations.ts";
 import { workflowTargets } from "../../workflow/runtime/target-registry.ts";
 import { canonicalRepository } from "../../workflow/runtime/targets.ts";
@@ -319,6 +323,12 @@ export function createIntegrationServices(
 				// The idle TTL is configuration, not a constant: the reaper resolves
 				// `environment.instances.idle_ttl_minutes` on every pass.
 				idleTtlMs: () => environmentInstanceIdleTtlMs(),
+				// The readiness bound and the settle window are configuration too
+				// (`fix-env-tools-round-2`): a start waits for the readiness the run's
+				// own definition declares, bounded per call so an edit applies to the
+				// next start.
+				readinessTimeoutMs: () => environmentInstanceReadinessMs(),
+				runSettleMs: () => environmentInstanceRunSettleMs(),
 				...(options.otelReceiver ? { otelReceiver: options.otelReceiver } : {}),
 				publish: (event) => dashboardEvents.publish?.(event),
 				...(options.logger ? { logger: options.logger } : {}),

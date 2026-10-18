@@ -113,6 +113,12 @@ function harness(options: {
 		apps: () => options.idents.map((ident) => app(options.checkout, ident)),
 		configDir: options.configDir,
 		docker: dockerSelection(),
+		// The readiness a definition declares is exercised through the real
+		// composition (`test/env-tools-real-composition.test.ts`); here one probe
+		// answers and the start does not wait, so a docker start can never sit out
+		// the production bound in a slot test.
+		readinessTimeoutMs: () => 0,
+
 		observeRun: async (candidate) =>
 			store.findActiveEnvironmentInstance(candidate.ident)
 				? "running"

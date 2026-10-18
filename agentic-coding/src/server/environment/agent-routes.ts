@@ -811,9 +811,7 @@ async function infrastructureSection(
 			.filter((entry) => entry !== "");
 		const state =
 			kind === "docker"
-				? observed
-					? runtimeState(dockerRuntimeStatus(observed.Status))
-					: "unknown"
+				? dockerInfraState(docker !== undefined, observed)
 				: kind === "script" && service.status
 					? runtimeState(service.status)
 					: "unknown";
@@ -836,6 +834,29 @@ async function infrastructureSection(
 				: null,
 		};
 	});
+}
+
+/**
+ * One infrastructure container's state, from what was actually probed.
+ *
+ * A service without a container is `not-created` when the container runtime is
+ * attached (the probe answered for it) and `unknown` when there is no runtime to
+ * ask: a service that was never created and a runtime nobody could reach are
+ * different facts, and the round-1 answer reported the first as the second
+ * (`fix-env-tools-round-2`).
+ */
+function dockerInfraState(
+	runtimeAttached: boolean,
+	observed: { Status: string } | undefined,
+): string {
+	if (!runtimeAttached) return "unknown";
+	if (!observed) return "not-created";
+	const status = observed.Status ?? "";
+	if (status === "not found") return "not-created";
+	// The runtime is attached but the probe could not read it: that is the one
+	// case where the answer is genuinely unknown.
+	if (status === "error") return "unknown";
+	return runtimeState(dockerRuntimeStatus(status));
 }
 
 /**
@@ -923,20 +944,22 @@ async function environmentStatus(
 	);
 	return {
 		owner,
-		apps: named.map((slot) => ({
-			app: slot.app,
-			holder: slot.holder,
-			status: slot.status,
-			waiters: slot.waiters,
-			heldByYou: slot.holder === owner,
-			...runDetail(instances, slot.app, slot.status),
-			// The developer's force release is a notice the holder reads once.
-			...(slot.holder === owner && slot.status === "released-by-developer"
-				? {
-						notice: `the developer released ${slot.app}; call env_start again if you still need it`,
-					}
-				: {}),
-		})),
+		apps: await Promise.all(
+			named.map(async (slot) => ({
+				app: slot.app,
+				holder: slot.holder,
+				status: slot.status,
+				waiters: slot.waiters,
+				heldByYou: slot.holder === owner,
+				...(await runDetail(instances, slot.app, slot.status)),
+				// The developer's force release is a notice the holder reads once.
+				...(slot.holder === owner && slot.status === "released-by-developer"
+					? {
+							notice: `the developer released ${slot.app}; call env_start again if you still need it`,
+						}
+					: {}),
+			})),
+		),
 	};
 }
 
@@ -950,15 +973,33 @@ async function environmentStatus(
  * (`fix-env-tool-defects-from-e2e`). A live run carries the detail too — its
  * runtime and its captured log file — but no exit code, because there is none.
  */
-function runDetail(
+async function runDetail(
 	instances: EnvironmentInstanceController,
 	app: string,
 	slotStatus: string | null | undefined,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
 	const record = instances.runRecord?.(app);
 	if (!record) return {};
 	const dead = record.status === "failed" || record.status === "stopped";
+	// What the definition declares about this run's readiness, probed once for
+	// this read: a container or a process that is up is not an application that
+	// serves (`fix-env-tools-round-2`).
+	const readiness = await instances.runReadinessOf?.(app);
 	return {
+		// What the definition declares about this run's readiness, probed once for
+		// this read: a container or a process that is up is not an application that
+		// serves (`fix-env-tools-round-2`).
+		...(readiness
+			? {
+					readiness: {
+						ready: readiness.ready,
+						...(readiness.waitingFor
+							? { waitingFor: readiness.waitingFor }
+							: {}),
+						...(readiness.lastProbe ? { lastProbe: readiness.lastProbe } : {}),
+					},
+				}
+			: {}),
 		run: {
 			runtime: record.runtime,
 			status: record.status,
@@ -1072,6 +1113,16 @@ export function summarizeAcquire(result: {
 	readonly apps?: readonly string[];
 	readonly positions?: Record<string, number>;
 	readonly holders?: Record<string, string>;
+	readonly readiness?: Readonly<
+		Record<
+			string,
+			{
+				readonly ready: boolean;
+				readonly waitingFor?: string;
+				readonly lastProbe?: string;
+			}
+		>
+	>;
 	readonly instances?: readonly {
 		readonly app: string;
 		readonly id: string;
@@ -1086,9 +1137,16 @@ export function summarizeAcquire(result: {
 		readonly run?: string;
 	}[];
 }): Record<string, unknown> {
-	if (result.outcome === "started" || result.outcome === "already-running")
+	if (result.outcome === "started" || result.outcome === "already-running") {
+		const readiness = result.readiness ?? {};
+		// A run whose definition declares a readiness that has not passed is
+		// `starting`, not `started`: the container or the process is up, the
+		// application is not serving yet (`fix-env-tools-round-2`).
+		const waiting = (result.instances ?? []).some(
+			(instance) => readiness[instance.app]?.ready === false,
+		);
 		return {
-			outcome: result.outcome,
+			outcome: waiting ? "starting" : result.outcome,
 			owner: result.owner,
 			apps: (result.instances ?? []).map((instance) => ({
 				app: instance.app,
@@ -1098,11 +1156,33 @@ export function summarizeAcquire(result: {
 				checkout: instance.checkoutPath,
 				imageTag: instance.imageTag,
 				endpoints: instance.endpoints,
+				// What the definition declares about this run's readiness, and what
+				// the last probe found, so the agent can tell "up" from "serving".
+				...(readiness[instance.app]
+					? {
+							readiness: {
+								ready: readiness[instance.app]?.ready === true,
+								...(readiness[instance.app]?.waitingFor === undefined
+									? {}
+									: { waitingFor: readiness[instance.app]?.waitingFor }),
+								...(readiness[instance.app]?.lastProbe === undefined
+									? {}
+									: { lastProbe: readiness[instance.app]?.lastProbe }),
+							},
+						}
+					: {}),
 				// The run's own id, so the agent can match the spans `otel_query`
 				// reports (`ac.run`) to the hold it is debugging.
 				...(instance.run ? { run: instance.run } : {}),
 			})),
+			...(waiting
+				? {
+						notice:
+							"the run holds the app but the readiness its definition declares has not passed yet; call env_status for the current probe, and raise environment.instances.readiness_timeout_seconds when this run needs longer",
+					}
+				: {}),
 		};
+	}
 	if (result.outcome === "released-by-developer")
 		return {
 			outcome: result.outcome,

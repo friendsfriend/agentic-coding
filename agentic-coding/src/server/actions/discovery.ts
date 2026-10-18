@@ -396,6 +396,7 @@ function discoverScriptRunTargets(context: DiscoveryContext): ActionTarget[] {
 				sourcePath,
 				command: candidate.command,
 				args: candidate.args(sourcePath),
+				...(metadata.readiness ? { readiness: metadata.readiness } : {}),
 				...(metadata.requires.length > 0
 					? { requires: metadata.requires }
 					: {}),
@@ -443,6 +444,7 @@ function discoverSystemShellRunTargets(
 			args: windows
 				? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", sourcePath]
 				: [sourcePath],
+			...(metadata.readiness ? { readiness: metadata.readiness } : {}),
 			...(metadata.requires.length > 0 ? { requires: metadata.requires } : {}),
 		});
 	}
@@ -1175,6 +1177,13 @@ export interface ShellScriptMetadata {
 	name: string;
 	mode: LaunchMode;
 	requires: DependencyRef[];
+	/**
+	 * `# devenv:ready=<url|host:port>`: the readiness this run target itself
+	 * declares (`fix-env-tools-round-2`). A script run has no container whose
+	 * health a compose file declares, so without an annotation the only thing a
+	 * start can prove is that the process is still alive.
+	 */
+	readiness?: string;
 }
 
 /**
@@ -1216,6 +1225,10 @@ export function parseShellScriptMetadata(
 				comment.slice("devenv:requires=".length).trim(),
 				scriptPath,
 			);
+		}
+		if (comment.startsWith("devenv:ready=")) {
+			const readiness = comment.slice("devenv:ready=".length).trim();
+			if (readiness !== "") metadata.readiness = readiness;
 		}
 	}
 	return metadata;

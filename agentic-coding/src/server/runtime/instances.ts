@@ -63,7 +63,9 @@ import type {
 	EnvironmentStateStore,
 } from "../environment/state-store.ts";
 import {
+	type ContainerSummary,
 	composeCommandForRuntime,
+	containerNameMatches,
 	type DockerRuntimeSelection,
 } from "./docker.ts";
 import {
@@ -117,6 +119,14 @@ two hundred milliseconds later (a missing `node_modules`, a port already in
  * own readiness probe is declared and executed by this controller.
  */
 const RUN_SETTLE_MS = 2000;
+/** How often a start re-probes the readiness its definition declares. */
+const READINESS_POLL_MS = 500;
+/** One probe's own ceiling (an HTTP readiness URL, a TCP connect). */
+const READINESS_PROBE_TIMEOUT_MS = 2000;
+/** Built-in bound of one start's readiness wait: two minutes. */
+export const DEFAULT_READINESS_TIMEOUT_MS = 120 * 1000;
+/** How many published ports one readiness probe connects to. */
+const MAX_READINESS_PORTS = 8;
 /** How many lines of a run's captured output a failure message carries. */
 const RUN_LOG_TAIL_LINES = 20;
 /** How much of that file one failure message reads at most. */
@@ -296,8 +306,16 @@ export interface EnvironmentInstanceControllerOptions {
 	readonly sleep?: (ms: number) => Promise<void>;
 	/** How long a script run must stay alive before it counts as started
 	 * (`RUN_SETTLE_MS`); a test can widen it so an immediately dying process
-	 * always wins the race instead of depending on the timer. */
+	 * always wins the race instead of depending on the timer. Absent: the
+	 * configured window (`runSettleMs`). */
 	readonly scriptSettleMs?: number;
+	/** Resolves the settle window a run target with no declared readiness must
+	 * survive (`environment.instances.run_settle_seconds`). */
+	readonly runSettleMs?: () => number;
+	/** Resolves the bound one start waits for the readiness the definition
+	 * declares (`environment.instances.readiness_timeout_seconds`, two minutes
+	 * by default). */
+	readonly readinessTimeoutMs?: () => number;
 	/** Queue position grace, in milliseconds. */
 	readonly queueGraceMs?: number;
 	/** How often a long poll re-checks the queues. */
@@ -314,6 +332,28 @@ export interface EnvironmentInstanceControllerOptions {
 	) => Promise<{ exitCode: number; output: string }>;
 	readonly logger?: (message: string) => void;
 }
+
+/**
+ * What a start knows about the readiness the run's definition declares for it.
+ *
+ * `ready: false` on a start answer means the run is UP — its process or
+ * container holds the slot — but the readiness its definition declares has not
+ * passed yet, which is what `outcome: "starting"` reports
+ * (`fix-env-tools-round-2`).
+ */
+export interface RunReadiness {
+	readonly ready: boolean;
+	/** What the run is waiting for while it is not ready. */
+	readonly waitingFor?: string;
+	/** The last probe's own result, ready or not. */
+	readonly lastProbe?: string;
+	/** A probe that found the run dead: the code and message to fail with. */
+	readonly failure?: { readonly code: string; readonly message: string };
+}
+
+/** One probe's result, without the failure branch: the probe either finds the run
+ * ready, finds it waiting, or throws its own `EnvironmentInstanceError`. */
+export type ReadinessProbe = () => Promise<RunReadiness>;
 
 export interface AcquireSlotsRequest {
 	readonly owner: string;
@@ -338,6 +378,9 @@ export interface SlotGrant {
 	readonly owner: EnvironmentOwner;
 	/** The instances the owner now holds, one per requested app. */
 	readonly instances: EnvironmentInstance[];
+	/** Per app, the readiness its run's definition declares. Absent for an app
+	 * whose definition declares none. */
+	readonly readiness?: Readonly<Record<string, RunReadiness>>;
 }
 
 export interface SlotRelease {
@@ -441,7 +484,9 @@ export class EnvironmentInstanceController {
 	>;
 	private readonly now: () => Date;
 	private readonly sleep: (ms: number) => Promise<void>;
-	private readonly scriptSettleMs: number;
+	private readonly scriptSettleMs?: number;
+	private readonly runSettleMs: () => number;
+	private readonly readinessTimeoutMs: () => number;
 	private readonly queueGraceMs: number;
 	private readonly waitPollMs: number;
 	private readonly observationRefreshMs: number;
@@ -523,7 +568,10 @@ export class EnvironmentInstanceController {
 		this.sleep =
 			options.sleep ??
 			((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-		this.scriptSettleMs = options.scriptSettleMs ?? RUN_SETTLE_MS;
+		this.scriptSettleMs = options.scriptSettleMs;
+		this.runSettleMs = options.runSettleMs ?? (() => RUN_SETTLE_MS);
+		this.readinessTimeoutMs =
+			options.readinessTimeoutMs ?? (() => DEFAULT_READINESS_TIMEOUT_MS);
 		this.queueGraceMs = options.queueGraceMs ?? QUEUE_GRACE_MS;
 		this.waitPollMs = options.waitPollMs ?? WAIT_POLL_MS;
 		this.observationRefreshMs =
@@ -666,10 +714,248 @@ export class EnvironmentInstanceController {
 		if (!spawned) return undefined;
 		const outcome = await Promise.race([
 			spawned.exited.then(() => "exited" as const),
-			this.sleep(this.scriptSettleMs).then(() => "settled" as const),
+			this.sleep(this.settleMs()).then(() => "settled" as const),
 		]);
 		if (outcome === "settled" && spawned.exitCode === null) return undefined;
 		return { code: spawned.exitCode };
+	}
+
+	/** The settle window a run target with no declared readiness must survive: the
+	 * test seam when one was injected, the configured value otherwise. */
+	private settleMs(): number {
+		return this.scriptSettleMs ?? this.runSettleMs();
+	}
+
+	// --- readiness -----------------------------------------------------------
+
+	/**
+	 * The readiness the app's own definition declares right now, for a status
+	 * read: one probe, no wait. `undefined` when the app's definition declares
+	 * nothing, so a caller reports no readiness rather than inventing one.
+	 */
+	async runReadinessOf(app: string): Promise<RunReadiness | undefined> {
+		const record = this.state.findActiveEnvironmentInstance(app);
+		if (!record) return undefined;
+		const configured = this.apps().find((candidate) => candidate.ident === app);
+		if (!configured) return undefined;
+		const target = this.findTarget(record, configured);
+		if (!target) return undefined;
+		if (record.runtime === "docker")
+			return this.dockerReadiness(record, target);
+		if (target.readiness) return this.scriptReadiness(record, target);
+		return undefined;
+	}
+
+	/**
+	 * Waits for the readiness a definition declares, bounded by the configured
+	 * timeout, and re-probes until it passes, the run dies or the bound expires.
+	 *
+	 * A probe that finds the run dead is a failed start, never a `starting`
+	 * answer: the caller reports the run's own exit status and output
+	 * (`fix-env-tools-round-2`).
+	 */
+	private async awaitReadiness(probe: ReadinessProbe): Promise<RunReadiness> {
+		const deadline = this.now().getTime() + this.readinessTimeoutMs();
+		let last = await probe();
+		for (;;) {
+			if (last.failure)
+				throw new EnvironmentInstanceError(
+					last.failure.code,
+					500,
+					last.failure.message,
+				);
+			if (last.ready) return last;
+			const now = this.now().getTime();
+			if (now >= deadline) return last;
+			await this.sleep(
+				Math.max(1, Math.min(READINESS_POLL_MS, deadline - now)),
+			);
+			last = await probe();
+		}
+	}
+
+	/**
+	 * Whether a docker run serves, from what the definition declares: the
+	 * containers of the app's compose project must be running, a container that
+	 * declares a healthcheck must be healthy, and a published port must accept
+	 * connections. What a container without either signal proves is only that it
+	 * is up — the definition declared nothing more (`fix-env-tools-round-2`).
+	 */
+	private async dockerReadiness(
+		record: EnvironmentInstanceRecord,
+		target: ActionTarget,
+	): Promise<RunReadiness> {
+		const docker = await this.dockerRuntime();
+		if (!docker)
+			return {
+				ready: false,
+				waitingFor: `a container runtime for ${record.app}`,
+				lastProbe: "no Docker-compatible runtime is available",
+			};
+		// A start asks what is there now: the container list is cached for half a
+		// minute, which would report the state before `compose up`.
+		docker.client.invalidateCache();
+		let containers: ContainerSummary[];
+		try {
+			containers = (await docker.client.allContainers()).filter((container) =>
+				this.containerBelongsTo(container, record, target),
+			);
+		} catch (error) {
+			return {
+				ready: false,
+				waitingFor: `the containers of ${record.app}`,
+				lastProbe: `reading the container list failed: ${message(error)}`,
+			};
+		}
+		if (containers.length === 0)
+			return {
+				ready: false,
+				waitingFor: `the containers of ${record.app}`,
+				lastProbe: "no container of the app is present yet",
+			};
+		const stopped = containers.find(
+			(container) => (container.State ?? "").toLowerCase() !== "running",
+		);
+		if (stopped) {
+			const name = containerLabel(stopped);
+			return {
+				ready: false,
+				waitingFor: `${name} to stay up`,
+				lastProbe: `${name} is ${stopped.State ?? "gone"}`,
+				failure: {
+					code: "run-exited",
+					message: `the run of ${record.app} ${name} ${stopped.State ?? "is gone"} before it was ready; last output: ${await this.containerLogTail(docker, stopped.Id)}`,
+				},
+			};
+		}
+		const healths: string[] = [];
+		for (const container of containers) {
+			let status: string | undefined;
+			try {
+				const inspected = await docker.client.inspect(container.Id);
+				status = inspected.state.health?.status;
+			} catch (error) {
+				return {
+					ready: false,
+					waitingFor: `the state of ${containerLabel(container)}`,
+					lastProbe: `inspecting the container failed: ${message(error)}`,
+				};
+			}
+			// A container without a healthcheck reports none: the definition
+			// declared no health signal for it.
+			if (status !== undefined && status !== "") healths.push(status);
+		}
+		if (healths.length > 0) {
+			const unhealthy = healths.find((status) => status === "unhealthy");
+			if (unhealthy)
+				return {
+					ready: false,
+					waitingFor: `the healthcheck of ${record.app}`,
+					lastProbe: `health: ${healths.join(", ")}`,
+					failure: {
+						code: "run-exited",
+						message: `the run of ${record.app} is unhealthy before it was ready; last output: ${await this.containerLogTail(docker, (containers[0] as ContainerSummary).Id)}`,
+					},
+				};
+			if (healths.every((status) => status === "healthy"))
+				return { ready: true, lastProbe: `health: ${healths.join(", ")}` };
+			return {
+				ready: false,
+				waitingFor: `the healthcheck of ${record.app}`,
+				lastProbe: `health: ${healths.join(", ")}`,
+			};
+		}
+		const ports = publishedPorts(containers);
+		if (ports.length === 0)
+			return {
+				ready: true,
+				lastProbe:
+					"the containers are running (no healthcheck and no published port declared)",
+			};
+		const refused: number[] = [];
+		for (const port of ports)
+			if (!(await portAnswers("127.0.0.1", port))) refused.push(port);
+		if (refused.length > 0)
+			return {
+				ready: false,
+				waitingFor: `port ${refused.join(", ")} of ${record.app} to accept connections`,
+				lastProbe: `connection refused on 127.0.0.1:${refused[0]}`,
+			};
+		return {
+			ready: true,
+			lastProbe: `published port ${ports.join(", ")} accepts connections`,
+		};
+	}
+
+	/** Whether one container was created by the app's own run definition. */
+	private containerBelongsTo(
+		container: ContainerSummary,
+		record: EnvironmentInstanceRecord,
+		target: ActionTarget,
+	): boolean {
+		const app = this.apps().find((candidate) => candidate.ident === record.app);
+		const sourcePaths = app
+			? this.runTargetsFor(app, record.checkoutPath, record.configOverlay).map(
+					(candidate) => candidate.sourcePath,
+				)
+			: [target.sourcePath];
+		return (
+			(container.Names ?? []).some((name) =>
+				containerNameMatches(
+					name,
+					record.app,
+					app?.containerBaseName ?? record.app,
+				),
+			) || containerFromConfigFiles(container, sourcePaths)
+		);
+	}
+
+	/** The last lines of one container's output, for a failure that explains
+	 * itself. Bounded by the client, and never a reason to fail the failure. */
+	private async containerLogTail(
+		docker: DockerRuntimeSelection,
+		containerId: string,
+	): Promise<string> {
+		try {
+			const text = await docker.client.getContainerLogs(containerId);
+			return text.split("\n").slice(-RUN_LOG_TAIL_LINES).join("\n");
+		} catch (error) {
+			return `cannot read the container logs: ${message(error)}`;
+		}
+	}
+
+	/**
+	 * The readiness a script run's own definition declares (`devenv:ready=`):
+	 * an HTTP(S) URL that must answer, or a `host:port` that must accept
+	 * connections. The process's own death is the other half: a run that exited
+	 * fails the start with its code and its captured output.
+	 */
+	private async scriptReadiness(
+		record: EnvironmentInstanceRecord,
+		target: ActionTarget,
+	): Promise<RunReadiness> {
+		const logPath = instanceLogPath(this.configDir, record.app);
+		const key = scriptHandleKey(record.id);
+		const exited = this.finishedScriptStatus(record.id);
+		if (exited !== undefined) {
+			const handle = this.scriptInfra.executionHandle(key);
+			return {
+				ready: false,
+				waitingFor: `${record.app} to stay up`,
+				lastProbe: `${record.app} exited`,
+				failure: {
+					code: "run-exited",
+					message: `the run of ${record.app} ${handle?.exitCode === undefined ? "exited" : `exited with status ${handle.exitCode}`} before it was ready; last output: ${readLogTail(logPath)}`,
+				},
+			};
+		}
+		const spec = target.readiness ?? "";
+		if (spec === "")
+			return {
+				ready: true,
+				lastProbe: "the run is alive (no readiness declared)",
+			};
+		return probeDeclaredReadiness(spec);
 	}
 
 	/** Every configured app's slot, for the environment views and the TUI. */
@@ -904,6 +1190,7 @@ export class EnvironmentInstanceController {
 			if (!queue || queue[0] !== waiter) return undefined;
 		}
 		const held: EnvironmentInstanceRecord[] = [];
+		const readiness: Record<string, RunReadiness> = {};
 		const toStart: string[] = [];
 		let started = false;
 		for (const app of waiter.apps) {
@@ -930,9 +1217,19 @@ export class EnvironmentInstanceController {
 			toStart.push(app);
 		}
 		for (const app of toStart) {
-			held.push(await this.start(waiter.owner, app, waiter.request));
+			const startedApp = await this.start(waiter.owner, app, waiter.request);
+			held.push(startedApp.record);
+			readiness[app] = startedApp.readiness;
 			started = true;
 		}
+		// A repeated start by the holder answers what its run's definition declares
+		// right now, so `already-running` never claims a run serves when it does
+		// not (`fix-env-tools-round-2`).
+		for (const record of held)
+			if (readiness[record.app] === undefined) {
+				const observed = await this.runReadinessOf(record.app);
+				if (observed) readiness[record.app] = observed;
+			}
 		this.dequeue(waiter);
 		for (const app of waiter.apps) {
 			this.invalidateApp(app);
@@ -943,6 +1240,7 @@ export class EnvironmentInstanceController {
 			outcome: started ? "started" : "already-running",
 			owner: waiter.owner,
 			instances,
+			...(Object.keys(readiness).length > 0 ? { readiness } : {}),
 		};
 	}
 
@@ -1329,7 +1627,7 @@ export class EnvironmentInstanceController {
 		owner: EnvironmentOwner,
 		appIdent: string,
 		request: QueuedRequest,
-	): Promise<EnvironmentInstanceRecord> {
+	): Promise<{ record: EnvironmentInstanceRecord; readiness: RunReadiness }> {
 		const app = this.apps().find((candidate) => candidate.ident === appIdent);
 		if (!app || app.appType === "library" || app.appType === "LIB")
 			throw new EnvironmentInstanceError(
@@ -1399,9 +1697,10 @@ export class EnvironmentInstanceController {
 			grantId,
 			...(selected.env ? { definitionEnv: selected.env } : {}),
 		});
-		// The early exit of a script that dies before the `starting -> running`
-		// CAS: the completion would otherwise be dropped and leave a dead row
-		// holding the app forever.
+		// What the run's own definition declares about its readiness: `ready` until
+		// a definition declares something that has not passed yet
+		// (`fix-env-tools-round-2`).
+		let readiness: RunReadiness = { ready: true };
 		let earlyExit: number | undefined;
 		try {
 			if (selected.runtime === "docker") {
@@ -1426,6 +1725,13 @@ export class EnvironmentInstanceController {
 						500,
 						result.output || `compose exited ${result.exitCode}`,
 					);
+				// A container that is up is not a running application: the start waits,
+				// bounded, for the readiness the definition declares (a compose
+				// healthcheck, or the published port accepting connections) and answers
+				// `starting` with what it is waiting for when the bound expires.
+				readiness = await this.awaitReadiness(() =>
+					this.dockerReadiness(record, selected),
+				);
 			} else if (selected.runtime === "kubernetes") {
 				await this.startKubernetesRun({
 					storageId: claimedId,
@@ -1545,6 +1851,15 @@ export class EnvironmentInstanceController {
 						`the run of ${appIdent} ${early.code === null ? "exited" : `exited with status ${early.code}`} before it was ready; last output: ${readLogTail(logPath)}`,
 					);
 				}
+				// A script run has no container whose health the definition declares,
+				// so its own `devenv:ready=` annotation is the only readiness it can
+				// declare; without one the settle window was the whole proof. With one,
+				// the start waits for it, bounded, and a process that dies while it waits
+				// fails the start with its code and output.
+				if (selected.readiness)
+					readiness = await this.awaitReadiness(() =>
+						this.scriptReadiness(record, selected),
+					);
 			}
 			if (
 				!this.state.compareAndSetEnvironmentInstanceStatus(
@@ -1581,7 +1896,7 @@ export class EnvironmentInstanceController {
 					500,
 					"instance disappeared after start",
 				);
-			return running;
+			return { record: running, readiness };
 		} catch (error) {
 			this.state.transitionEnvironmentInstanceStatus(
 				claimedId,
@@ -2681,6 +2996,129 @@ function endpointsOf(target: ActionTarget): Record<string, string> {
 			`${endpoint.protocol}://${host}:${endpoint.port}`;
 	}
 	return endpoints;
+}
+
+/** One container's name, without docker's leading slash. */
+function containerLabel(container: ContainerSummary): string {
+	return (container.Names?.[0] ?? container.Id).replace(/^\//, "");
+}
+
+/**
+ * The host ports the app's containers publish, deduplicated and bounded: a
+ * published port is a declaration the run has to answer on before it is ready.
+ */
+function publishedPorts(containers: readonly ContainerSummary[]): number[] {
+	const ports: number[] = [];
+	for (const container of containers) {
+		for (const entry of container.Ports ?? []) {
+			const port = entry.PublicPort ?? 0;
+			if (port <= 0 || port > 65535) continue;
+			if ((entry.Type ?? "tcp").toLowerCase() !== "tcp") continue;
+			if (!ports.includes(port)) ports.push(port);
+		}
+	}
+	return ports
+		.sort((left, right) => left - right)
+		.slice(0, MAX_READINESS_PORTS);
+}
+
+/**
+ * Whether something accepts a TCP connection at `host:port`.
+ *
+ * The probe is the definition's own declaration, so its failure is a
+ * "not yet": a refused or unreachable port is what a run that is still
+ * starting looks like (`fix-env-tools-round-2`).
+ */
+async function portAnswers(
+	host: string,
+	port: number,
+	timeoutMs = READINESS_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+	return new Promise<boolean>((resolve) => {
+		let settled = false;
+		const done = (value: boolean): void => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
+		const timer = setTimeout(() => done(false), timeoutMs);
+		void Bun.connect({
+			hostname: host,
+			port,
+			socket: {
+				open(socket) {
+					clearTimeout(timer);
+					socket.end();
+					done(true);
+				},
+				data() {},
+				close() {},
+				error() {
+					clearTimeout(timer);
+					done(false);
+				},
+			},
+		})
+			.then((socket) => {
+				// `open` already answered; a connection that failed without an
+				// `error` callback (a refused port can report only here) is a no.
+				if (!settled) {
+					clearTimeout(timer);
+					socket.end();
+					done(false);
+				}
+			})
+			.catch(() => {
+				clearTimeout(timer);
+				done(false);
+			});
+	});
+}
+
+/**
+ * One probe of a declared readiness: an HTTP(S) URL that has to answer under
+ * 400, or a `host:port` that has to accept connections.
+ */
+async function probeDeclaredReadiness(spec: string): Promise<RunReadiness> {
+	const target = spec.trim();
+	if (/^https?:\/\//i.test(target)) {
+		try {
+			const response = await fetch(target, {
+				method: "GET",
+				signal: AbortSignal.timeout(READINESS_PROBE_TIMEOUT_MS),
+			});
+			await response.arrayBuffer();
+			return response.status < 400
+				? { ready: true, lastProbe: `${target} answered ${response.status}` }
+				: {
+						ready: false,
+						waitingFor: `${target} to answer under status 400`,
+						lastProbe: `${target} answered ${response.status}`,
+					};
+		} catch (error) {
+			return {
+				ready: false,
+				waitingFor: `${target} to accept connections`,
+				lastProbe: message(error),
+			};
+		}
+	}
+	const separator = target.lastIndexOf(":");
+	const host = separator < 0 ? target : target.slice(0, separator);
+	const port = separator < 0 ? Number.NaN : Number(target.slice(separator + 1));
+	if (host === "" || !Number.isInteger(port) || port <= 0 || port > 65535)
+		return {
+			ready: false,
+			waitingFor: `a usable readiness declaration`,
+			lastProbe: `${JSON.stringify(spec)} is neither an HTTP(S) URL nor host:port`,
+		};
+	return (await portAnswers(host, port))
+		? { ready: true, lastProbe: `${host}:${port} accepts connections` }
+		: {
+				ready: false,
+				waitingFor: `${host}:${port} to accept connections`,
+				lastProbe: `connection refused on ${host}:${port}`,
+			};
 }
 
 /**

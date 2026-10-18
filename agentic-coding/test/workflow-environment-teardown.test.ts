@@ -328,6 +328,11 @@ describe("deleting a workflow", () => {
 				fallbacks: [],
 			} satisfies DockerRuntimeSelection,
 			resolveOwnerCheckout: () => checkout,
+			// This fixture's daemon lists no container, so a docker readiness probe
+			// can only ever answer "not yet": the start must not wait the production
+			// bound out for a test that is about the teardown
+			// (`fix-env-tools-round-2`).
+			readinessTimeoutMs: () => 0,
 			observeRun: async (candidate) =>
 				state.findActiveEnvironmentInstance(candidate.ident)
 					? "running"

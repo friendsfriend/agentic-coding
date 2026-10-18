@@ -120,6 +120,14 @@ export interface ActionTarget {
 	requires?: DependencyRef[];
 	exports?: EndpointExport[];
 	bindings?: EndpointBinding[];
+	/**
+	 * The readiness the definition itself declares: an HTTP(S) URL, or a
+	 * `host:port` that must accept connections, before the run counts as ready
+	 * (`fix-env-tools-round-2`). A script run target has no container and no
+	 * compose healthcheck, so its own header annotation is the only declaration
+	 * its readiness can come from.
+	 */
+	readiness?: string;
 	kubernetes?: KubernetesTargetMetadata;
 }
 

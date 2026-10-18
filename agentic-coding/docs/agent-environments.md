@@ -316,19 +316,45 @@ The `env_*` tools are the surface a durable run acts through, and one rule
 covers all of them: a signal is derived from the run record that actually holds
 the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
 
-- **A start is only `running` once the run is alive.** A script run target is
-  launched, then observed for a settle window (`RUN_SETTLE_MS`, 2 s). A process
-  that exits inside the window fails the start with kind `run-exited`, the exit
-  status and the last lines of the run's own captured output, and the slot is
-  released as `stopped`/`failed`; only a run still alive when the window ends is
-  `running`. This is the bridge until a run target's own readiness probe is
-  executed by the slot controller.
+- **A start is only `running` once the run is alive AND the readiness its
+  definition declares has passed.** The slot controller executes the readiness
+  the app's own definition declares (`fix-env-tools-round-2`):
+  - a **docker/compose** target waits for its containers: every container of the
+    app's compose project must be running, a container that declares a
+    `healthcheck` must be `healthy` (`starting` is not ready), and a definition
+    with no healthcheck must have its **published ports accept connections** on
+    `127.0.0.1`. A container that exits or turns `unhealthy` while the start
+    waits fails it with the container's own last output lines.
+  - a **script** target has no container, so the readiness it declares is its own
+    header annotation `# devenv:ready=<http(s) url | host:port>`; the start waits
+    for that endpoint to answer (under status 400 for a URL, a TCP connect for a
+    `host:port`). A process that exits while the start waits fails it with kind
+    `run-exited`, the exit status and the last lines of the run's own captured
+    output, and the slot is released as `stopped`/`failed`.
+  - a target that declares **nothing** gets the settle window
+    (`environment.instances.run_settle_seconds`, still 2 s): the process (or the
+    container) has to stay up that long, and nothing more is claimed.
+  The wait is bounded by `environment.instances.readiness_timeout_seconds`
+  (default 120 s, file-only, re-read per start). When the bound expires the run
+  keeps the slot and the answer is `starting`, naming what it is waiting for and
+  the last probe's own result (`waitingFor`, `lastProbe`); `env_status` reports
+  the same `readiness` object, so a run that is up is never reported as serving
+  by a later call.
 - **One record answers every status read.** `EnvironmentInstanceController.runRecord`
   is the single derivation behind `env_status` (each app's `run`: runtime, state,
   exit code, pid, and a dead run's captured log path and last lines), `env_logs`
   and the app status API (`appRuntimeStatus` ranks the record as one more
   observation for shell runtimes), so a live run, a dead one and a replacement
-  cannot be reported three different ways.
+  cannot be reported three different ways. A persisted `running` row whose run
+  this server process never started (a row a previous process left behind) is
+  reported `unknown`, never `running`: the slot still holds the app until a
+  developer release or a stop clears it, and a read never claims a process is
+  there when nothing can observe it.
+- **The readiness probe is the definition's, and the answer names it.**
+  `env_status` (each app's `readiness: { ready, waitingFor, lastProbe }`) and
+  `env_start` (`outcome: starting` while it is not ready) report the same probe,
+  so "the container is up" and "the application serves" are never the same
+  answer.
 - **A shell run has a log file.** The run's stdout and stderr go to
   `<config>/logs/instances/<app>.log`, so `env_logs` reads a shell app's own
   output; a docker/compose app reads its containers and a script service its
@@ -344,6 +370,15 @@ the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
   `env_status` accepts an infrastructure ident; `env_start`/`env_stop` refuse one
   and name the app whose requirement starts it when a live dependency lease
   names it.
+- **An infrastructure service's state is a probe, not a guess**
+  (`fix-env-tools-round-2`): the container runtime the composition attached is
+  asked. `running`/`starting`/`stopped`/`failed` come from the container's own
+  status; a service with **no container at all** is `not-created`; and `unknown`
+  is reserved for the one case where no runtime could be asked (no container
+  runtime was selected, or the daemon could not be read). Round 1 answered
+  `unknown` for a service that had simply never been created, because the TUI's
+  own server composition attached no container runtime to the agent environment
+  routes at all.
 - **`otel_query` ranks requests before poller traffic**, reports the count it
   ranked out, and evicts a poller's single-span trace from its live index before
   a request trace — insertion order alone let a backend that polls twice a
@@ -363,6 +398,26 @@ the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
   under this configuration) rather than the `playwright-server` infrastructure,
   and a scripted session gets an allow-list facade that fails an unknown method
   with the list of supported ones.
+
+## One composition for both server roots
+
+Two composition roots own a server: the headless `agentic-coding server`
+(`src/server-command.ts`) and the TUI's own listener (`src/tui/index.tsx`). Both
+build the environment stack through **one** function,
+`createEnvironmentStack` (`src/server/environment-stack.ts`): the run
+observation, the script lifecycle, the container/Kubernetes runtime routes and
+the integration services the agent environment routes read (`env_logs`, an
+infrastructure service's state, `env_build`/`env_test`, the slot controller).
+
+This is stated as a rule because its violation was invisible: the TUI built the
+integration services by hand and attached no container runtime, so
+`env_logs grid-allocation-backend` and `env_logs mailpit` answered "the server
+attached no container-runtime capability at all" while `env_start` of the same
+docker app worked (the slot controller selects its own runtime). An
+`EnvironmentInstanceController`'s own tests cannot see that: the capability the
+routes read is a composition input, so it is asserted through the real
+composition instead (`test/support/real-environment-server.ts`,
+`test/env-tools-real-composition.test.ts`).
 
 ## Developer-facing behavior
 

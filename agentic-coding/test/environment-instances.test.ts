@@ -383,6 +383,12 @@ function harness(options: {
 				clock.ms += ms;
 			}),
 		scriptSettleMs: options.scriptSettleMs ?? 10_000,
+		// The readiness a definition declares is exercised through the real
+		// composition (`test/env-tools-real-composition.test.ts`); here one probe
+		// answers and the start does not wait, so a docker start can never sit out
+		// the production bound in a slot test.
+		readinessTimeoutMs: () => 0,
+
 		waitPollMs: options.waitPollMs ?? 1_000,
 		runCommand: async (command, args, commandOptions) => {
 			calls.push({ command, args, env: commandOptions.env });

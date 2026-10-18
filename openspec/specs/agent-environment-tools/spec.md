@@ -85,14 +85,49 @@ Environment tool results SHALL be bounded in size and SHALL replace values from 
 - **WHEN** an app declares two build targets for the same default profile
 - **THEN** the listing SHALL mark the build action's default as ambiguous and SHALL name both targets
 
-### Requirement: A run that dies during startup fails the start
+### Requirement: A start reports running only when the declared readiness passed
 
-`env_start` SHALL report a script run target as `running` only once its process has stayed alive for a settle window, and SHALL fail the call with kind `run-exited` — carrying the exit status and a bounded tail of the run's own captured output — when the process exits inside that window. A failed start SHALL release the slot.
+`env_start` SHALL report an app's run as `running` only after the readiness the app's own definition declares has passed. It SHALL wait, bounded by the configured readiness timeout (`environment.instances.readiness_timeout_seconds`, default 120 s), for that readiness:
+
+- a docker/compose target: every container of the app's compose project running, a container that declares a healthcheck `healthy`, and otherwise the published ports accepting connections on `127.0.0.1`;
+- a script target: an endpoint its own header declares (`# devenv:ready=<http(s) url | host:port>`) answering (status under 400 for a URL, a TCP connection for `host:port`);
+- a target that declares no readiness at all: the settle window (`environment.instances.run_settle_seconds`, default 2 s), which SHALL be the only claim made about it.
+
+When the bound expires the call SHALL answer `starting`, naming what it is waiting for and the last probe's own result, and the run SHALL keep the slot. A run that dies while the start waits SHALL fail the call: kind `run-exited` for a script, with its exit status and a bounded tail of its captured output; the container's own last output lines for a docker run. A failed start SHALL release the slot.
 
 #### Scenario: The run target dies at once
 
 - **WHEN** an agent calls `env_start` for a shell run target whose script exits 1 because `node_modules` is missing
 - **THEN** the call SHALL fail with `run-exited`, the exit status and the run's last output lines, and the app SHALL NOT be held
+
+#### Scenario: A declared readiness that has not passed
+
+- **WHEN** an agent calls `env_start` for a shell run target whose `devenv:ready=` endpoint does not answer yet
+- **THEN** the call SHALL answer `starting` with what it is waiting for and the last probe result, and `env_start` SHALL NOT answer `started`
+
+#### Scenario: A container is up but the application is not serving
+
+- **WHEN** an agent calls `env_start` for a compose app whose container is running while its declared healthcheck is still `starting` or its published port refuses connections
+- **THEN** the call SHALL keep waiting within the bound and SHALL answer `starting` with the last probe result when the bound expires, rather than `started`
+
+#### Scenario: The run dies while the start waits
+
+- **WHEN** a declared readiness never passes and the run's process or container exits first
+- **THEN** the start SHALL fail with the run's exit status and its last output lines, and the app SHALL NOT stay held
+
+### Requirement: env_status agrees with observation in every phase
+
+`env_status` SHALL report an app's run from what can be observed: `starting` while the start is in flight, `running` once it holds the slot and its process or container is there, the run's state with its exit code and a bounded tail of its output once it ended, and `stopped` after a stop. It SHALL report the readiness the definition declares (`ready`, `waitingFor`, `lastProbe`) so a run that is up but not serving is never called ready. A persisted `running` row whose run this server process cannot observe (a process that is gone, a row a previous process left behind) SHALL NOT be reported as `running`; the slot SHALL keep holding the app until a stop or a developer release clears it.
+
+#### Scenario: Dead process, stale row
+
+- **WHEN** a row reads `running` but its process is gone
+- **THEN** `env_status` SHALL report the run as ended (with its exit code and last output lines when the run recorded them) or as unknown, never as running
+
+#### Scenario: Up but not serving
+
+- **WHEN** an app's container is running while its declared readiness has not passed
+- **THEN** `env_status` SHALL report `readiness.ready` as false with what it is waiting for, and SHALL report it ready once the probe passes
 
 ### Requirement: One run record answers every status signal
 
@@ -121,6 +156,34 @@ Environment tool results SHALL be bounded in size and SHALL replace values from 
 
 - **WHEN** the configured runtime's candidates do not answer
 - **THEN** the refusal SHALL name the command, every endpoint probed and the fact that none answered
+
+### Requirement: an infrastructure service's state is a probe
+
+`env_list` and `env_status` SHALL report an infrastructure service's state from the container runtime the composition attached: `running`/`starting`/`stopped`/`failed` from the container's own status, `not-created` when the runtime is attached and no container of the service exists, and `unknown` only when no runtime could be asked (none was selected, or the daemon could not be read).
+
+#### Scenario: A service that was never created
+
+- **WHEN** an agent calls `env_status` for a configured infrastructure service that has no container
+- **THEN** the answer SHALL report `not-created`, not `unknown`
+
+#### Scenario: No container runtime
+
+- **WHEN** the server selected no container runtime at all
+- **THEN** the answer SHALL report `unknown` and the refusals that need a runtime SHALL name what was probed
+
+### Requirement: every server root attaches the one environment composition
+
+Both composition roots — the headless server and the TUI's own listener — SHALL build the environment stack through the one composition (`createEnvironmentStack`), so every capability the agent environment routes read (the container runtime behind `env_logs`, an infrastructure state probe, `env_build`/`env_test`, the slot controller's runtimes) is attached in both. A route that needs a capability SHALL answer with what is missing instead of claiming a result.
+
+#### Scenario: env_logs for a docker app on the TUI's listener
+
+- **WHEN** the TUI owns the server and an agent calls `env_logs` for a docker compose app or an infrastructure service
+- **THEN** the answer SHALL be that app's or service's container output, not "the server attached no container-runtime capability at all"
+
+#### Scenario: An infrastructure state read on the TUI's listener
+
+- **WHEN** the TUI owns the server and an agent calls `env_status` for an infrastructure service
+- **THEN** the state SHALL come from the container runtime, as it does on the headless server
 
 ### Requirement: env_list is compact and reports the infrastructure
 
