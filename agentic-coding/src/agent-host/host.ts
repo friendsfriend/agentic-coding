@@ -23,7 +23,6 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { CodingTools } from "@earendil-works/pi-durable/tools";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
 	type CompactionConfig,
@@ -31,6 +30,7 @@ import {
 	resolveCompactionPolicy,
 } from "../workflow/compaction.ts";
 import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
+import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
@@ -361,7 +361,10 @@ export class DurableHost {
 		fs.mkdirSync(options.layout.runEnvDir, { recursive: true, mode: 0o700 });
 		const registry = createRegistry();
 		const host: { instance?: DurableHost } = {};
-		registry.install(CodingTools);
+		// pi-durable's coding tools with the bounded `bash` in place of its own
+		// (bash-tool.ts): every runtime this host serves gets the same default
+		// wall-clock bound, whoever selects the tool by name.
+		registry.install(boundedCodingTools());
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator

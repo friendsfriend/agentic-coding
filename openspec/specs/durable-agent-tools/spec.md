@@ -14,6 +14,25 @@ A durable run SHALL offer read, write, edit, bash and grep tools. A run whose pr
 - **WHEN** a worker run with write capability starts
 - **THEN** the model's tool list SHALL contain read, write, edit, bash and grep and the run SHALL NOT restrict its tools to an explicit subset
 
+### Requirement: Bounded `bash` calls
+Every durable run's `bash` tool SHALL run a call under a default wall-clock bound of 120 seconds when the caller passes no `timeout`, SHALL honor a caller's own `timeout` up to a ceiling of 3600 seconds, and SHALL state the default, the ceiling and the override in its description. When the bound fires, the command's process group SHALL be stopped, the result SHALL carry the output collected so far plus a line naming the bound, the elapsed time and how to scope the command instead, and the call SHALL be classified as a `timeout` failure. A call that ran past 60 seconds SHALL report its elapsed time in its result.
+
+#### Scenario: No timeout given
+- **WHEN** a durable run calls `bash` with a command and no `timeout`
+- **THEN** the call SHALL run under a 120-second bound and a command that exceeds it SHALL be stopped with its children and SHALL return the output collected so far plus a line naming the bound and what to do instead
+
+#### Scenario: Caller's timeout wins
+- **WHEN** a run calls `bash` with `timeout: 600`
+- **THEN** the call SHALL run under that 600-second bound
+
+#### Scenario: A timeout above the ceiling is capped
+- **WHEN** a run calls `bash` with a `timeout` above 3600 seconds
+- **THEN** the call SHALL run under a 3600-second bound
+
+#### Scenario: A stopped call is a timeout failure
+- **WHEN** a call's bound fires
+- **THEN** the recorded failure kind for that call SHALL be `timeout`
+
 ### Requirement: Search tool
 Every durable run SHALL offer a `grep` tool that searches a regular expression over the run's working directory and returns matching lines with their repository-relative path and line number. The tool SHALL refuse an absolute path or a path that escapes the working directory, SHALL bound the lines it returns, and SHALL answer an absent or failing ripgrep by falling back to the platform grep. It SHALL NOT write.
 

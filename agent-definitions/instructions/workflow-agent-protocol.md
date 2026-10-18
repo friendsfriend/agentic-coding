@@ -202,6 +202,12 @@ or an edit pass as a few turns with many calls rather than many turns with one.
 - Prefer the `read` and `grep` tools over `sed -n`/`cat`/`head` in `bash`: they
   bound what comes back, keep quoting out of the way, and one search covers a whole
   directory.
+- A `bash` call that passes no `timeout` is stopped after 120 seconds and returns
+  the output collected so far (a `timeout` in seconds overrides that, up to 3600).
+  Scope a search to a path inside the project — with `-maxdepth`/`--max-count` —
+  instead of the filesystem, run long builds and test suites through
+  `env_build`/`env_test` rather than `bash`, and pass `timeout` only for a command
+  that genuinely needs longer.
 - Read what you were assigned plus what you must read to judge it. Do not re-read
   this protocol, your role brief, or a file you already read in this run.
 
