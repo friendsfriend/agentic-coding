@@ -5,8 +5,12 @@
 // that enqueues one `model.classify` effect on entry; the reducer applies the
 // answered result before the effect-complete transition advances the step.
 import { ROUTING_INTEGRATION, TRIAGE_INTEGRATION } from "../classifiers.ts";
-import { GATE_GUARDED_STEP } from "./gates.ts";
-import type { CompletionResult, StepBehavior } from "./types.ts";
+import { GATE_GUARDED_STEP, gateDecisionTelemetry } from "./gates.ts";
+import type {
+	CompletionResult,
+	CompletionTelemetry,
+	StepBehavior,
+} from "./types.ts";
 
 export type RoutingPhase = "plan" | "apply";
 
@@ -143,21 +147,49 @@ function triageRouteCompletion(data: unknown): CompletionResult | undefined {
 		| undefined;
 	if (result?.integration !== TRIAGE_INTEGRATION)
 		return { transition: { outcome: "complete" } };
+	// The verification gate's own verdict rides on this step, so its evaluation is
+	// recorded here whatever the role selection does with it. A result that never
+	// reached a verdict (an outage the runner already announced as a skip) hangs
+	// no gate payload on the transition.
+	const gate = gateDecisionTelemetry(result.gate);
+	const completed = (
+		completion: CompletionResult,
+		plan?: CompletionTelemetry,
+	): CompletionResult => {
+		const telemetry = [gate, plan].filter(
+			(item): item is CompletionTelemetry => item !== undefined,
+		);
+		return telemetry.length ? { ...completion, telemetry } : completion;
+	};
 	// The verification gate resolves first and unconditionally: only an
 	// explicit skip verdict bypasses the round. A fail-open or unusable gate
 	// answer leaves the verdict at "run" and falls through to the ordinary
 	// role resolution below, so a classifier outage can never skip a stage.
 	if (result.gate?.decision === "skip")
-		return { transition: { outcome: "skip-verification" } };
+		return completed({ transition: { outcome: "skip-verification" } });
 	// A fail-open result carries no role constraint, so the transition carries
 	// no output and `core.triage` validates against the full eligible catalog.
-	if (result.failOpen === true) return { transition: { outcome: "complete" } };
+	if (result.failOpen === true)
+		return completed({ transition: { outcome: "complete" } });
 	const roles = Array.isArray(result.roles)
 		? result.roles.filter((role): role is string => typeof role === "string")
 		: [];
 	return roles.length
-		? { transition: { outcome: "complete", output: { roles } } }
-		: { transition: { outcome: "empty", output: { roles: [] } } };
+		? completed({ transition: { outcome: "complete", output: { roles } } })
+		: completed(
+				{ transition: { outcome: "empty", output: { roles: [] } } },
+				// A zero-role verdict is a real selection that bypasses triage, so the
+				// round still records which path produced its role set.
+				{
+					event: "triage.plan.selected",
+					payload: {
+						"herdr.triage.source": "empty-bypass",
+						"herdr.triage.roles": "",
+						"herdr.triage.roles.count": 0,
+						"herdr.triage.files.count": 0,
+					},
+				},
+			);
 }
 
 /** A step the engine inserts around a graph rather than one an author

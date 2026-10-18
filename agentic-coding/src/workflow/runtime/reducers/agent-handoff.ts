@@ -144,6 +144,7 @@ export function agentHandoff(
 		snapshot: structuredClone(snapshot),
 		definitionId: definition.id,
 		traits: effectiveFamilyTraits(definition),
+		hasStep: (stepId) => definition.steps.includes(stepId),
 		run,
 		outcome: command.outcome,
 		output,
@@ -248,6 +249,10 @@ export function agentHandoff(
 			outcome: command.outcome,
 			outputDigest,
 			...(!aborted ? {} : { aborted: true }),
+			// The decision this handoff recorded, for the engine's post-commit
+			// telemetry emission; a failed handoff records none here (the runtime
+			// reports an abandoned round from the state it still holds).
+			...(completion?.telemetry ? { telemetry: completion.telemetry } : {}),
 		},
 	};
 }

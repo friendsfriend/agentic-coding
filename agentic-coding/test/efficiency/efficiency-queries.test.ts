@@ -475,6 +475,107 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("verification-rounds-recorded separates recorded rounds from reconstructed ones", () => {
+		const query = queryByName("verification-rounds-recorded");
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE v_events (workflow_id TEXT, source TEXT, event TEXT);
+				CREATE TABLE v_runs (run_id TEXT, workflow_id TEXT, source TEXT, role TEXT, started_at TEXT);
+				-- wf-recorded: two rounds, both recorded.
+				INSERT INTO v_runs VALUES
+					('a1', 'wf-recorded', 'herdr', 'quality-verifier', '2026-01-01T10:00:00.000Z'),
+					('a2', 'wf-recorded', 'herdr', 'test-verifier', '2026-01-01T10:00:30.000Z'),
+					('a3', 'wf-recorded', 'herdr', 'quality-verifier', '2026-01-01T10:40:00.000Z');
+				INSERT INTO v_events VALUES
+					('wf-recorded', 'herdr', 'verification_round'),
+					('wf-recorded', 'herdr', 'verification_round'),
+					('wf-recorded', 'herdr', 'agent.handoff');
+				-- wf-silent: one round, no event at all.
+				INSERT INTO v_runs VALUES
+					('b1', 'wf-silent', 'herdr', 'security-verifier', '2026-01-02T10:00:00.000Z');
+			`);
+			const rows = db
+				.query<
+					{
+						source: string;
+						workflows: number;
+						rounds_recorded: number;
+						rounds_reconstructed: number;
+						rounds_unrecorded: number;
+						recorded_pct: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows).toHaveLength(1);
+			// The gap between the two same-round verifiers is 30 seconds and the gap
+			// to the next round is 40 minutes: two rounds for the first workflow,
+			// and the second workflow contributes the one run that is its round.
+			expect(rows[0]).toMatchObject({
+				source: "herdr",
+				workflows: 2,
+				rounds_recorded: 2,
+				rounds_reconstructed: 3,
+				rounds_unrecorded: 1,
+				recorded_pct: 66.7,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
+	test("gate-decisions splits recorded evaluations into run and skip", () => {
+		const query = queryByName("gate-decisions");
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE v_events (workflow_id TEXT, source TEXT, event TEXT, step_id TEXT, outcome TEXT);
+				INSERT INTO v_events VALUES
+					('wf-a', 'herdr', 'gate.decision', 'core.triage-route', 'run'),
+					('wf-a', 'herdr', 'gate.decision', 'core.triage-route', 'skip'),
+					('wf-b', 'herdr', 'gate.decision', 'core.triage-route', 'run'),
+					('wf-a', 'herdr', 'gate.decision', 'core.wiki-gate', 'skip'),
+					('wf-b', 'herdr', 'gate.decision', 'core.wiki-gate', 'skip'),
+					('wf-a', 'herdr', 'gate.skip', 'core.wiki-gate', NULL);
+			`);
+			const rows = db
+				.query<
+					{
+						source: string;
+						step_id: string;
+						decisions: number;
+						run_count: number;
+						skip_count: number;
+						undecided: number;
+						workflows: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			// Only `gate.decision` rows count: the `gate.skip` boundary event is not
+			// an evaluation.
+			expect(rows).toHaveLength(2);
+			const triage = rows.find((row) => row.step_id === "core.triage-route");
+			expect(triage).toMatchObject({
+				source: "herdr",
+				decisions: 3,
+				run_count: 2,
+				skip_count: 1,
+				undecided: 0,
+				workflows: 2,
+			});
+			const wiki = rows.find((row) => row.step_id === "core.wiki-gate");
+			expect(wiki).toMatchObject({
+				decisions: 2,
+				run_count: 0,
+				skip_count: 2,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
 	test("bash-vs-tools counts only arguments that survived into a digest", () => {
 		const query = queryByName("bash-vs-tools");
 		const db = new Database(datasetPath, { readonly: true });

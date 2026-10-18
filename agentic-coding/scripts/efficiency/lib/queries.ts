@@ -644,6 +644,113 @@ WHERE event = 'effect.result' AND (outcome IS NULL OR outcome <> 'ok' OR error_c
 ORDER BY at`,
 	},
 	{
+		name: "verification-rounds-recorded",
+		summary:
+			"Per source, the verification rounds the engine recorded (`verification_round`) against the rounds reconstructed from verifier run timing (20-minute gap). `rounds_unrecorded` is the selection's blind spot: rounds only the run timestamps show, which no event ever recorded. A nil percentage means the source recorded rounds it has no verifier runs for (a timestamp-less run).",
+		example:
+			"bun run scripts/efficiency/analyze.ts verification-rounds-recorded --dataset ~/ev/dataset-2026",
+		columns: [
+			"source",
+			"workflows",
+			"rounds_recorded",
+			"rounds_reconstructed",
+			"rounds_unrecorded",
+			"recorded_pct",
+		],
+		sql: `WITH recorded AS (
+	SELECT
+		source AS source,
+		workflow_id AS workflow_id,
+		COUNT(*) AS rounds_recorded
+	FROM v_events
+	WHERE event = 'verification_round'
+	GROUP BY 1, 2
+),
+verifier_runs AS (
+	SELECT
+		source AS source,
+		workflow_id AS workflow_id,
+		started_at AS started_at
+	FROM v_runs
+	WHERE role LIKE '%verifier%' AND started_at IS NOT NULL
+),
+marked AS (
+	SELECT
+		source,
+		workflow_id,
+		started_at,
+		CASE
+			WHEN julianday(started_at) - julianday(LAG(started_at) OVER (PARTITION BY source, workflow_id ORDER BY started_at)) > (20.0 / 1440.0)
+			THEN 1
+			ELSE 0
+		END AS new_round
+	FROM verifier_runs
+),
+reconstructed AS (
+	SELECT
+		source AS source,
+		workflow_id AS workflow_id,
+		MAX(round_index) AS rounds_reconstructed
+	FROM (
+		SELECT
+			source,
+			workflow_id,
+			SUM(new_round) OVER (PARTITION BY source, workflow_id ORDER BY started_at) + 1 AS round_index
+		FROM marked
+	)
+	GROUP BY 1, 2
+),
+keys AS (
+	SELECT source, workflow_id FROM recorded
+	UNION
+	SELECT source, workflow_id FROM reconstructed
+)
+SELECT
+	COALESCE(NULLIF(k.source, ''), '(no source)') AS source,
+	COUNT(*) AS workflows,
+	SUM(COALESCE(rec.rounds_recorded, 0)) AS rounds_recorded,
+	SUM(COALESCE(reb.rounds_reconstructed, 0)) AS rounds_reconstructed,
+	SUM(MAX(COALESCE(reb.rounds_reconstructed, 0) - COALESCE(rec.rounds_recorded, 0), 0)) AS rounds_unrecorded,
+	CASE
+		WHEN SUM(MAX(COALESCE(reb.rounds_reconstructed, 0), COALESCE(rec.rounds_recorded, 0))) > 0
+		THEN ROUND(100.0 * SUM(COALESCE(rec.rounds_recorded, 0)) / SUM(MAX(COALESCE(reb.rounds_reconstructed, 0), COALESCE(rec.rounds_recorded, 0))), 1)
+		ELSE NULL
+	END AS recorded_pct
+FROM keys k
+LEFT JOIN recorded rec ON rec.source = k.source AND rec.workflow_id = k.workflow_id
+LEFT JOIN reconstructed reb ON reb.source = k.source AND reb.workflow_id = k.workflow_id
+GROUP BY k.source
+ORDER BY k.source`,
+	},
+	{
+		name: "gate-decisions",
+		summary:
+			"Per source and gate step, the gate evaluations the engine recorded (`gate.decision`) and how they split between running and skipping the guarded stage. A stage whose rows are all skips is one the classifier never adds to; a stage with no row is one whose gate never evaluated.",
+		example:
+			"bun run scripts/efficiency/analyze.ts gate-decisions --dataset ~/ev/dataset-2026",
+		columns: [
+			"source",
+			"step_id",
+			"decisions",
+			"run_count",
+			"skip_count",
+			"undecided",
+			"workflows",
+		],
+		sql: `SELECT
+	COALESCE(NULLIF(source, ''), '(no source)') AS source,
+	COALESCE(NULLIF(step_id, ''), '(unset)') AS step_id,
+	COUNT(*) AS decisions,
+	SUM(CASE WHEN outcome = 'run' THEN 1 ELSE 0 END) AS run_count,
+	SUM(CASE WHEN outcome = 'skip' THEN 1 ELSE 0 END) AS skip_count,
+	SUM(CASE WHEN outcome IS NULL OR outcome NOT IN ('run', 'skip') THEN 1 ELSE 0 END) AS undecided,
+	COUNT(DISTINCT workflow_id) AS workflows
+FROM v_events
+WHERE event = 'gate.decision'
+GROUP BY source, step_id
+ORDER BY decisions DESC, step_id`,
+	},
+	{
 		name: "verifier-findings",
 		summary: "Verifier findings by severity and role.",
 		example:

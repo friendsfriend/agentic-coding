@@ -228,6 +228,66 @@ function action(
 	}).view;
 }
 
+/** Every telemetry envelope the engine wrote for one workflow, in order. */
+function telemetryEnvelopes(
+	root: string,
+	workflowId: string,
+): Array<Record<string, unknown>> {
+	const file = path.join(
+		root,
+		".herdr-workflow",
+		workflowId,
+		"telemetry.jsonl",
+	);
+	if (!fs.existsSync(file)) return [];
+	return fs
+		.readFileSync(file, "utf8")
+		.split("\n")
+		.filter((line) => line.length > 0)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** The envelopes of one event name, in emission order. */
+function telemetryEvents(
+	root: string,
+	workflowId: string,
+	event: string,
+): Array<Record<string, unknown>> {
+	return telemetryEnvelopes(root, workflowId).filter(
+		(envelope) => envelope.event === event,
+	);
+}
+
+/** Hand one role's run off as `failed`, the way a crashed or refused agent
+ * would: the round ends without a verdict. */
+function fail(
+	engine: WorkflowEngine,
+	root: string,
+	view: WorkflowView,
+	role: string,
+): WorkflowView {
+	const summary = view.runs.find(
+		(run) => run.role === role && ["pending", "working"].includes(run.status),
+	);
+	const run = engine.getRun(root, requireDefined(summary, `${role} run`).id);
+	const launch = engine
+		.claimEffects(root, 100)
+		.find(
+			(effect) =>
+				effect.kind === "agent.launch" &&
+				(effect.payload as { runId?: string }).runId === run.id,
+		);
+	if (!launch?.runToken) throw new Error(`missing ${role} launch token`);
+	return engine.dispatch(root, {
+		type: "agent.handoff",
+		runId: run.id,
+		generation: run.generation,
+		token: launch.runToken,
+		outcome: "failed",
+		message: "the verifier could not run",
+	}).view;
+}
+
 /** Drive the graph from its initial step to the verifier round: the round's
  * classifier gate, the triage model pass, the triage plan, and the verification
  * model pass. */
@@ -235,8 +295,9 @@ function reachVerification(
 	engine: WorkflowEngine,
 	root: string,
 	view: WorkflowView,
+	triage: Record<string, unknown> = { roles: ["quality-verifier"] },
 ): WorkflowView {
-	classify(engine, root, "triage", { roles: ["quality-verifier"] });
+	classify(engine, root, "triage", triage);
 	view = engine.status(root, view.workflowId);
 	expect(view.currentStep.id).toBe("core.route-triage");
 	classify(engine, root, "routing", { phase: "apply", answers: {} });
@@ -520,6 +581,289 @@ test("a failed round lands on the findings review, which selects the worker's fi
 		view = action(engine, root, view, "close");
 		expect(view.currentStep.id).toBe("core.closed");
 		expect(view.status).toBe("closed");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+/** One gate verdict as the runner hands it over: the classification the gate
+ * step reads, with the stage it guards and the policy that decided it. */
+function gateAnswer(
+	decision: "run" | "skip",
+	noul: number,
+): Record<string, unknown> {
+	return {
+		stage: "verification",
+		policy: "auto",
+		decision,
+		forced: false,
+		noul,
+	};
+}
+
+/** A fresh verify repository whose workspace preflight is already satisfied, so
+ * the graph stands on its first classifiable step with its runs created. One
+ * repository per workflow: the runner claims effects in store order, and a
+ * shared repository would make "drain the preflight" ambiguous. */
+async function startedVerify(workflowId: string): Promise<{
+	root: string;
+	engine: WorkflowEngine;
+	view: WorkflowView;
+}> {
+	const { root, baseCommit } = verifyRepo();
+	const engine = new WorkflowEngine(registerBuiltins());
+	const runner = new EffectRunner(
+		root,
+		engine,
+		agentEffectHandlers(root, engine, {
+			registry: engine.registry,
+			adapters: new Map([["pi-durable", new Adapter()]]),
+		}),
+	);
+	startVerify(engine, root, baseCommit, workflowId);
+	await runner.drain(1);
+	return { root, engine, view: engine.status(root, workflowId) };
+}
+
+test("each verification round records one event, whether it found anything or not", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-rounds");
+	const workflowId = "verify-rounds";
+	try {
+		let view = reachVerification(engine, root, started, {
+			roles: ["quality-verifier"],
+			gate: gateAnswer("run", 0.9),
+		});
+
+		// Round 1: one critical finding, so the round ends on a fix.
+		view = complete(engine, root, view, "quality-verifier", {
+			findings: [
+				{
+					id: "Q-001",
+					severity: "critical",
+					detail: "committed work is broken",
+					path: "committed.txt",
+					line: 1,
+				},
+			],
+		});
+		expect(view.currentStep.id).toBe("core.findings-review");
+		const rounds = telemetryEvents(root, workflowId, "verification_round");
+		expect(rounds).toHaveLength(1);
+		expect(rounds[0]?.stepId).toBe("core.verification");
+		expect(rounds[0]?.["herdr.verification.round"]).toBe(1);
+		expect(rounds[0]?.["herdr.verification.outcome"]).toBe("findings");
+		expect(rounds[0]?.["herdr.verification.runs.count"]).toBe(1);
+		expect(rounds[0]?.["herdr.verification.roles"]).toBe("quality-verifier");
+		expect(rounds[0]?.["herdr.verification.findings.critical"]).toBe(1);
+		expect(rounds[0]?.["herdr.verification.selected.roles"]).toBe(
+			"quality-verifier",
+		);
+		// The round's plan travels as counts and one digest: no path and no file
+		// body reaches the stream.
+		expect(rounds[0]?.["herdr.verification.files.count"]).toBe(1);
+		expect(rounds[0]?.["herdr.verification.files.by_role"]).toBe(
+			"quality-verifier=1",
+		);
+		expect(String(rounds[0]?.["herdr.verification.files.digest"])).toMatch(
+			/^[0-9a-f]{16}$/,
+		);
+
+		// The plan the round was locked to and the gate that let it run are
+		// recorded too, each exactly once for the round.
+		const plans = telemetryEvents(root, workflowId, "triage.plan.selected");
+		expect(plans).toHaveLength(1);
+		expect(plans[0]?.["herdr.triage.source"]).toBe("classifier");
+		expect(plans[0]?.["herdr.triage.round"]).toBe(1);
+		expect(plans[0]?.["herdr.triage.roles"]).toBe("quality-verifier");
+		expect(plans[0]?.["herdr.triage.files.by_role"]).toBe("quality-verifier=1");
+		// The changed scope is a count; this run's own store directory is part of
+		// the worktree, so the count is never below the two fixture files.
+		expect(
+			Number(plans[0]?.["herdr.triage.changed.count"]),
+		).toBeGreaterThanOrEqual(2);
+		const gates = telemetryEvents(root, workflowId, "gate.decision");
+		expect(gates).toHaveLength(1);
+		expect(gates[0]?.stepId).toBe("core.triage-route");
+		expect(gates[0]?.["herdr.gate.stage"]).toBe("verification");
+		expect(gates[0]?.["herdr.gate.decision"]).toBe("run");
+		expect(gates[0]?.verdict).toBe("run");
+		expect(gates[0]?.["herdr.gate.policy"]).toBe("auto");
+		expect(gates[0]?.["herdr.gate.forced"]).toBe(false);
+		expect(gates[0]?.["herdr.gate.noul"]).toBe(0.9);
+
+		// Round 2 through the findings review: the worker fixes, the round re-runs.
+		view = action(engine, root, view, "review-comments", {
+			comments: [
+				{
+					comment: "restore the committed behavior",
+					file: "committed.txt",
+					line: 1,
+					findingId: "Q-001",
+				},
+			],
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		view = complete(engine, root, view, "worker", { fixed: true });
+		expect(view.currentStep.id).toBe("core.triage-route");
+		classify(engine, root, "triage", {
+			roles: ["quality-verifier"],
+			gate: gateAnswer("run", 0.7),
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.triage");
+		view = complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "the branch changed",
+					files: ["committed.txt"],
+				},
+			],
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.verification");
+
+		// A clean verifier handoff leaves the round open: the engine-owned full
+		// suite has to run before the round is recorded as having found nothing.
+		view = complete(engine, root, view, "quality-verifier", { findings: [] });
+		expect(view.currentStep.id).toBe("core.verification");
+		expect(
+			telemetryEvents(root, workflowId, "verification_round"),
+		).toHaveLength(1);
+		view = complete(engine, root, view, "test-verifier", { findings: [] });
+		expect(view.currentStep.id).toBe("core.findings-review");
+		const recorded = telemetryEvents(root, workflowId, "verification_round");
+		expect(recorded).toHaveLength(2);
+		expect(recorded[1]?.["herdr.verification.round"]).toBe(2);
+		expect(recorded[1]?.["herdr.verification.outcome"]).toBe("none");
+		expect(recorded[1]?.["herdr.verification.runs.count"]).toBe(2);
+		expect(recorded[1]?.["herdr.verification.roles"]).toBe(
+			"quality-verifier,test-verifier",
+		);
+		expect(recorded[1]?.["herdr.verification.findings.critical"]).toBe(0);
+		// One plan and one gate decision per round, both rounds recorded.
+		expect(
+			telemetryEvents(root, workflowId, "triage.plan.selected"),
+		).toHaveLength(2);
+		expect(telemetryEvents(root, workflowId, "gate.decision")).toHaveLength(2);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an empty role selection records the round's bypass and the gate that allowed it", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-bypass");
+	try {
+		classify(engine, root, "triage", {
+			roles: [],
+			gate: gateAnswer("run", 0.6),
+		});
+		const view = engine.status(root, "verify-bypass");
+		expect(view.currentStep.id).toBe("core.route-verification");
+		const bypass = telemetryEvents(
+			root,
+			"verify-bypass",
+			"triage.plan.selected",
+		);
+		expect(bypass).toHaveLength(1);
+		expect(bypass[0]?.["herdr.triage.source"]).toBe("empty-bypass");
+		expect(bypass[0]?.["herdr.triage.roles.count"]).toBe(0);
+		expect(bypass[0]?.["herdr.triage.files.count"]).toBe(0);
+		expect(
+			telemetryEvents(root, "verify-bypass", "gate.decision")[0]?.[
+				"herdr.gate.decision"
+			],
+		).toBe("run");
+		expect(started.currentStep.id).toBe("core.triage-route");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a classifier outage records the triage agent's own plan as the unconstrained default", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-default");
+	try {
+		classify(engine, root, "triage", {
+			failOpen: true,
+			reason: "classifier unavailable",
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		const view = engine.status(root, "verify-default");
+		expect(view.currentStep.id).toBe("core.triage");
+		complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "the branch changed",
+					files: ["committed.txt"],
+				},
+			],
+		});
+		const plans = telemetryEvents(
+			root,
+			"verify-default",
+			"triage.plan.selected",
+		);
+		expect(plans).toHaveLength(1);
+		expect(plans[0]?.["herdr.triage.source"]).toBe("default");
+		// A fail-open result carries no verdict, so no gate evaluation is recorded.
+		expect(
+			telemetryEvents(root, "verify-default", "gate.decision"),
+		).toHaveLength(0);
+		expect(started.currentStep.id).toBe("core.triage-route");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a skip verdict records the gate's decision and no round", async () => {
+	const { root, engine } = await startedVerify("verify-skip");
+	try {
+		classify(engine, root, "triage", { gate: gateAnswer("skip", 0.1) });
+		const view = engine.status(root, "verify-skip");
+		expect(view.currentStep.id).toBe("core.completed");
+		const skipped = telemetryEvents(root, "verify-skip", "gate.decision");
+		expect(skipped).toHaveLength(1);
+		expect(skipped[0]?.["herdr.gate.decision"]).toBe("skip");
+		expect(skipped[0]?.verdict).toBe("skip");
+		expect(skipped[0]?.["herdr.gate.policy"]).toBe("auto");
+		expect(skipped[0]?.["herdr.gate.stage"]).toBe("verification");
+		expect(skipped[0]?.["herdr.gate.noul"]).toBe(0.1);
+		// The skipped round has no plan and no round record: the decision is the
+		// whole record of the evaluation.
+		expect(
+			telemetryEvents(root, "verify-skip", "triage.plan.selected"),
+		).toHaveLength(0);
+		expect(
+			telemetryEvents(root, "verify-skip", "verification_round"),
+		).toHaveLength(0);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a round whose verifier failed is recorded as abandoned", async () => {
+	const {
+		root,
+		engine,
+		view: started,
+	} = await startedVerify("verify-abandoned");
+	const workflowId = "verify-abandoned";
+	try {
+		let view = reachVerification(engine, root, started, {
+			roles: ["quality-verifier"],
+		});
+		view = fail(engine, root, view, "quality-verifier");
+		expect(view.currentStep.id).toBe("core.route-verification");
+		const rounds = telemetryEvents(root, workflowId, "verification_round");
+		expect(rounds).toHaveLength(1);
+		expect(rounds[0]?.["herdr.verification.round"]).toBe(1);
+		expect(rounds[0]?.["herdr.verification.outcome"]).toBe("abandoned");
+		expect(rounds[0]?.["herdr.verification.roles"]).toBe("quality-verifier");
+		expect(rounds[0]?.["herdr.verification.runs.count"]).toBe(1);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

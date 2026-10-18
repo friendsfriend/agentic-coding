@@ -97,7 +97,7 @@ const TURN_CALL_EVENT_NAMES: ReadonlySet<string> = new Set([
 
 export function eventClass(event: string): EventClass {
 	if (/compaction/.test(event)) return "compaction";
-	if (/^triage_/.test(event)) return "triage";
+	if (/^(triage_|triage\.)/.test(event)) return "triage";
 	if (/^(verif|verifier|test_verifier|worker_verification)/.test(event))
 		return "verifier";
 	if (

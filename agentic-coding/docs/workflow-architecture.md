@@ -546,6 +546,57 @@ plan summary, artifact bodies, paths, and diffs — travels inside one JSON
 envelope introduced by an "untrusted data" preamble, so no repository line can
 start a line that reads as engine-authored in the classifier's instruction area.
 
+### Decision telemetry
+
+Three engine events record a decision the workflow already took, so a round's
+selection and its gates are measurable without reading a snapshot. They are
+emitted through the same boundary as `gate.skip` — one envelope per event in
+`.herdr-workflow/<workflowId>/telemetry.jsonl`, written after the command
+commits, never able to fail or re-play it — and they add no state: the
+durable record stays `snapshot.gateDecisions` and the classifier decision
+history.
+
+- `triage.plan.selected` — once per round, the round's role set and the path
+  that produced it: `herdr.triage.source` is `classifier` (the round's own
+  classification selected the roles), `default` (the graph asks and the
+  classification came back fail-open, so the triage agent chose),
+  `legacy-agent` (the definition predates `core.triage-route`, so the agent's
+  plan has always been the selection), or `empty-bypass` (a real zero-role
+  verdict, which skips triage for a full-suite-only round and is recorded by the
+  routing step that decided it, since no triage run follows). The event also
+  carries the round index, the roles and their count, and the plan's file→role
+  map as counts plus a digest.
+- `verification_round` — once per round that ends: the round index, `outcome`
+  (`findings` when a critical finding was handed over, `none` otherwise,
+  `abandoned` when a verifier run failed and the round ended without a verdict),
+  the runs and roles that took part, the critical count, the role selection the
+  round was locked to, and the plan's file→role counts and digest. A round that
+  is still open — a sibling run in flight, or the engine-owned full suite not yet
+  dispatched — records nothing, so one round has exactly one event. A round
+  skipped by the verification gate runs nothing and records none: the gate
+  decision is its whole record.
+- `gate.decision` — once per gate evaluation, whether the stage ran or was
+  skipped: `herdr.gate.stage`, `herdr.gate.decision` (`run`/`skip`),
+  `herdr.gate.policy` (`auto`/`always`), `herdr.gate.forced`, and
+  `herdr.gate.noul` when the classifier answered with one. The evaluation's
+  latency is the envelope's `durationMs` (the classification call's measured
+  duration), so it is present exactly when the effect measured one. The
+  existing `gate.skip` event is unchanged and still fires on an actual skip.
+
+The file→role map never travels as a file list: `herdr.*.files.count`, one
+`role=count` per role, and a 16-character sha256 digest of the sorted
+`role:path` lines are the whole of it, so a round over a thousand-file change
+set costs the same as a round over one file. Payload fields the engine does not
+hold at that boundary are omitted rather than invented: per-finding ids, the
+warning/info breakdown, turns, tokens, cost, and peak context are not part of
+the handoff contract, and the changed-file count is resolved at the triage
+handoff — where the round's plan records it as `herdr.triage.changed.count` —
+not at verification. The same records are queryable after the fact: import
+`.herdr-workflow/**/telemetry.jsonl` into the efficiency dataset and run
+`analyze.ts verification-rounds-recorded` (recorded rounds against the rounds
+reconstructed from run timing, per source) and `analyze.ts gate-decisions` (the
+run/skip split per gate step, per source).
+
 Non-secret delivery settings are pinned in `metadata.executionSettings`, including
 the effective remote, resolved PR executable (or `null`), and config provenance.
 Delivery effects never reread ambient cwd configuration. Legacy snapshots remain

@@ -36,6 +36,15 @@ export interface CompletionEffect {
 	payload: JsonValue;
 }
 
+/** One engine telemetry event a committed command records. The event is
+ * observation only — it never feeds a transition — and the shared envelope's
+ * bound keeps only scalar values, so a payload can carry counts, ids, and
+ * digests but never a file body, a diff, or a prompt. */
+export interface CompletionTelemetry {
+	event: string;
+	payload: Record<string, unknown>;
+}
+
 export interface CompletionResult {
 	step?: {
 		selectedRoles?: readonly string[];
@@ -47,12 +56,18 @@ export interface CompletionResult {
 	deferTransition?: boolean;
 	runs?: readonly { role: string }[];
 	effects?: readonly CompletionEffect[];
+	/** The decisions this completion recorded, emitted by the runtime as engine
+	 * telemetry events after the command commits — one event per entry. */
+	telemetry?: readonly CompletionTelemetry[];
 }
 
 export interface AgentCompletionContext {
 	snapshot: WorkflowSnapshot;
 	definitionId: string;
 	traits?: WorkflowFamilyTraits;
+	/** Whether the pinned definition carries `stepId`: the graph's shape, the
+	 * same way `traits` is its declared behaviour. */
+	hasStep: (stepId: string) => boolean;
 	run: Pick<WorkflowRun, "id" | "role" | "stepId">;
 	outcome: string;
 	output?: unknown;

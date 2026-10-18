@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
 import type { WorkflowFamilyTraits } from "../registry.ts";
-import type { ArriveResult, StepBehavior } from "./types.ts";
+import type {
+	ArriveResult,
+	CompletionTelemetry,
+	StepBehavior,
+} from "./types.ts";
 
 // Single source of truth for the core.verification role catalog: the engine's
 // selection validation, triage validation, and the dashboard preset editor all
@@ -142,6 +147,48 @@ function allowedTriageRoles(
 	return new Set(selectedRoles.filter((role) => eligible.includes(role)));
 }
 
+/** The round's file→role map as the telemetry it may carry: one count per role
+ * plus a digest of the scoped `role:path` lines, never a path and never a file
+ * body. The plan is as large as the change set, so the event stays bounded by
+ * construction (counts + one 16-char digest) however many files it assigns. */
+function fileMapTelemetry(
+	prefix: string,
+	plan: unknown,
+): Record<string, unknown> {
+	const assignments =
+		plan && typeof plan === "object"
+			? (plan as { assignments?: unknown }).assignments
+			: undefined;
+	const counts = new Map<string, number>();
+	const lines: string[] = [];
+	for (const entry of Array.isArray(assignments) ? assignments : []) {
+		if (!entry || typeof entry !== "object") continue;
+		const role =
+			typeof (entry as { role?: unknown }).role === "string"
+				? (entry as { role: string }).role
+				: "unknown";
+		const files = (entry as { files?: unknown }).files;
+		for (const file of Array.isArray(files) ? files : [])
+			if (typeof file === "string") {
+				counts.set(role, (counts.get(role) ?? 0) + 1);
+				lines.push(`${role}:${file}`);
+			}
+	}
+	if (!lines.length) return {};
+	lines.sort();
+	return {
+		[`${prefix}.files.by_role`]: [...counts]
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([role, count]) => `${role}=${count}`)
+			.join(","),
+		[`${prefix}.files.digest`]: createHash("sha256")
+			.update(lines.join("\n"))
+			.digest("hex")
+			.slice(0, 16),
+		[`${prefix}.files.count`]: lines.length,
+	};
+}
+
 function triageCompletion(ctx: {
 	definitionId: string;
 	outcome: string;
@@ -149,6 +196,7 @@ function triageCompletion(ctx: {
 	changedFiles?: readonly string[];
 	snapshot: WorkflowSnapshot;
 	traits?: WorkflowFamilyTraits;
+	hasStep: (stepId: string) => boolean;
 }) {
 	if (ctx.outcome !== "complete") return undefined;
 	const output = ctx.output as {
@@ -199,7 +247,82 @@ function triageCompletion(ctx: {
 					`triage file is outside changed scope: ${file}`,
 				);
 	}
-	return { step: { selectedRoles: output.roles } };
+	return {
+		step: { selectedRoles: output.roles },
+		// Which path produced the round's role set: the classifier's own
+		// selection, the unconstrained default (a classifier outage inside a
+		// graph that asks), or the tier that predates the routing step, where the
+		// triage agent always chose. The zero-role bypass never reaches this step
+		// — it is recorded by the routing step that decided it.
+		telemetry: [
+			{
+				event: "triage.plan.selected",
+				payload: {
+					"herdr.triage.source": ctx.snapshot.step.selectedRoles.length
+						? "classifier"
+						: ctx.hasStep("core.triage-route")
+							? "default"
+							: "legacy-agent",
+					// The round this plan is for: the counter `core.verification`'s own
+					// arrival increments on entering the round it plans.
+					"herdr.triage.round":
+						(ctx.snapshot.loopCounts["core.verification:round"] ?? 0) + 1,
+					"herdr.triage.roles": output.roles.join(","),
+					"herdr.triage.roles.count": output.roles.length,
+					...fileMapTelemetry("herdr.triage", output),
+					...(ctx.changedFiles
+						? { "herdr.triage.changed.count": ctx.changedFiles.length }
+						: {}),
+				},
+			},
+		],
+	};
+}
+
+/** One verification round as the engine's bounded telemetry event
+ * (`verification_round`): the round index, the runs and roles that took part,
+ * the critical findings they handed over, the role selection the round was
+ * locked to, and the plan's file→role counts and digest. A round that ended with
+ * no critical finding reports `none`, so "this round found nothing" is a
+ * measurement rather than an absence.
+ *
+ * The engine holds no per-finding id, no warning/info breakdown, and no turn,
+ * token, or cost figure at this boundary — the handoff contract carries one
+ * critical count per verifier run — so none of them is invented here. */
+function verificationRoundTelemetry(
+	ctx: Parameters<NonNullable<StepBehavior["onAgentComplete"]>>[0],
+	result: { runId: string; role: string; critical: number },
+): CompletionTelemetry {
+	const results = [...ctx.snapshot.step.results, result];
+	const roles: string[] = [];
+	let critical = 0;
+	for (const item of results) {
+		if (!roles.includes(item.role)) roles.push(item.role);
+		if (Number.isFinite(item.critical)) critical += item.critical;
+	}
+	return {
+		event: "verification_round",
+		payload: {
+			"herdr.verification.round":
+				ctx.snapshot.loopCounts["core.verification:round"] ?? 1,
+			"herdr.verification.outcome": critical > 0 ? "findings" : "none",
+			"herdr.verification.runs": results.map((item) => item.runId).join(","),
+			"herdr.verification.runs.count": results.length,
+			"herdr.verification.roles": roles.join(","),
+			"herdr.verification.findings.critical": critical,
+			...(ctx.snapshot.step.selectedRoles.length
+				? {
+						"herdr.verification.selected.roles":
+							ctx.snapshot.step.selectedRoles.join(","),
+					}
+				: {}),
+			...fileMapTelemetry("herdr.verification", ctx.snapshot.step.context),
+			// No `changed.count` here: the engine resolves the change set at the
+			// triage handoff, where the round's plan records it, and holds none at
+			// this boundary. The round is still bounded by the counts and digest
+			// above.
+		},
+	};
 }
 
 function verificationCompletion(
@@ -215,6 +338,10 @@ function verificationCompletion(
 	const appendResults = [result];
 	if (ctx.remainingActiveRunIds.length)
 		return { deferTransition: true, step: { appendResults } };
+	// The round's own record, emitted only when the round really ends: a
+	// deferred round (a sibling still running, the engine-owned suite not yet
+	// dispatched) records nothing, so one round has exactly one event.
+	const round = verificationRoundTelemetry(ctx, result);
 	if (
 		result.critical > 0 ||
 		ctx.snapshot.step.results.some((item) => item.critical > 0)
@@ -222,6 +349,7 @@ function verificationCompletion(
 		const limit = ctx.snapshot.loopCounts["core.verification:fix"] ?? 0;
 		return {
 			step: { appendResults },
+			telemetry: [round],
 			transition: {
 				outcome:
 					limit + 1 >= (ctx.loopMaxAttempts ?? Number.MAX_SAFE_INTEGER)
@@ -243,6 +371,7 @@ function verificationCompletion(
 		};
 	return {
 		step: { appendResults },
+		telemetry: [round],
 		// The passing round hands its bounded results to the review gate, which
 		// decides "does a developer need to see this?" with the verifier
 		// evidence in hand.

@@ -208,6 +208,7 @@ describe("env-setup step behaviors", () => {
 		const completion = behavior("setup.author").onAgentComplete?.({
 			snapshot: snapshot(),
 			definitionId: "env-setup",
+			hasStep: () => false,
 			run: { id: "run-1", role: "env-setup", stepId: "setup.author" },
 			outcome: "complete",
 			remainingActiveRunIds: [],

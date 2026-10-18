@@ -191,6 +191,12 @@ interface CommittedTelemetry {
 	payload: Record<string, unknown>;
 	/** Present when a completed classifier effect applied routing. */
 	routingPayload?: Record<string, unknown>;
+	/** The decisions the committed step behavior recorded: one engine telemetry
+	 * event per entry, emitted right after the command's own event. */
+	decisionEvents?: readonly {
+		event: string;
+		payload: Record<string, unknown>;
+	}[];
 	/** Present when the command made the workflow terminal: the payload of the
 	 * one best-effort `workflow.rollup` event (D2). */
 	rollupPayload?: Record<string, unknown>;
@@ -539,6 +545,21 @@ export class WorkflowEngine {
 					effectId: committed.telemetry.effectId,
 					outcome: "ok",
 					payload: committed.telemetry.routingPayload,
+				});
+			// The step behavior's own decisions, each one engine event carrying the
+			// identity of the command that recorded it (its run, its effect, its
+			// measured duration), the effect's latency, and the bounded payload the
+			// behavior built. No envelope `outcome` here: the dataset reads a
+			// decision from the payload's own verdict, and an "ok" would mask it.
+			for (const decision of committed.telemetry.decisionEvents ?? [])
+				yield* self.telemetryEffect(committed.snapshot, decision.event, {
+					stepId: committed.telemetry.stepId,
+					runId: committed.telemetry.runId,
+					role: committed.telemetry.role,
+					effectId: committed.telemetry.effectId,
+					effectKind: committed.telemetry.effectKind,
+					durationMs: committed.telemetry.durationMs,
+					payload: decision.payload,
 				});
 			if (committed.telemetry.rollupPayload)
 				yield* self.telemetryEffect(committed.snapshot, "workflow.rollup", {
@@ -1965,12 +1986,35 @@ export class WorkflowEngine {
 		}
 		const eventData =
 			event.data && typeof event.data === "object"
-				? (event.data as { routingDecision?: RoutingDecisionSummary })
+				? (event.data as {
+						routingDecision?: RoutingDecisionSummary;
+						telemetry?: unknown;
+					})
 				: {};
 		if (eventData.routingDecision)
 			telemetry.routingPayload = routingDecisionPayload(
 				eventData.routingDecision,
 			);
+		// A step behavior's committed decision (`verification_round`,
+		// `triage.plan.selected`, `gate.decision`) rides on the event's data; the
+		// runtime only forwards it, so the vocabulary stays in `steps/`.
+		if (Array.isArray(eventData.telemetry)) {
+			const decisions: { event: string; payload: Record<string, unknown> }[] =
+				[];
+			for (const entry of eventData.telemetry)
+				if (
+					entry &&
+					typeof entry === "object" &&
+					typeof (entry as { event?: unknown }).event === "string" &&
+					(entry as { payload?: unknown }).payload !== null &&
+					typeof (entry as { payload?: unknown }).payload === "object"
+				)
+					decisions.push({
+						event: (entry as { event: string }).event,
+						payload: (entry as { payload: Record<string, unknown> }).payload,
+					});
+			if (decisions.length) telemetry.decisionEvents = decisions;
+		}
 		if (event.type === "agent.handoff") {
 			const data =
 				event.data && typeof event.data === "object"
@@ -1993,6 +2037,25 @@ export class WorkflowEngine {
 					if (Number.isFinite(item.critical)) critical += item.critical;
 				telemetry.payload["herdr.findings.critical"] = critical;
 			}
+			// A verifier run that failed ends its round without a verdict: its
+			// siblings are expired and the graph moves on, so the completion hook
+			// that records a finished round never runs. The round still happened, so
+			// the runtime reports the one round it can still see.
+			if (data.outcome === "failed" && telemetry.stepId === "core.verification")
+				telemetry.decisionEvents = [
+					{
+						event: "verification_round",
+						payload: this.abandonedRoundPayload(
+							db,
+							snapshot,
+							// The failed run's own attempt IS its round; the loop counter may
+							// already have advanced into the round that replaced this one.
+							telemetry.attempt ??
+								snapshot.loopCounts["core.verification:round"] ??
+								1,
+						),
+					},
+				];
 		}
 		if (event.type === "developer.action") {
 			const data =
@@ -2079,6 +2142,33 @@ export class WorkflowEngine {
 		}
 		if (first.answer?.kind)
 			telemetry.payload["herdr.answer.kind"] = first.answer.kind;
+	}
+
+	/** The one record of a verification round that ended on a failed run: which
+	 * round, and — from the round's own run rows — which runs were on it and who
+	 * they were. The plan's file→role map and the critical count are not
+	 * re-derived here: this round never reached the completion hook that records
+	 * a finished round, and the commit that ended it has already reset the step
+	 * for whatever follows. */
+	private abandonedRoundPayload(
+		db: import("bun:sqlite").Database,
+		snapshot: WorkflowSnapshot,
+		round: number,
+	): Record<string, unknown> {
+		const rows = db
+			.query(
+				"SELECT id, role FROM workflow_runs WHERE workflow_id=? AND step_id='core.verification' AND attempt=? ORDER BY created_at",
+			)
+			.all(snapshot.workflowId, round) as Array<{ id: string; role: string }>;
+		return {
+			"herdr.verification.round": round,
+			"herdr.verification.outcome": "abandoned",
+			"herdr.verification.runs": rows.map((row) => row.id).join(","),
+			"herdr.verification.runs.count": rows.length,
+			"herdr.verification.roles": [
+				...new Set(rows.map((row) => row.role)),
+			].join(","),
+		};
 	}
 
 	/** Structured research handoff counts taken from the authenticated command

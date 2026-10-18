@@ -9554,6 +9554,9 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			return {
 				snapshot: snapshot("openspec"),
 				definitionId: "openspec",
+				// The graphs these tests exercise are newer than the triage-route
+				// tier, so the routing step is present.
+				hasStep: (stepId) => stepId === "core.triage-route",
 				run: { id: "run", role: "triage", stepId: "core.triage" },
 				outcome: "complete",
 				remainingActiveRunIds: [],
@@ -9668,6 +9671,46 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 				"quality-verifier",
 				"security-verifier",
 			]);
+		});
+
+		test("the triage plan records which path produced the round's roles", () => {
+			const changedFiles = ["src/a.ts"];
+			const selection = (overrides: Partial<AgentCompletionContext>) => {
+				const result = completeStep("core.triage", {
+					output: plan("quality-verifier", changedFiles),
+					changedFiles,
+					...overrides,
+				});
+				const event = result?.telemetry?.[0];
+				expect(event?.event).toBe("triage.plan.selected");
+				return event?.payload as Record<string, unknown>;
+			};
+
+			// The classifier selected the round's roles; the plan may only narrow it.
+			expect(
+				selection({ snapshot: snapshot("openspec", ["quality-verifier"]) })[
+					"herdr.triage.source"
+				],
+			).toBe("classifier");
+			// A graph that asks and got no answer: the triage agent chose the roles.
+			expect(selection({})["herdr.triage.source"]).toBe("default");
+			// The tier that predates the routing step has nothing to ask, so the
+			// agent's own plan has always been the selection.
+			expect(selection({ hasStep: () => false })["herdr.triage.source"]).toBe(
+				"legacy-agent",
+			);
+
+			// The plan itself travels as counts and one digest, never as its paths.
+			const payload = selection({
+				snapshot: snapshot("openspec", ["quality-verifier"]),
+			});
+			expect(payload["herdr.triage.roles.count"]).toBe(1);
+			expect(payload["herdr.triage.files.count"]).toBe(1);
+			expect(payload["herdr.triage.files.by_role"]).toBe("quality-verifier=1");
+			expect(String(payload["herdr.triage.files.digest"])).toMatch(
+				/^[0-9a-f]{16}$/,
+			);
+			expect(JSON.stringify(payload)).not.toContain("src/a.ts");
 		});
 
 		test("triage rejects a role the classifier did not select", () => {

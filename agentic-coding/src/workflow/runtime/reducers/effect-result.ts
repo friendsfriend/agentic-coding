@@ -957,27 +957,29 @@ export function effectResult(
 					now,
 				)
 			: undefined;
-	if (command.outcome === "complete") {
-		const step = registry.stepForDefinition(definition, snapshot.currentStep);
-		const completion = step.behavior?.onEffectComplete?.({
-			snapshot: structuredClone(snapshot),
-			traits: effectiveFamilyTraits(definition),
-			effect: {
-				kind: row.kind,
-				payload: JSON.parse(row.payload_json),
-				data: command.data,
-			},
-		});
+	const completionStep =
+		command.outcome === "complete"
+			? registry.stepForDefinition(definition, snapshot.currentStep)
+			: undefined;
+	const completion = completionStep?.behavior?.onEffectComplete?.({
+		snapshot: structuredClone(snapshot),
+		traits: effectiveFamilyTraits(definition),
+		effect: {
+			kind: row.kind,
+			payload: JSON.parse(row.payload_json),
+			data: command.data,
+		},
+	});
+	if (completion && completionStep)
 		applyCompletionResult(
 			db,
 			snapshot,
 			definition,
-			step,
+			completionStep,
 			completion,
 			registry,
 			now,
 		);
-	}
 	if (command.outcome === "complete" && row.kind === "workspace.close")
 		enqueue(
 			db,
@@ -992,6 +994,9 @@ export function effectResult(
 		data: {
 			outcome: command.outcome,
 			...(routingDecision ? { routingDecision } : {}),
+			// The decision this effect recorded (a gate verdict, an empty role
+			// selection), for the engine's post-commit telemetry emission.
+			...(completion?.telemetry ? { telemetry: completion.telemetry } : {}),
 		},
 	};
 }
