@@ -16,7 +16,9 @@ import {
 import { telemetryWorkspaceRemoved } from "../workflow/observability.ts";
 import {
 	classifyToolFailure,
+	type ToolFailureKind,
 	toolArgsTelemetry,
+	toolFailureLine,
 	toolResultTelemetry,
 } from "./tool-telemetry.ts";
 
@@ -142,6 +144,8 @@ export interface TelemetryHooks {
 	/** The kind of a compaction, for one the host admitted itself (`auto-ceiling`).
 	 * Undefined means pi-durable started it, and its own reason decides. */
 	readonly compactionKind?: (taskId: string) => CompactionKind | undefined;
+	/** One observation per finished tool call (the dead-surface rule). */
+	readonly onToolOutcome?: (observation: ToolOutcomeObservation) => void;
 }
 
 /** The task kind of pi-durable's built-in compaction task. */
@@ -191,11 +195,25 @@ export function emitRuntimeEnvelope(
 	emit(identity, event, fields);
 }
 
+/** One finished tool call, as the run supervisor of a dead surface (see
+ * `fail-fast.ts`) needs it: what the call was, whether it succeeded, and — for
+ * a failure — its machine-readable kind and one bounded error line. */
+export interface ToolOutcomeObservation {
+	readonly tool: string;
+	readonly ok: boolean;
+	readonly kind?: ToolFailureKind;
+	readonly turn?: number;
+	/** One redacted, bounded line of the failure's own text, when it had any. */
+	readonly errorLine?: string;
+}
+
 /** Attach agent-event telemetry for one conversation; returns a stop
  * function. Best-effort: a failure to attach must never fail the run it
  * would have been observing. `hooks` carries the measurements the host also
  * uses (`onTiming` for the dashboard's tok/s, `onMeasuredContext` for the cost
- * ceiling), so one event stream serves both. */
+ * ceiling, `onToolOutcome` for the dead-surface rule: one observation per
+ * finished tool call, which must not throw: an observer's failure is not the
+ * run's), so one event stream serves all of them. */
 export async function attachTelemetry(
 	harness: Harness,
 	conversationId: ConversationId,
@@ -436,8 +454,12 @@ export async function attachTelemetry(
 					// faulted or was orphaned); a surviving one states its own error flag,
 					// so a failed `edit` is no longer recorded as a success.
 					const isError = event.entry === undefined || result?.isError === true;
+					const failureKind = isError
+						? classifyToolFailure(event.entry)
+						: undefined;
 					const turn =
 						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
+					const errorLine = isError ? toolFailureLine(event.entry) : undefined;
 					emit(identity, "runtime.tool", {
 						outcome: isError ? "error" : "ok",
 						"pi.tool.name": event.toolName,
@@ -456,11 +478,24 @@ export async function attachTelemetry(
 									"pi.tool.result_truncated": result.truncated,
 								}
 							: {}),
-						...(isError
-							? { "pi.tool.failure_kind": classifyToolFailure(event.entry) }
-							: {}),
+						...(failureKind ? { "pi.tool.failure_kind": failureKind } : {}),
 						...(turn !== undefined ? { "pi.turn.index": turn } : {}),
 					});
+					if (hooks.onToolOutcome) {
+						// An observer is the run's supervisor, not its runtime: a throw here
+						// would break the event stream it is watching, so it is swallowed.
+						try {
+							hooks.onToolOutcome({
+								tool: event.toolName,
+								ok: !isError,
+								...(failureKind ? { kind: failureKind } : {}),
+								...(turn !== undefined ? { turn } : {}),
+								...(errorLine ? { errorLine } : {}),
+							});
+						} catch {
+							/* observation is best-effort */
+						}
+					}
 					break;
 				}
 				case "run_end":

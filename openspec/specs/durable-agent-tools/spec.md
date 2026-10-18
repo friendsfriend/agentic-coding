@@ -90,7 +90,7 @@ The durable system prompt SHALL include a coding-agent preamble, the offered too
 - **THEN** the system prompt sent to the model SHALL contain that file's content
 
 ### Requirement: Runtime telemetry envelopes
-Durable runs SHALL emit the existing runtime telemetry envelope (schema version 1, layer `runtime`, runtime `pi-durable`, workflow/run/step/role/profile identity) for turn, model response, tool start/end, compaction and settle events to the run's telemetry path and configured OTLP endpoint. The compaction envelopes SHALL carry the compaction reason (`manual`, `threshold` or `overflow`), whether a generation is blocked waiting for it, the attempt count, the measured duration, the tokens before and after when they are measurable from the conversation's own generation usage, and the outcome with a bounded, redacted error class when the summarizer failed or the compaction was aborted. Content SHALL be captured only when the run's content-capture opt-in is set, and secrets SHALL be redacted with the same rules as the pi bridge.
+Durable runs SHALL emit the existing runtime telemetry envelope (schema version 1, layer `runtime`, runtime `pi-durable`, workflow/run/step/role/profile identity) for turn, model response, tool start/end, compaction, run fail-fast and settle events to the run's telemetry path and configured OTLP endpoint. The compaction envelopes SHALL carry the compaction reason (`manual`, `threshold` or `overflow`), whether a generation is blocked waiting for it, the attempt count, the measured duration, the tokens before and after when they are measurable from the conversation's own generation usage, and the outcome with a bounded, redacted error class when the summarizer failed or the compaction was aborted. The `run.fail-fast` envelope SHALL carry the decision, the tool, the failure kind(s), the consecutive-failure and success counts, the turns taken and whether a tool-host re-probe was possible, and SHALL carry no tool argument, result text or payload. Content SHALL be captured only when the run's content-capture opt-in is set, and secrets SHALL be redacted with the same rules as the pi bridge.
 
 #### Scenario: Metadata-only by default
 - **WHEN** a durable run completes a tool call without the content-capture opt-in
@@ -107,4 +107,8 @@ Durable runs SHALL emit the existing runtime telemetry envelope (schema version 
 #### Scenario: Summarizer fails
 - **WHEN** the compaction task fails
 - **THEN** the emitted compaction envelope SHALL carry the failed outcome and a bounded error class, without the summary text
+
+#### Scenario: A dead tool surface fails the run
+- **WHEN** a run is stopped because its tool surface never worked
+- **THEN** the emitted `run.fail-fast` envelope SHALL carry the decision, the tool, the failure kinds, the counts and the turns, and SHALL carry no argument or result text
 

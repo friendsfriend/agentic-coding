@@ -80,3 +80,30 @@ Tool execution for a run SHALL use the run's working directory and the environme
 - **WHEN** two runs in one host call `bash` to print `HERDR_RUN_ID`
 - **THEN** each SHALL print its own run id
 
+### Requirement: A dead tool surface fails the run fast
+The host SHALL count each run's consecutive failed tool calls and its successful calls, and SHALL treat a run whose tool surface never worked as surface-dead: zero successful calls in the run plus either five consecutive failures whose machine-readable kinds mean a broken surface (`host-error`, `denied`, `timeout`, `aborted`, `invalid-args`, `other`) or fifteen turns of failures that are all one tool's. The `not-found` and `no-match` kinds SHALL never count towards the five, because exploring a path or a text that is not there is ordinary work, and a run with at least one successful call SHALL never be surface-dead. The thresholds SHALL be named constants with documented defaults.
+
+On the first detection the host SHALL re-probe the run's tool host once, where such a mechanism exists, and grant the run one more turn; the re-probe SHALL be reported as performed or absent rather than assumed. If a call fails again, the host SHALL abort the run's conversation and record the run's own `blocked` handoff, naming the tool, the failure kind(s), the consecutive-failure count, the turns taken and one bounded, secret-free error line — never payload text — which the engine surfaces as the workflow's developer-visible attention. The host SHALL emit a `run.fail-fast` telemetry envelope for the decision carrying the run id, the role, the tool, the failure kinds, the counts, the turns and whether a re-probe was possible.
+
+A session without a run id (an orchestrator conversation is not an engine run) SHALL NOT be monitored, and a role whose first failing calls are its own expected evidence SHALL be exempt.
+
+#### Scenario: Five broken-surface failures with no success
+- **WHEN** a run has made five consecutive failures of a broken-surface kind and no successful call
+- **THEN** the host SHALL re-probe the run's tool host once, the run SHALL get one more turn, and a further failing call SHALL abort the conversation and record a `blocked` handoff naming the tool, the kinds and the count
+
+#### Scenario: Exploring a missing path
+- **WHEN** a run's calls fail with `not-found` or `no-match`
+- **THEN** the host SHALL NOT treat the surface as dead and the run SHALL keep working
+
+#### Scenario: One success disables the rule
+- **WHEN** a run has had at least one successful call
+- **THEN** no failure count SHALL end the run for a dead tool surface
+
+#### Scenario: Tool-host re-probe
+- **WHEN** the dead surface is detected for a run that carries an environment capability
+- **THEN** the host SHALL re-run the environment-server discovery probe once before the extra turn, and a run without such a host SHALL report that no re-probe mechanism existed
+
+#### Scenario: Exempt roles and the orchestrator
+- **WHEN** the failing run's role is `env-setup` or `debug`, or the session carries no run id
+- **THEN** the host SHALL NOT count that session's failures towards a dead-surface stop
+

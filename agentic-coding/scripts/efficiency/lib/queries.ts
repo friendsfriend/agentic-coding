@@ -1289,6 +1289,63 @@ WHERE e.event = 'runtime.compaction'
 GROUP BY e.workflow_id, e.run_id, e.role
 ORDER BY auto_ceiling DESC, peak_context_tokens DESC`,
 	},
+	{
+		name: "zero-success-runs",
+		summary:
+			"Runs with no successful call per 1,000 recorded runs, by era and role, over the `ok`/`failure_kind` columns the newest recording carries. Only runs with at least three calls whose outcome was recorded are counted, so a failures-only generation inflates the number instead of hiding it, and the per-era split is what separates the artefact from the defect.",
+		example:
+			"bun run scripts/efficiency/analyze.ts zero-success-runs --dataset ~/ev/dataset-2026",
+		limitable: true,
+		limit: 200,
+		columns: [
+			"era",
+			"role",
+			"runs",
+			"zero_success_runs",
+			"per_1000",
+			"zero_success_calls",
+			"zero_success_failures_with_kind",
+		],
+		sql: `WITH per_run AS (
+	SELECT
+		r.run_id AS run_id,
+		CASE WHEN COALESCE(r.started_at, r.completed_at, '') >= '2026-09-01'
+			THEN 'post-2026-09-01' ELSE 'pre-2026-09-01' END AS era,
+		COALESCE(r.role, '(unset)') AS role,
+		COUNT(*) AS calls,
+		SUM(CASE WHEN c.ok = 1 THEN 1 ELSE 0 END) AS ok_calls,
+		SUM(CASE WHEN c.ok IS NOT NULL THEN 1 ELSE 0 END) AS known_calls,
+		SUM(CASE WHEN c.failure_kind IS NOT NULL THEN 1 ELSE 0 END) AS kinded_failures
+	FROM v_runs r
+	JOIN v_tool_calls c ON c.run_id = r.run_id
+	GROUP BY r.run_id
+),
+recorded AS (
+	SELECT * FROM per_run WHERE known_calls >= 3
+)
+SELECT
+	r.era AS era,
+	r.role AS role,
+	COUNT(*) AS runs,
+	SUM(CASE WHEN r.ok_calls = 0 THEN 1 ELSE 0 END) AS zero_success_runs,
+	ROUND(1000.0 * SUM(CASE WHEN r.ok_calls = 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS per_1000,
+	SUM(CASE WHEN r.ok_calls = 0 THEN r.calls ELSE 0 END) AS zero_success_calls,
+	SUM(CASE WHEN r.ok_calls = 0 THEN r.kinded_failures ELSE 0 END) AS zero_success_failures_with_kind
+FROM recorded r
+GROUP BY 1, 2
+UNION ALL
+SELECT
+	r.era AS era,
+	'(all roles)' AS role,
+	COUNT(*) AS runs,
+	SUM(CASE WHEN r.ok_calls = 0 THEN 1 ELSE 0 END) AS zero_success_runs,
+	ROUND(1000.0 * SUM(CASE WHEN r.ok_calls = 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS per_1000,
+	SUM(CASE WHEN r.ok_calls = 0 THEN r.calls ELSE 0 END) AS zero_success_calls,
+	SUM(CASE WHEN r.ok_calls = 0 THEN r.kinded_failures ELSE 0 END) AS zero_success_failures_with_kind
+FROM recorded r
+GROUP BY 1
+ORDER BY era, per_1000 DESC`,
+	},
 ];
 
 export function queryByName(name: string): AnalysisQuery | undefined {

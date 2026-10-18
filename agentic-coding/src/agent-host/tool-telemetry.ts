@@ -18,6 +18,8 @@ export const ARGS_DIGEST_LIMIT = 200;
 export const COMMAND_DIGEST_LIMIT = 120;
 /** Bound of a path or pattern digest. */
 const DETAIL_LIMIT = 160;
+/** Bound of the one error line a fail-fast report keeps from a failed call. */
+export const FAILURE_LINE_LIMIT = 120;
 
 /** The machine-readable failure vocabulary. `other` is the honest catch-all for
  * a call that failed without a recognizable cause, never a classification
@@ -209,6 +211,27 @@ function textOf(content: unknown): string {
 	return parts.join("");
 }
 
+/** The committed `toolResult` message of a result entry, or `undefined` when no
+ * result entry survived (the call faulted or was orphaned). */
+function resultMessage(
+	entry: ToolResultEntryLike | undefined,
+): Record<string, unknown> | undefined {
+	if (entry === undefined) return undefined;
+	const messages = Array.isArray(entry.model) ? entry.model : [];
+	return messages.find((candidate) => {
+		if (candidate === null || typeof candidate !== "object") return false;
+		return (candidate as { role?: unknown }).role === "toolResult";
+	}) as Record<string, unknown> | undefined;
+}
+
+/** The result text of one call, or the empty string when there is none. Used
+ * only to derive a failure kind or a bounded error line; never returned as
+ * payload. */
+function resultText(entry: ToolResultEntryLike | undefined): string {
+	const message = resultMessage(entry);
+	return message === undefined ? "" : textOf(message.content);
+}
+
 function diagnosticsOf(entry: ToolResultEntryLike): DiagnosticLike[] {
 	const data = entry.data;
 	if (data === null || typeof data !== "object") return [];
@@ -249,14 +272,9 @@ export interface ToolResultTelemetry {
 export function toolResultTelemetry(
 	entry: ToolResultEntryLike | undefined,
 ): ToolResultTelemetry | undefined {
-	if (entry === undefined) return undefined;
-	const messages = Array.isArray(entry.model) ? entry.model : [];
-	const message = messages.find((candidate) => {
-		if (candidate === null || typeof candidate !== "object") return false;
-		return (candidate as { role?: unknown }).role === "toolResult";
-	}) as Record<string, unknown> | undefined;
-	if (message === undefined) return undefined;
-	const text = textOf(message.content);
+	const message = resultMessage(entry);
+	if (entry === undefined || message === undefined) return undefined;
+	const text = resultText(entry);
 	return {
 		isError: message.isError === true,
 		bytes: Buffer.byteLength(text, "utf8"),
@@ -305,14 +323,7 @@ export function classifyToolFailure(
 	entry: ToolResultEntryLike | undefined,
 ): ToolFailureKind {
 	if (entry === undefined) return "host-error";
-	const message = (() => {
-		const messages = Array.isArray(entry.model) ? entry.model : [];
-		const found = messages.find((candidate) => {
-			if (candidate === null || typeof candidate !== "object") return false;
-			return (candidate as { role?: unknown }).role === "toolResult";
-		}) as Record<string, unknown> | undefined;
-		return found === undefined ? "" : textOf(found.content);
-	})();
+	const message = resultText(entry);
 	const haystack = `${message} ${diagnosticsOf(entry)
 		.map((diagnostic) => `${diagnostic.code ?? ""} ${diagnostic.message ?? ""}`)
 		.join(" ")}`;
@@ -322,6 +333,21 @@ export function classifyToolFailure(
 	for (const [kind, pattern] of FAILURE_RULES)
 		if (pattern.test(lowered)) return kind;
 	return "other";
+}
+
+/** One bounded, secret-free line of a failed call's own error text, or
+ * `undefined` when there is none (a call whose result entry never survived has
+ * no text at all). Only the first non-empty line is kept, redacted before it is
+ * bound, so a fail-fast report can name the failure without carrying a payload
+ * or a secret. */
+export function toolFailureLine(
+	entry: ToolResultEntryLike | undefined,
+): string | undefined {
+	for (const line of resultText(entry).split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed.length > 0) return boundedRedacted(trimmed, FAILURE_LINE_LIMIT);
+	}
+	return undefined;
 }
 
 /** Whether a failure kind is one this module can produce (the dataset refuses

@@ -39,7 +39,16 @@ import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
 import { createDebugExtension } from "./debug-tools.ts";
+import {
+	ENVIRONMENT_URL_ENV,
+	ensureEnvironmentServer,
+} from "./environment-capability.ts";
 import { createEnvironmentExtension } from "./environment-tools.ts";
+import {
+	type FailFastDecision,
+	type ToolSurfaceMonitor,
+	toolSurfaceMonitorFor,
+} from "./fail-fast.ts";
 import { createFrameThrottle } from "./frame-throttle.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
@@ -60,7 +69,9 @@ import {
 	attachTelemetry,
 	type EntryTiming,
 	emitRuntimeEnvelope,
+	emitToolTelemetry,
 	type TelemetryIdentity,
+	type ToolOutcomeObservation,
 } from "./telemetry.ts";
 import {
 	codingTools,
@@ -73,6 +84,7 @@ import {
 	type ResumedRunState,
 	type RunContextLookup,
 	recordAbortedRunHandoff,
+	recordFailFastRunHandoff,
 	recordResumedRunHandoff,
 	withoutDebugRequestTools,
 } from "./tools.ts";
@@ -86,6 +98,27 @@ registerBunOAuthFlows();
  * transcript live (about 20 frames a second) while bounding what each frame
  * costs the watcher. */
 const STATE_FRAME_COALESCE_MS = 50;
+
+/** The one cheap tool-host re-probe a run's dead surface gets before it is
+ * stopped (efficiency backlog item 3). The host behind a run's `env_*`,
+ * `browser_*` and debug tools is the unified workflow server, and a run that
+ * received its capability knows its address: re-running the discovery probe is
+ * a file read plus one bounded loopback health request, which is what turns
+ * "the server was restarted under a live run" back into a working surface.
+ *
+ * A run with no environment capability has no such host to re-probe — the
+ * caller reports that honestly (`probed: false`) and still grants the one extra
+ * turn — so this never invents a mechanism that does not exist. */
+async function reprobeToolHost(
+	env: Readonly<Record<string, string>>,
+): Promise<boolean> {
+	if (!env[ENVIRONMENT_URL_ENV]) return false;
+	try {
+		return (await ensureEnvironmentServer()) !== undefined;
+	} catch {
+		return false;
+	}
+}
 
 interface RunMapState extends JsonObject {
 	runs: Record<string, { conversationId: number }>;
@@ -254,6 +287,13 @@ export interface DurableHostOptions {
 	 * Production callers (`host-main.ts`) never set these. */
 	readonly storage?: Storage;
 	readonly models?: Models;
+	/** Injectable substitution for the one cheap tool-host re-probe a dead tool
+	 * surface gets (`reprobeToolHost` by default). A focused test supplies its
+	 * own so no test ever probes the developer's real configuration; production
+	 * leaves it unset. */
+	readonly probeToolHost?: (
+		env: Readonly<Record<string, string>>,
+	) => Promise<boolean>;
 }
 
 /** One open durable harness plus its control socket. Owns exactly the state
@@ -263,6 +303,12 @@ export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
 	private readonly telemetry = new Map<ConversationId, () => void>();
+	/** The per-run dead-surface monitors, keyed like the telemetry attachments:
+	 * one counter per conversation, dropped with the run. */
+	private readonly toolSurfaces = new Map<ConversationId, ToolSurfaceMonitor>();
+	/** What the one tool-host re-probe of a run answered, so the run's own
+	 * `blocked` event reports the mechanism honestly instead of assuming one. */
+	private readonly toolProbes = new Map<ConversationId, boolean>();
 	/** Measured wall-clock timing per committed assistant entry, keyed by
 	 * conversation then entry id. In-memory: a host restart loses it. */
 	private readonly timings = new Map<
@@ -575,10 +621,14 @@ export class DurableHost {
 		// for a conversation whose telemetry stream could not be attached.
 		this.telemetryIdentities.set(conversation.id, identity);
 		if (!this.telemetry.has(conversation.id)) {
+			const conversationId = conversation.id;
+			// The dead-surface monitor of this run, or none for a session the rule
+			// leaves alone (no run id, or an exempt role such as `env-setup`).
+			const monitor = toolSurfaceMonitorFor(envVars);
 			try {
 				const stop = await attachTelemetry(
 					this.harness,
-					conversation.id,
+					conversationId,
 					context,
 					identity,
 					{
@@ -605,9 +655,22 @@ export class DurableHost {
 								? "auto-ceiling"
 								: undefined;
 						},
+						// The dead-surface rule observes every finished tool call of a run
+						// the rule applies to.
+						...(monitor
+							? {
+									onToolOutcome: (observation: ToolOutcomeObservation) =>
+										this.onToolOutcome(
+											input.runId,
+											conversationId,
+											observation,
+										),
+								}
+							: {}),
 					},
 				);
-				this.telemetry.set(conversation.id, stop);
+				this.telemetry.set(conversationId, stop);
+				if (monitor) this.toolSurfaces.set(conversationId, monitor);
 			} catch {
 				/* telemetry is observational only; a failed attach never fails the run */
 			}
@@ -1274,6 +1337,108 @@ export class DurableHost {
 		await this.serialized(record, () => this.stopConversation(runId, true));
 	}
 
+	/** One finished tool call of a run, fed to that run's dead-surface monitor.
+	 * The monitor's decision is the only thing that acts, and it acts outside
+	 * the event stream it was derived from: this method never blocks the
+	 * telemetry handler. */
+	private onToolOutcome(
+		runId: string,
+		conversationId: ConversationId,
+		observation: ToolOutcomeObservation,
+	): void {
+		const monitor = this.toolSurfaces.get(conversationId);
+		if (!monitor) return;
+		const decision = monitor.observe(observation);
+		if (!decision) return;
+		void this.handleFailFast(runId, conversationId, decision).catch((error) => {
+			this.log(
+				`fail-fast for ${runId} did not complete: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		});
+	}
+
+	/** Act on one dead-surface decision (efficiency backlog item 3): first the
+	 * one cheap re-probe of the run's tool host, which grants the run one more
+	 * turn, and then — when a call fails again — the run's own `blocked`
+	 * handoff naming the tool, the failure kinds, the count and one short error
+	 * line. Every decision is emitted as the `run.fail-fast` envelope, and the
+	 * handoff message is what the engine turns into the developer-visible
+	 * attention line. */
+	private async handleFailFast(
+		runId: string,
+		conversationId: ConversationId,
+		decision: FailFastDecision,
+	): Promise<void> {
+		const context = this.contexts.get(conversationId);
+		if (!context) return;
+		const env = context.env;
+		const facts = decision.facts;
+		const fields = {
+			"herdr.fail_fast.decision": decision.action,
+			"pi.tool.name": facts.tool,
+			"pi.tool.failure_kinds": facts.failureKinds.join(",") || "(unrecorded)",
+			"pi.tool.consecutive_failures": facts.consecutiveFailures,
+			"pi.tool.successes": facts.successes,
+			"pi.turn.count": facts.turns,
+		};
+		if (decision.action === "probe") {
+			const probe = this.options.probeToolHost ?? reprobeToolHost;
+			const probed = await probe(env).catch(() => false);
+			this.toolProbes.set(conversationId, probed);
+			emitToolTelemetry(env, "run.fail-fast", { ...fields, probed });
+			this.log(
+				`run ${runId} tool surface looks dead (${facts.consecutiveFailures} consecutive failed ${facts.tool} calls, no success); re-probed the tool host: ${probed ? "reachable" : "no mechanism"}`,
+			);
+			return;
+		}
+		const probed = this.toolProbes.get(conversationId) ?? false;
+		this.toolProbes.delete(conversationId);
+		emitToolTelemetry(env, "run.fail-fast", { ...fields, probed });
+		this.log(`run ${runId} stopped: ${decision.message}`);
+		await this.stopRunForDeadToolSurface(
+			runId,
+			conversationId,
+			decision.message,
+		);
+	}
+
+	/** Stop a run whose tool surface never worked: abort the conversation so no
+	 * further turn is taken, then record the run's own `blocked` handoff.
+	 * Deliberately *not* the developer abort's path: the run is not parked for a
+	 * reopen, its block is its outcome, so a later message reports the run
+	 * finished instead of resuming it. Best-effort like every host-side state
+	 * change — the conversation is aborted whatever the handoff does. */
+	private async stopRunForDeadToolSurface(
+		runId: string,
+		conversationId: ConversationId,
+		message: string,
+	): Promise<void> {
+		const record = this.runs.get(runId);
+		if (!record) return;
+		this.toolSurfaces.delete(conversationId);
+		this.toolProbes.delete(conversationId);
+		await this.serialized(record, async () => {
+			const conversation = await this.harness.conversation(
+				record.conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			await conversation?.abort(BACKGROUND_CONTEXT);
+			const context = this.contexts.get(record.conversationId);
+			if (!context) return;
+			try {
+				await recordFailFastRunHandoff(context, message);
+			} catch (error) {
+				this.log(
+					`fail-fast handoff not recorded for ${runId}: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			}
+		});
+	}
+
 	/** Abort a run's conversation. A developer-initiated abort (`recordBlocked`)
 	 * also records the run's `blocked` handoff, because the aborted turn can no
 	 * longer hand off itself and the engine would otherwise keep the run
@@ -1309,6 +1474,8 @@ export class DurableHost {
 		if (!record) return;
 		this.abortedRuns.delete(runId);
 		this.reconciledRuns.delete(runId);
+		this.toolSurfaces.delete(record.conversationId);
+		this.toolProbes.delete(record.conversationId);
 		await this.serialized(record, async () => {
 			const conversation = await this.harness.conversation(
 				record.conversationId,
@@ -1387,6 +1554,8 @@ export class DurableHost {
 				/* best-effort teardown */
 			}
 		}
+		this.toolSurfaces.clear();
+		this.toolProbes.clear();
 		for (const runId of [...this.runs.keys()]) {
 			try {
 				await this.stopConversation(runId, false);

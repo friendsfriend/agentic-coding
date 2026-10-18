@@ -1003,9 +1003,10 @@ them:
 | `client.ts` | `HostClient` (typed request/response + `watch`) and `ensureHostRunning` (connect-or-spawn). The engine adapter (`PiDurableAdapter` in `workflow/adapters.ts`) and the dashboard session snapshot (`tui/dash/handlers/keys.ts`) depend on this module only. | No. |
 | `settings.ts` | The `agentHost` configuration section type and its one-time seeding from the global pi `settings.json`. | No. |
 | `credentials.ts` | `PiAuthCredentialStore`, a pi-ai `CredentialStore`-shaped adapter over the user's live `~/.pi/agent/auth.json` (no copying). | No (structurally compatible, not statically coupled). |
-| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and the CLI handoffs a developer's session drives: `recordAbortedRunHandoff` (the `blocked`, `--aborted` handoff an abort records) and `recordResumedRunHandoff` (the `resume-run` reconcile that reopens the parked run for the next prompt). | Yes. |
+| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and the CLI handoffs a developer's session drives: `recordAbortedRunHandoff` (the `blocked`, `--aborted` handoff an abort records) and `recordResumedRunHandoff` (the `resume-run` reconcile that reopens the parked run for the next prompt). `recordFailFastRunHandoff` records the run's own `blocked` handoff when the host stops it for a dead tool surface. | Yes. |
 | `bash-tool.ts` | The `bash` tool's wall-clock bound (efficiency review item 2): pi-durable's coding tools with `bash` replaced by one that runs under a 120-second default when the caller passes no `timeout`, stops the command's process group when that bound fires, returns the output collected so far plus what to do instead, notes the elapsed time of a call that ran past 60 seconds, and caps a caller's own `timeout` at 3600 seconds. | Yes. |
-| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, records a developer abort as the run's `blocked` handoff (`abort`; never on teardown), serializes a conversation's mutating requests so a prompt cannot race the abort's withdrawal, and reconciles the workflow state before delivering a prompt to an aborted run. | Yes. |
+| `fail-fast.ts` | The per-run dead-tool-surface rule: the consecutive-failure and success counters, the failure kinds that mean a broken surface, the exempt roles, and the bounded secret-free `blocked` message. Pure logic, no harness and no I/O. | No. |
+| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, records a developer abort as the run's `blocked` handoff (`abort`; never on teardown), serializes a conversation's mutating requests so a prompt cannot race the abort's withdrawal, reconciles the workflow state before delivering a prompt to an aborted run, and feeds every finished tool call to that run's dead-surface monitor (`onToolOutcome`). | Yes. |
 | `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
 
 `src/cli.ts`'s `agent host` mode reaches `host-main.ts` through a dynamic
@@ -1063,6 +1064,47 @@ visible: the rendered assignment states that the environment tools are
 unavailable, and starting an `env-setup` workflow (which cannot do its job
 without them) records the same in the workflow's own `attention` health instead
 of launching an author run that can neither start nor build what it drafts.
+
+### Fail fast on a dead tool surface (efficiency backlog item 3)
+
+Nothing used to cut a run short when every tool call failed: the agent kept
+taking turns against a broken tool host, a denied sandbox or a wrong working
+directory, each turn re-reading the whole context. The tool-call telemetry shape
+now records every call's `ok` and a machine-readable failure kind, so
+`agent-host/fail-fast.ts` can decide it.
+
+`ToolSurfaceMonitor` counts consecutive failed calls and successes per run:
+
+- a run is **surface-dead** when it has had **zero successful calls** in this
+  run *and* either five consecutive failures whose kinds mean a broken surface
+  (`host-error`, `denied`, `timeout`, `aborted`, `invalid-args`, `other`) or
+  fifteen turns of failures that are all one tool's;
+- `not-found` and `no-match` never count towards the five: reading a path that
+  does not exist yet, or editing text that is not there, is ordinary work;
+- one successful call anywhere disables the rule for the rest of the run — the
+  rule is about a surface that never worked, not about a run going badly.
+
+The thresholds are the module's exported constants
+(`FAIL_FAST_CONSECUTIVE_FAILURES`, `FAIL_FAST_TURNS_WITHOUT_SUCCESS`). The
+first detection re-probes the run's tool host **once** and gives the agent one
+more turn: `reprobeToolHost` re-runs the environment-server discovery probe
+(the unified server behind `env_*`, `browser_*` and the debug tools) for a run
+that actually received `AGENTIC_ENV_URL`, and a run with no such host reports
+`probed: false` honestly rather than inventing a mechanism. A call that fails
+after that ends the run: the conversation is aborted and the host records the
+run's own `blocked` handoff (`recordFailFastRunHandoff`; no `--aborted` marker,
+so a later reconcile reports the run finished instead of reopening it) naming
+the tool, the failure kinds, the count, the turns and one bounded redacted error
+line. The engine turns that message into the developer-visible `attention`
+line, and every decision is emitted as the `run.fail-fast` runtime envelope
+(decision, tool, kinds, counts, turns, whether a re-probe was possible).
+
+Two roles are exempt because their first failing calls are expected evidence,
+verified against their own briefs: `env-setup` (its brief requires it to report
+what it authored and hand off `blocked` naming the missing server when the
+environment tools are unavailable) and `debug` (its brief asks it to read a
+failure rather than guess). An orchestrator conversation is not an engine run
+and carries no run id, so it is never monitored at all.
 
 ### Developer-question lifecycle (asynchronous)
 

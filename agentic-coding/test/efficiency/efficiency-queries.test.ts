@@ -739,4 +739,100 @@ describe("ready-made queries", () => {
 			db.close();
 		}
 	});
+
+	test("zero-success-runs counts recorded outcomes per era and role", () => {
+		const query = queryByName("zero-success-runs");
+		expect(query).toBeDefined();
+		// A copy of the fixture dataset, so the synthetic runs below never change
+		// what the other tests read.
+		const copy = path.join(out.path, "zero-success.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy);
+		try {
+			const run = db.query(
+				`INSERT INTO runs (run_id, workflow_id, role, status, started_at, source, source_rank, sources, confidence, preferred)
+				 VALUES (?, 'wf-zero', ?, 'completed', ?, 'telemetry.main-store', 0, 'telemetry.main-store', 'exact', 1)`,
+			);
+			const call = db.query(
+				`INSERT INTO tool_calls (run_id, workflow_id, source, source_rank, turn_index, dedupe_key, tool, ok, failure_kind, recording, confidence, preferred)
+				 VALUES (?, 'wf-zero', 'telemetry.main-store', 0, ?, ?, 'bash', ?, ?, 'harness', 'exact', 1)`,
+			);
+			/** One run of `role` whose every call carries a recorded outcome. */
+			const addRun = (
+				runId: string,
+				role: string,
+				startedAt: string,
+				calls: ReadonlyArray<{ ok: 0 | 1 | null; kind: string | null }>,
+			) => {
+				run.run(runId, role, startedAt);
+				for (const [index, entry] of calls.entries())
+					call.run(runId, index, `${runId}-${index}`, entry.ok, entry.kind);
+			};
+			// Post-era: one dead verifier run beside one healthy verifier run, and
+			// one run whose calls carry no outcome at all (the recording artefact)
+			// which must not be counted.
+			addRun("synth-zero", "quality-verifier", "2026-10-01T00:00:00.000Z", [
+				{ ok: 0, kind: "host-error" },
+				{ ok: 0, kind: "host-error" },
+				{ ok: 0, kind: "host-error" },
+				{ ok: 0, kind: "host-error" },
+			]);
+			addRun("synth-healthy", "quality-verifier", "2026-10-02T00:00:00.000Z", [
+				{ ok: 1, kind: null },
+				{ ok: 1, kind: null },
+				{ ok: 1, kind: null },
+			]);
+			addRun("synth-unrecorded", "worker", "2026-10-03T00:00:00.000Z", [
+				{ ok: null, kind: null },
+				{ ok: null, kind: null },
+				{ ok: null, kind: null },
+				{ ok: null, kind: null },
+			]);
+			// Pre-era: the same shape, so the era split is what the numbers show.
+			addRun("synth-legacy", "worker", "2026-01-05T00:00:00.000Z", [
+				{ ok: 0, kind: "host-error" },
+				{ ok: 0, kind: "host-error" },
+				{ ok: 0, kind: "host-error" },
+			]);
+			const rows = db
+				.query<
+					{
+						era: string;
+						role: string;
+						runs: number;
+						zero_success_runs: number;
+						per_1000: number;
+						zero_success_calls: number;
+						zero_success_failures_with_kind: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const verifier = rows.find(
+				(row) =>
+					row.era === "post-2026-09-01" && row.role === "quality-verifier",
+			);
+			expect(verifier?.runs).toBe(2);
+			expect(verifier?.zero_success_runs).toBe(1);
+			expect(verifier?.per_1000).toBe(500);
+			expect(verifier?.zero_success_calls).toBe(4);
+			expect(verifier?.zero_success_failures_with_kind).toBe(4);
+			// The unrecorded-outcome run is invisible, so a failures-only recording
+			// cannot inflate the modern era.
+			const modernAll = rows.find(
+				(row) => row.era === "post-2026-09-01" && row.role === "(all roles)",
+			);
+			expect(modernAll?.runs).toBe(2);
+			expect(modernAll?.zero_success_runs).toBe(1);
+			const legacy = rows.find(
+				(row) =>
+					row.era === "pre-2026-09-01" &&
+					row.role === "worker" &&
+					row.runs >= 1,
+			);
+			expect(legacy?.zero_success_runs).toBeGreaterThanOrEqual(1);
+		} finally {
+			db.close();
+		}
+	});
 });

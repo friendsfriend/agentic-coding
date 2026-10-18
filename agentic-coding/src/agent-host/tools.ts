@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
+import { FAIL_FAST_MESSAGE_LIMIT } from "./fail-fast.ts";
 import {
 	MAX_FILE_BYTES,
 	MAX_OUTPUT_CHARS,
@@ -136,6 +137,36 @@ export async function recordAbortedRunHandoff(
 	);
 	if (result.exitCode !== 0)
 		throw new Error(result.stderr.trim() || "abort handoff was not recorded");
+}
+
+/** Record the `blocked` handoff of a run the host itself stopped because the
+ * run's tool surface never worked (efficiency backlog item 3). Unlike the
+ * developer abort's handoff this is the run's own outcome: there is no
+ * `--aborted` marker, so the engine keeps the park as the run's result and a
+ * later reconcile reports the run finished instead of reopening it. The
+ * message is bounded by the caller and carries no payload. Best-effort by
+ * design — a run that already handed off, or has no managed-agent environment,
+ * is left unchanged. */
+export async function recordFailFastRunHandoff(
+	context: DurableRunContext,
+	message: string,
+): Promise<void> {
+	if (!context.env.HERDR_RUN_TOKEN) return;
+	const result = await runWorkflowCli(
+		[
+			"workflow",
+			"handoff",
+			"--outcome",
+			"blocked",
+			"--message",
+			message.slice(0, FAIL_FAST_MESSAGE_LIMIT),
+		],
+		context,
+	);
+	if (result.exitCode !== 0)
+		throw new Error(
+			result.stderr.trim() || "fail-fast handoff was not recorded",
+		);
 }
 
 /** What reconciling a run's workflow state before a prompt reported
