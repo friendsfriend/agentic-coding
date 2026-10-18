@@ -13,6 +13,7 @@ import type { RunContextLookup } from "../src/agent-host/tools.ts";
 
 const BROWSER_TOOLS = [
 	"browser_open",
+	"stage_login",
 	"browser_snapshot",
 	"browser_click",
 	"browser_fill",
@@ -187,6 +188,64 @@ describe("browser tool surface", () => {
 			action: "fill",
 			selector: "#name",
 			value: "ada",
+		});
+	});
+
+	test("a stage open sends the stage, its app key and a path instead of a url", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{ session: "default", url: "https://grid-int.example.test/orders" },
+			],
+		};
+		await invoke(
+			"browser_open",
+			{ stage: "grid-int", stageApp: "web", path: "/orders" },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			stage: "grid-int",
+			stageApp: "web",
+			path: "/orders",
+		});
+	});
+
+	test("stage_login sends the role to resolve, never a credential", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ login: "ok", url: "https://grid-int.example.test/home" }],
+		};
+		const { result } = await invoke(
+			"stage_login",
+			{ session: "clerk", app: "web", role: "clerk" },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/login",
+		);
+		// The body names a role; the value is resolved server-side and never travels.
+		expect(server.calls[0]?.body).toEqual({
+			session: "clerk",
+			app: "web",
+			role: "clerk",
+		});
+	});
+
+	test("a fill with a credential reference sends the reference, not a value", async () => {
+		const server: FakeServer = { calls: [], replies: [{ action: "fill" }] };
+		await invoke(
+			"browser_fill",
+			{
+				ref: "e7",
+				credential: { app: "web", role: "clerk", field: "password" },
+			},
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			action: "fill",
+			ref: "e7",
+			credential: { app: "web", role: "clerk", field: "password" },
 		});
 	});
 

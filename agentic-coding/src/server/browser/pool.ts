@@ -35,13 +35,20 @@
 // non-recording context with the same cookies.
 import fs from "node:fs";
 import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
+import { createStageGuard } from "../stages/guard.ts";
 import { BrowserPoolError, tooManySessionsMessage } from "./errors.ts";
-import { BrowserSession, type SessionRecording } from "./session.ts";
+import {
+	BrowserSession,
+	type SessionRecording,
+	type StageSessionBinding,
+} from "./session.ts";
 import type {
 	DriverBrowser,
 	DriverContext,
+	DriverHttpCredentials,
 	DriverLaunchOptions,
 	DriverPage,
+	DriverRequestGuard,
 } from "./types.ts";
 
 /** Default recording length before the pool stops it on its own. */
@@ -66,6 +73,14 @@ export interface OpenSessionRequest {
 	readonly viewport: { readonly width: number; readonly height: number };
 	readonly url?: string;
 	readonly app?: string;
+	/** The stage this session is bound to for its whole life
+	 * (`add-stage-testing-foundation`). */
+	readonly stage?: StageSessionBinding;
+	/** True when the caller saw the session in `find` and skipped the admission
+	 * that creating one would have needed: only a *reuse* is then allowed, because
+	 * a context created here would sit outside the stage's lease and session
+	 * bound. */
+	readonly reuseOnly?: boolean;
 }
 
 export interface SessionSummary {
@@ -73,6 +88,8 @@ export interface SessionSummary {
 	readonly name: string;
 	readonly url: string;
 	readonly app?: string;
+	/** The stage ident of a stage-bound session. */
+	readonly stage?: string;
 	readonly createdAt: number;
 	readonly lastUsed: number;
 	readonly recording: boolean;
@@ -121,10 +138,34 @@ export class BrowserPool {
 			name: session.name,
 			url: session.url,
 			...(session.app ? { app: session.app } : {}),
+			...(session.stage ? { stage: session.stage.ident } : {}),
 			createdAt: session.createdAt,
 			lastUsed: session.lastUsed,
 			recording: session.recording !== undefined,
 		}));
+	}
+
+	/**
+	 * Live sessions of one workflow on one stage.
+	 *
+	 * The stage usage registry derives both the `maxSessions` bound and the
+	 * exclusive lease from this, so a closed session, an idle session swept away,
+	 * a crashed context and run end all release them together.
+	 */
+	stageSessions(owner: string, stage: string): number {
+		return [...this.sessions.values()].filter(
+			(session) =>
+				session.owner === owner &&
+				session.stage?.ident === stage &&
+				!session.crashed,
+		).length;
+	}
+
+	/** Whether any workflow holds a live session on one stage. */
+	stageHeld(stage: string): boolean {
+		return [...this.sessions.values()].some(
+			(session) => session.stage?.ident === stage && !session.crashed,
+		);
 	}
 
 	/** The sessions one owner holds. */
@@ -186,7 +227,33 @@ export class BrowserPool {
 		let reservation: symbol | undefined;
 		for (;;) {
 			const existing = this.sessions.get(id);
+			// A reuse-only open cannot navigate the window away: creating a session
+			// here is exactly the bypass (no lease, no session bound) the caller's
+			// admission would have caught, so it is refused instead.
+			if (request.reuseOnly && !existing)
+				throw new BrowserPoolError(
+					"session-not-open",
+					`session ${JSON.stringify(request.name)} was closed while this open was being prepared; call browser_open again`,
+					409,
+				);
+			if (request.reuseOnly && existing?.crashed)
+				throw new BrowserPoolError(
+					"browser-crashed",
+					"the browser process went away; call browser_open again to relaunch it",
+					409,
+				);
 			if (existing && !existing.crashed) {
+				// The binding check belongs *here*, where the reuse decision is actually
+				// taken: a route-level pre-check cannot see a session a concurrent open
+				// registered in between.
+				if (request.stage && existing.stage?.ident !== request.stage.ident)
+					throw new BrowserPoolError(
+						"stage-mismatch",
+						existing.stage
+							? `session ${JSON.stringify(request.name)} is bound to stage ${existing.stage.ident}; a session cannot be re-bound to ${request.stage.ident}`
+							: `session ${JSON.stringify(request.name)} is not stage-bound; close it first, or open the stage under a fresh session name`,
+						409,
+					);
 				existing.touch();
 				this.releaseReservation(reservation);
 				return existing;
@@ -219,11 +286,21 @@ export class BrowserPool {
 		let slotReleased = false;
 		try {
 			const browser = await this.ensureBrowser();
+			// The guard is built from the session it reports to, so every refusal lands
+			// in the buffer the session's next tool call drains — including the ones the
+			// replacement context of a recording produces.
+			let session: BrowserSession | undefined;
+			const guard = request.stage
+				? createStageGuard(request.stage, (refusal) => {
+						session?.recordRefusal(refusal);
+					})
+				: undefined;
 			const context = await browser.newContext({
 				viewport: request.viewport,
+				...(guard ? { guard } : {}),
 			});
 			const page = await context.page();
-			const session = new BrowserSession({
+			session = new BrowserSession({
 				owner: request.owner,
 				name: request.name,
 				context,
@@ -231,6 +308,7 @@ export class BrowserPool {
 				viewport: request.viewport,
 				...(request.url ? { baseUrl: request.url } : {}),
 				...(request.app ? { app: request.app } : {}),
+				...(request.stage ? { stage: request.stage } : {}),
 				now: this.clock,
 			});
 			this.sessions.set(session.id, session);
@@ -375,11 +453,29 @@ export class BrowserPool {
 				viewport: session.viewport,
 				recordVideo: { dir: options.dir, size: { ...session.viewport } },
 				...(state === undefined ? {} : { storageState: state }),
+				// The guard and the HTTP credentials survive the swap: a recording is
+				// strictly more observable, never less restricted.
+				...(this.guardFor(session)
+					? { guard: this.guardFor(session) as DriverRequestGuard }
+					: {}),
+				...(session.httpCredentials
+					? { httpCredentials: session.httpCredentials }
+					: {}),
 			});
 			// The close that follows is this swap, not a crash.
 			session.beginContextSwap();
 			await previous.close().catch(() => {});
 			await this.finishSwap(session, browser, context, url);
+			// A dropper that does not wait for in-flight work (run end, shutdown) may
+			// have removed the session while the swap was in flight: the recording
+			// would then be attached to a session nobody holds, and the caller's
+			// cleanup would never remove the directory it owns.
+			if (this.sessions.get(session.id) !== session)
+				throw new BrowserPoolError(
+					"session-not-open",
+					"the session was closed while its recording context was being created; call browser_open again",
+					409,
+				);
 			const recording: SessionRecording = {
 				startedAt: this.clock(),
 				startedUrl: url,
@@ -491,6 +587,12 @@ export class BrowserPool {
 			context = await browser.newContext({
 				viewport: session.viewport,
 				...(state === undefined ? {} : { storageState: state }),
+				...(this.guardFor(session)
+					? { guard: this.guardFor(session) as DriverRequestGuard }
+					: {}),
+				...(session.httpCredentials
+					? { httpCredentials: session.httpCredentials }
+					: {}),
 			});
 		} catch (error) {
 			session.attachRecording(recording);
@@ -507,17 +609,43 @@ export class BrowserPool {
 				: false;
 		if (!keep) {
 			// Best effort: a cleanup that fails must not leave the swap half-applied.
-			try {
-				fs.rmSync(recording.dir, { recursive: true, force: true });
-			} catch (error) {
-				this.log(`could not remove ${recording.dir}: ${message(error)}`);
-			}
+			await fs.promises
+				.rm(recording.dir, { recursive: true, force: true })
+				.catch((error) => {
+					this.log(`could not remove ${recording.dir}: ${message(error)}`);
+				});
 		}
 		await this.finishSwap(session, browser, context, url);
 		return { videoSaved, posterSaved, autoStopped: recording.autoStopped, url };
 	}
 
 	// -- internals ---------------------------------------------------------
+
+	/** The guard of a stage-bound session, or `undefined` for a plain one. Built
+	 * per context so a recording's replacement carries the same rules. */
+	private guardFor(session: BrowserSession): DriverRequestGuard | undefined {
+		const binding = session.stage;
+		if (!binding) return undefined;
+		return createStageGuard(binding, (refusal) =>
+			session.recordRefusal(refusal),
+		);
+	}
+
+	/** Install HTTP basic credentials on a live session, and remember them so a
+	 * recording's replacement context keeps them. */
+	async setHttpCredentials(
+		session: BrowserSession,
+		credentials: DriverHttpCredentials,
+	): Promise<void> {
+		// The same gate a recording swap takes, and the session's field first: a swap
+		// reads `session.httpCredentials` when it builds the replacement context, so
+		// credentials installed while one is in flight travel into it instead of
+		// being installed on the context the swap is about to close.
+		await this.withRecordingGate(session, async () => {
+			session.httpCredentials = credentials;
+			await session.context.setHttpCredentials(credentials);
+		});
+	}
 
 	/** Sessions that count against the cap: live ones plus reservations whose
 	 * context is still being created. */
@@ -638,15 +766,31 @@ export class BrowserPool {
 	}
 
 	private async drop(session: BrowserSession): Promise<void> {
-		// A crashed session does not count against the cap, so removing it frees
-		// nothing: waking a waiter for it would hand out a slot that never existed.
-		const freed = !session.crashed;
-		this.sessions.delete(session.id);
+		// Whether a slot was freed follows the *map*, not the session's own flag: a
+		// second drop of a session that is no longer registered must not wake a
+		// second waiter for the one slot that left. A crashed session never counted
+		// against the cap, so removing it frees nothing.
+		const registered = this.sessions.delete(session.id);
+		const freed = registered && !session.crashed;
 		session.beginContextSwap();
 		// The slot is handed to the queue *before* the close is awaited, so it never
 		// becomes visible as free while the waiters are still parked.
 		if (freed) this.wakeNext();
 		await session.context.close().catch(() => {});
+		// A recording the run never stopped goes with the session: Playwright
+		// finalizes the WebM when the context closes, and nothing else would ever
+		// remove the directory it wrote into.
+		const abandoned = session.detachRecording();
+		if (!abandoned) return;
+		// Asynchronous, like every other filesystem call on this path: a dropped
+		// session is dropped from the middle of a request, and a synchronous
+		// recursive remove of a video directory would block the whole server's event
+		// loop for as long as the filesystem takes.
+		await fs.promises
+			.rm(abandoned.dir, { recursive: true, force: true })
+			.catch((error) => {
+				this.log(`could not remove ${abandoned.dir}: ${message(error)}`);
+			});
 	}
 
 	/**

@@ -136,10 +136,12 @@ describe("retry on the unavailable Compaction row", () => {
 				return entry;
 			},
 			refreshBrowser: async () => undefined,
+			refreshStages: async () => undefined,
 			bumpAgents: () => {
 				agentsBumped += 1;
 			},
 			bumpBrowser: () => {},
+			bumpStages: () => {},
 		});
 		await flush();
 
@@ -166,11 +168,17 @@ describe("retry on the unavailable Compaction row", () => {
 			refreshBrowser: async () => {
 				calls.push("browser");
 			},
+			refreshStages: async () => {
+				calls.push("stages");
+			},
 			bumpAgents: () => {
 				calls.push("bump-agents");
 			},
 			bumpBrowser: () => {
 				calls.push("bump-browser");
+			},
+			bumpStages: () => {
+				calls.push("bump-stages");
 			},
 		});
 
@@ -187,6 +195,12 @@ describe("retry on the unavailable Compaction row", () => {
 		retrySettingsSection(deps("agents"));
 		await flush();
 		expect(calls).toEqual(["providers", "projects", "agents", "bump-agents"]);
+
+		// The Stages section owns its own server read, like the Browser section.
+		calls.length = 0;
+		retrySettingsSection(deps("stages"));
+		await flush();
+		expect(calls).toEqual(["stages", "bump-stages"]);
 	});
 
 	test("the agent-config-backed sections are exactly agents and compaction", () => {

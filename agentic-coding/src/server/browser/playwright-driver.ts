@@ -11,16 +11,25 @@
 // * the injected snapshot attributes (`snapshot.ts`) and the element actions both
 //   go through one locator policy — `locator(selector).first()` — so a ref that
 //   matches one element cannot fail with Playwright's strict-mode error.
-import type { Browser, BrowserContext, Page, Request } from "playwright-core";
+import type {
+	Browser,
+	BrowserContext,
+	Locator,
+	Page,
+	Request,
+} from "playwright-core";
 import { SNAPSHOT_SCRIPT } from "./snapshot.ts";
 import type {
 	BrowserDriver,
 	DriverBrowser,
 	DriverConsoleEntry,
 	DriverContext,
+	DriverHttpCredentials,
 	DriverLaunchOptions,
+	DriverLocator,
 	DriverNetworkEvent,
 	DriverPage,
+	DriverRequestInfo,
 	DriverScreenshotOptions,
 } from "./types.ts";
 
@@ -69,10 +78,67 @@ function adaptBrowser(browser: Browser): DriverBrowser {
 				...(options.storageState === undefined
 					? {}
 					: { storageState: options.storageState as StorageState }),
+				...(options.httpCredentials === undefined
+					? {}
+					: { httpCredentials: options.httpCredentials }),
 			});
+			// The stage guard lives on the context, so a recording's replacement
+			// context carries it too: the pool passes the same guard again rather than
+			// the guard being re-derived from the session.
+			if (options.guard) await routeThroughGuard(context, options.guard);
 			return adaptContext(context);
 		},
 	};
+}
+
+/** One request, as the guard needs to see it. `frame()` throws for a request
+ * that has no frame (a service worker), which is never a main-frame navigation. */
+function requestInfo(request: Request): DriverRequestInfo {
+	let isMainFrameNavigation = false;
+	try {
+		isMainFrameNavigation =
+			request.isNavigationRequest() && request.frame().parentFrame() === null;
+	} catch {
+		isMainFrameNavigation = false;
+	}
+	return {
+		url: request.url(),
+		method: request.method(),
+		resourceType: request.resourceType(),
+		isMainFrameNavigation,
+	};
+}
+
+/** Install one guard on one context: every request it refuses is aborted. */
+async function routeThroughGuard(
+	context: BrowserContext,
+	guard: (request: DriverRequestInfo) => boolean,
+): Promise<void> {
+	await context.route("**/*", async (route) => {
+		const allowed = guard(requestInfo(route.request()));
+		// A race the page itself caused (a navigation the page already replaced) is
+		// not a guard failure: the request is gone either way.
+		if (allowed) await route.continue().catch(() => {});
+		else await route.abort().catch(() => {});
+	});
+}
+
+/** The one place a locator descriptor becomes a Playwright locator, so a login
+ * recipe works across pages and a mask covers exactly what a recipe filled. */
+function locatorOf(page: Page, locator: DriverLocator): Locator {
+	if (locator.selector !== undefined && locator.selector !== "")
+		return page.locator(locator.selector);
+	if (locator.label !== undefined && locator.label !== "")
+		return page.getByLabel(locator.label);
+	if (locator.role !== undefined && locator.role !== "") {
+		const role = locator.role as Parameters<Page["getByRole"]>[0];
+		return locator.name === undefined
+			? page.getByRole(role)
+			: page.getByRole(role, { name: locator.name });
+	}
+	throw new Error(
+		"a locator needs a selector, a label, or a role (with a name)",
+	);
 }
 
 function adaptContext(context: BrowserContext): DriverContext {
@@ -83,6 +149,9 @@ function adaptContext(context: BrowserContext): DriverContext {
 			await context.close();
 		},
 		storageState: () => context.storageState(),
+		setHttpCredentials: async (credentials: DriverHttpCredentials) => {
+			await context.setHTTPCredentials(credentials);
+		},
 		video: () => {
 			// The video belongs to the page that recorded it; Playwright exposes it
 			// only through `page.video()`. The handle is taken now and saved later,
@@ -199,6 +268,20 @@ function adaptPage(page: Page): DriverPage {
 		hover: async (selector, timeoutMs) => {
 			await page.locator(selector).first().hover({ timeout: timeoutMs });
 		},
+		fillField: async (locator, value, timeoutMs) => {
+			await locatorOf(page, locator)
+				.first()
+				.fill(value, { timeout: timeoutMs });
+		},
+		clickControl: async (locator, timeoutMs) => {
+			await locatorOf(page, locator).first().click({ timeout: timeoutMs });
+		},
+		waitForControl: async (locator, timeoutMs) => {
+			await locatorOf(page, locator)
+				.first()
+				.waitFor({ state: "visible", timeout: timeoutMs });
+		},
+		locatorCount: async (locator) => await locatorOf(page, locator).count(),
 		waitForSelector: async (selector, timeoutMs) => {
 			await page
 				.locator(selector)
@@ -224,17 +307,22 @@ function adaptPage(page: Page): DriverPage {
 		screenshot: async (options: DriverScreenshotOptions) => {
 			const quality =
 				options.quality === undefined ? {} : { quality: options.quality };
+			const mask = (options.mask ?? []).map((locator) =>
+				locatorOf(page, locator),
+			);
+			const masked = mask.length === 0 ? {} : { mask };
 			if (options.selector !== undefined) {
 				const element = await page
 					.locator(options.selector)
 					.first()
-					.screenshot({ type: options.type, ...quality });
+					.screenshot({ type: options.type, ...quality, ...masked });
 				return new Uint8Array(element);
 			}
 			const view = await page.screenshot({
 				type: options.type,
 				...quality,
 				fullPage: options.fullPage,
+				...masked,
 			});
 			return new Uint8Array(view);
 		},

@@ -57,15 +57,30 @@ const timeoutField = Schema.optional(
 	),
 );
 
-/** `browser_open`: a raw URL, or an app endpoint the calling workflow holds. */
+/** `browser_open`: a raw URL, an app endpoint the calling workflow holds, or a
+ * stage application (`add-stage-testing-foundation`). A stage open is bound to
+ * the stage for the session's whole life. */
 export const browserOpenRequestSchema = Schema.Struct({
 	url: Schema.optional(browserField(2048)),
 	app: Schema.optional(browserName(256)),
 	endpoint: Schema.optional(browserName(256)),
+	stage: Schema.optional(browserName(64)),
+	stageApp: Schema.optional(browserName(64)),
+	path: Schema.optional(browserField(1024)),
 	session: sessionField,
 	viewport: Schema.optional(browserViewportSchema),
 });
 export type BrowserOpenRequest = typeof browserOpenRequestSchema.Type;
+
+/** One credential a tool may ask the server to resolve and type
+ * (`add-stage-testing-foundation`): the role field of one staged application.
+ * The value never travels: the server resolves the reference itself. */
+export const browserCredentialRefSchema = Schema.Struct({
+	app: browserName(64),
+	role: browserName(64),
+	field: Schema.Literal("username", "password", "totp"),
+});
+export type BrowserCredentialRef = typeof browserCredentialRefSchema.Type;
 
 /** `browser_snapshot`, `browser_close` and the reads that need no more. */
 export const browserSessionRequestSchema = Schema.Struct({
@@ -82,6 +97,9 @@ export const browserActionRequestSchema = Schema.Struct({
 	ref: refField,
 	selector: selectorField,
 	value: Schema.optional(browserFreeText(8192)),
+	/** A credential the server fills in, instead of a literal `value`: the
+	 * resolved credential of one role field of the session's stage. */
+	credential: Schema.optional(browserCredentialRefSchema),
 	key: Schema.optional(browserField(64)),
 	values: Schema.optional(
 		Schema.Array(browserField(512)).pipe(Schema.maxItems(32)),
@@ -163,6 +181,40 @@ export const browserScriptRequestSchema = Schema.Struct({
 	timeoutMs: timeoutField,
 });
 export type BrowserScriptRequest = typeof browserScriptRequestSchema.Type;
+
+/** `stage_login`: run one role's declared login recipe on a stage-bound session.
+ * The server resolves the credential references itself, so this body carries
+ * names only. */
+export const browserStageLoginRequestSchema = Schema.Struct({
+	session: sessionField,
+	app: browserName(64),
+	role: browserName(64),
+});
+export type BrowserStageLoginRequest =
+	typeof browserStageLoginRequestSchema.Type;
+
+/** The refusal codes the stage surfaces answer with
+ * (`add-stage-testing-foundation`), declared here so the tool side and the
+ * route side name the same vocabulary and a test can assert it. */
+export const STAGE_ERROR_CODES = [
+	"stage-not-configured",
+	"stage-app-unknown",
+	"stage-mismatch",
+	"origin-not-allowed",
+	"stage-read-only",
+	"stage-rate-limit",
+	"stage-held",
+	"stage-session-limit",
+	"stage-session-restricted",
+	"recording-active",
+	"credential-missing",
+	"login-failed",
+	"login-mfa-required",
+	"login-timeout",
+	"login-step-not-found",
+	"login-not-required",
+] as const;
+export type StageErrorCode = (typeof STAGE_ERROR_CODES)[number];
 
 // ---------------------------------------------------------------------------
 // Settings: non-secret install state

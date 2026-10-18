@@ -122,6 +122,11 @@ import { startWorkflowMonitor } from "../../orchestrator/monitor.ts";
 import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
+	acceptCredentialKeystroke,
+	CredentialEditor,
+	readCredentialDraft,
+} from "../../settings/CredentialEditor.tsx";
+import {
 	type CompactionSettingsSnapshot,
 	type SettingsContext,
 	type SettingsItem,
@@ -135,6 +140,13 @@ import {
 	readEditorDraft,
 } from "../../settings/NumberEditor.tsx";
 import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
+import {
+	clearStageError,
+	lastStageError,
+	refreshStageStatus,
+	setStageCredential,
+	stageSnapshot,
+} from "../../settings/stages.ts";
 import {
 	refreshSettingsProjects,
 	refreshSettingsProviders,
@@ -306,6 +318,45 @@ export interface EnvironmentLaunchRequest {
 export interface DashboardTab {
 	mode: "home" | "attached";
 	keymap: Keymap<Renderable, KeyEvent>;
+}
+
+/**
+ * Whether one credential write's answer may still act on the dialog it was sent
+ * for.
+ *
+ * The dialog is escapable while a write is in flight (that is the point of the
+ * `escape` branch), and the next editor may open while the answer is still on
+ * its way — for the same variable or another one. The answer therefore
+ * identifies its own dialog four ways: the dialog it was sent from (a counter
+ * that advances every time the editor opens), the write within that dialog, the
+ * variable it writes, and the overlay that is on top. An answer that fails any
+ * of them is *reported* (a toast names the variable and the reason) and applied
+ * to nothing: it must not unfreeze, fill or close a dialog the developer opened
+ * after cancelling it — including the same row reopened, which is a different
+ * dialog with the same variable.
+ */
+export function credentialAnswerIsCurrent(input: {
+	/** The editor this answer was sent from. */
+	readonly dialog: number;
+	/** The editor that is open now. */
+	readonly openDialog: number;
+	/** The write within that editor this answer belongs to. */
+	readonly request: number;
+	/** The write the editor is waiting on now. */
+	readonly answeredRequest: number;
+	/** The variable this answer wrote. */
+	readonly variable: string;
+	/** The variable the open editor is setting, if one is open. */
+	readonly openVariable: string | undefined;
+	/** The overlay that is on top now. */
+	readonly overlay: string | undefined;
+}): boolean {
+	return (
+		input.openDialog === input.dialog &&
+		input.answeredRequest === input.request &&
+		input.openVariable === input.variable &&
+		input.overlay === "stage-credential"
+	);
 }
 
 export function App(props: {
@@ -997,6 +1048,26 @@ export function App(props: {
 	const [settingsClassifierVersion, setSettingsClassifierVersion] =
 		createSignal(0);
 	const [settingsBrowserVersion, setSettingsBrowserVersion] = createSignal(0);
+	const [settingsStageVersion, setSettingsStageVersion] = createSignal(0);
+	// The one Settings write that carries a secret: which `.env` variable is
+	// being set, its masked draft and the inline message. The draft is dropped as
+	// soon as the overlay leaves the top of the stack.
+	const [credentialTarget, setCredentialTarget] = createSignal<
+		{ variable: string; label: string } | undefined
+	>();
+	const [credentialDraft, setCredentialDraft] = createSignal("");
+	const [credentialError, setCredentialError] = createSignal<
+		string | undefined
+	>();
+	const [credentialSaving, setCredentialSaving] = createSignal(false);
+	/** Which write the dialog is waiting on. A write's answer carries the request
+	 * it belongs to (and the variable it wrote), so an answer that arrives after
+	 * the developer left the dialog cannot freeze, fill or close the next one. */
+	const [credentialRequest, setCredentialRequest] = createSignal(0);
+	/** Which editor is open. The same row can be opened twice while a write is in
+	 * flight, and the second editor is another dialog with the same variable: the
+	 * generation is what tells an answer's own dialog from its replacement. */
+	const [credentialDialog, setCredentialDialog] = createSignal(0);
 	const settingsSection = (): SettingsSection | undefined =>
 		settingsSectionOfPage(currentPage());
 	/** Stable configured project id of a project-scoped Settings page. */
@@ -1097,6 +1168,7 @@ export function App(props: {
 		settingsAgentVersion();
 		settingsClassifierVersion();
 		settingsBrowserVersion();
+		settingsStageVersion();
 		const projectIdent = settingsProjectIdent();
 		const repository = settingsAgentRepository();
 		return buildSettingsContext({
@@ -1110,6 +1182,7 @@ export function App(props: {
 			providers: settingsProviders(),
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
 			...(browserSnapshot() ? { browser: browserSnapshot() } : {}),
+			...(stageSnapshot() ? { stages: stageSnapshot() } : {}),
 		});
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
@@ -1155,6 +1228,24 @@ export function App(props: {
 		void refreshBrowserStatus().then(() =>
 			setSettingsBrowserVersion((value) => value + 1),
 		);
+	});
+	createEffect(() => {
+		if (settingsSection() !== "stages") return;
+		// The stage catalog is a server read (its own configuration root); refresh
+		// it when the section opens, so an edited stage file is what the rows show.
+		void refreshStageStatus().then(() =>
+			setSettingsStageVersion((value) => value + 1),
+		);
+	});
+	// A secret draft lives only while its dialog is open: the dialog's own Escape
+	// drops it, and this clears it on every *other* way the overlay can close (a
+	// pop from elsewhere, a section switch), so the next open starts empty and no
+	// secret outlives the overlay that owns it.
+	createEffect(() => {
+		if (nav.modal() === "stage-credential") return;
+		if (credentialTarget()) setCredentialTarget(undefined);
+		if (credentialError()) setCredentialError(undefined);
+		if (credentialDraft()) setCredentialDraft("");
 	});
 	// While the download runs, poll the server so the row shows its own progress
 	// and the cancel row appears without the developer pressing reload. The poll
@@ -1225,8 +1316,10 @@ export function App(props: {
 					},
 					refreshAgents: refreshAgentConfig,
 					refreshBrowser: refreshBrowserStatus,
+					refreshStages: refreshStageStatus,
 					bumpAgents: () => setSettingsAgentVersion((value) => value + 1),
 					bumpBrowser: () => setSettingsBrowserVersion((value) => value + 1),
+					bumpStages: () => setSettingsStageVersion((value) => value + 1),
 				});
 				return;
 			case "browser-install":
@@ -1278,6 +1371,24 @@ export function App(props: {
 					return;
 				}
 				void saveCompactionField("enabled", !current.effective.enabled);
+				return;
+			}
+			case "stage-credential": {
+				const target = {
+					variable: item.action.variable,
+					label: item.action.label,
+				};
+				// One batch, deliberately: the draft-clearing effect above reads the
+				// modal, so the target and the overlay it belongs to have to become
+				// visible together or the editor never renders.
+				batch(() => {
+					setCredentialDialog((value) => value + 1);
+					setCredentialTarget(target);
+					setCredentialDraft("");
+					setCredentialError(undefined);
+					setCredentialSaving(false);
+					nav.pushModal("stage-credential", "home");
+				});
 				return;
 			}
 			case "numeric-edit": {
@@ -1334,6 +1445,10 @@ export function App(props: {
 			if (settingsSection() === "browser")
 				void refreshBrowserStatus().then(() =>
 					setSettingsBrowserVersion((value) => value + 1),
+				);
+			if (settingsSection() === "stages")
+				void refreshStageStatus().then(() =>
+					setSettingsStageVersion((value) => value + 1),
 				);
 			notify("Settings reloaded", "info");
 			return true;
@@ -2008,6 +2123,10 @@ export function App(props: {
 			setThemeIndex(0);
 			return true;
 		}
+		// The masked credential editor owns its own Escape: it is the only handler
+		// that drops the secret draft with the dialog, and it has to stay live while
+		// the write is in flight (which the shell ladder would not).
+		if (nav.modal() === "stage-credential") return false;
 		if (isShellOwnedOverlay(nav.modal()) && nav.esc()) return true;
 		// 6. Breadcrumb focus returns to the page body.
 		if (nav.modal() === "none" && focusCrumb()) {
@@ -2362,6 +2481,97 @@ export function App(props: {
 				if (next !== compactionDraft()) {
 					setCompactionDraft(next);
 					setCompactionError(undefined);
+				}
+			}
+			return;
+		}
+
+		if (nav.modal() === "stage-credential") {
+			// The masked credential editor: every printable character is taken, the
+			// draft is rendered as bullets, Enter writes exactly the referenced
+			// `.env` key and Esc discards the secret.
+			const target = credentialTarget();
+			// A draft-less editor overlay is never left standing: without this every
+			// key of the shell would be swallowed by an overlay that cannot render.
+			if (!target) {
+				nav.popModal();
+				return;
+			}
+			if (key === "escape") {
+				// Escape stays live while the write is in flight: this overlay is the only
+				// place the draft exists, so leaving it must always be possible, and a
+				// request that has been sent cannot be recalled anyway (it is bounded by
+				// the request's own timeout). Leaving also ends the *freeze*: the write's
+				// answer no longer owns this dialog, and the next one opens with a draft
+				// that can be typed into.
+				setCredentialDialog((value) => value + 1);
+				setCredentialTarget(undefined);
+				setCredentialError(undefined);
+				setCredentialDraft("");
+				setCredentialSaving(false);
+				nav.popModal();
+				return;
+			}
+			// While the write is in flight the draft is frozen: another Enter would
+			// write the same key twice, and typing into a value that was already sent is
+			// a lie the dialog cannot keep.
+			if (credentialSaving()) return;
+			if (key === "backspace") {
+				setCredentialDraft((draft) => draft.slice(0, -1));
+				setCredentialError(undefined);
+			} else if (key === "enter" || key === "return") {
+				const read = readCredentialDraft(credentialDraft());
+				if (!read.ok) {
+					setCredentialError(read.message);
+					return;
+				}
+				// The write is identified by *which* request it is and which variable it
+				// writes: an editor opened after this one is another write of another
+				// value, and this answer may not unblock it, fill it with this failure or
+				// close it.
+				const request = credentialRequest() + 1;
+				setCredentialRequest(request);
+				const dialog = credentialDialog();
+				setCredentialSaving(true);
+				setCredentialError(undefined);
+				void setStageCredential(target.variable, read.value).then((ok) => {
+					const current = credentialAnswerIsCurrent({
+						dialog,
+						openDialog: credentialDialog(),
+						request,
+						answeredRequest: credentialRequest(),
+						variable: target.variable,
+						openVariable: credentialTarget()?.variable,
+						overlay: nav.modal(),
+					});
+					if (current) setCredentialSaving(false);
+					// The dialog may have been cancelled while the write was in flight, so
+					// every answer is reported where the developer can still see it — and
+					// never by popping whatever overlay happens to be on top by then.
+					if (!ok) {
+						const failure = lastStageError() ?? "the server refused the write";
+						clearStageError();
+						if (current) setCredentialError(failure);
+						else notify(`${target.variable} was not set: ${failure}`, "error");
+						return;
+					}
+					if (current) {
+						// The secret is dropped before anything else happens, and the catalog is
+						// re-read so the row shows `set <variable> (masked)`.
+						setCredentialDraft("");
+						setCredentialTarget(undefined);
+						nav.popModal();
+					}
+					notify(`${target.variable} set`, "success");
+					void refreshStageStatus().then(() =>
+						setSettingsStageVersion((value) => value + 1),
+					);
+				});
+			} else {
+				const next = acceptCredentialKeystroke(credentialDraft(), key);
+				if (next !== credentialDraft()) {
+					setCredentialDraft(next);
+					setCredentialError(undefined);
 				}
 			}
 			return;
@@ -3496,6 +3706,15 @@ export function App(props: {
 					{...(!compactionError() && compactionResolved()
 						? { resolved: compactionResolved() }
 						: {})}
+				/>
+			)}
+			{nav.modal() === "stage-credential" && credentialTarget() && (
+				<CredentialEditor
+					label={(credentialTarget() as { label: string }).label}
+					variable={(credentialTarget() as { variable: string }).variable}
+					value={credentialDraft()}
+					{...(credentialError() ? { error: credentialError() } : {})}
+					{...(credentialSaving() ? { saving: true } : {})}
 				/>
 			)}
 			{nav.modal() === "locations" && (

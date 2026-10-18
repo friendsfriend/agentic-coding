@@ -72,6 +72,7 @@ describe("home and category destinations", () => {
 			"settings.browser",
 			"settings.compaction",
 			"settings.providers",
+			"settings.stages",
 		]);
 	});
 
@@ -293,6 +294,7 @@ describe("every routed page has a definition and a label", () => {
 			"settings.browser",
 			"settings.compaction",
 			"settings.providers",
+			"settings.stages",
 			"environments",
 			"environments.applications",
 			"environments.libraries",
