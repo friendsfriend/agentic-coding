@@ -212,6 +212,35 @@ test("the startup guard accepts solo without an OpenSpec project", () => {
 	}
 });
 
+test("the clean-tree refusal names the dirty paths, bounded", () => {
+	// The refusal is what the orchestrator relays to the developer: "the tree is
+	// dirty" alone leaves them guessing which paths to commit. Bounded, so a
+	// repository-wide mess is a list of 20 paths and a count, not a page.
+	const root = repo();
+	try {
+		for (let index = 0; index < 23; index++)
+			fs.writeFileSync(
+				path.join(root, `dirty-${String(index).padStart(2, "0")}.txt`),
+				"dirty\n",
+			);
+		expect(() =>
+			validateStart(root, "solo-dirty", "solo", "add a flag"),
+		).toThrow(
+			/working tree must be clean before workflow start: 23 dirty path\(s\): dirty-00\.txt, dirty-01\.txt, .*\(\+3 more\)/,
+		);
+		let message = "";
+		try {
+			validateStart(root, "solo-dirty", "solo", "add a flag");
+		} catch (error) {
+			message = (error as Error).message;
+		}
+		expect(message).toContain("dirty-19.txt");
+		expect(message).not.toContain("dirty-20.txt");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a solo start requires a task and refuses an unclean worktree", () => {
 	const root = repo();
 	try {

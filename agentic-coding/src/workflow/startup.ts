@@ -154,8 +154,7 @@ export function validateStart(
 	}
 	if (requirements.has("clean-tree")) {
 		const dirty = runGit(repo, "status", "--porcelain");
-		if (dirty)
-			throw new Error("working tree must be clean before workflow start");
+		if (dirty) throw new Error(cleanTreeRefusal(dirty));
 	}
 	// The detached-worktree debug family selects the branch it investigates; the
 	// branch must already exist and is never created or switched.
@@ -202,6 +201,25 @@ export function validateStart(
 				`OpenSpec validation failed: ${(result.stderr.toString() || result.stdout.toString()).trim()}`,
 			);
 	}
+}
+
+/** The refusal a dirty checkout gets: the rule plus the paths that broke it,
+ * bounded so a repository-wide mess cannot become a page of output. The
+ * orchestrator relays this to the developer, so the paths are the answer to
+ * "what is dirty?". */
+const CLEAN_TREE_PATH_LIMIT = 20;
+function cleanTreeRefusal(porcelain: string): string {
+	const paths = porcelain
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "")
+		.map((line) => (line.length > 3 ? line.slice(3).trim() : line));
+	const shown = paths.slice(0, CLEAN_TREE_PATH_LIMIT);
+	const more =
+		paths.length > shown.length
+			? ` (+${paths.length - shown.length} more)`
+			: "";
+	return `working tree must be clean before workflow start: ${paths.length} dirty path(s): ${shown.join(", ")}${more}`;
 }
 
 /** The verify-only family's start rules: the checkout must be on a named

@@ -81,6 +81,30 @@ function emit(
 	}
 }
 
+/** Emit one content-free runtime envelope from a tool boundary, using the
+ * session's own run environment instead of a conversation handle (the
+ * orchestrator tools have no `Harness`). Best-effort like every other
+ * observation here: a session with no telemetry path and no OTLP endpoint
+ * records nothing rather than failing the tool it was measuring. */
+export function emitToolTelemetry(
+	env: Readonly<Record<string, string>>,
+	event: string,
+	fields: Record<string, unknown> = {},
+): void {
+	emit(
+		{
+			workflowId: env.HERDR_WORKFLOW_ID,
+			runId: env.HERDR_RUN_ID,
+			stepId: env.HERDR_STEP_ID,
+			role: env.HERDR_ROLE,
+			profile: env.HERDR_PROFILE,
+			telemetryPath: env.HERDR_TELEMETRY_PATH,
+		},
+		event,
+		fields,
+	);
+}
+
 /** Wall-clock timing of one committed assistant entry, measured from the
  * agent-event stream: pi-durable records no generation start/end, so this is
  * the only source for a real duration or token rate. */

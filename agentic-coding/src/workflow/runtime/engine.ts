@@ -1486,14 +1486,16 @@ export class WorkflowEngine {
 		snapshot: WorkflowSnapshot,
 		sameCheckout: boolean,
 	): { snapshot: WorkflowSnapshot; event: { type: string; data: unknown } } {
-		if (
-			db
-				.query("SELECT 1 FROM workflow_instances WHERE id=?")
-				.get(input.workflowId)
-		)
+		// The refusal names the status the existing row is in: the orchestrator
+		// relayed "already exists" before, and the status is what tells the
+		// developer whether that id is finished, waiting on them, or still running.
+		const existing = db
+			.query("SELECT status FROM workflow_instances WHERE id=?")
+			.get(input.workflowId) as { status?: string } | null;
+		if (existing)
 			throw new WorkflowRuntimeError(
 				"already-exists",
-				`workflow already exists: ${input.workflowId}`,
+				`workflow already exists: ${input.workflowId} (status: ${existing.status ?? "unknown"})`,
 			);
 		// Sample the creation timestamp after the writer lock is acquired so the
 		// durable timestamps never reflect time spent waiting for it.

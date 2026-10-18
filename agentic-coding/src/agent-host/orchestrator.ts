@@ -17,6 +17,17 @@ import {
 } from "@earendil-works/pi-durable";
 import { PUBLIC_WORKFLOW_CATALOG } from "../workflow/definitions/catalog.ts";
 import {
+	cachedBranchRefs,
+	compactWorkflowStatus,
+	compactWorkflowStatusView,
+	invalidateBranchCache,
+	noteFullDetail,
+	pendingQuestionUnion,
+	projectAgentConfig,
+	projectWorkflowList,
+	type WorkflowListStatus,
+} from "./orchestrator-compact.ts";
+import {
 	ORCHESTRATOR_TOKEN_ENV,
 	ORCHESTRATOR_URL_ENV,
 } from "./orchestrator-env.ts";
@@ -34,8 +45,10 @@ type Result = {
 };
 
 function text(value: unknown): Result {
-	const raw =
-		typeof value === "string" ? value : JSON.stringify(value, null, 2);
+	// Compact JSON: every result is re-sent on each later turn of the
+	// conversation, so indentation is paid for again and again (efficiency
+	// backlog item 5).
+	const raw = typeof value === "string" ? value : JSON.stringify(value);
 	return {
 		content: [
 			{
@@ -89,8 +102,9 @@ async function call(
 const observe = (env: Readonly<Record<string, string>>, observation: unknown) =>
 	call(env, "POST", "/api/v1/observe", { observation });
 
-/** The compact view of one workflow the orchestrator reasons about: status,
- * step, runs, failures, and what is waiting on the developer. */
+/** The full view of one workflow, returned only with `detail: "full"`: status,
+ * step, the task text, runs, failures, gate decisions and what is waiting on
+ * the developer. */
 export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 	const runs = (view.runs as Array<Record<string, unknown>> | undefined) ?? [];
 	const effects =
@@ -113,10 +127,11 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 		gatePolicies: view.gatePolicies,
 		health: view.health,
 		availableActions: view.availableActions,
-		pendingQuestions: view.pendingQuestions,
-		// Developer questions routed to you first: answer with workflow_action
-		// answer-question, or hand them to the developer with forward-question.
-		orchestratorQuestions: view.orchestratorQuestions,
+		// Developer questions routed to you first are folded in here (answer with
+		// workflow_action `answer-question`, or hand them to the developer with
+		// `forward-question`): the server's separate `orchestratorQuestions` copy
+		// duplicated the same records, so the deduplicated union is the one list.
+		pendingQuestions: pendingQuestionUnion(view),
 		runs: runs.slice(-20).map((run) => ({
 			stepId: run.stepId,
 			role: run.role,
@@ -249,7 +264,8 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
 - Plan approval, developer review, findings review and wiki review always belong to the developer. When a workflow waits on one, tell the developer what is waiting and where; never try to decide it.
-- Developer questions from the workflows you started are routed to you first and appear as \`orchestratorQuestions\` in workflow_status. Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
+- Developer questions from the workflows you started are routed to you first and appear in \`pendingQuestions\` in workflow_status (their record carries \`targetRole: "orchestrator"\`; there is no separate orchestrator list). Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
+- workflow_status answers a compact row by default; poll it with \`sinceRevision\` set to the revision of the last answer, so a poll of an unchanged workflow costs a few bytes. The task text, the full run history and the gate decisions are not in that row: ask for the task with \`includeTask: true\` and for everything with \`detail: "full"\`, only when you actually need it.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
 - Workflow events: the monitor delivers subscribed events to you as notes whose first line is "[workflow-monitor] subs=<labels>" followed by one line per event, "- <workflowId> → <stepId> (<what changed>)". The subs= list names the subscriptions that asked for the note; if you have no subscription of your own it reads subs=default, the monitor's own default, which list_subscriptions shows. The notifications the developer needs (a review waiting, a pending developer question) always reach the shell whatever you subscribe to. Use subscribe_events to choose what wakes you (mode wake for immediate coalesced notes, digest for one note per interval, silent to record without delivering), list_subscriptions to see them, unsubscribe_events to remove one, and read_events to pull recorded events since a cursor when you would rather poll than be woken. Every subscription expires, so give it a label, a reason and an expiry or an until-condition. Completion and progress events (workflow.completed, step.*, run.completed) are severity info, so minSeverity "warning" excludes them: to be told when a workflow finishes, name the terminal events in eventIds (workflow.completed, workflow.failed, workflow.closed) or pass minSeverity "info".
 - Report what you did and the resulting workflow status. Be concise.`;
@@ -322,70 +338,85 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_agent_config",
 				description:
-					"Use to inspect preset/model-profile choices before selecting a workflow preset; returns the default profile, profiles, presets and gates, optionally resolved for `repository`.",
+					'Use to inspect preset/model-profile choices before selecting a workflow preset; returns the default profile, the profile and preset names and the gate table, optionally resolved for `repository`. Pass detail:"full" for the complete profile and preset tables when you need to see which models a profile or a preset pool names.',
 				replay: "safe",
 				parameters: Type.Object({
 					repository: Type.Optional(RepoParameter),
+					detail: Type.Optional(
+						Type.Union([Type.Literal("full")], {
+							description:
+								'"full" returns the full profile and preset tables instead of their names.',
+						}),
+					),
 				}),
-				execute: run(async (args: { repository?: string }, env) => {
-					const query = args.repository
-						? `?repository=${encodeURIComponent(args.repository)}`
-						: "";
-					const loaded = (await call(
-						env,
-						"GET",
-						`/api/v1/config/agents${query}`,
-					)) as { agents?: Record<string, unknown> };
-					const agents = loaded.agents ?? {};
-					return {
-						defaultProfile: agents.default_profile,
-						profiles: agents.profiles,
-						presets: agents.presets,
-						gates: agents.gates,
-					};
-				}),
+				execute: run(
+					async (args: { repository?: string; detail?: "full" }, env) => {
+						if (args.detail === "full")
+							noteFullDetail(env, "list_agent_config");
+						const query = args.repository
+							? `?repository=${encodeURIComponent(args.repository)}`
+							: "";
+						const loaded = (await call(
+							env,
+							"GET",
+							`/api/v1/config/agents${query}`,
+						)) as { agents?: Record<string, unknown> };
+						return projectAgentConfig(loaded.agents ?? {}, args);
+					},
+				),
 			}),
 			defineTool({
 				name: "list_branches",
 				description:
-					"Use before choosing a branch or base for a workflow; returns the repository's local and remote branch refs.",
+					"Use before choosing a branch or base for a workflow; returns the repository's local and remote branch refs compactly (current, local, remote, default), reusing an identical answer for 30 s — a workflow start clears that reuse.",
 				replay: "safe",
 				parameters: Type.Object({ repo: RepoParameter }),
 				execute: run(async (args: { repo: string }, env) =>
-					observe(env, { kind: "branches", repo: args.repo }),
+					cachedBranchRefs(args.repo, () =>
+						observe(env, { kind: "branches", repo: args.repo }),
+					),
 				),
 			}),
 			defineTool({
 				name: "list_workflows",
 				description:
-					"Use to find existing workflows before starting or managing one; returns each target, id/type, status, current step, task, branch, owner, attention, actions and agents.",
+					'Use to find existing workflows before starting or managing one; returns one compact row per workflow — workflowId, target, workflowType, status, step, branch, who started it and an attention count — for every workflow that is not closed. Pass status:"all" to include closed workflows (or "active" (includes paused)|"attention"|"completed"|"closed" to narrow), and detail:"full" for the task text, the attention text, the available actions and the agents.',
 				replay: "safe",
-				parameters: Type.Object({}),
-				execute: run(async (_args, env) => {
-					const overviews = (await observe(env, {
-						kind: "workflows",
-					})) as Array<Record<string, unknown>>;
-					return overviews.map((overview) => {
-						const state = (overview.state ?? {}) as Record<string, unknown>;
-						return {
-							target: overview.target,
-							workflowId: state.workflowId,
-							workflowType: (state.definition as { id?: string } | undefined)
-								?.id,
-							status: state.status,
-							step: state.stepLabel ?? state.stepId,
-							task: state.task,
-							branch: state.branch,
-							// Who started the workflow: the session tells its own work from
-							// the developer's.
-							startedBy: overview.startedBy,
-							attention: (state.health as { attention?: string[] } | undefined)
-								?.attention,
-							availableActions: state.availableActions,
-							agents: overview.agents,
-						};
-					});
+				parameters: Type.Object({
+					status: Type.Optional(
+						Type.Union(
+							[
+								Type.Literal("active"),
+								Type.Literal("attention"),
+								Type.Literal("completed"),
+								Type.Literal("closed"),
+								Type.Literal("all"),
+							],
+							{
+								description:
+									"Filter: active (includes paused), attention, completed, closed, or all. Default: everything that is not closed.",
+							},
+						),
+					),
+					detail: Type.Optional(
+						Type.Union([Type.Literal("full")], {
+							description:
+								'"full" adds the task text, the attention text, the available actions and the agents.',
+						}),
+					),
 				}),
+				execute: run(
+					async (
+						args: { status?: WorkflowListStatus; detail?: "full" },
+						env,
+					) => {
+						if (args.detail === "full") noteFullDetail(env, "list_workflows");
+						const overviews = (await observe(env, {
+							kind: "workflows",
+						})) as Array<Record<string, unknown>>;
+						return projectWorkflowList(overviews, args);
+					},
+				),
 			}),
 			defineTool({
 				name: "sessions_report",
@@ -407,20 +438,52 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_status",
 				description:
-					"Use to inspect one workflow or before an action; returns status, current revision/step, runs, failed effects, pending questions and available actions.",
+					'Use to inspect one workflow or before an action; returns one compact row — workflowId, target, status, step, attention, current revision, pending questions (the ones routed to you included), available action ids and labels, failed effects, and the current run\'s role/status/model. The task text, the full run history and the gate decisions are NOT in the row: pass detail:"full" for the whole view, or includeTask:true for the task text alone. Pass sinceRevision equal to the previous answer\'s revision and an unchanged workflow answers in a few bytes ("unchanged", revision, status, step).',
 				replay: "safe",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,
+					sinceRevision: Type.Optional(
+						Type.Integer({
+							minimum: 0,
+							description:
+								"Revision of the previous answer; an unchanged workflow answers with a few bytes instead of the row.",
+						}),
+					),
+					detail: Type.Optional(
+						Type.Union([Type.Literal("full")], {
+							description:
+								'"full" returns the whole view: the task text, the run history, the gate decisions, health and every other field.',
+						}),
+					),
+					includeTask: Type.Optional(
+						Type.Boolean({
+							description:
+								"Include the task text in the compact row (it is the largest field of a task).",
+						}),
+					),
 				}),
 				execute: run(
-					async (args: { repo: string; workflowId: string }, env) => {
+					async (
+						args: {
+							repo: string;
+							workflowId: string;
+							sinceRevision?: number;
+							detail?: "full";
+							includeTask?: boolean;
+						},
+						env,
+					) => {
 						const view = (await call(
 							env,
 							"GET",
 							`/api/v1/workflow/view?repo=${encodeURIComponent(args.repo)}&workflowId=${encodeURIComponent(args.workflowId)}`,
 						)) as Record<string, unknown>;
-						return summarizeWorkflowView(view);
+						if (args.detail === "full") {
+							noteFullDetail(env, "workflow_status");
+							return summarizeWorkflowView(view);
+						}
+						return compactWorkflowStatus(view, args);
 					},
 				),
 			}),
@@ -552,6 +615,9 @@ export function createOrchestratorExtension(
 							...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
 							...(args.targetBranch ? { targetBranch: args.targetBranch } : {}),
 						});
+						// A start can create the workflow's branch, so the cached branch
+						// lists of every repository are dropped before the next poll.
+						invalidateBranchCache();
 						return message;
 					},
 				),
@@ -559,7 +625,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_action",
 				description:
-					"Use after workflow_status, passing its current revision, to resume, retry-effect, switch-preset, close, create-pr or answer/forward a routed question; returns the updated workflow view. Approval, rejection and review decisions are refused and belong to the developer.",
+					"Use after workflow_status, passing its current revision, to resume, retry-effect, switch-preset, close, create-pr or answer/forward a routed question; returns the updated workflow's compact row (the same shape workflow_status returns by default). Approval, rejection and review decisions are refused and belong to the developer.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,
@@ -594,7 +660,7 @@ export function createOrchestratorExtension(
 							actionId: args.actionId,
 							...(args.input === undefined ? {} : { input: args.input }),
 						})) as Record<string, unknown>;
-						return summarizeWorkflowView(view);
+						return compactWorkflowStatusView(view);
 					},
 				),
 			}),

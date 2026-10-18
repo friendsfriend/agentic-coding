@@ -299,8 +299,130 @@ describe("orchestrator host mode", () => {
 				"req-attribution",
 			);
 			const results = await waitForResults(host, "orchestrator", 2);
-			expect(results[0]).toContain('"startedBy": "orchestrator"');
-			expect(results[1]).toContain('"startedBy": "orchestrator"');
+			expect(results[0]).toContain('"startedBy":"orchestrator"');
+			expect(results[1]).toContain('"startedBy":"orchestrator"');
+			// Compact JSON: the indentation of the pretty-printed envelope was
+			// re-sent on every later turn of the conversation.
+			expect(results[0]).not.toContain("\n");
+			expect(results[1]).not.toContain("\n");
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
+
+	test("workflow_status is a compact row by default, full on request and short when unchanged", async () => {
+		// The three answers of the one tool: the default row (no task text, no run
+		// history, no gate decisions), the whole view behind `detail: "full"`, and
+		// the few-byte `unchanged` answer when `sinceRevision` is still current.
+		const task = "T".repeat(4096);
+		const view = {
+			workflowId: "wf-compact",
+			revision: 7,
+			status: "active",
+			repository: "/repos/shop",
+			worktree: "/repos/shop/.herdr-workflow/wf-compact",
+			branch: "feature/wf-compact",
+			task,
+			startedBy: "orchestrator",
+			currentStep: { id: "core.implementation", label: "Implementation" },
+			runs: [
+				{
+					id: "wf-compact-run-1",
+					stepId: "core.implementation",
+					role: "worker",
+					attempt: 1,
+					status: "completed",
+					runtime: "pi",
+					profile: "p",
+					model: "m",
+				},
+			],
+			effects: [],
+			gateDecisions: [
+				{
+					stage: "developer-review",
+					policy: "always",
+					decidedBy: "developer",
+					at: "now",
+				},
+			],
+			pendingQuestions: [
+				{ id: "q1", targetRole: "orchestrator", status: "pending" },
+			],
+			orchestratorQuestions: [
+				{ id: "q1", targetRole: "orchestrator", status: "pending" },
+			],
+			availableActions: [
+				{ id: "resume", label: "Resume", confirmation: "none" },
+			],
+		};
+		const server = await startWorkflowServer({
+			operations: { view: () => view } as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-compact-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			const call = (args: Record<string, unknown>) => ({
+				repo: "/repos/shop",
+				workflowId: "wf-compact",
+				...args,
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("workflow_status", call({}))], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[fauxToolCall("workflow_status", call({ detail: "full" }))],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(
+					[fauxToolCall("workflow_status", call({ sinceRevision: 7 }))],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit("orchestrator", "where is wf-compact?", "req-compact");
+			const results = await waitForResults(host, "orchestrator", 3);
+			// Default: the row, with the routed question once and no task text.
+			expect(results[0]).not.toContain(task);
+			expect(results[0]).not.toContain("gateDecisions");
+			expect(results[0]).toContain('"pendingQuestions":[{"id":"q1"');
+			expect(results[0]).toContain(
+				'"availableActions":[{"id":"resume","label":"Resume"}]',
+			);
+			expect(results[0]).not.toContain("orchestratorQuestions");
+			// Full: the task text and the gate decisions are back.
+			expect(results[1]).toContain(task);
+			expect(results[1]).toContain('"gateDecisions"');
+			expect(results[1]).not.toContain("orchestratorQuestions");
+			// Unchanged: a few bytes, not the row.
+			expect(results[2]).toBe(
+				'{"unchanged":true,"revision":7,"status":"active","step":{"id":"core.implementation","label":"Implementation"}}',
+			);
 		} finally {
 			await host.shutdown();
 			await server.stop();

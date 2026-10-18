@@ -242,7 +242,23 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 					},
 					routing: routing(),
 				}),
-			).toThrow(/workflow already exists: dup-guard/);
+			).toThrow(/workflow already exists: dup-guard \(status: [a-z-]+\)/);
+			// The status is the part the developer needs to act on: the orchestrator
+			// relays this refusal, and "already exists" alone does not say whether
+			// that id is finished, waiting on them, or still running.
+			expect(() =>
+				engine.start({
+					repo,
+					workflowId: "dup-guard",
+					definitionId: "openspec",
+					metadata: {
+						branch: "main",
+						baseBranch: "main",
+						baseCommit: "base",
+					},
+					routing: routing(),
+				}),
+			).toThrow(`status: ${engine.status(repo, "dup-guard").status}`);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

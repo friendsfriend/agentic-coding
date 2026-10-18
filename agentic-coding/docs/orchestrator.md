@@ -55,6 +55,35 @@ The automatic thresholds behind all of this live in `[agents.compaction]`
 running ones included.
 | Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
 
+## Compact tool results
+
+One conversation pays for every byte of every tool result on every later turn,
+so the orchestrator's tools answer compactly and everything else is opt-in:
+
+| Tool | Default answer | More |
+| --- | --- | --- |
+| `workflow_status` | One row: `workflowId`, `target`, `status`, `step`, `attention`, `revision`, `startedBy`, `pendingQuestions`, available action ids and labels, failed effects and the current run's role/status/model | `includeTask: true` adds the task text; `detail: "full"` returns the whole view (task, run history, gate decisions, health, worktree, preset). `sinceRevision` equal to the current revision answers `{unchanged, revision, status, step}` in a few bytes |
+| `list_workflows` | One compact row per workflow (`workflowId`, `target`, `workflowType`, `status`, `step`, `branch`, `startedBy`, attention **count**) for every workflow that is not closed | `status: "all"|"active"|"attention"|"completed"|"closed"` (`active` includes `paused`); `detail: "full"` adds the task text, the attention text, available actions and agents |
+| `list_agent_config` | With a `repository`: the default profile, the profile and preset **names** and the gate table | `detail: "full"` returns the full profile and preset tables |
+| `list_branches` | The repository's `current`/`local`/`remote`/`default` refs | An identical call within 30 s is answered from a bounded in-memory cache (keyed by repository); any `start_workflow` clears it |
+
+Every result is compact JSON — no indentation, because the indentation is paid
+again on every later turn. A `detail: "full"` read records one runtime
+telemetry envelope (`orchestrator.detail_full`, naming the tool) so full-view
+usage stays measurable; it changes nothing about the answer.
+
+The server-side `orchestratorQuestions` list is gone from the tool result: a
+question routed to the orchestrator is already in `pendingQuestions` (the
+server's copy duplicated the same records byte for byte), and its record keeps
+`targetRole: "orchestrator"`, so it is still visible and still answerable with
+`workflow_action` `answer-question` or `forward-question`. `workflow_action`
+answers with the same compact row `workflow_status` returns by default.
+
+A refused `start_workflow` names what to fix: an unclean worktree is refused
+with the dirty paths (at most 20, plus the total count) and a duplicate id is
+refused with the existing workflow's status. The task-reference variant of
+`start_workflow` is not part of this contract.
+
 ## Before starting a workflow
 
 The Orchestrator should establish these choices with the developer, in order:
