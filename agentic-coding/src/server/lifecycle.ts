@@ -13,9 +13,13 @@ import { orchestratorRuntimeDir } from "../orchestrator-state.ts";
 import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
 import {
 	type AgentsConfig,
+	DEFAULT_ORCHESTRATOR_EVENT_BURST_LIMIT,
+	DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS,
 	DEFAULT_ORCHESTRATOR_MONITOR,
 	DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS,
 	DEFAULT_ORCHESTRATOR_STALL_MINUTES,
+	orchestratorEventBurstLimit,
+	orchestratorEventBurstWindowSeconds,
 	orchestratorMonitorMode,
 	orchestratorReconcileSeconds,
 	orchestratorStallMinutes,
@@ -206,6 +210,16 @@ export async function startWorkflowServer(
 			reconcileMs: memoizedAgents(
 				(agents) => orchestratorReconcileSeconds(agents) * 1_000,
 				DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS * 1_000,
+			),
+			// The per-workflow event budget and its window: the bus's storm guard,
+			// read per use like the rest of `[agents.orchestrator]`.
+			maxEventsPerWindow: memoizedAgents(
+				orchestratorEventBurstLimit,
+				DEFAULT_ORCHESTRATOR_EVENT_BURST_LIMIT,
+			),
+			eventWindowMs: memoizedAgents(
+				(agents) => orchestratorEventBurstWindowSeconds(agents) * 1_000,
+				DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS * 1_000,
 			),
 			enrich: (input) => enrichWorkflowEvent(input),
 			...(options.configDir

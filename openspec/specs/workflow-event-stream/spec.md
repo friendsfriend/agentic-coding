@@ -18,7 +18,8 @@ effects (`effect.failed`), delivery (`delivery.push`, `pull-request.state`),
 runs (`run.started`, `run.completed`, `run.blocked`, `run.aborted`,
 `run.stalled`), verification (`verification.finished`), compaction
 (`compaction`), gates (`gate.decided`), the orchestrator launch ceiling
-(`limit.hit`) and OpenSpec progress (`openspec.task-progress`).
+(`limit.hit`), the bus's own rate limit (`events.suppressed`) and OpenSpec
+progress (`openspec.task-progress`).
 
 #### Scenario: Every catalog event has a payload schema and a derivation test
 
@@ -134,6 +135,61 @@ closed or blocked since the last observation SHALL update its projection instead
   stall threshold passes
 - **THEN** no `run.stalled` SHALL be recorded for it
 
+### Requirement: One observation, one transition
+
+The derivation SHALL be idempotent: the projection a derivation came from SHALL be
+stored before anything the derivation publishes can be observed, a nested
+observation of the same workflow SHALL be skipped, and the same event (id,
+workflow id and payload) SHALL NOT be recorded twice while that projection state
+is unchanged. Exactly one event SHALL therefore be recorded per real transition,
+whichever path observes it - a `workflow.updated` naming the workflow, a
+repository-level re-list, the reconciliation pass or a listing.
+
+#### Scenario: A transition during a long effect
+
+- **WHEN** a workflow enters a long, non-agent effect after an agent run
+  completed, and the effect keeps committing progress (a repository-level
+  `workflow.updated` per commit) while nothing about the workflow changes
+- **THEN** the transition SHALL be recorded exactly once and no further event
+  SHALL be recorded until the workflow really changes again
+
+#### Scenario: The same transition observed by another path
+
+- **WHEN** a transition was reported from a `workflow.updated` and the same
+  unchanged projection is then observed by a repository refresh, the
+  reconciliation pass and a listing
+- **THEN** no further event SHALL be recorded for it
+
+#### Scenario: A start reported while the listing is re-entered
+
+- **WHEN** recording a `workflow.started` causes the repository to be listed
+  again before that listing remembered the new workflow id
+- **THEN** exactly one `workflow.started` SHALL be recorded for it
+
+### Requirement: Bounded events per workflow
+
+The server SHALL bound the events it records for one workflow: more than
+`[agents.orchestrator] event_burst_limit` (default 120) of that workflow's
+events inside `[agents.orchestrator] event_burst_window_seconds` (default 10)
+SHALL be dropped, and the window's drop count SHALL be reported once as
+`events.suppressed` with a bounded payload (`count`, `workflowId`, `windowMs`).
+A human-needed event (`review.waiting`, `question.pending`) SHALL never be
+dropped: the developer's own notification is not subject to the limit.
+
+#### Scenario: A storm is rate-limited
+
+- **WHEN** one workflow produces far more events than its budget inside one
+  window
+- **THEN** the events inside the budget SHALL be recorded, the rest SHALL be
+  dropped, and exactly one `events.suppressed` SHALL report how many were
+  dropped in that window
+
+#### Scenario: A waiting review is never dropped
+
+- **WHEN** a workflow's budget for the window is already spent and a review
+  starts waiting or a developer question becomes pending
+- **THEN** that human-needed event SHALL still be recorded
+
 ### Requirement: Bounded, cursor-addressed event log
 
 The server SHALL keep the recorded events in a bounded, in-memory log addressed
@@ -212,6 +268,23 @@ for the first listing of a repository.
 - **WHEN** a drain publishes eight runId-less `workflow.updated` events for one
   repository inside one debounce window
 - **THEN** the server SHALL list that repository once
+
+#### Scenario: A repository re-list never nests
+
+- **WHEN** something asks for a repository listing while a listing of that
+  repository is still running (an event recorded during it, a consumer reading
+  back into the bus)
+- **THEN** the running listing SHALL complete undisturbed and at most one
+  follow-up listing SHALL be coalesced for what asked, so the refresh costs one
+  store read per window rather than a stack of them
+
+#### Scenario: The bus's own queue filling up is not a refresh
+
+- **WHEN** the server has published more events than the broker's per-subscriber
+  replay capacity, so the bus's own subscription queue is full
+- **THEN** a later publish SHALL NOT by itself re-list any repository (the bus
+  consumes the stream live; only a named workflow, a repository-level event or
+  the reconciliation pass reads the store)
 
 #### Scenario: The first listing of a repository is silent
 

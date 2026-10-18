@@ -13,7 +13,7 @@ import { Schema } from "effect";
 import { redactSecrets, type StartedBy } from "./workflow.ts";
 
 /** Bumped whenever an id, a category or a payload shape changes. */
-export const WORKFLOW_EVENT_CATALOG_VERSION = 1;
+export const WORKFLOW_EVENT_CATALOG_VERSION = 2;
 
 /** The category vocabulary, in the order events of one observation are
  * reported, so a note is deterministic. */
@@ -61,6 +61,7 @@ export const WORKFLOW_EVENT_IDS = [
 	"compaction",
 	"gate.decided",
 	"limit.hit",
+	"events.suppressed",
 	"openspec.task-progress",
 ] as const;
 export type WorkflowEventId = (typeof WORKFLOW_EVENT_IDS)[number];
@@ -259,6 +260,13 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		current: Schema.Number,
 		maximum: Schema.Number,
 	}),
+	// The bus's own rate limit tripping. Bounded by construction: a count, the one
+	// workflow it applies to and the window the count belongs to.
+	"events.suppressed": Schema.Struct({
+		count: Schema.Number,
+		workflowId: Schema.String,
+		windowMs: Schema.Number,
+	}),
 	"openspec.task-progress": Schema.Struct({
 		changeId: Schema.String,
 		done: Schema.Number,
@@ -300,6 +308,7 @@ const CATEGORY_OF: Record<WorkflowEventId, WorkflowEventCategory> = {
 	compaction: "compaction",
 	"gate.decided": "gate",
 	"limit.hit": "limit",
+	"events.suppressed": "limit",
 	"openspec.task-progress": "progress",
 };
 
@@ -365,6 +374,14 @@ export const MAX_NOTES_PER_HOUR = 20;
 export const DEFAULT_COALESCE_MS = 10_000;
 export const DEFAULT_MIN_NOTE_INTERVAL_MS = 60_000;
 export const DEFAULT_DIGEST_MINUTES = 5;
+/** The bus's own rate limit: at most `DEFAULT_MAX_EVENTS_PER_WINDOW` of one
+ * workflow's events are recorded inside one window, and the remainder are dropped
+ * with a single `events.suppressed` event reporting how many. Human-needed events
+ * (a waiting review, a pending question) are never dropped. The window is
+ * generous on purpose: one transition legitimately produces a handful of events,
+ * and a storm produces thousands per second. */
+export const DEFAULT_MAX_EVENTS_PER_WINDOW = 120;
+export const DEFAULT_EVENT_WINDOW_MS = 10_000;
 /** The implicit subscription that reproduces today's behaviour. */
 export const DEFAULT_SUBSCRIPTION_ID = "default";
 export const DEFAULT_SUBSCRIPTION_EVENT_IDS = [
@@ -698,6 +715,8 @@ export function describeWorkflowEvent(record: WorkflowEventRecord): string {
 			return `gate ${stringField(payload, "gateId")} ${stringField(payload, "decision")}`;
 		case "limit.hit":
 			return `limit ${stringField(payload, "limit")} reached (${numberField(payload, "current")}/${numberField(payload, "maximum")})`;
+		case "events.suppressed":
+			return `${numberField(payload, "count")} events suppressed (${stringField(payload, "workflowId")}, ${numberField(payload, "windowMs")}ms window)`;
 		case "openspec.task-progress":
 			return `tasks ${numberField(payload, "done")}/${numberField(payload, "total")}`;
 	}
@@ -736,6 +755,7 @@ export function workflowEventSeverity(
 		case "run.aborted":
 		case "run.stalled":
 		case "limit.hit":
+		case "events.suppressed":
 			return "warning";
 		case "effect.failed": {
 			const attempts = payload.attempts;

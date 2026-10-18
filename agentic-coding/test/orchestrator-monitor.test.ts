@@ -13,6 +13,7 @@ import type {
 	WorkflowEventRecord,
 	WorkflowEventSeverity,
 } from "../src/contracts/workflow-events.ts";
+import { MAX_NOTE_LINES } from "../src/contracts/workflow-events.ts";
 import {
 	DELIVERY_TIMINGS,
 	DeliveryPlanner,
@@ -194,6 +195,31 @@ describe("delivery planner", () => {
 		expect(planner.flush(1)).toBeUndefined();
 		expect(planner.nextDueAt(1)).toBe(60 * 60 * 1000);
 		expect(planner.flush(60 * 60 * 1000)).toBeDefined();
+	});
+
+	test("a storm is one note, capped at the line bound with an exact remainder", () => {
+		const planner = new DeliveryPlanner({
+			...DELIVERY_TIMINGS,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		// The shape of the bug this cap defends against: thousands of events for
+		// one workflow inside one window. The note may never grow with them.
+		for (let sequence = 1; sequence <= 1_000; sequence += 1)
+			planner.record(
+				event({ sequence, workflowId: "wf-1" }),
+				[subscription("default")],
+				0,
+			);
+		const note = planner.flush(0);
+		const lines = note?.split("\n") ?? [];
+		expect(lines).toHaveLength(MAX_NOTE_LINES + 2);
+		expect(lines[0]).toBe("[workflow-monitor] subs=default");
+		expect(lines.at(-1)).toBe(`… +${1_000 - MAX_NOTE_LINES} more`);
+		// Everything past the cap was dropped from the note, not left queued to
+		// arrive as a second one.
+		expect(planner.pendingCount).toBe(0);
+		expect(planner.flush(60_000)).toBeUndefined();
 	});
 
 	test("formatNote names no label when nothing matched", () => {
@@ -480,6 +506,42 @@ describe("monitor delivery", () => {
 		expect(notes).toEqual([]);
 		await waitUntil(() => notes.length === 1);
 		expect(notes).toHaveLength(1);
+		monitor.stop();
+	});
+
+	test("a storm is one note, and the next note waits for the minimum interval", async () => {
+		const { gateway, notes, monitor } = harness({
+			timings: { coalesceMs: 5, minNoteIntervalMs: 100 },
+		});
+		const storm = (from: number): void => {
+			for (let sequence = from; sequence < from + 200; sequence += 1)
+				gateway.frame({
+					event: event({
+						sequence,
+						id: "attention.raised",
+						humanNeeded: false,
+						payload: { reasons: ["boom"] },
+					}),
+					subscriptions: [subscription("default")],
+				});
+		};
+		// 200 events for one workflow inside one coalescing window: one note, and
+		// never more than the line bound in it.
+		storm(1);
+		await waitUntil(() => notes.length === 1);
+		expect(notes[0]?.split("\n")).toHaveLength(MAX_NOTE_LINES + 2);
+		// 400 more inside the minimum interval: the session is not woken again.
+		storm(201);
+		storm(401);
+		await sleep(40);
+		expect(notes).toHaveLength(1);
+		// Past the interval they merge forward into exactly one more capped note.
+		await waitUntil(() => notes.length === 2);
+		await sleep(40);
+		expect(notes).toHaveLength(2);
+		expect(notes[1]?.split("\n").length).toBeLessThanOrEqual(
+			MAX_NOTE_LINES + 2,
+		);
 		monitor.stop();
 	});
 

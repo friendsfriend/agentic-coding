@@ -10,15 +10,24 @@
 // Nothing here is a second source of truth: the workflow view of the one
 // workflow an event names (or the listing of the one repository it names) is
 // the only input, and an unreadable view keeps its previous projection instead
-// of inventing an event.
+// of inventing an event. One observation is also idempotent: the projection a
+// derivation came from is stored before anything it publishes can be observed,
+// and a nested observation of the same workflow is skipped, so a listener that
+// reads back into the bus cannot replay a transition it already received. The
+// repository-level refresh is bounded the same way: debounced per repository,
+// never nested, and never triggered by this bus's own subscription queue filling
+// up (it reads the stream live, so that queue says nothing about missed events).
 import fs from "node:fs";
 import path from "node:path";
 import type { EventEnvelope } from "../contracts/environment.ts";
 import type { WorkflowView } from "../contracts/workflow.ts";
 import {
 	boundedSummary,
+	DEFAULT_EVENT_WINDOW_MS,
+	DEFAULT_MAX_EVENTS_PER_WINDOW,
 	DEFAULT_SUBSCRIPTION_TTL_MS,
 	EVENT_LOG_CAPACITY,
+	isHumanNeededEvent,
 	isWorkflowEventId,
 	MAX_EVENT_PAGE,
 	MAX_EVENT_SUBSCRIPTIONS,
@@ -81,6 +90,10 @@ const CHARGE_FLUSH_MS = 5_000;
 /** How often the bus reconciles when no configuration names an interval
  * (`[agents.orchestrator] reconcile_seconds`, default 30). */
 const DEFAULT_RECONCILE_MS = 30_000;
+/** How many recorded-event signatures one workflow's de-duplication memory
+ * keeps: it only has to cover the events of one projection state, and a storm
+ * must not be able to grow it. */
+const MAX_RECORDED_SIGNATURES = 64;
 
 export class MonitorOffError extends Error {
 	constructor() {
@@ -179,6 +192,12 @@ export interface WorkflowEventBusOptions {
 	readonly logCapacity?: number;
 	/** How often buffered delivery charges reach the store; tests shorten it. */
 	readonly chargeFlushMs?: number;
+	/** The per-workflow rate limit the derivation is bounded by: at most this many
+	 * of one workflow's events are recorded per window, and the remainder are
+	 * dropped with one `events.suppressed` event. Defaults to the contract's
+	 * bounds (`DEFAULT_MAX_EVENTS_PER_WINDOW`, `DEFAULT_EVENT_WINDOW_MS`). */
+	readonly maxEventsPerWindow?: number;
+	readonly eventWindowMs?: number;
 	/** How many artifact reads the source caches keep (telemetry/tasks.md), so a
 	 * host that observes more workflows than this can raise it. */
 	readonly sourceCacheEntries?: number;
@@ -227,6 +246,9 @@ export function createWorkflowEventBus(
 	const debounceMs = options.debounceMs ?? 250;
 	const reconcileMsOf = () => options.reconcileMs?.() ?? DEFAULT_RECONCILE_MS;
 	const logCapacity = options.logCapacity ?? EVENT_LOG_CAPACITY;
+	const maxEventsPerWindow =
+		options.maxEventsPerWindow ?? DEFAULT_MAX_EVENTS_PER_WINDOW;
+	const eventWindowMs = options.eventWindowMs ?? DEFAULT_EVENT_WINDOW_MS;
 	const report = options.onError ?? (() => {});
 	const modeOf = () => options.monitorMode();
 	if (options.sourceCacheEntries !== undefined)
@@ -253,8 +275,21 @@ export function createWorkflowEventBus(
 	const worktreesByRepo = new Map<string, Set<string>>();
 	const trackedRepos = new Set<string>();
 	const readTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Workflow keys whose observation is still on the stack. Recording an event
+	 * delivers it, and delivering runs consumers inside that call stack; a nested
+	 * observation of the same workflow is skipped by this set (see `observeView`). */
+	const observing = new Set<string>();
+	/** What each workflow has already recorded under its current projection
+	 * generation (see `guardFor`), and the rate-limit window its events are
+	 * counted in. Both are per workflow and both are released with it. */
+	const recordedMemory = new Map<string, RecordedMemory>();
+	const suppressionWindows = new Map<string, SuppressionWindow>();
 	/** One pending coalesced repository refresh per repository named by a
 	 * runId-less `workflow.updated` (the hub's progress listener). */
+	/** The repositories whose re-list is on the stack right now, and the ones that
+	 * asked for one while it ran (one entry each, never a queue). */
+	const refreshingRepos = new Set<string>();
+	const pendingRepoRefresh = new Set<string>();
 	const repoTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Workflow ids observed as `closed` or `completed`, so an until-condition is
 	 * pruned without a store read. Seeded from the durable store and persisted. */
@@ -269,6 +304,11 @@ export function createWorkflowEventBus(
 		const prefix = `${repository}\u0000`;
 		for (const key of [...projections.keys()])
 			if (key.startsWith(prefix)) projections.delete(key);
+		for (const key of [...recordedMemory.keys()])
+			if (key.startsWith(prefix)) {
+				recordedMemory.delete(key);
+				suppressionWindows.delete(key);
+			}
 		for (const key of [...lastChangedAt.keys()])
 			if (key.startsWith(prefix)) lastChangedAt.delete(key);
 		for (const key of [...stalledAt.keys()])
@@ -673,7 +713,15 @@ export function createWorkflowEventBus(
 
 	/** Record drafts one by one, isolating each: neither a failed append nor a
 	 * failed delivery may swallow the rest of the observation (the caller only
-	 * advances its projection after this returns). */
+	 * advances its projection after this returns).
+	 *
+	 * Two guards stand between a draft and the log, both defence in depth for the
+	 * storm this bus already survived once (see the module header): an identical
+	 * event derived again from the projection it was already derived from is a
+	 * replay, not news, and a workflow that exceeds its event budget in a window
+	 * is rate-limited instead of allowed to run the process hot. A human-needed
+	 * event (a waiting review, a pending question) is subject to neither: the
+	 * developer's own notification must always get through. */
 	function recordDrafts(
 		drafts: readonly WorkflowEventDraft[],
 		input: {
@@ -683,18 +731,141 @@ export function createWorkflowEventBus(
 			stepId: string;
 			stepLabel: string;
 		},
+		options: { readonly bypassGuards?: boolean } = {},
 	): number {
 		let recorded = 0;
 		for (const draft of orderDrafts(drafts)) {
+			const guard = options.bypassGuards
+				? { record: true, charge: () => {} }
+				: guardFor(draft, input);
+			if (!guard.record) continue;
 			try {
 				const record = appendRecord(draft, input);
 				recorded += 1;
+				// Charged only after the append: a failed record spends nothing.
+				guard.charge();
 				deliver(record);
 			} catch (error) {
 				report(error);
 			}
 		}
 		return recorded;
+	}
+
+	/** The per-workflow memory that decides whether one draft is recorded: the
+	 * projection generation the drafts derive from, and the signatures already
+	 * recorded under it. */
+	interface RecordedMemory {
+		generation: number;
+		readonly signatures: Map<string, number>;
+	}
+
+	/** A rate-limit window for one workflow: how many of its events were recorded
+	 * inside it and how many were dropped. */
+	interface SuppressionWindow {
+		readonly repository: string;
+		readonly workflowId: string;
+		startedAt: number;
+		count: number;
+		dropped: number;
+	}
+
+	function memoryFor(key: string): RecordedMemory {
+		let memory = recordedMemory.get(key);
+		if (!memory) {
+			memory = { generation: 0, signatures: new Map() };
+			recordedMemory.set(key, memory);
+		}
+		return memory;
+	}
+
+	/** The window a workflow's events are counted in, opened (and the previous
+	 * window reported) when it has elapsed. */
+	function windowFor(
+		key: string,
+		repository: string,
+		workflowId: string,
+	): SuppressionWindow {
+		const at = now();
+		const current = suppressionWindows.get(key);
+		if (current && at - current.startedAt < eventWindowMs) return current;
+		if (current) reportSuppression(key, current);
+		const opened: SuppressionWindow = {
+			repository,
+			workflowId,
+			startedAt: at,
+			count: 0,
+			dropped: 0,
+		};
+		suppressionWindows.set(key, opened);
+		return opened;
+	}
+
+	/** Record the one warning a rate-limited window owes, with the exact number of
+	 * events it dropped. It is recorded outside both guards: the event that
+	 * reports suppression may never itself be suppressed. */
+	function reportSuppression(key: string, window: SuppressionWindow): void {
+		suppressionWindows.delete(key);
+		if (window.dropped === 0) return;
+		recordDrafts(
+			[
+				{
+					id: "events.suppressed",
+					payload: {
+						count: window.dropped,
+						workflowId: window.workflowId,
+						windowMs: eventWindowMs,
+					},
+				},
+			],
+			{
+				repository: window.repository,
+				workflowId: window.workflowId,
+				startedBy: "orchestrator",
+				stepId: "",
+				stepLabel: "",
+			},
+			{ bypassGuards: true },
+		);
+	}
+
+	/** What one draft needs before it is recorded: whether it may be, and what to
+	 * charge once it is. A draft that is a replay of the projection state it was
+	 * already derived from, or that exceeds the workflow's window budget, is not
+	 * recorded and is counted instead. */
+	function guardFor(
+		draft: WorkflowEventDraft,
+		input: { repository: string; workflowId: string },
+	): { record: boolean; charge: () => void } {
+		const open = { record: true, charge: () => {} };
+		// `limit.hit` names no workflow: the launch ceiling belongs to the machine.
+		if (input.workflowId === "" || isHumanNeededEvent(draft.id)) return open;
+		const key = keyOf(input.repository, input.workflowId);
+		const memory = memoryFor(key);
+		const signature = draftSignature(draft);
+		// The same event under the same projection state: the transition it reports
+		// was already recorded, so this is a replayed derivation, not news.
+		if (memory.signatures.get(signature) === memory.generation)
+			return { ...open, record: false };
+		const window = windowFor(key, input.repository, input.workflowId);
+		if (window.count >= maxEventsPerWindow) {
+			window.dropped += 1;
+			return { ...open, record: false };
+		}
+		return {
+			record: true,
+			charge: () => {
+				window.count += 1;
+				memory.signatures.set(signature, memory.generation);
+				// Bounded, oldest first: one workflow's memory for a whole history would
+				// otherwise grow with every transition it ever reported.
+				while (memory.signatures.size > MAX_RECORDED_SIGNATURES) {
+					const oldest = memory.signatures.keys().next().value;
+					if (oldest === undefined) break;
+					memory.signatures.delete(oldest);
+				}
+			},
+		};
 	}
 
 	/** Charge every matched subscription the event was recorded for. A *record*
@@ -793,6 +964,27 @@ export function createWorkflowEventBus(
 	function observeView(repository: string, view: WorkflowView): void {
 		if (!view?.workflowId) return;
 		const key = keyOf(repository, view.workflowId);
+		// Recording an event delivers it, and a delivery runs a consumer inside
+		// this call stack (the bus's own stream listener re-listing a repository, a
+		// shell listener reading the fresh state). A nested observation of this
+		// workflow would diff the projection this one is about to replace - the
+		// same transition, again and again. It is exactly the state this reads, so
+		// it is skipped rather than queued: the next scheduled observation sees
+		// whatever the store says then.
+		if (observing.has(key)) return;
+		observing.add(key);
+		try {
+			observeLocked(repository, view, key);
+		} finally {
+			observing.delete(key);
+		}
+	}
+
+	function observeLocked(
+		repository: string,
+		view: WorkflowView,
+		key: string,
+	): void {
 		const previous = projections.get(key);
 		const projected = projectWorkflowEvents(view);
 		let enrichment: WorkflowEventEnrichment | undefined;
@@ -825,6 +1017,16 @@ export function createWorkflowEventBus(
 				report(error);
 			}
 		}
+		// The projection advances before anything observable happens, so every path
+		// that reads it afterwards (a nested observation, the stall tick, another
+		// workflow's delivery) reads the state this derivation came from. Recording
+		// first was the storm: a delivery re-entered the bus while the projection
+		// still held the *previous* state, so the same transition was derived again
+		// - for as long as the store kept answering the same way.
+		projections.set(key, next);
+		workflowIndex.set(view.workflowId, repository);
+		rememberWorktree(repository, view.worktree);
+		trackRepo(repository);
 		const recorded = recordDrafts(drafts, {
 			repository,
 			workflowId: view.workflowId,
@@ -832,19 +1034,19 @@ export function createWorkflowEventBus(
 			stepId: next.stepId,
 			stepLabel: next.stepLabel,
 		});
-		// The projection advances only after its drafts are drained. "Changed" is
-		// the diff's own answer (a draft was produced), so no fingerprint of the
-		// whole projection is needed.
-		projections.set(key, next);
-		workflowIndex.set(view.workflowId, repository);
-		rememberWorktree(repository, view.worktree);
-		trackRepo(repository);
+		// "Changed" is the diff's own answer (a draft was produced), so no
+		// fingerprint of the whole projection is needed. The generation it defines
+		// is what de-duplication compares: a workflow that reported something moves
+		// on, so the same payload derived later (a genuine loop back into the same
+		// step) is news again, while a replay inside one observation still records
+		// under the generation the projection already had.
 		if (!previous || recorded > 0 || enrichmentChanged(previous, enrichment)) {
 			lastChangedAt.set(key, now());
 			stalledAt.delete(key);
 		} else if (!lastChangedAt.has(key)) {
 			lastChangedAt.set(key, now());
 		}
+		if (drafts.length > 0) memoryFor(key).generation += 1;
 	}
 
 	/** Read one workflow and fold it into its projection. `false` means nothing
@@ -921,6 +1123,8 @@ export function createWorkflowEventBus(
 			projections.delete(key);
 			lastChangedAt.delete(key);
 			stalledAt.delete(key);
+			recordedMemory.delete(key);
+			suppressionWindows.delete(key);
 			workflowIndex.delete(workflowId);
 		}
 		knownWorkflows.set(repository, seen);
@@ -968,7 +1172,7 @@ export function createWorkflowEventBus(
 			repository,
 			setTimeout(() => {
 				repoTimers.delete(repository);
-				noteListing(repository);
+				refreshRepo(repository);
 			}, debounceMs),
 		);
 		// The oldest pending refresh is dropped rather than letting one stream grow
@@ -981,6 +1185,31 @@ export function createWorkflowEventBus(
 			if (timer !== undefined) clearTimeout(timer);
 			repoTimers.delete(oldest);
 		}
+	}
+
+	/** Run one repository's re-list, never nested: a re-list that is still on the
+	 * stack re-enters the bus when it records an event (a delivery runs its
+	 * consumers inline), and the nested pass would read the same store again while
+	 * the outer one is half done. What asks while a pass runs is remembered as one
+	 * follow-up pass, so a burst costs one re-list per debounce window rather than
+	 * a stack of them. */
+	function refreshRepo(repository: string): void {
+		if (modeOf() === "off") return;
+		if (refreshingRepos.has(repository)) {
+			pendingRepoRefresh.add(repository);
+			return;
+		}
+		refreshingRepos.add(repository);
+		try {
+			noteListing(repository);
+		} catch (error) {
+			// A background refresh must never throw into the publisher that asked for
+			// it (a delivery, the broker's own subscriber loop).
+			report(error);
+		} finally {
+			refreshingRepos.delete(repository);
+		}
+		if (pendingRepoRefresh.delete(repository)) scheduleRepoRefresh(repository);
 	}
 
 	// -----------------------------------------------------------------------
@@ -1004,11 +1233,15 @@ export function createWorkflowEventBus(
 			}
 			schedule(event.resource, event.runId);
 		},
-		() => {
-			// A gap means events were missed: re-list every repository the bus has
-			// seen so the baseline is authoritative again.
-			for (const repository of trackedRepos) noteListing(repository);
-		},
+		// No overflow handler on purpose. This subscription consumes the stream
+		// live, so its bounded queue is a replay buffer nothing here drains: once the
+		// server has published `EVENT_REPLAY_CAPACITY` events the queue is full for
+		// the rest of the process' life, and a handler that answered an overflow
+		// would re-list every tracked repository on *every* publish - the CPU cost a
+		// busy server cannot pay, and the amplifier that turned one replayed
+		// transition into a storm. A change this stream genuinely misses is picked up
+		// by the reconciliation pass, which re-lists a repository that still holds a
+		// live workflow (`reconcile_seconds`, default 30s).
 	);
 
 	const stallTimer = setInterval(() => {
@@ -1071,7 +1304,7 @@ export function createWorkflowEventBus(
 		if (modeOf() === "off") return;
 		for (const repository of [...trackedRepos]) {
 			if (!hasLiveWorkflow(repository)) continue;
-			noteListing(repository);
+			refreshRepo(repository);
 		}
 	}
 
@@ -1369,7 +1602,7 @@ export function createWorkflowEventBus(
 		},
 
 		noteRepositoryListed(repository: string): void {
-			noteListing(repository);
+			refreshRepo(repository);
 		},
 
 		stop(): void {
@@ -1382,10 +1615,32 @@ export function createWorkflowEventBus(
 			readTimers.clear();
 			for (const timer of repoTimers.values()) clearTimeout(timer);
 			repoTimers.clear();
+			// A window that was still open when the bus stops still owes its one
+			// warning: the suppression outlives the storm that caused it.
+			for (const [key, window] of [...suppressionWindows])
+				reportSuppression(key, window);
 			flushCharges();
 			clearWorkflowEventSources();
 		},
 	};
+}
+
+/** One draft's identity: its id and every value of its payload in a stable
+ * order, so the same event derived twice is recognizable however the payload
+ * was built. */
+function draftSignature(draft: WorkflowEventDraft): string {
+	return `${draft.id}\u0000${stableJson(draft.payload)}`;
+}
+
+function stableJson(value: unknown): string {
+	if (value === null || typeof value !== "object")
+		return JSON.stringify(value) ?? "null";
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+	const record = value as Record<string, unknown>;
+	return `{${Object.keys(record)
+		.sort()
+		.map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+		.join(",")}}`;
 }
 
 /** Whether an enrichment learned something the previous projection did not

@@ -203,9 +203,10 @@ export function applyAgentsMutation(
 				}
 				case "set-orchestrator": {
 					// The file-only bounds (`limits`, `stall_minutes`,
-					// `reconcile_seconds`) have no editor here, so a session edit preserves
-					// whatever the developer wrote instead of dropping it with the rest of
-					// the table.
+					// `reconcile_seconds`, `event_burst_limit`,
+					// `event_burst_window_seconds`) have no editor here, so a session edit
+					// preserves whatever the developer wrote instead of dropping it with
+					// the rest of the table.
 					const existing = section.orchestrator;
 					const next: Record<string, unknown> = {};
 					if (
@@ -217,6 +218,8 @@ export function applyAgentsMutation(
 							"limits",
 							"stall_minutes",
 							"reconcile_seconds",
+							"event_burst_limit",
+							"event_burst_window_seconds",
 						] as const)
 							if (Object.hasOwn(existing, key))
 								next[key] = (existing as Record<string, unknown>)[key];

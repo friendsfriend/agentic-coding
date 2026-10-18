@@ -88,7 +88,9 @@ accumulate events and deliver at most once per `digestMinutes` (default 5);
 `silent` mode SHALL record the matched events and deliver no note. The system
 SHALL bound a note to 20 event lines, bound the pending backlog to 200 events
 (dropping and counting the oldest), and refuse to exceed 20 notes per trailing
-hour per session, keeping the rest queued.
+hour per session, keeping the rest queued. A note SHALL therefore stay bounded
+however many events one workflow produces, and no number of events SHALL wake a
+session more often than its minimum interval.
 
 #### Scenario: Burst of transitions
 
@@ -111,6 +113,21 @@ hour per session, keeping the rest queued.
 
 - **WHEN** one note would list more events than the line bound
 - **THEN** the note SHALL elide the rest with a count
+
+#### Scenario: A storm cannot flood the session
+
+- **WHEN** one workflow produces a thousand events inside one coalescing window
+  and the session may not be woken again yet
+- **THEN** the note SHALL list at most the line bound of them with one exact
+  remainder line, the events SHALL NOT arrive as a burst of notes, and the
+  events past the interval SHALL merge forward into one further bounded note
+
+#### Scenario: A waiting review outranks the event budget
+
+- **WHEN** the server has already spent a workflow's event budget for the window
+  and the workflow enters developer review
+- ****THEN** the `review.waiting` event SHALL still be recorded and delivered; the
+  budget applies to non-human-needed events only
 
 ### Requirement: De-duplicated, labelled notes
 

@@ -2,6 +2,7 @@
 // (add-orchestrator-event-subscriptions, tasks 1.1-1.5). Pure: synthetic
 // projections in, catalog drafts out.
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	DEFAULT_SUBSCRIPTION_EVENT_IDS,
@@ -102,7 +103,7 @@ function payload(
 
 describe("workflow event catalog", () => {
 	test("every id declares a category, a human-needed flag and a payload schema", () => {
-		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(1);
+		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(2);
 		expect(WORKFLOW_EVENT_CATALOG).toHaveLength(WORKFLOW_EVENT_IDS.length);
 		for (const id of WORKFLOW_EVENT_IDS) {
 			const entry = workflowEventCatalogEntry(id);
@@ -111,6 +112,15 @@ describe("workflow event catalog", () => {
 			expect(typeof entry.humanNeeded).toBe("boolean");
 			expect(entry.payload).toBeDefined();
 		}
+	});
+
+	test("the bus's own suppression warning is a bounded, non-human limit event", () => {
+		const entry = workflowEventCatalogEntry("events.suppressed");
+		expect(entry.category).toBe("limit");
+		expect(entry.humanNeeded).toBe(false);
+		const payload = { count: 1234, workflowId: "wf-1", windowMs: 10_000 };
+		expect(Schema.decodeUnknownSync(entry.payload)(payload)).toEqual(payload);
+		expect(workflowEventSeverity("events.suppressed", payload)).toBe("warning");
 	});
 
 	test("the human-needed set is exactly review.waiting and question.pending", () => {

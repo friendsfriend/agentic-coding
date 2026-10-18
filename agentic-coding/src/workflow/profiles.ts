@@ -8,6 +8,10 @@ import type {
 	RuntimeId,
 	WorkflowRouting,
 } from "../contracts/workflow.ts";
+import {
+	DEFAULT_EVENT_WINDOW_MS,
+	DEFAULT_MAX_EVENTS_PER_WINDOW,
+} from "../contracts/workflow-events.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
@@ -130,6 +134,12 @@ export interface OrchestratorConfig {
 	 * event bus, which re-lists the repositories it tracks while they still hold
 	 * an active workflow. File-only, like `limits`. */
 	reconcile_seconds?: number;
+	/** At most this many of one workflow's events are recorded per
+	 * `event_burst_window_seconds`, and one `events.suppressed` event reports how
+	 * many were dropped. File-only, like `limits`. */
+	event_burst_limit?: number;
+	/** The window `event_burst_limit` counts in, in seconds. File-only. */
+	event_burst_window_seconds?: number;
 }
 
 /** The stall threshold an absent `stall_minutes` key means. */
@@ -144,6 +154,19 @@ export const MAX_ORCHESTRATOR_STALL_MINUTES = 24 * 60;
 export const DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS = 30;
 /** The upper bound a configured interval must stay inside. */
 export const MAX_ORCHESTRATOR_RECONCILE_SECONDS = 60 * 60;
+
+/** The per-workflow event budget an absent `event_burst_limit` means, and the
+ * window it counts in. Both are the bus's own contract bounds, so the
+ * configuration and the bus can never disagree about what "too many events"
+ * means. */
+export const DEFAULT_ORCHESTRATOR_EVENT_BURST_LIMIT =
+	DEFAULT_MAX_EVENTS_PER_WINDOW;
+export const DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS =
+	DEFAULT_EVENT_WINDOW_MS / 1000;
+/** The upper bounds a configured budget must stay inside: a window longer than
+ * an hour or a budget above ten thousand events is not a bound any more. */
+export const MAX_ORCHESTRATOR_EVENT_BURST_LIMIT = 10_000;
+export const MAX_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS = 60 * 60;
 
 /** The `[agents.orchestrator] limits` table as it is written: both keys are
  * optional, so an unset key resolves to its default at read time. */
@@ -207,6 +230,27 @@ export function orchestratorReconcileSeconds(
 	return (
 		agents?.orchestrator?.reconcile_seconds ??
 		DEFAULT_ORCHESTRATOR_RECONCILE_SECONDS
+	);
+}
+
+/** The effective per-workflow event budget, defaulting to the bus's own bound so
+ * a configuration that says nothing still suppresses a storm. */
+export function orchestratorEventBurstLimit(
+	agents: AgentsConfig | undefined,
+): number {
+	return (
+		agents?.orchestrator?.event_burst_limit ??
+		DEFAULT_ORCHESTRATOR_EVENT_BURST_LIMIT
+	);
+}
+
+/** The effective event-budget window in seconds. */
+export function orchestratorEventBurstWindowSeconds(
+	agents: AgentsConfig | undefined,
+): number {
+	return (
+		agents?.orchestrator?.event_burst_window_seconds ??
+		DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS
 	);
 }
 
@@ -445,7 +489,9 @@ function validateOrchestrator(
 			key !== "monitor" &&
 			key !== "limits" &&
 			key !== "stall_minutes" &&
-			key !== "reconcile_seconds"
+			key !== "reconcile_seconds" &&
+			key !== "event_burst_limit" &&
+			key !== "event_burst_window_seconds"
 		)
 			throw new Error(`${location}: unsupported key ${key}`);
 	for (const key of ["model", "thinking"] as const)
@@ -482,6 +528,22 @@ function validateOrchestrator(
 				`${location}.reconcile_seconds must be a positive integer at most ${MAX_ORCHESTRATOR_RECONCILE_SECONDS}`,
 			);
 	}
+	for (const [key, maximum] of [
+		["event_burst_limit", MAX_ORCHESTRATOR_EVENT_BURST_LIMIT],
+		["event_burst_window_seconds", MAX_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS],
+	] as const) {
+		const raw = table[key];
+		if (raw === undefined) continue;
+		if (
+			typeof raw !== "number" ||
+			!Number.isInteger(raw) ||
+			raw <= 0 ||
+			raw > maximum
+		)
+			throw new Error(
+				`${location}.${key} must be a positive integer at most ${maximum}`,
+			);
+	}
 	return {
 		...(table.model !== undefined ? { model: table.model as string } : {}),
 		...(table.thinking !== undefined
@@ -495,6 +557,15 @@ function validateOrchestrator(
 			: {}),
 		...(table.reconcile_seconds !== undefined
 			? { reconcile_seconds: table.reconcile_seconds as number }
+			: {}),
+		...(table.event_burst_limit !== undefined
+			? { event_burst_limit: table.event_burst_limit as number }
+			: {}),
+		...(table.event_burst_window_seconds !== undefined
+			? {
+					event_burst_window_seconds:
+						table.event_burst_window_seconds as number,
+				}
 			: {}),
 		...(table.limits !== undefined
 			? {

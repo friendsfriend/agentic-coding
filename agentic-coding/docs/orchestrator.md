@@ -120,10 +120,20 @@ turns its existing `workflow.*` stream into catalog events: it re-reads only the
 workflow an event names (debounced per workflow, 250 ms, so a streaming run is
 one read per window), diffs a small projection (`src/server/workflow-events.ts`)
 and records the result in a bounded, cursor-addressed log (500 events, one
-monotonic sequence). A `resync` gap re-lists every repository it has seen
-instead of trusting what it holds. The whole pipeline is idle when `monitor` is
-`off`, and an unreadable workflow keeps its previous projection: an event is
-never invented from a miss.
+monotonic sequence). The derivation is idempotent, in the shape a real
+env-setup run proved it had to be: the projection a derivation came from is
+stored *before* anything it publishes can be observed, and a nested observation
+of the same workflow is skipped. Without that, recording one transition
+published a frame, the consumer of that frame read back into the bus while the
+projection still held the previous state, and the same transition was derived
+and delivered again — `step.completed`/`run.completed` in a loop at one pair per
+few milliseconds, ~100% CPU, until the step changed. A replayed event is now
+dropped outright, and one workflow's events are bounded
+(`[agents.orchestrator] event_burst_limit`, default 120, per
+`event_burst_window_seconds`, default 10) with the dropped count reported once as
+`events.suppressed`; a human-needed event is never dropped. The whole pipeline is
+idle when `monitor` is `off`, and an unreadable workflow keeps its previous
+projection: an event is never invented from a miss.
 
 An event that names **only a repository** (the refresh hub's progress listener
 carries no workflow id — one per committed effect of a drain) coalesces into one
@@ -135,14 +145,21 @@ writer this process never hears from at all (a handoff committed by another
 process, the CLI, a second TUI): every `[agents.orchestrator]
 reconcile_seconds` (default 30, file-only) the bus re-lists the repositories it
 tracks that still hold an `active` or `attention-required` workflow, and costs
-no store read for a repository whose work is done or when `monitor` is `off`.
+no store read for a repository whose work is done or when `monitor` is `off`. A
+listing is debounced per repository and never nests: a request that arrives while
+one is running becomes one follow-up pass, not a second read. The bus's own
+subscription queue filling up is deliberately *not* a refresh trigger — it
+consumes the stream live, so that queue is a replay buffer nothing drains, and
+treating its overflow as a gap re-listed every tracked repository on every later
+publish.
 
-The catalog lives in `src/contracts/workflow-events.ts` (version 1, stable ids)
+The catalog lives in `src/contracts/workflow-events.ts` (version 2, stable ids)
 and covers the workflow lifecycle (`workflow.started`/`completed`/`closed`/
 `failed`), steps, the four developer reviews (`review.waiting`/`resolved`),
 developer questions (`question.pending`/`routed`/`answered`), attention,
 effects, delivery, runs, verification findings, compaction, gate decisions, the
-orchestrator launch ceiling (`limit.hit`) and OpenSpec task progress. Only
+orchestrator launch ceiling (`limit.hit`), the bus's own rate limit
+(`events.suppressed`) and OpenSpec task progress. Only
 `review.waiting` and `question.pending` are **human-needed**: they raise the
 shell notification. Every payload is a bounded, secret-free summary — no
 credential, no raw transcript, no task text beyond a bounded summary.
