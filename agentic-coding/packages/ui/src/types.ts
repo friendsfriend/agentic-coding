@@ -278,6 +278,12 @@ export interface ActionTarget {
 	sourcePath: string;
 	requires?: DependencyRef[];
 	kubernetes?: KubernetesTargetMetadata;
+	/** The authoritative default of this action, as the server resolved it
+	 * (`fix-default-target-after-promotion`): shown in the picker so the choice
+	 * is visible even when the developer has to make it. */
+	default?: boolean;
+	defaultTargetId?: string;
+	defaultReason?: string;
 }
 
 export interface ActionTargetsResponse {

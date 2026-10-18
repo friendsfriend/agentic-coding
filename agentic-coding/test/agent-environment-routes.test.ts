@@ -235,25 +235,30 @@ describe("the agent environment routes are owner-scoped", () => {
 			heldByYou: false,
 		});
 		// Each target carries the deterministic default marking
-		// (`staged-env-setup-config-root`): the `default` profile's own target per
-		// action, so the choice is visible instead of silently picked.
+		// (`fix-default-target-after-promotion`): the `default` profile's own
+		// target per action, with the reason it was chosen, so the choice is
+		// visible instead of silently picked.
 		expect(apps[0]?.targets).toEqual([
 			{
 				id: "app/shop/action/run/docker/default",
 				action: "run",
 				runtime: "docker",
 				label: "Docker",
+				profile: "",
 				available: true,
 				default: true,
+				defaultReason: "the only default-profile run candidate (docker)",
 			},
 			{
 				id: "app/shop/action/build/shell/default",
 				action: "build",
 				runtime: "shell",
 				label: "Shell",
+				profile: "",
 				available: false,
 				reason: "no Dockerfile",
 				default: true,
+				defaultReason: "the only default-profile build candidate (shell)",
 			},
 		]);
 	});

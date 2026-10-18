@@ -1203,6 +1203,69 @@ test("a promoted definition that differs from the reviewed one is rebuilt and re
 	}
 });
 
+test("a live default that is not the one the gate validated fails the smoke check", async () => {
+	// The promoted configuration resolves a *different* default build than the one
+	// the gate validated (the motivating defect: the live Dockerfile beside the
+	// promoted shell target). The smoke check must fail with the drift named — the
+	// developer gets the rollback offer — instead of starting and reporting a
+	// target nobody validated.
+	const { configDir, repoRoot } = fixture();
+	const { engine, draftsDir } = environment({ configDir, repoRoot });
+	const clientModule = await import("../src/server/client.ts");
+	const configured = clientModule.configureBackendClient({
+		baseUrl: "http://127.0.0.1:9",
+		token: "test-token",
+		ownerId: "test",
+	});
+	const originalAcquire = configured.acquireSlots.bind(configured);
+	const started: unknown[] = [];
+	configured.acquireSlots = (async (request: unknown) => {
+		started.push(request);
+		return { outcome: "already-running" };
+	}) as typeof configured.acquireSlots;
+	try {
+		await withConfigRoot(configDir, async () => {
+			await runHandler(
+				engine,
+				repoRoot,
+				"environment.setup-stage",
+				subject(configDir, repoRoot, draftsDir),
+			);
+			const smoke = await runHandler<{
+				ok?: boolean;
+				started?: string;
+				build?: string;
+				detail?: string;
+				defaultDrift?: Array<{
+					action?: string;
+					validated?: string;
+					live?: string;
+				}>;
+			}>(engine, repoRoot, "environment.setup-smoke", {
+				...subject(configDir, repoRoot, draftsDir),
+				// The gate validated a build target the fixture's live configuration
+				// does not have (its only definition is the compose run target).
+				defaults: { build: "app/shop/build/shell" },
+			});
+			expect(smoke.ok).toBe(false);
+			expect(smoke.started).toBe("failed");
+			expect(smoke.build).toContain("not attempted");
+			expect(smoke.detail).toContain(
+				"does not resolve the defaults the gate validated",
+			);
+			expect(smoke.defaultDrift?.[0]?.action).toBe("build");
+			expect(smoke.defaultDrift?.[0]?.validated).toBe("app/shop/build/shell");
+			// Nothing was started: an unvalidated live target is never run, and the
+			// staged state stays so the rollback can put it back.
+			expect(started).toEqual([]);
+			expect(fs.existsSync(path.join(draftsDir, "root"))).toBe(true);
+		});
+	} finally {
+		configured.acquireSlots = originalAcquire;
+		clientModule.clearBackendClient();
+	}
+});
+
 test("a smoke check whose live start never comes up fails and keeps the staged state", async () => {
 	const { configDir, repoRoot } = fixture();
 	const { engine, draftsDir } = environment({ configDir, repoRoot });

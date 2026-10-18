@@ -9,6 +9,7 @@ import type {
 import type { AppStore } from "../stores/app-store.ts";
 import type { UiStore } from "../stores/ui-store.ts";
 import { agentSlotRefusal } from "./app-slot.ts";
+import { selectActionTarget } from "./target-choice.ts";
 
 export function operationProgressLabel(
 	action: AppAction | "start" | "stop" | "restart",
@@ -116,14 +117,28 @@ export function createDockerActions(
 						(definition) =>
 							definition.type === "run" && definition.availability.available,
 					);
-					const selected = definitions.find(
-						(definition) =>
-							definition.id === targetId ||
-							definition.id.endsWith(`/${profile || "default"}`),
-					);
+					// An explicitly named target or profile wins; otherwise the server's
+					// authoritative marking decides (a declaration in
+					// `apps/defaults/<app>.json` first, then the platform's runtime
+					// preference), so a promotion cannot leave the UI starting a run
+					// target the gate never validated (`fix-default-target-after-promotion`).
+					const choice = selectActionTarget(definitions, "run");
+					const selected =
+						definitions.find(
+							(definition) =>
+								definition.id === targetId ||
+								definition.id.endsWith(`/${profile || "default"}`),
+						) ?? (targetId || profile ? undefined : choice.target);
 					if (selected) {
 						appStore.pushModal("actions");
 						await client.startActionRun(selected.id);
+					} else if (choice.ambiguous) {
+						showError(
+							"Choose the default run target",
+							`${app.displayName} offers several run targets: ${choice.ambiguous
+								.map((definition) => definition.id)
+								.join(", ")}.\n\n${choice.reason ?? ""}`,
+						);
 					} else if (definitions.length === 1) {
 						appStore.pushModal("actions");
 						await client.startActionRun(definitions[0].id);
@@ -358,6 +373,16 @@ export function createDockerActions(
 				? definition.root.configuration.profile
 				: undefined,
 		sourcePath: "",
+		// The server's authoritative marking travels with the target, so the picker
+		// shows which one is the default and why
+		// (`fix-default-target-after-promotion`).
+		...(definition.default ? { default: true } : {}),
+		...(definition.defaultTargetId
+			? { defaultTargetId: definition.defaultTargetId }
+			: {}),
+		...(definition.defaultReason
+			? { defaultReason: definition.defaultReason }
+			: {}),
 	});
 
 	const openInfrastructureStartTargetPicker = async (infra: InfraService) => {
@@ -515,6 +540,25 @@ export function createDockerActions(
 			const targets = definitions
 				.filter((definition) => definition.availability.available)
 				.map(definitionTarget);
+			// The server marks the authoritative default on these definitions (the
+			// same resolver the gate, the agent tools and the smoke check use). Run
+			// that one; when several families are live with nothing declared, refuse
+			// and name the candidates instead of silently running the first one
+			// (`fix-default-target-after-promotion`).
+			const choice = selectActionTarget(definitions, action);
+			if (choice.ambiguous) {
+				showError(
+					`Choose the default ${action} target`,
+					`${app.displayName} offers several ${action} targets: ${choice.ambiguous
+						.map((definition) => definition.id)
+						.join(", ")}.\n\n${choice.reason ?? ""}`,
+				);
+				return;
+			}
+			if (choice.target) {
+				await runSelectedTarget(app, action, definitionTarget(choice.target));
+				return;
+			}
 			if (targets.length === 0) {
 				showNoTargets(action, app);
 				return;

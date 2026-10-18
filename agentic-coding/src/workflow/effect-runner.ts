@@ -18,6 +18,10 @@ import {
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
+import {
+	compareSetupDefaults,
+	resolveLiveDefaults,
+} from "../server/actions/default-target.ts";
 import type { ActionTarget } from "../server/actions/targets.ts";
 import {
 	BackendClientError,
@@ -2661,22 +2665,60 @@ export function agentEffectHandlers(
 							"no environment server is attached, so the promoted configuration cannot be started",
 						);
 					const configDir = resolveConfigRoot();
+					// The live defaults, resolved through the *same* rule the UI and the
+					// agent tools use (`fix-default-target-after-promotion`): the defect
+					// was a smoke check that started whatever the server guessed as "the
+					// default" while the gate had validated another target beside it. A
+					// live default that is not the validated one fails here, with the
+					// rollback offer, instead of being reported as a pass.
+					const live = resolveLiveDefaults({
+						configDir,
+						appIdent: subject.app,
+						checkoutDir: subject.checkout,
+					});
+					const parity = compareSetupDefaults(subject.defaults, live);
+					if (!parity.ok) {
+						const drift = parity.drift
+							.map(
+								(entry) =>
+									`${entry.action}: the gate validated ${entry.validated}, the live configuration resolves ${entry.live ?? "nothing"} (${entry.reason})`,
+							)
+							.join("; ");
+						return {
+							ok: false,
+							app: subject.app,
+							build:
+								"not attempted: the live default target is not the one the gate validated",
+							buildProvenIdentical: false,
+							defaultDrift: parity.drift,
+							defaults: {
+								build: live.build?.target?.id ?? "",
+								run: live.run?.target?.id ?? "",
+								test: live.test?.target?.id ?? "",
+							},
+							started: "failed",
+							detail: `the live configuration does not resolve the defaults the gate validated — ${drift}`,
+							stagedStateRemoved: [],
+						} as unknown as JsonValue;
+					}
 					// The promoted bytes are proved to be the reviewed ones before the
 					// build is reported as unnecessary: the gate built exactly these
 					// digests, so "proven identical by the gate" is a checked statement
 					// and not an assumption.
 					const diverged = Object.entries(subject.reviewed ?? {}).filter(
 						([relative, digest]) => {
-							const live = liveConfigPath(configDir, relative);
+							const liveFile = liveConfigPath(configDir, relative);
 							try {
-								return reviewedDigest(fs.readFileSync(live, "utf8")) !== digest;
+								return (
+									reviewedDigest(fs.readFileSync(liveFile, "utf8")) !== digest
+								);
 							} catch {
 								return true;
 							}
 						},
 					);
 					const started = yield* Effect.promise(() =>
-						startSetupTarget(subject, undefined, signal),
+						startSetupTarget(subject, live.run?.target, signal),
 					);
 					// The staged state has served its purpose once the live configuration
 					// has started; the promotion backup is deliberately kept. A failed
@@ -2697,6 +2739,11 @@ export function agentEffectHandlers(
 											owner: `workflow:${subject.workflowId}`,
 											app: subject.app,
 											action: "build",
+											// The live default build, named explicitly: the server must
+											// not resolve a second time to something else.
+											...(live.build?.target
+												? { target: live.build.target.id }
+												: {}),
 										},
 										signal,
 									),
@@ -2732,11 +2779,18 @@ export function agentEffectHandlers(
 						// a divergence is rebuilt here and reported instead.
 						build:
 							diverged.length === 0
-								? "skipped (proven identical by the gate)"
+								? `skipped (proven identical by the gate: ${live.build?.target?.id ?? "no build default"})`
 								: `rebuilt: the promoted definition differed from the reviewed one (${diverged
 										.map(([relative]) => relative)
 										.join(", ")})`,
 						buildProvenIdentical: diverged.length === 0,
+						// Which live default each action resolved to, so the report states
+						// what it did not rebuild rather than leaving it implied.
+						defaults: {
+							build: live.build?.target?.id ?? "",
+							run: live.run?.target?.id ?? "",
+							test: live.test?.target?.id ?? "",
+						},
 						...(buildFailure ? { buildFailure } : {}),
 						...(buildLogTail ? { buildLogTail } : {}),
 						started: started.ready ? "ready" : "failed",
@@ -2881,6 +2935,8 @@ interface SetupEffectSubject {
 	readonly checkout: string;
 	readonly draftsDir: string;
 	readonly reviewed?: Record<string, string>;
+	/** Action -> the target id the validation gate resolved as the default. */
+	readonly defaults?: Record<string, string>;
 }
 
 function setupSubject(payload: unknown): SetupEffectSubject {
@@ -2897,6 +2953,14 @@ function setupSubject(payload: unknown): SetupEffectSubject {
 			reviewedValue as Record<string, unknown>,
 		))
 			if (typeof digest === "string") reviewed[key] = digest;
+	const defaultsValue = value.defaults;
+	const validatedDefaults: Record<string, string> = {};
+	if (typeof defaultsValue === "object" && defaultsValue !== null)
+		for (const [action, targetId] of Object.entries(
+			defaultsValue as Record<string, unknown>,
+		))
+			if (typeof targetId === "string" && targetId !== "")
+				validatedDefaults[action] = targetId;
 	return {
 		workflowId: text("workflowId"),
 		runId: text("runId"),
@@ -2905,6 +2969,9 @@ function setupSubject(payload: unknown): SetupEffectSubject {
 		checkout: text("checkout"),
 		draftsDir: text("draftsDir"),
 		...(Object.keys(reviewed).length > 0 ? { reviewed } : {}),
+		...(Object.keys(validatedDefaults).length > 0
+			? { defaults: validatedDefaults }
+			: {}),
 	};
 }
 

@@ -5,6 +5,16 @@
 // `server/pkg/actionregistry/target_fixtures_test.go`: it materializes a real
 // recipe tree (compose file, Dockerfile, chart, shell scripts), records every
 // path as `{{ROOT}}`, and stores the definitions Go compiled for each scenario.
+//
+// One deliberate difference from the captured output
+// (`fix-default-target-after-promotion`): the recorded docker build/test
+// definitions carried the `prepare-build-context`/`cleanup-build-context` steps
+// unconditionally, and this fixture's recipe tree has no `templates/`
+// directory. The build-context overlay now exists only for a configuration that
+// has one, so those steps are absent here — and the `test` scenario expects the
+// image build as the single step of the pipeline, which is what it always ran
+// after the removed preparation step. `test/env-setup-staged.test.ts` covers the
+// overlay itself: the copy, the cleanup and the failure it no longer hides.
 // The test rebuilds the same tree in its own temporary root and replays each
 // scenario, so the compose leaf, dependency recursion, readiness gate,
 // failure-only diagnostics, port forwards, secret handling and the Docker

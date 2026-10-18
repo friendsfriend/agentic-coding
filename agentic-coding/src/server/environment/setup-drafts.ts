@@ -11,6 +11,7 @@ import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { validateWorkflowId } from "../../workflow/runtime/targets.ts";
+import { declarationDiffNotice } from "../actions/default-target.ts";
 
 export const SETUP_WORKFLOW_ID = "env-setup";
 export const SETUP_DRAFTS_DIRECTORY = ".drafts";
@@ -51,6 +52,11 @@ export const SETUP_DRAFT_PREFIXES: readonly string[] = [
 	"apps/compose/",
 	"apps/kubernetes/",
 	"apps/k8s/",
+	// The per-app default declaration (`fix-default-target-after-promotion`): a
+	// declaration that survives promotion is the only durable answer to "which
+	// default-profile target wins", so it is drafted, validated and promoted like
+	// any definition file.
+	"apps/defaults/",
 	"infrastructure/definitions/",
 	"infrastructure/compose/",
 ];
@@ -733,6 +739,17 @@ export function setupDraftChange(
 		linkTarget === undefined || status === "added"
 			? ""
 			: `# replaces the symlink -> ${linkTarget} with a regular file\n`;
+	// A drafted default declaration states which target becomes the default and,
+	// when the live configuration was ambiguous, which families it chose between:
+	// the developer approves a decision, not a file
+	// (`fix-default-target-after-promotion`).
+	const declarationNotice = /^apps\/defaults\/[^/]+\.json$/.test(relative)
+		? declarationDiffNotice({
+				configDir,
+				appIdent: path.basename(relative, ".json"),
+				text: draftText,
+			})
+		: "";
 	return {
 		path: relative,
 		status,
@@ -740,7 +757,7 @@ export function setupDraftChange(
 			status === "modified" && isSharedInfrastructurePath(relative),
 		linesAdded: counts.added,
 		linesDeleted: counts.removed,
-		diff: `${notice}${diff}`,
+		diff: `${declarationNotice}${notice}${diff}`,
 		...(linkTarget !== undefined && status === "modified"
 			? { replacesSymlink: linkTarget }
 			: {}),

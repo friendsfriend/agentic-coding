@@ -675,11 +675,9 @@ describe("a symlinked Dockerfile builds", () => {
 		expect(fs.lstatSync(sourceArg).isSymbolicLink()).toBe(false);
 	});
 
-	test("a build-context marker directory that does not exist produces no stderr", async () => {
+	test("a configuration without templates gets no build-context step at all", () => {
 		const { configDir } = liveConfig("env-setup-templates-");
 		const checkout = tempDir("env-setup-templates-checkout-");
-		// A temp directory that does not exist yet: the marker's own directory is
-		// what the shell used to complain about.
 		const tempDirPath = path.join(checkout, "missing-tmp");
 		const target = discoverActionTargets({
 			appIdent: "shop",
@@ -696,20 +694,111 @@ describe("a symlinked Dockerfile builds", () => {
 			ALL_TOOLS,
 			{ checkoutDir: checkout, configDir, tempDir: tempDirPath },
 		);
+		// The overlay exists for a build context that uses `templates/`; a
+		// configuration that has none gets neither the copy nor the cleanup, so
+		// nothing is written into the checkout and nothing can complain about a
+		// directory that does not exist (`fix-default-target-after-promotion`).
+		expect(findStep(definitions, "/step/prepare-build-context")).toBeUndefined();
+		expect(findStep(definitions, "/step/cleanup-build-context")).toBeUndefined();
+		expect(fs.readdirSync(checkout)).toEqual([]);
+	});
+
+	test("the templates overlay copies them into the build context and cleans exactly them up", () => {
+		const { configDir } = liveConfig("env-setup-templates-");
+		writeFile(
+			path.join(configDir, "templates", ".dockerignore"),
+			"node_modules\n",
+		);
+		writeFile(
+			path.join(configDir, "templates", "sub", "keep.txt"),
+			"keep\n",
+		);
+		const checkout = tempDir("env-setup-templates-checkout-");
+		// A pre-existing file of the developer's own checkout: the cleanup removes
+		// what the overlay copied, never what was already there.
+		writeFile(path.join(checkout, "src.txt"), "mine\n");
+		const target = discoverActionTargets({
+			appIdent: "shop",
+			localDir: checkout,
+			action: "build",
+			configDir,
+			platform: "linux",
+		}).find((candidate) => candidate.runtime === "docker");
+		if (!target) throw new Error("no docker build target");
+		const definitions = compileContainerTargetsWithTools(
+			"shop",
+			target,
+			undefined,
+			ALL_TOOLS,
+			{ checkoutDir: checkout, configDir, tempDir: path.join(checkout, "tmp") },
+		);
 		const prepare = findStep(definitions, "/step/prepare-build-context");
-		const configuration = prepare?.configuration as {
+		const cleanup = findStep(definitions, "/step/cleanup-build-context");
+		const prepareConfiguration = prepare?.configuration as {
 			command?: string;
 			args?: string[];
 		};
-		expect(configuration.command).toBe("sh");
-		// The configuration has no `templates/` directory either: both the marker
-		// directory and the missing templates must stay silent.
-		const run = Bun.spawnSync(
+		const cleanupConfiguration = cleanup?.configuration as {
+			command?: string;
+			args?: string[];
+		};
+		// No `2>/dev/null; true`: a copy that fails must fail the step.
+		expect(prepareConfiguration.args?.join("\n")).not.toContain("2>/dev/null");
+		expect(prepareConfiguration.args?.join("\n")).not.toContain("; true");
+		const run = (configuration: { command?: string; args?: string[] }) =>
+			Bun.spawnSync(
+				[configuration.command ?? "sh", ...(configuration.args ?? [])],
+				{ cwd: checkout, stdout: "pipe", stderr: "pipe" },
+			);
+		const prepared = run(prepareConfiguration);
+		expect(prepared.stderr.toString()).toBe("");
+		expect(prepared.exitCode).toBe(0);
+		// The Dockerfile's own COPY can now see them.
+		expect(fs.readFileSync(path.join(checkout, ".dockerignore"), "utf8")).toBe(
+			"node_modules\n",
+		);
+		expect(
+			fs.readFileSync(path.join(checkout, "sub", "keep.txt"), "utf8"),
+		).toBe("keep\n");
+		const cleaned = run(cleanupConfiguration);
+		expect(cleaned.exitCode).toBe(0);
+		expect(fs.existsSync(path.join(checkout, ".dockerignore"))).toBe(false);
+		expect(fs.existsSync(path.join(checkout, "sub"))).toBe(false);
+		expect(fs.readFileSync(path.join(checkout, "src.txt"), "utf8")).toBe("mine\n");
+	});
+
+	test("a templates copy that cannot run fails instead of reporting success", () => {
+		const { configDir } = liveConfig("env-setup-templates-");
+		writeFile(path.join(configDir, "templates", ".dockerignore"), "x\n");
+		const checkout = tempDir("env-setup-templates-checkout-");
+		const target = discoverActionTargets({
+			appIdent: "shop",
+			localDir: checkout,
+			action: "build",
+			configDir,
+			platform: "linux",
+		}).find((candidate) => candidate.runtime === "docker");
+		if (!target) throw new Error("no docker build target");
+		const definitions = compileContainerTargetsWithTools(
+			"shop",
+			target,
+			undefined,
+			ALL_TOOLS,
+			{ checkoutDir: checkout, configDir, tempDir: path.join(checkout, "tmp") },
+		);
+		const configuration = findStep(
+			definitions,
+			"/step/prepare-build-context",
+		)?.configuration as { command?: string; args?: string[] };
+		// The templates directory disappears between compilation and the build: the
+		// step must say so, not exit 0 having copied nothing.
+		fs.rmSync(path.join(configDir, "templates"), { recursive: true, force: true });
+		const failed = Bun.spawnSync(
 			[configuration.command ?? "sh", ...(configuration.args ?? [])],
 			{ cwd: checkout, stdout: "pipe", stderr: "pipe" },
 		);
-		expect(run.stderr.toString()).toBe("");
-		expect(run.exitCode).toBe(0);
+		expect(failed.exitCode).not.toBe(0);
+		expect(failed.stderr.toString()).not.toBe("");
 	});
 
 	test("an unresolvable link falls back to its lexical path so the tool names it", async () => {

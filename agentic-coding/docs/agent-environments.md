@@ -250,9 +250,12 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
   build**, the app's **default run target** to readiness, the **default test**
   when one exists, and `docker compose config -q` on every modified shared
   infrastructure definition. Every step is reported with its exit status and a
-  bounded log tail, the default target per action is named, and two candidates
-  for one default-profile build/test target are an explicit `no-default-target`
-  finding rather than a silent pick. A step the machine cannot run (no docker
+  bounded log tail, the default target per action is named **with the reason it
+  was resolved** (declared / only candidate / preference), and two candidates for
+  one default-profile build/test target are an explicit `no-default-target`
+  finding rather than a silent pick. The steps run the targets the gate
+  *resolved*, so "what the gate validated" and "what runs" cannot drift apart
+  inside the gate itself. A step the machine cannot run (no docker
   daemon, no `docker` CLI, an unreachable Kubernetes cluster) is a visible
   `skipped` finding and fails the gate, never a pass. Each step also has a
   deadline and the gate a wall-clock budget: a hung build is stopped and
@@ -263,7 +266,10 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
 - **Approval.** `setup.approval` shows the developer every new and modified
   file as a unified diff against the live configuration, flags a change to an
   existing shared service definition as *affects all apps*, and offers approve
-  (promote) or request changes with comments (back to the author).
+  (promote) or request changes with comments (back to the author). A drafted
+  default declaration (`apps/defaults/<app>.json`) renders as the decision it
+  is — `# default build for <app> = "<target>" (was ambiguous: docker, shell)` —
+  and is backed up, promoted and rolled back like any other drafted file.
 - **Atomic promotion, conflict-safe.** `setup.promote` backs up every replaced
   live file to `<config>/.backups/env-setup-<workflow-id>/`, writes each file
   through a temporary sibling renamed over its target, reloads the environment
@@ -276,10 +282,18 @@ agentic-coding workflow start --workflow env-setup --repo PATH --mode checkout \
   anything is written**, and the conflict names the path. Any other failure — a
   write or the reload — restores every replaced file, removes every added one,
   and leaves the drafts in place for the retry.
-- **Post-promotion smoke check.** After a promotion, `setup.smoke` starts the
-  real default target once against the live configuration; it first proves that
-  every promoted file still holds the digest the gate recorded, so
-  `build: skipped (proven identical by the gate)` is a checked statement. A
+- **Post-promotion smoke check.** After a promotion, `setup.smoke` resolves the
+  **live** defaults of build, run and test through the same resolver every other
+  consumer uses (the agent tools, `env_list` and the developer's Build action)
+  and compares them with the defaults the gate validated, which the run recorded
+  in its own snapshot. A live default that is not the validated one fails the
+  check with the drift named and the rollback offer — the defect this exists for
+  is a promotion that left the live Dockerfile target beside the promoted shell
+  target, which the smoke check used to start without noticing. When they do
+  match it starts the resolved run target and proves that every promoted file
+  still holds the digest the gate recorded, so `build: skipped (proven identical
+  by the gate: <target>)` is a checked statement that names what it did not
+  rebuild. A
   failure offers the developer rollback (`rollback-promotion`, which restores
   exactly the previous files — content and mode — from the promotion's own
   backup and puts the staged root back for the author) or keeping the promotion

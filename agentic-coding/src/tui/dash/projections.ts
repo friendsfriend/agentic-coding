@@ -314,8 +314,29 @@ function setupValidationSummary(context: unknown): string | undefined {
 			)
 				? ((entry as { superseded?: unknown[] }).superseded ?? []).map(String)
 				: [];
+			// How the default was decided, so the developer approves a decision and
+			// not just a target id (`fix-default-target-after-promotion`): a
+			// declaration they wrote, the only family on offer, or the platform's
+			// run preference.
+			const source =
+				typeof (entry as { source?: unknown }).source === "string"
+					? String((entry as { source?: unknown }).source)
+					: "";
+			const declared =
+				typeof (entry as { declared?: unknown }).declared === "string"
+					? String((entry as { declared?: unknown }).declared)
+					: "";
+			const why =
+				source === "declared"
+					? `(declared${declared ? ` as ${declared}` : ""})`
+					: source === "only-candidate"
+						? "(the only default-profile candidate)"
+						: source === "preference"
+							? "(the platform's runtime preference)"
+							: "";
 			return [
 				`${String(entry.action)}: ${String(entry.targetId)}`,
+				why,
 				superseded.length > 0
 					? `(superseded: ${superseded.join(", ")} — still in the configuration, so remove it or give it a non-default profile if it must not remain)`
 					: "",

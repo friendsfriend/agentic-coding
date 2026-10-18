@@ -637,20 +637,6 @@
             "label": "Build: Build",
             "children": [
               {
-                "id": "app/api/action/build/docker/default/step/prepare-build-context",
-                "kind": "command",
-                "label": "Prepare build context",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
-                }
-              },
-              {
                 "id": "app/api/action/build/docker/default/step/build-image",
                 "kind": "command",
                 "label": "Build image",
@@ -677,21 +663,6 @@
                   "setValues": {
                     "image.ref": "devenv-api:latest"
                   }
-                }
-              },
-              {
-                "id": "app/api/action/build/docker/default/step/cleanup-build-context",
-                "kind": "command",
-                "label": "Clean up build context",
-                "failurePolicy": "always-run",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "if [ -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default ]; then xargs -I{} rm -rf \"{}\" \u003c {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; rm -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default; fi"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
                 }
               },
               {
@@ -850,20 +821,6 @@
             "label": "Build: Build",
             "children": [
               {
-                "id": "app/api/action/build/podman/default/step/prepare-build-context",
-                "kind": "command",
-                "label": "Prepare build context",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
-                }
-              },
-              {
                 "id": "app/api/action/build/podman/default/step/build-image",
                 "kind": "command",
                 "label": "Build image",
@@ -890,21 +847,6 @@
                   "setValues": {
                     "image.ref": "devenv-api:latest"
                   }
-                }
-              },
-              {
-                "id": "app/api/action/build/podman/default/step/cleanup-build-context",
-                "kind": "command",
-                "label": "Clean up build context",
-                "failurePolicy": "always-run",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "if [ -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default ]; then xargs -I{} rm -rf \"{}\" \u003c {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; rm -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default; fi"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
                 }
               },
               {
@@ -1085,17 +1027,32 @@
             "label": "Test: Test",
             "children": [
               {
-                "id": "app/api/action/test/docker/default/step/prepare-build-context",
+                "id": "app/api/action/test/docker/default/step/build-image",
                 "kind": "command",
-                "label": "Prepare build context",
+                "label": "Build image",
+                "produces": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
                 "handler": "docker",
                 "configuration": {
                   "args": [
-                    "-c",
-                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "build",
+                    "-f",
+                    "{{ROOT}}/apps/api/Dockerfile",
+                    "-t",
+                    "devenv-api:latest",
+                    "."
                   ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
+                  "command": "docker",
+                  "dir": "{{ROOT}}/apps/api",
+                  "setValues": {
+                    "image.ref": "devenv-api:latest"
+                  }
                 }
               }
             ]
@@ -1120,17 +1077,32 @@
             "label": "Test: Test",
             "children": [
               {
-                "id": "app/api/action/test/podman/default/step/prepare-build-context",
+                "id": "app/api/action/test/podman/default/step/build-image",
                 "kind": "command",
-                "label": "Prepare build context",
+                "label": "Build image",
+                "produces": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
                 "handler": "docker",
                 "configuration": {
                   "args": [
-                    "-c",
-                    "mkdir -p {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman 2>/dev/null; ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                    "build",
+                    "-f",
+                    "{{ROOT}}/apps/api/Dockerfile",
+                    "-t",
+                    "devenv-api:latest",
+                    "."
                   ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
+                  "command": "podman",
+                  "dir": "{{ROOT}}/apps/api",
+                  "setValues": {
+                    "image.ref": "devenv-api:latest"
+                  }
                 }
               }
             ]

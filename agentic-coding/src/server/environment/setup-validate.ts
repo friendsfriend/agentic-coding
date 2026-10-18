@@ -13,6 +13,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadEnvFile } from "../../env-file.ts";
 import {
+	candidatesOfTargets,
+	DEFAULT_DECLARATIONS_DIR,
+	type DefaultDeclaration,
+	decideDefaultTarget,
+	defaultDeclarationPath,
+	defaultDeclarationRelative,
+	readDefaultDeclaration,
+	resolveDefaultTarget,
+} from "../actions/default-target.ts";
+import {
 	configDirEntries,
 	discoverActionTargets,
 } from "../actions/discovery.ts";
@@ -43,6 +53,11 @@ const DRAFT_ACTIONS: ReadonlyArray<{ prefix: string; action: AppAction }> = [
 	{ prefix: "apps/k8s/", action: "run" },
 	{ prefix: "apps/build/", action: "build" },
 	{ prefix: "apps/build/", action: "test" },
+	// The per-app default declaration is the one drafted path that is not itself a
+	// target (`fix-default-target-after-promotion`), and it may name any action.
+	{ prefix: `${DEFAULT_DECLARATIONS_DIR}/`, action: "build" },
+	{ prefix: `${DEFAULT_DECLARATIONS_DIR}/`, action: "test" },
+	{ prefix: `${DEFAULT_DECLARATIONS_DIR}/`, action: "run" },
 ];
 
 /** How long one Kubernetes reachability probe may take before it answers
@@ -69,6 +84,7 @@ export interface SetupValidationFinding {
 		| "test"
 		| "infra"
 		| "no-default-target"
+		| "default-declaration"
 		| "no-test-target"
 		| "skipped";
 	readonly message: string;
@@ -248,6 +264,12 @@ export interface SetupValidationDefault {
 	readonly targetId: string;
 	readonly profile: string;
 	readonly runtime: string;
+	/** How the default was decided, so the approval summary can say why
+	 * (`fix-default-target-after-promotion`): `declared` names the specific
+	 * missing statement the developer should see when the choice was ambiguous. */
+	readonly source?: "declared" | "only-candidate" | "preference";
+	/** The declaration that named it, when one did. */
+	readonly declared?: string;
 	/** Live target ids this draft supersedes (same action and profile): a draft
 	 * cannot delete a live definition, so the file it writes is the one the app
 	 * means to use, and the report says which live target it displaces. */
@@ -323,18 +345,23 @@ export function supersededIds(
 		.sort();
 }
 
-/** The run target the platform would start by default: Docker, then a script,
- * then Kubernetes — the same precedence `selectTarget` applies. */
+/** The run target the platform would start by default: a declaration in
+ * `apps/defaults/<app>.json` when one names it, else Docker, then a script,
+ * then Kubernetes — the same precedence `selectTarget` applies, resolved
+ * through the one shared rule (`fix-default-target-after-promotion`). */
 export function preferredRunTarget(
 	targets: readonly ActionTarget[],
+	declared?: string,
+	declarationPath?: string,
 ): ActionTarget | undefined {
-	for (const runtime of ["docker", "shell", "systemshell", "kubernetes"]) {
-		const matching = targets.filter((target) => target.runtime === runtime);
-		if (matching.length === 0) continue;
-		const preferred = defaultTargetOf(matching);
-		return preferred.target ?? (matching[0] as ActionTarget);
-	}
-	return targets[0];
+	const decision = decideDefaultTarget({
+		action: "run",
+		candidates: candidatesOfTargets(targets),
+		...(declared ? { declared } : {}),
+		...(declarationPath ? { declarationPath } : {}),
+	});
+	if (!decision.target) return undefined;
+	return targets.find((target) => target.id === decision.target?.id);
 }
 
 /**
@@ -595,6 +622,26 @@ export async function validateSetupDrafts(
 	// test. Every step is reported, and a step the machine cannot run is a
 	// `skipped` finding the developer sees, never a pass.
 	const byAction = (action: AppAction): ActionTarget[] => discovered(action);
+	// The per-app default declaration, read from the staged root: a drafted
+	// declaration is what the author validated and what the promotion publishes,
+	// so it decides here exactly as it will live afterwards
+	// (`fix-default-target-after-promotion`).
+	const declarationPath = defaultDeclarationPath(sourceRoot, context.appIdent);
+	const declaration: DefaultDeclaration = readDefaultDeclaration(
+		context.configDir,
+		context.appIdent,
+		sourceRoot,
+	);
+	const declarationRelative = defaultDeclarationRelative(context.appIdent);
+	for (const problem of declaration.problems)
+		findings.push({
+			check: "default-declaration",
+			message: problem,
+			subject: declarationRelative,
+		});
+	// What each action's default was resolved to, so the real path below (build,
+	// start, test) runs *these* targets and not a second guess.
+	const resolvedDefaults = new Map<AppAction, ActionTarget>();
 	for (const action of ["build", "run", "test"] as AppAction[]) {
 		const seen = byAction(action);
 		steps.push({
@@ -608,40 +655,79 @@ export async function validateSetupDrafts(
 				? { detail: `the app declares no ${action} target` }
 				: {}),
 		});
+		const declared = declaration.actions[action];
 		if (action === "run") {
-			// A run target is resolved by runtime precedence
-			// (`selectTarget`): an app with a compose file and a script target that
-			// the developer starts fine must not fail the gate, so no ambiguity is
-			// raised for `run` — the resolved default is reported instead.
-			const preferred = preferredRunTarget(seen);
-			if (preferred)
+			// A run target is resolved by runtime precedence (`selectTarget`): an app
+			// with a compose file and a script target that the developer starts fine
+			// must not fail the gate, so no ambiguity is raised for `run` — the
+			// resolved default is reported with its reason instead. A declaration
+			// still wins.
+			const resolved = resolveDefaultTarget({
+				configDir: context.configDir,
+				configOverlay: sourceRoot,
+				appIdent: context.appIdent,
+				action,
+				targets: seen,
+				declaration,
+				declarationPath,
+			});
+			if (resolved.targetObject) {
+				resolvedDefaults.set(action, resolved.targetObject);
 				defaults.push({
 					action: "run",
-					targetId: preferred.id,
-					profile: preferred.profile ?? "default",
-					runtime: preferred.runtime,
+					targetId: resolved.targetObject.id,
+					profile: resolved.targetObject.profile ?? "default",
+					runtime: resolved.targetObject.runtime,
+					source: resolved.source,
+					...(resolved.source === "declared" && declared ? { declared } : {}),
 				});
+			}
 		} else {
 			const effective = supersededTargets(seen, draftedPaths);
 			const superseded = supersededIds(seen, effective);
-			const resolved = defaultTargetOf(effective);
+			const resolved = resolveDefaultTarget({
+				configDir: context.configDir,
+				configOverlay: sourceRoot,
+				appIdent: context.appIdent,
+				action,
+				targets: effective,
+				declaration,
+				declarationPath,
+			});
+			// A declaration that names a live target a draft supersedes disagrees with
+			// the draft beside it: publishing it would validate one target and run
+			// another, so it is refused instead of half-honoured.
+			if (
+				declared !== undefined &&
+				resolved.source !== "declared" &&
+				seen.some(
+					(target) => target.id === declared || target.runtime === declared,
+				)
+			)
+				findings.push({
+					check: "default-declaration",
+					message: `${declarationRelative} declares ${JSON.stringify(declared)} as the default ${action}, but the draft supersedes it (${superseded.join(", ")}); declare the drafted target instead`,
+					subject: declarationRelative,
+				});
 			if (resolved.ambiguous)
 				findings.push({
 					check: "no-default-target",
-					message: `${context.appIdent} declares several default-profile ${action} targets (${resolved.ambiguous
+					message: `${context.appIdent} declares several default-profile ${action} targets (${resolved.candidates
 						.map((candidate) => candidate.id)
-						.join(
-							", ",
-						)}); give one of them a non-default profile, or draft the replacement so the draft supersedes it`,
+						.join(", ")}); ${resolved.reason}`,
 				});
-			else if (resolved.target)
+			else if (resolved.targetObject) {
+				resolvedDefaults.set(action, resolved.targetObject);
 				defaults.push({
 					action: action as "build" | "run" | "test",
-					targetId: resolved.target.id,
-					profile: resolved.target.profile ?? "default",
-					runtime: resolved.target.runtime,
+					targetId: resolved.targetObject.id,
+					profile: resolved.targetObject.profile ?? "default",
+					runtime: resolved.targetObject.runtime,
+					source: resolved.source,
+					...(resolved.source === "declared" && declared ? { declared } : {}),
 					...(superseded.length > 0 ? { superseded } : {}),
 				});
+			}
 		}
 	}
 
@@ -681,8 +767,9 @@ export async function validateSetupDrafts(
 	const runTargets = discovered("run");
 	// The default run target is always part of the real path: an app whose run
 	// target is a script must not be silently dropped from the gate just because
-	// only its build/test definitions were drafted.
-	const defaultRun = preferredRunTarget(runTargets);
+	// only its build/test definitions were drafted. It is the resolved default
+	// (declaration first), the same target the smoke check will start live.
+	const defaultRun = resolvedDefaults.get("run");
 	const reports: SetupValidationTargetReport[] = [];
 	/** Records a step the whole-gate budget prevented from running at all. */
 	const budgetExhausted = (
@@ -795,13 +882,15 @@ export async function validateSetupDrafts(
 	};
 
 	// The default build runs first: a draft whose default build fails must never
-	// reach the developer's review.
+	// reach the developer's review. It is the *resolved* default (a declaration
+	// wins, a superseding draft is the successor), not a second guess over the
+	// raw discovered list — which skipped the build entirely whenever two families
+	// were live.
 	const buildSeen = discovered("build");
-	if (buildSeen.length > 0) {
-		const chosen = defaultTargetOf(buildSeen);
-		if (!chosen.ambiguous)
-			await runStep("build", chosen.target, context.buildTarget);
-	}
+	const chosenBuild = resolvedDefaults.get("build");
+	if (chosenBuild) await runStep("build", chosenBuild, context.buildTarget);
+	else if (buildSeen.length === 0)
+		await runStep("build", undefined, context.buildTarget);
 
 	// Every *changed* shared infrastructure definition must at least parse: an
 	// infra draft whose paths or includes resolve nowhere must not reach the
@@ -983,9 +1072,10 @@ export async function validateSetupDrafts(
 	// and fails is a finding, and an app with no test target is stated.
 	const testSeen = discovered("test");
 	{
-		const chosen = defaultTargetOf(testSeen);
-		if (!chosen.ambiguous)
-			await runStep("test", chosen.target, context.testTarget);
+		const chosen = resolvedDefaults.get("test");
+		if (chosen) await runStep("test", chosen, context.testTarget);
+		else if (testSeen.length === 0)
+			await runStep("test", undefined, context.testTarget);
 	}
 
 	// The app the gate started is released again unless the workflow keeps it:

@@ -334,6 +334,11 @@ export interface WorkflowMetadata {
 	 * did not approve. Engine-owned (the store), never a file under the staged
 	 * root the authoring agent can write. */
 	setupReviewedDrafts?: Record<string, string>;
+	/** The default target the validation gate resolved per action, recorded when
+	 * the gate passed (`fix-default-target-after-promotion`): the post-promotion
+	 * smoke check resolves the live configuration through the same resolver and
+	 * fails with a rollback offer when the live default is not this one. */
+	setupValidatedDefaults?: Record<string, string>;
 	/** Stage-gate policies resolved once at start and pinned for the run's
 	 * lifetime, so a mid-run config edit cannot change what may be skipped.
 	 * Absent on snapshots started before the gates existed; the mandatory

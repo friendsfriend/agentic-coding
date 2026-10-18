@@ -40,6 +40,11 @@ export interface EnvSetupSubject {
 	 * it in the workflow's own snapshot. The promotion refuses to publish
 	 * anything else, so the approval authorises the bytes that become live. */
 	readonly reviewed?: Record<string, string>;
+	/** Action -> the target id the validation gate resolved as the default. The
+	 * smoke check resolves the live configuration through the same rule and fails
+	 * when the live default is not what the gate validated
+	 * (`fix-default-target-after-promotion`). */
+	readonly defaults?: Record<string, string>;
 }
 
 export function envSetupSubject(snapshot: {
@@ -50,6 +55,7 @@ export function envSetupSubject(snapshot: {
 		worktree: string;
 		setupDraftsDir?: string;
 		setupReviewedDrafts?: Record<string, string>;
+		setupValidatedDefaults?: Record<string, string>;
 		createdAt: string;
 	};
 }): EnvSetupSubject {
@@ -65,6 +71,9 @@ export function envSetupSubject(snapshot: {
 		draftsDir: snapshot.metadata.setupDraftsDir ?? "",
 		...(snapshot.metadata.setupReviewedDrafts
 			? { reviewed: snapshot.metadata.setupReviewedDrafts }
+			: {}),
+		...(snapshot.metadata.setupValidatedDefaults
+			? { defaults: snapshot.metadata.setupValidatedDefaults }
 			: {}),
 	};
 }

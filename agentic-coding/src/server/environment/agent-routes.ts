@@ -26,6 +26,13 @@ import type {
 	AgentEnvironmentBuild,
 } from "../../contracts/environment.ts";
 import { loadEnvFile } from "../../env-file.ts";
+import {
+	type DefaultCandidate,
+	decideDefaultTarget,
+	declaredTargetId,
+	defaultDeclarationRelative,
+	readDefaultDeclaration,
+} from "../actions/default-target.ts";
 import { discoverActionTargets } from "../actions/discovery.ts";
 import type { ActionRegistry } from "../actions/registry.ts";
 import {
@@ -409,85 +416,73 @@ function claimedApps(apps: string | readonly string[]): string[] {
 	return unique;
 }
 
-const DEFAULT_RUNTIME_PREFERENCE: readonly string[] = [
-	"docker",
-	"shell",
-	"podman",
-	"systemshell",
-	"tmux",
-	"command-shell",
-	"command-powershell",
-	"kubernetes",
-];
-/** `build`/`test` run synchronously: the plain command rendering is the default,
- * not the `tmux` window one. A `run` keeps the window first, which is the
- * interactive default. */
-const SYNCHRONOUS_RUNTIME_PREFERENCE: readonly string[] = [
-	"docker",
-	"shell",
-	"podman",
-	"systemshell",
-	"command-shell",
-	"command-powershell",
-	"tmux",
-	"kubernetes",
-];
+/** The discovered target ids a definition row renders. */
+function rowTargetId(row: Record<string, unknown>): string | undefined {
+	const targetId = row.targetId;
+	return typeof targetId === "string" && targetId !== "" ? targetId : undefined;
+}
 
 /**
  * Mark the deterministic default target per action, so the choice between two
  * default-profile candidates is visible instead of silently picked
- * (`staged-env-setup-config-root`).
- *
- * The renderings of *one* target are not a choice: a shell target compiles into
- * a `tmux` variant beside its plain command, and a docker target into a `podman`
- * dialect when podman is present, so a naive "every id ending in `/default`"
- * would mark every shell app ambiguous. Candidates are grouped by their runtime
- * family (container / script / kubernetes), and the action's default is the
- * first rendering in the platform's preference order within the single family
- * that has a default-profile candidate; several *families* is the ambiguous
- * case the author must resolve.
+ * (`staged-env-setup-config-root`), with the reason it was chosen and the same
+ * rule every other consumer applies (`fix-default-target-after-promotion`): a
+ * declaration in `apps/defaults/<app>.json` wins, one runtime family is no
+ * choice at all, and a `build`/`test` of several families with nothing declared
+ * is reported ambiguous rather than guessed.
  */
 function markDefaultTargets(
+	deps: AgentEnvironmentDeps,
+	appIdent: string,
+	overlay: string | undefined,
 	targets: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-	const family = (runtime: unknown): string => {
-		const value = String(runtime ?? "");
-		if (value === "docker" || value === "podman") return "container";
-		if (value.startsWith("tmux") || value.startsWith("command"))
-			return "script";
-		return value;
-	};
-	const preferred = (target: Record<string, unknown>): boolean => {
-		const profile = String(target.profile ?? "");
-		return (
-			profile === "" ||
-			profile === "default" ||
-			String(target.id).endsWith("/default")
-		);
-	};
-	for (const action of ["build", "test", "run"]) {
-		const preference =
-			action === "run"
-				? DEFAULT_RUNTIME_PREFERENCE
-				: SYNCHRONOUS_RUNTIME_PREFERENCE;
-		const candidates = targets
-			.filter((target) => target.action === action && preferred(target))
-			.sort((a, b) => {
-				const index = (value: Record<string, unknown>): number => {
-					const position = preference.indexOf(String(value.runtime ?? ""));
-					return position === -1 ? 99 : position;
-				};
-				return index(a) - index(b);
-			});
-		if (candidates.length === 0) continue;
-		const families = new Set(
-			candidates.map((target) => family(target.runtime)),
-		);
-		if (families.size === 1) {
-			(candidates[0] as Record<string, unknown>).default = true;
+	const declaration = readDefaultDeclaration(deps.configDir, appIdent, overlay);
+	for (const action of ["build", "test", "run"] as const) {
+		const rows = targets.filter((row) => row.action === action);
+		if (rows.length === 0) continue;
+		const candidates: DefaultCandidate[] = rows.map((row) => ({
+			id: String(row.id ?? ""),
+			...(rowTargetId(row) ? { targetId: rowTargetId(row) as string } : {}),
+			definitionId: String(row.id ?? ""),
+			action,
+			runtime: String(row.runtime ?? ""),
+			...(typeof row.profile === "string" && row.profile !== ""
+				? { profile: row.profile }
+				: {}),
+			...(typeof row.label === "string" ? { label: row.label } : {}),
+		}));
+		const decision = decideDefaultTarget({
+			action,
+			candidates,
+			...(declaration.actions[action] !== undefined
+				? { declared: declaration.actions[action] as string }
+				: {}),
+			declarationPath: defaultDeclarationRelative(appIdent),
+		});
+		if (decision.ambiguous) {
+			const names = new Set(
+				decision.candidates.map((candidate) => candidate.id),
+			);
+			for (const row of rows)
+				if (names.has(String(row.id ?? "")))
+					Object.assign(row, {
+						defaultAmbiguous: true,
+						defaultReason: decision.reason,
+					});
 			continue;
 		}
-		for (const candidate of candidates) candidate.defaultAmbiguous = true;
+		const chosen = decision.target?.id;
+		if (chosen === undefined) continue;
+		const winner = rows.find((row) => String(row.id ?? "") === chosen);
+		if (!winner) continue;
+		Object.assign(winner, {
+			default: true,
+			...(decision.target?.targetId
+				? { defaultTargetId: decision.target.targetId }
+				: {}),
+			defaultReason: decision.reason,
+		});
 	}
 	return targets;
 }
@@ -560,8 +555,12 @@ async function targetsByApp(
 		byApp.set(
 			app.ident,
 			markDefaultTargets(
+				deps,
+				app.ident,
+				overlay,
 				staged.map((target) => ({
 					id: target.id,
+					targetId: target.id,
 					action: target.action,
 					runtime: target.runtime,
 					label: target.label,
@@ -601,9 +600,13 @@ function liveTargetsByApp(
 		const list = byApp.get(definition.owner.id) ?? [];
 		list.push({
 			id: definition.id,
+			...(definitionTargetId(definition)
+				? { targetId: definitionTargetId(definition) as string }
+				: {}),
 			action: definition.type,
 			runtime: definition.runtime,
 			label: definition.label,
+			profile: definitionProfile(definition),
 			available: definition.availability.available,
 			...(definition.availability.reason
 				? { reason: definition.availability.reason }
@@ -611,8 +614,38 @@ function liveTargetsByApp(
 		});
 		byApp.set(definition.owner.id, list);
 	}
-	for (const [app, list] of byApp) byApp.set(app, markDefaultTargets(list));
+	for (const [app, list] of byApp)
+		byApp.set(app, markDefaultTargets(deps, app, undefined, list));
 	return byApp;
+}
+
+/** One value a compiled definition's steps recorded, first match wins. */
+function definitionStepValue(
+	definition: ActionDefinition,
+	key: string,
+): string | undefined {
+	let found: string | undefined;
+	const walk = (step: unknown): void => {
+		if (found !== undefined) return;
+		if (typeof step !== "object" || step === null) return;
+		const value = (step as { configuration?: Record<string, unknown> })
+			.configuration?.[key];
+		if (typeof value === "string" && value !== "") found = value;
+		const children = (step as { children?: unknown[] }).children;
+		if (Array.isArray(children)) for (const child of children) walk(child);
+	};
+	walk(definition.root);
+	return found;
+}
+
+/** The discovered target id a compiled definition renders, when it has one. */
+function definitionTargetId(definition: ActionDefinition): string | undefined {
+	return definitionStepValue(definition, "targetId");
+}
+
+/** The profile a compiled target definition carries, as its leaf recorded it. */
+function definitionProfile(definition: ActionDefinition): string {
+	return definitionStepValue(definition, "profile") ?? "";
 }
 
 async function environmentList(
@@ -703,6 +736,27 @@ async function environmentStatus(
 	};
 }
 
+/** The run target id an owner's declaration names for one app, when it has one. */
+function declaredRunTargetId(
+	deps: AgentEnvironmentDeps,
+	owner: string,
+	appIdent: string,
+): string | undefined {
+	const app = deps.apps?.getAppByIdent(appIdent);
+	if (!app) return undefined;
+	const overlay = deps.resolveOwnerOverlay?.(
+		owner as `workflow:${string}`,
+		app,
+	);
+	return declaredTargetId({
+		configDir: deps.configDir,
+		appIdent,
+		action: "run",
+		checkoutDir: app.localDirectoryPath,
+		...(overlay ? { configOverlay: overlay } : {}),
+	});
+}
+
 async function environmentAcquire(
 	deps: AgentEnvironmentDeps,
 	owner: string,
@@ -710,10 +764,24 @@ async function environmentAcquire(
 	signal?: AbortSignal,
 ): Promise<unknown> {
 	const instances = requireInstances(deps);
+	const claimed = claimedApps(body.apps);
+	// A declaration that names the app's run target is honoured here by naming that
+	// target: the caller asked for "the app", and `apps/defaults/<app>.json` is
+	// where the developer said which run target that is
+	// (`fix-default-target-after-promotion`). Without a declaration nothing is
+	// passed and the slot controller's documented runtime preference decides —
+	// including when several apps are claimed at once, which one target cannot
+	// express.
+	const declaredRun =
+		!body.target && !body.runtime && !body.profile && claimed.length === 1
+			? declaredRunTargetId(deps, owner, claimed[0] as string)
+			: undefined;
 	const result = await instances.acquire({
 		owner: parseEnvironmentOwner(owner),
-		apps: claimedApps(body.apps),
-		...(body.target ? { target: body.target } : {}),
+		apps: claimed,
+		...((body.target ?? declaredRun)
+			? { target: body.target ?? declaredRun }
+			: {}),
 		...(body.profile ? { profile: body.profile } : {}),
 		...(body.runtime ? { runtime: body.runtime } : {}),
 		...(body.replicas === undefined ? {} : { replicas: body.replicas }),

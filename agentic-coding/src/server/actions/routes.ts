@@ -42,6 +42,10 @@ import {
 	compileKubernetesLifecycleActions,
 } from "./compile.ts";
 import { Coordinator } from "./coordinator.ts";
+import {
+	resolveDefaultTarget,
+	runtimePreferenceFor,
+} from "./default-target.ts";
 import { discoverActionTargets } from "./discovery.ts";
 import { type CommandStepHandler, Engine, type EngineEvent } from "./engine.ts";
 import {
@@ -566,10 +570,112 @@ function actionsForApp(
 	if (snapshot.version === 0 && snapshot.definitions.length === 0) {
 		return json({ version: 0, actions: [] });
 	}
+	const definitions = snapshot.forResource({ kind, id: ident });
 	return json({
 		version: snapshot.version,
-		actions: snapshot.forResource({ kind, id: ident }),
+		actions:
+			kind === "app"
+				? markAppDefaultTargets(context, ident, definitions)
+				: definitions,
 	});
+}
+
+/** The discovered target ids one compiled definition renders (its leaf steps
+ * carry the `targetId` discovery produced). */
+function definitionTargetIds(definition: ActionDefinition): string[] {
+	const ids = new Set<string>();
+	const walk = (step: unknown): void => {
+		if (typeof step !== "object" || step === null) return;
+		const value = (step as { configuration?: { targetId?: unknown } })
+			.configuration?.targetId;
+		if (typeof value === "string" && value !== "") ids.add(value);
+		const children = (step as { children?: unknown[] }).children;
+		if (Array.isArray(children)) for (const child of children) walk(child);
+	};
+	walk(definition.root);
+	return [...ids];
+}
+
+/**
+ * Mark the authoritative default of every action on the definitions a client
+ * (the Environments UI/TUI) is about to pick from, with the same resolver the
+ * agent tools, the validation gate and the smoke check use
+ * (`fix-default-target-after-promotion`). Without this the UI's build action
+ * saw three available renderings of two different runtime families and ran
+ * whichever the picker happened to list first — the live Dockerfile the gate had
+ * deliberately not validated.
+ */
+function markAppDefaultTargets(
+	context: ActionRouteContext,
+	ident: string,
+	definitions: readonly ActionDefinition[],
+): ActionDefinition[] {
+	const rows = definitions.map((definition) => ({ ...definition }));
+	const app = context.services.apps.getAppByIdent(ident);
+	if (!app || rows.length === 0) return rows;
+	const configDir = context.services.configDir;
+	for (const action of ["build", "test", "run"] as const) {
+		const actionRows = rows.filter((definition) => definition.type === action);
+		if (actionRows.length === 0) continue;
+		let targets: ActionTarget[] = [];
+		try {
+			targets = discoverActionTargets({
+				appIdent: ident,
+				localDir: app.localDirectoryPath,
+				action,
+				configDir,
+				platform: process.platform,
+			});
+		} catch (error) {
+			context.services.logger?.(
+				`[WARN] default target discovery for ${ident} ${action} failed: ${message(error)}`,
+			);
+			continue;
+		}
+		if (targets.length === 0) continue;
+		const decision = resolveDefaultTarget({
+			configDir,
+			appIdent: ident,
+			action,
+			targets,
+		});
+		if (decision.ambiguous) {
+			const names = new Set(
+				decision.candidates.map((candidate) => candidate.id),
+			);
+			for (const row of actionRows)
+				if (definitionTargetIds(row).some((id) => names.has(id)))
+					Object.assign(row, {
+						defaultAmbiguous: true,
+						defaultReason: decision.reason,
+					});
+			continue;
+		}
+		const chosen = decision.target?.id;
+		if (chosen === undefined) continue;
+		const matches = actionRows.filter((row) =>
+			definitionTargetIds(row).includes(chosen),
+		);
+		if (matches.length === 0) continue;
+		// Several renderings can render one target (a shell target compiles into a
+		// `tmux` window variant beside its synchronous command one). The developer's
+		// build/test is synchronous: the platform preference order names which
+		// rendering the default is, so a `default` marking never starts a window.
+		const preference = runtimePreferenceFor(action);
+		const rank = (definition: ActionDefinition): number => {
+			const index = preference.indexOf(definition.runtime);
+			return index === -1 ? 99 : index;
+		};
+		const winner = [...matches].sort(
+			(a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : 1),
+		)[0] as ActionDefinition;
+		Object.assign(winner, {
+			default: true,
+			defaultTargetId: chosen,
+			defaultReason: decision.reason,
+		});
+	}
+	return rows;
 }
 
 // --- runs ------------------------------------------------------------------
@@ -970,6 +1076,7 @@ export interface AgentActionResult {
 /** The build/test target one agent request names: an id or label, else the
  * profile's own default, and never a silent guess between several. */
 function agentTarget(
+	configDir: string,
 	targets: readonly ActionTarget[],
 	request: AgentActionRequest,
 ): ActionTarget {
@@ -1006,7 +1113,7 @@ function agentTarget(
 				!keys.has(`${candidate.action}|${candidate.profile ?? "default"}`),
 		);
 		if (effective.length !== targets.length)
-			return agentTarget(effective, request);
+			return agentTarget(configDir, effective, request);
 	}
 	let candidates = [...targets];
 	if (request.profile)
@@ -1019,26 +1126,30 @@ function agentTarget(
 		throw new Error(
 			`no ${request.action} target of ${request.app.ident} matches profile ${JSON.stringify(request.profile)}`,
 		);
-	const preferred = candidates.filter(
-		(candidate) => (candidate.profile ?? "default") === "default",
-	);
-	// Deterministic and visible (`staged-env-setup-config-root`): the `default`
-	// profile's own target, and never a silent guess between several. Two
-	// default-profile build targets (a Dockerfile and a host-maven script) must
-	// be named by the author or given distinct profiles, not picked by accident.
-	if (preferred.length === 1) return preferred[0] as ActionTarget;
-	if (preferred.length > 1)
+	// One rule for every consumer (`fix-default-target-after-promotion`): a
+	// declaration in `apps/defaults/<app>.json` wins, a single runtime family is
+	// no choice at all, and several families with nothing declared is an error
+	// the caller can act on — never a runtime-preference guess. The defect was
+	// exactly that guess: the gate validated a promoted shell target while the
+	// UI built the live Dockerfile beside it.
+	const decision = resolveDefaultTarget({
+		configDir,
+		...(request.configOverlay ? { configOverlay: request.configOverlay } : {}),
+		appIdent: request.app.ident,
+		action: request.action,
+		targets: candidates,
+	});
+	if (decision.ambiguous)
 		throw new Error(
-			`${request.app.ident} offers several ${request.action} targets for the default profile (${preferred
+			`${request.app.ident} offers several ${request.action} targets for the default profile (${decision.candidates
 				.map((candidate) => candidate.id)
-				.join(", ")}); name one with target or profile`,
+				.join(", ")}); ${decision.reason}`,
 		);
-	if (candidates.length === 1) return candidates[0] as ActionTarget;
-	throw new Error(
-		`${request.app.ident} offers several ${request.action} targets (${candidates
-			.map((candidate) => candidate.id)
-			.join(", ")}); name one with target or profile`,
-	);
+	if (!decision.targetObject)
+		throw new Error(
+			`${request.app.ident} offers no ${request.action} target for the default profile`,
+		);
+	return decision.targetObject;
 }
 
 /**
@@ -1070,7 +1181,7 @@ export async function runAppBuildTestAction(
 		throw new Error(
 			`${request.app.ident} has no ${request.action} target in ${request.checkoutDir}`,
 		);
-	const target = agentTarget(targets, request);
+	const target = agentTarget(services.configDir, targets, request);
 	const definitions = compileContainerTargetsWithTools(
 		request.app.ident,
 		target,

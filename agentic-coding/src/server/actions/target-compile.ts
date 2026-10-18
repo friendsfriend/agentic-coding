@@ -1124,6 +1124,22 @@ export function resolveBuildSourcePath(sourcePath: string): string {
 	}
 }
 
+/** A path as a single-quoted shell word, so a configuration or temporary
+ * directory with a space in it cannot change what a build-context step runs. */
+function shellPath(value: string): string {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/** Whether a directory exists, used to decide whether a build context uses the
+ * configuration's `templates/` overlay at all. */
+function dirExists(dir: string): boolean {
+	try {
+		return fs.statSync(dir).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 function dockerBuildSteps(
 	id: string,
 	appIdent: string,
@@ -1165,26 +1181,36 @@ function dockerBuildSteps(
 		options.tempDir,
 		`devenv-templates-${appIdent}-${id}`,
 	);
-	const markerDirectory = path.dirname(templateMarker);
-
-	// Copy templates (for example .dockerignore) before the build so the build
-	// context does not carry large directories such as node_modules. The marker's
-	// directory is created first: without it the shell reports
-	// `devenv-templates-...: No such file or directory` on every build even
-	// though nothing is wrong — the stderr noise the first real run hit.
+	// The build context overlay (`fix-default-target-after-promotion`): a
+	// configuration may keep `templates/` (typically a `.dockerignore`) that the
+	// app's Dockerfile COPYs, and the overlay copies those entries into the
+	// checkout *for the build only*. It exists only when the configuration really
+	// has that directory — a build context that uses no templates gets no step at
+	// all — it records exactly the entries it copied so the cleanup removes
+	// exactly those, and it fails with a message instead of swallowing an error
+	// (`2>/dev/null; true` used to turn a failed copy into a silent success).
+	const usesTemplates = dirExists(templatesDir);
 	const prepare = step(
 		"prepare-build-context",
 		"Prepare build context",
 		KIND.command,
 	);
-	prepare.configuration = {
-		command: "sh",
-		args: [
-			"-c",
-			`mkdir -p ${markerDirectory} 2>/dev/null; ls -1A ${templatesDir}/ > ${templateMarker} 2>/dev/null; cp -r ${templatesDir}/. . 2>/dev/null; true`,
-		],
-		dir,
-	};
+	if (usesTemplates)
+		prepare.configuration = {
+			command: "sh",
+			args: [
+				"-c",
+				[
+					"set -e",
+					`marker=${shellPath(templateMarker)}`,
+					`templates=${shellPath(templatesDir)}`,
+					'mkdir -p "$(dirname "$marker")"',
+					'ls -1A "$templates/" > "$marker"',
+					'cp -R "$templates/." .',
+				].join("\n"),
+			],
+			dir,
+		};
 	const build = step("build-image", "Build image", KIND.command);
 	const imageName = `devenv-${appIdent}:latest`;
 	build.configuration = {
@@ -1207,14 +1233,23 @@ function dockerBuildSteps(
 		KIND.command,
 	);
 	cleanupTemplates.failurePolicy = FAILURE_ALWAYS_RUN;
-	cleanupTemplates.configuration = {
-		command: "sh",
-		args: [
-			"-c",
-			`if [ -f ${templateMarker} ]; then xargs -I{} rm -rf "{}" < ${templateMarker} 2>/dev/null; rm -f ${templateMarker}; fi`,
-		],
-		dir,
-	};
+	if (usesTemplates)
+		cleanupTemplates.configuration = {
+			command: "sh",
+			args: [
+				"-c",
+				[
+					`marker=${shellPath(templateMarker)}`,
+					'if [ -f "$marker" ]; then',
+					"  while IFS= read -r entry; do",
+					'    if [ -n "$entry" ]; then rm -rf -- "$entry"; fi',
+					'  done < "$marker"',
+					'  rm -f "$marker"',
+					"fi",
+				].join("\n"),
+			],
+			dir,
+		};
 	// Prune superseded images and unused volumes after every successful build.
 	// Docker also has a distinct BuildKit cache while podman's builder prune
 	// aliases image prune. Never `--all`: current tagged images must survive.
@@ -1305,9 +1340,9 @@ function dockerBuildSteps(
 		}),
 	];
 	return [
-		prepare,
+		...(usesTemplates ? [prepare] : []),
 		build,
-		cleanupTemplates,
+		...(usesTemplates ? [cleanupTemplates] : []),
 		prune,
 		inspect,
 		create,

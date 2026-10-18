@@ -547,6 +547,15 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 			Schema.Record({ key: text(4096), value: text(128) }),
 			{ exact: true },
 		),
+		/** Action -> the target id the validation gate resolved as the default,
+		 * recorded when the gate passed (`fix-default-target-after-promotion`). The
+		 * smoke check compares the live resolver's answer with this, so "the live
+		 * default is what the gate validated" is a checked statement. Bounded to
+		 * three actions. */
+		setupValidatedDefaults: Schema.optionalWith(
+			Schema.Record({ key: text(64), value: text(512) }),
+			{ exact: true },
+		),
 		/** Who started the workflow; absent on snapshots that predate the
 		 * attribution, which read as `developer`. */
 		startedBy: Schema.optionalWith(

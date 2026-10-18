@@ -21,10 +21,16 @@ function targetBadge(target: ActionTarget): string {
 
 export function formatActionTargetLabel(target: ActionTarget): string {
 	const profile = target.profile ? ` (${target.profile})` : "";
-	return `${targetBadge(target)} ${target.label}${profile}`;
+	const badge = target.default === true ? " [default]" : "";
+	return `${targetBadge(target)} ${target.label}${profile}${badge}`;
 }
 
 function targetDetails(target: ActionTarget): string {
+	// Why this target is the default (declared in apps/defaults/<app>.json, the
+	// only family on offer, the platform's run preference): the developer reads
+	// the reason, never just a marker.
+	if (target.default === true && target.defaultReason)
+		return target.defaultReason;
 	if (target.runtime !== "kubernetes" || !target.kubernetes) return "";
 	const k = target.kubernetes;
 	const chart = k.chartPath.split(/[\\/]/).slice(-2).join("/");

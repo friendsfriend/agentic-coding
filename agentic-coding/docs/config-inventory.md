@@ -31,6 +31,7 @@ cannot select the root: a root-selecting key inside it is ignored and reported.
 | `.env` | env file | `src/env-file.ts`, `src/backend/home.ts` | Secret/endpoint references. Reads only the named variables. |
 | `providers/*.json` | JSON | `src/server/integrations/provider-store.ts` | `${VAR}` placeholders only; written 0600. |
 | `apps/definitions/*.json`, `libraries/definitions/*.json`, `infrastructure/definitions/*.json` | JSON | `src/server/environment/manager.ts`, `config.ts` | `${CONFIG}`/`$CONFIG` placeholder expansion. |
+| `apps/defaults/<app>.json` | JSON | `src/server/actions/default-target.ts` | Which target is the default for one app and action, so a choice between runtime families is decided instead of guessed. Read by the agent build/test tools, `env_list`, the developer's UI action, the validation gate and the smoke check; drafted and promoted by `env-setup` like any definition file. |
 | `scripts/**` | native | `src/server/environment/example-config.ts` | Stay in their own formats. |
 | `environment-server.json` | JSON | environment authority | Server handoff for a spawned backend. |
 | `wiki/` | OKF markdown | `src/workflow/wiki.ts` | Knowledge bundle; `HERDR_WIKI_DIR` overrides its location. |

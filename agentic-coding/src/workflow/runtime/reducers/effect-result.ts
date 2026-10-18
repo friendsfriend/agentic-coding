@@ -869,6 +869,29 @@ export function effectResult(
 					reviewed[path.slice(0, 4096)] = digest.slice(0, 128);
 			snapshot.metadata.setupReviewedDrafts = reviewed;
 		}
+		// The default target the gate resolved per action: the smoke check resolves
+		// the live configuration through the same rule and fails when they differ
+		// (`fix-default-target-after-promotion`).
+		const defaults =
+			command.data && typeof command.data === "object"
+				? (
+						command.data as {
+							defaults?: Array<{ action?: unknown; targetId?: unknown }>;
+						}
+					).defaults
+				: undefined;
+		if (Array.isArray(defaults)) {
+			const validated: Record<string, string> = {};
+			for (const entry of defaults.slice(0, 8))
+				if (
+					typeof entry?.action === "string" &&
+					typeof entry?.targetId === "string" &&
+					entry.targetId !== ""
+				)
+					validated[entry.action.slice(0, 64)] = entry.targetId.slice(0, 512);
+			if (Object.keys(validated).length > 0)
+				snapshot.metadata.setupValidatedDefaults = validated;
+		}
 	}
 	if (command.outcome === "complete" && row.kind === "workspace.setup") {
 		const data =
