@@ -19,7 +19,6 @@ import {
 	SETTINGS_INVENTORY,
 } from "../src/tui/settings/catalog.ts";
 import {
-	agentMenuInformationalItems,
 	type SettingsContext,
 	settingsItems,
 } from "../src/tui/settings/items.ts";
@@ -361,13 +360,12 @@ describe("orchestrator monitor configuration", () => {
 		});
 	});
 
-	test("a session edit preserves the file-only bounds", () => {
+	test("a session edit preserves the file-only event bounds", () => {
 		withConfig(
 			{
 				agents: {
 					...BASE_CONFIG.agents,
 					orchestrator: {
-						limits: { max_active: 1, max_starts_per_day: 2 },
 						stall_minutes: 45,
 						reconcile_seconds: 60,
 					},
@@ -382,12 +380,11 @@ describe("orchestrator monitor configuration", () => {
 					undefined,
 					loadAgentConfig().revision,
 				);
-				// None of these has an editor here, so an unrelated session edit must not
-				// drop the developer's guard from the configuration file.
+				// Neither has an editor here, so an unrelated session edit must not
+				// drop the developer's bound from the configuration file.
 				expect(loadAgentConfig().agents.orchestrator).toEqual({
 					model: "vendor/m",
 					thinking: "high",
-					limits: { max_active: 1, max_starts_per_day: 2 },
 					stall_minutes: 45,
 					reconcile_seconds: 60,
 				});
@@ -483,33 +480,6 @@ describe("section items surface every inventoried setting", () => {
 		expect(
 			unset.find((candidate) => candidate.id === "agents.orchestrator")?.value,
 		).toContain("monitor wake");
-	});
-
-	test("the launch-limits row states the enforced ceiling and marks the default", () => {
-		const base = context("agents");
-		const row = (agents: Partial<SettingsContext["agents"]>) =>
-			settingsItems({ ...base, agents: { ...base.agents, ...agents } }).find(
-				(item) => item.id === "agents.launch-limits",
-			);
-		// Nothing configured: the defaults are named, and the row is read-only.
-		const defaults = row({});
-		expect(defaults?.value).toBe("5 active · 20 starts per 24 h (defaults)");
-		expect(defaults?.editable).toBe(false);
-		// A configured ceiling is shown without the default marker, and a single
-		// start is not pluralized.
-		expect(
-			row({
-				orchestratorLimits: { maxActive: 1, maxStartsPerDay: 1 },
-				orchestratorLimitsConfigured: true,
-			})?.value,
-		).toBe("1 active · 1 start per 24 h");
-		// The row is not merely inventoried: it is one of the informational rows the
-		// Agent Presets menu renders, so the ceiling reaches the screen.
-		expect(
-			agentMenuInformationalItems(settingsItems(base)).some(
-				(item) => item.id === "agents.launch-limits",
-			),
-		).toBe(true);
 	});
 
 	test("every rendered item belongs to an inventoried setting", () => {

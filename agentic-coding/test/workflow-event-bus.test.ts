@@ -142,6 +142,16 @@ function put(harness: Harness, repo: string, value: WorkflowView): void {
 	harness.views.set(`${repo}\u0000${value.workflowId}`, value);
 }
 
+/** Record `count` `workflow.started` events synchronously: the first listing is
+ * the silent baseline and the second reports every id it did not hold before,
+ * so this is the shortest observable path to a recorded event. */
+function recordStarts(harnessed: Harness, count: number, repo = "/repo"): void {
+	harnessed.bus.noteRepositoryListed(repo);
+	for (let index = 0; index < count; index += 1)
+		put(harnessed, repo, view(`wf-${index}`));
+	harnessed.bus.noteRepositoryListed(repo);
+}
+
 async function waitUntil(
 	condition: () => boolean,
 	timeoutMs = 2_000,
@@ -249,24 +259,6 @@ describe("derivation driver", () => {
 				.readEvents()
 				.events.filter((event) => event.id === "run.stalled"),
 		).toHaveLength(1);
-		harnessed.bus.stop();
-	});
-
-	test("the launch ceiling refusal is recorded with its counts", () => {
-		const harnessed = harness();
-		harnessed.bus.recordLimitHit({
-			limit: "max_active",
-			current: 5,
-			maximum: 5,
-		});
-		const events = harnessed.bus.readEvents().events;
-		expect(events).toHaveLength(1);
-		expect(events[0]?.id).toBe("limit.hit");
-		expect(events[0]?.payload).toMatchObject({
-			limit: "max_active",
-			current: 5,
-			maximum: 5,
-		});
 		harnessed.bus.stop();
 	});
 });
@@ -473,12 +465,7 @@ describe("reconciliation tick", () => {
 describe("bounded log", () => {
 	test("the sequence never restarts and a stale cursor is answered explicitly", () => {
 		const harnessed = harness({ capacity: 3 });
-		for (let index = 0; index < 5; index += 1)
-			harnessed.bus.recordLimitHit({
-				limit: "max_active",
-				current: index,
-				maximum: 5,
-			});
+		recordStarts(harnessed, 5);
 		const all = harnessed.bus.readEvents();
 		expect(all.events).toHaveLength(3);
 		expect(all.oldestSequence).toBe(3);
@@ -619,7 +606,7 @@ describe("subscriptions", () => {
 		} as never);
 		const counted = harnessed.bus.subscribe({
 			label: "counted",
-			filter: { scope: "mine", eventIds: ["limit.hit"] },
+			filter: { scope: "mine", eventIds: ["workflow.started"] },
 			remainingEvents: 1,
 		} as never);
 		harnessed.clock += 120_000;
@@ -647,11 +634,7 @@ describe("subscriptions", () => {
 			harnessed.bus.listSubscriptions().map((subscription) => subscription.id),
 		).not.toContain(untilClosed.id);
 
-		harnessed.bus.recordLimitHit({
-			limit: "max_active",
-			current: 5,
-			maximum: 5,
-		});
+		recordStarts(harnessed, 1, "/other");
 		expect(
 			harnessed.bus.listSubscriptions().map((subscription) => subscription.id),
 		).not.toContain(counted.id);
@@ -1052,17 +1035,21 @@ describe("failure isolation", () => {
 				throw new Error("publish failed");
 			},
 		} as never;
+		const listed: WorkflowView[] = [];
 		const bus = createWorkflowEventBus({
 			events: broker,
 			view: () => view("wf-1"),
-			listViews: () => [view("wf-1")],
+			listViews: () => listed,
 			monitorMode: () => "wake",
 			runtimeDir: fs.mkdtempSync(path.join(os.tmpdir(), "wf-events-throw-")),
 			debounceMs: 5,
 			stallTickMs: 100_000,
 		});
-		bus.recordLimitHit({ limit: "max_active", current: 5, maximum: 5 });
-		bus.recordLimitHit({ limit: "max_active", current: 6, maximum: 5 });
+		// The first listing is the silent baseline; the second derives one
+		// `workflow.started` draft per new id, each one failing to publish.
+		bus.noteRepositoryListed("/repo");
+		listed.push(view("wf-1"), view("wf-2"));
+		bus.noteRepositoryListed("/repo");
 		expect(bus.readEvents().events).toHaveLength(2);
 		bus.stop();
 	});
@@ -1117,19 +1104,10 @@ describe("failure isolation", () => {
 describe("reads", () => {
 	test("a filter with no scope still narrows, and an absent filter reads everything", () => {
 		const harnessed = harness();
-		harnessed.bus.recordLimitHit({
-			limit: "max_active",
-			current: 5,
-			maximum: 5,
-		});
-		harnessed.bus.recordLimitHit({
-			limit: "max_starts_per_day",
-			current: 20,
-			maximum: 20,
-		});
+		recordStarts(harnessed, 2);
 		expect(harnessed.bus.readEvents().events).toHaveLength(2);
 		const narrowed = harnessed.bus.readEvents({
-			filter: { eventIds: ["limit.hit"] },
+			filter: { eventIds: ["workflow.started"] },
 		});
 		expect(narrowed.events).toHaveLength(2);
 		const none = harnessed.bus.readEvents({
@@ -1137,7 +1115,7 @@ describe("reads", () => {
 		});
 		expect(none.events).toEqual([]);
 		const critical = harnessed.bus.readEvents({
-			filter: { eventIds: ["limit.hit"], minSeverity: "critical" },
+			filter: { eventIds: ["workflow.started"], minSeverity: "critical" },
 		});
 		expect(critical.events).toEqual([]);
 		harnessed.bus.stop();
@@ -1182,13 +1160,7 @@ describe("the durable store survives what it cannot read", () => {
 			} as never),
 		).toThrow(StoreUnreadableError);
 		// ...and a background delivery write does not touch the file either.
-		put(harnessed, "/repo", view("wf-1"));
-		harnessed.bus.noteWorkflowUpdated("/repo", "wf-1");
-		harnessed.bus.recordLimitHit({
-			limit: "max_active",
-			current: 5,
-			maximum: 5,
-		});
+		recordStarts(harnessed, 1, "/other");
 		expect(fs.readFileSync(store, "utf8")).toBe(before);
 		harnessed.bus.stop();
 	});

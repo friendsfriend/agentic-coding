@@ -122,7 +122,6 @@ function recordingOperations(calls: Calls): ServerOperations {
 		},
 		blueprintSteps: () => [],
 		validateBlueprint: () => ({ ok: false, diagnostics: [] }),
-		orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 		repair: (request) => {
 			calls.repair = request;
 			return view;
@@ -152,8 +151,6 @@ function recordingOperations(calls: Calls): ServerOperations {
 			provenance: { source: "default", files: [] },
 			conflicts: [],
 			revision: "stub-revision",
-			orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
-			orchestratorLimitsConfigured: false,
 			// The user-scope compaction read the Compaction section renders.
 			compaction: {
 				configured: {},

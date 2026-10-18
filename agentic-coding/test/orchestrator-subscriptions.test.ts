@@ -154,18 +154,22 @@ describe("orchestrator event tools", () => {
 		const runtimeDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "wf-events-route-"),
 		);
+		const listed: WorkflowView[] = [];
 		const bus = createWorkflowEventBus({
 			events: new EventBroker("route-test"),
 			view: (_repository, workflowId) => view(workflowId),
-			listViews: () => [view("wf-1")],
+			listViews: () => listed,
 			monitorMode: () => "wake",
 			runtimeDir,
 			debounceMs: 5,
 			stallTickMs: 100_000,
 			logCapacity: 2,
 		});
-		for (let index = 0; index < 4; index += 1)
-			bus.recordLimitHit({ limit: "max_active", current: index, maximum: 5 });
+		// The first listing is the silent baseline; the second derives one
+		// `workflow.started` per new id, which is the log this test pages through.
+		bus.noteRepositoryListed(repo);
+		for (let index = 0; index < 4; index += 1) listed.push(view(`wf-${index}`));
+		bus.noteRepositoryListed(repo);
 		try {
 			await withServer(
 				async (server, tools) => {
@@ -187,7 +191,9 @@ describe("orchestrator event tools", () => {
 					});
 					// A filter narrows the page, and one that names no scope still does:
 					// the route reads an absent scope as the documented `mine` default.
-					const narrowed = await call(read, { eventIds: ["limit.hit"] });
+					const narrowed = await call(read, {
+						eventIds: ["workflow.started"],
+					});
 					expect(
 						(
 							JSON.parse(narrowed.content[0]?.text ?? "{}") as {

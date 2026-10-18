@@ -248,19 +248,16 @@ describe("delivery planner", () => {
 			formatNote(
 				[
 					{
-						event: event({
-							workflowId: "",
-							stepId: "",
-							id: "limit.hit",
-							payload: { limit: "max_active", current: 5, maximum: 5 },
-						}),
+						event: event({}),
 						labels: [],
 						dueAt: 0,
 					},
 				],
 				EMPTY,
 			),
-		).toBe("[workflow-monitor]\n- limit max_active reached (5/5)");
+		).toBe(
+			"[workflow-monitor]\n- wf-1 → core.developer-review (developer review waiting)",
+		);
 	});
 });
 

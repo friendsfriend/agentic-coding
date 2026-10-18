@@ -492,10 +492,7 @@ describe("orchestrator host mode", () => {
 				},
 				loadAgents: () => ({
 					agents: {},
-					orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
-					orchestratorLimitsConfigured: false,
 				}),
-				orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 			} as unknown as ServerOperations,
 		});
 		const dir = fs.mkdtempSync(
@@ -588,10 +585,7 @@ describe("orchestrator host mode", () => {
 				},
 				loadAgents: () => ({
 					agents: {},
-					orchestratorLimits: { maxActive: 5, maxStartsPerDay: 20 },
-					orchestratorLimitsConfigured: false,
 				}),
-				orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 			} as unknown as ServerOperations,
 			environment: {
 				manager: {
