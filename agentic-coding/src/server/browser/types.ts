@@ -45,6 +45,51 @@ export interface DriverScreenshotOptions {
 	readonly fullPage: boolean;
 	/** Restrict the capture to one element, by CSS selector. */
 	readonly selector?: string;
+	/** Elements whose pixels are covered before the shot
+	 * (`add-stage-testing-foundation`): a password field, or a field a credential
+	 * was typed into, is never part of a returned or stored image. */
+	readonly mask?: readonly DriverLocator[];
+}
+
+/** One way a tool names an element without a CSS selector: an accessible label,
+ * a role plus its accessible name, or a raw selector. A login recipe declares
+ * its controls this way, so the same recipe works across pages of one form
+ * (`add-stage-testing-foundation`). */
+export interface DriverLocator {
+	readonly label?: string;
+	readonly role?: string;
+	readonly name?: string;
+	readonly selector?: string;
+}
+
+/** The stable key of one locator descriptor, resolved in the order the drivers
+ * use (selector, then label, then role+name), so a test can name the control a
+ * fake driver should treat as absent. */
+export function driverLocatorKey(locator: DriverLocator): string {
+	if (locator.selector !== undefined && locator.selector !== "")
+		return `selector=${locator.selector}`;
+	if (locator.label !== undefined && locator.label !== "")
+		return `label=${locator.label}`;
+	return `role=${locator.role ?? ""}[name=${locator.name ?? ""}]`;
+}
+
+/** One request a guarded context is about to make, as the guard sees it. */
+export interface DriverRequestInfo {
+	readonly url: string;
+	readonly method: string;
+	readonly resourceType: string;
+	/** True for a main-frame document navigation: a tool, a script, a redirect
+	 * or a link, but not an image, a font or an XHR. */
+	readonly isMainFrameNavigation: boolean;
+}
+
+/** A stage's request guard: `false` aborts the request. Only a stage-bound
+ * context has one. */
+export type DriverRequestGuard = (request: DriverRequestInfo) => boolean;
+
+export interface DriverHttpCredentials {
+	readonly username: string;
+	readonly password: string;
 }
 
 export interface DriverContextOptions {
@@ -54,6 +99,11 @@ export interface DriverContextOptions {
 		readonly size: { readonly width: number; readonly height: number };
 	};
 	readonly storageState?: unknown;
+	/** HTTP basic credentials, for a stage whose recipe is `http-basic`. */
+	readonly httpCredentials?: DriverHttpCredentials;
+	/** The stage's request guard. It is a context option because the guard must
+	 * survive a recording's context swap. */
+	readonly guard?: DriverRequestGuard;
 }
 
 /** One page of one session. Everything a tool can do to a page is one method
@@ -82,6 +132,20 @@ export interface DriverPage {
 		timeoutMs: number,
 	): Promise<void>;
 	hover(selector: string, timeoutMs: number): Promise<void>;
+	/** Fill one element named by a locator descriptor (a login field). */
+	fillField(
+		locator: DriverLocator,
+		value: string,
+		timeoutMs: number,
+	): Promise<void>;
+	/** Click one control named by a locator descriptor (a login submit). */
+	clickControl(locator: DriverLocator, timeoutMs: number): Promise<void>;
+	/** Wait until one control named by a locator descriptor is visible; throws on
+	 * timeout, which is how a login step learns its control is absent. */
+	waitForControl(locator: DriverLocator, timeoutMs: number): Promise<void>;
+	/** How many elements one locator matches, for the "is an MFA prompt shown"
+	 * probe. */
+	locatorCount(locator: DriverLocator): Promise<number>;
 	waitForSelector(selector: string, timeoutMs: number): Promise<void>;
 	waitForText(text: string, timeoutMs: number): Promise<void>;
 	waitForUrl(pattern: string, timeoutMs: number): Promise<void>;
@@ -110,6 +174,9 @@ export interface DriverContext {
 	page(): Promise<DriverPage>;
 	close(): Promise<void>;
 	storageState(): Promise<unknown>;
+	/** Install HTTP credentials on a live context (`http-basic` login, and the
+	 * credential flow's own reload). */
+	setHttpCredentials(credentials: DriverHttpCredentials): Promise<void>;
 	/** The recorded video, or `undefined` when this context does not record. */
 	video(): DriverVideo | undefined;
 	/** A page that is currently open in this context (a script may open one). */

@@ -5,6 +5,7 @@
 // re-reads are testable without a terminal.
 import type { BrowserStatusResponse } from "../../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../../contracts/gateway.ts";
+import type { StagesStatusResponse } from "../../../contracts/stages.ts";
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
@@ -93,6 +94,7 @@ export interface SettingsContextInput {
 	providers: ProviderSnapshot;
 	classifier?: ClassifierStatusResponse;
 	browser?: BrowserStatusResponse;
+	stages?: StagesStatusResponse;
 }
 
 /**
@@ -142,6 +144,7 @@ export function buildSettingsContext(
 		providers: input.providers,
 		...(input.classifier ? { classifier: input.classifier } : {}),
 		...(input.browser ? { browser: input.browser } : {}),
+		...(input.stages ? { stages: input.stages } : {}),
 	};
 }
 
@@ -163,9 +166,12 @@ export interface SettingsRetryDeps {
 	/** Re-read the agent-config entry the agents/compaction rows render. */
 	refreshAgents: (repository?: string) => Promise<unknown>;
 	refreshBrowser: () => Promise<unknown>;
+	/** Re-read the stage catalog the Stages rows render. */
+	refreshStages: () => Promise<unknown>;
 	/** Re-read the snapshot signal once a read lands, so the section re-renders. */
 	bumpAgents: () => void;
 	bumpBrowser: () => void;
+	bumpStages: () => void;
 }
 
 /**
@@ -178,6 +184,10 @@ export interface SettingsRetryDeps {
 export function retrySettingsSection(deps: SettingsRetryDeps): void {
 	if (deps.section === "browser") {
 		void deps.refreshBrowser().then(deps.bumpBrowser);
+		return;
+	}
+	if (deps.section === "stages") {
+		void deps.refreshStages().then(deps.bumpStages);
 		return;
 	}
 	deps.refreshProviders();

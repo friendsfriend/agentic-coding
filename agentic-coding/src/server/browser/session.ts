@@ -23,14 +23,19 @@
 // Nothing here knows about the pool's capacity, the run's lifetime or evidence:
 // the pool owns those, and every method here is a page operation plus one
 // bounded buffer.
+
+import type { StageRefusal, StageSessionPolicy } from "../stages/guard.ts";
 import { refSelector, snapshotRefs } from "./snapshot.ts";
 import type {
 	DriverConsoleEntry,
 	DriverContext,
+	DriverHttpCredentials,
+	DriverLocator,
 	DriverNetworkEvent,
 	DriverPage,
 	DriverScreenshotOptions,
 } from "./types.ts";
+import { driverLocatorKey } from "./types.ts";
 
 /** Console and network history are ring buffers: the newest entries are what a
  * debugger reads, and a long-lived page must not grow the server's memory. */
@@ -41,6 +46,23 @@ export const DEFAULT_ACTION_TIMEOUT_MS = 10_000;
 /** `browser_wait` may reach further, because waiting is the tool's whole job. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
 export const MAX_WAIT_TIMEOUT_MS = 120_000;
+/** How many refused requests one session reports before it stops counting: a
+ * broken page redirecting in a loop must not grow a buffer without bound. */
+export const MAX_GUARD_EVENTS = 20;
+/** How many credential-filled elements one session remembers for its screenshots:
+ * every stage screenshot resolves all of them, so the ledger is a per-frame cost
+ * a login flow could otherwise inflate without bound. */
+export const MAX_CREDENTIAL_FILLS = 32;
+
+/** The bounds and origin rules a stage-bound session carries
+ * (`add-stage-testing-foundation`): the guard policy itself, so the pool, the
+ * session and the login path all read one object. */
+export type StageSessionBinding = StageSessionPolicy;
+
+/** The selector that covers every password field of a stage screenshot. */
+export const PASSWORD_MASK: DriverLocator = {
+	selector: 'input[type="password"]',
+};
 
 export interface ConsoleEntry {
 	readonly level: string;
@@ -129,7 +151,23 @@ export interface SessionOptions {
 	readonly viewport: { readonly width: number; readonly height: number };
 	readonly baseUrl?: string;
 	readonly app?: string;
+	/** The stage this session is bound to for its whole life, if any. */
+	readonly stage?: StageSessionBinding;
+	/** The shared, bounded refusal buffer of this session, filled by the stage
+	 * guard and drained by the tool call that sees it. */
+	readonly guardEvents?: GuardRefusalRecord[];
 	readonly now?: () => number;
+}
+
+/** One recorded refusal with the sequence number it was recorded at, so a tool
+ * call can tell what its own page work produced from what it is merely
+ * relaying, and whether a result has already reported it. */
+export interface GuardRefusalRecord {
+	readonly seq: number;
+	readonly refusal: StageRefusal;
+	/** Set once a tool result has reported it; it is then reported by nothing
+	 * else. */
+	claimed: boolean;
 }
 
 export class BrowserSession {
@@ -143,6 +181,12 @@ export class BrowserSession {
 	 * useful answer when the live URL is empty. */
 	baseUrl: string;
 	app: string | undefined;
+	/** The stage binding: immutable for the session's life, so a session can never
+	 * be talked into another stage's allow-list. */
+	readonly stage: StageSessionBinding | undefined;
+	/** HTTP basic credentials installed on this session's context, kept so a
+	 * recording's replacement context keeps them. */
+	httpCredentials: DriverHttpCredentials | undefined;
 	viewport: { width: number; height: number };
 	/** Set when the browser process went away under this session. */
 	crashed = false;
@@ -156,6 +200,23 @@ export class BrowserSession {
 	 * bounded by the page's concurrency, never by its total request count. */
 	private readonly inFlight = new Map<string, NetworkEntry>();
 	private active = 0;
+	/** Elements a credential was typed into, so a screenshot covers them. */
+	private readonly credentialFills: DriverLocator[] = [];
+	/** The keys of `credentialFills`, so a repeated fill is one set lookup rather
+	 * than a scan of everything this session has ever filled. */
+	private readonly credentialFillKeys = new Set<string>();
+	/** The refusals the guard recorded, each with the sequence number it was
+	 * recorded at and whether a tool result has reported it yet. Shared with the
+	 * guard installed on the context (and on the recording context after a swap). */
+	private readonly guardEvents: GuardRefusalRecord[];
+	/** How many refusals this session has recorded. The fence a tool call reports
+	 * from; monotonic and never reset. */
+	private refusalSeq = 0;
+	/** The fences of the tool calls currently holding this session, one entry per
+	 * live `beginUse`, keyed by the sequence the call began at. A reported refusal
+	 * is kept while any of them is still below it, so a call that was already in
+	 * flight when it happened is not the call that loses it. */
+	private readonly liveFences = new Map<number, number>();
 	/** True while the pool deliberately replaces this session's context
 	 * (recording), when a page close is expected rather than a crash. */
 	private swapping = false;
@@ -171,6 +232,8 @@ export class BrowserSession {
 		};
 		this.baseUrl = options.baseUrl ?? "";
 		this.app = options.app;
+		this.stage = options.stage;
+		this.guardEvents = options.guardEvents ?? [];
 		this.clock = options.now ?? (() => Date.now());
 		this.createdAt = this.clock();
 		this.lastUsed = this.createdAt;
@@ -227,15 +290,28 @@ export class BrowserSession {
 		return this.active > 0;
 	}
 
-	/** Mark one request in flight on this session. */
-	beginUse(): void {
+	/**
+	 * Mark one request in flight on this session, and answer the refusal fence its
+	 * report reads from: what the guard recorded before this call began is not
+	 * this call's to *own* (it is still reported, as somebody else's).
+	 */
+	beginUse(): number {
 		this.active += 1;
+		const fence = this.refusalSeq;
+		this.liveFences.set(fence, (this.liveFences.get(fence) ?? 0) + 1);
 		this.touch();
+		return fence;
 	}
 
-	/** The matching release; safe to call once per `beginUse`. */
-	endUse(): void {
+	/** The matching release; safe to call once per `beginUse`. The fence is given
+	 * back with it, so a long-running call stops holding refusals open. */
+	endUse(fence?: number): void {
 		this.active = Math.max(0, this.active - 1);
+		if (fence === undefined) return;
+		const live = this.liveFences.get(fence);
+		if (live === undefined) return;
+		if (live > 1) this.liveFences.set(fence, live - 1);
+		else this.liveFences.delete(fence);
 	}
 
 	/** Every operation on a session is a use of it: the idle TTL measures
@@ -382,6 +458,161 @@ export class BrowserSession {
 		return entries.slice(Math.max(0, entries.length - filter.limit));
 	}
 
+	/**
+	 * The refusals a tool call has to report, split by who owns them.
+	 *
+	 * * `mine` — recorded after this call began, so its own page work produced them.
+	 * * `unclaimed` — recorded before it began and not reported by anything yet. The
+	 *   spec is explicit that the *next* tool result on a session reports what the
+	 *   guard refused, including page work that happened between two calls (an
+	 *   abandoned script's own request, a late redirect), and this is that rule.
+	 *
+	 * Reporting is a *claim*, never a clear: one session carries several calls at
+	 * once (a script abandoned by its own timeout keeps driving the page while the
+	 * next call runs), and a call that emptied the buffer would delete the refusals
+	 * of every call still in flight. An entry is dropped once it has been reported
+	 * and no caller with an older fence can still be looking for it.
+	 */
+	claimRefusals(since = 0): {
+		readonly mine: StageRefusal[];
+		readonly unclaimed: StageRefusal[];
+	} {
+		const mine: StageRefusal[] = [];
+		const unclaimed: StageRefusal[] = [];
+		for (const entry of this.guardEvents) {
+			if (entry.claimed) continue;
+			if (entry.seq > since) mine.push(entry.refusal);
+			else unclaimed.push(entry.refusal);
+			entry.claimed = true;
+		}
+		if (this.guardEvents.some((entry) => entry.claimed)) this.pruneClaimed();
+		return { mine, unclaimed };
+	}
+
+	/** Record one refusal, bounded. Called by the guard this session installed. */
+	recordRefusal(refusal: StageRefusal): void {
+		this.refusalSeq += 1;
+		// Bounded, and the *oldest* goes: the refusals a call can still act on are
+		// the ones the page just produced.
+		if (this.guardEvents.length >= MAX_GUARD_EVENTS) this.guardEvents.shift();
+		this.guardEvents.push({
+			seq: this.refusalSeq,
+			refusal,
+			claimed: false,
+		});
+	}
+
+	/** Drop the reported refusals no live call can still be looking for: one below
+	 * the lowest live fence belongs to a call that has already read it or begun
+	 * after it happened. */
+	private pruneClaimed(): void {
+		const floor = this.lowestLiveFence();
+		for (let index = this.guardEvents.length - 1; index >= 0; index -= 1) {
+			const entry = this.guardEvents[index] as GuardRefusalRecord;
+			if (!entry.claimed) continue;
+			if (floor !== undefined && entry.seq > floor) continue;
+			this.guardEvents.splice(index, 1);
+		}
+	}
+
+	/** The fence the oldest live call began at, or `undefined` when none is live. */
+	private lowestLiveFence(): number | undefined {
+		let lowest: number | undefined;
+		for (const fence of this.liveFences.keys())
+			if (lowest === undefined || fence < lowest) lowest = fence;
+		return lowest;
+	}
+
+	/** Refuse using a stage session for another stage. */
+	assertStage(ident: string): void {
+		if (!this.stage)
+			throw new BrowserSessionError(
+				"stage-session-required",
+				`this session is not stage-bound, so it cannot be used for stage ${ident}`,
+				409,
+			);
+		if (this.stage.ident !== ident)
+			throw new BrowserSessionError(
+				"stage-mismatch",
+				`this session is bound to stage ${this.stage.ident}; a session cannot be re-bound to ${ident}`,
+				409,
+			);
+	}
+
+	/**
+	 * Fill one element with a resolved credential.
+	 *
+	 * The value is passed straight to the driver and never stored, echoed or
+	 * logged; what *is* remembered is the locator, so every element a credential
+	 * was typed into can be covered in the next screenshot.
+	 */
+	async fillCredential(
+		locator: DriverLocator,
+		value: string,
+		timeoutMs = DEFAULT_ACTION_TIMEOUT_MS,
+	): Promise<void> {
+		this.touch();
+		try {
+			await this.page.fillField(locator, value, timeoutMs);
+		} catch (error) {
+			// The driver's `fill` writes the value it was handed into its own call
+			// log, and every error Playwright throws carries that log back inside its
+			// message. So the error is *replaced*, never re-thrown: no credential can
+			// travel in a message to the model, a log line or a transcript, whatever
+			// shape a driver's failure message has.
+			throw new BrowserSessionError(
+				"credential-fill-failed",
+				`the element ${driverLocatorKey(locator)} could not be filled with a credential (${error instanceof Error ? error.name : "Error"}); nothing of the value is reported`,
+				502,
+			);
+		}
+		const key = driverLocatorKey(locator);
+		if (this.credentialFillKeys.has(key)) return;
+		// Bounded: `maskLocators` resolves every entry on *every* stage screenshot,
+		// so an unbounded ledger is a per-frame cost a login flow could inflate with
+		// a loop of distinct selectors. The oldest key is dropped instead of the
+		// newest refused, and `PASSWORD_MASK` still covers policy-named password
+		// fields whether or not their own element is still remembered.
+		if (this.credentialFills.length >= MAX_CREDENTIAL_FILLS) {
+			const dropped = this.credentialFills.shift();
+			if (dropped) this.credentialFillKeys.delete(driverLocatorKey(dropped));
+		}
+		this.credentialFillKeys.add(key);
+		this.credentialFills.push(locator);
+	}
+
+	/** The elements a stage screenshot has to cover: every password field, plus
+	 * every element this session typed a credential into. */
+	maskLocators(): DriverLocator[] {
+		if (!this.stage) return [];
+		return [PASSWORD_MASK, ...this.credentialFills];
+	}
+
+	/** Wait for one control named by a locator descriptor; throws on timeout,
+	 * which is how a login step learns its control is absent. */
+	async waitForControl(
+		locator: DriverLocator,
+		timeoutMs: number,
+	): Promise<void> {
+		this.touch();
+		await this.page.waitForControl(locator, timeoutMs);
+	}
+
+	/** Click one control named by a locator descriptor. */
+	async clickControl(
+		locator: DriverLocator,
+		timeoutMs = DEFAULT_ACTION_TIMEOUT_MS,
+	): Promise<void> {
+		this.touch();
+		await this.page.clickControl(locator, timeoutMs);
+	}
+
+	/** How many elements one locator matches (the MFA-prompt probe). */
+	async locatorCount(locator: DriverLocator): Promise<number> {
+		this.touch();
+		return await this.page.locatorCount(locator);
+	}
+
 	async goto(url: string, timeoutMs: number): Promise<number | null> {
 		this.touch();
 		const status = await this.page.goto(url, timeoutMs);
@@ -499,6 +730,9 @@ export class BrowserSession {
 				...(options.quality === undefined ? {} : { quality: options.quality }),
 				fullPage: options.fullPage,
 				...(selector === undefined ? {} : { selector }),
+				// A stage screenshot covers every password field and every element a
+				// credential was typed into; another session has nothing to mask.
+				...(this.stage ? { mask: this.maskLocators() } : {}),
 			});
 		} finally {
 			if (narrowed) await this.page.setViewportSize(previous);

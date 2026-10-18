@@ -65,6 +65,7 @@ import {
 	type ToolPolicy,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
+import { createStageExtension } from "./stage-tools.ts";
 import {
 	attachTelemetry,
 	type EntryTiming,
@@ -417,6 +418,11 @@ export class DurableHost {
 		// endpoints of the apps it holds — all of which a verifier needs.
 		const debug = createDebugExtension(lookup);
 		registry.install(debug);
+		// The stage tool rides it too: a run reads the hosted stages this
+		// configuration allows (never a credential value) and finds out which role
+		// to log in as, which a read-only verifier needs as much as a coder.
+		const stages = createStageExtension(lookup);
+		registry.install(stages);
 		// The delegated debug request tools ride every durable run except a
 		// `debug` run itself: the delegation has to be impossible from the role
 		// that answers requests, not merely discouraged
@@ -429,6 +435,7 @@ export class DurableHost {
 			...(search.tools ?? []),
 			...(environment.tools ?? []),
 			...(browser.tools ?? []),
+			...(stages.tools ?? []),
 			...(debug.tools ?? []),
 			...(debugRequests.tools ?? []),
 		];

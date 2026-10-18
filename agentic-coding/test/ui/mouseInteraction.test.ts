@@ -181,6 +181,7 @@ const EXPLICIT_ONLY = [
 	"action-run",
 	"passphrase",
 	"task-add",
+	"stage-credential",
 ] as const;
 
 test("the dismissal policy is one table: read-only dismisses, guarded keeps its control", () => {
@@ -193,6 +194,7 @@ test("the dismissal policy is one table: read-only dismisses, guarded keeps its 
 	expect(backdropDismiss("credentials")).toBe(false);
 	expect(backdropDismiss("developer-question")).toBe(false);
 	expect(backdropDismiss("number-editor")).toBe(false);
+	expect(backdropDismiss("stage-credential")).toBe(false);
 	expect(backdropDismiss("quit-confirm")).toBe(false);
 	expect(backdropDismiss("confirm")).toBe(false);
 	// State guard: a draft, a secret or a running operation is never dismissed,

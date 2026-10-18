@@ -34,6 +34,7 @@ export type PageId =
 	| "settings.browser"
 	| "settings.compaction"
 	| "settings.providers"
+	| "settings.stages"
 	| "environments"
 	| "environments.applications"
 	| "environments.libraries"
@@ -85,6 +86,7 @@ export const SETTINGS_SECTIONS = [
 	"browser",
 	"compaction",
 	"providers",
+	"stages",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
@@ -97,6 +99,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<
 	browser: "Browser",
 	compaction: "Compaction",
 	providers: "Providers/credentials",
+	stages: "Stages",
 };
 
 /** One-line description of what each Settings section edits and where. */
@@ -109,6 +112,7 @@ export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
 	compaction:
 		"When durable agent runs summarize their own context, and how much room they keep",
 	providers: "Git providers and protected credentials",
+	stages: "The hosted stages agent runs may drive, and their credential status",
 };
 
 /** The page identity of one Settings section. */
@@ -211,6 +215,11 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	},
 	"settings.providers": {
 		label: SETTINGS_SECTION_LABELS.providers,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.stages": {
+		label: SETTINGS_SECTION_LABELS.stages,
 		parent: () => ({ page: "settings" }),
 		picker: true,
 	},

@@ -28,6 +28,7 @@ import {
 } from "../../workflow/effects.ts";
 import { workflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts";
 import { readJsonBody } from "../auth.ts";
+import { environmentSecrets, redact } from "../environment/agent-routes.ts";
 import type { EnvironmentManager } from "../environment/manager.ts";
 import {
 	type LocatedEvidenceWorkflow,
@@ -39,6 +40,7 @@ import {
 	AGENT_BROWSER_CLOSE_PATH,
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
+	AGENT_BROWSER_LOGIN_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
@@ -49,8 +51,23 @@ import {
 	decodeRouteRequest,
 } from "../protocol.ts";
 import type { EnvironmentInstanceController } from "../runtime/instances.ts";
+import {
+	readStageCatalog,
+	type StageCatalog,
+	type StageEntry,
+	stageByIdent,
+	stageCredentialVariables,
+	stageRefusalReason,
+} from "../stages/catalog.ts";
+import { type StageRefusal, sanitizeStageUrl } from "../stages/guard.ts";
+import {
+	type StageAdmission,
+	StageLimitError,
+	StageUsageRegistry,
+} from "../stages/limits.ts";
 import { BrowserPoolError } from "./errors.ts";
 import type { BrowserInstaller } from "./install.ts";
+import { fillStageCredential, runStageLogin } from "./login.ts";
 import type { BrowserPool } from "./pool.ts";
 import { createScriptExpect } from "./script-expect.ts";
 import {
@@ -59,6 +76,7 @@ import {
 	DEFAULT_ACTION_TIMEOUT_MS,
 	DEFAULT_WAIT_TIMEOUT_MS,
 	MAX_WAIT_TIMEOUT_MS,
+	type StageSessionBinding,
 } from "./session.ts";
 
 /** The session a call names when it names none. */
@@ -83,9 +101,37 @@ export interface BrowserRouteDeps {
 	readonly settings: () => ResolvedBrowserSettings;
 	readonly apps?: Pick<EnvironmentManager, "getAppByIdent">;
 	readonly instances?: EnvironmentInstanceController;
+	/** The configuration root the stage catalog is read from. Absent in a test
+	 * that drives no stage, where every stage open is `stage-not-configured`. */
+	readonly configDir?: string;
+	/** The per-workflow stage bounds and leases. The server passes one registry
+	 * for the process's life, so a rolling minute survives between requests. */
+	readonly stages?: StageUsageRegistry;
 	/** Test seam: locate a workflow without the engine. */
 	readonly locate?: (workflowId: string) => LocatedEvidenceWorkflow | undefined;
 	readonly now?: () => number;
+}
+
+/** The registry of one `BrowserRouteDeps` object, created on first use and kept
+ * for that object's life — so a rolling minute is a minute even when a caller
+ * did not pass a registry of its own. */
+const registries = new WeakMap<BrowserRouteDeps, StageUsageRegistry>();
+
+function stageUsage(deps: BrowserRouteDeps): StageUsageRegistry {
+	const existing = deps.stages ?? registries.get(deps);
+	if (existing) return existing;
+	const created = new StageUsageRegistry({
+		...(deps.now ? { now: deps.now } : {}),
+		stageSessions: (owner, stage) => deps.pool.stageSessions(owner, stage),
+	});
+	registries.set(deps, created);
+	return created;
+}
+
+/** The catalog of this request, read fresh so a stage file the developer just
+ * edited applies to the next call. */
+function stageCatalog(deps: BrowserRouteDeps): StageCatalog {
+	return readStageCatalog(deps.configDir ?? "");
 }
 
 function json(value: unknown, status = 200): Response {
@@ -125,6 +171,15 @@ export function browserStatusValue(
 	};
 }
 
+/** One session a request is using, and the refusal fence it reports from: what
+ * the guard recorded *before* this call began is not this call's to report. The
+ * two travel together because a session can be used by more than one call at
+ * once (a script abandoned by its own timeout keeps running). */
+interface SessionUse {
+	readonly session: BrowserSession;
+	readonly refusalsFrom: number;
+}
+
 /**
  * The owner-scoped browser routes. Answers `undefined` for a path this module
  * does not own, so `app.ts` can keep handing the rest of the capability prefix
@@ -141,30 +196,248 @@ export async function handleBrowserRoute(
 	if (!path.startsWith("/api/v1/agent-env/browser/")) return undefined;
 	// Sessions a request uses are marked in flight for its whole duration, so the
 	// idle sweep cannot close a page under a running script.
-	const used: BrowserSession[] = [];
+	const used: SessionUse[] = [];
+	let status = 200;
+	let envelope: Record<string, unknown>;
 	try {
 		const value = await dispatch(deps, request, path, method, owner, used);
-		return json({ ok: true, value });
+		envelope = { ok: true, value };
+	} catch (error) {
+		if (error instanceof StageLimitError) {
+			status = error.code === "stage-rate-limit" ? 429 : 409;
+			envelope = {
+				error: {
+					code: error.code,
+					message: error.message,
+					...(error.retryAfterMs === undefined
+						? {}
+						: { retryAfterMs: error.retryAfterMs }),
+				},
+			};
+		} else if (
+			error instanceof BrowserPoolError ||
+			error instanceof BrowserSessionError ||
+			error instanceof EvidenceError
+		) {
+			status = error.status;
+			envelope = { error: { code: error.code, message: error.message } };
+		} else {
+			status = 400;
+			envelope = {
+				error: { code: "browser-failed", message: message(error) },
+			};
+		}
+	} finally {
+		for (const use of used) use.session.endUse(use.refusalsFrom);
+	}
+	// A stage guard refuses requests the session's *page* made, not the call that
+	// triggered them, so what it recorded is reported on this result: an aborted
+	// navigation becomes the call's own refusal, and a refusal a page caused on
+	// its own is attached for the model to read.
+	const refusals = drainRefusals(used);
+	const applied = applyRefusals(envelope, refusals, status);
+	envelope = applied.envelope;
+	status = applied.status;
+	// Every browser reply passes the shared redactor (the configuration `.env`
+	// values, in plain and URL-encoded form) and the URL sanitizer, so a token in
+	// a page's text, in an evaluated value, in a console line or in a redirect's
+	// query or fragment cannot reach a tool result, a log or an evidence file.
+	const redacted = sanitizeUrlsIn(redact(envelope, redactionSecrets(deps)));
+	return json(redacted, status);
+}
+
+/** The refusals a request's sessions have to report: its own, plus whatever no
+ * result has reported yet. */
+function drainRefusals(used: readonly SessionUse[]): RefusalReport {
+	const mine: StageRefusal[] = [];
+	const unclaimed: StageRefusal[] = [];
+	for (const use of used) {
+		const report = use.session.claimRefusals(use.refusalsFrom);
+		mine.push(...report.mine);
+		unclaimed.push(...report.unclaimed);
+	}
+	return { mine, unclaimed };
+}
+
+/** One result's refusals, split by whether the call that reports them owns them.
+ *
+ * * `mine` — this call's own page work, which is what may turn its answer into
+ *   the refusal (a navigation the guard aborted is the call's own failure).
+ * * `unclaimed` — recorded before this call began and reported by nothing since:
+ *   the spec says the *next* tool result on the session reports the guard's
+ *   refusals, so a refusal that arrives between two calls is relayed by the next
+ *   one. Relaying is not owning: it never rewrites that call's status. */
+interface RefusalReport {
+	readonly mine: StageRefusal[];
+	readonly unclaimed: StageRefusal[];
+}
+
+/** Attach the refusals to one envelope, and let a refused navigation answer
+ * with the refusal's own code — and its own status, so a refusal is never
+ * reported as a bad request — instead of a bare `net::ERR_ABORTED`. Only a
+ * refusal this call produced can do that; a relayed one leaves the status it
+ * was given. */
+function applyRefusals(
+	envelope: Record<string, unknown>,
+	report: RefusalReport,
+	status: number,
+): { readonly envelope: Record<string, unknown>; readonly status: number } {
+	const refusals = [...report.mine, ...report.unclaimed];
+	if (refusals.length === 0) return { envelope, status };
+	const events = refusals.map((refusal) => ({
+		code: refusal.code,
+		url: refusal.url,
+		...(refusal.method ? { method: refusal.method } : {}),
+	}));
+	const error = envelope.error as
+		| { code?: string; message?: string }
+		| undefined;
+	if (
+		report.mine.length > 0 &&
+		error?.code === "browser-failed" &&
+		looksAborted(error.message ?? "")
+	) {
+		const refusal = report.mine[report.mine.length - 1] as StageRefusal;
+		return {
+			// Both refusals are the same answer to the caller — a stage policy said no —
+			// so the aborted call is reported as `403`, not as a bad request.
+			status: 403,
+			envelope: {
+				...envelope,
+				error: { code: refusal.code, message: refusalMessage(refusal) },
+				guardEvents: events,
+			},
+		};
+	}
+	return { envelope: { ...envelope, guardEvents: events }, status };
+}
+
+/** Both refusals are the same answer to the caller: a stage policy said no. */
+
+function looksAborted(text: string): boolean {
+	return text.includes("net::") || text.includes("ERR_ABORTED");
+}
+
+/** One refusal, as prose. The URL is already sanitized (origin and path only),
+ * so a refusal can be reported without leaking a query or a fragment. */
+export function refusalMessage(refusal: StageRefusal): string {
+	if (refusal.code === "stage-read-only")
+		return `this stage is read-only, so the ${refusal.method} request to ${refusal.url} was aborted; a declared readOnlyExceptions entry is what allows one`;
+	return `${refusal.url} is not in this stage's origin allow-list, so the navigation was aborted; use an origin the stage declares in allowedOrigins`;
+}
+
+/** The secret values every browser reply is scrubbed of: the configuration
+ * `.env` (all of a stage's credentials come from there), each value also in its
+ * URL-encoded form, because a credential reaches a URL encoded far more often
+ * than plain. */
+function redactionSecrets(
+	deps: BrowserRouteDeps,
+): ReturnType<typeof environmentSecrets> {
+	const base = environmentSecrets(deps.configDir ?? "");
+	const encoded = base.flatMap((secret) => {
+		const value = encodeURIComponent(secret.value);
+		return value === secret.value
+			? []
+			: [{ name: `${secret.name}:url-encoded`, value }];
+	});
+	return [...base, ...encoded].sort(
+		(left, right) => right.value.length - left.value.length,
+	);
+}
+
+/** Query parameters whose value never survives a reported URL. */
+const SENSITIVE_URL_PARAM =
+	/(^|_)(token|code|secret|password|passwd|pwd|key|session|sessionid|sid|sig|signature|auth|assertion|saml|ticket|state|nonce)($|_)/i;
+
+/**
+ * Sanitize every URL-shaped string of a reply: a token-like query parameter is
+ * replaced, and a fragment that carries something (an OAuth implicit-flow
+ * `#access_token=…`, a callback `#code=…`) is replaced whole. A plain anchor
+ * (`#section`) is left alone, and a URL nothing had to be hidden in is returned
+ * unchanged, so page content stays byte-identical except where a secret sat.
+ */
+export function sanitizeUrlsIn(value: string): string;
+export function sanitizeUrlsIn(value: unknown): unknown;
+export function sanitizeUrlsIn(value: unknown): unknown {
+	if (typeof value === "string") return sanitizeUrlTokens(value);
+	if (Array.isArray(value)) return value.map((item) => sanitizeUrlsIn(item));
+	if (value === null || typeof value !== "object") return value;
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value))
+		out[key] = sanitizeUrlsIn(item);
+	return out;
+}
+
+function sanitizeUrlTokens(text: string): string {
+	if (!text.includes("://")) return text;
+	return text.replace(/https?:\/\/[^\s"'<>)\\]+/g, (raw) => sanitizeUrl(raw));
+}
+
+/** One URL, or the same text when there was nothing to hide. */
+function sanitizeUrl(raw: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		return raw;
+	}
+	let changed = false;
+	for (const key of [...parsed.searchParams.keys()]) {
+		if (!SENSITIVE_URL_PARAM.test(key) || parsed.searchParams.get(key) === "")
+			continue;
+		parsed.searchParams.set(key, "redacted");
+		changed = true;
+	}
+	const fragment = parsed.hash.slice(1);
+	if (fragment !== "" && (fragment.includes("=") || fragment.length >= 16)) {
+		parsed.hash = "#redacted";
+		changed = true;
+	}
+	return changed ? parsed.toString() : raw;
+}
+
+/** One session URL as an evidence entry may carry it.
+ *
+ * An evidence entry is written to disk and read long after the call that made it,
+ * and the reply redactor runs on the *reply*: a callback URL's token, or a
+ * signed `?sig=…`, would otherwise survive in the manifest, in the dashboard's
+ * evidence list and in a later report. So the same redactor and the same URL
+ * sanitizer every reply passes are applied *before* anything is attached. */
+function evidenceUrl(deps: BrowserRouteDeps, url: string): string {
+	const redacted = redact(url, redactionSecrets(deps));
+	const sanitized = sanitizeUrlsIn(
+		typeof redacted === "string" ? redacted : url,
+	);
+	return typeof sanitized === "string" ? sanitized : url;
+}
+
+/**
+ * Run one credential-handling call so that nothing its failure carries can reach
+ * the caller.
+ *
+ * The value's own stops already refuse to quote it (`BrowserSession.fillCredential`),
+ * but a credential flow is the one place where a *third* party's error could
+ * still carry it: a locator failure, a browser-level message, a driver's call
+ * log. An error this module defines passes through unchanged — it is value-free
+ * by construction — and anything else becomes one that is, with its name as the
+ * only detail.
+ */
+async function withoutCredentialEcho<T>(run: () => Promise<T>): Promise<T> {
+	try {
+		return await run();
 	} catch (error) {
 		if (
+			error instanceof BrowserSessionError ||
 			error instanceof BrowserPoolError ||
-			error instanceof BrowserSessionError
+			error instanceof StageLimitError ||
+			error instanceof EvidenceError
 		)
-			return json(
-				{ error: { code: error.code, message: error.message } },
-				error.status,
-			);
-		if (error instanceof EvidenceError)
-			return json(
-				{ error: { code: error.code, message: error.message } },
-				error.status,
-			);
-		return json(
-			{ error: { code: "browser-failed", message: message(error) } },
-			400,
+			throw error;
+		throw new BrowserSessionError(
+			"credential-failed",
+			`the credential flow failed (${error instanceof Error ? error.name : "Error"}); nothing of the value is reported`,
+			502,
 		);
-	} finally {
-		for (const session of used) session.endUse();
 	}
 }
 
@@ -176,7 +449,7 @@ async function dispatch(
 	owner: string,
 	/** The sessions this request has begun work on, released by the caller when
 	 * the request ends. */
-	used: BrowserSession[],
+	used: SessionUse[],
 ): Promise<unknown> {
 	// Every call releases what the idle TTL has expired, so an abandoned run's
 	// sessions cannot hold the cap until a timer nobody owns fires.
@@ -185,7 +458,7 @@ async function dispatch(
 		const body = decodeRouteRequest<
 			import("../../contracts/browser.ts").BrowserOpenRequest
 		>(path, await readJsonBody(request));
-		return await openSession(deps, owner, body);
+		return await openSession(deps, owner, body, used);
 	}
 	if (method === "POST" && path === AGENT_BROWSER_SNAPSHOT_PATH) {
 		const body = decodeRouteRequest<
@@ -296,6 +569,12 @@ async function dispatch(
 		>(path, await readJsonBody(request));
 		return await runScript(deps, owner, used, body);
 	}
+	if (method === "POST" && path === AGENT_BROWSER_LOGIN_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserStageLoginRequest
+		>(path, await readJsonBody(request));
+		return await stageLogin(deps, owner, used, body);
+	}
 	if (method === "POST" && path === AGENT_BROWSER_CLOSE_PATH) {
 		const body = decodeRouteRequest<
 			import("../../contracts/browser.ts").BrowserSessionRequest
@@ -322,11 +601,14 @@ function ownerWorkflowId(owner: string): string | undefined {
 /**
  * Resolve what to open.
  *
- * A raw URL is always allowed: an agent already has a shell and a browser it
- * can point at anything, so refusing a URL here would be theatre. An app
- * endpoint is different — it resolves to another workflow's code — so it is
- * allowed only while *this* workflow holds the app, and the refusal names the
- * holder so the agent learns who to ask instead of retrying.
+ * A raw URL is always allowed *for a session that is not stage-bound*: an agent
+ * already has a shell and a browser it can point at anything, so refusing a URL
+ * there would be theatre. A stage-bound session is different — its allow-list
+ * exists to keep a run on one environment — so a raw URL whose origin the stage
+ * does not declare is refused with `origin-not-allowed`. An app endpoint is
+ * different again: it resolves to another workflow's code, so it is allowed
+ * only while *this* workflow holds the app, and the refusal names the holder so
+ * the agent learns who to ask instead of retrying.
  */
 async function resolveOpenUrl(
 	deps: BrowserRouteDeps,
@@ -399,42 +681,275 @@ async function openSession(
 	deps: BrowserRouteDeps,
 	owner: string,
 	body: import("../../contracts/browser.ts").BrowserOpenRequest,
+	used: SessionUse[],
 ): Promise<unknown> {
 	const settings = deps.settings();
+	const name = body.session ?? DEFAULT_BROWSER_SESSION;
+	// A stage open is resolved from the catalog, and it is the only way to bind a
+	// session: an existing session keeps its binding for life.
+	const bound = await resolveOpenTarget(deps, owner, body, name);
+	// An open navigates, so its page work is its own: the fence is taken here,
+	// before the context is created (a session a workflow already holds) or before
+	// the first navigation runs (a brand-new one, whose refusal buffer starts
+	// empty, so its fence is 0 and every refusal it records is this open's).
+	const before = deps.pool.find(owner, name);
+	const fence = before ? before.beginUse() : 0;
+	try {
+		const session = await deps.pool.acquire({
+			owner,
+			name,
+			viewport: clampViewport(body.viewport, settings.viewport),
+			url: bound.url,
+			...(bound.app ? { app: bound.app } : {}),
+			...(bound.stage ? { stage: bound.stage } : {}),
+			// The admission below was skipped because this name already had a session;
+			// the pool may then only reuse it. Creating one here would be a context
+			// outside the exclusive lease and the stage's session bound.
+			...(bound.reuseOnly ? { reuseOnly: true } : {}),
+		});
+		// The reply carries the refusals the open's own navigation produced, exactly
+		// as every other call on the session does. A session the pool had to create
+		// is not the one the fence was taken on, and its buffer is fresh.
+		used.push({
+			session,
+			refusalsFrom: session === before ? fence : session.beginUse(),
+		});
+		return {
+			session: session.name,
+			url: session.url,
+			...(session.app ? { app: session.app } : {}),
+			...(session.stage ? { stage: session.stage.ident } : {}),
+			viewport: { ...session.viewport },
+			sessions: deps.pool.ownedBy(owner).length,
+		};
+	} finally {
+		// The admission is what made this open visible to the stage's lease and to
+		// its session bound while the context was being created; from here on the
+		// pool's own session count is what holds the slot, on every path.
+		bound.admission?.settle();
+	}
+}
+
+/**
+ * The URL one open resolves to, and the stage binding it carries.
+ *
+ * Three cases, in the order the spec names them: a stage open (resolved from the
+ * catalog, with the per-stage session bound and the exclusive lease taken before
+ * any context exists), a raw URL or endpoint in an existing stage-bound session
+ * (checked against the binding's allow-list), and every other open unchanged.
+ */
+async function resolveOpenTarget(
+	deps: BrowserRouteDeps,
+	owner: string,
+	body: import("../../contracts/browser.ts").BrowserOpenRequest,
+	name: string,
+): Promise<{
+	url: string;
+	app?: string;
+	stage?: StageSessionBinding;
+	admission?: StageAdmission;
+	/** True when the session this open resolves to already exists, so the pool
+	 * must reuse it rather than create one without an admission. */
+	reuseOnly?: boolean;
+}> {
+	const existing = deps.pool.find(owner, name);
+	const stageIdent = body.stage?.trim();
+	if (stageIdent) return resolveStageOpen(deps, owner, body, name, stageIdent);
 	const resolved = await resolveOpenUrl(deps, owner, body);
-	const session = await deps.pool.acquire({
-		owner,
-		name: body.session ?? DEFAULT_BROWSER_SESSION,
-		viewport: clampViewport(body.viewport, settings.viewport),
-		url: resolved.url,
-		...(resolved.app ? { app: resolved.app } : {}),
-	});
-	return {
-		session: session.name,
-		url: session.url,
-		...(session.app ? { app: session.app } : {}),
-		viewport: { ...session.viewport },
-		sessions: deps.pool.ownedBy(owner).length,
+	if (existing?.stage) assertAllowedOrigin(existing.stage, resolved.url);
+	return resolved;
+}
+
+function resolveStageOpen(
+	deps: BrowserRouteDeps,
+	owner: string,
+	body: import("../../contracts/browser.ts").BrowserOpenRequest,
+	name: string,
+	ident: string,
+): {
+	url: string;
+	app?: string;
+	stage: StageSessionBinding;
+	admission?: StageAdmission;
+} {
+	const entry = stageEntryFor(deps, ident);
+	const appKey = body.stageApp?.trim();
+	if (!appKey)
+		throw new BrowserPoolError(
+			"stage-app-unknown",
+			`browser_open on stage ${ident} needs a stageApp; the stage declares ${Object.keys(entry.stage.apps).join(", ")}`,
+			400,
+		);
+	const app = entry.stage.apps[appKey];
+	if (!app)
+		throw new BrowserPoolError(
+			"stage-app-unknown",
+			`stage ${ident} declares no application ${JSON.stringify(appKey)}; it declares ${Object.keys(entry.stage.apps).join(", ")}`,
+			404,
+		);
+	const existing = deps.pool.find(owner, name);
+	if (existing && existing.stage?.ident !== ident)
+		throw new BrowserPoolError(
+			"stage-mismatch",
+			existing.stage
+				? `session ${JSON.stringify(name)} is bound to stage ${existing.stage.ident}; a session cannot be re-bound to ${ident}`
+				: `session ${JSON.stringify(name)} already exists and is not stage-bound; close it first, or open stage ${ident} under a fresh session name`,
+			409,
+		);
+	const url = joinStagePath(app.url, body.path);
+	const binding: StageSessionBinding = {
+		ident: entry.ident,
+		access: entry.stage.access,
+		origins: entry.origins,
+		readOnlyExceptions: entry.stage.readOnlyExceptions ?? [],
+		limits: entry.limits,
 	};
+	assertAllowedOrigin(binding, url);
+	// The bounds and the lease are claimed before a context exists, and only for a
+	// genuinely new session: re-opening the session a workflow already has on the
+	// stage must not count it twice. The admission is what the caller settles once
+	// the open has finished, so the stage counts as held for the whole of it.
+	const admission = existing
+		? undefined
+		: stageUsage(deps).open({
+				stage: entry.ident,
+				exclusive: entry.stage.exclusive === true,
+				maxSessions: entry.limits.maxSessions,
+				owner,
+			});
+	return {
+		url,
+		...(app.app ? { app: app.app } : { app: appKey }),
+		stage: binding,
+		...(admission ? { admission } : {}),
+		...(existing ? { reuseOnly: true } : {}),
+	};
+}
+
+/** One stage application's URL, with the optional path appended. */
+function joinStagePath(base: string, suffix: string | undefined): string {
+	const extra = suffix?.trim();
+	if (!extra) return base;
+	try {
+		return new URL(extra, base).toString();
+	} catch {
+		throw new BrowserPoolError(
+			"origin-not-allowed",
+			`${JSON.stringify(extra)} is not a path this stage's ${base} can be opened at`,
+			400,
+		);
+	}
+}
+
+/** Refuse a URL a stage-bound session must not navigate to. */
+function assertAllowedOrigin(binding: StageSessionBinding, url: string): void {
+	let origin: string | undefined;
+	try {
+		origin = new URL(url).origin;
+	} catch {
+		origin = undefined;
+	}
+	if (origin && binding.origins.includes(origin)) return;
+	throw new BrowserPoolError(
+		"origin-not-allowed",
+		`${sanitizeStageUrl(url)} is not in stage ${binding.ident}'s origin allow-list (${binding.origins.join(", ")})`,
+		403,
+	);
+}
+
+/** One allow-listed stage of this request's catalog. An unknown ident and an
+ * excluded one answer the same code, with the exclusion reason when there is
+ * one — a refused stage file must never be silently absent. */
+function stageEntryFor(deps: BrowserRouteDeps, ident: string): StageEntry {
+	const catalog = stageCatalog(deps);
+	const entry = stageByIdent(catalog, ident);
+	if (entry) return entry;
+	const reason = stageRefusalReason(catalog, ident);
+	throw new BrowserPoolError(
+		"stage-not-configured",
+		`stage ${ident} is not configured in ${catalog.defsDir}\n${reason}`,
+		404,
+	);
 }
 
 async function sessionFor(
 	deps: BrowserRouteDeps,
 	owner: string,
 	name: string | undefined,
-	used: BrowserSession[],
+	used: SessionUse[],
+	options: { readonly countAction?: boolean } = {},
 ): Promise<BrowserSession> {
 	const session = deps.pool.session(owner, name ?? DEFAULT_BROWSER_SESSION);
 	// In flight for the whole request: the idle sweep must not close this page
-	// while a tool is still driving it.
-	session.beginUse();
-	used.push(session);
+	// while a tool is still driving it. The fence the use answers with is where
+	// this call's own refusals start.
+	used.push({ session, refusalsFrom: session.beginUse() });
 	// The recording bound is enforced where a session is used, not by a timer: a
 	// recording that outlived it is discarded before anything else happens. The
 	// pool serializes this with an explicit stop, so two concurrent requests
 	// cannot both stop the same recording.
 	await deps.pool.autoStopIfExpired(session);
+	// One browser call on a stage is one action of the stage's rolling minute.
+	if (options.countAction !== false && session.stage)
+		stageUsage(deps).countAction({
+			stage: session.stage.ident,
+			owner,
+			maxActionsPerMinute: session.stage.limits.maxActionsPerMinute,
+		});
 	return session;
+}
+
+// ---------------------------------------------------------------------------
+// Stage login
+// ---------------------------------------------------------------------------
+
+/**
+ * `stage_login`: run one role's declared recipe on a stage-bound session.
+ *
+ * The route carries names only — the server resolves every credential reference
+ * itself, at call time — so neither the request, the response, the tool result
+ * nor a log line ever holds a value. The one exception the spec names is an
+ * application without roles, which answers `login-not-required`.
+ */
+async function stageLogin(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserStageLoginRequest,
+): Promise<unknown> {
+	const session = await sessionFor(deps, owner, body.session, used);
+	const binding = session.stage;
+	if (!binding)
+		throw new BrowserSessionError(
+			"stage-session-restricted",
+			"this session is not stage-bound, so it has no declared login recipe",
+			409,
+		);
+	const entry = stageEntryFor(deps, binding.ident);
+	const result = await withoutCredentialEcho(
+		async () =>
+			await runStageLogin({
+				session,
+				entry,
+				appKey: body.app,
+				role: body.role,
+				configDir: deps.configDir ?? "",
+				installHttpCredentials: async (credentials) => {
+					await deps.pool.setHttpCredentials(session, credentials);
+				},
+				...(deps.now ? { now: deps.now } : {}),
+			}),
+	);
+	return {
+		session: session.name,
+		stage: entry.ident,
+		url: result.url,
+		steps: result.steps,
+		...(result.skipped.length > 0 ? { skipped: result.skipped } : {}),
+		...(result.notRequired
+			? { login: "not-required", code: "login-not-required" }
+			: { login: "ok" }),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +959,7 @@ async function sessionFor(
 async function act(
 	deps: BrowserRouteDeps,
 	owner: string,
-	used: BrowserSession[],
+	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserActionRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
@@ -457,15 +972,41 @@ async function act(
 		case "click":
 			await session.click(target, timeoutMs);
 			break;
-		case "fill":
+		case "fill": {
+			// A stage-bound session can be handed a credential *reference* instead of a
+			// value: the server resolves it, types it, and reports nothing of it.
+			const credential = body.credential;
+			if (credential) {
+				const binding = session.stage;
+				if (!binding)
+					throw new BrowserSessionError(
+						"stage-session-restricted",
+						"browser_fill with a credential needs a stage-bound session; pass a value instead",
+						409,
+					);
+				await withoutCredentialEcho(() =>
+					fillStageCredential({
+						session,
+						entry: stageEntryFor(deps, binding.ident),
+						appKey: credential.app,
+						role: credential.role,
+						field: credential.field,
+						target,
+						timeoutMs,
+						configDir: deps.configDir ?? "",
+					}),
+				);
+				break;
+			}
 			if (body.value === undefined)
 				throw new BrowserPoolError(
 					"value-required",
-					"browser_fill needs a value",
+					"browser_fill needs a value, or a credential on a stage-bound session",
 					400,
 				);
 			await session.fill(target, body.value, timeoutMs);
 			break;
+		}
 		case "press":
 			if (!body.key)
 				throw new BrowserPoolError(
@@ -503,7 +1044,7 @@ async function act(
 async function screenshot(
 	deps: BrowserRouteDeps,
 	owner: string,
-	used: BrowserSession[],
+	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserScreenshotRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
@@ -525,11 +1066,14 @@ async function screenshot(
 		bytes: bytes.byteLength,
 	};
 	if (body.evidence === true) {
+		// The stored entry carries a sanitized URL, and a caption that embeds one
+		// carries the same: an evidence entry outlives the call that made it.
+		const url = evidenceUrl(deps, session.url);
 		const entry = await storeEvidence(deps, owner, {
 			bytes,
 			kind: "screenshot",
-			caption: body.caption?.trim() || `Screenshot of ${session.url}`,
-			url: session.url,
+			caption: body.caption?.trim() || `Screenshot of ${url}`,
+			url,
 			extension: "jpg",
 			...(session.app ? { app: session.app } : {}),
 		});
@@ -545,7 +1089,7 @@ async function screenshot(
 async function recordStart(
 	deps: BrowserRouteDeps,
 	owner: string,
-	used: BrowserSession[],
+	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserRecordRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
@@ -565,8 +1109,12 @@ async function recordStart(
 		};
 	} catch (error) {
 		// A start that failed owns nothing: the directory it created is removed
-		// rather than left behind as an empty recording.
-		fs.rmSync(dir, { recursive: true, force: true });
+		// rather than left behind as an empty recording. Asynchronous, because a
+		// failed start (a session that was closed under it, a browser that went
+		// away) must not block the event loop on a recursive remove.
+		await fs.promises
+			.rm(dir, { recursive: true, force: true })
+			.catch(() => undefined);
 		throw error;
 	}
 }
@@ -574,7 +1122,7 @@ async function recordStart(
 async function recordStop(
 	deps: BrowserRouteDeps,
 	owner: string,
-	used: BrowserSession[],
+	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserRecordRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
@@ -643,13 +1191,14 @@ async function finishRecordingStop(
 			500,
 		);
 	}
-	const caption = body.caption?.trim() || `Recording of ${result.url}`;
+	const url = evidenceUrl(deps, result.url);
+	const caption = body.caption?.trim() || `Recording of ${url}`;
 	const poster = result.posterSaved
 		? await storeEvidence(deps, owner, {
 				file: posterPath,
 				kind: "screenshot",
 				caption: `${caption} (final frame)`,
-				url: result.url,
+				url,
 				extension: "jpg",
 				...(session.app ? { app: session.app } : {}),
 			})
@@ -658,7 +1207,7 @@ async function finishRecordingStop(
 		file: videoPath,
 		kind: "video",
 		caption,
-		url: result.url,
+		url,
 		extension: "webm",
 		...(session.app ? { app: session.app } : {}),
 		...(poster ? { poster: poster.id } : {}),
@@ -692,7 +1241,7 @@ type AsyncScript = (
 async function runScript(
 	deps: BrowserRouteDeps,
 	owner: string,
-	used: BrowserSession[],
+	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserScriptRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
@@ -739,12 +1288,29 @@ async function runScript(
 		result: serializable(result),
 	};
 	if (body.save === true) {
-		const spec = reproSpec(body.code, session.url);
+		// The spec text is built from the *sanitized* URL and then redacted before
+		// it is stored: an evidence entry is written to disk and read long after the
+		// call, so a callback token in the URL the script ran on must be gone before
+		// the file exists, not only from the reply.
+		const url = evidenceUrl(deps, session.url);
+		const spec = redact(
+			reproSpec(body.code, url, {
+				...(session.stage
+					? {
+							credentialVariables: stageCredentialNames(
+								deps.configDir ?? "",
+								session.stage.ident,
+							),
+						}
+					: {}),
+			}),
+			redactionSecrets(deps),
+		);
 		const entry = await storeEvidence(deps, owner, {
-			text: spec,
+			text: typeof spec === "string" ? sanitizeUrlsIn(spec) : "",
 			kind: "script",
-			caption: body.caption?.trim() || `Repro spec for ${session.url}`,
-			url: session.url,
+			caption: body.caption?.trim() || `Repro spec for ${url}`,
+			url,
 			extension: "spec.ts",
 			...(session.app ? { app: session.app } : {}),
 		});
@@ -930,12 +1496,40 @@ function isLocatorLike(value: object): boolean {
 	);
 }
 
+/** The context methods a stage-bound session refuses a script (`task 3.7`): the
+ * session's own cookies and storage are how a login's identity is carried, and
+ * an agent that read them out would be reading a credential by another name. */
+const STAGE_CONTEXT_RESTRICTED: Record<string, string> = {
+	cookies: "stage-session-restricted",
+	storageState: "stage-session-restricted",
+	addCookies: "stage-session-restricted",
+	clearCookies: "stage-session-restricted",
+};
+
+/** One stage-bound session's refusals, as the facade raises them. */
+export function stageRestrictedCode(
+	stageBound: boolean,
+	method: string,
+): string | undefined {
+	return stageBound ? STAGE_CONTEXT_RESTRICTED[method] : undefined;
+}
+
 export function scriptHandles(session: BrowserSession): {
 	readonly page: unknown;
 	readonly context: unknown;
 } {
 	const rawPage = session.page.raw() as object;
 	const rawContext = session.context.raw() as object;
+	const stageBound = session.stage !== undefined;
+	/** A stage-bound session masks the screenshot either way: the mask a script's
+	 * own `page.screenshot()` (or a locator's) has to carry is this session's
+	 * credential fills. */
+	const screenshotFixups: FacadeArgumentFixups = stageBound
+		? {
+				screenshot: (args) =>
+					maskedScreenshotOptions(session.maskLocators(), args),
+			}
+		: {};
 	const pages = new WeakMap<object, object>();
 	const contexts = new WeakMap<object, object>();
 	const locators = new WeakMap<object, object>();
@@ -943,7 +1537,16 @@ export function scriptHandles(session: BrowserSession): {
 	const wrapLocator = (raw: object): object => {
 		const cached = locators.get(raw);
 		if (cached) return cached;
-		const facade = facadeOf(raw, "locator", LOCATOR_METHODS, wrap);
+		const facade = facadeOf(
+			raw,
+			"locator",
+			LOCATOR_METHODS,
+			wrap,
+			{},
+			{},
+			{},
+			screenshotFixups,
+		);
 		locators.set(raw, facade);
 		return facade;
 	};
@@ -958,7 +1561,17 @@ export function scriptHandles(session: BrowserSession): {
 	const wrapContext = (raw: object): object => {
 		const cached = contexts.get(raw);
 		if (cached) return cached;
-		const facade = facadeOf(raw, "context", CONTEXT_METHODS, wrap);
+		const facade = facadeOf(
+			raw,
+			"context",
+			stageBound
+				? CONTEXT_METHODS.filter((name) => !(name in STAGE_CONTEXT_RESTRICTED))
+				: CONTEXT_METHODS,
+			wrap,
+			{},
+			{},
+			stageBound ? STAGE_CONTEXT_RESTRICTED : {},
+		);
 		contexts.set(raw, facade);
 		return facade;
 	};
@@ -1029,6 +1642,8 @@ export function scriptHandles(session: BrowserSession): {
 				mouse: facadeOf(mouseOf(raw), "mouse", MOUSE_METHODS, wrap),
 			},
 			PAGE_RESULT_BOUNDS,
+			{},
+			screenshotFixups,
 		);
 	let page: object | undefined;
 	const pageFacade = (): object => {
@@ -1039,6 +1654,31 @@ export function scriptHandles(session: BrowserSession): {
 	};
 	const context = wrapContext(rawContext);
 	return { page: pageFacade(), context };
+}
+
+/** A per-facade argument fixup, by method name: what this session has to add to
+ * one method's arguments before the raw object sees them. */
+type FacadeArgumentFixups = Record<string, (args: unknown[]) => unknown[]>;
+
+/** The screenshot options one stage-bound session has to carry, so a frame a
+ * *script* takes covers what was typed into it exactly as `browser_screenshot`
+ * does: a credential is masked by one rule, not by whichever tool asked. */
+function maskedScreenshotOptions(
+	mask: readonly unknown[],
+	args: unknown[],
+): unknown[] {
+	if (mask.length === 0) return args;
+	const options = args[0];
+	if (options === undefined) return [{ mask: [...mask] }, ...args.slice(1)];
+	if (options === null || typeof options !== "object") return args;
+	const existing = (options as { mask?: unknown }).mask;
+	return [
+		{
+			...(options as Record<string, unknown>),
+			mask: [...mask, ...(Array.isArray(existing) ? existing : [])],
+		},
+		...args.slice(1),
+	];
 }
 
 /** Build a frozen allow-list facade over one raw object.
@@ -1057,15 +1697,23 @@ function facadeOf(
 	wrap: (value: unknown) => unknown,
 	extras: Record<string, unknown> = {},
 	bounds: Record<string, number> = {},
+	/** Methods this facade refuses with a named code instead of a bare "not
+	 * available" (a stage session's cookie and storage reads). */
+	restricted: Record<string, string> = {},
+	/** Arguments one supported method needs before the raw object sees them (a
+	 * stage-bound screenshot's mask). */
+	fixups: FacadeArgumentFixups = {},
 ): object {
 	const facade: Record<string, unknown> = {};
 	for (const name of names) {
 		const value = (raw as Record<string, unknown>)[name];
 		if (typeof value !== "function") continue;
 		const bound = bounds[name];
+		const fixup = fixups[name];
 		facade[name] = (...args: unknown[]) => {
+			const callArgs = fixup ? fixup(args) : args;
 			const wrapped = wrap(
-				(value as (...inner: unknown[]) => unknown).call(raw, ...args),
+				(value as (...inner: unknown[]) => unknown).call(raw, ...callArgs),
 			);
 			if (bound === undefined) return wrapped;
 			const cut = (input: unknown): unknown =>
@@ -1090,6 +1738,13 @@ function facadeOf(
 			// the facade itself.
 			if (typeof property !== "string" || property === "then") return undefined;
 			if (property in target) return Reflect.get(target, property, receiver);
+			const code = restricted[property];
+			if (code)
+				throw new BrowserSessionError(
+					code,
+					`${label}.${property} is refused on a stage-bound session: a login lives in this session's cookies and storage, and reading them out would be reading a credential`,
+					409,
+				);
 			throw new Error(
 				`${label}.${property} is not available; the supported ${label} methods are: ${supported}`,
 			);
@@ -1105,9 +1760,48 @@ function mouseOf(raw: object): object {
 	return ((raw as { mouse?: object }).mouse ?? {}) as object;
 }
 
+/** The credential *variable names* of one stage, for a repro spec's preamble:
+ * names only, resolved from the catalog and never from a value. */
+export function stageCredentialNames(
+	configDir: string,
+	ident: string,
+): string[] {
+	const variables = stageCredentialVariables(readStageCatalog(configDir));
+	return [...variables.entries()]
+		.filter(([, source]) => source.stage === ident)
+		.map(([name]) => name)
+		.sort();
+}
+
 /** The saved repro: the agent's own body, wrapped in a `@playwright/test` spec
- * pinned to the URL the script ran against, so the developer can rerun it. */
-export function reproSpec(code: string, url: string): string {
+ * pinned to the URL the script ran against, so the developer can rerun it.
+ *
+ * A spec saved from a stage-bound session begins with a login preamble that
+ * reads the stage's credential *variable names* from the process environment:
+ * the spec therefore carries the shape of the login and no value of it. */
+export function reproSpec(
+	code: string,
+	url: string,
+	options: { readonly credentialVariables?: readonly string[] } = {},
+): string {
+	const variables = options.credentialVariables ?? [];
+	const variablesBlock =
+		variables.length === 0
+			? []
+			: [
+					"// Stage login. These variables are read from the process environment; no",
+					"// credential value is written into this file.",
+					"const stageCredentials: Record<string, string> = {",
+					...variables.map((name) => `\t${name}: required("${name}"),`),
+					"};",
+					"void stageCredentials;",
+					"",
+					"function required(name: string): string {",
+					"\tconst value = process.env[name];",
+					"\tif (value === undefined) throw new Error(`$${name} is not set`);",
+					"\treturn value;",
+					"}",
+				];
 	const indented = code
 		.split("\n")
 		.map((line) => `\t\t${line}`)
@@ -1116,6 +1810,7 @@ export function reproSpec(code: string, url: string): string {
 		"// Generated by browser_run_script; rerun with `npx playwright test`.",
 		'import { test, expect } from "@playwright/test";',
 		"",
+		...variablesBlock,
 		`const baseURL = ${JSON.stringify(url)};`,
 		"",
 		'test("repro", async ({ page, context }) => {',

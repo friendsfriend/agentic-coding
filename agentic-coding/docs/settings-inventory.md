@@ -8,9 +8,9 @@ Settings section page, a scope, a storage description, and at least one rendered
 item, so nothing can be inventoried and then never shown.
 
 Sections: `settings` (landing) with `settings.appearance`,
-`settings.agents`, `settings.browser` and `settings.providers`. A section route
-may carry a configured application/library id (`resourceId`) as its stable
-project scope.
+`settings.agents`, `settings.browser`, `settings.stages` and
+`settings.providers`. A section route may carry a configured application/library
+id (`resourceId`) as its stable project scope.
 
 ## Scopes
 
@@ -41,6 +41,8 @@ unavailable or unauthorized server is a section error with a retry.
 | Compaction | Compaction | `src/workflow/compaction.ts` (write through `src/server/config.ts`) | user | `[agents.compaction]` in the layered workflow config — `enabled`, `reserveTokens`, `backgroundTokens`, `keepRecentTokens` and `ceilingTokens`; the window-relative fields accept a whole token count or a percentage of the model's context window (`"15%"`), while the cost ceiling is absolute tokens (`0` turns it off); a present `agentHost.compaction` overrides the section, and a project overlay's `[agents]` is not read at all | no | immediate (the durable host re-reads the policy at every generation) | yes (bounded numeric editor / on-off row) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
+| Hosted stages | Stages | `src/server/stages/catalog.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/stages/definitions/*.json` and `stages/policy.json`, read from the canonical configuration root only (a repository overlay is ignored) | no | immediate (every read re-reads the files; a durable run sees the same catalog through `stage_info`) | no (structure is read-only: a stage file is edited on disk) |
+| Stage credentials | Stages | `src/server/stages/routes.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/.env` — only the variables the stage catalog references | yes | immediate (the next login reads the new value; a running session keeps the credentials it installed) | yes (masked entry; only a referenced variable can be written) |
 
 ## Source and restart policy
 
@@ -69,6 +71,18 @@ unavailable or unauthorized server is a section error with a retry.
   reads provider status through the capability-bearing environment client
   (`Authorization: Bearer <instance token>`) and opens the existing environment
   editors for changes; it never writes the client's own checkout.
+- **Stages** is a read of the server's stage catalog (`GET /api/v1/stages`, and
+  the agent-facing twin under the environment capability) plus one write
+  (`POST /api/v1/stages/credential`), which the server resolves against the
+  catalog: a variable no allow-listed stage references is refused
+  (`credential-unknown`), so the section can never become a general `.env`
+  writer. The section shows the validation state, the access level, the apps and
+  each role's credential *presence*, and lists a refused file with its
+  value-free diagnostics; the credential row is offered only for a variable the
+  catalog references, is typed masked, and its value is never returned by a read,
+  stored in the snapshot, or shown again. A transport-less shell reads the same
+  catalog through `src/server/stages/operations.ts`, so a local run and a
+  connected one show one catalog.
 - **Application of changes**: persistent agent edits affect subsequent workflow
   starts only. Orchestrator starts are not capped: the server counts nothing and
   refuses no start, whatever the workload. A running workflow keeps the routing resolved into its run input

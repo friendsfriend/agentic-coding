@@ -22,6 +22,7 @@ import {
 	AGENT_BROWSER_CLOSE_PATH,
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
+	AGENT_BROWSER_LOGIN_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
@@ -155,7 +156,8 @@ const TargetParameters = {
 const BrowserOpenParameters = Type.Object({
 	url: Type.Optional(
 		Type.String({
-			description: "The URL to open. Any URL is allowed.",
+			description:
+				"The URL to open. Any URL is allowed, except in a session already bound to a stage: there the URL's origin must be one the stage allow-lists (`origin-not-allowed` otherwise).",
 		}),
 	),
 	app: Type.Optional(
@@ -170,6 +172,24 @@ const BrowserOpenParameters = Type.Object({
 				"The endpoint name the app exports (from env_start's endpoints), resolved to its URL.",
 		}),
 	),
+	stage: Type.Optional(
+		Type.String({
+			description:
+				"An allow-listed stage ident from stage_info. Opens the stage's application at its configured URL and binds the session to that stage for the session's whole life: every main-frame navigation stays on the stage's allow-list, a read-only stage refuses state-changing requests, and stage_login becomes available. An unknown or refused stage answers `stage-not-configured`.",
+		}),
+	),
+	stageApp: Type.Optional(
+		Type.String({
+			description:
+				"The stage application key to open (from stage_info), required with `stage`.",
+		}),
+	),
+	path: Type.Optional(
+		Type.String({
+			description:
+				"An optional path appended to the stage application's configured URL.",
+		}),
+	),
 	session: SessionParameter,
 	viewport: Type.Optional(
 		Type.Object({
@@ -182,6 +202,33 @@ const BrowserOpenParameters = Type.Object({
 const BrowserSessionParameters = Type.Object({
 	session: SessionParameter,
 });
+
+/** The credential reference `browser_fill` accepts instead of a literal value. */
+const CredentialParameter = Type.Optional(
+	Type.Object(
+		{
+			app: Type.String({
+				description: "The stage application key the role belongs to.",
+			}),
+			role: Type.String({ description: "The role name of that application." }),
+			field: Type.Union(
+				[
+					Type.Literal("username"),
+					Type.Literal("password"),
+					Type.Literal("totp"),
+				],
+				{
+					description:
+						"Which credential of the role to fill. A `totp` field is filled with a code computed now from the referenced secret.",
+				},
+			),
+		},
+		{
+			description:
+				"Fill the resolved credential of one role field instead of a literal `value`, on a session bound to a stage. The value never travels: the server reads it from the configuration `.env`. Use this rather than typing a credential you were told about, and never pass a credential as `value`.",
+		},
+	),
+);
 
 /** One tool per action, so the model never has to remember a discriminator. */
 function actionTool(
@@ -209,6 +256,9 @@ function actionTool(
 				...(extra.selector === undefined ? {} : { selector: extra.selector }),
 				...(extra.session === undefined ? {} : { session: extra.session }),
 				...(extra.value === undefined ? {} : { value: extra.value }),
+				...(extra.credential === undefined
+					? {}
+					: { credential: extra.credential }),
 				...(extra.key === undefined ? {} : { key: extra.key }),
 				...(extra.values === undefined ? {} : { values: extra.values }),
 				...(extra.timeoutMs === undefined
@@ -345,6 +395,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Open a page in a headless browser and get back the session, URL and viewport.",
 					"Give a raw `url`, or an `app` plus `endpoint` from env_list/env_start — an endpoint resolves only while this workflow holds that app, and otherwise fails with `app-not-held` naming the holder.",
 					"`session` opens (or reuses) a named page; the unnamed session is `default`. Sessions are isolated browser contexts, capped by browser.max_sessions with FIFO queueing and closed when the run ends or idles past its TTL.",
+					"Give `stage` plus `stageApp` (both from stage_info) to open a hosted stage application instead: the URL comes from the stage catalog, and the session stays on the stage's origin allow-list for its whole life.",
 					// The browser is the server's own, not a configured service: an agent that
 					// went looking for the `playwright-server` infrastructure (or port 3050)
 					// spent calls on something this surface never uses.
@@ -365,6 +416,11 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.endpoint === undefined
 										? {}
 										: { endpoint: args.endpoint }),
+									...(args.stage === undefined ? {} : { stage: args.stage }),
+									...(args.stageApp === undefined
+										? {}
+										: { stageApp: args.stageApp }),
+									...(args.path === undefined ? {} : { path: args.path }),
 									...(args.session === undefined
 										? {}
 										: { session: args.session }),
@@ -376,6 +432,44 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						);
 					} catch (error) {
 						return failure(`browser_open: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_login",
+				description: [
+					"Log a stage-bound session in with the role's declared recipe: the server resolves the role's credential references from the configuration `.env` at call time, types them and waits for the login to complete.",
+					"Use it on a session opened with `browser_open({ stage, stageApp })`; it answers the sanitized landing URL, or `credential-missing` naming the variable to set in Settings → Stages, `login-step-not-found`, `login-mfa-required` (the page asks for a second factor the recipe does not provide), `login-timeout`, `login-failed` or `login-not-required` for an application without roles.",
+					"Its arguments, results, errors and telemetry never contain a credential value — do not try to read one, and never pass one to another tool.",
+				].join(" "),
+				parameters: Type.Object({
+					app: Type.String({
+						description: "The stage application key to log in to.",
+					}),
+					role: Type.String({
+						description:
+							"The role to log in as (from stage_info), e.g. a read-only clerk role.",
+					}),
+					session: SessionParameter,
+				}),
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_login: run context unavailable");
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_BROWSER_LOGIN_PATH, {
+								timeoutMs: ACTION_TIMEOUT_MS,
+								body: {
+									app: args.app,
+									role: args.role,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_login: ${message(error)}`);
 					}
 				},
 			}),
@@ -425,11 +519,14 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				lookup,
 				"fill",
 				"browser_fill",
-				"Fill an input named by a ref from the latest browser_snapshot (preferred) or a selector with `value`.",
+				"Fill an input named by a ref from the latest browser_snapshot (preferred) or a selector with `value` — or, on a session bound to a stage, with `credential: { app, role, field }`, which the server resolves from the configuration `.env` so the value never enters this conversation.",
 				{
-					value: Type.String({
-						description: "The text to type into the field.",
-					}),
+					value: Type.Optional(
+						Type.String({
+							description: "The text to type into the field.",
+						}),
+					),
+					credential: CredentialParameter,
 				},
 			),
 			actionTool(

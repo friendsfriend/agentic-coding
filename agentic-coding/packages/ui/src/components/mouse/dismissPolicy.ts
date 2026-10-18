@@ -39,6 +39,9 @@ export type DialogDismissKind =
 	| "developer-question"
 	| "credentials"
 	| "number-editor"
+	// A credential typed into the protected `.env` flow: the draft is secret, so
+	// the backdrop never dismisses it.
+	| "stage-credential"
 	| "review"
 	| "comment"
 	| "review-files"
@@ -84,6 +87,7 @@ export const DIALOG_DISMISS_MODES: Record<
 	"developer-question": "explicit",
 	credentials: "explicit",
 	"number-editor": "explicit",
+	"stage-credential": "explicit",
 	review: "explicit",
 	comment: "explicit",
 	"review-files": "escape",

@@ -16,7 +16,9 @@ export type Modal =
 	| "new-workflow"
 	| "delete-workflow"
 	/** The bounded numeric editor for one compaction threshold. */
-	| "compaction-value";
+	| "compaction-value"
+	/** The masked editor for one `.env` variable a stage references. */
+	| "stage-credential";
 
 /**
  * Overlay kinds the shell handler itself owns. `environment` is deliberately
@@ -37,6 +39,9 @@ const SHELL_OWNED_OVERLAY_NAMES: readonly Modal[] = [
 	// The bounded numeric editor: the shell owns its draft, its validation and
 	// its save boundary, so its keys are routed through the same dispatcher.
 	"compaction-value",
+	// The masked credential editor: the shell owns the secret draft and the
+	// protected write, so its keys are routed through the same dispatcher.
+	"stage-credential",
 ];
 
 /** Whether the current overlay kind is one the shell handler owns. */

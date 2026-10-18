@@ -9,6 +9,7 @@
 
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
+import type { StagesStatusResponse } from "../../contracts/stages.ts";
 import {
 	COMPACTION_CEILING_DEFAULT,
 	COMPACTION_CEILING_MINIMUM,
@@ -37,6 +38,7 @@ import {
 	type SettingsScope,
 	scopeLabel,
 } from "./catalog.ts";
+import { lastStageError } from "./stages.ts";
 
 /** What activating an item does. Navigation is returned, never performed. */
 export type SettingsAction =
@@ -56,6 +58,10 @@ export type SettingsAction =
 	| { kind: "numeric-edit"; field: CompactionTokenField }
 	/** Flip the compaction enable switch. */
 	| { kind: "compaction-toggle" }
+	/** Set one credential the stage catalog references, through the protected
+	 * `.env` flow: the value is typed into a masked dialog, written to the
+	 * referenced key and never shown again. */
+	| { kind: "stage-credential"; variable: string; label: string }
 	| { kind: "navigate"; route: Route };
 
 export interface SettingsItem {
@@ -185,6 +191,9 @@ export interface SettingsContext {
 	/** Browser install state and effective bounds. Absent until the first server
 	 * read resolves. */
 	browser?: BrowserStatusResponse;
+	/** Stage catalog, credential status and diagnostics. Absent until the first
+	 * server read resolves. */
+	stages?: StagesStatusResponse;
 }
 
 /** The structural shape of `[agents] file_judgment` this layer renders. Declared
@@ -637,7 +646,162 @@ export function settingsItems(context: SettingsContext): SettingsItem[] {
 			return compactionItems(context);
 		case "providers":
 			return providerItems(context);
+		case "stages":
+			return stageItems(context);
 	}
+}
+
+/**
+ * The Stages section (`add-stage-testing-foundation`, task 5.1). Read-only
+ * structure: which hosted stages this configuration allows, what each one
+ * contains and why a file was refused. The one write is a credential, and it
+ * goes through the protected `.env` flow — a row offers it only for a variable
+ * the catalog actually references, and the value never comes back.
+ */
+function stageItems(context: SettingsContext): SettingsItem[] {
+	const stages = context.stages;
+	if (!stages) return stageUnavailableItems(lastStageError());
+	const items: SettingsItem[] = [];
+	items.push({
+		id: "stages.root",
+		label: "Stage definitions",
+		value: `${stages.stages.length} allowed · ${stages.excluded.length} refused`,
+		detail: `${inventoryDetail("stages.catalog")} · ${stages.configDir}`,
+		editable: false,
+		action: { kind: "none" },
+	});
+	for (const stage of stages.stages) {
+		const where = `${stage.environment}/${stage.system}`;
+		items.push({
+			id: `stages.stage.${stage.ident}`,
+			label: stage.displayName,
+			value: `${stage.access} · ${where} · ${stage.apps.length} app${stage.apps.length === 1 ? "" : "s"}`,
+			detail: [
+				`plan approval ${stage.planApproval}${stage.exclusive ? " · exclusive" : ""}`,
+				stage.origins.length
+					? `navigations stay on ${stage.origins.join(", ")}`
+					: "no origin declared: the guard would refuse every navigation",
+				stage.readOnlyExceptions.length
+					? `${stage.readOnlyExceptions.length} read-only exception${stage.readOnlyExceptions.length === 1 ? "" : "s"}`
+					: "",
+			]
+				.filter(Boolean)
+				.join(" · "),
+			editable: false,
+			action: { kind: "none" },
+		});
+		for (const app of stage.apps) {
+			items.push({
+				id: `stages.app.${stage.ident}.${app.key}`,
+				label: `${app.label} (${app.kind})`,
+				value: app.url,
+				detail: [
+					app.app ? `app ${app.app}` : "no configured app linked",
+					app.version
+						? `version ${app.version.path} → ${app.version.status === "ok" ? (app.version.value ?? "ok") : "not discoverable"}`
+						: "no version probe",
+					app.roles.length
+						? `roles: ${app.roles.map((role) => role.role).join(", ")}`
+						: "no roles: stage_login answers login-not-required",
+				].join(" · "),
+				editable: false,
+				action: { kind: "none" },
+			});
+			for (const role of app.roles)
+				for (const credential of role.credentials) {
+					// The variable is named with *both* statuses: a value that is already set
+					// can still be replaced, so the row that would replace it has to say which
+					// key it writes. A row is therefore always the credential editor.
+					const variable = credential.variable;
+					const set = credential.status === "set";
+					items.push({
+						id: `stages.credentials.${stage.ident}.${app.key}.${role.role}.${credential.field}`,
+						label: `${role.role} · ${credential.field}`,
+						value: set ? `set ${variable} (masked)` : `missing ${variable}`,
+						detail: [
+							`${inventoryDetail("stages.credentials")} · ${app.label} · login ${role.login ?? "none"}${role.loginKind ? ` (${role.loginKind})` : ""}`,
+							set
+								? `the value stays in the configuration \`.env\` and is never shown here · Enter replaces ${variable}`
+								: `Enter sets ${variable} in the configuration \`.env\``,
+						].join(" · "),
+						editable: true,
+						action: {
+							kind: "stage-credential",
+							variable,
+							// Field first: the dialog puts the variable in front of this, and a
+							// narrow terminal clips the tail. The variable already names the field
+							// (`…_PASSWORD`), so what has to survive after it is the role and the
+							// application the credential belongs to.
+							label: `${credential.field} · ${role.role} · ${app.label} · ${stage.displayName}`,
+						},
+					});
+				}
+		}
+		for (const diagnostic of stage.diagnostics)
+			items.push({
+				id: `stages.diagnostic.${stage.ident}.${diagnostic}`,
+				label: "Diagnostic",
+				value: diagnostic,
+				detail:
+					"the stage is allowed with this warning; every durable run reads the same diagnostics through stage_info",
+				editable: false,
+				action: { kind: "none" },
+			});
+	}
+	for (const excluded of stages.excluded)
+		items.push({
+			id: `stages.excluded.${excluded.file}`,
+			label: excluded.ident
+				? `${excluded.ident} (refused)`
+				: `${excluded.file} (refused)`,
+			value: excluded.diagnostics.join(" · "),
+			detail:
+				"a refused stage is never configured as one: fix the file and the next read allows it",
+			editable: false,
+			action: { kind: "none" },
+		});
+	if (stages.stages.length === 0 && stages.excluded.length === 0)
+		items.push({
+			id: "stages.empty",
+			label: "No stage definitions",
+			value: `${stages.configDir}/stages/definitions`,
+			detail:
+				"add a stage definition there (and optionally stages/policy.json) so agent runs may drive a hosted stage",
+			editable: false,
+			action: { kind: "none" },
+		});
+	return items;
+}
+
+function stageUnavailableItems(error: string | undefined): SettingsItem[] {
+	// "There is no snapshot yet" and "the read failed" are different facts, and
+	// only one of them is worth retrying *because* something broke. Both get an
+	// explicit, separately labelled retry row: a blank section with no way to ask
+	// again is the state a developer cannot get out of.
+	return [
+		{
+			id: "stages.unavailable",
+			label: "Stages",
+			value: error ? "unavailable" : "loading…",
+			detail: error
+				? `the connected server could not be read: ${error} · an unreachable server never falls back to a local configuration`
+				: "the stage catalog is read from the connected server and has not answered yet",
+			editable: false,
+			action: { kind: "none" },
+		},
+		{
+			id: "stages.retry",
+			// Both branches read the row's state: "retry" over a section that is
+			// merely *reading* (its own value is `reading…`) would be a lie, so the
+			// label follows the branch where the value does.
+			label: error ? "Retry the stage read" : "Read the stage catalog again",
+			value: error ? "retry" : "reading…",
+			detail:
+				"read the connected server again and replace this section with what it answers",
+			editable: true,
+			action: { kind: "retry" },
+		},
+	];
 }
 
 /** One-line browser phase copy; the raw enum is never shown. */

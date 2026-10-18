@@ -212,6 +212,34 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		items: ["providers.credentials", "providers.retry"],
 		note: "Status only: secrets are entered through the credential flow and never shown or routed here.",
 	},
+	{
+		id: "stages.catalog",
+		section: "stages",
+		label: "Hosted stages",
+		owner: "src/server/stages/catalog.ts",
+		scope: "server",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR/stages/definitions/*.json and stages/policy.json (the canonical configuration root only)",
+		secret: false,
+		effect: "immediate",
+		editable: false,
+		items: ["stages."],
+		note: "Structure and validation state are read-only: a stage file is edited on disk, and a refused stage is shown with its diagnostics so a typo has an answer.",
+	},
+	{
+		id: "stages.credentials",
+		section: "stages",
+		label: "Stage credentials",
+		owner: "src/server/stages/routes.ts",
+		scope: "server",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR/.env — only the variables the stage catalog references",
+		secret: true,
+		effect: "immediate",
+		editable: true,
+		items: ["stages.credentials", "stages.unavailable", "stages.retry"],
+		note: "Only a variable the catalog references can be written, and the value is typed masked into the configuration `.env`; it is never shown again or returned by a read. A variable that is already set is replaced by the same row: the row names the key it writes, so Enter sets *or replaces* the value behind it (never a second copy of the variable).",
+	},
 ];
 
 /** Every inventory entry of one section, in declaration order. */

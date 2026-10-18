@@ -224,6 +224,47 @@ test("a nested edit keeps its diff in the call's structured details", async () =
 	await host.shutdown();
 });
 
+test("a durable run's codemode sandbox offers the stage and browser tools", async () => {
+	const dir = tempWorkflowDir();
+	enableCodemode(dir);
+	const { host, faux } = await openHost(dir);
+	const runEnvPath = writeRunEnv(dir, {});
+	// A read-only run: the stage read and the browser tools act on the app slot, so
+	// a verifier has them too — and the sandbox has to say so.
+	await host.ensureRun({
+		runId: "run-tools",
+		name: "verifier-tools",
+		cwd: dir,
+		runEnvPath,
+		toolPolicy: "read-only",
+		model: `${faux.getModel().provider}/${faux.getModel().id}`,
+	});
+	faux.setResponses([
+		fauxAssistantMessage(
+			[
+				fauxToolCall("codemode", {
+					code: "return ALL_TOOLS;",
+				}),
+			],
+			{ stopReason: "toolUse" },
+		),
+	]);
+	await host.submit("run-tools", "what can you call", "req-tools");
+	faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
+	await settle(host, "run-tools");
+
+	const result = toolResultText(
+		await host.entriesForTest("run-tools"),
+		"codemode",
+	);
+	// The script sees the tools the run was offered, stage read included.
+	expect(result).toContain("stage_info");
+	expect(result).toContain("browser_open");
+	// And never what the run does not have.
+	expect(result).not.toContain('"write"');
+	await host.shutdown();
+});
+
 test("a read-only run cannot reach write through a codemode script", async () => {
 	const dir = tempWorkflowDir();
 	enableCodemode(dir);

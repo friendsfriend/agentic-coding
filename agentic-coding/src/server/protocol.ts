@@ -24,6 +24,7 @@ import {
 	browserScreenshotRequestSchema,
 	browserScriptRequestSchema,
 	browserSessionRequestSchema,
+	browserStageLoginRequestSchema,
 	browserWaitRequestSchema,
 } from "../contracts/browser.ts";
 import { credentialRespondSchema } from "../contracts/credential.ts";
@@ -43,6 +44,7 @@ import {
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
+import { stageCredentialRequestSchema } from "../contracts/stages.ts";
 import {
 	telemetryPruneRequestSchema,
 	telemetryScanRequestSchema,
@@ -91,6 +93,19 @@ export const AGENT_BROWSER_SCREENSHOT_PATH = `${AGENT_BROWSER_PREFIX}screenshot`
 export const AGENT_BROWSER_RECORD_PATH = `${AGENT_BROWSER_PREFIX}record`;
 export const AGENT_BROWSER_SCRIPT_PATH = `${AGENT_BROWSER_PREFIX}script`;
 export const AGENT_BROWSER_CLOSE_PATH = `${AGENT_BROWSER_PREFIX}close`;
+/** The credential-safe login of a stage-bound session. */
+export const AGENT_BROWSER_LOGIN_PATH = `${AGENT_BROWSER_PREFIX}login`;
+
+/** The stage catalog of one run: the same read surface as the dashboard's, with
+ * version probes resolved. It rides the owner capability because a run may only
+ * be told about the allow-listed stages it is allowed to drive. */
+export const AGENT_STAGES_PATH = `${AGENT_ENVIRONMENT_PREFIX}stages`;
+
+/** The instance-authenticated stage surface the dashboard and Settings read: the
+ * catalog with credential *status*, and the protected credential flow that
+ * writes one referenced key of the configuration `.env`. */
+export const STAGES_PATH = "/api/v1/stages";
+export const STAGES_CREDENTIAL_PATH = "/api/v1/stages/credential";
 
 /** The debug surface of one run (`add-agent-debug-tools`): the traces its runs
  * exported, the data the infra services it requires hold, and the endpoints of
@@ -147,6 +162,7 @@ export const ROUTE_DOMAINS = [
 	"environment",
 	"evidence",
 	"browser",
+	"stages",
 	"integrations",
 	"git",
 	"wiki",
@@ -276,6 +292,15 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	// The Settings browser surface: install state, the opt-in install and its
 	// cancel. Instance-authenticated like the classifier's own install routes.
 	{ method: "GET", path: BROWSER_STATUS_PATH, owner: "bun", domain: "browser" },
+	// The stage catalog and its credential flow: instance-authenticated like the
+	// browser install surface next to them.
+	{ method: "GET", path: STAGES_PATH, owner: "bun", domain: "stages" },
+	{
+		method: "POST",
+		path: STAGES_CREDENTIAL_PATH,
+		owner: "bun",
+		domain: "stages",
+	},
 	{
 		method: "POST",
 		path: BROWSER_INSTALL_PATH,
@@ -667,6 +692,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		schema: browserSessionRequestSchema,
 	},
 	{
+		path: AGENT_BROWSER_LOGIN_PATH,
+		schemaId: "server.agent-env.browser.login",
+		schema: browserStageLoginRequestSchema,
+	},
+	{
 		path: AGENT_OTEL_QUERY_PATH,
 		schemaId: "server.agent-env.debug.otel",
 		schema: agentOtelQuerySchema,
@@ -685,6 +715,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: BROWSER_INSTALL_PATH,
 		schemaId: "server.browser.install",
 		schema: browserInstallRequestSchema,
+	},
+	{
+		path: STAGES_CREDENTIAL_PATH,
+		schemaId: "server.stages.credential",
+		schema: stageCredentialRequestSchema,
 	},
 	{
 		path: BROWSER_INSTALL_CANCEL_PATH,

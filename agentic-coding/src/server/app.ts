@@ -93,6 +93,13 @@ import {
 	SERVER_API_VERSION,
 } from "./protocol.ts";
 import { EnvironmentInstanceError } from "./runtime/instances.ts";
+import { StageUsageRegistry } from "./stages/limits.ts";
+import {
+	handleStageCredentialRoute,
+	handleStageRoute,
+	type StageRouteDeps,
+	stagesStatusValue,
+} from "./stages/routes.ts";
 import type { WorkflowEventHub } from "./subscriptions.ts";
 import type { TelemetryOperations } from "./telemetry.ts";
 import {
@@ -330,6 +337,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		installer: browser.installer,
 		pool: browser.pool,
 		settings: browser.settings,
+		...(options.configDir ? { configDir: options.configDir } : {}),
+		// One registry for the process's life: a rolling minute has to survive
+		// between two requests, and the pool it reads is the same pool.
+		stages: stageUsage,
 		...(options.environment?.manager
 			? { apps: options.environment.manager }
 			: {}),
@@ -337,6 +348,23 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			? { instances: options.integrations.instances }
 			: {}),
 	});
+
+	/** The stage bound of one process: the sessions of this pool are the source
+	 * of truth, so a lease and a session cap end with the sessions themselves. */
+	const stageUsage = new StageUsageRegistry({
+		stageSessions: (owner, stage) => browser.pool.stageSessions(owner, stage),
+	});
+
+	/** What both stage read surfaces and the credential flow read: the catalog of
+	 * the canonical configuration root, never a repository overlay. */
+	const stageDeps = (): StageRouteDeps => ({
+		configDir: options.configDir ?? "",
+		...(options.environment?.manager ? { appIdents: () => appIdents() } : {}),
+	});
+
+	/** The app idents a stage may link, read from the same configuration root. */
+	const appIdents = (): readonly string[] =>
+		(options.environment?.manager.getApps() ?? []).map((app) => app.ident);
 
 	/** What the owner-scoped debug routes read: the trace index this process's
 	 * receivers feed, the app slots a held-app precondition is checked against,
@@ -413,6 +441,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// endpoints of the apps it holds.
 			const debugged = await handleDebugRoute(debugDeps(), request, url, owner);
 			if (debugged) return debugged;
+			// The stage surface rides the same capability: a run reads the stages its
+			// own configuration allows, and nothing else.
+			const stages = await handleStageRoute(stageDeps(), request, url, owner);
+			if (stages) return stages;
 			return (
 				(await handleAgentEnvironmentRoute(
 					agentEnvironmentDeps(),
@@ -617,6 +649,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				// released here, where the run's own apps are released, so nothing keeps a
 				// browser slot for a workflow that is over.
 				await browser.pool.closeOwner(decoded.owner);
+				// The run's rolling rate windows go with its sessions: they can never be
+				// read again, so holding them would grow the registry for the life of the
+				// process.
+				stageUsage.release(decoded.owner);
 				return json({ ok: true, value });
 			} catch (error) {
 				return instanceErrorResponse(error);
@@ -1039,6 +1075,22 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			const value = await operations.cancelBrowserInstall();
 			events.publish({ domain: "workflow", kind: "browser.install.cancel" });
 			return json({ ok: true, value });
+		}
+
+		// The stage surfaces (`protocol.ts` declares `STAGES_PATH` and
+		// `STAGES_CREDENTIAL_PATH`), instance-authenticated like every other
+		// dashboard read: the operator sees the allow-list, and only a referenced
+		// variable is written.
+		if (method === "GET" && path === "/api/v1/stages")
+			return json({ ok: true, value: stagesStatusValue(stageDeps()) });
+
+		if (method === "POST" && path === "/api/v1/stages/credential") {
+			const written = await handleStageCredentialRoute(stageDeps(), request);
+			// The write is the only stage change a dashboard can make here, so it is
+			// announced like the browser install is.
+			if (written.status === 200)
+				events.publish({ domain: "stages", kind: "stages.credential" });
+			return written;
 		}
 
 		if (method === "POST" && path === "/api/v1/credentials/respond") {

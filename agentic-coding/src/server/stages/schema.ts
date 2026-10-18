@@ -1,0 +1,302 @@
+// Stage definition schema (`add-stage-testing-foundation`, task 1.1).
+//
+// A stage is one operator-owned, hosted test environment named by its file
+// stem under `<config-root>/stages/definitions/<ident>.json`, plus one global
+// `stages/policy.json`. This module owns the *structural* contract: what a
+// stage file and a policy file may contain. Semantic refusal (production-like
+// names, denied hosts, `https`, `${VAR}`-only credentials, declared login
+// recipes, known app idents, ceiling clamping) belongs to `catalog.ts`, which
+// turns one decode failure into a value-free diagnostic.
+//
+// Credentials are references and nothing else: every credential field is a
+// whole `${VARIABLE}` reference resolved from the configuration root `.env` at
+// the moment of use (`catalog.ts` `resolveStageCredential`). The schema cannot
+// enforce that a string *is* a reference — a literal that fails the check must
+// produce a diagnostic that never quotes it — so the check lives in the
+// catalog, which formats its own message.
+import { Schema } from "effect";
+import { ArrayFormatter, ParseError } from "effect/ParseResult";
+import {
+	formatIssuePath,
+	sanitizeIssueMessage,
+} from "../../contracts/decode.ts";
+
+/** The ident grammar a stage file stem has to match. */
+export const STAGE_IDENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** How a stage may be used, as a real control: `read-only` refuses every
+ * state-changing request, `writable` allows them. */
+export const stageAccessSchema = Schema.Literal("read-only", "writable");
+
+/** When a derived test plan must wait for the developer (phase 3 reads it; the
+ * field is configuration from phase 1 on). */
+export const stagePlanApprovalSchema = Schema.Literal(
+	"always",
+	"when-writing",
+	"never",
+);
+
+/** What a staged application is: a UI to drive, an API to read, a mail catcher
+ * to wait on, or a probe for version discovery. */
+export const stageAppKindSchema = Schema.Literal(
+	"ui",
+	"api",
+	"mail-catcher",
+	"probe",
+);
+
+/** The credential values one role may reference, in section order. */
+export const STAGE_CREDENTIAL_FIELDS = [
+	"username",
+	"password",
+	"totp",
+] as const;
+export const stageCredentialFieldSchema = Schema.Literal(
+	...STAGE_CREDENTIAL_FIELDS,
+);
+
+/** Where a login step finds one element: an accessible label, a role plus its
+ * accessible name, or a raw selector. At least one is required, and the catalog
+ * refuses a locator that names none. */
+export const stageLocatorSchema = Schema.Struct({
+	label: Schema.optional(Schema.String),
+	role: Schema.optional(Schema.String),
+	name: Schema.optional(Schema.String),
+	selector: Schema.optional(Schema.String),
+});
+
+/** One field of one login step: which credential goes into it, and where. */
+export const stageLoginFieldSchema = Schema.Struct({
+	credential: stageCredentialFieldSchema,
+	label: Schema.optional(Schema.String),
+	role: Schema.optional(Schema.String),
+	name: Schema.optional(Schema.String),
+	selector: Schema.optional(Schema.String),
+});
+
+/** One page of a login: the fields it fills, the control that submits it, and
+ * whether it may be absent (the "Stay signed in?" style prompt). */
+export const stageLoginStepSchema = Schema.Struct({
+	optional: Schema.optional(Schema.Boolean),
+	fields: Schema.Array(stageLoginFieldSchema),
+	submit: Schema.optional(stageLocatorSchema),
+});
+
+/** When a login counts as complete. */
+export const stageLoginSuccessSchema = Schema.Struct({
+	/** The main frame must have left this origin (an application origin, or the
+	 * identity provider's when the application itself is the IdP page). */
+	notOrigin: Schema.optional(Schema.String),
+	/** The URL must match this substring. */
+	url: Schema.optional(Schema.String),
+	/** This text must be visible. */
+	text: Schema.optional(Schema.String),
+});
+
+/** A declarative login: an ordered multi-page form (a single-page form is one
+ * step), or HTTP basic authentication through the session's credentials. */
+export const stageLoginRecipeSchema = Schema.Struct({
+	kind: Schema.Literal("form", "http-basic"),
+	/** The origin the recipe's steps run on; informational for `http-basic`. */
+	origin: Schema.optional(Schema.String),
+	steps: Schema.optional(Schema.Array(stageLoginStepSchema)),
+	success: Schema.optional(stageLoginSuccessSchema),
+});
+
+/** One role of one staged application. `login` names a recipe of the stage's
+ * own `logins` table; a role with no credential reference needs none. */
+export const stageRoleSchema = Schema.Struct({
+	login: Schema.optional(Schema.String),
+	username: Schema.optional(Schema.String),
+	password: Schema.optional(Schema.String),
+	totp: Schema.optional(Schema.String),
+});
+
+/** A declared version probe: a path on the application's own origin and the
+ * dotted field of its JSON answer that carries the version. */
+export const stageVersionProbeSchema = Schema.Struct({
+	path: Schema.String,
+	field: Schema.String,
+});
+
+export const stageAppSchema = Schema.Struct({
+	label: Schema.String,
+	/** Optional link to a configured app ident (`apps/definitions`). */
+	app: Schema.optional(Schema.String),
+	url: Schema.String,
+	kind: stageAppKindSchema,
+	/** The product a mail-catcher application speaks (`mailpit`). */
+	api: Schema.optional(Schema.String),
+	roles: Schema.optional(
+		Schema.Record({ key: Schema.String, value: stageRoleSchema }),
+	),
+	version: Schema.optional(stageVersionProbeSchema),
+});
+
+/** One method-specific exception to a read-only stage's method guard. */
+export const stageReadOnlyExceptionSchema = Schema.Struct({
+	origin: Schema.String,
+	pathPrefix: Schema.String,
+	methods: Schema.optional(Schema.Array(Schema.String)),
+});
+
+/** Per-stage bounds. Every one of them is clamped to the policy ceiling. */
+export const stageLimitsSchema = Schema.Struct({
+	maxSessions: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	maxActionsPerMinute: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	maxWaitSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	maxScreenshots: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	maxRecordingMinutes: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+});
+
+/** Test-data conventions and cleanup hints. Free text, never a credential. */
+export const stageDataSchema = Schema.Struct({
+	prefix: Schema.optional(Schema.String),
+	notes: Schema.optional(Schema.String),
+	cleanup: Schema.optional(Schema.String),
+});
+
+/** Where the process knowledge of this stage lives in the wiki. */
+export const stageWikiSchema = Schema.Struct({
+	processes: Schema.optional(Schema.Array(Schema.String)),
+});
+
+/** One stage definition file. The ident has to equal the file stem. */
+export const stageDefinitionSchema = Schema.Struct({
+	ident: Schema.String,
+	displayName: Schema.String,
+	environment: Schema.String,
+	system: Schema.String,
+	access: stageAccessSchema,
+	planApproval: Schema.optional(stagePlanApprovalSchema),
+	exclusive: Schema.optional(Schema.Boolean),
+	/** Allow `http` for a host that is not loopback. Deliberate and staged: a
+	 * plaintext stage carries credentials in the clear. */
+	insecureHttp: Schema.optional(Schema.Boolean),
+	apps: Schema.Record({ key: Schema.String, value: stageAppSchema }),
+	logins: Schema.optional(
+		Schema.Record({ key: Schema.String, value: stageLoginRecipeSchema }),
+	),
+	allowedOrigins: Schema.optional(Schema.Array(Schema.String)),
+	readOnlyExceptions: Schema.optional(
+		Schema.Array(stageReadOnlyExceptionSchema),
+	),
+	data: Schema.optional(stageDataSchema),
+	limits: Schema.optional(stageLimitsSchema),
+	wiki: Schema.optional(stageWikiSchema),
+});
+export type StageDefinition = typeof stageDefinitionSchema.Type;
+
+/** The stage app as the decoded file declares it. */
+export type StageApp = typeof stageAppSchema.Type;
+/** One role of a staged application. */
+export type StageRole = typeof stageRoleSchema.Type;
+/** One declared login recipe. */
+export type StageLoginRecipe = typeof stageLoginRecipeSchema.Type;
+/** One login step of a form recipe. */
+export type StageLoginStep = typeof stageLoginStepSchema.Type;
+/** Where one login field is: label, role+name, or selector. */
+export type StageLocator = typeof stageLocatorSchema.Type;
+/** Per-stage bounds, as declared. */
+export type StageLimits = typeof stageLimitsSchema.Type;
+/** One read-only method exception. */
+export type StageReadOnlyException = typeof stageReadOnlyExceptionSchema.Type;
+/** The declared version probe of one staged application. */
+export type StageVersionProbe = typeof stageVersionProbeSchema.Type;
+/** The credential fields a role may reference. */
+export type StageCredentialField = typeof stageCredentialFieldSchema.Type;
+
+/** The global policy file: the operator's deny list and the ceilings no stage
+ * may exceed. Both optional; absent means "no denial, documented defaults". */
+export const stagePolicySchema = Schema.Struct({
+	deniedHostPatterns: Schema.optional(Schema.Array(Schema.String)),
+	ceilings: Schema.optional(stageLimitsSchema),
+});
+export type StagePolicy = typeof stagePolicySchema.Type;
+
+/** One value-free complaint about one stage or policy file. It names the file
+ * and the field, and never a value — in particular never a credential that
+ * failed the reference check. */
+export interface StageIssue {
+	readonly path: string;
+	readonly message: string;
+}
+
+/** Decode a stage document. A failure answers value-free issues (the offending
+ * value is stripped exactly as the transport contracts strip it), so a literal
+ * password in a stage file never appears in a diagnostic, a log or a response. */
+export function decodeStageDefinition(
+	value: unknown,
+): DecodeResult<StageDefinition> {
+	return decodeStageDocument("stage", stageDefinitionSchema, value);
+}
+
+/** Decode the global policy document. */
+export function decodeStagePolicy(value: unknown): DecodeResult<StagePolicy> {
+	return decodeStageDocument("stage-policy", stagePolicySchema, value);
+}
+
+type DecodeResult<T> =
+	| { readonly ok: true; readonly value: T }
+	| { readonly ok: false; readonly issues: readonly StageIssue[] };
+
+function decodeStageDocument<T>(
+	id: string,
+	schema: Schema.Schema<T>,
+	value: unknown,
+): DecodeResult<T> {
+	try {
+		const decoded = Schema.decodeUnknownSync(
+			schema,
+			// An unknown field is a typo in an allow-list file, so it is refused
+			// rather than silently dropped.
+			{ onExcessProperty: "error" },
+		)(value) as T;
+		return { ok: true, value: decoded };
+	} catch (error) {
+		if (!(error instanceof ParseError)) throw error;
+		const issues = ArrayFormatter.formatErrorSync(error)
+			.slice(0, 8)
+			.map((issue) => ({
+				path: formatIssuePath(issue.path),
+				message: sanitizeIssueMessage(issue.message),
+			}));
+		return {
+			ok: false,
+			issues:
+				issues.length > 0
+					? issues
+					: [{ path: "$", message: `${id}: expected a valid document` }],
+		};
+	}
+}

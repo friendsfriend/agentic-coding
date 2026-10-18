@@ -32,7 +32,7 @@ const MAX_ISSUE_MESSAGE_CHARS = 256;
 /** Render an Effect issue path (property + index parts) as a `$.a.b[0]` path,
  * bounded like the message so an unexpected property name cannot produce an
  * oversized diagnostic (SEC-002). */
-function formatIssuePath(path: readonly PropertyKey[]): string {
+export function formatIssuePath(path: readonly PropertyKey[]): string {
 	let formatted = "$";
 	for (const part of path) {
 		formatted +=
@@ -50,7 +50,7 @@ function formatIssuePath(path: readonly PropertyKey[]): string {
  * input and can be a capability token or secret carried on a wrong-typed
  * field, so it must never reach messages or diagnostics (SEC-001). Refinement
  * messages (custom filter text) have no raw value and pass through unchanged. */
-function sanitizeIssueMessage(message: string): string {
+export function sanitizeIssueMessage(message: string): string {
 	const bounded =
 		message.length > MAX_ISSUE_MESSAGE_CHARS
 			? `${message.slice(0, MAX_ISSUE_MESSAGE_CHARS)}\u2026`

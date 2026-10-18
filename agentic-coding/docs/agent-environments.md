@@ -399,6 +399,85 @@ the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
   and a scripted session gets an allow-list facade that fails an unknown method
   with the list of supported ones.
 
+## Hosted stages
+
+A **stage** is a non-production environment an agent run may drive directly in a
+headless browser: an integration or staging deployment of a real application,
+whose URLs, login recipes and navigation rules an operator declares in one file.
+It is the answer to "test this against a deployed app" without handing a model
+a URL and a password and hoping. Nothing here applies to a production system:
+a production-like name is refused by the catalog, and only the operator's own
+`$AGENTIC_CODING_CONFIG_DIR/stages/definitions/*.json` files can define one
+(`docs/config-inventory.md`).
+
+- **The catalog is the boundary, and every rule it declares is enforced.**
+  `allowedOrigins` is the origin allow-list, checked on main-frame document
+  navigations only — a page may still load its own fonts, styles, scripts and
+  (read-only) API calls from wherever it likes, but the *document* never lands
+  on another origin, so an injected redirect cannot take a session off the
+  stage. A request whose URL cannot be parsed is refused rather than assumed
+  safe, and `about:`/`blob:`/`data:`/`javascript:` are allowed because they
+  navigate nowhere. Where a real application genuinely needs one state-changing
+  call (a search that POSTs, a filter), `readOnlyExceptions` names it by origin,
+  path prefix and method; **everything else is read-only** — `GET`, `HEAD` and
+  `OPTIONS` are safe, every other method is refused. A refusal aborts the
+  navigation and comes back to the caller with its own code (`origin-not-allowed`
+  or `stage-read-only`) and, beside it, the refused URL reduced to origin and
+  path: no query, no fragment.
+- **A refusal is reported on the next tool result.** Each stage-bound session
+  keeps a bounded buffer of refusals (origin+path, method) that the next browser
+  reply drains and attaches as `guardEvents`, whether that reply succeeded or
+  failed. An agent therefore learns that a navigation was refused instead of
+  seeing a bare `net::ERR_ABORTED`, and the operator learns the same from the
+  session's own record.
+- **Login is a declared recipe, executed server-side.** `stage_login` runs an
+  ordered multi-page `form` recipe (a field step, an optional submit control, an
+  optional prompt step — what an Entra ID login needs) or installs an
+  `http-basic` credential on the browser context. The credential is resolved from
+  the configuration `.env` at that moment, typed into the page, and never
+  returned: the answer names the recipe, the role and which elements were
+  filled, and a saved repro spec carries the credential *variable names* so a
+  later run can re-enter them itself. A login that never finishes is bounded
+  (`login-timeout`), a control that never appears is named (`login-step-not-found`),
+  and a second factor the recipe cannot answer — push, SMS, number matching — is
+  reported as `login-mfa-required` rather than guessed at. TOTP is supported when
+  the role declares a `totp` reference: the code is derived from the shared
+  secret (RFC 6238) at the moment it is typed, so the secret is the only stored
+  value.
+- **The session's own identity is not readable.** On a stage-bound session the
+  script facade refuses `context.cookies`, `context.storageState`,
+  `context.addCookies` and `context.clearCookies`
+  (`stage-session-restricted`): a cookie is a credential by another name, and
+  reading it out would defeat every rule above.
+- **Redaction covers everything a browser replies.** Every browser reply (and
+  every error) passes the shared redactor over the configuration `.env` values
+  and their URL-encoded forms — a value an app echoed into its own page text, a
+  console line, or a script's return value comes back as
+  `«redacted:NAME»` — and then a URL sanitizer that drops a token-like query
+  parameter (`code`, `token`, `sessionId`, …) and an opaque fragment from every
+  URL-shaped string. A credential is therefore covered twice: by value and by
+  the URL that carries it. The one browser operation redaction cannot cover is a
+  **recording**: video is bytes, not text, so a credential fill is refused while
+  a session is recording (`recording-active`), and the same refusal guards
+  `stage_login`.
+- **Limits are per stage, and a stage can be exclusive.** `limits.maxSessions`
+  bounds how many sessions one workflow may hold on a stage at once (a second
+  open is refused, not queued: `stage-session-limit`), and
+  `limits.maxActionsPerMinute` bounds how many stage-bound tool calls one
+  workflow may make per minute (`stage-rate-limit`, with `retryAfterMs`). A stage
+  marked `exclusive` may be held by one workflow at a time
+  (`stage-held`); the default is shared, because two agents reading the same
+  integration environment usually do not conflict, and the residual risk of two
+  runs in one shared shell session is accepted and stated here rather than
+  half-solved. `stages/policy.json` `ceilings` clamps any definition downward,
+  so an operator can bound a whole catalog without editing every file.
+- **What an agent sees.** `stage_info` returns the catalog's structure,
+  diagnostics and credential *presence* — never a value — and `browser_open`
+  takes `stage` plus `stageApp` (and an optional `path`) to open a session bound
+  to it. A raw URL inside a stage-bound session is checked against that stage's
+  allow-list, so an agent cannot leave the stage by passing a URL, and it cannot
+  re-bind a session to a different stage (`stage-mismatch`).
+
 ## One composition for both server roots
 
 Two composition roots own a server: the headless `agentic-coding server`
