@@ -85,3 +85,53 @@ Environment tool results SHALL be bounded in size and SHALL replace values from 
 - **WHEN** an app declares two build targets for the same default profile
 - **THEN** the listing SHALL mark the build action's default as ambiguous and SHALL name both targets
 
+### Requirement: A run that dies during startup fails the start
+
+`env_start` SHALL report a script run target as `running` only once its process has stayed alive for a settle window, and SHALL fail the call with kind `run-exited` — carrying the exit status and a bounded tail of the run's own captured output — when the process exits inside that window. A failed start SHALL release the slot.
+
+#### Scenario: The run target dies at once
+
+- **WHEN** an agent calls `env_start` for a shell run target whose script exits 1 because `node_modules` is missing
+- **THEN** the call SHALL fail with `run-exited`, the exit status and the run's last output lines, and the app SHALL NOT be held
+
+### Requirement: One run record answers every status signal
+
+`env_status`, `env_logs`, the app status API and the run's own captured log SHALL derive from the single environment instance record for that app: the holder, the run's runtime, its state and, for a run that ended, its exit code. A run that ended SHALL be reported as such even when the slot row still reads `running`.
+
+#### Scenario: A dead run
+
+- **WHEN** an agent calls `env_status` for an app whose run just failed with exit code 1
+- **THEN** the answer SHALL carry the run's runtime, state, exit code and the last lines of its captured output
+
+#### Scenario: A live run
+
+- **WHEN** a workflow holds an app whose script run is still alive
+- **THEN** `env_status` and the app status API SHALL both report it as running
+
+### Requirement: env_logs reads the source that belongs to the runtime
+
+`env_logs` SHALL read a container app's output from its compose project's containers, a shell (script) run's output from the file that run's own stdout and stderr were captured to, and an infrastructure service's output from its declared log file or Kubernetes release. A missing container runtime SHALL be reported with what was probed (the runtime command, the endpoints tried and that no daemon answered) rather than as a bare unavailability.
+
+#### Scenario: A shell app
+
+- **WHEN** an agent calls `env_logs` for an app running a script run target
+- **THEN** the answer SHALL be the lines that run wrote, and SHALL NOT depend on a container runtime
+
+#### Scenario: No daemon answers
+
+- **WHEN** the configured runtime's candidates do not answer
+- **THEN** the refusal SHALL name the command, every endpoint probed and the fact that none answered
+
+### Requirement: env_list is compact and reports the infrastructure
+
+`env_list` SHALL answer a compact listing by default — per app the holder, status and one row per target naming what the tools accept — with `detail: "full"` or an `app` filter returning the ids and the reason each default was chosen, so the answer fits inside the tool's own output bound. It SHALL report the configured infrastructure services with their ident, kind, observed state, ports when known, and the declared `db_query` connection. `env_status` SHALL accept an infrastructure ident, and `env_start`/`env_stop` SHALL refuse one with what starts it, naming the requiring app when a live dependency lease names it.
+
+#### Scenario: Default listing
+
+- **WHEN** an agent lists an environment with many apps and configured infrastructure
+- **THEN** the default answer SHALL be compact, SHALL contain the infrastructure section, and SHALL say how to ask for the full detail
+
+#### Scenario: Infrastructure is required by an app
+
+- **WHEN** an agent calls `env_start` for an infrastructure service a live lease attributes to app `customer-fe`
+- **THEN** the tool SHALL refuse with "infrastructure X is started by app customer-fe's requirement; start that app instead"

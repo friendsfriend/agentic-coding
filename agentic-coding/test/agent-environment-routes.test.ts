@@ -113,6 +113,9 @@ function controllerDouble(input: {
 	acquire?: unknown;
 	/** Rejects the acquire, as the controller does for a detected cycle. */
 	acquireError?: unknown;
+	/** The latest run row a log read resolves, as the real controller derives
+	 * it from the instance store. */
+	runRecord?: (app: string) => unknown;
 }): ControllerSpy {
 	const acquired: unknown[] = [];
 	const stopped: string[] = [];
@@ -148,6 +151,7 @@ function controllerDouble(input: {
 		touchOwnedActivity: (_owner: string, app: string) => {
 			touched.push(app);
 		},
+		...(input.runRecord ? { runRecord: input.runRecord } : {}),
 	} as unknown as EnvironmentInstanceController;
 	return { instance, acquired, stopped, touched };
 }
@@ -156,6 +160,16 @@ interface CallResult {
 	readonly status: number;
 	readonly body: Record<string, unknown>;
 	readonly text: string;
+}
+
+/** The dependency-lease capability `env_start` reads to name the app that
+ * requires an infrastructure service (`dependency/<ident>` keys). */
+function leasesDouble(
+	leases: Array<{ targetId: string; ownerApp: string; lifecycle: string }>,
+): ActionRouteContext {
+	return {
+		services: { leases: { active: () => leases } },
+	} as unknown as ActionRouteContext;
 }
 
 async function call(
@@ -191,7 +205,32 @@ function payloadOf(result: CallResult): Record<string, unknown> {
 }
 
 describe("the agent environment routes are owner-scoped", () => {
-	test("the list reports holders, waiters, the app's targets and the configured infrastructure", async () => {
+	/** The deps of the listing tests: one app, two infra services, one registry. */
+	function listingDeps(controller: ControllerSpy): AgentEnvironmentDeps {
+		return {
+			configDir: "",
+			instances: controller.instance,
+			apps: appsDouble([appOf("shop", "/repos/shop")]),
+			registry: registryDouble(),
+			// An env-setup author has to see the infrastructure a drafted app
+			// depends on, not only the apps.
+			infraServices: () => [
+				{
+					ident: "shop-db",
+					type: "postgres",
+					query: {
+						kind: "postgres",
+						database: "shop",
+						userEnv: "SHOP_DB_USER",
+						passwordEnv: "SHOP_DB_PASSWORD",
+					},
+				},
+				{ ident: "shop-cache" },
+			],
+		};
+	}
+
+	test("the default listing is compact and carries the infrastructure section", async () => {
 		const controller = controllerDouble({
 			slots: [
 				{
@@ -203,27 +242,30 @@ describe("the agent environment routes are owner-scoped", () => {
 			],
 		});
 		const result = await call(
-			{
-				configDir: "",
-				instances: controller.instance,
-				apps: appsDouble([appOf("shop", "/repos/shop")]),
-				registry: registryDouble(),
-				// An env-setup author has to see the infrastructure a drafted app
-				// depends on, not only the apps.
-				infraServices: () => [
-					{ ident: "shop-db", type: "postgres" },
-					{ ident: "shop-cache" },
-				],
-			},
+			listingDeps(controller),
 			"GET",
 			"/api/v1/agent-env/list",
 		);
 		expect(result.status).toBe(200);
 		const value = payloadOf(result);
 		expect(value.owner).toBe(OWNER);
+		// The tail of a 31-43 KB answer was cut by the tool's own output bound, so
+		// the infrastructure section must sit in a small default answer
+		// (`fix-env-tool-defects-from-e2e`).
+		expect(value.detail).toBe("compact");
 		expect(value.infrastructure).toEqual([
-			{ ident: "shop-db", type: "postgres" },
-			{ ident: "shop-cache", type: null },
+			{
+				ident: "shop-db",
+				kind: "postgres",
+				state: "unknown",
+				query: {
+					kind: "postgres",
+					database: "shop",
+					userEnv: "SHOP_DB_USER",
+					passwordEnv: "SHOP_DB_PASSWORD",
+				},
+			},
+			{ ident: "shop-cache", kind: "docker", state: "unknown", query: null },
 		]);
 		const apps = value.apps as Array<Record<string, unknown>>;
 		expect(apps).toHaveLength(1);
@@ -234,6 +276,46 @@ describe("the agent environment routes are owner-scoped", () => {
 			waiters: [OWNER],
 			heldByYou: false,
 		});
+		// Compact rows still name what env_start/env_build accept, which is what a
+		// caller needs from them.
+		expect(apps[0]?.targets).toEqual([
+			{
+				action: "run",
+				runtime: "docker",
+				label: "Docker",
+				default: true,
+			},
+			{
+				action: "build",
+				runtime: "shell",
+				label: "Shell",
+				available: false,
+				reason: "no Dockerfile",
+				default: true,
+			},
+		]);
+	});
+
+	test("detail=full keeps the ids and the reason each default was chosen", async () => {
+		const controller = controllerDouble({
+			slots: [
+				{
+					app: "shop",
+					holder: "workflow:other",
+					status: "running",
+					waiters: [OWNER],
+				},
+			],
+		});
+		const value = payloadOf(
+			await call(
+				listingDeps(controller),
+				"GET",
+				"/api/v1/agent-env/list?detail=full",
+			),
+		);
+		expect(value.detail).toBe("full");
+		const apps = value.apps as Array<Record<string, unknown>>;
 		// Each target carries the deterministic default marking
 		// (`fix-default-target-after-promotion`): the `default` profile's own
 		// target per action, with the reason it was chosen, so the choice is
@@ -261,6 +343,128 @@ describe("the agent environment routes are owner-scoped", () => {
 				defaultReason: "the only default-profile build candidate (shell)",
 			},
 		]);
+	});
+
+	test("naming an app is that app's own full detail, and an unknown name is refused", async () => {
+		const controller = controllerDouble({});
+		const value = payloadOf(
+			await call(
+				listingDeps(controller),
+				"GET",
+				"/api/v1/agent-env/list?app=shop",
+			),
+		);
+		expect(value.detail).toBe("full");
+		const apps = value.apps as Array<Record<string, unknown>>;
+		expect(apps).toHaveLength(1);
+		// A typo must not read as an empty environment.
+		const missing = await call(
+			listingDeps(controller),
+			"GET",
+			"/api/v1/agent-env/list?app=shpo",
+		);
+		expect(missing.status).toBe(404);
+	});
+
+	test("an infrastructure name is refused by env_start with what starts it", async () => {
+		const controller = controllerDouble({});
+		// An infrastructure service is configured but no live lease names a
+		// requiring app: the answer says what this surface cannot do and who can,
+		// instead of starting something or answering "app not found".
+		const unheld = await call(
+			{
+				...listingDeps(controller),
+				infraServices: () => [{ ident: "playwright-server", type: "script" }],
+				actions: leasesDouble([]),
+			},
+			"POST",
+			"/api/v1/agent-env/acquire",
+			{ body: { apps: ["playwright-server"], waitSec: 1 } },
+		);
+		expect(unheld.status).toBe(409);
+		expect(unheld.text).toContain("is not started by this surface");
+		// A live owned lease names the app whose requirement starts it.
+		const managed = await call(
+			{
+				...listingDeps(controller),
+				infraServices: () => [{ ident: "playwright-server", type: "script" }],
+				actions: leasesDouble([
+					{
+						targetId: "dependency/playwright-server",
+						ownerApp: "customer-fe",
+						lifecycle: "owned",
+					},
+				]),
+			},
+			"POST",
+			"/api/v1/agent-env/acquire",
+			{ body: { apps: ["playwright-server"], waitSec: 1 } },
+		);
+		expect(managed.status).toBe(409);
+		expect(managed.text).toContain(
+			"is started by app customer-fe's requirement; start that app instead",
+		);
+		expect(controller.acquired).toEqual([]);
+	});
+
+	test("env_status answers an infrastructure ident with its own row", async () => {
+		const controller = controllerDouble({});
+		const result = await call(
+			{
+				...listingDeps(controller),
+				infraServices: () => [
+					{
+						ident: "shop-db",
+						type: "script",
+						status: "running",
+						logPath: "/tmp/shop-db.log",
+					},
+				],
+			},
+			"GET",
+			"/api/v1/agent-env/status?app=shop-db",
+		);
+		expect(result.status).toBe(200);
+		expect(payloadOf(result).apps).toEqual([]);
+		expect(payloadOf(result).infrastructure).toEqual([
+			{
+				ident: "shop-db",
+				kind: "script",
+				state: "running",
+				logPath: "/tmp/shop-db.log",
+				query: null,
+			},
+		]);
+		// Neither an app nor an infra service is still refused.
+		const missing = await call(
+			listingDeps(controller),
+			"GET",
+			"/api/v1/agent-env/status?app=nope",
+		);
+		expect(missing.status).toBe(404);
+	});
+
+	test("env_stop refuses an infrastructure service and names the app to stop", async () => {
+		const controller = controllerDouble({});
+		const result = await call(
+			{
+				...listingDeps(controller),
+				infraServices: () => [{ ident: "shop-db", type: "postgres" }],
+				actions: leasesDouble([
+					{
+						targetId: "dependency/shop-db/docker/local/docker",
+						ownerApp: "shop",
+						lifecycle: "owned",
+					},
+				]),
+			},
+			"POST",
+			"/api/v1/agent-env/stop",
+			{ body: { app: "shop-db" } },
+		);
+		expect(result.status).toBe(409);
+		expect(result.text).toContain("stop that app");
+		expect(controller.stopped).toEqual([]);
 	});
 
 	test("acquire always asks for the derived owner, never one from the body", async () => {
@@ -1106,6 +1310,89 @@ describe("env_logs bounds and selects its source", () => {
 			harness.cleanup();
 		}
 	});
+
+	test("a shell app's log is the run's own captured output file", async () => {
+		const harness = logsHarness();
+		const logFile = path.join(
+			path.dirname(harness.deps.configDir),
+			"instance.log",
+		);
+		fs.writeFileSync(logFile, "node_modules is missing\nserve skipped\n");
+		try {
+			// A shell run has no container: resolving it as a docker app is what made
+			// `env_logs` answer "no container runtime is available" for a stack that
+			// was up (`fix-env-tool-defects-from-e2e`).
+			const deps: AgentEnvironmentDeps = {
+				...harness.deps,
+				instances: controllerDouble({
+					runRecord: () => ({
+						runtime: "shell",
+						status: "running",
+						logPath: logFile,
+						pid: 4242,
+					}),
+				}).instance,
+				runtime: { infraServices: [] } as unknown as RuntimeRouteServices,
+			};
+			const read = await call(deps, "GET", "/api/v1/agent-env/logs?app=shop");
+			expect(read.status).toBe(200);
+			const value = payloadOf(read);
+			expect(value.source).toBe(logFile);
+			expect(value.lines).toEqual(["node_modules is missing", "serve skipped"]);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	test("a shell app whose run wrote nothing says so instead of probing docker", async () => {
+		const harness = logsHarness();
+		try {
+			const deps: AgentEnvironmentDeps = {
+				...harness.deps,
+				instances: controllerDouble({
+					runRecord: () => ({
+						runtime: "shell",
+						status: "stopped",
+						logPath: path.join(
+							harness.deps.configDir,
+							"logs",
+							"instances",
+							"shop.log",
+						),
+					}),
+				}).instance,
+				runtime: {} as unknown as RuntimeRouteServices,
+			};
+			const read = await call(deps, "GET", "/api/v1/agent-env/logs?app=shop");
+			expect(read.status).toBe(404);
+			expect(read.text).toContain("no captured log");
+			expect(read.text).not.toContain("no container runtime");
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	test("a missing container runtime names what was probed", async () => {
+		const probe =
+			"docker is not on this process's PATH; probed unix:///var/run/docker.sock; no daemon answered its ping";
+		const harness = logsHarness();
+		try {
+			const deps: AgentEnvironmentDeps = {
+				...harness.deps,
+				runtime: {
+					dockerProbe: probe,
+					infraServices: [],
+				} as unknown as RuntimeRouteServices,
+			};
+			const read = await call(deps, "GET", "/api/v1/agent-env/logs?app=shop");
+			expect(read.status).toBe(503);
+			expect(read.text).toContain("no container runtime is available");
+			expect(read.text).toContain("probed unix:///var/run/docker.sock");
+			expect(read.text).toContain("not on this process's PATH");
+		} finally {
+			harness.cleanup();
+		}
+	});
 });
 
 describe("the list and status report only real apps", () => {
@@ -1126,6 +1413,52 @@ describe("the list and status report only real apps", () => {
 		);
 		const apps = payloadOf(result).apps as Array<Record<string, unknown>>;
 		expect(apps.map((app) => app.app)).toEqual(["shop"]);
+	});
+
+	test("a dead run's status carries its exit code and last output lines", async () => {
+		const root = tempRoot();
+		const logFile = path.join(root, "instance.log");
+		fs.writeFileSync(logFile, "booting\nnode_modules is missing\nexit 1\n");
+		const controller = controllerDouble({
+			slots: [{ app: "shop", holder: OWNER, status: "running", waiters: [] }],
+			runRecord: () => ({
+				runtime: "shell",
+				status: "failed",
+				exitCode: 1,
+				pid: 4242,
+				logPath: logFile,
+			}),
+		});
+		try {
+			const result = await call(
+				{
+					configDir: root,
+					instances: controller.instance,
+					apps: appsDouble([appOf("shop", "/repos/shop")]),
+				},
+				"GET",
+				"/api/v1/agent-env/status?app=shop",
+			);
+			expect(result.status).toBe(200);
+			const app = (payloadOf(result).apps as Array<Record<string, unknown>>)[0];
+			// The slot row still says running; the run record says failed with code 1.
+			// Both are reported, so the disagreement is visible rather than hidden.
+			expect(app).toMatchObject({
+				holder: OWNER,
+				status: "running",
+				run: {
+					runtime: "shell",
+					status: "failed",
+					slotStatus: "running",
+					exitCode: 1,
+					pid: 4242,
+					logPath: logFile,
+					logTail: "booting\nnode_modules is missing\nexit 1",
+				},
+			});
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	test("status without an app reports every slot", async () => {

@@ -337,6 +337,13 @@ function harness(options: {
 		args: readonly string[],
 		options: { cwd: string; env: Readonly<Record<string, string>> },
 	) => Promise<{ exitCode: number; output: string }>;
+	/** Replaces the injected long-poll sleep. A test about a real dying process
+	 * passes the real timer, so the exit wins the settle race instead of the
+	 * fake clock elapsing it. */
+	sleep?: (ms: number) => Promise<void>;
+	/** The settle window a script run must survive; widened in tests by default
+	 * to 10 s so the failure is the process's exit, not the timer. */
+	scriptSettleMs?: number;
 }): Harness {
 	const calls: Harness["calls"] = [] as unknown as Harness["calls"];
 	const events: SlotEvent[] = [];
@@ -369,10 +376,13 @@ function harness(options: {
 			return checkout;
 		},
 		now: () => new Date(clock.ms),
-		sleep: async (ms: number) => {
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			clock.ms += ms;
-		},
+		sleep:
+			options.sleep ??
+			(async (ms: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				clock.ms += ms;
+			}),
+		scriptSettleMs: options.scriptSettleMs ?? 10_000,
 		waitPollMs: options.waitPollMs ?? 1_000,
 		runCommand: async (command, args, commandOptions) => {
 			calls.push({ command, args, env: commandOptions.env });
@@ -1763,17 +1773,94 @@ describe("app slot regressions", () => {
 			() => store.store.close(),
 			() => fs.rmSync(root, { recursive: true, force: true }),
 		]);
-		await expect(
-			slots.controller.acquire({
-				owner: "workflow:a",
-				apps: ["shop"],
-				waitSec: 1,
-			}),
-		).rejects.toMatchObject({ code: "start-failed" });
+		// Both codes are the same outcome: the process that was supposed to serve
+		// the app is gone, so the start failed and the slot is released.
+		const failure = (await slots.controller
+			.acquire({ owner: "workflow:a", apps: ["shop"], waitSec: 1 })
+			.catch((error: unknown) => error)) as { code?: string };
+		expect(["run-exited", "start-failed"]).toContain(failure.code ?? "");
 		// The settled row is terminal, so the app is free again.
 		const record = store.store.findEnvironmentInstance("workflow:a", "shop");
 		expect(["stopped", "failed"]).toContain(record?.status ?? "missing");
 		expect(await slots.occupancy("shop")).toBeUndefined();
+	});
+
+	test("a run target that dies during startup is run-exited with its code and output", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-run-exited-"));
+		const fixture = scriptFixture(root);
+		// The shape the end-to-end run hit: the script dies at once (a missing
+		// node_modules) and says so on stderr.
+		fs.writeFileSync(
+			fixture.sourcePath,
+			"#!/bin/sh\necho 'node_modules is missing, run bun install' 1>&2\nexit 1\n",
+		);
+		const store = tempState("run-exited");
+		const slots = harness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			apps: () => [app(fixture.checkout)],
+			store: store.store,
+			// The real timer and a wide window: the process's own exit decides, not
+			// the harness's fake clock.
+			sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+			scriptSettleMs: 10_000,
+		});
+		track([
+			() => store.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+		const failure = (await slots.controller
+			.acquire({
+				owner: "workflow:a",
+				apps: ["shop"],
+				runtime: "shell",
+				waitSec: 1,
+			})
+			.catch((error: unknown) => error)) as {
+			code?: string;
+			message?: string;
+		};
+		expect(failure.code).toBe("run-exited");
+		// The failure carries the run's own exit status and its last output, so the
+		// agent does not have to fetch the log to know what happened.
+		expect(failure.message).toContain("exited with status 1");
+		expect(failure.message).toContain("node_modules is missing");
+		// A failure releases the slot: it is not an instance that holds the app.
+		expect(await slots.occupancy("shop")).toBeUndefined();
+		const record = store.store.findEnvironmentInstance("workflow:a", "shop");
+		expect(record?.status).toBe("failed");
+	});
+
+	test("a run that is alive when the settle window ends is running", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-settled-live-"));
+		const fixture = scriptFixture(root);
+		fs.writeFileSync(fixture.sourcePath, "#!/bin/sh\nsleep 5\n");
+		const store = tempState("settled-live");
+		const slots = harness({
+			root,
+			configDir: fixture.configDir,
+			checkout: fixture.checkout,
+			apps: () => [app(fixture.checkout)],
+			store: store.store,
+			sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+			scriptSettleMs: 20,
+		});
+		track([
+			() => store.store.close(),
+			() => fs.rmSync(root, { recursive: true, force: true }),
+		]);
+		const grant = await slots.controller.acquire({
+			owner: "workflow:a",
+			apps: ["shop"],
+			runtime: "shell",
+			waitSec: 1,
+		});
+		expect(grant.outcome).toBe("started");
+		expect(
+			store.store.findEnvironmentInstance("workflow:a", "shop")?.status,
+		).toBe("running");
+		await slots.controller.release("shop");
 	});
 
 	test("a retired parallel-era row is only confirmed stopped by observation", async () => {

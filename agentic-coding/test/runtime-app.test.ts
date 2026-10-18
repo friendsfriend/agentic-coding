@@ -575,7 +575,47 @@ describe("runtime status selection (Go runstatus fixture)", () => {
 		kubernetesStatus?: string;
 		lastRunRuntime?: string;
 		shellTmuxRunActive?: boolean;
+		runRecord?: { runtime: string; state: string; exitCode?: number };
 	}) => observation;
+
+	test("the app slot's own run record decides a workflow-held shell run", () => {
+		// `fix-env-tool-defects-from-e2e`: the status API reported `stopped` for a
+		// dev server that was serving 200, because nothing read the slot row.
+		expect(
+			appRuntimeStatus(
+				withObservation({
+					runRecord: { runtime: "shell", state: "running" },
+				}),
+				{ Status: "not found", ContainerID: "", Ports: "" },
+			),
+		).toEqual({ state: "running" });
+		expect(
+			appRuntimeStatus(
+				withObservation({
+					runRecord: { runtime: "shell", state: "failed", exitCode: 1 },
+				}),
+				{ Status: "not found", ContainerID: "", Ports: "" },
+			),
+		).toEqual({ state: "failed", detail: "exit code 1" });
+		// A docker run is already observed through its container, so a stopped
+		// record neither hides it nor turns one stopped observation into two.
+		expect(
+			appRuntimeStatus(
+				withObservation({
+					runRecord: { runtime: "shell", state: "stopped" },
+				}),
+				{ Status: "not found", ContainerID: "", Ports: "" },
+			),
+		).toEqual({ state: "stopped" });
+		expect(
+			appRuntimeStatus(
+				withObservation({
+					runRecord: { runtime: "docker", state: "running" },
+				}),
+				{ Status: "exited", ContainerID: "", Ports: "" },
+			),
+		).toEqual({ state: "stopped" });
+	});
 
 	test("the highest-ranked observation wins regardless of runtime type", () => {
 		expect(

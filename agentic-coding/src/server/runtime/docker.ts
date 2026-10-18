@@ -94,9 +94,27 @@ export function runtimeCandidates(
 	env: Record<string, string | undefined> = process.env,
 	uid = defaultUid(),
 	home = defaultHome(),
+	/** Injectable existence probe, so the candidate list is testable without a
+	 * daemon on the machine. */
+	exists: (path: string) => boolean = (candidate) => fs.existsSync(candidate),
 ): DockerRuntime[] {
 	if (name === "docker") {
-		return [{ name: "docker", command: "docker", host: env.DOCKER_HOST ?? "" }];
+		if (env.DOCKER_HOST)
+			return [{ name: "docker", command: "docker", host: env.DOCKER_HOST }];
+		// The empty host means "the platform's default socket", which on macOS is
+		// not where Docker Desktop, colima or OrbStack put theirs: the `docker`
+		// CLI resolves that from its own context, and a probe that only knows
+		// `/var/run/docker.sock` fails while `docker ps` works. So the per-user
+		// endpoints are probed too, and the two answers disagree no more
+		// (`fix-env-tool-defects-from-e2e`).
+		return [
+			{ name: "docker", command: "docker", host: "" },
+			...dockerUserEndpoints(uid, home, exists, env).map((host) => ({
+				name: "docker",
+				command: "docker",
+				host,
+			})),
+		];
 	}
 	if (name === "podman") {
 		const podmanHost = env.DEVENV_PODMAN_HOST;
@@ -136,6 +154,88 @@ function defaultUid(): number {
 
 function defaultHome(): string {
 	return process.env.HOME ?? "";
+}
+
+/**
+ * The per-user Docker endpoints a `docker` CLI finds from its own context on a
+ * machine where the daemon is not on the system socket: Docker Desktop,
+ * colima, OrbStack and rootless dockerd each keep it under the user's home (or
+ * `XDG_RUNTIME_DIR`). Only the ones that exist are offered, so a probe order is
+ * a list of real candidates rather than a list of guesses.
+ */
+export function dockerUserEndpoints(
+	uid = defaultUid(),
+	home = defaultHome(),
+	exists: (path: string) => boolean = (candidate) => fs.existsSync(candidate),
+	env: Record<string, string | undefined> = process.env,
+): string[] {
+	if (process.platform === "win32") return [];
+	const runtimeDir = (env.XDG_RUNTIME_DIR ?? "").trim();
+	const paths = [
+		...(home === ""
+			? []
+			: [
+					`${home}/.docker/run/docker.sock`,
+					`${home}/.colima/default/docker.sock`,
+					`${home}/.orbstack/run/docker.sock`,
+				]),
+		`/run/user/${uid}/docker.sock`,
+		...(runtimeDir === "" ? [] : [`${runtimeDir}/docker.sock`]),
+	];
+	const found: string[] = [];
+	for (const candidate of paths) {
+		if (!exists(candidate)) continue;
+		const endpoint = `unix://${candidate}`;
+		if (!found.includes(endpoint)) found.push(endpoint);
+	}
+	return found;
+}
+
+/**
+ * What a runtime probe looked for, as one line: the CLI a caller would use and
+ * whether it resolves on this process's PATH, every endpoint that was probed,
+ * and the fact that none answered. A genuinely missing runtime then names the
+ * binary and the sockets instead of being an unattributable "no runtime"
+ * (`fix-env-tool-defects-from-e2e`).
+ */
+export function describeRuntimeSelection(
+	name: string,
+	env: Record<string, string | undefined> = process.env,
+	options: {
+		readonly uid?: number;
+		readonly home?: string;
+		readonly exists?: (path: string) => boolean;
+		readonly which?: (command: string) => string | null;
+	} = {},
+): string {
+	const candidates = runtimeCandidates(
+		name,
+		env,
+		options.uid ?? defaultUid(),
+		options.home ?? defaultHome(),
+		options.exists,
+	);
+	const command = runtimeCommandForRuntime(name);
+	let binary: string | null = null;
+	try {
+		binary =
+			(options.which ?? ((probe: string) => Bun.which(probe)))(command) ?? null;
+	} catch {
+		binary = null;
+	}
+	const endpoints: string[] = [];
+	for (const candidate of candidates) {
+		const target = parseDockerHost(candidate.host, env);
+		const endpoint = target.unix ? `unix://${target.unix}` : target.url;
+		if (!endpoints.includes(endpoint)) endpoints.push(endpoint);
+	}
+	return [
+		`${command} ${binary ? `resolves at ${binary}` : "is not on this process's PATH"}`,
+		endpoints.length === 0
+			? "no candidate endpoint for this platform"
+			: `probed ${endpoints.join(", ")}`,
+		"no daemon answered its ping",
+	].join("; ");
 }
 
 export function composeCommandForRuntime(name: string): string {

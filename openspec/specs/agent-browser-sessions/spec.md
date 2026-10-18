@@ -53,3 +53,20 @@ Screenshots SHALL be returned to the model and stored as evidence only when requ
 - **WHEN** an agent stops a recording with `keep: false`
 - **THEN** no video file SHALL remain and no evidence entry SHALL be created
 
+### Requirement: The browser is the server's own, not a configured service
+
+The browser tools SHALL drive one browser owned by the workflow server process — a system Chrome or a Chromium installed under the configuration, launched locally through Playwright — and SHALL NOT depend on a configured `playwright-server` infrastructure service or any remote browser endpoint.
+
+#### Scenario: No configured browser service
+
+- **WHEN** a workflow with no `playwright-server` infrastructure opens a session
+- **THEN** `browser_open` SHALL launch the server's own browser and the tool description SHALL say so
+
+### Requirement: A scripted page reports the surface it supports
+
+`browser_run_script` SHALL hand the script an allow-list facade of the session's page and context, SHALL fail an unknown method with a message naming the supported ones, and SHALL state the supported page, context and locator operations in the tool description. Results that would reach another session or the shared browser SHALL be refused.
+
+#### Scenario: An unsupported method
+
+- **WHEN** a script calls a page method outside the allow-list
+- **THEN** the call SHALL fail with a message that names the method and lists the supported ones

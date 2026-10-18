@@ -43,6 +43,11 @@ export interface LegacyRuntimeEvent {
 export interface RuntimeRouteServices {
 	/** Selected container runtime, or `undefined` when none is available. */
 	readonly docker?: DockerRuntimeSelection;
+	/** Why no container runtime is selected, when one is missing: the
+	 * candidates that were probed and the CLI that would drive them, so a
+	 * caller reports what was looked for instead of a bare "no runtime"
+	 * (`fix-env-tool-defects-from-e2e`). */
+	readonly dockerProbe?: string;
 	readonly kubernetes: KubernetesClusterService;
 	readonly apps: {
 		getAppByIdent(ident: string): AppForRuntime | undefined;

@@ -66,18 +66,32 @@ import {
 	kubernetesLogsForRelease,
 	type RuntimeRouteServices,
 } from "../runtime/routes.ts";
+import {
+	dockerRuntimeStatus,
+	state as runtimeState,
+} from "../runtime/status.ts";
 import type { App } from "./config.ts";
 import { parseEnvironmentOwner } from "./instances/model.ts";
 import type { EnvironmentManager } from "./manager.ts";
 import { stagedSymlinkedDefinitions } from "./setup-drafts.ts";
 
-/** The infrastructure-service fields the log reader needs. The configured and
- * runtime models both carry them, so the reader accepts either rather than
- * forcing one model onto the other. */
+/** The infrastructure-service fields the log reader and the listing need. The
+ * configured and runtime models both carry them, so either is accepted rather
+ * than forcing one model onto the other. */
 interface InfraLogSource {
 	readonly ident: string;
+	readonly displayName?: string;
 	readonly type?: string;
+	readonly containerBaseName?: string;
+	readonly status?: string;
 	readonly logPath?: string;
+	/** The read-only connection `db_query` may use, when one is declared. */
+	readonly query?: {
+		readonly kind: string;
+		readonly database: string;
+		readonly userEnv: string;
+		readonly passwordEnv: string;
+	};
 	readonly kubernetes?: {
 		readonly namespace?: string;
 		readonly release?: string;
@@ -317,7 +331,7 @@ async function dispatch(
 	ok: (value: unknown, status?: number) => Response,
 ): Promise<Response | undefined> {
 	if (method === "GET" && path === AGENT_LIST_PATH)
-		return ok(await environmentList(deps, owner));
+		return ok(await environmentList(deps, owner, url.searchParams));
 	if (method === "GET" && path === AGENT_STATUS_PATH)
 		return ok(
 			await environmentStatus(deps, owner, url.searchParams.get("app")),
@@ -648,37 +662,70 @@ function definitionProfile(definition: ActionDefinition): string {
 	return definitionStepValue(definition, "profile") ?? "";
 }
 
+/**
+ * The environment listing.
+ *
+ * The default answer is compact on purpose: the full view of a real
+ * configuration ran to 31-43 KB per call whose tail — the infrastructure
+ * section — was cut by the tool's own output bound, so an agent never saw it
+ * (`fix-env-tool-defects-from-e2e`). `detail=full` (or naming one app) returns
+ * the long form with the label, the id and the reason each default was chosen.
+ */
 async function environmentList(
 	deps: AgentEnvironmentDeps,
 	owner: string,
+	params: URLSearchParams,
 ): Promise<unknown> {
 	const instances = requireInstances(deps);
+	const detail = (params.get("detail") ?? "").trim();
+	const only = (params.get("app") ?? "").trim();
+	// Naming one app is a request for that app's own detail: a filtered answer is
+	// small whatever it carries.
+	const full = detail === "full" || only !== "";
 	const slots = await instances.slots();
 	const byApp = new Map(slots.map((slot) => [slot.app, slot]));
 	const stagedView = await targetsByApp(deps, owner);
 	const targets = stagedView.targets;
+	const configured = (deps.apps?.getApps() ?? []).filter(
+		(app) => app.appType !== "library" && app.appType !== "LIB",
+	);
+	if (only !== "") {
+		const known = configured.some((app) => app.ident === only);
+		const infra = (deps.infraServices?.() ?? []).some(
+			(service) => service.ident === only,
+		);
+		if (!known && !infra)
+			throw new EnvironmentInstanceError(
+				"app-not-found",
+				404,
+				`app ${JSON.stringify(only)} not found`,
+			);
+	}
 	// Reading the environment is using it: the apps this owner holds stay live.
 	noteUse(
 		instances,
 		owner,
 		slots.map((slot) => slot.app),
 	);
+	const apps = configured
+		.filter((app) => only === "" || app.ident === only)
+		.map((app) => {
+			const slot = byApp.get(app.ident);
+			const rows = targets.get(app.ident) ?? [];
+			return {
+				app: app.ident,
+				displayName: app.displayName,
+				holder: slot?.holder ?? null,
+				status: slot?.status ?? null,
+				waiters: slot?.waiters ?? [],
+				heldByYou: slot?.holder === owner,
+				targets: full ? rows : rows.map(compactTarget),
+			};
+		});
 	return {
 		owner,
-		apps: (deps.apps?.getApps() ?? [])
-			.filter((app) => app.appType !== "library" && app.appType !== "LIB")
-			.map((app) => {
-				const slot = byApp.get(app.ident);
-				return {
-					app: app.ident,
-					displayName: app.displayName,
-					holder: slot?.holder ?? null,
-					status: slot?.status ?? null,
-					waiters: slot?.waiters ?? [],
-					heldByYou: slot?.holder === owner,
-					targets: targets.get(app.ident) ?? [],
-				};
-			}),
+		detail: full ? "full" : "compact",
+		apps,
 		// A staged definition file that is a symlink *is* the developer's real
 		// file: a write to it writes through the link (the motivating run
 		// overwrote a file in the developer's own repository that way). The
@@ -689,13 +736,143 @@ async function environmentList(
 			? { stagedSymlinks: stagedView.symlinks }
 			: {}),
 		// The configured infrastructure is part of what this run may act on (it
-		// has no slot of its own): `env_logs` takes an infra service ident, so
-		// the listing names the services and how each one is reached.
-		infrastructure: (deps.infraServices?.() ?? []).map((service) => ({
-			ident: service.ident,
-			type: service.type ?? null,
-		})),
+		// has no slot of its own): the section names every service, how it is
+		// reached, whether it is up and whether `db_query` can use it.
+		infrastructure: await infrastructureSection(deps),
+		...(full
+			? {}
+			: {
+					notice:
+						"targets are compact (targetId, label, action, runtime, default, availability); call env_list with detail=full, or with app=<ident>, for the ids and the reasons behind each default",
+				}),
 	};
+}
+
+/** One target row on the default's scale: what to name in env_start/env_build,
+ * on which runtime, and whether it is the deterministic default. */
+function compactTarget(row: Record<string, unknown>): Record<string, unknown> {
+	return {
+		...(rowTargetId(row) ? { targetId: rowTargetId(row) } : {}),
+		...(typeof row.label === "string" ? { label: row.label } : {}),
+		action: row.action,
+		runtime: row.runtime,
+		...(typeof row.profile === "string" && row.profile !== ""
+			? { profile: row.profile }
+			: {}),
+		...(row.default === true ? { default: true } : {}),
+		...(row.defaultAmbiguous === true ? { defaultAmbiguous: true } : {}),
+		...(row.available === false ? { available: false } : {}),
+		...(typeof row.reason === "string" && row.reason !== ""
+			? { reason: row.reason }
+			: {}),
+		...(row.staged === true ? { staged: true } : {}),
+	};
+}
+
+/**
+ * The infrastructure section: name, kind, ports, whether it is up and whether
+ * `db_query` can use it, per service.
+ *
+ * "Up" is observed, never remembered: a container service is read from one
+ * container list (cached by the client, so the section costs one call whatever
+ * the number of services), a script service from its own configured state, and a
+ * cluster release reports `unknown` because this surface has no cluster read to
+ * justify a stronger claim. Ports come from the running container; a definition
+ * file does not declare them.
+ */
+async function infrastructureSection(
+	deps: AgentEnvironmentDeps,
+): Promise<Array<Record<string, unknown>>> {
+	const services = deps.infraServices?.() ?? [];
+	if (services.length === 0) return [];
+	const docker = deps.runtime?.docker;
+	const containerTargets = services
+		.filter((service) => (service.type ?? "docker") === "docker")
+		.map((service) => ({
+			ident: service.ident,
+			containerBaseName: service.containerBaseName ?? service.ident,
+		}));
+	let info = new Map<string, { Status: string; Ports: string }>();
+	if (docker && containerTargets.length > 0) {
+		try {
+			info = await docker.client.batchGetInfo([], containerTargets);
+		} catch (error) {
+			deps.logger?.(
+				`env_list: reading the infrastructure containers failed: ${message(error)}`,
+			);
+		}
+	}
+	return services.map((service) => {
+		const kind = service.type ?? "docker";
+		const observed = info.get(service.ident);
+		const ports = (observed?.Ports ?? "")
+			.split(",")
+			.map((entry) => entry.trim())
+			.filter((entry) => entry !== "");
+		const state =
+			kind === "docker"
+				? observed
+					? runtimeState(dockerRuntimeStatus(observed.Status))
+					: "unknown"
+				: kind === "script" && service.status
+					? runtimeState(service.status)
+					: "unknown";
+		return {
+			ident: service.ident,
+			...(service.displayName ? { displayName: service.displayName } : {}),
+			kind,
+			...(ports.length > 0 ? { ports } : {}),
+			state,
+			...(service.logPath ? { logPath: service.logPath } : {}),
+			// `db_query` needs a declared connection *and* an app this workflow
+			// holds that requires the service; the listing names the declaration.
+			query: service.query
+				? {
+						kind: service.query.kind,
+						database: service.query.database,
+						userEnv: service.query.userEnv,
+						passwordEnv: service.query.passwordEnv,
+					}
+				: null,
+		};
+	});
+}
+
+/**
+ * The app whose own definition requires one infrastructure service, when a live
+ * owned lease names it: the lease key is `dependency/<identity>` and the
+ * identity is the service's ident (with its runtime/profile/provider appended
+ * when the reference names those).
+ */
+function requiredBy(
+	deps: AgentEnvironmentDeps,
+	service: string,
+): { readonly app: string; readonly lifecycle: string } | undefined {
+	for (const lease of deps.actions?.services.leases?.active() ?? []) {
+		if (
+			lease.targetId === `dependency/${service}` ||
+			lease.targetId.startsWith(`dependency/${service}/`)
+		)
+			return { app: lease.ownerApp, lifecycle: lease.lifecycle };
+	}
+	return undefined;
+}
+
+/** The refusal one infrastructure ident gets from `env_start`: the app that
+ * requires it is what starts it, and when a live lease names that app the
+ * answer names it too. */
+function infrastructureRefusal(
+	deps: AgentEnvironmentDeps,
+	ident: string,
+): EnvironmentInstanceError {
+	const owner = requiredBy(deps, ident);
+	return new EnvironmentInstanceError(
+		"infrastructure-managed",
+		409,
+		owner
+			? `infrastructure ${JSON.stringify(ident)} is started by app ${owner.app}'s requirement; start that app instead`
+			: `infrastructure ${JSON.stringify(ident)} is not started by this surface: the app whose definition requires it starts it, and the developer's environment panel can start it on its own`,
+	);
 }
 
 async function environmentStatus(
@@ -707,12 +884,38 @@ async function environmentStatus(
 	const slots = await instances.slots();
 	const named =
 		app === null || app === "" ? slots : slots.filter((s) => s.app === app);
-	if (app !== null && app !== "" && named.length === 0)
+	if (app !== null && app !== "" && named.length === 0) {
+		// An infrastructure service has no slot of its own, but it is part of what
+		// this run may act on (`env_logs` takes its ident): its status is answered
+		// rather than reported as a missing app (`fix-env-tool-defects-from-e2e`).
+		const service = (deps.infraServices?.() ?? []).find(
+			(candidate) => candidate.ident === app,
+		);
+		if (service) {
+			const rows = await infrastructureSection(deps);
+			const row = rows.find((entry) => entry.ident === app) ?? { ident: app };
+			return {
+				owner,
+				apps: [],
+				infrastructure: [
+					{
+						...row,
+						...(requiredBy(deps, app)
+							? {
+									requiredBy: requiredBy(deps, app)?.app,
+									notice: `started by app ${requiredBy(deps, app)?.app}'s requirement; env_stop stops the app, not the shared service`,
+								}
+							: {}),
+					},
+				],
+			};
+		}
 		throw new EnvironmentInstanceError(
 			"app-not-found",
 			404,
 			`app ${JSON.stringify(app)} not found`,
 		);
+	}
 	noteUse(
 		instances,
 		owner,
@@ -726,6 +929,7 @@ async function environmentStatus(
 			status: slot.status,
 			waiters: slot.waiters,
 			heldByYou: slot.holder === owner,
+			...runDetail(instances, slot.app, slot.status),
 			// The developer's force release is a notice the holder reads once.
 			...(slot.holder === owner && slot.status === "released-by-developer"
 				? {
@@ -734,6 +938,63 @@ async function environmentStatus(
 				: {}),
 		})),
 	};
+}
+
+/**
+ * The run detail one status row carries: the runtime, the exit code and the last
+ * output lines of a run that already ended.
+ *
+ * It is the same row `slots()` reports and the same record the status API and
+ * `env_logs` read (`EnvironmentInstanceController.runRecord`), so the three
+ * signals cannot disagree about a live run, a dead one or a replacement
+ * (`fix-env-tool-defects-from-e2e`). A live run carries the detail too — its
+ * runtime and its captured log file — but no exit code, because there is none.
+ */
+function runDetail(
+	instances: EnvironmentInstanceController,
+	app: string,
+	slotStatus: string | null | undefined,
+): Record<string, unknown> {
+	const record = instances.runRecord?.(app);
+	if (!record) return {};
+	const dead = record.status === "failed" || record.status === "stopped";
+	return {
+		run: {
+			runtime: record.runtime,
+			status: record.status,
+			...(slotStatus === record.status ? {} : { slotStatus }),
+			...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
+			...(record.pid === undefined ? {} : { pid: record.pid }),
+			...(dead && record.logPath ? { logPath: record.logPath } : {}),
+			...(dead && record.logPath ? { logTail: logTailOf(record.logPath) } : {}),
+		},
+	};
+}
+
+/** The last lines of a dead run's captured output, bounded like the failure the
+ * start itself reports. Returns nothing when the file is not there. */
+function logTailOf(file: string): string | undefined {
+	try {
+		const size = fs.statSync(file).size;
+		const window = Math.min(size, 8 * 1024);
+		if (window === 0) return undefined;
+		const handle = fs.openSync(file, "r");
+		try {
+			const buffer = Buffer.alloc(window);
+			fs.readSync(handle, buffer, 0, window, size - window);
+			let text = buffer.toString("utf8");
+			if (window < size) {
+				const newline = text.indexOf("\n");
+				text = newline < 0 ? "" : text.slice(newline + 1);
+			}
+			const lines = text.split("\n").filter((line) => line !== "");
+			return lines.slice(-20).join("\n");
+		} finally {
+			fs.closeSync(handle);
+		}
+	} catch {
+		return undefined;
+	}
 }
 
 /** The run target id an owner's declaration names for one app, when it has one. */
@@ -765,6 +1026,15 @@ async function environmentAcquire(
 ): Promise<unknown> {
 	const instances = requireInstances(deps);
 	const claimed = claimedApps(body.apps);
+	// An infrastructure service has no slot to acquire: it is started by the app
+	// whose definition requires it (or by the developer), and this surface says so
+	// precisely instead of answering "app not found"
+	// (`fix-env-tool-defects-from-e2e`).
+	const infrastructure = claimed.filter((ident) =>
+		(deps.infraServices?.() ?? []).some((service) => service.ident === ident),
+	);
+	if (infrastructure.length > 0)
+		throw infrastructureRefusal(deps, infrastructure[0] as string);
 	// A declaration that names the app's run target is honoured here by naming that
 	// target: the caller asked for "the app", and `apps/defaults/<app>.json` is
 	// where the developer said which run target that is
@@ -863,6 +1133,19 @@ async function environmentStop(
 	app: string,
 ): Promise<unknown> {
 	const instances = requireInstances(deps);
+	// Stopping an infrastructure service is not this surface's: it is shared by
+	// every app that requires it, so the app's stop releases it and the developer's
+	// panel owns the service itself (`fix-env-tool-defects-from-e2e`).
+	if ((deps.infraServices?.() ?? []).some((service) => service.ident === app)) {
+		const owner = requiredBy(deps, app);
+		throw new EnvironmentInstanceError(
+			"infrastructure-managed",
+			409,
+			owner
+				? `infrastructure ${JSON.stringify(app)} is started by app ${owner.app}'s requirement: stop that app, and the service is stopped once no app requires it`
+				: `infrastructure ${JSON.stringify(app)} is shared, not held by this run: stop the app that requires it, or ask the developer to stop the service`,
+		);
+	}
 	const occupant = await instances.occupancy(app);
 	if (!occupant)
 		throw new EnvironmentInstanceError(
@@ -1125,6 +1408,24 @@ async function collectLogs(
 		);
 	}
 	if (app) {
+		// A shell (script) run has no container: its own captured output file is
+		// what `env_logs` reads, resolved from the app's latest run row so a run
+		// that already failed still answers (`fix-env-tool-defects-from-e2e`).
+		const run = deps.instances?.runRecord?.(app.ident);
+		if (run?.logPath) {
+			if (!fs.existsSync(run.logPath))
+				throw new EnvironmentInstanceError(
+					"log-unavailable",
+					404,
+					`the script run of ${JSON.stringify(ident)} has no captured log at ${run.logPath}`,
+				);
+			const fileTail = await readTextFileTail(run.logPath, tail);
+			return {
+				source: run.logPath,
+				lines: fileTail.lines,
+				truncated: fileTail.truncated,
+			};
+		}
 		const dir = app.localDirectoryPath;
 		const kubernetesTarget = deps.runtime?.resolveKubernetesTarget?.(
 			app.ident,
@@ -1203,7 +1504,13 @@ async function dockerLogResult(
 		throw new EnvironmentInstanceError(
 			"runtime-unavailable",
 			503,
-			"no container runtime is available",
+			// The probe's own finding, not a bare "no runtime": a failure that does
+			// not say what was looked for costs the caller a call it cannot answer
+			// (`fix-env-tool-defects-from-e2e`).
+			`no container runtime is available: ${
+				deps.runtime?.dockerProbe ??
+				"the server attached no container-runtime capability at all"
+			}`,
 		);
 	const sourcePaths = composeSourcePaths(deps.configDir, ident);
 	const containers = (await docker.client.allContainers()).filter(

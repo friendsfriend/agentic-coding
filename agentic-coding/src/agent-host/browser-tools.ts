@@ -345,6 +345,10 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Open a page in a headless browser and get back the session, URL and viewport.",
 					"Give a raw `url`, or an `app` plus `endpoint` from env_list/env_start — an endpoint resolves only while this workflow holds that app, and otherwise fails with `app-not-held` naming the holder.",
 					"`session` opens (or reuses) a named page; the unnamed session is `default`. Sessions are isolated browser contexts, capped by browser.max_sessions with FIFO queueing and closed when the run ends or idles past its TTL.",
+					// The browser is the server's own, not a configured service: an agent that
+					// went looking for the `playwright-server` infrastructure (or port 3050)
+					// spent calls on something this surface never uses.
+					"The browser is the workflow server's own: one Playwright-driven Chromium in this process, launched locally from an installed system Chrome or from the browser installed under this configuration; it does not use the configured playwright-server infrastructure service.",
 					"Call browser_snapshot next: the action tools take the refs it returns.",
 				].join(" "),
 				parameters: BrowserOpenParameters,
@@ -680,6 +684,11 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Run Playwright JavaScript against this session's page with `(page, context, expect)`, bounded by `timeoutMs` (default 60s, max 10min).",
 					"On timeout the tool fails with `script-timeout` and the session stays usable.",
 					"`save: true` stores the code as a rerunnable `@playwright/test` spec (with the page URL pinned) in this workflow's evidence.",
+					// The facade is an allow-list: naming it here is what keeps an agent from
+					// discovering the surface by failing (`fix-env-tool-defects-from-e2e`).
+					"`page` supports: goto, reload, goBack, goForward, url, title, content (truncated), setViewportSize, viewportSize, waitForLoadState, waitForURL, waitForSelector, waitForFunction, waitForTimeout, click, fill, press, selectOption, hover, textContent, innerText, inputValue, isVisible, isEnabled, screenshot, evaluate, locator, getByRole, getByText, getByLabel, getByPlaceholder, getByTestId, getByTitle, getByAltText, context(), keyboard, mouse.",
+					"`context` supports: newPage, pages, cookies, addCookies, clearCookies, storageState, setDefaultTimeout, setDefaultNavigationTimeout, waitForTimeout; a locator supports the usual click/fill/press/waitFor/count/text reads and nested locator/getBy* builders.",
+					"The handles are an allow-list facade, not a sandbox: a method outside the lists throws with the supported names in its message, and a result that would walk back to the shared browser (a `Response`, a `JSHandle`, another session's context) is refused.",
 				].join(" "),
 				parameters: BrowserScriptParameters,
 				execute: async (args, api) => {

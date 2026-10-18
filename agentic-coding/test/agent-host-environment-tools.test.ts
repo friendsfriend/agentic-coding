@@ -215,6 +215,16 @@ describe("environment tool surface", () => {
 		}
 		expect(server.calls[3]?.body).toEqual({ app: "shop" });
 	});
+
+	test("env_list forwards the detail and the app it was asked about", async () => {
+		const server: FakeServer = { calls: [], replies: [{ apps: [] }] };
+		await invoke("env_list", { detail: "full" }, server);
+		await invoke("env_list", { app: "shop" }, server);
+		expect(server.calls.map((call) => call.url)).toEqual([
+			"http://127.0.0.1:4050/api/v1/agent-env/list?detail=full",
+			"http://127.0.0.1:4050/api/v1/agent-env/list?app=shop",
+		]);
+	});
 });
 
 // `evidence_attach` and `evidence_list` (`add-workflow-evidence-store`, task

@@ -96,8 +96,23 @@ function bindingOf(
 const NO_BINDING =
 	"this run has no agent environment capability (the workflow server did not provide one); the environment tools are unavailable";
 
-/** `env_list` — what the environment holds right now. */
-const EnvListParameters = Type.Object({});
+/** `env_list` — what the environment holds right now. The default answer is
+ * compact; `detail: "full"` (or naming one app) returns the long form. */
+const EnvListParameters = Type.Object({
+	app: Type.Optional(
+		Type.String({
+			minLength: 1,
+			description:
+				"One app's own full listing, instead of every app's compact one",
+		}),
+	),
+	detail: Type.Optional(
+		Type.Literal("full", {
+			description:
+				"Every app's full targets, with the ids and the reason behind each default",
+		}),
+	),
+});
 
 /** One app names the request, or a bounded list of the apps needed together.
  * `env_start` is told to name every app it needs in one call, so the server can
@@ -241,6 +256,27 @@ const EnvLogsParameters = Type.Object({
 	),
 });
 
+/** One refused environment call. The server's own code (`run-exited`,
+ * `run-max-wait`, `deadlock`, …) is what a caller branches on, so it is carried
+ * rather than folded into prose. */
+class EnvironmentCallError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "EnvironmentCallError";
+		this.code = code;
+	}
+}
+
+/** The failure line one refused call reports: the server's code first, so a
+ * start that died during startup reads `env_start: run-exited: ...` and an agent
+ * can tell it from a transport failure. */
+function callFailure(prefix: string, error: unknown): string {
+	if (error instanceof EnvironmentCallError)
+		return `${prefix}: ${error.code}: ${error.message}`;
+	return `${prefix}: ${message(error)}`;
+}
+
 /** `agentic.environment`: the environment tool surface of one durable run. */
 export function createEnvironmentExtension(
 	lookup: RunContextLookup,
@@ -278,10 +314,15 @@ export function createEnvironmentExtension(
 			signal: AbortSignal.any(signals),
 		});
 		const parsed = (await response.json().catch(() => undefined)) as
-			| { ok?: boolean; value?: unknown; error?: { message?: string } }
+			| {
+					ok?: boolean;
+					value?: unknown;
+					error?: { code?: string; message?: string };
+			  }
 			| undefined;
 		if (!response.ok || !parsed || parsed.ok === false || parsed.error)
-			throw new Error(
+			throw new EnvironmentCallError(
+				parsed?.error?.code ?? `http-${response.status}`,
 				parsed?.error?.message ??
 					`the environment server answered ${response.status}`,
 			);
@@ -293,20 +334,28 @@ export function createEnvironmentExtension(
 		tools: [
 			defineTool({
 				name: "env_list",
-				description:
-					"List this workflow's apps and infrastructure: who holds each app, who is waiting for it, and the run, build and test targets it offers. Read this before starting anything.",
+				description: [
+					"List this workflow's apps and infrastructure: who holds each app, who is waiting for it, the run, build and test targets it offers, and the configured infrastructure services with their kind, ports, state and whether db_query can use them. Read this before starting anything.",
+					'The answer is compact by default (targets as targetId/label/action/runtime/default/availability); pass `detail: "full"`, or name one `app`, for the ids and the reason behind each default.',
+				].join(" "),
 				parameters: EnvListParameters,
-				execute: async (_args, api) => {
+				execute: async (args, api) => {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("env_list: run context unavailable");
+					const query = new URLSearchParams();
+					if (args.app) query.set("app", args.app);
+					if (args.detail) query.set("detail", args.detail);
 					try {
 						return text(
-							await call(run.env, "GET", "/api/v1/agent-env/list", {
-								timeoutMs: READ_TIMEOUT_MS,
-							}),
+							await call(
+								run.env,
+								"GET",
+								`/api/v1/agent-env/list${query.size > 0 ? `?${query}` : ""}`,
+								{ timeoutMs: READ_TIMEOUT_MS },
+							),
 						);
 					} catch (error) {
-						return failure(`env_list: ${message(error)}`);
+						return failure(callFailure("env_list", error));
 					}
 				},
 			}),
@@ -319,6 +368,7 @@ export function createEnvironmentExtension(
 					'Ask for `runtime: "kubernetes"` with `replicas` only when the problem depends on more than one replica (locking, caching, scheduled jobs, session affinity): the cluster run is the slow, opt-in path, and it fails with `cluster-unavailable` when the cluster does not exist rather than creating one.',
 					"While an app is held by another workflow this call waits in the queue and reports its position and holder; it returns `still-waiting` with the position once `timeoutSec` elapses — call it again to keep the position. `released-by-developer` means the developer took the app back; `deadlock` means two workflows hold what the other needs — stop an app you hold that the other is waiting for (`env_list` names the holders) and call again, because repeating the same call deadlocks again immediately.",
 					"Stop the apps you started when you are done: another workflow may be waiting for them.",
+					"A run whose process dies during startup fails the call with `run-exited` and the run's own exit status and last output lines; nothing is held and nothing needs stopping.",
 				].join(" "),
 				parameters: EnvStartParameters,
 				execute: async (args, api, context) => {
@@ -372,7 +422,7 @@ export function createEnvironmentExtension(
 							// transport's raw message: the server withdrew the queue entry.
 							if (context?.abortSignal?.aborted)
 								return failure("env_start: cancelled");
-							return failure(`env_start: ${message(error)}`);
+							return failure(callFailure("env_start", error));
 						}
 						const outcome = String(value.outcome ?? "");
 						if (outcome === "started" || outcome === "already-running")
@@ -426,7 +476,7 @@ export function createEnvironmentExtension(
 			defineTool({
 				name: "env_status",
 				description:
-					"Report who holds each of this workflow's apps, their status, who is waiting, and any notice the developer left (a force release reads `released-by-developer`).",
+					"Report who holds each of this workflow's apps, their status, who is waiting, and any notice the developer left (a force release reads `released-by-developer`). Each app also carries its `run`: the runtime, the run's own status and, for a run that already ended, its exit code and the last output lines.",
 				parameters: EnvStatusParameters,
 				execute: async (args, api) => {
 					const run = lookup(api.conversationId);
@@ -441,7 +491,7 @@ export function createEnvironmentExtension(
 							),
 						);
 					} catch (error) {
-						return failure(`env_status: ${message(error)}`);
+						return failure(callFailure("env_status", error));
 					}
 				},
 			}),
@@ -461,7 +511,7 @@ export function createEnvironmentExtension(
 							}),
 						);
 					} catch (error) {
-						return failure(`env_stop: ${message(error)}`);
+						return failure(callFailure("env_stop", error));
 					}
 				},
 			}),
@@ -485,7 +535,7 @@ export function createEnvironmentExtension(
 							}),
 						);
 					} catch (error) {
-						return failure(`env_build: ${message(error)}`);
+						return failure(callFailure("env_build", error));
 					}
 				},
 			}),
@@ -509,7 +559,7 @@ export function createEnvironmentExtension(
 							}),
 						);
 					} catch (error) {
-						return failure(`env_test: ${message(error)}`);
+						return failure(callFailure("env_test", error));
 					}
 				},
 			}),
@@ -538,7 +588,7 @@ export function createEnvironmentExtension(
 							),
 						);
 					} catch (error) {
-						return failure(`env_logs: ${message(error)}`);
+						return failure(callFailure("env_logs", error));
 					}
 				},
 			}),

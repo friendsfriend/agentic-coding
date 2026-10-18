@@ -125,8 +125,15 @@ function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** `otel_query` — the traces this workflow's runs exported. */
+/** `otel_query` — the traces, and the log records, this workflow's runs
+ * exported. */
 const OtelQueryParameters = Type.Object({
+	mode: Type.Optional(
+		Type.Union([Type.Literal("traces"), Type.Literal("logs")], {
+			description:
+				"`traces` (default) for the trace list or a span tree, `logs` for the log records of the same runs (a `traceId` narrows them to one request)",
+		}),
+	),
 	app: Type.Optional(
 		Type.String({
 			minLength: 1,
@@ -156,11 +163,55 @@ const OtelQueryParameters = Type.Object({
 				"One trace: its span tree instead of the list, with the key attributes and exception events of every span",
 		}),
 	),
+	minSpans: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: 500,
+			description: "Only traces with at least this many spans",
+		}),
+	),
+	rootKind: Type.Optional(
+		Type.String({
+			description:
+				"Only traces whose root span has this OTLP kind (`server` for an inbound request)",
+		}),
+	),
+	http: Type.Optional(
+		Type.String({
+			description:
+				"Only traces whose root span names this HTTP route/target/URL",
+		}),
+	),
+	excludeNames: Type.Optional(
+		Type.String({
+			description:
+				"Drop traces whose every span name contains this (a background poller's query)",
+		}),
+	),
+	includeNoise: Type.Optional(
+		Type.Boolean({
+			description:
+				"Rank the single-span background traces among the rest instead of after them",
+		}),
+	),
+	severity: Type.Optional(
+		Type.String({
+			description:
+				"Logs mode: only records whose severity contains this (`ERROR`)",
+		}),
+	),
+	text: Type.Optional(
+		Type.String({
+			description:
+				"Logs mode: only records whose body or attributes contain this",
+		}),
+	),
 	limit: Type.Optional(
 		Type.Integer({
 			minimum: 1,
-			maximum: 100,
-			description: "How many traces the list returns (default 20, maximum 100)",
+			maximum: 200,
+			description:
+				"How many rows the list returns (traces default 20, logs default 50, maximum 200)",
 		}),
 	),
 });
@@ -253,9 +304,11 @@ export function createDebugExtension(
 			defineTool({
 				name: "otel_query",
 				description: [
-					"Read the traces this workflow's own runs exported to the local receiver: a bounded list of recent traces, or one trace's span tree.",
-					"App telemetry is attributed by resource attributes (`ac.app`, `ac.owner`, `ac.run`), so a previous holder's spans are never returned even though its host and port are identical.",
-					"Without `traceId` the answer is up to `limit` rows `{traceId, root, durationMs, status, errorCount, startedAt, app, run}`; with one it is the span tree of that trace, with the `http.*`/`db.*` attributes and exception events of each span.",
+					"Read the traces this workflow's own runs exported to the local receiver: a bounded list of recent traces, one trace's span tree, or (`mode: \"logs\"`) the log records of the same runs.",
+					"App telemetry is attributed by resource attributes (`ac.app`, `ac.owner`, `ac.run`), so a previous holder's spans and logs are never returned even though its host and port are identical.",
+					"Without `traceId` the answer is up to `limit` rows `{traceId, root, rootKind, durationMs, status, errorCount, startedAt, app, run, spanCount}`; with one it is the span tree of that trace, with the `http.*`/`db.*` attributes and exception events of each span.",
+					"A backend that polls its database exports one span per query, so single-span traces that are not `server` spans are ranked after the request traces and the answer reports how many were dropped: pass `includeNoise`, `minSpans`, `excludeNames` or `http` to see them or to narrow the list.",
+					'`mode: "logs"` returns `{at, severity, body, service, traceId, spanId, attributes}` rows, bounded like a span; filter them with `traceId` (the log lines of one request), `severity`, `text` and `since`.',
 					"Nothing is returned when the app is not exporting to the receiver: check that it carries the `AC_OTEL_*` variables of its run definition.",
 				].join(" "),
 				parameters: OtelQueryParameters,
@@ -273,6 +326,20 @@ export function createDebugExtension(
 									...(args.status ? { status: args.status } : {}),
 									...(args.name ? { name: args.name } : {}),
 									...(args.traceId ? { traceId: args.traceId } : {}),
+									...(args.mode ? { mode: args.mode } : {}),
+									...(args.minSpans === undefined
+										? {}
+										: { minSpans: args.minSpans }),
+									...(args.rootKind ? { rootKind: args.rootKind } : {}),
+									...(args.http ? { http: args.http } : {}),
+									...(args.excludeNames
+										? { excludeNames: args.excludeNames }
+										: {}),
+									...(args.includeNoise === undefined
+										? {}
+										: { includeNoise: args.includeNoise }),
+									...(args.severity ? { severity: args.severity } : {}),
+									...(args.text ? { text: args.text } : {}),
 									...(args.limit === undefined ? {} : { limit: args.limit }),
 								},
 								READ_TIMEOUT_MS,

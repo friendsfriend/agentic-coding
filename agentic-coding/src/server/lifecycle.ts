@@ -37,7 +37,7 @@ import {
 } from "./classifier.ts";
 import { loadAgentConfig } from "./config.ts";
 import { CredentialRegistry } from "./credentials.ts";
-import { TraceIndex } from "./debug/trace-index.ts";
+import { LogIndex, TraceIndex } from "./debug/trace-index.ts";
 import { diagnosticsSection } from "./diagnostics/instance.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import {
@@ -187,6 +187,10 @@ export async function startWorkflowServer(
 	// index, and the route says so instead of answering an empty list.
 	const traceIndex =
 		options.receivers && options.signalSink ? new TraceIndex() : undefined;
+	// The same receivers decode LOG records; the index is what makes the log
+	// lines of one request fetchable by trace id (`fix-env-tool-defects-from-e2e`).
+	const logIndex =
+		options.receivers && options.signalSink ? new LogIndex() : undefined;
 	const hub = options.hub ?? startWorkflowEventHub(events);
 	const operations = options.operations ?? serverOperations;
 	// The workflow event catalog (add-orchestrator-event-subscriptions): the
@@ -261,6 +265,7 @@ export async function startWorkflowServer(
 			: {}),
 		...(telemetry ? { telemetry } : {}),
 		...(traceIndex ? { traceIndex } : {}),
+		...(logIndex ? { logIndex } : {}),
 		...(options.environment ? { environment: options.environment } : {}),
 		...(options.version ? { version: options.version } : {}),
 		...(options.operations ? { operations: options.operations } : {}),
@@ -280,7 +285,7 @@ export async function startWorkflowServer(
 		options.receivers && options.signalSink
 			? await startTelemetryReceivers(
 					options.receivers,
-					traceIndex
+					traceIndex && logIndex
 						? {
 								...options.signalSink,
 								// One push feeds both views: the shell's live stores and the index
@@ -288,6 +293,13 @@ export async function startWorkflowServer(
 								pushTraces: (spans) => {
 									traceIndex.push(spans);
 									options.signalSink?.pushTraces(spans);
+								},
+								// A log record is indexed the same way a span is, so the log lines
+								// of one request can be fetched by its trace id
+								// (`fix-env-tool-defects-from-e2e`).
+								pushLogs: (logs) => {
+									logIndex.push(logs);
+									options.signalSink?.pushLogs(logs);
 								},
 							}
 						: options.signalSink,

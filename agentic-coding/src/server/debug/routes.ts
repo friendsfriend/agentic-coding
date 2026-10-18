@@ -47,7 +47,11 @@ import {
 	type SqlPort,
 } from "./db-query.ts";
 import { callEndpoint, endpointUrl, HttpRequestError } from "./http.ts";
-import { type TraceIndex, TraceIndexError } from "./trace-index.ts";
+import {
+	type LogIndex,
+	type TraceIndex,
+	TraceIndexError,
+} from "./trace-index.ts";
 
 /** Everything the debug routes read. A missing capability answers 503 for the
  * operation it serves instead of inventing a result. */
@@ -55,6 +59,9 @@ export interface DebugRouteDeps {
 	/** The live trace index the receivers feed. Absent means this server receives
 	 * no telemetry, so no trace is queryable. */
 	readonly traceIndex?: TraceIndex;
+	/** The live log index the same receivers feed. Absent means this server
+	 * receives no telemetry, so no log is queryable either. */
+	readonly logIndex?: LogIndex;
 	readonly instances?: EnvironmentInstanceController;
 	readonly apps?: Pick<EnvironmentManager, "getAppByIdent">;
 	/** The configured infra services, read per call so a reload applies. */
@@ -211,6 +218,36 @@ function otelQuery(
 	const traceId = body.traceId?.trim();
 	const app = body.app?.trim();
 	const name = body.name?.trim();
+	const severity = body.severity?.trim();
+	const textBody = body.text?.trim();
+	if (
+		body.mode === "logs" ||
+		(severity !== undefined && severity !== "") ||
+		(textBody !== undefined && textBody !== "")
+	) {
+		// A log read is a read of the same receiver: the records are indexed by
+		// the same `ac.owner`, and the answer says what it did not return
+		// (`fix-env-tool-defects-from-e2e`).
+		const logs = deps.logIndex;
+		if (!logs)
+			throw new DebugRouteError(
+				"log-index-unavailable",
+				"this server receives no telemetry, so no log line of this workflow is queryable",
+				503,
+			);
+		return {
+			mode: "logs",
+			...logs.list(owner, {
+				...(traceId === undefined || traceId === "" ? {} : { traceId }),
+				...(severity === undefined || severity === "" ? {} : { severity }),
+				...(textBody === undefined || textBody === ""
+					? {}
+					: { text: textBody }),
+				...(body.since === undefined ? {} : { since: body.since }),
+				...(body.limit === undefined ? {} : { limit: body.limit }),
+			}),
+		};
+	}
 	if (traceId !== undefined && traceId !== "") {
 		const tree = index.tree(owner, traceId);
 		if (!tree)
@@ -221,6 +258,9 @@ function otelQuery(
 			);
 		return { mode: "tree", ...tree };
 	}
+	const http = body.http?.trim();
+	const excludeNames = body.excludeNames?.trim();
+	const rootKind = body.rootKind?.trim();
 	return {
 		mode: "list",
 		...index.list(owner, {
@@ -229,6 +269,15 @@ function otelQuery(
 			...(body.status === undefined ? {} : { status: body.status }),
 			...(name === undefined || name === "" ? {} : { name }),
 			...(body.limit === undefined ? {} : { limit: body.limit }),
+			...(body.minSpans === undefined ? {} : { minSpans: body.minSpans }),
+			...(rootKind === undefined || rootKind === "" ? {} : { rootKind }),
+			...(http === undefined || http === "" ? {} : { http }),
+			...(excludeNames === undefined || excludeNames === ""
+				? {}
+				: { excludeNames }),
+			...(body.includeNoise === undefined
+				? {}
+				: { includeNoise: body.includeNoise }),
 		}),
 	};
 }

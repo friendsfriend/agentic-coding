@@ -391,6 +391,27 @@ export function appRuntimeStatus(
 	) {
 		candidates.push({ source: "shell", status: "running" });
 	}
+	// The slot's own run record is an observation like any other: a
+	// workflow-held shell run is a process this server started, and its row is
+	// the only thing that knows whether it is still alive. A `stopped` record
+	// adds nothing (it ranks no higher than the container candidate) and is left
+	// out, so it cannot turn one stopped observation into "2 targets".
+	const record = observation?.runRecord;
+	if (
+		record &&
+		["shell", "powershell", "systemshell"].includes(record.runtime) &&
+		(record.state === "running" ||
+			record.state === "starting" ||
+			record.state === "failed")
+	) {
+		candidates.push({
+			source: "run",
+			status:
+				record.exitCode === undefined
+					? record.state
+					: `${record.state} (exit code ${record.exitCode})`,
+		});
+	}
 	return selectStatus(candidates);
 }
 
@@ -438,6 +459,15 @@ export interface RunObservationShape {
 	readonly lastRunRuntime?: string;
 	readonly shellTmuxRunActive?: boolean;
 	readonly runTargetInfo?: unknown;
+	/** The app slot's own run record — the same single record the agent's
+	 * `env_status` and `env_logs` read, so the status API cannot disagree with
+	 * them about a live, a dead or a replacement run
+	 * (`fix-env-tool-defects-from-e2e`). */
+	readonly runRecord?: {
+		readonly runtime: string;
+		readonly state: string;
+		readonly exitCode?: number;
+	};
 }
 
 /** The script lifecycle owner's status shape, kept structural on purpose. */

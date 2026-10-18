@@ -310,6 +310,50 @@ The workflow ends at `core.completed` with `close` only; closing releases the
 app slots through the same owner-bound `environment.teardown` effect every
 family uses.
 
+## What the agent-facing tools report, and from where
+
+The `env_*` tools are the surface a durable run acts through, and one rule
+covers all of them: a signal is derived from the run record that actually holds
+the app, never from a remembered flag (`fix-env-tool-defects-from-e2e`).
+
+- **A start is only `running` once the run is alive.** A script run target is
+  launched, then observed for a settle window (`RUN_SETTLE_MS`, 2 s). A process
+  that exits inside the window fails the start with kind `run-exited`, the exit
+  status and the last lines of the run's own captured output, and the slot is
+  released as `stopped`/`failed`; only a run still alive when the window ends is
+  `running`. This is the bridge until a run target's own readiness probe is
+  executed by the slot controller.
+- **One record answers every status read.** `EnvironmentInstanceController.runRecord`
+  is the single derivation behind `env_status` (each app's `run`: runtime, state,
+  exit code, pid, and a dead run's captured log path and last lines), `env_logs`
+  and the app status API (`appRuntimeStatus` ranks the record as one more
+  observation for shell runtimes), so a live run, a dead one and a replacement
+  cannot be reported three different ways.
+- **A shell run has a log file.** The run's stdout and stderr go to
+  `<config>/logs/instances/<app>.log`, so `env_logs` reads a shell app's own
+  output; a docker/compose app reads its containers and a script service its
+  declared log file. The run's output is also what a failed start and a dead
+  run's status report.
+- **A missing container runtime says what was probed.** The `docker` candidates
+  include the per-user sockets a `docker` CLI resolves from its own context
+  (Docker Desktop, colima, OrbStack, rootless), and a selection that fails
+  reports the command, every endpoint it tried and that no daemon answered.
+- **`env_list` is compact by default**, with `detail: "full"` (or an `app`
+  filter) for the ids and the reasons, and carries an `infrastructure` section
+  (ident, kind, ports, observed state, declared `db_query` connection).
+  `env_status` accepts an infrastructure ident; `env_start`/`env_stop` refuse one
+  and name the app whose requirement starts it when a live dependency lease
+  names it.
+- **`otel_query` ranks requests before poller traffic** and reports the count it
+  ranked out, and its logs mode answers the OTLP log records of the same runs by
+  trace id — the receivers decode `/v1/logs` with the same `ac.owner`
+  attribution the spans carry.
+- **The browser tools need no configured service.** The server drives one
+  locally launched Playwright browser (a system Chrome, or the Chromium installed
+  under this configuration) rather than the `playwright-server` infrastructure,
+  and a scripted session gets an allow-list facade that fails an unknown method
+  with the list of supported ones.
+
 ## Developer-facing behavior
 
 - The TUI's run action checks the slot first: while an agent holds the app it

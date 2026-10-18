@@ -14,12 +14,26 @@ Every app run SHALL receive an OTel endpoint, a service name and resource attrib
 
 ### Requirement: Trace query is scoped to the workflow's runs
 
-`otel_query` SHALL return only spans whose `ac.owner` is the calling workflow, as bounded trace summaries or one bounded span tree.
+`otel_query` SHALL return only spans whose `ac.owner` is the calling workflow, as bounded trace summaries or one bounded span tree. The trace list SHALL rank request traces before single-span background traffic (a poller's query, for example), SHALL report how many matching traces the default ranking pushed out of the answer, and SHALL accept `minSpans`, `rootKind`, `http`, `excludeNames`, `includeNoise` and `status` filters that replace the default ranking when they are given.
 
 #### Scenario: Previous holder's traces
 
 - **WHEN** `workflow:a` ran `customer-mw`, released it, and `workflow:b` now queries traces of `customer-mw`
 - **THEN** `workflow:a`'s spans SHALL NOT appear in `workflow:b`'s result
+
+#### Scenario: A poller floods the list
+
+- **WHEN** an app polls its database twice a second and the newest traces are all single-span queries
+- **THEN** the request trace SHALL be ranked first, and the answer SHALL report how many background traces were dropped and how to see them
+
+### Requirement: Log records are queryable by their workflow and trace
+
+`otel_query` SHALL answer the OTLP log records the workflow's runs exported, attributed by the same `ac.owner`, as bounded rows (time, severity, a bounded body, service, trace id, span id and bounded attributes) filtered by `traceId`, `severity`, `text` and `since`. A server that receives no telemetry SHALL answer `log-index-unavailable` rather than silently returning spans.
+
+#### Scenario: The log lines of one request
+
+- **WHEN** an agent queries `otel_query` with `mode: "logs"` and the `traceId` of a failing request
+- **THEN** the answer SHALL be that request's log lines, redacted and bounded, and SHALL never include another workflow's records
 
 ### Requirement: Database access is read-only and bounded
 

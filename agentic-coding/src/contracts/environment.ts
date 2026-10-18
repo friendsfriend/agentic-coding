@@ -342,12 +342,25 @@ const agentLimit = (max: number) =>
 /** `otel_query`: a bounded trace list, or one trace's span tree when a
  * `traceId` names it. The owner comes from the capability, never the body. */
 export const agentOtelQuerySchema = Schema.Struct({
+	/** `traces` (the default) or the log records of the same runs. */
+	mode: Schema.optional(Schema.Literal("traces", "logs")),
 	app: Schema.optional(agentAppName),
 	since: Schema.optional(safeInstanceText),
 	status: Schema.optional(Schema.Literal("all", "error", "success")),
 	name: Schema.optional(safeInstanceText),
 	traceId: Schema.optional(safeInstanceText),
-	limit: agentLimit(100),
+	/** Trace-list filters: a minimum span count, the root span's kind, an HTTP
+	 * route the root names, names to exclude, and whether the single-span
+	 * background traces are ranked with the rest. */
+	minSpans: agentLimit(500),
+	rootKind: Schema.optional(safeInstanceText),
+	http: Schema.optional(safeInstanceText),
+	excludeNames: Schema.optional(safeInstanceText),
+	includeNoise: Schema.optional(Schema.Boolean),
+	/** Log filters: a severity substring and a substring of body/attributes. */
+	severity: Schema.optional(safeInstanceText),
+	text: Schema.optional(agentFreeText(500)),
+	limit: agentLimit(200),
 });
 
 /** `db_query`: one read-only statement against an infra service whose declared

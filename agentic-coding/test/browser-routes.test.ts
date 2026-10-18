@@ -14,6 +14,7 @@ import { BrowserPool } from "../src/server/browser/pool.ts";
 import {
 	type BrowserRouteDeps,
 	handleBrowserRoute,
+	MAX_SCRIPT_CONTENT_CHARS,
 	reproSpec,
 } from "../src/server/browser/routes.ts";
 import type { App } from "../src/server/environment/config.ts";
@@ -279,6 +280,79 @@ describe("agent browser routes", () => {
 		const poster = stopped.value.poster as { id: string } | undefined;
 		expect(poster?.id).toBeString();
 		expect(stopped.value.video).toMatchObject({ poster: poster?.id });
+		await routeDeps.pool.closeAll();
+	});
+
+	test("a scripted page exposes the documented Playwright surface", async () => {
+		const worktree = fixture();
+		const routeDeps = deps(worktree, createFakeDriver());
+		await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+			url: "http://app.local/",
+		});
+		// The facade is an allow-list: the methods the tool description names must
+		// really be there, and each must answer like the Playwright method it wraps
+		// (`fix-env-tool-defects-from-e2e`: `page.waitForFunction` was undefined).
+		const script = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+			code: [
+				"const kinds = {};",
+				"for (const name of ['waitForFunction','waitForSelector','waitForURL','waitForLoadState','title','content','getByText','getByLabel','getByPlaceholder','getByRole','press','fill'])",
+				"  kinds[name] = typeof page[name];",
+				"await page.waitForFunction(() => true);",
+				"await page.waitForSelector('[data-ac-ref=\"e0\"]');",
+				"await page.waitForURL('http://app.local/');",
+				"await page.waitForLoadState('load');",
+				"return {",
+				"  kinds,",
+				"  title: await page.title(),",
+				"  text: await page.getByText('Save').textContent(),",
+				"};",
+			].join("\n"),
+		});
+		expect(script.status).toBe(200);
+		const result = script.value.result as {
+			kinds: Record<string, string>;
+			title: string;
+			text: string;
+		};
+		for (const value of Object.values(result.kinds))
+			expect(value).toBe("function");
+		expect(result.title).toBe("Fake");
+		expect(result.text).toBe("fake");
+		await routeDeps.pool.closeAll();
+	});
+
+	test("an unsupported page method fails with the supported surface", async () => {
+		const worktree = fixture();
+		const routeDeps = deps(worktree, createFakeDriver());
+		await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+			url: "http://app.local/",
+		});
+		// The failure names the method and lists what *is* supported, instead of the
+		// bare `TypeError` an undefined property produces.
+		const refused = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+			code: "return page.waitForPizza();",
+		});
+		expect(refused.status).toBe(400);
+		expect(refused.text).toContain("page.waitForPizza is not available");
+		expect(refused.text).toContain("waitForFunction");
+		expect(refused.text).toContain("getByText");
+		await routeDeps.pool.closeAll();
+	});
+
+	test("the scripted page's content is bounded", async () => {
+		const worktree = fixture();
+		const routeDeps = deps(
+			worktree,
+			createFakeDriver({ content: "x".repeat(MAX_SCRIPT_CONTENT_CHARS + 500) }),
+		);
+		await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+			url: "http://app.local/",
+		});
+		const script = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+			code: "const html = await page.content();\nreturn html.length;",
+		});
+		expect(script.status).toBe(200);
+		expect(script.value.result).toBe(MAX_SCRIPT_CONTENT_CHARS + 1);
 		await routeDeps.pool.closeAll();
 	});
 

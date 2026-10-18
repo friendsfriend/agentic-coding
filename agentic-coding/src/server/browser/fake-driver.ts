@@ -42,6 +42,9 @@ export interface FakeDriverOptions {
 	readonly screenshot?: Uint8Array;
 	/** The bytes a kept recording writes. */
 	readonly video?: string | Uint8Array;
+	/** The HTML `content()` returns, so the script facade's own bound on it is
+	 * observable with a page bigger than the bound. */
+	readonly content?: string;
 }
 
 export interface FakeContext extends DriverContext {
@@ -121,17 +124,49 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		// references a real Playwright page does (`locator` results and the input
 		// devices point back at the page), so a facade that fails to mask them is
 		// caught here rather than only against a real browser.
+		const rawLocator = (): object => ({
+			click: async () => {},
+			fill: async () => {},
+			textContent: async () => "fake",
+			page: rawPage,
+		});
 		const rawPage: Record<string, unknown> = {
 			send: async () => "fake",
-			// Enough of a page's shape for the script facade to recognize it.
+			// Enough of a page's shape for the script facade to recognize it, and the
+			// methods the facade's own allow-list names, so the surface an agent is
+			// told about is the surface the fake exercises.
 			goto: async () => null,
 			url: () => "about:blank",
-			locator: () => ({
-				click: async () => {},
-				fill: async () => {},
-				textContent: async () => "fake",
-				page: rawPage,
-			}),
+			locator: () => rawLocator(),
+			getByRole: () => rawLocator(),
+			getByText: () => rawLocator(),
+			getByLabel: () => rawLocator(),
+			getByPlaceholder: () => rawLocator(),
+			getByTestId: () => rawLocator(),
+			getByTitle: () => rawLocator(),
+			getByAltText: () => rawLocator(),
+			title: async () => "Fake",
+			content: async () => options.content ?? "<html>fake</html>",
+			setViewportSize: async (size: { width: number; height: number }) => {
+				page.viewport = { ...size };
+			},
+			viewportSize: () => ({ ...page.viewport }),
+			waitForLoadState: async () => {},
+			waitForURL: async () => {},
+			waitForSelector: async () => {},
+			waitForFunction: async () => {},
+			waitForTimeout: async () => {},
+			click: async () => {},
+			fill: async () => {},
+			press: async () => {},
+			selectOption: async () => {},
+			hover: async () => {},
+			textContent: async () => "fake text",
+			innerText: async () => "fake text",
+			inputValue: async () => "",
+			isVisible: async () => true,
+			isEnabled: async () => true,
+			evaluate: async () => "evaluated",
 		};
 		rawPage.keyboard = { press: async () => {}, page: rawPage };
 		rawPage.mouse = { click: async () => {}, page: rawPage };

@@ -33,6 +33,17 @@ export interface AppFamilyServicesOptions {
 	readonly runObservation?: AppFamilyServices["runObservation"];
 	/** The run-target/Kubernetes observer the app family reads. */
 	readonly observation?: RunObservation;
+	/** The app slot's own run record: the status API reads the same single record
+	 * the agent's `env_status` and `env_logs` read, so a workflow-held shell run
+	 * is reported by what actually holds the slot
+	 * (`fix-env-tool-defects-from-e2e`). */
+	readonly runRecord?: (ident: string) =>
+		| {
+				readonly runtime: string;
+				readonly status: string;
+				readonly exitCode?: number;
+		  }
+		| undefined;
 	readonly publish?: (event: {
 		type: string;
 		properties: Record<string, unknown>;
@@ -79,11 +90,25 @@ export function createAppFamilyServices(
 		...(options.kubernetesStatus
 			? { kubernetesStatus: options.kubernetesStatus }
 			: {}),
-		...(options.observation
+		...(options.observation || options.runRecord
 			? {
 					runObservation: async (ident: string) => {
+						// The slot's own record travels with every observation: it is the one
+						// thing that knows whether a workflow-held shell run is still alive.
+						const record = options.runRecord?.(ident);
+						const recorded = record
+							? {
+									runRecord: {
+										runtime: record.runtime,
+										state: record.status,
+										...(record.exitCode === undefined
+											? {}
+											: { exitCode: record.exitCode }),
+									},
+								}
+							: {};
 						const observation = options.observation;
-						if (!observation) return {};
+						if (!observation) return recorded;
 						const app = options.manager.getAppByIdent(ident);
 						const lastRunRuntime = observation.lastRunRuntime(ident);
 						const shellTmuxRunActive =
@@ -101,6 +126,7 @@ export function createAppFamilyServices(
 							...(observation.runTargetInfo(ident) === undefined
 								? {}
 								: { runTargetInfo: observation.runTargetInfo(ident) }),
+							...recorded,
 						};
 					},
 				}

@@ -775,6 +775,12 @@ async function runScript(
  * body still runs with the server process's globals, which the tool's own
  * documentation says and which is why the tool is only offered to runs that
  * already hold a shell.
+ *
+ * A facade is a `Proxy` over the frozen allow-list, so a method that is not on
+ * the list *fails with the list* instead of arriving as `undefined` and being
+ * discovered as `TypeError: page.waitForFunction is not a function` — the
+ * failure mode that cost an end-to-end debug run a whole call
+ * (`fix-env-tool-defects-from-e2e`).
  */
 const PAGE_METHODS = [
 	"goto",
@@ -790,6 +796,7 @@ const PAGE_METHODS = [
 	"waitForURL",
 	"waitForTimeout",
 	"waitForSelector",
+	"waitForFunction",
 	"click",
 	"fill",
 	"press",
@@ -870,6 +877,25 @@ const LOCATOR_METHODS = [
 const KEYBOARD_METHODS = ["press", "type", "insertText", "down", "up"] as const;
 const MOUSE_METHODS = ["move", "click", "down", "up", "wheel"] as const;
 
+/** The largest `page.content()` a script receives. Real app HTML is unbounded,
+ * so the value is cut rather than handed to the model whole. */
+export const MAX_SCRIPT_CONTENT_CHARS = 20_000;
+
+/** The bounds a facade method's own result carries, by method name. Only the
+ * reads whose result grows with the page are bounded; everything else is data
+ * the script asked for and passes through `wrap` unchanged. */
+const PAGE_RESULT_BOUNDS: Record<string, number> = {
+	content: MAX_SCRIPT_CONTENT_CHARS,
+};
+
+/** The method names one facade exposes, as an error message lists them. */
+function supportedMethods(
+	names: readonly string[],
+	extras: Record<string, unknown>,
+): string {
+	return [...names, ...Object.keys(extras)].sort().join(", ");
+}
+
 /** A Playwright page: it navigates and it can build locators. A locator has
  * `click`/`fill` too, which is why the page test has to come first. */
 function isPageLike(value: object): boolean {
@@ -917,7 +943,7 @@ export function scriptHandles(session: BrowserSession): {
 	const wrapLocator = (raw: object): object => {
 		const cached = locators.get(raw);
 		if (cached) return cached;
-		const facade = facadeOf(raw, LOCATOR_METHODS, wrap);
+		const facade = facadeOf(raw, "locator", LOCATOR_METHODS, wrap);
 		locators.set(raw, facade);
 		return facade;
 	};
@@ -932,7 +958,7 @@ export function scriptHandles(session: BrowserSession): {
 	const wrapContext = (raw: object): object => {
 		const cached = contexts.get(raw);
 		if (cached) return cached;
-		const facade = facadeOf(raw, CONTEXT_METHODS, wrap);
+		const facade = facadeOf(raw, "context", CONTEXT_METHODS, wrap);
 		contexts.set(raw, facade);
 		return facade;
 	};
@@ -989,14 +1015,21 @@ export function scriptHandles(session: BrowserSession): {
 	/** The page facade is built directly, never through `wrapPage`: routing the
 	 * session's own page back through the wrapper would recurse for ever. */
 	const pageFacadeOf = (raw: object): object =>
-		facadeOf(raw, PAGE_METHODS, wrap, {
-			// `context` is the session's own context facade, as a function (that is
-			// what `page.context()` is); the input devices are facades in their own
-			// right, and a real page exposes them as properties.
-			context: () => wrapContext(rawContext),
-			keyboard: facadeOf(keyboardOf(raw), KEYBOARD_METHODS, wrap),
-			mouse: facadeOf(mouseOf(raw), MOUSE_METHODS, wrap),
-		});
+		facadeOf(
+			raw,
+			"page",
+			PAGE_METHODS,
+			wrap,
+			{
+				// `context` is the session's own context facade, as a function (that is
+				// what `page.context()` is); the input devices are facades in their own
+				// right, and a real page exposes them as properties.
+				context: () => wrapContext(rawContext),
+				keyboard: facadeOf(keyboardOf(raw), "keyboard", KEYBOARD_METHODS, wrap),
+				mouse: facadeOf(mouseOf(raw), "mouse", MOUSE_METHODS, wrap),
+			},
+			PAGE_RESULT_BOUNDS,
+		);
 	let page: object | undefined;
 	const pageFacade = (): object => {
 		if (page) return page;
@@ -1008,24 +1041,60 @@ export function scriptHandles(session: BrowserSession): {
 	return { page: pageFacade(), context };
 }
 
-/** Build a frozen allow-list facade over one raw object. */
+/** Build a frozen allow-list facade over one raw object.
+ *
+ * Only the named operations exist, each one a bound function over the real
+ * object; every result passes through `wrap` and, where the method's result
+ * grows with the page, through its own bound. Anything else fails loudly: a
+ * `Proxy` answers a supported name from the list and throws for an unknown one
+ * with the names that are supported, so an agent learns the surface from the
+ * error rather than from a bare `TypeError`.
+ */
 function facadeOf(
 	raw: object,
+	label: string,
 	names: readonly string[],
 	wrap: (value: unknown) => unknown,
 	extras: Record<string, unknown> = {},
+	bounds: Record<string, number> = {},
 ): object {
 	const facade: Record<string, unknown> = {};
 	for (const name of names) {
 		const value = (raw as Record<string, unknown>)[name];
 		if (typeof value !== "function") continue;
-		facade[name] = (...args: unknown[]) =>
-			wrap((value as (...inner: unknown[]) => unknown).call(raw, ...args));
+		const bound = bounds[name];
+		facade[name] = (...args: unknown[]) => {
+			const wrapped = wrap(
+				(value as (...inner: unknown[]) => unknown).call(raw, ...args),
+			);
+			if (bound === undefined) return wrapped;
+			const cut = (input: unknown): unknown =>
+				typeof input === "string" && input.length > bound
+					? `${input.slice(0, bound)}…`
+					: input;
+			return typeof (wrapped as PromiseLike<unknown> | undefined)?.then ===
+				"function"
+				? (wrapped as Promise<unknown>).then(cut)
+				: cut(wrapped);
+		};
 	}
 	// `extras` are literal values, not builders: `context` is a function because
 	// that is what `page.context()` is, and the input devices are objects.
 	for (const [name, value] of Object.entries(extras)) facade[name] = value;
-	return Object.freeze(facade);
+	const supported = supportedMethods(names, extras);
+	return new Proxy(Object.freeze(facade), {
+		get(target, property, receiver) {
+			// A symbol is never a Playwright method (`Symbol.toStringTag` and the
+			// inspect hook describe the object), and `then` must stay absent or a
+			// facade would look like a thenable and `wrap` would resolve a result to
+			// the facade itself.
+			if (typeof property !== "string" || property === "then") return undefined;
+			if (property in target) return Reflect.get(target, property, receiver);
+			throw new Error(
+				`${label}.${property} is not available; the supported ${label} methods are: ${supported}`,
+			);
+		},
+	});
 }
 
 function keyboardOf(raw: object): object {

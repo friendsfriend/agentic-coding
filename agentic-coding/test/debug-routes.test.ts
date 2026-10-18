@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { SpanData } from "../src/contracts/telemetry.ts";
+import type { LogData, SpanData } from "../src/contracts/telemetry.ts";
 import {
 	type DbQueryConnection,
 	MAX_VALUE_CHARS,
@@ -23,8 +23,10 @@ import {
 } from "../src/server/debug/routes.ts";
 import {
 	AC_OWNER_ATTRIBUTE,
+	LogIndex,
 	MAX_ATTRIBUTE_CHARS,
 	MAX_INDEXED_TRACES,
+	MAX_LOG_BODY_CHARS,
 	TraceIndex,
 } from "../src/server/debug/trace-index.ts";
 import type { App, InfraService } from "../src/server/environment/config.ts";
@@ -57,6 +59,8 @@ function span(input: {
 	status?: "error" | "ok" | "unset";
 	attributes?: Array<{ key: string; value: string | number | boolean }>;
 	events?: SpanData["events"];
+	/** The OTLP kind; `2` (server) unless a test builds background traffic. */
+	kind?: number;
 }): SpanData {
 	const start = input.startMs;
 	const end = start + (input.durationMs ?? 5);
@@ -81,7 +85,7 @@ function span(input: {
 		resource: { attributes: resource, droppedAttributesCount: 0 },
 		scope: { name: "test", version: "1" },
 		serviceName: input.app ?? "shop",
-		kind: 2,
+		kind: input.kind ?? 2,
 		...(input.events === undefined ? {} : { events: input.events }),
 	};
 }
@@ -175,6 +179,48 @@ function valueIn(json: Record<string, unknown>): Record<string, unknown> {
 	return (json.value ?? {}) as Record<string, unknown>;
 }
 
+/** One log record of a run, attributed by the same resource attributes. */
+function logRecord(input: {
+	owner?: string;
+	app?: string;
+	run?: string;
+	body: string;
+	severity?: string;
+	traceId?: string;
+	spanId?: string;
+	timeMs?: number;
+	attributes?: Array<{ key: string; value: string | number | boolean }>;
+}): LogData {
+	return {
+		resource: {
+			attributes: [
+				...(input.owner === undefined
+					? []
+					: [{ key: "ac.owner", value: input.owner }]),
+				...(input.app === undefined
+					? []
+					: [{ key: "ac.app", value: input.app }]),
+				...(input.run === undefined
+					? []
+					: [{ key: "ac.run", value: input.run }]),
+			],
+		},
+		scope: { name: "test", version: "1" },
+		timeUnixNano: nanosAt(
+			input.timeMs ?? Date.parse("2026-01-01T00:00:00.000Z"),
+		),
+		severity: input.severity ?? "INFO",
+		body: input.body,
+		attributes: (input.attributes ?? []).map((attribute) => ({
+			key: attribute.key,
+			value: String(attribute.value),
+		})),
+		...(input.traceId === undefined ? {} : { traceId: input.traceId }),
+		...(input.spanId === undefined ? {} : { spanId: input.spanId }),
+		serviceName: input.app ?? "shop",
+	};
+}
+
 describe("otel_query", () => {
 	test("answers with this workflow's runs and never a previous holder's", async () => {
 		const index = new TraceIndex();
@@ -225,6 +271,239 @@ describe("otel_query", () => {
 			spanCount: 2,
 		});
 		expect(index.size("workflow:a")).toBe(1);
+	});
+
+	test("a background poller is ranked after the request trace, and reported", async () => {
+		const index = new TraceIndex();
+		// The shape the end-to-end run hit: a poller exporting one SELECT span
+		// twice a second, newer than the one request that mattered.
+		const poller = ["p1", "p2", "p3"].map((traceId, position) =>
+			span({
+				traceId,
+				spanId: `${traceId}-root`,
+				name: "SELECT 1",
+				owner: OWNER,
+				app: "shop",
+				startMs: Date.parse("2026-01-01T00:01:00.000Z") + position,
+				kind: 3,
+			}),
+		);
+		index.push([
+			...poller,
+			...requestTrace({
+				traceId: "req-1",
+				owner: OWNER,
+				app: "shop",
+				startMs: Date.parse("2026-01-01T00:00:00.000Z"),
+			}),
+		]);
+		// A limit of one still answers the request trace, not the newest poller.
+		const listed = await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+			limit: 1,
+		});
+		const value = valueIn(listed.json);
+		expect(
+			(value.traces as Array<Record<string, unknown>>).map((t) => t.traceId),
+		).toEqual(["req-1"]);
+		expect(value.noiseDropped).toBe(3);
+		expect(String(value.notice)).toContain("includeNoise");
+
+		// Asking for them, or narrowing by hand, removes the default ordering.
+		const noise = valueIn(
+			(
+				await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+					limit: 1,
+					includeNoise: true,
+				})
+			).json,
+		);
+		expect(
+			(noise.traces as Array<Record<string, unknown>>).map((t) => t.traceId),
+		).toEqual(["p3"]);
+		expect(noise.noiseDropped).toBe(0);
+		const narrowed = valueIn(
+			(
+				await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+					minSpans: 2,
+				})
+			).json,
+		);
+		expect(
+			(narrowed.traces as Array<Record<string, unknown>>).map((t) => t.traceId),
+		).toEqual(["req-1"]);
+		expect(narrowed.noiseDropped).toBe(0);
+		const excluded = valueIn(
+			(
+				await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+					excludeNames: "SELECT",
+				})
+			).json,
+		);
+		expect(
+			(excluded.traces as Array<Record<string, unknown>>).map((t) => t.traceId),
+		).toEqual(["req-1"]);
+	});
+
+	test("the root kind and an HTTP route narrow the list", async () => {
+		const index = new TraceIndex();
+		index.push([
+			...requestTrace({ traceId: "req-1", owner: OWNER, app: "shop" }),
+			...requestTrace({
+				traceId: "req-2",
+				owner: OWNER,
+				app: "shop",
+				startMs: Date.parse("2026-01-01T00:00:10.000Z"),
+			}),
+		]);
+		const value = valueIn(
+			(
+				await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+					rootKind: "server",
+					http: "/orders",
+				})
+			).json,
+		);
+		expect(
+			(value.traces as Array<Record<string, unknown>>).map((t) => t.traceId),
+		).toEqual(["req-2", "req-1"]);
+		expect((value.traces as Array<Record<string, unknown>>)[0]?.rootKind).toBe(
+			"server",
+		);
+		const none = valueIn(
+			(
+				await post({ traceIndex: index }, AGENT_OTEL_QUERY_PATH, {
+					rootKind: "consumer",
+				})
+			).json,
+		);
+		expect(none.traces).toEqual([]);
+	});
+
+	test("the log records of one request are answerable by trace id", async () => {
+		const traceIndex = new TraceIndex();
+		const logIndex = new LogIndex();
+		logIndex.push([
+			logRecord({
+				owner: OWNER,
+				app: "shop",
+				run: "grant-b",
+				body: "handling GET /orders",
+				traceId: "req-1",
+				spanId: "req-1-root",
+				timeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+			}),
+			logRecord({
+				owner: OWNER,
+				app: "shop",
+				run: "grant-b",
+				body: "order lookup failed",
+				severity: "ERROR",
+				traceId: "req-1",
+				spanId: "req-1-db",
+				timeMs: Date.parse("2026-01-01T00:00:00.500Z"),
+				attributes: [{ key: "db.statement", value: "SELECT * FROM orders" }],
+			}),
+			// Another workflow's record is never returned, even though its app and
+			// grant are the same shape.
+			logRecord({
+				owner: "workflow:a",
+				app: "shop",
+				body: "somebody else's line",
+				traceId: "req-1",
+			}),
+			// A record that names no owner is nobody's: it is not indexed at all.
+			logRecord({ body: "workflow telemetry", traceId: "req-1" }),
+		]);
+		expect(logIndex.size(OWNER)).toBe(2);
+		expect(logIndex.size("workflow:a")).toBe(1);
+
+		const byTrace = valueIn(
+			(
+				await post({ traceIndex, logIndex }, AGENT_OTEL_QUERY_PATH, {
+					mode: "logs",
+					traceId: "req-1",
+				})
+			).json,
+		);
+		expect(byTrace.mode).toBe("logs");
+		expect(byTrace.owner).toBe(OWNER);
+		const lines = byTrace.logs as Array<Record<string, unknown>>;
+		// Newest first, and only this workflow's records.
+		expect(lines.map((line) => line.body)).toEqual([
+			"order lookup failed",
+			"handling GET /orders",
+		]);
+		expect(lines[0]).toMatchObject({
+			severity: "ERROR",
+			service: "shop",
+			traceId: "req-1",
+			spanId: "req-1-db",
+			attributes: { "db.statement": "SELECT * FROM orders" },
+		});
+
+		const errors = valueIn(
+			(
+				await post({ traceIndex, logIndex }, AGENT_OTEL_QUERY_PATH, {
+					mode: "logs",
+					severity: "error",
+				})
+			).json,
+		);
+		expect((errors.logs as Array<Record<string, unknown>>).length).toBe(1);
+		// A filter alone selects the logs mode, so a caller need not know to ask.
+		const text = valueIn(
+			(
+				await post({ traceIndex, logIndex }, AGENT_OTEL_QUERY_PATH, {
+					text: "lookup failed",
+				})
+			).json,
+		);
+		expect(text.mode).toBe("logs");
+		expect((text.logs as Array<Record<string, unknown>>).length).toBe(1);
+		const limited = valueIn(
+			(
+				await post({ traceIndex, logIndex }, AGENT_OTEL_QUERY_PATH, {
+					mode: "logs",
+					limit: 1,
+				})
+			).json,
+		);
+		expect(limited.matched).toBe(2);
+		expect(limited.truncated).toBe(true);
+	});
+
+	test("a log body is bounded and a server without a log index says so", async () => {
+		const traceIndex = new TraceIndex();
+		const logIndex = new LogIndex();
+		logIndex.push([
+			logRecord({ owner: OWNER, body: "x".repeat(MAX_LOG_BODY_CHARS + 100) }),
+			logRecord({
+				owner: OWNER,
+				body: "ok",
+				attributes: [
+					{ key: "long", value: "y".repeat(MAX_ATTRIBUTE_CHARS + 100) },
+				],
+			}),
+		]);
+		const value = valueIn(
+			(
+				await post({ traceIndex, logIndex }, AGENT_OTEL_QUERY_PATH, {
+					mode: "logs",
+				})
+			).json,
+		);
+		const lines = value.logs as Array<Record<string, unknown>>;
+		// Both records carry the same instant, so they keep their insertion order.
+		expect(String(lines[0]?.body)).toHaveLength(MAX_LOG_BODY_CHARS + 1);
+		expect(
+			((lines[1]?.attributes ?? {}) as Record<string, string>).long,
+		).toHaveLength(MAX_ATTRIBUTE_CHARS + 1);
+
+		const missing = await post({ traceIndex }, AGENT_OTEL_QUERY_PATH, {
+			mode: "logs",
+		});
+		expect(missing.status).toBe(503);
+		expect(errorOf(missing.json).code).toBe("log-index-unavailable");
 	});
 
 	test("filters by app, name, status and since, and bounds the list", async () => {

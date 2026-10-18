@@ -35,6 +35,7 @@
 //     shell. `user`-held apps, unobserved (`unknown`) apps and apps whose owner
 //     is waiting for another app are never reaped.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { discoverActionTargets } from "../actions/discovery.ts";
 import type {
@@ -105,6 +106,21 @@ const DEFAULT_IDLE_TTL_MS = 30 * 60 * 1000;
 const OBSERVATION_REFRESH_MS = 1000;
 /** How long discovered run targets are reused before the tree is re-read. */
 const TARGET_CACHE_MS = 1000;
+/**
+ * How long a script run must stay alive before it counts as started.
+ *
+ * A launcher only knows that the command *spawned*; a run target that exits
+two hundred milliseconds later (a missing `node_modules`, a port already in
+ * use) is a failed start, and reporting it as `running` made `env_start`
+ * disagree with reality in one direction and the status views in the other
+ * (`fix-env-tool-defects-from-e2e`). This is the bridge until a run target's
+ * own readiness probe is declared and executed by this controller.
+ */
+const RUN_SETTLE_MS = 2000;
+/** How many lines of a run's captured output a failure message carries. */
+const RUN_LOG_TAIL_LINES = 20;
+/** How much of that file one failure message reads at most. */
+const RUN_LOG_TAIL_BYTES = 64 * 1024;
 /** How often a long poll re-checks whether it heads every queue. */
 const WAIT_POLL_MS = 25;
 /** How long a start/stop transition may stay in flight before reconcile acts. */
@@ -278,6 +294,10 @@ export interface EnvironmentInstanceControllerOptions {
 	readonly newGrantId?: () => string;
 	/** Test seam: replaces the long-poll sleep. */
 	readonly sleep?: (ms: number) => Promise<void>;
+	/** How long a script run must stay alive before it counts as started
+	 * (`RUN_SETTLE_MS`); a test can widen it so an immediately dying process
+	 * always wins the race instead of depending on the timer. */
+	readonly scriptSettleMs?: number;
 	/** Queue position grace, in milliseconds. */
 	readonly queueGraceMs?: number;
 	/** How often a long poll re-checks the queues. */
@@ -421,6 +441,7 @@ export class EnvironmentInstanceController {
 	>;
 	private readonly now: () => Date;
 	private readonly sleep: (ms: number) => Promise<void>;
+	private readonly scriptSettleMs: number;
 	private readonly queueGraceMs: number;
 	private readonly waitPollMs: number;
 	private readonly observationRefreshMs: number;
@@ -502,6 +523,7 @@ export class EnvironmentInstanceController {
 		this.sleep =
 			options.sleep ??
 			((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+		this.scriptSettleMs = options.scriptSettleMs ?? RUN_SETTLE_MS;
 		this.queueGraceMs = options.queueGraceMs ?? QUEUE_GRACE_MS;
 		this.waitPollMs = options.waitPollMs ?? WAIT_POLL_MS;
 		this.observationRefreshMs =
@@ -568,6 +590,86 @@ export class EnvironmentInstanceController {
 			holder: "user",
 			status: observed === "running" ? "running" : "unknown",
 		};
+	}
+
+	/**
+	 * What a log or a run status needs about the app's latest run: its runtime,
+	 * the row's status, and — for a script run — the file its own output was
+	 * captured to and the exit code it ended with.
+	 *
+	 * The latest row is read whatever its status, not only an active one: a run
+	 * that already failed is exactly the one whose log and exit code are worth
+	 * reading (`fix-env-tool-defects-from-e2e`).
+	 */
+	runRecord(app: string):
+		| {
+				readonly runtime: string;
+				readonly status: EnvironmentInstanceStatus;
+				readonly logPath?: string;
+				readonly exitCode?: number;
+				readonly pid?: number;
+		  }
+		| undefined {
+		const rows = this.state
+			.getEnvironmentInstances()
+			.filter((row) => row.app === app);
+		const record =
+			this.state.findActiveEnvironmentInstance(app) ?? rows[rows.length - 1];
+		if (!record) return undefined;
+		// A container or a cluster release logs itself; only a script run's output
+		// is this process's own capture.
+		if (record.runtime === "docker" || record.runtime === "kubernetes")
+			return {
+				runtime: record.runtime,
+				status: record.status as EnvironmentInstanceStatus,
+			};
+		const handle = this.scriptInfra.executionHandle(scriptHandleKey(record.id));
+		const status = record.status as EnvironmentInstanceStatus;
+		// A finished run that has not been reconciled yet still holds `running` in
+		// the row: the handle's own terminal state is the truth about the process.
+		const observed =
+			status === "running" || status === "unknown"
+				? this.finishedScriptStatus(record.id)
+				: undefined;
+		return {
+			runtime: record.runtime,
+			status: observed ?? status,
+			logPath: instanceLogPath(this.configDir, app),
+			...(handle?.exitCode === undefined ? {} : { exitCode: handle.exitCode }),
+			...(handle?.pid === undefined ? {} : { pid: handle.pid }),
+		};
+	}
+
+	/** The terminal status a script run already reached, from its own handle. */
+	private finishedScriptStatus(
+		storageId: string,
+	): EnvironmentInstanceStatus | undefined {
+		const handle = this.scriptInfra.executionHandle(scriptHandleKey(storageId));
+		if (handle?.exitCode === undefined) return undefined;
+		return handle.exitCode === 0 ? "stopped" : "failed";
+	}
+
+	/**
+	 * Whether a script run died inside its settle window, and with what status.
+	 *
+	 * The race is bound on both sides: the exit promise, and the window itself.
+	 * A window that elapses is re-checked against the process's own exit code, so
+	 * a process that died exactly at the boundary is not reported as running.
+	 * `undefined` means the run is alive and settled (or was never spawned); a
+	 * `null` code is a process that exited without Bun reporting one.
+	 */
+	private async settledExit(
+		spawned:
+			| { readonly exitCode: number | null; readonly exited: Promise<number> }
+			| undefined,
+	): Promise<{ readonly code: number | null } | undefined> {
+		if (!spawned) return undefined;
+		const outcome = await Promise.race([
+			spawned.exited.then(() => "exited" as const),
+			this.sleep(this.scriptSettleMs).then(() => "settled" as const),
+		]);
+		if (outcome === "settled" && spawned.exitCode === null) return undefined;
+		return { code: spawned.exitCode };
 	}
 
 	/** Every configured app's slot, for the environment views and the TUI. */
@@ -1334,30 +1436,67 @@ export class EnvironmentInstanceController {
 				});
 			} else {
 				const key = scriptHandleKey(record.id);
+				// The run's own output is captured to a file: a shell run has no
+				// container, so this file is what `env_logs` (and a dead run's status)
+				// reads (`fix-env-tool-defects-from-e2e`).
+				const logPath = instanceLogPath(this.configDir, appIdent);
+				let spawned:
+					| {
+							readonly exitCode: number | null;
+							readonly exited: Promise<number>;
+					  }
+					| undefined;
 				const launch = await this.scriptInfra.launch({
 					ident: key,
 					runner: "shell",
 					command: selected.command ?? "sh",
 					args: selected.args ?? [selected.sourcePath],
 					dir: selected.workingDir ?? checkoutPath,
+					logPath,
 					env: environmentWith(variables, owner),
 					...(owner === "user" ? {} : { forceLogged: true }),
 					spawn: () => {
-						const proc = Bun.spawn(
-							[
-								selected.command ?? "sh",
-								...(selected.args ?? [selected.sourcePath]),
-							],
-							{
-								cwd: selected.workingDir ?? checkoutPath,
-								env: environmentWith(variables, owner),
-								stdout: "ignore",
-								stderr: "ignore",
-							},
-						);
+						// One descriptor for both streams, opened with `w`: two separate
+						// handles would each write at offset 0 and interleave the output the
+						// run produced. A descriptor that cannot be opened degrades to the
+						// old discarded output rather than failing the start.
+						let logFd: number | undefined;
+						try {
+							fs.mkdirSync(path.dirname(logPath), {
+								recursive: true,
+								mode: 0o700,
+							});
+							logFd = fs.openSync(logPath, "w");
+						} catch (error) {
+							this.logger?.(
+								`[slots] capturing the output of ${appIdent} in ${logPath} failed: ${message(error)}`,
+							);
+						}
+						const argv = [
+							selected.command ?? "sh",
+							...(selected.args ?? [selected.sourcePath]),
+						];
+						const spawnOptions = {
+							cwd: selected.workingDir ?? checkoutPath,
+							env: environmentWith(variables, owner),
+						};
+						const proc =
+							logFd === undefined
+								? Bun.spawn(argv, {
+										...spawnOptions,
+										stdout: "ignore",
+										stderr: "ignore",
+									})
+								: Bun.spawn(argv, {
+										...spawnOptions,
+										stdout: logFd,
+										stderr: logFd,
+									});
+						spawned = proc;
 						void proc.exited.then((exitCode) => {
+							if (logFd !== undefined) fs.closeSync(logFd);
 							if (this.scriptInfra instanceof ScriptInfrastructure)
-								this.scriptInfra.noteExit(key, exitCode, "", proc.pid);
+								this.scriptInfra.noteExit(key, exitCode, logPath, proc.pid);
 							const handle = this.scriptInfra.executionHandle(key);
 							if (handle?.pid !== proc.pid) return;
 							const current = this.state.getEnvironmentInstance(record.id);
@@ -1384,6 +1523,28 @@ export class EnvironmentInstanceController {
 						500,
 						`script exited during startup with status ${launch.status}`,
 					);
+				// A launch that answered `running` has only proved the command
+				// spawned. A run target that dies immediately (a missing
+				// `node_modules`, a port already taken) is a *failed start* with its
+				// exit code and its own output - not a live instance that holds the app
+				// (`fix-env-tool-defects-from-e2e`).
+				const early = await this.settledExit(spawned);
+				if (early) {
+					// The row is settled here rather than left to the catch below: a run
+					// that exited cleanly on its own is `stopped`, not `failed`, and the
+					// release the exit should produce must be the honest one.
+					this.state.transitionEnvironmentInstanceStatus(
+						claimedId,
+						"starting",
+						early.code === 0 ? "stopped" : "failed",
+						this.now().toISOString(),
+					);
+					throw new EnvironmentInstanceError(
+						"run-exited",
+						500,
+						`the run of ${appIdent} ${early.code === null ? "exited" : `exited with status ${early.code}`} before it was ready; last output: ${readLogTail(logPath)}`,
+					);
+				}
 			}
 			if (
 				!this.state.compareAndSetEnvironmentInstanceStatus(
@@ -2754,6 +2915,51 @@ function selectTarget(
 
 function scriptHandleKey(storageId: string): string {
 	return `environment-instance:${storageId}`;
+}
+
+/**
+ * The file a script run's own output is captured to.
+ *
+ * One slot per app, so the path is stable per app and a log read needs no
+ * lookup: the run that holds the app is the run that wrote it, and a replacement
+ * run truncates it (`fix-env-tool-defects-from-e2e`). A shell run has no
+ * container, so without this file `env_logs` had nothing to read and fell
+ * through to a runtime probe that answered "no container runtime".
+ */
+export function instanceLogPath(configDir: string, appIdent: string): string {
+	return path.join(configDir, "logs", "instances", `${appIdent}.log`);
+}
+
+/**
+ * The last lines of a run's captured output, bounded on both axes: a failure
+ * answer carries the output that explains it, never the whole file.
+ */
+function readLogTail(file: string): string {
+	let handle: number;
+	try {
+		handle = fs.openSync(file, "r");
+	} catch {
+		return "(no captured output)";
+	}
+	try {
+		const size = fs.fstatSync(handle).size;
+		const window = Math.min(size, RUN_LOG_TAIL_BYTES);
+		if (window === 0) return "(no captured output)";
+		const buffer = Buffer.alloc(window);
+		fs.readSync(handle, buffer, 0, window, size - window);
+		let text = buffer.toString("utf8");
+		// A window that starts mid-line would answer with a mangled first line.
+		if (window < size) {
+			const newline = text.indexOf("\n");
+			text = newline < 0 ? "" : text.slice(newline + 1);
+		}
+		const lines = text.split("\n").filter((line) => line !== "");
+		return lines
+			.slice(Math.max(0, lines.length - RUN_LOG_TAIL_LINES))
+			.join("\n");
+	} finally {
+		fs.closeSync(handle);
+	}
 }
 
 function environmentWith(

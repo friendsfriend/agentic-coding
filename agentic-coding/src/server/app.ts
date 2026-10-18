@@ -58,7 +58,7 @@ import { type BrowserRouteDeps, handleBrowserRoute } from "./browser/routes.ts";
 import { type BrowserRuntime, browserRuntime } from "./browser/runtime.ts";
 import type { CredentialRegistry } from "./credentials.ts";
 import { type DebugRouteDeps, handleDebugRoute } from "./debug/routes.ts";
-import type { TraceIndex } from "./debug/trace-index.ts";
+import type { LogIndex, TraceIndex } from "./debug/trace-index.ts";
 import {
 	type AgentEnvironmentDeps,
 	handleAgentEnvironmentRoute,
@@ -138,6 +138,8 @@ export interface ServerAppOptions {
 	 * the spans its own runs exported (`otel_query`). Absent: the process owns no
 	 * receivers and answers that no trace is queryable. */
 	readonly traceIndex?: TraceIndex;
+	/** The live log index the receivers feed, for `otel_query`'s logs mode. */
+	readonly logIndex?: LogIndex;
 }
 
 export interface ServerApp {
@@ -342,6 +344,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 	 * and the configured infra services a query connection is declared on. */
 	const debugDeps = (): DebugRouteDeps => ({
 		...(options.traceIndex ? { traceIndex: options.traceIndex } : {}),
+		...(options.logIndex ? { logIndex: options.logIndex } : {}),
 		configDir: options.configDir ?? "",
 		...(options.environment?.manager
 			? { apps: options.environment.manager }

@@ -12,6 +12,7 @@ import type { App } from "../environment/config.ts";
 import { createBunRuntimeDispatch } from "./dispatch.ts";
 import {
 	type DockerRuntimeSelection,
+	describeRuntimeSelection,
 	runSystemPrune,
 	selectRuntime,
 	spawnCommandRunner,
@@ -81,6 +82,7 @@ export async function createRuntimeServices(
 		process.env.DEVENV_CONTAINER_RUNTIME ??
 		"docker";
 	let docker = options.dockerClientOverride;
+	let dockerProbe: string | undefined;
 	if (!docker) {
 		try {
 			docker = await selectRuntime(runtimeName, {
@@ -93,6 +95,11 @@ export async function createRuntimeServices(
 				}`,
 			);
 		}
+		if (!docker)
+			dockerProbe = describeRuntimeSelection(
+				runtimeName,
+				options.env ?? process.env,
+			);
 	}
 	const containerName =
 		options.containerName ?? docker?.runtime.name ?? runtimeName;
@@ -119,6 +126,7 @@ export async function createRuntimeServices(
 	const controller = new AbortController();
 	const routes: RuntimeRouteServices = {
 		...(docker ? { docker } : {}),
+		...(dockerProbe ? { dockerProbe } : {}),
 		kubernetes,
 		apps: {
 			getAppByIdent: (ident) =>

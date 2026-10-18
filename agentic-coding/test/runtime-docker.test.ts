@@ -14,6 +14,7 @@ import {
 	containerStatusRank,
 	DockerClient,
 	decodeLogFrames,
+	describeRuntimeSelection,
 	dockerTlsOptions,
 	formatPorts,
 	parseDockerHost,
@@ -148,6 +149,55 @@ describe("runtime selection", () => {
 		).toEqual([
 			{ name: "docker", command: "docker", host: "tcp://1.2.3.4:2375" },
 		]);
+	});
+
+	test("docker without DOCKER_HOST probes the per-user sockets too", () => {
+		// The `docker` CLI resolves Docker Desktop's/colima's/OrbStack's socket
+		// from its own context; `/var/run/docker.sock` alone is why a probe failed
+		// while `docker ps` worked (`fix-env-tool-defects-from-e2e`).
+		const candidates = runtimeCandidates(
+			"docker",
+			{},
+			501,
+			"/Users/dev",
+			(socket) => socket === "/Users/dev/.docker/run/docker.sock",
+		);
+		expect(candidates).toEqual([
+			{ name: "docker", command: "docker", host: "" },
+			{
+				name: "docker",
+				command: "docker",
+				host: "unix:///Users/dev/.docker/run/docker.sock",
+			},
+		]);
+	});
+
+	test("a failed probe says which binary and which sockets it tried", () => {
+		const description = describeRuntimeSelection(
+			"docker",
+			{},
+			{
+				uid: 501,
+				home: "/Users/dev",
+				exists: () => false,
+				which: () => null,
+			},
+		);
+		expect(description).toContain("is not on this process's PATH");
+		expect(description).toContain("probed unix:///var/run/docker.sock");
+		expect(description).toContain("no daemon answered its ping");
+
+		const found = describeRuntimeSelection(
+			"docker",
+			{},
+			{
+				uid: 501,
+				home: "/Users/dev",
+				exists: () => false,
+				which: () => "/usr/local/bin/docker",
+			},
+		);
+		expect(found).toContain("resolves at /usr/local/bin/docker");
 	});
 
 	test("podman prefers explicit host, then DOCKER_HOST, then sockets", () => {

@@ -391,6 +391,13 @@ export function createIntegrationServices(
 		git,
 		providers,
 		...(options.runtime ? { docker: options.runtime.docker } : {}),
+		// The status API reads the app slot's own run record, exactly as the
+		// agent's `env_status` does: without it a workflow-held shell dev server
+		// was reported `stopped` while it served HTTP 200
+		// (`fix-env-tool-defects-from-e2e`).
+		...(instances
+			? { runRecord: (ident: string) => instances.runRecord(ident) }
+			: {}),
 		// A script service's status comes from its lifecycle owner when one is
 		// attached: a remembered flag is never reported as a running service.
 		...(options.scriptInfra
