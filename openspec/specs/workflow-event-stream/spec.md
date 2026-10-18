@@ -17,9 +17,8 @@ developer questions (`question.pending`, `question.routed`, `question.answered`)
 effects (`effect.failed`), delivery (`delivery.push`, `pull-request.state`),
 runs (`run.started`, `run.completed`, `run.blocked`, `run.aborted`,
 `run.stalled`), verification (`verification.finished`), compaction
-(`compaction`), gates (`gate.decided`), the orchestrator launch ceiling
-(`limit.hit`), the bus's own rate limit (`events.suppressed`) and OpenSpec
-progress (`openspec.task-progress`).
+(`compaction`), gates (`gate.decided`), the bus's own rate limit
+(`events.suppressed`) and OpenSpec progress (`openspec.task-progress`).
 
 #### Scenario: Every catalog event has a payload schema and a derivation test
 
@@ -97,23 +96,14 @@ repository SHALL emit exactly one `workflow.started`.
 
 ### Requirement: Refusal and stall events
 
-The launch-ceiling refusal SHALL emit `limit.hit` with the limit name, the
-current count and the maximum, from the server path that refuses the start (the
-one event not derived from a projection). A tracked workflow that is `active`
-and has made no progress for longer than the configured
-`[agents.orchestrator] stall_minutes` (default 30) SHALL emit `run.stalled`
-naming the step and the elapsed minutes, and only after a fresh read of that
-workflow confirms it is still `active` and unchanged: a workflow that completed,
-closed or blocked since the last observation SHALL update its projection instead
-(its transition is what is reported) and SHALL NOT produce `run.stalled`.
-`run.stalled` SHALL NOT be emitted twice for the same unchanged workflow.
-
-#### Scenario: Orchestrator launch ceiling reached
-
-- **WHEN** the server refuses an orchestrator start because `max_active` is
-  reached
-- **THEN** a `limit.hit` event SHALL be recorded with the current count and the
-  maximum
+A tracked workflow that is `active` SHALL emit `run.stalled` once it has made no
+progress for longer than the configured `[agents.orchestrator] stall_minutes`
+(default 30), naming the step and the elapsed minutes, and only after a fresh
+read of that workflow confirms it is still `active` and unchanged: a workflow
+that completed, closed or blocked since the last observation SHALL update its
+projection instead (its transition is what is reported) and SHALL NOT produce
+`run.stalled`. `run.stalled` SHALL NOT be emitted twice for the same unchanged
+workflow.
 
 #### Scenario: A stalled run
 

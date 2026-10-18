@@ -108,42 +108,13 @@ delivered and in `off` mode nothing SHALL be observed.
   default event occurs
 - **THEN** the session SHALL receive the note the default subscription produces
 
-### Requirement: Orchestrator launch limits
-
-The server SHALL refuse a workflow start from the orchestrator principal when the
-number of orchestrator-started workflows that are neither `completed` nor
-`closed`, across all workflow targets, has reached the configured `max_active`,
-or when the number of orchestrator-started workflows created in the trailing 24
-hours has reached `max_starts_per_day`. Defaults SHALL be 5 and 20. The refusal
-SHALL use status 409 with code `orchestrator-limit` and SHALL name the limit, the
-current count and the counted workflows. Starts from the operator principal SHALL
-NOT be limited or counted.
-
-#### Scenario: Active limit reached
-
-- **WHEN** five orchestrator-started workflows are active and `max_active` is 5
-- **AND** the orchestrator starts another workflow
-- **THEN** the server SHALL answer 409 `orchestrator-limit` naming the five
-  workflows
-- **AND** no workflow SHALL be created
-
-#### Scenario: Completed workflows free capacity
-
-- **WHEN** one of those workflows completes
-- **THEN** the next orchestrator start SHALL be accepted
-
-#### Scenario: Developer start is unaffected
-
-- **WHEN** the limit is reached and the developer starts a workflow
-- **THEN** the start SHALL be accepted
-
 ### Requirement: Orchestrator can shape workflows with blueprints
 
 The orchestrator principal SHALL be allowed to read the blueprint step catalog,
 validate blueprints, and start blueprint workflows. Blueprint starts from the
-orchestrator SHALL keep the human-review gate pin and SHALL count toward the
-orchestrator launch limits. The orchestrator session SHALL be offered tools for
-these operations and SHALL never submit a manifest directly.
+orchestrator SHALL keep the human-review gate pin. The orchestrator session SHALL
+be offered tools for these operations and SHALL never submit a manifest
+directly.
 
 #### Scenario: Orchestrator validates then starts
 
