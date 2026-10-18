@@ -322,11 +322,6 @@ describe("ready-made queries", () => {
 				.all();
 			expect(rows).toHaveLength(2);
 			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
-			expect(rows[0]).toMatchObject({
-			const rounds = rows.filter((row) => row.workflow_id === "wf-a");
-			expect(rounds.map((row) => row.round_index)).toEqual([1, 2]);
-			expect(rounds[0]).toMatchObject({
-			expect(rows.length).toBeGreaterThan(0);
 			expect(rows).toHaveLength(2);
 			expect(rows.map((row) => row.round_index)).toEqual([1, 2]);
 			expect(rows[0]).toMatchObject({
@@ -338,7 +333,6 @@ describe("ready-made queries", () => {
 				cost: 2,
 			});
 			expect(rows[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
-			expect(rounds[1]).toMatchObject({ roles: 1, runs: 1, cost: 0.25 });
 		} finally {
 			db.close();
 		}
@@ -391,10 +385,6 @@ describe("ready-made queries", () => {
 		const query = queryByName("source-gaps");
 		expect(query).toBeDefined();
 		const out = makeTempDir("efficiency-source-gaps-");
-	test("run-window-drift reports a session that outlived its run window", () => {
-		const query = queryByName("run-window-drift");
-		expect(query).toBeDefined();
-		const out = makeTempDir("efficiency-window-drift-");
 		const copy = path.join(out.path, "dataset.sqlite");
 		fs.copyFileSync(datasetPath, copy);
 		const db = new Database(copy, { readwrite: true });
@@ -419,6 +409,9 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
+		}
+	});
+
 	test("delivery-timeline measures the latencies it has and leaves the rest null", () => {
 		const query = queryByName("delivery-timeline");
 		const copy = makeTempDir("efficiency-delivery-");
@@ -547,6 +540,17 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			copy.cleanup();
+		}
+	});
+
+	test("run-window-drift reports a session that outlived its run window", () => {
+		const query = queryByName("run-window-drift");
+		expect(query).toBeDefined();
+		const out = makeTempDir("efficiency-window-drift-");
+		const copy = path.join(out.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy, { readwrite: true });
+		try {
 			const target = db
 				.query<{ run_id: string }, []>(
 					`SELECT t.run_id AS run_id
@@ -577,6 +581,29 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
+		}
+	});
+
+	test("kpi-baseline reports every metric the measurement plan tracks", () => {
+		const query = queryByName("kpi-baseline");
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db
+				.query<{ kpi: string; value: number | null }, []>(`${query?.sql}`)
+				.all();
+			const byKpi = new Map(rows.map((row) => [row.kpi, row.value]));
+			expect(byKpi.has("cost_total_preferred")).toBe(true);
+			expect(byKpi.has("turns_total")).toBe(true);
+			expect(byKpi.has("single_call_turn_share")).toBe(true);
+			expect(byKpi.has("verifier_cost_share")).toBe(true);
+			expect(byKpi.has("empty_settles")).toBe(true);
+			const share = byKpi.get("single_call_turn_share");
+			if (share !== null && share !== undefined) {
+				expect(share).toBeGreaterThanOrEqual(0);
+				expect(share).toBeLessThanOrEqual(1);
+			}
+		} finally {
+			db.close();
 		}
 	});
 });

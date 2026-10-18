@@ -884,6 +884,8 @@ ORDER BY r.started_at, r.run_id`,
 FROM source_files
 WHERE parsed = 0
 ORDER BY source, path`,
+	},
+	{
 		name: "delivery-timeline",
 		summary:
 			"Per workflow: the archive and push latencies the delivery events record, the developer wait after a push and after a wiki approval, and the effect/git failure counts beside them.",
@@ -959,6 +961,8 @@ WHERE p.archive_started_at IS NOT NULL
 	OR p.git_started_at IS NOT NULL
 	OR a.wiki_approval_at IS NOT NULL
 ORDER BY p.closed_at, p.workflow_id`,
+	},
+	{
 		name: "run-window-drift",
 		summary:
 			"Runs whose turns continue well past the run's own recorded window: a resumed session still attributed to a finished run.",
@@ -1004,6 +1008,8 @@ JOIN turn_window w ON w.run_id = r.run_id
 WHERE r.completed_at IS NOT NULL
 	AND julianday(w.last_turn_at) - julianday(r.completed_at) > (1.0 / 1440.0)
 ORDER BY tail_seconds DESC, r.run_id`,
+	},
+	{
 		name: "source-recording",
 		summary:
 			"Per source and month: recorded calls with their outcomes, plus how many runs recorded only failures — the recording-bias trap in one table.",
@@ -1067,6 +1073,59 @@ ORDER BY p.source, p.month`,
 FROM v_run_summary
 GROUP BY 1, 2
 ORDER BY month, role_group`,
+	},
+	{
+		name: "kpi-baseline",
+		summary:
+			"The measurement plan's KPI board in one row per metric: the baseline values every later snapshot is compared against.",
+		example:
+			"bun run scripts/efficiency/analyze.ts kpi-baseline --dataset ~/ev/dataset-2026",
+		columns: ["kpi", "value"],
+		sql: `WITH per_run AS (
+	SELECT
+		r.run_id AS run_id,
+		COALESCE(r.role, '(unset)') AS role,
+		COALESCE(r.started_at, r.completed_at) AS at,
+		COALESCE(c.calls, 0) AS calls,
+		COALESCE(c.failed, 0) AS failed,
+		COALESCE(t.turns, 0) AS turns,
+		COALESCE(t.cost, 0) AS cost
+	FROM v_runs r
+	LEFT JOIN (SELECT run_id, COUNT(*) AS turns, SUM(cost) AS cost FROM v_turns GROUP BY run_id) t
+		ON t.run_id = r.run_id
+	LEFT JOIN (SELECT run_id, COUNT(*) AS calls,
+		SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed FROM v_tool_calls GROUP BY run_id) c
+		ON c.run_id = r.run_id
+)
+SELECT 'cost_total_preferred' AS kpi, ROUND(SUM(cost), 4) AS value FROM per_run
+UNION ALL SELECT 'cost_share_after_2026-08-31',
+	ROUND(1.0 * SUM(CASE WHEN COALESCE(at, '') >= '2026-09-01' THEN cost ELSE 0 END) / NULLIF(SUM(cost), 0), 4)
+	FROM per_run
+UNION ALL SELECT 'runs_total', COUNT(*) FROM per_run
+UNION ALL SELECT 'turns_total', SUM(turns) FROM per_run
+UNION ALL SELECT 'tool_calls_total', SUM(calls) FROM per_run
+UNION ALL SELECT 'single_call_turn_share',
+	ROUND(1.0 * (SELECT COUNT(*) FROM v_turns WHERE tool_calls = 1)
+		/ NULLIF((SELECT COUNT(*) FROM v_turns WHERE tool_calls IS NOT NULL), 0), 4)
+UNION ALL SELECT 'verifier_cost_share',
+	ROUND(1.0 * SUM(CASE WHEN role LIKE '%verifier%' THEN cost ELSE 0 END) / NULLIF(SUM(cost), 0), 4)
+	FROM per_run
+UNION ALL SELECT 'worker_turns_per_run',
+	ROUND(1.0 * SUM(CASE WHEN role = 'worker' THEN turns ELSE 0 END)
+		/ NULLIF(SUM(CASE WHEN role = 'worker' THEN 1 ELSE 0 END), 0), 1)
+	FROM per_run
+UNION ALL SELECT 'runs_all_calls_failed_per_1000',
+	ROUND(1000.0 * SUM(CASE WHEN calls >= 3 AND failed = calls THEN 1 ELSE 0 END)
+		/ NULLIF(SUM(CASE WHEN calls >= 3 THEN 1 ELSE 0 END), 0), 1)
+	FROM per_run
+UNION ALL SELECT 'blocked_handoffs', COUNT(*) FROM v_events
+	WHERE event = 'agent.handoff' AND outcome = 'blocked'
+UNION ALL SELECT 'empty_settles', COUNT(*) FROM v_events WHERE event LIKE '%empty_settle%'
+UNION ALL SELECT 'empty_settle_workflows', COUNT(DISTINCT workflow_id) FROM v_events
+	WHERE event LIKE '%empty_settle%'
+UNION ALL SELECT 'developer_questions', COUNT(*) FROM v_events
+	WHERE event = 'developer.question.created'
+ORDER BY kpi`,
 	},
 ];
 
