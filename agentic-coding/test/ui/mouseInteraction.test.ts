@@ -334,7 +334,7 @@ test("two rows sharing a holder are never each other's double tap", () => {
 	const selectGesture: RowGestureState = {};
 	const selected: number[] = [];
 	const activated: number[] = [];
-	const selectRow = (instance: unknown) =>
+	const selectRow = (_instance: unknown) =>
 		useRowMouse({
 			gesture: selectGesture,
 			index: 0, // the shape `Selectable` uses

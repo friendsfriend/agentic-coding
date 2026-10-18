@@ -2983,7 +2983,11 @@ function setupSubject(payload: unknown): SetupEffectSubject {
  */
 async function startSetupTarget(
 	subject: SetupEffectSubject,
-	target: ActionTarget | undefined,
+	// Only the target's canonical id is read (the slot request below), and a
+	// target the live configuration resolved to is a `DefaultCandidate`, whose id
+	// is the same string an `ActionTarget` carries — narrowed here instead of
+	// widening the resolved defaults with a cast.
+	target: { readonly id: string } | undefined,
 	signal?: AbortSignal,
 ): Promise<SetupTargetStartResult> {
 	const client = backendClientFromEnv() ?? backendClient();

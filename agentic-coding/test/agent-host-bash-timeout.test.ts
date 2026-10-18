@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import {
@@ -64,7 +65,10 @@ function fakeEnv(options: {
 /** Run the tool the way the harness does, collecting what the model would see
  * as the result content and what the call failed with. */
 async function callBash(
-	tool: BashTool,
+	// The registration as this package installs it: `boundedCodingTools` returns
+	// extensions whose tools are typed by their schema parameter, and the harness
+	// only needs the executable surface here.
+	tool: ToolRegistration,
 	args: Record<string, unknown>,
 	env: unknown,
 	context: unknown = undefined,

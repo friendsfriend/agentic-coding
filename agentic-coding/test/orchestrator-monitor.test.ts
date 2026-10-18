@@ -222,6 +222,27 @@ describe("delivery planner", () => {
 		expect(planner.flush(60_000)).toBeUndefined();
 	});
 
+	test("a window carries every event that arrived inside it, not only the ones due at its close", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 5,
+			minNoteIntervalMs: 60_000,
+		});
+		// The shape of the flake this pins down: a burst the monitor records over a
+		// few milliseconds used to open one window per millisecond, so the note the
+		// first window produced carried only its own millisecond and everything else
+		// the window received waited a whole `minNoteIntervalMs` for the next note.
+		for (const at of [0, 1, 2, 3])
+			planner.record(
+				event({ sequence: at + 1 }),
+				[subscription("default")],
+				at,
+			);
+		expect(planner.flush(5)?.split("\n")).toHaveLength(5);
+		expect(planner.pendingCount).toBe(0);
+		expect(planner.flush(65_000)).toBeUndefined();
+	});
+
 	test("formatNote names no label when nothing matched", () => {
 		expect(
 			formatNote(
@@ -510,8 +531,16 @@ describe("monitor delivery", () => {
 	});
 
 	test("a storm is one note, and the next note waits for the minimum interval", async () => {
+		// An injected clock, as in the burst test above: the whole storm is recorded
+		// inside one coalescing window and the window is closed by advancing the
+		// clock, so the note's contents do not depend on how long the 200 synchronous
+		// frames take or on which millisecond each one lands in. The arrival-time
+		// split itself is the planner's own test ("a window carries every event that
+		// arrived inside it").
+		const clock = { at: 0 };
 		const { gateway, notes, monitor } = harness({
 			timings: { coalesceMs: 5, minNoteIntervalMs: 100 },
+			clock,
 		});
 		const storm = (from: number): void => {
 			for (let sequence = from; sequence < from + 200; sequence += 1)
@@ -528,6 +557,10 @@ describe("monitor delivery", () => {
 		// 200 events for one workflow inside one coalescing window: one note, and
 		// never more than the line bound in it.
 		storm(1);
+		await sleep(20);
+		expect(notes).toEqual([]);
+		// The window closes.
+		clock.at = 5;
 		await waitUntil(() => notes.length === 1);
 		expect(notes[0]?.split("\n")).toHaveLength(MAX_NOTE_LINES + 2);
 		// 400 more inside the minimum interval: the session is not woken again.
@@ -536,6 +569,7 @@ describe("monitor delivery", () => {
 		await sleep(40);
 		expect(notes).toHaveLength(1);
 		// Past the interval they merge forward into exactly one more capped note.
+		clock.at = 105;
 		await waitUntil(() => notes.length === 2);
 		await sleep(40);
 		expect(notes).toHaveLength(2);

@@ -144,26 +144,51 @@ export class DeliveryPlanner {
 		}
 	}
 
-	private dueAtFor(subscription: DeliverySubscription, now: number): number {
-		// The subscription's own cadence overrides the default window, and its
-		// `minIntervalMs` (when it declared one) floors how soon it may contribute
-		// again.
-		const labelFloor = this.lastPerLabel.get(subscription.label);
-		const floor =
-			subscription.minIntervalMs === undefined || labelFloor === undefined
-				? Number.NEGATIVE_INFINITY
-				: labelFloor + subscription.minIntervalMs;
+	/** The coalescing window one subscription delivers with: its own cadence
+	 * override, or the planner's. */
+	private windowOf(subscription: DeliverySubscription): number {
 		if (subscription.mode === "digest")
-			return Math.max(
-				now +
-					(subscription.digestMinutes ?? this.timings.digestMs / 60_000) *
-						60_000,
-				floor,
+			return (
+				(subscription.digestMinutes ?? this.timings.digestMs / 60_000) * 60_000
 			);
-		return Math.max(
-			now + (subscription.coalesceMs ?? this.timings.coalesceMs),
-			floor,
-		);
+		return subscription.coalesceMs ?? this.timings.coalesceMs;
+	}
+
+	/** The floor a subscription's `minIntervalMs` puts under its next
+	 * contribution, or -Infinity while it has never contributed. */
+	private floorFor(subscription: DeliverySubscription): number {
+		const labelFloor = this.lastPerLabel.get(subscription.label);
+		return subscription.minIntervalMs === undefined || labelFloor === undefined
+			? Number.NEGATIVE_INFINITY
+			: labelFloor + subscription.minIntervalMs;
+	}
+
+	/** When this subscription's event is delivered.
+	 *
+	 * The window belongs to the subscription and its note carries every event the
+	 * window received, so an event that arrives while one of its own windows is
+	 * still open joins that window. Without this, two events of one subscription a
+	 * millisecond apart open two windows that close a millisecond apart: the first
+	 * note is delivered at the first close with only the events of its own
+	 * millisecond, and everything else the window received has to wait for the next
+	 * note — a whole `minNoteIntervalMs` — because the backlog merged forward. A
+	 * burst recorded over a few milliseconds then arrives as one truncated note
+	 * plus a remainder, which is exactly the storm the coalescing window exists to
+	 * prevent. A window that already closed, or one that closes later than this
+	 * subscription's own window (`entry.dueAt > close`), is not joined: a digest
+	 * window never pulls a wake subscriber forward, and a wake window never holds a
+	 * digest subscriber back. */
+	private dueAtFor(subscription: DeliverySubscription, now: number): number {
+		const close = now + this.windowOf(subscription);
+		let joined: number | undefined;
+		for (const entry of this.entries) {
+			if (!entry.labels.includes(subscription.label)) continue;
+			if (entry.dueAt <= now || entry.dueAt > close) continue;
+			if (joined === undefined || entry.dueAt < joined) joined = entry.dueAt;
+		}
+		// The subscription's own `minIntervalMs` floors how soon it may contribute
+		// again, and outranks joining an open window.
+		return Math.max(joined ?? close, this.floorFor(subscription));
 	}
 
 	/** The earliest instant a note could be delivered, or undefined when nothing

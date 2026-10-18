@@ -5,6 +5,7 @@ The `agentic-coding/` package uses Biome as its single linter, import organizer,
 Run from `agentic-coding/`:
 
 - `bun run lint` — check for lint, formatting, and import-order issues (must pass with zero diagnostics before finishing any change).
+- `bun run type-check` — the whole-project type gate (`tsc --noEmit`), which Biome does not replace. It is part of finishing a change, not only of starting one: it must end with 0 errors, and a focused test run is not a substitute for it.
 - `bun run format` — rewrite files in place to fix formatting only.
 - `bunx biome check --write .` — apply safe fixes (formatting, imports); add `--unsafe` for fixable lint issues, then review the diff.
 
@@ -15,7 +16,6 @@ Rules of thumb:
 - `a11y` rules are off globally because this is an OpenTUI terminal app, not a web page.
 - Non-null assertions (`value!`) are banned by `style/noNonNullAssertion`. Replace them with a real guard (`if (!x) throw ...` / early return), a fallback (`??`), or restructure so the compiler narrows the value. If a case is genuinely unavoidable, add `// biome-ignore lint/style/noNonNullAssertion: <reason>` on the line directly above.
 - `src/workflow/embedded.generated.ts` is excluded via config override; never hand-edit it or reformat it — regenerate with `bun run build`.
-- Type checking stays with `bun run type-check` (`tsc --noEmit`); Biome does not replace it.
 
 ## Workflow architecture
 

@@ -267,8 +267,10 @@ Notes are submitted to the active session as `whenBusy: "followUp"` input. The
 first line is `[workflow-monitor] subs=<labels>`, naming every subscription that
 asked for the note, followed by one line per event,
 `- <workflowId> → <stepId> (<what changed>)`. Events inside a 10 s coalescing
-window become one note, the session receives at most one note per minute, and
-everything beyond that bound is merged into the next note. One event matched by
+window become one note — the window opens with its first event, and an event
+that arrives while it is still open joins it instead of opening a second one —
+the session receives at most one note per minute, and everything beyond that
+bound is merged into the next note. One event matched by
 several subscriptions is one line listing all their labels. A note lists at most
 20 event lines, the pending backlog holds at most 200 events (the oldest dropped
 and counted in the next note elision) and a session receives at most 20 notes in

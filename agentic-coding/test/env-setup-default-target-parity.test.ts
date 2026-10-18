@@ -18,6 +18,9 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// The definition shape the route actually answers with, so the two consumers
+// below are typed against the same contract the UI reads.
+import type { ActionDefinition } from "@devenv/types";
 import { selectActionTarget } from "../packages/devenv/cli/src/tui/actions/target-choice.ts";
 import {
 	compareSetupDefaults,
@@ -250,13 +253,7 @@ describe("one default target per app+action", () => {
 			const payload = (await (
 				await call(context, "/api/apps/shop/actions")
 			).json()) as {
-				actions: Array<{
-					id: string;
-					type: string;
-					default?: boolean;
-					defaultTargetId?: string;
-					availability: { available: boolean };
-				}>;
+				actions: ActionDefinition[];
 			};
 			const choice = selectActionTarget(payload.actions, "build");
 			expect(choice.ambiguous).toBeUndefined();
@@ -272,7 +269,7 @@ describe("one default target per app+action", () => {
 			expect(live.build?.target?.id).toBe(SHELL_TARGET);
 			expect(live.build?.source).toBe("declared");
 			expect(choice.target?.defaultTargetId).toBe(live.build?.target?.id);
-			expect(built.targetId).toBe(live.build?.target?.id);
+			expect(live.build?.target?.id).toBe(built.targetId);
 
 			const ran: string[] = [];
 			const report = await runGate(f, ran);
@@ -351,7 +348,7 @@ describe("one default target per app+action", () => {
 		const payload = (await (
 			await call(context, "/api/apps/shop/actions")
 		).json()) as {
-			actions: Array<{ id: string; type: string }>;
+			actions: ActionDefinition[];
 		};
 		const choice = selectActionTarget(payload.actions, "build");
 		expect(choice.target).toBeUndefined();

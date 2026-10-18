@@ -57,6 +57,7 @@ describe("ready-made queries", () => {
 					{
 						source: string;
 						month: string;
+						recording: string;
 						calls: number;
 						ok: number;
 						failed: number;
@@ -103,7 +104,8 @@ describe("ready-made queries", () => {
 						with_result_size: number;
 						with_duration: number;
 						args_pct: number;
-					}[]
+					},
+					[]
 				>(`${query?.sql}`)
 				.all();
 			// The harness generation records every field of every call.
@@ -136,7 +138,8 @@ describe("ready-made queries", () => {
 						calls: number;
 						failed: number;
 						failures_per_100_calls: number;
-					}[]
+					},
+					[]
 				>(`${query?.sql}`)
 				.all();
 			for (const row of rows) {
@@ -198,7 +201,8 @@ describe("ready-made queries", () => {
 						repeat_groups: number;
 						repeated_calls: number;
 						repeated_calls_per_100: number;
-					}[]
+					},
+					[]
 				>(`${query?.sql}`)
 				.all();
 			expect(rows.length).toBeGreaterThan(0);

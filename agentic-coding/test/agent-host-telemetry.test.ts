@@ -11,6 +11,7 @@ import {
 	fauxProvider,
 	fauxText,
 	fauxToolCall,
+	type JsonObject,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
@@ -57,7 +58,7 @@ describe("tool-call telemetry shape", () => {
 	/** One faux turn whose tool call fails, plus one that succeeds. */
 	async function runToolTurn(options: {
 		tool: string;
-		args: Record<string, unknown>;
+		args: JsonObject;
 		callId: string;
 		/** Set to echo a secret-looking value into the tool's own result. */
 		secret?: string;
