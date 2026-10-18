@@ -52,14 +52,6 @@ export interface AgentsListResponse {
 	readonly provenance: unknown;
 	readonly conflicts: string[];
 	readonly revision?: string;
-	/** The server-enforced orchestrator launch ceiling (user-level, no project
-	 * overlay), resolved with defaults. */
-	readonly orchestratorLimits?: {
-		readonly maxActive: number;
-		readonly maxStartsPerDay: number;
-	};
-	/** True when the user-level configuration set a bound. */
-	readonly orchestratorLimitsConfigured?: boolean;
 	/** The user-scope compaction policy the durable host resolves. Absent on a
 	 * gateway that predates the read. */
 	readonly compaction?: unknown;

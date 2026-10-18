@@ -125,20 +125,6 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		items: ["agents.orchestrator"],
 	},
 	{
-		id: "agents.launch-limits",
-		section: "agents",
-		label: "Orchestrator launch limits",
-		owner: "src/workflow/profiles.ts",
-		scope: "user",
-		storage:
-			"[agents.orchestrator] limits (max_active, max_starts_per_day), stall_minutes, reconcile_seconds and event_burst_limit/event_burst_window_seconds in the layered workflow config",
-		secret: false,
-		effect: "next-start",
-		editable: false,
-		items: ["agents.launch-limits"],
-		note: "File-only bounds: the server enforces the ceiling, so Settings shows the effective value read-only. `stall_minutes` (default 30) is how long a tracked active workflow may make no progress before one `run.stalled` event is recorded, `reconcile_seconds` (default 30) is how often the server re-lists a tracked repository that still holds an active workflow, so a change no event carried is still reported, and `event_burst_limit`/`event_burst_window_seconds` (default 120 events per 10s) is the per-workflow event budget whose overflow is reported by one `events.suppressed` event.",
-	},
-	{
 		id: "agents.compaction",
 		section: "compaction",
 		label: "Compaction",

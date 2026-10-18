@@ -171,16 +171,6 @@ export const agentsListResponseSchema = Schema.Struct({
 	provenance: Schema.Unknown,
 	conflicts: Schema.Array(Schema.String),
 	revision: Schema.optional(Schema.String),
-	/** The server-enforced orchestrator launch ceiling, resolved from the
-	 * user-level configuration with no project overlay. */
-	orchestratorLimits: Schema.optional(
-		Schema.Struct({
-			maxActive: Schema.Number,
-			maxStartsPerDay: Schema.Number,
-		}),
-	),
-	/** True when the user-level configuration set a bound. */
-	orchestratorLimitsConfigured: Schema.optional(Schema.Boolean),
 	/** The user-scope compaction policy read (`add-agent-compaction`): the
 	 * written section, its resolved effective values and the source. Opaque to
 	 * the transport; the Settings layer reads the fields it renders. */

@@ -35,8 +35,6 @@ import {
 	type AgentsConfig,
 	isOrchestratorMonitorMode,
 	ORCHESTRATOR_MONITOR_MODES,
-	type OrchestratorLimits,
-	orchestratorLaunchLimits,
 	type PresetConfig,
 	type ProfileConfig,
 	parseAgentsConfig,
@@ -205,11 +203,10 @@ export function applyAgentsMutation(
 					return;
 				}
 				case "set-orchestrator": {
-					// The file-only bounds (`limits`, `stall_minutes`,
-					// `reconcile_seconds`, `event_burst_limit`,
-					// `event_burst_window_seconds`) have no editor here, so a session edit
-					// preserves whatever the developer wrote instead of dropping it with
-					// the rest of the table.
+					// The file-only bounds (`stall_minutes`, `reconcile_seconds`,
+					// `event_burst_limit`, `event_burst_window_seconds`) have no editor
+					// here, so a session edit preserves whatever the developer wrote instead
+					// of dropping it with the rest of the table.
 					const existing = section.orchestrator;
 					const next: Record<string, unknown> = {};
 					if (
@@ -218,7 +215,6 @@ export function applyAgentsMutation(
 						!Array.isArray(existing)
 					)
 						for (const key of [
-							"limits",
 							"stall_minutes",
 							"reconcile_seconds",
 							"event_burst_limit",
@@ -354,25 +350,6 @@ export interface CompactionSettingsRead {
  * definitions the writer must refuse over, and the revision of the effective
  * agents section. `repositoryIndependent` skips the project overlay entirely, so
  * a caller can read the user-level table that no repository can loosen. */
-/** The server-enforced orchestrator launch ceiling, resolved from the
- * user-level configuration with no project overlay, and whether the developer
- * actually set a bound. One resolver for the guard and for the Settings read, so
- * the displayed value is the enforced one. */
-export function orchestratorLaunchCeiling(): {
-	limits: OrchestratorLimits;
-	configured: boolean;
-} {
-	const agents = loadAgentConfig(undefined, {
-		repositoryIndependent: true,
-	}).agents;
-	const raw = agents.orchestrator?.limits;
-	return {
-		limits: orchestratorLaunchLimits(agents),
-		configured:
-			raw?.max_active !== undefined || raw?.max_starts_per_day !== undefined,
-	};
-}
-
 export function loadAgentConfig(
 	repository?: string,
 	options: { repositoryIndependent?: boolean } = {},

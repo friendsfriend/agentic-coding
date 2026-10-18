@@ -121,9 +121,9 @@ export async function listProjects(
 
 /** The session-efficiency report over telemetry from every known target
  * (the configured project catalog + the custom-path target registry + the
- * shared wiki/research data root — the same set the sidebar and launch limits
- * read). Observational: it only reads `telemetry.jsonl` files, never a store,
- * so it never initializes, migrates, drains, or mutates. A target whose
+ * shared wiki/research data root — the same set the sidebar reads).
+ * Observational: it only reads `telemetry.jsonl` files, never a store, so it
+ * never initializes, migrates, drains, or mutates. A target whose
  * directory cannot be read is named in `skippedTargets`, not dropped silently.
  * The deterministic analysis lives in the pure `sessions-report` module; this
  * is the one I/O boundary both the orchestrator observation and the CLI

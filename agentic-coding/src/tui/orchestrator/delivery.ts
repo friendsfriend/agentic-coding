@@ -61,14 +61,10 @@ function sortEntries(entries: readonly PendingEntry[]): PendingEntry[] {
 	return [...entries].sort((a, b) => a.event.sequence - b.event.sequence);
 }
 
-/** One note line: the workflow and the step it reached, then what changed. An
- * event that names no workflow (the orchestrator launch ceiling) is one line
- * without a target. */
+/** One note line: the workflow and the step it reached, then what changed. */
 export function formatEventLine(event: WorkflowEventRecord): string {
 	const description = describeWorkflowEvent(event);
-	return event.workflowId
-		? `- ${event.workflowId} → ${event.stepId} (${description})`
-		: `- ${description}`;
+	return `- ${event.workflowId} → ${event.stepId} (${description})`;
 }
 
 /** One note: the fixed prefix with the contributing subscription labels, then

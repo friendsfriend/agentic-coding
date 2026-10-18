@@ -44,11 +44,6 @@ import {
 	drainEffects,
 	engine as workflowEngineFactory,
 } from "../workflow/operations.ts";
-import type { OrchestratorLimits } from "../workflow/profiles.ts";
-import {
-	countOrchestratorLaunches,
-	type OrchestratorLaunchCounts,
-} from "../workflow/runtime/orchestrator-launches.ts";
 import {
 	AGENT_QUESTION_WAIT_MS,
 	QUESTION_WAIT_MS,
@@ -71,7 +66,6 @@ import {
 	type CompactionSettingsRead,
 	loadAgentConfig,
 	loadCompactionSettings,
-	orchestratorLaunchCeiling,
 } from "./config.ts";
 import {
 	blueprintStepCatalog,
@@ -144,9 +138,6 @@ export interface ServerOperations {
 	/** Compile a blueprint without side effects: the summary and digest, or the
 	 * compiler's diagnostics. Never reads or writes a store. */
 	validateBlueprint(blueprint: unknown): BlueprintValidation;
-	/** Orchestrator-started workflow counts across every target, for the launch
-	 * ceiling the transport enforces before `start`. */
-	orchestratorLaunches(): OrchestratorLaunchCounts;
 	repair(request: RepairRequest): WorkflowView;
 	question(request: QuestionRequest): WorkflowView;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
@@ -373,15 +364,8 @@ export function saveAgents(request: AgentsMutationRequest): void {
 		void startSelectedLocalClassifier(mutation.classifier.provider);
 }
 
-/** The agents read plus the server-enforced orchestrator launch ceiling. The
- * ceiling is resolved from the user-level configuration with no project overlay,
- * so a cloned repository cannot loosen the guard and Settings shows exactly what
- * the server enforces. */
+/** The agents read plus the user-scope compaction policy. */
 export interface AgentConfigRead extends ReturnType<typeof loadAgentConfig> {
-	readonly orchestratorLimits: OrchestratorLimits;
-	/** True when the user-level configuration actually set a bound, so the
-	 * read-only row can mark a fully defaulted ceiling. */
-	readonly orchestratorLimitsConfigured: boolean;
 	/** The user-scope compaction policy the durable host resolves, resolved with
 	 * no reference window (a percentage then uses its documented default).
 	 * Optional in the shape so a gateway that predates the read still satisfies
@@ -391,19 +375,10 @@ export interface AgentConfigRead extends ReturnType<typeof loadAgentConfig> {
 
 /** Read the effective agents config server-side (no view reads the file). */
 export function loadAgents(repository?: string): AgentConfigRead {
-	const ceiling = orchestratorLaunchCeiling();
 	return {
 		...loadAgentConfig(repository),
-		orchestratorLimits: ceiling.limits,
-		orchestratorLimitsConfigured: ceiling.configured,
 		compaction: loadCompactionSettings(),
 	};
-}
-
-/** Count orchestrator-started workflows across every target. Reads only, so a
- * start decision never initializes or migrates a store. */
-export function orchestratorLaunches(): OrchestratorLaunchCounts {
-	return countOrchestratorLaunches();
 }
 /** Managed-agent developer question: resolve identity server-side, dispatch and
  * wait (bounded by the request signal) for the answer. */
@@ -465,7 +440,6 @@ export const serverOperations: ServerOperations = {
 	start: startWorkflow,
 	blueprintSteps: blueprintStepCatalog,
 	validateBlueprint: validateWorkflowBlueprint,
-	orchestratorLaunches,
 	repair,
 	question,
 	saveReview,

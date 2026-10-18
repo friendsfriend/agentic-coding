@@ -135,16 +135,6 @@ export function buildSettingsContext(
 				})),
 			routing: agents ? agentRoutingEntries(agents) : [],
 			...(agents?.orchestrator ? { orchestrator: agents.orchestrator } : {}),
-			// The enforced ceiling comes from the server read, not the section's own
-			// scope: the server resolves it from the user-level configuration, so the
-			// read-only row cannot contradict what a start is checked against.
-			...(entry.orchestratorLimits
-				? {
-						orchestratorLimits: entry.orchestratorLimits,
-						orchestratorLimitsConfigured:
-							entry.orchestratorLimitsConfigured ?? false,
-					}
-				: {}),
 			// The durable compaction policy rides in the same read. It is user-scope
 			// whatever the page's scope, so a project-scoped page renders it too.
 			...(compaction ? { compaction } : {}),

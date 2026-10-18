@@ -82,7 +82,6 @@ import {
 } from "./integrations/routes.ts";
 import {
 	orchestratorActionRefusal,
-	orchestratorLaunchRefusal,
 	orchestratorRouteAllowed,
 } from "./orchestrator-policy.ts";
 import {
@@ -805,39 +804,6 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"app-not-configured",
 					`app ${JSON.stringify(requestedApp)} is not a configured application`,
 				);
-			// The orchestrator's launch ceiling is counted immediately before the
-			// start and refused with its own code, so the session cannot talk its
-			// way past it. Operator starts are never limited or counted.
-			if (principal === "orchestrator") {
-				// The ceiling is the user-level one the server owns: the read has no
-				// project overlay, so a repository cannot loosen its own guard.
-				const limits = operations.loadAgents().orchestratorLimits;
-				const counts = operations.orchestratorLaunches();
-				const refusal = orchestratorLaunchRefusal({
-					limits,
-					active: counts.active,
-					recent: counts.recent,
-					skipped: counts.skipped,
-				});
-				if (refusal) {
-					// The launch ceiling is the one catalog event not derived from a
-					// projection: it is recorded here, where the start is refused.
-					const exceeded =
-						counts.active.length >= limits.maxActive
-							? {
-									limit: "max_active",
-									current: counts.active.length,
-									maximum: limits.maxActive,
-								}
-							: {
-									limit: "max_starts_per_day",
-									current: counts.recent.length,
-									maximum: limits.maxStartsPerDay,
-								};
-					options.eventBus?.recordLimitHit(exceeded);
-					return errorResponse(409, "orchestrator-limit", refusal);
-				}
-			}
 			// Orchestrator-started work keeps every human review: the server pins
 			// the plan, developer and wiki gates to `always`, whatever the preset.
 			// The same principal pins `startedBy` for the workflow's lifetime.

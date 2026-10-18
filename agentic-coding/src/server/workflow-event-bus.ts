@@ -146,13 +146,6 @@ export interface WorkflowEventBus {
 	listSubscriptions(): readonly WorkflowEventSubscription[];
 	subscribe(request: WorkflowEventSubscribeRequest): WorkflowEventSubscription;
 	unsubscribe(subscriptionId: string): boolean;
-	/** Record the one event not derived from a projection: the orchestrator
-	 * launch ceiling refusing a start. */
-	recordLimitHit(input: {
-		limit: string;
-		current: number;
-		maximum: number;
-	}): void;
 	/** Observe one workflow as if its `workflow.updated` had arrived. */
 	noteWorkflowUpdated(repository: string, workflowId: string): void;
 	/** Observe one repository's listing: the first is its baseline (no
@@ -838,8 +831,7 @@ export function createWorkflowEventBus(
 		input: { repository: string; workflowId: string },
 	): { record: boolean; charge: () => void } {
 		const open = { record: true, charge: () => {} };
-		// `limit.hit` names no workflow: the launch ceiling belongs to the machine.
-		if (input.workflowId === "" || isHumanNeededEvent(draft.id)) return open;
+		if (isHumanNeededEvent(draft.id)) return open;
 		const key = keyOf(input.repository, input.workflowId);
 		const memory = memoryFor(key);
 		const signature = draftSignature(draft);
@@ -1568,33 +1560,6 @@ export function createWorkflowEventBus(
 			);
 			pendingCharges.delete(subscriptionId);
 			return true;
-		},
-
-		recordLimitHit(input: {
-			limit: string;
-			current: number;
-			maximum: number;
-		}): void {
-			if (modeOf() === "off") return;
-			recordDrafts(
-				[
-					{
-						id: "limit.hit",
-						payload: {
-							limit: input.limit,
-							current: input.current,
-							maximum: input.maximum,
-						},
-					},
-				],
-				{
-					repository: "",
-					workflowId: "",
-					startedBy: "orchestrator",
-					stepId: "",
-					stepLabel: "",
-				},
-			);
 		},
 
 		noteWorkflowUpdated(repository: string, workflowId: string): void {

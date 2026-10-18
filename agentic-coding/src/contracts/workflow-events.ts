@@ -60,7 +60,6 @@ export const WORKFLOW_EVENT_IDS = [
 	"verification.finished",
 	"compaction",
 	"gate.decided",
-	"limit.hit",
 	"events.suppressed",
 	"openspec.task-progress",
 ] as const;
@@ -255,11 +254,6 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		decision: Schema.String,
 		forced: Schema.Boolean,
 	}),
-	"limit.hit": Schema.Struct({
-		limit: Schema.String,
-		current: Schema.Number,
-		maximum: Schema.Number,
-	}),
 	// The bus's own rate limit tripping. Bounded by construction: a count, the one
 	// workflow it applies to and the window the count belongs to.
 	"events.suppressed": Schema.Struct({
@@ -307,7 +301,6 @@ const CATEGORY_OF: Record<WorkflowEventId, WorkflowEventCategory> = {
 	"verification.finished": "verification",
 	compaction: "compaction",
 	"gate.decided": "gate",
-	"limit.hit": "limit",
 	"events.suppressed": "limit",
 	"openspec.task-progress": "progress",
 };
@@ -713,8 +706,6 @@ export function describeWorkflowEvent(record: WorkflowEventRecord): string {
 			return `compaction (${stringField(payload, "role")})`;
 		case "gate.decided":
 			return `gate ${stringField(payload, "gateId")} ${stringField(payload, "decision")}`;
-		case "limit.hit":
-			return `limit ${stringField(payload, "limit")} reached (${numberField(payload, "current")}/${numberField(payload, "maximum")})`;
 		case "events.suppressed":
 			return `${numberField(payload, "count")} events suppressed (${stringField(payload, "workflowId")}, ${numberField(payload, "windowMs")}ms window)`;
 		case "openspec.task-progress":
@@ -754,7 +745,6 @@ export function workflowEventSeverity(
 		case "run.blocked":
 		case "run.aborted":
 		case "run.stalled":
-		case "limit.hit":
 		case "events.suppressed":
 			return "warning";
 		case "effect.failed": {

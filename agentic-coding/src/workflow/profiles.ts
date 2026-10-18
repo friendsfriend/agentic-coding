@@ -120,23 +120,21 @@ export const DEFAULT_ORCHESTRATOR_MONITOR: OrchestratorMonitorMode = "wake";
 
 /** The Orchestrator chat session's configuration. `model` and `thinking` are
  * the `provider/modelId` and thinking-level strings a durable run accepts;
- * `monitor` is the shell workflow monitor's mode; `limits` is the file-only
- * launch ceiling the server enforces. */
+ * `monitor` is the shell workflow monitor's mode. */
 export interface OrchestratorConfig {
 	model?: string;
 	thinking?: string;
 	monitor?: OrchestratorMonitorMode;
-	limits?: OrchestratorLimitsConfig;
 	/** Minutes without progress before a tracked active workflow is reported as
-	 * stalled (`run.stalled`). File-only, like `limits`. */
+	 * stalled (`run.stalled`). File-only. */
 	stall_minutes?: number;
 	/** Seconds between two reconciliation passes of the server-side workflow
 	 * event bus, which re-lists the repositories it tracks while they still hold
-	 * an active workflow. File-only, like `limits`. */
+	 * an active workflow. File-only. */
 	reconcile_seconds?: number;
 	/** At most this many of one workflow's events are recorded per
 	 * `event_burst_window_seconds`, and one `events.suppressed` event reports how
-	 * many were dropped. File-only, like `limits`. */
+	 * many were dropped. File-only. */
 	event_burst_limit?: number;
 	/** The window `event_burst_limit` counts in, in seconds. File-only. */
 	event_burst_window_seconds?: number;
@@ -168,46 +166,12 @@ export const DEFAULT_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS =
 export const MAX_ORCHESTRATOR_EVENT_BURST_LIMIT = 10_000;
 export const MAX_ORCHESTRATOR_EVENT_BURST_WINDOW_SECONDS = 60 * 60;
 
-/** The `[agents.orchestrator] limits` table as it is written: both keys are
- * optional, so an unset key resolves to its default at read time. */
-export interface OrchestratorLimitsConfig {
-	max_active?: number;
-	max_starts_per_day?: number;
-}
-
-/** The resolved launch ceiling the server enforces, defaults already applied. */
-export interface OrchestratorLimits {
-	readonly maxActive: number;
-	readonly maxStartsPerDay: number;
-}
-
-/** The ceiling an absent `limits` key means: at most five active workflows and
- * twenty starts in the trailing 24 hours. */
-export const DEFAULT_ORCHESTRATOR_LIMITS: OrchestratorLimits = {
-	maxActive: 5,
-	maxStartsPerDay: 20,
-};
-
 /** The effective monitor mode, defaulting to `wake` so a configuration that
  * says nothing wakes the orchestrator exactly like an explicit `monitor` key. */
 export function orchestratorMonitorMode(
 	agents: AgentsConfig | undefined,
 ): OrchestratorMonitorMode {
 	return agents?.orchestrator?.monitor ?? DEFAULT_ORCHESTRATOR_MONITOR;
-}
-
-/** The effective launch ceiling, defaulting each unset key to 5 active / 20
- * starts per trailing 24 h so a configuration that says nothing still has a
- * guard. */
-export function orchestratorLaunchLimits(
-	agents: AgentsConfig | undefined,
-): OrchestratorLimits {
-	const limits = agents?.orchestrator?.limits;
-	return {
-		maxActive: limits?.max_active ?? DEFAULT_ORCHESTRATOR_LIMITS.maxActive,
-		maxStartsPerDay:
-			limits?.max_starts_per_day ?? DEFAULT_ORCHESTRATOR_LIMITS.maxStartsPerDay,
-	};
 }
 
 /** The effective stalled-run threshold in minutes, defaulting to 30 so a
@@ -468,7 +432,7 @@ function validateGates(
 }
 
 /** Validate `[agents.orchestrator]`: an optional model, thinking level, monitor
- * mode, launch `limits` table and the two file-only event bounds
+ * mode and the two file-only event bounds
  * (`stall_minutes`, `reconcile_seconds`). Unknown keys are refused so a typo is
  * not silently ignored. */
 function validateOrchestrator(
@@ -479,7 +443,7 @@ function validateOrchestrator(
 	const location = source ? `${where} (${source})` : where;
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw new Error(
-			`${location} must be a table with model, thinking, monitor, limits`,
+			`${location} must be a table with model, thinking, monitor`,
 		);
 	const table = value as Record<string, unknown>;
 	for (const key of Object.keys(table))
@@ -487,7 +451,6 @@ function validateOrchestrator(
 			key !== "model" &&
 			key !== "thinking" &&
 			key !== "monitor" &&
-			key !== "limits" &&
 			key !== "stall_minutes" &&
 			key !== "reconcile_seconds" &&
 			key !== "event_burst_limit" &&
@@ -567,41 +530,7 @@ function validateOrchestrator(
 						table.event_burst_window_seconds as number,
 				}
 			: {}),
-		...(table.limits !== undefined
-			? {
-					limits: validateOrchestratorLimits(
-						table.limits,
-						`${location}.limits`,
-					),
-				}
-			: {}),
 	};
-}
-
-/** Validate `[agents.orchestrator] limits`: an optional `max_active` and
- * `max_starts_per_day`, each a positive integer. Unknown keys are refused so a
- * typo is not silently ignored. */
-function validateOrchestratorLimits(
-	value: unknown,
-	location: string,
-): OrchestratorLimitsConfig {
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error(
-			`${location} must be a table with max_active and max_starts_per_day`,
-		);
-	const table = value as Record<string, unknown>;
-	for (const key of Object.keys(table))
-		if (key !== "max_active" && key !== "max_starts_per_day")
-			throw new Error(`${location}: unsupported key ${key}`);
-	const limits: OrchestratorLimitsConfig = {};
-	for (const key of ["max_active", "max_starts_per_day"] as const) {
-		const raw = table[key];
-		if (raw === undefined) continue;
-		if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0)
-			throw new Error(`${location}.${key} must be a positive integer`);
-		limits[key] = raw;
-	}
-	return limits;
 }
 
 /** True when `value` is a configured monitor mode. Exported so the settings
