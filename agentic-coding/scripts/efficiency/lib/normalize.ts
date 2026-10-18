@@ -118,6 +118,10 @@ export interface NormalizedEvent {
 	phaseTo?: string;
 	/** A short, space-free reason code; prose is never kept. */
 	reasonCode?: string;
+	/** Why a compaction ran, as the envelope's own `kind`: `auto-ceiling`,
+	 * `auto-overflow` or `manual`. Absent on a generation that only spells a
+	 * reason. */
+	compactionKind?: string;
 	compactionReason?: string;
 	compactionBlocking?: boolean;
 
@@ -299,6 +303,7 @@ export function normalizeRecord(
 			return reason !== undefined && looksLikeCode(reason) ? reason : undefined;
 		})(),
 		compactionReason: str(record.reason),
+		compactionKind: str(record.kind),
 		compactionBlocking: bool(record.blocking),
 	};
 

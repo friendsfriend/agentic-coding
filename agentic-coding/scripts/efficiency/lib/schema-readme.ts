@@ -76,7 +76,10 @@ reports per-generation completeness on.
 One row per noteworthy engine or adapter event: handoffs, effect results, gate
 decisions, verifier findings, compaction, delivery. \`event_class\` groups them.
 \`detail\` is a bounded, redacted error class; \`detail_hash\`/\`detail_bytes\`
-describe the free text that was *not* stored.
+describe the free text that was *not* stored. \`compaction_kind\` and
+\`compaction_blocking\` carry a compaction envelope's own vocabulary
+(\`auto-ceiling\`/\`auto-overflow\`/\`manual\`, and whether it blocked the
+request), which is what the \`compactions\` query counts per run.
 
 ## De-duplication precedence
 

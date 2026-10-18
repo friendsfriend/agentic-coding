@@ -10,10 +10,13 @@
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
 import {
+	COMPACTION_CEILING_DEFAULT,
+	COMPACTION_CEILING_MINIMUM,
 	COMPACTION_DEFAULT_TRIGGER_PERCENT,
 	COMPACTION_PERCENT_MAX,
 	COMPACTION_PERCENT_MIN,
 	COMPACTION_TOKEN_CEILING,
+	type CompactionCeiling,
 	type CompactionFieldError,
 	type CompactionTokenField,
 	type CompactionTokenValue,
@@ -140,6 +143,10 @@ export interface CompactionSettingsSnapshot {
 		readonly backgroundTokens: number;
 		readonly keepRecentTokens: number;
 	};
+	/** The resolved cost ceiling: the absolute line above which a long-lived
+	 * session compacts at its next safe point, and why it is inactive when it is.
+	 * Absent until a read carries it (an older server, or a hand-built snapshot). */
+	readonly ceiling?: CompactionCeiling;
 	/** The window a percentage resolved against, when the read knows one. The
 	 * host resolves the real one per run from its own models. */
 	readonly referenceWindow?: number;
@@ -432,6 +439,31 @@ export function compactionTokenValueLabel(
 		: `${effective} tokens`;
 }
 
+/** The effective value a token row shows. The cost ceiling is not part of the
+ * policy pi-durable receives, so it comes from the resolved ceiling instead. */
+export function compactionEffectiveValue(
+	snapshot: CompactionSettingsSnapshot,
+	field: CompactionTokenField,
+): number {
+	return field === "ceilingTokens"
+		? (snapshot.ceiling?.ceilingTokens ?? COMPACTION_CEILING_DEFAULT)
+		: snapshot.effective[field];
+}
+
+/** One line stating what the cost ceiling does, and — when it is resolved
+ * inactive — which condition holds. */
+export function compactionCeilingLabel(
+	ceiling: CompactionCeiling | undefined,
+): string {
+	if (!ceiling) return `${COMPACTION_CEILING_DEFAULT} tokens (default)`;
+	if (ceiling.inactive === "off") return "0 tokens (off)";
+	if (ceiling.inactive === "disabled")
+		return `${ceiling.ceilingTokens} tokens (off while automatic compaction is off)`;
+	if (ceiling.inactive === "above-overflow")
+		return `${ceiling.ceilingTokens} tokens (ignored: the overflow threshold is lower)${ceiling.overflowTokens !== undefined ? `, ${ceiling.overflowTokens}` : ""}`;
+	return `${ceiling.ceilingTokens} tokens`;
+}
+
 /** The Compaction section (`add-agent-compaction`): the four values the durable
  * host resolves, the effective value of each, where it came from, and the
  * documented defaults. The reference window a percentage resolves against is
@@ -495,7 +527,12 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 		{
 			field: "keepRecentTokens",
 			label: "Kept verbatim",
-			why: `recent context a summary keeps word for word (default ${compactionFieldDefaultForm("keepRecentTokens")}); a percentage like "15%" scales with each run's own model window`,
+			why: `recent context a summary keeps word for word (default ${compactionFieldDefaultForm("keepRecentTokens")}); a percentage like "15%" scales with each run's own model window, and the resolved tail is capped at half an active cost ceiling so the summary plus the tail stay under it`,
+		},
+		{
+			field: "ceilingTokens",
+			label: "Cost ceiling",
+			why: `absolute context a long-lived session may carry before it compacts at the next safe point (default ${compactionFieldDefaultForm("ceilingTokens")}); it is a cost control, not an overflow guard, so it applies only when it sits below the window's overflow threshold — otherwise it is ignored with a warning event. 0 turns it off; automatic compaction off turns it off too`,
 		},
 	];
 	const configured = snapshot.configured as Record<string, unknown>;
@@ -510,17 +547,25 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 		items.push({
 			id: `compaction.${row.field}`,
 			label: row.label,
-			value: compactionTokenValueLabel(
-				configuredValue,
-				snapshot.effective[row.field],
-			),
+			value:
+				row.field === "ceilingTokens" &&
+				configuredValue === undefined &&
+				snapshot.ceiling !== undefined &&
+				!snapshot.ceiling.active
+					? compactionCeilingLabel(snapshot.ceiling)
+					: compactionTokenValueLabel(
+							configuredValue,
+							compactionEffectiveValue(snapshot, row.field),
+						),
 			detail: [
 				source,
 				row.why,
 				percent !== undefined
 					? "the host resolves the percentage against the smallest context window its runs use"
 					: "",
-				`Enter edits (whole tokens, ${compactionFieldMinimum(row.field)}–${COMPACTION_TOKEN_CEILING}, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}%)`,
+				row.field === "ceilingTokens"
+					? `Enter edits (whole tokens, 0 to turn it off, or ${COMPACTION_CEILING_MINIMUM}–${COMPACTION_TOKEN_CEILING})`
+					: `Enter edits (whole tokens, ${compactionFieldMinimum(row.field)}–${COMPACTION_TOKEN_CEILING}, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}%)`,
 			]
 				.filter(Boolean)
 				.join(" · "),

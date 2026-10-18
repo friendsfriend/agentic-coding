@@ -39,7 +39,7 @@ unavailable or unauthorized server is a section error with a retry.
 | Headless browser | Browser | `src/server/browser/install.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/browsers` (Playwright's `PLAYWRIGHT_BROWSERS_PATH`); a detected system Chrome is used instead when present, and the opt-in Install row is the only download path in the application | no | immediate | yes (Settings → Browser → Install Chromium) |
 | Browser sessions | Browser | `src/workflow/effects.ts` | user | `browser.max_sessions`, `browser.idle_ttl_minutes` and `browser.viewport` in the layered workflow config | no | immediate | no (file-only bounds, shown read-only) |
 | Telemetry receiver binds | — | `src/workflow/effects.ts` | user | `telemetry.receiver.container_bind` in the layered workflow config: `auto` (the container bridge gateway, on a Linux engine), `off` (loopback only) or one explicit address; a wildcard address is never bound | no | next start | no (file-only; read when the receivers bind) |
-| Compaction | Compaction | `src/workflow/compaction.ts` (write through `src/server/config.ts`) | user | `[agents.compaction]` in the layered workflow config — `enabled`, `reserveTokens`, `backgroundTokens` and `keepRecentTokens`, each a whole token count or a percentage of the model's context window (`"15%"`); a present `agentHost.compaction` overrides the section, and a project overlay's `[agents]` is not read at all | no | immediate (the durable host re-reads the policy at every generation) | yes (bounded numeric editor / on-off row) |
+| Compaction | Compaction | `src/workflow/compaction.ts` (write through `src/server/config.ts`) | user | `[agents.compaction]` in the layered workflow config — `enabled`, `reserveTokens`, `backgroundTokens`, `keepRecentTokens` and `ceilingTokens`; the window-relative fields accept a whole token count or a percentage of the model's context window (`"15%"`), while the cost ceiling is absolute tokens (`0` turns it off); a present `agentHost.compaction` overrides the section, and a project overlay's `[agents]` is not read at all | no | immediate (the durable host re-reads the policy at every generation) | yes (bounded numeric editor / on-off row) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
 
@@ -179,22 +179,27 @@ flight, without a host restart.
   "enabled": true,
   "reserveTokens": 32000,
   "backgroundTokens": 32000,
-  "keepRecentTokens": 20000
+  "keepRecentTokens": 20000,
+  "ceilingTokens": 150000
 } } }
 ```
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Gates threshold and overflow compaction only; `/compact` in a session works either way |
+| `enabled` | `true` | Gates threshold, overflow and ceiling compaction only; `/compact` in a session works either way |
 | `reserveTokens` | `max(32000, 30% of the run's window)` | Room kept free for the answer: a request above `contextWindow - reserve` waits for a summary — 70% of the model's window with the default. It also bounds the summarizer's own output budget (`0.8 × reserve`) |
 | `backgroundTokens` | `32000` | How far below the blocking threshold a summary starts in the background; `0` disables the background path |
-| `keepRecentTokens` | `20000` | Recent context a summary keeps word for word |
+| `keepRecentTokens` | `20000` | Recent context a summary keeps word for word; it must stay below `ceilingTokens`, and is resolved to at most half an active ceiling |
+| `ceilingTokens` | `150000` | **Cost ceiling** (absolute): once a request has carried this many tokens, the run compacts at its next safe point. `0` turns it off; automatic compaction off turns it off too |
 
-Each token value is either a whole number of tokens or a percentage of the
+Each window-relative token value (`reserveTokens`, `backgroundTokens`,
+`keepRecentTokens`) is either a whole number of tokens or a percentage of the
 model's context window (`"15%"`). An absolute value is used as written, and a
 percentage is resolved against the smallest context window among the models the
 host's tracked runs use, falling back to that field's absolute default when no
-window is known.
+window is known. The cost ceiling is absolute only: a percentage of a 1M window
+would silently become a different control on a 128k model, and the ceiling exists
+to bound absolute spend.
 
 The reserve's default is the one that is *not* absolute, because it is the value
 that decides when automatic compaction fires: every model the presets run
@@ -214,15 +219,39 @@ itself: `reserveTokens` and `keepRecentTokens` are at least 4096,
 `backgroundTokens` at least 0, the reserve is at most half a known window, and
 the kept-verbatim tail at most `window - reserve - 1024`. Values are validated
 when they are written (a non-integer, a negative count, an out-of-range
-percentage), and a hand-edited file that fails validation falls back to the
-documented default for that field rather than failing a durable launch.
+percentage, a ceiling that is neither `0` nor at least 16384, a percentage where
+the ceiling is absolute, and a kept tail at or above the ceiling), and a
+hand-edited file that fails validation falls back to the documented default for
+that field rather than failing a durable launch.
+
+The reserve is an *overflow* guard: it decides when a request can no longer fit
+the window. The ceiling is the *cost* control, and the two are deliberately
+separate. Every turn of a long run re-reads the whole context, so the second half
+of a run costs 1.87–2.9× the first; on a 1M-token window the overflow guard sits
+at 700,000 tokens, which a measured worker run (911,257 tokens) barely reached
+and the orchestrator (333,278) never did. The ceiling therefore applies **only
+when it is below the overflow threshold**: on a smaller window the overflow guard
+is the tighter of the two, and a ceiling above it is ignored once with a
+`runtime.compaction_ceiling` warning rather than compacting twice in a row. Two
+guards keep the ceiling itself from looping: a compaction may not follow another
+until 20 turns or 40,000 tokens of new context have passed (the reduced context
+is measured after the summary, so the floor counts real growth), and after three
+ceiling compactions inside ten turns the ceiling stops for that conversation and
+records a `loop-guard` warning. A ceiling compaction is admitted at the measured
+end of a turn and placed by `pi-durable` at the next turn boundary, so it never
+interrupts a tool call; it runs the same summarizer the overflow path runs, with
+no instructions, so a worker's assignment and a verifier's finding references
+survive it the same way.
 
 Manual compaction is the `/compact [instructions]` command of an agent session
 (`docs/orchestrator.md`); its outcome vocabulary is `started`,
 `already-compacting` (naming the reason in flight) and `nothing-to-compact`, and
 a run the host no longer tracks is reported as finished. Both paths emit the
 `runtime.compaction_start` / `runtime.compaction` telemetry envelopes
-(`docs/agent-session-telemetry.md`).
+(`docs/agent-session-telemetry.md`), each carrying the `kind` the analysis counts
+(`auto-ceiling`, `auto-overflow` or `manual`); the ceiling's own decisions are
+reported by `runtime.compaction_ceiling`, and `runtime.settled` carries the peak
+context and the per-kind counts of the run.
 
 ## Credentials
 

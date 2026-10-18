@@ -72,12 +72,20 @@ Durable runs are driven by `pi-durable`'s own agent-event stream
 tag every envelope `runtime: "pi-durable"`. Alongside `runtime.turn_started`,
 `runtime.usage`, `runtime.tool_start`, `runtime.tool`, `runtime.settled` and
 `runtime.task_failed`, one compaction is reported by two envelopes
-(`add-agent-compaction`):
+(`add-agent-compaction`), and the cost ceiling's decisions by a third:
 
 | Event | Fields |
 | --- | --- |
-| `runtime.compaction_start` | `reason` (`manual`, `threshold` or `overflow`), `blocking` (a generation waits for it), `attempt` |
-| `runtime.compaction` | `reason`, `blocking`, `attempts`, `durationMs`, `tokensBefore` / `tokensAfter` when measurable, `outcome` (`completed`, `failed` or `aborted`), and `pi.error.class` when it failed |
+| `runtime.compaction_start` | `reason` (`manual`, `threshold` or `overflow`), `kind` (`auto-ceiling`, `auto-overflow` or `manual`), `blocking` (a generation waits for it), `attempt` |
+| `runtime.compaction` | `reason`, `kind`, `blocking`, `attempts`, `durationMs`, `tokensBefore` / `tokensAfter` when measurable, `outcome` (`completed`, `failed` or `aborted`), and `pi.error.class` when it failed |
+| `runtime.compaction_ceiling` | the cost ceiling's own decisions: `status` (`compact`, `ignored` or `suspended`), `reason` (`above-overflow` or `loop-guard`), `ceilingTokens`, `contextTokens`, `overflowTokens`, `turnIndex`, `floorTurns`, `floorTokens`, `windowTurns`, `loopLimit`, `taskId` |
+
+`kind` is what the analysis counts: pi-durable knows `manual` and the automatic
+threshold/overflow family, and the host claims its own proactive compactions as
+`auto-ceiling` (efficiency backlog item 6). `runtime.settled` additionally
+carries `peakContextTokens` (the largest prompt the conversation ever carried),
+`turns`, and `compactionsAutoCeiling` / `compactionsAutoOverflow` /
+`compactionsManual`.
 
 The token movement is measured, never invented: `pi-durable` records no counters
 for a compaction, so `tokensBefore` is the newest request's prompt tokens

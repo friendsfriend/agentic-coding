@@ -12,12 +12,15 @@ import { createHash } from "node:crypto";
 import { isClassifierProviderId } from "../workflow/classifier-providers.ts";
 import {
 	COMPACTION_DEFAULTS,
+	type CompactionCeiling,
 	type CompactionConfig,
 	type CompactionField,
 	type CompactionFieldError,
 	type CompactionPolicy,
 	type CompactionSource,
 	compactionConfigIsEmpty,
+	compactionKeepRecentBelowCeiling,
+	resolveCompactionCeiling,
 	resolveCompactionPolicy,
 	resolveCompactionSection,
 	validateCompactionConfig,
@@ -259,10 +262,22 @@ export function applyAgentsMutation(
 						!Array.isArray(section.compaction)
 							? (section.compaction as Record<string, unknown>)
 							: {};
-					section.compaction = {
+					const next = {
 						...current,
 						[mutation.field]: mutation.value,
 					};
+					// The one cross-field rule: the kept-verbatim tail has to stay below the
+					// cost ceiling, or the next request is already over the line. It is
+					// checked on the section the write would leave behind and reported against
+					// the field being edited, so neither value can be moved past the other.
+					if (
+						mutation.field === "keepRecentTokens" ||
+						mutation.field === "ceilingTokens"
+					) {
+						const crossField = compactionKeepRecentBelowCeiling(next);
+						if (crossField) throw new Error(crossField);
+					}
+					section.compaction = next;
 					return;
 				}
 			}
@@ -309,6 +324,7 @@ export function loadCompactionSettings(): CompactionSettingsRead {
 		configured: effectiveSection,
 		configuredIsDefault: compactionConfigIsEmpty(effectiveSection),
 		effective: resolveCompactionPolicy(effectiveSection),
+		ceiling: resolveCompactionCeiling(effectiveSection),
 		source,
 		validation: validateCompactionConfig(agentsCompaction ?? {}),
 		defaults: COMPACTION_DEFAULTS,
@@ -324,6 +340,10 @@ export interface CompactionSettingsRead {
 	/** True when nothing is configured anywhere and the defaults apply. */
 	readonly configuredIsDefault: boolean;
 	readonly effective: CompactionPolicy;
+	/** The resolved cost ceiling (efficiency backlog item 6): the absolute line
+	 * above which a long-lived session compacts at the next safe point, resolved
+	 * with no reference window like `effective`. */
+	readonly ceiling: CompactionCeiling;
 	readonly source: CompactionSource;
 	/** Per-field errors of the written `[agents.compaction]` section, if any. */
 	readonly validation: CompactionFieldError[];

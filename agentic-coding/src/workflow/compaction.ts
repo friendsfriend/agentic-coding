@@ -30,12 +30,25 @@
 // of 128k but 2% of 1M), so it is the value offered as a percentage; its
 // absolute default keeps a workable verbatim tail on the 128k–200k windows in
 // normal use.
+//
+// Those three values are all *overflow* guards: they decide when a request
+// cannot fit the window any more. That is a safety net, not a cost control — on
+// a 1M-token window the blocking threshold sits at 700,000 tokens, which a
+// measured worker run (911,257 tokens) barely reached and the orchestrator
+// (333,278) never did. The second half of a long run costs 1.87–2.9× the first
+// because every turn re-reads the whole context, so the policy carries a second,
+// independent mechanism: the **cost ceiling** (`ceilingTokens`, default 150,000).
+// It is absolute by construction, because the thing it bounds is money per turn
+// and not window occupancy, and it applies only when it sits *below* the
+// overflow threshold — on a small window the overflow guard is the tighter of
+// the two and a second, lower trigger would only fight it.
 
 /** The token-valued fields of the policy, in Settings display order. */
 export const COMPACTION_TOKEN_FIELDS = [
 	"reserveTokens",
 	"backgroundTokens",
 	"keepRecentTokens",
+	"ceilingTokens",
 ] as const;
 export type CompactionTokenField = (typeof COMPACTION_TOKEN_FIELDS)[number];
 
@@ -55,6 +68,8 @@ export interface CompactionConfig {
 	reserveTokens?: CompactionTokenValue;
 	backgroundTokens?: CompactionTokenValue;
 	keepRecentTokens?: CompactionTokenValue;
+	/** The cost ceiling in absolute tokens; `0` disables it. */
+	ceilingTokens?: CompactionTokenValue;
 }
 
 /** The resolved policy pi-durable receives: every field an absolute count. */
@@ -112,6 +127,52 @@ export const COMPACTION_TOKEN_CEILING = 10_000_000;
 export const COMPACTION_PERCENT_MIN = 1;
 export const COMPACTION_PERCENT_MAX = 90;
 
+/**
+ * The documented cost ceiling: once a request has carried this many tokens, the
+ * host compacts at the next safe point even though the window is nowhere near
+ * full. 150,000 is the line the efficiency analysis measured (213 of the
+ * orchestrator's 570 turns sat above it, and capping there was worth $8.30 of
+ * $48.13), and it is deliberately above the point where a summary's own cost
+ * would exceed the re-reads it prevents: a summary costs roughly one pass over
+ * the summarized range, so compacting much below ~100k trades a cheaper tail for
+ * more summaries than it saves. The default is a starting point, not a
+ * measurement — the per-run `peakContextTokens` telemetry and the `compactions`
+ * analysis query exist so it can be re-measured after a week.
+ */
+export const COMPACTION_CEILING_DEFAULT = 150_000;
+
+/** Smallest accepted *enabled* ceiling. Below it the summary plus a workable
+ * kept tail would be most of the budget, which is the compaction loop the
+ * floor and the loop guard exist to prevent; `0` is the documented way to turn
+ * the ceiling off, and a value between it and this floor is refused. */
+export const COMPACTION_CEILING_MINIMUM = 16_384;
+
+/** Share of an active ceiling the kept-verbatim tail may occupy. The summary is
+ * written on top of the tail, so the tail may not take the whole ceiling: half
+ * leaves the same room again for the summary and for the turns that follow, and
+ * the next request lands well under the ceiling instead of immediately above it
+ * (a tail at the ceiling is exactly the loop the floors cannot break). */
+export const COMPACTION_CEILING_KEPT_SHARE = 0.5;
+
+/** The floor under a ceiling compaction: a second one waits for at least this
+ * many turns **or** this many tokens of new context, so a conversation whose
+ * reduced context is still close to the ceiling cannot compact on every turn. */
+export const COMPACTION_CEILING_FLOOR_TURNS = 20;
+export const COMPACTION_CEILING_FLOOR_TOKENS = 40_000;
+
+/** The loop guard: once this many ceiling compactions have been admitted inside
+ * this many turns, ceiling compaction stops for the rest of the conversation and
+ * raises a visible warning event. Manual compaction stays available. */
+export const COMPACTION_CEILING_LOOP_TURNS = 10;
+export const COMPACTION_CEILING_LOOP_LIMIT = 3;
+
+/** Fields that accept an absolute token count only. A percentage cannot express
+ * a cost ceiling: the ceiling exists to bound absolute spend, and `"15%"` of a
+ * 1M window would be a 150,000-token ceiling that silently becomes 19,200 on a
+ * 128k model. */
+export const COMPACTION_ABSOLUTE_ONLY_FIELDS: ReadonlySet<CompactionTokenField> =
+	new Set(["ceilingTokens"]);
+
 /** Longest accepted `/compact` instruction text (durable-agent-compaction:
  * "Manual compaction outcomes"). Longer is refused as an invalid request rather
  * than truncated silently, so the summarizer never runs on text nobody wrote. */
@@ -121,12 +182,16 @@ export const COMPACTION_MAX_INSTRUCTIONS = 2000;
  * editor's bounds and the resolver agree. `backgroundTokens: 0` disables
  * background compaction, which is why it is the one field that accepts 0. */
 export function compactionFieldMinimum(field: CompactionTokenField): number {
-	return field === "backgroundTokens" ? 0 : COMPACTION_TOKEN_FLOOR;
+	return field === "backgroundTokens" || field === "ceilingTokens"
+		? 0
+		: COMPACTION_TOKEN_FLOOR;
 }
 
 /** The documented absolute default of one token field. */
 export function compactionFieldDefault(field: CompactionTokenField): number {
-	return COMPACTION_DEFAULTS[field];
+	return field === "ceilingTokens"
+		? COMPACTION_CEILING_DEFAULT
+		: COMPACTION_DEFAULTS[field];
 }
 
 /** One field's documented default as a single line, for Settings and the docs:
@@ -174,6 +239,8 @@ function compactionFieldFormProblem(
 	value: unknown,
 ): string | undefined {
 	if (typeof value === "string") {
+		if (COMPACTION_ABSOLUTE_ONLY_FIELDS.has(field))
+			return `${field}: expected a whole number of tokens (an absolute cost ceiling; 0 turns it off)`;
 		const percent = parseCompactionPercent(value);
 		if (percent === undefined)
 			return `${field}: expected a whole number of tokens or a percentage like "15%"`;
@@ -199,6 +266,36 @@ export function validateCompactionField(
 	if (form) return form;
 	if (typeof value === "number" && value < compactionFieldMinimum(field))
 		return `${field}: must be at least ${compactionFieldMinimum(field)}`;
+	if (
+		field === "ceilingTokens" &&
+		typeof value === "number" &&
+		value > 0 &&
+		value < COMPACTION_CEILING_MINIMUM
+	)
+		return `${field}: must be 0 (off) or at least ${COMPACTION_CEILING_MINIMUM}`;
+	return undefined;
+}
+
+/** The cross-field rule of the two values that meet at the ceiling: the
+ * verbatim tail has to stay below it, or the next request is already over the
+ * line and every turn compacts. A percentage tail (or an absent one) cannot be
+ * compared without a window, so it is not checked here; resolution clamps it.
+ */
+export function compactionKeepRecentBelowCeiling(section: {
+	readonly keepRecentTokens?: unknown;
+	readonly ceilingTokens?: unknown;
+}): string | undefined {
+	const keep = section.keepRecentTokens;
+	if (typeof keep !== "number" || !Number.isFinite(keep)) return undefined;
+	const rawCeiling = section.ceilingTokens;
+	const ceilingTokens =
+		typeof rawCeiling === "number" && Number.isFinite(rawCeiling)
+			? Math.max(0, Math.round(rawCeiling))
+			: COMPACTION_CEILING_DEFAULT;
+	// A disabled ceiling has nothing for the tail to stay below.
+	if (ceilingTokens === 0) return undefined;
+	if (keep >= ceilingTokens)
+		return `keepRecentTokens: must be below ceilingTokens (${ceilingTokens}) so the summary and the kept tail fit under the cost ceiling`;
 	return undefined;
 }
 
@@ -219,6 +316,9 @@ export function validateCompactionConfig(
 		const problem = validateCompactionField(field, raw);
 		if (problem) errors.push({ field, message: problem });
 	}
+	const crossField = compactionKeepRecentBelowCeiling(value);
+	if (crossField)
+		errors.push({ field: "keepRecentTokens", message: crossField });
 	return errors;
 }
 
@@ -290,6 +390,92 @@ function resolveField(
 	return compactionFieldDefault(field);
 }
 
+/** A usable reference window, or undefined when none is known. */
+function resolveWindow(
+	referenceWindow: number | undefined,
+): number | undefined {
+	return typeof referenceWindow === "number" &&
+		Number.isFinite(referenceWindow) &&
+		referenceWindow > 0
+		? Math.floor(referenceWindow)
+		: undefined;
+}
+
+/** The resolved cost ceiling. `active` is the only field a caller has to read to
+ * know whether it may compact; `inactive` says why not, so Settings and the
+ * warning event can name the reason instead of a silent off. */
+export interface CompactionCeiling {
+	/** The ceiling in absolute tokens; `0` when it is off. */
+	readonly ceilingTokens: number;
+	readonly active: boolean;
+	readonly inactive?: "disabled" | "off" | "above-overflow";
+	/** The overflow threshold the ceiling is compared against
+	 * (`window - reserveTokens`), when the window is known. */
+	readonly overflowTokens?: number;
+	readonly floorTurns: number;
+	readonly floorTokens: number;
+	readonly loopTurns: number;
+	readonly loopLimit: number;
+}
+
+function resolveCeilingFrom(
+	config: CompactionConfig,
+	enabled: boolean,
+	window: number | undefined,
+	reserveTokens: number,
+): CompactionCeiling {
+	const raw = resolveField("ceilingTokens", config, window);
+	// `0` is the documented off switch; anything else below the minimum is a
+	// typo, and resolution floors it rather than refusing to launch.
+	const ceilingTokens =
+		raw <= 0 ? 0 : Math.max(COMPACTION_CEILING_MINIMUM, Math.round(raw));
+	const overflowTokens =
+		window !== undefined ? window - reserveTokens : undefined;
+	const base = {
+		ceilingTokens,
+		...(overflowTokens !== undefined ? { overflowTokens } : {}),
+		floorTurns: COMPACTION_CEILING_FLOOR_TURNS,
+		floorTokens: COMPACTION_CEILING_FLOOR_TOKENS,
+		loopTurns: COMPACTION_CEILING_LOOP_TURNS,
+		loopLimit: COMPACTION_CEILING_LOOP_LIMIT,
+	};
+	// `enabled` gates every automatic path, the ceiling included: a session with
+	// automatic compaction off compacts only when the developer asks for it.
+	if (!enabled) return { ...base, active: false, inactive: "disabled" };
+	if (ceilingTokens === 0) return { ...base, active: false, inactive: "off" };
+	// The ceiling is a *lower* trigger than the overflow guard by definition. On a
+	// small window the overflow guard is already the tighter of the two, so the
+	// ceiling is ignored (and reported) instead of compacting twice in a row.
+	if (overflowTokens !== undefined && ceilingTokens >= overflowTokens)
+		return { ...base, active: false, inactive: "above-overflow" };
+	return { ...base, active: true };
+}
+
+/** The cost ceiling of a configuration section, resolved against the same
+ * reference window the policy is. */
+export function resolveCompactionCeiling(
+	config: CompactionConfig,
+	referenceWindow?: number,
+): CompactionCeiling {
+	const window = resolveWindow(referenceWindow);
+	const enabled = config.enabled ?? COMPACTION_DEFAULTS.enabled;
+	let reserveTokens = Math.max(
+		COMPACTION_TOKEN_FLOOR,
+		resolveField("reserveTokens", config, window),
+	);
+	if (window !== undefined)
+		reserveTokens = Math.min(reserveTokens, Math.floor(window / 2));
+	return resolveCeilingFrom(config, enabled, window, reserveTokens);
+}
+
+/** The most of an active ceiling the kept-verbatim tail may take. */
+export function compactionCeilingKeptTailCap(ceilingTokens: number): number {
+	return Math.max(
+		COMPACTION_TOKEN_FLOOR,
+		Math.floor(ceilingTokens * COMPACTION_CEILING_KEPT_SHARE),
+	);
+}
+
 /**
  * Resolve the written section into the policy pi-durable receives. Every field
  * is absolute in the result: a percentage is resolved against `referenceWindow`
@@ -303,18 +489,17 @@ function resolveField(
  *   `backgroundTokens` at least 0 (0 disables background compaction);
  * - with a known window the reserve is clamped to half the window, and the
  *   kept-verbatim tail to `window - reserve - 1024` so a threshold compaction
- *   can still pick a range to summarize.
+ *   can still pick a range to summarize;
+ * - with an *active* cost ceiling the kept-verbatim tail is additionally capped
+ *   at {@link COMPACTION_CEILING_KEPT_SHARE} of it, so the request after a
+ *   ceiling compaction starts well below the ceiling again.
  */
 export function resolveCompactionPolicy(
 	config: CompactionConfig,
 	referenceWindow?: number,
 ): CompactionPolicy {
-	const window =
-		typeof referenceWindow === "number" &&
-		Number.isFinite(referenceWindow) &&
-		referenceWindow > 0
-			? Math.floor(referenceWindow)
-			: undefined;
+	const window = resolveWindow(referenceWindow);
+	const enabled = config.enabled ?? COMPACTION_DEFAULTS.enabled;
 	let reserveTokens = Math.max(
 		COMPACTION_TOKEN_FLOOR,
 		resolveField("reserveTokens", config, window),
@@ -334,12 +519,76 @@ export function resolveCompactionPolicy(
 			Math.max(COMPACTION_TOKEN_FLOOR, window - reserveTokens - 1024),
 		);
 	}
-	return {
-		enabled: config.enabled ?? COMPACTION_DEFAULTS.enabled,
-		reserveTokens,
-		keepRecentTokens,
-		backgroundTokens,
-	};
+	// The summary is written on top of the kept tail, so an active ceiling caps
+	// the tail at half of itself: the request after the compaction then lands well
+	// under the ceiling instead of immediately above it.
+	const ceiling = resolveCeilingFrom(config, enabled, window, reserveTokens);
+	if (ceiling.active)
+		keepRecentTokens = Math.min(
+			keepRecentTokens,
+			compactionCeilingKeptTailCap(ceiling.ceilingTokens),
+		);
+	return { enabled, reserveTokens, keepRecentTokens, backgroundTokens };
+}
+
+/** Why a ceiling compaction did not run: the reasons are reported, so a session
+ * that never compacts says which condition held instead of looking inert. */
+export type CompactionCeilingQuietReason =
+	| "inactive"
+	| "suspended"
+	| "below-ceiling"
+	| "floor"
+	| "loop-guard";
+
+/** What the host remembers about one conversation's ceiling compactions. */
+export interface CompactionCeilingState {
+	/** Monotonic turn index of the measured turn (pi-durable's `turn_start`
+	 * counter), so the floors are counted in turns and not in wall time. */
+	readonly turnIndex: number;
+	readonly lastCompactionTurn?: number;
+	/** The context size measured at that compaction, so "new context since" is a
+	 * token difference and not a guess. */
+	readonly lastCompactionTokens?: number;
+	/** The turns ceiling compactions were admitted at, oldest first. */
+	readonly compactionTurns: readonly number[];
+	readonly suspended?: boolean;
+}
+
+export type CompactionCeilingDecision =
+	| { readonly kind: "compact" }
+	| { readonly kind: "quiet"; readonly reason: CompactionCeilingQuietReason };
+
+/**
+ * Decide whether a measured turn should be compacted for cost. Pure, so the
+ * whole rule — the ceiling, the floor and the loop guard — is testable without a
+ * provider. A `compact` verdict is admitted at the next safe point by the host;
+ * `quiet` reports the condition that held.
+ */
+export function evaluateCompactionCeiling(input: {
+	readonly ceiling: CompactionCeiling;
+	readonly contextTokens: number;
+	readonly state: CompactionCeilingState;
+}): CompactionCeilingDecision {
+	const { ceiling, contextTokens, state } = input;
+	if (!ceiling.active) return { kind: "quiet", reason: "inactive" };
+	if (state.suspended) return { kind: "quiet", reason: "suspended" };
+	if (!(contextTokens >= ceiling.ceilingTokens))
+		return { kind: "quiet", reason: "below-ceiling" };
+	const recent = state.compactionTurns.filter(
+		(turn) => state.turnIndex - turn < ceiling.loopTurns,
+	);
+	if (recent.length >= ceiling.loopLimit)
+		return { kind: "quiet", reason: "loop-guard" };
+	if (state.lastCompactionTurn !== undefined) {
+		const turns = state.turnIndex - state.lastCompactionTurn;
+		const tokens = contextTokens - (state.lastCompactionTokens ?? 0);
+		// Either floor is enough to admit the next compaction: 20 turns of small
+		// growth will not reach the ceiling on its own, and one huge turn should not
+		// have to wait for twenty.
+		if (turns < ceiling.floorTurns && tokens < ceiling.floorTokens)
+			return { kind: "quiet", reason: "floor" };
+	}
+	return { kind: "compact" };
 }
 
 /** `32000` or `"15%"` as one line, for a Settings row or an error message. */

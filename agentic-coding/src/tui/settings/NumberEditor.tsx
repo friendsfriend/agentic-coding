@@ -12,6 +12,7 @@
 import { GenericModal, uiColors } from "@ui";
 import { Show } from "solid-js";
 import {
+	COMPACTION_ABSOLUTE_ONLY_FIELDS,
 	COMPACTION_PERCENT_MAX,
 	COMPACTION_PERCENT_MIN,
 	COMPACTION_TOKEN_CEILING,
@@ -30,6 +31,9 @@ export interface NumberEditorField {
 	readonly min: number;
 	/** Largest accepted whole number. */
 	readonly max: number;
+	/** Whether the field also accepts the `"N%"` form. The cost ceiling is
+	 * absolute by construction, so its editor offers no percentage. */
+	readonly percent: boolean;
 }
 
 /** Label and purpose of each editable token field, in section order. */
@@ -51,6 +55,11 @@ const EDITOR_FIELDS: Readonly<
 		description:
 			"Recent context a summary keeps word for word; a percentage scales with each run's window.",
 	},
+	ceilingTokens: {
+		label: "Cost ceiling",
+		description:
+			"Absolute context a long-lived session may carry before it compacts at the next safe point. 0 turns it off.",
+	},
 };
 
 /** The editor's own description of one field, bounds included. */
@@ -64,6 +73,7 @@ export function compactionEditorField(
 		description: meta.description,
 		min: compactionFieldMinimum(field),
 		max: COMPACTION_TOKEN_CEILING,
+		percent: !COMPACTION_ABSOLUTE_ONLY_FIELDS.has(field),
 	};
 }
 
@@ -104,6 +114,11 @@ export function readEditorDraft(
 	if (!text) return { ok: false, message: "enter a value" };
 	const percent = /^(\d{1,3})%$/.exec(text);
 	if (percent) {
+		if (COMPACTION_ABSOLUTE_ONLY_FIELDS.has(field))
+			return {
+				ok: false,
+				message: `${field}: whole tokens only (an absolute value); 0 turns it off`,
+			};
 		const value = Number(percent[1]);
 		if (value < COMPACTION_PERCENT_MIN || value > COMPACTION_PERCENT_MAX)
 			return {
@@ -148,7 +163,9 @@ export const NUMBER_EDITOR_HELP: readonly {
 
 export function NumberEditor(props: NumberEditorProps) {
 	const bounds = () =>
-		`${props.target.min}–${props.target.max} tokens, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}% of the run's window`;
+		props.target.percent
+			? `${props.target.min}–${props.target.max} tokens, or ${COMPACTION_PERCENT_MIN}%–${COMPACTION_PERCENT_MAX}% of the run's window`
+			: `${props.target.min}–${props.target.max} tokens (0 turns it off)`;
 	return (
 		<GenericModal
 			dismissKind="number-editor"

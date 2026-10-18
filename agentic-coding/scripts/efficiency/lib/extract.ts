@@ -1123,6 +1123,10 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				severity: null,
 				count: 1,
 				trace_id: null,
+				// A placed summary carries no reason of its own: the envelope that
+				// reported the compaction does (efficiency backlog item 6).
+				compaction_kind: null,
+				compaction_blocking: null,
 				detail: null,
 				detail_hash: null,
 				detail_bytes: compaction.summaryBytes,
@@ -1154,6 +1158,11 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 			severity: event.severity ?? null,
 			count: 1,
 			trace_id: event.traceId ?? null,
+			compaction_kind: event.compactionKind ?? null,
+			compaction_blocking:
+				event.compactionBlocking === undefined
+					? null
+					: Number(event.compactionBlocking),
 			detail: (() => {
 				const text = str(
 					event.errorClass ?? event.handoffReason ?? event.reasonCode ?? null,
@@ -1187,6 +1196,8 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				severity: null,
 				count: 1,
 				trace_id: null,
+				compaction_kind: null,
+				compaction_blocking: null,
 				detail: null,
 				detail_hash: null,
 				detail_bytes: null,

@@ -31,6 +31,7 @@ import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 import {
 	type CompactionConfig,
+	resolveCompactionCeiling,
 	resolveCompactionPolicy,
 } from "../../src/workflow/compaction.ts";
 
@@ -265,6 +266,30 @@ test("the compaction rows open the numeric editor, validate, cancel and save", a
 	);
 	expect(percentRow).toContain("Kept verbatim — 15% → 20000 tokens");
 	expect(live().keepRecentTokens).toBe(20000);
+
+	// The cost ceiling renders one row further and is edited by the same overlay;
+	// it is absolute only, so the editor refuses the percentage form.
+	t.mockInput.pressKey("j");
+	await frameWhere(t, (frame) => rowSelected(frame, "Cost ceiling"));
+	t.mockInput.pressEnter();
+	await frameWhere(t, (frame) => frame.includes("Cost ceiling · compaction"));
+	clearDraft(t, 6);
+	type(t, "15%");
+	t.mockInput.pressEnter();
+	await frameWhere(t, (frame) => frame.includes("whole tokens only"));
+	expect(writtenCompaction(configPath)?.ceilingTokens).toBeUndefined();
+	clearDraft(t, 5);
+	type(t, "90000");
+	t.mockInput.pressEnter();
+	await waitForWritten(configPath, (value) => value.ceilingTokens === 90000);
+	const ceilingRow = await frameWhere(t, (frame) =>
+		frame.includes("Cost ceiling — 90000 tokens"),
+	);
+	expect(ceilingRow).not.toContain("90000█");
+	// The running host resolves the saved ceiling to the trigger it will use.
+	expect(
+		resolveCompactionCeiling(liveCompactionSection(configPath)()).ceilingTokens,
+	).toBe(90000);
 });
 
 test("the enabled row toggles through the same server-owned write", async () => {

@@ -170,6 +170,11 @@ CREATE TABLE events (
 	severity TEXT,
 	count INTEGER NOT NULL DEFAULT 1,
 	trace_id TEXT,
+	-- The compaction generation's own vocabulary (efficiency backlog item 6): which
+	-- kind ran and whether it blocked the request. Append-only: an older dataset
+	-- simply has the columns empty.
+	compaction_kind TEXT,
+	compaction_blocking INTEGER,
 	detail TEXT,
 	detail_hash TEXT,
 	detail_bytes INTEGER,
@@ -381,8 +386,8 @@ function insertAll(
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const eventStatement = db.prepare(
-		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, detail, detail_hash, detail_bytes, confidence, preferred)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, detail, detail_hash, detail_bytes, confidence, preferred)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 
 	for (const descriptor of SOURCE_LIST)
@@ -514,6 +519,8 @@ function insertAll(
 			event.severity,
 			event.count,
 			event.trace_id,
+			event.compaction_kind,
+			event.compaction_blocking,
 			event.detail,
 			event.detail_hash,
 			event.detail_bytes,

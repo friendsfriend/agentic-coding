@@ -164,6 +164,14 @@ function recordingOperations(calls: Calls): ServerOperations {
 					backgroundTokens: 32000,
 					keepRecentTokens: 20000,
 				},
+				ceiling: {
+					ceilingTokens: 150000,
+					active: true,
+					floorTurns: 20,
+					floorTokens: 40000,
+					loopTurns: 10,
+					loopLimit: 3,
+				},
 				source: "default",
 				validation: [],
 				defaults: {

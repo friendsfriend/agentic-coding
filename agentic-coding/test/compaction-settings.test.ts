@@ -24,6 +24,8 @@ import {
 } from "../src/tui/settings/NumberEditor.tsx";
 import { settingsSectionOfPage } from "../src/tui/shared/routes.ts";
 import {
+	COMPACTION_CEILING_DEFAULT,
+	COMPACTION_CEILING_MINIMUM,
 	COMPACTION_PERCENT_MAX,
 	COMPACTION_TOKEN_CEILING,
 	COMPACTION_TOKEN_FLOOR,
@@ -36,6 +38,15 @@ const DEFAULTS = {
 	keepRecentTokens: 20000,
 };
 
+const CEILING = {
+	ceilingTokens: COMPACTION_CEILING_DEFAULT,
+	active: true,
+	floorTurns: 20,
+	floorTokens: 40000,
+	loopTurns: 10,
+	loopLimit: 3,
+};
+
 function snapshot(
 	overrides: Partial<CompactionSettingsSnapshot> = {},
 ): CompactionSettingsSnapshot {
@@ -43,6 +54,7 @@ function snapshot(
 		configured: {},
 		configuredIsDefault: true,
 		effective: DEFAULTS,
+		ceiling: CEILING,
 		source: "default",
 		validation: [],
 		defaults: DEFAULTS,
@@ -163,6 +175,75 @@ describe("compaction section rows", () => {
 		expect(
 			items.find((item) => item.id === "compaction.reference-window")?.value,
 		).toBe("128000 tokens");
+	});
+
+	test("the cost ceiling row states the default, the ignored case and the off case", () => {
+		const items = settingsItems(context(snapshot()));
+		const row = items.find((item) => item.id === "compaction.ceilingTokens");
+		expect(row?.label).toBe("Cost ceiling");
+		expect(row?.value).toBe("150000 tokens (default)");
+		expect(row?.action).toEqual({
+			kind: "numeric-edit",
+			field: "ceilingTokens",
+		});
+		expect(row?.detail).toContain("overflow threshold");
+		// A small window leaves the overflow guard tighter, so the row says the
+		// ceiling is ignored and names the threshold it lost against.
+		const ignored = settingsItems(
+			context(
+				snapshot({
+					ceiling: {
+						...CEILING,
+						active: false,
+						inactive: "above-overflow",
+						overflowTokens: 68000,
+					},
+				}),
+			),
+		).find((item) => item.id === "compaction.ceilingTokens");
+		expect(ignored?.value).toContain("ignored");
+		expect(ignored?.value).toContain("68000");
+		// A configured 0 is shown as the off switch, not as a default.
+		const off = settingsItems(
+			context(
+				snapshot({
+					configured: { ceilingTokens: 0 },
+					configuredIsDefault: false,
+					source: "agents",
+					ceiling: {
+						...CEILING,
+						ceilingTokens: 0,
+						active: false,
+						inactive: "off",
+					},
+				}),
+			),
+		).find((item) => item.id === "compaction.ceilingTokens");
+		expect(off?.value).toBe("0 tokens");
+	});
+
+	test("the editor edits the cost ceiling as an absolute value only", () => {
+		const field = compactionEditorField("ceilingTokens");
+		expect(field.min).toBe(0);
+		expect(field.percent).toBe(false);
+		expect(field.label).toBe("Cost ceiling");
+		expect(readEditorDraft("ceilingTokens", "90000")).toEqual({
+			ok: true,
+			value: 90000,
+		});
+		expect(readEditorDraft("ceilingTokens", "0")).toEqual({
+			ok: true,
+			value: 0,
+		});
+		const percent = readEditorDraft("ceilingTokens", "15%");
+		expect(percent.ok).toBe(false);
+		if (!percent.ok) expect(percent.message).toContain("absolute");
+		const tiny = readEditorDraft("ceilingTokens", "10000");
+		expect(tiny.ok).toBe(false);
+		if (!tiny.ok)
+			expect(tiny.message).toContain(String(COMPACTION_CEILING_MINIMUM));
+		// The window-relative fields keep their percentage form.
+		expect(compactionEditorField("keepRecentTokens").percent).toBe(true);
 	});
 
 	test("a rejected value is surfaced as its own row", () => {

@@ -25,8 +25,11 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
+	type CompactionCeiling,
 	type CompactionConfig,
 	type CompactionPolicy,
+	evaluateCompactionCeiling,
+	resolveCompactionCeiling,
 	resolveCompactionPolicy,
 } from "../workflow/compaction.ts";
 import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
@@ -53,7 +56,12 @@ import {
 	type ToolPolicy,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
-import { attachTelemetry, type EntryTiming } from "./telemetry.ts";
+import {
+	attachTelemetry,
+	type EntryTiming,
+	emitRuntimeEnvelope,
+	type TelemetryIdentity,
+} from "./telemetry.ts";
 import {
 	codingTools,
 	createAskJevExtension,
@@ -188,6 +196,29 @@ interface RunRecord {
 	model?: string;
 }
 
+/** What the host remembers about one conversation's cost-ceiling compactions
+ * (efficiency backlog item 6): the measured turn, what it decided at, and the
+ * turns it compacted at, which is what the floor and the loop guard count. */
+export interface CeilingRecord {
+	turnIndex: number;
+	lastCompactionTurn?: number;
+	lastCompactionTokens?: number;
+	/** The measured context of the first turn after a compaction: the base the
+	 * token floor counts new context from. Without it the floor would measure the
+	 * *net* change, which a compaction hides — a conversation that shrinks from
+	 * 200k to 20k and then grows back to 80k added 60k of new context, not −120k. */
+	baselineTokens?: number;
+	/** Set while the next measured turn will be that baseline. */
+	awaitingBaseline?: boolean;
+	compactionTurns: number[];
+	/** Set once the loop guard tripped: no further ceiling compaction for this
+	 * conversation, and the warning was emitted. */
+	suspended?: boolean;
+	/** Set once the "ignored above the overflow threshold" warning was emitted, so
+	 * a long run records it once instead of on every turn. */
+	warnedAboveOverflow?: boolean;
+}
+
 /** One manual compaction's outcome (durable-agent-compaction: "Manual
  * compaction outcomes"). */
 export type CompactionRunStatus =
@@ -254,6 +285,22 @@ export class DurableHost {
 	private readonly operations = new Map<string, Promise<void>>();
 	/** Context windows by model ref (see `modelWindow`). */
 	private readonly modelWindows = new Map<string, number | undefined>();
+	/** The cost ceiling's per-conversation bookkeeping, keyed by conversation. */
+	private readonly ceilings = new Map<ConversationId, CeilingRecord>();
+	/** Compaction tasks this host admitted for cost, so the telemetry envelope
+	 * reports `auto-ceiling` instead of pi-durable's `manual`. */
+	private readonly ceilingCompactions = new Set<string>();
+	/** Ceiling compactions admitted but not yet seen starting on the event stream:
+	 * `conversation.compact()` resolves after the task's `compaction_start` event
+	 * is published, so the kind has to be claimed before the call and not from its
+	 * returned identity. */
+	private readonly ceilingPending = new Map<ConversationId, number>();
+	/** Each conversation's telemetry identity, so a ceiling decision can report
+	 * itself as an envelope on the same file the run writes. */
+	private readonly telemetryIdentities = new Map<
+		ConversationId,
+		TelemetryIdentity
+	>();
 	private server: net.Server | undefined;
 	private closing = false;
 
@@ -512,30 +559,52 @@ export class DurableHost {
 			readOnly,
 			...(model ? { model } : {}),
 		});
+		const identity: TelemetryIdentity = {
+			workflowId: envVars.HERDR_WORKFLOW_ID,
+			runId: envVars.HERDR_RUN_ID,
+			stepId: envVars.HERDR_STEP_ID,
+			role: envVars.HERDR_ROLE,
+			profile: envVars.HERDR_PROFILE,
+			generation: Number.isFinite(Number(envVars.HERDR_RUN_GENERATION))
+				? Number(envVars.HERDR_RUN_GENERATION)
+				: undefined,
+			telemetryPath: envVars.HERDR_TELEMETRY_PATH,
+			captureContent: envVars.HERDR_CAPTURE_CONTENT === "1",
+		};
+		// The ceiling's own envelopes go to the same file as the run's, including
+		// for a conversation whose telemetry stream could not be attached.
+		this.telemetryIdentities.set(conversation.id, identity);
 		if (!this.telemetry.has(conversation.id)) {
 			try {
 				const stop = await attachTelemetry(
 					this.harness,
 					conversation.id,
 					context,
+					identity,
 					{
-						workflowId: envVars.HERDR_WORKFLOW_ID,
-						runId: envVars.HERDR_RUN_ID,
-						stepId: envVars.HERDR_STEP_ID,
-						role: envVars.HERDR_ROLE,
-						profile: envVars.HERDR_PROFILE,
-						generation: Number.isFinite(Number(envVars.HERDR_RUN_GENERATION))
-							? Number(envVars.HERDR_RUN_GENERATION)
-							: undefined,
-						telemetryPath: envVars.HERDR_TELEMETRY_PATH,
-						captureContent: envVars.HERDR_CAPTURE_CONTENT === "1",
-					},
-					(entryId, timing) => {
-						const existing = this.timings.get(conversation.id) ?? {};
-						this.timings.set(conversation.id, {
-							...existing,
-							[entryId]: timing,
-						});
+						onTiming: (entryId, timing) => {
+							const existing = this.timings.get(conversation.id) ?? {};
+							this.timings.set(conversation.id, {
+								...existing,
+								[entryId]: timing,
+							});
+						},
+						// The measured context of one committed turn is also the cost
+						// ceiling's input, so one event stream serves both and the ceiling
+						// is decided between turns, never inside a tool call.
+						onMeasuredContext: ({ promptTokens, turnIndex }) =>
+							this.observeContext(input.runId, promptTokens, turnIndex),
+						compactionKind: (taskId) => {
+							const pending = this.ceilingPending.get(conversation.id) ?? 0;
+							if (pending > 0) {
+								this.ceilingPending.set(conversation.id, pending - 1);
+								this.ceilingCompactions.add(taskId);
+								return "auto-ceiling";
+							}
+							return this.ceilingCompactions.has(taskId)
+								? "auto-ceiling"
+								: undefined;
+						},
 					},
 				);
 				this.telemetry.set(conversation.id, stop);
@@ -682,12 +751,194 @@ export class DurableHost {
 		return smallest;
 	}
 
+	/** The effective compaction section, re-read at every resolution (design D4). */
+	private compactionConfig(): CompactionConfig {
+		return (
+			this.options.compaction?.() ?? this.options.settings.compaction ?? {}
+		);
+	}
+
 	/** The policy pi-durable receives, resolved at every read: the effective
 	 * configuration section against the current reference window. */
 	private compactionPolicy(): CompactionPolicy {
-		const config =
-			this.options.compaction?.() ?? this.options.settings.compaction ?? {};
-		return resolveCompactionPolicy(config, this.referenceWindow());
+		return resolveCompactionPolicy(
+			this.compactionConfig(),
+			this.referenceWindow(),
+		);
+	}
+
+	/** The cost ceiling of one run: resolved against that run's own model window
+	 * (the window its conversation actually has), falling back to the smallest
+	 * window in play when its model is unknown. */
+	private resolveRunCeiling(record: RunRecord): CompactionCeiling {
+		const window =
+			(record.model ? this.modelWindow(record.model) : undefined) ??
+			this.referenceWindow();
+		return resolveCompactionCeiling(this.compactionConfig(), window);
+	}
+
+	/**
+	 * Measure one committed turn against the cost ceiling (efficiency backlog
+	 * item 6). The measurement arrives at an assistant message boundary, so the
+	 * compaction it admits is placed at the next turn boundary: pi-durable writes
+	 * a conversation-owned summary through a submission and never interrupts a
+	 * tool call. Every path is best-effort and reports through telemetry; a
+	 * ceiling that cannot be evaluated must never fail the run.
+	 */
+	private observeContext(
+		runId: string,
+		promptTokens: number,
+		turnIndex: number,
+	): void {
+		const record = this.runs.get(runId);
+		if (!record) return;
+		const ceiling = this.resolveRunCeiling(record);
+		const state =
+			this.ceilings.get(record.conversationId) ??
+			({ turnIndex, compactionTurns: [] } satisfies CeilingRecord);
+		state.turnIndex = Math.max(state.turnIndex, turnIndex);
+		this.ceilings.set(record.conversationId, state);
+		const identity = this.telemetryIdentities.get(record.conversationId);
+		if (state.awaitingBaseline) {
+			// The first measurement after an admitted compaction is the reduced
+			// context: the base the token floor counts new context from.
+			state.baselineTokens = promptTokens;
+			state.awaitingBaseline = false;
+		}
+		if (!ceiling.active) {
+			// The ceiling is a lower trigger than the overflow guard by definition. On
+			// a small window the guard is already the tighter one, so the ceiling is
+			// reported once as ignored instead of compacting twice in a row.
+			if (
+				ceiling.inactive === "above-overflow" &&
+				!state.warnedAboveOverflow &&
+				identity
+			) {
+				state.warnedAboveOverflow = true;
+				emitRuntimeEnvelope(identity, "runtime.compaction_ceiling", {
+					status: "ignored",
+					reason: "above-overflow",
+					ceilingTokens: ceiling.ceilingTokens,
+					...(ceiling.overflowTokens !== undefined
+						? { overflowTokens: ceiling.overflowTokens }
+						: {}),
+					contextTokens: promptTokens,
+				});
+			}
+			return;
+		}
+		const decision = evaluateCompactionCeiling({
+			ceiling,
+			contextTokens: promptTokens,
+			state: {
+				...state,
+				...(state.baselineTokens !== undefined
+					? { lastCompactionTokens: state.baselineTokens }
+					: {}),
+			},
+		});
+		if (decision.kind === "compact") {
+			void this.admitCeilingCompaction(
+				runId,
+				record,
+				state,
+				ceiling,
+				promptTokens,
+			);
+			return;
+		}
+		if (decision.reason === "loop-guard" && !state.suspended) {
+			// A visible warning, not a silent stop: three compactions inside ten turns
+			// means the ceiling cannot keep the context down, so ceiling compaction
+			// ends for this conversation and the developer is told.
+			state.suspended = true;
+			if (identity)
+				emitRuntimeEnvelope(identity, "runtime.compaction_ceiling", {
+					status: "suspended",
+					reason: "loop-guard",
+					ceilingTokens: ceiling.ceilingTokens,
+					contextTokens: promptTokens,
+					compactionsInWindow: state.compactionTurns.filter(
+						(turn) => state.turnIndex - turn < ceiling.loopTurns,
+					).length,
+					windowTurns: ceiling.loopTurns,
+					loopLimit: ceiling.loopLimit,
+				});
+		}
+	}
+
+	/** Admit one ceiling compaction, serially with the conversation's other
+	 * mutations, at most one per conversation. */
+	private async admitCeilingCompaction(
+		runId: string,
+		record: RunRecord,
+		state: CeilingRecord,
+		ceiling: CompactionCeiling,
+		contextTokens: number,
+	): Promise<void> {
+		try {
+			await this.serialized(record, async () => {
+				const conversation = await this.harness.conversation(
+					record.conversationId,
+					BACKGROUND_CONTEXT,
+				);
+				if (!conversation) return;
+				// A summarizer already in flight is summarizing the same context.
+				if ((await this.liveCompactions(conversation)).length > 0) return;
+				// No instructions on purpose: the ceiling path runs exactly the summarizer
+				// the overflow path runs (same prompt, same head retention), so a worker's
+				// assignment and a verifier's plan/finding references survive a proactive
+				// compaction the way they survive a forced one.
+				const pending = this.ceilingPending.get(record.conversationId) ?? 0;
+				// The kind is claimed before the call: pi-durable publishes
+				// `compaction_start` while `compact()` is still in flight.
+				this.ceilingPending.set(record.conversationId, pending + 1);
+				let taskId: Awaited<ReturnType<typeof conversation.compact>>;
+				try {
+					taskId = await conversation.compact(undefined, BACKGROUND_CONTEXT);
+				} finally {
+					// A task that never started (nothing to compact) must not leave a claim
+					// behind for a later manual compaction to inherit.
+					this.ceilingPending.set(record.conversationId, pending);
+				}
+				this.ceilingCompactions.add(String(taskId));
+				state.compactionTurns.push(state.turnIndex);
+				state.lastCompactionTurn = state.turnIndex;
+				state.lastCompactionTokens = contextTokens;
+				// The reduced context is measured by the next turn's request, which is
+				// where the token floor starts counting again.
+				state.awaitingBaseline = true;
+				const identity = this.telemetryIdentities.get(record.conversationId);
+				if (identity)
+					emitRuntimeEnvelope(identity, "runtime.compaction_ceiling", {
+						status: "compact",
+						ceilingTokens: ceiling.ceilingTokens,
+						contextTokens,
+						turnIndex: state.turnIndex,
+						floorTurns: ceiling.floorTurns,
+						floorTokens: ceiling.floorTokens,
+						taskId: String(taskId),
+					});
+			});
+		} catch (error) {
+			this.log(
+				`run ${runId}: cost-ceiling compaction not admitted: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}
+
+	/** Test-only: the cost ceiling resolved for one run, and what the host has
+	 * decided about it so far. Not part of the control protocol. */
+	ceilingForTest(runId: string): CompactionCeiling | undefined {
+		const record = this.runs.get(runId);
+		return record ? this.resolveRunCeiling(record) : undefined;
+	}
+
+	ceilingStateForTest(runId: string): CeilingRecord | undefined {
+		const record = this.runs.get(runId);
+		return record ? this.ceilings.get(record.conversationId) : undefined;
 	}
 
 	/**
@@ -1067,6 +1318,10 @@ export class DurableHost {
 			this.runs.delete(runId);
 			this.contexts.delete(record.conversationId);
 			this.timings.delete(record.conversationId);
+			// The ceiling's bookkeeping is per conversation and dies with it.
+			this.ceilings.delete(record.conversationId);
+			this.telemetryIdentities.delete(record.conversationId);
+			this.ceilingPending.delete(record.conversationId);
 		});
 	}
 

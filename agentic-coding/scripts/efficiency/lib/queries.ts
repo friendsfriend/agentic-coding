@@ -1251,6 +1251,44 @@ UNION ALL SELECT 'developer_questions', COUNT(*) FROM v_events
 	WHERE event = 'developer.question.created'
 ORDER BY kpi`,
 	},
+	{
+		name: "compactions",
+		summary:
+			"Cost-ceiling compactions per run: how many ran, of which kind, and the peak context the run carried.",
+		example:
+			"bun run scripts/efficiency/analyze.ts compactions --dataset ~/ev/dataset-2026 --limit 40",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"workflow_id",
+			"run_id",
+			"role",
+			"auto_ceiling",
+			"auto_overflow",
+			"manual",
+			"peak_context_tokens",
+			"cost",
+		],
+		// The three kinds come from the envelope's own `kind` field (efficiency
+		// backlog item 6). `peak_context_tokens` is the measured context, not the
+		// input counter alone: a request's prompt is input plus the cache read and
+		// cache write it carried. The baseline this column is read against is
+		// "automatic compactions > 0, peak context < 200k".
+		sql: `SELECT
+	e.workflow_id AS workflow_id,
+	e.run_id AS run_id,
+	COALESCE(e.role, '(unset)') AS role,
+	SUM(CASE WHEN e.compaction_kind = 'auto-ceiling' THEN 1 ELSE 0 END) AS auto_ceiling,
+	SUM(CASE WHEN e.compaction_kind = 'auto-overflow' THEN 1 ELSE 0 END) AS auto_overflow,
+	SUM(CASE WHEN e.compaction_kind = 'manual' THEN 1 ELSE 0 END) AS manual,
+	(SELECT MAX(COALESCE(t.input_tokens, 0) + COALESCE(t.cache_read_tokens, 0) + COALESCE(t.cache_write_tokens, 0))
+		FROM v_turns t WHERE t.run_id = e.run_id) AS peak_context_tokens,
+	(SELECT ROUND(SUM(t.cost), 4) FROM v_turns t WHERE t.run_id = e.run_id) AS cost
+FROM v_events e
+WHERE e.event = 'runtime.compaction'
+GROUP BY e.workflow_id, e.run_id, e.role
+ORDER BY auto_ceiling DESC, peak_context_tokens DESC`,
+	},
 ];
 
 export function queryByName(name: string): AnalysisQuery | undefined {

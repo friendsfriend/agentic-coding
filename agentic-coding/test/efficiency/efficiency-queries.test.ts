@@ -151,6 +151,40 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("compactions reports the kinds of compaction and the peak context per run", () => {
+		const query = queryByName("compactions");
+		expect(query).toBeDefined();
+		const db = new Database(datasetPath, { readonly: true });
+		try {
+			const rows = db.query(`${query?.sql}`).all() as Array<{
+				workflow_id: string;
+				run_id: string;
+				role: string;
+				auto_ceiling: number;
+				auto_overflow: number;
+				manual: number;
+				peak_context_tokens: number;
+				cost: number;
+			}>;
+			const run = rows.find((row) => row.run_id === "run-ceil-a");
+			expect(run).toBeDefined();
+			expect(run?.auto_ceiling).toBe(1);
+			expect(run?.auto_overflow).toBe(1);
+			expect(run?.manual).toBe(1);
+			// The peak context is the measured request: input plus the cache read it
+			// carried, which is what the ceiling is compared against.
+			expect(run?.peak_context_tokens).toBe(190000);
+			// A run whose only compaction was the ceiling still reports it, so
+			// "automatic compactions > 0" is answerable per run.
+			const second = rows.find((row) => row.run_id === "run-ceil-b");
+			expect(second?.auto_ceiling).toBe(1);
+			expect(second?.auto_overflow).toBe(0);
+			expect(second?.manual).toBe(0);
+		} finally {
+			db.close();
+		}
+	});
+
 	test("repeats-per-run counts the extra calls of an exact repeat", () => {
 		const query = queryByName("repeats-per-run");
 		expect(query).toBeDefined();

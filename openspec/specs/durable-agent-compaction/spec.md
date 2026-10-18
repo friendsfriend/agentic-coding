@@ -76,8 +76,8 @@ changed, and when the configuration changes.
 
 The compaction policy SHALL be read at every resolution rather than fixed when
 the host opens, so a configuration change SHALL affect running conversations
-without restarting the host. `enabled` SHALL gate threshold and overflow
-compaction only and SHALL NOT disable manual compaction.
+without restarting the host. `enabled` SHALL gate threshold, overflow and
+ceiling compaction only and SHALL NOT disable manual compaction.
 
 #### Scenario: Setting changed while a run works
 
@@ -88,6 +88,62 @@ compaction only and SHALL NOT disable manual compaction.
 
 - **WHEN** `enabled` is false and the developer runs `/compact` in the session
 - **THEN** the manual compaction SHALL still be admitted
+
+### Requirement: Cost ceiling for long-lived sessions
+
+The resolved policy SHALL carry a cost ceiling in absolute tokens (default
+`150000`, configured as `ceilingTokens`, `0` turning it off) alongside the
+window-relative overflow reserve. The ceiling SHALL apply only when it is below
+the run's overflow threshold (`contextWindow - reserveTokens`), and when it is at
+or above that threshold the ceiling SHALL be ignored and one visible warning
+event SHALL record the ceiling and the threshold it lost against. The ceiling
+SHALL gate on `enabled`: automatic compaction off turns the ceiling off too. A
+ceiling compaction SHALL be admitted only at a turn boundary, from the measured
+context of a committed turn, and SHALL never interrupt a tool call, and it SHALL
+use the same summarizer the overflow path uses so the head context (assignment,
+plan and finding references) is retained the same way. A second ceiling
+compaction SHALL wait for at least 20 turns or 40,000 tokens of new context since
+the last one, the kept-verbatim tail SHALL resolve to at most half an active
+ceiling, and after three ceiling compactions inside ten turns ceiling compaction
+SHALL stop for that conversation and record one visible warning event. Each
+compaction SHALL be reported with its kind (`auto-ceiling`, `auto-overflow` or
+`manual`), and the run-completion telemetry SHALL record the peak context and the
+number of compactions of each kind.
+
+#### Scenario: A long run crosses the ceiling
+
+- **WHEN** a run on a 1000000-token window has measured 200000 prompt tokens with the default ceiling
+- **THEN** the host SHALL admit one compaction at the next turn boundary, report it as `auto-ceiling`, and record the pre-compaction context as the run's peak context
+
+#### Scenario: The ceiling is below the overflow threshold
+
+- **WHEN** a run's window and reserve put the overflow threshold below the configured ceiling
+- **THEN** no ceiling compaction SHALL be admitted and one warning event SHALL name the ceiling and the overflow threshold
+
+#### Scenario: Ceiling disabled
+
+- **WHEN** `ceilingTokens` is `0`
+- **THEN** no ceiling compaction SHALL be admitted for any run and the Settings row SHALL show the ceiling as off
+
+#### Scenario: The floor holds a second compaction back
+
+- **WHEN** a ceiling compaction has just run and the next turn grows the context past the ceiling by fewer than 40000 tokens within fewer than 20 turns
+- **THEN** no second ceiling compaction SHALL be admitted
+
+#### Scenario: The loop guard stops a ceiling that cannot keep up
+
+- **WHEN** three ceiling compactions have been admitted inside ten turns
+- **THEN** ceiling compaction SHALL stop for that conversation and one warning event SHALL name the guard, while `/compact` SHALL remain available
+
+#### Scenario: The kept tail cannot defeat the ceiling
+
+- **WHEN** `keepRecentTokens` is configured at or above `ceilingTokens`
+- **THEN** the write SHALL be rejected naming the field, and the resolved kept tail SHALL be at most half an active ceiling
+
+#### Scenario: The cost ceiling is absolute only
+
+- **WHEN** `ceilingTokens` is written as a percentage
+- **THEN** the write SHALL be rejected and the previously stored configuration SHALL remain in effect
 
 ### Requirement: Manual compaction outcomes
 

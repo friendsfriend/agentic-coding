@@ -240,6 +240,42 @@ context < 200 k, per-decile cost curve flatter than 3.3×.
 **Workflow.** Solo fix workflow, cheap-medium preset; touches
 `src/workflow/compaction.ts` and the Settings read/write.
 
+**Implemented.** The policy now carries two independent triggers.
+`reserveTokens` is unchanged and stays the last-resort overflow guard
+(`max(32000, 30 % of the window)`, so 700,000 tokens on the 1 M windows the
+presets run). `ceilingTokens` is the new absolute cost ceiling, default
+**150,000** (the line the measurements in `02h` were taken at), configurable in
+Settings → Compaction next to the other fields, `0` to turn it off;
+`enabled: false` turns it off too. It applies only when it is *below* the
+overflow threshold — on a small window the overflow guard is the tighter one and
+a higher ceiling is ignored once with a `runtime.compaction_ceiling` warning.
+A ceiling compaction is admitted at the measured end of a turn (the controller
+uses the same prompt counters `runtime.usage` carries) and placed by pi-durable
+at the next turn boundary, so it never interrupts a tool call. The floor is 20
+turns or 40,000 tokens of new context since the last ceiling compaction (the
+reduced context is measured after the summary, so the floor counts real growth),
+the kept-verbatim tail is resolved to at most half an active ceiling, and the loop
+guard stops ceiling compaction for the session after three compactions inside ten
+turns, recording a `loop-guard` warning. The ceiling passes no instructions to the
+summarizer, so it keeps the head context (assignment, plan/finding references)
+exactly as the overflow path does.
+
+The default of 150,000 is a starting point, not a measured optimum: a summary
+costs roughly one pass over the range it replaces, so compacting far below
+~100 k trades cheaper tails for more summaries than it saves. That is why the
+per-run record matters:
+
+- every compaction envelope carries `kind` (`auto-ceiling`, `auto-overflow`,
+  `manual`), and `runtime.settled` carries `peakContextTokens` plus the per-kind
+  counts of the run;
+- `bun run scripts/efficiency/analyze.ts compactions --dataset <dir>` returns,
+  per run, the count of each kind, `peak_context_tokens` (input + cache read +
+  cache write, i.e. the context the ceiling is compared against) and the run's
+  cost. Next week's snapshot answers "automatic compactions > 0, peak context <
+  200 k, cost curve flatter" from that one query; if the ceiling is too high or
+  too low, the `ceilingTokens` field is the thing to move (and the `ignored` /
+  `suspended` envelopes say when a window or a loop made it moot).
+
 ## 7. `env_list` answers the default-target question and carries infra reachability
 
 **Problem (VERIFIED at source).** `env_list` reports `defaultAmbiguous: true`

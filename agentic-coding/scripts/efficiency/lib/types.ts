@@ -260,6 +260,9 @@ export interface EventRow {
 	severity: string | null;
 	count: number;
 	trace_id: string | null;
+	/** The envelope's own compaction kind and blocking flag, when it carried one. */
+	compaction_kind: string | null;
+	compaction_blocking: number | null;
 	detail: string | null;
 	detail_hash: string | null;
 	detail_bytes: number | null;

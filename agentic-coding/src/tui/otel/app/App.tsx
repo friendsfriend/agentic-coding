@@ -49,9 +49,11 @@ import {
 } from "../../../contracts/telemetry.ts";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
+	COMPACTION_CEILING_MINIMUM,
 	type CompactionField,
 	type CompactionTokenValue,
 	formatCompactionValue,
+	resolveCompactionCeiling,
 	resolveCompactionPolicy,
 } from "../../../workflow/compaction.ts";
 import {
@@ -1030,6 +1032,17 @@ export function App(props: {
 		if (!target) return undefined;
 		const read = readEditorDraft(target.field, compactionDraft());
 		if (!read.ok) return undefined;
+		// The cost ceiling is not part of pi-durable's policy: what it resolves to is
+		// the absolute line a long-lived session compacts above, and whether the
+		// window it runs on leaves that line reachable at all.
+		if (target.field === "ceilingTokens") {
+			const ceiling = resolveCompactionCeiling({
+				ceilingTokens: read.value,
+			});
+			return ceiling.active
+				? `${ceiling.ceilingTokens} tokens · ceiling compaction fires above it`
+				: `${ceiling.ceilingTokens} tokens · ignored: the overflow threshold is lower on a known window`;
+		}
 		const resolved = resolveCompactionPolicy({ [target.field]: read.value });
 		return `${resolved[target.field]} tokens when no model window is known`;
 	};
@@ -1274,10 +1287,16 @@ export function App(props: {
 					| Record<string, unknown>
 					| undefined;
 				const raw = configured?.[field];
+				// The cost ceiling rides in the same snapshot but not in the policy
+				// pi-durable receives, so its effective value comes from the ceiling.
+				const effective =
+					field === "ceilingTokens"
+						? (snapshot?.ceiling?.ceilingTokens ?? COMPACTION_CEILING_MINIMUM)
+						: snapshot?.effective[field];
 				const shown =
 					typeof raw === "number" || typeof raw === "string"
 						? String(raw)
-						: String(snapshot?.effective[field] ?? "");
+						: String(effective ?? "");
 				// One batch, deliberately: every write below flushes its effects before
 				// the next statement otherwise, and the draft-clearing effect above reads
 				// the modal — so setting the target while the overlay is still closed

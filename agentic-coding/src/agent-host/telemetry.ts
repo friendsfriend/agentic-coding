@@ -121,6 +121,29 @@ export interface EntryTiming {
 	readonly thinkingMs?: number;
 }
 
+/** Why a compaction ran, as the analysis needs to count it (efficiency backlog
+ * item 6). pi-durable knows `manual`, `threshold` and `overflow`; the cost
+ * ceiling is the host's own proactive path, so it is named here and reported by
+ * the host through {@link TelemetryHooks.compactionKind}. */
+export type CompactionKind = "auto-ceiling" | "auto-overflow" | "manual";
+
+/** The measurement hooks a host may attach alongside the envelopes. All of them
+ * are optional: telemetry is observational, and a host that passes none still
+ * records the same envelopes it always did. */
+export interface TelemetryHooks {
+	/** Measured wall-clock timing of one committed assistant entry. */
+	readonly onTiming?: (entryId: string, timing: EntryTiming) => void;
+	/** The context size one committed assistant message carried, with the turn it
+	 * belongs to. The cost ceiling is decided from this measurement. */
+	readonly onMeasuredContext?: (info: {
+		readonly promptTokens: number;
+		readonly turnIndex: number;
+	}) => void;
+	/** The kind of a compaction, for one the host admitted itself (`auto-ceiling`).
+	 * Undefined means pi-durable started it, and its own reason decides. */
+	readonly compactionKind?: (taskId: string) => CompactionKind | undefined;
+}
+
 /** The task kind of pi-durable's built-in compaction task. */
 const COMPACTION_TASK_KIND = "pi.compaction";
 
@@ -132,6 +155,8 @@ const COMPACTION_TASK_KIND = "pi.compaction";
 interface TrackedCompaction {
 	reason: string;
 	blocking: boolean;
+	/** The counted kind: whether the host admitted it for cost or pi-durable did. */
+	kind: CompactionKind;
 	attempts: number;
 	startedAt: number;
 	tokensBefore?: number;
@@ -154,16 +179,29 @@ function promptTokens(usage: {
 	return usage.input + usage.cacheRead + usage.cacheWrite;
 }
 
+/** One runtime envelope from a host that already holds the identity (the cost
+ * ceiling reports its decisions this way). Best-effort like every other
+ * observation: an unwritable telemetry file records nothing rather than failing
+ * the run it was measuring. */
+export function emitRuntimeEnvelope(
+	identity: TelemetryIdentity,
+	event: string,
+	fields: Record<string, unknown> = {},
+): void {
+	emit(identity, event, fields);
+}
+
 /** Attach agent-event telemetry for one conversation; returns a stop
  * function. Best-effort: a failure to attach must never fail the run it
- * would have been observing. `onTiming` additionally receives each committed
- * assistant entry's measured wall-clock timing. */
+ * would have been observing. `hooks` carries the measurements the host also
+ * uses (`onTiming` for the dashboard's tok/s, `onMeasuredContext` for the cost
+ * ceiling), so one event stream serves both. */
 export async function attachTelemetry(
 	harness: Harness,
 	conversationId: ConversationId,
 	context: Context,
 	identity: TelemetryIdentity,
-	onTiming?: (entryId: string, timing: EntryTiming) => void,
+	hooks: TelemetryHooks = {},
 ): Promise<() => void> {
 	const stream = await watchEvents(harness, conversationId, context);
 	let generationStart: number | undefined;
@@ -181,6 +219,24 @@ export async function attachTelemetry(
 	/** `turn_start` events seen so far; -1 while the conversation has not started
 	 * a turn, so a call before the first turn records no index rather than 0. */
 	let turnIndex = -1;
+	/** The largest context this conversation carried, by the provider's own
+	 * prompt counters: the number the run-completion envelope reports so a
+	 * ceiling's effect is measurable after the fact. */
+	let peakContextTokens = 0;
+	/** Compactions by kind, counted once each when they start. */
+	const compactionKinds: Record<CompactionKind, number> = {
+		"auto-ceiling": 0,
+		"auto-overflow": 0,
+		manual: 0,
+	};
+	/** The kind of one compaction: the host names its own ceiling admissions,
+	 * everything else is pi-durable's reason (`manual`, or the automatic
+	 * threshold/overflow family). */
+	const kindOf = (taskId: string, reason: string): CompactionKind => {
+		const admitted = hooks.compactionKind?.(taskId);
+		if (admitted) return admitted;
+		return reason === "manual" ? "manual" : "auto-overflow";
+	};
 
 	/** Emit one compaction's completion envelope. `tokensAfter` is present only
 	 * when a later generation measured it; the envelope is emitted exactly once,
@@ -200,6 +256,7 @@ export async function attachTelemetry(
 				: "aborted";
 		emit(identity, "runtime.compaction", {
 			reason: entry.reason,
+			kind: entry.kind,
 			blocking: entry.blocking,
 			attempts: entry.attempts,
 			...(entry.endedAt !== undefined
@@ -292,8 +349,8 @@ export async function attachTelemetry(
 						generationStart !== undefined
 							? Math.max(0, now - generationStart)
 							: undefined;
-					if (assistant && onTiming) {
-						onTiming(String(entry.id), {
+					if (assistant && hooks.onTiming) {
+						hooks.onTiming(String(entry.id), {
 							...(generationMs !== undefined ? { generationMs } : {}),
 							...(thinkingMs > 0 ? { thinkingMs } : {}),
 						});
@@ -314,11 +371,16 @@ export async function attachTelemetry(
 						const prompt = promptTokens(usage);
 						if (prompt > 0) {
 							lastPromptTokens = prompt;
+							if (prompt > peakContextTokens) peakContextTokens = prompt;
 							// A compaction that ended before this generation is now measured:
 							// its summary was placed and this request carried the reduced
 							// context, which is the only "tokens after" available (pi-durable
 							// records no counters for a compaction itself).
 							flushCompactions(true, prompt);
+							// The same measurement decides the cost ceiling: it is taken at the
+							// end of a committed turn, so a ceiling compaction is admitted at a
+							// turn boundary and never inside a tool call.
+							hooks.onMeasuredContext?.({ promptTokens: prompt, turnIndex });
 						}
 						if (tokens > 0 || cost > 0)
 							emit(identity, "runtime.usage", {
@@ -402,7 +464,17 @@ export async function attachTelemetry(
 					break;
 				}
 				case "run_end":
-					emit(identity, "runtime.settled");
+					// The run settled: the envelope carries what makes a ceiling's effect
+					// measurable per run — the peak context and the number of compactions
+					// by kind — so "automatic compactions > 0, peak context < 200k" can be
+					// answered from telemetry alone.
+					emit(identity, "runtime.settled", {
+						...(peakContextTokens > 0 ? { peakContextTokens } : {}),
+						...(turnIndex >= 0 ? { turns: turnIndex + 1 } : {}),
+						compactionsAutoCeiling: compactionKinds["auto-ceiling"],
+						compactionsAutoOverflow: compactionKinds["auto-overflow"],
+						compactionsManual: compactionKinds.manual,
+					});
 					// The run settled: a compaction that never got a measured follow-up
 					// generation still reports what is known (its reason, duration and
 					// before-tokens) instead of being dropped.
@@ -417,8 +489,13 @@ export async function attachTelemetry(
 				case "compaction_start": {
 					const taskId = String(event.taskId);
 					const existing = compactions.get(taskId);
+					const kind = existing?.kind ?? kindOf(taskId, event.reason);
+					// Count each compaction once, at its first start; a retried attempt is
+					// the same compaction and must not double the counter.
+					if (!existing) compactionKinds[kind] += 1;
 					compactions.set(taskId, {
 						reason: event.reason,
+						kind,
 						blocking: event.blocking,
 						attempts: (existing?.attempts ?? 0) + 1,
 						startedAt: existing?.startedAt ?? now,
@@ -428,6 +505,7 @@ export async function attachTelemetry(
 					});
 					emit(identity, "runtime.compaction_start", {
 						reason: event.reason,
+						kind,
 						blocking: event.blocking,
 						attempt: 1,
 					});
@@ -437,6 +515,7 @@ export async function attachTelemetry(
 					const taskId = String(event.taskId);
 					const entry = compactions.get(taskId) ?? {
 						reason: event.reason,
+						kind: kindOf(taskId, event.reason),
 						blocking: false,
 						attempts: 1,
 						startedAt: now,
@@ -453,6 +532,7 @@ export async function attachTelemetry(
 						const taskId = String(event.taskId);
 						const entry = compactions.get(taskId) ?? {
 							reason: "unknown",
+							kind: kindOf(taskId, "unknown"),
 							blocking: false,
 							attempts: 1,
 							startedAt: now,
