@@ -1006,6 +1006,7 @@ them:
 | `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask` (bounded agent wait, abort signal forwarded to the spawned CLI), `ask_jev`, the system-prompt sections, and the CLI handoffs a developer's session drives: `recordAbortedRunHandoff` (the `blocked`, `--aborted` handoff an abort records) and `recordResumedRunHandoff` (the `resume-run` reconcile that reopens the parked run for the next prompt). `recordFailFastRunHandoff` records the run's own `blocked` handoff when the host stops it for a dead tool surface. | Yes. |
 | `bash-tool.ts` | The `bash` tool's wall-clock bound (efficiency review item 2): pi-durable's coding tools with `bash` replaced by one that runs under a 120-second default when the caller passes no `timeout`, stops the command's process group when that bound fires, returns the output collected so far plus what to do instead, notes the elapsed time of a call that ran past 60 seconds, and caps a caller's own `timeout` at 3600 seconds. | Yes. |
 | `fail-fast.ts` | The per-run dead-tool-surface rule: the consecutive-failure and success counters, the failure kinds that mean a broken surface, the exempt roles, and the bounded secret-free `blocked` message. Pure logic, no harness and no I/O. | No. |
+| `tool-suggestions.ts` | What a failed `read`/`edit`/`grep` call adds to its own error text (efficiency backlog item 12): the nearest whitespace-normalised region of the file with line numbers, the lines a non-unique `oldText` occurs at, the overlapping edit indexes, the nearest existing path for a path that is not there, or the first entries of a path that is a directory. Pure text logic plus one bounded path search, wrapped around pi-durable's `read` and `edit` by name. | Yes. |
 | `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, records a developer abort as the run's `blocked` handoff (`abort`; never on teardown), serializes a conversation's mutating requests so a prompt cannot race the abort's withdrawal, reconciles the workflow state before delivering a prompt to an aborted run, and feeds every finished tool call to that run's dead-surface monitor (`onToolOutcome`). | Yes. |
 | `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
 
@@ -1105,6 +1106,51 @@ what it authored and hand off `blocked` naming the missing server when the
 environment tools are unavailable) and `debug` (its brief asks it to read a
 failure rather than guess). An orchestrator conversation is not an engine run
 and carries no run id, so it is never monitored at all.
+
+### Self-correcting tool failures (efficiency backlog item 12)
+
+`edit` fails on roughly one call in eight — "oldText not found", "not unique",
+"edits overlap" — and each failure used to cost the model a full turn plus a
+re-read to re-derive text it already had; of the 22 tool errors measured in one
+run, nine were the same wrong-root path (a repository-root-relative path while
+the package lives one level down) answered by a bare ENOENT.
+
+`agent-host/tool-suggestions.ts` derives the hint **locally**, from the file and
+the run's own environment, and appends it to the tool's own error text as a
+question. Never a silent substitution: a nearest match can mislead, so the
+model sees what it asked for and what was actually there.
+
+- an `edit` failure names the nearest region of the file as `did you mean lines
+  N-M of <path>` with a short numbered excerpt (1-based line numbers, the region
+  marked `>`), the line numbers a non-unique `oldText` occurs at, or the
+  `edits[i]`/`edits[j]` pair that overlaps with the lines each spans. Lines are
+  compared after whitespace normalisation, so an indentation-only difference —
+  which pi-durable's exact match rejects — is still recognised;
+- a path that is not there suggests the nearest existing one: the same relative
+  path under each ancestor and each descendant directory of the working
+  directory (the wrong-root case), then the closest same-named file. A path that
+  is a **directory** says so and lists its first entries;
+- `grep` carries the same hint when the searched path is not there (a directory
+  is a legitimate search target, so it gets none); `read` adds it for both the
+  missing-path and the directory case.
+
+Everything is bounded by the module's exported `TOOL_SUGGESTION_LIMITS`: 20
+rendered lines and 2 KB of text, at most 400 directory entries read by the path
+search (three levels below the working directory, never into `.git`,
+`node_modules`, `dist`, `build`, `.cache` or `.herdr-workflow`), and ten entries
+listed for a directory. The text logic (`nearestMatchWindow`, `matchRange`,
+`matchingLineNumbers`, `overlappingEditIndexes`, `editFailureHint`,
+`nearestExistingPath`, `renderPathSuggestion`) is pure and unit-tested without a
+tool or a filesystem; `suggestingCodingTools()` wraps pi-durable's `read` and
+`edit` and is installed by the host right after `boundedCodingTools()`, so the
+registration selected for each of those names is the suggesting one everywhere a
+run selects it.
+
+The tool's error text stays **first** and the original error stays the thrown
+error's cause, so the failure kind `classifyToolFailure` records is still the
+tool's own (`not-found`/`no-match` keep their exemptions in the fail-fast rule)
+and a suggestion cannot turn one failure into another: an unexpected throw while
+deriving a hint leaves the original error untouched.
 
 ### Developer-question lifecycle (asynchronous)
 

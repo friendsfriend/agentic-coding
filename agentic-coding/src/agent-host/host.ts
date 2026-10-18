@@ -73,6 +73,7 @@ import {
 	type TelemetryIdentity,
 	type ToolOutcomeObservation,
 } from "./telemetry.ts";
+import { suggestingCodingTools } from "./tool-suggestions.ts";
 import {
 	codingTools,
 	createAskJevExtension,
@@ -458,6 +459,11 @@ export class DurableHost {
 		// (bash-tool.ts): every runtime this host serves gets the same default
 		// wall-clock bound, whoever selects the tool by name.
 		registry.install(boundedCodingTools());
+		// …and `read`/`edit` with the self-correcting failure hints
+		// (tool-suggestions.ts). Installed after the coding tools so its
+		// registration of each of those names is the one a run selects; a
+		// suggestion-only failure never replaces the tool's own error text.
+		registry.install(suggestingCodingTools());
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator

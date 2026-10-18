@@ -32,6 +32,7 @@ import {
 	usageLine,
 	validateQuestions,
 } from "./jev.ts";
+import { missingPathHint, suggestionDeps } from "./tool-suggestions.ts";
 
 /** Per-conversation context the durable tools need but pi-durable's own
  * `ToolExecutionApi`/`PromptInput` do not carry: the run's workflow identity,
@@ -915,6 +916,17 @@ export function createSearchExtension(): Extension {
 					if (!env) return fail("this run has no execution environment");
 					const scoped = scopedSearchPath(args.path);
 					if (!scoped.ok) return fail(scoped.why);
+					/** A failure about the searched path carries the nearest existing
+					 * one (tool-suggestions.ts): a repository-root-relative path while
+					 * the package lives one level down is the most common reason a
+					 * search reports nothing at all. */
+					const failPath = async (text: string) => {
+						const hint = await missingPathHint(
+							scoped.path,
+							suggestionDeps(env, context),
+						);
+						return fail(hint === undefined ? text : `${text}\n${hint}`);
+					};
 					const asked = Number.isFinite(args.maxMatches)
 						? Math.floor(args.maxMatches as number)
 						: GREP_DEFAULT_MATCHES;
@@ -965,14 +977,14 @@ export function createSearchExtension(): Extension {
 							`grep ${fallbackFlags.join(" ")} -e ${shellQuote(args.pattern)} ${shellQuote(scoped.path)}`,
 						);
 						if (!search.result.ok)
-							return fail(
+							return failPath(
 								`the search could not run (${search.result.error.code})`,
 							);
 					}
 					// Above 1 both tools report a usage or pattern error rather than a
 					// result; their own message is more useful than "no match".
 					if (search.result.value.exitCode > 1 && search.captured.trim())
-						return fail(search.captured.trim().slice(0, 400));
+						return failPath(search.captured.trim().slice(0, 400));
 					const lines = search.captured
 						.split("\n")
 						.filter((line) => line.length > 0);
