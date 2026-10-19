@@ -429,19 +429,116 @@ function redactionSecrets(
 	// URL or a snapshot, and an agent-supplied script can print one, so every
 	// browser reply is scrubbed with the live token map and not only with `.env`.
 	const live = browserTokenStore(deps).secrets();
+	// Every value the identity cache holds is a credential too
+	// (`add-stage-identity-cache`, SEC): a sign-on cookie or a cached JWT echoed
+	// into a title, a console line or a URL is masked by the same scrubber. The
+	// values a live context *installed* are included even after their entry is
+	// gone (forgotten, expired, evicted): the browser still carries them, so an
+	// echo of one is still an echo of a credential.
+	const identity = identityRedactionSecrets(deps);
 	// The PKCE values of a code-grant login (`add-stage-oauth2-code-pkce`): the
 	// verifier, `state` and the code a receiver took are as secret as the token
 	// they lead to, and the callback URL the window lands on carries the code.
 	const pkce = pkceSecrets();
-	const encoded = [...base, ...live, ...pkce].flatMap((secret) => {
+	// Both halves are already longest-first, so merging is linear: the identity set
+	// can hold hundreds of values and sorting it again on every reply is what a
+	// stage application's `localStorage` would otherwise cost the server (PERF).
+	// The encoded copies of the other three sources are derived here, small and per
+	// reply, so no source loses its URL-encoded form to the memoisation (SEC-002).
+	const listed = [...base, ...live, ...pkce];
+	return mergeByLength(
+		sortByLength([...listed, ...encodedVariants(listed)]),
+		identity,
+	);
+}
+
+/** Each value also in its URL-encoded form, because a credential reaches a URL
+ * encoded far more often than plain. A value `encodeURIComponent` leaves alone
+ * contributes nothing. */
+function encodedVariants(
+	secrets: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	return secrets.flatMap((secret) => {
 		const value = encodeURIComponent(secret.value);
 		return value === secret.value
 			? []
 			: [{ name: `${secret.name}:url-encoded`, value }];
 	});
-	return [...base, ...live, ...pkce, ...encoded].sort(
+}
+
+/** The identity part of the scrubber, memoised per pool state.
+ *
+ * Every browser reply asks for it, and the set only changes when a capture, an
+ * install, a forget or a close touches it — `secretRevision()` names exactly
+ * those events. The URL-encoded copies are derived once per change rather than
+ * once per reply. */
+let identitySecretCache:
+	| {
+			readonly pool: unknown;
+			readonly revision: number;
+			readonly values: ReturnType<typeof environmentSecrets>;
+	  }
+	| undefined;
+
+function identityRedactionSecrets(
+	deps: BrowserRouteDeps,
+): ReturnType<typeof environmentSecrets> {
+	const pool = deps.pool;
+	const revision = pool.secretRevision();
+	if (
+		identitySecretCache !== undefined &&
+		identitySecretCache.pool === pool &&
+		identitySecretCache.revision === revision
+	)
+		return identitySecretCache.values;
+	const plain = [
+		...pool.identityStore().secrets(),
+		...pool.installedIdentitySecrets(),
+	];
+	const values = sortByLength([...plain, ...encodedVariants(plain)]);
+	identitySecretCache = { pool, revision, values };
+	return values;
+}
+
+function sortByLength(
+	secrets: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	return [...secrets].sort(
 		(left, right) => right.value.length - left.value.length,
 	);
+}
+
+/** Merge two longest-first lists into one without re-sorting either. */
+function mergeByLength(
+	left: ReturnType<typeof environmentSecrets>,
+	right: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	const merged: ReturnType<typeof environmentSecrets> = [];
+	let i = 0;
+	let j = 0;
+	while (i < left.length && j < right.length) {
+		const a = left[i];
+		const b = right[j];
+		if (
+			a !== undefined &&
+			(b === undefined || a.value.length >= b.value.length)
+		) {
+			merged.push(a);
+			i += 1;
+		} else if (b !== undefined) {
+			merged.push(b);
+			j += 1;
+		}
+	}
+	for (; i < left.length; i += 1) {
+		const value = left[i];
+		if (value !== undefined) merged.push(value);
+	}
+	for (; j < right.length; j += 1) {
+		const value = right[j];
+		if (value !== undefined) merged.push(value);
+	}
+	return merged;
 }
 
 /** The token store this deps object reads: its own, or the process's. */
@@ -847,6 +944,7 @@ async function openSession(
 			url: bound.url,
 			...(bound.app ? { app: bound.app } : {}),
 			...(bound.stage ? { stage: bound.stage } : {}),
+			...(bound.identityRole ? { identityRole: bound.identityRole } : {}),
 			// The admission below was skipped because this name already had a session;
 			// the pool may then only reuse it. Creating one here would be a context
 			// outside the exclusive lease and the stage's session bound.
@@ -864,6 +962,11 @@ async function openSession(
 			url: session.url,
 			...(session.app ? { app: session.app } : {}),
 			...(session.stage ? { stage: session.stage.ident } : {}),
+			// The names only: which role this session's login belongs to, and whether
+			// a cached entry was installed into its context before the first
+			// navigation (`add-stage-identity-cache`). A value is never reported.
+			...(session.identity ? { stageRole: session.identity.role } : {}),
+			...(session.identity?.cacheInstalled ? { identityInstalled: true } : {}),
 			viewport: { ...session.viewport },
 			sessions: deps.pool.ownedBy(owner).length,
 		};
@@ -893,6 +996,10 @@ async function resolveOpenTarget(
 	app?: string;
 	stage?: StageSessionBinding;
 	admission?: StageAdmission;
+	/** The role whose cached identity this open installs
+	 * (`add-stage-identity-cache`): the pool needs it before the first
+	 * navigation, so it cannot be deferred to `stage_login`. */
+	identityRole?: string;
 	/** True when the session this open resolves to already exists, so the pool
 	 * must reuse it rather than create one without an admission. */
 	reuseOnly?: boolean;
@@ -916,6 +1023,7 @@ function resolveStageOpen(
 	app?: string;
 	stage: StageSessionBinding;
 	admission?: StageAdmission;
+	identityRole?: string;
 } {
 	const entry = stageEntryFor(deps, ident);
 	const appKey = body.stageApp?.trim();
@@ -942,6 +1050,21 @@ function resolveStageOpen(
 			409,
 		);
 	const url = joinStagePath(app.url, body.path);
+	// The role is optional and names-only: it decides whose cached identity this
+	// context starts from (`add-stage-identity-cache`). A role the application
+	// does not declare is refused here, so a plan cannot ask for an identity no
+	// login of this stage could ever establish.
+	const roleKey = body.stageRole?.trim();
+	if (roleKey !== undefined && roleKey !== "") {
+		if (app.roles?.[roleKey] === undefined)
+			throw new BrowserPoolError(
+				"stage-role-unknown",
+				`stage ${ident} declares no role ${JSON.stringify(roleKey)} of ${appKey}; it declares ${Object.keys(app.roles ?? {}).join(", ") || "none"}`,
+				404,
+			);
+	}
+	const identityRole =
+		roleKey === undefined || roleKey === "" ? undefined : roleKey;
 	const bearer = bearerScopes(entry);
 	const binding: StageSessionBinding = {
 		ident: entry.ident,
@@ -949,6 +1072,10 @@ function resolveStageOpen(
 		origins: entry.origins,
 		readOnlyExceptions: entry.stage.readOnlyExceptions ?? [],
 		limits: entry.limits,
+		// The stage's identity-cache bounds and the origins one entry covers: the
+		// applications and the login recipes, never a third-party host.
+		identity: entry.identity,
+		identityOrigins: entry.identityOrigins,
 		// The origins this session's requests are authenticated for, from the
 		// roles that declared them (`add-stage-oauth2-auth`, task 3.3), and the
 		// origins a request may be issued *from* to receive one: a foreign-origin
@@ -972,6 +1099,7 @@ function resolveStageOpen(
 		url,
 		...(app.app ? { app: app.app } : { app: appKey }),
 		stage: binding,
+		...(identityRole === undefined ? {} : { identityRole }),
 		...(admission ? { admission } : {}),
 		...(existing ? { reuseOnly: true } : {}),
 	};
@@ -1049,6 +1177,12 @@ async function sessionFor(
 	// refusal because the developer is logging in is not an action of the run.
 	if (session.heldByUser && options.allowHeld !== true)
 		throw sessionHeldRefusal(session);
+	// A living session re-captures its identity when its refresh interval has
+	// passed (`add-stage-identity-cache`, D5): a rotated refresh token has to
+	// reach the cache while the run that rotated it is still going. It is bound
+	// to use rather than to a timer, so a server with no stage session runs
+	// nothing, and a capture never fails the call that triggered it.
+	await deps.pool.refreshIdentity(session).catch(() => false);
 	// One browser call on a stage is one action of the stage's rolling minute.
 	if (options.countAction !== false && session.stage)
 		stageUsage(deps).countAction({
@@ -1088,6 +1222,25 @@ async function stageLogin(
 			409,
 		);
 	const entry = stageEntryFor(deps, binding.ident);
+	// The role is remembered on the session from here on, so a successful login of
+	// any path — the cached one, the silent SSO check, the recipe, the hand-off —
+	// captures into the right key (`add-stage-identity-cache`). `cacheInstalled`
+	// is kept for the same role and dropped for a different one: an identity of
+	// another role was never installed into this context.
+	session.identity = {
+		...session.identity,
+		role: body.role,
+		// Every role this context logs in as is remembered, not only the one it was
+		// installed for: a second login of a *different* role leaves one jar holding
+		// two users, and `captureIdentity` refuses to file such a context under
+		// either key (SEC-001).
+		loggedRoles: [
+			...new Set([...(session.identity?.loggedRoles ?? []), body.role]),
+		],
+		cacheInstalled:
+			session.identity?.role === body.role &&
+			session.identity.cacheInstalled === true,
+	};
 	// 1. Recording first, before any hand-off is considered (spec trigger order):
 	// a credential must never reach a video.
 	if (session.recording)
@@ -1207,6 +1360,49 @@ async function stageLogin(
 	// does not appear in a window this server launched (spike 0.2, D10), so the
 	// automated path keeps the foundation's `credential-missing` answer instead of
 	// sending a developer to a window that cannot ask for anything.
+	// 2c. The cached identity (`add-stage-identity-cache`, D3): this context was
+	// created with this role's entry installed, so the login may already be done.
+	// The recipe's declared success condition decides — never the cache alone —
+	// and a rejection evicts the entry and lets the normal path run, which is the
+	// whole difference between "a hint" and "a credential this server trusts".
+	if (
+		appView !== undefined &&
+		appView.url !== "" &&
+		recipe?.success !== undefined &&
+		session.identity?.role === body.role &&
+		session.identity.cacheInstalled
+	) {
+		const accepted = await silentLoginCheck({
+			session,
+			recipe,
+			url: appView.url,
+			timeoutMs: SILENT_SSO_CHECK_MS,
+			...(deps.now ? { now: deps.now } : {}),
+		});
+		if (accepted) {
+			// The accepted entry is re-captured: the identity provider may have rotated
+			// its cookie on this very visit, and the newest state is what the next
+			// session has to start from.
+			await deps.pool.captureIdentity(session, "cache");
+			return {
+				session: session.name,
+				stage: entry.ident,
+				login: "ok",
+				via: "cache",
+				identity: "cache",
+				verified: true,
+				url: sanitizeStageUrl(session.url),
+			};
+		}
+		// Rejected: the entry is evicted *before* the fallback runs, so a login this
+		// call performs is never discredited by the entry it replaced.
+		deps.pool.forgetIdentity({ stage: entry.ident, role: body.role });
+		session.identity = {
+			...session.identity,
+			role: body.role,
+			cacheInstalled: false,
+		};
+	}
 	const needsPerson =
 		roleView !== undefined &&
 		roleView.login !== undefined &&
@@ -1235,15 +1431,20 @@ async function stageLogin(
 			timeoutMs: SILENT_SSO_CHECK_MS,
 			...(deps.now ? { now: deps.now } : {}),
 		});
-		if (reused)
+		if (reused) {
+			// The state another application's sign-in left in this window is worth
+			// keeping too, and it was the developer's login.
+			await deps.pool.captureIdentity(session, "user");
 			return {
 				session: session.name,
 				stage: entry.ident,
 				login: "ok",
 				via: "existing-session",
+				identity: "user",
 				verified: true,
 				url: sanitizeStageUrl(session.url),
 			};
+		}
 	}
 
 	// 4. The interactive-login policy decides who may be asked (D7).
@@ -1318,6 +1519,9 @@ async function stageLogin(
 			});
 		throw error;
 	}
+	// Step 6: keep what the login established (`add-stage-identity-cache`, D2). A
+	// login that declared nothing to do established nothing to capture.
+	if (!result.notRequired) await deps.pool.captureIdentity(session, "recipe");
 	return {
 		session: session.name,
 		stage: entry.ident,
@@ -1326,7 +1530,7 @@ async function stageLogin(
 		...(result.skipped.length > 0 ? { skipped: result.skipped } : {}),
 		...(result.notRequired
 			? { login: "not-required", code: "login-not-required" }
-			: { login: "ok" }),
+			: { login: "ok", identity: "recipe" }),
 	};
 }
 
@@ -1353,6 +1557,17 @@ async function startHandoff(input: {
 	const { deps, session, entry } = input;
 	const handoff = requireHandoff(deps);
 	const label = entry.stage.displayName;
+	// The role this login belongs to is recorded on the session *before* the
+	// developer is asked: the hand-off ends in `stage_login_wait`, which has the
+	// session and its role but not this request, and that is what the cache is
+	// keyed by when the login succeeds (`add-stage-identity-cache`).
+	session.identity = {
+		...session.identity,
+		role: input.role,
+		cacheInstalled:
+			session.identity?.role === input.role &&
+			session.identity.cacheInstalled === true,
+	};
 	const status = await handoff.request({
 		session,
 		stage: entry.ident,
@@ -1420,6 +1635,15 @@ async function startAuthorizationCodeHandoff(input: {
 }): Promise<unknown> {
 	const { deps, session, entry } = input;
 	const label = entry.stage.displayName;
+	// The role is recorded on the session before the developer is asked, for the
+	// same reason `startHandoff` does it: the wait is where the identity of a
+	// successful `authorization_code` login is captured
+	// (`add-stage-identity-cache`).
+	session.identity = {
+		...session.identity,
+		role: input.role,
+		cacheInstalled: false,
+	};
 	// The caller has already checked the role's login mode — a policy that forbids
 	// the window, or a client id that is not set, was refused before this function
 	// was reached — so everything from here on opens machinery that a `handoff`
@@ -1580,6 +1804,13 @@ async function stageLoginWait(
 	);
 	const waited = await handoff.wait(session, capMs);
 	const stage = session.stage?.ident;
+	// A hand-off that ended `ok` is a login the developer performed, so this is
+	// where its identity is captured (`add-stage-identity-cache`, D2). The read-back
+	// path above has no live session and therefore no context to read. One capture
+	// per outcome: the attempt stamps the refresh interval, so a second one would
+	// only reset it.
+	if (waited.outcome?.outcome === "ok" && session.identity?.role !== undefined)
+		await deps.pool.captureIdentity(session, "user");
 	if (waited.status)
 		return {
 			session: session.name,
@@ -1587,7 +1818,12 @@ async function stageLoginWait(
 			login: "needs-user",
 			...waited.status,
 		};
-	return terminalLoginAnswer(waited.outcome, session.name, stage);
+	return terminalLoginAnswer(
+		waited.outcome,
+		session.name,
+		stage,
+		waited.outcome.outcome === "ok" ? "user" : undefined,
+	);
 }
 
 /** How one ended hand-off is answered, whether it was waited for or read back
@@ -1598,6 +1834,7 @@ function terminalLoginAnswer(
 	outcome: LoginHandoffOutcome,
 	sessionName: string,
 	stage?: string,
+	identity?: "user",
 ): unknown {
 	const named = { session: sessionName, ...(stage ? { stage } : {}) };
 	switch (outcome.outcome) {
@@ -1606,6 +1843,7 @@ function terminalLoginAnswer(
 				...named,
 				login: "ok",
 				via: outcome.via,
+				...(identity === undefined ? {} : { identity }),
 				verified: outcome.verified,
 				url: outcome.url,
 			};

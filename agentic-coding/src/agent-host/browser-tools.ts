@@ -188,6 +188,12 @@ const BrowserOpenParameters = Type.Object({
 				"The stage application key to open (from stage_info), required with `stage`.",
 		}),
 	),
+	stageRole: Type.Optional(
+		Type.String({
+			description:
+				'The role whose cached sign-in this session should start from (from stage_info). With a live cache entry for `(stage, stageRole)` the server installs its cookies and storage before the page\'s first request, so stage_login often reaches the success condition without a developer prompt and answers `identity: "cache"`. Absent means an empty browser, which is what every stage session did before. A role the application does not declare answers `stage-role-unknown`.',
+		}),
+	),
 	path: Type.Optional(
 		Type.String({
 			description:
@@ -400,6 +406,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Give a raw `url`, or an `app` plus `endpoint` from env_list/env_start — an endpoint resolves only while this workflow holds that app, and otherwise fails with `app-not-held` naming the holder.",
 					"`session` opens (or reuses) a named page; the unnamed session is `default`. Sessions are isolated browser contexts, capped by browser.max_sessions with FIFO queueing and closed when the run ends or idles past its TTL.",
 					"Give `stage` plus `stageApp` (both from stage_info) to open a hosted stage application instead: the URL comes from the stage catalog, and the session stays on the stage's origin allow-list for its whole life.",
+					"Add `stageRole` to start that session from the role's cached sign-in: the server installs the cached cookies and storage before the page's first request, and stage_login reports `identity: \"cache\"` when the application accepts them. The cache is bounded, exists only in this server's memory, and its values are never returned or stored anywhere.",
 					// The browser is the server's own, not a configured service: an agent that
 					// went looking for the `playwright-server` infrastructure (or port 3050)
 					// spent calls on something this surface never uses.
@@ -424,6 +431,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.stageApp === undefined
 										? {}
 										: { stageApp: args.stageApp }),
+									...(args.stageRole === undefined
+										? {}
+										: { stageRole: args.stageRole }),
 									...(args.path === undefined ? {} : { path: args.path }),
 									...(args.session === undefined
 										? {}

@@ -25,6 +25,9 @@ import type {
 	StageApiRequestResponse,
 	StageCredentialRequest,
 	StageCredentialResponse,
+	StageIdentitiesResponse,
+	StageIdentityForgetRequest,
+	StageIdentityForgetResponse,
 	StageStatus,
 	StagesStatusResponse,
 	StageTokenInfoRequest,
@@ -40,6 +43,8 @@ import {
 	AGENT_STAGES_PATH,
 	decodeRouteRequest,
 	STAGES_CREDENTIAL_PATH,
+	STAGES_IDENTITY_FORGET_PATH,
+	STAGES_IDENTITY_PATH,
 } from "../protocol.ts";
 import {
 	StageApiError,
@@ -55,6 +60,7 @@ import {
 	stageRefusalReason,
 	stageView,
 } from "./catalog.ts";
+import { stageIdentityCache } from "./identity-cache.ts";
 import type { StageUsageRegistry } from "./limits.ts";
 import {
 	forgetStageTokens,
@@ -99,6 +105,13 @@ export interface StageRouteDeps {
 	/** Test seam: the HTTP client of one stage API call. */
 	readonly fetch?: typeof fetch;
 	readonly now?: () => number;
+	/** The process's browser pool, as the one forget implementation
+	 * (`add-stage-identity-cache`, D5). A forget that only dropped the entry would
+	 * be undone by a live session's next refresh or clean-close capture; the pool
+	 * is what moves the key's generation on and clears the session's source. It
+	 * answers the listing from the *same* store it removed from, so the count and
+	 * the entries of one answer can never describe two different caches. */
+	readonly identityForget?: StageIdentityForget;
 }
 
 function json(value: unknown, status = 200): Response {
@@ -174,6 +187,141 @@ export function stagesStatusValue(deps: StageRouteDeps): StagesStatusResponse {
 		excluded: excludedStatuses(catalog),
 	};
 	return redactor(deps)(value) as StagesStatusResponse;
+}
+
+// ---------------------------------------------------------------------------
+// The identity cache (`add-stage-identity-cache`)
+// ---------------------------------------------------------------------------
+
+/** The live entries, as the dashboard, the CLI and the Settings section render
+ * them. The list is `(stage, role, capturedAt, expiresAt)` and nothing else: the
+ * cache's own `list()` cannot carry a cookie, a name or a value. */
+export function stageIdentitiesValue(): StageIdentitiesResponse {
+	return { entries: stageIdentityCache().list() };
+}
+
+/**
+ * The process's forget implementation, registered by whichever assembly built
+ * the browser pool (`app.ts`). The transport-less Settings path
+ * (`operations.ts`) reaches the same code as the HTTP route through it, so there
+ * is one forget and not two.
+ */
+/** The process's forget: one function per process, registered by the assembly
+ * that built the pool. */
+export type StageIdentityForget = (filter: {
+	readonly stage?: string;
+	readonly role?: string;
+}) => StageIdentityForgetResponse;
+
+/** What the pool-shaped forget needs of a pool: the removal and the store it
+ * removes from. Structural, so a test builds the same function over a fake. */
+export interface StageIdentityForgetPool {
+	readonly forgetIdentity: (filter: {
+		readonly stage?: string;
+		readonly role?: string;
+	}) => number;
+	readonly identityStore: () => {
+		list(): StageIdentityForgetResponse["entries"];
+	};
+}
+
+/** The one forget an assembly registers (`app.ts`). Both halves come from the
+ * pool's own store — the one the removal just changed — so a reply cannot count
+ * from one cache and list another (QUALITY-203/CONC-303). */
+export function poolIdentityForget(
+	pool: StageIdentityForgetPool,
+): StageIdentityForget {
+	return (filter) => ({
+		removed: pool.forgetIdentity(filter),
+		entries: pool.identityStore().list(),
+	});
+}
+
+let processIdentityForget: StageIdentityForget | undefined;
+
+/** Register the process's forget (`app.ts`), or clear it with no argument. The
+ * clear is for a test or a second assembly in one process: production registers
+ * once, when it builds its pool, and keeps that registration for the life of the
+ * process (`CONC-402`). Idempotent, so a second assembly replaces the first. */
+export function registerStageIdentityForget(
+	forget?: StageIdentityForget,
+): void {
+	processIdentityForget = forget;
+}
+
+/** Forget cached identities — one `(stage, role)`, every role of one stage, or
+ * every entry (neither field) — answering how many left and the list that
+ * remains, so a dashboard needs one round trip.
+ *
+ * A forgotten identity is not a logout: the browser sessions that live right now
+ * keep their own state, and only the *next* session starts empty. But the forget
+ * outlives them: the pool moves each affected key's generation on and clears the
+ * live sessions' source, so neither their next refresh nor their clean close
+ * re-inserts what was removed (`design.md` D5). */
+export function forgetStageIdentity(
+	body: StageIdentityForgetRequest,
+	deps?: StageRouteDeps,
+): StageIdentityForgetResponse {
+	const filter = {
+		...(body.stage === undefined ? {} : { stage: body.stage }),
+		...(body.role === undefined ? {} : { role: body.role }),
+	};
+	const forget = deps?.identityForget ?? processIdentityForget;
+	// One store answers both: the pool's when there is a pool, the process store
+	// only when there is none (QUALITY-203/CONC-303).
+	if (forget !== undefined) return forget(filter);
+	const store = stageIdentityCache();
+	return { removed: store.forget(filter), entries: store.list() };
+}
+
+/**
+ * Serve the two instance-authenticated identity routes. They are siblings of the
+ * catalog route and are separate from it because forgetting an identity is an
+ * operator action, not a run's: the agent surface (`/api/v1/agent-env/stages`)
+ * only ever reads.
+ *
+ * Neither answer can contain a value: the store's `list()` is value-free by
+ * construction, which is what makes redaction here a belt rather than the
+ * braces.
+ */
+export async function handleStageIdentityRoute(
+	deps: StageRouteDeps,
+	request: Request,
+	path: string,
+): Promise<Response | undefined> {
+	const method = request.method.toUpperCase();
+	if (path === STAGES_IDENTITY_PATH) {
+		if (method !== "GET")
+			return json(
+				{ error: { code: "method", message: `${path} is read-only` } },
+				405,
+			);
+		return json({ ok: true, value: redactor(deps)(stageIdentitiesValue()) });
+	}
+	if (path !== STAGES_IDENTITY_FORGET_PATH) return undefined;
+	if (method !== "POST")
+		return json(
+			{ error: { code: "method", message: `${path} takes POST` } },
+			405,
+		);
+	let body: StageIdentityForgetRequest;
+	try {
+		body = decodeRouteRequest<StageIdentityForgetRequest>(
+			STAGES_IDENTITY_FORGET_PATH,
+			await readJsonBody(request),
+		);
+	} catch (error) {
+		return json(
+			{
+				error: {
+					code: "bad-request",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			},
+			400,
+		);
+	}
+	return json({ ok: true, value: forgetStageIdentity(body, deps) });
 }
 
 /** The refused stage files, as both read surfaces report them: the file, its
@@ -373,6 +521,7 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 					: { bearerOrigins: [...role.bearerOrigins] }),
 				credentialStatus: role.credentialStatus,
 				loginMode: role.loginMode,
+				cacheable: role.cacheable,
 				credentials: role.credentials.map((credential) => ({
 					field: credential.field,
 					variable: credential.variable,
@@ -420,6 +569,15 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 		// numbers it is held to, the cleanup a `writable` stage expects and which wiki
 		// process to read first.
 		limits: { ...view.limits },
+		// The identity cache's bounds, in the units a plan reads them in. A stage
+		// opt-out is reported as `enabled: false` rather than as an absent object,
+		// so "no silent login here" is a fact and not a guess.
+		identityCache: {
+			enabled: view.identityCache.enabled,
+			ttlMinutes: Math.round(view.identityCache.ttlMs / 60_000),
+			maxEntries: view.identityCache.maxEntries,
+			refreshSeconds: Math.round(view.identityCache.refreshMs / 1_000),
+		},
 		data: { ...view.data },
 		wiki: { processes: [...view.wiki.processes] },
 		diagnostics: view.diagnostics.map(

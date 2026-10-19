@@ -1035,6 +1035,7 @@ describe("the stage read names the provider without a value", () => {
 				provider: "idp",
 				grant: "client_credentials",
 				loginMode: "automated",
+				cacheable: true,
 				bearerOrigins: [fixture.api.origin],
 			});
 			for (const secret of [CLIENT_SECRET, ACCESS_TOKEN, REFRESH_TOKEN])

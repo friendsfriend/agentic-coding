@@ -9,7 +9,11 @@
 
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
-import type { StagesStatusResponse } from "../../contracts/stages.ts";
+import type {
+	StageIdentitiesResponse,
+	StageIdentityStatus,
+	StagesStatusResponse,
+} from "../../contracts/stages.ts";
 import {
 	COMPACTION_CEILING_DEFAULT,
 	COMPACTION_CEILING_MINIMUM,
@@ -62,6 +66,20 @@ export type SettingsAction =
 	 * `.env` flow: the value is typed into a masked dialog, written to the
 	 * referenced key and never shown again. */
 	| { kind: "stage-credential"; variable: string; label: string }
+	/** Forget cached sign-ins (`add-stage-identity-cache`): one `(stage, role)`,
+	 * every role of one stage (`role` absent), or the whole cache (`stage` absent
+	 * too). The row names the scope it drops, and its label counts what the
+	 * listing held when it was rendered. A single key is one activation; a
+	 * stage-wide or whole-cache scope removes every key at once, so the shell arms
+	 * it on the first activation and performs it on a second one on the same row
+	 * (`App.tsx`). Dropping an identity only affects the *next* session's silent
+	 * reuse — it never logs a live session out. */
+	| {
+			kind: "stage-identity-forget";
+			stage?: string;
+			role?: string;
+			label: string;
+	  }
 	| { kind: "navigate"; route: Route };
 
 export interface SettingsItem {
@@ -194,6 +212,68 @@ export interface SettingsContext {
 	/** Stage catalog, credential status and diagnostics. Absent until the first
 	 * server read resolves. */
 	stages?: StagesStatusResponse;
+	/** The live stage identity cache: `(stage, role, captured, expires)` only.
+	 * Absent until the first server read resolves, and empty when nothing is
+	 * cached — which is not the same fact. */
+	stageIdentities?: StageIdentitiesResponse;
+	/** Why the identity read failed, when the catalog itself succeeded. Passed in
+	 * with the snapshot so the rows stay a pure function of the context. */
+	stageIdentityError?: string;
+	/** The scope a wide forget is armed on: the row says so, because an arm
+	 * nothing renders is an arm nobody can see they took (USAB-302). */
+	stageIdentityArmed?: { readonly stage?: string; readonly role?: string };
+}
+
+/** Where the Settings cursor goes after a forget removed the row it was on.
+ *
+ * The row that still names the scope wins (a stage-wide forget that left other
+ * entries of that stage). Failing that, the same scope's *disarmed* row — a
+ * stage's bounds row, which takes a second press again — and failing that the
+ * nearest row above that a single Enter cannot turn into a forget: a sibling
+ * `(stage, role)` entry row would make the next Enter forget a sign-in nobody
+ * chose (USAB-201/USAB-301). */
+export function identityForgetAnchor(
+	rows: readonly SettingsItem[],
+	target: { readonly stage?: string; readonly role?: string },
+	from: number,
+): number {
+	const survives = rows.findIndex(
+		(row) =>
+			row.action.kind === "stage-identity-forget" &&
+			row.action.stage === target.stage &&
+			row.action.role === target.role,
+	);
+	if (survives >= 0) return survives;
+	const parent = rows.findIndex(
+		(row) =>
+			row.action.kind === "stage-identity-forget" &&
+			row.action.stage === target.stage &&
+			row.action.role === undefined,
+	);
+	if (parent >= 0) return parent;
+	for (let index = Math.min(from, rows.length - 1); index >= 0; index -= 1) {
+		const row = rows[index];
+		if (row === undefined) continue;
+		const onePress =
+			row.action.kind === "stage-identity-forget" &&
+			row.action.role !== undefined;
+		if (!onePress) return index;
+	}
+	return 0;
+}
+
+/** True when `scope` is the armed one: same stage, same role, both possibly
+ * absent (a whole-cache arm names neither). */
+function identityForgetArmed(
+	context: SettingsContext,
+	scope: { readonly stage?: string; readonly role?: string },
+): boolean {
+	const armed = context.stageIdentityArmed;
+	return (
+		armed !== undefined &&
+		armed.stage === scope.stage &&
+		armed.role === scope.role
+	);
 }
 
 /** The structural shape of `[agents] file_judgment` this layer renders. Declared
@@ -690,6 +770,53 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 			editable: false,
 			action: { kind: "none" },
 		});
+		// The identity cache of this stage (`add-stage-identity-cache`): its bounds
+		// first — which are also this stage's "forget every cached sign-in" action —
+		// then one row per cached `(stage, role)`. A row carries the key and two
+		// instants: the section never sees a cookie, a storage key or a value, because
+		// the server's listing cannot express one.
+		// The listing's absence is not "nothing is cached": a failed identity read
+		// leaves the catalog usable, so the row has to say that it does not know
+		// rather than describe an empty cache it never saw.
+		const known = context.stageIdentities !== undefined;
+		const cached = cachedIdentitiesFor(context.stageIdentities, stage.ident);
+		const stageArmed = identityForgetArmed(context, { stage: stage.ident });
+		items.push({
+			id: `stages.identity.${stage.ident}`,
+			label: "Identity cache",
+			value: `${identityCacheValue(
+				stage.identityCache,
+				known ? cached.length : undefined,
+			)}${stageArmed ? " · armed: press Enter again" : ""}`,
+			detail: [
+				...(stageArmed
+					? [
+							"armed: the first Enter asked for confirmation, and this one forgets them",
+						]
+					: []),
+				inventoryDetail("stages.identity"),
+				"a cached sign-in lives only in this server's memory: it is never written to disk, never returned by a tool and never shown here, and a restart starts empty",
+				known
+					? cached.length > 0
+						? `Enter forgets all ${cached.length} of them: the next session of each role logs in the normal way`
+						: "nothing is cached for this stage yet"
+					: "what this stage holds is unknown: the listing of cached sign-ins could not be read, and Enter does nothing until it can",
+			].join(" · "),
+			editable: cached.length > 0,
+			action:
+				cached.length > 0
+					? {
+							kind: "stage-identity-forget",
+							stage: stage.ident,
+							label:
+								cached.length === 1
+									? `the cached sign-in of ${stage.displayName}`
+									: `all ${cached.length} cached sign-ins of ${stage.displayName}`,
+						}
+					: { kind: "none" },
+		});
+		for (const entry of cached)
+			items.push(identityEntryItem(stage.ident, stage.displayName, entry));
 		for (const app of stage.apps) {
 			items.push({
 				id: `stages.app.${stage.ident}.${app.key}`,
@@ -790,7 +917,164 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 			editable: false,
 			action: { kind: "none" },
 		});
+	// A cached sign-in whose stage this configuration no longer allows is still in
+	// the server's memory (up to its TTL), so it has to stay reachable: rendered
+	// from the listing rather than from the catalog, with its key and its forget
+	// action and no bounds to show.
+	const allowed = new Set(stages.stages.map((entry) => entry.ident));
+	for (const [ident, entries] of cachedIdentitiesByStage(
+		context.stageIdentities,
+	))
+		if (!allowed.has(ident)) {
+			const orphanArmed = identityForgetArmed(context, { stage: ident });
+			items.push({
+				id: `stages.identity.orphan.${ident}`,
+				label: "Identity cache",
+				value: `${entries.length} cached sign-in${entries.length === 1 ? "" : "s"} for a stage this configuration no longer allows${orphanArmed ? " · armed: press Enter again" : ""}`,
+				detail: [
+					inventoryDetail("stages.identity"),
+					`stage ${ident} is not in the allow-list: its file was removed, renamed or refused`,
+					"Enter forgets them: an entry would otherwise live until its TTL ends",
+				].join(" · "),
+				editable: true,
+				action: {
+					kind: "stage-identity-forget",
+					stage: ident,
+					label: `the cached sign-ins of the stage ${ident}`,
+				},
+			});
+			for (const entry of entries)
+				items.push(identityEntryItem(ident, ident, entry));
+		}
+	// The whole cache comes last: the widest scope belongs at the end of the
+	// section it clears, and it is one activation instead of one per stage.
+	const all = context.stageIdentities?.entries ?? [];
+	if (all.length > 0) {
+		const allArmed = identityForgetArmed(context, {});
+		items.push({
+			id: "stages.identity.all",
+			label: "Forget every cached sign-in",
+			value: `${all.length} cached · server-wide${allArmed ? " · armed: press Enter again" : ""}`,
+			detail: [
+				...(allArmed
+					? [
+							"armed: the first Enter asked for confirmation, and this one forgets every cached sign-in",
+						]
+					: []),
+				inventoryDetail("stages.identity"),
+				"Enter forgets every cached identity in this server's memory, of every stage and role",
+				"the browser sessions that live right now keep their own state",
+			].join(" · "),
+			editable: true,
+			action: {
+				kind: "stage-identity-forget",
+				label: `all ${all.length} cached sign-ins`,
+			},
+		});
+	}
+	// A failed identity read is reported where the identity rows would be, and
+	// never as a failure of the catalog above it: the credential rows still work.
+	const identityError = context.stageIdentityError;
+	if (identityError !== undefined)
+		items.push({
+			id: "stages.identity.unreadable",
+			label: "Cached sign-ins",
+			value: "unreadable",
+			detail: `the cached sign-ins could not be read: ${identityError} · the stage catalog above was read`,
+			editable: false,
+			action: { kind: "none" },
+		});
 	return items;
+}
+
+/** The identity cache's effective bounds of one stage, as one line. `maxEntries`
+ * is the *process* cap rather than a per-stage capacity, and it is named as one:
+ * every stage row would otherwise read "max 8" as its own budget. */
+function identityCacheValue(
+	bounds: {
+		readonly enabled: boolean;
+		readonly ttlMinutes: number;
+		readonly maxEntries: number;
+		readonly refreshSeconds: number;
+	},
+	/** How many entries this stage holds, or `undefined` when the listing could not
+	 * be read — which is not the same as zero. */
+	cached: number | undefined,
+): string {
+	if (!bounds.enabled) return "off (identityCache: false)";
+	return [
+		"enabled",
+		`ttl ${bounds.ttlMinutes} min`,
+		`re-captured on the first call after ${bounds.refreshSeconds}s`,
+		`server-wide cap ${bounds.maxEntries} entries`,
+		cached === undefined ? "contents unknown" : `${cached} cached`,
+	].join(" · ");
+}
+
+/** One cached `(stage, role)` row: the key, two instants and the forget action. */
+function identityEntryItem(
+	stage: string,
+	stageLabel: string,
+	entry: StageIdentityStatus,
+): SettingsItem {
+	return {
+		id: `stages.identity.${stage}.${entry.role}`,
+		label: `${entry.role} · cached sign-in`,
+		value: [
+			`captured ${relativeInstant(entry.capturedAt)}`,
+			`expires ${relativeInstant(entry.expiresAt)}`,
+			// A count, never a value: a capture that hit the bounds says so, so an
+			// operator debugging a login that needs a value the cache dropped can see
+			// that it was cut short instead of blaming the application.
+			...(entry.truncated > 0
+				? [`${entry.truncated} values too short, long or many to keep`]
+				: []),
+		].join(" · "),
+		detail: [
+			inventoryDetail("stages.identity"),
+			`key ${stage}/${entry.role}`,
+			"Enter forgets it: the next session of this role logs in the normal way",
+			"the browser sessions that live right now keep their own state",
+		].join(" · "),
+		editable: true,
+		action: {
+			kind: "stage-identity-forget",
+			stage,
+			role: entry.role,
+			label: `${entry.role} · ${stageLabel}`,
+		},
+	};
+}
+
+/** Every cached identity, grouped by the stage it belongs to. */
+function cachedIdentitiesByStage(
+	identities: StageIdentitiesResponse | undefined,
+): Map<string, StageIdentityStatus[]> {
+	const byStage = new Map<string, StageIdentityStatus[]>();
+	for (const entry of identities?.entries ?? []) {
+		const list = byStage.get(entry.stage) ?? [];
+		list.push(entry);
+		byStage.set(entry.stage, list);
+	}
+	return byStage;
+}
+
+/** The cached identities of one stage, or none when the read has not landed. */
+function cachedIdentitiesFor(
+	snapshot: StageIdentitiesResponse | undefined,
+	stage: string,
+): readonly StageIdentityStatus[] {
+	if (!snapshot) return [];
+	return snapshot.entries.filter((entry) => entry.stage === stage);
+}
+
+/** "in 42 min" / "3 min ago": a bound the developer can compare with the TTL the
+ * row above it reports, without a clock in the section. */
+function relativeInstant(at: number): string {
+	const delta = at - Date.now();
+	const minutes = Math.round(Math.abs(delta) / 60_000);
+	if (minutes < 1) return "just now";
+	return delta < 0 ? `${minutes} min ago` : `in ${minutes} min`;
 }
 
 function stageUnavailableItems(error: string | undefined): SettingsItem[] {

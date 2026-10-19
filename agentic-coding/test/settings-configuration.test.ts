@@ -19,6 +19,7 @@ import {
 	SETTINGS_INVENTORY,
 } from "../src/tui/settings/catalog.ts";
 import {
+	identityForgetAnchor,
 	type SettingsContext,
 	settingsItems,
 } from "../src/tui/settings/items.ts";
@@ -433,6 +434,79 @@ describe("section items surface every inventoried setting", () => {
 					},
 				],
 			},
+			// One stage with one role and one credential, so the section renders a
+			// row for every kind of inventoried setting: the catalog, the credential
+			// and the identity cache's bounds and its entries.
+			stages: {
+				configDir: "/tmp/agentic-coding",
+				stages: [
+					{
+						ident: "grid-int",
+						displayName: "Grid integration",
+						environment: "integration",
+						system: "grid",
+						access: "read-only",
+						planApproval: "always",
+						exclusive: false,
+						apps: [
+							{
+								key: "web",
+								label: "Grid web",
+								url: "https://grid-int.example.test/",
+								kind: "ui",
+								roles: [
+									{
+										role: "clerk",
+										login: "web-form",
+										loginKind: "form",
+										credentialStatus: "missing GRID_INT_CLERK_PASSWORD",
+										loginMode: "handoff",
+										cacheable: true,
+										credentials: [
+											{
+												field: "password",
+												variable: "GRID_INT_CLERK_PASSWORD",
+												status: "missing GRID_INT_CLERK_PASSWORD",
+											},
+										],
+									},
+								],
+							},
+						],
+						origins: ["https://grid-int.example.test"],
+						readOnlyExceptions: [],
+						limits: {
+							maxSessions: 1,
+							maxActionsPerMinute: 30,
+							maxWaitSeconds: 120,
+							maxScreenshots: 20,
+							maxRecordingMinutes: 5,
+							maxLoginHandoffSeconds: 900,
+						},
+						identityCache: {
+							enabled: true,
+							ttlMinutes: 240,
+							maxEntries: 8,
+							refreshSeconds: 120,
+						},
+						data: {},
+						wiki: { processes: [] },
+						diagnostics: [],
+					},
+				],
+				excluded: [],
+			},
+			stageIdentities: {
+				entries: [
+					{
+						stage: "grid-int",
+						role: "clerk",
+						capturedAt: Date.now() - 60_000,
+						expiresAt: Date.now() + 60_000,
+						truncated: 0,
+					},
+				],
+			},
 		};
 	}
 
@@ -448,6 +522,256 @@ describe("section items surface every inventoried setting", () => {
 				expect(matches.length).toBeGreaterThan(0);
 			}
 		}
+	});
+
+	test("the identity cache shows its bounds, one row per key, and all three forget scopes", () => {
+		// `add-stage-identity-cache` task 3.1: the rows a developer reads and
+		// activates. The ids alone would pass the inventory test whatever they
+		// said, so each row's *value* and *action* is pinned here.
+		const base = context("stages");
+		const stage = base.stages?.stages[0];
+		if (!stage) throw new Error("the fixture must carry one stage");
+		const items = settingsItems({
+			...base,
+			stageIdentities: {
+				entries: [
+					{
+						stage: "grid-int",
+						role: "clerk",
+						capturedAt: Date.now() - 60_000,
+						expiresAt: Date.now() + 10_800_000,
+						// A capture that hit the bounds: the row says so, and says
+						// nothing about *what* was dropped.
+						truncated: 3,
+					},
+					{
+						stage: "grid-int",
+						role: "admin",
+						capturedAt: Date.now() - 30_000,
+						expiresAt: Date.now() + 10_830_000,
+						truncated: 0,
+					},
+					// A stage the allow-list no longer names: the entries outlive the
+					// file, so they still have to be reachable and forgettable.
+					{
+						stage: "retired",
+						role: "clerk",
+						capturedAt: Date.now() - 5_000,
+						expiresAt: Date.now() + 10_855_000,
+						truncated: 0,
+					},
+				],
+			},
+		});
+		const bounds = items.find((item) => item.id === "stages.identity.grid-int");
+		expect(bounds?.value).toContain("ttl 240 min");
+		expect(bounds?.value).toContain("server-wide cap 8 entries");
+		expect(bounds?.value).toContain("2 cached");
+		expect(bounds?.editable).toBe(true);
+		// Enter on the bounds row is the stage-wide scope: one forget for every role
+		// of that stage, and the action names no role.
+		expect(bounds?.action).toEqual({
+			kind: "stage-identity-forget",
+			stage: "grid-int",
+			label: "all 2 cached sign-ins of Grid integration",
+		});
+		const clerk = items.find(
+			(item) => item.id === "stages.identity.grid-int.clerk",
+		);
+		expect(clerk?.action).toEqual({
+			kind: "stage-identity-forget",
+			stage: "grid-int",
+			role: "clerk",
+			label: "clerk · Grid integration",
+		});
+		expect(clerk?.value).toContain("captured 1 min ago");
+		expect(clerk?.value).toContain("expires in 180 min");
+		// The count of dropped values is reported; the row that stored whole says
+		// nothing about dropping.
+		expect(clerk?.value).toContain("3 values");
+		const admin = items.find(
+			(item) => item.id === "stages.identity.grid-int.admin",
+		);
+		expect(admin?.value).not.toContain("values");
+		// The row says what is held, never what it holds.
+		expect(JSON.stringify(clerk)).not.toContain("SENT");
+		const orphan = items.find(
+			(item) => item.id === "stages.identity.orphan.retired",
+		);
+		expect(orphan?.action).toEqual({
+			kind: "stage-identity-forget",
+			stage: "retired",
+			label: "the cached sign-ins of the stage retired",
+		});
+		expect(
+			items.some((item) => item.id === "stages.identity.retired.clerk"),
+		).toBe(true);
+		// The widest scope is one row, last in the section, naming no key at all.
+		const all = items.find((item) => item.id === "stages.identity.all");
+		expect(all?.action).toEqual({
+			kind: "stage-identity-forget",
+			label: "all 3 cached sign-ins",
+		});
+		expect(all?.value).toBe("3 cached · server-wide");
+		if (!all) throw new Error("the forget-all row must exist");
+		if (!orphan) throw new Error("the orphan row must exist");
+		expect(items.indexOf(all)).toBeGreaterThan(items.indexOf(orphan));
+	});
+
+	test("an armed wide forget says so on its own row", () => {
+		// The confirmation lives in a signal the shell owns; a row that never renders
+		// it makes the second Enter invisible until something is forgotten (USAB-302).
+		const base = context("stages");
+		const armed = settingsItems({
+			...base,
+			stageIdentityArmed: { stage: "grid-int" },
+		});
+		const bounds = armed.find((item) => item.id === "stages.identity.grid-int");
+		expect(bounds?.value).toContain("armed: press Enter again");
+		expect(bounds?.detail).toContain("this one forgets them");
+		// Only the armed scope's row: the widest row and another stage's keep their
+		// ordinary text.
+		expect(
+			armed.find((item) => item.id === "stages.identity.all")?.value,
+		).not.toContain("armed");
+		const everything = settingsItems({ ...base, stageIdentityArmed: {} });
+		expect(
+			everything.find((item) => item.id === "stages.identity.all")?.value,
+		).toContain("armed: press Enter again");
+		expect(
+			everything.find((item) => item.id === "stages.identity.grid-int")?.value,
+		).not.toContain("armed");
+		// A one-press `(stage, role)` row is never armed, so nothing on the section
+		// claims a confirmation that does not exist.
+		expect(
+			settingsItems({
+				...base,
+				stageIdentityArmed: { stage: "grid-int", role: "clerk" },
+			}).find((item) => item.id === "stages.identity.grid-int")?.value,
+		).not.toContain("armed");
+	});
+
+	test("a forget leaves the cursor where one Enter cannot forget an unchosen key", () => {
+		// Forgetting one `(stage, role)` removes its row, and the index it held now
+		// names a sibling entry row — a *one-press* forget. Landing there would let
+		// the next Enter silently drop a sign-in nobody chose (USAB-301).
+		const base = context("stages");
+		const withTwo = (entries: SettingsContext["stageIdentities"]) =>
+			settingsItems({
+				...base,
+				stageIdentities: entries,
+			});
+		const entry = (role: string) => ({
+			stage: "grid-int",
+			role,
+			capturedAt: Date.now() - 60_000,
+			expiresAt: Date.now() + 10_800_000,
+			truncated: 0,
+		});
+		const before = withTwo({ entries: [entry("clerk"), entry("admin")] });
+		const from = before.findIndex(
+			(item) => item.id === "stages.identity.grid-int.admin",
+		);
+		expect(from).toBeGreaterThan(0);
+		// What the section renders once the admin's sign-in is gone: the clerk's entry
+		// row now sits where the admin's was.
+		const after = withTwo({ entries: [entry("clerk")] });
+		const landed = identityForgetAnchor(
+			after,
+			{ stage: "grid-int", role: "admin" },
+			from,
+		);
+		const row = after[landed];
+		expect(row?.id).not.toBe("stages.identity.grid-int.clerk");
+		// It is the stage's own bounds row: an arm again, never a forgot-this-second.
+		expect(row?.id).toBe("stages.identity.grid-int");
+		// The same for the widest scope: with every entry gone the section keeps no
+		// forget row at all, so the cursor steps up to something inert.
+		const everything = withTwo({ entries: [] });
+		const landedWide = identityForgetAnchor(
+			everything,
+			{},
+			everything.findIndex((item) => item.id === "stages.identity.grid-int") +
+				1,
+		);
+		expect(everything[landedWide]?.action.kind).not.toBe(
+			"stage-identity-forget",
+		);
+		// And with nothing to fall back to it never leaves the list.
+		expect(identityForgetAnchor([], { stage: "grid-int" }, 5)).toBe(0);
+	});
+
+	test("an identity listing that was never read says unknown, not empty", () => {
+		const base = context("stages");
+		const items = settingsItems({ ...base, stageIdentities: undefined });
+		const bounds = items.find((item) => item.id === "stages.identity.grid-int");
+		// "0 cached" would be a claim about a cache nobody read (TESTQ-017).
+		expect(bounds?.value).toContain("contents unknown");
+		expect(bounds?.value).not.toContain("0 cached");
+		// Nothing to forget, so nothing is offered: an armed row over an unknown
+		// listing is an action whose count nobody knows.
+		expect(bounds?.editable).toBe(false);
+		expect(bounds?.action).toEqual({ kind: "none" });
+		expect(items.some((item) => item.id === "stages.identity.all")).toBe(false);
+	});
+
+	test("a failed identity read is reported on its own rows, and the catalog stays usable", () => {
+		const base = context("stages");
+		const items = settingsItems({
+			...base,
+			stageIdentities: undefined,
+			stageIdentityError: "the server answered 503",
+		});
+		const unreadable = items.find(
+			(item) => item.id === "stages.identity.unreadable",
+		);
+		expect(unreadable?.value).toBe("unreadable");
+		expect(unreadable?.detail).toContain("the server answered 503");
+		expect(unreadable?.editable).toBe(false);
+		// The credential rows are what the section is for, and a failed identity
+		// read never hides them.
+		expect(
+			items.some(
+				(item) =>
+					item.id.startsWith("stages.") && item.id.includes("credential"),
+			),
+		).toBe(true);
+	});
+
+	test("a stage that opted out says so, and its row forgets nothing", () => {
+		const base = context("stages");
+		const catalog = base.stages;
+		const stage = catalog?.stages[0];
+		if (!catalog || !stage) throw new Error("the fixture must carry one stage");
+		const items = settingsItems({
+			...base,
+			stages: {
+				...catalog,
+				stages: [
+					{
+						...stage,
+						identityCache: {
+							...(stage.identityCache ?? {
+								ttlMinutes: 240,
+								maxEntries: 8,
+								refreshSeconds: 120,
+							}),
+							enabled: false,
+						},
+					},
+				],
+			},
+			stageIdentities: { entries: [] },
+		});
+		const bounds = items.find((item) => item.id === "stages.identity.grid-int");
+		expect(bounds?.value).toBe("off (identityCache: false)");
+		expect(bounds?.editable).toBe(false);
+		expect(bounds?.action).toEqual({ kind: "none" });
+		// Nothing is cached, so there is no entry row and no forget-all row.
+		expect(
+			items.some((item) => item.id.startsWith("stages.identity.grid-int.")),
+		).toBe(false);
+		expect(items.some((item) => item.id === "stages.identity.all")).toBe(false);
 	});
 
 	test("the orchestrator row carries the monitor mode the config stores", () => {

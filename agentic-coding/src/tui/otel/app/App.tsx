@@ -128,6 +128,7 @@ import {
 } from "../../settings/CredentialEditor.tsx";
 import {
 	type CompactionSettingsSnapshot,
+	identityForgetAnchor,
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
@@ -142,9 +143,12 @@ import {
 import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
 import {
 	clearStageError,
+	forgetStageIdentity,
 	lastStageError,
+	lastStageIdentityError,
 	refreshStageStatus,
 	setStageCredential,
+	stageIdentities,
 	stageSnapshot,
 } from "../../settings/stages.ts";
 import {
@@ -1049,6 +1053,21 @@ export function App(props: {
 		createSignal(0);
 	const [settingsBrowserVersion, setSettingsBrowserVersion] = createSignal(0);
 	const [settingsStageVersion, setSettingsStageVersion] = createSignal(0);
+	/** The scope a forget is armed on. A stage-wide or whole-cache forget removes
+	 * every key at once, which is more than one Enter should do by accident, so it
+	 * takes a second activation on the same row; a single `(stage, role)` row
+	 * forgets one sign-in and stays one press. It travels in the Settings snapshot
+	 * so the armed row can say that one more Enter removes it, and it is cleared by
+	 * any other activation, by a section change and by a re-read (USAB-302). */
+	const [identityForgetArmed, setIdentityForgetArmed] = createSignal<
+		{ readonly stage?: string; readonly role?: string } | undefined
+	>();
+	const identityForgetScope = (
+		scope: { readonly stage?: string; readonly role?: string } | undefined,
+	): string | undefined =>
+		scope === undefined
+			? undefined
+			: `${scope.stage ?? "*"}\u0000${scope.role ?? "*"}`;
 	// The one Settings write that carries a secret: which `.env` variable is
 	// being set, its masked draft and the inline message. The draft is dropped as
 	// soon as the overlay leaves the top of the stack.
@@ -1171,6 +1190,8 @@ export function App(props: {
 		settingsStageVersion();
 		const projectIdent = settingsProjectIdent();
 		const repository = settingsAgentRepository();
+		// Part of the snapshot, so the armed row itself says one more Enter removes it.
+		const armedScope = identityForgetArmed();
 		return buildSettingsContext({
 			themes: themeNames,
 			activeTheme: getActiveThemeName(),
@@ -1183,6 +1204,14 @@ export function App(props: {
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
 			...(browserSnapshot() ? { browser: browserSnapshot() } : {}),
 			...(stageSnapshot() ? { stages: stageSnapshot() } : {}),
+			...(stageIdentities() ? { stageIdentities: stageIdentities() } : {}),
+			// Passed in rather than read by the item builder: a failed identity read is
+			// what the identity rows report, and a pure builder that reaches for module
+			// state renders it only in the shell (TESTQ-017).
+			...(lastStageIdentityError()
+				? { stageIdentityError: lastStageIdentityError() }
+				: {}),
+			...(armedScope ? { stageIdentityArmed: armedScope } : {}),
 		});
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
@@ -1282,6 +1311,14 @@ export function App(props: {
 		if (compactionTarget()) setCompactionTarget(undefined);
 		if (compactionError()) setCompactionError(undefined);
 	});
+	// The arm belongs to one row and one moment. A section change or a re-read of
+	// the stage rows (a refresh, a retry, another forget) moves the row under it,
+	// so it is dropped rather than left to fire on whatever takes its place.
+	createEffect(() => {
+		settingsSection();
+		settingsStageVersion();
+		setIdentityForgetArmed(undefined);
+	});
 	const settingsIndex = (): number =>
 		pages.viewState<number>(pages.current()) ?? 0;
 	const setSettingsIndex = (index: number): void => {
@@ -1289,6 +1326,10 @@ export function App(props: {
 	};
 	const activateSettingsItem = (item: SettingsItem | undefined): void => {
 		if (!item) return;
+		// Anything that is not the armed row disarms it: the confirmation belongs to
+		// one row and one moment, not to the section.
+		if (item.action.kind !== "stage-identity-forget")
+			setIdentityForgetArmed(undefined);
 		switch (item.action.kind) {
 			case "none":
 				return;
@@ -1371,6 +1412,74 @@ export function App(props: {
 					return;
 				}
 				void saveCompactionField("enabled", !current.effective.enabled);
+				return;
+			}
+			case "stage-identity-forget": {
+				// The row names the `(stage, role)` it drops. Forgetting one sign-in only
+				// means the *next* session of that role logs in the normal way, so that
+				// row is one press; a stage-wide or whole-cache row removes every key at
+				// once and takes a second press on the same row.
+				const target = {
+					...(item.action.stage === undefined
+						? {}
+						: { stage: item.action.stage }),
+					...(item.action.role === undefined ? {} : { role: item.action.role }),
+					label: item.action.label,
+				};
+				const scope = `${target.stage ?? "*"}\u0000${target.role ?? "*"}`;
+				if (
+					target.role === undefined &&
+					identityForgetScope(identityForgetArmed()) !== scope
+				) {
+					setIdentityForgetArmed(
+						target.stage === undefined ? {} : { stage: target.stage },
+					);
+					notify(
+						`Press Enter again to forget ${target.label} · every cached sign-in in that scope is dropped`,
+						"warning",
+					);
+					return;
+				}
+				setIdentityForgetArmed(undefined);
+				void forgetStageIdentity({
+					...(target.stage === undefined ? {} : { stage: target.stage }),
+					...(target.role === undefined ? {} : { role: target.role }),
+				}).then((removed) => {
+					// The count, not a boolean: forgetting a key that was already gone is
+					// not a failure, and saying "forgot 0" is what makes that visible
+					// instead of reporting a success the operator cannot verify.
+					if (removed === undefined) {
+						const failure = lastStageError();
+						clearStageError();
+						notify(
+							`Could not forget ${target.label}: ${failure ?? "the server refused the call"}`,
+							"error",
+						);
+					} else if (removed === 0) {
+						notify(
+							`Nothing to forget: ${target.label} was already gone`,
+							"info",
+						);
+					} else {
+						notify(
+							`Forgot ${removed} cached ${removed === 1 ? "sign-in" : "sign-ins"}: ${target.label} · the next session logs in normally`,
+							"success",
+						);
+					}
+					void refreshStageStatus().then(() => {
+						setSettingsStageVersion((value) => value + 1);
+						// Re-anchor the selection instead of leaving the index where the forgotten
+						// row was: the rows below it move up, so a stale index would silently
+						// point at a different `(stage, role)` — and Enter would forget that one.
+						// The row is matched by the scope it acts on, not by its id, because a
+						// stage the allow-list no longer names renders its stage-wide row under
+						// another id.
+						const rows = settingsSectionItems() ?? [];
+						setSettingsIndex(
+							identityForgetAnchor(rows, target, settingsIndex() - 1),
+						);
+					});
+				});
 				return;
 			}
 			case "stage-credential": {

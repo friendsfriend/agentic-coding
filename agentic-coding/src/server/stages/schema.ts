@@ -312,6 +312,11 @@ export const stageDefinitionSchema = Schema.Struct({
 	 * because a stage may never widen what the operator denied. */
 	interactiveLogin: Schema.optional(stageInteractiveLoginSchema),
 	wiki: Schema.optional(stageWikiSchema),
+	/** Whether a successful login of this stage may leave a bounded identity in
+	 * the server's memory cache (`add-stage-identity-cache`). Absent reads as
+	 * `true`: the cache is the default, and a stage that must never keep a
+	 * sign-on says `false`. */
+	identityCache: Schema.optional(Schema.Boolean),
 });
 export type StageDefinition = typeof stageDefinitionSchema.Type;
 
@@ -346,14 +351,58 @@ export type StageOAuth2Grant = typeof stageOAuth2GrantSchema.Type;
 export type StageOAuth2Provider = typeof stageOAuth2ProviderSchema.Type;
 /** How a client authenticates at the token endpoint. */
 export type StageOAuth2ClientAuth = typeof stageOAuth2ClientAuthSchema.Type;
+/** The bounds of the in-memory stage identity cache
+ * (`add-stage-identity-cache`). All three are ceilings: a stage cannot raise
+ * them, and a policy that sets none reads as the documented defaults. */
+export const stageIdentityCachePolicySchema = Schema.Struct({
+	/** How long one captured identity lives, from its capture and never extended
+	 * by a read. Defaults to 240 (four hours). */
+	ttlMinutes: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	/** How many `(stage, role)` identities the process keeps at once; the oldest
+	 * capture is evicted first. Defaults to 8. */
+	maxEntries: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+	/** How often a living session re-captures its identity into the cache, so a
+	 * long run's rotated token is what a later session reuses. Defaults to 120
+	 * (two minutes). */
+	refreshSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
+});
+export type StageIdentityCachePolicy =
+	typeof stageIdentityCachePolicySchema.Type;
 
 /** The global policy file: the operator's deny list and the ceilings no stage
- * may exceed. Both optional; absent means "no denial, documented defaults". */
+ * may exceed. Both optional; absent means "no denial, documented defaults".
+ *
+ * `identityCache` is additive for *this* build only: both documents decode with
+ * `onExcessProperty: "error"`, so a build from before `add-stage-identity-cache`
+ * that meets an upgraded `policy.json` refuses it as unusable and then refuses
+ * every stage ("without a trustworthy policy the deny list is unknown"). A
+ * downgrade is therefore a config rollback, not a code-only one — remove the key
+ * (and a stage's own `identityCache`) before running the older build. */
 export const stagePolicySchema = Schema.Struct({
 	deniedHostPatterns: Schema.optional(Schema.Array(Schema.String)),
 	ceilings: Schema.optional(stageLimitsSchema),
 	/** The allow-list-wide interactive-login policy. Absent reads as `local`. */
 	interactiveLogin: Schema.optional(stageInteractiveLoginSchema),
+	/** The identity cache's ceilings. Absent reads as the documented defaults. */
+	identityCache: Schema.optional(stageIdentityCachePolicySchema),
 });
 export type StagePolicy = typeof stagePolicySchema.Type;
 

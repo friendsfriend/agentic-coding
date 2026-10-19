@@ -99,7 +99,10 @@ import { StageUsageRegistry } from "./stages/limits.ts";
 import { stageTokenStore } from "./stages/oauth2.ts";
 import {
 	handleStageCredentialRoute,
+	handleStageIdentityRoute,
 	handleStageRoute,
+	poolIdentityForget,
+	registerStageIdentityForget,
 	type StageRouteDeps,
 	stagesStatusValue,
 } from "./stages/routes.ts";
@@ -371,8 +374,18 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 
 	/** What both stage read surfaces and the credential flow read: the catalog of
 	 * the canonical configuration root, never a repository overlay. */
+	// The operator forget has to reach the pool, not the store: it is the pool that
+	// moves a key's generation on and clears the live sessions' source, so a
+	// refresh or a clean close cannot re-insert what was forgotten (`design.md`
+	// D5). Registering it makes the transport-less Settings path
+	// (`stages/operations.ts`) take the same code as the route. One process builds
+	// one pool, so the registration lives as long as the process (`CONC-402`).
+	const forgetIdentity = poolIdentityForget(browser.pool);
+	registerStageIdentityForget(forgetIdentity);
+
 	const stageDeps = (): StageRouteDeps => ({
 		configDir: options.configDir ?? "",
+		identityForget: forgetIdentity,
 		...(options.environment?.manager ? { appIdents: () => appIdents() } : {}),
 		// One token store and one rolling minute for the whole process
 		// (`add-stage-oauth2-auth`): the token a `stage_login` acquired is the one
@@ -1111,6 +1124,29 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			if (written.status === 200)
 				events.publish({ domain: "stages", kind: "stages.credential" });
 			return written;
+		}
+
+		// The identity cache (`add-stage-identity-cache`): the value-free listing and
+		// the forget action. Reading the cache is an ordinary dashboard read; a
+		// forget changes what the *next* stage session starts from, so it is
+		// announced like the credential write is.
+		if (method === "GET" && path === "/api/v1/stages/identity") {
+			const listed = await handleStageIdentityRoute(stageDeps(), request, path);
+			if (listed === undefined)
+				throw new Error("the identity cache route did not answer its listing");
+			return listed;
+		}
+		if (method === "POST" && path === "/api/v1/stages/identity/forget") {
+			const forgotten = await handleStageIdentityRoute(
+				stageDeps(),
+				request,
+				path,
+			);
+			if (forgotten === undefined)
+				throw new Error("the identity cache route did not answer the forget");
+			if (forgotten.status === 200)
+				events.publish({ domain: "stages", kind: "stages.identity" });
+			return forgotten;
 		}
 
 		if (method === "POST" && path === "/api/v1/credentials/respond") {

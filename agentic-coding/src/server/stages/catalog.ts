@@ -26,6 +26,13 @@ import {
 	loadEnvFile,
 } from "../../env-file.ts";
 import {
+	DEFAULT_IDENTITY_CACHE,
+	MAX_IDENTITY_CACHE_ENTRIES,
+	MAX_IDENTITY_CACHE_REFRESH_SECONDS,
+	MAX_IDENTITY_CACHE_TTL_MINUTES,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
+} from "./identity-cache.ts";
+import {
 	decodeStageDefinition,
 	decodeStagePolicy,
 	isOAuth2Role,
@@ -61,6 +68,17 @@ export const DEFAULT_STAGE_LIMITS = {
  * a policy that declares a larger one is clamped to this. */
 export const MAX_LOGIN_HANDOFF_SECONDS = 1800;
 
+/** The identity cache's documented defaults and hard ceilings live with the
+ * cache (`add-stage-identity-cache`); the policy and the effective bounds are
+ * resolved here, where every other bound is. */
+export {
+	DEFAULT_IDENTITY_CACHE,
+	MAX_IDENTITY_CACHE_ENTRIES,
+	MAX_IDENTITY_CACHE_REFRESH_SECONDS,
+	MAX_IDENTITY_CACHE_TTL_MINUTES,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
+};
+
 export interface EffectiveStageLimits {
 	readonly maxSessions: number;
 	readonly maxActionsPerMinute: number;
@@ -73,6 +91,68 @@ export interface EffectiveStageLimits {
 /** Whether this server may open a headed window for a stage login it cannot
  * automate: the policy's value, narrowed by the stage and never widened by it. */
 export type InteractiveLoginMode = "local" | "never";
+
+/** One stage's effective identity-cache bounds: whether it may cache at all, how
+ * long one capture lives, how many entries the process keeps, and how often a
+ * living session re-captures. */
+export interface EffectiveIdentityCache {
+	readonly enabled: boolean;
+	readonly ttlMs: number;
+	readonly maxEntries: number;
+	readonly refreshMs: number;
+}
+
+/** The effective identity-cache bounds of one stage: the policy's ceilings (or
+ * the documented defaults), each clamped to its own hard ceiling, and the
+ * stage's own `identityCache: false` opt-out. A stage cannot raise a bound; a
+ * refresh interval can never outlive the entry it refreshes. */
+export function effectiveIdentityCache(
+	stage: Pick<StageDefinition, "identityCache">,
+	policy: StagePolicy,
+): EffectiveIdentityCache {
+	const declared = policy.identityCache ?? {};
+	const ttlMinutes = Math.min(
+		declared.ttlMinutes ?? DEFAULT_IDENTITY_CACHE.ttlMinutes,
+		MAX_IDENTITY_CACHE_TTL_MINUTES,
+	);
+	const refreshSeconds = Math.min(
+		MAX_IDENTITY_CACHE_REFRESH_SECONDS,
+		// A floor, because the refresh is bound to *use*: at a one-second interval a
+		// session whose calls are a second apart re-captures on each of them, which is
+		// the per-call cost the interval exists to keep off the hot path (PERF).
+		Math.max(
+			MIN_IDENTITY_CACHE_REFRESH_SECONDS,
+			declared.refreshSeconds ?? DEFAULT_IDENTITY_CACHE.refreshSeconds,
+		),
+		// A re-capture after the entry has already expired would put a value into
+		// the store that no read could ever install, so a short TTL still wins over
+		// the floor.
+		ttlMinutes * 60,
+	);
+	return {
+		enabled: stage.identityCache !== false,
+		ttlMs: ttlMinutes * 60_000,
+		maxEntries: Math.min(
+			declared.maxEntries ?? DEFAULT_IDENTITY_CACHE.maxEntries,
+			MAX_IDENTITY_CACHE_ENTRIES,
+		),
+		refreshMs: refreshSeconds * 1_000,
+	};
+}
+
+/** The origins a cached identity may cover (`add-stage-identity-cache`, D2): the
+ * stage's own applications, plus the origin each of its login recipes runs on.
+ * A third-party host a page happens to call is in neither set, so neither its
+ * cookies nor its storage are ever captured or installed. */
+export function stageIdentityOrigins(stage: StageDefinition): string[] {
+	const origins = new Set<string>(stageAppOrigins(stage));
+	for (const recipe of Object.values(stage.logins ?? {})) {
+		if (recipe.origin === undefined) continue;
+		const origin = originOf(recipe.origin);
+		if (origin) origins.add(origin);
+	}
+	return [...origins];
+}
 
 /** What a run can expect of one role's login, as both read surfaces report it:
  * `automated` (this server performs it), `handoff` (it needs the developer and
@@ -170,6 +250,12 @@ export interface StageEntry {
 	/** The stage's allow-list: the origins of its applications together with its
 	 * `allowedOrigins`. */
 	readonly origins: readonly string[];
+	/** The identity cache's effective bounds for this stage
+	 * (`add-stage-identity-cache`). */
+	readonly identity: EffectiveIdentityCache;
+	/** The origins a cached identity covers: the applications and the login
+	 * recipes, never a third-party host. */
+	readonly identityOrigins: readonly string[];
 	readonly diagnostics: readonly StageDiagnostic[];
 }
 
@@ -284,6 +370,8 @@ export function readStageCatalog(
 			limits: pending.limits,
 			interactiveLogin: effectiveInteractiveLogin(pending.stage, policyRead),
 			origins: stageOrigins(pending.stage),
+			identity: effectiveIdentityCache(pending.stage, policyRead),
+			identityOrigins: stageIdentityOrigins(pending.stage),
 			diagnostics: pending.diagnostics,
 		});
 	}
@@ -393,7 +481,32 @@ function readPolicy(
 			kind: "warning",
 			message: `is lowered to the ${MAX_LOGIN_HANDOFF_SECONDS} s login hand-off ceiling, which is the longest one hand-off may block a stage action`,
 		});
+	// The same for the identity cache's three ceilings
+	// (`add-stage-identity-cache`): a policy value no stage can ever be bounded by
+	// is reported once, at the policy, rather than under every stage's own view.
+	for (const [field, hard] of [
+		["ttlMinutes", MAX_IDENTITY_CACHE_TTL_MINUTES],
+		["maxEntries", MAX_IDENTITY_CACHE_ENTRIES],
+		["refreshSeconds", MAX_IDENTITY_CACHE_REFRESH_SECONDS],
+	] as const) {
+		const declared = identityCacheCeiling(decoded.value, field);
+		if (declared === undefined || declared <= hard) continue;
+		diagnostics.push({
+			file,
+			field: `identityCache.${field}`,
+			kind: "warning",
+			message: `is lowered to the hard ceiling ${hard}, which no stage identity cache may exceed`,
+		});
+	}
 	return decoded.value;
+}
+
+/** One declared identity-cache ceiling of the policy, when it has one. */
+function identityCacheCeiling(
+	policy: StagePolicy,
+	field: keyof typeof DEFAULT_IDENTITY_CACHE,
+): number | undefined {
+	return policy.identityCache?.[field];
 }
 
 /** Stage definition files, sorted, so diagnostics and views are stable. */
@@ -1247,6 +1360,13 @@ export interface StageRoleView {
 	 * `missing <VAR>`. */
 	readonly credentialStatus: string;
 	readonly loginMode: StageLoginMode;
+	/** Whether a successful login of this role may leave a cached identity
+	 * (`add-stage-identity-cache`). False for a stage that set `identityCache:
+	 * false`, and false for the `http-basic` recipe: the driver cannot observe the
+	 * `Authorization` header a browser's own credential dialog generates, so there
+	 * is nothing to capture (`design.md` D2). A plan that needs the reuse can read
+	 * this instead of inferring it from the login kind. */
+	readonly cacheable: boolean;
 	readonly credentials: readonly StageCredentialView[];
 }
 
@@ -1296,6 +1416,9 @@ export interface StageView {
 		readonly cleanup?: string;
 	};
 	readonly limits: EffectiveStageLimits;
+	/** The identity cache's effective bounds (`add-stage-identity-cache`): what a
+	 * run can expect of a silent login on this stage. */
+	readonly identityCache: EffectiveIdentityCache;
 	readonly wiki: { readonly processes: readonly string[] };
 	/** The stage's OAuth 2.0 providers (`add-stage-oauth2-auth`). */
 	readonly oauth2: { readonly providers: readonly StageOAuth2ProviderView[] };
@@ -1357,6 +1480,11 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 						credentialStatus,
 						interactiveLogin: entry.interactiveLogin,
 					}),
+					// A `http-basic` credential is entered by the browser itself, and the
+					// driver cannot see the header that produces it, so that login leaves no
+					// capture to reuse (D2). Everything else is cacheable unless the stage
+					// opted out.
+					cacheable: entry.identity.enabled && loginKind !== "http-basic",
 					credentials,
 				};
 			}),
@@ -1394,6 +1522,7 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 				: { cleanup: entry.stage.data.cleanup }),
 		},
 		limits: entry.limits,
+		identityCache: entry.identity,
 		wiki: { processes: entry.stage.wiki?.processes ?? [] },
 		oauth2: {
 			providers: Object.entries(entry.stage.oauth2?.providers ?? {}).map(

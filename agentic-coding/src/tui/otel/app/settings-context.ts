@@ -5,7 +5,10 @@
 // re-reads are testable without a terminal.
 import type { BrowserStatusResponse } from "../../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../../contracts/gateway.ts";
-import type { StagesStatusResponse } from "../../../contracts/stages.ts";
+import type {
+	StageIdentitiesResponse,
+	StagesStatusResponse,
+} from "../../../contracts/stages.ts";
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
@@ -95,6 +98,12 @@ export interface SettingsContextInput {
 	classifier?: ClassifierStatusResponse;
 	browser?: BrowserStatusResponse;
 	stages?: StagesStatusResponse;
+	/** The live identity cache, and why it could not be read when it could not. */
+	stageIdentities?: StageIdentitiesResponse;
+	stageIdentityError?: string;
+	/** The scope a wide forget is armed on, so the row it belongs to can say that
+	 * one more Enter removes it (USAB-302). */
+	stageIdentityArmed?: { readonly stage?: string; readonly role?: string };
 }
 
 /**
@@ -145,6 +154,15 @@ export function buildSettingsContext(
 		...(input.classifier ? { classifier: input.classifier } : {}),
 		...(input.browser ? { browser: input.browser } : {}),
 		...(input.stages ? { stages: input.stages } : {}),
+		...(input.stageIdentities
+			? { stageIdentities: input.stageIdentities }
+			: {}),
+		...(input.stageIdentityError
+			? { stageIdentityError: input.stageIdentityError }
+			: {}),
+		...(input.stageIdentityArmed
+			? { stageIdentityArmed: input.stageIdentityArmed }
+			: {}),
 	};
 }
 

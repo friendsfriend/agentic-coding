@@ -12,9 +12,16 @@
 import { resolveConfigRoot } from "../../config-root.ts";
 import type {
 	StageCredentialResponse,
+	StageIdentitiesResponse,
+	StageIdentityForgetResponse,
 	StagesStatusResponse,
 } from "../../contracts/stages.ts";
-import { setStageCredential, stagesStatusValue } from "./routes.ts";
+import {
+	forgetStageIdentity,
+	setStageCredential,
+	stageIdentitiesValue,
+	stagesStatusValue,
+} from "./routes.ts";
 
 function deps() {
 	// The catalog's default app-ident read is the same `apps/definitions`
@@ -25,6 +32,24 @@ function deps() {
 /** The whole catalog: allow-listed stages and the files that were refused. */
 export function stagesStatus(): StagesStatusResponse {
 	return stagesStatusValue(deps());
+}
+
+/** The live identity cache, as the Settings section lists it: `(stage, role,
+ * capturedAt, expiresAt)` and nothing else. */
+export function stageIdentities(): StageIdentitiesResponse {
+	return stageIdentitiesValue();
+}
+
+/** Forget cached sign-ins: one `(stage, role)`, every role of one stage, or the
+ * whole cache when neither is named. */
+export function forgetStageIdentityValue(
+	stage?: string,
+	role?: string,
+): StageIdentityForgetResponse {
+	return forgetStageIdentity({
+		...(stage === undefined ? {} : { stage }),
+		...(role === undefined ? {} : { role }),
+	});
 }
 
 /** Set one credential the catalog references, by variable name. */

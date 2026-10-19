@@ -623,9 +623,10 @@ a production-like name is refused by the catalog, and only the operator's own
   (until then a call answers `browser-crashed`), because a login nobody finished
   is not a page the run may read. When the hand-off ends, the window is the
   agent's again — stop typing in it, since the run drives the same page from
-  there — and the login lives only as long as that session: nothing is written to
-  the configuration directory, no profile or storage-state file is kept, and the
-  next session starts logged out. A conditional-access policy that rejects an
+  there — and the login outlives that session only through the identity cache
+  below: nothing is written to the configuration directory, no profile or
+  storage-state file is kept, and a stage whose cache is off, or has nothing for
+  that role, starts its next session logged out. A conditional-access policy that rejects an
   unmanaged or non-compliant browser still refuses the login inside the window;
   that refusal is the tenant's, not this tool's, and the hand-off then ends as
   `login-handoff-unverified` or on its deadline. One hand-off is active per
@@ -641,6 +642,72 @@ a production-like name is refused by the catalog, and only the operator's own
   (`kind: "login-handoff"`) is the *Done*/*Abort* surface: it is never routed to
   the orchestrator, never appears in a run's prior dialogue, and resolving it
   never resumes a blocked run.
+- **A successful login leaves a bounded identity in this server's memory.**
+  Signing in per role per run is the most expensive thing a stage test does, so
+  the server keeps what the login established: for one `(stage, role)`, the
+  browser state of the stage's own application and login origins — cookies
+  (including the `HttpOnly` session cookie and the identity provider's
+  `Domain=…` sign-on cookie) and those origins' `localStorage`/`sessionStorage`
+  (where MSAL keeps its token cache). It lives **only in memory**: never a file,
+  never the workflow store, never a log line, a telemetry attribute, a snapshot,
+  an evidence file or a tool result, and a restart starts empty. A session that
+  names the role — `browser_open({ stage, stageApp, stageRole })` — is created
+  *with* that state already installed (the cookies before the first request, the
+  storage as an origin-scoped init script, so an application that reads its
+  token at load finds it), and `stage_login` then re-checks the recipe's declared
+  success condition instead of trusting the cache: accepted answers `ok` with
+  `identity: "cache"` and re-captures what the visit left behind, rejected evicts
+  the entry and runs the ordinary login. A login result is the only place the
+  source is reported: it carries `identity: "cache" | "recipe" | "user"` and
+  nothing else about the state (a capture itself answers only whether it stored
+  something). The listing and the dashboard show `(stage, role, capturedAt,
+  expiresAt)` plus `truncated`, a *count* of the values the capture bounds
+  dropped — a value kept is at least 6 characters (the redactor's own floor, so a
+  stored value is always a scrubbed one) and at most 32 KiB, with at most 256
+  values and 512 KiB per entry — and no name or value, and neither a capture, a
+  refresh, a rejection nor a forget writes a log line about the state. The set
+  those values join while a live context carries them is bounded the same way
+  (`mergeIdentitySecrets`: newest 512 values / 1 MiB per context), so the scrubber
+  cannot grow with the length of a run. The bounds are per capture — a
+  default `identityCache.ttlMinutes` of 240 (ceiling 1440), `maxEntries` 8 per
+  process (ceiling 50) evicting the oldest capture, expired cookies dropped on
+  the way in, and a re-capture of a living session on the first browser call
+  after `identityCache.refreshSeconds` (default 120, floor 30, ceiling 3600, and
+  never longer than the TTL) — so a rotated
+  refresh token, or a recording swap that dropped `sessionStorage`, reaches the
+  cache while the run still works. The refresh is bound to use, not a timer:
+  there is no background sweep, and a session nobody calls captures nothing more.
+  `"identityCache": false` on a stage opts out entirely. Forgetting is available
+  at all three granularities — one `(stage, role)`, every role of one stage, and
+  everything — on each of the three surfaces: Settings → Stages (Enter on the
+  entry; the stage row and the section's forget-all row remove every key in their
+  scope, so they are armed by a first Enter and performed by a second),
+  `agentic-coding stage identity forget [--stage S] [--role R] [--all]`, and
+  `POST /api/v1/stages/identity/forget`, while
+  `agentic-coding stage identity list` (or `GET /api/v1/stages/identity`) shows
+  what is held. Forgetting never logs a live session out: it decides what the
+  *next* one starts from, and a forget that a live session's own refresh or clean
+  close would undo is held off until the next successful login. The `http-basic`
+  recipe is **not** cacheable — the browser's own authentication dialog never
+  shows this server the `Authorization` header it generates, and the change's
+  spike confirmed the driver cannot observe it — so such a role installs its
+  credential per session and caches nothing. A cached entry is never a credential
+  this server acts on by itself either: it is browser state installed into a
+  context that already answers to the stage's guard, and the declared success
+  condition is what decides whether the login happened. Cached values join the
+  redaction set (each value the store holds, the base64url segments of anything
+  JWT-shaped, and their URL-encoded forms) — a value too short to be a credential
+  is never captured, so a stored value is always a registered one — and so do the
+  values a live browser context installed, for as long as it exists, so a state
+  stays masked after its entry is forgotten or expires. A page that echoes one
+  into its own text, console or a URL comes back masked. The OAuth 2.0 token
+  store is a separate thing: it holds the token the *server* presents, while this
+  cache holds what a *browser*
+  keeps, and neither can be derived from the other. Rolling the server back is a
+  config step as well as a code one: an older build reads an `identityCache` key
+  in `stages/policy.json` or in a stage definition as an unexpected property,
+  refuses the file, and (for the policy) then refuses every stage, so remove the
+  keys before running the older build.
 - **The hand-off is a policy seam, not an assumption.**
   `interactiveLogin: "local" | "never"` in `stages/policy.json` (default
   `local`); a stage may narrow it to `never` and can never widen it. Under
