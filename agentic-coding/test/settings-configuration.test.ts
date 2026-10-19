@@ -433,6 +433,77 @@ describe("section items surface every inventoried setting", () => {
 					},
 				],
 			},
+			// One stage with one role and one credential, so the section renders a
+			// row for every kind of inventoried setting: the catalog, the credential
+			// and the identity cache's bounds and its entries.
+			stages: {
+				configDir: "/tmp/agentic-coding",
+				stages: [
+					{
+						ident: "grid-int",
+						displayName: "Grid integration",
+						environment: "integration",
+						system: "grid",
+						access: "read-only",
+						planApproval: "always",
+						exclusive: false,
+						apps: [
+							{
+								key: "web",
+								label: "Grid web",
+								url: "https://grid-int.example.test/",
+								kind: "ui",
+								roles: [
+									{
+										role: "clerk",
+										login: "web-form",
+										loginKind: "form",
+										credentialStatus: "missing GRID_INT_CLERK_PASSWORD",
+										loginMode: "handoff",
+										credentials: [
+											{
+												field: "password",
+												variable: "GRID_INT_CLERK_PASSWORD",
+												status: "missing GRID_INT_CLERK_PASSWORD",
+											},
+										],
+									},
+								],
+							},
+						],
+						origins: ["https://grid-int.example.test"],
+						readOnlyExceptions: [],
+						limits: {
+							maxSessions: 1,
+							maxActionsPerMinute: 30,
+							maxWaitSeconds: 120,
+							maxScreenshots: 20,
+							maxRecordingMinutes: 5,
+							maxLoginHandoffSeconds: 900,
+						},
+						identityCache: {
+							enabled: true,
+							ttlMinutes: 240,
+							maxEntries: 8,
+							refreshSeconds: 120,
+						},
+						data: {},
+						wiki: { processes: [] },
+						diagnostics: [],
+					},
+				],
+				excluded: [],
+			},
+			stageIdentities: {
+				entries: [
+					{
+						stage: "grid-int",
+						role: "clerk",
+						capturedAt: Date.now() - 60_000,
+						expiresAt: Date.now() + 60_000,
+					},
+				],
+			},
 		};
 	}
 

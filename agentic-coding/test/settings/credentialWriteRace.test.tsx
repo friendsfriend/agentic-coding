@@ -154,6 +154,12 @@ function stageStatus(): StagesStatusResponse {
 					maxRecordingMinutes: 5,
 					maxLoginHandoffSeconds: 900,
 				},
+				identityCache: {
+					enabled: true,
+					ttlMinutes: 240,
+					maxEntries: 8,
+					refreshSeconds: 120,
+				},
 				data: {},
 				wiki: { processes: [] },
 				diagnostics: [],
@@ -253,9 +259,10 @@ async function openSettings(t: Test, destination: string, marker: string) {
 
 /** Walk the selection down to the credential row and activate it. */
 async function openCredentialEditor(t: Test) {
-	// The section is the only list on the page: definitions, the stage, the app,
-	// the role's login-mode row, then the credential row the write belongs to.
-	for (let i = 0; i < 4; i++) {
+	// The section is the only list on the page: definitions, the stage, the stage's
+	// identity-cache row, the app, the role's login-mode row, then the credential
+	// row the write belongs to.
+	for (let i = 0; i < 5; i++) {
 		t.mockInput.pressKey("j");
 		await t.renderOnce();
 	}

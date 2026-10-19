@@ -142,9 +142,11 @@ import {
 import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
 import {
 	clearStageError,
+	forgetStageIdentity,
 	lastStageError,
 	refreshStageStatus,
 	setStageCredential,
+	stageIdentities,
 	stageSnapshot,
 } from "../../settings/stages.ts";
 import {
@@ -1183,6 +1185,7 @@ export function App(props: {
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
 			...(browserSnapshot() ? { browser: browserSnapshot() } : {}),
 			...(stageSnapshot() ? { stages: stageSnapshot() } : {}),
+			...(stageIdentities() ? { stageIdentities: stageIdentities() } : {}),
 		});
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
@@ -1371,6 +1374,33 @@ export function App(props: {
 					return;
 				}
 				void saveCompactionField("enabled", !current.effective.enabled);
+				return;
+			}
+			case "stage-identity-forget": {
+				// The row names the `(stage, role)` it drops, and the activation is the
+				// confirmation: forgetting a cached sign-in only means the *next*
+				// session of that role logs in the normal way, and the catalog read
+				// afterwards re-renders the rows without it.
+				const target = {
+					stage: item.action.stage,
+					role: item.action.role,
+					label: item.action.label,
+				};
+				void forgetStageIdentity(target.stage, target.role).then((forgot) => {
+					if (forgot) {
+						notify(`Forgot the cached identity of ${target.label}`, "success");
+					} else {
+						const failure = lastStageError();
+						clearStageError();
+						notify(
+							`Could not forget the cached identity of ${target.label}: ${failure ?? "the server refused the call"}`,
+							"error",
+						);
+					}
+					void refreshStageStatus().then(() =>
+						setSettingsStageVersion((value) => value + 1),
+					);
+				});
 				return;
 			}
 			case "stage-credential": {

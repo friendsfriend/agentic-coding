@@ -240,6 +240,20 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		items: ["stages.credentials", "stages.unavailable", "stages.retry"],
 		note: "Only a variable the catalog references can be written, and the value is typed masked into the configuration `.env`; it is never shown again or returned by a read. A variable that is already set is replaced by the same row: the row names the key it writes, so Enter sets *or replaces* the value behind it (never a second copy of the variable).",
 	},
+	{
+		id: "stages.identity",
+		section: "stages",
+		label: "Stage identity cache",
+		owner: "src/server/stages/identity-cache.ts",
+		scope: "server",
+		storage:
+			"Process memory only: never a file, a store record, a log line, a telemetry attribute or an evidence file",
+		secret: true,
+		effect: "immediate",
+		editable: true,
+		items: ["stages.identity"],
+		note: "A cached sign-in is the browser state of one (stage, role): cookies and origin storage captured after a verified login, bounded by stages/policy.json and forgotten on restart. The listing carries the key and two instants; a value is never shown, returned or written anywhere. Enter on an entry forgets it.",
+	},
 ];
 
 /** Every inventory entry of one section, in declaration order. */

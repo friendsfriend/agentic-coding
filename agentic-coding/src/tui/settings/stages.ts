@@ -10,15 +10,22 @@
 // A credential value is passed *in* and never kept: the module holds the catalog
 // snapshot only, and the snapshot carries names and presence, never values.
 import { createCustomFetch } from "@devenv/core/src/custom-fetch.ts";
-import type { StagesStatusResponse } from "../../contracts/stages.ts";
+import type {
+	StageIdentitiesResponse,
+	StagesStatusResponse,
+} from "../../contracts/stages.ts";
 import { backendClient } from "../../server/client.ts";
 import {
+	forgetStageIdentityValue as inProcessForgetStageIdentity,
 	setStageCredentialValue as inProcessSetStageCredential,
+	stageIdentities as inProcessStageIdentities,
 	stagesStatus as inProcessStagesStatus,
 } from "../../server/stages/operations.ts";
 
 /** Last catalog read; undefined before the first refresh. */
 let cached: StagesStatusResponse | undefined;
+/** Last identity-cache read (`add-stage-identity-cache`). */
+let identities: StageIdentitiesResponse | undefined;
 /** Message from the most recent failed call, consumed by the view's toast. */
 let lastError: string | undefined;
 
@@ -29,6 +36,12 @@ const STAGE_REQUEST_TIMEOUT_MS = 15_000;
 
 export function stageSnapshot(): StagesStatusResponse | undefined {
 	return cached;
+}
+
+/** The live identity cache, or `undefined` before the first read. It carries
+ * `(stage, role, captured, expires)` and nothing else. */
+export function stageIdentities(): StageIdentitiesResponse | undefined {
+	return identities;
 }
 
 export function lastStageError(): string | undefined {
@@ -42,6 +55,7 @@ export function clearStageError(): void {
 /** Drop the cached snapshot (tests, and a configuration-root switch). */
 export function clearStageSnapshot(): void {
 	cached = undefined;
+	identities = undefined;
 	lastError = undefined;
 }
 
@@ -78,17 +92,58 @@ export async function refreshStageStatus(): Promise<
 				}),
 			);
 			cached = value as StagesStatusResponse;
+			// The identity cache rides the same read: it is derived from the same
+			// catalog, so one round trip per section refresh is the bound.
+			identities = (await readJson(
+				await createCustomFetch()(`${baseUrl}/api/v1/stages/identity`, {
+					signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
+				}),
+			)) as StageIdentitiesResponse;
 		} else {
 			// A transport-less shell reads its own configuration root.
 			cached = inProcessStagesStatus();
+			identities = inProcessStageIdentities();
 		}
 		lastError = undefined;
 	} catch (error) {
 		// An unread or unauthorized server is a section error, not a stale value.
 		lastError = message(error);
 		cached = undefined;
+		identities = undefined;
 	}
 	return cached;
+}
+
+/**
+ * Forget the cached sign-in of one `(stage, role)`. The next session of that role
+ * starts empty and logs in the normal way; a session that lives right now keeps
+ * the state it already has. Answers whether the call went through, leaving the
+ * failure in `lastStageError`.
+ */
+export async function forgetStageIdentity(
+	stage: string,
+	role: string,
+): Promise<boolean> {
+	const baseUrl = serverUrl();
+	try {
+		if (baseUrl) {
+			await readJson(
+				await createCustomFetch()(`${baseUrl}/api/v1/stages/identity/forget`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ stage, role }),
+					signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
+				}),
+			);
+		} else {
+			inProcessForgetStageIdentity(stage, role);
+		}
+		lastError = undefined;
+		return true;
+	} catch (error) {
+		lastError = message(error);
+		return false;
+	}
 }
 
 /**

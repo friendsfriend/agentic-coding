@@ -9,7 +9,11 @@
 
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
-import type { StagesStatusResponse } from "../../contracts/stages.ts";
+import type {
+	StageIdentitiesResponse,
+	StageIdentityStatus,
+	StagesStatusResponse,
+} from "../../contracts/stages.ts";
 import {
 	COMPACTION_CEILING_DEFAULT,
 	COMPACTION_CEILING_MINIMUM,
@@ -62,6 +66,15 @@ export type SettingsAction =
 	 * `.env` flow: the value is typed into a masked dialog, written to the
 	 * referenced key and never shown again. */
 	| { kind: "stage-credential"; variable: string; label: string }
+	/** Forget the cached sign-in of one `(stage, role)` (`add-stage-identity-cache`).
+	 * Activating the row is the confirmation: the row names the key it drops, and
+	 * dropping it only affects the *next* session's silent reuse. */
+	| {
+			kind: "stage-identity-forget";
+			stage: string;
+			role: string;
+			label: string;
+	  }
 	| { kind: "navigate"; route: Route };
 
 export interface SettingsItem {
@@ -194,6 +207,10 @@ export interface SettingsContext {
 	/** Stage catalog, credential status and diagnostics. Absent until the first
 	 * server read resolves. */
 	stages?: StagesStatusResponse;
+	/** The live stage identity cache: `(stage, role, captured, expires)` only.
+	 * Absent until the first server read resolves, and empty when nothing is
+	 * cached — which is not the same fact. */
+	stageIdentities?: StageIdentitiesResponse;
 }
 
 /** The structural shape of `[agents] file_judgment` this layer renders. Declared
@@ -690,6 +707,45 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 			editable: false,
 			action: { kind: "none" },
 		});
+		// The identity cache of this stage (`add-stage-identity-cache`): its bounds
+		// first, then one row per cached `(stage, role)`. A row carries the key and
+		// two instants — the section never sees a cookie, a storage key or a value,
+		// because the server's listing cannot express one.
+		items.push({
+			id: `stages.identity.${stage.ident}`,
+			label: "Identity cache",
+			value: stage.identityCache.enabled
+				? `enabled · ${stage.identityCache.ttlMinutes} min · max ${stage.identityCache.maxEntries} · refresh ${stage.identityCache.refreshSeconds}s`
+				: "off (identityCache: false)",
+			detail: [
+				inventoryDetail("stages.identity"),
+				"a cached sign-in lives only in this server's memory: it is never written to disk, never returned by a tool and never shown here, and a restart starts empty",
+			].join(" · "),
+			editable: false,
+			action: { kind: "none" },
+		});
+		for (const entry of cachedIdentitiesFor(
+			context.stageIdentities,
+			stage.ident,
+		))
+			items.push({
+				id: `stages.identity.${stage.ident}.${entry.role}`,
+				label: `${entry.role} · cached sign-in`,
+				value: `captured ${relativeInstant(entry.capturedAt)} · expires ${relativeInstant(entry.expiresAt)}`,
+				detail: [
+					inventoryDetail("stages.identity"),
+					`key ${stage.ident}/${entry.role}`,
+					"Enter forgets it: the next session of this role logs in the normal way",
+					"the browser sessions that live right now keep their own state",
+				].join(" · "),
+				editable: true,
+				action: {
+					kind: "stage-identity-forget",
+					stage: stage.ident,
+					role: entry.role,
+					label: `${entry.role} · ${stage.displayName}`,
+				},
+			});
 		for (const app of stage.apps) {
 			items.push({
 				id: `stages.app.${stage.ident}.${app.key}`,
@@ -791,6 +847,24 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "none" },
 		});
 	return items;
+}
+
+/** The cached identities of one stage, or none when the read has not landed. */
+function cachedIdentitiesFor(
+	snapshot: StageIdentitiesResponse | undefined,
+	stage: string,
+): readonly StageIdentityStatus[] {
+	if (!snapshot) return [];
+	return snapshot.entries.filter((entry) => entry.stage === stage);
+}
+
+/** "in 42 min" / "3 min ago": a bound the developer can compare with the TTL the
+ * row above it reports, without a clock in the section. */
+function relativeInstant(at: number): string {
+	const delta = at - Date.now();
+	const minutes = Math.round(Math.abs(delta) / 60_000);
+	if (minutes < 1) return "just now";
+	return delta < 0 ? `${minutes} min ago` : `in ${minutes} min`;
 }
 
 function stageUnavailableItems(error: string | undefined): SettingsItem[] {
