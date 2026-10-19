@@ -18,4 +18,4 @@
 ## 4. Docs and verification
 
 - [x] 4.1 Docs: `docs/agent-environments.md` ("Hosted stages": OAuth 2.0 providers, grants, token handling, `stage_api_request`, the client-side-token limit, the unattended seam), `docs/config-inventory.md`.
-- [ ] 4.2 `bun run type-check` 0 errors, `bun run test`, biome, `openspec validate --changes --strict`.
+- [x] 4.2 `bun run type-check` 0 errors, `bun run test`, biome, `openspec validate --changes --strict`.
