@@ -140,6 +140,13 @@ import {
 	resolveGatePolicies,
 	resolvePreset,
 } from "./profiles.ts";
+import {
+	type PushPreflightOutcome,
+	pushAuthFailureNote,
+	pushAuthFailureSignal,
+	pushPreflightEffect,
+	redactRemoteLabel,
+} from "./push-preflight.ts";
 import type {
 	StepDefinition,
 	WorkflowFamilyTraits,
@@ -968,6 +975,55 @@ export function agentEffectHandlers(
 					...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
 					...(input.cost !== undefined ? { cost: input.cost } : {}),
 					payload: input.payload,
+				}),
+			);
+		} catch {
+			/* telemetry is observational; never alter the workflow outcome */
+		}
+	};
+	/** Emit one delivery-push preflight verdict (efficiency backlog item 16):
+	 * bounded and content-free, one per push attempt, so the blocking path is
+	 * measurable without reading a workflow's state. */
+	const emitDeliveryPreflight = (
+		snapshot: WorkflowSnapshot,
+		effect: ClaimedEffect,
+		verdict: {
+			outcome: PushPreflightOutcome;
+			/** The remote to report, already masked. */
+			label: string;
+			detail?: string;
+			source: "preflight" | "push";
+			durationMs?: number;
+		},
+	): void => {
+		try {
+			telemetrySink(
+				telemetryDirectory(snapshot),
+				adapterTelemetryEnvelope({
+					event: "delivery.push_preflight",
+					at: new Date().toISOString(),
+					workflowId: snapshot.workflowId,
+					traceparent: traceparent(workflowTraceContext(snapshot.workflowId)),
+					stepId: snapshot.currentStep,
+					effectId: effect.id,
+					// A blocked push is this event's actionable case; an inconclusive
+					// check is not a delivery failure.
+					outcome: verdict.outcome === "auth-failed" ? "error" : "ok",
+					...(verdict.durationMs !== undefined
+						? { durationMs: verdict.durationMs }
+						: {}),
+					payload: {
+						"herdr.delivery.push.preflight": verdict.outcome,
+						"herdr.delivery.push.source": verdict.source,
+						"herdr.delivery.push.remote": redactTelemetryText(verdict.label),
+						...(verdict.detail
+							? {
+									"herdr.delivery.push.detail": redactTelemetryText(
+										verdict.detail,
+									),
+								}
+							: {}),
+					},
 				}),
 			);
 		} catch {
@@ -2071,7 +2127,37 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"delivery remote and branch must be safe Git names",
 						);
-					yield* runGitWithCredentialsEffect(
+					// Ask once, cheaply and non-interactively, whether this machine holds
+					// a credential the remote accepts, so a push that cannot authenticate
+					// is blocked here with an actionable note instead of being attempted,
+					// retried unchanged and attempted again (efficiency backlog item 16).
+					// Only a positive authentication failure blocks; the check is skipped
+					// when the push itself may ask for a credential, and when the remote is
+					// a local path or absent.
+					const preflight = yield* pushPreflightEffect({
+						cwd: snapshot.metadata.worktree,
+						remote: settings.remote,
+						signal,
+						interactive: options.credentialPrompt !== undefined,
+					});
+					emitDeliveryPreflight(snapshot, effect, {
+						outcome: preflight.outcome,
+						label: preflight.label,
+						...(preflight.detail ? { detail: preflight.detail } : {}),
+						source: "preflight",
+						durationMs: preflight.durationMs,
+					});
+					if (preflight.outcome === "auth-failed")
+						throw new PermanentFailure(
+							pushAuthFailureNote({
+								remote: settings.remote,
+								label: preflight.label,
+								signal: preflight.detail ?? "",
+								source: "preflight",
+							}),
+						);
+					const pushStartedAt = Date.now();
+					const pushed = yield* runGitWithCredentialsEffect(
 						snapshot.metadata.worktree,
 						[
 							"push",
@@ -2085,7 +2171,30 @@ export function agentEffectHandlers(
 							signal,
 							env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
 						},
-					);
+					).pipe(Effect.either);
+					if (Either.isLeft(pushed)) {
+						// A push that failed on authentication after an inconclusive check —
+						// or one the check left to a credential prompt that did not resolve
+						// it — blocks for the same reason the check itself does: retrying it
+						// unchanged reproduces the identical failure.
+						const matched = pushAuthFailureSignal(pushed.left.message);
+						if (!matched) throw pushed.left;
+						emitDeliveryPreflight(snapshot, effect, {
+							outcome: "auth-failed",
+							label: redactRemoteLabel(preflight.label || settings.remote),
+							detail: matched,
+							source: "push",
+							durationMs: Date.now() - pushStartedAt,
+						});
+						throw new PermanentFailure(
+							pushAuthFailureNote({
+								remote: settings.remote,
+								label: preflight.label,
+								signal: matched,
+								source: "push",
+							}),
+						);
+					}
 					return {
 						head: yield* git(
 							snapshot.metadata.worktree,

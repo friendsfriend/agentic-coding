@@ -94,6 +94,7 @@ const DOMAIN_FILES = [
 const RUNTIME_FILES = [
 	"workflow/effects.ts",
 	"workflow/effect-runner.ts",
+	"workflow/push-preflight.ts", // non-interactive delivery-push credential preflight (efficiency backlog item 16)
 	"workflow/classifier-runner.ts", // bounded OpenSpec artifact collection + classifier model invocation
 	"workflow/laya-local.ts", // managed local classifier sidecar + opt-in model acquisition
 	"workflow/secure-fs.ts",

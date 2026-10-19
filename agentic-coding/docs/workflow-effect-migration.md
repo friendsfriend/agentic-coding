@@ -23,7 +23,7 @@ The four roadmap phases and their owners:
 | Contracts & definitions | `contracts.ts`, `schema.ts`, `definitions/contracts.ts`, `definitions/steps.ts`, `registry.ts` | 1 | engine, view, store, reducers, steps, CLI | Pure decoding; `path` normalization is a named pure step |
 | Store/kernel/reducers/security | `runtime/store.ts`, `runtime/engine.ts`, `runtime/view.ts`, `runtime/reducers/*`, `runtime/capability.ts`, `runtime/dialogue.ts` | 2 | CLI, dashboard | SQLite via `secure-fs.ts`/store adapter |
 | Startup/config/profiles | `startup.ts`, `profiles.ts`, `paths.ts` | 2 | CLI, engine | `Bun.file`/env via `effects.ts` seam |
-| Runner/adapters/credentials/wiki/assets | `effect-runner.ts`, `adapters.ts`, `credentials.ts`, `wiki.ts`, `assets.ts`, `secure-fs.ts`, `process.ts`, `failures.ts`, `herdr-schema.ts` | 3 | engine | git/subprocess/fs/network are native boundary adapters |
+| Runner/adapters/credentials/wiki/assets | `effect-runner.ts`, `push-preflight.ts`, `adapters.ts`, `credentials.ts`, `wiki.ts`, `assets.ts`, `secure-fs.ts`, `process.ts`, `failures.ts`, `herdr-schema.ts` | 3 | engine | git/subprocess/fs/network are native boundary adapters |
 | Telemetry | `observability.ts`, `effects.ts` (TraceExporter) | 4 | engine, CLI | OTLP HTTP exporter is a native boundary adapter |
 | CLI | `cli/*`, `cli.ts` | 4 | bin | process/env |
 | Workflow-facing TUI/shared clients | `tui/dash/*` consumers | 4 | dashboard | n/a |

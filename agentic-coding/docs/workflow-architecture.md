@@ -109,6 +109,76 @@ short-hashed ident for a custom path. It never relies on worktrunk's ambient
 `worktree-path` default, which has no `<root>/<ident>/` container to derive from
 for a repository outside the environment home.
 
+### Delivery push preflight (efficiency backlog item 16)
+
+A `delivery.push` that cannot authenticate used to be attempted, retried
+unchanged through the durable outbox and attempted again. Measured: six
+`git_operations_failed` events in three workflows, all
+`Permission denied (publickey)` on `git push`, with retries 11 s and 12 s apart
+and one pair 4.5 min apart — every attempt spending the same seconds to
+reproduce the same failure, and each one adding a monitor line whose workflow id
+was repeated twelve times.
+
+`src/workflow/push-preflight.ts` asks the credential question **once**, cheaply
+and non-interactively, from inside the `delivery.push` handler's `execute` — no
+new effect kind and no store change:
+
+- `git remote get-url --push --all -- <remote>` resolves the URL a push would
+  actually use (a configured *name* is resolved here too, so URL rewrites apply);
+  a configured URL resolves to itself. An empty remote, or a name this
+  repository does not have, is `skipped-no-remote` and runs no subprocess.
+- `git ls-remote --heads -- <remote>` runs under `GIT_TERMINAL_PROMPT=0`,
+  `GIT_SSH_COMMAND=<the command git would use> -o BatchMode=yes` and
+  `GIT_ALLOW_PROTOCOL=https:ssh:git`, with the process environment minus every
+  askpass relay (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_ASKPASS_REQUIRE`,
+  `AGENTIC_CODING_ASKPASS*`). The ssh command is *extended*, never replaced: a
+  configured `GIT_SSH_COMMAND`/`core.sshCommand`/`GIT_SSH` keeps its key and its
+  wrapper, so the check cannot fail for a push that would have worked.
+  `PUSH_PREFLIGHT_TIMEOUT_MS` bounds it at 10 s and the `git config` read at 5 s.
+- **Only a positive authentication failure blocks**: `Permission denied
+  (publickey|password|keyboard-interactive)`, `authentication failed`, `invalid
+  username or password`, `access denied`. A timeout, an unknown host, a refused
+  connection, a repository that is not there, a 404, or git's own "terminal
+  prompts disabled" is `inconclusive` and the push runs exactly as before — a
+  preflight must never block a push that would have succeeded, so the check's own
+  failure is a verdict, never an error.
+- A remote that is a local path or `file://` URL needs no credential and is
+  `skipped-local`, again without a subprocess.
+- `skipped-interactive`: when the push itself can ask the developer for a
+  credential — the dashboard and the execution coordinator always attach a
+  credential prompt — the check is skipped, because `BatchMode=yes` cannot
+  reproduce an answer that prompt would give and would report a failure for a
+  push that would have worked. That path still blocks **once**: the handler
+  attempts the push, and a push that fails with one of the same authentication
+  lines raises the same note (`source: push`) instead of being retried unchanged.
+
+A block is one `PermanentFailure` carrying `pushAuthFailureNote`: which remote
+and which URL, the matched line (bounded to 300 characters), and what to do
+(unlock the key the remote accepts — `ssh-add -l` lists what is loaded — fix the
+stored credential, or retry the delivery push to answer a prompt). The reported
+remote is masked and redacted (`//user:pass@host` becomes `//user:***@host`,
+known credential shapes are removed), so no key material, token or passphrase is
+printed, persisted or emitted. The effect ends `failed` with `attempts = 1`, the
+workflow enters `attention-required` with that single line, and nothing retries
+it. After the fix, the `retry-effect:<id>` developer action gives the effect a
+fresh attempt budget and the same push runs normally.
+
+Every attempt emits one `delivery.push_preflight` adapter envelope (`outcome:
+error` only for `auth-failed`; `herdr.delivery.push.preflight` is the verdict,
+`herdr.delivery.push.source` is `preflight` or `push`,
+`herdr.delivery.push.remote` is the masked remote and
+`herdr.delivery.push.detail` a bounded one-line reason). Emitting is wrapped so
+telemetry can never change the delivery outcome.
+
+To verify a delivery in a store, read the `events` query
+(`event = 'delivery.push_preflight'`, `event_class = 'delivery'`) and the failed
+effect's attempt count — baseline 3 attempts in 23 s becomes one failed effect
+with `attempts = 1` and one attention line. `delivery-timeline`'s `git_failures`
+column counts only the legacy `git_operations_*` vocabulary and stays at its
+baseline here; the modern shape of that failure is an `attention-required`
+workflow with a failed `delivery.push` effect, which this change now produces
+once instead of repeatedly.
+
 ### Store lifecycle
 
 `initializeStore()` is the only schema-writing boundary, and it writes
@@ -1257,7 +1327,7 @@ runtime code depends on it.
 | Layer | Paths | Owns |
 | --- | --- | --- |
 | **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/blueprints/`, `workflow/contracts.ts`, `workflow/schema.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, blueprint compilation, contracts, Effect Schema-backed contract decoding (`schema.ts` — declarative; the `Contract<T>` facades delegate here), structural registry validation, and the generated instruction-asset data module. |
-| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/pi-tools.ts`, `workflow/run-env.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, global-pi settings reads, the run environment file, configured-project catalog reads, the durable agent host). |
+| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/push-preflight.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/pi-tools.ts`, `workflow/run-env.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, global-pi settings reads, the run environment file, configured-project catalog reads, the durable agent host). |
 | **application** | `workflow/startup.ts`, `workflow/operations.ts`, `workflow/application.ts` | Shared orchestration both the CLI and the dashboard compose: startup/validation routing, the in-process engine factory, effect draining, configured-project listing (`operations.ts`, backed by the runtime catalog client), and the named application composition root (`application.ts` — the single place the production `applicationLayer` is composed and Effect programs run, complete-workflow-effect-cutover task 1). |
 | **cli** | `workflow/cli/`, `workflow/cli.ts` | Command parsing, dispatch (`run.ts`), command modules, and git/registry/pane helpers. |
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/`, `tui/orchestrator/` | Dashboard, observability, settings and Home Orchestrator feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |
