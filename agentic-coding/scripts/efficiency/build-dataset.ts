@@ -20,6 +20,12 @@ import {
 	UsageError,
 } from "./lib/cli.ts";
 import { writeDataset } from "./lib/dataset.ts";
+import {
+	describeEmptySources,
+	EMPTY_SOURCE_ALLOWLIST,
+	findEmptySources,
+	parseEmptySourcePatterns,
+} from "./lib/empty-sources.ts";
 import { extractTables } from "./lib/extract.ts";
 import { buildInventory } from "./lib/inventory.ts";
 import { datasetReadme } from "./lib/schema-readme.ts";
@@ -35,6 +41,9 @@ Options:
   --out <dir>         Output directory. Default: <evidence>/dataset-<timestamp>.
   --inventory <file>  Also write the data-inventory markdown to this path.
   --top <n>           Workflows listed per gap table in the inventory (default 40).
+  --allow-empty <p>   Comma-separated path patterns of source files known to be
+                      empty, added to the built-in allow-list. A source file
+                      that parses into zero rows fails the build otherwise.
   --quiet             Do not log per-file progress.
   --help              Show this help.
 
@@ -64,6 +73,10 @@ function main(argv: readonly string[]): number {
 	);
 	const inventoryPath = optionalValue(args, "inventory");
 	const top = numberValue(args, "top", 40);
+	const allowlist = [
+		...EMPTY_SOURCE_ALLOWLIST,
+		...parseEmptySourcePatterns(optionalValue(args, "allow-empty")),
+	];
 	const quiet = args.flags.has("quiet");
 	const log = (message: string) => {
 		if (!quiet) process.stderr.write(`${message}\n`);
@@ -93,8 +106,23 @@ function main(argv: readonly string[]): number {
 		sourcesAvailable: sourcesAvailable.join(", "),
 		buildMs: "",
 	};
-	const write = writeDataset({ outDir, tables: extraction.tables, meta });
 	meta.buildMs = String(Math.round(performance.now() - started));
+
+	// A source file that parsed nothing is an error, not a note: the harness
+	// stores reported zero rows for weeks while holding a sixth of the
+	// snapshot's turns, and a build that records that in a note loses the source
+	// without failing anything. `source-gaps` reports the same rows on a dataset
+	// that was built before this check existed.
+	const emptySources = findEmptySources(
+		extraction.tables.sourceFiles,
+		allowlist,
+	);
+	if (emptySources.length > 0) {
+		process.stderr.write(describeEmptySources(emptySources));
+		return 1;
+	}
+
+	const write = writeDataset({ outDir, tables: extraction.tables, meta });
 	// Re-open only to record the final meta; the counts are already known.
 	const readme = datasetReadme(
 		meta,

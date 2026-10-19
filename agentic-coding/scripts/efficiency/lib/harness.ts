@@ -244,13 +244,83 @@ interface RunsDocumentState {
 	ignored: number;
 }
 
+/**
+ * A SQLite URI filename for a store that cannot change: `immutable=1` tells
+ * SQLite to read the pages it finds and never consult a write-ahead log. Only
+ * `%`, `?` and `#` need escaping, because they are what ends the path part of a
+ * URI.
+ */
+export function immutableUri(filePath: string): string {
+	const escaped = filePath.replace(
+		/[%?#]/g,
+		(char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+	return `file:${escaped}?immutable=1`;
+}
+
+/**
+ * Force the lazily opened file to be read now, so a failure surfaces at the open
+ * rather than in the middle of the scan.
+ */
+function assertReadable(db: Database): void {
+	db.query<{ n: number }, []>("select count(*) as n from sqlite_master").get();
+}
+
+/**
+ * Open a harness store read-only.
+ *
+ * A harness store is a SQLite database in WAL mode, and the snapshot copies it
+ * without the `-shm`/`-wal` companions a live store has. SQLite cannot open a
+ * WAL database read-only without them — every statement fails with "unable to
+ * open database file" — which is how nine `harness.*` files reported zero rows
+ * while holding 2,263 assistant turns.
+ *
+ * The plain read-only open is tried first, so a store that does carry its WAL is
+ * still read exactly as the runtime left it. Only when that fails is the file
+ * reopened through `immutable=1`, which lets SQLite read a frozen file without a
+ * shared-memory index. That *ignores a live `-wal`*: the snapshot's own header
+ * pages are then the whole database, which is the point for a snapshot copy and
+ * the reason this stays the fallback rather than the default.
+ */
+function openHarnessStore(filePath: string): {
+	db: Database;
+	immutable: boolean;
+} {
+	let plainFailure: Error | undefined;
+	try {
+		const db = new Database(filePath, { readonly: true });
+		try {
+			assertReadable(db);
+			return { db, immutable: false };
+		} catch (error) {
+			db.close();
+			plainFailure = error as Error;
+		}
+	} catch (error) {
+		plainFailure = error as Error;
+	}
+	const db = new Database(immutableUri(filePath), { readonly: true });
+	try {
+		assertReadable(db);
+	} catch (error) {
+		db.close();
+		throw plainFailure ?? (error as Error);
+	}
+	return { db, immutable: true };
+}
+
 /** Read one harness store. Read-only; a corrupt harness degrades to a note. */
 export function readHarness(filePath: string): HarnessReadResult {
 	const stats: ReadStats = { records: 0, parsed: 0, skipped: 0, notes: [] };
 	const conversations = new Map<number, HarnessConversation>();
 	let db: Database | undefined;
 	try {
-		db = new Database(filePath, { readonly: true });
+		const opened = openHarnessStore(filePath);
+		db = opened.db;
+		if (opened.immutable)
+			stats.notes.push(
+				"opened immutable=1: the snapshot copy has no -shm/-wal companion, so a live -wal would be ignored",
+			);
 		const conversationRows = db
 			.query<{ id: number }, []>("select id from conversations order by id")
 			.all();

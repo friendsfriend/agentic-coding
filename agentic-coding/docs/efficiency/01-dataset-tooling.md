@@ -5,6 +5,12 @@ builds the evidence and says what it can and cannot answer; it makes **no**
 judgement about useless calls or any other inefficiency. The measurements live
 in [`00-data-inventory.md`](./00-data-inventory.md), which is generated.
 
+The harness reader repair and the build's empty-source alarm are recorded in
+[`04a-harness-reader-repair.md`](./04a-harness-reader-repair.md). Every figure in
+this document and in `00`…`04` was taken before that repair, when nine
+`harness.*` stores were unreadable, so those figures are lower bounds against the
+repaired denominators.
+
 The tooling is read-only with respect to the product: it never runs the
 app/server/TUI, opens the live stores read-only, changes nothing under `src/`
 and leaves the store schema at version 6. The dataset is written **outside the
@@ -32,6 +38,15 @@ The builder finishes in about two seconds on the full snapshot (508 source
 files, ~103k records) and prints a JSON summary: per-table row counts, the byte
 size, the sources it found, sources it expected but did not find, the number of
 unparseable records and the number of notes.
+
+A source file whose parse yields **zero rows** fails the build (non-zero exit, a
+message naming the file and its counts, and no dataset written): a source can be
+lost silently otherwise, which is exactly what happened to the nine `harness.*`
+stores (see [`04a-harness-reader-repair.md`](./04a-harness-reader-repair.md)).
+Legitimately empty sources are named in `EMPTY_SOURCE_ALLOWLIST`
+(`scripts/efficiency/lib/empty-sources.ts`) or passed once as
+`--allow-empty "<pattern>[,<pattern>]"`; an entry is a `*`/`**` glob over the
+snapshot-relative path, optionally narrowed with a `source`.
 
 ```bash
 bun run scripts/efficiency/build-dataset.ts \

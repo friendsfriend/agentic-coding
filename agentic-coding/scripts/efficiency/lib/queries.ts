@@ -997,7 +997,7 @@ ORDER BY r.started_at, r.run_id`,
 	{
 		name: "source-gaps",
 		summary:
-			"Snapshot files the build parsed into zero rows: a whole source can be lost while every workflow count still looks plausible.",
+			"Snapshot files that parsed into zero rows: a whole source can be lost while every workflow count still looks plausible. The build now fails on them unless the file is allow-listed (`empty-sources.ts`), so this query reports the gaps of a dataset built before that check",
 		example:
 			"bun run scripts/efficiency/analyze.ts source-gaps --dataset ~/ev/dataset-2026",
 		limitable: true,
