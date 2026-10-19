@@ -5,6 +5,7 @@
 // loopback server whose operations are stubbed, so the wire contract (including
 // the task/taskRef refusal) is exercised, not bypassed.
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import { createOrchestratorExtension } from "../src/agent-host/orchestrator.ts";
 import { compactWorkflowStatus } from "../src/agent-host/orchestrator-compact.ts";
 import {
@@ -16,7 +17,10 @@ import {
 	decodeWorkflowIds,
 	rankSimilarIds,
 } from "../src/agent-host/orchestrator-resolve.ts";
-import type { WorkflowStartRequest } from "../src/contracts/actions.ts";
+import {
+	type WorkflowStartRequest,
+	workflowStartRequestSchema,
+} from "../src/contracts/actions.ts";
 import { orchestratorTokenFor } from "../src/server/auth.ts";
 import type { ServerOperations } from "../src/server/handlers.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
@@ -123,25 +127,50 @@ async function withServer<T>(
 		lastDeveloperMessage?: string;
 		changes?: unknown[];
 		startError?: string;
+		/** Extra identity rows: a second repository holding an id the base board
+		 * already knows (`wf-1` in two repositories). */
+		board?: Array<{ target: string; workflowId: string }>;
 	} = {},
 ): Promise<T> {
 	const started: WorkflowStartRequest[] = [];
 	// Every view read as `repo/workflowId`: a test asserts which repository the
 	// board resolved for an id it was not told.
 	const read: string[] = [];
+	const extra = (options.board ?? []).map((row) => ({
+		target: row.target,
+		startedBy: "orchestrator",
+		state: { workflowId: row.workflowId, status: "active" },
+		tasks: [0, 0] as [number, number],
+		agents: [],
+	}));
 	const operations = {
 		runObservation: async (request: unknown) => {
 			const kind = (request as { kind?: string }).kind;
 			if (kind === "workflows") return BOARD;
-			if (kind === "openspec-changes") return options.changes ?? [];
+			// The board's identity rows: the read a resolution resolves against.
+			if (kind === "workflow-targets")
+				return [...BOARD, ...extra].map((row) => ({
+					workflowId: row.state.workflowId,
+					target: row.target,
+				}));
+			if (kind === "openspec-changes") {
+				const rows = options.changes ?? [];
+				const limit = (request as { limit?: number }).limit;
+				return limit === undefined ? rows : rows.slice(0, limit);
+			}
 			return [];
 		},
-		// The board's own rows name the repository; a view for an id the board
-		// does not know is what the server refuses.
+		// The board's own rows name the repository; a view for a repository the
+		// board does not place the id in, or for an id it does not know at all, is
+		// what the server refuses.
 		view: (repo: string, workflowId: string) => {
 			read.push(`${repo}/${workflowId}`);
 			const found = VIEWS[workflowId];
-			if (!found) throw new Error(`workflow not found: ${workflowId}`);
+			const owners = [...BOARD, ...extra]
+				.filter((row) => row.state.workflowId === workflowId)
+				.map((row) => row.target);
+			if (!found || !owners.includes(repo))
+				throw new Error(`workflow not found: ${workflowId}`);
 			return found;
 		},
 		start: async (request: WorkflowStartRequest) => {
@@ -259,6 +288,9 @@ describe("cheap wake-up tools", () => {
 			async (tools) => {
 				const list = tools.get("list_changes");
 				expect(list?.description).toContain("openspec/changes");
+				// The listing is a prefix of a bounded set, and it says so: a change
+				// that is absent may simply sort past the cut.
+				expect(list?.description).toContain("first 100 active changes");
 				if (!list) return;
 				const all = await call(list, { repo: "/repo" });
 				expect(json(all)).toEqual(rows);
@@ -282,6 +314,25 @@ describe("cheap wake-up tools", () => {
 			expect((json(answer) as Record<string, unknown>).workflowId).toBe("wf-2");
 			expect((json(answer) as Record<string, unknown>).target).toBe("/repo");
 			expect(read).toEqual(["/other/wf-2"]);
+		});
+	});
+
+	test("a named repository is where to look first, never a denial of a known id", async () => {
+		await withServer(async (tools, _started, read) => {
+			const status = tools.get("workflow_status");
+			if (!status) throw new Error("missing workflow_status");
+			const answer = (await call(status, {
+				repo: "/other",
+				workflowId: "wf-1",
+			})) as ToolResult;
+			// The board knows `wf-1` lives in `/repo`, so the answer is its row —
+			// which names that target — instead of `unknown: true` plus candidates
+			// that are all wrong.
+			const row = json(answer) as Record<string, unknown>;
+			expect(row.unknown).toBeUndefined();
+			expect(row.workflowId).toBe("wf-1");
+			expect(row.target).toBe("/repo");
+			expect(read).toEqual(["/other/wf-1", "/repo/wf-1"]);
 		});
 	});
 
@@ -345,6 +396,41 @@ describe("cheap wake-up tools", () => {
 		});
 	});
 
+	test("one id in two repositories answers one named entry per target", async () => {
+		await withServer(
+			async (tools, _started, read) => {
+				const status = tools.get("workflow_status");
+				if (!status) throw new Error("missing workflow_status");
+				const answer = (await call(status, {
+					workflowId: "wf-1",
+					sinceRevision: { "wf-1": 7 },
+				})) as ToolResult;
+				const entries = json(answer) as Array<Record<string, unknown>>;
+				// Two entries mean two indistinguishable rows unless each one names
+				// its workflow, so the short-circuit names it too.
+				expect(entries).toHaveLength(2);
+				expect(entries).toEqual([
+					{
+						workflowId: "wf-1",
+						unchanged: true,
+						revision: 7,
+						status: "active",
+						step: { id: "core.implementation", label: "Implementation" },
+					},
+					{
+						workflowId: "wf-1",
+						unchanged: true,
+						revision: 7,
+						status: "active",
+						step: { id: "core.implementation", label: "Implementation" },
+					},
+				]);
+				expect(read).toEqual(["/repo/wf-1", "/mirror/wf-1"]);
+			},
+			{ board: [{ target: "/mirror", workflowId: "wf-1" }] },
+		);
+	});
+
 	test("an unknown id answers the closest ids instead of failing the call", async () => {
 		await withServer(async (tools) => {
 			const status = tools.get("workflow_status");
@@ -362,6 +448,9 @@ describe("cheap wake-up tools", () => {
 				candidates: ["wf-1"],
 				more: 0,
 			});
+			// An empty candidate list still has a next step, and the description
+			// names it: the tool that lists the ids that do exist.
+			expect(status.description).toContain("call list_workflows");
 		});
 	});
 
@@ -400,6 +489,32 @@ describe("cheap wake-up tools", () => {
 		});
 	});
 
+	test("the wire contract refuses a task and a taskRef on its own", async () => {
+		// The tool's guard throws before it POSTs, so the boundary's own refusal is
+		// asserted on the start request schema: a caller that skips the tool still
+		// cannot send both.
+		const both = Schema.decodeUnknownEither(workflowStartRequestSchema)({
+			repo: "/repo",
+			workflowId: "wf-1",
+			mode: "worktree",
+			task: "add a flag",
+			taskRef: { change: "add-flag" },
+		});
+		expect(both._tag).toBe("Left");
+		expect(both._tag === "Left" ? String(both.left.message) : "").toContain(
+			"cannot carry both",
+		);
+		const reference = Schema.decodeUnknownEither(workflowStartRequestSchema)({
+			repo: "/repo",
+			workflowId: "wf-1",
+			mode: "worktree",
+			taskRef: { change: "add-flag" },
+		});
+		expect(
+			reference._tag === "Right" ? reference.right.task : "decoded",
+		).toBeUndefined();
+	});
+
 	test("previousMessage sends the developer's own last message as the task", async () => {
 		const message = "make the flag configurable per preset";
 		await withServer(
@@ -422,6 +537,26 @@ describe("cheap wake-up tools", () => {
 				);
 			},
 			{ lastDeveloperMessage: message },
+		);
+	});
+
+	test("previousMessage over the task bound is refused, never cut", async () => {
+		const long = "x".repeat(16_001);
+		await withServer(
+			async (tools, started) => {
+				const start = tools.get("start_workflow");
+				if (!start) throw new Error("missing start_workflow");
+				const answer = (await call(start, {
+					repo: "/repo",
+					workflowId: "wf-1",
+					workflowType: "solo",
+					taskRef: { previousMessage: true },
+				})) as ToolResult;
+				expect(answer.isError).toBe(true);
+				expect(answer.content[0]?.text).toContain("over the 16000-character");
+				expect(started).toHaveLength(0);
+			},
+			{ lastDeveloperMessage: long },
 		);
 	});
 

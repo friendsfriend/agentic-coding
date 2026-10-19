@@ -42,6 +42,10 @@ import type {
 } from "../../contracts/workflow.ts";
 import { effectiveManifestPolicy } from "../../workflow/definitions.ts";
 import {
+	discoverChangeIds,
+	readChangeArtifact,
+} from "../../workflow/openspec-changes.ts";
+import {
 	sessionsReport,
 	engine as workflowEngine,
 } from "../../workflow/operations.ts";
@@ -110,6 +114,7 @@ import { cachedText } from "./file-cache.ts";
 export type DashboardObservation =
 	| { kind: "dashboard"; repo: string; workflowId: string }
 	| { kind: "workflows" }
+	| { kind: "workflow-targets" }
 	| { kind: "projects" }
 	| { kind: "artifacts"; state: WorkflowState }
 	| { kind: "artifact-content"; state: WorkflowState; artifact: string }
@@ -139,7 +144,7 @@ export type DashboardObservation =
 	| { kind: "developer-review-findings"; repo: string; workflowId: string }
 	| { kind: "repair-preview"; repo: string; workflowId: string }
 	| { kind: "changes"; repo: string }
-	| { kind: "openspec-changes"; repo: string }
+	| { kind: "openspec-changes"; repo: string; limit?: number }
 	| { kind: "branches"; repo: string }
 	| {
 			kind: "evidence";
@@ -164,6 +169,8 @@ export async function runLocalObservation(
 	switch (observation.kind) {
 		case "workflows":
 			return listWorkflowsFromCatalog();
+		case "workflow-targets":
+			return listWorkflowTargetsFromCatalog();
 		case "projects":
 			return discoverProjects();
 		case "dashboard":
@@ -222,7 +229,7 @@ export async function runLocalObservation(
 		case "changes":
 			return discoverChanges(observation.repo);
 		case "openspec-changes":
-			return listOpenSpecChanges(observation.repo);
+			return listOpenSpecChanges(observation.repo, observation.limit);
 		case "branches":
 			return discoverBranches(observation.repo);
 		case "evidence":
@@ -371,6 +378,58 @@ export async function listWorkflowsFromCatalog(
 		...overview,
 		projectIdent: projectIdentForPath(catalog, overview.state.repository),
 	}));
+}
+
+/** One workflow's identity as a lookup needs it: the `workflowId` the model was
+ * given and the target that owns it. `workflow_status` resolves an id with no
+ * `repo` against this read instead of the full board, whose rows carry the task
+ * text, every run, the gate decisions and the definition graph. */
+export interface WorkflowTargetRow {
+	workflowId: string;
+	target: string;
+}
+
+export function buildWorkflowTargets(roots: string[]): WorkflowTargetRow[] {
+	const found: WorkflowTargetRow[] = [];
+	const seen = new Set<string>();
+	const addRepository = (repo: string) => {
+		let store: string;
+		try {
+			store = canonicalStorePath(repo);
+			if (!existsSync(store)) return;
+		} catch {
+			return;
+		}
+		let views: WorkflowView[];
+		try {
+			views = listWorkflowViews(repo);
+		} catch {
+			return;
+		}
+		for (const view of views) {
+			if (!view.workflowId) continue;
+			// The wiki and research targets share one store file, so identity is
+			// the store file plus the id, never the target.
+			const identity = `${store}\0${view.workflowId}`;
+			if (seen.has(identity)) continue;
+			seen.add(identity);
+			found.push({
+				workflowId: view.workflowId,
+				target: workflowTargetFor(repo, view.definition.id),
+			});
+		}
+	};
+	for (const root of workflowRoots(roots)) addRepository(root);
+	addRepository(wikiWorkflowTarget());
+	addRepository(researchWorkflowTarget());
+	return found.sort((a, b) => a.workflowId.localeCompare(b.workflowId));
+}
+
+export async function listWorkflowTargetsFromCatalog(): Promise<
+	WorkflowTargetRow[]
+> {
+	const catalog = await loadProjectCatalog({});
+	return buildWorkflowTargets(workflowRoots(projectCanonicalRoots(catalog)));
 }
 
 export function discoverProjectsAsync(
@@ -2149,16 +2208,7 @@ export function openSpecArtifact(state: WorkflowState, artifact: string) {
 }
 
 export function discoverChanges(repo: string): string[] {
-	const changesDir = join(repo, "openspec", "changes");
-	if (!existsSync(changesDir)) return [];
-	try {
-		return readdirSync(changesDir, { withFileTypes: true })
-			.filter((entry) => entry.isDirectory() && entry.name !== "archive")
-			.map((entry) => entry.name)
-			.sort();
-	} catch {
-		return [];
-	}
+	return discoverChangeIds(repo);
 }
 
 /** One listing's protocol bound: rows, title length and how much of a change's
@@ -2169,45 +2219,55 @@ const OPENSPEC_TITLE_LIMIT = 80;
 const OPENSPEC_TITLE_BYTES = 4096;
 const OPENSPEC_TASKS_BYTES = 64 * 1024;
 
-/** Read at most `bytes` from the start of a file; a missing or unreadable file
- * answers the empty string, because a change without an artifact is a row with
- * less information, not a failed listing. */
-function readBounded(file: string, bytes: number): string {
-	let fd: number | undefined;
-	try {
-		fd = openSync(file, "r");
-		const buffer = Buffer.alloc(bytes);
-		const read = readSync(fd, buffer, 0, bytes, 0);
-		return buffer.subarray(0, read).toString("utf8");
-	} catch {
-		return "";
-	} finally {
-		if (fd !== undefined) closeSync(fd);
-	}
-}
+/** The section headings every OpenSpec proposal carries, in the fixed order the
+ * template writes them. They label a section, not a change, so they are never
+ * answered as a row's title. */
+const OPEN_SPEC_SECTIONS = new Set([
+	"why",
+	"what changes",
+	"impact",
+	"context",
+	"goals",
+	"non-goals",
+	"decisions",
+	"risks",
+	"alternatives",
+	"migration",
+	"rollout",
+	"testing",
+	"open questions",
+]);
 
-/** The first Markdown heading of a proposal, truncated: the one human label a
- * row carries, instead of the document behind it. */
+/** The human label of a change's proposal: its level-1 heading, or — for the
+ * OpenSpec template, whose proposals often start at `## Why` — the first
+ * heading that is not one of the template's fixed section names. Truncated: a
+ * row carries a label, never the document behind it. */
 function changeTitle(proposal: string): string | undefined {
+	const headings: Array<{ depth: string; text: string }> = [];
 	for (const line of proposal.split("\n")) {
-		const match = /^#{1,6}\s+(.+)$/.exec(line.trim());
-		if (match?.[1])
-			return match[1].trim().slice(0, OPENSPEC_TITLE_LIMIT) || undefined;
+		const match = /^(#{1,6})\s+(.+)$/.exec(line.trim());
+		if (match?.[1] && match[2])
+			headings.push({ depth: match[1], text: match[2].trim() });
 	}
-	return undefined;
+	const heading =
+		headings.find((entry) => entry.depth === "#") ??
+		headings.find((entry) => !OPEN_SPEC_SECTIONS.has(entry.text.toLowerCase()));
+	if (!heading) return undefined;
+	return heading.text.slice(0, OPENSPEC_TITLE_LIMIT) || undefined;
 }
 
 /** `<checked>/<total>` over a tasks file's checkbox lines, or undefined when
  * the change has no checkbox at all. */
 function changeProgress(tasks: string): string | undefined {
-	const boxes = tasks
-		.split("\n")
-		.filter((line) => /^\s*[-*]\s*\[[ xX]\]/.test(line));
-	if (boxes.length === 0) return undefined;
-	const checked = boxes.filter((line) =>
-		/^\s*[-*]\s*\[[xX]\]/.test(line),
-	).length;
-	return `${checked}/${boxes.length}`;
+	let total = 0;
+	let checked = 0;
+	for (const line of tasks.split("\n")) {
+		const match = /^\s*[-*]\s*\[([ xX])\]/.exec(line);
+		if (!match) continue;
+		total += 1;
+		if (match[1] !== " ") checked += 1;
+	}
+	return total === 0 ? undefined : `${checked}/${total}`;
 }
 
 /** The non-closed workflows of one repository, keyed by the change they
@@ -2242,31 +2302,39 @@ function changesInFlight(
  * directory) and answers an empty list for a repository without it. */
 export function listOpenSpecChanges(
 	repo: string,
+	limit = OPENSPEC_CHANGE_LIMIT,
 ): Array<Record<string, unknown>> {
 	const changesDir = join(repo, "openspec", "changes");
 	if (!existsSync(changesDir)) return [];
 	const inFlight = changesInFlight(repo);
-	return discoverChanges(repo)
-		.slice(0, OPENSPEC_CHANGE_LIMIT)
-		.map((changeId) => {
-			const root = join(changesDir, changeId);
-			const title = changeTitle(
-				readBounded(join(root, "proposal.md"), OPENSPEC_TITLE_BYTES),
-			);
-			const tasks = changeProgress(
-				readBounded(join(root, "tasks.md"), OPENSPEC_TASKS_BYTES),
-			);
-			const workflow = inFlight.get(changeId);
-			return {
-				changeId,
-				...(title ? { title } : {}),
-				...(tasks ? { tasks } : {}),
-				path: `openspec/changes/${changeId}`,
-				...(workflow
-					? { workflowId: workflow.workflowId, status: workflow.status }
-					: {}),
-			};
-		});
+	// One id per row, at most the requested (and protocol) bound: the slice
+	// happens before any artifact is read, so a poll for five rows never pays
+	// for a hundred.
+	const ids = discoverChangeIds(repo).slice(
+		0,
+		Math.min(limit, OPENSPEC_CHANGE_LIMIT),
+	);
+	return ids.map((changeId) => {
+		const root = join(changesDir, changeId);
+		const proposal = readChangeArtifact(
+			root,
+			"proposal.md",
+			OPENSPEC_TITLE_BYTES,
+		);
+		const taskFile = readChangeArtifact(root, "tasks.md", OPENSPEC_TASKS_BYTES);
+		const title = changeTitle(proposal.kind === "text" ? proposal.text : "");
+		const tasks = changeProgress(taskFile.kind === "text" ? taskFile.text : "");
+		const workflow = inFlight.get(changeId);
+		return {
+			changeId,
+			...(title ? { title } : {}),
+			...(tasks ? { tasks } : {}),
+			path: `openspec/changes/${changeId}`,
+			...(workflow
+				? { workflowId: workflow.workflowId, status: workflow.status }
+				: {}),
+		};
+	});
 }
 
 export function discoverProjects(): Promise<ProjectOption[]> {

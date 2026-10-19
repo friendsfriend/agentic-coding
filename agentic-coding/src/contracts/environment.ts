@@ -86,7 +86,12 @@ const observationSchema = Schema.Union(
 	Schema.Struct({
 		kind: Schema.Literal("openspec-changes"),
 		repo: Schema.String,
+		limit: Schema.optional(Schema.Int),
 	}),
+	// The identity rows `workflow_status` resolves an id with (efficiency
+	// backlog item 21): every board row reduced to its workflowId and target, so
+	// resolving one id costs two fields per workflow rather than a full state.
+	Schema.Struct({ kind: Schema.Literal("workflow-targets") }),
 	Schema.Struct({ kind: Schema.Literal("branches"), repo: Schema.String }),
 	Schema.Struct({
 		kind: Schema.Literal("evidence"),

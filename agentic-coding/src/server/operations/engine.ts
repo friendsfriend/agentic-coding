@@ -34,7 +34,7 @@ import {
 } from "../../workflow/runtime.ts";
 import {
 	prepareWorkflowStart,
-	taskReferenceSuffix,
+	workflowStartedAnswer,
 } from "../../workflow/startup.ts";
 import { prepareBlueprintWorkflowStart } from "./blueprints.ts";
 
@@ -325,7 +325,7 @@ export async function startWorkflowInProcess(
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, args.workflowId);
-	return `Workflow started: ${args.workflowId}${taskReferenceSuffix(prepared)}`;
+	return workflowStartedAnswer(args.workflowId, prepared);
 }
 
 /** Everything a blueprint start carries in addition to the ordinary start
@@ -374,7 +374,7 @@ export async function startBlueprintWorkflowInProcess(
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, input.workflowId);
-	return `Workflow started: ${input.workflowId}${taskReferenceSuffix(prepared)}`;
+	return workflowStartedAnswer(input.workflowId, prepared);
 }
 
 /** Start the home-only wiki review without requiring a repository. */

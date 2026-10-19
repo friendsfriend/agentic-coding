@@ -26,6 +26,12 @@ export const workflowActionRequestSchema = Schema.Struct({
 	input: Schema.optional(Schema.Unknown),
 });
 
+/** The task bound of a start, in characters. Inline text, a change reference
+ * assembled on the server and a `taskRef.previousMessage` substitution all
+ * enter the same start, so they answer to the same bound: a reference never
+ * starts a workflow the typed task could not. */
+export const TASK_CHAR_BOUND = 16_000;
+
 export const workflowStartRequestSchema = Schema.Struct({
 	repo: Schema.String,
 	ticket: Schema.optional(Schema.String),

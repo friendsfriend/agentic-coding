@@ -3,6 +3,18 @@ import path from "node:path";
 import { Effect } from "effect";
 import { rankSimilarIds } from "../agent-host/orchestrator-resolve.ts";
 import { resolveConfigRoot } from "../config-root.ts";
+import { TASK_CHAR_BOUND } from "../contracts/actions.ts";
+import {
+	changesRoot,
+	discoverChangeIds,
+	readChangeArtifact,
+} from "./openspec-changes.ts";
+
+// The listing is the resolver's input and `list_changes`' answer; one
+// implementation keeps the ids the model is told to pick from and the ids that
+// resolve from drifting apart.
+export { discoverChangeIds };
+
 import type {
 	StartedBy,
 	WorkflowExecutionSettings,
@@ -126,6 +138,17 @@ export function taskReferenceSuffix(prepared: PreparedWorkflowStart): string {
 	return ` — task from change ${JSON.stringify(reference.change)}, ${reference.taskChars} task chars`;
 }
 
+/** The acceptance line of a start. Both start paths (built-in and blueprint)
+ * answer with this one function, so the echo that makes a mis-resolved task
+ * reference visible cannot be dropped from one of them: an inline-text start
+ * answers the bare `Workflow started: <id>` it always did. */
+export function workflowStartedAnswer(
+	workflowId: string,
+	prepared: PreparedWorkflowStart,
+): string {
+	return `Workflow started: ${workflowId}${taskReferenceSuffix(prepared)}`;
+}
+
 export function validateStart(
 	repo: string,
 	workflowId: string,
@@ -243,11 +266,16 @@ function cleanTreeRefusal(porcelain: string): string {
 /** The bound the orchestrator's `task` parameter already enforces on a task, in
  * characters. A change reference assembles its task inside the same bound, so a
  * reference never starts a workflow an inline task could not. */
-export const TASK_CHAR_BOUND = 16_000;
+export { TASK_CHAR_BOUND };
+
 /** Room the trailing truncation marker may use inside `TASK_CHAR_BOUND`. */
 const TRUNCATION_MARKER_BUDGET = 240;
 /** How many dropped section names the truncation marker still lists. */
 const TRUNCATION_MARKER_SECTIONS = 5;
+/** How much of a change's `proposal.md` (its whole task source) and of its
+ * `tasks.md` (read to list the checkboxes) is read at all. */
+const PROPOSAL_BYTES = 64 * 1024;
+const OPENSPEC_TASKS_BYTES = 64 * 1024;
 
 /** A change reference resolved into the task every later start rule reads. */
 export interface ResolvedTaskReference {
@@ -257,34 +285,6 @@ export interface ResolvedTaskReference {
 	task: string;
 	/** The `##` sections (or `tasks`) the character bound dropped whole. */
 	truncated: string[];
-}
-
-/** The `openspec/changes` directory of one repository. */
-function changesRoot(repo: string): string {
-	return path.join(repo, "openspec", "changes");
-}
-
-/** The active change ids of a repository: the directories under
- * `openspec/changes`, without `archive` and without anything that is not a real
- * directory (so a symlinked entry is never a resolvable change). */
-export function discoverChangeIds(repo: string): string[] {
-	try {
-		return fs
-			.readdirSync(changesRoot(repo), { withFileTypes: true })
-			.filter((entry) => entry.isDirectory() && entry.name !== "archive")
-			.map((entry) => entry.name)
-			.sort();
-	} catch {
-		return [];
-	}
-}
-
-function readTextIfPresent(file: string): string {
-	try {
-		return fs.readFileSync(file, "utf8");
-	} catch {
-		return "";
-	}
 }
 
 /** The whole `##` sections of a proposal, in file order. The preamble before
@@ -322,10 +322,11 @@ function buildTaskText(
 ): {
 	task: string;
 	truncated: string[];
+	unchecked: number;
 } {
 	const root = path.join(changesRoot(repo), change);
-	const proposal = readTextIfPresent(path.join(root, "proposal.md"));
-	const tasks = readTextIfPresent(path.join(root, "tasks.md"));
+	const proposal = changeArtifact(root, change, "proposal.md", PROPOSAL_BYTES);
+	const tasks = changeArtifact(root, change, "tasks.md", OPENSPEC_TASKS_BYTES);
 	const limit = TASK_CHAR_BOUND - TRUNCATION_MARKER_BUDGET;
 	const parts: string[] = [];
 	const truncated: string[] = [];
@@ -348,6 +349,9 @@ function buildTaskText(
 			length += text.length + 2;
 		}
 	}
+	const unchecked = tasks
+		.split("\n")
+		.filter((line) => /^[-*]\s*\[ \]/.test(line.trim())).length;
 	let body = parts.join("\n\n");
 	if (truncated.length > 0) {
 		const named = truncated.slice(0, TRUNCATION_MARKER_SECTIONS);
@@ -357,7 +361,24 @@ function buildTaskText(
 				: "";
 		body = `${body}\n\n[task truncated: ${named.join(", ")}${more}]`;
 	}
-	return { task: body.slice(0, TASK_CHAR_BOUND), truncated };
+	return { task: body.slice(0, TASK_CHAR_BOUND), truncated, unchecked };
+}
+
+/** One bounded artifact read of a change, refusing anything that is not a
+ * regular file inside the change: a reference may not be turned into a read of
+ * another file through the repository's own content. */
+function changeArtifact(
+	root: string,
+	change: string,
+	name: string,
+	bytes: number,
+): string {
+	const artifact = readChangeArtifact(root, name, bytes);
+	if (artifact.kind === "refused")
+		throw new Error(
+			`OpenSpec change ${change} has a ${name} that is not a regular file inside the change; refusing to read through it`,
+		);
+	return artifact.kind === "text" ? artifact.text : "";
 }
 
 function boundedList(values: readonly string[], limit = 5): string {
@@ -419,10 +440,15 @@ export function resolveTaskReference(
 				`task reference ${JSON.stringify(reference)} is not a change of ${repo}: it must point inside ${path.join("openspec", "changes")}`,
 			);
 		const segments = inside.split(path.sep).filter((segment) => segment !== "");
-		if (segments[0] === "archive")
+		if (segments[0] === "archive") {
+			const ranked = rankSimilarIds(ids, segments[1] ?? "");
+			const closest = ranked.candidates.length
+				? `; active changes: ${boundedList(ranked.candidates)}${ranked.more > 0 ? ` (+${ranked.more} more)` : ""}`
+				: "";
 			throw new Error(
-				`task reference ${JSON.stringify(reference)} names an archived change: an archived change is history, not work to start`,
+				`task reference ${JSON.stringify(reference)} names an archived change: an archived change is history, not work to start${closest}`,
 			);
+		}
 		if (segments.length > 1)
 			throw new Error(
 				`task reference ${JSON.stringify(reference)} is not a change directory: it must be ${path.join("openspec", "changes", "<changeId>")}`,
@@ -456,6 +482,15 @@ export function resolveTaskReference(
 	if (!built.task.trim())
 		throw new Error(
 			`OpenSpec change ${change} has no proposal.md or tasks.md content in ${repo}`,
+		);
+	// A change whose boxes are all checked is finished work: the archive move is
+	// a workflow step, not something a change's author performs, so an
+	// implemented change stays listed at the top level and would otherwise start
+	// a workflow with nothing left to do. The same rule the `openspec-apply`
+	// start requirement applies, so both agree on what is actionable.
+	if (built.unchecked === 0)
+		throw new Error(
+			`task reference ${JSON.stringify(reference)} resolves to ${change}, which has no unchecked task; pick a change that still has work (list_changes shows its progress)`,
 		);
 	return { change, task: built.task, truncated: built.truncated };
 }

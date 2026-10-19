@@ -118,10 +118,12 @@ diagnostic.
 Given `repo` and a reference string:
 
 1. A path form (absolute, or relative to `repo`, containing a separator) is
-   accepted only when it resolves inside `<repo>/openspec/changes/<id>` with a
-   single path segment under `changes/`; `..`, symlink escapes and
-   `openspec/changes/archive/**` are refused (an archived change is history, not
-   work to start; the refusal says so).
+   accepted only when it normalises to `<repo>/openspec/changes/<id>` with a
+   single path segment under `changes/`; a path that leaves `openspec/changes`,
+   names the directory itself or names more than one segment below it, a symlink
+   escape, and `openspec/changes/archive/**` are refused (an archived change is
+   history, not work to start; the refusal says so and names the active
+   changes).
 2. Otherwise the reference is a change id: an exact directory match wins.
 3. Failing that, the reference is matched as a prefix, then as a substring, of
    the active change ids. Exactly one match resolves; more than one is refused as
@@ -130,6 +132,19 @@ Given `repo` and a reference string:
    workflow id, bounded to 5 candidates plus a `(+n more)` count).
 4. The refusal is one bounded line: the rule, the reference, and the candidates.
    No file contents.
+5. A resolved change must still have an unchecked task. The archive move is a
+   workflow step, not something a change's author performs, so an implemented
+   change keeps sitting at the top level; without this rule a reference could
+   start a workflow with nothing left to do. The rule is the same one the
+   `openspec-apply` start requirement applies, so the resolver and the start
+   boundary agree on what is actionable.
+6. A change artifact is read only when it is a regular file inside the change
+   directory (the directory is containment-checked, and the artifact's real path
+   may not leave it). A symlink, FIFO, socket or device in place of
+   `proposal.md`/`tasks.md` is refused in one line instead of being followed:
+   following it would read an arbitrary host file or block the server until a
+   writer opens the pipe. The listing applies the same check and answers the row
+   with less information instead of failing.
 
 The task text is assembled from whole sections of `proposal.md` (`##` sections
 in file order, `## Why` first) followed by `tasks.md`'s checkbox list, capped at
@@ -316,9 +331,44 @@ own guard, are untouched.
   still lands on a change under `openspec/changes` resolves to it, while a path
   that leaves that directory, names the directory itself, names more than one
   segment below it, or names `archive/**` is refused.
-- **The workflow board is read lazily and at most once per call** (only when a
-  `repo` was omitted or an unknown id needs candidates), so today's explicit
-  `repo` call pays nothing for the new resolution.
+- **The identity a resolution needs is its own observation kind**
+  (`{kind: "workflow-targets"}` → `{workflowId, target}` per board row). The
+  board's `workflows` read serializes every workflow's full dashboard state —
+  the task text, every run, the gate decisions — and a lookup needs two fields.
+  `list_workflows` keeps `workflows`; the resolution and the candidate list read
+  the identity rows. The read is lazy and at most once per call, so an explicit
+  `repo` call that resolves on the first try pays nothing.
+- **`repo` is where to look first, never the whole answer.** When the named
+  repository does not hold the id, the board names the repository that does, and
+  the row answered carries that target (named, because it answers for another
+  repository than the call named). A `workflowId` present in two repositories
+  answers one named entry per target, including on the `unchanged`
+  short-circuit. Only an id no board row names is `unknown: true`, and its
+  description says to call `list_workflows` when no candidate is similar.
+- **`repo` applies to every id of a multi-id poll** and is omitted to resolve a
+  cross-repository poll; the parameter description says so.
+- **The per-message bound applies to `taskRef.previousMessage` too.** The
+  previous message travels verbatim (the agreement is the developer's own words),
+  so an over-long one is refused in one line naming the alternatives rather than
+  truncated. `TASK_CHAR_BOUND` lives in `contracts/actions.ts` so the tool
+  parameter, the resolver and the previous-message check are one number.
+- **The previous message is the one the running turn answers**, not the newest
+  text admitted: a `followUp` submitted while a turn runs waits in a queue and is
+  promoted only once it has left the harness inbox (read lazily at the next
+  admission and the next read), so it can never take the place of the message in
+  flight. A `steer` does replace it, because a steer replaces the turn's input.
+- **The acceptance line is one function** (`workflowStartedAnswer`), shared by
+  the built-in and blueprint start paths, so neither can drop the resolution
+  echo; the dashboard's `STARTED` reader matches the id as the first token and no
+  longer anchors at the end of the line.
+- **A row's title is a level-1 heading**, or the first heading that is not one of
+  the OpenSpec template's fixed section names, or nothing. Most proposals in this
+  repository start at `## Why`, and answering `"Why"` as the title was worse than
+  answering no title at all.
+- **`taskRef.previousMessage` does not survive a conversation being discarded**,
+  but it does survive a `stopRun`/`ensureRun` of the same conversation: the
+  messages are keyed by conversation, which is what `RunMapDoc` re-opens, so the
+  entry is never dropped by run teardown.
 
 ## Migration Plan
 

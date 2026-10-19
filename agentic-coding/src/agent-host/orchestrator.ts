@@ -15,6 +15,7 @@ import {
 	type Extension,
 	section,
 } from "@earendil-works/pi-durable";
+import { TASK_CHAR_BOUND } from "../contracts/actions.ts";
 import { PUBLIC_WORKFLOW_CATALOG } from "../workflow/definitions/catalog.ts";
 import {
 	cachedBranchRefs,
@@ -167,17 +168,17 @@ interface WorkflowBoardRow {
 async function workflowBoard(
 	env: Readonly<Record<string, string>>,
 ): Promise<WorkflowBoardRow[]> {
-	const rows = (await observe(env, { kind: "workflows" })) as Array<
+	// The identity read, not `workflows`: a resolution needs two fields per row,
+	// while the board's rows carry the task text, every run and the gate
+	// decisions of every workflow on the machine.
+	const rows = (await observe(env, { kind: "workflow-targets" })) as Array<
 		Record<string, unknown>
 	>;
 	return rows
-		.map((row) => {
-			const state = (row.state ?? {}) as Record<string, unknown>;
-			return {
-				workflowId: String(state.workflowId ?? ""),
-				target: String(row.target ?? ""),
-			};
-		})
+		.map((row) => ({
+			workflowId: String(row.workflowId ?? ""),
+			target: String(row.target ?? ""),
+		}))
 		.filter((row) => row.workflowId !== "" && row.target !== "");
 }
 
@@ -227,46 +228,80 @@ async function workflowStatusAnswer(
 			more: ranked.more,
 		};
 	};
-	const readOne = async (workflowId: string): Promise<unknown[]> => {
-		const targets = args.repo
-			? [args.repo]
-			: (await boardRows())
+	const targetsOf = async (workflowId: string): Promise<string[]> => {
+		const rows = await boardRows();
+		return [
+			...new Set(
+				rows
 					.filter((row) => row.workflowId === workflowId)
-					.map((row) => row.target);
-		if (targets.length === 0) return [await unknownAnswer(workflowId)];
-		// Every entry of a multi-entry answer names its workflow, even on the
-		// unchanged short-circuit; a lone entry keeps the shape it had.
-		const named = ids.length > 1 || targets.length > 1;
+					.map((row) => row.target),
+			),
+		];
+	};
+	const viewOf = async (
+		target: string,
+		workflowId: string,
+	): Promise<Record<string, unknown> | undefined> => {
+		try {
+			return (await call(
+				env,
+				"GET",
+				`/api/v1/workflow/view?repo=${encodeURIComponent(target)}&workflowId=${encodeURIComponent(workflowId)}`,
+			)) as Record<string, unknown>;
+		} catch (error) {
+			// An id the server does not know is an answer, not a failed call: the
+			// corpus shows a failed poll costs a whole turn, while the candidates
+			// let the model retry with the right id in this same turn.
+			const message = error instanceof Error ? error.message : String(error);
+			if (!message.includes("workflow not found")) throw error;
+			return undefined;
+		}
+	};
+	const answerOf = (
+		workflowId: string,
+		view: Record<string, unknown>,
+		named: boolean,
+	): unknown => {
+		if (args.detail === "full") {
+			noteFullDetail(env, "workflow_status");
+			return summarizeWorkflowView(view);
+		}
+		return compactWorkflowStatus(view, {
+			sinceRevision: revisions.get(workflowId),
+			includeTask: args.includeTask,
+			named,
+		});
+	};
+	const readOne = async (workflowId: string): Promise<unknown[]> => {
+		// A named repository is where to look first, never the whole answer: when
+		// it does not hold the id, the board names the repository that does, and
+		// the row it answers carries that target. Answering "unknown" for an id
+		// the board knows would send the model back to guessing.
+		const hinted = args.repo ? [args.repo] : await targetsOf(workflowId);
+		if (hinted.length === 0) return [await unknownAnswer(workflowId)];
 		const answers: unknown[] = [];
-		for (const target of targets) {
-			let view: Record<string, unknown>;
-			try {
-				view = (await call(
-					env,
-					"GET",
-					`/api/v1/workflow/view?repo=${encodeURIComponent(target)}&workflowId=${encodeURIComponent(workflowId)}`,
-				)) as Record<string, unknown>;
-			} catch (error) {
-				// An id the server does not know is an answer, not a failed call: the
-				// corpus shows a failed poll costs a whole turn, while the candidates
-				// let the model retry with the right id in this same turn.
-				const message = error instanceof Error ? error.message : String(error);
-				if (!message.includes("workflow not found")) throw error;
+		for (const target of hinted) {
+			const view = await viewOf(target, workflowId);
+			if (view) {
+				answers.push(
+					answerOf(workflowId, view, ids.length > 1 || hinted.length > 1),
+				);
+				continue;
+			}
+			const elsewhere = args.repo
+				? (await targetsOf(workflowId)).filter((found) => found !== target)
+				: [];
+			if (elsewhere.length === 0) {
 				answers.push(await unknownAnswer(workflowId));
 				continue;
 			}
-			if (args.detail === "full") {
-				noteFullDetail(env, "workflow_status");
-				answers.push(summarizeWorkflowView(view));
-				continue;
+			for (const found of elsewhere) {
+				const moved = await viewOf(found, workflowId);
+				// Named, because this entry answers for another repository than the
+				// one the call named: the row says which target it came from.
+				if (moved) answers.push(answerOf(workflowId, moved, true));
 			}
-			answers.push(
-				compactWorkflowStatus(view, {
-					sinceRevision: revisions.get(workflowId),
-					includeTask: args.includeTask,
-					named,
-				}),
-			);
+			if (answers.length === 0) answers.push(await unknownAnswer(workflowId));
 		}
 		return answers;
 	};
@@ -564,31 +599,30 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "list_changes",
 				description:
-					"Use to see which OpenSpec changes a repository has — before referencing one in start_workflow, instead of guessing a proposal.md path with read; returns one compact row per active change — changeId, title, tasks (checked/total), the change's openspec/changes/<id> path and the workflow already implementing it.",
+					"Use to see which OpenSpec changes a repository has — before referencing one in start_workflow, instead of guessing a proposal.md path with read; returns one compact row per active change — changeId, title, tasks (checked/total), the change's openspec/changes/<id> path and the workflow already implementing it. The answer is at most the first 100 active changes by changeId, so a change you expected may be past that cut, and a path is exact only for a listed change.",
 				replay: "safe",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					limit: Type.Optional(
 						Type.Integer({
 							minimum: 1,
-							maximum: 200,
+							maximum: 100,
 							description: "Return at most this many rows (default 100).",
 						}),
 					),
 				}),
-				execute: run(async (args: { repo: string; limit?: number }, env) => {
-					const rows = (await observe(env, {
+				execute: run(async (args: { repo: string; limit?: number }, env) =>
+					observe(env, {
 						kind: "openspec-changes",
 						repo: args.repo,
-					})) as unknown[];
-					if (args.limit === undefined || !Array.isArray(rows)) return rows;
-					return rows.slice(0, args.limit);
-				}),
+						...(args.limit === undefined ? {} : { limit: args.limit }),
+					}),
+				),
 			}),
 			defineTool({
 				name: "workflow_status",
 				description:
-					'Use to inspect one workflow or before an action; returns one compact row — workflowId, target, status, step, attention, current revision, pending questions (the ones routed to you included), available action ids and labels, failed effects, and the current run\'s role/status/model. The task text, the full run history and the gate decisions are NOT in the row: pass detail:"full" for the whole view, or includeTask:true for the task text alone. Pass sinceRevision equal to the previous answer\'s revision and an unchanged workflow answers in a few bytes ("unchanged", revision, status, step). Pass the workflowId list_workflows returned and omit repo to resolve it from the same workflow board; several ids (at most 8) poll in one call, each with its own sinceRevision; an id no workflow has answers with the closest existing ids instead of failing.',
+					'Use to inspect one workflow or before an action; returns one compact row — workflowId, target, status, step, attention, current revision, pending questions (the ones routed to you included), available action ids and labels, failed effects, and the current run\'s role/status/model. The task text, the full run history and the gate decisions are NOT in the row: pass detail:"full" for the whole view, or includeTask:true for the task text alone. Pass sinceRevision equal to the previous answer\'s revision and an unchanged workflow answers in a few bytes ("unchanged", revision, status, step). Pass the workflowId list_workflows returned and omit repo to resolve it from the same workflow board; several ids (at most 8) poll in one call, each with its own sinceRevision; `repo` is where to look first and applies to every id in the call, so omit it to resolve each id — or an id in another repository — from the workflow board; an id no workflow has answers with the closest existing ids instead of failing, and when it names no candidate, call list_workflows for the ids that do exist.',
 				replay: "safe",
 				parameters: Type.Object({
 					repo: Type.Optional(RepoParameter),
@@ -691,7 +725,7 @@ export function createOrchestratorExtension(
 					task: Type.Optional(
 						Type.String({
 							minLength: 1,
-							maxLength: 16_000,
+							maxLength: TASK_CHAR_BOUND,
 							description:
 								"Task agreed with the developer: goal, constraints and acceptance criteria. Exactly one of task/taskRef.",
 						}),
@@ -810,7 +844,7 @@ export function createOrchestratorExtension(
 								);
 							if (reference.change) change = reference.change;
 							else if (reference.previousMessage === true)
-								previous = context.lastDeveloperMessage?.();
+								previous = await context.lastDeveloperMessage?.();
 							else
 								throw new Error(
 									'taskRef takes {change: "<changeId>"} or {previousMessage: true}',
@@ -822,6 +856,13 @@ export function createOrchestratorExtension(
 							// The previous message is the host's to resolve (the server holds no
 							// conversation), so it travels as the task text and the echo is added
 							// here; a change reference travels as `taskRef` and the server echoes it.
+							// The previous message travels verbatim (the agreement is that the
+							// developer's own words are the task), so an over-long one is refused
+							// rather than cut: every other task enters inside this bound.
+							if (previous !== undefined && previous.length > TASK_CHAR_BOUND)
+								throw new Error(
+									`the previous developer message is ${previous.length} characters, over the ${TASK_CHAR_BOUND}-character task bound: pass a shorter \`task\`, or \`taskRef.change\` for an OpenSpec change`,
+								);
 							if (previous !== undefined)
 								echo = ` — task from the previous developer message, ${previous.length} task chars`;
 						}

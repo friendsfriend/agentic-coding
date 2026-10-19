@@ -87,6 +87,13 @@ test("a path inside openspec/changes resolves, and the archive does not", () => 
 			path.join(root, "openspec", "changes", "add-flag"),
 		).change,
 	).toBe("add-flag");
+	// An archived change is refused with the active changes named, so the retry
+	// is a real id instead of another guess.
+	expect(() =>
+		resolveTaskReference(root, "openspec/changes/archive/add-flag"),
+	).toThrow(
+		/archived change is history, not work to start; active changes: .*add-flag/,
+	);
 	expect(() =>
 		resolveTaskReference(root, "openspec/changes/archive/old"),
 	).toThrow(/archived change is history/);
@@ -167,6 +174,37 @@ test("a change too large for the task bound drops whole sections and marks it", 
 	expect(resolved.task).toMatch(/\[task truncated: .*Section \d+/);
 	// A dropped section is absent whole: no half-section survives.
 	expect(resolved.task).not.toContain("## Section 39");
+});
+
+test("a change whose boxes are all checked is finished work, not a startable task", () => {
+	const root = createTempRepoFixture("task-reference-done-", repoPreset.readme);
+	const dir = path.join(root, "openspec", "changes", "already-done");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "proposal.md"), PROPOSAL);
+	fs.writeFileSync(
+		path.join(dir, "tasks.md"),
+		"## 1. Work\n\n- [x] 1.1 Read the guard\n- [x] 1.2 Add the flag\n",
+	);
+	// The archive move is a workflow step, so an implemented change stays listed;
+	// starting a workflow for it would start one with nothing left to do.
+	expect(() => resolveTaskReference(root, "already-done")).toThrow(
+		/resolves to already-done, which has no unchecked task; pick a change that still has work/,
+	);
+});
+
+test("a symlinked artifact is refused instead of read through", () => {
+	const root = repoWithChanges();
+	const change = path.join(root, "openspec", "changes", "add-flag");
+	fs.writeFileSync(path.join(root, "elsewhere.md"), PROPOSAL);
+	fs.rmSync(path.join(change, "proposal.md"));
+	fs.symlinkSync(
+		path.join(root, "elsewhere.md"),
+		path.join(change, "proposal.md"),
+	);
+	// The repository's own content may not aim the read at another file.
+	expect(() => resolveTaskReference(root, "add-flag")).toThrow(
+		/has a proposal\.md that is not a regular file inside the change; refusing to read through it/,
+	);
 });
 
 test("a reference is refused for an empty reference and a repository without changes", () => {

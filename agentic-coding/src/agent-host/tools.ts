@@ -49,7 +49,10 @@ export interface DurableRunContext {
 	 * references "the previous message" instead of re-typing it, and the
 	 * reference echo names it (efficiency backlog item 21). Never a monitor
 	 * note and never an abort marker; undefined until the developer writes. */
-	readonly lastDeveloperMessage?: () => string | undefined;
+	readonly lastDeveloperMessage?: () =>
+		| string
+		| undefined
+		| Promise<string | undefined>;
 	readonly jev?: {
 		readonly provider: string;
 		readonly model: string;

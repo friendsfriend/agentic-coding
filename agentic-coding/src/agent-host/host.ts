@@ -317,11 +317,19 @@ export interface DurableHostOptions {
 export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
-	/** The last developer message of each conversation, in the developer's own
-	 * words: the orchestrator's `taskRef.previousMessage` substitutes it as the
-	 * task instead of re-typing prose that was already sent. Monitor notes and
-	 * abort markers are never recorded here. */
-	private readonly lastDeveloperMessages = new Map<ConversationId, string>();
+	/** The developer message each conversation's running turn is answering, in
+	 * the developer's own words: the orchestrator's `taskRef.previousMessage`
+	 * substitutes it as the task instead of re-typing prose that was already
+	 * sent. A message that arrived while a turn was already running is *queued*,
+	 * never substituted for the one that turn answers. Monitor notes and abort
+	 * markers are recorded in neither map. */
+	private readonly turnDeveloperMessages = new Map<ConversationId, string>();
+	/** The developer messages admitted behind a running turn, oldest first: each
+	 * becomes the answered message when the turn ahead of it commits. */
+	private readonly queuedDeveloperMessages = new Map<
+		ConversationId,
+		string[]
+	>();
 	private readonly telemetry = new Map<ConversationId, () => void>();
 	/** The per-run dead-surface monitors, keyed like the telemetry attachments:
 	 * one counter per conversation, dropped with the run. */
@@ -627,7 +635,7 @@ export class DurableHost {
 			cwd: input.cwd,
 			env: envVars,
 			lastDeveloperMessage: () =>
-				this.lastDeveloperMessages.get(conversation.id),
+				this.answeredDeveloperMessage(conversation.id),
 			...(readJevBinding(envVars) ? { jev: readJevBinding(envVars) } : {}),
 		};
 		this.contexts.set(conversation.id, runContext);
@@ -1174,8 +1182,10 @@ export class DurableHost {
 			);
 			// The developer's own message is what a `taskRef.previousMessage` start
 			// substitutes; a monitor note and an abort marker are not.
-			if (developerMessage(text))
-				this.lastDeveloperMessages.set(record.conversationId, text);
+			this.recordDeveloperMessage(record.conversationId, text, mode);
+			// A message admitted now may have released the one that was queued
+			// ahead of it; a turn already running keeps its own.
+			await this.promoteDequeuedMessages(record.conversationId);
 			return {
 				submissionId: String(submission.id),
 				...(reconciled
@@ -1186,6 +1196,74 @@ export class DurableHost {
 					: {}),
 			};
 		});
+	}
+
+	/** The developer message the conversation's running turn is answering.
+	 *
+	 * A message admitted while a run was already live waits in the queue, and
+	 * becomes the answered message once the turn ahead of it has taken it out of
+	 * the inbox. Promotion is therefore lazy — at the next admission and at the
+	 * next read — because the only turn boundary the host sees is a model call,
+	 * which happens several times inside one developer turn. */
+	private async answeredDeveloperMessage(
+		conversationId: ConversationId,
+	): Promise<string | undefined> {
+		await this.promoteDequeuedMessages(conversationId);
+		return this.turnDeveloperMessages.get(conversationId);
+	}
+
+	/** Promote every queued message the inbox no longer holds: a message that
+	 * left the inbox is the one the running turn is answering. The count is what
+	 * makes this safe — a message still waiting behind the running turn stays
+	 * queued, so the turn in flight keeps the message it started with. A
+	 * conversation the host cannot read promotes nothing. */
+	private async promoteDequeuedMessages(
+		conversationId: ConversationId,
+	): Promise<void> {
+		const queued = this.queuedDeveloperMessages.get(conversationId);
+		if (!queued || queued.length === 0) return;
+		const conversation = await this.harness.conversation(
+			conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation) return;
+		const state = await conversation.viewState(BACKGROUND_CONTEXT);
+		let waiting: number;
+		try {
+			const inbox = state.value.docs["pi.inbox"] as
+				| { items?: unknown[] }
+				| undefined;
+			waiting = inbox?.items?.length ?? 0;
+		} finally {
+			state.dispose();
+		}
+		while (queued.length > waiting) {
+			const next = queued.shift();
+			if (next !== undefined)
+				this.turnDeveloperMessages.set(conversationId, next);
+		}
+		if (queued.length === 0)
+			this.queuedDeveloperMessages.delete(conversationId);
+	}
+
+	/** Bind an admitted message to the turn that will answer it. The first
+	 * message of a conversation is answered immediately; a message that
+	 * interrupts the running turn (`steer`) replaces the answered one; a
+	 * `followUp` behind a running turn waits in the queue, so the turn in flight
+	 * keeps the message it started with. */
+	private recordDeveloperMessage(
+		conversationId: ConversationId,
+		text: string,
+		mode: "steer" | "followUp",
+	): void {
+		if (!developerMessage(text)) return;
+		if (mode === "steer" || !this.turnDeveloperMessages.has(conversationId)) {
+			this.turnDeveloperMessages.set(conversationId, text);
+			return;
+		}
+		const queued = this.queuedDeveloperMessages.get(conversationId) ?? [];
+		queued.push(text);
+		this.queuedDeveloperMessages.set(conversationId, queued);
 	}
 
 	/** Serialize one conversation's mutating operations. A prompt that arrives
@@ -1521,7 +1599,10 @@ export class DurableHost {
 			await conversation?.abort(BACKGROUND_CONTEXT);
 			this.runs.delete(runId);
 			this.contexts.delete(record.conversationId);
-			this.lastDeveloperMessages.delete(record.conversationId);
+			// The developer's messages are keyed by conversation, and the
+			// conversation outlives the run: the next `ensureRun` re-opens the one
+			// `RunMapDoc` recorded, and a `previousMessage` start still answers with
+			// the message that session last sent.
 			this.timings.delete(record.conversationId);
 			// The ceiling's bookkeeping is per conversation and dies with it.
 			this.ceilings.delete(record.conversationId);

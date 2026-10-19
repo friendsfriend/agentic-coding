@@ -118,12 +118,89 @@ test("a change that already has a workflow is marked instead of started twice", 
 	const rows = listOpenSpecChanges(root);
 	const inFlight = rows.find((row) => row.changeId === "add-flag");
 	expect(inFlight?.workflowId).toBe("add-flag");
-	expect(String(inFlight?.status)).not.toBe("closed");
+	// The status the engine wrote for a freshly started workflow: a row that
+	// dropped or renamed the field would otherwise still pass.
+	expect(inFlight?.status).toBe("active");
 	expect(rows.find((row) => row.changeId === "other-change")).toEqual({
 		changeId: "other-change",
 		title: "Other",
 		path: "openspec/changes/other-change",
 	});
+});
+
+test("the dashboard's id list is the same listing, and both read a change's artifacts safely", async () => {
+	const root = createTempRepoFixture(
+		"openspec-changes-shared-",
+		repoPreset.readme,
+	);
+	writeChange(root, "add-flag", { proposal: "# Add the flag\n" });
+	writeChange(root, "other-change", { proposal: "# Other\n" });
+	writeChange(root, path.join("archive", "old-change"), {
+		proposal: "# Old\n",
+	});
+	// The bare id list the dashboard's new-workflow form reads is the same
+	// listing, so the id the model is told to pick from always resolves.
+	expect(await runLocalObservation({ kind: "changes", repo: root })).toEqual([
+		"add-flag",
+		"other-change",
+	]);
+	// A symlinked artifact is not an artifact: it is refused rather than
+	// followed, so a row loses its title instead of reading another file.
+	fs.rmSync(
+		path.join(root, "openspec", "changes", "other-change", "tasks.md"),
+		{
+			force: true,
+		},
+	);
+	fs.writeFileSync(path.join(root, "secret.txt"), "- [x] fake\n");
+	fs.symlinkSync(
+		path.join(root, "secret.txt"),
+		path.join(root, "openspec", "changes", "other-change", "tasks.md"),
+	);
+	const rows = listOpenSpecChanges(root);
+	expect(rows.find((row) => row.changeId === "other-change")).toEqual({
+		changeId: "other-change",
+		title: "Other",
+		path: "openspec/changes/other-change",
+	});
+});
+
+test("a proposal titled by a template section answers no title, and its own heading wins", () => {
+	const root = createTempRepoFixture(
+		"openspec-changes-title-",
+		repoPreset.readme,
+	);
+	// The OpenSpec template starts at `## Why`: the section name is not a label.
+	writeChange(root, "template-only", {
+		proposal: "## Why\n\n## What Changes\n",
+	});
+	writeChange(root, "titled", {
+		proposal: "## Why\n\n## What Changes\n\n# Ship the launcher flag\n",
+	});
+	const rows = listOpenSpecChanges(root);
+	expect(rows.find((row) => row.changeId === "template-only")).toEqual({
+		changeId: "template-only",
+		path: "openspec/changes/template-only",
+	});
+	expect(rows.find((row) => row.changeId === "titled")?.title).toBe(
+		"Ship the launcher flag",
+	);
+});
+
+test("the listing reads at most the requested rows, and is bounded at 100", () => {
+	const root = createTempRepoFixture(
+		"openspec-changes-limit-",
+		repoPreset.readme,
+	);
+	for (const id of ["a-change", "b-change", "c-change"])
+		writeChange(root, id, { proposal: `# ${id}\n` });
+	// The slice happens before any artifact is read, so a small poll never pays
+	// for the whole directory — and never answers more than the protocol bound.
+	expect(listOpenSpecChanges(root, 2).map((row) => row.changeId)).toEqual([
+		"a-change",
+		"b-change",
+	]);
+	expect(listOpenSpecChanges(root, 500)).toHaveLength(3);
 });
 
 test("the listing is bounded: at most 100 rows, and a title at most 80 characters", () => {

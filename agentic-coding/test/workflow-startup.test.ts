@@ -20,6 +20,7 @@ import { parseAgentsConfig } from "../src/workflow/profiles.ts";
 import {
 	prepareWorkflowStart,
 	taskReferenceSuffix,
+	workflowStartedAnswer,
 } from "../src/workflow/startup.ts";
 import {
 	autoRemoveRepoFixtures,
@@ -175,6 +176,23 @@ describe("shared workflow startup", () => {
 			// the wrong change is visible instead of silent.
 			expect(taskReferenceSuffix(prepared)).toBe(
 				` — task from change "add-flag", ${(prepared.input.metadata.task ?? "").length} task chars`,
+			);
+			// The acceptance line both start paths answer with names what it
+			// resolved, so a reference that resolved to the wrong change is visible.
+			expect(workflowStartedAnswer("task-ref", prepared)).toBe(
+				`Workflow started: task-ref — task from change "add-flag", ${(prepared.input.metadata.task ?? "").length} task chars`,
+			);
+			// An inline task's answer is the bare line it always was.
+			const inline = prepareWorkflowStart({
+				repo,
+				workflowId: "inline",
+				definitionId: "wiki",
+				task: "write the flag docs",
+				mode: "checkout",
+				preset: "fixed",
+			});
+			expect(workflowStartedAnswer("inline", inline)).toBe(
+				"Workflow started: inline",
 			);
 			// A reference resolves before the guard, so an unknown change is refused
 			// with its candidates rather than starting a workflow with no task.
