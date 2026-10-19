@@ -14,7 +14,11 @@
 // `/api/v1/agent-env/stages` surface with the capability the run already holds.
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
-import { AGENT_STAGES_PATH } from "../server/protocol.ts";
+import {
+	AGENT_STAGE_API_REQUEST_PATH,
+	AGENT_STAGE_TOKEN_INFO_PATH,
+	AGENT_STAGES_PATH,
+} from "../server/protocol.ts";
 import {
 	ENVIRONMENT_OWNER_HEADER,
 	ENVIRONMENT_TOKEN_ENV,
@@ -76,21 +80,24 @@ function bindingOf(
 const NO_BINDING =
 	"this run has no agent environment capability (the workflow server did not provide one); the stage tool is unavailable";
 
-/** One authenticated read of the server's owner-scoped stage surface. */
+/** One authenticated call of the server's owner-scoped stage surface. */
 async function call(
 	env: Readonly<Record<string, string>>,
 	path: string,
 	timeoutMs: number,
 	send: typeof fetch,
+	body?: unknown,
 ): Promise<unknown> {
 	const binding = bindingOf(env);
 	if (!binding) throw new Error(NO_BINDING);
 	const response = await send(`${binding.url}${path}`, {
-		method: "GET",
+		method: body === undefined ? "GET" : "POST",
 		headers: {
 			authorization: `Bearer ${binding.token}`,
 			[ENVIRONMENT_OWNER_HEADER]: binding.owner,
+			...(body === undefined ? {} : { "content-type": "application/json" }),
 		},
+		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		signal: AbortSignal.timeout(timeoutMs),
 	});
 	const parsed = (await response.json().catch(() => undefined)) as
@@ -113,6 +120,28 @@ export interface StageToolOptions {
 	/** Test seam. */
 	readonly fetch?: typeof fetch;
 }
+
+/** The two optional coordinates `stage_api_request` and `stage_token_info` share:
+ * a stage is only named when a run knows more than one, and an application only
+ * when the stage has more than one candidate. */
+const TargetParameters = {
+	stage: Type.Optional(
+		Type.String({
+			description:
+				"The stage ident. Omit it when this configuration allows exactly one stage, which then applies.",
+		}),
+	),
+	app: Type.Optional(
+		Type.String({
+			description:
+				"The application key. Omit it when the stage has exactly one candidate (one `api` application, or one that declares the role).",
+		}),
+	),
+	role: Type.String({
+		description:
+			"The role whose token authenticates the call, as `stage_info` lists it.",
+	}),
+};
 
 export function createStageExtension(
 	lookup: RunContextLookup,
@@ -157,6 +186,108 @@ export function createStageExtension(
 					} catch (error) {
 						return failure(
 							`stage_info: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_api_request",
+				description: [
+					"Call a hosted stage's API as one of its roles: the server attaches the role's bearer token and sends the request to that application's configured origin. Use it instead of `browser_run_script` for a `api` application.",
+					"`path` is a path of the application (`/v1/requests?limit=5`), never a URL: the host is the one the stage names, and an absolute URL is refused.",
+					"Do not send an `Authorization` header — the server's own token is attached, and an agent-supplied one is refused rather than overwritten.",
+					"A `read-only` stage refuses a state-changing method, a request above 64 KiB, and a response above 256 KiB (the body is truncated and `truncated` says so). A `401` is retried once with a renewed token.",
+					"The answer is redacted: the status, the response headers on the allow-list, and the body. Learn the token's four presentation fields with `stage_token_info`.",
+				].join(" "),
+				parameters: Type.Object({
+					...TargetParameters,
+					method: Type.Union(
+						[
+							Type.Literal("GET"),
+							Type.Literal("HEAD"),
+							Type.Literal("POST"),
+							Type.Literal("PUT"),
+							Type.Literal("PATCH"),
+							Type.Literal("DELETE"),
+						],
+						{ description: "The HTTP method of the call." },
+					),
+					path: Type.String({
+						description:
+							"The path of the application, with an optional query string, e.g. `/v1/requests?limit=5`.",
+					}),
+					headers: Type.Optional(
+						Type.Record(Type.String(), Type.String(), {
+							description:
+								"Additional request headers. `Authorization`, `host` and `content-length` are refused.",
+						}),
+					),
+					body: Type.Optional(
+						Type.String({
+							description:
+								"The request body, at most 64 KiB. Send JSON as a JSON string.",
+						}),
+					),
+				}),
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run)
+						return failure("stage_api_request: run context unavailable");
+					try {
+						return text(
+							await call(
+								run.env,
+								AGENT_STAGE_API_REQUEST_PATH,
+								READ_TIMEOUT_MS,
+								send,
+								{
+									...(args.stage === undefined ? {} : { stage: args.stage }),
+									...(args.app === undefined ? {} : { app: args.app }),
+									role: args.role,
+									method: args.method,
+									path: args.path,
+									...(args.headers === undefined
+										? {}
+										: { headers: args.headers }),
+									...(args.body === undefined ? {} : { body: args.body }),
+								},
+							),
+						);
+					} catch (error) {
+						return failure(
+							`stage_api_request: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_token_info",
+				description: [
+					"Read the four presentation fields of the token one role holds on a stage: `expiresAt`, `scopes`, `audience` and `issuer`.",
+					"A token that does not exist yet is acquired first, so this is also how to check that a role can obtain one at all.",
+					"Nothing else about the token is ever returned — no claim, no subject, no value — so a run can plan around an expiry without ever holding the credential.",
+				].join(" "),
+				parameters: Type.Object({ ...TargetParameters }),
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_token_info: run context unavailable");
+					try {
+						return text(
+							await call(
+								run.env,
+								AGENT_STAGE_TOKEN_INFO_PATH,
+								READ_TIMEOUT_MS,
+								send,
+								{
+									...(args.stage === undefined ? {} : { stage: args.stage }),
+									...(args.app === undefined ? {} : { app: args.app }),
+									role: args.role,
+								},
+							),
+						);
+					} catch (error) {
+						return failure(
+							`stage_token_info: ${error instanceof Error ? error.message : String(error)}`,
 						);
 					}
 				},

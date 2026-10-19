@@ -19,7 +19,11 @@ import {
 	STAGE_EXTENSION,
 } from "../src/agent-host/stage-tools.ts";
 import type { RunContextLookup } from "../src/agent-host/tools.ts";
-import { AGENT_STAGES_PATH } from "../src/server/protocol.ts";
+import {
+	AGENT_STAGE_API_REQUEST_PATH,
+	AGENT_STAGE_TOKEN_INFO_PATH,
+	AGENT_STAGES_PATH,
+} from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import {
 	handleStageRoute,
@@ -41,6 +45,35 @@ interface Call {
 	readonly method: string;
 	readonly owner: string | null;
 	readonly authorization: string | null;
+}
+
+/** One `stage_api_request` / `stage_token_info` call, with its body. */
+interface PostedCall {
+	readonly url: string;
+	readonly method: string;
+	readonly owner: string | null;
+	readonly authorization: string | null;
+	readonly body: unknown;
+}
+
+/** A transport that records what the tool sent and answers a fixed envelope,
+ * so the tools are tested for what they *send*, not for the route's own
+ * behaviour (which `stage-oauth2-routes.test.ts` covers). */
+function postedFetch(calls: PostedCall[], value: unknown): typeof fetch {
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const headers = new Headers(init?.headers);
+		calls.push({
+			url: String(input),
+			method: init?.method ?? "GET",
+			owner: headers.get(ENVIRONMENT_OWNER_HEADER),
+			authorization: headers.get("authorization"),
+			body:
+				init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+		});
+		return new Response(JSON.stringify({ ok: true, value }), {
+			headers: { "content-type": "application/json" },
+		});
+	}) as unknown as typeof fetch;
 }
 
 /** The real stage route, behind a recorded transport. */
@@ -147,6 +180,14 @@ function toolOf(extension: Extension): Executable {
 	return tool as unknown as Executable;
 }
 
+function toolNamed(extension: Extension, name: string): Executable {
+	const tool = (extension.tools ?? []).find(
+		(candidate) => candidate.name === name,
+	);
+	if (!tool) throw new Error(`the extension offers no tool ${name}`);
+	return tool as unknown as Executable;
+}
+
 const textOf = (blocks: readonly ContentBlock[]): string =>
 	blocks
 		.filter((block) => block.type === "text")
@@ -158,11 +199,13 @@ function lookup(env: Record<string, string>): RunContextLookup {
 }
 
 describe("stage_info", () => {
-	test("one tool every durable run may be offered, described as value-free", () => {
+	test("every durable run is offered the stage surface, described as value-free", () => {
 		const extension = createStageExtension(lookup(RUN_ENV));
 		expect(extension.name).toBe(STAGE_EXTENSION);
 		expect((extension.tools ?? []).map((tool) => tool.name)).toEqual([
 			"stage_info",
+			"stage_api_request",
+			"stage_token_info",
 		]);
 		const description = toolOf(extension).description ?? "";
 		// The promise the tool is built on, in the text a model reads.
@@ -171,6 +214,13 @@ describe("stage_info", () => {
 		// And how to use what it returns.
 		expect(description).toContain("browser_open({ stage, stageApp })");
 		expect(description).toContain("stage_login({ app, role })");
+		// The OAuth 2.0 tools keep the same promise: the token is the server's.
+		const api = toolNamed(extension, "stage_api_request").description ?? "";
+		expect(api).toContain("Do not send an `Authorization` header");
+		expect(api).toContain("the server attaches the role's bearer token");
+		const token = toolNamed(extension, "stage_token_info").description ?? "";
+		expect(token).toContain("four presentation fields");
+		expect(token).toContain("no value");
 	});
 
 	test("it reads the owner capability and answers the catalog without a value", async () => {
@@ -253,5 +303,111 @@ describe("stage_info", () => {
 		).execute({}, { conversationId: 1 }, {});
 		expect(result.isError).toBe(true);
 		expect(textOf(result.content)).toContain("no agent environment capability");
+	});
+});
+
+describe("stage_api_request", () => {
+	test("it posts the call to the agent surface with the run's own capability", async () => {
+		const calls: PostedCall[] = [];
+		const server = postedFetch(calls, {
+			stage: "grid-int",
+			app: "api",
+			role: "service",
+			method: "GET",
+			url: "https://grid-int-api.example.test/v1/requests",
+			status: 200,
+			headers: { "content-type": "application/json" },
+			body: '{"ok":true}',
+			truncated: false,
+			bytes: 11,
+			renewals: 0,
+		});
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_api_request",
+		).execute(
+			{
+				stage: "grid-int",
+				role: "service",
+				method: "GET",
+				path: "/v1/requests?limit=5",
+			},
+			{ conversationId: 1 },
+			{},
+		);
+		expect(result.isError).toBeUndefined();
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe(
+			`http://127.0.0.1:4050${AGENT_STAGE_API_REQUEST_PATH}`,
+		);
+		expect(calls[0]?.method).toBe("POST");
+		// The run's own capability authenticates the *tool call*; the role's bearer
+		// token is the server's to attach and never travels through here.
+		expect(calls[0]?.authorization).toBe("Bearer capability-for-wf-alpha");
+		expect(calls[0]?.owner).toBe("workflow:wf-alpha");
+		expect(calls[0]?.body).toEqual({
+			stage: "grid-int",
+			role: "service",
+			method: "GET",
+			path: "/v1/requests?limit=5",
+		});
+		// The answer is what the model reads, unchanged.
+		expect(textOf(result.content)).toContain('"renewals": 0');
+	});
+
+	test("a refused call answers the route's code, and the tool is told what it omitted", async () => {
+		const calls: PostedCall[] = [];
+		const server = (async () =>
+			new Response(
+				JSON.stringify({
+					ok: false,
+					error: { code: "stage-app-ambiguous", message: "two apps" },
+				}),
+				{ headers: { "content-type": "application/json" }, status: 400 },
+			)) as unknown as typeof fetch;
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_api_request",
+		).execute(
+			{ role: "service", method: "DELETE", path: "/v1/requests/1" },
+			{ conversationId: 1 },
+			{},
+		);
+		expect(calls).toHaveLength(0);
+		expect(result.isError).toBe(true);
+		expect(textOf(result.content)).toContain("[stage-app-ambiguous]");
+	});
+});
+
+describe("stage_token_info", () => {
+	test("it posts the target and answers the four fields the server chose to present", async () => {
+		const calls: PostedCall[] = [];
+		const server = postedFetch(calls, {
+			stage: "grid-int",
+			app: "api",
+			role: "service",
+			expiresAt: "2026-01-01T01:00:00.000Z",
+			scopes: ["grid.read"],
+			audience: "https://grid-int-api.example.test",
+			issuer: "https://idp.example.test",
+		});
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_token_info",
+		).execute(
+			{ stage: "grid-int", role: "service" },
+			{ conversationId: 1 },
+			{},
+		);
+		expect(result.isError).toBeUndefined();
+		expect(calls[0]?.url).toBe(
+			`http://127.0.0.1:4050${AGENT_STAGE_TOKEN_INFO_PATH}`,
+		);
+		expect(calls[0]?.body).toEqual({ stage: "grid-int", role: "service" });
+		const text = textOf(result.content);
+		expect(text).toContain("2026-01-01T01:00:00.000Z");
+		expect(text).toContain("https://idp.example.test");
+		// Four fields, and nothing about the token itself.
+		expect(text).not.toContain("access");
 	});
 });
