@@ -80,6 +80,11 @@ describe the free text that was *not* stored. \`compaction_kind\` and
 \`compaction_blocking\` carry a compaction envelope's own vocabulary
 (\`auto-ceiling\`/\`auto-overflow\`/\`manual\`, and whether it blocked the
 request), which is what the \`compactions\` query counts per run.
+\`repair_effects\`, \`repair_runs\` and \`repair_count\` carry what an
+\`operator.repair\` retired (the ids themselves stay in the store they were
+recorded in); \`wait_kind\` names the developer wait a \`workflow.waiting\` row
+opened, whose subject is the \`detail\` of the row and whose duration is the
+distance to the \`workflow.waiting.ended\` row that closes it.
 
 ## De-duplication precedence
 

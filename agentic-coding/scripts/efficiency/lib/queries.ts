@@ -751,6 +751,196 @@ GROUP BY source, step_id
 ORDER BY decisions DESC, step_id`,
 	},
 	{
+		name: "operator-repairs-recorded",
+		summary:
+			"Per source, the repairs the engine recorded (`operator.repair`) and how much of the repair its own row carries: the bounded reason, the count of effects it expired, and the count of runs it retired. A repair recorded before these fields existed is a blind spot — the event names the step it moved to and nothing about why or what it retired.",
+		example:
+			"bun run scripts/efficiency/analyze.ts operator-repairs-recorded --dataset ~/ev/dataset-2026",
+		columns: [
+			"source",
+			"workflows",
+			"repairs",
+			"repairs_with_reason",
+			"repairs_with_effects",
+			"repairs_with_runs",
+			"repairs_with_count",
+			"max_expired_effects",
+			"reason_pct",
+		],
+		sql: `SELECT
+	COALESCE(NULLIF(e.source, ''), '(no source)') AS source,
+	COUNT(DISTINCT e.workflow_id) AS workflows,
+	COUNT(*) AS repairs,
+	SUM(CASE WHEN e.detail IS NOT NULL AND e.detail <> '' THEN 1 ELSE 0 END) AS repairs_with_reason,
+	SUM(CASE WHEN e.repair_effects IS NOT NULL THEN 1 ELSE 0 END) AS repairs_with_effects,
+	SUM(CASE WHEN e.repair_runs IS NOT NULL THEN 1 ELSE 0 END) AS repairs_with_runs,
+	SUM(CASE WHEN e.repair_count IS NOT NULL THEN 1 ELSE 0 END) AS repairs_with_count,
+	MAX(e.repair_effects) AS max_expired_effects,
+	CASE
+		WHEN COUNT(*) > 0
+		THEN ROUND(100.0 * SUM(CASE WHEN e.detail IS NOT NULL AND e.detail <> '' THEN 1 ELSE 0 END) / COUNT(*), 1)
+		ELSE NULL
+	END AS reason_pct
+FROM v_events e
+WHERE e.event = 'operator.repair'
+GROUP BY e.source
+ORDER BY repairs DESC`,
+	},
+	{
+		name: "developer-waits",
+		summary:
+			"Per workflow, agent work against developer wait: the runs' wall clock, the waits the engine recorded (`workflow.waiting` paired with `workflow.waiting.ended`), and the question waits reconstructed from the dialogue when a workflow recorded none. `waits_recorded` against `waits_ended` is the pairing check; `waits_open` counts a start no end ever followed, and a workflow that recorded no wait falls back to the reconstructed question wait, so the two are never added together. A workflow whose ends outnumber its starts reported waits whose start predates the recording.",
+		example:
+			"bun run scripts/efficiency/analyze.ts developer-waits --dataset ~/ev/dataset-2026 --limit 20",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"workflow_id",
+			"questions",
+			"blocked_handoffs",
+			"waits_recorded",
+			"waits_ended",
+			"waits_open",
+			"question_waits",
+			"question_wait_seconds",
+			"recorded_wait_seconds",
+			"human_wait_seconds",
+			"agent_seconds",
+			"human_share_pct",
+		],
+		sql: `WITH question_created AS (
+	SELECT
+		workflow_id AS workflow_id,
+		source AS source,
+		at AS at,
+		ROW_NUMBER() OVER (PARTITION BY workflow_id, source ORDER BY at) AS rn
+	FROM v_events
+	WHERE event = 'developer.question.created' AND at IS NOT NULL
+),
+question_ended AS (
+	SELECT
+		workflow_id AS workflow_id,
+		source AS source,
+		at AS at,
+		ROW_NUMBER() OVER (PARTITION BY workflow_id, source ORDER BY at) AS rn
+	FROM v_events
+	WHERE event IN ('developer.question.answered', 'developer.question.expired') AND at IS NOT NULL
+),
+question_pairs AS (
+	SELECT
+		c.workflow_id AS workflow_id,
+		MAX(CAST(ROUND((julianday(e.at) - julianday(c.at)) * 86400) AS INTEGER), 0) AS seconds
+	FROM question_created c
+	JOIN question_ended e
+		ON e.workflow_id = c.workflow_id AND e.source = c.source AND e.rn = c.rn
+),
+question_waits AS (
+	SELECT
+		workflow_id AS workflow_id,
+		COUNT(*) AS question_waits,
+		SUM(seconds) AS question_wait_seconds
+	FROM question_pairs
+	GROUP BY workflow_id
+),
+recorded_pairs AS (
+	SELECT
+		s.id AS id,
+		s.workflow_id AS workflow_id,
+		MAX(CAST(ROUND((julianday(MIN(e.at)) - julianday(s.at)) * 86400) AS INTEGER), 0) AS seconds
+	FROM v_events s
+	JOIN v_events e
+		ON e.workflow_id = s.workflow_id
+		AND e.event = 'workflow.waiting.ended'
+		AND COALESCE(e.wait_kind, '') = COALESCE(s.wait_kind, '')
+		AND COALESCE(e.detail, '') = COALESCE(s.detail, '')
+		AND e.at IS NOT NULL AND s.at IS NOT NULL AND e.at >= s.at
+	WHERE s.event = 'workflow.waiting'
+	GROUP BY s.id
+),
+recorded_waits AS (
+	SELECT
+		workflow_id AS workflow_id,
+		SUM(seconds) AS recorded_wait_seconds
+	FROM recorded_pairs
+	GROUP BY workflow_id
+),
+open_waits AS (
+	SELECT
+		s.workflow_id AS workflow_id,
+		COUNT(*) AS waits_open
+	FROM v_events s
+	WHERE s.event = 'workflow.waiting'
+		AND NOT EXISTS (
+			SELECT 1 FROM v_events e
+			WHERE e.workflow_id = s.workflow_id
+				AND e.event = 'workflow.waiting.ended'
+				AND COALESCE(e.wait_kind, '') = COALESCE(s.wait_kind, '')
+				AND COALESCE(e.detail, '') = COALESCE(s.detail, '')
+				AND e.at IS NOT NULL AND s.at IS NOT NULL AND e.at >= s.at
+		)
+	GROUP BY s.workflow_id
+),
+workflow_keys AS (
+	SELECT id AS workflow_id FROM workflows
+),
+runs AS (
+	SELECT
+		workflow_id AS workflow_id,
+		SUM(MAX(CAST(ROUND((julianday(completed_at) - julianday(started_at)) * 86400) AS INTEGER), 0)) AS agent_seconds
+	FROM v_runs
+	WHERE started_at IS NOT NULL AND completed_at IS NOT NULL
+	GROUP BY workflow_id
+),
+counts AS (
+	SELECT
+		workflow_id AS workflow_id,
+		SUM(CASE WHEN event = 'developer.question.created' THEN 1 ELSE 0 END) AS questions,
+		SUM(CASE WHEN event = 'agent.handoff' AND outcome = 'blocked' THEN 1 ELSE 0 END) AS blocked_handoffs,
+		SUM(CASE WHEN event = 'workflow.waiting' THEN 1 ELSE 0 END) AS waits_recorded,
+		SUM(CASE WHEN event = 'workflow.waiting.ended' THEN 1 ELSE 0 END) AS waits_ended
+	FROM v_events
+	GROUP BY workflow_id
+),
+joined AS (
+	SELECT
+		w.workflow_id AS workflow_id,
+		COALESCE(c.questions, 0) AS questions,
+		COALESCE(c.blocked_handoffs, 0) AS blocked_handoffs,
+		COALESCE(c.waits_recorded, 0) AS waits_recorded,
+		COALESCE(c.waits_ended, 0) AS waits_ended,
+		COALESCE(o.waits_open, 0) AS waits_open,
+		COALESCE(q.question_waits, 0) AS question_waits,
+		COALESCE(q.question_wait_seconds, 0) AS question_wait_seconds,
+		COALESCE(r.recorded_wait_seconds, 0) AS recorded_wait_seconds,
+		COALESCE(run.agent_seconds, 0) AS agent_seconds
+	FROM workflow_keys w
+	LEFT JOIN counts c ON c.workflow_id = w.workflow_id
+	LEFT JOIN open_waits o ON o.workflow_id = w.workflow_id
+	LEFT JOIN question_waits q ON q.workflow_id = w.workflow_id
+	LEFT JOIN recorded_waits r ON r.workflow_id = w.workflow_id
+	LEFT JOIN runs run ON run.workflow_id = w.workflow_id
+)
+SELECT
+	workflow_id AS workflow_id,
+	questions AS questions,
+	blocked_handoffs AS blocked_handoffs,
+	waits_recorded AS waits_recorded,
+	waits_ended AS waits_ended,
+	waits_open AS waits_open,
+	question_waits AS question_waits,
+	question_wait_seconds AS question_wait_seconds,
+	recorded_wait_seconds AS recorded_wait_seconds,
+	CASE WHEN waits_recorded > 0 THEN recorded_wait_seconds ELSE question_wait_seconds END AS human_wait_seconds,
+	agent_seconds AS agent_seconds,
+	CASE
+		WHEN agent_seconds + (CASE WHEN waits_recorded > 0 THEN recorded_wait_seconds ELSE question_wait_seconds END) > 0
+		THEN ROUND(100.0 * (CASE WHEN waits_recorded > 0 THEN recorded_wait_seconds ELSE question_wait_seconds END) / (agent_seconds + (CASE WHEN waits_recorded > 0 THEN recorded_wait_seconds ELSE question_wait_seconds END)), 1)
+		ELSE NULL
+	END AS human_share_pct
+FROM joined
+ORDER BY (CASE WHEN waits_recorded > 0 THEN recorded_wait_seconds ELSE question_wait_seconds END) DESC`,
+	},
+	{
 		name: "verifier-findings",
 		summary: "Verifier findings by severity and role.",
 		example:

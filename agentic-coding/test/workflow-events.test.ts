@@ -46,6 +46,7 @@ function view(overrides: {
 		answer?: { kind: string; value?: string };
 	}>;
 	gateDecisions?: WorkflowView["gateDecisions"];
+	waiting?: WorkflowView["waiting"];
 	task?: string;
 }): WorkflowView {
 	const step = overrides.step ?? "core.implementation";
@@ -69,6 +70,7 @@ function view(overrides: {
 		developerDialogue: overrides.developerDialogue ?? [],
 		gateDecisions: overrides.gateDecisions ?? [],
 		availableActions: [],
+		...(overrides.waiting ? { waiting: overrides.waiting } : {}),
 	} as unknown as WorkflowView;
 }
 
@@ -105,7 +107,7 @@ function payload(
 
 describe("workflow event catalog", () => {
 	test("every id declares a category, a human-needed flag and a payload schema", () => {
-		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(2);
+		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(3);
 		expect(WORKFLOW_EVENT_CATALOG).toHaveLength(WORKFLOW_EVENT_IDS.length);
 		for (const id of WORKFLOW_EVENT_IDS) {
 			const entry = workflowEventCatalogEntry(id);
@@ -123,6 +125,39 @@ describe("workflow event catalog", () => {
 		const payload = { count: 1234, workflowId: "wf-1", windowMs: 10_000 };
 		expect(Schema.decodeUnknownSync(entry.payload)(payload)).toEqual(payload);
 		expect(workflowEventSeverity("events.suppressed", payload)).toBe("warning");
+	});
+
+	test("the developer-wait pair is a bounded, non-human workflow event", () => {
+		// The wait boundary is derived from the view, so it must not notify: the
+		// obligation itself already notifies as `question.pending` or
+		// `review.waiting`, and a second notification per wait would double it.
+		for (const id of ["workflow.waiting", "workflow.waiting.ended"] as const) {
+			const entry = workflowEventCatalogEntry(id);
+			expect(entry.category).toBe("workflow");
+			expect(entry.humanNeeded).toBe(false);
+		}
+		const start = {
+			kind: "handoff",
+			subject: "run-1",
+			stepId: "core.implementation",
+		};
+		expect(
+			Schema.decodeUnknownSync(
+				workflowEventCatalogEntry("workflow.waiting").payload,
+			)({ ...start, since: "2026-01-01T00:00:00.000Z" }),
+		).toEqual({ ...start, since: "2026-01-01T00:00:00.000Z" });
+		expect(
+			Schema.decodeUnknownSync(
+				workflowEventCatalogEntry("workflow.waiting.ended").payload,
+			)({ ...start, seconds: 180 }),
+		).toEqual({ ...start, seconds: 180 });
+		// The kind is a closed vocabulary, so a new blocking state has to name
+		// itself here instead of arriving as an arbitrary string.
+		expect(() =>
+			Schema.decodeUnknownSync(
+				workflowEventCatalogEntry("workflow.waiting").payload,
+			)({ ...start, kind: "something-else" }),
+		).toThrow();
 	});
 
 	test("the human-needed set is exactly review.waiting and question.pending", () => {

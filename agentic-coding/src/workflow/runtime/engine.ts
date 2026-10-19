@@ -24,10 +24,13 @@ import { resolveConfigRoot } from "../../config-root.ts";
 import {
 	decodeCommand,
 	type EffectKind,
+	sameWorkflowWait,
 	type WorkflowCommand,
 	type WorkflowRun,
 	type WorkflowSnapshot,
 	type WorkflowView,
+	type WorkflowWait,
+	waitSeconds,
 } from "../../contracts/workflow.ts";
 import { setupDraftsDir } from "../../server/environment/setup-drafts.ts";
 import type { RoutingDecisionSummary } from "../classifiers.ts";
@@ -165,6 +168,7 @@ import {
 	previewRepair as viewPreviewRepair,
 	status as viewStatus,
 } from "./view.ts";
+import { definitionStepActor, waitState, workflowWait } from "./waiting.ts";
 
 interface CommittedDispatch {
 	snapshot: WorkflowSnapshot;
@@ -191,9 +195,11 @@ interface CommittedTelemetry {
 	payload: Record<string, unknown>;
 	/** Present when a completed classifier effect applied routing. */
 	routingPayload?: Record<string, unknown>;
-	/** The decisions the committed step behavior recorded: one engine telemetry
-	 * event per entry, emitted right after the command's own event. */
-	decisionEvents?: readonly {
+	/** The engine telemetry events the committed command derived beyond its own
+	 * event: the decisions a step behavior recorded, and the developer-wait
+	 * boundary (`workflow.waiting` / `workflow.waiting.ended`). One event per
+	 * entry, emitted right after the command's own event. */
+	derivedEvents?: readonly {
 		event: string;
 		payload: Record<string, unknown>;
 	}[];
@@ -221,6 +227,41 @@ const TERMINAL_STATUSES = new Set([
 	"closed",
 	"attention-required",
 ]);
+
+/** How many ids a committed event's bounded id list holds; a list the event did
+ * not carry counts as zero retired entries. */
+function idCount(value: unknown): number {
+	return Array.isArray(value) ? value.length : 0;
+}
+/** The telemetry payload of an opening `workflow.waiting`: the kind, the id a
+ * reader resolves the wait by, the step it waits at, and when it began. Scalars
+ * only, so the ids stay in the state that causes the wait. */
+function waitStartPayload(
+	wait: WorkflowWait,
+	stepId: string,
+): Record<string, unknown> {
+	return {
+		"herdr.wait.kind": wait.kind,
+		"herdr.wait.subject": wait.subject,
+		"herdr.wait.step": stepId,
+		...(wait.since ? { "herdr.wait.since": wait.since } : {}),
+	};
+}
+
+/** The payload of the matching `workflow.waiting.ended`: the same identity plus
+ * the seconds the wait stayed open, absent when the state recorded no start
+ * time (a legacy snapshot with no `stepEnteredAt`). */
+function waitEndedPayload(
+	wait: WorkflowWait,
+	stepId: string,
+	at: string,
+): Record<string, unknown> {
+	const seconds = waitSeconds(wait.since, at);
+	return {
+		...waitStartPayload(wait, stepId),
+		...(seconds === undefined ? {} : { "herdr.wait.seconds": seconds }),
+	};
+}
 const MAX_DIGEST_ATTRIBUTE = 16;
 
 /** What an `env-setup` workflow's health says when no server is reachable for
@@ -399,6 +440,13 @@ export class WorkflowEngine {
 				stepId: result.snapshot.currentStep,
 				payload: self.startTelemetryPayload(result.snapshot),
 			});
+			// A workflow whose first step is the developer's starts waiting for them,
+			// so it records the open wait with everything else the start records.
+			if (result.wait)
+				yield* self.telemetryEffect(result.snapshot, "workflow.waiting", {
+					stepId: result.snapshot.currentStep,
+					payload: waitStartPayload(result.wait, result.snapshot.currentStep),
+				});
 			self.onCommitted(prepared.storeTarget);
 			// A workflow started in a directory of the operator's choosing owns a
 			// store only this registry remembers; without it the sidebar would stop
@@ -551,7 +599,7 @@ export class WorkflowEngine {
 			// measured duration), the effect's latency, and the bounded payload the
 			// behavior built. No envelope `outcome` here: the dataset reads a
 			// decision from the payload's own verdict, and an "ok" would mask it.
-			for (const decision of committed.telemetry.decisionEvents ?? [])
+			for (const decision of committed.telemetry.derivedEvents ?? [])
 				yield* self.telemetryEffect(committed.snapshot, decision.event, {
 					stepId: committed.telemetry.stepId,
 					runId: committed.telemetry.runId,
@@ -1506,7 +1554,13 @@ export class WorkflowEngine {
 		input: StartWorkflowInput,
 		snapshot: WorkflowSnapshot,
 		sameCheckout: boolean,
-	): { snapshot: WorkflowSnapshot; event: { type: string; data: unknown } } {
+	): {
+		snapshot: WorkflowSnapshot;
+		event: { type: string; data: unknown };
+		/** The developer wait the workflow starts in, when its first step is
+		 * already the developer's (record-repairs-and-developer-waits). */
+		wait: WorkflowWait | undefined;
+	} {
 		// The refusal names the status the existing row is in: the orchestrator
 		// relayed "already exists" before, and the status is what tells the
 		// developer whether that id is finished, waiting on them, or still running.
@@ -1578,7 +1632,17 @@ export class WorkflowEngine {
 			);
 		else enterStep(db, snapshot, definition, this.registry, this.now);
 		writeSnapshot(db, snapshot);
-		return { snapshot, event };
+		return {
+			snapshot,
+			event,
+			wait: workflowWait(
+				waitState(
+					snapshot,
+					runs(db, snapshot.workflowId),
+					definitionStepActor(this.registry, definition, snapshot.currentStep),
+				),
+			),
+		};
 	}
 
 	/** `workflow.started` payload: the definition identity and the bounded start
@@ -1866,6 +1930,16 @@ export class WorkflowEngine {
 		if (!repin) validateSnapshot(snapshot, definition, runList, this.registry);
 		const statusBefore = snapshot.status;
 		const stepBefore = snapshot.currentStep;
+		// The wait the workflow is in *before* this command reduces, read from the
+		// state the store already holds: the pair the command's commit records is
+		// the difference between it and the wait after (record-repairs-and-developer-waits).
+		const waitBefore = workflowWait(
+			waitState(
+				snapshot,
+				runList,
+				definitionStepActor(this.registry, definition, stepBefore),
+			),
+		);
 		const event = this.reduce(
 			db,
 			snapshot,
@@ -1901,6 +1975,8 @@ export class WorkflowEngine {
 				snapshot,
 				statusBefore,
 				stepBefore,
+				definition,
+				waitBefore,
 				preparedHandoff,
 			),
 		};
@@ -1917,6 +1993,8 @@ export class WorkflowEngine {
 		snapshot: WorkflowSnapshot,
 		statusBefore: WorkflowSnapshot["status"],
 		stepBefore: string,
+		definition: Readonly<CompiledWorkflowDefinition>,
+		waitBefore: WorkflowWait | undefined,
 		preparedHandoff?: PreparedHandoffEvidence,
 	): CommittedTelemetry {
 		const telemetry: CommittedTelemetry = {
@@ -2013,7 +2091,7 @@ export class WorkflowEngine {
 						event: (entry as { event: string }).event,
 						payload: (entry as { payload: Record<string, unknown> }).payload,
 					});
-			if (decisions.length) telemetry.decisionEvents = decisions;
+			if (decisions.length) telemetry.derivedEvents = decisions;
 		}
 		if (event.type === "agent.handoff") {
 			const data =
@@ -2042,7 +2120,7 @@ export class WorkflowEngine {
 			// that records a finished round never runs. The round still happened, so
 			// the runtime reports the one round it can still see.
 			if (data.outcome === "failed" && telemetry.stepId === "core.verification")
-				telemetry.decisionEvents = [
+				telemetry.derivedEvents = [
 					{
 						event: "verification_round",
 						payload: this.abandonedRoundPayload(
@@ -2074,9 +2152,29 @@ export class WorkflowEngine {
 		if (event.type === "research.handoff.recorded")
 			this.applyResearchHandoffTelemetry(telemetry, command);
 		if (command.type === "operator.repair") {
+			const data =
+				event.data && typeof event.data === "object"
+					? (event.data as {
+							reason?: unknown;
+							repairCount?: unknown;
+							expiredEffects?: unknown;
+							retiredRuns?: unknown;
+						})
+					: {};
 			telemetry.payload["herdr.step.from"] = stepBefore;
 			telemetry.payload["herdr.step.to"] = snapshot.currentStep;
+			// The command's reason length stays as recorded; the bounded, masked
+			// reason and what the repair retired come from the committed event, so
+			// the telemetry layer carries the same record the store holds. Only the
+			// counts travel here: a telemetry attribute keeps scalars, and the ids
+			// themselves are in the durable event and the snapshot.
 			telemetry.payload["herdr.reason.length"] = command.reason.length;
+			if (typeof data.reason === "string" && data.reason !== "")
+				telemetry.payload["herdr.repair.reason"] = data.reason;
+			telemetry.payload["herdr.repair.effects"] = idCount(data.expiredEffects);
+			telemetry.payload["herdr.repair.runs"] = idCount(data.retiredRuns);
+			if (typeof data.repairCount === "number")
+				telemetry.payload["herdr.repair.count"] = data.repairCount;
 		}
 		if (
 			command.type === "operator.repin" ||
@@ -2088,12 +2186,61 @@ export class WorkflowEngine {
 				snapshot.definition.digest,
 			);
 		}
+		const waits = this.waitEvents(
+			db,
+			definition,
+			snapshot,
+			waitBefore,
+			stepBefore,
+		);
+		if (waits.length)
+			telemetry.derivedEvents = [...(telemetry.derivedEvents ?? []), ...waits];
 		if (
 			TERMINAL_STATUSES.has(snapshot.status) &&
 			!TERMINAL_STATUSES.has(statusBefore)
 		)
 			telemetry.rollupPayload = this.rollupPayload(db, snapshot);
 		return telemetry;
+	}
+
+	/** The developer-wait boundary this command committed
+	 * (record-repairs-and-developer-waits): the wait the state held before it and
+	 * the one it holds after. A command that changes neither (`operator.poll`, a
+	 * re-entry into the same gate) derives nothing, so a poll never emits an
+	 * event and a wait is announced once, when the state that causes it appears.
+	 *
+	 * A wait still open when the workflow reaches `completed`/`closed` ends here:
+	 * `workflowWait` projects no wait for a terminal workflow, so the close is
+	 * what ends it and no wait can dangle. A wait whose start this build never saw
+	 * (the state predates the recording) ends without a start, which the
+	 * `developer-waits` pairing check reports rather than hides. */
+	private waitEvents(
+		db: import("bun:sqlite").Database,
+		definition: Readonly<CompiledWorkflowDefinition>,
+		snapshot: WorkflowSnapshot,
+		waitBefore: WorkflowWait | undefined,
+		stepBefore: string,
+	): { event: string; payload: Record<string, unknown> }[] {
+		const waitAfter = workflowWait(
+			waitState(
+				snapshot,
+				runs(db, snapshot.workflowId),
+				definitionStepActor(this.registry, definition, snapshot.currentStep),
+			),
+		);
+		if (sameWorkflowWait(waitBefore, waitAfter)) return [];
+		const events: { event: string; payload: Record<string, unknown> }[] = [];
+		if (waitBefore)
+			events.push({
+				event: "workflow.waiting.ended",
+				payload: waitEndedPayload(waitBefore, stepBefore, nowIso(this.now)),
+			});
+		if (waitAfter)
+			events.push({
+				event: "workflow.waiting",
+				payload: waitStartPayload(waitAfter, snapshot.currentStep),
+			});
+		return events;
 	}
 
 	/** Question round-trip payload resolved from the dialogue record the reducer

@@ -13,7 +13,7 @@ import { Schema } from "effect";
 import { redactSecrets, type StartedBy } from "./workflow.ts";
 
 /** Bumped whenever an id, a category or a payload shape changes. */
-export const WORKFLOW_EVENT_CATALOG_VERSION = 2;
+export const WORKFLOW_EVENT_CATALOG_VERSION = 3;
 
 /** The category vocabulary, in the order events of one observation are
  * reported, so a note is deterministic. */
@@ -40,6 +40,8 @@ export const WORKFLOW_EVENT_IDS = [
 	"workflow.completed",
 	"workflow.closed",
 	"workflow.failed",
+	"workflow.waiting",
+	"workflow.waiting.ended",
 	"step.entered",
 	"step.completed",
 	"review.waiting",
@@ -174,6 +176,22 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		stepLabel: Schema.String,
 		reasons,
 	}),
+	// A developer wait opening and closing (record-repairs-and-developer-waits).
+	// The kind is `WorkflowWaitKind`, the subject the id a reader resolves it by,
+	// and `seconds` how long the closed wait had been open — a count, so the
+	// payload stays free of transcript content and of the wait's own text.
+	"workflow.waiting": Schema.Struct({
+		kind: Schema.Literal("question", "handoff", "approval"),
+		subject: Schema.String,
+		stepId: Schema.String,
+		since: Schema.optional(Schema.String),
+	}),
+	"workflow.waiting.ended": Schema.Struct({
+		kind: Schema.Literal("question", "handoff", "approval"),
+		subject: Schema.String,
+		stepId: Schema.String,
+		seconds: Schema.optional(Schema.Number),
+	}),
 	"step.entered": Schema.Struct({
 		stepId: Schema.String,
 		stepLabel: Schema.String,
@@ -307,6 +325,8 @@ const CATEGORY_OF: Record<WorkflowEventId, WorkflowEventCategory> = {
 	"workflow.completed": "workflow",
 	"workflow.closed": "workflow",
 	"workflow.failed": "workflow",
+	"workflow.waiting": "workflow",
+	"workflow.waiting.ended": "workflow",
 	"step.entered": "step",
 	"step.completed": "step",
 	"review.waiting": "review",
@@ -705,6 +725,10 @@ export function describeWorkflowEvent(record: WorkflowEventRecord): string {
 			return `attention required: ${reasonText(payload)}`;
 		case "attention.cleared":
 			return `attention cleared: ${reasonText(payload)}`;
+		case "workflow.waiting":
+			return `waiting on the developer: ${stringField(payload, "kind")}`;
+		case "workflow.waiting.ended":
+			return `developer wait ended: ${stringField(payload, "kind")}`;
 		case "step.entered":
 			return "step entered";
 		case "step.completed":

@@ -21,7 +21,11 @@ import {
 // the runtime records since tool-call telemetry stopped being name-only). A
 // dataset built from an older-only snapshot simply carries NULL/legacy values
 // in the new columns, so old rows stay readable.
-export const DATASET_SCHEMA_VERSION = 2;
+// 3: `events` gained `repair_effects`, `repair_runs` and `wait_kind` (efficiency
+// backlog items 11 and 12): what a recorded repair retired, and which kind of
+// developer wait a recorded `workflow.waiting` row reports. Append-only, same
+// rule: a dataset built from an older-only snapshot carries NULL there.
+export const DATASET_SCHEMA_VERSION = 3;
 export const DATASET_FILE = "dataset.sqlite";
 
 const TABLES_DDL = `
@@ -175,6 +179,13 @@ CREATE TABLE events (
 	-- simply has the columns empty.
 	compaction_kind TEXT,
 	compaction_blocking INTEGER,
+	-- The repair and waiting vocabulary (efficiency backlog items 11 and 12): what
+	-- a recorded repair expired and retired, and which kind of developer wait a
+	-- workflow.waiting row reports. Append-only, like every column above.
+	repair_effects INTEGER,
+	repair_runs INTEGER,
+	repair_count INTEGER,
+	wait_kind TEXT,
 	detail TEXT,
 	detail_hash TEXT,
 	detail_bytes INTEGER,
@@ -386,8 +397,8 @@ function insertAll(
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const eventStatement = db.prepare(
-		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, detail, detail_hash, detail_bytes, confidence, preferred)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, repair_effects, repair_runs, repair_count, wait_kind, detail, detail_hash, detail_bytes, confidence, preferred)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 
 	for (const descriptor of SOURCE_LIST)
@@ -521,6 +532,10 @@ function insertAll(
 			event.trace_id,
 			event.compaction_kind,
 			event.compaction_blocking,
+			event.repair_effects,
+			event.repair_runs,
+			event.repair_count,
+			event.wait_kind,
 			event.detail,
 			event.detail_hash,
 			event.detail_bytes,

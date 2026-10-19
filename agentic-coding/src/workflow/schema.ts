@@ -224,6 +224,12 @@ const repairedSchema = Schema.Struct({
 	reason: boundedText(4096),
 	fromStep: text(4096),
 	at: text(4096),
+	// The repair's effect, recorded since efficiency backlog item 11: the ids it
+	// expired and retired, and the workflow's repair count. Optional, so a
+	// snapshot written before them still decodes unchanged.
+	expiredEffects: Schema.optional(stringArray()),
+	retiredRuns: Schema.optional(stringArray()),
+	count: Schema.optional(integer()),
 });
 const repinnedSchema = Schema.Struct({
 	fromDigest: text(4096),

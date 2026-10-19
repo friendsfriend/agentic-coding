@@ -97,6 +97,9 @@ const TURN_CALL_EVENT_NAMES: ReadonlySet<string> = new Set([
 
 export function eventClass(event: string): EventClass {
 	if (/compaction/.test(event)) return "compaction";
+	// Every developer-blocking transition: entering a wait and ending one
+	// (efficiency backlog item 12).
+	if (/^workflow\.waiting/.test(event)) return "wait";
 	if (/^(triage_|triage\.)/.test(event)) return "triage";
 	if (/^(verif|verifier|test_verifier|worker_verification)/.test(event))
 		return "verifier";
@@ -126,6 +129,13 @@ function str(value: string | undefined | null): string | null {
 	return value === undefined || value === null || value.length === 0
 		? null
 		: value;
+}
+
+/** How many ids a bounded id list holds. The ids themselves stay in the store
+ * they were recorded in; the dataset keeps their count. Anything that is not an
+ * array counts as none recorded. */
+function idCount(value: unknown): number | null {
+	return Array.isArray(value) ? value.length : null;
 }
 
 /** Highest-precedence source among those that contributed to a row. */
@@ -1128,6 +1138,10 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				compaction_kind: null,
 				compaction_blocking: null,
 				detail: null,
+				wait_kind: null,
+				repair_effects: null,
+				repair_runs: null,
+				repair_count: null,
 				detail_hash: null,
 				detail_bytes: compaction.summaryBytes,
 				confidence: item.confidence,
@@ -1165,10 +1179,19 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 					: Number(event.compactionBlocking),
 			detail: (() => {
 				const text = str(
-					event.errorClass ?? event.handoffReason ?? event.reasonCode ?? null,
+					event.repairReason ??
+						event.errorClass ??
+						event.handoffReason ??
+						event.reasonCode ??
+						event.waitSubject ??
+						null,
 				);
 				return text === null ? null : redactBounded(text, 160);
 			})(),
+			wait_kind: event.waitKind ?? null,
+			repair_effects: event.repairEffects ?? null,
+			repair_runs: event.repairRuns ?? null,
+			repair_count: event.repairCount ?? null,
 			detail_hash: event.detail?.hash ?? null,
 			detail_bytes: event.detail?.bytes ?? null,
 			confidence: "exact",
@@ -1179,6 +1202,13 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 		for (const event of read.events) {
 			const data = event.data ?? {};
 			const outcome = typeof data.outcome === "string" ? data.outcome : null;
+			// The durable event's own record of the repair (reason, expired effect ids,
+			// retired run ids) is what this source extracts: the ids themselves stay in
+			// the store, the dataset keeps their counts and the bounded reason. A
+			// developer wait is a projection of state this log already holds, so its
+			// boundary is only in the telemetry stream (`wait_kind` stays null here).
+			const reason = typeof data.reason === "string" ? data.reason : null;
+			const detailText = reason !== null && reason.length > 0 ? reason : null;
 			events.push({
 				workflow_id: event.workflowId,
 				run_id: typeof data.runId === "string" ? data.runId : null,
@@ -1198,7 +1228,12 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				trace_id: null,
 				compaction_kind: null,
 				compaction_blocking: null,
-				detail: null,
+				detail: detailText === null ? null : redactBounded(detailText, 160),
+				wait_kind: null,
+				repair_effects: idCount(data.expiredEffects),
+				repair_runs: idCount(data.retiredRuns),
+				repair_count:
+					typeof data.repairCount === "number" ? data.repairCount : null,
 				detail_hash: null,
 				detail_bytes: null,
 				confidence: "exact",

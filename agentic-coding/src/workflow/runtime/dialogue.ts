@@ -32,6 +32,24 @@ export const AGENT_QUESTION_WAIT_MS = 120_000;
  * forwards the question to the developer. */
 export const ORCHESTRATOR_QUESTION_TARGET = "orchestrator";
 
+/** Whether a record is a question the developer may answer right now: pending,
+ * not expired, and not routed to a peer agent. A record still routed to the
+ * orchestrator stays listed, because the developer is the backstop when the
+ * orchestrator does not act (make-developer-questions-asynchronous). The one
+ * predicate behind the developer modal, `view.pendingQuestions` and the
+ * developer wait, so the three can never disagree about who owes an answer. */
+export function developerPendingQuestion(
+	item: Pick<DeveloperDialogueRecord, "status" | "expiresAt" | "targetRole">,
+	now: () => Date,
+): boolean {
+	return (
+		(item.targetRole === undefined ||
+			item.targetRole === ORCHESTRATOR_QUESTION_TARGET) &&
+		item.status === "pending" &&
+		Date.parse(item.expiresAt) > now().getTime()
+	);
+}
+
 /** Forward orchestrator-routed questions to the developer: clear the
  * orchestrator marker, keep the records pending, and reset the wait window and
  * timer nonce so the developer gets a full window and a fresh expiry timer.

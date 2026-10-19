@@ -118,6 +118,17 @@ export interface NormalizedEvent {
 	phaseTo?: string;
 	/** A short, space-free reason code; prose is never kept. */
 	reasonCode?: string;
+	/** The bounded, credential-masked reason a repair was taken (efficiency
+	 * backlog item 11). Absent on every generation that recorded none. */
+	repairReason?: string;
+	/** How many effects the repair expired and how many runs it retired. */
+	repairEffects?: number;
+	repairRuns?: number;
+	/** The workflow-level repair counter the engine recorded with the event. */
+	repairCount?: number;
+	/** What a workflow wait was about, and its subject (item 12). */
+	waitKind?: string;
+	waitSubject?: string;
 	/** Why a compaction ran, as the envelope's own `kind`: `auto-ceiling`,
 	 * `auto-overflow` or `manual`. Absent on a generation that only spells a
 	 * reason. */
@@ -302,6 +313,12 @@ export function normalizeRecord(
 			const reason = str(record.reason);
 			return reason !== undefined && looksLikeCode(reason) ? reason : undefined;
 		})(),
+		repairReason: str(record["herdr.repair.reason"]),
+		repairEffects: num(record["herdr.repair.effects"]),
+		repairRuns: num(record["herdr.repair.runs"]),
+		repairCount: num(record["herdr.repair.count"]),
+		waitKind: str(record["herdr.wait.kind"]),
+		waitSubject: str(record["herdr.wait.subject"]),
 		compactionReason: str(record.reason),
 		compactionKind: str(record.kind),
 		compactionBlocking: bool(record.blocking),

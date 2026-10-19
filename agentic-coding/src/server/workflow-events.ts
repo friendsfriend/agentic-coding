@@ -16,8 +16,11 @@ import {
 	type GateDecisionRecord,
 	type RunStatus,
 	type StartedBy,
+	sameWorkflowWait,
 	type WorkflowStatus,
 	type WorkflowView,
+	type WorkflowWait,
+	waitSeconds,
 } from "../contracts/workflow.ts";
 import {
 	boundedReasons,
@@ -84,6 +87,10 @@ export interface WorkflowEventProjection {
 	readonly stepLabel: string;
 	readonly attempt: number;
 	readonly review: WorkflowReviewKind | null;
+	/** The developer wait the workflow is in, `null` when it waits for nobody
+	 * (record-repairs-and-developer-waits). Read from the view's own projection,
+	 * so the diff below only reports a wait that opened or ended. */
+	readonly waiting: WorkflowWait | null;
 	readonly attention: readonly string[];
 	readonly pendingQuestions: readonly WorkflowQuestionRef[];
 	readonly routedQuestions: readonly WorkflowQuestionRef[];
@@ -152,6 +159,7 @@ export function projectWorkflowEvents(
 		stepLabel: view.currentStep?.label ?? stepId,
 		attempt: view.currentStep?.attempt ?? 0,
 		review: reviewKindForStep(stepId) ?? null,
+		waiting: view.waiting ?? null,
 		attention: [...(view.health?.attention ?? [])],
 		pendingQuestions: questionRefs(view.pendingQuestions),
 		routedQuestions: questionRefs(view.orchestratorQuestions),
@@ -245,6 +253,32 @@ export function deriveWorkflowEvents(
 		else if (next.status === "completed")
 			push("workflow.completed", { ...step });
 		else if (next.status === "closed") push("workflow.closed", { ...step });
+	}
+
+	// -- waiting -------------------------------------------------------------
+	// One event per transition: the first observation of a workflow records the
+	// baseline (a workflow already waiting at plan approval when the server starts
+	// is the developer's situation, not news), and a poll of an unchanged view
+	// differs in nothing, so neither emits here.
+	if (
+		!sameWorkflowWait(previous.waiting ?? undefined, next.waiting ?? undefined)
+	) {
+		if (previous.waiting) {
+			const seconds = waitSeconds(previous.waiting.since, context.at);
+			push("workflow.waiting.ended", {
+				kind: previous.waiting.kind,
+				subject: previous.waiting.subject,
+				stepId: previous.stepId,
+				...(seconds === undefined ? {} : { seconds }),
+			});
+		}
+		if (next.waiting)
+			push("workflow.waiting", {
+				kind: next.waiting.kind,
+				subject: next.waiting.subject,
+				stepId: next.stepId,
+				...(next.waiting.since ? { since: next.waiting.since } : {}),
+			});
 	}
 
 	// -- attention -----------------------------------------------------------

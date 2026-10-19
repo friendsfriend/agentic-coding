@@ -26,6 +26,12 @@ import {
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
 
+function requireDefined<T>(value: T | null | undefined, what: string): T {
+	if (value === undefined || value === null)
+		throw new Error(`expected ${what} to exist`);
+	return value;
+}
+
 function repository(root: string): string {
 	return createRepoFixture(root, repoPreset.readme);
 }
@@ -556,6 +562,92 @@ test("question capability rejects another run and expires after 24 hours", () =>
 				questionId,
 			}),
 		).toThrow(/no longer pending/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a developer question opens a wait and the answer ends it", () => {
+	const { repo, engine, run, token, now } = setup();
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const telemetry = () =>
+			fs
+				.readFileSync(
+					path.join(repo, ".herdr-workflow", "question", "telemetry.jsonl"),
+					"utf8",
+				)
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as Record<string, unknown>);
+		const of = (event: string) =>
+			telemetry().filter((envelope) => envelope.event === event);
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "which design?",
+			options: [{ label: "A", value: "a" }],
+		});
+		const question = created.snapshot.developerDialogue[0];
+		const questionId = question?.id;
+		const timerNonce = question?.timerNonce;
+		if (!questionId || !timerNonce) throw new Error("question missing");
+		// The wait is the question: the developer owes an answer, and the view says
+		// since when.
+		expect(created.view.waiting).toEqual({
+			kind: "question",
+			subject: questionId,
+			since: question.createdAt,
+		});
+		expect(of("workflow.waiting")).toHaveLength(1);
+		expect(of("workflow.waiting")[0]?.["herdr.wait.kind"]).toBe("question");
+		expect(of("workflow.waiting")[0]?.["herdr.wait.subject"]).toBe(questionId);
+		// Reading the workflow is not progress: a poll records nothing.
+		const polled = telemetry().length;
+		engine.status(repo, "question");
+		expect(telemetry()).toHaveLength(polled);
+		// The answer ends the wait and says how long the developer took.
+		now(new Date("2026-01-01T00:01:40Z"));
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: created.snapshot.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "option", value: "a" },
+		});
+		expect(answered.view.waiting).toBeUndefined();
+		const ended = of("workflow.waiting.ended");
+		expect(ended).toHaveLength(1);
+		expect(ended[0]?.["herdr.wait.kind"]).toBe("question");
+		expect(ended[0]?.["herdr.wait.subject"]).toBe(questionId);
+		expect(ended[0]?.["herdr.wait.seconds"]).toBe(100);
+		// An expiry ends the wait the same way, so a question nobody answers leaves
+		// no open wait behind.
+		const second = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			description: "and now?",
+			options: [],
+		});
+		const secondQuestion = second.snapshot.developerDialogue[1];
+		if (!secondQuestion) throw new Error("second question missing");
+		expect(second.view.waiting?.subject).toBe(secondQuestion.id);
+		// Past the durable expiry the timer owns, the record may be expired.
+		now(new Date(Date.parse(secondQuestion.expiresAt) + 1_000));
+		const expired = engine.dispatch(repo, {
+			type: "timer.question-expire",
+			workflowId: run.workflowId,
+			questionId: secondQuestion.id,
+			timerNonce: requireDefined(secondQuestion.timerNonce, "timer nonce"),
+		});
+		expect(expired.view.waiting).toBeUndefined();
+		expect(of("workflow.waiting.ended")).toHaveLength(2);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

@@ -667,6 +667,87 @@ not at verification. The same records are queryable after the fact: import
 reconstructed from run timing, per source) and `analyze.ts gate-decisions` (the
 run/skip split per gate step, per source).
 
+### Repair records
+
+An `operator.repair` moves a workflow back to an earlier step and expires what the
+step it leaves still holds. The event used to name only the two steps, which left
+every repair in the imported dataset with no recorded cause: 42 repairs across 23
+workflows, a reason on none of them. The transition now carries its own record —
+in the committed event data, on `snapshot.repaired`, and on the workflow view's
+`repaired`:
+
+- `reason` — the operator's own words, bounded to 160 characters with control
+  characters collapsed and known credential shapes redacted, through the same
+  `boundedSummary` helper that bounds an event's `detail`. An absent reason is an
+  empty string, never a placeholder.
+- `expiredEffects` and `retiredRuns` — the ids of the outbox rows the expiry
+  retired (`artifact.write`, `agent.prompt`, `agent.launch`) and of the runs it
+  expired, including a debug run the expiry launched. Both are capped at 32
+  entries and deduplicated; a `snapshot.repaired` record is a summary of what the
+  repair did, not a second copy of the outbox.
+- `count` — how many repairs the workflow has recorded by then, this one
+  included, read from the committed `operator.repair` events. It is a
+  reconciliation figure, not stored state: a workflow's events and its record
+  always agree about it.
+
+The engine telemetry event carries the reason and the two counts
+(`herdr.repair.reason`, `herdr.repair.effects`, `herdr.repair.runs`, and
+`herdr.repair.count`) and no ids, because `boundedTelemetryPayload` keeps scalars
+only — the ids live in the durable event and the snapshot, which is where a reader
+that has to act on them reads them. Recording is observational: a repair with no
+reason still repairs, and neither the source step, the target step, the expired
+effects nor the retired runs depend on the record being written. In the efficiency
+dataset the reason lands in `events.detail` and the counts in
+`events.repair_effects`, `events.repair_runs` and `events.repair_count`, which is
+what `analyze.ts operator-repairs-recorded` reports per source — every repair, and
+how many carry a reason and a retirement count — against the baseline of 42
+repairs over 23 workflows with a reason on none of them.
+
+### Developer waits
+
+Agent time stops and human time starts wherever the workflow hands itself over to
+the developer: a question it asked (including a `login-handoff` ask, which is one
+of these records), a run that handed off as blocked, or a step whose actor is the
+developer — the plan, findings and wiki gates. The wait is a **projection**, in
+`src/workflow/runtime/waiting.ts`, over state the engine already has: the
+snapshot's status and current step with its entry time, the dialogue records, the
+run rows, and the actor of the current step in the pinned definition. It is never
+stored, never a snapshot field and never an effect, so there is no schema or
+migration for it and no way for it to disagree with the state it describes. The
+view carries it as `waiting` (`{ kind, subject, since }`, optional and additive,
+with `waitResponseSchema`), precedence is question over handoff over approval,
+and the subject is the oldest open question, the first blocked run, or the gate's
+step id. A question the developer owes an answer for is a record that is pending
+and not routed to a peer agent; one still routed to the orchestrator counts,
+because the developer is the backstop. The clock never ends a wait: a record past
+its durable expiry is still the wait until the expiry the engine records clears
+it, so every start has an end. A workflow that is `completed` or `closed` waits
+for nobody, which is what makes a wait left open by a killed run end at the close.
+
+The wait becomes an event at each transition, not on each read. In the engine,
+`commitDispatch` projects the wait *before* the reducer runs (`waitBefore`, over
+the pre-transition run rows) and again after the commit (`waitAfter`), and the
+repository writes `workflow.waiting.ended` then `workflow.waiting` only when the
+two differ — so a poll, a retried command, a re-entered gate and a repeated read
+emit nothing, and one blocking state replacing another ends one wait and starts
+the next in that order. A workflow that starts straight into a developer step gets
+its start event from the start path for the same reason. Leaving a wait reports
+`herdr.wait.seconds`, so the recorded telemetry can be summed per workflow.
+
+The event bus derives the same pair from the workflow view it already observes
+(`deriveWorkflowEvents`), which is what the event stream, subscriptions and the
+shells read: the first observation of a workflow emits nothing, an unchanged wait
+emits nothing, and both events are in the versioned catalog
+(`WORKFLOW_EVENT_CATALOG_VERSION` 3) with payload schemas, category `workflow` and
+**not** `human-needed` — the obligation itself already notifies as
+`question.pending` or `review.waiting`, and a second notification per wait would
+double it. In the efficiency dataset `wait_kind` comes from `herdr.wait.kind` and
+the subject from the telemetry detail, and `analyze.ts developer-waits` reports
+agent seconds and human wait seconds as two numbers per workflow: it prefers the
+recorded waits and falls back to the question records (`asked` paired with
+`answered` or `expired`) only where a source recorded none, which is the 22
+question waits and 3,562 seconds the dialogue alone could account for.
+
 Non-secret delivery settings are pinned in `metadata.executionSettings`, including
 the effective remote, resolved PR executable (or `null`), and config provenance.
 Delivery effects never reread ambient cwd configuration. Legacy snapshots remain
@@ -1096,6 +1177,7 @@ row):
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
 | `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, `resumeBlockedAsker`/`resumeAskerAfterAnswer` (re-issue the run that asked a question once its answer is recorded), plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because every `reducers/*.ts` module needs these without needing the `WorkflowEngine` class itself — importing `engine.ts` from a reducer would close the cycle `engine.ts -> reducer -> engine.ts`. |
 | `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
+| `waiting.ts` | The developer wait as a pure projection (`WaitState`/`waitState` → `workflowWait`) plus `definitionStepActor` for the current step's actor. Shared by the view, the engine's emission and the event bus, so all three name the same wait. No store access, no clock, no state. |
 | `reducers/*.ts` | One file per `reduce()` command branch (or a small explicitly-grouped set: `agent-question.ts` holds both `agent.question` and `agent.question-expire`; `repair.ts` holds `operator.repair`, `operator.repin`, and `operator.resume`). Each reducer receives `registry`/`now` as explicit parameters and the already-open `db`/`snapshot` — it runs inside the kernel's existing transaction, never opening its own. |
 | `engine.ts` | The `WorkflowEngine` class: `start`, `dispatch`, the `reduce()` command-type dispatch table, `claimEffects`, `telemetry`, `locate`, and thin public-API delegates to the modules above. The residue once every leaf/feature/reducer is moved out. |
 

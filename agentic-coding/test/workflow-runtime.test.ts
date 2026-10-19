@@ -1815,6 +1815,163 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("a repair records its cause and what it retired", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-repair-record-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			const started = engine.start({
+				repo,
+				workflowId: "repair-record",
+				definitionId: "openspec",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: routing(),
+			});
+			const routed = advanceRouting(engine, repo, started.view);
+			const oldRun = requireDefined(routed.runs[0], "first run");
+			const repaired = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: routed.workflowId,
+				revision: routed.revision,
+				targetStep: "core.plan-approval",
+				reason: `operator confirmed evidence api_key=abc123 ${"x".repeat(200)}`,
+			});
+			const record = requireDefined(
+				repaired.snapshot.repaired,
+				"repair record",
+			);
+			expect(record.fromStep).toBe(routed.currentStep.id);
+			// The reason is free text a developer typed, so it is bounded and
+			// credential-masked exactly like an event's detail.
+			expect(record.reason.length).toBeLessThanOrEqual(160);
+			expect(record.reason).toContain("api_key: <redacted>");
+			expect(record.reason).not.toContain("abc123");
+			// The repair names what it retired, not only where it went.
+			expect(record.retiredRuns).toEqual([oldRun.id]);
+			expect(record.expiredEffects?.length).toBeGreaterThan(0);
+			expect(record.count).toBe(1);
+			// The view carries the same record, so a reader that never opens the
+			// snapshot still sees why the workflow moved.
+			expect(repaired.view.repaired).toEqual(record);
+			const envelopes = fs
+				.readFileSync(
+					path.join(
+						repo,
+						".herdr-workflow",
+						repaired.view.workflowId,
+						"telemetry.jsonl",
+					),
+					"utf8",
+				)
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as Record<string, unknown>);
+			const recorded = requireDefined(
+				envelopes.find((envelope) => envelope.event === "operator.repair"),
+				"repair telemetry",
+			);
+			expect(recorded["herdr.repair.reason"]).toBe(record.reason);
+			expect(recorded["herdr.repair.effects"]).toBe(
+				record.expiredEffects?.length,
+			);
+			expect(recorded["herdr.repair.runs"]).toBe(1);
+			expect(recorded["herdr.repair.count"]).toBe(1);
+			// The payload counts what the record lists; the ids stay in the store.
+			const payload = JSON.stringify(recorded);
+			for (const id of [...(record.expiredEffects ?? []), oldRun.id])
+				expect(payload).not.toContain(id);
+			// A second repair counts itself against the workflow's history.
+			const again = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: routed.workflowId,
+				revision: repaired.view.revision,
+				targetStep: "core.plan-approval",
+				reason: "second pass",
+			});
+			expect(again.snapshot.repaired?.count).toBe(2);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("a developer gate opens a wait, re-entering it does not, and acting ends it", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wait-gate-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			let time = new Date("2026-01-02T09:00:00Z");
+			const engine = new WorkflowEngine(registerBuiltins(), () => time);
+			const telemetry = () =>
+				fs
+					.readFileSync(
+						path.join(repo, ".herdr-workflow", "wait-gate", "telemetry.jsonl"),
+						"utf8",
+					)
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line) as Record<string, unknown>);
+			const of = (event: string) =>
+				telemetry().filter((envelope) => envelope.event === event);
+			const started = engine.start({
+				repo,
+				workflowId: "wait-gate",
+				definitionId: "openspec",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: routing(),
+			});
+			const routed = advanceRouting(engine, repo, started.view);
+			const atGate = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: routed.workflowId,
+				revision: routed.revision,
+				targetStep: "core.plan-approval",
+				reason: "operator confirmed evidence",
+			});
+			// The gate is the developer's, so the workflow waits for them from the
+			// step entry the snapshot already records.
+			expect(atGate.view.waiting).toEqual({
+				kind: "approval",
+				subject: "core.plan-approval",
+				since: atGate.snapshot.metadata.stepEnteredAt,
+			});
+			expect(of("workflow.waiting")).toHaveLength(1);
+			expect(of("workflow.waiting")[0]?.["herdr.wait.kind"]).toBe("approval");
+			expect(of("workflow.waiting")[0]?.["herdr.wait.subject"]).toBe(
+				"core.plan-approval",
+			);
+			// A poll of the running workflow records what the state says, not a
+			// second wait: one event per transition.
+			const before = telemetry().length;
+			engine.status(repo, "wait-gate");
+			expect(telemetry()).toHaveLength(before);
+			// Re-entering the same gate is still the same wait, so it emits nothing.
+			const again = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: routed.workflowId,
+				revision: atGate.view.revision,
+				targetStep: "core.plan-approval",
+				reason: "second pass",
+			});
+			expect(of("workflow.waiting")).toHaveLength(1);
+			expect(again.view.waiting?.kind).toBe("approval");
+			// Acting at the gate ends the wait, and the end says how long it was.
+			time = new Date(time.getTime() + 90_000);
+			const approved = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: routed.workflowId,
+				revision: again.view.revision,
+				actionId: "approve-plan",
+			});
+			expect(approved.view.waiting).toBeUndefined();
+			const ended = of("workflow.waiting.ended");
+			expect(ended).toHaveLength(1);
+			expect(ended[0]?.["herdr.wait.kind"]).toBe("approval");
+			expect(ended[0]?.["herdr.wait.subject"]).toBe("core.plan-approval");
+			expect(ended[0]?.["herdr.wait.seconds"]).toBe(90);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("review-comments at plan approval returns to planning with feedback and review-fix mode", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-plan-comments-"),
@@ -2711,16 +2868,41 @@ describe("transactional workflow runtime", () => {
 					.find((effect) => effect.kind === "agent.launch")?.runToken,
 				"run token",
 			);
+			const handoff = blockedEngine.dispatch(repo, {
+				type: "agent.handoff",
+				runId: blockedRun.id,
+				generation: 1,
+				token: blockedToken,
+				outcome: "blocked",
+				message: "need input",
+			});
+			expect(handoff.view.status).toBe("attention-required");
+			// The blocked run is the developer's wait, whatever the handoff kind was:
+			// the projection reads the run rows, so a new kind needs no new code. The
+			// blocked run blocks the workflow, so the wait outlives the attention
+			// edge until the developer resolves the run.
+			expect(handoff.view.waiting).toMatchObject({
+				kind: "handoff",
+				subject: blockedRun.id,
+			});
 			expect(
-				blockedEngine.dispatch(repo, {
-					type: "agent.handoff",
-					runId: blockedRun.id,
-					generation: 1,
-					token: blockedToken,
-					outcome: "blocked",
-					message: "need input",
-				}).view.status,
-			).toBe("attention-required");
+				Date.parse(requireDefined(handoff.view.waiting?.since, "wait start")),
+			).toBeGreaterThan(0);
+			const waits = fs
+				.readFileSync(
+					path.join(repo, ".herdr-workflow", "blocked", "telemetry.jsonl"),
+					"utf8",
+				)
+				.split("\n")
+				.filter((line) => line.includes('"workflow.waiting"'));
+			expect(waits).toHaveLength(1);
+			expect(JSON.parse(requireDefined(waits[0], "wait event"))).toMatchObject({
+				"herdr.wait.kind": "handoff",
+				"herdr.wait.subject": blockedRun.id,
+				// The event and the view name the same start, so a reader pairing
+				// telemetry with a view sees one wait.
+				"herdr.wait.since": handoff.view.waiting?.since,
+			});
 			const db = new Database(canonicalStorePath(repo));
 			const profileJson = JSON.stringify(profile);
 			const definition = registerBuiltins().definition("no-openspec", 1);

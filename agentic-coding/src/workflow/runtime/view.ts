@@ -19,7 +19,10 @@ import {
 	resolveDefinition,
 	resolveDefinitionWithOrigin,
 } from "./definitions.ts";
-import { ORCHESTRATOR_QUESTION_TARGET } from "./dialogue.ts";
+import {
+	developerPendingQuestion,
+	ORCHESTRATOR_QUESTION_TARGET,
+} from "./dialogue.ts";
 import type { RepairPreview } from "./engine-types.ts";
 import {
 	ACTIVE_RUN,
@@ -39,6 +42,7 @@ import {
 	unsupportedStoreVersion,
 	validateDecodedSnapshot,
 } from "./store.ts";
+import { definitionStepActor, waitState, workflowWait } from "./waiting.ts";
 
 /** The compiled graph of a pinned definition, in walk order: a breadth-first
  * walk from the definition's initial step, taking each step's own edges in
@@ -114,12 +118,8 @@ function pendingDeveloperQuestions(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
 	now: () => Date,
 ): NonNullable<WorkflowView["developerDialogue"]> {
-	return publicDialogue(snapshot).filter(
-		(item) =>
-			(item.targetRole === undefined ||
-				item.targetRole === ORCHESTRATOR_QUESTION_TARGET) &&
-			item.status === "pending" &&
-			Date.parse(item.expiresAt) > now().getTime(),
+	return publicDialogue(snapshot).filter((item) =>
+		developerPendingQuestion(item, now),
 	);
 }
 
@@ -133,7 +133,7 @@ function pendingOrchestratorQuestions(
 ): NonNullable<WorkflowView["developerDialogue"]> {
 	return publicDialogue(snapshot).filter(
 		(item) =>
-			item.targetRole === "orchestrator" &&
+			item.targetRole === ORCHESTRATOR_QUESTION_TARGET &&
 			item.status === "pending" &&
 			Date.parse(item.expiresAt) > now().getTime(),
 	);
@@ -278,6 +278,13 @@ export function viewFromRows(
 				confirmation: "confirm",
 			});
 		}
+		const waiting = workflowWait(
+			waitState(
+				snapshot,
+				runList,
+				definitionStepActor(registry, definition, snapshot.currentStep),
+			),
+		);
 		return {
 			workflowId: snapshot.workflowId,
 			changeId: snapshot.metadata.changeId,
@@ -351,6 +358,13 @@ export function viewFromRows(
 			developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
 			classifierDecisions: snapshot.classifierDecisions ?? [],
 			gateDecisions: snapshot.gateDecisions ?? [],
+			// The last repair travels with the view so a reader sees why the workflow
+			// sits at a step next to the blocked handoff that led there. Absent means
+			// no repair has been recorded for this workflow.
+			...(snapshot.repaired ? { repaired: snapshot.repaired } : {}),
+			// The developer wait is read from the state that already blocks this
+			// workflow, so it never disagrees with `pendingQuestions` or the run list.
+			...(waiting ? { waiting } : {}),
 			pendingQuestions: pendingDeveloperQuestions(
 				snapshot.developerDialogue ?? [],
 				now,

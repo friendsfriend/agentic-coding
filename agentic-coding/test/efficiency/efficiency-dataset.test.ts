@@ -336,6 +336,58 @@ describe("events and redaction", () => {
 		expect(row?.detail_bytes).toBeGreaterThan(0);
 	});
 
+	test("records a repair's cause and effect and a wait's subject, from either source", () => {
+		const repairs = query<{
+			source: string;
+			workflow_id: string | null;
+			detail: string | null;
+			repair_effects: number | null;
+			repair_runs: number | null;
+			repair_count: number | null;
+		}>(
+			"SELECT source, workflow_id, detail, repair_effects, repair_runs, repair_count FROM events WHERE event = 'operator.repair' ORDER BY source",
+		);
+		// The store records the reason with the event's data and the ids it expired as
+		// data arrays; the telemetry carries the same repair as scalars. Both map to
+		// the same row shape, so neither source is the blind one.
+		expect(repairs.map((row) => row.source).sort()).toEqual([
+			"herdr.main-store",
+			"telemetry.main-store",
+		]);
+		for (const row of repairs) {
+			expect(row.workflow_id).toBe("span-wf");
+			expect(row.detail).toContain("verification failed twice");
+			expect(row.repair_effects).toBe(2);
+			expect(row.repair_runs).toBe(1);
+			expect(row.repair_count).toBe(1);
+		}
+		const waits = query<{
+			event: string;
+			source: string;
+			wait_kind: string | null;
+			detail: string | null;
+		}>(
+			"SELECT event, source, wait_kind, detail FROM events WHERE event LIKE 'workflow.waiting%' ORDER BY event, source",
+		);
+		// The pair is telemetry-only: the durable log records the state that blocks
+		// the workflow, and the boundary between two states is a telemetry event.
+		// Both rows name the same kind and subject, which is what makes the wait
+		// measurable.
+		expect(waits).toHaveLength(2);
+		expect(new Set(waits.map((row) => row.event))).toEqual(
+			new Set(["workflow.waiting", "workflow.waiting.ended"]),
+		);
+		expect(new Set(waits.map((row) => row.source))).toEqual(
+			new Set(["telemetry.main-store"]),
+		);
+		expect(new Set(waits.map((row) => row.wait_kind))).toEqual(
+			new Set(["question"]),
+		);
+		expect(new Set(waits.map((row) => row.detail))).toEqual(
+			new Set(["question-1"]),
+		);
+	});
+
 	test("no text column in the dataset contains a secret or a transcript body", () => {
 		const forbidden = [
 			"sk-live",

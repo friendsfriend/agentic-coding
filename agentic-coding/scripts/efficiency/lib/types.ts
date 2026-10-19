@@ -242,6 +242,7 @@ export type EventClass =
 	| "compaction"
 	| "delivery"
 	| "routing"
+	| "wait"
 	| "other";
 
 export interface EventRow {
@@ -263,7 +264,18 @@ export interface EventRow {
 	/** The envelope's own compaction kind and blocking flag, when it carried one. */
 	compaction_kind: string | null;
 	compaction_blocking: number | null;
+	/** A free-text detail about the event, bounded and credential-masked. A repair
+	 * carries its bounded reason here and a waiting event its subject id. */
 	detail: string | null;
+	/** The wait kind a `workflow.waiting`/`workflow.waiting.ended` row reports
+	 * (efficiency backlog item 12). Append-only: an older dataset reads NULL. */
+	wait_kind: string | null;
+	/** How many effects the repair expired and how many runs it retired. */
+	repair_effects: number | null;
+	repair_runs: number | null;
+	/** The workflow-level repair counter the engine recorded with the row: how
+	 * many repairs the workflow had by then, this one included. */
+	repair_count: number | null;
 	detail_hash: string | null;
 	detail_bytes: number | null;
 	confidence: Confidence;

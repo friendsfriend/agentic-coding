@@ -68,4 +68,5 @@ INSERT INTO workflow_runs (id, workflow_id, step_id, role, generation, attempt, 
 INSERT INTO workflow_events (workflow_id, revision, type, actor_json, data_json, at) VALUES
 	('span-wf', 0, 'workflow.started', '{"kind":"developer"}', '{"definition":{"id":"solo"}}', '2026-01-02T09:00:00.000Z'),
 	('span-wf', 5, 'agent.handoff', '{"kind":"agent","runId":"run-span-a","role":"worker"}', '{"outcome":"complete"}', '2026-01-02T09:05:00.000Z'),
-	('span-wf', 6, 'agent.handoff', '{"kind":"agent","runId":"run-span-b","role":"worker"}', '{"outcome":"blocked"}', '2026-01-02T10:10:00.000Z');
+	('span-wf', 6, 'agent.handoff', '{"kind":"agent","runId":"run-span-b","role":"worker"}', '{"outcome":"blocked"}', '2026-01-02T10:10:00.000Z'),
+	('span-wf', 7, 'operator.repair', '{"kind":"developer"}', '{"source":"core.implementation","target":"core.implementation","reason":"verification failed twice; restarting implementation","repairCount":1,"expiredEffects":["effect-1","effect-2"],"retiredRuns":["run-span-b"]}', '2026-01-02T10:20:00.000Z');

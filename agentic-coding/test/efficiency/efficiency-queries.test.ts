@@ -628,6 +628,154 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("operator-repairs-recorded reports what each recorded repair carried", () => {
+		const query = queryByName("operator-repairs-recorded");
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE v_events (workflow_id TEXT, source TEXT, event TEXT, detail TEXT, repair_effects INTEGER, repair_runs INTEGER, repair_count INTEGER);
+				INSERT INTO v_events VALUES
+					('wf-a', 'telemetry.main-store', 'operator.repair', 'verification failed twice', 2, 1, 1),
+					('wf-a', 'telemetry.main-store', 'operator.repair', NULL, NULL, NULL, NULL),
+					('wf-b', 'telemetry.main-store', 'operator.repair', '', NULL, NULL, NULL),
+					('wf-a', 'herdr.main-store', 'operator.repair', 'stalled run', NULL, NULL, NULL),
+					('wf-a', 'telemetry.main-store', 'agent.handoff', NULL, NULL, NULL, NULL);
+			`);
+			const rows = db
+				.query<
+					{
+						source: string;
+						workflows: number;
+						repairs: number;
+						repairs_with_reason: number;
+						repairs_with_effects: number;
+						repairs_with_runs: number;
+						repairs_with_count: number;
+						max_expired_effects: number | null;
+						reason_pct: number | null;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows).toHaveLength(2);
+			// The telemetry source recorded three repairs, one of them with a reason
+			// and effects; an empty reason is a missing one, and a non-repair event is
+			// not a repair at all.
+			expect(
+				rows.find((row) => row.source === "telemetry.main-store"),
+			).toMatchObject({
+				workflows: 2,
+				repairs: 3,
+				repairs_with_reason: 1,
+				repairs_with_effects: 1,
+				repairs_with_runs: 1,
+				repairs_with_count: 1,
+				max_expired_effects: 2,
+				reason_pct: 33.3,
+			});
+			// A repair recorded by a store that keeps the reason but neither count is
+			// measurable only for its reason.
+			expect(
+				rows.find((row) => row.source === "herdr.main-store"),
+			).toMatchObject({
+				workflows: 1,
+				repairs: 1,
+				repairs_with_reason: 1,
+				repairs_with_effects: 0,
+				reason_pct: 100,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
+	test("developer-waits pairs recorded waits and falls back to the dialogue's question waits", () => {
+		const query = queryByName("developer-waits");
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE workflows (id TEXT);
+				CREATE TABLE v_runs (workflow_id TEXT, started_at TEXT, completed_at TEXT);
+				CREATE TABLE v_events (id INTEGER PRIMARY KEY, workflow_id TEXT, source TEXT, event TEXT, at TEXT, outcome TEXT, wait_kind TEXT, detail TEXT);
+				INSERT INTO workflows VALUES ('wf-dialogue'), ('wf-recorded');
+				-- wf-dialogue recorded no wait event: its wait is the dialogue's own
+				-- asked-to-answered / asked-to-expired distance.
+				INSERT INTO v_events (workflow_id, source, event, at, outcome, wait_kind, detail) VALUES
+					('wf-dialogue', 'telemetry.main-store', 'developer.question.created', '2026-01-01T10:00:00.000Z', NULL, NULL, NULL),
+					('wf-dialogue', 'telemetry.main-store', 'developer.question.created', '2026-01-01T10:05:00.000Z', NULL, NULL, NULL),
+					('wf-dialogue', 'telemetry.main-store', 'developer.question.answered', '2026-01-01T10:10:00.000Z', NULL, NULL, NULL),
+					('wf-dialogue', 'telemetry.main-store', 'developer.question.expired', '2026-01-01T10:20:00.000Z', NULL, NULL, NULL),
+					('wf-dialogue', 'telemetry.main-store', 'developer.question.created', '2026-01-01T10:30:00.000Z', NULL, NULL, NULL);
+				INSERT INTO v_runs VALUES
+					('wf-dialogue', '2026-01-01T09:00:00.000Z', '2026-01-01T09:30:00.000Z'),
+					('wf-dialogue', '2026-01-01T09:00:00.000Z', NULL);
+				-- wf-recorded recorded one closed wait and one still open, and one
+				-- blocked handoff; its question wait must not be added on top.
+				INSERT INTO v_events (workflow_id, source, event, at, outcome, wait_kind, detail) VALUES
+					('wf-recorded', 'herdr.main-store', 'workflow.waiting', '2026-01-01T11:00:00.000Z', NULL, 'question', 'q1'),
+					('wf-recorded', 'herdr.main-store', 'workflow.waiting.ended', '2026-01-01T11:01:00.000Z', NULL, 'question', 'q1'),
+					('wf-recorded', 'herdr.main-store', 'workflow.waiting', '2026-01-01T11:05:00.000Z', NULL, 'handoff', 'run-1'),
+					('wf-recorded', 'herdr.main-store', 'agent.handoff', '2026-01-01T11:05:00.000Z', 'blocked', NULL, NULL),
+					('wf-recorded', 'telemetry.main-store', 'developer.question.created', '2026-01-01T11:00:00.000Z', NULL, NULL, NULL),
+					('wf-recorded', 'telemetry.main-store', 'developer.question.answered', '2026-01-01T11:05:00.000Z', NULL, NULL, NULL);
+			`);
+			const rows = db
+				.query<
+					{
+						workflow_id: string;
+						questions: number;
+						blocked_handoffs: number;
+						waits_recorded: number;
+						waits_ended: number;
+						waits_open: number;
+						question_waits: number;
+						question_wait_seconds: number;
+						recorded_wait_seconds: number;
+						human_wait_seconds: number;
+						agent_seconds: number;
+						human_share_pct: number | null;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.map((row) => row.workflow_id)).toEqual([
+				"wf-dialogue",
+				"wf-recorded",
+			]);
+			// Two answered questions (10 and 15 minutes) and one still open at the
+			// dataset's edge: the open one opens a wait with no end and so counts
+			// nothing. The run without a completion adds no agent time.
+			expect(rows[0]).toMatchObject({
+				questions: 3,
+				waits_recorded: 0,
+				question_waits: 2,
+				question_wait_seconds: 1500,
+				recorded_wait_seconds: 0,
+				human_wait_seconds: 1500,
+				agent_seconds: 1800,
+				human_share_pct: 45.5,
+			});
+			// The recorded minute wins over the five-minute question wait the dialogue
+			// would have measured: one wait is reported once, and the open handoff wait
+			// is what `waits_open` counts.
+			expect(rows[1]).toMatchObject({
+				questions: 1,
+				blocked_handoffs: 1,
+				waits_recorded: 2,
+				waits_ended: 1,
+				waits_open: 1,
+				question_waits: 1,
+				question_wait_seconds: 300,
+				recorded_wait_seconds: 60,
+				human_wait_seconds: 60,
+				agent_seconds: 0,
+				human_share_pct: 100,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
 	test("bash-vs-tools counts only arguments that survived into a digest", () => {
 		const query = queryByName("bash-vs-tools");
 		const db = new Database(datasetPath, { readonly: true });

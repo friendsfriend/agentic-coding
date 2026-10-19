@@ -548,8 +548,63 @@ export interface WorkflowSnapshot {
 		fingerprint: string;
 		concepts: Array<{ id: string; digest: string }>;
 	};
-	repaired?: { reason: string; fromStep: string; at: string };
+	repaired?: WorkflowRepairRecord;
 	repinned?: { fromDigest: string; at: string };
+}
+
+/** The last operator repair, as the snapshot records it and the view publishes
+ * it: the bounded reason a repair was taken, the step it left, when it ran, and
+ * what it retired. `expiredEffects`, `retiredRuns` and `count` are absent in a
+ * snapshot written before they were recorded, so they are read as “not
+ * recorded” rather than as an empty repair. Both id lists hold at most 32 ids. */
+export interface WorkflowRepairRecord {
+	reason: string;
+	fromStep: string;
+	at: string;
+	expiredEffects?: readonly string[];
+	retiredRuns?: readonly string[];
+	/** How many repairs this workflow has recorded, this one included. */
+	count?: number;
+}
+
+/** What a workflow is waiting for a human to do. Three states block a workflow
+ * in front of the developer, and each one already exists in the store: a pending
+ * developer question, a run handed over `blocked`, and a step whose actor is the
+ * developer (an approval or a review gate). The wait kind names which one, the
+ * subject is the id a reader resolves it by (the question, the run, the step),
+ * and `since` is when the wait began, absent when the state does not record it
+ * (a legacy snapshot with no `stepEnteredAt`). */
+export type WorkflowWaitKind = "question" | "handoff" | "approval";
+export interface WorkflowWait {
+	kind: WorkflowWaitKind;
+	subject: string;
+	since?: string;
+}
+
+/** Whether two waits are the same obligation. A wait whose `since` moved is the
+ * same wait: the workflow never stopped waiting for the developer, so a repair
+ * that re-enters the same gate does not restart the wait. Both the engine (the
+ * pair it records per commit) and the event bus (two successive observations of
+ * a view) compare waits with it, so one definition decides what a transition is. */
+export function sameWorkflowWait(
+	left: WorkflowWait | undefined,
+	right: WorkflowWait | undefined,
+): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	return left.kind === right.kind && left.subject === right.subject;
+}
+
+/** Whole seconds from `since` to `at`, or absent when `since` is unknown or
+ * unreadable. Never negative: a clock that moved backwards reports zero. */
+export function waitSeconds(
+	since: string | undefined,
+	at: string,
+): number | undefined {
+	if (since === undefined) return undefined;
+	const start = Date.parse(since);
+	const end = Date.parse(at);
+	if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
+	return Math.max(0, Math.round((end - start) / 1000));
 }
 export interface WorkflowRun {
 	id: string;
@@ -741,6 +796,14 @@ export interface WorkflowView {
 	classifierDecisions?: ClassifierDecisionRecord[];
 	/** Stage-gate decisions in creation order. */
 	gateDecisions?: GateDecisionRecord[];
+	/** The last operator repair: why, from where, and what it retired. Read next
+	 * to the run list, where a blocked handoff is read. */
+	repaired?: WorkflowRepairRecord;
+	/** The developer wait the workflow is in right now, when it is in one. A
+	 * projection of the state that already blocks the workflow — a pending
+	 * developer question, a blocked run, a developer step — never stored state, so
+	 * it can never dangle (record-repairs-and-developer-waits, item 12). */
+	waiting?: WorkflowWait;
 	/** Pending subset routed to the developer, ordered oldest first. */
 	pendingQuestions?: DeveloperDialogueRecord[];
 	/** Pending subset routed to the orchestrator first (orchestrator-started
@@ -1641,6 +1704,21 @@ const gateDecisionRecordResponseSchema = Schema.Struct({
 	reason: Schema.optional(Schema.String),
 });
 
+const repairRecordResponseSchema = Schema.Struct({
+	reason: boundedString(4096),
+	fromStep: Schema.String,
+	at: Schema.String,
+	expiredEffects: Schema.optional(Schema.Array(Schema.String)),
+	retiredRuns: Schema.optional(Schema.Array(Schema.String)),
+	count: Schema.optional(nonNegativeInt),
+});
+
+const waitResponseSchema = Schema.Struct({
+	kind: Schema.Literal("question", "handoff", "approval"),
+	subject: Schema.String,
+	since: Schema.optional(Schema.String),
+});
+
 const dialogueRecordResponseSchema = Schema.Struct({
 	id: Schema.String,
 	workflowId: Schema.String,
@@ -1737,6 +1815,8 @@ export const workflowViewSchema = Schema.Struct({
 	gateDecisions: Schema.optional(
 		Schema.Array(gateDecisionRecordResponseSchema),
 	),
+	repaired: Schema.optional(repairRecordResponseSchema),
+	waiting: Schema.optional(waitResponseSchema),
 	pendingQuestions: Schema.optional(Schema.Array(dialogueRecordResponseSchema)),
 	availableActions: Schema.Array(
 		Schema.Struct({
