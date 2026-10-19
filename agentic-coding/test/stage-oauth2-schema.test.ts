@@ -270,7 +270,7 @@ describe("the oauth2 role's login mode", () => {
 		);
 	});
 
-	test("the authorization_code grant is valid configuration, and its login is not this build's", () => {
+	test("the authorization_code grant is a hand-off, and a policy that forbids a window makes it unavailable", () => {
 		const grant = {
 			apps: {
 				api: {
@@ -288,9 +288,8 @@ describe("the oauth2 role's login mode", () => {
 			},
 		};
 		// With the authorization endpoint the flow needs, the file is valid
-		// configuration; the login itself is not this build's, so the mode is
-		// `unavailable` rather than a hand-off no run could complete (USAB-003).
-		// The browser flow itself belongs to `add-stage-oauth2-code-pkce`.
+		// configuration, and the login is a hand-off (`add-stage-oauth2-code-pkce`):
+		// the window the interactive login already opens is what completes it.
 		const complete = writeStage({
 			...grant,
 			...provider({
@@ -301,10 +300,27 @@ describe("the oauth2 role's login mode", () => {
 		const role = viewOf(complete).view.apps[0]?.roles[0];
 		expect(role?.grant).toBe("authorization_code");
 		expect(role?.loginKind).toBe("oauth2");
-		expect(role?.loginMode).toBe("unavailable");
+		expect(role?.loginMode).toBe("handoff");
 
-		// Without it the catalog refuses the file rather than accepting a provider
-		// that could never complete the flow.
+		// A policy that forbids a window forbids this login too: it is a person's
+		// sign-in, so `unavailable` is the honest mode rather than a hand-off that
+		// would be refused.
+		const forbidden = writeStage(
+			{
+				...grant,
+				...provider({
+					authorizationEndpoint: "https://login.example.test/oauth2/authorize",
+				}),
+			},
+			{},
+			{ interactiveLogin: "never" },
+		);
+		expect(viewOf(forbidden).view.apps[0]?.roles[0]?.loginMode).toBe(
+			"unavailable",
+		);
+
+		// Without the authorization endpoint the catalog refuses the file rather
+		// than accepting a provider that could never complete the flow.
 		const incomplete = writeStage(grant);
 		expect(errors(incomplete).join("\n")).toContain("authorizationEndpoint");
 	});

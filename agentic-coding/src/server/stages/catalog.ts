@@ -114,11 +114,16 @@ export function roleLoginMode(input: {
 	if (input.recipeKind === "interactive")
 		return mayOpenWindow ? "handoff" : "unavailable";
 	if (input.recipeKind === "oauth2") {
-		// The authorization code grant is a person's sign-in, and this build cannot
-		// perform it yet: reporting `handoff` would send a run into a hand-off that
-		// is refused, so the honest answer is `unavailable` (USAB-003) — the value
-		// the contract reserves for "needs a person, and this build cannot".
-		if (input.grant === "authorization_code") return "unavailable";
+		// The authorization code grant is a person's sign-in
+		// (`add-stage-oauth2-code-pkce`): no reference of the role's own decides it,
+		// because the identity is the developer's at the provider. It is a hand-off
+		// whenever a window may be opened, and `unavailable` only under a policy that
+		// forbids one — the value the contract reserves for "needs a person, and this
+		// build cannot".
+		if (input.grant === "authorization_code")
+			return mayOpenWindow && input.credentialStatus === "set"
+				? "handoff"
+				: "unavailable";
 		// The two unattended grants need no person at all; a missing reference is
 		// a `.env` gap no window could fill, so it is `unavailable` too.
 		return input.grant === undefined || input.credentialStatus !== "set"

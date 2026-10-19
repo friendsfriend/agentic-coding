@@ -511,7 +511,7 @@ describe("the store", () => {
 		expect(idp.calls).toHaveLength(0);
 	});
 
-	test("the authorization_code grant is a named refusal rather than a half-built login", async () => {
+	test("an authorization_code role is stored and used, but never signs in by itself", async () => {
 		const idp = provider(() =>
 			tokenAnswer({ access_token: "never-asked", expires_in: 60 }),
 		);
@@ -521,18 +521,34 @@ describe("the store", () => {
 			authorizationEndpoint: true,
 		});
 		const { roleInput } = roleOf(configDir);
+		const key = roleTokenKey(roleInput);
+		const store = new StageTokenStore();
 
-		const failure = (await roleToken(roleInput, new StageTokenStore()).catch(
+		// A request that merely needs a token never starts a sign-in
+		// (`add-stage-oauth2-code-pkce`): the refusal says what to do instead, and
+		// the token endpoint is not called.
+		const failure = (await roleToken(roleInput, store).catch(
 			(error: unknown) => error,
 		)) as StageAuthError;
 
 		expect(failure.code).toBe("login-failed");
-		expect(failure.providerCode).toBe("unsupported_grant");
-		// The message is for its reader: it names the grants that do work here, and
-		// never an internal change id (USAB-004).
-		expect(failure.message).toContain("not supported by this build");
-		expect(failure.message).toContain("client_credentials");
+		expect(failure.providerCode).toBe("interactive_login_required");
+		expect(failure.message).toContain("stage_login");
 		expect(failure.message).not.toContain("add-stage");
+		expect(idp.calls).toHaveLength(0);
+
+		// The token `stage_login`'s hand-off obtained is used exactly as an
+		// unattended one is.
+		const stored = await store.token(key, async () => ({
+			accessToken: "obtained-by-the-hand-off",
+			// Well inside the store's skew window, so this is a live token.
+			expiresAt: Date.now() + 3_600_000,
+			scopes: [],
+			provider: "idp",
+		}));
+		expect((await roleToken(roleInput, store)).accessToken).toBe(
+			stored.accessToken,
+		);
 		expect(idp.calls).toHaveLength(0);
 	});
 });

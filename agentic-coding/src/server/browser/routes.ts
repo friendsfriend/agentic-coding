@@ -68,6 +68,8 @@ import {
 	StageUsageRegistry,
 } from "../stages/limits.ts";
 import {
+	beginAuthorizationCodeLogin,
+	pkceSecrets,
 	roleToken,
 	StageAuthError,
 	type StageTokenStore,
@@ -139,6 +141,9 @@ export interface BrowserRouteDeps {
 	 * acquires into it and every reply is scrubbed with what it holds. Omitted,
 	 * the process store is used. */
 	readonly tokens?: StageTokenStore;
+	/** The fetch a code-grant login's token exchange uses. Absent, the global one;
+	 * a test points it at a local token endpoint. */
+	readonly fetch?: typeof fetch;
 	readonly now?: () => number;
 }
 
@@ -421,13 +426,17 @@ function redactionSecrets(
 	// URL or a snapshot, and an agent-supplied script can print one, so every
 	// browser reply is scrubbed with the live token map and not only with `.env`.
 	const live = browserTokenStore(deps).secrets();
-	const encoded = [...base, ...live].flatMap((secret) => {
+	// The PKCE values of a code-grant login (`add-stage-oauth2-code-pkce`): the
+	// verifier, `state` and the code a receiver took are as secret as the token
+	// they lead to, and the callback URL the window lands on carries the code.
+	const pkce = pkceSecrets();
+	const encoded = [...base, ...live, ...pkce].flatMap((secret) => {
 		const value = encodeURIComponent(secret.value);
 		return value === secret.value
 			? []
 			: [{ name: `${secret.name}:url-encoded`, value }];
 	});
-	return [...base, ...live, ...encoded].sort(
+	return [...base, ...live, ...pkce, ...encoded].sort(
 		(left, right) => right.value.length - left.value.length,
 	);
 }
@@ -1108,6 +1117,19 @@ async function stageLogin(
 	// `credential-missing` names the unset variable, `login-failed` carries the
 	// provider's error code. The token value never leaves this call.
 	if (roleView?.loginKind === "oauth2") {
+		// The one grant that needs a person is the hand-off's
+		// (`add-stage-oauth2-code-pkce`): PKCE, a single-use loopback receiver and
+		// the developer's sign-in in the window the hand-off already opens.
+		if (roleView.grant === "authorization_code")
+			return await startAuthorizationCodeHandoff({
+				deps,
+				session,
+				entry,
+				appKey: body.app,
+				appLabel: appView?.label ?? body.app,
+				appUrl: appView?.url ?? entry.stage.apps[body.app]?.url ?? "",
+				role: body.role,
+			});
 		try {
 			await roleToken(
 				{
@@ -1286,6 +1308,32 @@ async function startHandoff(input: {
 	readonly recipe?: StageLoginRecipe;
 }): Promise<unknown> {
 	const { deps, session, entry } = input;
+	const handoff = requireHandoff(deps);
+	const label = entry.stage.displayName;
+	const status = await handoff.request({
+		session,
+		stage: entry.ident,
+		stageLabel: label,
+		app: input.appKey,
+		appLabel: input.appLabel,
+		role: input.role,
+		reason: input.reason,
+		loginUrl: input.appUrl,
+		recipe: input.recipe ?? { kind: "form" },
+		maxSeconds: entry.limits.maxLoginHandoffSeconds,
+		description: `Log in to ${input.appLabel} as ${input.role} on stage ${label}`,
+		context: handoffContext(input.reason, input.appUrl, label),
+	});
+	return { session: session.name, login: "needs-user", ...status };
+}
+
+/**
+ * The hand-off coordinator, or the refusal a machine without a window answers.
+ *
+ * Checked *before* anything is queued, so a machine that cannot show a window
+ * never opens one and never raises an attention record.
+ */
+function requireHandoff(deps: BrowserRouteDeps): LoginHandoffCoordinator {
 	const handoff = deps.handoff;
 	if (!handoff)
 		throw new BrowserPoolError(
@@ -1304,22 +1352,116 @@ async function startHandoff(input: {
 			503,
 			available.reason,
 		);
+	return handoff;
+}
+
+/**
+ * Start (or rejoin) one `authorization_code` hand-off
+ * (`add-stage-oauth2-code-pkce`, task 2.1).
+ *
+ * The login is the hand-off's: the same record, window, session lock and
+ * deadline, and no mechanism of its own. What this adds is the flow behind it —
+ * PKCE, `state` and the single-use loopback receiver — and the one origin the
+ * window has to be allowed to reach when the provider redirects back. The
+ * receiver is released on every ending path, including a failed request, so a
+ * login that never starts leaves no port bound.
+ */
+async function startAuthorizationCodeHandoff(input: {
+	readonly deps: BrowserRouteDeps;
+	readonly session: BrowserSession;
+	readonly entry: StageEntry;
+	readonly appKey: string;
+	readonly appLabel: string;
+	readonly appUrl: string;
+	readonly role: string;
+}): Promise<unknown> {
+	const { deps, session, entry } = input;
 	const label = entry.stage.displayName;
-	const status = await handoff.request({
-		session,
-		stage: entry.ident,
-		stageLabel: label,
-		app: input.appKey,
-		appLabel: input.appLabel,
-		role: input.role,
-		reason: input.reason,
-		loginUrl: input.appUrl,
-		recipe: input.recipe ?? { kind: "form" },
-		maxSeconds: entry.limits.maxLoginHandoffSeconds,
-		description: `Log in to ${input.appLabel} as ${input.role} on stage ${label}`,
-		context: handoffContext(input.reason, input.appUrl, label),
-	});
-	return { session: session.name, login: "needs-user", ...status };
+	// The policy decides before anything is opened: a configuration that forbids
+	// the window refuses the login instead of creating a hand-off nobody can
+	// complete (`interactiveLogin: "never"`, D3).
+	if (entry.interactiveLogin === "never")
+		throw new BrowserSessionError(
+			"login-user-unavailable",
+			`${input.appKey}.${input.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`,
+			409,
+		);
+	const handoff = requireHandoff(deps);
+	let flow: Awaited<ReturnType<typeof beginAuthorizationCodeLogin>>;
+	try {
+		flow = await beginAuthorizationCodeLogin(
+			{
+				stage: entry.stage,
+				appKey: input.appKey,
+				role: input.role,
+				configDir: deps.configDir ?? "",
+			},
+			browserTokenStore(deps),
+			{
+				...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+				...(deps.now === undefined ? {} : { now: deps.now }),
+			},
+		);
+	} catch (error) {
+		if (error instanceof StageAuthError)
+			throw new BrowserSessionError(
+				error.code,
+				error.message,
+				error.code === "credential-missing" ? 409 : 502,
+			);
+		throw error;
+	}
+	// The window has to be allowed to land on the loopback callback before the
+	// activation starts; the hand-off's own teardown takes the allowance away
+	// again on every ending path.
+	deps.pool.allowHandoffRedirect(session, flow.redirectOrigin);
+	const release = (): void => {
+		deps.pool.clearHandoffRedirect(session);
+		flow.close();
+	};
+	try {
+		const status = await handoff.request({
+			session,
+			stage: entry.ident,
+			stageLabel: label,
+			app: input.appKey,
+			appLabel: input.appLabel,
+			role: input.role,
+			reason: "unautomatable-step",
+			loginUrl: flow.authorizationUrl,
+			recipe: { kind: "interactive" },
+			maxSeconds: entry.limits.maxLoginHandoffSeconds,
+			description: `Log in to ${input.appLabel} as ${input.role} on stage ${label}`,
+			context: authorizationCodeContext(flow.authorizationUrl, label),
+			completion: {
+				poll: flow.poll,
+				url: sanitizeStageUrl(input.appUrl),
+				close: release,
+				land: async () => {
+					if (input.appUrl === "") return;
+					await session.goto(input.appUrl, DEFAULT_ACTION_TIMEOUT_MS);
+				},
+			},
+		});
+		return { session: session.name, login: "needs-user", ...status };
+	} catch (error) {
+		release();
+		throw error;
+	}
+}
+
+/** The attention record's words for a code-grant hand-off: the provider's own
+ * origin (never the authorization URL, its `state` or its challenge), what the
+ * developer does there, and how the hand-off ends. */
+function authorizationCodeContext(
+	authorizationUrl: string,
+	stageLabel: string,
+): string {
+	return [
+		"Reason: this role signs in with a person's own identity at the provider.",
+		`The agent is waiting for ${stageLabel}. Sign in inside the browser window agentic-coding opened for ${originOnly(authorizationUrl)} — do not type into the terminal.`,
+		"The hand-off ends by itself as soon as the provider redirects back to this server; Abort ends it without a token, and closing the window aborts it.",
+	].join(" ");
 }
 
 /** The attention record's context: the reason, the window to look for and how
@@ -1442,6 +1584,24 @@ function terminalLoginAnswer(
 				undefined,
 				{ by: outcome.by },
 			);
+		case "failed": {
+			// The code grant's own value-free refusal (`add-stage-oauth2-code-pkce`):
+			// a `state` mismatch, a provider's `error`, or an exchange the token
+			// endpoint refused. The code, the verifier and the tokens are not part of
+			// it, and neither is the callback URL.
+			const error = outcome.error;
+			if (error instanceof StageAuthError)
+				throw new BrowserSessionError(
+					error.code,
+					error.message,
+					error.code === "credential-missing" ? 409 : 502,
+				);
+			throw new BrowserSessionError(
+				"login-failed",
+				"the sign-in ended without a token; nothing of the attempt is reported",
+				502,
+			);
+		}
 		case "unavailable":
 			throw new BrowserPoolError(
 				"login-handoff-unavailable",

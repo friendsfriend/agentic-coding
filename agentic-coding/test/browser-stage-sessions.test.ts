@@ -54,6 +54,7 @@ import {
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
+import { pkceSecrets } from "../src/server/stages/oauth2.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
 import { workflowEvidenceScope } from "../src/workflow/runtime/evidence-store.ts";
 
@@ -2411,5 +2412,319 @@ describe("stage-bound sessions", () => {
 		expect(refused.status).toBe(409);
 		expect(refused.value.code).toBe("recording-active");
 		await deps.pool.closeAll();
+	});
+});
+
+// The authorization code hand-off (`add-stage-oauth2-code-pkce`).
+//
+// The developer's sign-in at the provider is the fake driver's page work; what
+// this block drives is everything the server does around it: `stage_login`
+// answers `login-needs-user` and opens the provider's authorization endpoint in
+// the hand-off window, the session may reach the loopback callback while the
+// hand-off runs (and only then), the provider's redirect is a real HTTP request
+// on the receiver, and `stage_login_wait` answers `ok` only once the token is
+// held — never with a code, a verifier, a `state` or a token in its answer.
+const CODE_CLIENT_ID = "code-pkce-client-id-do-not-leak";
+const CODE_CLIENT_SECRET = "code-pkce-client-secret-do-not-leak";
+const CODE_AUTHORIZATION_CODE = "authorization-code-do-not-leak";
+const CODE_ACCESS_TOKEN = "authorization-code-access-token-do-not-leak";
+
+/** A fake token endpoint that records what the exchange sent. */
+function codeTokenEndpoint(): {
+	readonly endpoint: string;
+	readonly calls: URLSearchParams[];
+	readonly stop: () => void;
+} {
+	const calls: URLSearchParams[] = [];
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch: async (request) => {
+			calls.push(new URLSearchParams(await request.text()));
+			return Response.json({
+				access_token: CODE_ACCESS_TOKEN,
+				expires_in: 3_600,
+			});
+		},
+	});
+	return {
+		endpoint: `http://127.0.0.1:${server.port}/oauth2/token`,
+		calls,
+		stop: () => server.stop(true),
+	};
+}
+
+/** One configuration root whose only role signs in with the code grant. */
+function codeConfigRoot(
+	tokenEndpoint: string,
+	limits: Record<string, unknown> = {},
+): string {
+	const configDir = configRoot({
+		apps: {
+			web: {
+				label: "Grid web",
+				url: APP_URL,
+				kind: "ui",
+				roles: {
+					user: {
+						login: "oauth2",
+						provider: "idp",
+						grant: "authorization_code",
+					},
+				},
+			},
+		},
+		oauth2: {
+			providers: {
+				idp: {
+					tokenEndpoint,
+					authorizationEndpoint: `${IDP_URL}oauth2/authorize`,
+					clientId: "${GRID_INT_CLIENT_ID}",
+					clientSecret: "${GRID_INT_CLIENT_SECRET}",
+				},
+			},
+		},
+		allowedOrigins: [IDP_URL, new URL(tokenEndpoint).origin],
+		limits: { maxSessions: 1, maxActionsPerMinute: 30, ...limits },
+	});
+	fs.writeFileSync(
+		path.join(configDir, ".env"),
+		`GRID_INT_CLIENT_ID=${CODE_CLIENT_ID}\nGRID_INT_CLIENT_SECRET=${CODE_CLIENT_SECRET}\n`,
+	);
+	return configDir;
+}
+
+/** One PKCE value the server currently keeps out of every reply. */
+function pkce(name: string): string | undefined {
+	return pkceSecrets().find((secret) => secret.name === name)?.value;
+}
+
+/** The loopback URL the provider would redirect to. */
+function callbackUrl(origin: string, params: Record<string, string>): string {
+	return `${origin}/callback?${new URLSearchParams(params).toString()}`;
+}
+
+/** Wait for the hand-off's window to finish its activation: the promotion and the
+ * navigation to the provider happen after `stage_login` has answered. */
+async function waitForUrl(
+	session: BrowserSession,
+	fragment: string,
+): Promise<void> {
+	for (let attempt = 0; attempt < 400; attempt += 1) {
+		if (session.url.includes(fragment)) return;
+		await Bun.sleep(5);
+	}
+	throw new Error(`the window never reached ${fragment}`);
+}
+
+describe("the authorization code hand-off", () => {
+	test("stage_login opens the provider, the callback completes it, and the wait answers ok", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(handoff.status).toBe(200);
+			expect(handoff.value.login).toBe("needs-user");
+			expect(handoff.value.reason).toBe("unautomatable-step");
+			expect(typeof handoff.value.deadlineAt).toBe("string");
+			// The answer carries the hand-off's status and nothing of the flow: no
+			// challenge, no `state`, no URL.
+			expect(handoff.text).not.toContain("code_challenge");
+			expect(handoff.text).not.toContain("state=");
+
+			const session = sessionOf(deps, "default");
+			// The window was promoted and now stands on the provider's authorization
+			// endpoint, which carries the challenge and the opaque state.
+			expect(driver.launchOptions).toContainEqual({ headless: false });
+			await waitForUrl(session, "oauth2/authorize");
+			expect(session.url).toContain(`${IDP_URL}oauth2/authorize`);
+			expect(session.url).toContain("code_challenge_method=S256");
+			const origin = deps.pool.handoffRedirect(session);
+			expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			// The one navigation an allow-list would otherwise abort is the redirect
+			// the login itself asked for.
+			expect(
+				contextOf(deps).runGuard({
+					url: callbackUrl(origin, { code: "x", state: "y" }),
+					method: "GET",
+					resourceType: "document",
+					isMainFrameNavigation: true,
+				}),
+			).toBe(true);
+
+			const state = pkce("stage-oauth2-state");
+			const verifier = pkce("stage-oauth2-code-verifier");
+			if (state === undefined) throw new Error("no state was registered");
+			const answered = await fetch(
+				callbackUrl(origin, {
+					code: CODE_AUTHORIZATION_CODE,
+					state,
+				}),
+			);
+			expect(answered.status).toBe(200);
+			expect(await answered.text()).toContain("close this window");
+
+			const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(waited.status).toBe(200);
+			expect(waited.value.login).toBe("ok");
+			expect(waited.value.via).toBe("token");
+			expect(waited.value.verified).toBe(true);
+			// The landing is the application, sanitized: never the callback the window
+			// last landed on.
+			expect(waited.value.url).toBe(APP_URL);
+			for (const value of [
+				CODE_AUTHORIZATION_CODE,
+				CODE_ACCESS_TOKEN,
+				state,
+				verifier ?? "",
+				origin,
+				CODE_CLIENT_SECRET,
+			])
+				expect(waited.text).not.toContain(value);
+
+			// The exchange happened once, with the verifier and this login's redirect.
+			expect(idp.calls).toHaveLength(1);
+			const exchange = idp.calls[0];
+			if (exchange === undefined) throw new Error("no exchange was made");
+			expect(exchange.get("grant_type")).toBe("authorization_code");
+			expect(exchange.get("code")).toBe(CODE_AUTHORIZATION_CODE);
+			expect(exchange.get("code_verifier")).toBe(verifier ?? "");
+			expect(exchange.get("redirect_uri")).toBe(`${origin}/callback`);
+
+			// The allowance is gone with the hand-off, and the window is back on the
+			// application rather than on a callback page that no longer answers.
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			expect(session.url).toBe(APP_URL);
+			expect(
+				contextOf(deps).runGuard({
+					url: callbackUrl(origin, { code: "x", state: "y" }),
+					method: "GET",
+					resourceType: "document",
+					isMainFrameNavigation: true,
+				}),
+			).toBe(false);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a callback whose state does not match fails the login, and nothing is exchanged", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(handoff.value.login).toBe("needs-user");
+			const session = sessionOf(deps, "default");
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+
+			const answered = await fetch(
+				callbackUrl(origin, {
+					code: CODE_AUTHORIZATION_CODE,
+					state: "not-this-logins-state",
+				}),
+			);
+			expect(answered.status).toBe(400);
+			expect(await answered.text()).not.toContain(CODE_AUTHORIZATION_CODE);
+
+			const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(waited.status).toBe(502);
+			expect(waited.value.code).toBe("login-failed");
+			expect(String(waited.value.message)).toContain("state");
+			expect(waited.text).not.toContain(CODE_AUTHORIZATION_CODE);
+			// No exchange was attempted, and the receiver is not listening any more.
+			expect(idp.calls).toHaveLength(0);
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			const late = await fetch(
+				callbackUrl(origin, { code: "late", state: "late" }),
+			).catch(() => undefined);
+			expect(late).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("the deadline closes the receiver and answers login-handoff-timeout", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(
+				codeConfigRoot(idp.endpoint, { maxLoginHandoffSeconds: 1 }),
+				driver,
+			);
+			await openStage(deps);
+			const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			const session = sessionOf(deps, "default");
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			// The deadline is the request time plus the stage's one second: two reads
+			// of the clock put it in the past.
+			deps.now?.();
+			deps.now?.();
+			const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: String(handoff.value.session),
+				timeoutSec: 5,
+			});
+			expect(waited.status).toBe(408);
+			expect(waited.value.code).toBe("login-handoff-timeout");
+			expect(idp.calls).toHaveLength(0);
+			// The receiver went with the deadline: nothing answers a late callback.
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			const late = await fetch(
+				callbackUrl(origin, { code: "late", state: "late" }),
+			).catch(() => undefined);
+			expect(late).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a policy that forbids the window refuses the code login without opening one", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const configDir = codeConfigRoot(idp.endpoint);
+			forbidInteractiveLogin(configDir);
+			const driver = createFakeDriver();
+			const deps = build(configDir, driver);
+			await openStage(deps);
+			const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(refused.status).toBe(409);
+			expect(refused.value.code).toBe("login-user-unavailable");
+			// No window, no banner, no receiver: the refusal is the policy's.
+			expect(driver.launchOptions).toEqual([{ headless: true }]);
+			expect(driver.performed).toEqual([]);
+			expect(
+				deps.pool.handoffRedirect(sessionOf(deps, "default")),
+			).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
 	});
 });

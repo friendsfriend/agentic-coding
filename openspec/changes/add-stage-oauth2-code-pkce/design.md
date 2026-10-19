@@ -36,6 +36,15 @@ A deadline, an abort or a closed window ends the hand-off and stops the receiver
 
 The authorization code, the verifier and the tokens join the redaction set `add-stage-oauth2-auth` already installs, and no tool result, log line, telemetry attribute, evidence file or report carries them. The agent learns the outcome and, through `stage_token_info`, the expiry, scopes, audience and issuer — never a claim, a code or a token.
 
+### D5 — As built: two seams the hand-off needed, and nothing else
+
+Implementing D3 showed that the hand-off needed exactly two additions, both of them inside its own mechanism:
+
+- **A completion the page cannot answer.** A declared recipe succeeds when the page reaches a URL; a code-grant login succeeds when *this server's* receiver has the token, whatever the window shows last. `LoginHandoffRequest` therefore takes an optional `completion` (`poll()`, `close()`, an optional `land()` and the URL the outcome reports), polled on the hand-off's own tick before any page-based success condition, and the coordinator gained one outcome (`failed`) that carries the server's own value-free `StageAuthError`. `close()` runs on every ending path, so the receiver is released by the hand-off's teardown rather than by each caller.
+- **One origin a stage session may reach.** The provider's redirect is a main-frame navigation to `http://127.0.0.1:<port>`, an origin no stage declares. `BrowserPool` keeps the allowance per session (`allowHandoffRedirect` / `clearHandoffRedirect`) and `createStageGuard` reads `policy.origins` per navigation instead of snapshotting it, so a fresh *and* a reused interactive context both see the addition and its removal. Nothing else about the session's binding changes, and the allowance is dropped when the session is dropped.
+
+Two smaller decisions worth stating: a *Done* from the developer is never an `ok` for this grant (only the receiver completing is), so it ends as `login-handoff-unverified` after the hand-off's grace period; and a request that merely needs a token never starts a sign-in, so `stage_token_info`, `stage_api_request` and the bearer header refuse an empty store with `login-failed` (`interactive_login_required`) — outside `StageTokenStore.token`, so the refusal is not remembered as a provider failure and does not block the hand-off's own write.
+
 ## Risks / Trade-offs
 
 - [A registration forbids a loopback redirect] → documented; the role falls back to the browser hand-off, and this grant is simply not usable for that provider.

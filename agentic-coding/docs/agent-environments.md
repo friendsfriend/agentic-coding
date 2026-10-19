@@ -459,12 +459,43 @@ a production-like name is refused by the catalog, and only the operator's own
   `credential-missing` naming the variable, and a provider refusal is
   `login-failed` with the provider's own `error` code (its `error_description`,
   scrubbed and bounded, is the message) — never a token.
-  `authorization_code` is *declared* by the schema for the user-delegated case,
-  and its login is not this build's: `stage_login` answers `login-failed`
-  ("the authorization_code grant is not supported by this build;
-  client_credentials and refresh_token are"), and `stage_info` reports that
-  role's `loginMode` as `unavailable` rather than `handoff`, so a run plans no
-  hand-off that could not be created.
+  `authorization_code` is the third grant: the user-delegated one, where the
+  identity at the provider is the developer's own. It is a **hand-off**, so
+  `stage_info` reports that role's `loginMode` as `handoff`, and `stage_login`
+  answers `login-needs-user` — see the bullet on the code grant below.
+- **The code grant is a person's sign-in on a single-use loopback receiver.**
+  For a role whose grant is `authorization_code`, `stage_login` builds an RFC
+  7636 PKCE pair (a 43-character verifier and its `S256` challenge) and an
+  opaque, unguessable `state`, opens the provider's `authorizationEndpoint` in
+  the *same* hand-off window the interactive login uses (one record, one window,
+  one session lock, one deadline), and listens on
+  `http://127.0.0.1:<ephemeral>/callback` for the redirect. The receiver is
+  bound to the loopback interface only, accepts exactly **one** callback,
+  compares `state` in constant time before anything else, and closes on every
+  ending path — success, a mismatched `state`, the deadline, an abort — so no
+  port stays bound after a login. The authorization code, the verifier and every
+  token stay in the server: they are added to the redaction set while the login
+  runs, the callback page reflects no parameter, and a `state` mismatch, a
+  provider `error` or a refused exchange ends the login as `login-failed` with a
+  value-free message. `stage_login_wait` answers `ok` (`via: "token"`,
+  `verified: true`) **only** after the exchange succeeded and the token is in
+  the store; a *Done* that never completed is `login-handoff-unverified`, and a
+  deadline is `login-handoff-timeout`. The token is then an ordinary one: it is
+  renewed by the store like any other, `stage_api_request` and a
+  `bearerOrigins` page use it, the completed hand-off returns the window to the
+  application (rather than leaving it on a callback page that no longer
+  answers), and no path that merely *needs* a token starts a
+  window — an empty store there is `login-failed` ("call stage_login first").
+  `scope` and `audience` come from the provider, a provider with no
+  `clientSecret` is a public client (no `Authorization` header is sent, the
+  client id travels in the body), and a provider that returns a refresh token
+  gets it stored like the `refresh_token` grant's. Registering the loopback
+  redirect is the operator's job: an identity provider that forbids a loopback
+  `redirect_uri` refuses the sign-in in the window, and that is a registration
+  decision rather than an engine fallback. A policy of
+  `interactiveLogin: "never"` refuses the login outright
+  (`login-user-unavailable`, `loginMode: "unavailable"`) instead of opening a
+  window.
 - **A token login still needs the session it runs on.** `stage_login` is a
   browser-layer action on an open, stage-bound session: the token login opens no
   page, window or prompt, but it does need `browser_open({ stage, stageApp })`
@@ -552,7 +583,8 @@ a production-like name is refused by the catalog, and only the operator's own
   a query or a credential). `stage_login_wait` then blocks *in the server*, so
   no run is parked and no model turn is spent: each call executes one stage
   action and answers `login-needs-user` while the developer is still working, or
-  the terminal outcome — `ok` (`via: "handoff"`, with `verified`), or
+  the terminal outcome — `ok` (`via: "handoff"` for a page login, `"token"` for
+  the code grant, with `verified`), or
   `login-handoff-unverified` / `-timeout` / `-aborted` (`by: developer | agent |
   window-closed | run-ended`). A terminal outcome is a `blocked` verdict with
   that code as its reason. A deadline **closes** the window and leaves the
@@ -582,7 +614,8 @@ a production-like name is refused by the catalog, and only the operator's own
   `interactiveLogin: "local" | "never"` in `stages/policy.json` (default
   `local`); a stage may narrow it to `never` and can never widen it. Under
   `never` a login that needs a person is refused — `login-user-unavailable` for
-  an `interactive` recipe or a role that declares no credential reference, and
+  an `interactive` recipe, an `authorization_code` role or a role that declares
+  no credential reference, and
   the recipe's own `credential-missing` when only a value is missing — and on a
   machine with no display or only a `headless_shell` build `stage_login` answers
   `login-handoff-unavailable` (`reason: "no-display"` or

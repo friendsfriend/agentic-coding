@@ -64,13 +64,18 @@ export interface LoginHandoffStatus {
 export type LoginHandoffOutcome =
 	| {
 			readonly outcome: "ok";
-			readonly via: "handoff" | "existing-session";
+			readonly via: "handoff" | "existing-session" | "token";
 			readonly verified: boolean;
 			readonly url: string;
 	  }
 	| { readonly outcome: "unverified"; readonly url: string }
 	| { readonly outcome: "timeout"; readonly deadlineAt: string }
 	| { readonly outcome: "aborted"; readonly by: LoginHandoffAbortBy }
+	/** The login ended by itself and without a token: a code-grant exchange the
+	 * provider refused, or a callback whose `state` did not match
+	 * (`add-stage-oauth2-code-pkce`). The error is the server's own value-free
+	 * refusal, never a value. */
+	| { readonly outcome: "failed"; readonly error: unknown }
 	| { readonly outcome: "unavailable"; readonly reason: "launch-failed" };
 
 /** What one `stage_login_wait` call answered: the pending hand-off, or the
@@ -78,6 +83,35 @@ export type LoginHandoffOutcome =
 export type LoginHandoffWait =
 	| { readonly status: LoginHandoffStatus; readonly outcome?: undefined }
 	| { readonly status?: undefined; readonly outcome: LoginHandoffOutcome };
+
+/** How a hand-off that runs no page login has done so far
+ * (`add-stage-oauth2-code-pkce`): pending while the developer is still in the
+ * provider's window, `ok` once the token is held, `failed` with the server's own
+ * value-free refusal when the exchange ended without one. */
+export type LoginHandoffCompletion =
+	| { readonly state: "pending" }
+	| { readonly state: "ok" }
+	| { readonly state: "failed"; readonly error: unknown };
+
+/** The login a hand-off drives when the page it opened is not what completes it.
+ *
+ * A code-grant login ends on the loopback receiver behind the provider's
+ * redirect, not on a success condition a page can be asked about. This is the
+ * seam that lets the same hand-off own the window, the lock and the deadline
+ * without growing a second mechanism. */
+export interface LoginHandoffCompletionSource {
+	poll(): LoginHandoffCompletion;
+	/** The URL the terminal `ok` reports: the stage application, never the
+	 * loopback callback the window last landed on. */
+	readonly url?: string;
+	/** Release what the login itself owns (its single-use receiver). Called
+	 * exactly once, on every ending path, and never allowed to fail the ending. */
+	close(): Promise<void> | void;
+	/** Bring the window back to the application once the token is held, so the
+	 * session is usable instead of sitting on a callback page that no longer
+	 * answers. Called only for the `ok` outcome, and never allowed to fail it. */
+	land?(): Promise<void> | void;
+}
 
 export interface LoginHandoffRequest {
 	readonly session: BrowserSession;
@@ -95,6 +129,9 @@ export interface LoginHandoffRequest {
 	readonly recipe: StageLoginRecipe;
 	/** The stage's effective `maxLoginHandoffSeconds`. */
 	readonly maxSeconds: number;
+	/** The login the hand-off drives instead of a page's success condition
+	 * (`add-stage-oauth2-code-pkce`). Absent for every recipe a page completes. */
+	readonly completion?: LoginHandoffCompletionSource;
 	/** The attention record's words. Names and the deadline only, no URL beyond
 	 * the application's own origin and no credential. */
 	readonly description: string;
@@ -388,6 +425,27 @@ export class LoginHandoffCoordinator {
 				outcome: "aborted",
 				by: "developer",
 			});
+		// A login that ends off-page (`add-stage-oauth2-code-pkce`): the code-grant
+		// flow's receiver took the callback and the token is held, or the exchange
+		// ended without one. Nothing about the page is asked, because the page is
+		// the provider's and the window's last stop is this server's own loopback
+		// callback.
+		const completion = current.request.completion;
+		if (completion) {
+			const login = completion.poll();
+			if (login.state === "ok")
+				return await this.finish(current, {
+					outcome: "ok",
+					via: "token",
+					verified: true,
+					url: sanitizeStageUrl(completion.url ?? session.url),
+				});
+			if (login.state === "failed")
+				return await this.finish(current, {
+					outcome: "failed",
+					error: login.error,
+				});
+		}
 		// A declared success condition is what makes an automatic ending
 		// possible at all: without one, *Done* is the only thing that ends a
 		// hand-off well.
@@ -408,12 +466,25 @@ export class LoginHandoffCoordinator {
 					});
 			}
 		} else if (current.answer === "done") {
-			return await this.finish(current, {
-				outcome: "ok",
-				via: "handoff",
-				verified: false,
-				url: this.landingUrl(current),
-			});
+			if (current.request.completion !== undefined) {
+				// The developer says the sign-in is finished, but a code-grant login is
+				// only done when its receiver has the token: give the callback the same
+				// grace a declared success condition gets, then answer honestly that it
+				// did not complete (a *Done* is never an `ok` without a token).
+				if (current.doneAt === undefined) current.doneAt = this.clock();
+				if (this.clock() - current.doneAt >= HANDOFF_GRACE_MS)
+					return await this.finish(current, {
+						outcome: "unverified",
+						url: this.landingUrl(current),
+					});
+			} else {
+				return await this.finish(current, {
+					outcome: "ok",
+					via: "handoff",
+					verified: false,
+					url: this.landingUrl(current),
+				});
+			}
 		}
 		if (this.clock() >= current.deadlineAt)
 			await this.finish(current, {
@@ -593,6 +664,30 @@ export class LoginHandoffCoordinator {
 		}
 		const queued = this.queue.indexOf(entry);
 		if (queued >= 0) this.queue.splice(queued, 1);
+		// The login's own machinery goes first: the loopback receiver stops listening
+		// on every ending (success, mismatch, deadline, abort), so no port stays bound
+		// after a hand-off and no later callback can take a second code.
+		if (entry.request.completion !== undefined) {
+			try {
+				await entry.request.completion.close();
+			} catch {
+				// An ending path is never failed by the login's own teardown.
+			}
+			// A completed code-grant login leaves its window on the receiver's own
+			// "you can close this window" page, which no longer answers once the
+			// receiver is closed: the session is brought back to the application it
+			// logged in to, so the next tool call finds a live page.
+			if (
+				outcome.outcome === "ok" &&
+				entry.request.completion.land !== undefined
+			) {
+				try {
+					await entry.request.completion.land();
+				} catch {
+					// The login already succeeded; a failed landing is not a failed login.
+				}
+			}
+		}
 		await this.pool.removeBanner(session).catch(() => {});
 		// A deadline closes the window (spec), and a window the developer already
 		// closed has closed itself. Neither is re-opened here: closing it marks the
@@ -776,6 +871,8 @@ function outcomeCode(outcome: LoginHandoffOutcome): string {
 			return "login-handoff-timeout";
 		case "aborted":
 			return "login-handoff-aborted";
+		case "failed":
+			return "login-failed";
 		case "unavailable":
 			return "login-handoff-unavailable";
 	}

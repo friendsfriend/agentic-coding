@@ -20,6 +20,9 @@
 // bounds and `forget` are the shape that change takes over, so no call site has
 // to move when its bounded in-memory store lands. Until then this module carries
 // its own, which is why the bounds are constants here rather than configuration.
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { loadEnvFile } from "../../env-file.ts";
 import {
@@ -128,8 +131,14 @@ export interface TokenRequestInput {
 	readonly clientAuth: "basic" | "body";
 	readonly scope: readonly string[];
 	readonly audience?: string;
-	readonly grant: "client_credentials" | "refresh_token";
+	readonly grant: StageOAuth2Grant;
 	readonly refreshToken?: string;
+	/** The authorization code a `authorization_code` request exchanges, and the
+	 * three values that belong to it: the loopback redirect it was issued for and
+	 * the PKCE verifier it was bound to (`add-stage-oauth2-code-pkce`). */
+	readonly code?: string;
+	readonly redirectUri?: string;
+	readonly codeVerifier?: string;
 }
 
 export interface TokenRequestDeps {
@@ -166,6 +175,23 @@ export async function requestToken(
 				"invalid_grant",
 			);
 		body.set("refresh_token", input.refreshToken);
+	}
+	if (input.grant === "authorization_code") {
+		// The code, the redirect it was issued for and the verifier that binds it:
+		// all three stay in this call, and none of them is ever part of a message.
+		if (
+			input.code === undefined ||
+			input.redirectUri === undefined ||
+			input.codeVerifier === undefined
+		)
+			throw new StageAuthError(
+				"login-failed",
+				`${input.provider}: the authorization_code exchange needs a code, its redirect URI and its PKCE verifier`,
+				"invalid_request",
+			);
+		body.set("code", input.code);
+		body.set("redirect_uri", input.redirectUri);
+		body.set("code_verifier", input.codeVerifier);
 	}
 	const headers: Record<string, string> = {
 		"content-type": "application/x-www-form-urlencoded",
@@ -770,7 +796,7 @@ export interface ResolvedRoleToken {
 	 * `authorization_code` client need not. */
 	readonly confidential: boolean;
 	readonly audience?: string;
-	readonly grant: "client_credentials" | "refresh_token";
+	readonly grant: StageOAuth2Grant;
 }
 
 /**
@@ -787,15 +813,11 @@ export function resolveRoleToken(
 			"login-failed",
 			`${input.appKey}.${input.role} does not declare the oauth2 login recipe`,
 		);
-	if (recipe.grant === "authorization_code")
-		// The one grant that needs a person is `add-stage-oauth2-code-pkce`: the
-		// stage file is valid, and this build cannot perform that login. The message
-		// is for its reader, so it names the grants that do work here.
-		throw new StageAuthError(
-			"login-failed",
-			"the authorization_code grant is not supported by this build; client_credentials and refresh_token are",
-			"unsupported_grant",
-		);
+	// The `authorization_code` grant resolves here like any other: its token is
+	// obtained by `stage_login`'s hand-off and held by the same store, so the
+	// paths that only *use* a token (`stage_api_request`, `stage_token_info`, the
+	// browser's bearer header) read it exactly as they read an unattended one.
+	// Only an acquisition refuses to start a sign-in by itself (`roleTokenFrom`).
 	const provider = input.stage.oauth2?.providers?.[recipe.provider];
 	if (provider === undefined)
 		throw new StageAuthError(
@@ -810,7 +832,7 @@ export function resolveRoleToken(
 		clientAuth: provider.clientAuth ?? "basic",
 		confidential: provider.clientSecret !== undefined,
 		...(provider.audience === undefined ? {} : { audience: provider.audience }),
-		grant: recipe.grant as "client_credentials" | "refresh_token",
+		grant: recipe.grant,
 	};
 }
 
@@ -829,6 +851,17 @@ export async function roleTokenFrom(
 	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
 ): Promise<OAuth2Token> {
 	const { input, key } = resolved;
+	// The code grant is obtained by `stage_login`'s hand-off, never by a request
+	// that merely needs a token: a page load, a `stage_api_request` or a
+	// `stage_token_info` must not start an interactive sign-in. The check is
+	// *outside* the store, so a refusal here is never remembered as a provider
+	// failure and the token the hand-off stored is used from the moment it exists.
+	if (resolved.grant === "authorization_code" && store.peek(key) === undefined)
+		throw new StageAuthError(
+			"login-failed",
+			`${input.appKey}.${input.role} logs in with the authorization_code grant: call stage_login on a stage-bound session first, and its token is used here afterwards`,
+			"interactive_login_required",
+		);
 	return await store.token(key, async () => {
 		// The references are resolved *inside* the acquisition: they run before the
 		// request, so a missing variable still leaves no request and no entry behind,
@@ -909,6 +942,505 @@ export async function roleToken(
 	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
 ): Promise<OAuth2Token> {
 	return await roleTokenFrom(resolveRoleToken(input), store, options);
+}
+
+// ---------------------------------------------------------------------------
+// The authorization code grant (`add-stage-oauth2-code-pkce`)
+// ---------------------------------------------------------------------------
+//
+// The third grant is the only one a person performs: the browser has to visit the
+// provider's authorization endpoint, the developer signs in there, and the
+// provider redirects back to this server. Three things live here:
+//
+// * **PKCE and `state`** — a verifier, its S256 challenge and an opaque `state`,
+//   built with `node:crypto` and never reported. The verifier is what makes a
+//   stolen code useless, and `state` is what makes a callback from anywhere but
+//   this login useless.
+// * **The loopback receiver** — a single-use `node:http` server bound to
+//   `127.0.0.1` on an ephemeral port. It takes exactly one callback, validates
+//   `state` in constant time, and closes on every path (success, mismatch,
+//   deadline, abort), so no port stays bound after a login.
+// * **The exchange** — the code, its redirect URI and the verifier go to the
+//   token endpoint through the same bounded request the unattended grants use.
+//
+// The code, the verifier, `state` and the tokens are registered in the redaction
+// set while the login runs (`pkceSecrets`), so no reply, log line, telemetry
+// attribute or evidence file can carry one.
+
+/** The host the loopback receiver binds: the loopback interface only, never a
+ * wildcard address, so no other machine can reach a callback that carries an
+ * authorization code. */
+export const LOOPBACK_HOST = "127.0.0.1";
+
+/** The one path the receiver answers, and the redirect URI's path. */
+export const LOOPBACK_CALLBACK_PATH = "/callback";
+
+/** How many PKCE values the redaction set remembers. A login in flight owns two
+ * (the verifier and `state`); the code a receiver took stays behind after its
+ * flow ended, one-shot and short-lived, so the cap is what keeps a long-lived
+ * server from growing the list with the history of every login. */
+const PKCE_SECRET_CAP = 64;
+
+/** The PKCE values of the logins this process ran, oldest first. */
+const pkceSecretsSeen = new Map<string, StageTokenSecret>();
+
+/** Every PKCE value the redactor has to scrub, longest first so a verifier is
+ * replaced before a shorter value that contains it. */
+export function pkceSecrets(): StageTokenSecret[] {
+	return [...pkceSecretsSeen.values()].sort(
+		(left, right) => right.value.length - left.value.length,
+	);
+}
+
+function rememberPkceSecret(secret: StageTokenSecret): void {
+	if (secret.value === "") return;
+	// Re-inserting moves the value to the young end, so the cap drops what is
+	// actually oldest rather than what was first seen.
+	pkceSecretsSeen.delete(secret.value);
+	pkceSecretsSeen.set(secret.value, secret);
+	while (pkceSecretsSeen.size > PKCE_SECRET_CAP) {
+		const oldest = pkceSecretsSeen.keys().next();
+		if (oldest.done === true) break;
+		pkceSecretsSeen.delete(oldest.value);
+	}
+}
+
+/** Keep one value out of every reply while the login that owns it runs. */
+function guardPkceSecret(name: string, value: string): () => void {
+	rememberPkceSecret({ name, value });
+	return () => {
+		pkceSecretsSeen.delete(value);
+	};
+}
+
+/** One RFC 7636 code verifier: 32 random bytes as unpadded base64url, which is
+ * 43 characters of the RFC's unreserved alphabet (inside its 43–128 bound). */
+export function createCodeVerifier(
+	random: (size: number) => Uint8Array = randomBytes,
+): string {
+	return Buffer.from(random(32)).toString("base64url");
+}
+
+/** `base64url(SHA-256(ASCII(verifier)))`, unpadded: the PKCE `S256` challenge. */
+export function codeChallengeS256(verifier: string): string {
+	return createHash("sha256").update(verifier, "ascii").digest("base64url");
+}
+
+/** The opaque, unguessable `state` this login's callback is matched on. */
+export function createAuthorizationState(
+	random: (size: number) => Uint8Array = randomBytes,
+): string {
+	return Buffer.from(random(32)).toString("base64url");
+}
+
+export interface AuthorizationUrlInput {
+	readonly authorizationEndpoint: string;
+	readonly clientId: string;
+	readonly redirectUri: string;
+	readonly state: string;
+	readonly codeChallenge: string;
+	readonly scope: readonly string[];
+	readonly audience?: string;
+}
+
+/**
+ * The provider's authorization URL, as the hand-off window opens it.
+ *
+ * It carries the client id, the redirect URI, the scopes, the audience, `state`
+ * and the S256 challenge — and nothing else. No client secret goes into a URL,
+ * and the code and the tokens only exist after the callback.
+ */
+export function authorizationUrl(input: AuthorizationUrlInput): string {
+	const url = new URL(input.authorizationEndpoint);
+	url.searchParams.set("response_type", "code");
+	url.searchParams.set("client_id", input.clientId);
+	url.searchParams.set("redirect_uri", input.redirectUri);
+	url.searchParams.set("state", input.state);
+	url.searchParams.set("code_challenge", input.codeChallenge);
+	url.searchParams.set("code_challenge_method", "S256");
+	if (input.scope.length > 0)
+		url.searchParams.set("scope", input.scope.join(" "));
+	if (input.audience !== undefined)
+		url.searchParams.set("audience", input.audience);
+	return url.toString();
+}
+
+/** One single-use loopback receiver. */
+export interface LoopbackReceiver {
+	/** `http://127.0.0.1:<ephemeral>/callback`: the redirect URI the provider is
+	 * asked for. It never carries a value. */
+	readonly redirectUri: string;
+	/** The same URI's origin, which is the one main-frame navigation a stage
+	 * session has to allow while the hand-off runs. */
+	readonly origin: string;
+	/** The authorization code, once a callback with the right `state` arrived. */
+	readonly code: Promise<string>;
+	/** Refuse every later callback and release the port. Idempotent, and safe on
+	 * every ending path. */
+	close(): void;
+}
+
+export interface LoopbackReceiverOptions {
+	readonly state: string;
+	/** The interface to bind. Only a test ever passes anything but loopback. */
+	readonly host?: string;
+}
+
+/** How much of a provider's own error code one refusal keeps. */
+const MAX_PROVIDER_CODE_CHARS = 60;
+
+/**
+ * Start the single-use receiver of one login (`add-stage-oauth2-code-pkce`, D2).
+ *
+ * It accepts exactly one callback. A callback whose `state` does not match never
+ * reaches the token endpoint: the receiver answers a page that says the sign-in
+ * did not complete, refuses the code, and closes. A provider's own `error` is
+ * mapped to a value-free `login-failed` carrying its code, after bounding. Every
+ * page it answers is this module's own text — no parameter is ever reflected
+ * into it, so a provider cannot use the callback page to show a value.
+ */
+export async function startLoopbackReceiver(
+	options: LoopbackReceiverOptions,
+): Promise<LoopbackReceiver> {
+	const host = options.host ?? LOOPBACK_HOST;
+	const sockets = new Set<Socket>();
+	let settle: {
+		resolve: (code: string) => void;
+		reject: (error: unknown) => void;
+	} = { resolve: () => {}, reject: () => {} };
+	let finished = false;
+	const code = new Promise<string>((resolve, reject) => {
+		settle = { resolve, reject };
+	});
+	// A receiver that never hands out its code (its port could not be bound, so no
+	// caller ever awaited it) must not surface as an unhandled rejection: the
+	// refusal reaches the caller as the `startLoopbackReceiver` throw.
+	void code.catch(() => {});
+	const server: Server = createServer((request, response) => {
+		const answer = (status: number, body: string): void => {
+			response.writeHead(status, {
+				"content-type": "text/html; charset=utf-8",
+				"cache-control": "no-store",
+				"referrer-policy": "no-referrer",
+			});
+			response.end(body);
+		};
+		let url: URL;
+		try {
+			url = new URL(request.url ?? "/", `http://${host}`);
+		} catch {
+			answer(400, page("This sign-in could not be read."));
+			return;
+		}
+		if (url.pathname !== LOOPBACK_CALLBACK_PATH) {
+			answer(404, page("This address is not a login callback."));
+			return;
+		}
+		if (request.method !== "GET" && request.method !== "HEAD") {
+			answer(405, page("This address answers a sign-in redirect only."));
+			return;
+		}
+		if (finished) {
+			// Single use: the second callback of a login is refused, and it cannot
+			// replace or re-open the code the first one took.
+			answer(410, page("This sign-in has already completed."));
+			return;
+		}
+		const receivedState = url.searchParams.get("state") ?? "";
+		if (!stateMatches(options.state, receivedState)) {
+			answer(400, failedPage);
+			finish(
+				new StageAuthError(
+					"login-failed",
+					"the login callback did not match this sign-in (`state` mismatch), so no code was exchanged",
+					"state_mismatch",
+				),
+			);
+			return;
+		}
+		const providerError = url.searchParams.get("error");
+		if (providerError !== null && providerError !== "") {
+			answer(400, failedPage);
+			finish(
+				new StageAuthError(
+					"login-failed",
+					`the provider ended the sign-in (${boundedCode(providerError)}), so no code was exchanged`,
+					boundedCode(providerError),
+				),
+			);
+			return;
+		}
+		const received = url.searchParams.get("code");
+		if (received === null || received === "") {
+			answer(400, failedPage);
+			finish(
+				new StageAuthError(
+					"login-failed",
+					"the login callback carried no authorization code",
+					"invalid_response",
+				),
+			);
+			return;
+		}
+		answer(200, successPage);
+		finish(undefined, received);
+	});
+	server.on("connection", (socket) => {
+		sockets.add(socket);
+		socket.on("close", () => sockets.delete(socket));
+	});
+	/** End the receiver exactly once: answer the code promise and release the port.
+	 * The connections a browser kept alive are destroyed *after* the response that
+	 * ended the receiver had its chance to flush — killing them now would reset
+	 * the very page the developer is looking at — and the timer is unref'd, so a
+	 * lingering socket never holds the process. */
+	const finish = (error?: unknown, value?: string): void => {
+		if (finished) return;
+		finished = true;
+		if (server.listening) server.close();
+		const timer = setTimeout(() => {
+			for (const socket of sockets) socket.destroy();
+			sockets.clear();
+		}, 250);
+		(timer as unknown as { unref?: () => void }).unref?.();
+		if (error !== undefined) settle.reject(error);
+		else settle.resolve(value ?? "");
+	};
+	try {
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(0, host, () => {
+				server.removeListener("error", reject);
+				// A listener from here on: an error on a bound server is not a reason to
+				// take the process down, and the login's own deadline bounds the wait.
+				server.on("error", () => {});
+				resolve();
+			});
+		});
+	} catch (error) {
+		finish(
+			new StageAuthError(
+				"login-failed",
+				`a loopback receiver for the sign-in could not be opened (${
+					error instanceof Error ? boundedCode(error.name) : "error"
+				})`,
+				"receiver_unavailable",
+			),
+		);
+		throw new StageAuthError(
+			"login-failed",
+			"a loopback receiver for the sign-in could not be opened on 127.0.0.1",
+			"receiver_unavailable",
+		);
+	}
+	const address = server.address();
+	const port =
+		typeof address === "object" && address !== null ? address.port : 0;
+	const redirectUri = `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`;
+	return {
+		redirectUri,
+		origin: `http://${LOOPBACK_HOST}:${port}`,
+		code,
+		close: () =>
+			finish(
+				new StageAuthError(
+					"login-failed",
+					"the login hand-off ended before the provider called back, so no code was exchanged",
+					"login_aborted",
+				),
+			),
+	};
+}
+
+/** Compare `state` without letting the comparison's duration say how much of a
+ * guess was right. */
+function stateMatches(expected: string, received: string): boolean {
+	const left = Buffer.from(expected, "utf8");
+	const right = Buffer.from(received, "utf8");
+	if (left.length !== right.length) return false;
+	return timingSafeEqual(left, right);
+}
+
+/** A provider's `error` code, bounded and stripped of anything that is not a
+ * code: the value is a third party's text, and only its code is reported. */
+function boundedCode(value: string): string {
+	const code = value
+		.replace(/[^A-Za-z0-9_.-]/g, "")
+		.slice(0, MAX_PROVIDER_CODE_CHARS);
+	return code === "" ? "provider_error" : code;
+}
+
+function page(message: string): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><title>Sign-in</title></head><body><p>${message}</p></body></html>`;
+}
+
+/** The page a callback that took no code answers. It says nothing about why
+ * beyond "did not complete": the reason is a refusal code in the server, never
+ * a value on a page. */
+const failedPage = page(
+	"The sign-in did not complete, so no token was obtained. You can close this window.",
+);
+
+/** The page a completed callback answers. */
+const successPage = page(
+	"You can close this window: the sign-in completed and the agent continues.",
+);
+
+/** What one in-flight code login has done so far. */
+export type AuthorizationCodeState =
+	| { readonly state: "pending" }
+	| { readonly state: "ok" }
+	| { readonly state: "failed"; readonly error: unknown };
+
+/** One login the hand-off drives: the URL its window opens, the loopback origin
+ * it needs to reach, and what it has done so far. */
+export interface AuthorizationCodeFlow {
+	readonly authorizationUrl: string;
+	readonly redirectOrigin: string;
+	poll(): AuthorizationCodeState;
+	/** Stop the receiver, forget the PKCE values and refuse every later callback.
+	 * Idempotent; called on every ending path of the hand-off. */
+	close(): void;
+}
+
+/**
+ * Begin one `authorization_code` login for a role: PKCE, `state`, the receiver,
+ * the authorization URL, and the exchange that runs when the callback lands. The
+ * token is written to the store on success and nowhere else.
+ *
+ * Every refusal before the window opens is a `StageAuthError` —
+ * `credential-missing` names the `.env` variable, `login-failed` carries a
+ * provider code — and none of them quotes a value.
+ */
+export async function beginAuthorizationCodeLogin(
+	input: StageRoleTokenInput,
+	store: StageTokenStore,
+	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
+): Promise<AuthorizationCodeFlow> {
+	const recipe = oauth2RoleOf(input.stage, input.appKey, input.role);
+	if (recipe === undefined || recipe.grant !== "authorization_code")
+		throw new StageAuthError(
+			"login-failed",
+			`${input.appKey}.${input.role} does not declare the authorization_code grant`,
+		);
+	const provider = input.stage.oauth2?.providers?.[recipe.provider];
+	if (provider === undefined)
+		throw new StageAuthError(
+			"login-failed",
+			`${input.appKey}.${input.role} names the oauth2 provider ${JSON.stringify(recipe.provider)}, which the stage does not declare`,
+		);
+	const authorizationEndpoint = provider.authorizationEndpoint;
+	if (authorizationEndpoint === undefined)
+		throw new StageAuthError(
+			"login-failed",
+			`the oauth2 provider ${JSON.stringify(recipe.provider)} declares no authorizationEndpoint, which the authorization_code grant needs`,
+		);
+	let clientId: string;
+	let clientSecret: string | undefined;
+	try {
+		clientId = resolveStageOAuthCredential(
+			input.stage,
+			recipe.provider,
+			"clientId",
+			input.configDir,
+		);
+		if (provider.clientSecret !== undefined)
+			clientSecret = resolveStageOAuthCredential(
+				input.stage,
+				recipe.provider,
+				"clientSecret",
+				input.configDir,
+			);
+	} catch (error) {
+		if (error instanceof StageCredentialError)
+			throw new StageAuthError("credential-missing", error.message);
+		throw error;
+	}
+	const key = roleTokenKey(input);
+	const verifier = createCodeVerifier();
+	const state = createAuthorizationState();
+	const forgetPkce = [
+		guardPkceSecret("stage-oauth2-code-verifier", verifier),
+		guardPkceSecret("stage-oauth2-state", state),
+	];
+	const receiver = await startLoopbackReceiver({ state });
+	const url = authorizationUrl({
+		authorizationEndpoint,
+		clientId,
+		redirectUri: receiver.redirectUri,
+		state,
+		codeChallenge: codeChallengeS256(verifier),
+		scope: key.scope,
+		...(provider.audience === undefined ? {} : { audience: provider.audience }),
+	});
+	let settled: AuthorizationCodeState = { state: "pending" };
+	let closed = false;
+	const token = (async () => {
+		const code = await receiver.code;
+		// The code is a one-shot credential: registered before it is used, so it can
+		// never appear in a reply or a log line, and kept past the flow so a replay is
+		// scrubbed too.
+		rememberPkceSecret({
+			name: "stage-oauth2-authorization-code",
+			value: code,
+		});
+		return await store.token(
+			key,
+			async () =>
+				await requestToken(
+					{
+						provider: recipe.provider,
+						tokenEndpoint: provider.tokenEndpoint,
+						clientId,
+						...(clientSecret === undefined ? {} : { clientSecret }),
+						clientAuth: provider.clientAuth ?? "basic",
+						scope: key.scope,
+						...(provider.audience === undefined
+							? {}
+							: { audience: provider.audience }),
+						grant: "authorization_code",
+						code,
+						redirectUri: receiver.redirectUri,
+						codeVerifier: verifier,
+					},
+					{
+						...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+						...(options.now === undefined ? {} : { now: options.now }),
+						// The provider's own error description is scrubbed of everything this
+						// login holds, the code and the verifier included.
+						secrets: [
+							{ name: "stage-oauth2-code-verifier", value: verifier },
+							{ name: "stage-oauth2-state", value: state },
+							{ name: "stage-oauth2-authorization-code", value: code },
+							...(clientSecret === undefined
+								? []
+								: [{ name: "stage-client-secret", value: clientSecret }]),
+						],
+					},
+				),
+		);
+	})();
+	// Both outcomes end the polling, not the process: a listener keeps an
+	// unobserved flow quiet until the hand-off asks about it.
+	void token.then(
+		() => {
+			if (!closed) settled = { state: "ok" };
+		},
+		(error: unknown) => {
+			if (!closed) settled = { state: "failed", error };
+		},
+	);
+	return {
+		authorizationUrl: url,
+		redirectOrigin: receiver.origin,
+		poll: () => settled,
+		close: () => {
+			if (closed) return;
+			closed = true;
+			for (const forget of forgetPkce) forget();
+			receiver.close();
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------

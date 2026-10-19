@@ -67,7 +67,11 @@ export function createStageGuard(
 	policy: StageSessionPolicy,
 	record: (refusal: StageRefusal) => void,
 ): StageRequestGuard {
-	const origins = new Set(policy.origins);
+	// The allow-list is read per navigation, not captured once: a code-grant
+	// hand-off adds its own loopback callback origin to `policy.origins` for the
+	// duration of the sign-in (`add-stage-oauth2-code-pkce`) and takes it away
+	// again when the hand-off ends. A main-frame navigation is rare, so the check
+	// stays an `includes` on a handful of origins.
 	return (request) => {
 		let url: URL;
 		try {
@@ -87,7 +91,7 @@ export function createStageGuard(
 		// The allow-list scopes *navigations*, not the page's own requests: a
 		// subresource off the list is not this guard's business, and the read-only
 		// method rule below still applies to it.
-		if (request.isMainFrameNavigation && !origins.has(url.origin)) {
+		if (request.isMainFrameNavigation && !policy.origins.includes(url.origin)) {
 			record({
 				code: "origin-not-allowed",
 				url: sanitizeStageUrl(request.url),

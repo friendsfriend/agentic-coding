@@ -35,7 +35,7 @@
 // non-recording context with the same cookies.
 import fs from "node:fs";
 import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
-import { createStageGuard } from "../stages/guard.ts";
+import { createStageGuard, type StageSessionPolicy } from "../stages/guard.ts";
 import { bannerRemovalScript } from "./banner.ts";
 import { BrowserPoolError, tooManySessionsMessage } from "./errors.ts";
 import {
@@ -162,6 +162,12 @@ export class BrowserPool {
 	/** Contexts that already carry the banner-removal init script. Keyed by the
 	 * context object itself, so a swapped context is collected with the session. */
 	private readonly bannerRemovalInstalled = new WeakSet<object>();
+	/** The one loopback origin a code-grant hand-off's callback navigates to, per
+	 * session id (`add-stage-oauth2-code-pkce`). It is the only origin a
+	 * stage-bound session's allow-list is widened with, it exists only while that
+	 * hand-off runs, and `guardFor` reads it per navigation so a reused
+	 * interactive context sees it too. */
+	private readonly handoffRedirects = new Map<string, string>();
 	/** The acquire critical section: the capacity check and the reservation of
 	 * the slot it grants, with no await between them. */
 	private acquireGate: Promise<void> = Promise.resolve();
@@ -840,7 +846,26 @@ export class BrowserPool {
 	private guardFor(session: BrowserSession): DriverRequestGuard | undefined {
 		const binding = session.stage;
 		if (!binding) return undefined;
-		return createStageGuard(binding, (refusal) =>
+		// A code-grant hand-off's callback lands on a loopback origin the stage
+		// never declares: the receiver is this server's own single-use listener, and
+		// it is the redirect the login itself asked the provider for. The origin is
+		// read per navigation, so the context a promotion reuses sees the addition
+		// and its removal without being rebuilt.
+		const redirectOf = (): string | undefined =>
+			this.handoffRedirects.get(session.id);
+		const policy: StageSessionPolicy = {
+			ident: binding.ident,
+			access: binding.access,
+			get origins() {
+				const redirect = redirectOf();
+				return redirect === undefined
+					? binding.origins
+					: [...binding.origins, redirect];
+			},
+			readOnlyExceptions: binding.readOnlyExceptions,
+			limits: binding.limits,
+		};
+		return createStageGuard(policy, (refusal) =>
 			session.recordRefusal(refusal),
 		);
 	}
@@ -885,6 +910,32 @@ export class BrowserPool {
 				return undefined;
 			}
 		};
+	}
+
+	/**
+	 * Allow one main-frame navigation to a loopback callback for the duration of a
+	 * code-grant hand-off (`add-stage-oauth2-code-pkce`).
+	 *
+	 * The origin is the receiver the login itself started on `127.0.0.1`: the
+	 * provider redirects the developer's window there, and the stage's allow-list
+	 * would otherwise abort the very navigation that completes the sign-in.
+	 * Nothing else about the session's binding changes, and
+	 * `clearHandoffRedirect` (called on every ending path of the hand-off) puts the
+	 * session back exactly where it was.
+	 */
+	allowHandoffRedirect(session: BrowserSession, origin: string): void {
+		this.handoffRedirects.set(session.id, origin);
+	}
+
+	/** Drop the loopback allowance of one session. Idempotent. */
+	clearHandoffRedirect(session: BrowserSession): void {
+		this.handoffRedirects.delete(session.id);
+	}
+
+	/** The loopback origin a code-grant hand-off is currently allowed to reach, or
+	 * `undefined`. It carries no value: an origin is `http://127.0.0.1:<port>`. */
+	handoffRedirect(session: BrowserSession): string | undefined {
+		return this.handoffRedirects.get(session.id);
 	}
 
 	/** Attach (or replace) the bearer-token source of this pool. Called by the
@@ -1083,6 +1134,7 @@ export class BrowserPool {
 		// against the cap, so removing it frees nothing.
 		const registered = this.sessions.delete(session.id);
 		const freed = registered && !session.crashed;
+		this.handoffRedirects.delete(session.id);
 		if (registered) this.onSessionClosed?.(session, cause);
 		session.beginContextSwap();
 		// The slot is handed to the queue *before* the close is awaited, so it never
