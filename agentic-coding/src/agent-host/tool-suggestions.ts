@@ -27,6 +27,7 @@ import {
 	type createEditTool,
 	type createReadTool,
 } from "@earendil-works/pi-durable/tools";
+import { toolSurfaceNote } from "./tool-surface.ts";
 
 /** What one suggestion may cost: the excerpt it may render, and the filesystem
  * work it may do to find a path. Every one of these is a hard bound. */
@@ -434,6 +435,9 @@ export interface SuggestionDeps {
 
 export interface SuggestionOptions {
 	readonly limits?: Partial<SuggestionLimits>;
+	/** Whether this run's tool set contains `codemode`, so the `read`
+	 * description names it only where the host registered it (tool-surface.ts). */
+	readonly codemodeRegistered?: boolean;
 }
 
 export interface PathCandidate {
@@ -878,6 +882,13 @@ export function createSuggestingReadTool(
 ): ReadTool {
 	return {
 		...base,
+		// The description states the inspection split where the tool is chosen,
+		// not only in the protocol document (efficiency backlog item 14): every
+		// existing contract of pi-durable's own description is kept, and the note
+		// is appended after it.
+		description: [base.description, toolSurfaceNote(options)]
+			.filter((part) => typeof part === "string" && part.length > 0)
+			.join(" "),
 		async execute(args: ReadArgs, api: ReadApi, context) {
 			try {
 				return await base.execute(args, api, context);

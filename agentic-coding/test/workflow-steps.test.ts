@@ -9080,6 +9080,61 @@ describe("workflow step behaviors", () => {
 		);
 	});
 
+	test("every assignment states the tool surface in its first lines", () => {
+		// Efficiency backlog item 14: the split and the batching rule live in the
+		// dynamic envelope, which is the part a follow-up attempt re-sends, not
+		// only in the protocol document the first prompt carries.
+		const registry = registerBuiltins();
+		const block = [
+			"## Tool surface",
+			"",
+			"`read` (with `offset`/`limit`) and `grep` (with a `path` filter) are the default way to inspect code; `bash` is for builds, tests and `openspec`; `codemode`, when this run offers it, chains a search → filter → summarise pipeline into one turn. Emit every independent call for a step in one message rather than one call per turn — each turn re-sends the whole conversation.",
+		].join("\n");
+		const roles: Array<[string, string, readonly string[]]> = [
+			["core.plan", "planner", ["read and edit repository"]],
+			["fusion.consolidate", "consolidator", ["read and edit repository"]],
+			["core.implementation", "worker", ["read and edit repository"]],
+			["core.verification", "quality-verifier", ["read repository"]],
+			["core.verification", "test-verifier", ["read repository"]],
+			["core.triage", "triage", ["read repository"]],
+			["core.wiki", "wiki", ["read and edit repository"]],
+			["core.wiki", "research-wiki", ["read and edit repository"]],
+		];
+		for (const [stepId, role, permissions] of roles) {
+			// First assignment and follow-up alike: the rule is part of the round's
+			// own sections, so it travels every time.
+			for (const generation of [1, 2]) {
+				const prompt = renderAssignment(registry.step(stepId), {
+					protocolVersion: 1,
+					workflowId: "workflow",
+					runId: `run-${role}`,
+					generation,
+					stepId,
+					role,
+					objective: "Do the assigned work.",
+					interaction: "silent",
+					inputs: [],
+					permissions,
+					checks: [],
+					allowedOutcomes: ["complete", "blocked", "failed"],
+					environment: {} as Assignment["environment"],
+				}).prompt;
+				expect(prompt).toContain(block);
+				expect(prompt.indexOf("## Tool surface")).toBeLessThan(
+					prompt.indexOf("## Objective"),
+				);
+				// The section names no editing tool: it is true for a read-only run,
+				// which has neither `edit` nor `write`.
+				const section = prompt.slice(
+					prompt.indexOf("## Tool surface"),
+					prompt.indexOf("## Objective"),
+				);
+				expect(section).not.toContain("edit");
+				expect(section).not.toContain("write");
+			}
+		}
+	});
+
 	test("resolves active roles from representative snapshots", () => {
 		const selected = ["security-verifier", "test-verifier"];
 		// An empty selection means the round needs no domain verifier: the

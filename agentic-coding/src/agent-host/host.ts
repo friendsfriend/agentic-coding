@@ -393,6 +393,7 @@ export class DurableHost {
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
 		options: DurableHostOptions,
+		codemodeRegistered: boolean,
 	): {
 		readonly readOnlyTools: readonly ToolRegistration[];
 		readonly workflowTools: readonly ToolRegistration[];
@@ -401,7 +402,7 @@ export class DurableHost {
 		registry.install(dialogue);
 		const jev = createAskJevExtension(lookup);
 		registry.install(jev);
-		const search = createSearchExtension();
+		const search = createSearchExtension({ codemodeRegistered });
 		registry.install(search);
 		// Every durable run gets the environment tools, read-only runs included:
 		// they act on the app slot instead of the source tree, so a verifier can
@@ -462,15 +463,25 @@ export class DurableHost {
 		fs.mkdirSync(options.layout.runEnvDir, { recursive: true, mode: 0o700 });
 		const registry = createRegistry();
 		const host: { instance?: DurableHost } = {};
+		// Whether this host's runs get `codemode` at all, resolved once and before
+		// the coding tools are installed: the same flag decides whether the tool is
+		// registered below and whether the `read`/`grep`/`bash` descriptions and
+		// the assignments name it (tool-surface.ts). A run is never told about a
+		// tool its tool set does not contain.
+		const codemodeRegistered =
+			!options.orchestrator &&
+			globalPiTools(piSettingsPath(options.globalAgentDir)).some(
+				(tool) => tool.tool === "codemode",
+			);
 		// pi-durable's coding tools with the bounded `bash` in place of its own
 		// (bash-tool.ts): every runtime this host serves gets the same default
 		// wall-clock bound, whoever selects the tool by name.
-		registry.install(boundedCodingTools());
+		registry.install(boundedCodingTools({ codemodeRegistered }));
 		// …and `read`/`edit` with the self-correcting failure hints
 		// (tool-suggestions.ts). Installed after the coding tools so its
 		// registration of each of those names is the one a run selects; a
 		// suggestion-only failure never replaces the tool's own error text.
-		registry.install(suggestingCodingTools());
+		registry.install(suggestingCodingTools({ codemodeRegistered }));
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator
@@ -479,18 +490,17 @@ export class DurableHost {
 		if (orchestrator) registry.install(orchestrator);
 		const workflowTools = orchestrator
 			? { readOnlyTools: [], workflowTools: [] }
-			: DurableHost.installWorkflowExtensions(registry, lookup, options);
+			: DurableHost.installWorkflowExtensions(
+					registry,
+					lookup,
+					options,
+					codemodeRegistered,
+				);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
 		// additional tool: the run keeps its direct tools either way. The
 		// orchestrator never gets it: its tool surface is exactly its own.
-		const codemode =
-			!orchestrator &&
-			globalPiTools(piSettingsPath(options.globalAgentDir)).some(
-				(tool) => tool.tool === "codemode",
-			)
-				? createDurableCodemode()
-				: undefined;
+		const codemode = codemodeRegistered ? createDurableCodemode() : undefined;
 		if (codemode) registry.install(codemode.extension);
 		const models =
 			options.models ??

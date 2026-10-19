@@ -33,6 +33,7 @@ import {
 	validateQuestions,
 } from "./jev.ts";
 import { missingPathHint, suggestionDeps } from "./tool-suggestions.ts";
+import { toolSurfaceNote } from "./tool-surface.ts";
 
 /** Per-conversation context the durable tools need but pi-durable's own
  * `ToolExecutionApi`/`PromptInput` do not carry: the run's workflow identity,
@@ -894,7 +895,9 @@ export function gatherContextFiles(
  * each, with an unbounded result. This returns `path:line: text` hits for a
  * whole scoped path in one call, which is what turns a verifier's review from
  * dozens of turns into a handful. */
-export function createSearchExtension(): Extension {
+export function createSearchExtension(
+	options: { readonly codemodeRegistered?: boolean } = {},
+): Extension {
 	return defineExtension({
 		name: "agentic.search",
 		tools: [
@@ -904,6 +907,10 @@ export function createSearchExtension(): Extension {
 					"Search the repository for a regular expression and return the matching lines as `path:line: text`. Read-only, bounded to the run's working directory.",
 					"Prefer this over `bash` grep/sed: one call covers a whole directory, quoting is not a hazard, and the result is capped instead of spilling.",
 					"One call per pattern and several per message: independent searches emitted together cost one turn.",
+					// The inspection split and the batching rule where the tool is
+					// chosen (efficiency backlog item 14); `codemode` only when this
+					// run's tool set has it.
+					toolSurfaceNote(options),
 				].join(" "),
 				replay: "safe",
 				parameters: GrepParameters,

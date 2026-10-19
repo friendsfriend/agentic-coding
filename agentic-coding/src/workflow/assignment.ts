@@ -20,6 +20,21 @@ const NO_ENVIRONMENT_TOOLS = [
 	"Do not work around this by shelling out to `docker`/`kubectl` yourself or by reasoning about a run you did not make: say in your handoff that the environment tools were unavailable, and hand off `blocked` when the task cannot be done without them (an `env-setup` workflow cannot start, build or test the definitions it drafts).",
 ].join("\n");
 
+/** The inspection split and the batching rule, in the assignment's first lines
+ * (efficiency backlog item 14). The rule lived only in the protocol document,
+ * which is sent once at the top of an 18 kB prompt; the dynamic envelope is the
+ * one part a follow-up attempt or round re-sends, so the rule travels here.
+ *
+ * The wording matches the `read`/`grep`/`bash`/`codemode` descriptions
+ * (`agent-host/tool-surface.ts`) and names no tool a run may lack: `codemode`
+ * is conditioned on the run's own tool set, and `edit`/`write` are never named,
+ * because a read-only run has neither. */
+const TOOL_SURFACE = [
+	"## Tool surface",
+	"",
+	"`read` (with `offset`/`limit`) and `grep` (with a `path` filter) are the default way to inspect code; `bash` is for builds, tests and `openspec`; `codemode`, when this run offers it, chains a search → filter → summarise pipeline into one turn. Emit every independent call for a step in one message rather than one call per turn — each turn re-sends the whole conversation.",
+].join("\n");
+
 export interface RenderedAssignment {
 	prompt: string;
 	digest: string;
@@ -164,6 +179,8 @@ export function renderAssignment(
 		`Generation: ${assignment.generation}`,
 		`Step: ${assignment.stepId}`,
 		`Role: ${assignment.role}`,
+		"",
+		TOOL_SURFACE,
 		"",
 		"## Objective",
 		assignment.objective,

@@ -29,6 +29,7 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { codemodeWasmPath, codemodeWorkerUrl } from "./codemode-assets.ts";
+import { BATCHING_RULE, CODEMODE_PIPELINE } from "./tool-surface.ts";
 
 export const CODEMODE_TOOL_NAME = "codemode";
 
@@ -48,6 +49,10 @@ const CODEMODE_DESCRIPTION = [
 	"- `text(value)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script.",
 	"- `store(key, value)` and `load(key)` keep JSON values across codemode calls in this run.",
 	"- `ALL_TOOLS` lists the tools this script can call.",
+	// Its own place in the inspection split (efficiency backlog item 14): the
+	// tool exists to collapse a pipeline, and the batching rule holds here too.
+	`- ${CODEMODE_PIPELINE}.`,
+	`- ${BATCHING_RULE}.`,
 ].join("\n");
 
 /** A durable `codemode` extension plus the tool it registers, so the host can
