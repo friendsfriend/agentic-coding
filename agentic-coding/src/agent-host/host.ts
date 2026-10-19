@@ -19,6 +19,7 @@ import {
 	type Extension,
 	Harness,
 	type JsonObject,
+	type Registry,
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -32,7 +33,6 @@ import {
 	resolveCompactionCeiling,
 	resolveCompactionPolicy,
 } from "../workflow/compaction.ts";
-import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
@@ -75,6 +75,11 @@ import {
 	type ToolOutcomeObservation,
 } from "./telemetry.ts";
 import { suggestingCodingTools } from "./tool-suggestions.ts";
+import {
+	resolveCodemodeRegistered,
+	resolveSearchRegistered,
+	type ToolSurfaceOptions,
+} from "./tool-surface.ts";
 import {
 	codingTools,
 	createAskJevExtension,
@@ -384,6 +389,9 @@ export class DurableHost {
 		private readonly workflowTools: readonly ToolRegistration[],
 		/** The orchestrator extension, present only in orchestrator mode. */
 		private readonly orchestratorExtension: Extension | undefined,
+		/** The published tool registry, kept only so a focused test can read what
+		 * a run of this host is actually offered (`toolDescriptionsForTest`). */
+		private readonly registry: Registry,
 	) {}
 
 	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, the
@@ -393,7 +401,7 @@ export class DurableHost {
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
 		options: DurableHostOptions,
-		codemodeRegistered: boolean,
+		surface: ToolSurfaceOptions,
 	): {
 		readonly readOnlyTools: readonly ToolRegistration[];
 		readonly workflowTools: readonly ToolRegistration[];
@@ -402,7 +410,7 @@ export class DurableHost {
 		registry.install(dialogue);
 		const jev = createAskJevExtension(lookup);
 		registry.install(jev);
-		const search = createSearchExtension({ codemodeRegistered });
+		const search = createSearchExtension(surface);
 		registry.install(search);
 		// Every durable run gets the environment tools, read-only runs included:
 		// they act on the app slot instead of the source tree, so a verifier can
@@ -468,20 +476,25 @@ export class DurableHost {
 		// registered below and whether the `read`/`grep`/`bash` descriptions and
 		// the assignments name it (tool-surface.ts). A run is never told about a
 		// tool its tool set does not contain.
-		const codemodeRegistered =
-			!options.orchestrator &&
-			globalPiTools(piSettingsPath(options.globalAgentDir)).some(
-				(tool) => tool.tool === "codemode",
-			);
+		// The same resolution decides whether `grep` is named: orchestrator mode
+		// installs the coding tools but never the search extension.
+		const surface: ToolSurfaceOptions = {
+			codemodeRegistered: resolveCodemodeRegistered(
+				options.globalAgentDir,
+				options.orchestrator === true,
+			),
+			searchRegistered: resolveSearchRegistered(options.orchestrator === true),
+		};
+		const codemodeRegistered = surface.codemodeRegistered === true;
 		// pi-durable's coding tools with the bounded `bash` in place of its own
 		// (bash-tool.ts): every runtime this host serves gets the same default
 		// wall-clock bound, whoever selects the tool by name.
-		registry.install(boundedCodingTools({ codemodeRegistered }));
+		registry.install(boundedCodingTools(surface));
 		// …and `read`/`edit` with the self-correcting failure hints
 		// (tool-suggestions.ts). Installed after the coding tools so its
 		// registration of each of those names is the one a run selects; a
 		// suggestion-only failure never replaces the tool's own error text.
-		registry.install(suggestingCodingTools({ codemodeRegistered }));
+		registry.install(suggestingCodingTools(surface));
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator
@@ -494,7 +507,7 @@ export class DurableHost {
 					registry,
 					lookup,
 					options,
-					codemodeRegistered,
+					surface,
 				);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
@@ -560,6 +573,7 @@ export class DurableHost {
 			workflowTools.readOnlyTools,
 			workflowTools.workflowTools,
 			orchestrator,
+			registry,
 		);
 		host.instance = instance;
 		return instance;
@@ -743,6 +757,24 @@ export class DurableHost {
 				: this.readOnlyTools),
 			...(this.codemodeTool ? [this.codemodeTool] : []),
 		];
+	}
+
+	/** Test-only: the description of every tool this host installed, by tool
+	 * name (the last install of a name wins, as it does for a run). Not part of
+	 * the control protocol; focused tests use this to confirm that a description
+	 * names only the tools a run of this host actually has — the host resolves
+	 * the tool surface once, so the registration and the descriptions can never
+	 * disagree (efficiency backlog item 14). */
+	toolDescriptionsForTest(): Record<string, string> {
+		const descriptions: Record<string, string> = {};
+		for (const { tool } of this.registry.snapshot().tools()) {
+			const name = (tool as { readonly name?: unknown }).name;
+			const description = (tool as { readonly description?: unknown })
+				.description;
+			if (typeof name === "string" && typeof description === "string")
+				descriptions[name] = description;
+		}
+		return descriptions;
 	}
 
 	/** Test-only: the committed transcript entries of one run's conversation.
