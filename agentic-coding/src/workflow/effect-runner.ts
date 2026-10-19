@@ -154,6 +154,12 @@ import type {
 } from "./registry.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
 import {
+	boundedChangedFilesInput,
+	planFileInput,
+	priorFindingsInput,
+	stepForwardsChangedFiles,
+} from "./runtime/assignment-scope.ts";
+import {
 	captureDebugBaseline,
 	type DebugRequest,
 	resolveDebugReportPath,
@@ -1589,10 +1595,9 @@ export function agentEffectHandlers(
 					const launchStartedAt = Date.now();
 					const token =
 						effect.runToken ?? engine.issueRunCapability(repo, run.id);
-					const changedFiles =
-						run.stepId === "core.triage"
-							? yield* p(() => changedFilesInAsync(snapshot))
-							: [];
+					const changedFiles = stepForwardsChangedFiles(run.stepId)
+						? yield* p(() => changedFilesInAsync(snapshot))
+						: [];
 					// The run environment this launch writes carries the owner-scoped
 					// environment capability. A process that is not the server (the CLI's
 					// drain, the per-repository agent host) discovers a running one from the
@@ -4186,7 +4191,7 @@ function renderedAssignment(
 		snapshot,
 		token,
 		registry,
-		run.stepId === "core.triage" ? changedFilesIn(snapshot) : [],
+		stepForwardsChangedFiles(run.stepId) ? changedFilesIn(snapshot) : [],
 		captureContent,
 	);
 	return {
@@ -4237,7 +4242,9 @@ async function renderedAssignmentAsync(
 				snapshot,
 				token,
 				registry,
-				run.stepId === "core.triage" ? await changedFilesInAsync(snapshot) : [],
+				stepForwardsChangedFiles(run.stepId)
+					? await changedFilesInAsync(snapshot)
+					: [],
 				captureContent,
 			);
 	return {
@@ -4289,7 +4296,23 @@ function assignmentFor(
 				).assignments?.find((item) => item.role === run.role) ??
 				snapshot.step.context)
 			: snapshot.step.context;
-	const changed = run.stepId === "core.triage" ? changedFiles : [];
+	const changedLine = stepForwardsChangedFiles(run.stepId)
+		? run.stepId === "core.triage"
+			? changedFiles.length
+				? `Changed files: ${changedFiles.join(" ")}`
+				: undefined
+			: boundedChangedFilesInput(changedFiles)
+		: undefined;
+	// The plan's own file list reaches the implementation assignment, and the
+	// round's changed files and the earlier round's recorded findings reach a
+	// verification round (efficiency backlog item 13): both read from evidence
+	// the engine already wrote, bounded, and absent rather than invented.
+	const planFiles =
+		run.stepId === "core.implementation" ? planFileInput(snapshot) : undefined;
+	const priorFindings =
+		run.stepId === "core.verification"
+			? priorFindingsInput(snapshot)
+			: undefined;
 	const dialogue = snapshot.developerDialogue.filter(
 		// A `stage_login` hand-off record is browser bookkeeping, not decision
 		// context: it never reaches an assignment (add-stage-interactive-login).
@@ -4376,7 +4399,9 @@ function assignmentFor(
 		...(hooked?.introLines ?? []),
 		...wikiReviewInput,
 		...researchHandoffInput,
-		...(changed.length ? [`Changed files: ${changed.join(" ")}`] : []),
+		...(planFiles ? [planFiles] : []),
+		...(changedLine ? [changedLine] : []),
+		...(priorFindings ? [priorFindings] : []),
 		...(context === undefined || hooked?.suppressStepInputLine
 			? []
 			: [`Step input: ${JSON.stringify(context)}`]),

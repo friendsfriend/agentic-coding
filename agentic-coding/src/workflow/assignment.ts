@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ENVIRONMENT_URL_ENV } from "../agent-host/environment-capability.ts";
+import { ASSIGNMENT_TOOL_SURFACE } from "../agent-host/tool-surface.ts";
 import type { Assignment } from "../contracts/workflow.ts";
 import { AGENT_DEF_DIR } from "./paths.ts";
 import type { StepDefinition, WorkflowFamilyTraits } from "./registry.ts";
@@ -19,6 +20,33 @@ const NO_ENVIRONMENT_TOOLS = [
 	"No agentic-coding server was reachable for this run's configuration, so the environment tools (`env_list`, `env_start`, `env_status`, `env_stop`, `env_build`, `env_test`, `env_logs`), the browser tools (`browser_*`) and the debug tools (`otel_query`, `db_query`, `http_request`) have no capability: every call to them fails.",
 	"Do not work around this by shelling out to `docker`/`kubectl` yourself or by reasoning about a run you did not make: say in your handoff that the environment tools were unavailable, and hand off `blocked` when the task cannot be done without them (an `env-setup` workflow cannot start, build or test the definitions it drafts).",
 ].join("\n");
+
+// The tool surface (efficiency backlog item 14): the same split and the same
+// batching rule the tool descriptions carry, taken from the module that owns
+// them (`agent-host/tool-surface.ts`) instead of restated here, so the two
+// surfaces cannot drift apart. The rule lived only in the protocol document,
+// which is sent once at the top of an 18 kB prompt; the dynamic envelope is the
+// one part a follow-up attempt or round re-sends, so it travels here, in the
+// first lines of every assignment. It names no tool a run may lack: `codemode`
+// is conditioned on the run's own tool set, and `edit`/`write` are never named,
+// because a read-only run has neither.
+
+/** The `## Inputs` body. A one-line input is a bullet; a multi-line input is an
+ * untrusted-context block with its own heading (prior dialogue, a research
+ * handoff, an earlier round's findings), so it is rendered as its own blank-line
+ * separated section — its heading stays a heading, and the engine-owned bullets
+ * after it do not read as part of it. */
+function renderInputs(inputs: readonly string[]): string[] {
+	const lines: string[] = [];
+	let afterBlock = false;
+	for (const item of inputs) {
+		const block = item.includes("\n");
+		if (block || afterBlock) lines.push("");
+		lines.push(block ? item : `- ${item}`);
+		afterBlock = block;
+	}
+	return lines;
+}
 
 export interface RenderedAssignment {
 	prompt: string;
@@ -165,6 +193,8 @@ export function renderAssignment(
 		`Step: ${assignment.stepId}`,
 		`Role: ${assignment.role}`,
 		"",
+		ASSIGNMENT_TOOL_SURFACE,
+		"",
 		"## Objective",
 		assignment.objective,
 		"",
@@ -177,7 +207,7 @@ export function renderAssignment(
 			: []),
 		"## Inputs",
 		...(assignment.inputs.length
-			? assignment.inputs.map((item) => `- ${item}`)
+			? renderInputs(assignment.inputs)
 			: ["- none"]),
 		"",
 		"## Permissions",

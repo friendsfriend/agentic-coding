@@ -805,6 +805,66 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("explore-tools reports the per-run exploratory mix and its median", () => {
+		const query = queryByName("explore-tools");
+		expect(query).toBeDefined();
+		const out = makeTempDir("efficiency-explore-tools-");
+		const copy = path.join(out.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy, { readwrite: true });
+		try {
+			db.run(
+				`INSERT INTO runs (run_id, run_label, workflow_id, step_id, role, profile, status, source, source_rank, sources, confidence, preferred)
+				 VALUES ('run-explore', 'explore', 'wf-explore', 'core.plan', 'planner', 'deepseek-flash', 'completed', 'test', 1, 'test', 'exact', 1)`,
+			);
+			const insertCall = db.query(
+				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, call_id, dedupe_key, tool, ok, result_bytes, recording, confidence, preferred)
+				 VALUES ('run-explore', 'explore', 'wf-explore', 'test', 1, ?, ?, ?, 1, ?, 'exact', 'exact', 1)`,
+			);
+			// Three bash calls and one read among five calls in all: the bash
+			// share is 60 % of the run, the exploratory set is the four
+			// non-`edit` calls, and the median of its sizes (100, 300, 900, 2000)
+			// is the lower middle.
+			insertCall.run("c1", "d1", "bash", 100);
+			insertCall.run("c2", "d2", "bash", 900);
+			insertCall.run("c3", "d3", "bash", 2000);
+			insertCall.run("c4", "d4", "read", 300);
+			insertCall.run("c5", "d5", "edit", 40);
+			const row = db
+				.query<
+					{
+						role: string;
+						profile: string;
+						calls: number;
+						bash_calls: number;
+						read_calls: number;
+						grep_calls: number;
+						bash_share_pct: number;
+						explore_calls: number;
+						explore_result_bytes: number;
+						explore_result_median_bytes: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all()
+				.find((item) => item.calls === 5);
+			expect(row?.role).toBe("planner");
+			expect(row?.profile).toBe("deepseek-flash");
+			expect(row?.bash_calls).toBe(3);
+			expect(row?.read_calls).toBe(1);
+			// No `grep` call at all is the measurement this change targets, and it
+			// is reported as zero rather than as a missing row.
+			expect(row?.grep_calls).toBe(0);
+			expect(row?.bash_share_pct).toBe(60);
+			expect(row?.explore_calls).toBe(4);
+			expect(row?.explore_result_bytes).toBe(3300);
+			expect(row?.explore_result_median_bytes).toBe(300);
+		} finally {
+			db.close();
+			out.cleanup();
+		}
+	});
+
 	test("stalled-runs reports only runs at or below two turns", () => {
 		const query = queryByName("stalled-runs");
 		const db = new Database(datasetPath, { readonly: true });

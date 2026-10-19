@@ -1258,6 +1258,80 @@ GROUP BY c.run_id
 ORDER BY shell_for_a_tool DESC, c.run_id`,
 	},
 	{
+		name: "explore-tools",
+		summary:
+			"A run's exploratory tool mix: how much of it is bash rather than read/grep, and what that exploration returned.",
+		example:
+			"bun run scripts/efficiency/analyze.ts explore-tools --dataset ~/ev/dataset-2026 --limit 50",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"role",
+			"profile",
+			"calls",
+			"bash_calls",
+			"read_calls",
+			"grep_calls",
+			"bash_share_pct",
+			"explore_calls",
+			"explore_result_bytes",
+			"explore_result_median_bytes",
+		],
+		sql: `WITH explore AS (
+	SELECT
+		c.run_id AS run_id,
+		c.tool AS tool,
+		COALESCE(c.result_bytes, 0) AS result_bytes
+	FROM v_tool_calls c
+	WHERE c.tool IN ('bash', 'read', 'grep')
+),
+totals AS (
+	SELECT
+		e.run_id AS run_id,
+		COUNT(*) AS explore_calls,
+		SUM(CASE WHEN e.tool = 'bash' THEN 1 ELSE 0 END) AS bash_calls,
+		SUM(CASE WHEN e.tool = 'read' THEN 1 ELSE 0 END) AS read_calls,
+		SUM(CASE WHEN e.tool = 'grep' THEN 1 ELSE 0 END) AS grep_calls,
+		SUM(e.result_bytes) AS explore_result_bytes
+	FROM explore e
+	GROUP BY e.run_id
+),
+ranked AS (
+	SELECT
+		run_id AS run_id,
+		result_bytes AS result_bytes,
+		ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY result_bytes) AS row_number,
+		COUNT(*) OVER (PARTITION BY run_id) AS call_count
+	FROM explore
+)
+SELECT
+	t.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	r.role AS role,
+	COALESCE(r.profile, '(unset)') AS profile,
+	(SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = t.run_id) AS calls,
+	t.bash_calls AS bash_calls,
+	t.read_calls AS read_calls,
+	t.grep_calls AS grep_calls,
+	ROUND(
+		100.0 * t.bash_calls
+		/ NULLIF((SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = t.run_id), 0),
+		1
+	) AS bash_share_pct,
+	t.explore_calls AS explore_calls,
+	t.explore_result_bytes AS explore_result_bytes,
+	-- SQLite has no median: the middle exploratory result size, and the lower of
+	-- the two middles for an even number of them.
+	(SELECT k.result_bytes FROM ranked k
+		WHERE k.run_id = t.run_id AND k.row_number = (k.call_count + 1) / 2
+	) AS explore_result_median_bytes
+FROM totals t
+JOIN v_runs r ON r.run_id = t.run_id
+ORDER BY t.explore_result_bytes DESC, t.run_id`,
+	},
+	{
 		name: "stalled-runs",
 		summary:
 			"Runs that were started and produced two turns or fewer: engine and queue waste.",

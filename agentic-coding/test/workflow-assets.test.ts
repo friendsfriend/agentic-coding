@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import {
+	AGENT_DEFINITION_VERSION,
+	AGENT_DEFINITIONS,
+} from "../src/workflow/embedded.generated.ts";
+import { AGENT_DEF_DIR } from "../src/workflow/paths.ts";
 
 test("embedded workflow assets stay outside skill/plugin discovery", () => {
 	const names = Object.keys(AGENT_DEFINITIONS);
@@ -76,4 +83,87 @@ test("triage instructions scope the decided roles instead of selecting them", ()
 	// A later round also drops a still-clean role whose files are unchanged.
 	expect(triage).toContain("drop a role that PASSed in a prior round");
 	expect(triage).toContain("Reuse unchanged prior PASS evidence");
+});
+
+test("the planner brief writes early and budgets orientation", () => {
+	const planning = AGENT_DEFINITIONS["instructions/planning.md"];
+	// The skeleton first, and it triggers on the resolved path openspec names,
+	// not on a directory that exists before the artifact set is known: the
+	// artifact exists early, and each later one is extended in place.
+	expect(planning).toContain(
+		"As soon as `openspec status` names the first artifact's `resolvedOutputPath` and `openspec instructions` returns its template, write that artifact's skeleton — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn. Write nothing before the resolved path exists: the artifact set is openspec's to name, not yours to assume.",
+	);
+	// The old trigger is gone rather than sitting beside the new one: one
+	// instruction, not two that can disagree.
+	expect(planning).not.toContain(
+		"Immediately after creating the directory, write a skeleton",
+	);
+	// The budget bounds exploration only: the dependency-read rule it must not
+	// weaken is restated in the same paragraph, and a question that cannot be
+	// settled inside the surface goes to `openQuestions` instead of more reads.
+	expect(planning).toContain(
+		"Budget orientation to a small share of your turns; when a question cannot be settled within this surface, record it in the plan's `openQuestions` instead of reading further.",
+	);
+	expect(planning).toContain(
+		"Understand the task's domain surface: read only the files the change touches and their direct dependencies",
+	);
+	expect(planning).toContain(
+		"The budget bounds exploration, not the required reads: still read every dependency artifact from disk before writing the one that depends on it.",
+	);
+	// `artifacts` is the plan's file list, and the brief says so where the
+	// planner writes it.
+	expect(planning).toContain(
+		"`artifacts` (the plan's file list: the change's artifact paths, then every repository-relative file the plan creates or changes",
+	);
+	// The validation ownership the brief already had is untouched.
+	expect(planning).toContain("openspec validate");
+	expect(planning).toContain("## Validation ownership");
+});
+
+test("both wiki briefs write early and keep their own update-first contract", () => {
+	const openspec = AGENT_DEFINITIONS["instructions/wiki-openspec.md"];
+	const research = AGENT_DEFINITIONS["instructions/wiki-research.md"];
+	for (const brief of [openspec, research]) {
+		expect(brief).toContain("## Write early");
+		expect(brief).toContain(
+			"instead of reading further before writing anything",
+		);
+		expect(brief).toContain(
+			"This budget bounds orientation only: the budget moves the write earlier, it does not shorten the sequence — that sequence, not the budget, still decides which path is written, and the authoring contract still applies to every concept you touch.",
+		);
+	}
+	// Each brief keeps its own vocabulary: the search-named target for the
+	// openspec wiki, the corroborated directive for the research wiki.
+	expect(openspec).toContain(
+		"Write or update the first concept as soon as the update-first sequence below names its target",
+	);
+	// The gate is the sequence's target, not the search: the search can name a
+	// concept the sequence would update elsewhere.
+	expect(openspec).not.toContain("as soon as the search names a target");
+	expect(research).toContain(
+		"Write or update the first dictated concept as soon as its directive's claim is corroborated",
+	);
+	expect(openspec).not.toContain("first dictated concept");
+	expect(research).not.toContain("names its target");
+});
+
+test("the embedded instructions are the briefs on disk, hash included", () => {
+	// The pin travels with the embedded copies: a brief edited without
+	// regenerating `embedded.generated.ts` fails here (and in the materializer a
+	// compiled binary would otherwise serve stale text).
+	const names = ["planning.md", "wiki-openspec.md", "wiki-research.md"];
+	for (const name of names)
+		expect(AGENT_DEFINITIONS[`instructions/${name}`]).toBe(
+			fs.readFileSync(path.join(AGENT_DEF_DIR, "instructions", name), "utf8"),
+		);
+	const hash = createHash("sha1")
+		.update(
+			Object.entries(AGENT_DEFINITIONS)
+				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+				.map(([key, value]) => `${key}\u0000${value}`)
+				.join("\u0001"),
+		)
+		.digest("hex")
+		.slice(0, 12);
+	expect(AGENT_DEFINITION_VERSION).toBe(`sha1-${hash}`);
 });

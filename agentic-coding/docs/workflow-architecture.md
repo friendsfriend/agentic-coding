@@ -1602,6 +1602,77 @@ tool's own (`not-found`/`no-match` keep their exemptions in the fail-fast rule)
 and a suggestion cannot turn one failure into another: an unexpected throw while
 deriving a hint leaves the original error untouched.
 
+### The orientation budget and the named tool surface (efficiency backlog items 13 and 14)
+
+Measurement: `core.plan` spent 50.7 % of its cost before the first artifact,
+and the wiki step 66 %; planners made **no** `grep` call at all (1,621 `bash`
+vs 908 `read`), and 38.3 % of a worker's pre-edit calls were exploration. The
+protocol document already stated the batching rule — but once per run, at the
+top of an ~18 kB prompt, never in the dynamic envelope a follow-up attempt or
+round re-sends and never at the point where the tool is chosen.
+
+Three independent mechanisms, no engine behavior change and no new persisted
+state:
+
+- **Write early, budget orientation.** `instructions/planning.md` says a
+  skeleton of the first artifact is written as soon as `openspec status` names
+  its `resolvedOutputPath` and `openspec instructions` returns its template, then
+  extended in place — keyed on the resolved path, because `openspec new change`
+  creates a directory and no artifact file; the domain-surface paragraph
+  budgets orientation against a fallback that is not a read (`openQuestions`),
+  restates the dependency-read rule it must not weaken, and `artifacts` is
+  documented as the plan's file list. `wiki-openspec.md` and
+  `wiki-research.md` each gained a `## Write early` section in their own
+  vocabulary, keyed on the target their update-first sequence names (not on the
+  search), keeping "the update-first sequence decides the path" untouched.
+- **The tool surface travels with the assignment.** `assignment.ts` renders a
+  `## Tool surface` section between the identity lines and `## Objective`
+  (447 B), so it is part of the dynamic envelope on every round: `read`
+  (`offset`/`limit`) and `grep` (with a `path` filter) are the default way to
+  inspect code, `bash` is for focused builds, tests, `openspec` and the
+  repository's git and handoff commands, `codemode` chains a search → filter →
+  summarise pipeline when the run offers it, and independent calls belong in one
+  message. `agent-host/tool-surface.ts` owns those sentences (the
+  `read`/`grep`/`bash`/`codemode` descriptions build their text from the same
+  constants and `assignment.ts` imports the section, so the two surfaces cannot
+  drift), and the host resolves the surface once — before installing the tools —
+  from the run's global pi settings for `codemode` and from the host mode for
+  `grep`: the orchestrator host installs no search extension, so its `read` and
+  `bash` descriptions carry the split without the search tool instead of naming
+  a tool those runs do not have. The sentence names no editing tool, which keeps
+  it true for a read-only run. `DurableHost.toolDescriptionsForTest()` exposes
+  the installed descriptions so a test can assert the registration and the
+  wording agree.
+- **Forwarded scope.** `workflow/runtime/assignment-scope.ts` reads what the
+  engine already recorded: the plan artifact's `artifacts` (newest of
+  `core.plan:planner` / `fusion.consolidate:consolidator`) becomes the
+  implementation assignment's `Plan files:` line, and a verification round gets
+  its `Changed files:` line plus the last recorded findings per verifier role as
+  an untrusted block. Every read is bounded (40 plan paths, 100 changed files or
+  4 KiB of `Changed files:` text with every path gated like a plan path — no
+  absolute path, no `..`, no control characters, ≤200 characters, 8 findings per
+  role, 200 characters per detail, 4 KiB per findings block, the assignment's own
+  512 KiB artifact bound) and every failure — missing,
+  unreadable, oversized, digest-mismatched or undecodable — degrades to no
+  forwarded line rather than a failed launch. Forwarded text is paths and
+  findings only, masked through `redactSecrets`, never file contents or diff
+  text, and no change documents are parsed and no worktree is scanned to find
+  either list. `effect-runner.ts`'s `stepForwardsChangedFiles` keeps triage's own
+  unbounded line exactly as it was. A multi-line forwarded block (findings, prior
+  dialogue, research handoff) is rendered as its own blank-line separated section
+  in `## Inputs`, so its `##` heading stays a heading instead of becoming a
+  bullet.
+
+Measured prompt addition: 447 B per assignment, 846 B in `planning.md`, 485 B in
+`wiki-openspec.md` and 487 B in `wiki-research.md` (once per run each), and a net
+112 B per request across the four tool descriptions (a 51 B sentence on each of
+`read`/`grep`/`bash`, less the 41 B duplicate the `grep` description lost). The
+forwarded lists are bounded, so the worst case is a few kilobytes on a first
+prompt of ~21 kB, well inside `MAX_ASSIGNMENT_BYTES` (96 KiB). The efficiency
+query `explore-tools` reports the per-run exploratory mix by profile
+(`bash`/`read`/`grep` calls, bash share, exploratory result bytes and their
+median); it is additive and no existing query or CSV column changed.
+
 ### Developer-question lifecycle (asynchronous)
 
 The tool call is **not** the answer-delivery channel

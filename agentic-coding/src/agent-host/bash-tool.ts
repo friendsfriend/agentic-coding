@@ -18,6 +18,7 @@ import {
 	CodingTools,
 	type createBashTool,
 } from "@earendil-works/pi-durable/tools";
+import { type ToolSurfaceOptions, toolSurfaceNote } from "./tool-surface.ts";
 
 /** The wall-clock bound a `bash` call gets when the caller passes no `timeout`,
  * in seconds: long enough for a focused build or test command, short enough
@@ -38,6 +39,13 @@ export interface BashBoundOptions {
 	readonly maxTimeoutSeconds?: number;
 	readonly elapsedNoteSeconds?: number;
 }
+
+/** What the coding-tool registration takes: the bounds above plus whether this
+ * run's tool set contains `codemode`, which only changes the `bash`
+ * description's last sentence (tool-surface.ts). */
+export interface BoundedCodingToolsOptions
+	extends BashBoundOptions,
+		ToolSurfaceOptions {}
 
 /** The `timeout` one call runs with. The caller's own value always wins,
  * capped at the ceiling; an invalid value (not finite, or not positive) is
@@ -145,7 +153,7 @@ function observedEnv(env: ExecutionEnv, onTimeout: () => void): ExecutionEnv {
  */
 export function createBoundedBashTool(
 	base: BashTool,
-	options: BashBoundOptions = {},
+	options: BoundedCodingToolsOptions = {},
 ): BashTool {
 	const defaultSeconds =
 		options.defaultTimeoutSeconds ?? BASH_DEFAULT_TIMEOUT_SECONDS;
@@ -157,6 +165,9 @@ export function createBoundedBashTool(
 			base.description,
 			`The call is stopped after ${formatSeconds(defaultSeconds)} when no \`timeout\` is given; a \`timeout\` in seconds overrides that, up to ${formatSeconds(ceiling)}.`,
 			"A stopped call returns the output collected so far and says so. Scope an expensive search to a path inside the project (with -maxdepth/--max-count) instead of the whole filesystem, and run long builds and test suites through env_build/env_test rather than bash.",
+			// The inspection split and the batching rule where the shell is chosen
+			// (efficiency backlog item 14); `codemode` only when this run has it.
+			toolSurfaceNote(options),
 		]
 			.filter((part) => typeof part === "string" && part.length > 0)
 			.join(" "),
@@ -222,7 +233,9 @@ export function createBoundedBashTool(
  * read-only policy, a debug run's explicit list and the orchestrator's list all
  * resolve to this registration wherever they name `bash`.
  */
-export function boundedCodingTools(options: BashBoundOptions = {}): Extension {
+export function boundedCodingTools(
+	options: BoundedCodingToolsOptions = {},
+): Extension {
 	const tools = (CodingTools.tools ?? []).map((tool) =>
 		tool.name === "bash"
 			? createBoundedBashTool(tool as BashTool, options)
