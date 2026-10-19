@@ -96,14 +96,37 @@ export function createStageGuard(
 			return false;
 		}
 		if (policy.access === "writable") return true;
-		if (SAFE_METHODS.has(method)) return true;
-		if (hasReadOnlyException(policy, url, method)) return true;
+		if (readOnlyRefusal(policy, url, method) === undefined) return true;
 		record({
 			code: "stage-read-only",
 			url: sanitizeStageUrl(request.url),
 			method,
 		});
 		return false;
+	};
+}
+
+/**
+ * The read-only refusal of one request, when the stage's policy refuses it.
+ *
+ * One rule, two callers: the browser guard above and `stage_api_request`
+ * (`add-stage-oauth2-auth`), which sends a request the browser never sees. A
+ * second copy of `SAFE_METHODS` or of the exception match is exactly how the two
+ * would drift apart.
+ */
+export function readOnlyRefusal(
+	policy: StageSessionPolicy,
+	url: URL,
+	method: string,
+): StageRefusal | undefined {
+	if (policy.access === "writable") return undefined;
+	const upper = method.toUpperCase();
+	if (SAFE_METHODS.has(upper)) return undefined;
+	if (hasReadOnlyException(policy, url, upper)) return undefined;
+	return {
+		code: "stage-read-only",
+		url: sanitizeStageUrl(url.toString()),
+		method: upper,
 	};
 }
 
