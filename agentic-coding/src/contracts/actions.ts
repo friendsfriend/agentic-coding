@@ -31,6 +31,11 @@ export const workflowStartRequestSchema = Schema.Struct({
 	ticket: Schema.optional(Schema.String),
 	workflowId: Schema.String,
 	task: Schema.optional(Schema.String),
+	/** A task reference instead of inline `task` text (efficiency backlog item
+	 * 21): an OpenSpec change of the target repository, which the server
+	 * resolves into that change's task. Exactly one of `task`/`taskRef` is
+	 * accepted, so a reference can never silently override typed text. */
+	taskRef: Schema.optional(Schema.Struct({ change: Schema.String })),
 	mode: Schema.String,
 	workflowType: Schema.optional(Schema.String),
 	/** A custom-shaped blueprint the server compiles, stores and starts instead
@@ -55,6 +60,13 @@ export const workflowStartRequestSchema = Schema.Struct({
 		{
 			message: () =>
 				"a start request cannot name both a workflowType and a blueprint",
+		},
+	),
+	Schema.filter(
+		(request) => request.task === undefined || request.taskRef === undefined,
+		{
+			message: () =>
+				"a start request cannot carry both a task and a taskRef; send exactly one",
 		},
 	),
 );

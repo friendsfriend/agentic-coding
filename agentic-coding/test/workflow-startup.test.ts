@@ -17,9 +17,13 @@ import {
 	settingsFingerprint,
 } from "../src/workflow/effects.ts";
 import { parseAgentsConfig } from "../src/workflow/profiles.ts";
-import { prepareWorkflowStart } from "../src/workflow/startup.ts";
+import {
+	prepareWorkflowStart,
+	taskReferenceSuffix,
+} from "../src/workflow/startup.ts";
 import {
 	autoRemoveRepoFixtures,
+	commitRepoFixture,
 	createTempRepoFixture,
 } from "./support/git-fixture.ts";
 
@@ -132,6 +136,66 @@ describe("classifier provider pinning", () => {
 });
 
 describe("shared workflow startup", () => {
+	test("a task reference becomes the task text before the start guard runs", () => {
+		// A referenced change passes the same start guard, preset and branch rules
+		// as an inline task: the reference is resolved into text first, so nothing
+		// downstream can tell (or trust) the difference.
+		const repo = repository();
+		const change = path.join(repo, "openspec", "changes", "add-flag");
+		fs.mkdirSync(change, { recursive: true });
+		fs.writeFileSync(
+			path.join(change, "proposal.md"),
+			"# Add the flag\n\n## Why\n\nNo flag yet.\n",
+		);
+		fs.writeFileSync(
+			path.join(change, "tasks.md"),
+			"## 1. Work\n\n- [ ] 1.1 Add the flag\n",
+		);
+		commitRepoFixture(repo, "add the change");
+		const file = path.join(os.tmpdir(), `startup-task-ref-${process.pid}.json`);
+		fs.writeFileSync(file, presetConfig(["core.wiki", "core.research"]));
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			const prepared = prepareWorkflowStart({
+				repo,
+				workflowId: "task-ref",
+				definitionId: "wiki",
+				taskRef: { change: "add-flag" },
+				mode: "checkout",
+				preset: "fixed",
+			});
+			expect(prepared.input.metadata.task).toContain("## Why");
+			expect(prepared.input.metadata.task).toContain("- [ ] 1.1 Add the flag");
+			expect(prepared.taskReference).toEqual({
+				change: "add-flag",
+				taskChars: (prepared.input.metadata.task ?? "").length,
+			});
+			// The answer names the resolved source, so a reference that resolved to
+			// the wrong change is visible instead of silent.
+			expect(taskReferenceSuffix(prepared)).toBe(
+				` — task from change "add-flag", ${(prepared.input.metadata.task ?? "").length} task chars`,
+			);
+			// A reference resolves before the guard, so an unknown change is refused
+			// with its candidates rather than starting a workflow with no task.
+			expect(() =>
+				prepareWorkflowStart({
+					repo,
+					workflowId: "task-ref-missing",
+					definitionId: "wiki",
+					taskRef: { change: "add-flaggs" },
+					mode: "checkout",
+					preset: "fixed",
+				}),
+			).toThrow(/matches no active OpenSpec change/);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(file, { force: true });
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
 	test("normalizes repository-backed startup and pins config provenance", () => {
 		const repo = repository();
 		const file = path.join(repo, "config.json");

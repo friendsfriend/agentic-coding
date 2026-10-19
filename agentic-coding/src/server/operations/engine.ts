@@ -32,7 +32,10 @@ import {
 	researchWorkflowTarget,
 	validateWorkflowId,
 } from "../../workflow/runtime.ts";
-import { prepareWorkflowStart } from "../../workflow/startup.ts";
+import {
+	prepareWorkflowStart,
+	taskReferenceSuffix,
+} from "../../workflow/startup.ts";
 import { prepareBlueprintWorkflowStart } from "./blueprints.ts";
 
 export {
@@ -200,6 +203,9 @@ export function startArgs(input: {
 	ticket: string;
 	workflowId: string;
 	task?: string;
+	/** A task reference instead of inline text: an OpenSpec change of the target
+	 * repository, resolved to the task by the start boundary. */
+	taskRef?: { change: string };
 	mode: string;
 	workflowType?: string;
 	preset?: string;
@@ -242,6 +248,7 @@ export function startArgs(input: {
 		workflowId: validateWorkflowId(input.workflowId),
 		definitionId,
 		task: input.task || undefined,
+		...(input.taskRef ? { taskRef: input.taskRef } : {}),
 		ticket: input.ticket || undefined,
 		...(research
 			? {}
@@ -306,6 +313,7 @@ export async function startWorkflowInProcess(
 		definitionId: args.definitionId,
 		mode: args.mode as "worktree" | "checkout" | undefined,
 		task: args.task,
+		...(args.taskRef ? { taskRef: args.taskRef } : {}),
 		ticket: args.ticket,
 		preset: args.preset,
 		sourceBranch: args.sourceBranch,
@@ -317,7 +325,7 @@ export async function startWorkflowInProcess(
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, args.workflowId);
-	return `Workflow started: ${args.workflowId}`;
+	return `Workflow started: ${args.workflowId}${taskReferenceSuffix(prepared)}`;
 }
 
 /** Everything a blueprint start carries in addition to the ordinary start
@@ -327,6 +335,9 @@ export interface BlueprintStartRequest {
 	workflowId: string;
 	blueprint: unknown;
 	task?: string;
+	/** A task reference instead of inline text; the same resolution and the same
+	 * echo as a built-in start. */
+	taskRef?: { change: string };
 	ticket?: string;
 	mode?: string;
 	preset?: string;
@@ -351,6 +362,7 @@ export async function startBlueprintWorkflowInProcess(
 		workflowId: input.workflowId,
 		blueprint: input.blueprint,
 		task: input.task,
+		...(input.taskRef ? { taskRef: input.taskRef } : {}),
 		ticket: input.ticket,
 		mode: input.mode as "worktree" | "checkout" | undefined,
 		preset: input.preset,
@@ -362,7 +374,7 @@ export async function startBlueprintWorkflowInProcess(
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, input.workflowId);
-	return `Workflow started: ${input.workflowId}`;
+	return `Workflow started: ${input.workflowId}${taskReferenceSuffix(prepared)}`;
 }
 
 /** Start the home-only wiki review without requiring a repository. */

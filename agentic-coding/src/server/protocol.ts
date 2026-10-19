@@ -772,6 +772,9 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "local-changes", domain: "git" },
 	{ kind: "local-diff", domain: "git" },
 	{ kind: "changes", domain: "git" },
+	// The repository's active OpenSpec changes read from its working tree, like
+	// `changes`: same domain, richer (still content-free) rows.
+	{ kind: "openspec-changes", domain: "git" },
 	{ kind: "verifier-findings", domain: "workflow" },
 	{ kind: "verifier-report", domain: "workflow" },
 	{ kind: "developer-review-findings", domain: "workflow" },

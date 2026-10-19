@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
 	type CompactionCeiling,
@@ -173,6 +174,18 @@ function parseRunEnvFile(contents: string): Record<string, string> {
 	return env;
 }
 
+/** The marker the monitor's delivered notes carry as their first line. A note is
+ * the orchestrator's own delivery, not the developer speaking. */
+const MONITOR_NOTE_PREFIX = "[workflow-monitor]";
+
+/** Whether a submitted text is the developer's own message: the monitor's notes
+ * and the abort marker are deliveries, not words the developer wrote, so a
+ * `taskRef.previousMessage` start never sends one. */
+function developerMessage(text: string): boolean {
+	if (text.startsWith(MONITOR_NOTE_PREFIX)) return false;
+	return text.trim() !== DEVELOPER_ABORT_MESSAGE;
+}
+
 function readJevBinding(env: Record<string, string>): DurableRunContext["jev"] {
 	const raw = env.AGENTIC_JEV;
 	if (!raw) return undefined;
@@ -304,6 +317,11 @@ export interface DurableHostOptions {
 export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
+	/** The last developer message of each conversation, in the developer's own
+	 * words: the orchestrator's `taskRef.previousMessage` substitutes it as the
+	 * task instead of re-typing prose that was already sent. Monitor notes and
+	 * abort markers are never recorded here. */
+	private readonly lastDeveloperMessages = new Map<ConversationId, string>();
 	private readonly telemetry = new Map<ConversationId, () => void>();
 	/** The per-run dead-surface monitors, keyed like the telemetry attachments:
 	 * one counter per conversation, dropped with the run. */
@@ -608,6 +626,8 @@ export class DurableHost {
 			runId: input.runId,
 			cwd: input.cwd,
 			env: envVars,
+			lastDeveloperMessage: () =>
+				this.lastDeveloperMessages.get(conversation.id),
 			...(readJevBinding(envVars) ? { jev: readJevBinding(envVars) } : {}),
 		};
 		this.contexts.set(conversation.id, runContext);
@@ -1152,6 +1172,10 @@ export class DurableHost {
 				{ type: "input", content: text, requestId, whenBusy: mode },
 				BACKGROUND_CONTEXT,
 			);
+			// The developer's own message is what a `taskRef.previousMessage` start
+			// substitutes; a monitor note and an abort marker are not.
+			if (developerMessage(text))
+				this.lastDeveloperMessages.set(record.conversationId, text);
 			return {
 				submissionId: String(submission.id),
 				...(reconciled
@@ -1497,6 +1521,7 @@ export class DurableHost {
 			await conversation?.abort(BACKGROUND_CONTEXT);
 			this.runs.delete(runId);
 			this.contexts.delete(record.conversationId);
+			this.lastDeveloperMessages.delete(record.conversationId);
 			this.timings.delete(record.conversationId);
 			// The ceiling's bookkeeping is per conversation and dies with it.
 			this.ceilings.delete(record.conversationId);

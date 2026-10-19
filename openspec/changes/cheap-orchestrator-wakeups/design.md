@@ -287,6 +287,39 @@ own guard, are untouched.
   touches `orchestrator.ts` additively (new tool block, widened parameter
   schemas) and never the `read`/`grep`/`bash` descriptions.
 
+### Assumptions recorded instead of asked
+
+- **"The previous developer message" is the last message the developer submitted
+  in this session, as of the tool call** — normally the message that triggered the
+  turn, because the host records a submission when it is accepted. Monitor notes
+  (`[workflow-monitor] …`) and the abort marker are deliveries, not the developer
+  speaking, so they are never recorded; a session that has only received notes has
+  no previous message and `{ previousMessage: true }` is refused.
+- **An unknown workflow id is recognised from the server's own refusal**
+  (`workflow not found: <id>`, `WorkflowRuntimeError("not-found")`); any other
+  failure still fails the call. Candidates come from the workflow board: the rows
+  of `repo` when it was named, the whole board when it was not — or when that
+  repository has no row at all, because "no candidates" helps nobody.
+- **Only multi-entry answers are named.** A single id resolved in a single
+  repository answers byte for byte what it answered before (with or without the
+  `unchanged` short-circuit); every entry of a multi-entry answer carries its
+  `workflowId`, and so does an unknown-id entry.
+- **The listing is bounded in the process that reads it**: at most 100 rows
+  (sorted by id), a title read from at most 4 KiB of `proposal.md` and cut at 80
+  characters, task progress from at most 64 KiB of `tasks.md`, no other file read,
+  and `openspec/changes/archive` never listed.
+- **The task text is the proposal's `##` sections plus the tasks file's checkbox
+  lines.** The proposal's preamble (its title) is dropped, a `###` subsection
+  belongs to its `##` parent, and a unit that does not fit is dropped whole and
+  named in the `[task truncated: …]` marker rather than cut mid-sentence.
+- **A path reference is normalised before the containment check**: a `..` that
+  still lands on a change under `openspec/changes` resolves to it, while a path
+  that leaves that directory, names the directory itself, names more than one
+  segment below it, or names `archive/**` is refused.
+- **The workflow board is read lazily and at most once per call** (only when a
+  `repo` was omitted or an unknown id needs candidates), so today's explicit
+  `repo` call pays nothing for the new resolution.
+
 ## Migration Plan
 
 No migration. The wire field is optional and additive, the observation kind is

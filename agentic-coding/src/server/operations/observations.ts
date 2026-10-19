@@ -139,6 +139,7 @@ export type DashboardObservation =
 	| { kind: "developer-review-findings"; repo: string; workflowId: string }
 	| { kind: "repair-preview"; repo: string; workflowId: string }
 	| { kind: "changes"; repo: string }
+	| { kind: "openspec-changes"; repo: string }
 	| { kind: "branches"; repo: string }
 	| {
 			kind: "evidence";
@@ -220,6 +221,8 @@ export async function runLocalObservation(
 			return previewWorkflowRepair(observation.repo, observation.workflowId);
 		case "changes":
 			return discoverChanges(observation.repo);
+		case "openspec-changes":
+			return listOpenSpecChanges(observation.repo);
 		case "branches":
 			return discoverBranches(observation.repo);
 		case "evidence":
@@ -2156,6 +2159,114 @@ export function discoverChanges(repo: string): string[] {
 	} catch {
 		return [];
 	}
+}
+
+/** One listing's protocol bound: rows, title length and how much of a change's
+ * file is read at all. The orchestrator asked for existence, progress and a
+ * path — never for a document. */
+const OPENSPEC_CHANGE_LIMIT = 100;
+const OPENSPEC_TITLE_LIMIT = 80;
+const OPENSPEC_TITLE_BYTES = 4096;
+const OPENSPEC_TASKS_BYTES = 64 * 1024;
+
+/** Read at most `bytes` from the start of a file; a missing or unreadable file
+ * answers the empty string, because a change without an artifact is a row with
+ * less information, not a failed listing. */
+function readBounded(file: string, bytes: number): string {
+	let fd: number | undefined;
+	try {
+		fd = openSync(file, "r");
+		const buffer = Buffer.alloc(bytes);
+		const read = readSync(fd, buffer, 0, bytes, 0);
+		return buffer.subarray(0, read).toString("utf8");
+	} catch {
+		return "";
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
+}
+
+/** The first Markdown heading of a proposal, truncated: the one human label a
+ * row carries, instead of the document behind it. */
+function changeTitle(proposal: string): string | undefined {
+	for (const line of proposal.split("\n")) {
+		const match = /^#{1,6}\s+(.+)$/.exec(line.trim());
+		if (match?.[1])
+			return match[1].trim().slice(0, OPENSPEC_TITLE_LIMIT) || undefined;
+	}
+	return undefined;
+}
+
+/** `<checked>/<total>` over a tasks file's checkbox lines, or undefined when
+ * the change has no checkbox at all. */
+function changeProgress(tasks: string): string | undefined {
+	const boxes = tasks
+		.split("\n")
+		.filter((line) => /^\s*[-*]\s*\[[ xX]\]/.test(line));
+	if (boxes.length === 0) return undefined;
+	const checked = boxes.filter((line) =>
+		/^\s*[-*]\s*\[[xX]\]/.test(line),
+	).length;
+	return `${checked}/${boxes.length}`;
+}
+
+/** The non-closed workflows of one repository, keyed by the change they
+ * implement: a change that is already being worked on is marked in the listing
+ * instead of starting a second workflow for it. The recorded change id is the
+ * key, and the workflow id is the fallback for a definition that records
+ * none. */
+function changesInFlight(
+	repo: string,
+): Map<string, { workflowId: string; status: string }> {
+	const found = new Map<string, { workflowId: string; status: string }>();
+	let views: WorkflowView[];
+	try {
+		views = listWorkflowViews(repo);
+	} catch {
+		return found;
+	}
+	for (const view of views) {
+		if (!view.workflowId || view.status === "closed") continue;
+		const key = view.changeId?.trim() || view.workflowId;
+		if (!found.has(key))
+			found.set(key, { workflowId: view.workflowId, status: view.status });
+	}
+	return found;
+}
+
+/** The compact rows of one repository's active OpenSpec changes (efficiency
+ * backlog item 21): change id, title, task progress, the change's
+ * repository-relative path — so the next read is exact instead of guessed —
+ * and the workflow already implementing it, if any. It reads
+ * `openspec/changes` only (never `archive`, never a file outside a change
+ * directory) and answers an empty list for a repository without it. */
+export function listOpenSpecChanges(
+	repo: string,
+): Array<Record<string, unknown>> {
+	const changesDir = join(repo, "openspec", "changes");
+	if (!existsSync(changesDir)) return [];
+	const inFlight = changesInFlight(repo);
+	return discoverChanges(repo)
+		.slice(0, OPENSPEC_CHANGE_LIMIT)
+		.map((changeId) => {
+			const root = join(changesDir, changeId);
+			const title = changeTitle(
+				readBounded(join(root, "proposal.md"), OPENSPEC_TITLE_BYTES),
+			);
+			const tasks = changeProgress(
+				readBounded(join(root, "tasks.md"), OPENSPEC_TASKS_BYTES),
+			);
+			const workflow = inFlight.get(changeId);
+			return {
+				changeId,
+				...(title ? { title } : {}),
+				...(tasks ? { tasks } : {}),
+				path: `openspec/changes/${changeId}`,
+				...(workflow
+					? { workflowId: workflow.workflowId, status: workflow.status }
+					: {}),
+			};
+		});
 }
 
 export function discoverProjects(): Promise<ProjectOption[]> {

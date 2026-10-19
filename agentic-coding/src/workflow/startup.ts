@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
+import { rankSimilarIds } from "../agent-host/orchestrator-resolve.ts";
 import { resolveConfigRoot } from "../config-root.ts";
 import type {
 	StartedBy,
@@ -77,6 +78,10 @@ export interface WorkflowStartRequest {
 	workflowId: string;
 	definitionId: string;
 	task?: string;
+	/** A task *reference* instead of inline text: an active OpenSpec change of
+	 * the target repository, resolved here into the task the start guard, the
+	 * preset and every review already see (efficiency backlog item 21). */
+	taskRef?: { change: string };
 	ticket?: string;
 	mode?: "worktree" | "checkout";
 	preset?: string;
@@ -106,6 +111,19 @@ export interface PreparedWorkflowStart {
 	target: string;
 	config: WorkflowConfig;
 	provenance: ConfigProvenance;
+	/** The change a `taskRef` resolved to and the length of the task assembled
+	 * from it: the start answer echoes both, so a reference that resolved to
+	 * the wrong change is visible instead of silent. */
+	taskReference?: { change: string; taskChars: number };
+}
+
+/** The echo a start answer carries when its task came from a change reference
+ * (`taskReferenceSuffix` of an inline-text start is empty, so its answer is
+ * unchanged). */
+export function taskReferenceSuffix(prepared: PreparedWorkflowStart): string {
+	const reference = prepared.taskReference;
+	if (!reference) return "";
+	return ` — task from change ${JSON.stringify(reference.change)}, ${reference.taskChars} task chars`;
 }
 
 export function validateStart(
@@ -220,6 +238,226 @@ function cleanTreeRefusal(porcelain: string): string {
 			? ` (+${paths.length - shown.length} more)`
 			: "";
 	return `working tree must be clean before workflow start: ${paths.length} dirty path(s): ${shown.join(", ")}${more}`;
+}
+
+/** The bound the orchestrator's `task` parameter already enforces on a task, in
+ * characters. A change reference assembles its task inside the same bound, so a
+ * reference never starts a workflow an inline task could not. */
+export const TASK_CHAR_BOUND = 16_000;
+/** Room the trailing truncation marker may use inside `TASK_CHAR_BOUND`. */
+const TRUNCATION_MARKER_BUDGET = 240;
+/** How many dropped section names the truncation marker still lists. */
+const TRUNCATION_MARKER_SECTIONS = 5;
+
+/** A change reference resolved into the task every later start rule reads. */
+export interface ResolvedTaskReference {
+	/** The active OpenSpec change the reference resolved to. */
+	change: string;
+	/** The task text assembled from that change's `proposal.md` and `tasks.md`. */
+	task: string;
+	/** The `##` sections (or `tasks`) the character bound dropped whole. */
+	truncated: string[];
+}
+
+/** The `openspec/changes` directory of one repository. */
+function changesRoot(repo: string): string {
+	return path.join(repo, "openspec", "changes");
+}
+
+/** The active change ids of a repository: the directories under
+ * `openspec/changes`, without `archive` and without anything that is not a real
+ * directory (so a symlinked entry is never a resolvable change). */
+export function discoverChangeIds(repo: string): string[] {
+	try {
+		return fs
+			.readdirSync(changesRoot(repo), { withFileTypes: true })
+			.filter((entry) => entry.isDirectory() && entry.name !== "archive")
+			.map((entry) => entry.name)
+			.sort();
+	} catch {
+		return [];
+	}
+}
+
+function readTextIfPresent(file: string): string {
+	try {
+		return fs.readFileSync(file, "utf8");
+	} catch {
+		return "";
+	}
+}
+
+/** The whole `##` sections of a proposal, in file order. The preamble before
+ * the first `##` heading (the title) is left out: a task carries the sections
+ * that state the goal, the constraints and the acceptance criteria. */
+function proposalSections(markdown: string): string[] {
+	return markdown
+		.split(/\n(?=##\s)/)
+		.map((chunk) => chunk.trim())
+		.filter((chunk) => /^##\s/.test(chunk));
+}
+
+function sectionName(section: string): string {
+	const first = section.split("\n")[0] ?? "";
+	return first.replace(/^#+\s*/, "").trim() || "section";
+}
+
+/** The checkbox list of a `tasks.md`: whole lines, in file order, so the task
+ * carries the same actionable items the OpenSpec tooling reads. */
+function checkboxLines(markdown: string): string[] {
+	return markdown
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => /^[-*]\s*\[[ xX]\]/.test(line));
+}
+
+/** Assemble the task of a change: its proposal's `##` sections, then its
+ * `tasks.md` checkbox list, capped at `TASK_CHAR_BOUND`. A section (or the
+ * whole checkbox list) that does not fit is dropped *whole* and named in a
+ * trailing marker, so the model sees that a constraint may be missing instead
+ * of a sentence cut in half. */
+function buildTaskText(
+	repo: string,
+	change: string,
+): {
+	task: string;
+	truncated: string[];
+} {
+	const root = path.join(changesRoot(repo), change);
+	const proposal = readTextIfPresent(path.join(root, "proposal.md"));
+	const tasks = readTextIfPresent(path.join(root, "tasks.md"));
+	const limit = TASK_CHAR_BOUND - TRUNCATION_MARKER_BUDGET;
+	const parts: string[] = [];
+	const truncated: string[] = [];
+	let length = 0;
+	for (const section of proposalSections(proposal)) {
+		const next = length === 0 ? section : `\n\n${section}`;
+		if (length + next.length > limit) {
+			truncated.push(sectionName(section));
+			continue;
+		}
+		parts.push(section);
+		length += next.length;
+	}
+	const checklist = checkboxLines(tasks);
+	if (checklist.length > 0) {
+		const text = checklist.join("\n");
+		if (length + text.length + 2 > limit) truncated.push("tasks");
+		else {
+			parts.push(text);
+			length += text.length + 2;
+		}
+	}
+	let body = parts.join("\n\n");
+	if (truncated.length > 0) {
+		const named = truncated.slice(0, TRUNCATION_MARKER_SECTIONS);
+		const more =
+			truncated.length > named.length
+				? ` (+${truncated.length - named.length} more)`
+				: "";
+		body = `${body}\n\n[task truncated: ${named.join(", ")}${more}]`;
+	}
+	return { task: body.slice(0, TASK_CHAR_BOUND), truncated };
+}
+
+function boundedList(values: readonly string[], limit = 5): string {
+	const shown = values.slice(0, limit);
+	const more =
+		values.length > shown.length
+			? ` (+${values.length - shown.length} more)`
+			: "";
+	return `${shown.join(", ")}${more}`;
+}
+
+/** Resolve a task reference into the task text of an active OpenSpec change.
+ *
+ * The reference is either a change id or a path that must land inside this
+ * repository's `openspec/changes/<id>` (one segment, never `..`, never a
+ * symlink escape, never `archive`), an exact id, then a prefix, then a
+ * substring. One match resolves; more than one is refused as ambiguous with the
+ * matches named; none is refused with the closest ids — the same bounded
+ * `rankSimilarIds` answer `workflow_status` gives an unknown workflow id. Every
+ * refusal is one line without file contents. */
+export function resolveTaskReference(
+	repo: string,
+	reference: string,
+): ResolvedTaskReference {
+	const wanted = reference.trim();
+	if (!wanted)
+		throw new Error(
+			"task reference is empty: pass an OpenSpec change id or path, or taskRef.previousMessage",
+		);
+	if (!repo)
+		throw new Error(
+			"a task reference needs a repository: pass repo with taskRef.change",
+		);
+	const ids = discoverChangeIds(repo);
+	if (ids.length === 0)
+		throw new Error(
+			`no active OpenSpec changes in ${repo}: a task reference needs openspec/changes/<id>`,
+		);
+	const unresolved = (wantedId: string) => {
+		const ranked = rankSimilarIds(ids, wantedId);
+		const closest = ranked.candidates.length
+			? `closest: ${ranked.candidates.join(", ")}${ranked.more > 0 ? ` (+${ranked.more} more)` : ""}`
+			: "no similar change id";
+		return `task reference ${JSON.stringify(reference)} matches no active OpenSpec change in ${repo}; ${closest}`;
+	};
+	let change: string | undefined;
+	if (
+		wanted.includes("/") ||
+		wanted.includes("\\") ||
+		path.isAbsolute(wanted)
+	) {
+		const root = changesRoot(repo);
+		const absolute = path.resolve(
+			path.isAbsolute(wanted) ? wanted : path.join(repo, wanted),
+		);
+		const inside = path.relative(root, absolute);
+		if (inside === "" || inside.startsWith("..") || path.isAbsolute(inside))
+			throw new Error(
+				`task reference ${JSON.stringify(reference)} is not a change of ${repo}: it must point inside ${path.join("openspec", "changes")}`,
+			);
+		const segments = inside.split(path.sep).filter((segment) => segment !== "");
+		if (segments[0] === "archive")
+			throw new Error(
+				`task reference ${JSON.stringify(reference)} names an archived change: an archived change is history, not work to start`,
+			);
+		if (segments.length > 1)
+			throw new Error(
+				`task reference ${JSON.stringify(reference)} is not a change directory: it must be ${path.join("openspec", "changes", "<changeId>")}`,
+			);
+		const candidate = segments[0] ?? "";
+		if (!ids.includes(candidate)) throw new Error(unresolved(candidate));
+		// Every listed id is a real directory (a symlinked entry is not one), and
+		// the resolved directory must still live inside the changes root: a path
+		// form can never be used to read a change outside the repository.
+		const realRoot = fs.realpathSync(root);
+		const real = fs.realpathSync(path.join(root, candidate));
+		if (real !== realRoot && !real.startsWith(`${realRoot}${path.sep}`))
+			throw new Error(
+				`task reference ${JSON.stringify(reference)} escapes ${path.join("openspec", "changes")}`,
+			);
+		change = candidate;
+	}
+	if (!change && ids.includes(wanted)) change = wanted;
+	if (!change) {
+		const prefixes = ids.filter((id) => id.startsWith(wanted));
+		const matches =
+			prefixes.length > 0 ? prefixes : ids.filter((id) => id.includes(wanted));
+		if (matches.length > 1)
+			throw new Error(
+				`task reference ${JSON.stringify(reference)} is ambiguous in ${repo}: ${boundedList(matches)}`,
+			);
+		if (matches.length === 1) change = matches[0];
+	}
+	if (!change) throw new Error(unresolved(wanted));
+	const built = buildTaskText(repo, change);
+	if (!built.task.trim())
+		throw new Error(
+			`OpenSpec change ${change} has no proposal.md or tasks.md content in ${repo}`,
+		);
+	return { change, task: built.task, truncated: built.truncated };
 }
 
 /** The verify-only family's start rules: the checkout must be on a named
@@ -530,6 +768,15 @@ function prepareFromContext(
 			route.profile,
 			registry.stepForDefinition(definition, route.stepId).requirements,
 		);
+	// A task reference resolves here, before the start guard below, so the
+	// resolved text is exactly the task every rule validates, the preset pools
+	// and every human review sees: a reference can never take a different path
+	// than inline text (efficiency backlog item 21).
+	const reference =
+		request.taskRef === undefined
+			? undefined
+			: resolveTaskReference(ctx.repo, request.taskRef.change);
+	const task = reference ? reference.task : request.task;
 	const wikiOnly =
 		request.definitionId === "wiki-comments" ||
 		ctx.target === wikiWorkflowTarget();
@@ -564,7 +811,7 @@ function prepareFromContext(
 			ctx.repo,
 			ctx.workflowId,
 			request.definitionId,
-			request.task,
+			task,
 			{
 				sourceBranch: rebaseSource ?? debugBranch,
 				targetBranch: rebaseTarget,
@@ -711,6 +958,14 @@ function prepareFromContext(
 		config,
 		provenance,
 		target: ctx.target,
+		...(reference
+			? {
+					taskReference: {
+						change: reference.change,
+						taskChars: reference.task.length,
+					},
+				}
+			: {}),
 		input: {
 			repo: ctx.target,
 			...(research && ctx.repo ? { repositoryContext: ctx.repo } : {}),
@@ -729,7 +984,7 @@ function prepareFromContext(
 						? ""
 						: (rebaseTarget ?? config.workflow.base_branch),
 				baseCommit,
-				...(request.task?.trim() ? { task: request.task.trim() } : {}),
+				...(task?.trim() ? { task: task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),
 				...(setupApp ? { app: setupApp } : {}),
 				...(request.preset ? { selectedPreset: request.preset } : {}),

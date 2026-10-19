@@ -35,6 +35,9 @@ export interface WorkflowStatusArgs {
 	sinceRevision?: number;
 	/** Include the task text in the compact row. */
 	includeTask?: boolean;
+	/** Name the `workflowId` on the `unchanged` short-circuit: a poll of several
+	 * ids answers one entry per id, so every entry identifies itself. */
+	named?: boolean;
 }
 
 export interface WorkflowListArgs {
@@ -152,6 +155,9 @@ export function compactWorkflowStatus(
 ): unknown {
 	if (args.sinceRevision !== undefined && args.sinceRevision === view.revision)
 		return {
+			// A multi-id poll's entries are otherwise indistinguishable, so a named
+			// short-circuit identifies itself; the single-id answer is unchanged.
+			...(args.named ? { workflowId: view.workflowId } : {}),
 			unchanged: true,
 			revision: view.revision,
 			status: view.status,
