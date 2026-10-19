@@ -56,6 +56,20 @@ const reviewActions = () => [
 	},
 ];
 
+/** The archive step's bounded repair loop (`bound-archive-repair-loop`): one
+ * archive entry gets at most this many `openspec validate`/`archive` attempts —
+ * the entry itself and one structural repair round — and after the last failure
+ * the step hands off `blocked` instead of starting another round. */
+export const ARCHIVE_ATTEMPT_LIMIT = 2;
+/** The step-local counter the budget lives in (`snapshot.loopCounts`), beside
+ * the verification round/fix counters. */
+export const ARCHIVE_ATTEMPT_KEY = "core.archive:attempts";
+/** Set by `onArrive` for an entry the engine transitioned into (the graph entry
+ * or the failed attempt's own self-loop) and consumed by `onEnter`. Absent means
+ * the step was entered without an arrival — a developer `operator.repair` or a
+ * resumed workflow — which starts a fresh pair of attempts. */
+export const ARCHIVE_ARRIVAL_KEY = "core.archive:arrival";
+
 export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.plan-approval": {
 		developerActions: () => [
@@ -189,5 +203,72 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 		validateEvidence: ({ evidence }) =>
 			validateArchiveEvidence(evidence as PreparedStepEvidence),
 		acceptsCommentsContext: true,
+		// The attempt budget is step-local state read and written here: `onArrive`
+		// counts an entry the engine transitioned into, `onEnter` starts a fresh
+		// pair for an entry the engine did not transition into, and
+		// `onAgentComplete` spends the budget on a failed attempt.
+		onArrive: ({ snapshot, edge }) => {
+			snapshot.loopCounts[ARCHIVE_ATTEMPT_KEY] =
+				edge.from === "core.archive"
+					? (snapshot.loopCounts[ARCHIVE_ATTEMPT_KEY] ?? 1) + 1
+					: 1;
+			snapshot.loopCounts[ARCHIVE_ARRIVAL_KEY] = 1;
+			return undefined;
+		},
+		onEnter: ({ snapshot }) => {
+			if (snapshot.loopCounts[ARCHIVE_ARRIVAL_KEY]) {
+				snapshot.loopCounts[ARCHIVE_ARRIVAL_KEY] = 0;
+				return undefined;
+			}
+			snapshot.loopCounts[ARCHIVE_ATTEMPT_KEY] = 1;
+			return undefined;
+		},
+		onAgentComplete: ({ snapshot, outcome }) => {
+			if (outcome !== "blocked") return undefined;
+			const attempt = snapshot.loopCounts[ARCHIVE_ATTEMPT_KEY] ?? 1;
+			// A failed attempt with budget left re-enters this step for the one
+			// structural repair round, and the granted round is the decision worth
+			// reporting. The last attempt returns no completion at all: the handoff's
+			// own `blocked` message parks the workflow with the validator output (bounded
+			// by the handoff contract's 4096-byte `message` field, which refuses an
+			// oversized detail before anything is persisted), and a completion without a
+			// transition would leave the workflow active with no run to finish it.
+			if (attempt >= ARCHIVE_ATTEMPT_LIMIT) return undefined;
+			return {
+				transition: { outcome: "blocked" },
+				telemetry: [
+					{
+						event: "archive.repair_round",
+						payload: {
+							"herdr.archive.failed_attempt": attempt,
+							"herdr.archive.next_attempt": attempt + 1,
+							"herdr.archive.limit": ARCHIVE_ATTEMPT_LIMIT,
+						},
+					},
+				],
+			};
+		},
+		assignmentInputs: ({ snapshot }) => {
+			const attempt = Math.min(
+				snapshot.loopCounts[ARCHIVE_ATTEMPT_KEY] ?? 1,
+				ARCHIVE_ATTEMPT_LIMIT,
+			);
+			return {
+				introLines: [
+					`Archive attempt ${attempt} of ${ARCHIVE_ATTEMPT_LIMIT}: the engine allows at most ${ARCHIVE_ATTEMPT_LIMIT} \`openspec validate\`/\`openspec archive\` attempts for this archive entry, and this run owns attempt ${attempt}.`,
+					attempt > 1
+						? 'This is the structural repair attempt. Reproduce the failure with `openspec validate "$HERDR_CHANGE_ID" --strict`, fix only structural issues (missing `## MODIFIED Requirements`/`## REMOVED Requirements` sections) against the approved proposal, then run the validate/archive pair once. If the failure is not structural, hand off `blocked` with the exact validator output instead of guessing.'
+						: "Run the `openspec validate`/`openspec archive` pair exactly once and do not edit the change documents on this attempt. A failure hands the exact validator output back as this attempt's blocked message — the engine grants one repair attempt, never a third.",
+				],
+				checks: [
+					`at most one \`openspec validate "$HERDR_CHANGE_ID" --strict\` plus one \`openspec archive "$HERDR_CHANGE_ID" --yes\` for attempt ${attempt} of ${ARCHIVE_ATTEMPT_LIMIT}`,
+				],
+			};
+		},
+		handoffNote: [
+			"Finish the archive attempt with one outcome and the command output it produced:",
+			"Hand off `complete` only for an archived change (the engine verifies the archive move itself).",
+			"Hand off `blocked` with the failing validator output verbatim: that message is the developer's whole repair brief. The handoff command refuses a message over 4096 bytes, so hand over at most 4000 characters of the output rather than the whole transcript.",
+		],
 	},
 };

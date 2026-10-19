@@ -47,6 +47,58 @@ describe("ready-made queries", () => {
 		}
 	});
 
+	test("archive-attempts flags the archive runs past the item's call ceiling", () => {
+		const query = queryByName("archive-attempts");
+		expect(query).toBeDefined();
+		const copy = makeTempDir("efficiency-archive-attempts-");
+		const file = path.join(copy.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, file);
+		const db = new Database(file);
+		try {
+			const insertRun = db.query(
+				`INSERT INTO runs (run_id, run_label, workflow_id, step_id, role, status, handoff_outcome, source, source_rank, sources, confidence, preferred)
+				 VALUES (?, ?, 'wf-archive', 'core.archive', 'archive', 'completed', ?, 'test', 1, 'test', 'exact', 1)`,
+			);
+			insertRun.run("run-noisy", "noisy", "blocked");
+			insertRun.run("run-clean", "clean", "complete");
+			const insertCall = db.query(
+				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, call_id, dedupe_key, tool, ok, recording, confidence, preferred)
+				 VALUES (?, ?, 'wf-archive', 'test', 1, ?, ?, 'read', 1, 'exact', 'exact', 1)`,
+			);
+			// 14 calls is past the archive budget's 12-call ceiling; 2 is not.
+			for (let index = 0; index < 14; index += 1)
+				insertCall.run("run-noisy", "noisy", `c${index}`, `noisy-${index}`);
+			for (let index = 0; index < 2; index += 1)
+				insertCall.run("run-clean", "clean", `d${index}`, `clean-${index}`);
+
+			const rows = db
+				.query<
+					{
+						run_id: string;
+						calls: number;
+						over_budget: number;
+						handoff_outcome: string;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			expect(rows.map((row) => row.run_id)).toEqual(["run-noisy", "run-clean"]);
+			expect(rows[0]).toMatchObject({
+				calls: 14,
+				over_budget: 1,
+				handoff_outcome: "blocked",
+			});
+			expect(rows[1]).toMatchObject({
+				calls: 2,
+				over_budget: 0,
+				handoff_outcome: "complete",
+			});
+		} finally {
+			db.close();
+			copy.cleanup();
+		}
+	});
+
 	test("source-recording marks a failure-only generation instead of reporting a failure rate", () => {
 		const query = queryByName("source-recording");
 		expect(query).toBeDefined();

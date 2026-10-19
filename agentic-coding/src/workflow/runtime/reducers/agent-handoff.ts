@@ -10,6 +10,7 @@ import type {
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
+import { redactTelemetryText } from "../../observability.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -229,7 +230,17 @@ export function agentHandoff(
 		transition(db, snapshot, definition, "complete", output, registry, now);
 	else if (command.outcome === "blocked" && !completion) {
 		snapshot.status = "attention-required";
-		snapshot.attention = [command.message ?? `${run.role} blocked`];
+		// The run's own words are the detail — the archive step parks with its
+		// validator output through exactly this field (`bound-archive-repair-loop`)
+		// — with credential shapes redacted before they become persisted attention
+		// text. The size bound is the handoff contract's own: `agentHandoffSchema`
+		// refuses a message over 4096 bytes, so a subprocess transcript can never
+		// arrive here unbounded.
+		snapshot.attention = [
+			command.message === undefined
+				? `${run.role} blocked`
+				: redactTelemetryText(command.message),
+		];
 	} else if (command.outcome === "failed") {
 		expireSiblingRuns(db, snapshot, now);
 		transition(

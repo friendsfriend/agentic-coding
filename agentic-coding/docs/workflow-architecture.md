@@ -780,6 +780,56 @@ They are separate because verification selects a subset at runtime, while its
 candidate list must include every verifier for routing. Other steps derive both
 answers from the same step-owned rule.
 
+### The archive attempt budget (efficiency backlog item 17)
+
+Two archive runs in the measured corpus spent 110 and 58 turns — around 40
+`openspec` invocations and 90 kB of output between them, 23% of that family's
+archive turns — and both ended `attention-required` with an `operator.repair`
+afterwards. The cost was not the archive but the unbounded repair loop: the run
+re-derived, re-validated and re-archived while the developer waited.
+
+`core.archive`'s behavior now spends a **two-attempt budget per archive entry**
+(`ARCHIVE_ATTEMPT_LIMIT` in `src/workflow/steps/lifecycle.ts`):
+
+- one attempt is one `openspec validate --strict` plus one `openspec archive
+  --yes` pair. The assignment states which attempt the run owns and what that
+  attempt may do: attempt 1 repairs nothing, attempt 2 fixes only structural
+  merge markers (a missing `## MODIFIED Requirements`/`## REMOVED Requirements`
+  section) and never rewrites requirement or scenario content;
+- a failed attempt that still has budget hands off `blocked` and the engine
+  re-enters the step: exactly one structural repair round;
+- the **second** failure hands off `blocked` and returns no completion at all,
+  so `runtime/reducers/agent-handoff.ts` parks the workflow
+  `attention-required` with the run's own validator output as the `attention`
+  detail, redacted for known credential shapes (`redactTelemetryText`; the
+  handoff contract's own 4096-byte `message` bound is what keeps a transcript
+  from arriving unbounded), and no third archive run is launched;
+- a developer `operator.repair` or `resume` re-enters the step without an
+  engine arrival, which starts a **fresh pair** of attempts.
+
+The counter is step-local state in `snapshot.loopCounts`
+(`core.archive:attempts`), like the verification round and fix counters, so no
+snapshot schema change is needed. `onArrive` counts an entry the engine
+transitioned into — the graph entry, or the failed attempt's own self-loop — and
+sets the `core.archive:arrival` marker; `onEnter` consumes that marker and
+starts a fresh pair when it is absent, because the engine's `enterStep` without
+a transition is by construction a developer repair, a resume, or a profile
+preset switch, each of which should grant one. A granted repair round is
+reported as the `archive.repair_round` decision event (failed attempt, next
+attempt, limit); the parked attempt needs no event of its own, because the run's
+blocked handoff and the parked workflow are its visible signal.
+
+The graph's `blocked`/`failed` loop edges keep their `maxAttempts: 3` bound:
+the second blocked attempt now never reaches them, and the `failed` outcome
+keeps the retry it always had. The happy path is untouched — a change that
+archives on its first pair completes through the same evidence check
+(`validateArchiveEvidence`) and the same `complete` transition.
+
+The `archive-attempts` efficiency query (`scripts/efficiency/lib/queries.ts`)
+lists archive runs per snapshot with turns, calls, the handoff outcome and the
+item's 12-call ceiling flag, so the bound is verified from the corpus rather
+than from this document.
+
 ## Context carry-over precedence
 
 `step.context` on arrival is resolved by one ordered rule list in

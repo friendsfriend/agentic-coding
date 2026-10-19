@@ -1453,6 +1453,40 @@ FROM recorded r
 GROUP BY 1
 ORDER BY era, per_1000 DESC`,
 	},
+	{
+		name: "archive-attempts",
+		summary:
+			"Archive runs per snapshot, busiest first, with the calls each one spent and whether it passed the archive budget's 12-call ceiling (`bound-archive-repair-loop`). One accepted entry plus at most one repair round is the expected shape; a snapshot with several archive runs over the ceiling is the repair loop the archive step now bounds.",
+		example:
+			"bun run scripts/efficiency/analyze.ts archive-attempts --dataset ~/ev/dataset-2026 --limit 50",
+		limitable: true,
+		limit: 200,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"snapshot",
+			"role",
+			"status",
+			"handoff_outcome",
+			"turns",
+			"calls",
+			"over_budget",
+		],
+		sql: `SELECT
+	r.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	r.source AS snapshot,
+	COALESCE(r.role, '(unset)') AS role,
+	COALESCE(r.status, '(unset)') AS status,
+	COALESCE(r.handoff_outcome, '(none)') AS handoff_outcome,
+	(SELECT COUNT(*) FROM v_turns t WHERE t.run_id = r.run_id) AS turns,
+	(SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = r.run_id) AS calls,
+	CASE WHEN (SELECT COUNT(*) FROM v_tool_calls c WHERE c.run_id = r.run_id) > 12
+		THEN 1 ELSE 0 END AS over_budget
+FROM v_runs r
+WHERE r.role = 'archive' OR r.step_id = 'core.archive'
+ORDER BY calls DESC, turns DESC`,
+	},
 ];
 
 export function queryByName(name: string): AnalysisQuery | undefined {
