@@ -193,9 +193,27 @@ function provider(
 	return { ...fake, configDir, ...roleOf(configDir) };
 }
 
-/** The value one PKCE secret currently carries, by its redaction name. */
-function pkceValue(name: string): string | undefined {
-	return pkceSecrets().find((secret) => secret.name === name)?.value;
+/** Every value one PKCE secret currently carries, by its redaction name. A name
+ * can have several live values — a state outlives the flow that registered it —
+ * so presence is asserted on the list rather than on one lookup. */
+function pkceValues(name: string): string[] {
+	return pkceSecrets()
+		.filter((secret) => secret.name === name)
+		.map((secret) => secret.value);
+}
+
+/** The one live verifier: exactly one login is open at a time in this file, and
+ * a flow forgets its verifier on close. */
+function liveVerifier(): string | undefined {
+	return pkceValues("stage-oauth2-code-verifier").at(-1);
+}
+
+/** The `state` a login put in its own authorization URL: what the provider would
+ * send back, read from the URL the window opens. */
+function stateOf(flow: { readonly authorizationUrl: string }): string {
+	const state = new URL(flow.authorizationUrl).searchParams.get("state");
+	if (state === null) throw new Error("the authorization URL carries no state");
+	return state;
 }
 
 /** Answer the receiver's callback the way the provider's redirect would. */
@@ -286,6 +304,15 @@ describe("the single-use loopback receiver", () => {
 		expect(receiver.redirectUri).toBe(
 			`http://127.0.0.1:${new URL(receiver.redirectUri).port}${LOOPBACK_CALLBACK_PATH}`,
 		);
+		// The listener is loopback and nothing else, and it says so: a wildcard bind
+		// would expose a callback that carries an authorization code, and a redirect
+		// URI that did not name the bound address would send the provider where
+		// nothing listens (TQ-006, QUALITY-004).
+		expect(receiver.address).toBe("127.0.0.1");
+		expect(new URL(receiver.redirectUri).port).toBe(String(receiver.port));
+		expect(receiver.redirectUri).toBe(
+			`http://${receiver.address}:${receiver.port}${LOOPBACK_CALLBACK_PATH}`,
+		);
 		const answer = await callBack(receiver.origin, {
 			code: AUTHORIZATION_CODE,
 			state,
@@ -327,6 +354,36 @@ describe("the single-use loopback receiver", () => {
 		expect(failure.code).toBe("login-failed");
 		expect(failure.providerCode).toBe("state_mismatch");
 		expect(failure.message).not.toContain(AUTHORIZATION_CODE);
+	});
+
+	test("a state of the right length but the wrong value is refused like any other", async () => {
+		const state = createAuthorizationState();
+		const receiver = await startLoopbackReceiver({ state });
+		receivers.push(receiver);
+		// A forgery that a length check would accept: the same number of characters
+		// as the real state, differing in the last one. The comparison is the whole
+		// value, not its shape.
+		const forged = `${state.slice(0, -1)}${state.at(-1) === "A" ? "B" : "A"}`;
+		expect(forged).toHaveLength(state.length);
+		const refused = receiver.code.catch((error: unknown) => error);
+
+		const answer = await callBack(receiver.origin, {
+			code: AUTHORIZATION_CODE,
+			state: forged,
+		});
+		expect(answer.status).toBe(400);
+		expect(await answer.text()).not.toContain(AUTHORIZATION_CODE);
+		const failure = (await refused) as StageAuthError;
+		expect(failure.providerCode).toBe("state_mismatch");
+
+		// The login is over: a callback that does not carry this login's own state
+		// ends it rather than leaving a receiver listening for a state a forgery
+		// already answered (the comparison is the whole value, in constant time).
+		const late = await callBack(receiver.origin, {
+			code: AUTHORIZATION_CODE,
+			state,
+		}).catch(() => undefined);
+		expect(late?.status ?? 0).not.toBe(200);
 	});
 
 	test("an error the provider passed back is a bounded, value-free code", async () => {
@@ -389,12 +446,12 @@ describe("the login a flow runs", () => {
 			fetch: fakeEndpointFetch(fake.endpoint),
 		});
 		try {
-			const verifier = pkceValue("stage-oauth2-code-verifier");
-			const state = pkceValue("stage-oauth2-state");
+			const verifier = liveVerifier();
+			const state = stateOf(flow);
 			expect(verifier).toBeDefined();
 			expect(state).toBeDefined();
-			if (verifier === undefined || state === undefined)
-				throw new Error("the flow registered no PKCE values");
+			if (verifier === undefined)
+				throw new Error("the flow registered no verifier");
 			expect(flow.poll().state).toBe("pending");
 
 			// The authorization URL the window opens is this flow's own request.
@@ -459,8 +516,7 @@ describe("the login a flow runs", () => {
 			fetch: fakeEndpointFetch(fake.endpoint),
 		});
 		try {
-			const state = pkceValue("stage-oauth2-state");
-			if (state === undefined) throw new Error("no state was registered");
+			const state = stateOf(flow);
 			const answer = await callBack(flow.redirectOrigin, {
 				code: AUTHORIZATION_CODE,
 				state,
@@ -495,9 +551,8 @@ describe("the login a flow runs", () => {
 			fetch: fakeEndpointFetch(fake.endpoint),
 		});
 		try {
-			const verifier = pkceValue("stage-oauth2-code-verifier");
-			const state = pkceValue("stage-oauth2-state");
-			if (state === undefined) throw new Error("no state was registered");
+			const verifier = liveVerifier();
+			const state = stateOf(flow);
 			await callBack(flow.redirectOrigin, { code: AUTHORIZATION_CODE, state });
 			await settle(flow.poll);
 
@@ -517,33 +572,36 @@ describe("the login a flow runs", () => {
 		}
 	});
 
-	test("the PKCE values are scrubbed while the login runs, and the code outlives it", async () => {
+	test("the verifier is spent with the flow, while the state and the code outlive it", async () => {
 		const fake = provider(() => tokenAnswer());
 		const store = new StageTokenStore();
 		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
 			fetch: fakeEndpointFetch(fake.endpoint),
 		});
-		const verifier = pkceValue("stage-oauth2-code-verifier");
-		const state = pkceValue("stage-oauth2-state");
-		expect(verifier).toBeDefined();
-		expect(state).toBeDefined();
+		const verifier = liveVerifier();
+		const state = stateOf(flow);
+		if (verifier === undefined) throw new Error("no verifier was registered");
 		try {
-			const live = pkceValue("stage-oauth2-state");
-			if (live === undefined) throw new Error("no state was registered");
-			await callBack(flow.redirectOrigin, {
+			// While the login runs, what the provider's redirect carries is scrubbed.
+			expect(pkceValues("stage-oauth2-code-verifier")).toContain(verifier);
+			expect(pkceValues("stage-oauth2-state")).toContain(state);
+			const answered = await callBack(flow.redirectOrigin, {
 				code: AUTHORIZATION_CODE,
-				state: live,
+				state,
 			});
+			expect(answered.status).toBe(200);
 			await settle(flow.poll);
 		} finally {
 			flow.close();
 		}
-		// The verifier's one chance is spent with the flow, but the code a receiver
-		// took stays in the redaction set: a replay of the callback URL is scrubbed
-		// too.
-		expect(pkceValue("stage-oauth2-code-verifier")).not.toBe(verifier);
-		expect(pkceValue("stage-oauth2-state")).not.toBe(state);
-		expect(pkceValue("stage-oauth2-authorization-code")).toBe(
+		// The verifier's one chance is spent with the flow that owned it. `state` and
+		// the code stay registered: a hand-off that ends without bringing the window
+		// back to the application leaves it standing on the provider's authorization
+		// URL, which carries `state=`, and a replay of the callback URL carries both
+		// (OAS-002).
+		expect(pkceValues("stage-oauth2-code-verifier")).not.toContain(verifier);
+		expect(pkceValues("stage-oauth2-state")).toContain(state);
+		expect(pkceValues("stage-oauth2-authorization-code")).toContain(
 			AUTHORIZATION_CODE,
 		);
 	});

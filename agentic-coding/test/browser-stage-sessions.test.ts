@@ -2494,9 +2494,27 @@ function codeConfigRoot(
 	return configDir;
 }
 
-/** One PKCE value the server currently keeps out of every reply. */
+/** Every value one PKCE secret currently carries. The list rather than one
+ * lookup: a state outlives the flow that registered it, so a count is how a
+ * leaked flow is told from a closed one. */
+function pkceValues(name: string): string[] {
+	return pkceSecrets()
+		.filter((secret) => secret.name === name)
+		.map((secret) => secret.value);
+}
+
+/** One PKCE value the server currently keeps out of every reply. A login forgets
+ * its verifier when its flow closes, so at most one is live here. */
 function pkce(name: string): string | undefined {
-	return pkceSecrets().find((secret) => secret.name === name)?.value;
+	return pkceValues(name).at(-1);
+}
+
+/** The `state` of the login whose authorization URL the window is standing on:
+ * what the provider's redirect would send back. */
+function stateOf(session: BrowserSession): string {
+	const state = new URL(session.url).searchParams.get("state");
+	if (state === null) throw new Error("the provider URL carries no state");
+	return state;
 }
 
 /** The loopback URL the provider would redirect to. */
@@ -2530,7 +2548,7 @@ describe("the authorization code hand-off", () => {
 			});
 			expect(handoff.status).toBe(200);
 			expect(handoff.value.login).toBe("needs-user");
-			expect(handoff.value.reason).toBe("unautomatable-step");
+			expect(handoff.value.reason).toBe("user-identity");
 			expect(typeof handoff.value.deadlineAt).toBe("string");
 			// The answer carries the hand-off's status and nothing of the flow: no
 			// challenge, no `state`, no URL.
@@ -2544,6 +2562,19 @@ describe("the authorization code hand-off", () => {
 			await waitForUrl(session, "oauth2/authorize");
 			expect(session.url).toContain(`${IDP_URL}oauth2/authorize`);
 			expect(session.url).toContain("code_challenge_method=S256");
+			const state = stateOf(session);
+			// The banner this window carries is the login's own: it says which role is
+			// signing in and why, and it offers no *Done* the developer could choose,
+			// because this login ends when the provider has called back — not when
+			// someone says so (USAB-201).
+			const banner = driver.initScripts.at(-1)?.[0] ?? "";
+			expect(banner).toContain("data-ac-handoff-banner");
+			expect(banner).toContain(
+				"this role signs in with your own identity at the provider",
+			);
+			expect(banner).not.toContain("choose Done");
+			expect(banner).not.toContain(state);
+			expect(banner).not.toContain("code_challenge");
 			const origin = deps.pool.handoffRedirect(session);
 			expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 			if (origin === undefined) throw new Error("no loopback allowance");
@@ -2558,9 +2589,8 @@ describe("the authorization code hand-off", () => {
 				}),
 			).toBe(true);
 
-			const state = pkce("stage-oauth2-state");
 			const verifier = pkce("stage-oauth2-code-verifier");
-			if (state === undefined) throw new Error("no state was registered");
+			expect(verifier).toBeDefined();
 			const answered = await fetch(
 				callbackUrl(origin, {
 					code: CODE_AUTHORIZATION_CODE,
@@ -2696,6 +2726,343 @@ describe("the authorization code hand-off", () => {
 				callbackUrl(origin, { code: "late", state: "late" }),
 			).catch(() => undefined);
 			expect(late).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("the code, the state and the verifier never survive a reply the page produced", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			// Two sessions: the login runs on the stage's, while the page-produced line
+			// is read back through one the developer's sign-in does not hold. The
+			// redaction set is the process's, so a reply on either one is scrubbed
+			// (TQ-002).
+			const deps = build(
+				codeConfigRoot(idp.endpoint, { maxSessions: 2 }),
+				driver,
+			);
+			await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				session: "plain",
+				url: "https://plain.example.test/",
+			});
+			const plain = driver.lastPage();
+			if (plain === undefined) throw new Error("no page was opened");
+			await openStage(deps);
+			await call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" });
+			const session = sessionOf(deps, "default");
+			await waitForUrl(session, "oauth2/authorize");
+			const state = stateOf(session);
+			const verifier = pkce("stage-oauth2-code-verifier");
+			if (verifier === undefined) throw new Error("no verifier was registered");
+			// A page that logs its own configuration is the usual source of a leaked
+			// value. The verifier is put in the line to prove the set covers it, though
+			// a page never sees one: it travels in the exchange's own body.
+			plain.emitConsole({
+				type: "error",
+				text: `verifier=${verifier} state=${state}`,
+			});
+			const live = await call(deps, AGENT_BROWSER_CONSOLE_PATH, {
+				session: "plain",
+			});
+			expect(live.status).toBe(200);
+			expect(live.text).toContain("verifier=");
+			expect(live.text).not.toContain(verifier);
+			expect(live.text).not.toContain(state);
+			expect(live.text).toContain("redacted");
+
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			const callback = callbackUrl(origin, {
+				code: CODE_AUTHORIZATION_CODE,
+				state,
+			});
+			expect(await fetch(callback).then((answer) => answer.status)).toBe(200);
+			// The code is the one value the provider's redirect carries and could replay,
+			// so it stays scrubbed for the rest of the process.
+			plain.emitConsole({ type: "error", text: `replayed ${callback}` });
+			const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(waited.value.login).toBe("ok");
+			expect(waited.text).not.toContain(CODE_AUTHORIZATION_CODE);
+			expect(waited.text).not.toContain(CODE_ACCESS_TOKEN);
+			const after = await call(deps, AGENT_BROWSER_CONSOLE_PATH, {
+				session: "plain",
+			});
+			expect(after.text).toContain("replayed");
+			expect(after.text).not.toContain(CODE_AUTHORIZATION_CODE);
+			expect(after.text).not.toContain(CODE_CLIENT_SECRET);
+			expect(after.text).toContain("redacted");
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a wait the developer ends by closing the window aborts the login and releases the receiver", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			await call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" });
+			const session = sessionOf(deps, "default");
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			const waiting = call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			for (let i = 0; i < 400; i++) {
+				if (driver.performed.includes("bringToFront")) break;
+				await Bun.sleep(5);
+			}
+			driver.lastPage()?.close("user");
+
+			const waited = await waiting;
+			expect(waited.status).toBe(409);
+			expect(waited.value.code).toBe("login-handoff-aborted");
+			expect(waited.value.by).toBe("window-closed");
+			// An abort ends the login: no allowance, no listener, no exchange, and no
+			// value in the answer (task 2.1).
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			expect(pkceValues("stage-oauth2-code-verifier")).toHaveLength(0);
+			expect(
+				await fetch(callbackUrl(origin, { code: "late", state: "late" })).catch(
+					() => undefined,
+				),
+			).toBeUndefined();
+			expect(idp.calls).toHaveLength(0);
+			expect(waited.text).not.toContain(CODE_CLIENT_SECRET);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("Done on a login the provider completes is answered as unverified, and it closes the receiver", async () => {
+		const idp = codeTokenEndpoint();
+		const timers: Array<{ run: () => void; ms: number }> = [];
+		const records: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+			// The developer chose *Done*: for a completion-driven login that is not a
+			// verification, and it must not be reported as one (TQ-003).
+			answer: async () => "done" as const,
+			close: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver, {
+				attention,
+				schedule: (run, ms) => {
+					timers.push({ run, ms });
+					return () => {};
+				},
+			});
+			await openStage(deps);
+			await call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" });
+			const session = sessionOf(deps, "default");
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			const waiting = call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 600,
+			});
+			let settled = false;
+			void waiting.then(
+				() => {
+					settled = true;
+				},
+				() => {
+					settled = true;
+				},
+			);
+			for (let i = 0; i < 40 && !settled; i++) {
+				for (const timer of timers.splice(0, timers.length)) {
+					if (timer.ms !== HANDOFF_TICK_MS) {
+						timers.push(timer);
+						continue;
+					}
+					deps.now?.();
+					timer.run();
+				}
+				await Bun.sleep(1);
+			}
+			expect(settled).toBe(true);
+			const waited = await waiting;
+			expect(waited.status).toBe(409);
+			expect(waited.value.code).toBe("login-handoff-unverified");
+			// *Done* ended the login without a token: the receiver goes, and nothing
+			// was exchanged.
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			expect(idp.calls).toHaveLength(0);
+			expect(
+				await fetch(callbackUrl(origin, { code: "late", state: "late" })).catch(
+					() => undefined,
+				),
+			).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("the attention record names the loopback origin in words and never the URL", async () => {
+		const idp = codeTokenEndpoint();
+		const records: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+			answer: async () => undefined,
+			close: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver, { attention });
+			await openStage(deps);
+			await call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" });
+			const session = sessionOf(deps, "default");
+			await waitForUrl(session, "oauth2/authorize");
+			const state = stateOf(session);
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			const context = String(records[0]?.context);
+			// The record says where to sign in as an origin and nothing more: the
+			// provider's own, never the authorization URL's path or query, never
+			// `state`, and never the loopback receiver the developer never visits
+			// (TQ-004).
+			expect(context).toContain("login.example.test");
+			expect(context).toContain("own identity");
+			expect(context).not.toContain("oauth2/authorize");
+			expect(context).not.toContain("?");
+			expect(context).not.toContain("127.0.0.1");
+			expect(context).not.toContain(state);
+			expect(context).not.toContain("code_challenge");
+			expect(context).toContain("The hand-off expires at");
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("two logins that overlap leave exactly one receiver, and the login still completes", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			// Two calls racing on one session: each opens a receiver before either
+			// owns the hand-off, and the one that loses has to close its own without
+			// touching the winner's (CONC-001, CONC-002, CONC-003, PERF-001).
+			const [first, second] = await Promise.all([
+				call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" }),
+				call(deps, AGENT_BROWSER_LOGIN_PATH, { app: "web", role: "user" }),
+			]);
+			expect(first.value.login).toBe("needs-user");
+			expect(second.value.login).toBe("needs-user");
+			// One hand-off, not two: both answers describe the same queued login.
+			expect(second.value.handoffId).toBe(first.value.handoffId);
+			const session = sessionOf(deps, "default");
+			// Exactly one verifier is live: the loser's flow was closed, so exactly one
+			// receiver is listening and exactly one allowance remains.
+			expect(pkceValues("stage-oauth2-code-verifier")).toHaveLength(1);
+			const origin = deps.pool.handoffRedirect(session);
+			if (origin === undefined) throw new Error("no loopback allowance");
+			await waitForUrl(session, "oauth2/authorize");
+			const answered = await fetch(
+				callbackUrl(origin, {
+					code: CODE_AUTHORIZATION_CODE,
+					state: stateOf(session),
+				}),
+			);
+			expect(answered.status).toBe(200);
+			const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(waited.value.login).toBe("ok");
+			expect(idp.calls).toHaveLength(1);
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a role whose client id is not set is refused before a window or a receiver exists", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const configDir = codeConfigRoot(idp.endpoint);
+			fs.writeFileSync(path.join(configDir, ".env"), "\n");
+			const driver = createFakeDriver();
+			const deps = build(configDir, driver);
+			await openStage(deps);
+			const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			// The mode `stage_info` reports is `unavailable` for this role, and the
+			// refusal names the gap: no window, no banner, no receiver, no request.
+			expect(refused.status).toBe(409);
+			expect(refused.value.code).toBe("credential-missing");
+			expect(String(refused.value.message)).toContain("client id");
+			expect(driver.launchOptions).toEqual([{ headless: true }]);
+			expect(driver.performed).toEqual([]);
+			expect(
+				deps.pool.handoffRedirect(sessionOf(deps, "default")),
+			).toBeUndefined();
+			expect(pkceValues("stage-oauth2-code-verifier")).toHaveLength(0);
+			expect(idp.calls).toHaveLength(0);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("an allowance is released by its own origin, and never takes another's", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			const session = sessionOf(deps, "default");
+			// Two flows that overlap both hold an allowance, and the one that loses the
+			// hand-off releases only its own (CONC-003).
+			deps.pool.allowHandoffRedirect(session, "http://127.0.0.1:1");
+			deps.pool.allowHandoffRedirect(session, "http://127.0.0.1:2");
+			deps.pool.clearHandoffRedirect(session, "http://127.0.0.1:2");
+
+			expect(deps.pool.handoffRedirect(session)).toBe("http://127.0.0.1:1");
+			const guard = contextOf(deps).runGuard({
+				url: "http://127.0.0.1:1/callback?code=x&state=y",
+				method: "GET",
+				resourceType: "document",
+				isMainFrameNavigation: true,
+			});
+			expect(guard).toBe(true);
+			expect(
+				contextOf(deps).runGuard({
+					url: "http://127.0.0.1:2/callback?code=x&state=y",
+					method: "GET",
+					resourceType: "document",
+					isMainFrameNavigation: true,
+				}),
+			).toBe(false);
+			// Releasing the last one leaves the session exactly as it was.
+			deps.pool.clearHandoffRedirect(session, "http://127.0.0.1:1");
+			expect(deps.pool.handoffRedirect(session)).toBeUndefined();
 			await deps.pool.closeAll();
 		} finally {
 			idp.stop();

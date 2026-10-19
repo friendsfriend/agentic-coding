@@ -54,6 +54,7 @@ import {
 import type { EnvironmentInstanceController } from "../runtime/instances.ts";
 import {
 	readStageCatalog,
+	roleLoginMode,
 	type StageCatalog,
 	type StageEntry,
 	stageByIdent,
@@ -1120,7 +1121,27 @@ async function stageLogin(
 		// The one grant that needs a person is the hand-off's
 		// (`add-stage-oauth2-code-pkce`): PKCE, a single-use loopback receiver and
 		// the developer's sign-in in the window the hand-off already opens.
-		if (roleView.grant === "authorization_code")
+		if (roleView.grant === "authorization_code") {
+			// The login mode is the value `stage_info` reports (`roleLoginMode`), so the
+			// plan an agent reads and this call can never disagree (D3): a policy that
+			// forbids the window and a client id that is not set are both refusals
+			// *here*, before a window, an attention record or a receiver exists.
+			const mode = roleLoginMode({
+				recipeKind: roleView.loginKind,
+				grant: roleView.grant,
+				credentialStatus: roleView.credentialStatus,
+				interactiveLogin: entry.interactiveLogin,
+			});
+			if (mode !== "handoff")
+				throw new BrowserSessionError(
+					entry.interactiveLogin === "never"
+						? "login-user-unavailable"
+						: "credential-missing",
+					entry.interactiveLogin === "never"
+						? `${body.app}.${body.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`
+						: `${body.app}.${body.role} signs in with the authorization_code grant, which needs a client id; stage_info names the unset variable`,
+					409,
+				);
 			return await startAuthorizationCodeHandoff({
 				deps,
 				session,
@@ -1130,6 +1151,7 @@ async function stageLogin(
 				appUrl: appView?.url ?? entry.stage.apps[body.app]?.url ?? "",
 				role: body.role,
 			});
+		}
 		try {
 			await roleToken(
 				{
@@ -1304,7 +1326,7 @@ async function startHandoff(input: {
 	readonly appLabel: string;
 	readonly appUrl: string;
 	readonly role: string;
-	readonly reason: "no-credentials" | "unautomatable-step";
+	readonly reason: "no-credentials" | "unautomatable-step" | "user-identity";
 	readonly recipe?: StageLoginRecipe;
 }): Promise<unknown> {
 	const { deps, session, entry } = input;
@@ -1377,15 +1399,10 @@ async function startAuthorizationCodeHandoff(input: {
 }): Promise<unknown> {
 	const { deps, session, entry } = input;
 	const label = entry.stage.displayName;
-	// The policy decides before anything is opened: a configuration that forbids
-	// the window refuses the login instead of creating a hand-off nobody can
-	// complete (`interactiveLogin: "never"`, D3).
-	if (entry.interactiveLogin === "never")
-		throw new BrowserSessionError(
-			"login-user-unavailable",
-			`${input.appKey}.${input.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`,
-			409,
-		);
+	// The caller has already checked the role's login mode — a policy that forbids
+	// the window, or a client id that is not set, was refused before this function
+	// was reached — so everything from here on opens machinery that a `handoff`
+	// can complete.
 	const handoff = requireHandoff(deps);
 	let flow: Awaited<ReturnType<typeof beginAuthorizationCodeLogin>>;
 	try {
@@ -1416,18 +1433,21 @@ async function startAuthorizationCodeHandoff(input: {
 	// again on every ending path.
 	deps.pool.allowHandoffRedirect(session, flow.redirectOrigin);
 	const release = (): void => {
-		deps.pool.clearHandoffRedirect(session);
+		deps.pool.clearHandoffRedirect(session, flow.redirectOrigin);
 		flow.close();
 	};
 	try {
-		const status = await handoff.request({
+		const { status, owned } = await handoff.requestOwned({
 			session,
 			stage: entry.ident,
 			stageLabel: label,
 			app: input.appKey,
 			appLabel: input.appLabel,
 			role: input.role,
-			reason: "unautomatable-step",
+			// Nothing is missing and no step failed: the identity at the provider is
+			// the developer's own, which is what this role is configured for
+			// (USAB-202).
+			reason: "user-identity",
 			loginUrl: flow.authorizationUrl,
 			recipe: { kind: "interactive" },
 			maxSeconds: entry.limits.maxLoginHandoffSeconds,
@@ -1443,6 +1463,14 @@ async function startAuthorizationCodeHandoff(input: {
 				},
 			},
 		});
+		if (!owned) {
+			// Another call's hand-off is the pending one: this call's receiver and
+			// allowance are nobody's, so they go now instead of listening on until the
+			// other hand-off ends (PERF-001). Its allowance is its own origin, so the
+			// hand-off that did take the login keeps its own.
+			release();
+			return { session: session.name, login: "needs-user", ...status };
+		}
 		return { session: session.name, login: "needs-user", ...status };
 	} catch (error) {
 		release();

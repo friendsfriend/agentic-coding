@@ -310,7 +310,7 @@ async function readBoundedJson(
 ): Promise<Record<string, unknown> | undefined> {
 	let text: string;
 	try {
-		text = (await response.text()).slice(0, MAX_TOKEN_RESPONSE_BYTES);
+		text = await readBoundedText(response, MAX_TOKEN_RESPONSE_BYTES);
 	} catch {
 		return undefined;
 	}
@@ -320,6 +320,51 @@ async function readBoundedJson(
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Read at most `cap` bytes of a body and stop there.
+ *
+ * A token endpoint is a third party, and under the code grant it answers the
+ * request that carried the authorization code and the PKCE verifier: an
+ * unbounded `response.text()` would grow this process's heap to whatever that
+ * answer weighs before the cap applied to the string (SEC-002). A declared
+ * `content-length` above the cap is refused without reading a byte, and a body
+ * without one is read through its reader, which is cancelled as soon as the
+ * accumulated bytes pass the cap.
+ */
+async function readBoundedText(
+	response: Response,
+	cap: number,
+): Promise<string> {
+	const declared = Number(response.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > cap) return "";
+	const body = response.body;
+	if (body === null) return (await response.text()).slice(0, cap);
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (value === undefined) continue;
+			total += value.byteLength;
+			if (total > cap) {
+				chunks.push(value.subarray(0, value.byteLength - (total - cap)));
+				await reader.cancel().catch(() => {});
+				break;
+			}
+			chunks.push(value);
+		}
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {
+			// A cancelled reader is already released; nothing to do.
+		}
+	}
+	return Buffer.concat(chunks).toString("utf8");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -478,16 +523,23 @@ export class StageTokenStore {
 	async token(
 		key: OAuth2TokenKey,
 		acquire: () => Promise<OAuth2Token>,
+		options: { readonly exclusive?: boolean } = {},
 	): Promise<OAuth2Token> {
 		const id = tokenKey(key);
 		this.ids.set(id, key);
-		const existing = this.entries.get(id);
-		if (existing !== undefined && !this.stale(existing.token))
-			return existing.token;
-		const failed = this.recentFailure(id);
-		if (failed !== undefined) throw failed;
-		const inFlight = this.pending.get(id);
-		if (inFlight !== undefined) return await inFlight;
+		// `exclusive` is for the code grant's exchange: that acquisition is one
+		// person's own sign-in, with its own authorization code, so it must neither
+		// join another acquisition of the same key nor be refused by a refusal another
+		// login remembered (CONC-002).
+		if (options.exclusive !== true) {
+			const existing = this.entries.get(id);
+			if (existing !== undefined && !this.stale(existing.token))
+				return existing.token;
+			const failed = this.recentFailure(id);
+			if (failed !== undefined) throw failed;
+			const inFlight = this.pending.get(id);
+			if (inFlight !== undefined) return await inFlight;
+		}
 		const generation = this.generationOf(id);
 		let promise: Promise<OAuth2Token> | undefined;
 		const acquisition = (async () => {
@@ -851,17 +903,6 @@ export async function roleTokenFrom(
 	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
 ): Promise<OAuth2Token> {
 	const { input, key } = resolved;
-	// The code grant is obtained by `stage_login`'s hand-off, never by a request
-	// that merely needs a token: a page load, a `stage_api_request` or a
-	// `stage_token_info` must not start an interactive sign-in. The check is
-	// *outside* the store, so a refusal here is never remembered as a provider
-	// failure and the token the hand-off stored is used from the moment it exists.
-	if (resolved.grant === "authorization_code" && store.peek(key) === undefined)
-		throw new StageAuthError(
-			"login-failed",
-			`${input.appKey}.${input.role} logs in with the authorization_code grant: call stage_login on a stage-bound session first, and its token is used here afterwards`,
-			"interactive_login_required",
-		);
 	return await store.token(key, async () => {
 		// The references are resolved *inside* the acquisition: they run before the
 		// request, so a missing variable still leaves no request and no entry behind,
@@ -900,6 +941,24 @@ export async function roleTokenFrom(
 		// the store's refresh token, and that is the one a provider's error
 		// description can echo back (SEC-001).
 		const refreshToken = store.refreshTokenFor(key, declaredRefreshToken);
+		// The grant this acquisition actually is (`add-stage-oauth2-code-pkce`): a
+		// request that merely needs a token never starts an interactive sign-in, so an
+		// `authorization_code` role renews with the refresh token its hand-off's
+		// exchange stored, exactly as the `refresh_token` grant does. With no such
+		// token there is nothing to renew and the sign-in has to happen again in
+		// `stage_login`.
+		const grant =
+			resolved.grant === "authorization_code"
+				? refreshToken === undefined
+					? undefined
+					: "refresh_token"
+				: resolved.grant;
+		if (grant === undefined)
+			throw new StageAuthError(
+				"login-failed",
+				`${input.appKey}.${input.role} logs in with the authorization_code grant: call stage_login on a stage-bound session first, and a token it obtained here is renewed from its refresh token when the provider issued one`,
+				"interactive_login_required",
+			);
 		const secrets: StageTokenSecret[] = [
 			...(clientSecret === undefined
 				? []
@@ -922,7 +981,7 @@ export async function roleTokenFrom(
 				...(resolved.audience === undefined
 					? {}
 					: { audience: resolved.audience }),
-				grant: resolved.grant,
+				grant,
 				...(refreshToken === undefined ? {} : { refreshToken }),
 			},
 			{
@@ -1073,6 +1132,12 @@ export interface LoopbackReceiver {
 	/** The same URI's origin, which is the one main-frame navigation a stage
 	 * session has to allow while the hand-off runs. */
 	readonly origin: string;
+	/** The address the listener actually bound. It is `127.0.0.1` and nothing else:
+	 * a wildcard bind would expose a callback that carries an authorization code,
+	 * so this is reported (value-free) to be asserted rather than assumed. */
+	readonly address: string;
+	/** The ephemeral port it bound. */
+	readonly port: number;
 	/** The authorization code, once a callback with the right `state` arrived. */
 	readonly code: Promise<string>;
 	/** Refuse every later callback and release the port. Idempotent, and safe on
@@ -1082,8 +1147,6 @@ export interface LoopbackReceiver {
 
 export interface LoopbackReceiverOptions {
 	readonly state: string;
-	/** The interface to bind. Only a test ever passes anything but loopback. */
-	readonly host?: string;
 }
 
 /** How much of a provider's own error code one refusal keeps. */
@@ -1102,7 +1165,6 @@ const MAX_PROVIDER_CODE_CHARS = 60;
 export async function startLoopbackReceiver(
 	options: LoopbackReceiverOptions,
 ): Promise<LoopbackReceiver> {
-	const host = options.host ?? LOOPBACK_HOST;
 	const sockets = new Set<Socket>();
 	let settle: {
 		resolve: (code: string) => void;
@@ -1127,7 +1189,7 @@ export async function startLoopbackReceiver(
 		};
 		let url: URL;
 		try {
-			url = new URL(request.url ?? "/", `http://${host}`);
+			url = new URL(request.url ?? "/", `http://${LOOPBACK_HOST}`);
 		} catch {
 			answer(400, page("This sign-in could not be read."));
 			return;
@@ -1209,7 +1271,7 @@ export async function startLoopbackReceiver(
 	try {
 		await new Promise<void>((resolve, reject) => {
 			server.once("error", reject);
-			server.listen(0, host, () => {
+			server.listen(0, LOOPBACK_HOST, () => {
 				server.removeListener("error", reject);
 				// A listener from here on: an error on a bound server is not a reason to
 				// take the process down, and the login's own deadline bounds the wait.
@@ -1218,28 +1280,31 @@ export async function startLoopbackReceiver(
 			});
 		});
 	} catch (error) {
-		finish(
-			new StageAuthError(
-				"login-failed",
-				`a loopback receiver for the sign-in could not be opened (${
-					error instanceof Error ? boundedCode(error.name) : "error"
-				})`,
-				"receiver_unavailable",
-			),
-		);
-		throw new StageAuthError(
+		// One error, not two: this is the object the caller sees *and* the value the
+		// receiver's own promise settles with, so a reader has a single message to
+		// trace (QUALITY-002).
+		const failure = new StageAuthError(
 			"login-failed",
-			"a loopback receiver for the sign-in could not be opened on 127.0.0.1",
+			`a loopback receiver for the sign-in could not be opened on ${LOOPBACK_HOST} (${
+				error instanceof Error && error.name !== ""
+					? boundedCode(error.name)
+					: "error"
+			})`,
 			"receiver_unavailable",
 		);
+		finish(failure);
+		throw failure;
 	}
-	const address = server.address();
-	const port =
-		typeof address === "object" && address !== null ? address.port : 0;
-	const redirectUri = `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`;
+	const bound = server.address();
+	const port = typeof bound === "object" && bound !== null ? bound.port : 0;
+	const address =
+		typeof bound === "object" && bound !== null ? bound.address : LOOPBACK_HOST;
+	const redirectUri = `http://${address}:${port}${LOOPBACK_CALLBACK_PATH}`;
 	return {
 		redirectUri,
-		origin: `http://${LOOPBACK_HOST}:${port}`,
+		origin: `http://${address}:${port}`,
+		address,
+		port,
 		code,
 		close: () =>
 			finish(
@@ -1359,11 +1424,22 @@ export async function beginAuthorizationCodeLogin(
 	const key = roleTokenKey(input);
 	const verifier = createCodeVerifier();
 	const state = createAuthorizationState();
-	const forgetPkce = [
-		guardPkceSecret("stage-oauth2-code-verifier", verifier),
-		guardPkceSecret("stage-oauth2-state", state),
-	];
+	// `state` is kept for the process, like the authorization code: a hand-off that
+	// ends without bringing the window back to the application leaves it standing on
+	// the provider's authorization URL, which carries `state=` and the challenge,
+	// and every later `browser_snapshot` of that page would otherwise report it
+	// (OAS-002).
+	rememberPkceSecret({ name: "stage-oauth2-state", value: state });
+	// The receiver comes first, and the verifier joins the redaction set only when
+	// there is a login that owns it. A bind that fails therefore leaves nothing
+	// behind, by construction rather than by cleanup (QUALITY-003): the redirect URI
+	// it would answer on is not known to anyone until this function returns, so no
+	// callback can arrive before the guard below is in place.
 	const receiver = await startLoopbackReceiver({ state });
+	const forgetVerifier = guardPkceSecret(
+		"stage-oauth2-code-verifier",
+		verifier,
+	);
 	const url = authorizationUrl({
 		authorizationEndpoint,
 		clientId,
@@ -1384,6 +1460,9 @@ export async function beginAuthorizationCodeLogin(
 			name: "stage-oauth2-authorization-code",
 			value: code,
 		});
+		// `exclusive`: the exchange is this login's own, so it neither joins another
+		// acquisition of the same key nor reads its outcome as this login's
+		// completion (CONC-002).
 		return await store.token(
 			key,
 			async () =>
@@ -1418,6 +1497,7 @@ export async function beginAuthorizationCodeLogin(
 						],
 					},
 				),
+			{ exclusive: true },
 		);
 	})();
 	// Both outcomes end the polling, not the process: a listener keeps an
@@ -1437,7 +1517,7 @@ export async function beginAuthorizationCodeLogin(
 		close: () => {
 			if (closed) return;
 			closed = true;
-			for (const forget of forgetPkce) forget();
+			forgetVerifier();
 			receiver.close();
 		},
 	};

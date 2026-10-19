@@ -319,6 +319,20 @@ describe("the oauth2 role's login mode", () => {
 			"unavailable",
 		);
 
+		// A client id the `.env` does not set is a gap no window could fill, so the
+		// mode is `unavailable` here too — and `stage_login` refuses with the same
+		// mode rather than opening a window nobody can complete (TQ-005).
+		const unset = writeStage(
+			{
+				...grant,
+				...provider({
+					authorizationEndpoint: "https://login.example.test/oauth2/authorize",
+				}),
+			},
+			{ STAGE_GRID_INT_CLIENT_ID: "" },
+		);
+		expect(viewOf(unset).view.apps[0]?.roles[0]?.loginMode).toBe("unavailable");
+
 		// Without the authorization endpoint the catalog refuses the file rather
 		// than accepting a provider that could never complete the flow.
 		const incomplete = writeStage(grant);

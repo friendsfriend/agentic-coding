@@ -32,7 +32,14 @@ export const HANDOFF_MAX_WAIT_MS = 600_000;
 /** How long a terminal outcome stays readable by a later `stage_login_wait`. */
 export const HANDOFF_OUTCOME_TTL_MS = 300_000;
 
-export type LoginHandoffReason = "no-credentials" | "unautomatable-step";
+export type LoginHandoffReason =
+	| "no-credentials"
+	| "unautomatable-step"
+	/** A role that is designed to be signed in by the person running the agent:
+	 * the authorization code grant. Nothing is missing and nothing failed — the
+	 * identity at the provider is the developer's own (`add-stage-oauth2-code-pkce`,
+	 * USAB-202). */
+	| "user-identity";
 export type LoginHandoffState = "queued" | "active";
 export type LoginHandoffAbortBy =
 	| "developer"
@@ -283,13 +290,30 @@ export class LoginHandoffCoordinator {
 	 * `stage_login` result must not wait for a launch.
 	 */
 	async request(request: LoginHandoffRequest): Promise<LoginHandoffStatus> {
+		return (await this.requestOwned(request)).status;
+	}
+
+	/**
+	 * The same, and whether *this* request is the one that took the hand-off.
+	 *
+	 * A rejoin is not an owning answer: the caller that arrives second queued
+	 * nothing, so machinery it opened before calling (a code grant's loopback
+	 * receiver and its allowance) belongs to nobody and it has to close it rather
+	 * than leave it listening for the rest of the hand-off (CONC-001, PERF-001).
+	 *
+	 * The decision and the registration happen without an intervening await, so two
+	 * concurrent callers cannot both be told they own the hand-off.
+	 */
+	async requestOwned(
+		request: LoginHandoffRequest,
+	): Promise<{ readonly status: LoginHandoffStatus; readonly owned: boolean }> {
 		this.pruneOutcomes();
 		const existing = this.bySession.get(request.session.id)?.entry;
 		if (existing && !existing.finished) {
 			// A second `stage_login` on a held session rejoins the pending
 			// hand-off; it never starts a second one.
 			request.session.touch();
-			return this.status(existing);
+			return { status: this.status(existing), owned: false };
 		}
 		const handoffId = newHandoffId();
 		const deadlineAt = this.clock() + Math.max(1, request.maxSeconds) * 1_000;
@@ -324,10 +348,10 @@ export class LoginHandoffCoordinator {
 		// Creating the record yields, and the hand-off can be ended in that window
 		// (a closed session, a deadline that had no time left). A finished entry
 		// never becomes active.
-		if (entry.finished) return this.status(entry);
-		if (!claimed) return this.status(entry);
+		if (entry.finished) return { status: this.status(entry), owned: true };
+		if (!claimed) return { status: this.status(entry), owned: true };
 		this.start(entry);
-		return this.status(entry);
+		return { status: this.status(entry), owned: true };
 	}
 
 	/**
@@ -562,8 +586,11 @@ export class LoginHandoffCoordinator {
 			deadline: formatHandoffDeadline(entry.deadlineAt, this.clock()),
 			// There is no *Done* to choose when the run refused the record, and a
 			// banner that promises one leaves the developer waiting for a button that
-			// never renders (USAB-105).
-			canConfirm: entry.recorded,
+			// never renders (USAB-105). Nor is there one to choose for a
+			// completion-driven login: a code grant is done when its receiver has the
+			// token, so *Done* would close the receiver and answer `unverified` to a
+			// developer who followed the banner (USAB-201).
+			canConfirm: entry.recorded && entry.request.completion === undefined,
 		};
 		await this.pool.openInteractive(session, loginUrl, async (context) => {
 			await context.addInitScript(bannerScript(text));

@@ -162,12 +162,14 @@ export class BrowserPool {
 	/** Contexts that already carry the banner-removal init script. Keyed by the
 	 * context object itself, so a swapped context is collected with the session. */
 	private readonly bannerRemovalInstalled = new WeakSet<object>();
-	/** The one loopback origin a code-grant hand-off's callback navigates to, per
-	 * session id (`add-stage-oauth2-code-pkce`). It is the only origin a
-	 * stage-bound session's allow-list is widened with, it exists only while that
-	 * hand-off runs, and `guardFor` reads it per navigation so a reused
-	 * interactive context sees it too. */
-	private readonly handoffRedirects = new Map<string, string>();
+	/** Every loopback origin a code-grant hand-off's callback navigates to, per
+	 * session id (`add-stage-oauth2-code-pkce`). These are the only origins a
+	 * stage-bound session's allow-list is widened with, they exist only while their
+	 * hand-off runs, and `guardFor` reads them per navigation so a reused
+	 * interactive context sees them too. A set rather than one value: two login
+	 * calls that overlap both open a receiver before either owns the hand-off, and
+	 * the one that loses must not take the winner's allowance away. */
+	private readonly handoffRedirects = new Map<string, Set<string>>();
 	/** The acquire critical section: the capacity check and the reservation of
 	 * the slot it grants, with no await between them. */
 	private acquireGate: Promise<void> = Promise.resolve();
@@ -356,13 +358,20 @@ export class BrowserPool {
 			const browser = await this.ensureBrowser();
 			// The guard is built from the session it reports to, so every refusal lands
 			// in the buffer the session's next tool call drains — including the ones the
-			// replacement context of a recording produces.
+			// replacement context of a recording produces. It hands over to the session's
+			// own guard (`guardFor`) as soon as there is a session: that is the guard
+			// which knows the loopback origin a code-grant hand-off added for its
+			// callback, and the context created here is the one that login may run in
+			// (`add-stage-oauth2-code-pkce`).
 			let session: BrowserSession | undefined;
-			const guard = request.stage
+			let live: DriverRequestGuard | undefined;
+			const declared = request.stage
 				? createStageGuard(request.stage, (refusal) => {
 						session?.recordRefusal(refusal);
 					})
 				: undefined;
+			const guard: DriverRequestGuard | undefined =
+				declared === undefined ? undefined : (info) => (live ?? declared)(info);
 			const authorization = this.authorizationForBinding(request.stage);
 			const context = await browser.newContext({
 				viewport: request.viewport,
@@ -383,6 +392,9 @@ export class BrowserPool {
 			});
 			this.sessions.set(session.id, session);
 			registered = session;
+			// Same rules, and now the session's own guard: it is the one that sees an
+			// allowance added while this context is alive.
+			live = this.guardFor(session);
 			if (request.url) {
 				// The first navigation is work in flight: without this the session
 				// looks idle to `close` (and to the sweep) for as long as the
@@ -851,16 +863,16 @@ export class BrowserPool {
 		// it is the redirect the login itself asked the provider for. The origin is
 		// read per navigation, so the context a promotion reuses sees the addition
 		// and its removal without being rebuilt.
-		const redirectOf = (): string | undefined =>
+		const redirects = (): ReadonlySet<string> | undefined =>
 			this.handoffRedirects.get(session.id);
 		const policy: StageSessionPolicy = {
 			ident: binding.ident,
 			access: binding.access,
 			get origins() {
-				const redirect = redirectOf();
-				return redirect === undefined
+				const redirect = redirects();
+				return redirect === undefined || redirect.size === 0
 					? binding.origins
-					: [...binding.origins, redirect];
+					: [...binding.origins, ...redirect];
 			},
 			readOnlyExceptions: binding.readOnlyExceptions,
 			limits: binding.limits,
@@ -924,18 +936,29 @@ export class BrowserPool {
 	 * session back exactly where it was.
 	 */
 	allowHandoffRedirect(session: BrowserSession, origin: string): void {
-		this.handoffRedirects.set(session.id, origin);
+		const origins = this.handoffRedirects.get(session.id);
+		if (origins === undefined) {
+			this.handoffRedirects.set(session.id, new Set([origin]));
+			return;
+		}
+		origins.add(origin);
 	}
 
-	/** Drop the loopback allowance of one session. Idempotent. */
-	clearHandoffRedirect(session: BrowserSession): void {
-		this.handoffRedirects.delete(session.id);
+	/** Drop one loopback allowance, and only that one: a teardown names the origin
+	 * it owns, so a flow that never took the hand-off cannot clear the allowance of
+	 * the login that did (CONC-003). Idempotent. */
+	clearHandoffRedirect(session: BrowserSession, origin: string): void {
+		const origins = this.handoffRedirects.get(session.id);
+		if (origins === undefined) return;
+		origins.delete(origin);
+		if (origins.size === 0) this.handoffRedirects.delete(session.id);
 	}
 
 	/** The loopback origin a code-grant hand-off is currently allowed to reach, or
 	 * `undefined`. It carries no value: an origin is `http://127.0.0.1:<port>`. */
 	handoffRedirect(session: BrowserSession): string | undefined {
-		return this.handoffRedirects.get(session.id);
+		const origins = this.handoffRedirects.get(session.id);
+		return origins === undefined ? undefined : [...origins][0];
 	}
 
 	/** Attach (or replace) the bearer-token source of this pool. Called by the
