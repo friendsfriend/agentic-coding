@@ -289,8 +289,15 @@ export async function attachTelemetry(
 	// working when it was written — not the run that created the conversation.
 	const identityOf = (): TelemetryIdentity =>
 		typeof identity === "function" ? identity() : identity;
-	const emit = (event: string, fields: Record<string, unknown> = {}): void => {
-		emitEnvelope(identityOf(), event, fields);
+	/** Emit one envelope under an explicit identity. The identity is passed in, never
+	 * resolved here: one event's envelopes and its measurements must be the same
+	 * run's, and `handle` resolves it once per event for exactly that reason. */
+	const emit = (
+		identity: TelemetryIdentity,
+		event: string,
+		fields: Record<string, unknown> = {},
+	): void => {
+		emitEnvelope(identity, event, fields);
 	};
 	let generationStart: number | undefined;
 	let thinkingStart: number | undefined;
@@ -334,6 +341,7 @@ export async function attachTelemetry(
 	 * when a later generation measured it; the envelope is emitted exactly once,
 	 * either when that measurement arrives or when the stream settles. */
 	const emitCompaction = (
+		identity: TelemetryIdentity,
 		taskId: string,
 		entry: TrackedCompaction,
 		tokensAfter: number | undefined,
@@ -346,7 +354,7 @@ export async function attachTelemetry(
 			: entry.summaryPlaced
 				? "completed"
 				: "aborted";
-		emit("runtime.compaction", {
+		emit(identity, "runtime.compaction", {
 			reason: entry.reason,
 			kind: entry.kind,
 			blocking: entry.blocking,
@@ -368,23 +376,27 @@ export async function attachTelemetry(
 	 * exclamation mark of honesty: a measured flush never invents a "tokens
 	 * after" — it is attached only when the request is genuinely smaller than
 	 * the one before the compaction, which is what a placed summary does. */
-	const flushCompactions = (measured: boolean, tokensAfter?: number): void => {
+	const flushCompactions = (
+		identity: TelemetryIdentity,
+		measured: boolean,
+		tokensAfter?: number,
+	): void => {
 		for (const [taskId, entry] of [...compactions]) {
 			if (entry.emitted) continue;
 			if (entry.failedClass) {
-				emitCompaction(taskId, entry, undefined);
+				emitCompaction(identity, taskId, entry, undefined);
 				continue;
 			}
 			if (entry.endedAt === undefined) continue;
 			if (!measured) {
-				emitCompaction(taskId, entry, undefined);
+				emitCompaction(identity, taskId, entry, undefined);
 				continue;
 			}
 			const shrank =
 				tokensAfter !== undefined &&
 				entry.tokensBefore !== undefined &&
 				tokensAfter < entry.tokensBefore;
-			if (shrank) emitCompaction(taskId, entry, tokensAfter);
+			if (shrank) emitCompaction(identity, taskId, entry, tokensAfter);
 		}
 	};
 	const closeThinking = (now: number) => {
@@ -403,11 +415,15 @@ export async function attachTelemetry(
 		}
 		if (newest) newest.summaryPlaced = true;
 	};
+	// The handler is deliberately synchronous: a delivered batch is stamped with
+	// the identity current at delivery, and `host.ts`'s rebinding drain waits one
+	// macrotask turn so a frame already committed under the leaving run arrives
+	// first. An `await` inside this handler would reopen that gap.
 	const handle = (events: readonly AgentEvent[]) => {
 		for (const event of events) {
 			const now = Date.now();
-			// This event's identity, resolved once: the envelopes it produces and the
-			// measurements it reports are the same run's.
+			// This event's identity, resolved once — here and nowhere else: the
+			// envelopes it produces and the measurements it reports are the same run's.
 			const current = identityOf();
 			switch (event.type) {
 				case "message_start":
@@ -471,7 +487,7 @@ export async function attachTelemetry(
 							// its summary was placed and this request carried the reduced
 							// context, which is the only "tokens after" available (pi-durable
 							// records no counters for a compaction itself).
-							flushCompactions(true, prompt);
+							flushCompactions(current, true, prompt);
 							// The same measurement decides the cost ceiling: it is taken at the
 							// end of a committed turn, so a ceiling compaction is admitted at a
 							// turn boundary and never inside a tool call.
@@ -481,7 +497,7 @@ export async function attachTelemetry(
 							);
 						}
 						if (tokens > 0 || cost > 0)
-							emit("runtime.usage", {
+							emit(current, "runtime.usage", {
 								inputTokens: usage.input,
 								outputTokens: usage.output,
 								cacheReadTokens: usage.cacheRead,
@@ -499,7 +515,7 @@ export async function attachTelemetry(
 				}
 				case "turn_start":
 					turnIndex += 1;
-					emit("runtime.turn_started");
+					emit(current, "runtime.turn_started");
 					break;
 				case "tool_execution_start": {
 					const args = toolArgsTelemetry(event.toolName, event.args);
@@ -508,7 +524,7 @@ export async function attachTelemetry(
 						turnIndex: turnIndex < 0 ? undefined : turnIndex,
 					});
 					callOwners.set(event.toolCallId, current);
-					emit("runtime.tool_start", {
+					emit(current, "runtime.tool_start", {
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
 						// What was asked, never the payload: the hash joins exact repeats,
@@ -517,7 +533,7 @@ export async function attachTelemetry(
 						"pi.tool.args_digest": args.digest,
 						"pi.tool.argument_bytes": args.bytes,
 						...(turnIndex >= 0 ? { "pi.turn.index": turnIndex } : {}),
-						...(identityOf().captureContent
+						...(current.captureContent
 							? {
 									"herdr.content.tool_input": redact(
 										JSON.stringify(event.args),
@@ -544,7 +560,9 @@ export async function attachTelemetry(
 					const turn =
 						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
 					const errorLine = isError ? toolFailureLine(event.entry) : undefined;
-					emit("runtime.tool", {
+					// The envelope of the call, under the run that began it — the same identity
+					// the outcome below is reported with.
+					emit(owner, "runtime.tool", {
 						outcome: isError ? "error" : "ok",
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
@@ -590,7 +608,7 @@ export async function attachTelemetry(
 					// measurable per run — the peak context and the number of compactions
 					// by kind — so "automatic compactions > 0, peak context < 200k" can be
 					// answered from telemetry alone.
-					emit("runtime.settled", {
+					emit(current, "runtime.settled", {
 						...(peakContextTokens > 0 ? { peakContextTokens } : {}),
 						...(turnIndex >= 0 ? { turns: turnIndex + 1 } : {}),
 						compactionsAutoCeiling: compactionKinds["auto-ceiling"],
@@ -600,7 +618,11 @@ export async function attachTelemetry(
 					// The run settled: a compaction that never got a measured follow-up
 					// generation still reports what is known (its reason, duration and
 					// before-tokens) instead of being dropped.
-					flushCompactions(false);
+					flushCompactions(current, false);
+					// No call of the settled run is still in flight, so its owner entries are
+					// dropped here rather than kept for the life of the stream (an aborted
+					// conversation never delivers the ends that would prune them).
+					callOwners.clear();
 					break;
 				case "entry_appended":
 					// A `pi.compaction` entry is the placed summary: the receipt that
@@ -625,7 +647,7 @@ export async function attachTelemetry(
 							? { tokensBefore: lastPromptTokens }
 							: {}),
 					});
-					emit("runtime.compaction_start", {
+					emit(current, "runtime.compaction_start", {
 						reason: event.reason,
 						kind,
 						blocking: event.blocking,
@@ -647,7 +669,7 @@ export async function attachTelemetry(
 					break;
 				}
 				case "task_failed": {
-					emit("runtime.task_failed", {
+					emit(current, "runtime.task_failed", {
 						"pi.error.class": redact(event.message).slice(0, 160),
 					});
 					if (event.kind === COMPACTION_TASK_KIND) {
@@ -661,7 +683,7 @@ export async function attachTelemetry(
 						};
 						entry.failedClass = redact(event.message).slice(0, 160);
 						compactions.set(taskId, entry);
-						emitCompaction(taskId, entry, undefined);
+						emitCompaction(current, taskId, entry, undefined);
 					}
 					break;
 				}
@@ -673,8 +695,9 @@ export async function attachTelemetry(
 	stream.start(async (events) => handle(events));
 	return () => {
 		// Whatever compaction is still pending when the stream stops is reported
-		// with what is known, so telemetry never silently loses one.
-		flushCompactions(false);
+		// with what is known, so telemetry never silently loses one. The stream is
+		// being detached, so it is the binding's current identity that reports it.
+		flushCompactions(identityOf(), false);
 		void stream.stop();
 	};
 }

@@ -104,6 +104,17 @@ identifier spaces. Nothing here writes workflow state: the envelopes are
 observational, and `stopRun` never emits a `closed` for the run it stops (a run is
 not closed when its session continues).
 
+A `closed` is the one envelope a reader takes as proof that a session continued,
+so its writer reports whether the append happened: a close that could not be
+written to the leaving run's telemetry path (its workspace is gone, the path is
+unwritable) is retried into the binding that now holds the conversation, and on
+that conversation's later bindings while it stays unwritten, and is written once.
+The transition is serialized per conversation — read the previous binding, drain
+the stream for one macrotask turn so a frame the leaving run already committed is
+still theirs, write the new binding — so two overlapping rebindings cannot close
+one run twice or leave the last run open. `runtime.tool` is emitted under the run
+that *started* the call, not the run bound when the call finished.
+
 The token movement is measured, never invented: `pi-durable` records no counters
 for a compaction, so `tokensBefore` is the newest request's prompt tokens
 (input + cache read/write) before it started and `tokensAfter` is attached only

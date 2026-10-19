@@ -2,10 +2,12 @@
 
 A run's session outlives the run, and nothing records it: 156 of the 1,259
 preferred runs in the pinned snapshot (12.4 %, in 38 workflows) carry turns after
-their own recorded completion — median tail 1,032 s, p90 5,748 s, max 63,380 s —
-and those 156 runs hold 11,960 turns (34.4 % of the 34,711 the snapshot records;
-the turn counts are pre-repair and not a ratio of the cost denominator) and 114.50
-of the repaired 441.9321 preferred cost units (25.9 %). A run recorded `complete` with a
+their own recorded completion — median tail 1,032 s (median-high), p90 5,748 s
+(nearest rank), max 63,380 s —
+and those 156 runs hold 14,163 turns, 11,960 of which start after the run's own
+recorded completion (34.4 % of the 34,711 the snapshot records; the turn counts
+are pre-repair and not a ratio of the cost denominator) and 114.50 of the
+repaired 441.9321 preferred cost units (25.9 %). A run recorded `complete` with a
 6-minute window labels 17 minutes of later work, and 315 of 1,259 runs (25.0 %)
 record no turns at all because their work is attributed to an earlier run of the
 same step and role. Status, duration and cost per run are therefore wrong for a
@@ -33,7 +35,9 @@ session.
   to the conversation (reason `created`, `rebound`, `adopted` or `resumed`) and
   `runtime.session_window.closed` on the run it leaves when a different run
   rebinds it, naming the run it rebinds to. Both carry the conversation id as the
-  session id; neither writes any workflow state.
+  conversation id as `herdr.session.conversation_id`, never as the envelope's
+  `sessionId` (that field means *run* id everywhere else); neither writes any
+  workflow state.
 - Rebind the conversation's runtime telemetry identity to the run that is
   actually active, so a turn emitted after a rebinding is attributed to the run
   that was working. The envelopes of one stream therefore carry the run current
@@ -41,12 +45,18 @@ session.
   runs that currently record no turns record their own.
 - Make `run-window-drift` classify every tail and carry the count of turns in it:
   `attributed` (the run's session is recorded as rebound to a later run),
-  `clock-artifact` (the run's recorded completion precedes its own start, i.e.
-  the traces source's span-start convention) or `unexplained`.
-- Make the dataset build fail on an unexplained tail instead of recording a note,
-  the way an empty source already fails it: the alarm judges only workflows whose
-  recording states a session window, reports every other drifting run as
-  `unrecorded`, and writes no dataset when it fails.
+  `resumed` (the run's own conversation is bound to it at or after its completion,
+  or with the `resumed` reason), `clock-artifact` (the run's recorded completion
+  precedes its own start, i.e. the traces source's span-start convention) or
+  `unexplained`. A binding that predates the run's own completion is not a
+  continuation, so it stays `unexplained`.
+- Make the dataset build fail on a tail no record explains instead of recording a
+  note, the way an empty source already fails it: the gate is each drifting run
+  (a run is recorded iff a session-window row names *its* run id), a run that
+  began before its workflow's first record is counted `unrecorded.beforeRecord`,
+  a run that began after it without its own record fails as
+  `unrecorded.afterRecord`, and a failed build writes no dataset. The summary
+  keeps `judged`, `unrecorded` and `clockArtifact` apart.
 - No `STORE_SCHEMA_VERSION` change (stays 6), no migration, no compat shim, and
   no change to when a workflow blocks, completes or resumes: the record travels
   in the telemetry envelope, and a resumed session keeps its run.

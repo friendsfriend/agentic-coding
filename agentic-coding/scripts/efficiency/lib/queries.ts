@@ -57,20 +57,37 @@ tail_window AS (
 	GROUP BY t.run_id
 ),
 -- The window this run's own session is recorded as: an opened row for the run
--- says the run kept (or resumed) its conversation, a closed row says a later
--- run continued it. A run is *recorded* iff one of the two names its run id, and
--- a recorded run's tail is attributed by definition — the recording is the
--- statement (efficiency backlog item 20).
+-- says the run was bound to its conversation, a closed row says a later run
+-- continued it. A run is *recorded* iff one of the two names its run id, and only
+-- a record that states a continuation *after* the run's own completion explains
+-- its tail (efficiency backlog item 20).
 session_record AS (
 	SELECT
 		e.run_id AS run_id,
 		MAX(CASE WHEN e.event = 'runtime.session_window.closed' THEN 1 ELSE 0 END) AS closed,
-		-- The run's own bindings (opened), and the move a closed reported. A
-		-- conversation bound twice to one run (an abort, then a resume) reports
-		-- created and then resumed: the later move is the one worth naming.
-		MAX(CASE WHEN e.event = 'runtime.session_window.opened' THEN e.session_reason END) AS session_reason,
-		MAX(e.session_rebound_to) AS session_rebound_to
+		-- An 'opened' row the run's own completion predates is a binding, not a
+		-- continuation: a session that went on under a later run without a 'closed'
+		-- record (a handover across a host lifetime) looks exactly like that, and it
+		-- is the misattribution this class exists to refuse.
+		MAX(CASE
+			WHEN e.event = 'runtime.session_window.opened'
+				AND julianday(e.at) >= julianday(r.completed_at) THEN 1 ELSE 0
+		END) AS opened_after_completion,
+		-- The reason of the run's *latest* binding, not the largest reason text: a
+		-- conversation bound twice to one run (a create, then an adoption after a
+		-- host restart) reports the later move.
+		(SELECT e2.session_reason FROM v_events e2
+			WHERE e2.run_id = e.run_id
+				AND e2.event = 'runtime.session_window.opened'
+				AND e2.session_reason IS NOT NULL
+			ORDER BY e2.at DESC LIMIT 1) AS session_reason,
+		(SELECT e2.session_rebound_to FROM v_events e2
+			WHERE e2.run_id = e.run_id
+				AND e2.event = 'runtime.session_window.closed'
+				AND e2.session_rebound_to IS NOT NULL
+			ORDER BY e2.at DESC LIMIT 1) AS session_rebound_to
 	FROM v_events e
+	JOIN v_runs r ON r.run_id = e.run_id
 	WHERE e.event IN (
 		'runtime.session_window.opened',
 		'runtime.session_window.closed'
@@ -105,14 +122,16 @@ SELECT
 	CASE WHEN s.run_id IS NULL THEN 0 ELSE 1 END AS session_recorded,
 	s.session_reason AS session_reason,
 	s.session_rebound_to AS session_rebound_to,
+	COALESCE(s.opened_after_completion, 0) AS session_opened_after_completion,
 	wr.first_session_window_at AS first_session_window_at,
 	CASE
 		-- The traces reader dates an 'agent.handoff' span by its start, so this
 		-- run's own window cannot be read at all: nothing else can be concluded
 		-- from a tail with no beginning (design D5: classified, not rewritten).
 		WHEN julianday(r.completed_at) <= julianday(r.started_at) THEN 'clock-artifact'
-		WHEN s.run_id IS NOT NULL AND s.closed = 1 THEN 'attributed'
-		WHEN s.run_id IS NOT NULL THEN 'resumed'
+		WHEN s.closed = 1 THEN 'attributed'
+		WHEN s.run_id IS NOT NULL
+			AND (s.session_reason = 'resumed' OR s.opened_after_completion = 1) THEN 'resumed'
 		ELSE 'unexplained'
 	END AS drift_kind
 FROM v_runs r
@@ -1369,7 +1388,7 @@ ORDER BY p.closed_at, p.workflow_id`,
 	{
 		name: "run-window-drift",
 		summary:
-			"Runs whose turns continue well past the run's own recorded window — a session that outlived the run it was attributed to — each with the turns in its tail, whether a session-window row names the run at all (`session_recorded`), and what the recording says: the session was rebound to a later run (`attributed`), the run kept its own conversation (`resumed`), the window cannot be read (`clock-artifact`) or nothing explains it (`unexplained`).",
+			"Runs whose turns continue well past the run's own recorded window — a session that outlived the run it was attributed to — each with the turns in its tail, whether a session-window row names the run at all (`session_recorded`), and what the recording says: the session was rebound to a later run (`attributed`), the run's own conversation was bound after its completion or resumed (`resumed`), the window cannot be read (`clock-artifact`) or nothing explains a continuation (`unexplained`, whether or not the run was bound before its completion).",
 		example:
 			"bun run scripts/efficiency/analyze.ts run-window-drift --dataset ~/ev/dataset-2026 --limit 20",
 		limitable: true,
@@ -1389,6 +1408,7 @@ ORDER BY p.closed_at, p.workflow_id`,
 			"session_recorded",
 			"session_reason",
 			"session_rebound_to",
+			"session_opened_after_completion",
 			"first_session_window_at",
 			"drift_kind",
 		],

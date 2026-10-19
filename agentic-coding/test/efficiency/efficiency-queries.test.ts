@@ -1112,6 +1112,42 @@ describe("ready-made queries", () => {
 				"runtime.session_window.opened",
 				"resumed",
 			);
+			// A binding the run's own completion predates is not a continuation: the
+			// session went on under a later run this host cannot name (a handover
+			// across a host lifetime), which is the misattribution item 20 refuses.
+			addRun(
+				"run-created-only",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-created-only",
+				"2026-03-01T11:05:00.000Z",
+				"runtime.session_window.opened",
+				"created",
+			);
+			// The same run bound twice: `created` before its completion, then an
+			// adoption after it (a host restart). The later move is the one the
+			// recording has to report, and what it says the tail is.
+			addRun(
+				"run-bound-twice",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-bound-twice",
+				"2026-03-01T11:05:00.000Z",
+				"runtime.session_window.opened",
+				"created",
+			);
+			sessionEvent.run(
+				"run-bound-twice",
+				"2026-03-01T11:15:00.000Z",
+				"runtime.session_window.opened",
+				"adopted",
+			);
 			// A window that cannot be read: the completion is not after the start.
 			addRun(
 				"run-clock",
@@ -1171,6 +1207,20 @@ describe("ready-made queries", () => {
 				drift_kind: "resumed",
 				session_recorded: 1,
 				session_reason: "resumed",
+				tail_turns: 1,
+			});
+			// Recorded, but the record does not state that the session continued.
+			expect(byRun.get("run-created-only")).toMatchObject({
+				drift_kind: "unexplained",
+				session_recorded: 1,
+				session_opened_after_completion: 0,
+				tail_turns: 1,
+			});
+			expect(byRun.get("run-bound-twice")).toMatchObject({
+				drift_kind: "resumed",
+				session_recorded: 1,
+				session_reason: "adopted",
+				session_opened_after_completion: 1,
 				tail_turns: 1,
 			});
 			expect(byRun.get("run-clock")).toMatchObject({

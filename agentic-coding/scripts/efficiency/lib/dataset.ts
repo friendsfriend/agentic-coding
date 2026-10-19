@@ -27,9 +27,42 @@ import {
 // rule: a dataset built from an older-only snapshot carries NULL there.
 // 4: `events` gained the session window's own vocabulary (efficiency backlog item
 // 20): `session_reason`, `session_rebound_to`, `session_previous_run_id` and
-// `session_conversation_id`. Append-only, same rule.
+// `session_conversation_id`. Append-only within a version: a v4 dataset built
+// from an older-only snapshot carries NULL there. A *file* an older build wrote
+// has no such column at all, so reading it is refused
+// (`assertDatasetSchemaVersion`) instead of failing with a bare SQL error.
 export const DATASET_SCHEMA_VERSION = 4;
 export const DATASET_FILE = "dataset.sqlite";
+
+/** A dataset file written by a different build: its `events` table has no column
+ * this build's views read. */
+export class DatasetSchemaError extends Error {}
+
+/** Refuse a dataset file this build cannot read, naming the rebuild instead of
+ * letting a query die on `no such column`. `writeDataset` always writes the
+ * current version and deletes an existing file first, so the fix is always a
+ * rebuild, never a conversion. */
+export function assertDatasetSchemaVersion(
+	db: Database,
+	datasetPath: string,
+): void {
+	let built: number | undefined;
+	try {
+		const row = db
+			.query<{ value: string }, []>(
+				"SELECT value FROM meta WHERE key = 'datasetSchemaVersion'",
+			)
+			.get();
+		built = row === null ? undefined : Number(row.value);
+	} catch {
+		// No `meta` table at all: not a dataset this tooling wrote.
+		built = undefined;
+	}
+	if (built === DATASET_SCHEMA_VERSION) return;
+	throw new DatasetSchemaError(
+		`dataset schema ${built ?? "unknown"} at ${datasetPath}; this build reads ${DATASET_SCHEMA_VERSION} — rebuild it with scripts/efficiency/build-dataset.ts`,
+	);
+}
 
 const TABLES_DDL = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -192,7 +225,9 @@ CREATE TABLE events (
 	-- The session-window vocabulary (efficiency backlog item 20): the reason a
 	-- conversation was bound to a run (created, rebound, adopted, resumed), the
 	-- run it left and the run it moved to, and the conversation the window
-	-- belongs to. Append-only: an older dataset has them empty.
+	-- belongs to. Append-only since schema 4: a v4 dataset built from an
+	-- older-only snapshot has them empty, and a dataset file an earlier build
+	-- wrote must be rebuilt (see assertDatasetSchemaVersion).
 	session_reason TEXT,
 	session_rebound_to TEXT,
 	session_previous_run_id TEXT,

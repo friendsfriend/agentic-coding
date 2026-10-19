@@ -1340,11 +1340,14 @@ most recently bound to it, with that run's identity) and updates it in
 `ensureRun` before the run's first submission:
 
 - the conversation's telemetry stream resolves its identity once per event
-  (`attachTelemetry` takes an identity or a getter), so a turn that lands after a
-  rebinding is the later run's turn — and the cost ceiling is decided from the
-  measurement of the run that produced the message, while a tool outcome is
-  charged to the run that *started* that call (`tool_execution_start` records the
-  owner), so neither can act on a run other than its own;
+  (`attachTelemetry` takes an identity or a getter) and hands that identity to
+  each writer, so a turn that lands after a rebinding is the later run's turn —
+  and the cost ceiling is decided from the measurement of the run that produced
+  the message, while a tool outcome is charged to the run that *started* that call
+  (`tool_execution_start` records the owner by `toolCallId`), so neither can act on
+  a run other than its own. A dead-surface decision is acted on with the failing
+  run's own context and recorded as `herdr.fail_fast.scope: "owner-rebound"`
+  (refused, no abort, no handoff) when a later run now holds the conversation;
 - the move is stated as two runtime envelopes on the same sink, both carrying the
   conversation id as `herdr.session.conversation_id` (never as `sessionId`, which
   means *run* id everywhere else):
@@ -1355,7 +1358,17 @@ most recently bound to it, with that run's identity) and updates it in
     a restart) or `resumed` (the same run bound again, as after an abort);
   - `runtime.session_window.closed` for the run being left, with
     `herdr.session.rebound_to` naming the run now bound, emitted before the
-    opened record.
+    opened record. A close that could not be written (the leaving run's workspace
+    is gone) is retried into the binding that now holds the conversation, and on
+    that conversation's later bindings, until it lands — its absence is what a
+    reader treats as a defect.
+
+The whole transition (read the previous binding, drain the stream, write the new
+one) is serialized per conversation, so two overlapping rebindings can neither
+close one run twice — naming a successor that never held the conversation — nor
+leave the last run unclosed. The drain is one macrotask turn: pi-durable publishes
+a commit's events synchronously and delivers them a microtask later, so without it
+a frame already committed under the leaving run would resolve the new identity.
 
 The two windows stay separate on purpose. A run is **not** closed when its
 session stops: that would change when a run — and so a workflow — is complete,
@@ -1368,10 +1381,14 @@ environment (an orchestrator session).
 
 A reader pairs the two: `scripts/efficiency`'s `run-window-drift` query reports,
 per drifting run, the turns in its tail, whether a session-window row names *that
-run* (`session_recorded`) and a `drift_kind` of `attributed` (the recording states
-the session went on under a later run), `resumed` (the run kept its own
-conversation), `clock-artifact` (the run's recorded completion is not after its
-start, so the window cannot be read) or `unexplained` (nothing names the run).
+run* (`session_recorded`) and a `drift_kind` of `attributed` (a `closed` row
+states the session went on under a later run), `resumed` (the recording binds the
+run's own conversation to it at or after its completion, or with the reason
+`resumed`), `clock-artifact` (the run's recorded completion is not after its
+start, so the window cannot be read) or `unexplained` (the record states no
+continuation, whether or not it names the run — a binding from before the run's
+completion is not one). The build refuses an `unexplained` tail whose record was
+due.
 
 The build's gate is **per run, not per workflow**: a run is recorded iff a
 session-window row names its run id, so a workflow that records one run's move

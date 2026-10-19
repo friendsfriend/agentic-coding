@@ -136,10 +136,13 @@ function main(argv: readonly string[]): number {
 	fs.writeFileSync(path.join(outDir, "README.md"), readme, { mode: 0o600 });
 
 	// A run whose session kept working after the run closed is either stated by
-	// the recording or a defect (efficiency backlog item 20): an unexplained tail
-	// fails the build, the way a source that parses nothing does. Only a workflow
-	// whose own recording carries a session window is judged, so a generation that
-	// predates the record is reported as unrecorded and still builds.
+	// the recording or a defect (efficiency backlog item 20): a tail no record
+	// states a continuation for fails the build, the way a source that parses
+	// nothing does. The gate is per *run*, not per workflow: a run's record is the
+	// one that names its own run id, so one run's move cannot hide another's lost
+	// record. A run that began before its workflow's first session-window event
+	// (or whose own window cannot be read) is reported as unrecorded and still
+	// builds; a run that began after that event with no such record fails.
 	const runWindow = inspectRunWindow(write.path);
 	if (runWindow.failures.length > 0) {
 		fs.rmSync(write.path, { force: true });
@@ -177,9 +180,9 @@ function main(argv: readonly string[]): number {
 			0,
 		),
 		notes: extraction.tables.notes.length,
-		// The run/session window split: two populations, never mixed — the runs the
-		// session record covers (and what it says) and the runs it does not cover at
-		// all (and whether a record was due). `drifting` is their sum.
+		// The run/session window split: three populations, never mixed — the runs the
+		// session record explains, the runs whose window cannot be read, and the runs
+		// no record states a continuation for (with whether one was due).
 		runWindow: {
 			drifting: runWindow.rows.length,
 			judged: {

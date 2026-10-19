@@ -180,6 +180,11 @@ Every query reads the preferred rows and runs in a second or less.
 | `source-recording` | per source, month and recording: outcomes, the share of calls with an argument digest, result size, duration and failure kind, and failure-only runs | `analyze.ts source-recording --dataset <out>` |
 | `run-window-drift` | runs whose turns continue past the run's own recorded completion, with the turns in the tail (`tail_turns`), whether a session-window row names the run (`session_recorded`) and what the recording says (`drift_kind`, see below) | `analyze.ts run-window-drift --dataset <out> --limit 20` |
 
+Any query in this list refuses a dataset file whose recorded schema version is not
+the one this build writes (`assertDatasetSchemaVersion`): the columns are
+append-only within a version, so an older file has none of them, and the message
+names both versions and the rebuild. There is no conversion.
+
 ### `run-window-drift` and the session window
 
 A run's window is the engine's: `started_at` to the `agent.handoff` that closed
@@ -199,42 +204,57 @@ The query keeps the columns it always had (`run_id`, `workflow_id`, `role`,
   (`tail_turns` 0) is not drift, however long the one turn that straddles its
   completion ran;
 - `session_recorded` — `1` iff a `runtime.session_window.opened` or
-  `runtime.session_window.closed` row names this run id. That is the gate: a run
-  the record names is *judged*, a run it does not name is *unrecorded*;
-- `session_reason`, `session_rebound_to`, `first_session_window_at` — the run's
-  own binding reason (`created`/`rebound`/`adopted`/`resumed`), the run it was
-  rebound to, and its workflow's first session-window instant (the moment the
-  workflow started recording one at all);
-- `drift_kind`:
-  - `attributed` — a `runtime.session_window.closed` event names this run: the
-    session went on under a later run, which did the work the earlier run's row
-    would otherwise claim;
-  - `resumed` — a `runtime.session_window.opened` event names this run: the run
-    kept (or resumed, or adopted) its own conversation, so the tail is the same
-    run working on the same session. This is the abort-and-resume path, where the
-    store clears `completed_at` and the dataset still dates the completion at the
-    last `agent.handoff`;
+  `runtime.session_window.closed` row names this run id. That is the per-run gate:
+  a run is recorded iff the record names *its* run id, so one run's move cannot
+  hide another's missing record;
+- `session_reason`, `session_rebound_to`, `session_opened_after_completion`,
+  `first_session_window_at` — the run's own *latest* binding reason
+  (`created`/`rebound`/`adopted`/`resumed`, by `at DESC`, not the largest text),
+  the run its latest `closed` names, whether one of the run's own `opened` rows
+  falls at or after its completion, and its workflow's first session-window
+  instant (the moment the workflow started recording one at all);
+- `drift_kind`, decided in the order `clock-artifact` → `attributed` → `resumed`
+  → `unexplained`:
   - `clock-artifact` — `completed_at <= started_at`, i.e. the run's own window
     cannot be read at all (the traces reader dates an `agent.handoff` span by its
     start), so nothing can be concluded from its tail;
-  - `unexplained` — the window is readable and no session-window row names the
-    run, so nothing in the recording accounts for the tail.
+  - `attributed` — a `runtime.session_window.closed` event names this run: the
+    session went on under a later run, which did the work the earlier run's row
+    would otherwise claim;
+  - `resumed` — no `closed`, but the recording binds the run's own conversation to
+    it *after* its completion (`session_opened_after_completion`) or with the
+    reason `resumed`: the tail is the same run working on the same session. This
+    is the abort-and-resume path, where the store clears `completed_at` and the
+    dataset still dates the completion at the last `agent.handoff`;
+  - `unexplained` — the window is readable and the record states no continuation,
+    whether or not some row names the run. A binding from *before* the run's
+    completion is not a continuation: a session that went on under a later run
+    across a host lifetime leaves exactly that shape, and calling it explained
+    would make the alarm silent for the misattribution it exists to catch.
 
-The gate is **per run, not per workflow**, and the build summary keeps the two
+The gate is **per run, not per workflow**, and the build summary keeps the three
 populations apart:
 
-- `runWindow.judged {runs, attributed, resumed}` plus a top-level
-  `clockArtifact` and `unexplained` over every row — the runs the record names
-  and what it says. They always build;
-- `runWindow.unrecorded {runs, beforeRecord, afterRecord}` — the runs it does not
-  name. `beforeRecord` counts the ones where no record is due (the run started
-  before its workflow's first session-window event, or its window cannot be
-  read); `afterRecord` counts a **broken record**, which fails the build.
+- `runWindow.judged {runs, attributed, resumed}` — the rows the record explains
+  (`attributed` + `resumed`). They always build;
+- `runWindow.unrecorded {runs, beforeRecord, afterRecord}` — the `unexplained`
+  rows, with a top-level `unexplained` equal to `unrecorded.runs`. `beforeRecord`
+  counts the ones where no record is due (the run started before its workflow's
+  first session-window event); `afterRecord` counts a **broken record** — a run
+  that started after the workflow already recorded a window and still has no
+  continuation of its own — which fails the build;
+- a top-level `clockArtifact` — the rows whose own window cannot be read, counted
+  apart from both because their class says nothing about the session.
 
-On failure the build deletes the dataset and its README, names the offending runs,
-their workflows and the query to inspect, and exits non-zero — the same shape as
-the empty-source alarm. On the pinned snapshot every drifting run is unrecorded
-and `beforeRecord` (the whole generation predates the record), so it builds.
+A failed build leaves no dataset behind: it deletes the dataset and its README,
+names the offending runs, their workflows and the query to inspect, and exits
+non-zero — the same shape as the empty-source alarm. On the pinned snapshot every
+drifting run is `unexplained` and `beforeRecord` (the whole generation predates
+the record), so it builds, with `clockArtifact` reporting the 62 rows whose
+completion precedes their start. A workflow that straddles the change records some
+runs and not others: the runs it recorded are judged, the ones that began before
+its first record are `beforeRecord`, and only a run that began after that record
+without its own is a failure.
 
 A query that a later step needs and this list does not have belongs in
 `scripts/efficiency/lib/queries.ts` (name, summary, SQL, columns, one example),

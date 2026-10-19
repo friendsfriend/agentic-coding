@@ -15,9 +15,9 @@ Measured on the pinned snapshot, restored to the repository's current denominato
 | figure | value |
 | --- | --- |
 | runs carrying turns after their own recorded completion | **156 of 1,259** (12.4 %), in **38** of 668 workflows |
-| turns those runs carry | **11,960 of 34,711** (34.4 %) — turn counts as the snapshot records them, before the cost repair; they are not a ratio against the repaired cost denominator below |
+| turns those runs carry, and turns in their tails | **14,163** of the 34,711 the snapshot records; **11,960** of those turns start *after* the run's own recorded completion (`SUM(tail_turns)` of the drifting rows, 34.4 %) — turn counts as the snapshot records them, before the cost repair, and not a ratio against the repaired cost denominator below |
 | preferred cost those runs carry | **114.50 of the repaired 441.9321** units (25.9 %) |
-| tail after completion | median **1,032 s**, p90 **5,748 s**, max **63,380 s** |
+| tail after completion, over the 156 rows | median **1,032 s** (median-high), p90 **5,748 s** (nearest rank), max **63,380 s** |
 | runs that record no turns at all | **315 of 1,259** (25.0 %) |
 | sources of the drifting rows | `traces.otel-tui` 78, `telemetry.main-store` 76, `telemetry.backend` 1, `herdr.backend` 1 |
 | drifting rows whose completion precedes their own start | 62, all of them `traces.otel-tui` |
@@ -125,12 +125,20 @@ The record is two runtime envelopes on the conversation's *binding*:
 - `runtime.session_window.closed` — the identity of the run being left, payload
   `herdr.session.rebound_to` = the run now bound.
 
-Both carry the conversation id in the envelope's `sessionId`, so one session is
-one key across its runs (`telemetryEnvelope` already has that field, and
-`TelemetryEventInput` already accepts it). Both are emitted by the host, not the
-engine, and neither writes workflow state: no snapshot field, no store column, no
-effect, no schema version change. The envelopes land in the dataset's `events`
-table with `run_id`, `at` and their payload, which is what the query reads.
+Both carry the conversation id as `herdr.session.conversation_id` — never as the
+envelope's `sessionId`, which means *run* id everywhere else
+(`src/server/telemetry-parser.ts` maps it to `herdr.session.id`), so one session
+is one key across its runs without two identifier spaces under one attribute.
+Both are emitted by the host, not the engine, and neither writes workflow state:
+no snapshot field, no store column, no effect, no `STORE_SCHEMA_VERSION` change.
+The envelopes land in the dataset's `events` table with `run_id`, `at` and their
+payload, which is what the query reads; those four new `events` columns
+(`session_reason`, `session_rebound_to`, `session_previous_run_id`,
+`session_conversation_id`) are why `DATASET_SCHEMA_VERSION` moves 3 → 4,
+append-only within the version. A *file* an earlier build wrote has no such
+column at all, so every reader refuses it by name
+(`assertDatasetSchemaVersion`) instead of dying on `no such column`: there is no
+conversion, only a rebuild.
 
 ### D2 — The stream resolves its identity per envelope; the binding moves with the run
 
@@ -143,11 +151,15 @@ and updates it in `ensureRun` *before* the run's first prompt:
   `runtime.session_window.closed` names;
 - the new identity, plus the record's payload, is what `runtime.session_window.opened`
   carries;
-- the hooks that name a run (`onMeasuredContext` → `observeContext`,
-  `onToolOutcome` → the dead-surface monitor) resolve the *current* binding rather
-  than closing over `input.runId`, so the ceiling and the monitor follow the run
-  that is working. The hook signature does not change: the host passes a closure
-  that reads its own binding.
+- the hooks that name a run resolve the run that *produced* the observation
+  rather than closing over `input.runId`: `onMeasuredContext` → `observeContext`
+  is charged to the run whose message carried the measurement (the identity the
+  stream resolved for that batch), and `onToolOutcome` → the dead-surface monitor
+  is charged to the run that started the call (`callOwners` by `toolCallId`), with
+  an observation for a run the host no longer tracks ignored. A decision the
+  monitor takes is acted on with the failing run's own context, and refused when
+  a later run now holds the conversation (SEC-003). The hook signature does not
+  change: the host closes over the identity the event was delivered under.
 
 The binding map is keyed by conversation and survives a run's retirement
 (`stopRun` keeps deleting the per-run maps it deletes today — `runs`, `contexts`,
@@ -155,11 +167,17 @@ The binding map is keyed by conversation and survives a run's retirement
 conversation reused after its run was retired still names the run it left. A host
 restart clears the map with the rest of the host's memory; a conversation then
 reused is `adopted` and no `closed` record is written, because the host cannot
-name a run it no longer remembers. That hole cannot produce an unrecorded tail:
-`watchEvents` streams only what is published after the attachment, so the turns a
-conversation produced while no stream was attached are not attributed to anyone —
-they are absent, not misdated. This is why the analysis can treat a tail with no
-session record as a real defect without any false positive from a restart.
+name a run it no longer remembers. `watchEvents` streams only what is published
+after the attachment, so the turns a conversation produced while no stream was
+attached are attributed to nobody — they are absent, not misdated. The hole that
+leaves is the one no host can close alone, and the analysis does not pretend
+otherwise: a session that went on under a later run *across a host lifetime*
+leaves the leaving run with only the binding it got before its own completion
+(`created`/`rebound`), and a binding states no continuation. Only a `closed` row,
+an `opened` row at or after the run's own completion, or the `resumed` reason
+explains a tail; anything else is `unexplained`, which is a defect and not a
+restart false positive, because the run whose record is missing is the run the
+alarm is about.
 
 Emission is best-effort and observational, like the rest of the stream: a failure
 to attach, or to emit, never fails a run, and no emission happens before the
@@ -173,13 +191,24 @@ The query keeps its columns (`run_id`, `workflow_id`, `role`, `status`,
 `tail_seconds`, threshold > 1 minute) and adds:
 
 - `tail_turns` — the turns that started after the run's completion;
-- `drift_kind`:
-  - `attributed` — a `runtime.session_window.closed` event exists for this run at
-    or after its completion, i.e. the recording states that the run's session
-    went on under another run;
+- `session_opened_after_completion` — `1` iff one of this run's own `opened`
+  rows falls at or after its completion: the recording states that the session
+  was bound to this run again after the run closed;
+- `session_reason` and `session_rebound_to` — the run's *latest* binding reason and
+  the run its latest `closed` names (correlated by `at DESC`, not `MAX` of the
+  text: a conversation bound twice to one run, `created` then `adopted` after a
+  host restart, must report the later move);
+- `drift_kind`, decided in the order `clock-artifact` → `attributed` → `resumed`
+  → `unexplained`:
   - `clock-artifact` — `run_completed_at <= run_started_at`, i.e. the run's own
-    window cannot be read (Cause B);
-  - `unexplained` — neither.
+    window cannot be read (Cause B). Nothing can be concluded from a tail with no
+    beginning, so this class wins outright;
+  - `attributed` — a `runtime.session_window.closed` row names this run, i.e. the
+    recording states that its session went on under another run;
+  - `resumed` — no `closed`, but the run's own conversation is recorded as bound
+    to it *after* its completion (`session_opened_after_completion`) or with the
+    `resumed` reason, i.e. the same run kept working on the same session;
+  - `unexplained` — neither, whether or not some row names the run.
 
 The classification is additive, so the population, the tails and the ranking of
 the historical snapshot are unchanged; a reader that asks "which runs are wrong
@@ -189,25 +218,34 @@ about themselves" now gets an answer per row rather than one list.
 
 `scripts/efficiency/lib/run-window.ts` runs the shared query SQL against the
 dataset this build just wrote and returns the drifting rows split by
-`drift_kind` plus the workflows that recorded no session window at all. The
-build's `main()` fails — after deleting the dataset and its README, as an empty
-source does — when at least one row is `unexplained` **and** that row's workflow
-recorded at least one `runtime.session_window.*` event. Everything else is
-reported and does not fail:
+`drift_kind` plus the workflows that recorded any session window. Every drifting
+row falls in exactly one of three populations, and the build's `main()` fails —
+after deleting the dataset and its README, as an empty source does — when at
+least one `unexplained` row's *own* record was due. Nothing else fails:
 
-- a workflow whose recording carries no session-window event at all is counted as
-  `unrecorded` — the snapshot's whole history, and the reason the pinned dataset
-  still builds;
-- `attributed` and `clock-artifact` rows are counted and printed;
-- the counts go into the build summary under `runWindow`, and the failure's
-  message names the rows, the workflow ids and the query to inspect
-  (`analyze.ts run-window-drift`), so the alarm explains itself.
+- `judged` — the rows the record explains: `attributed` (a `closed` names the run
+  the session moved to) or `resumed` (`opened` at or after the run's own
+  completion, or the `resumed` reason);
+- `unrecorded` — the `unexplained` rows, split by whether a record was due: a run
+  that started before its workflow's first session-window event
+  (`beforeRecord`) is reported and never fails, while a run that started after it
+  and still has an `unexplained` tail is a **broken record** (`afterRecord`) and
+  fails;
+- `clock-artifact` — the rows whose own window cannot be read, counted on their
+  own because their class says nothing about the session.
 
-The rule is deliberately per-workflow rather than dataset-wide: a workflow whose
-own events state a session window is a workflow whose tails this record can
-explain, and one unexplained tail there is a defect. This is the same shape as
-`source-recording`'s per-generation split, where a figure is only read against
-the generation that could have recorded it.
+The counts go into the build summary under `runWindow` (`drifting`, `judged
+{runs, attributed, resumed}`, `unrecorded {runs, beforeRecord, afterRecord}`,
+`clockArtifact`, `unexplained`, `recordedWorkflows`), and the failure's message
+names the rows, the workflow ids and the query to inspect (`analyze.ts
+run-window-drift`), so the alarm explains itself.
+
+The gate is deliberately **per run**, not per workflow and not dataset-wide: a
+run is recorded iff a session-window row names *that run id*, so one run's move
+cannot hide another run's lost record — the defect this alarm exists to catch is
+exactly one run of a workflow recording while its neighbour does not. This is the
+same shape as `source-recording`'s per-generation split, where a figure is only
+read against the generation that could have recorded it.
 
 ### D5 — Cause B is classified, not fixed, and named as a limitation
 
@@ -259,25 +297,39 @@ than asked about:
   some other run of the same workflow recorded its own move — exactly the defect
   the alarm exists to catch — and it also has to guess what "the workflow records"
   means for a workflow that spans generations.
-- **[A run with no record of its own is split by whether one was due]**: it
+- **[A run the record does not explain is split by whether one was due]**: it
   *predates the record* when it started before its workflow's first session-window
-  event (`first_session_window_at`, `lib/run-window.ts`'s `recordWasDue`) or when
-  its own window cannot be read; that is counted and never fails. A run that
-  started after the workflow already recorded a window and still has none is a
-  **broken record** and fails the build, because the record should have named it.
-  Reporting it as merely unrecorded would let the alarm go quiet exactly when the
-  recording regressed.
+  event (`first_session_window_at`, `lib/run-window.ts`'s `recordWasDue`); that is
+  counted and never fails. A run that started after the workflow already recorded
+  a window and is still `unexplained` is a **broken record** and fails the build,
+  because the record should have named a continuation for it. Reporting it as
+  merely unrecorded would let the alarm go quiet exactly when the recording
+  regressed.
 - **[`drift_kind` is decided in the order `clock-artifact` → `attributed` →
   `resumed` → `unexplained`]**: an unreadable window (`completed_at <=
   started_at`) says nothing about the session, so it wins outright (D5); then the
   record decides — `attributed` for a `closed` (the session went on under a later
-  run), `resumed` for an `opened` only (the run kept its own conversation); only a
-  run the record does not name is `unexplained`.
+  run), `resumed` for a run the record binds to itself at or after its completion
+  or with the `resumed` reason; and only a run whose record states no
+  continuation is `unexplained`.
+- **[A binding is not a continuation on its own]** (`resumed` requires evidence,
+  MIG-101): a run that was bound to its conversation *before* its own completion
+  and left it without a `closed` row — a handover across a host lifetime, where
+  the next binding cannot name the run it left — is `unexplained`, not `resumed`.
+  Treating any binding as an explanation would make the alarm silent for exactly
+  the misattribution item 20 exists to catch. The two continuation statements
+  that do count are `closed` (the session moved to a named later run) and
+  `opened` at or after the run's completion.
+- **[The reported reason is the run's latest binding]** (MIG-103/QV-101): a
+  conversation bound twice to one run reports the later move, via a correlated
+  subquery ordered `at DESC`, because the reason is what a reader compares across
+  runs and `MAX(reason)` would report `created` for a run that was in fact
+  re-adopted after a host restart.
 - **[`resumed` is a drift class, not a defect]**: the abort-and-resume path keeps
   the same run id, and the dataset still dates the run's completion at its last
   `agent.handoff`, so the turns of the resumed attempt look like a tail of the
-  same run. The `opened` record is the statement that they are that run working
-  on, and classifying it as `unexplained` would fail every resumed run.
+  same run. The record is the statement that they are that run working on, and
+  classifying it as `unexplained` would fail every resumed run.
 - **[`tail_turns` counts turns that started after the run's recorded completion,
   and the query's threshold requires one]**: the same clock reference
   `tail_window` already used for `last_turn_at`, plus `COALESCE(tw.tail_turns, 0)
@@ -286,9 +338,12 @@ than asked about:
 - **[The alarm deletes the dataset and its README before exiting]** — the shape
   the empty-source alarm already has — so a failed build cannot leave a
   plausible-looking dataset that a later step reads as current.
-- **[`runWindow` keeps the two populations apart]**: `drifting`, then
-  `judged {runs, attributed, resumed}` and `unrecorded {runs, beforeRecord,
-  afterRecord}`, plus `clockArtifact`, `unexplained` and `recordedWorkflows`. An
+- **[`runWindow` keeps the three populations apart]**: `drifting`, then `judged
+  {runs, attributed, resumed}`, `unrecorded {runs, beforeRecord, afterRecord}`,
+  `clockArtifact`, `unexplained` and `recordedWorkflows`. `judged` is the
+  `attributed` + `resumed` rows, `unrecorded` is the `unexplained` rows (so
+  `unexplained` equals `unrecorded.runs`) and `clockArtifact` is counted
+  separately, because an unreadable window says nothing about the session. An
   earlier single bag of numbers made `judged` and `unrecorded` look like one
   population and left `attributed + clockArtifact + unexplained = judged` holding
   only by accident.
@@ -313,9 +368,41 @@ than asked about:
   identity and be re-stamped with the wrong run. The wait costs one turn of the
   event loop, once per rebinding, inside `ensureRun`.
 - **[A failed `closed` record is retried, not lost]**: `emitSessionWindow` returns
-  whether the append happened and the host keeps an unwritten close per
-  conversation, re-emitting it on the conversation's next binding. A silently
-  dropped close is precisely `unexplained` drift, which the alarm refuses.
+  whether the append happened, and the host keeps an unwritten close per
+  conversation and writes it in the same transition into the binding that now
+  holds the conversation — the path that failed is the *leaving* run's, which is
+  what made the write fail — or, if that fails too, on the conversation's next
+  binding. A silently dropped close is precisely `unexplained` drift, which the
+  alarm refuses.
+- **[The whole session-window transition is serialized per conversation]**
+  (CONCURRENCY-003): reading the previous binding, draining the stream, writing
+  the new binding and emitting its two envelopes are one chained step, so two
+  overlapping rebindings of one conversation cannot both close the leaving run —
+  one of them naming a successor that never held the conversation — and cannot
+  leave the last run unclosed. The pending-close queue is capped, so a
+  conversation whose telemetry can never be written does not grow without bound.
+- **[The producing run is resolved per event and handed to the writer]**
+  (CONCURRENCY-004): `emit`-level helpers take the identity explicitly instead of
+  re-resolving the current binding, so an event the stream delivers for a frame
+  its run already committed is stamped with that run even if the binding moved in
+  between; `runtime.tool` is emitted under the run that *started* the call
+  (`callOwners`, pruned on every `tool_execution_end` and cleared on `run_end`).
+  This is structural rather than synchronicity-dependent, which is what the
+  drain's one macrotask turn cannot by itself guarantee.
+- **[`handleFailFast` is refused for a run that no longer owns the conversation]**
+  (SEC-003): a dead tool surface's supervisor used to take the bound
+  conversation's environment, which after a rebinding is the successor's, and
+  could abort and hand off the wrong run. It now reads the failing run's own
+  context and states `herdr.fail_fast.scope: "owner-rebound"` instead.
+- **[The cross-rebind producer identity is covered structurally, not by a
+  deterministic test]** (TQV-102): reproducing a frame that is committed under one
+  run and delivered after the binding moved needs a real durable harness whose
+  publication timing is under test control, which the faux-provider harness cannot
+  give; the drain makes the window one microtask wide. What is pinned instead is
+  the contract the fix rests on (an envelope is written under the identity it is
+  handed, never one resolved later), the serialization of two overlapping
+  rebindings, and the retry of a lost close — with the limitation recorded here
+  rather than papered over.
 - **[The binding map's lifetime is the host process]**: like the per-conversation
   telemetry stream it exists so the conversation can attribute later turns, so it
   is dropped only at shutdown, never on `stopRun`. `stopRun` therefore also guards
@@ -330,16 +417,27 @@ than asked about:
 
 No migration. The record is new telemetry: a store written before this change has
 no session-window events, which is exactly the `unrecorded` case (D4), and every
-reader treats a missing record as "not recorded" rather than "no tail". Rollback
-is the revert of one change: the envelopes stop being written, `run-window-drift`
-still classifies (with every drift row `unexplained` or `clock-artifact`), and the
+reader treats a missing record as "not recorded" rather than "no tail". The
+dataset's `events` columns are append-only within schema 4, so a dataset built
+from an older-only snapshot simply reads empty there; a dataset *file* an earlier
+build wrote has no such column at all and is refused by
+`assertDatasetSchemaVersion` (naming the rebuild) rather than read wrongly. A
+workflow that straddles the change records some runs and not others: the runs it
+recorded are judged, the ones that started before its first record are counted
+`beforeRecord`, and only a run that started after that record without its own is
+a failure. Rollback is the revert of one change: the envelopes stop being written,
+`run-window-drift` still classifies (with every drift row `unexplained`,
+`resumed`-from-a-pre-completion binding excluded, or `clock-artifact`), and the
 build alarm reports the drifting runs as unrecorded-before-record instead of
 judging them.
 
 ## Open Questions
 
-None blocking. The two that a follow-up owns: (1) whether the traces reader
-should date a run from the end of its handoff span (D5), and (2) whether a run
-whose session continued should carry a derived "effective end" in the dataset's
-run rollup, which would make per-run duration match the session window everywhere
-instead of leaving the tail visible but separate.
+None blocking. The three that a follow-up owns: (1) whether the traces reader
+should date a run from the end of its handoff span (D5); (2) whether a run whose
+session continued should carry a derived "effective end" in the dataset's run
+rollup, which would make per-run duration match the session window everywhere
+instead of leaving the tail visible but separate; and (3) whether the session
+binding should be persisted in the run-map document, so a session continued
+*across a host lifetime* could name the run it left instead of leaving that run
+`unexplained` (D2).

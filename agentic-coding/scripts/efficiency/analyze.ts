@@ -19,7 +19,11 @@ import {
 	parseArgs,
 	UsageError,
 } from "./lib/cli.ts";
-import { DATASET_FILE } from "./lib/dataset.ts";
+import {
+	assertDatasetSchemaVersion,
+	DATASET_FILE,
+	DatasetSchemaError,
+} from "./lib/dataset.ts";
 import { QUERIES, queryByName } from "./lib/queries.ts";
 
 const HELP = `Usage: bun run scripts/efficiency/analyze.ts <query> [options]
@@ -75,6 +79,7 @@ function main(argv: readonly string[]): number {
 	const sql = query.limitable ? `${query.sql}\nLIMIT ${limit}` : query.sql;
 	const db = new Database(datasetPath, { readonly: true });
 	try {
+		assertDatasetSchemaVersion(db, datasetPath);
 		const rows = db.query<Record<string, unknown>, []>(sql).all();
 		if (args.flags.has("json")) {
 			process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
@@ -94,7 +99,9 @@ function main(argv: readonly string[]): number {
 try {
 	process.exit(main(Bun.argv.slice(2)));
 } catch (error) {
-	if (error instanceof UsageError) {
+	// A dataset an earlier build wrote is a usage problem, not a crash: the
+	// message names the rebuild, which is the only fix there is.
+	if (error instanceof UsageError || error instanceof DatasetSchemaError) {
 		process.stderr.write(`${error.message}\n\n${HELP}`);
 		process.exit(2);
 	}

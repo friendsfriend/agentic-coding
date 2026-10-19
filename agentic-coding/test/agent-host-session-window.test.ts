@@ -238,7 +238,9 @@ describe("the session window of a durable conversation", () => {
 			});
 		await ensure();
 		await oneTurn(host, faux, "run-resume");
-		const before = readEnvelopes(telemetryPath);
+		// Wait for the run's own frames to be complete before reading: the delta below
+		// must be the record's, not a trailing envelope that happened to land late.
+		const before = await waitForEnvelopes(telemetryPath, "runtime.settled", 1);
 		// The aborted run is resumed: the engine ensures the same run id on the
 		// same conversation, which is `resumed` — the run's window is not reopened.
 		await ensure();
@@ -250,7 +252,9 @@ describe("the session window of a durable conversation", () => {
 		// The resume wrote exactly one envelope and produced no turn: the record
 		// observes the move and nothing else, so nothing the host emits could have
 		// restarted, completed or re-opened the run's own window.
-		expect(envelopes.length).toBe(before.length + 1);
+		const sessionOf = (rows: Array<Record<string, unknown>>) =>
+			rows.filter((envelope) => SESSION_EVENTS.has(String(envelope.event)));
+		expect(sessionOf(envelopes).length - sessionOf(before).length).toBe(1);
 		expect(
 			envelopes.filter((envelope) => envelope.event === "runtime.turn_started"),
 		).toHaveLength(1);
@@ -450,6 +454,128 @@ describe("the session window of a durable conversation", () => {
 				SESSION_EVENTS.has(String(envelope.event)),
 			),
 		).toEqual([]);
+		await host.shutdown();
+	});
+
+	test("a close that could not be written is retried on the next binding", async () => {
+		// A `closed` record is what a reader treats as proof of a continuation, so a
+		// close nobody wrote is a tail nobody can explain and a failed build. The
+		// leaving run's own telemetry path is what failed, so the retry writes into the
+		// binding that now holds the conversation — one durable statement, once.
+		const dir = tempWorkflowDir();
+		const { host, faux, telemetryPath, model } = await openHost(dir);
+		const envFor = (runId: string, telemetry: string) =>
+			writeRunEnv(dir, runId, {
+				HERDR_WORKFLOW_ID: "wf-window-retry",
+				HERDR_RUN_ID: runId,
+				HERDR_TELEMETRY_PATH: telemetry,
+			});
+		// A *file* where the run's telemetry directory would be: the append cannot
+		// happen, exactly as it cannot for a removed workspace.
+		const blocked = path.join(dir, "blocked");
+		fs.writeFileSync(blocked, "not a directory\n");
+		const blockedPath = path.join(blocked, "telemetry.jsonl");
+		const ensure = (runId: string, telemetry: string) =>
+			host.ensureRun({
+				runId,
+				name: "worker-window-retry",
+				cwd: dir,
+				runEnvPath: envFor(runId, telemetry),
+				toolPolicy: "default",
+				model,
+			});
+		await ensure("run-a", blockedPath);
+		await oneTurn(host, faux, "run-a");
+		await ensure("run-b", telemetryPath);
+		const afterRebinding = await waitForEnvelopes(
+			telemetryPath,
+			"runtime.session_window.opened",
+			1,
+		);
+		const session = afterRebinding.filter((envelope) =>
+			SESSION_EVENTS.has(String(envelope.event)),
+		);
+		// The retried close comes before the record that explains the continuation,
+		// and it names the run that was left.
+		expect(session.map((envelope) => envelope.event)).toEqual([
+			"runtime.session_window.closed",
+			"runtime.session_window.opened",
+		]);
+		expect(session[0]).toMatchObject({
+			runId: "run-a",
+			"herdr.session.rebound_to": "run-b",
+		});
+		// A third binding does not write the same close twice: the pending entry is
+		// dropped once it landed.
+		await host.stopRun("run-b");
+		await ensure("run-c", telemetryPath);
+		const all = await waitForEnvelopes(
+			telemetryPath,
+			"runtime.session_window.opened",
+			2,
+		);
+		expect(
+			all.filter(
+				(envelope) =>
+					envelope.event === "runtime.session_window.closed" &&
+					envelope.runId === "run-a",
+			),
+		).toHaveLength(1);
+		await host.shutdown();
+	});
+
+	test("two rebindings of one conversation never interleave", async () => {
+		// The transition (read the previous binding, drain, write the new one) is one
+		// step per conversation: without that, two overlapping rebindings close the
+		// same run twice — once naming a successor that never held the conversation —
+		// and leave the run that did hold it unclosed.
+		const dir = tempWorkflowDir();
+		const { host, telemetryPath, model } = await openHost(dir);
+		const ensure = (runId: string) =>
+			host.ensureRun({
+				runId,
+				name: "worker-window-chain",
+				cwd: dir,
+				runEnvPath: writeRunEnv(dir, runId, {
+					HERDR_WORKFLOW_ID: "wf-window-chain",
+					HERDR_RUN_ID: runId,
+					HERDR_TELEMETRY_PATH: telemetryPath,
+				}),
+				toolPolicy: "default",
+				model,
+			});
+		const first = await ensure("run-a");
+		// Two runs of the same step and role are launched onto the same conversation
+		// before the first has finished ensuring — a retried launch, or two clients of
+		// one step — and neither is awaited until both are in flight.
+		const [second, third] = await Promise.all([
+			ensure("run-b"),
+			ensure("run-c"),
+		]);
+		expect(second.conversationId).toBe(first.conversationId);
+		expect(third.conversationId).toBe(first.conversationId);
+		const session = readEnvelopes(telemetryPath).filter((envelope) =>
+			SESSION_EVENTS.has(String(envelope.event)),
+		);
+		// One close per run that was left, each naming the run that followed it, and
+		// one opening per run: no run is closed twice and none is left open.
+		const closes = session.filter(
+			(envelope) => envelope.event === "runtime.session_window.closed",
+		);
+		expect(closes.map((envelope) => envelope.runId)).toEqual([
+			"run-a",
+			"run-b",
+		]);
+		expect(
+			closes.map((envelope) => envelope["herdr.session.rebound_to"]),
+		).toEqual(["run-b", "run-c"]);
+		expect(
+			session
+				.filter(
+					(envelope) => envelope.event === "runtime.session_window.opened",
+				)
+				.map((envelope) => envelope.runId),
+		).toEqual(["run-a", "run-b", "run-c"]);
 		await host.shutdown();
 	});
 });

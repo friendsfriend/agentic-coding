@@ -16,6 +16,7 @@ import {
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { emitRuntimeEnvelope } from "../src/agent-host/telemetry.ts";
 import { agentMetrics } from "../src/workflow/run-projections.ts";
 
 function tempWorkflowDir(): string {
@@ -293,5 +294,39 @@ describe("durable host telemetry", () => {
 			envelopes.some((e) => typeof e["herdr.content.tool_input"] === "string"),
 		).toBe(true);
 		await host.shutdown();
+	});
+
+	test("an envelope is written under the identity it was handed, never one resolved later", () => {
+		// The invariant the session window rests on: a conversation outlives the run
+		// that created it, so the producing run is resolved per event and handed to
+		// the writer. A writer that re-resolved the current binding instead would
+		// stamp a leaving run's last frames with its successor.
+		const dir = tempWorkflowDir();
+		const pathA = path.join(dir, "a", "telemetry.jsonl");
+		const pathB = path.join(dir, "b", "telemetry.jsonl");
+		const identityOf = (runId: string, telemetryPath: string) => ({
+			workflowId: "wf-tool-owner",
+			runId,
+			telemetryPath,
+		});
+		expect(
+			emitRuntimeEnvelope(
+				identityOf("run-a", pathA),
+				"runtime.session_window.closed",
+				{ "herdr.session.rebound_to": "run-b" },
+			),
+		).toBe(true);
+		expect(fs.existsSync(pathB)).toBe(false);
+		const written = fs
+			.readFileSync(pathA, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(written).toHaveLength(1);
+		expect(written[0]).toMatchObject({
+			event: "runtime.session_window.closed",
+			runId: "run-a",
+			"herdr.session.rebound_to": "run-b",
+		});
 	});
 });
