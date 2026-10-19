@@ -13,7 +13,7 @@ code. `core.archive` SHALL remain an agent step declaring `roles: () =>
 
 This requirement records a measured fact, not a new behavior: the spike for
 efficiency backlog item 22 established that no era of the engine ever executed
-those commands (see `docs/efficiency/02f-archive-effect-counterfactual.md`).
+those commands (see `docs/efficiency/02i-archive-effect-counterfactual.md`).
 
 #### Scenario: No archive effect exists in the catalog
 

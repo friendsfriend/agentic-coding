@@ -19,7 +19,7 @@ effect.
 
 ## What Changes
 
-- Add `docs/efficiency/02f-archive-effect-counterfactual.md`, an addendum in the
+- Add `docs/efficiency/02i-archive-effect-counterfactual.md`, an addendum in the
   style of `04a-harness-reader-repair.md` that records the spike: the code
   citation per era, the reproducing queries, the numbers, and the verdict. Like
   `04a`, it is additive — it does not revise the figures in `00`…`04`.
@@ -49,7 +49,7 @@ corrects an analysis record, so no existing requirement changes.
 
 ## Impact
 
-- `docs/efficiency/02f-archive-effect-counterfactual.md` (new).
+- `docs/efficiency/02i-archive-effect-counterfactual.md` (new).
 - `docs/efficiency/02e-wiki-archive-delivery.md` (open-question answer only).
 - `docs/efficiency/04-backlog.md` (item 22 premise note only).
 - No source, contracts, effects, telemetry or storage changes. No migration, no

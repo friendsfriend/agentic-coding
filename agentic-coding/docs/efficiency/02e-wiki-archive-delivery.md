@@ -122,6 +122,9 @@ So the archive is ~7 turns and 1.8 cost units of model time for what an effect
 did in 18 s, and the model is only *needed* on the failure path (WD-4). Note the
 caution: the older window also has `archive`-role runs (with turns and cost), so
 "engine effect" and "agent step" may have coexisted there; see Open questions.
+That question is now settled — the pair bracketed the archive agent's own run and
+there was never an engine effect; see
+[`02i-archive-effect-counterfactual.md`](./02i-archive-effect-counterfactual.md).
 
 ### WD-2 / WD-3 — the wiki agent reads first and writes last
 
@@ -295,10 +298,9 @@ limits 8), so there is no measured rework from the order of these steps.
 ## Open questions
 
 * **Was `delivery.archive_started/completed` really an engine effect doing the
-  same work?** The current source has no emitter for it, and the same July window
-  also contains `archive`-role runs with turns and cost, so the two may have
-  coexisted (or the older role was a different job). Settling it needs git
-  history, which this step is not allowed to read.
+  same work?** **Settled: no.** The git history the spike was allowed to read
+  shows both events emitted around the archive agent's own run; see
+  [`02i-archive-effect-counterfactual.md`](./02i-archive-effect-counterfactual.md).
 * **Why do wiki runs stop after 2026-10-07?** 7 runs in October but cost recorded
   for one, and none after. Reduced use, a different workflow family, or lost
   telemetry — the snapshot cannot tell.

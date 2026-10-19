@@ -74,12 +74,14 @@ archive agent* (`archive_started`) and by *the verb that agent calls when done*
 
 Never the engine. The instruction lived in the agent's own skill and prompt:
 
-- `skills/herdr-openspec-archive/SKILL.md` (introduced `122cf11`): *"For
-  standard/direct-apply workflows, run `openspec archive \"$HERDR_CHANGE_ID\"
-  --yes` … On success, run `herdr-workflow archive --repo \"$PWD\" --change
-  \"$HERDR_CHANGE_ID\"` to hand off to git operations."*
+- `agent-definitions/skills/herdr-openspec-archive/SKILL.md` (introduced
+  `122cf11`, deleted by `b69cc8e`): *"For standard/direct-apply workflows, run
+  `openspec archive \"$HERDR_CHANGE_ID\" --yes` … On success, run
+  `herdr-workflow archive --repo \"$PWD\" --change \"$HERDR_CHANGE_ID\"` to
+  hand off to git operations."*
 - `4e10ebb`, `6cc30b7`, `aa9bb51` embed the same sentence as **prompt text** for
-  the agent: ``Run `openspec archive ${state.changeId} --yes` to move …``.
+  the agent (`agentic-coding/src/workflow/completion.ts:37-38`): ``Run `openspec
+  archive ${state.changeId} --yes` to move …``.
 
 A grep of every era for engine-side `openspec` spawning (`subprocess`, `spawn`,
 `exec`, `Bun.$`, `execFile`) finds **no call site** — only prompt and skill text.
@@ -92,7 +94,10 @@ planning (`steps/planning.ts:47`), not to the archive.
 `grep -rn "archive_started\|archive_completed" src/` returns **nothing**. The
 events are gone; `delivery.commit` and `delivery.push` are the only delivery
 effects, and `core.archive` is an agent step with `roles: () => ["archive"]`
-(`steps/lifecycle.ts:201`).
+(`steps/lifecycle.ts:201`). They stopped when the code that emitted them was
+deleted: `b69cc8e` (2026-08-15) removed
+`agentic-coding/src/workflow/completion.ts` outright (`@@ -1,184 +0,0 @@`), one
+day after the snapshot's last pair (2026-08-14T08:41:03).
 
 ## What the data says
 
@@ -137,9 +142,10 @@ fields at all. The tokens were never missing; they live on run and turn rows, an
 inside these windows they are **0.67 units over 164 turns**, i.e. entirely
 consistent with a fast/free model doing a two-command job.
 
-Cost per archive run is flat across the window boundary — 0.0232 units/run inside
-the window vs 0.0235 units/run outside — so nothing regressed when the window
-closed. There is no effect whose loss could be restored.
+Cost per archive run is flat across the boundary — **0.0240** units/run in the 31
+archive runs of the 32 pair workflows vs **0.0230** in the other 48 archive runs
+of the snapshot — so nothing regressed when the window closed. There is no effect
+whose loss could be restored.
 
 ## Verdict
 
@@ -175,7 +181,7 @@ Recorded because the assignment forbids asking the developer:
    22's Problem paragraph. Recording the finding only in an archived
    `design.md` would leave both statements standing, and the next efficiency pass
    would re-derive the same false counterfactual. So the change adds a
-   `02f`-style addendum and reduces the two upstream statements to one-line
+   `02i`-style addendum and reduces the two upstream statements to one-line
    pointers.
 3. **Addendum, not rewrite.** `04a` set the precedent: an addendum is additive
    and does not revise the figures in `00`…`04`. The `02e` and `04-backlog` edits
@@ -188,6 +194,9 @@ Recorded because the assignment forbids asking the developer:
    `openspec.validate` effect already does exactly that at planning) — but that
    needs a fresh decision from the developer and a fresh justification, which is
    out of scope here and is surfaced as an open question instead.
+5. **The addendum is `02i`, not the `02f` the plan first named.** `02f` is already
+   taken by `02f-env-setup-author.md`, so the next free number in the deep-dive
+   series is used. The content and the pointers are unchanged by the rename.
 
 ## Risks / Trade-offs
 
