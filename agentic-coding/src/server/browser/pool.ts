@@ -36,6 +36,16 @@
 import fs from "node:fs";
 import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
 import { createStageGuard, type StageSessionPolicy } from "../stages/guard.ts";
+import {
+	identityFromStorageState,
+	liveCookies,
+	parsedSessionStorage,
+	SESSION_STORAGE_READ_SCRIPT,
+	type StageIdentityCache,
+	stageIdentityCache,
+	storageInitScript,
+	withSessionStorage,
+} from "../stages/identity-cache.ts";
 import { bannerRemovalScript } from "./banner.ts";
 import { BrowserPoolError, tooManySessionsMessage } from "./errors.ts";
 import {
@@ -89,6 +99,10 @@ export interface BrowserPoolOptions {
 		binding: StageSessionBinding,
 		scope: StageBearerScope,
 	) => Promise<string | undefined>;
+	/** The identity cache this pool installs and captures into
+	 * (`add-stage-identity-cache`). Absent reads as the process-wide store, and a
+	 * test passes its own so a "restart" is a fresh instance. */
+	readonly identity?: StageIdentityCache;
 }
 
 /** Why a session left the pool. `closed` is the caller's own `browser_close`,
@@ -109,6 +123,11 @@ export interface OpenSessionRequest {
 	 * a context created here would sit outside the stage's lease and session
 	 * bound. */
 	readonly reuseOnly?: boolean;
+	/** The role whose cached identity this context is created with
+	 * (`add-stage-identity-cache`). It has to be known at open time: the cookies
+	 * and the storage init script are installed *before* the first navigation, so
+	 * the identity provider sees them on the very first request of the page. */
+	readonly identityRole?: string;
 }
 
 export interface SessionSummary {
@@ -147,6 +166,9 @@ export class BrowserPool {
 				scope: StageBearerScope,
 		  ) => Promise<string | undefined>)
 		| undefined;
+	/** The identity cache of this pool: the process-wide one unless a caller
+	 * supplied its own. */
+	private readonly identity: StageIdentityCache;
 	private browser: DriverBrowser | undefined;
 	/** The second, lazily launched headed browser. It exists only while a
 	 * promoted session lives in it (task 1.3). */
@@ -196,6 +218,14 @@ export class BrowserPool {
 		this.log = options.log ?? (() => {});
 		this.onSessionClosed = options.onSessionClosed;
 		this.bearerToken = options.bearerToken;
+		this.identity = options.identity ?? stageIdentityCache();
+	}
+
+	/** The identity cache this pool reads and writes, so a surface can report or
+	 * forget one without reaching for the process singleton behind the pool's
+	 * back. */
+	identityStore(): StageIdentityCache {
+		return this.identity;
 	}
 
 	/** Every open session, for a status read. */
@@ -241,6 +271,129 @@ export class BrowserPool {
 	/** The sessions one owner holds. */
 	ownedBy(owner: string): SessionSummary[] {
 		return this.summaries().filter((session) => session.owner === owner);
+	}
+
+	// -- stage identity (`add-stage-identity-cache`) -------------------------
+
+	/**
+	 * Capture the identity a session's login established, into the cache.
+	 *
+	 * Only what the stage's own origins hold is read: the cookies whose domain is
+	 * one of them, and the `localStorage` of each — plus the `sessionStorage` of
+	 * the document the session is on, which only a live page can be asked for.
+	 * Nothing is captured from a foreign origin a page happened to call.
+	 *
+	 * A capture that finds nothing (a token-only code grant leaves no browser
+	 * state at all) never overwrites an entry that does hold something: an empty
+	 * fact is not a newer truth. And a capture that fails — a closed page, a
+	 * refused storage area — answers `false` instead of failing the login that
+	 * asked for it, because a cache is an optimisation and never a precondition.
+	 */
+	async captureIdentity(
+		session: BrowserSession,
+		source: "cache" | "recipe" | "user",
+	): Promise<boolean> {
+		const policy = session.stage?.identity;
+		const identity = session.identity;
+		const origins = session.stage?.identityOrigins ?? [];
+		const stage = session.stage?.ident;
+		if (!policy?.enabled || identity === undefined || stage === undefined)
+			return false;
+		if (origins.length === 0) return false;
+		try {
+			const snapshot = await session.context.storageState();
+			let state = identityFromStorageState(snapshot, origins);
+			// `sessionStorage` is only readable while the document that owns it is the
+			// page's own: the origin is compared, not the URL, so a `/path/` landing
+			// page still belongs to its origin.
+			const current = originOf(session.page.url());
+			if (current !== undefined && origins.includes(current)) {
+				const read = await session.page
+					.evaluate(SESSION_STORAGE_READ_SCRIPT)
+					.catch(() => undefined);
+				state = withSessionStorage(state, current, parsedSessionStorage(read));
+			}
+			const holdsSomething =
+				state.cookies.length > 0 ||
+				state.origins.some(
+					(origin) =>
+						origin.localStorage.length > 0 || origin.sessionStorage.length > 0,
+				);
+			if (
+				!holdsSomething &&
+				this.identity.holds({ stage, role: identity.role })
+			)
+				return false;
+			this.identity.put({ stage, role: identity.role }, state, {
+				ttlMs: policy.ttlMs,
+				maxEntries: policy.maxEntries,
+			});
+			session.identity = {
+				role: identity.role,
+				cacheInstalled: identity.cacheInstalled,
+				source,
+				// The pool's own clock, not the store's: when this session captured is
+				// what the refresh interval counts from, and the two clocks are injected
+				// separately.
+				capturedAt: this.clock(),
+			};
+			return true;
+		} catch {
+			// A capture never fails the login it follows.
+			return false;
+		}
+	}
+
+	/**
+	 * Re-capture a living session's identity when its refresh interval has passed
+	 * (`design.md` D5). A long run rotates its refresh token while it works; a
+	 * later session has to reuse what the run *ended* with, not what it started
+	 * with. A session that never logged in, a stage that disabled the cache and a
+	 * session whose interval has not elapsed all answer `false` without touching
+	 * the context.
+	 */
+	async refreshIdentity(session: BrowserSession): Promise<boolean> {
+		const policy = session.stage?.identity;
+		const identity = session.identity;
+		if (!policy?.enabled || identity?.source === undefined) return false;
+		const capturedAt = identity.capturedAt ?? 0;
+		if (this.clock() - capturedAt < policy.refreshMs) return false;
+		return await this.captureIdentity(session, identity.source);
+	}
+
+	/** The live identities, as `(stage, role, capturedAt, expiresAt)`: what the
+	 * dashboard action and the route report, and never a value. */
+	identities(): ReturnType<StageIdentityCache["list"]> {
+		return this.identity.list();
+	}
+
+	/** Forget one stage's cached identities (one role of it, when `role` is
+	 * named), answering how many left. */
+	forgetIdentity(filter: { stage: string; role?: string }): number {
+		return this.identity.forget(filter);
+	}
+
+	/** The capture an open would install, or `undefined` when the stage holds
+	 * none for this role. Expired cookies are dropped again here: a cookie's own
+	 * expiry is independent of the entry's TTL. */
+	private identityInstall(request: OpenSessionRequest):
+		| {
+				readonly role: string;
+				readonly cookies: ReturnType<typeof liveCookies>;
+				readonly script: string;
+		  }
+		| undefined {
+		const role = request.identityRole;
+		const binding = request.stage;
+		if (role === undefined || binding === undefined) return undefined;
+		if (binding.identity?.enabled !== true) return undefined;
+		const entry = this.identity.peek({ stage: binding.ident, role });
+		if (entry === undefined) return undefined;
+		return {
+			role,
+			cookies: liveCookies(entry.state.cookies, this.clock()),
+			script: storageInitScript(entry.state),
+		};
 	}
 
 	/**
@@ -378,6 +531,17 @@ export class BrowserPool {
 				...(guard ? { guard } : {}),
 				...(authorization ? { authorization } : {}),
 			});
+			// The cached identity is installed on the fresh context *before* the first
+			// navigation (`add-stage-identity-cache`, D3): cookies into the jar, the
+			// storage into an origin-scoped init script, so a silent sign-in finds its
+			// token on the first load instead of after one round trip.
+			const install = this.identityInstall(request);
+			if (install !== undefined) {
+				if (install.cookies.length > 0)
+					await context.addCookies(install.cookies).catch(() => {});
+				if (install.script !== "")
+					await context.addInitScript(install.script).catch(() => {});
+			}
 			const page = await context.page();
 			session = new BrowserSession({
 				owner: request.owner,
@@ -388,6 +552,18 @@ export class BrowserPool {
 				...(request.url ? { baseUrl: request.url } : {}),
 				...(request.app ? { app: request.app } : {}),
 				...(request.stage ? { stage: request.stage } : {}),
+				// The role is remembered even when nothing was installed: a first login
+				// of that role still has to fill the cache (`add-stage-identity-cache`).
+				// `cacheInstalled` says only whether *this* context started with one.
+				...(request.identityRole === undefined ||
+				request.stage?.identity?.enabled !== true
+					? {}
+					: {
+							identity: {
+								role: request.identityRole,
+								cacheInstalled: install !== undefined,
+							},
+						}),
 				now: this.clock,
 			});
 			this.sessions.set(session.id, session);
@@ -1160,6 +1336,16 @@ export class BrowserPool {
 		this.handoffRedirects.delete(session.id);
 		if (registered) this.onSessionClosed?.(session, cause);
 		session.beginContextSwap();
+		// A clean close is the last chance to keep what the login established
+		// (`add-stage-identity-cache`, D5): the context is still alive here, and a
+		// session that ends without one is exactly the session whose next run would
+		// have to sign in again. A crash has nothing left to read, so it is skipped.
+		if (
+			registered &&
+			session.identity?.source !== undefined &&
+			cause !== "crashed"
+		)
+			await this.captureIdentity(session, session.identity.source);
 		// The slot is handed to the queue *before* the close is awaited, so it never
 		// becomes visible as free while the waiters are still parked.
 		if (freed) this.wakeNext();

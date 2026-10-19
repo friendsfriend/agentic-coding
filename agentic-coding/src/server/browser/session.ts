@@ -24,6 +24,7 @@
 // the pool owns those, and every method here is a page operation plus one
 // bounded buffer.
 
+import type { EffectiveIdentityCache } from "../stages/catalog.ts";
 import type { StageRefusal, StageSessionPolicy } from "../stages/guard.ts";
 import { refSelector, snapshotRefs } from "./snapshot.ts";
 import type {
@@ -77,7 +78,34 @@ export type StageSessionBinding = StageSessionPolicy & {
 	 * foreign-origin subframe inside a stage session never gets one, however
 	 * allow-listed its target is. */
 	readonly initiators?: readonly string[];
+	/** The stage's effective identity-cache bounds (`add-stage-identity-cache`):
+	 * whether this session may capture and reuse one, how long the entry lives,
+	 * how often a living session refreshes it. Absent means the stage declares
+	 * no cache, which is the same as `enabled: false`. */
+	readonly identity?: EffectiveIdentityCache;
+	/** The origins a cached identity covers: the stage's applications and its
+	 * login recipes, never a third-party host. */
+	readonly identityOrigins?: readonly string[];
 };
+
+/** The identity one stage session's login established
+ * (`add-stage-identity-cache`). It is bookkeeping only: the captured cookie and
+ * storage values live in the cache, never here. */
+export interface SessionIdentity {
+	/** The role whose login this session performs, `stageRole` at open time or the
+	 * role `stage_login` names. */
+	role: string;
+	/** A cached entry was installed into this session's context before its first
+	 * navigation, so a silent check is worth performing. */
+	cacheInstalled: boolean;
+	/** Where the identity now in the browser came from, once a login succeeded:
+	 * `cache` (the installed entry was silently accepted), `recipe` (this server
+	 * performed the login) or `user` (the developer did, through the hand-off).
+	 * Absent until a login succeeds. */
+	source?: "cache" | "recipe" | "user";
+	/** When the cache last captured this identity, epoch milliseconds. */
+	capturedAt?: number;
+}
 
 /** The selector that covers every password field of a stage screenshot. */
 export const PASSWORD_MASK: DriverLocator = {
@@ -203,6 +231,10 @@ export interface SessionOptions {
 	readonly app?: string;
 	/** The stage this session is bound to for its whole life, if any. */
 	readonly stage?: StageSessionBinding;
+	/** The identity this session starts with, when a cached entry was installed
+	 * into its context before the first navigation
+	 * (`add-stage-identity-cache`). */
+	readonly identity?: SessionIdentity;
 	/** The shared, bounded refusal buffer of this session, filled by the stage
 	 * guard and drained by the tool call that sees it. */
 	readonly guardEvents?: GuardRefusalRecord[];
@@ -237,6 +269,9 @@ export class BrowserSession {
 	/** HTTP basic credentials installed on this session's context, kept so a
 	 * recording's replacement context keeps them. */
 	httpCredentials: DriverHttpCredentials | undefined;
+	/** The identity this session's login established, and where it came from
+	 * (`add-stage-identity-cache`). Holds a role and a source, never a value. */
+	identity: SessionIdentity | undefined;
 	viewport: { width: number; height: number };
 	/** Set when the browser process went away under this session. */
 	crashed = false;
@@ -291,6 +326,7 @@ export class BrowserSession {
 		this.baseUrl = options.baseUrl ?? "";
 		this.app = options.app;
 		this.stage = options.stage;
+		this.identity = options.identity;
 		this.guardEvents = options.guardEvents ?? [];
 		this.clock = options.now ?? (() => Date.now());
 		this.createdAt = this.clock();

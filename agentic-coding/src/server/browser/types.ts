@@ -123,6 +123,21 @@ export interface DriverHttpCredentials {
 	readonly password: string;
 }
 
+/** One cookie installed into a live context (`add-stage-identity-cache`): the
+ * shape `storageState()` reports a cookie in, so a captured identity can be put
+ * back without a translation layer that could lose `httpOnly` or `sameSite`.
+ * `expires` is epoch *seconds*, `-1` for a cookie with no expiry of its own. */
+export interface DriverCookie {
+	readonly name: string;
+	readonly value: string;
+	readonly domain: string;
+	readonly path: string;
+	readonly expires: number;
+	readonly httpOnly: boolean;
+	readonly secure: boolean;
+	readonly sameSite?: "Strict" | "Lax" | "None";
+}
+
 export interface DriverContextOptions {
 	readonly viewport: { readonly width: number; readonly height: number };
 	readonly recordVideo?: {
@@ -224,6 +239,11 @@ export interface DriverContext {
 	 * page's own scripts (the hand-off banner). */
 	addInitScript(script: string): Promise<void>;
 	storageState(): Promise<unknown>;
+	/** Install cookies into a live context, before its first navigation.
+	 * Server-side only: the script facade keeps refusing every cookie read and
+	 * write, so a run can neither see nor plant one (`add-stage-identity-cache`,
+	 * SEC). */
+	addCookies(cookies: readonly DriverCookie[]): Promise<void>;
 	/** Install HTTP credentials on a live context (`http-basic` login, and the
 	 * credential flow's own reload). */
 	setHttpCredentials(credentials: DriverHttpCredentials): Promise<void>;

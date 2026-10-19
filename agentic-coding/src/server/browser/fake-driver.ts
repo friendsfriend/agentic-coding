@@ -14,6 +14,7 @@ import type {
 	DriverConsoleEntry,
 	DriverContext,
 	DriverContextOptions,
+	DriverCookie,
 	DriverHttpCredentials,
 	DriverLaunchOptions,
 	DriverLocator,
@@ -58,6 +59,25 @@ export interface FakeDriverOptions {
 	 * not editable: the value is inside the error's own call log, which is exactly
 	 * the shape a credential must never let through. */
 	readonly failFill?: boolean;
+	/** The snapshot `storageState()` reports (`add-stage-identity-cache`): the
+	 * cookies and per-origin `localStorage` one context starts with, which is what
+	 * a capture reads. Defaults to one `http://fake.local` token. */
+	readonly storageState?: FakeStorageState;
+	/** The JSON text the `sessionStorage` read answers with
+	 * (`sessionStorage.length`/`key`/`getItem`). Defaults to `{}`. */
+	readonly sessionStorage?: string;
+}
+
+/** The `storageState()`-shaped snapshot a fake context starts with. */
+export interface FakeStorageState {
+	readonly cookies?: readonly DriverCookie[];
+	readonly origins?: readonly {
+		readonly origin: string;
+		readonly localStorage: readonly {
+			readonly name: string;
+			readonly value: string;
+		}[];
+	}[];
 }
 
 /** One fake context's mutable world: the URL it is on, whether it records, the
@@ -111,6 +131,10 @@ export interface FakeContext extends DriverContext {
 	): Promise<string | undefined>;
 	/** The HTTP credentials installed on this context, if any. */
 	httpCredentials: DriverHttpCredentials | undefined;
+	/** Every cookie currently in this context's jar: the snapshot it started with
+	 * plus everything `addCookies` installed, so a later `storageState()` reports
+	 * what a real context would. */
+	readonly cookies: readonly DriverCookie[];
 }
 
 export interface FakePage extends DriverPage {
@@ -180,6 +204,9 @@ export interface FakeDriver extends BrowserDriver {
 	readonly launchOptions: Array<{ readonly headless: boolean }>;
 	/** The init scripts installed per context, in context order. */
 	readonly initScripts: string[][];
+	/** Every `addCookies` payload, in call order, so an installed identity is
+	 * assertable without a browser. */
+	readonly installedCookies: DriverCookie[][];
 	/** Simulate a browser process going away: every slot by default, or only the
 	 * headless one / only the interactive one, so crash isolation between the two
 	 * browsers is assertable. */
@@ -227,6 +254,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	const httpCredentialsCalls: DriverHttpCredentials[] = [];
 	const launchOptions: Array<{ readonly headless: boolean }> = [];
 	const initScripts: string[][] = [];
+	const installedCookies: DriverCookie[][] = [];
 	let absentControls: string[] = [];
 	let counts: Record<string, number> = {};
 	/** Requests the page makes while a `goto` is still in flight: the subresources
@@ -239,6 +267,16 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		new Uint8Array([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00]);
 	const videoBytes = options.video ?? "fake-webm";
 	const failFill = options.failFill ?? false;
+	const sessionStorageText = options.sessionStorage ?? "{}";
+	const initialSnapshot: FakeStorageState = options.storageState ?? {
+		cookies: [],
+		origins: [
+			{
+				origin: "http://fake.local",
+				localStorage: [{ name: "token", value: "abc" }],
+			},
+		],
+	};
 	const launchError = options.launchError;
 	let launchCount = 0;
 	let contextCount = 0;
@@ -431,9 +469,11 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			title: async () => "Fake",
 			content: async () => context.url,
 			evaluate: async (expression) =>
-				expression.includes("document")
-					? context.url
-					: `evaluated:${expression}`,
+				expression.includes("window.sessionStorage")
+					? sessionStorageText
+					: expression.includes("document")
+						? context.url
+						: `evaluated:${expression}`,
 			snapshot: async () => snapshotText,
 			setViewportSize: async (size) => {
 				page.viewport = { ...size };
@@ -579,7 +619,13 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			slot,
 		};
 		const own: FakePage[] = [];
+		let contextCookies: DriverCookie[] = (initialSnapshot.cookies ?? []).map(
+			(cookie) => ({ ...cookie }),
+		);
 		const context: FakeContext = {
+			get cookies() {
+				return contextCookies;
+			},
 			recorded: world.recorded,
 			guard: options.guard,
 			initScripts: world.scripts,
@@ -606,14 +652,27 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 				for (const page of own) page.close("server");
 			},
 			storageState: async () => ({
-				cookies: [],
-				origins: [
-					{
-						origin: "http://fake.local",
-						localStorage: [{ name: "token", value: "abc" }],
-					},
-				],
+				cookies: contextCookies.map((cookie) => ({ ...cookie })),
+				origins: (initialSnapshot.origins ?? []).map((origin) => ({
+					origin: origin.origin,
+					localStorage: origin.localStorage.map((entry) => ({ ...entry })),
+				})),
 			}),
+			addCookies: async (cookies) => {
+				installedCookies.push(cookies.map((cookie) => ({ ...cookie })));
+				for (const cookie of cookies)
+					contextCookies = [
+						...contextCookies.filter(
+							(existing) =>
+								!(
+									existing.name === cookie.name &&
+									existing.domain === cookie.domain &&
+									existing.path === cookie.path
+								),
+						),
+						{ ...cookie },
+					];
+			},
 			setHttpCredentials: async (credentials) => {
 				context.httpCredentials = credentials;
 				httpCredentialsCalls.push(credentials);
@@ -666,6 +725,9 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		},
 		get initScripts() {
 			return initScripts;
+		},
+		get installedCookies() {
+			return installedCookies;
 		},
 		async launch(options: DriverLaunchOptions) {
 			if (launchError) throw launchError;

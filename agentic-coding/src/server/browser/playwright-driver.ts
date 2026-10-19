@@ -26,6 +26,7 @@ import type {
 	DriverBrowser,
 	DriverConsoleEntry,
 	DriverContext,
+	DriverCookie,
 	DriverHttpCredentials,
 	DriverLaunchOptions,
 	DriverLocator,
@@ -205,6 +206,28 @@ function adaptContext(context: BrowserContext): DriverContext {
 			await context.addInitScript({ content: script });
 		},
 		storageState: () => context.storageState(),
+		// A cached identity is installed as cookies before the first navigation, so
+		// the identity provider sees its own sign-on cookie on the very first
+		// request instead of after a login round trip
+		// (`add-stage-identity-cache`, D3). Playwright takes back exactly the cookie
+		// shape `storageState()` reported, so nothing in the capture is lost here.
+		addCookies: async (cookies: readonly DriverCookie[]) => {
+			if (cookies.length === 0) return;
+			await context.addCookies(
+				cookies.map((cookie) => ({
+					name: cookie.name,
+					value: cookie.value,
+					domain: cookie.domain,
+					path: cookie.path,
+					expires: cookie.expires,
+					httpOnly: cookie.httpOnly,
+					secure: cookie.secure,
+					...(cookie.sameSite === undefined
+						? {}
+						: { sameSite: cookie.sameSite }),
+				})),
+			);
+		},
 		setHttpCredentials: async (credentials: DriverHttpCredentials) => {
 			await context.setHTTPCredentials(credentials);
 		},
