@@ -618,24 +618,44 @@ start a line that reads as engine-authored in the classifier's instruction area.
 
 ### Decision telemetry
 
-Three engine events record a decision the workflow already took, so a round's
+Four engine events record a decision the workflow already took, so a round's
 selection and its gates are measurable without reading a snapshot. They are
 emitted through the same boundary as `gate.skip` — one envelope per event in
 `.herdr-workflow/<workflowId>/telemetry.jsonl`, written after the command
 commits, never able to fail or re-play it — and they add no state: the
-durable record stays `snapshot.gateDecisions` and the classifier decision
-history.
+durable record stays `snapshot.gateDecisions`, `snapshot.verificationScope`, and
+the classifier decision history.
 
 - `triage.plan.selected` — once per round, the round's role set and the path
   that produced it: `herdr.triage.source` is `classifier` (the round's own
   classification selected the roles), `default` (the graph asks and the
   classification came back fail-open, so the triage agent chose),
   `legacy-agent` (the definition predates `core.triage-route`, so the agent's
-  plan has always been the selection), or `empty-bypass` (a real zero-role
-  verdict, which skips triage for a full-suite-only round and is recorded by the
-  routing step that decided it, since no triage run follows). The event also
-  carries the round index, the roles and their count, and the plan's file→role
-  map as counts plus a digest.
+  plan has always been the selection), `reverification` (the routing step scoped
+  the round to the roles owning the files the previous fix changed, read from
+  the persisted scope record rather than from the classifier's answers),
+  `empty-bypass` (a real zero-role verdict, which skips triage for a
+  full-suite-only round and is recorded by the routing step that decided it,
+  since no triage run follows), or `reverification-empty` (a fix below the
+  minimum changed-file count with no reported finding to re-run, whose round
+  runs the engine-owned full suite only). The event also carries the round
+  index, the roles and their count, and the plan's file→role map as counts plus
+  a digest; the `reverification-empty` payload also carries the measured
+  changed-file count, because no triage run reports that round's change set.
+- `verification_scope` — once per round that reaches the routing decision, next
+  to the gate decision: `herdr.verification.scope.round`, `.mode`
+  (`first-round`, `scoped`, `suite-only`, `full-set`), `.reason`
+  (`no-previous-round`, `owner-touched`, `below-minimum-diff`,
+  `findings-reported`, `baseline-unusable`, `delta-unusable`,
+  `no-plan-ownership`, `unowned-touched-file`, `shared-touched-file`,
+  `reported-role-outside-catalog`), `.threshold`,
+  `.touched.count` (substantively changed files), `.touched.changed` (all
+  touched files), `.baseline.count`, and the sorted `role=reason` lists
+  `.roles.rerun` and `.roles.skipped` (`owner-touched`, `not-owner`,
+  `below-minimum-diff`, `findings-reported`, `classifier-selected`,
+  `classifier-skipped`). Roles come
+  from the nine-role catalog and reasons from a closed vocabulary, so both lists
+  are bounded by construction; no path and no file body is exported.
 - `verification_round` — once per round that ends: the round index, `outcome`
   (`findings` when a critical finding was handed over, `none` otherwise,
   `abandoned` when a verifier run failed and the round ended without a verdict),
@@ -666,6 +686,78 @@ not at verification. The same records are queryable after the fact: import
 `analyze.ts verification-rounds-recorded` (recorded rounds against the rounds
 reconstructed from run timing, per source) and `analyze.ts gate-decisions` (the
 run/skip split per gate step, per source).
+
+### Re-verification scope
+
+`core.triage-route` decides which roles a round runs. Rounds 2..N used to take
+today's path — the classifier asks one question per eligible role and every
+selected role runs again — whatever the fix actually touched. A round that
+follows a fix now runs only the verifier roles that own the fix's substantively
+changed files, plus the engine-owned full-suite role, which is unconditional.
+The full-suite verifier never becomes skippable, no edge, outcome, round budget,
+or blocking behaviour changes, and the dashboard renders nothing new: the record
+is engine state plus telemetry.
+
+The decision is computed when the routing step's classification effect
+completes (only a completion can persist a record and choose an outcome) and is
+persisted as `snapshot.verificationScope`, one optional exact struct with the
+caps the other bounded records use (512 plan paths, 512 baseline and delta
+entries, 16-character digests, 9 roles):
+
+- `round`/`plan` — written by `core.triage`'s completion, which is where the
+  round's `{role, files}` ownership is final. A round that bypasses triage (a
+  zero-role selection, a below-minimum fix) records an empty plan, so the next
+  round widens (`no-plan-ownership`). The plan is always written: the record is
+  merged field by field, so an omitted plan would keep the previous round's
+  ownership under this round's stamp.
+- `reported` — written by `core.verification`'s `fix` completion: the round that
+  reported critical findings and the roles that reported them (the engine-owned
+  full-suite role excluded). The fix exists to resolve those findings, so the next
+  round re-runs each reported role whatever file it touched, with the reason
+  `findings-reported`; a reported role the definition can no longer launch widens
+  the round (`reported-role-outside-catalog`).
+- `baseline` — the tree the round verifies, captured at the `core.triage`
+  handoff as a fallback and at every `core.implementation` handoff as its
+  post-fix stamp, per file two 16-character sha256 digests: `raw` over the bytes
+  and `normalized` over the bytes with ASCII whitespace removed (a binary file,
+  detected by a NUL byte in the first 8 KiB, uses the raw digest for both).
+  Files the engine writes under `HERDR_WORKFLOW_DIRECTORY` are excluded, or its
+  own bookkeeping would widen every round.
+- `delta` — measured at the `core.implementation` handoff against the stored
+  baseline: a path whose `raw` digest differs, or that appears or disappears, is
+  touched; one whose `raw` digest differs but whose `normalized` digest matches is
+  touched but not substantive. `threshold` carries the effective
+  `workflow.min_reverification_changed_files` (integer 0..20, default 1; `0`
+  disables the rule).
+- `decision` — the mode, the reason, the counts, and the per-role reasons.
+
+Caps are 512 manifest entries, 1 MiB per file and 32 MiB in total; an overflow or
+an unreadable file marks the capture incomplete instead of failing the handoff,
+and an incomplete capture widens the round. The reader trusts no path in the
+manifest: it resolves the real path, refuses anything outside the worktree or that
+is not a regular file (a FIFO or `/dev/zero` never reaches EOF), and applies the
+per-file cap before reading. A path the tree no longer holds is recorded as a
+deletion with a reserved all-zero digest pair — a change in its own right — and a
+path or plan entry longer than the record's 1024-byte bound makes the observation
+incomplete rather than unwritable. A second `core.implementation` handoff in one
+round window folds its fix into the round's delta (the union of the substantive
+paths) instead of replacing the first fix's measurement.
+
+The round widens to exactly today's classifier-decided round — unconstrained on a
+classifier outage, minus the reported roles it must not drop — when no
+previous-round record exists, when the record's round stamps are not the last
+completed round and the round it opens, when the baseline or delta is missing or
+incomplete, when the plan assigns no file, when a substantively touched file has
+no owner or more than one owner, or when a reported role is outside the eligible
+catalog. Everything unreadable or ambiguous therefore widens, and the decision's
+reason names why.
+Below the minimum the round runs no domain role **other than the roles that
+reported the findings the fix resolved**: with none it takes the routing step's
+existing `empty` outcome — `core.triage` is bypassed and `core.verification` runs
+the engine-owned full-suite role only — and appends an `attention` entry naming
+the below-minimum fix, so a round that opens without domain roles after a fix is
+never silent. A scoped or suite-only round that ran without the classifier (an
+outage) appends one too.
 
 ### Repair records
 

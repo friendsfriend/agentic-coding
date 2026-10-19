@@ -56,6 +56,14 @@ export interface CompletionResult {
 	deferTransition?: boolean;
 	runs?: readonly { role: string }[];
 	effects?: readonly CompletionEffect[];
+	/** The re-verification scope record this completion writes, merged into the
+	 * snapshot field by field: the runtime stamps the baseline and the delta, so
+	 * a step that records plan ownership or the round's decision must never
+	 * replace them. */
+	verificationScope?: WorkflowSnapshot["verificationScope"];
+	/** Attention entries this completion records, appended to the workflow's
+	 * existing (redacted, bounded) list. */
+	attention?: readonly string[];
 	/** The decisions this completion recorded, emitted by the runtime as engine
 	 * telemetry events after the command commits — one event per entry. */
 	telemetry?: readonly CompletionTelemetry[];
@@ -80,6 +88,9 @@ export interface AgentCompletionContext {
 
 export interface EffectCompletionContext {
 	snapshot: WorkflowSnapshot;
+	/** The pinned definition's id: the routing step reads its eligible verifier
+	 * catalog from the definition's family traits. */
+	definitionId: string;
 	traits?: WorkflowFamilyTraits;
 	effect: {
 		kind: EffectKind;

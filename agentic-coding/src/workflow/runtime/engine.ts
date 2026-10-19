@@ -126,6 +126,13 @@ import {
 } from "./reducers/login-handoff.ts";
 import { repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
+import {
+	captureVerificationBaseline,
+	measureVerificationDelta,
+	minReverificationChangedFiles,
+	observeVerificationTree,
+	unionVerificationDelta,
+} from "./reverification.ts";
 import type { WorkflowClock } from "./services.ts";
 import {
 	engineLayer,
@@ -1845,7 +1852,85 @@ export class WorkflowEngine {
 				);
 			preparedHandoff.changedFiles = finalChangedFiles;
 		}
+		// The re-verification scope (role-scoped re-verification): the tree the
+		// round is about to verify, and — after a fix — which of its files the fix
+		// changed in content. Read here, before the writer transaction, because file
+		// I/O is legal in the runtime boundary and nowhere in `steps/`.
+		const scope = this.observeReverificationScope(
+			observed,
+			command,
+			() =>
+				// The `core.triage` manifest read above is the same list this
+				// observation needs, so it is reused rather than spawned a third time.
+				preparedHandoff.changedFiles ?? changedFilesIn(observed),
+		);
+		if (scope) preparedHandoff.verificationScope = scope;
 		return { preparedHandoff, handoffWorktree };
+	}
+
+	/** The tree digest observation a `core.implementation` or `core.triage`
+	 * handoff records:
+	 *
+	 * - the baseline is the round's own tree, stamped with the round it opens.
+	 *   `core.triage` is the accurate capture — nothing but verifier side effects
+	 *   separates it from the round it verifies — and `core.implementation` is the
+	 *   fallback capture for a definition that bypasses triage, so a
+	 *   verification-only family still scopes its second round;
+	 * - the fix delta is measured at the implementation handoff against the
+	 *   baseline of the round the fix followed, and stamped with that round, so the
+	 *   routing step can tell a fresh measurement from a stale one;
+	 * - a baseline already stamped with the round this handoff opens is left alone,
+	 *   so a `blocked`/`failed` self-loop or a second handoff of the same step
+	 *   cannot reset the reference the delta was measured against.
+	 *
+	 * Nothing here throws on a measurement problem: an unreadable tree, a cap
+	 * overflow, or a foreign baseline yields an incomplete record, and an
+	 * incomplete record widens the round instead of failing the handoff. */
+	private observeReverificationScope(
+		snapshot: WorkflowSnapshot,
+		command: Extract<WorkflowCommand, { type: "agent.handoff" }>,
+		manifest: () => readonly string[],
+	): WorkflowSnapshot["verificationScope"] | undefined {
+		if (command.outcome !== "complete") return undefined;
+		const measuring = snapshot.currentStep === "core.implementation";
+		if (!measuring && snapshot.currentStep !== "core.triage") return undefined;
+		const existing = snapshot.verificationScope;
+		// The counter holds the last round `core.verification` entered, so the round
+		// this handoff opens is the next one.
+		const followed = snapshot.loopCounts["core.verification:round"] ?? 0;
+		const opens = followed + 1;
+		const stamped = existing?.baseline;
+		// A baseline already stamped with the round this handoff opens is the
+		// reference an earlier handoff of the same fix cycle captured. `core.triage`
+		// then has nothing to add, and `core.implementation` must measure against it
+		// rather than against a tree its own fix already changed.
+		const carriesReference = stamped?.round === opens;
+		if (!measuring && carriesReference) return undefined;
+		const observation = observeVerificationTree(
+			snapshot.metadata.worktree,
+			manifest(),
+		);
+		// `core.triage` is the accurate capture — nothing but verifier side effects
+		// separates it from the round it verifies — and `core.implementation` is the
+		// fallback capture for a definition that bypasses triage, so a
+		// verification-only family still scopes its second round. Either way the
+		// fresh capture is the tree the next round verifies.
+		const baseline = captureVerificationBaseline(observation, opens);
+		if (!measuring) return { ...existing, baseline };
+		// The threshold is configuration, and a round that is only capturing a
+		// baseline must not read it: a bad value fails the measurement that uses it.
+		const threshold = minReverificationChangedFiles();
+		const reference = carriesReference
+			? { ...stamped, round: followed }
+			: existing?.baseline;
+		// A round can hand off more than once — a fix, a skipped round, a developer
+		// review, another fix — so a second fix folds into the round's delta instead
+		// of replacing the first fix's files.
+		const delta = unionVerificationDelta(
+			measureVerificationDelta(observation, reference, followed, threshold),
+			existing?.delta,
+		);
+		return { ...existing, baseline, delta };
 	}
 
 	/** The handoff evidence of one delegated debug run: the report, the files

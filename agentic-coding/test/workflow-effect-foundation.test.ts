@@ -6,6 +6,7 @@ import {
 	externalDiagnostic,
 	GATE_DECISION_MAX_RECORDS,
 	isRetryableFailure,
+	type VerificationScopeRecord,
 	type WorkflowFailure,
 } from "../src/contracts/workflow.ts";
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
@@ -204,6 +205,142 @@ test("snapshot round-trip preserves schema-declared and unknown keys", () => {
 	expect(
 		(snapshot.metadata as unknown as Record<string, unknown>).legacyMeta,
 	).toEqual({ keep: true });
+});
+
+/** The smallest snapshot the decoder accepts, so one added field is the only
+ * difference between the cases below. */
+function minimalSnapshot(): Record<string, unknown> {
+	return {
+		schemaVersion: 1,
+		workflowId: "w",
+		revision: 0,
+		definition: { id: "no-openspec", version: 1, digest: "d" },
+		status: "active",
+		currentStep: "core.verification",
+		step: {
+			attempt: 1,
+			activeRunIds: [],
+			completedRunIds: [],
+			selectedRoles: [],
+			testRunStarted: false,
+			results: [],
+		},
+		metadata: {
+			repository: ".",
+			worktree: ".",
+			branch: "main",
+			baseBranch: "main",
+			baseCommit: "x",
+			createdAt: "x",
+			updatedAt: "x",
+			stepEnteredAt: "x",
+		},
+		routing: { defaultProfile: "x", routes: [] },
+		evidence: [],
+		loopCounts: {},
+		attention: [],
+	};
+}
+
+const scopeRecord: VerificationScopeRecord = {
+	round: 2,
+	plan: [{ role: "quality-verifier", files: ["src/a.ts"] }],
+	reported: { round: 2, roles: ["quality-verifier"] },
+	baseline: {
+		round: 3,
+		complete: true,
+		files: [
+			{
+				path: "src/a.ts",
+				raw: "0123456789abcdef",
+				normalized: "0123456789abcdef",
+			},
+		],
+	},
+	delta: {
+		round: 2,
+		complete: true,
+		threshold: 1,
+		files: [{ path: "src/a.ts", substantive: true }],
+	},
+	decision: {
+		round: 2,
+		mode: "scoped",
+		reason: "owner-touched",
+		threshold: 1,
+		touched: 1,
+		changed: 1,
+		baselineCount: 1,
+		rerun: [{ role: "quality-verifier", reason: "owner-touched" }],
+		skipped: [{ role: "security-verifier", reason: "not-owner" }],
+	},
+};
+
+test("the re-verification scope record round-trips and stays optional", () => {
+	// A snapshot written before the record existed still decodes: the field is
+	// optional, so no migration and no version bump is involved.
+	expect(decodeSnapshot(minimalSnapshot()).verificationScope).toBeUndefined();
+	// The whole record survives the decode-rewrite cycle field by field, because
+	// the runtime and the steps write it from different points.
+	const decoded = decodeSnapshot({
+		...minimalSnapshot(),
+		verificationScope: scopeRecord,
+	});
+	expect(decoded.verificationScope).toEqual(scopeRecord);
+	// A partial record is a record: the runtime stamps the baseline before any
+	// step has recorded a plan or a decision.
+	expect(
+		decodeSnapshot({
+			...minimalSnapshot(),
+			verificationScope: { baseline: scopeRecord.baseline },
+		}).verificationScope,
+	).toEqual({ baseline: scopeRecord.baseline });
+	// A decision this reader does not know is refused rather than stored and
+	// read as a reason a later round acts on.
+	for (const broken of [
+		{ ...scopeRecord, decision: { ...scopeRecord.decision, mode: "cheap" } },
+		{ ...scopeRecord, decision: { ...scopeRecord.decision, reason: "vibes" } },
+		{
+			...scopeRecord,
+			delta: { ...scopeRecord.delta, files: [{ path: "a" }] },
+		},
+		// A reported role is what the floor acts on, so a malformed one is refused
+		// here rather than read as a role that never reported anything.
+		{ ...scopeRecord, reported: { round: 2 } },
+		{ ...scopeRecord, reported: { round: 2, roles: "quality-verifier" } },
+	]) {
+		expect(() =>
+			decodeSnapshot({ ...minimalSnapshot(), verificationScope: broken }),
+		).toThrow();
+	}
+	// The lists are capped at the record's own bound: an overflowing plan is
+	// refused, so no truncated ownership can hide a file's owner.
+	expect(() =>
+		decodeSnapshot({
+			...minimalSnapshot(),
+			verificationScope: {
+				...scopeRecord,
+				plan: Array.from({ length: 10 }, () => ({
+					role: "quality-verifier",
+					files: [],
+				})),
+			},
+		}),
+	).toThrow(/at most 9 scope roles|at most 9 plan roles/);
+	// The reported-role list is capped the same way: the floor cannot widen a round
+	// beyond the catalog the record can name.
+	expect(() =>
+		decodeSnapshot({
+			...minimalSnapshot(),
+			verificationScope: {
+				...scopeRecord,
+				reported: {
+					round: 2,
+					roles: Array.from({ length: 10 }, () => "quality-verifier"),
+				},
+			},
+		}),
+	).toThrow(/at most 9 reported roles/);
 });
 
 test("requireText failures name the snapshot contract, not a field path", () => {

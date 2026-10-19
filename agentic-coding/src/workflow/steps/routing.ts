@@ -6,11 +6,19 @@
 // answered result before the effect-complete transition advances the step.
 import { ROUTING_INTEGRATION, TRIAGE_INTEGRATION } from "../classifiers.ts";
 import { GATE_GUARDED_STEP, gateDecisionTelemetry } from "./gates.ts";
+import {
+	classifierDecided,
+	decideReverification,
+	decisionRecord,
+	reverificationRoles,
+	withClassifierRoles,
+} from "./reverification.ts";
 import type {
 	CompletionResult,
 	CompletionTelemetry,
 	StepBehavior,
 } from "./types.ts";
+import { triageRolesFor } from "./verification.ts";
 
 export type RoutingPhase = "plan" | "apply";
 
@@ -124,9 +132,9 @@ const triageRouteBehavior: StepBehavior = {
 		);
 		return undefined;
 	},
-	onEffectComplete: ({ effect }) =>
-		effect.kind === "model.classify"
-			? triageRouteCompletion(effect.data)
+	onEffectComplete: (ctx) =>
+		ctx.effect.kind === "model.classify"
+			? triageRouteCompletion(ctx, ctx.effect.data)
 			: undefined,
 };
 
@@ -136,44 +144,138 @@ const triageRouteBehavior: StepBehavior = {
  * an outage, not a verdict, so it must not be read as an answer of zero roles:
  * `empty` is reserved for a real selection that came back empty, because
  * bypassing triage on an outage would silently reduce the round. */
-function triageRouteCompletion(data: unknown): CompletionResult | undefined {
+function triageRouteCompletion(
+	ctx: Parameters<NonNullable<StepBehavior["onEffectComplete"]>>[0],
+	data: unknown,
+): CompletionResult | undefined {
+	const snapshot = ctx.snapshot;
+	const eligible = triageRolesFor(ctx.definitionId, ctx.traits);
+	// `core.verification`'s arrival increments the round counter, so the counter
+	// still holds the last completed round while this round's decision is taken.
+	const completedRound = snapshot.loopCounts["core.verification:round"] ?? 0;
+	const openingRound = completedRound + 1;
+	// The scope decision (role-scoped re-verification) is computed before the
+	// classifier is read: it depends on the previous round's plan, the fix delta
+	// the runtime measured, and nothing the classifier answered — which is why a
+	// classifier outage keeps a scoped round's role set instead of widening it.
+	const scope = decideReverification({
+		eligibleRoles: eligible,
+		round: completedRound,
+		record: snapshot.verificationScope,
+		threshold: snapshot.verificationScope?.delta?.threshold,
+	});
 	const result = data as
 		| {
 				integration?: unknown;
 				failOpen?: unknown;
+				reason?: unknown;
 				roles?: unknown;
 				gate?: { decision?: unknown } | undefined;
 		  }
 		| undefined;
-	if (result?.integration !== TRIAGE_INTEGRATION)
-		return { transition: { outcome: "complete" } };
-	// The verification gate's own verdict rides on this step, so its evaluation is
-	// recorded here whatever the role selection does with it. A result that never
-	// reached a verdict (an outage the runner already announced as a skip) hangs
-	// no gate payload on the transition.
-	const gate = gateDecisionTelemetry(result.gate);
+	const answered =
+		result?.integration === TRIAGE_INTEGRATION ? result : undefined;
+	const answeredRoles =
+		answered === undefined
+			? undefined
+			: Array.isArray(answered.roles)
+				? answered.roles.filter(
+						(role): role is string => typeof role === "string",
+					)
+				: undefined;
+	// A fail-open round carries no selection at all — the unconstrained triage
+	// agent chooses — so its record reports the mode and the reason and no
+	// per-role reason that has not happened yet.
+	const decision =
+		answered === undefined || answered.failOpen === true
+			? scope
+			: withClassifierRoles(scope, eligible, answeredRoles ?? []);
 	const completed = (
 		completion: CompletionResult,
 		plan?: CompletionTelemetry,
 	): CompletionResult => {
-		const telemetry = [gate, plan].filter(
-			(item): item is CompletionTelemetry => item !== undefined,
-		);
-		return telemetry.length ? { ...completion, telemetry } : completion;
+		const telemetry = [
+			gateDecisionTelemetry(answered?.gate),
+			scopeTelemetry(decision, openingRound),
+			plan,
+		].filter((item): item is CompletionTelemetry => item !== undefined);
+		return {
+			...completion,
+			attention: [
+				...(completion.attention ?? []),
+				// An engine-scoped round that continues without the classifier is
+				// smaller than the round today's path would have run, so it stays
+				// audible.
+				...(answered === undefined && !classifierDecided(decision)
+					? [
+							`verifier role classification unavailable; verification round ${openingRound} continued with the engine-scoped role set (${decision.mode}: ${decision.reason})`,
+						]
+					: []),
+			],
+			telemetry,
+			// The decision is persisted before the transition, so the round's own
+			// triage completion can attribute the role set the engine supplied and
+			// the next round can read the plan that round recorded.
+			verificationScope: { decision: decisionRecord(decision, openingRound) },
+		};
 	};
-	// The verification gate resolves first and unconditionally: only an
-	// explicit skip verdict bypasses the round. A fail-open or unusable gate
-	// answer leaves the verdict at "run" and falls through to the ordinary
-	// role resolution below, so a classifier outage can never skip a stage.
-	if (result.gate?.decision === "skip")
-		return completed({ transition: { outcome: "skip-verification" } });
-	// A fail-open result carries no role constraint, so the transition carries
-	// no output and `core.triage` validates against the full eligible catalog.
-	if (result.failOpen === true)
+	// The verification gate resolves first and unconditionally: only an explicit
+	// skip verdict bypasses the round, and a skipped round is no round — it
+	// records the gate decision and no scope.
+	if (answered?.gate?.decision === "skip")
+		return {
+			transition: { outcome: "skip-verification" },
+			telemetry: [gateDecisionTelemetry(answered.gate)].filter(
+				(item): item is CompletionTelemetry => item !== undefined,
+			),
+		};
+	// An engine-scoped round supplies the outcome's role set exactly as a
+	// classifier selection does, so triage's locked-set validation, the rendered
+	// step input, and the verification fan-out are all unchanged.
+	if (decision.mode === "scoped")
+		return completed({
+			transition: {
+				outcome: "complete",
+				output: { roles: reverificationRoles(decision) },
+			},
+		});
+	// A fix below the minimum changed-file count opens no domain round: the
+	// routing step's own zero-role outcome bypasses triage and runs the
+	// engine-owned full suite only, and an attention entry keeps it audible.
+	if (decision.mode === "suite-only")
+		return completed(
+			{
+				transition: { outcome: "empty", output: { roles: [] } },
+				attention: [
+					`verification round ${openingRound} runs only the engine-owned full suite: ` +
+						`the fix changed ${decision.touched} file(s) in content, below the minimum of ${decision.threshold}`,
+				],
+			},
+			{
+				event: "triage.plan.selected",
+				payload: {
+					"herdr.triage.source": "reverification-empty",
+					"herdr.triage.round": openingRound,
+					"herdr.triage.roles": "",
+					"herdr.triage.roles.count": 0,
+					"herdr.triage.files.count": 0,
+					// The measured fix size, so an operator can see why the round
+					// opened no domain role: no triage step runs to record it.
+					"herdr.triage.changed.count": decision.changed,
+				},
+			},
+		);
+	// A classifier-decided round keeps today's path exactly: a fail-open result
+	// carries no role constraint (so triage validates against the full eligible
+	// catalog) and an outage carries no verdict at all.
+	if (answered === undefined || answered.failOpen === true)
 		return completed({ transition: { outcome: "complete" } });
-	const roles = Array.isArray(result.roles)
-		? result.roles.filter((role): role is string => typeof role === "string")
-		: [];
+	// A round the engine left to the classifier still re-runs the roles that
+	// reported the findings the fix resolved: the floor is not a scope, so a role
+	// the classifier left out stays in the run set. The classifier's own roles
+	// keep their order and are not filtered here — triage validates them against
+	// the eligible catalog exactly as before.
+	const roles = [...new Set([...(answeredRoles ?? []), ...scope.reported])];
 	return roles.length
 		? completed({ transition: { outcome: "complete", output: { roles } } })
 		: completed(
@@ -190,6 +292,36 @@ function triageRouteCompletion(data: unknown): CompletionResult | undefined {
 					},
 				},
 			);
+}
+
+/** One `verification_scope` event per round that reaches the decision: the mode,
+ * the reason, the threshold in force, the counts, and one `role=reason` pair per
+ * role in the run set and in the skip set. Role names come from the registered
+ * verifier catalog and reasons from a closed vocabulary, so both lists are
+ * bounded by construction; no path, no file body, and no task text is exported. */
+function scopeTelemetry(
+	decision: ReturnType<typeof decideReverification>,
+	round: number,
+): CompletionTelemetry {
+	const pairs = (roles: readonly { role: string; reason: string }[]) =>
+		[...roles]
+			.sort((left, right) => (left.role < right.role ? -1 : 1))
+			.map((entry) => `${entry.role}=${entry.reason}`)
+			.join(",");
+	return {
+		event: "verification_scope",
+		payload: {
+			"herdr.verification.scope.round": round,
+			"herdr.verification.scope.mode": decision.mode,
+			"herdr.verification.scope.reason": decision.reason,
+			"herdr.verification.scope.threshold": decision.threshold,
+			"herdr.verification.scope.touched.count": decision.touched,
+			"herdr.verification.scope.touched.changed": decision.changed,
+			"herdr.verification.scope.baseline.count": decision.baselineCount,
+			"herdr.verification.scope.roles.rerun": pairs(decision.rerun),
+			"herdr.verification.scope.roles.skipped": pairs(decision.skipped),
+		},
+	};
 }
 
 /** A step the engine inserts around a graph rather than one an author

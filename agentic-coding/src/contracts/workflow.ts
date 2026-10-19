@@ -457,6 +457,147 @@ export interface GateDecisionRecord {
 	reason?: string;
 }
 
+/** The re-verification scope record (role-scoped re-verification) is bounded by
+ * the round's plan and the fix's own delta: at most one entry per verifier role
+ * (nine), at most this many files per list, and a 16-character content digest
+ * per file. It is content-free by construction — paths the changed-file
+ * manifest already carries and hashes, never a file body. */
+export const VERIFICATION_SCOPE_MAX_FILES = 512;
+export const VERIFICATION_SCOPE_MAX_ROLES = 9;
+export const VERIFICATION_SCOPE_DIGEST_LENGTH = 16;
+/** The longest repository-relative path the record can hold, in UTF-8 bytes. A
+ * manifest or plan entry above it is unmeasurable, which widens the round
+ * instead of refusing the handoff that would record it. */
+export const VERIFICATION_SCOPE_MAX_PATH_BYTES = 1024;
+
+/** Which path decided a round's role set: the first round of a workflow, an
+ * engine-scoped round, a round whose fix was below the minimum diff (the
+ * engine-owned full suite only), or a round the engine widened to today's
+ * classifier-decided behaviour. */
+export type VerificationScopeMode =
+	| "first-round"
+	| "scoped"
+	| "suite-only"
+	| "full-set";
+
+/** Why a round took its mode. A closed vocabulary, so the record and its
+ * telemetry stay bounded: no previous round to scope from, ownership of a
+ * touched file, a fix below the minimum changed-file count, the roles that
+ * reported the findings the fix resolved, and the ways the engine refuses to
+ * scope and leaves the round as it was. */
+export type VerificationScopeReason =
+	| "no-previous-round"
+	| "owner-touched"
+	| "below-minimum-diff"
+	| "findings-reported"
+	| "baseline-unusable"
+	| "delta-unusable"
+	| "no-plan-ownership"
+	| "unowned-touched-file"
+	| "shared-touched-file"
+	| "reported-role-outside-catalog";
+
+/** Why one role is in a round's run set or its skip set. `owner-touched` and
+ * `not-owner` are the engine's own scope decision; `below-minimum-diff` marks
+ * the roles a suite-only round skips; `findings-reported` marks a role that
+ * reported a finding in the round the fix follows, which runs whatever it owns;
+ * `classifier-selected`/`classifier-skipped` describe a round the engine left to
+ * the classifier, so every role's participation is explainable in every mode. */
+export type VerificationRoleReason =
+	| "owner-touched"
+	| "not-owner"
+	| "below-minimum-diff"
+	| "findings-reported"
+	| "classifier-selected"
+	| "classifier-skipped";
+
+/** One role's participation reason. The role comes from the registered
+ * verifier catalog and the reason from the closed vocabulary above, so both
+ * lists are bounded by construction. */
+export interface VerificationScopeRole {
+	role: string;
+	reason: VerificationRoleReason;
+}
+
+/** The content digests of one file in the tree a round verified. `raw` covers
+ * the bytes and `normalized` the same bytes with ASCII whitespace removed, so a
+ * whitespace-only edit is touched but not substantive. Binary files (a NUL byte
+ * in the first 8 KiB) use the raw digest for both. Never content: a
+ * 16-character hash and a path the manifest already carries. */
+export interface VerificationScopeDigest {
+	path: string;
+	raw: string;
+	normalized: string;
+}
+
+/** The tree the round verified, stamped with the round it belongs to. An
+ * incomplete baseline is a measurement failure (a cap overflow or a read
+ * error), never an empty change set. */
+export interface VerificationScopeBaseline {
+	round: number;
+	complete: boolean;
+	files: VerificationScopeDigest[];
+}
+
+/** One file the fix touched. `substantive` is false when only whitespace
+ * changed; an added or removed file is always substantive. */
+export interface VerificationScopeDeltaFile {
+	path: string;
+	substantive: boolean;
+}
+
+/** The fix's own delta, stamped with the round the fix followed and carrying
+ * the effective minimum changed-file threshold, so the pure decision never has
+ * to load configuration. An incomplete delta widens the round rather than
+ * narrowing it. */
+export interface VerificationScopeDelta {
+	round: number;
+	complete: boolean;
+	threshold: number;
+	files: VerificationScopeDeltaFile[];
+}
+
+/** The decision a round took, and why each role ran or did not. */
+export interface VerificationScopeDecision {
+	/** The round this decision is for (the round it opens). */
+	round: number;
+	mode: VerificationScopeMode;
+	reason: VerificationScopeReason;
+	threshold: number;
+	/** Files the fix changed in content. */
+	touched: number;
+	/** Files the fix touched at all, whitespace-only ones included. */
+	changed: number;
+	/** Files in the baseline the delta was measured against. */
+	baselineCount: number;
+	rerun: VerificationScopeRole[];
+	skipped: VerificationScopeRole[];
+}
+
+/** The roles that reported at least one critical finding in a round. The fix
+ * that follows exists to resolve them, so each of those roles runs in the next
+ * round whatever file the fix touched — the floor that keeps a fixed finding
+ * from going unverified when its file was not the one that changed. */
+export interface VerificationScopeReported {
+	round: number;
+	roles: string[];
+}
+
+/** The engine's re-verification record for the last round that reached the
+ * routing step. Absent on a snapshot written before this record existed, which
+ * reads as "no previous round" and takes the first-round path. */
+export interface VerificationScopeRecord {
+	/** The round this plan is for. */
+	round?: number;
+	/** That round's plan ownership: every file the triage plan scoped, per role. */
+	plan?: Array<{ role: string; files: string[] }>;
+	/** The roles that reported findings in this round. */
+	reported?: VerificationScopeReported;
+	baseline?: VerificationScopeBaseline;
+	delta?: VerificationScopeDelta;
+	decision?: VerificationScopeDecision;
+}
+
 export interface ClassifierDecisionOption {
 	label: string;
 	profile: string;
@@ -549,6 +690,11 @@ export interface WorkflowSnapshot {
 	classifierDecisions?: ClassifierDecisionRecord[];
 	/** Bounded, ordered stage-gate decision history. Missing in legacy snapshots. */
 	gateDecisions?: GateDecisionRecord[];
+	/** The last round's re-verification scope record (role-scoped
+	 * re-verification): the previous plan's ownership, the fix delta measured
+	 * since the tree that round verified, and the decision taken. Missing in
+	 * snapshots written before the record existed. */
+	verificationScope?: VerificationScopeRecord;
 	/** Deterministic source-content baseline for repository-backed wiki runs. */
 	sourceBaseline?: { fingerprint: string };
 	/** Complete pre-agent baseline for repository-independent wiki reviews. */

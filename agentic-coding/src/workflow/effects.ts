@@ -251,6 +251,12 @@ export interface WorkflowConfig {
 	agents?: unknown;
 	workflow: {
 		max_verification_rounds: number;
+		/** How many files a fix must change in content for the round that follows
+		 * it to open with the roles that own them
+		 * (role-scoped-re-verification). An integer from 0 to 20; `0` disables the
+		 * rule, so every round opens with its owners. Below the value the round
+		 * runs the engine-owned full suite only. Missing reads as the default 1. */
+		min_reverification_changed_files?: number;
 		remote: string;
 		branch_prefix: string;
 		base_branch: string;
@@ -335,6 +341,7 @@ export interface WorkflowConfig {
 export const DEFAULT_CONFIG: WorkflowConfig = {
 	workflow: {
 		max_verification_rounds: 6,
+		min_reverification_changed_files: 1,
 		remote: "origin",
 		branch_prefix: "feature/",
 		base_branch: "origin/HEAD",

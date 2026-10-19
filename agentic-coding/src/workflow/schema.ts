@@ -31,6 +31,10 @@ import {
 	CLASSIFIER_DECISION_MAX_RECORDS,
 	GATE_DECISION_MAX_RECORDS,
 	questionOptions,
+	VERIFICATION_SCOPE_DIGEST_LENGTH,
+	VERIFICATION_SCOPE_MAX_FILES,
+	VERIFICATION_SCOPE_MAX_PATH_BYTES,
+	VERIFICATION_SCOPE_MAX_ROLES,
 } from "../contracts/workflow.ts";
 
 // ---------------------------------------------------------------------------
@@ -218,6 +222,131 @@ const loopCountsSchema = Schema.Record({
 const wikiBaselineSchema = Schema.Struct({
 	fingerprint: text(128),
 	concepts: Schema.Array(Schema.Struct({ id: text(4096), digest: text(128) })),
+});
+/** The re-verification scope record (role-scoped re-verification). Every list is
+ * capped at the record's own bound — one entry per verifier role, at most
+ * `VERIFICATION_SCOPE_MAX_FILES` files or delta entries — so a record beyond the
+ * caps is refused instead of stored truncated, and a snapshot that carries it
+ * still decodes on a reader that predates it (`onExcessProperty: "preserve"`). */
+const verificationScopeDigestSchema = Schema.Struct({
+	path: boundedText(VERIFICATION_SCOPE_MAX_PATH_BYTES),
+	raw: text(VERIFICATION_SCOPE_DIGEST_LENGTH),
+	normalized: text(VERIFICATION_SCOPE_DIGEST_LENGTH),
+});
+const verificationScopeRoleSchema = Schema.Struct({
+	role: text(64),
+	reason: Schema.Literal(
+		"owner-touched",
+		"not-owner",
+		"below-minimum-diff",
+		"findings-reported",
+		"classifier-selected",
+		"classifier-skipped",
+	),
+});
+const verificationScopeRolesSchema = Schema.Array(
+	verificationScopeRoleSchema,
+).pipe(
+	Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
+		message: () =>
+			`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} scope roles`,
+	}),
+);
+const verificationScopeRecordSchema = Schema.Struct({
+	round: Schema.optionalWith(integer(), { exact: true }),
+	plan: Schema.optionalWith(
+		Schema.Array(
+			Schema.Struct({
+				role: text(64),
+				files: Schema.Array(
+					boundedText(VERIFICATION_SCOPE_MAX_PATH_BYTES),
+				).pipe(
+					Schema.filter(
+						(items) => items.length <= VERIFICATION_SCOPE_MAX_FILES,
+						{
+							message: () =>
+								`expected at most ${VERIFICATION_SCOPE_MAX_FILES} plan files`,
+						},
+					),
+				),
+			}),
+		).pipe(
+			Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
+				message: () =>
+					`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} plan roles`,
+			}),
+		),
+		{ exact: true },
+	),
+	reported: Schema.optionalWith(
+		Schema.Struct({
+			round: integer(),
+			roles: Schema.Array(text(64)).pipe(
+				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
+					message: () =>
+						`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} reported roles`,
+				}),
+			),
+		}),
+		{ exact: true },
+	),
+	baseline: Schema.optionalWith(
+		Schema.Struct({
+			round: integer(),
+			complete: Schema.Boolean,
+			files: Schema.Array(verificationScopeDigestSchema).pipe(
+				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_FILES, {
+					message: () =>
+						`expected at most ${VERIFICATION_SCOPE_MAX_FILES} baseline files`,
+				}),
+			),
+		}),
+		{ exact: true },
+	),
+	delta: Schema.optionalWith(
+		Schema.Struct({
+			round: integer(),
+			complete: Schema.Boolean,
+			threshold: integer(),
+			files: Schema.Array(
+				Schema.Struct({
+					path: boundedText(VERIFICATION_SCOPE_MAX_PATH_BYTES),
+					substantive: Schema.Boolean,
+				}),
+			).pipe(
+				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_FILES, {
+					message: () =>
+						`expected at most ${VERIFICATION_SCOPE_MAX_FILES} delta files`,
+				}),
+			),
+		}),
+		{ exact: true },
+	),
+	decision: Schema.optionalWith(
+		Schema.Struct({
+			round: integer(),
+			mode: Schema.Literal("first-round", "scoped", "suite-only", "full-set"),
+			reason: Schema.Literal(
+				"no-previous-round",
+				"owner-touched",
+				"below-minimum-diff",
+				"findings-reported",
+				"baseline-unusable",
+				"delta-unusable",
+				"no-plan-ownership",
+				"unowned-touched-file",
+				"shared-touched-file",
+				"reported-role-outside-catalog",
+			),
+			threshold: integer(),
+			touched: integer(),
+			changed: integer(),
+			baselineCount: integer(),
+			rerun: verificationScopeRolesSchema,
+			skipped: verificationScopeRolesSchema,
+		}),
+		{ exact: true },
+	),
 });
 const sourceBaselineSchema = Schema.Struct({ fingerprint: text(128) });
 const repairedSchema = Schema.Struct({
@@ -627,6 +756,9 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		),
 		{ exact: true, default: () => [] },
 	),
+	verificationScope: Schema.optionalWith(verificationScopeRecordSchema, {
+		exact: true,
+	}),
 	sourceBaseline: Schema.optionalWith(sourceBaselineSchema, { exact: true }),
 	wikiBaseline: Schema.optionalWith(wikiBaselineSchema, { exact: true }),
 	repaired: Schema.optionalWith(repairedSchema, { exact: true }),

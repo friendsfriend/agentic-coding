@@ -844,7 +844,7 @@ test("a fail-open classification leaves triage unconstrained and records attenti
 	}
 });
 
-test("a second verification round re-runs the classifier routing step", () => {
+test("a second verification round re-runs the classifier routing step and scopes to the fix's owner", () => {
 	const root = repo();
 	try {
 		const engine = new WorkflowEngine(registerBuiltins());
@@ -897,10 +897,12 @@ test("a second verification round re-runs the classifier routing step", () => {
 			data: { integration: "triage", roles: ["security-verifier"] },
 		}).view;
 		expect(view.currentStep.id).toBe("core.triage");
-		// The round's own selection is what triage is constrained by, not the
-		// previous round's.
+		// The classification still ran and is still recorded as evidence; what
+		// triage is constrained by is the scope's owner set, not the classifier's
+		// answer, because the fix touched a file only quality-verifier owned.
+		expect(view.classifierDecisions).toHaveLength(2);
 		expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
-			roles: ["security-verifier"],
+			roles: ["quality-verifier"],
 		});
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });

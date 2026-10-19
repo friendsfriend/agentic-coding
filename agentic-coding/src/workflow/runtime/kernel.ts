@@ -22,6 +22,7 @@ import type {
 } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import { redactTelemetryText } from "../observability.ts";
 import type {
 	CompiledWorkflowDefinition,
 	StepDefinition,
@@ -115,6 +116,180 @@ function completionJson(value: unknown, label: string): JsonValueType {
 	} catch {
 		throw new WorkflowRuntimeError("reducer-contract", `${label} must be JSON`);
 	}
+}
+
+/** Merge a completion's re-verification record into the snapshot, field by
+ * field: the runtime stamps the baseline and the delta while a step records the
+ * plan and the decision, so a spread of the whole record would let one writer
+ * erase the other's work. Every field is shape-checked at this boundary like the
+ * other completion fields, so a malformed record is a reducer-contract failure
+ * rather than a snapshot that later widens for the wrong reason. */
+function applyVerificationScope(
+	snapshot: WorkflowSnapshot,
+	record: CompletionResult["verificationScope"],
+): void {
+	if (record === undefined) return;
+	if (!record || typeof record !== "object" || Array.isArray(record))
+		throw scopeProblem("verification scope");
+	const scope = record as Record<string, unknown>;
+	const problems = [
+		...(scope.round === undefined || isCount(scope.round)
+			? []
+			: [scopeProblem("verification scope round")]),
+		...planProblems(scope.plan),
+		...reportedProblems(scope.reported),
+		...baselineProblems("baseline", scope.baseline),
+		...baselineProblems("delta", scope.delta),
+		...decisionProblems(scope.decision),
+	];
+	const first = problems[0];
+	if (first) throw first;
+	const merged: NonNullable<WorkflowSnapshot["verificationScope"]> = {
+		...(snapshot.verificationScope ?? {}),
+	};
+	if (scope.round !== undefined) merged.round = scope.round as number;
+	if (scope.plan !== undefined)
+		merged.plan = scope.plan as NonNullable<typeof merged.plan>;
+	if (scope.reported !== undefined)
+		merged.reported = scope.reported as NonNullable<typeof merged.reported>;
+	if (scope.baseline !== undefined)
+		merged.baseline = scope.baseline as NonNullable<typeof merged.baseline>;
+	if (scope.delta !== undefined)
+		merged.delta = scope.delta as NonNullable<typeof merged.delta>;
+	if (scope.decision !== undefined)
+		merged.decision = scope.decision as NonNullable<typeof merged.decision>;
+	snapshot.verificationScope = merged;
+}
+
+function scopeProblem(detail: string): WorkflowRuntimeError {
+	return new WorkflowRuntimeError("reducer-contract", `invalid ${detail}`);
+}
+
+function isCount(value: unknown): boolean {
+	return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function isTextList(value: unknown): boolean {
+	return (
+		Array.isArray(value) && value.every((item) => typeof item === "string")
+	);
+}
+
+function isRoleList(value: unknown): boolean {
+	if (!Array.isArray(value)) return false;
+	for (const item of value) {
+		if (!item || typeof item !== "object") return false;
+		if (typeof (item as { role?: unknown }).role !== "string") return false;
+		if (typeof (item as { reason?: unknown }).reason !== "string") return false;
+	}
+	return true;
+}
+
+function reportedProblems(reported: unknown): WorkflowRuntimeError[] {
+	if (reported === undefined) return [];
+	if (!reported || typeof reported !== "object" || Array.isArray(reported))
+		return [scopeProblem("verification scope reported roles")];
+	const shaped = reported as { round?: unknown; roles?: unknown };
+	return [
+		...(isCount(shaped.round)
+			? []
+			: [scopeProblem("verification scope reported round")]),
+		...(isTextList(shaped.roles)
+			? []
+			: [scopeProblem("verification scope reported roles")]),
+	];
+}
+
+function planProblems(plan: unknown): WorkflowRuntimeError[] {
+	if (plan === undefined) return [];
+	if (!Array.isArray(plan)) return [scopeProblem("verification scope plan")];
+	const problems: WorkflowRuntimeError[] = [];
+	for (const entry of plan) {
+		if (!entry || typeof entry !== "object") {
+			problems.push(scopeProblem("verification scope plan entry"));
+			continue;
+		}
+		const shaped = entry as { role?: unknown; files?: unknown };
+		if (typeof shaped.role !== "string")
+			problems.push(scopeProblem("verification scope plan role"));
+		if (!isTextList(shaped.files))
+			problems.push(scopeProblem("verification scope plan files"));
+	}
+	return problems;
+}
+
+function baselineProblems(
+	key: "baseline" | "delta",
+	value: unknown,
+): WorkflowRuntimeError[] {
+	if (value === undefined) return [];
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return [scopeProblem(`verification scope ${key}`)];
+	const shaped = value as {
+		round?: unknown;
+		complete?: unknown;
+		files?: unknown;
+		threshold?: unknown;
+	};
+	const problems: WorkflowRuntimeError[] = [];
+	if (!isCount(shaped.round))
+		problems.push(scopeProblem(`verification scope ${key} round`));
+	if (typeof shaped.complete !== "boolean")
+		problems.push(scopeProblem(`verification scope ${key} flag`));
+	if (!Array.isArray(shaped.files))
+		problems.push(scopeProblem(`verification scope ${key} files`));
+	if (key === "delta" && !isCount(shaped.threshold))
+		problems.push(scopeProblem("verification scope threshold"));
+	return problems;
+}
+
+function decisionProblems(decision: unknown): WorkflowRuntimeError[] {
+	if (decision === undefined) return [];
+	if (!decision || typeof decision !== "object" || Array.isArray(decision))
+		return [scopeProblem("verification scope decision")];
+	const shaped = decision as Record<string, unknown>;
+	const problems: WorkflowRuntimeError[] = [];
+	for (const key of [
+		"round",
+		"threshold",
+		"touched",
+		"changed",
+		"baselineCount",
+	])
+		if (!isCount(shaped[key]))
+			problems.push(scopeProblem(`verification scope decision ${key}`));
+	if (typeof shaped.mode !== "string")
+		problems.push(scopeProblem("verification scope decision mode"));
+	if (typeof shaped.reason !== "string")
+		problems.push(scopeProblem("verification scope decision reason"));
+	if (!isRoleList(shaped.rerun))
+		problems.push(scopeProblem("verification scope decision rerun"));
+	if (!isRoleList(shaped.skipped))
+		problems.push(scopeProblem("verification scope decision skipped"));
+	return problems;
+}
+
+/** Append a completion's attention entries to the workflow's own list, with the
+ * same redaction the handoff's `blocked` path applies: a step's wording is the
+ * workflow's record, so a credential shape an agent echoed can never reach it. */
+function appendAttention(
+	snapshot: WorkflowSnapshot,
+	entries: CompletionResult["attention"],
+): void {
+	if (entries === undefined) return;
+	if (
+		!Array.isArray(entries) ||
+		entries.some((entry) => typeof entry !== "string")
+	)
+		throw new WorkflowRuntimeError(
+			"reducer-contract",
+			"invalid attention entry",
+		);
+	if (!entries.length) return;
+	snapshot.attention = [
+		...(snapshot.attention ?? []),
+		...entries.map((entry) => redactTelemetryText(entry)),
+	];
 }
 
 export function applyCompletionResult(
@@ -280,6 +455,8 @@ export function applyCompletionResult(
 		createRun(db, snapshot, step, request.role, now);
 	for (const effect of result.effects ?? [])
 		enqueue(db, snapshot, effect.kind, effect.idempotencyKey, effect.payload);
+	applyVerificationScope(snapshot, result.verificationScope);
+	appendAttention(snapshot, result.attention);
 	if (transitionRequest)
 		transition(
 			db,

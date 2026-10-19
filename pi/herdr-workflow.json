@@ -6,6 +6,7 @@
   },
   "workflow": {
     "max_verification_rounds": 20,
+    "min_reverification_changed_files": 1,
     "remote": "origin",
     "branch_prefix": "feature/",
     "base_branch": "origin/HEAD"

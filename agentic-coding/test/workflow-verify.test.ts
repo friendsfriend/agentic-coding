@@ -296,6 +296,9 @@ function reachVerification(
 	root: string,
 	view: WorkflowView,
 	triage: Record<string, unknown> = { roles: ["quality-verifier"] },
+	plan: Array<{ role: string; files: string[] }> = [
+		{ role: "quality-verifier", files: ["committed.txt"] },
+	],
 ): WorkflowView {
 	classify(engine, root, "triage", triage);
 	view = engine.status(root, view.workflowId);
@@ -304,13 +307,7 @@ function reachVerification(
 	view = engine.status(root, view.workflowId);
 	expect(view.currentStep.id).toBe("core.triage");
 	view = complete(engine, root, view, "triage", {
-		roles: [
-			{
-				role: "quality-verifier",
-				reason: "the branch changed",
-				files: ["committed.txt"],
-			},
-		],
+		roles: plan.map((entry) => ({ ...entry, reason: "the branch changed" })),
 	});
 	expect(view.currentStep.id).toBe("core.route-verification");
 	classify(engine, root, "routing", { phase: "apply", answers: {} });
@@ -543,7 +540,10 @@ test("a failed round lands on the findings review, which selects the worker's fi
 			],
 		});
 
-		// The worker's completion re-enters the round at the classifier gate.
+		// The worker changes the file the finding named, which is what the next
+		// round scopes from, and its completion re-enters the round at the
+		// classifier gate.
+		fs.appendFileSync(path.join(root, "committed.txt"), "restored\n");
 		view = complete(engine, root, view, "worker", { fixed: true });
 		expect(view.currentStep.id).toBe("core.triage-route");
 
@@ -704,6 +704,7 @@ test("each verification round records one event, whether it found anything or no
 		});
 		classify(engine, root, "routing", { phase: "apply", answers: {} });
 		view = engine.status(root, workflowId);
+		fs.appendFileSync(path.join(root, "committed.txt"), "restored\n");
 		view = complete(engine, root, view, "worker", { fixed: true });
 		expect(view.currentStep.id).toBe("core.triage-route");
 		classify(engine, root, "triage", {
@@ -745,10 +746,144 @@ test("each verification round records one event, whether it found anything or no
 		);
 		expect(recorded[1]?.["herdr.verification.findings.critical"]).toBe(0);
 		// One plan and one gate decision per round, both rounds recorded.
-		expect(
-			telemetryEvents(root, workflowId, "triage.plan.selected"),
-		).toHaveLength(2);
+		const roundPlans = telemetryEvents(
+			root,
+			workflowId,
+			"triage.plan.selected",
+		);
+		expect(roundPlans).toHaveLength(2);
+		// Round 2 reran the one role that owned the file the fix changed, so its
+		// plan is attributed to the scope rather than to the classifier.
+		expect(roundPlans[1]?.["herdr.triage.source"]).toBe("reverification");
+		expect(roundPlans[1]?.["herdr.triage.round"]).toBe(2);
+		expect(roundPlans[1]?.["herdr.triage.roles"]).toBe("quality-verifier");
 		expect(telemetryEvents(root, workflowId, "gate.decision")).toHaveLength(2);
+
+		// The scope decision itself: the first round is classifier-decided, the
+		// second reruns the owner of the changed file and records every role it
+		// skipped, with the reason, for the developer.
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes).toHaveLength(2);
+		expect(scopes[0]?.["herdr.verification.scope.mode"]).toBe("first-round");
+		expect(scopes[0]?.["herdr.verification.scope.roles.rerun"]).toBe(
+			"quality-verifier=classifier-selected",
+		);
+		expect(scopes[1]?.["herdr.verification.scope.round"]).toBe(2);
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("scoped");
+		expect(scopes[1]?.["herdr.verification.scope.reason"]).toBe(
+			"owner-touched",
+		);
+		expect(scopes[1]?.["herdr.verification.scope.threshold"]).toBe(1);
+		expect(scopes[1]?.["herdr.verification.scope.touched.count"]).toBe(1);
+		expect(scopes[1]?.["herdr.verification.scope.baseline.count"]).toBe(2);
+		expect(scopes[1]?.["herdr.verification.scope.roles.rerun"]).toBe(
+			"quality-verifier=owner-touched",
+		);
+		expect(
+			String(scopes[1]?.["herdr.verification.scope.roles.skipped"]),
+		).toContain("security-verifier=not-owner");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fix that changed no file opens only the engine-owned full suite", async () => {
+	const {
+		root,
+		engine,
+		view: started,
+	} = await startedVerify("verify-noop-fix");
+	const workflowId = "verify-noop-fix";
+	try {
+		let view = reachVerification(engine, root, started, {
+			roles: ["quality-verifier"],
+			gate: gateAnswer("run", 0.9),
+		});
+		// The domain verifier is clean and the engine-owned full suite is the one
+		// that fails, so nothing but the suite reported the finding the fix was for.
+		view = complete(engine, root, view, "quality-verifier", { findings: [] });
+		expect(
+			view.runs
+				.filter((run) => ["pending", "working"].includes(run.status))
+				.map((run) => run.role),
+		).toEqual(["test-verifier"]);
+		view = complete(engine, root, view, "test-verifier", {
+			findings: [
+				{
+					id: "Q-001",
+					severity: "critical",
+					detail: "committed work is broken",
+					path: "committed.txt",
+					line: 1,
+				},
+			],
+		});
+		expect(view.currentStep.id).toBe("core.findings-review");
+		view = action(engine, root, view, "review-comments", {
+			comments: [
+				{
+					comment: "restore the committed behavior",
+					file: "committed.txt",
+					line: 1,
+					findingId: "Q-001",
+				},
+			],
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		// The worker reports a fix but changes no file, so nothing can be
+		// attributed: the round opens on the engine-owned full suite alone rather
+		// than spending every domain verifier again.
+		view = complete(engine, root, view, "worker", { fixed: true });
+		expect(view.currentStep.id).toBe("core.triage-route");
+		// The classifier is still asked; its role selection is what the scope
+		// replaces, so a zero-role answer here must not be what decides the round.
+		classify(engine, root, "triage", {
+			roles: [],
+			gate: gateAnswer("run", 0.9),
+		});
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.route-verification");
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.verification");
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes).toHaveLength(2);
+		expect(scopes[1]?.["herdr.verification.scope.round"]).toBe(2);
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("suite-only");
+		expect(scopes[1]?.["herdr.verification.scope.reason"]).toBe(
+			"below-minimum-diff",
+		);
+		expect(scopes[1]?.["herdr.verification.scope.touched.count"]).toBe(0);
+		expect(scopes[1]?.["herdr.verification.scope.roles.rerun"]).toBe("");
+		expect(
+			String(scopes[1]?.["herdr.verification.scope.roles.skipped"]),
+		).toContain("quality-verifier=below-minimum-diff");
+		// The bypass records the path that produced its role set, and its reason
+		// stays audible to a developer rather than disappearing into a count.
+		const plans = telemetryEvents(root, workflowId, "triage.plan.selected");
+		expect(plans.map((plan) => plan["herdr.triage.source"])).toEqual([
+			"classifier",
+			"reverification-empty",
+		]);
+		// The bypass has no triage step to record the fix size, so the event does.
+		expect(plans[1]?.["herdr.triage.changed.count"]).toBe(0);
+		expect(
+			view.health.attention.some((item) =>
+				item.includes("below the minimum of 1"),
+			),
+		).toBe(true);
+		// Round 2 runs the engine-owned full suite and nothing else.
+		expect(
+			view.runs
+				.filter((run) => ["pending", "working"].includes(run.status))
+				.map((run) => run.role),
+		).toEqual(["test-verifier"]);
+		view = complete(engine, root, view, "test-verifier", { findings: [] });
+		expect(view.currentStep.id).toBe("core.findings-review");
+		const rounds = telemetryEvents(root, workflowId, "verification_round");
+		expect(rounds[1]?.["herdr.verification.round"]).toBe(2);
+		expect(rounds[1]?.["herdr.verification.roles"]).toBe("test-verifier");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
@@ -864,6 +999,396 @@ test("a round whose verifier failed is recorded as abandoned", async () => {
 		expect(rounds[0]?.["herdr.verification.outcome"]).toBe("abandoned");
 		expect(rounds[0]?.["herdr.verification.roles"]).toBe("quality-verifier");
 		expect(rounds[0]?.["herdr.verification.runs.count"]).toBe(1);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+/** Drive a two-role round 1 to a fix handoff, reporting findings from `reported`
+ * and — the way a real fix does — changing a file before the worker hands off. */
+function fixAfterRound(
+	engine: WorkflowEngine,
+	root: string,
+	view: WorkflowView,
+	findingsByRole: Record<string, unknown[]>,
+	mutate: (root: string) => void,
+): WorkflowView {
+	// One claim for the whole round: a claim leases every ready effect, so a
+	// per-run claim would find the sibling's launch already leased.
+	const claims = engine.claimEffects(root, 100);
+	const roles = view.runs
+		.filter((run) => ["pending", "working"].includes(run.status))
+		.map((run) => run.role);
+	for (const role of roles) {
+		const run = engine.getRun(
+			root,
+			requireDefined(
+				view.runs.find((summary) => summary.role === role),
+				`${role} run`,
+			).id,
+		);
+		const launch = requireDefined(
+			claims.find(
+				(effect) =>
+					effect.kind === "agent.launch" &&
+					(effect.payload as { runId?: string }).runId === run.id,
+			),
+			`${role} launch`,
+		);
+		if (!launch.runToken) throw new Error(`missing ${role} launch token`);
+		const outputPath = requireDefined(run.outputPath, `${role} output path`);
+		fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+		fs.writeFileSync(
+			outputPath,
+			JSON.stringify({
+				runId: run.id,
+				schemaId: run.outputSchema?.id,
+				schemaVersion: run.outputSchema?.version,
+				payload: { findings: findingsByRole[role] ?? [] },
+			}),
+		);
+		view = engine.dispatch(root, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token: launch.runToken,
+			outcome: "complete",
+			artifact: outputPath,
+		}).view;
+	}
+	expect(view.currentStep.id).toBe("core.findings-review");
+	view = action(engine, root, view, "review-comments", {
+		comments: Object.keys(findingsByRole).flatMap((role) =>
+			(
+				findingsByRole[role] as Array<{
+					id: string;
+					path: string;
+					line: number;
+				}>
+			).map((finding) => ({
+				comment: "resolve the reported finding",
+				file: finding.path,
+				line: finding.line,
+				findingId: finding.id,
+			})),
+		),
+	});
+	classify(engine, root, "routing", { phase: "apply", answers: {} });
+	view = engine.status(root, view.workflowId);
+	mutate(root);
+	return complete(engine, root, view, "worker", { fixed: true });
+}
+
+/** Reach the round-2 verifier fan-out of a fix round: the triage-routing
+ * classifier's answer (or reception), the round's plan when the engine left it
+ * to the classifier, and the verification model pass. */
+function reachSecondRound(
+	engine: WorkflowEngine,
+	root: string,
+	view: WorkflowView,
+	roles: string[] | undefined,
+	plan?: Array<{ role: string; files: string[] }>,
+): WorkflowView {
+	expect(view.currentStep.id).toBe("core.triage-route");
+	classify(engine, root, "triage", {
+		...(roles === undefined
+			? { failOpen: true, reason: "classifier unavailable" }
+			: { roles }),
+		gate: gateAnswer("run", 0.8),
+	});
+	view = engine.status(root, view.workflowId);
+	expect(view.currentStep.id).toBe("core.route-triage");
+	classify(engine, root, "routing", { phase: "apply", answers: {} });
+	view = engine.status(root, view.workflowId);
+	// A round the engine left to the unconstrained triage agent stops here: its
+	// plan is the caller's to supply, or the caller asserts on the step it reached.
+	if (!plan) return view;
+	expect(view.currentStep.id).toBe("core.triage");
+	view = complete(engine, root, view, "triage", {
+		roles: plan.map((entry) => ({ ...entry, reason: "the fix changed" })),
+	});
+	expect(view.currentStep.id).toBe("core.route-verification");
+	classify(engine, root, "routing", { phase: "apply", answers: {} });
+	view = engine.status(root, view.workflowId);
+	expect(view.currentStep.id).toBe("core.verification");
+	return view;
+}
+
+test("a fix touching another role's file reruns the owner and the role that reported", async () => {
+	const {
+		root,
+		engine,
+		view: started,
+	} = await startedVerify("verify-owner-two");
+	const workflowId = "verify-owner-two";
+	try {
+		let view = reachVerification(
+			engine,
+			root,
+			started,
+			{
+				roles: ["quality-verifier", "security-verifier"],
+				gate: gateAnswer("run", 0.9),
+			},
+			[
+				{ role: "quality-verifier", files: ["committed.txt"] },
+				{ role: "security-verifier", files: ["uncommitted.txt"] },
+			],
+		);
+		// The quality role reports the round's only finding; the fix then changes
+		// the security role's file. Both must run again: the owner of the fix, and
+		// the role whose finding the fix claims to resolve.
+		view = fixAfterRound(
+			engine,
+			root,
+			view,
+			{
+				"quality-verifier": [
+					{
+						id: "Q-001",
+						severity: "critical",
+						detail: "committed work is broken",
+						path: "committed.txt",
+						line: 1,
+					},
+				],
+			},
+			(tree) =>
+				fs.appendFileSync(path.join(tree, "uncommitted.txt"), "fixed\n"),
+		);
+		view = reachSecondRound(
+			engine,
+			root,
+			view,
+			["usability-verifier"],
+			[
+				{ role: "quality-verifier", files: ["committed.txt"] },
+				{ role: "security-verifier", files: ["uncommitted.txt"] },
+			],
+		);
+		// The scope replaced the classifier's answer entirely.
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("scoped");
+		expect(scopes[1]?.["herdr.verification.scope.reason"]).toBe(
+			"owner-touched",
+		);
+		expect(scopes[1]?.["herdr.verification.scope.roles.rerun"]).toBe(
+			"quality-verifier=findings-reported,security-verifier=owner-touched",
+		);
+		expect(
+			String(scopes[1]?.["herdr.verification.scope.roles.skipped"]),
+		).toContain("usability-verifier=not-owner");
+		expect(
+			view.runs
+				.filter((run) => ["pending", "working"].includes(run.status))
+				.map((run) => run.role)
+				.sort(),
+		).toEqual(["quality-verifier", "security-verifier"]);
+		const plans = telemetryEvents(root, workflowId, "triage.plan.selected");
+		expect(plans[1]?.["herdr.triage.source"]).toBe("reverification");
+		expect(plans[1]?.["herdr.triage.roles"]).toBe(
+			"quality-verifier,security-verifier",
+		);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fix touching a file no role owns widens the round to the classifier", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-unowned");
+	const workflowId = "verify-unowned";
+	try {
+		let view = reachVerification(engine, root, started, {
+			roles: ["quality-verifier"],
+			gate: gateAnswer("run", 0.9),
+		});
+		// The fix adds a file the round's plan never mentioned, so the plan cannot
+		// say which role should look at it.
+		view = fixAfterRound(
+			engine,
+			root,
+			view,
+			{
+				"quality-verifier": [
+					{
+						id: "Q-001",
+						severity: "critical",
+						detail: "committed work is broken",
+						path: "committed.txt",
+						line: 1,
+					},
+				],
+			},
+			(tree) => fs.writeFileSync(path.join(tree, "extra.txt"), "extra\n"),
+		);
+		// The widened round keeps the classifier's selection and the role that
+		// reported the finding, so the unconstrained agent plans both.
+		view = reachSecondRound(
+			engine,
+			root,
+			view,
+			["security-verifier"],
+			[
+				{ role: "security-verifier", files: ["extra.txt"] },
+				{ role: "quality-verifier", files: ["committed.txt"] },
+			],
+		);
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("full-set");
+		expect(scopes[1]?.["herdr.verification.scope.reason"]).toBe(
+			"unowned-touched-file",
+		);
+		// The widened round keeps the classifier's role set, and the role that
+		// reported the finding is not dropped from it.
+		expect(scopes[1]?.["herdr.verification.scope.roles.rerun"]).toBe(
+			"quality-verifier=findings-reported,security-verifier=classifier-selected",
+		);
+		const plans = telemetryEvents(root, workflowId, "triage.plan.selected");
+		expect(plans[1]?.["herdr.triage.source"]).toBe("classifier");
+		expect(plans[1]?.["herdr.triage.roles"]).toBe(
+			"security-verifier,quality-verifier",
+		);
+		expect(
+			view.runs
+				.filter((run) => ["pending", "working"].includes(run.status))
+				.map((run) => run.role)
+				.sort(),
+		).toEqual(["quality-verifier", "security-verifier"]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fix touching a file two roles own widens the round", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-shared");
+	const workflowId = "verify-shared";
+	try {
+		let view = reachVerification(
+			engine,
+			root,
+			started,
+			{
+				roles: ["quality-verifier", "security-verifier"],
+				gate: gateAnswer("run", 0.9),
+			},
+			[
+				{ role: "quality-verifier", files: ["committed.txt"] },
+				{ role: "security-verifier", files: ["committed.txt"] },
+			],
+		);
+		view = fixAfterRound(
+			engine,
+			root,
+			view,
+			{
+				"security-verifier": [
+					{
+						id: "S-001",
+						severity: "critical",
+						detail: "the committed file exposes a secret",
+						path: "committed.txt",
+						line: 1,
+					},
+				],
+			},
+			(tree) => fs.appendFileSync(path.join(tree, "committed.txt"), "fixed\n"),
+		);
+		view = reachSecondRound(engine, root, view, undefined);
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("full-set");
+		expect(scopes[1]?.["herdr.verification.scope.reason"]).toBe(
+			"shared-touched-file",
+		);
+		// A fail-open answer carries no selection, so the unconstrained triage agent
+		// is asked to plan the widened round itself.
+		expect(view.currentStep.id).toBe("core.triage");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a scoped round that continues without the classifier stays audible", async () => {
+	const { root, engine, view: started } = await startedVerify("verify-outage");
+	const workflowId = "verify-outage";
+	try {
+		let view = reachVerification(engine, root, started, {
+			roles: ["quality-verifier"],
+			gate: gateAnswer("run", 0.9),
+		});
+		view = fixAfterRound(
+			engine,
+			root,
+			view,
+			{
+				"quality-verifier": [
+					{
+						id: "Q-001",
+						severity: "critical",
+						detail: "committed work is broken",
+						path: "committed.txt",
+						line: 1,
+					},
+				],
+			},
+			(tree) => fs.appendFileSync(path.join(tree, "committed.txt"), "fixed\n"),
+		);
+		// The classifier answers nothing at all: a scoped round keeps the engine's
+		// own role set instead of widening, and says so.
+		const effect = engine
+			.claimEffects(root, 100)
+			.find(
+				(item) =>
+					item.kind === "model.classify" &&
+					(item.payload as { integration?: string }).integration === "triage",
+			);
+		engine.dispatch(root, {
+			type: "effect.result",
+			effectId: requireDefined(effect, "triage classification").id,
+			lease: requireDefined(
+				requireDefined(effect, "triage classification").lease,
+				"classify lease",
+			),
+			outcome: "complete",
+			data: { integration: "routing", phase: "apply", answers: {} },
+		});
+		view = engine.status(root, workflowId);
+		// The interrupted round reaches triage unconstrained — the classifier gave
+		// no role set to validate against — so the engine's scope is what the agent
+		// is steered to, and the attention entry says so.
+		expect(view.currentStep.id).toBe("core.route-triage");
+		expect(
+			view.health.attention.some((item) =>
+				item.includes(
+					"continued with the engine-scoped role set (scoped: owner-touched)",
+				),
+			),
+		).toBe(true);
+		const scopes = telemetryEvents(root, workflowId, "verification_scope");
+		expect(scopes[1]?.["herdr.verification.scope.mode"]).toBe("scoped");
+		expect(scopes[1]?.["herdr.verification.scope.roles.rerun"]).toBe(
+			"quality-verifier=owner-touched",
+		);
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.triage");
+		view = complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "the engine scoped the round to it",
+					files: ["committed.txt"],
+				},
+			],
+		});
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		view = engine.status(root, workflowId);
+		expect(view.currentStep.id).toBe("core.verification");
+		expect(
+			view.runs
+				.filter((run) => ["pending", "working"].includes(run.status))
+				.map((run) => run.role)
+				.sort(),
+		).toEqual(["quality-verifier"]);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

@@ -3,6 +3,7 @@ import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
 import type { WorkflowFamilyTraits } from "../registry.ts";
+import { ENGINE_OWNED_VERIFIER_ROLE, planRecord } from "./reverification.ts";
 import type {
 	ArriveResult,
 	CompletionTelemetry,
@@ -247,26 +248,44 @@ function triageCompletion(ctx: {
 					`triage file is outside changed scope: ${file}`,
 				);
 	}
+	const round = (ctx.snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
+	// The round's own decision, when the routing step recorded one for it: an
+	// engine-scoped round attributes its role set to the scope rather than to the
+	// classifier, even though the classifier still answered (role-scoped
+	// re-verification).
+	const decision = ctx.snapshot.verificationScope?.decision;
+	const scoped = decision?.round === round && decision.mode === "scoped";
+	const ownership = planRecord(output.assignments);
 	return {
 		step: { selectedRoles: output.roles },
+		// The previous round's plan is what the next round scopes from, and the
+		// transition that reaches it resets the step context this plan arrives in,
+		// so the ownership is persisted here. A plan beyond the record's caps is
+		// recorded as an empty plan — the field is always written, so it clears the
+		// previous round's ownership instead of leaving it under this round's stamp
+		// (the record is merged field by field). An empty plan widens the next round
+		// rather than letting a truncated plan hide a file's owner.
+		verificationScope: { round, plan: ownership.plan },
 		// Which path produced the round's role set: the classifier's own
-		// selection, the unconstrained default (a classifier outage inside a
-		// graph that asks), or the tier that predates the routing step, where the
-		// triage agent always chose. The zero-role bypass never reaches this step
-		// — it is recorded by the routing step that decided it.
+		// selection, the engine's re-verification scope, the unconstrained default
+		// (a classifier outage inside a graph that asks), or the tier that
+		// predates the routing step, where the triage agent always chose. The
+		// zero-role bypasses never reach this step — they are recorded by the
+		// routing step that decided them.
 		telemetry: [
 			{
 				event: "triage.plan.selected",
 				payload: {
-					"herdr.triage.source": ctx.snapshot.step.selectedRoles.length
-						? "classifier"
-						: ctx.hasStep("core.triage-route")
-							? "default"
-							: "legacy-agent",
+					"herdr.triage.source": scoped
+						? "reverification"
+						: ctx.snapshot.step.selectedRoles.length
+							? "classifier"
+							: ctx.hasStep("core.triage-route")
+								? "default"
+								: "legacy-agent",
 					// The round this plan is for: the counter `core.verification`'s own
 					// arrival increments on entering the round it plans.
-					"herdr.triage.round":
-						(ctx.snapshot.loopCounts["core.verification:round"] ?? 0) + 1,
+					"herdr.triage.round": round,
 					"herdr.triage.roles": output.roles.join(","),
 					"herdr.triage.roles.count": output.roles.length,
 					...fileMapTelemetry("herdr.triage", output),
@@ -347,9 +366,28 @@ function verificationCompletion(
 		ctx.snapshot.step.results.some((item) => item.critical > 0)
 	) {
 		const limit = ctx.snapshot.loopCounts["core.verification:fix"] ?? 0;
+		// The roles that reported the round's findings. The fix that follows exists
+		// to resolve them, so the next round re-runs each of them whatever file the
+		// fix touched — the floor that keeps a fixed finding from going unverified.
+		// The engine-owned full-suite role is excluded: it runs anyway, and it is
+		// not part of the catalog a scope may name.
+		const reported = [
+			...new Set(
+				[...ctx.snapshot.step.results, result]
+					.filter((item) => item.critical > 0)
+					.map((item) => item.role)
+					.filter((role) => role !== ENGINE_OWNED_VERIFIER_ROLE),
+			),
+		];
 		return {
 			step: { appendResults },
 			telemetry: [round],
+			verificationScope: {
+				reported: {
+					round: ctx.snapshot.loopCounts["core.verification:round"] ?? 0,
+					roles: reported,
+				},
+			},
 			transition: {
 				outcome:
 					limit + 1 >= (ctx.loopMaxAttempts ?? Number.MAX_SAFE_INTEGER)

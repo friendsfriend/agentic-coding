@@ -54,6 +54,11 @@ export interface PreparedHandoffEvidence {
 	 * side run: the report and the files that changed since its baseline
 	 * (add-debug-subagent-requests). */
 	debugRequest?: PreparedDebugRequestHandoff;
+	/** The re-verification scope the runtime observed at this handoff
+	 * (role-scoped re-verification): the round's tree baseline and, after a fix,
+	 * the delta it changed. Merged into the snapshot before the step's own
+	 * completion, which writes the plan and the decision on disjoint fields. */
+	verificationScope?: WorkflowSnapshot["verificationScope"];
 }
 
 export function agentHandoff(
@@ -210,6 +215,20 @@ export function agentHandoff(
 		(id) => id !== run.id,
 	);
 	snapshot.step.completedRunIds.push(run.id);
+	// The runtime's own observation is merged first, so the step's completion (the
+	// triage plan, the routing decision) adds its disjoint fields on top of it. A
+	// handoff observes exactly two fields — the baseline and the delta — and the
+	// merge is restricted to them, so the record's bookkeeping (the plan, the
+	// reported roles, the decision) is never erased by a step that wrote none.
+	if (command.outcome === "complete" && prepared?.verificationScope) {
+		const observed = prepared.verificationScope;
+		const merged: NonNullable<WorkflowSnapshot["verificationScope"]> = {
+			...(snapshot.verificationScope ?? {}),
+		};
+		if (observed.baseline) merged.baseline = observed.baseline;
+		if (observed.delta) merged.delta = observed.delta;
+		snapshot.verificationScope = merged;
+	}
 	if (completion) {
 		applyCompletionResult(
 			db,

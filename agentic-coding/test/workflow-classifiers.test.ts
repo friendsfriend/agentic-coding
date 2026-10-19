@@ -628,6 +628,7 @@ describe("routing steps and graph wiring", () => {
 			stepId: "core.plan",
 		});
 		const completion = behavior.onEffectComplete?.({
+			definitionId: "workflow",
 			// The arriving edge's output is recorded as this step's context; the
 			// completion hands it on rather than forwarding the model answer, so the
 			// step this route step precedes receives what the edge delivered.
@@ -837,7 +838,8 @@ describe("noul answers and the per-role questions", () => {
 
 describe("verifier-role routing step and graph", () => {
 	const triageRouteData = (data: unknown) => ({
-		snapshot: { currentStep: "core.triage-route" } as never,
+		definitionId: "workflow",
+		snapshot: { currentStep: "core.triage-route", loopCounts: {} } as never,
 		effect: {
 			kind: "model.classify" as const,
 			payload: { integration: "triage" },
@@ -2136,6 +2138,7 @@ describe("stage gate protocol", () => {
 
 describe("stage gate step behaviors", () => {
 	const gateData = (data: unknown) => ({
+		definitionId: "workflow",
 		snapshot: { currentStep: "core.review-gate" } as never,
 		effect: {
 			kind: "model.classify" as const,
@@ -2239,7 +2242,8 @@ describe("stage gate step behaviors", () => {
 
 	test("the verification gate resolves before the role selection", () => {
 		const triageData = (data: unknown) => ({
-			snapshot: { currentStep: "core.triage-route" } as never,
+			definitionId: "workflow",
+			snapshot: { currentStep: "core.triage-route", loopCounts: {} } as never,
 			effect: {
 				kind: "model.classify" as const,
 				payload: { integration: "triage" },

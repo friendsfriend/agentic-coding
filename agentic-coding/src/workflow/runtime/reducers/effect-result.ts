@@ -963,6 +963,7 @@ export function effectResult(
 			: undefined;
 	const completion = completionStep?.behavior?.onEffectComplete?.({
 		snapshot: structuredClone(snapshot),
+		definitionId: definition.id,
 		traits: effectiveFamilyTraits(definition),
 		effect: {
 			kind: row.kind,

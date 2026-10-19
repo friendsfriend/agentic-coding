@@ -223,6 +223,7 @@ describe("env-setup step behaviors", () => {
 
 		// The armed baseline is what releases the author's run.
 		const launched = behavior("setup.author").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.setup-guard",
@@ -237,6 +238,7 @@ describe("env-setup step behaviors", () => {
 		// permanently and the workflow parks in attention-required. A completed
 		// check is what lets the author hand off to validation.
 		const afterGuard = behavior("setup.author").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.setup-guard",
@@ -261,6 +263,7 @@ describe("env-setup step behaviors", () => {
 		expect((gate.payload as { app?: string }).app).toBe("shop");
 
 		const failed = behavior("setup.validate").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.validate",
@@ -275,6 +278,7 @@ describe("env-setup step behaviors", () => {
 		});
 
 		const passed = behavior("setup.validate").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.validate",
@@ -315,6 +319,7 @@ describe("env-setup step behaviors", () => {
 
 		// Only a clean check enqueues the promotion.
 		const afterGuard = behavior("setup.promote").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.setup-guard",
@@ -330,6 +335,7 @@ describe("env-setup step behaviors", () => {
 		// A rolled-back promotion is a failure the graph retries, never a
 		// completed step that published nothing.
 		const rolledBack = behavior("setup.promote").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.promote",
@@ -339,6 +345,7 @@ describe("env-setup step behaviors", () => {
 		});
 		expect(rolledBack?.transition?.outcome).toBe("failed");
 		const promoted = behavior("setup.promote").onEffectComplete?.({
+			definitionId: "workflow",
 			snapshot: snapshot(),
 			effect: {
 				kind: "environment.promote",
