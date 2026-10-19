@@ -70,7 +70,9 @@ import {
 	attachTelemetry,
 	type EntryTiming,
 	emitRuntimeEnvelope,
+	emitSessionWindow,
 	emitToolTelemetry,
+	type SessionWindowReason,
 	type TelemetryIdentity,
 	type ToolOutcomeObservation,
 } from "./telemetry.ts";
@@ -231,6 +233,18 @@ interface RunRecord {
 	model?: string;
 }
 
+/** The run a conversation is currently bound to, with the identity that run
+ * records under (efficiency backlog item 20: a run's window is its session's
+ * window). One conversation serves every later run of the same step and role, so
+ * this is what makes a turn attributable to the run that was working: the
+ * telemetry stream reads it per envelope and the session-window events name it.
+ * It survives the run's retirement (`stopRun` keeps it) because the conversation
+ * is what continues — a host restart is the only thing that loses it. */
+interface SessionBinding {
+	readonly runId: string;
+	readonly identity: TelemetryIdentity;
+}
+
 /** What the host remembers about one conversation's cost-ceiling compactions
  * (efficiency backlog item 6): the measured turn, what it decided at, and the
  * turns it compacted at, which is what the floor and the loop guard count. */
@@ -349,6 +363,11 @@ export class DurableHost {
 		ConversationId,
 		TelemetryIdentity
 	>();
+	/** The run each conversation is bound to *now* — the session window's binding,
+	 * and the identity the conversation's telemetry stream stamps its envelopes
+	 * with. Deliberately not dropped by `stopRun`: a conversation outlives the run
+	 * it was created for, and the run it left is what a rebinding reports. */
+	private readonly sessionBindings = new Map<ConversationId, SessionBinding>();
 	private server: net.Server | undefined;
 	private closing = false;
 
@@ -575,6 +594,9 @@ export class DurableHost {
 		const readOnly = input.toolPolicy === "read-only";
 		const debugRun = envVars.HERDR_ROLE === "debug";
 		const toolSelection = this.toolSelectionFor(input.toolPolicy, debugRun);
+		// Whether this run is the one the conversation was made for, which is what
+		// separates a `created` session window from an `adopted` one.
+		let createdConversation = false;
 		if (!conversation) {
 			conversation = await this.harness.createConversation(
 				{
@@ -596,6 +618,7 @@ export class DurableHost {
 					conversationId: conversation?.id as unknown as number,
 				};
 			}, context);
+			createdConversation = true;
 		} else if (toolSelection) {
 			await conversation.configure(
 				{ tools: toolSelection, cwd: input.cwd },
@@ -633,6 +656,10 @@ export class DurableHost {
 		// The ceiling's own envelopes go to the same file as the run's, including
 		// for a conversation whose telemetry stream could not be attached.
 		this.telemetryIdentities.set(conversation.id, identity);
+		// The conversation's session window: bind it to this run and state the move
+		// (efficiency backlog item 20). Pure observation — it writes no workflow
+		// state, and a failure to emit never fails the run.
+		this.recordSessionWindow(conversation.id, identity, createdConversation);
 		if (!this.telemetry.has(conversation.id)) {
 			const conversationId = conversation.id;
 			// The dead-surface monitor of this run, or none for a session the rule
@@ -643,7 +670,10 @@ export class DurableHost {
 					this.harness,
 					conversationId,
 					context,
-					identity,
+					// The binding, not this run's identity: the stream outlives the run it
+					// was attached for, and a later run of the same step and role must
+					// record its own turns instead of the creating run's.
+					() => this.sessionBindingOf(conversationId)?.identity ?? identity,
 					{
 						onTiming: (entryId, timing) => {
 							const existing = this.timings.get(conversation.id) ?? {};
@@ -654,9 +684,15 @@ export class DurableHost {
 						},
 						// The measured context of one committed turn is also the cost
 						// ceiling's input, so one event stream serves both and the ceiling
-						// is decided between turns, never inside a tool call.
+						// is decided between turns, never inside a tool call. The run is the
+						// one bound now, so a ceiling decision is recorded against the run
+						// that made it rather than the one that created the conversation.
 						onMeasuredContext: ({ promptTokens, turnIndex }) =>
-							this.observeContext(input.runId, promptTokens, turnIndex),
+							this.observeContext(
+								this.boundRunId(conversationId) ?? input.runId,
+								promptTokens,
+								turnIndex,
+							),
 						compactionKind: (taskId) => {
 							const pending = this.ceilingPending.get(conversation.id) ?? 0;
 							if (pending > 0) {
@@ -674,7 +710,7 @@ export class DurableHost {
 							? {
 									onToolOutcome: (observation: ToolOutcomeObservation) =>
 										this.onToolOutcome(
-											input.runId,
+											this.boundRunId(conversationId) ?? input.runId,
 											conversationId,
 											observation,
 										),
@@ -690,6 +726,75 @@ export class DurableHost {
 		}
 		this.log(`ensureRun ${input.runId} -> conversation ${conversation.id}`);
 		return { conversationId: String(conversation.id) };
+	}
+
+	/** The conversation's current run binding, or undefined for a session that
+	 * never carried a run id (an orchestrator session records no window). */
+	private sessionBindingOf(
+		conversationId: ConversationId,
+	): SessionBinding | undefined {
+		return this.sessionBindings.get(conversationId);
+	}
+
+	private boundRunId(conversationId: ConversationId): string | undefined {
+		return this.sessionBindings.get(conversationId)?.runId;
+	}
+
+	/** Bind one conversation to the run that is about to work on it and state the
+	 * move as the session window (efficiency backlog item 20). A conversation
+	 * bound to a different run first closes that run's window (`closed`, naming
+	 * the run now bound) and then opens this one's (`opened`, reason `rebound`);
+	 * a conversation made for this run opens with `created`, one whose previous
+	 * run this host cannot name (a restart) with `adopted`, and one bound to the
+	 * same run again (an abort, then a resume) with `resumed`.
+	 *
+	 * Best-effort and observational, like every envelope: it writes no workflow
+	 * state, changes no conversation, and a failed emission leaves the run and the
+	 * workflow exactly as they would be without the record. Nothing is recorded
+	 * for a conversation with no run id in its environment. */
+	private recordSessionWindow(
+		conversationId: ConversationId,
+		identity: TelemetryIdentity,
+		createdConversation: boolean,
+	): void {
+		const runId = identity.runId;
+		if (runId === undefined) return;
+		const previous = this.sessionBindings.get(conversationId);
+		this.sessionBindings.set(conversationId, { runId, identity });
+		try {
+			if (previous !== undefined && previous.runId !== runId) {
+				emitSessionWindow(
+					conversationId,
+					"runtime.session_window.closed",
+					previous.identity,
+					{ "herdr.session.rebound_to": runId },
+				);
+				emitSessionWindow(
+					conversationId,
+					"runtime.session_window.opened",
+					identity,
+					{
+						"herdr.session.reason": "rebound" satisfies SessionWindowReason,
+						"herdr.session.previous_run_id": previous.runId,
+					},
+				);
+				return;
+			}
+			const reason: SessionWindowReason =
+				previous !== undefined
+					? "resumed"
+					: createdConversation
+						? "created"
+						: "adopted";
+			emitSessionWindow(
+				conversationId,
+				"runtime.session_window.opened",
+				identity,
+				{ "herdr.session.reason": reason },
+			);
+		} catch {
+			/* the session window is an observation; it never fails the run */
+		}
 	}
 
 	/** The explicit tool list for a policy, or undefined for the full default
@@ -1502,6 +1607,11 @@ export class DurableHost {
 			this.ceilings.delete(record.conversationId);
 			this.telemetryIdentities.delete(record.conversationId);
 			this.ceilingPending.delete(record.conversationId);
+			// The session binding is *not* deleted: the conversation outlives the run,
+			// and a later run of the same step and role recording a rebinding has to
+			// name the run it left (efficiency backlog item 20). The telemetry stream
+			// stays attached for the same reason, so it can attribute the new run's
+			// turns to that run.
 		});
 	}
 

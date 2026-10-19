@@ -28,6 +28,10 @@ import {
 } from "./lib/empty-sources.ts";
 import { extractTables } from "./lib/extract.ts";
 import { buildInventory } from "./lib/inventory.ts";
+import {
+	describeUnrecordedRunWindow,
+	inspectRunWindow,
+} from "./lib/run-window.ts";
 import { datasetReadme } from "./lib/schema-readme.ts";
 import { discoverEvidence } from "./lib/sources.ts";
 
@@ -131,6 +135,21 @@ function main(argv: readonly string[]): number {
 	);
 	fs.writeFileSync(path.join(outDir, "README.md"), readme, { mode: 0o600 });
 
+	// A run whose session kept working after the run closed is either stated by
+	// the recording or a defect (efficiency backlog item 20): an unexplained tail
+	// fails the build, the way a source that parses nothing does. Only a workflow
+	// whose own recording carries a session window is judged, so a generation that
+	// predates the record is reported as unrecorded and still builds.
+	const runWindow = inspectRunWindow(write.path);
+	if (runWindow.failures.length > 0) {
+		fs.rmSync(write.path, { force: true });
+		fs.rmSync(path.join(outDir, "README.md"), { force: true });
+		process.stderr.write(
+			describeUnrecordedRunWindow(runWindow.failures, write.path),
+		);
+		return 1;
+	}
+
 	if (inventoryPath !== undefined) {
 		const inventory = buildInventory({
 			datasetPath: write.path,
@@ -158,6 +177,17 @@ function main(argv: readonly string[]): number {
 			0,
 		),
 		notes: extraction.tables.notes.length,
+		// The run/session window split: how many drifting runs the build judged,
+		// what the recording explained, and how many belong to a generation that
+		// cannot state a session window at all.
+		runWindow: {
+			drifting: runWindow.rows.length,
+			judged: runWindow.judged.length,
+			attributed: runWindow.attributed,
+			clockArtifact: runWindow.clockArtifact,
+			unexplained: runWindow.unexplained,
+			unrecorded: runWindow.unrecorded.length,
+		},
 		buildMs: Math.round(performance.now() - started),
 	};
 	process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

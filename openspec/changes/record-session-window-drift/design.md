@@ -247,6 +247,38 @@ docs state them, with the fix listed as a follow-up.
   that conversation records `rebound` from the retired run, which is what the
   query's `attributed` class means.
 
+## Assumptions made while implementing
+
+Where the plan left a detail open, these were chosen and are recorded here rather
+than asked about:
+
+- **[The alarm's gate is the drifting run's own workflow]** (`run-window.ts`): a
+  workflow is judged when its own `v_events` rows contain any
+  `runtime.session_window.%` event, so a workflow that mixes a recorded round
+  with an earlier unrecorded one is judged as a whole. The alternative — judging
+  per run on "did *this* run's session emit a window event" — would silently pass
+  an unrecorded tail in a recorded workflow, which is the defect the alarm exists
+  to catch.
+- **[`drift_kind` is decided in the order `attributed` → `clock-artifact` →
+  `unexplained`]**: an explained tail wins over an unreadable window (both are
+  accounted for), and only a row with neither is a defect. `clock-artifact` ranks
+  second because it is a statement about the *reader* (D5), not about the run.
+- **[`tail_turns` counts turns that started after the run's recorded completion]**:
+  the same clock reference `tail_window` already used for `last_turn_at`, so the
+  count and the measured tail can never disagree about which turns are in the
+  tail.
+- **[The alarm deletes the dataset and its README before exiting]** — the shape
+  the empty-source alarm already has — so a failed build cannot leave a
+  plausible-looking dataset that a later step reads as current.
+- **[`runWindow` is a new object in the build summary]**: `drifting`, `judged`,
+  `attributed`, `clockArtifact`, `unexplained`, `unrecorded`. `drifting` counts
+  every row the query reports, `judged` the rows in recorded workflows, so
+  `judged = attributed + clockArtifact + unexplained` always holds.
+- **[`adopted` is tested through a restart, not by reaching into the host]**: the
+  test opens a file-backed host, shuts it down and opens a second host over the
+  same layout, so the second host finds the run map and the conversation without a
+  binding — the real condition, not a simulated one.
+
 ## Migration Plan
 
 No migration. The record is new telemetry: a store written before this change has

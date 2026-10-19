@@ -34,6 +34,64 @@ const RUN_SUMMARY_COLUMNS = [
 	"cost",
 ];
 
+/** The run-window statement `run-window-drift` registers. Exported so the
+ * dataset build's alarm (`lib/run-window.ts`) reads exactly what the query
+ * reports: the two can never disagree about what a tail is. */
+export const RUN_WINDOW_DRIFT_SQL = `WITH turn_window AS (
+	SELECT
+		t.run_id AS run_id,
+		MIN(t.started_at) AS first_turn_at,
+		MAX(COALESCE(t.ended_at, t.started_at)) AS last_turn_at,
+		COUNT(*) AS turns
+	FROM v_turns t
+	WHERE t.started_at IS NOT NULL
+	GROUP BY t.run_id
+),
+tail_window AS (
+	SELECT t.run_id AS run_id, COUNT(*) AS tail_turns
+	FROM v_turns t
+	JOIN v_runs r ON r.run_id = t.run_id
+	WHERE t.started_at IS NOT NULL
+		AND r.completed_at IS NOT NULL
+		AND julianday(t.started_at) > julianday(r.completed_at)
+	GROUP BY t.run_id
+),
+-- A run whose session is recorded as rebound to a later run: the tail is a
+-- continuation the recording states, not a window error.
+session_record AS (
+	SELECT DISTINCT e.run_id AS run_id
+	FROM v_events e
+	JOIN v_runs r ON r.run_id = e.run_id
+	WHERE e.event = 'runtime.session_window.closed'
+		AND julianday(e.at) >= julianday(r.completed_at)
+)
+SELECT
+	r.run_id AS run_id,
+	r.workflow_id AS workflow_id,
+	COALESCE(r.role, '(unset)') AS role,
+	COALESCE(r.status, '(unset)') AS status,
+	r.started_at AS run_started_at,
+	r.completed_at AS run_completed_at,
+	w.turns AS turns,
+	COALESCE(tw.tail_turns, 0) AS tail_turns,
+	w.first_turn_at AS first_turn_at,
+	w.last_turn_at AS last_turn_at,
+	CAST((julianday(w.last_turn_at) - julianday(r.completed_at)) * 86400 AS INTEGER) AS tail_seconds,
+	CASE
+		WHEN s.run_id IS NOT NULL THEN 'attributed'
+		-- The traces reader dates an 'agent.handoff' span by its start, so this
+		-- run's own window cannot be read (design D5: classified, not rewritten).
+		WHEN julianday(r.completed_at) <= julianday(r.started_at) THEN 'clock-artifact'
+		ELSE 'unexplained'
+	END AS drift_kind
+FROM v_runs r
+JOIN turn_window w ON w.run_id = r.run_id
+LEFT JOIN tail_window tw ON tw.run_id = r.run_id
+LEFT JOIN session_record s ON s.run_id = r.run_id
+WHERE r.completed_at IS NOT NULL
+	AND julianday(w.last_turn_at) - julianday(r.completed_at) > (1.0 / 1440.0)
+ORDER BY tail_seconds DESC, r.run_id`;
+
 export const QUERIES: readonly AnalysisQuery[] = [
 	{
 		name: "summary",
@@ -1278,7 +1336,7 @@ ORDER BY p.closed_at, p.workflow_id`,
 	{
 		name: "run-window-drift",
 		summary:
-			"Runs whose turns continue well past the run's own recorded window: a resumed session still attributed to a finished run.",
+			"Runs whose turns continue well past the run's own recorded window — a session that outlived the run it was attributed to — each with the turns in its tail and whether the recording explains it (`attributed`), cannot read the window (`clock-artifact`) or explains nothing (`unexplained`).",
 		example:
 			"bun run scripts/efficiency/analyze.ts run-window-drift --dataset ~/ev/dataset-2026 --limit 20",
 		limitable: true,
@@ -1291,36 +1349,13 @@ ORDER BY p.closed_at, p.workflow_id`,
 			"run_started_at",
 			"run_completed_at",
 			"turns",
+			"tail_turns",
 			"first_turn_at",
 			"last_turn_at",
 			"tail_seconds",
+			"drift_kind",
 		],
-		sql: `WITH turn_window AS (
-	SELECT
-		t.run_id AS run_id,
-		MIN(t.started_at) AS first_turn_at,
-		MAX(COALESCE(t.ended_at, t.started_at)) AS last_turn_at,
-		COUNT(*) AS turns
-	FROM v_turns t
-	WHERE t.started_at IS NOT NULL
-	GROUP BY t.run_id
-)
-SELECT
-	r.run_id AS run_id,
-	r.workflow_id AS workflow_id,
-	COALESCE(r.role, '(unset)') AS role,
-	COALESCE(r.status, '(unset)') AS status,
-	r.started_at AS run_started_at,
-	r.completed_at AS run_completed_at,
-	w.turns AS turns,
-	w.first_turn_at AS first_turn_at,
-	w.last_turn_at AS last_turn_at,
-	CAST((julianday(w.last_turn_at) - julianday(r.completed_at)) * 86400 AS INTEGER) AS tail_seconds
-FROM v_runs r
-JOIN turn_window w ON w.run_id = r.run_id
-WHERE r.completed_at IS NOT NULL
-	AND julianday(w.last_turn_at) - julianday(r.completed_at) > (1.0 / 1440.0)
-ORDER BY tail_seconds DESC, r.run_id`,
+		sql: RUN_WINDOW_DRIFT_SQL,
 	},
 	{
 		name: "source-recording",

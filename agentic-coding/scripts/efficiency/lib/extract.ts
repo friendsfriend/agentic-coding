@@ -119,6 +119,12 @@ export function eventClass(event: string): EventClass {
 			return "effect";
 		case "workflow.started":
 		case "legacy.migrated":
+		// The session window (efficiency backlog item 20): the run's session was
+		// bound to a run, or left one for a later run. Recorded as lifecycle so the
+		// two events are readable by class as well as by name; `run-window-drift`
+		// reads them by name.
+		case "runtime.session_window.opened":
+		case "runtime.session_window.closed":
 			return "lifecycle";
 		default:
 			return "other";

@@ -1319,6 +1319,71 @@ unavailable, and starting an `env-setup` workflow (which cannot do its job
 without them) records the same in the workflow's own `attention` health instead
 of launching an author run that can neither start nor build what it drafts.
 
+### The session window (efficiency backlog item 20)
+
+A run has two windows and the record used to state only one of them. The **run
+window** is the engine's: `workflow_runs.started_at` to `completed_at`, closed by
+the run's `agent.handoff`. The **session window** is the durable host's: one
+pi-durable conversation per canonical agent name — `(workflow, step, role)`,
+stable across rounds, attempts, repairs and resumes — which outlives every run it
+serves.
+
+Nothing used to say that a session continued: the conversation's telemetry
+stream was attached once, with the identity of the run that created it, so every
+later run of the same step and role was stamped with that first run's id. On the
+pinned snapshot 156 of 1,259 runs carried turns after their own recorded
+completion (11,960 of 34,711 turns) while the runs that actually did the work
+recorded none — a run labelled `blocked, 4 minutes` covered 45 minutes of work.
+
+`host.ts` now keeps one **binding** per conversation (`sessionBindings`: the run
+most recently bound to it, with that run's identity) and updates it in
+`ensureRun` before the run's first submission:
+
+- the conversation's telemetry stream resolves its identity per envelope
+  (`attachTelemetry` takes an identity or a getter), so a turn that lands after a
+  rebinding is the later run's turn — and the cost ceiling and the dead-surface
+  monitor follow the same binding, so their decisions are recorded against the
+  run that made them;
+- the move is stated as two runtime envelopes on the same sink, both carrying the
+  conversation id as `sessionId`:
+  - `runtime.session_window.opened` with `herdr.session.reason` — `created` (the
+    conversation was made for this run), `rebound` (an existing conversation
+    whose previous run is known, with `herdr.session.previous_run_id`), `adopted`
+    (an existing conversation whose previous run this host cannot name, as after
+    a restart) or `resumed` (the same run bound again, as after an abort);
+  - `runtime.session_window.closed` for the run being left, with
+    `herdr.session.rebound_to` naming the run now bound, emitted before the
+    opened record.
+
+The two windows stay separate on purpose. A run is **not** closed when its
+session stops: that would change when a run — and so a workflow — is complete,
+and would relabel a resumed run, which is the *same* run and must keep its
+window. Both envelopes are observational: they write no workflow state, need no
+store field (`STORE_SCHEMA_VERSION` stays 6), no migration and no snapshot, and a
+failed emission leaves the run and the workflow exactly as they would be
+without it. Nothing is recorded for a conversation with no run id in its
+environment (an orchestrator session).
+
+A reader pairs the two: `scripts/efficiency`'s `run-window-drift` query reports,
+per drifting run, the turns in its tail and a `drift_kind` of `attributed` (the
+recording states the session went on under a later run), `clock-artifact` (the
+run's recorded completion is not after its start, so the window cannot be read)
+or `unexplained`; the dataset build fails on an unexplained tail in a workflow
+whose own recording states a session window (see
+[`efficiency/01-dataset-tooling.md`](./efficiency/01-dataset-tooling.md)).
+
+**Coverage limit**: the conversation survives everything, but the host's binding
+map is in memory. A host restart between two rounds of the same step loses it, so
+the next `ensureRun` records `adopted` and no `closed`, and the turns the
+detached conversation produced while no stream was attached are not attributed to
+anyone (`watchEvents` streams only what is published after the attachment). That
+hole is *unrecorded*, never misattributed.
+
+`stopRun` deliberately keeps the conversation's binding even though it drops the
+run's own bookkeeping: the conversation is what continues. A conversation reused
+after its run was retired therefore records `rebound` from that run, which is
+what the query's `attributed` class means.
+
 ### Fail fast on a dead tool surface (efficiency backlog item 3)
 
 Nothing used to cut a run short when every tool call failed: the agent kept

@@ -178,6 +178,39 @@ Every query reads the preferred rows and runs in a second or less.
 | `verifier-findings` | verifier findings by severity and role | `analyze.ts verifier-findings --dataset <out>` |
 | `runs` | per-run rollup for eyeballing one workflow | `analyze.ts runs --dataset <out> --limit 20` |
 | `source-recording` | per source, month and recording: outcomes, the share of calls with an argument digest, result size, duration and failure kind, and failure-only runs | `analyze.ts source-recording --dataset <out>` |
+| `run-window-drift` | runs whose turns continue past the run's own recorded completion, with the turns in the tail (`tail_turns`) and whether the recording explains it (`drift_kind`, see below) | `analyze.ts run-window-drift --dataset <out> --limit 20` |
+
+### `run-window-drift` and the session window
+
+A run's window is the engine's: `started_at` to the `agent.handoff` that closed
+it. Its session's window is the durable host's: one pi-durable conversation per
+`(workflow, step, role)`, which outlives every run it serves. The host records
+the move between them as two runtime envelopes on the conversation's run binding
+(`runtime.session_window.opened` with a reason, `runtime.session_window.closed`
+naming the run it rebinds to), so a turn a session emits after its run closed is
+a **recorded continuation** rather than a window error.
+
+The query keeps the columns it always had (`run_id`, `workflow_id`, `role`,
+`status`, `run_started_at`, `run_completed_at`, `turns`, `first_turn_at`,
+`last_turn_at`, `tail_seconds`, and the one-minute threshold) and adds:
+
+- `tail_turns` — how many of the run's turns started after its recorded
+  completion;
+- `drift_kind`:
+  - `attributed` — a `runtime.session_window.closed` event exists for this run at
+    or after its completion: the session went on under a later run, which did the
+    work the earlier run's row would otherwise claim;
+  - `clock-artifact` — `completed_at <= started_at`, i.e. the run's own window
+    cannot be read (the traces reader dates an `agent.handoff` span by its start);
+  - `unexplained` — neither, so nothing in the recording accounts for the tail.
+
+The build fails on an unexplained tail — but only in a workflow whose own
+recording carries a session-window event. A workflow that predates the record
+(the whole pinned snapshot) is counted and reported under `runWindow.unrecorded`
+in the build summary and still builds; an `attributed` or `clock-artifact` row is
+counted and passes. On failure the build deletes the dataset and its README,
+names the offending runs, their workflows and the query to inspect, and exits
+non-zero — the same shape as the empty-source alarm.
 
 A query that a later step needs and this list does not have belongs in
 `scripts/efficiency/lib/queries.ts` (name, summary, SQL, columns, one example),
@@ -200,7 +233,8 @@ and SQL for the traces and durable stores. The SQLite fixtures are committed as
 `test/efficiency/fixture.ts`, so no binary blob enters the repository. The tests
 cover the parsing of both telemetry formats, the de-duplication precedence, run
 attribution, redaction, corrupt-line tolerance, the repeated-call and
-reconciliation queries, and that every documented query runs.
+reconciliation queries, the `run-window-drift` classification and its build
+alarm, and that every documented query runs.
 
 ## Constraints the tooling respects
 

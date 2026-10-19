@@ -43,7 +43,9 @@ function redact(text: string): string {
 }
 const CONTENT_LIMIT = 8192;
 
-function emit(
+/** Write one runtime envelope for `identity`'s run: to that run's telemetry
+ * file, and to the OTLP receiver when the session exports there. */
+function emitEnvelope(
 	identity: TelemetryIdentity,
 	event: string,
 	fields: Record<string, unknown> = {},
@@ -99,7 +101,7 @@ export function emitToolTelemetry(
 	event: string,
 	fields: Record<string, unknown> = {},
 ): void {
-	emit(
+	emitEnvelope(
 		{
 			workflowId: env.HERDR_WORKFLOW_ID,
 			runId: env.HERDR_RUN_ID,
@@ -192,7 +194,41 @@ export function emitRuntimeEnvelope(
 	event: string,
 	fields: Record<string, unknown> = {},
 ): void {
-	emit(identity, event, fields);
+	emitEnvelope(identity, event, fields);
+}
+
+/** Why a conversation was bound to a run: `created` (the conversation was made
+ * for this run), `rebound` (an existing conversation whose previous run is
+ * known), `adopted` (an existing conversation whose previous run this host
+ * cannot name, as after a restart) or `resumed` (the same run bound again, as
+ * after an abort). */
+export type SessionWindowReason = "created" | "rebound" | "adopted" | "resumed";
+
+/** The two session-window envelopes (efficiency backlog item 20: a run's window
+ * is its session's window). The run window is the engine's — `started_at` to
+ * the run's `agent.handoff` — and keeps its meaning; these state the window of
+ * the *session* that served the run, so a turn a conversation emits after its
+ * run closed is a recorded continuation rather than an unexplained window
+ * error. Additive and observational: no workflow state, no store field, no
+ * schema change, and neither envelope closes a run or a session. */
+export type SessionWindowEvent =
+	| "runtime.session_window.opened"
+	| "runtime.session_window.closed";
+
+/** Emit one session-window envelope on the run binding it names. Both events
+ * carry the conversation id as the envelope's session identity, so one session
+ * is one key across all the runs it serves. Best-effort like every other
+ * observation here: an unwritable telemetry file records nothing. */
+export function emitSessionWindow(
+	conversationId: ConversationId,
+	event: SessionWindowEvent,
+	identity: TelemetryIdentity,
+	fields: Record<string, unknown> = {},
+): void {
+	emitRuntimeEnvelope(identity, event, {
+		sessionId: String(conversationId),
+		...fields,
+	});
 }
 
 /** One finished tool call, as the run supervisor of a dead surface (see
@@ -213,15 +249,28 @@ export interface ToolOutcomeObservation {
  * uses (`onTiming` for the dashboard's tok/s, `onMeasuredContext` for the cost
  * ceiling, `onToolOutcome` for the dead-surface rule: one observation per
  * finished tool call, which must not throw: an observer's failure is not the
- * run's), so one event stream serves all of them. */
+ * run's), so one event stream serves all of them.
+ *
+ * `identity` is the run's identity, or a getter for the one current now: a
+ * conversation outlives the run that created it, and the host passes a getter so
+ * a later run's events are that run's (see `host.ts`'s session binding). A plain
+ * identity means "this stream belongs to one run". */
 export async function attachTelemetry(
 	harness: Harness,
 	conversationId: ConversationId,
 	context: Context,
-	identity: TelemetryIdentity,
+	identity: TelemetryIdentity | (() => TelemetryIdentity),
 	hooks: TelemetryHooks = {},
 ): Promise<() => void> {
 	const stream = await watchEvents(harness, conversationId, context);
+	// One stream can outlive the run that created it: a later run of the same
+	// step and role is served by the same conversation, so the identity is
+	// resolved at each emission and every envelope carries the run that was
+	// working when it was written — not the run that created the conversation.
+	const identityOf = (): TelemetryIdentity =>
+		typeof identity === "function" ? identity() : identity;
+	const emit = (event: string, fields: Record<string, unknown> = {}): void =>
+		emitEnvelope(identityOf(), event, fields);
 	let generationStart: number | undefined;
 	let thinkingStart: number | undefined;
 	let thinkingMs = 0;
@@ -272,7 +321,7 @@ export async function attachTelemetry(
 			: entry.summaryPlaced
 				? "completed"
 				: "aborted";
-		emit(identity, "runtime.compaction", {
+		emit("runtime.compaction", {
 			reason: entry.reason,
 			kind: entry.kind,
 			blocking: entry.blocking,
@@ -401,7 +450,7 @@ export async function attachTelemetry(
 							hooks.onMeasuredContext?.({ promptTokens: prompt, turnIndex });
 						}
 						if (tokens > 0 || cost > 0)
-							emit(identity, "runtime.usage", {
+							emit("runtime.usage", {
 								inputTokens: usage.input,
 								outputTokens: usage.output,
 								cacheReadTokens: usage.cacheRead,
@@ -419,7 +468,7 @@ export async function attachTelemetry(
 				}
 				case "turn_start":
 					turnIndex += 1;
-					emit(identity, "runtime.turn_started");
+					emit("runtime.turn_started");
 					break;
 				case "tool_execution_start": {
 					const args = toolArgsTelemetry(event.toolName, event.args);
@@ -427,7 +476,7 @@ export async function attachTelemetry(
 						startedAt: now,
 						turnIndex: turnIndex < 0 ? undefined : turnIndex,
 					});
-					emit(identity, "runtime.tool_start", {
+					emit("runtime.tool_start", {
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
 						// What was asked, never the payload: the hash joins exact repeats,
@@ -436,7 +485,7 @@ export async function attachTelemetry(
 						"pi.tool.args_digest": args.digest,
 						"pi.tool.argument_bytes": args.bytes,
 						...(turnIndex >= 0 ? { "pi.turn.index": turnIndex } : {}),
-						...(identity.captureContent
+						...(identityOf().captureContent
 							? {
 									"herdr.content.tool_input": redact(
 										JSON.stringify(event.args),
@@ -460,7 +509,7 @@ export async function attachTelemetry(
 					const turn =
 						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
 					const errorLine = isError ? toolFailureLine(event.entry) : undefined;
-					emit(identity, "runtime.tool", {
+					emit("runtime.tool", {
 						outcome: isError ? "error" : "ok",
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
@@ -503,7 +552,7 @@ export async function attachTelemetry(
 					// measurable per run — the peak context and the number of compactions
 					// by kind — so "automatic compactions > 0, peak context < 200k" can be
 					// answered from telemetry alone.
-					emit(identity, "runtime.settled", {
+					emit("runtime.settled", {
 						...(peakContextTokens > 0 ? { peakContextTokens } : {}),
 						...(turnIndex >= 0 ? { turns: turnIndex + 1 } : {}),
 						compactionsAutoCeiling: compactionKinds["auto-ceiling"],
@@ -538,7 +587,7 @@ export async function attachTelemetry(
 							? { tokensBefore: lastPromptTokens }
 							: {}),
 					});
-					emit(identity, "runtime.compaction_start", {
+					emit("runtime.compaction_start", {
 						reason: event.reason,
 						kind,
 						blocking: event.blocking,
@@ -560,7 +609,7 @@ export async function attachTelemetry(
 					break;
 				}
 				case "task_failed": {
-					emit(identity, "runtime.task_failed", {
+					emit("runtime.task_failed", {
 						"pi.error.class": redact(event.message).slice(0, 160),
 					});
 					if (event.kind === COMPACTION_TASK_KIND) {
