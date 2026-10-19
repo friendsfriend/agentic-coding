@@ -23,6 +23,7 @@ import {
 	AGENT_STAGES_PATH,
 	STAGES_CREDENTIAL_PATH,
 } from "../src/server/protocol.ts";
+import { stageBearerToken } from "../src/server/stages/api-request.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
 import { StageTokenStore } from "../src/server/stages/oauth2.ts";
@@ -112,6 +113,8 @@ interface FixtureOptions {
 	readonly apiAnswer?: (request: Request) => Response;
 	/** The token endpoint's answer for the nth request. */
 	readonly tokenAnswers?: (count: number) => Response;
+	/** The audience the provider declares, for the `stage_token_info` shape. */
+	readonly audience?: string;
 	/** A read-only exception, resolved against the API server's own origin. */
 	readonly readOnlyException?: { readonly pathPrefix: string };
 	/** The stage's action rate, tightened so one test can be refused by it. */
@@ -177,6 +180,9 @@ function seeded(options: FixtureOptions = {}): Fixture {
 					clientId: "${STAGE_GRID_INT_CLIENT_ID}",
 					clientSecret: "${STAGE_GRID_INT_CLIENT_SECRET}",
 					scope: [SCOPE],
+					...(options.audience === undefined
+						? {}
+						: { audience: options.audience }),
 				},
 			},
 		},
@@ -437,6 +443,30 @@ describe("stage_api_request sends the role's own credential", () => {
 			},
 		);
 	});
+	test("query parameters are sent as the call's query string, and never twice", async () => {
+		await withFixture({}, async (fixture) => {
+			const answer = await apiRequest(fixture.deps, {
+				role: "service",
+				method: "GET",
+				path: "/orders",
+				query: { limit: "5", tag: "a b" },
+			});
+			expect(answer.status).toBe(200);
+			expect(fixture.api.calls[0]?.path).toBe("/orders?limit=5&tag=a+b");
+
+			// One request cannot carry two query strings: a `?` in the path and a
+			// `query` object are refused together, before anything is sent.
+			const refused = await apiRequest(fixture.deps, {
+				role: "service",
+				method: "GET",
+				path: "/orders?limit=5",
+				query: { limit: "6" },
+			});
+			expect(refused.status).toBe(400);
+			expect(refused.code).toBe("stage-request-invalid");
+			expect(fixture.api.calls).toHaveLength(1);
+		});
+	});
 });
 
 describe("what stage_api_request refuses before anything is sent", () => {
@@ -590,6 +620,42 @@ describe("one 401 costs exactly one renewal", () => {
 		);
 	});
 
+	test("a 401 renewal presents the rotated refresh token, not the .env one", async () => {
+		// A rotating provider invalidates the refresh token it handed out before: the
+		// retry has to present the replacement, or the renewal is refused as
+		// `invalid_grant` even though the credential is fine (QA-002).
+		await withFixture(
+			{
+				grant: "refresh_token",
+				tokenAnswers: (count) =>
+					json({
+						access_token: `access-${count}`,
+						refresh_token: `rotated-${count}`,
+						expires_in: 3600,
+					}),
+				apiAnswer: (request) =>
+					request.headers.get("authorization") === "Bearer access-2"
+						? json({ orders: ["fresh"] })
+						: new Response("expired", { status: 401 }),
+			},
+			async (fixture) => {
+				const answer = await apiRequest(fixture.deps, {
+					role: "service",
+					method: "GET",
+					path: "/orders",
+				});
+				expect(answer.status).toBe(200);
+				expect(answer.value.renewals).toBe(1);
+				expect(fixture.idp.calls).toHaveLength(2);
+				expect(fixture.idp.calls[0]?.body).toContain(
+					`refresh_token=${REFRESH_TOKEN}`,
+				);
+				expect(fixture.idp.calls[1]?.body).toContain("refresh_token=rotated-1");
+				expect(fixture.idp.calls[1]?.body).not.toContain(REFRESH_TOKEN);
+			},
+		);
+	});
+
 	test("a second 401 is reported as it is, and a 5xx is never retried as a credential problem", async () => {
 		await withFixture(
 			{
@@ -663,6 +729,22 @@ describe("the answer is bounded", () => {
 		});
 	});
 
+	test("the request bound is bytes, not characters, so a multi-byte body is refused too", async () => {
+		await withFixture({}, async (fixture) => {
+			// 40 000 characters, 80 000 bytes: the contract's character bound passes,
+			// the route's byte bound does not.
+			const answer = await apiRequest(fixture.deps, {
+				role: "service",
+				method: "POST",
+				path: "/orders",
+				body: "é".repeat(40_000),
+			});
+			expect(answer.status).toBe(413);
+			expect(answer.code).toBe("stage-request-invalid");
+			expect(fixture.api.calls).toHaveLength(0);
+		});
+	});
+
 	test("a host that never answers is a call failure, not a hang", async () => {
 		await withFixture({}, async (fixture) => {
 			// The server's own client raising its timeout, which is what an
@@ -726,6 +808,40 @@ describe("stage_token_info answers four fields", () => {
 			expect(fixture.idp.calls).toHaveLength(1);
 			expect(fixture.tokens.list()).toHaveLength(1);
 		});
+	});
+
+	test("a declared audience is one of the four fields, and an absent one is not invented", async () => {
+		await withFixture({ audience: "api://grid" }, async (fixture) => {
+			const answer = await tokenInfo(fixture.deps, { role: "service" });
+			expect(answer.status).toBe(200);
+			expect(Object.keys(answer.value).sort()).toEqual([
+				"audience",
+				"expiresAt",
+				"issuer",
+				"scopes",
+			]);
+			expect(answer.value.audience).toBe("api://grid");
+		});
+	});
+
+	test("a provider that names no lifetime still answers its expiry instead of failing", async () => {
+		// `expires_in` is only RECOMMENDED, so an answer without it is legal: the
+		// token is treated as short-lived, and the four fields are still reported
+		// rather than the read failing on a token it just acquired (QA-001).
+		await withFixture(
+			{
+				tokenAnswers: () =>
+					json({ access_token: ACCESS_TOKEN, token_type: "Bearer" }),
+			},
+			async (fixture) => {
+				const before = Date.now();
+				const answer = await tokenInfo(fixture.deps, { role: "service" });
+				expect(answer.status).toBe(200);
+				expect(Number(answer.value.expiresAt)).toBeGreaterThanOrEqual(before);
+				expect(answer.value.expiresAt).toBeLessThan(before + 60_000);
+				expect(fixture.idp.calls).toHaveLength(1);
+			},
+		);
 	});
 
 	test("a provider that refuses answers its error code alone", async () => {
@@ -838,6 +954,39 @@ describe("a rewritten credential is not shadowed by a token", () => {
 			expect(fixture.idp.calls[1]?.headers.get("authorization")).toBe(
 				`Basic ${Buffer.from(`${CLIENT_ID}:a-rotated-client-secret`).toString("base64")}`,
 			);
+		});
+	});
+});
+
+describe("a session's bearer scope is resolved once", () => {
+	test("the same page's N requests cost one catalog read and one token", async () => {
+		await withFixture({}, async (fixture) => {
+			// One binding object is one session: the pool passes the session's own
+			// binding for every request its page makes (PERF-001, PERF-002).
+			const binding = { ident: "grid-int" };
+			const scope = { app: "api", role: "service" };
+			expect(await stageBearerToken(fixture.deps, binding, scope)).toBe(
+				`Bearer ${ACCESS_TOKEN}`,
+			);
+			expect(fixture.idp.calls).toHaveLength(1);
+
+			// A second request of the same session, with deps that could not resolve
+			// anything: the role was resolved once, and the token comes from the store.
+			const elsewhere = {
+				...fixture.deps,
+				configDir: path.join(os.tmpdir(), "stage-oauth2-no-such-root"),
+			};
+			expect(await stageBearerToken(elsewhere, binding, scope)).toBe(
+				`Bearer ${ACCESS_TOKEN}`,
+			);
+			expect(fixture.idp.calls).toHaveLength(1);
+
+			// Another session has its own resolution, and refuses rather than
+			// borrowing the first one's: the cache is per binding, not per role name.
+			expect(
+				await stageBearerToken(elsewhere, { ident: "grid-int" }, scope),
+			).toBeUndefined();
+			expect(fixture.idp.calls).toHaveLength(1);
 		});
 	});
 });

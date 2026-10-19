@@ -62,7 +62,9 @@ export interface StageRoleStatus {
 	readonly credentialStatus: string;
 	/** What a run can expect of this login: `automated` (this server performs
 	 * it), `handoff` (it needs the developer in a headed window), `unavailable`
-	 * (it needs the developer and this configuration forbids the window). */
+	 * (it needs the developer and this configuration forbids the window, or it is
+	 * a recipe this build cannot perform at all — the `authorization_code` grant
+	 * is `unavailable` until the browser hand-off lands). */
 	readonly loginMode: "automated" | "handoff" | "unavailable";
 	readonly credentials: readonly StageCredentialStatus[];
 }
@@ -178,6 +180,12 @@ export interface StageCredentialResponse {
  * stage's API application, sent by the server with the role's token. A path and
  * nothing else: an absolute URL is refused, so the host is always the one the
  * stage file names. */
+
+/** The most a `stage_api_request` body may carry, in bytes. The contract bounds
+ * the field to these characters *and* the route checks the encoded bytes, so a
+ * multi-byte body cannot slip past the advertised limit (QA-005). */
+export const MAX_STAGE_API_REQUEST_BYTES = 64 * 1024;
+
 export const stageApiRequestSchema = Schema.Struct({
 	/** The stage ident. Optional only when exactly one allow-listed stage exists,
 	 * which then applies to every request. */
@@ -194,6 +202,14 @@ export const stageApiRequestSchema = Schema.Struct({
 	method: Schema.Literal("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"),
 	/** A path of that application, with an optional query string. */
 	path: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(2048)),
+	/** Query parameters, as an object. Refused together with a `?` in `path`, so
+	 * one request cannot express two different query strings. */
+	query: Schema.optional(
+		Schema.Record({
+			key: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
+			value: Schema.String.pipe(Schema.maxLength(2048)),
+		}),
+	),
 	headers: Schema.optional(
 		Schema.Record({
 			key: Schema.String.pipe(
@@ -204,7 +220,9 @@ export const stageApiRequestSchema = Schema.Struct({
 			value: Schema.String.pipe(Schema.maxLength(4096)),
 		}),
 	),
-	body: Schema.optional(Schema.String.pipe(Schema.maxLength(64 * 1024))),
+	body: Schema.optional(
+		Schema.String.pipe(Schema.maxLength(MAX_STAGE_API_REQUEST_BYTES)),
+	),
 });
 export type StageApiRequest = typeof stageApiRequestSchema.Type;
 
@@ -248,12 +266,16 @@ export type StageTokenInfoRequest = typeof stageTokenInfoRequestSchema.Type;
 /** Exactly four fields, and the schema is what keeps it that way: a provider's
  * claims, the subject and every token value stay on the server. */
 export const stageTokenInfoResponseSchema = Schema.Struct({
+	/** Epoch **milliseconds**, directly comparable with `Date.now()`. */
 	expiresAt: Schema.Number,
 	scopes: Schema.Array(Schema.String),
 	audience: Schema.optional(Schema.String),
 	issuer: Schema.optional(Schema.String),
 });
 export interface StageTokenInfoResponse {
+	/** The instant the access token expires, in epoch milliseconds (so
+	 * `expiresAt - Date.now()` is a lifetime in ms, *not* an `expires_in` value).
+	 */
 	readonly expiresAt: number;
 	readonly scopes: readonly string[];
 	readonly audience?: string;

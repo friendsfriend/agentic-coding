@@ -182,6 +182,19 @@ export const stageRoleSchema = Schema.Struct({
 	refreshToken: Schema.optional(Schema.String),
 });
 
+/**
+ * Whether a role selects the `oauth2` recipe.
+ *
+ * The new fields decide, never the bare name: `oauth2` stays a legal name for a
+ * recipe of a stage's own `logins` table, which existing stage files declare
+ * (MIG-001). A role that carries `provider` or `grant` is an OAuth 2.0 role, and
+ * such a role has to say `login: "oauth2"` — the two directions are checked by
+ * `validateOAuth2Role`.
+ */
+export function isOAuth2Role(role: StageRole): boolean {
+	return role.provider !== undefined || role.grant !== undefined;
+}
+
 /** A declared version probe: a path on the application's own origin and the
  * dotted field of its JSON answer that carries the version. */
 export const stageVersionProbeSchema = Schema.Struct({

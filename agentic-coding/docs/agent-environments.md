@@ -449,18 +449,28 @@ a production-like name is refused by the catalog, and only the operator's own
   (`oauth2.providers.<name>`: an https `tokenEndpoint`, a `clientId`
   ``${VAR}``, an optional `clientSecret` ``${VAR}``, `scope`, `audience` and
   `clientAuth`: `basic` — the default — or `body`), a `grant`
-  (`client_credentials` or `refresh_token`), and optionally `bearerOrigins`.
-  `stage_login` asks the provider for a token and answers `ok` with
-  `via: "token"` once one exists — no page, no window, no typing — so an
-  unattended policy (`interactiveLogin: "never"`) is the normal case for the
-  two grants that need no person: a `client_credentials` role, and a
-  `refresh_token` role whose ``${VAR}`` refresh token the `.env` sets. A missing
-  reference is the familiar `credential-missing` naming the variable, and a
-  provider refusal is `login-failed` with the provider's own `error` code (its
-  `error_description`, scrubbed and bounded, is the message) — never a token.
-  `authorization_code` is *declared* by the schema for the user-delegated case
-  but is not obtained by this phase: `stage_login` answers
-  `login-failed [unsupported_grant]` until the local-redirect hand-off lands.
+  (`client_credentials`, `refresh_token` or `authorization_code`), and
+  optionally `bearerOrigins`. `stage_login` asks the provider for a token and
+  answers `ok` with `via: "token"` once one exists — no login page, no window,
+  no typing, no prompt — so an unattended policy
+  (`interactiveLogin: "never"`) is the normal case for the two grants that need
+  no person: a `client_credentials` role, and a `refresh_token` role whose
+  ``${VAR}`` refresh token the `.env` sets. A missing reference is the familiar
+  `credential-missing` naming the variable, and a provider refusal is
+  `login-failed` with the provider's own `error` code (its `error_description`,
+  scrubbed and bounded, is the message) — never a token.
+  `authorization_code` is *declared* by the schema for the user-delegated case,
+  and its login is not this build's: `stage_login` answers `login-failed`
+  ("the authorization_code grant is not supported by this build;
+  client_credentials and refresh_token are"), and `stage_info` reports that
+  role's `loginMode` as `unavailable` rather than `handoff`, so a run plans no
+  hand-off that could not be created.
+- **A token login still needs the session it runs on.** `stage_login` is a
+  browser-layer action on an open, stage-bound session: the token login opens no
+  page, window or prompt, but it does need `browser_open({ stage, stageApp })`
+  first, it counts as one stage action and it holds one session slot. A run that
+  only needs an API needs no session at all: `stage_api_request` acquires and
+  renews the token itself.
 - **The token is the server's, and only its shape is ever reported.** The
   access token lives in an in-memory store keyed by `(stage, app, role,
   provider, scope set)`, is renewed single-flight when a caller arrives inside
@@ -470,27 +480,37 @@ a production-like name is refused by the catalog, and only the operator's own
   process cannot grow it without limit. It is never written to a file, a store
   table, a log line, a journal entry, a tool result or an evidence file, and it
   never reaches the model: `stage_token_info` presents exactly `expiresAt`,
-  `scopes`, `audience` and `issuer`, and every reply passes the redactor over
+  `scopes`, `audience` and `issuer` (`expiresAt` is epoch **milliseconds**, so
+  `expiresAt - Date.now()` is what is left of the token's life), and every reply
+  passes the redactor over
   the live token values (and their URL-encoded forms) as well as over `.env`.
   `browser_network` says whether a request carried an `Authorization` header and
   shows `authorization: "«redacted»"` in place of its value.
 - **`stage_api_request` is how a run calls an API application.** It sends the
   role's token to the application's configured origin and nowhere else: the tool
-  takes a **path** (`/v1/requests?limit=5`), never a URL, so the host cannot be
+  takes a **path** (`/v1/requests?limit=5`) or its `query` object, never a URL,
+  so the host cannot be
   redirected by the model; an `Authorization` header the agent supplies is
   refused (`stage-auth-header`) rather than overwritten; the stage's origin
   allow-list must contain the result; a `read-only` stage refuses any
   state-changing method and any declared exception that does not match; the
-  body is bounded at 64 KiB and the response at 256 KiB (truncated, with
-  `truncated: true` and no silent cut); the call is bounded by a 20 s timeout
+  body is bounded at 64 KiB (measured in bytes) and the response at 256 KiB
+  (truncated, with `truncated: true` and no silent cut — and if the *tool's* own
+  answer is cut, the cut happens inside the body so `truncated`, `bytes` and
+  `renewals` still arrive); the call is bounded by a 20 s timeout
   and one renewal-and-retry on `401`; and only allow-listed response headers
   (`content-type`, `etag`, `location`, `retry-after`, …) are returned — never
   `set-cookie` or a hop-by-hop header. Calls count against the stage's
-  `maxActionsPerMinute` like any other stage action.
-- **A bearer header is scoped to an exact origin.** `bearerOrigins` declares
+  `maxActionsPerMinute` like any other stage action, and a refusal that has a
+  wait attached says so in the answer a model reads.
+- **A bearer header is scoped to an exact origin, and to the stage's own pages.**
+  `bearerOrigins` declares
   the origins a *browser session* also authenticates with the role's token. The
   header is added by the context's route handler, which asks the token store per
-  request: the origin must match one the stage declares exactly, a request that
+  request: the origin must match one the stage declares exactly, the request has
+  to be issued by a document the stage itself owns (one of the stage's app or
+  allow-listed origins — a frame from anywhere else, or a request that names no
+  document at all, goes out bare), a request that
   already carries an `Authorization` header is left alone, a cross-origin
   redirect lands on an unmatched origin and therefore goes out bare, and a token
   that cannot be obtained leaves the request unauthenticated instead of aborting

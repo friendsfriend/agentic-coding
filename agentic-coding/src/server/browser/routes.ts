@@ -73,7 +73,7 @@ import {
 	type StageTokenStore,
 	stageTokenStore,
 } from "../stages/oauth2.ts";
-import type { StageLoginRecipe } from "../stages/schema.ts";
+import { isOAuth2Role, type StageLoginRecipe } from "../stages/schema.ts";
 import { BrowserPoolError } from "./errors.ts";
 import {
 	HANDOFF_MAX_WAIT_MS,
@@ -450,7 +450,7 @@ function bearerScopes(entry: StageEntry): StageBearerScope[] {
 	const seen = new Set<string>();
 	for (const [appKey, app] of Object.entries(entry.stage.apps)) {
 		for (const [role, value] of Object.entries(app.roles ?? {})) {
-			if (value.login !== "oauth2") continue;
+			if (!isOAuth2Role(value)) continue;
 			for (const declared of value.bearerOrigins ?? []) {
 				const origin = originOnly(declared);
 				if (origin === "" || seen.has(origin)) continue;
@@ -938,8 +938,10 @@ function resolveStageOpen(
 		readOnlyExceptions: entry.stage.readOnlyExceptions ?? [],
 		limits: entry.limits,
 		// The origins this session's requests are authenticated for, from the
-		// roles that declared them (`add-stage-oauth2-auth`, task 3.3).
-		...(bearer.length === 0 ? {} : { bearer }),
+		// roles that declared them (`add-stage-oauth2-auth`, task 3.3), and the
+		// origins a request may be issued *from* to receive one: a foreign-origin
+		// document inside this session never gets a stage role's token (SEC-002).
+		...(bearer.length === 0 ? {} : { bearer, initiators: [...entry.origins] }),
 	};
 	assertAllowedOrigin(binding, url);
 	// The bounds and the lease are claimed before a context exists, and only for a

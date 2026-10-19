@@ -138,8 +138,10 @@ export class BrowserPool {
 		| ((session: BrowserSession, cause: SessionCloseCause) => void)
 		| undefined;
 	/** The caller's bearer-token source, or `undefined` when this process has
-	 * none. */
-	private readonly bearerToken:
+	 * none. Settable after construction: the runtime singleton is built by
+	 * whichever surface touches it first, and the workflow composition may attach
+	 * the source later (CONC-004). */
+	private bearerToken:
 		| ((
 				binding: StageSessionBinding,
 				scope: StageBearerScope,
@@ -868,17 +870,34 @@ export class BrowserPool {
 		const scopes = binding?.bearer ?? [];
 		const source = this.bearerToken;
 		if (!binding || scopes.length === 0 || !source) return undefined;
+		const initiators = binding.initiators ?? [];
 		return async (request) => {
 			const origin = originOf(request.url);
 			if (origin === undefined) return undefined;
 			const scope = scopes.find((candidate) => candidate.origin === origin);
 			if (!scope) return undefined;
+			// Who issued the request, not only where it goes: a frame at another
+			// origin inside this session never receives the role's token (SEC-002).
+			if (!issuedBy(initiators, request.initiator)) return undefined;
 			try {
 				return await source(binding, scope);
 			} catch {
 				return undefined;
 			}
 		};
+	}
+
+	/** Attach (or replace) the bearer-token source of this pool. Called by the
+	 * runtime when the workflow composition arrives after the pool was built. */
+	setBearerToken(
+		source:
+			| ((
+					binding: StageSessionBinding,
+					scope: StageBearerScope,
+			  ) => Promise<string | undefined>)
+			| undefined,
+	): void {
+		this.bearerToken = source;
 	}
 
 	/** Install HTTP basic credentials on a live session, and remember them so a
@@ -1207,6 +1226,27 @@ function originOf(url: string): string {
 	} catch {
 		return "";
 	}
+}
+
+/**
+ * Whether a request may carry the role's token, judged by who issued it
+ * (`add-stage-oauth2-auth`, SEC-002).
+ *
+ * `initiators` empty means the binding carries no such rule, which keeps every
+ * caller that builds a binding by hand on the previous behaviour. Otherwise the
+ * issuing document has to be one of the stage's own origins: an absent initiator
+ * (a service worker), an empty one (a frame without a document yet) or a foreign
+ * origin leaves the request bare, exactly as a cross-origin redirect already
+ * does.
+ */
+function issuedBy(
+	initiators: readonly string[],
+	initiator: string | undefined,
+): boolean {
+	if (initiators.length === 0) return true;
+	if (initiator === undefined || initiator === "") return false;
+	const origin = originOf(initiator);
+	return origin !== "" && initiators.includes(origin);
 }
 
 function message(error: unknown): string {

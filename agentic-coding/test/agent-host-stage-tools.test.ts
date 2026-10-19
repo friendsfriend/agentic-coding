@@ -76,6 +76,35 @@ function postedFetch(calls: PostedCall[], value: unknown): typeof fetch {
 	}) as unknown as typeof fetch;
 }
 
+/** A transport that records what the tool sent and answers the route's refusal
+ * envelope, so a test can assert both what the tool sent *and* what it made of
+ * an answer that is not a success. */
+function refusingFetch(
+	calls: PostedCall[],
+	error: {
+		readonly code: string;
+		readonly message: string;
+		readonly retryAfterMs?: number;
+	},
+	status = 400,
+): typeof fetch {
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const headers = new Headers(init?.headers);
+		calls.push({
+			url: String(input),
+			method: init?.method ?? "GET",
+			owner: headers.get(ENVIRONMENT_OWNER_HEADER),
+			authorization: headers.get("authorization"),
+			body:
+				init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+		});
+		return new Response(JSON.stringify({ ok: false, error }), {
+			headers: { "content-type": "application/json" },
+			status,
+		});
+	}) as unknown as typeof fetch;
+}
+
 /** The real stage route, behind a recorded transport. */
 function routeFetch(
 	deps: StageRouteDeps,
@@ -357,14 +386,10 @@ describe("stage_api_request", () => {
 
 	test("a refused call answers the route's code, and the tool is told what it omitted", async () => {
 		const calls: PostedCall[] = [];
-		const server = (async () =>
-			new Response(
-				JSON.stringify({
-					ok: false,
-					error: { code: "stage-app-ambiguous", message: "two apps" },
-				}),
-				{ headers: { "content-type": "application/json" }, status: 400 },
-			)) as unknown as typeof fetch;
+		const server = refusingFetch(calls, {
+			code: "stage-app-ambiguous",
+			message: "two apps",
+		});
 		const result = await toolNamed(
 			createStageExtension(lookup(RUN_ENV), { fetch: server }),
 			"stage_api_request",
@@ -373,9 +398,105 @@ describe("stage_api_request", () => {
 			{ conversationId: 1 },
 			{},
 		);
-		expect(calls).toHaveLength(0);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe(
+			`http://127.0.0.1:4050${AGENT_STAGE_API_REQUEST_PATH}`,
+		);
+		// What the tool sent is what the model asked for, and the omitted fields are
+		// omitted rather than invented.
+		expect(calls[0]?.body).toEqual({
+			role: "service",
+			method: "DELETE",
+			path: "/v1/requests/1",
+		});
 		expect(result.isError).toBe(true);
 		expect(textOf(result.content)).toContain("[stage-app-ambiguous]");
+	});
+
+	test("query parameters travel as an object, next to the path", async () => {
+		const calls: PostedCall[] = [];
+		const server = postedFetch(calls, { status: 200, body: "[]" });
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_api_request",
+		).execute(
+			{
+				role: "service",
+				method: "GET",
+				path: "/v1/requests",
+				query: { limit: "5" },
+			},
+			{ conversationId: 1 },
+			{},
+		);
+		expect(result.isError).toBeUndefined();
+		expect(calls[0]?.body).toEqual({
+			role: "service",
+			method: "GET",
+			path: "/v1/requests",
+			query: { limit: "5" },
+		});
+	});
+
+	test("a rate limit reaches the model with the wait it has to observe", async () => {
+		const calls: PostedCall[] = [];
+		const server = refusingFetch(
+			calls,
+			{
+				code: "stage-rate-limit",
+				message:
+					"stage grid-int allows 60 stage calls per minute in this workflow",
+				retryAfterMs: 30_000,
+			},
+			429,
+		);
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_api_request",
+		).execute(
+			{ role: "service", method: "GET", path: "/v1/requests" },
+			{ conversationId: 1 },
+			{},
+		);
+		expect(result.isError).toBe(true);
+		const text = textOf(result.content);
+		expect(text).toContain("[stage-rate-limit]");
+		// A limit without its wait is a poll loop; the number the route sent is the
+		// one the model has to see (USAB-005).
+		expect(text).toContain("retry in 30 s");
+	});
+
+	test("a body far above the result bound is cut inside itself, so the envelope still parses", async () => {
+		const calls: PostedCall[] = [];
+		// Bigger than the whole tool result bound: the body is the only thing a cut
+		// may remove, and the fields that say what happened have to survive it
+		// (USAB-001).
+		const big = "z".repeat(200 * 1024);
+		const server = postedFetch(calls, {
+			status: 200,
+			body: big,
+			truncated: false,
+			bytes: big.length,
+			renewals: 0,
+		});
+		const result = await toolNamed(
+			createStageExtension(lookup(RUN_ENV), { fetch: server }),
+			"stage_api_request",
+		).execute(
+			{ role: "service", method: "GET", path: "/big" },
+			{ conversationId: 1 },
+			{},
+		);
+		expect(result.isError).toBeUndefined();
+		const text = textOf(result.content);
+		expect(text.length).toBeLessThanOrEqual(40_000);
+		const parsed = JSON.parse(text) as Record<string, unknown>;
+		expect(parsed.status).toBe(200);
+		expect(parsed.truncated).toBe(true);
+		expect(parsed.bytes).toBe(big.length);
+		expect(parsed.renewals).toBe(0);
+		expect(String(parsed.body).length).toBeLessThan(big.length);
+		expect(String(parsed.body)).toContain("body truncated");
 	});
 });
 
@@ -386,7 +507,7 @@ describe("stage_token_info", () => {
 			stage: "grid-int",
 			app: "api",
 			role: "service",
-			expiresAt: "2026-01-01T01:00:00.000Z",
+			expiresAt: 1_767_229_200_000,
 			scopes: ["grid.read"],
 			audience: "https://grid-int-api.example.test",
 			issuer: "https://idp.example.test",
@@ -405,9 +526,10 @@ describe("stage_token_info", () => {
 		);
 		expect(calls[0]?.body).toEqual({ stage: "grid-int", role: "service" });
 		const text = textOf(result.content);
-		expect(text).toContain("2026-01-01T01:00:00.000Z");
+		// Epoch milliseconds, exactly as the contract documents it, and nothing the
+		// token holds beyond the four presentation fields (USAB-002).
+		expect(text).toContain("1767229200000");
 		expect(text).toContain("https://idp.example.test");
-		// Four fields, and nothing about the token itself.
 		expect(text).not.toContain("access");
 	});
 });

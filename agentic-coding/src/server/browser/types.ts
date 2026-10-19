@@ -86,6 +86,12 @@ export interface DriverRequestInfo {
 	/** True for a main-frame document navigation: a tool, a script, a redirect
 	 * or a link, but not an image, a font or an XHR. */
 	readonly isMainFrameNavigation: boolean;
+	/** The URL of the frame that issued the request — the document a script runs
+	 * in, `about:blank` for a frame without a document yet, and absent for a
+	 * service worker, which has no frame. A bearer provider needs it: a target
+	 * origin alone would hand the role's token to a foreign document that
+	 * happens to fetch a `bearerOrigins` origin (SEC-002). */
+	readonly initiator?: string;
 }
 
 /** A stage's request guard: `false` aborts the request. Only a stage-bound
@@ -103,6 +109,10 @@ export type DriverRequestGuard = (request: DriverRequestInfo) => boolean;
  * provider is swallowed by the driver: a request that cannot be authenticated is
  * sent unauthenticated, never aborted, because the page is still usable and an
  * abort would look like a broken application.
+ *
+ * A provider also has to decide *who* issued the request: `DriverRequestInfo`
+ * carries the initiating frame, so a foreign-origin document inside a stage
+ * session does not receive a stage role's token (SEC-002).
  */
 export type DriverAuthorizationProvider = (
 	request: DriverRequestInfo,

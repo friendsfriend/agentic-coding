@@ -107,17 +107,24 @@ function adaptBrowser(browser: Browser): DriverBrowser {
  * that has no frame (a service worker), which is never a main-frame navigation. */
 function requestInfo(request: Request): DriverRequestInfo {
 	let isMainFrameNavigation = false;
+	let initiator: string | undefined;
 	try {
+		const frame = request.frame();
 		isMainFrameNavigation =
-			request.isNavigationRequest() && request.frame().parentFrame() === null;
+			request.isNavigationRequest() && frame.parentFrame() === null;
+		// The document that issued the request: the one fact a bearer provider
+		// cannot read from the target URL (SEC-002).
+		initiator = frame.url();
 	} catch {
 		isMainFrameNavigation = false;
+		initiator = undefined;
 	}
 	return {
 		url: request.url(),
 		method: request.method(),
 		resourceType: request.resourceType(),
 		isMainFrameNavigation,
+		...(initiator === undefined ? {} : { initiator }),
 	};
 }
 

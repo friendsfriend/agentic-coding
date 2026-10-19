@@ -62,14 +62,18 @@ const SCOPE = "api://grid/.default";
 function provider(): {
 	readonly endpoint: string;
 	readonly calls: () => number;
+	/** What each token request carried, so a grant is asserted as sent. */
+	readonly forms: URLSearchParams[];
 	readonly stop: () => void;
 } {
 	let calls = 0;
+	const forms: URLSearchParams[] = [];
 	const server = Bun.serve({
 		port: 0,
 		hostname: "127.0.0.1",
-		fetch: async () => {
+		fetch: async (request) => {
 			calls += 1;
+			forms.push(new URLSearchParams(await request.text()));
 			return new Response(
 				JSON.stringify({
 					access_token: ACCESS_TOKEN,
@@ -84,15 +88,32 @@ function provider(): {
 	return {
 		endpoint: `http://127.0.0.1:${server.port}/oauth2/token`,
 		calls: () => calls,
+		forms,
 		stop: () => server.stop(true),
 	};
 }
 
 /** One throwaway configuration root: a stage whose `api` role is `oauth2` and
  * whose page role is not. */
+/** The stage's policy file, as Settings writes it. */
+function writePolicy(configDir: string, interactiveLogin: string): void {
+	fs.writeFileSync(
+		path.join(configDir, "stages", "policy.json"),
+		`${JSON.stringify({ interactiveLogin }, null, 2)}\n`,
+	);
+}
+
+/** The refresh token the second fixture stage's role holds. */
+const REFRESH_TOKEN = "browser-refresh-token-sentinel-4a17-do-not-leak";
+
 function configRoot(
 	tokenEndpoint: string,
-	options: { readonly withClientSecret?: boolean } = {},
+	options: {
+		readonly withClientSecret?: boolean;
+		/** Also write a stage whose role uses the `refresh_token` grant, so the
+		 * second unattended grant is exercised under the same configuration. */
+		readonly refreshStage?: boolean;
+	} = {},
 ): string {
 	const configDir = fs.mkdtempSync(
 		path.join(os.tmpdir(), "stage-oauth2-browser-"),
@@ -146,6 +167,37 @@ function configRoot(
 		path.join(defsDir, "grid-int.json"),
 		`${JSON.stringify(definition, null, 2)}\n`,
 	);
+	if (options.refreshStage === true) {
+		// The same stage shape with the other unattended grant: a role that holds a
+		// refresh token instead of a client secret, and rotates it.
+		fs.writeFileSync(
+			path.join(defsDir, "grid-refresh.json"),
+			`${JSON.stringify(
+				{
+					...definition,
+					ident: "grid-refresh",
+					displayName: "Grid refresh",
+					apps: {
+						...definition.apps,
+						api: {
+							...definition.apps.api,
+							roles: {
+								service: {
+									login: "oauth2",
+									provider: "idp",
+									grant: "refresh_token",
+									refreshToken: "${GRID_INT_REFRESH_TOKEN}",
+									bearerOrigins: [API_URL],
+								},
+							},
+						},
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+	}
 	fs.writeFileSync(
 		path.join(configDir, ".env"),
 		`${[
@@ -153,6 +205,9 @@ function configRoot(
 			...(options.withClientSecret === false
 				? []
 				: [`GRID_INT_CLIENT_SECRET=${CLIENT_SECRET}`]),
+			...(options.refreshStage === true
+				? [`GRID_INT_REFRESH_TOKEN=${REFRESH_TOKEN}`]
+				: []),
 		].join("\n")}\n`,
 	);
 	return configDir;
@@ -317,21 +372,31 @@ function openStage(deps: BrowserRouteDeps, body: Record<string, unknown> = {}) {
 	});
 }
 
+/** The question "and what if the request names no document at all?". `undefined`
+ * cannot ask it: a default parameter would replace it with the page's own
+ * origin, which is the answer under test. */
+const NO_INITIATOR = "\u0000no-initiator";
+
 /** The routing layer's question for one request the page makes. */
 function askAuthorization(
 	deps: BrowserRouteDeps,
 	url: string,
 	headers: Record<string, string> = {},
+	/** The document that issued the request: the session's own page by default,
+	 * which is what a page's own `fetch` reports (SEC-002). */
+	initiator: string = APP_URL,
 ): Promise<string | undefined> {
 	const session = deps.pool.session(OWNER, "default");
 	if (!session) throw new Error("no session");
 	const context = session.context as unknown as FakeContext;
+	const named = initiator === NO_INITIATOR ? undefined : initiator;
 	return context.runAuthorization(
 		{
 			url,
 			method: "GET",
 			resourceType: "fetch",
 			isMainFrameNavigation: false,
+			...(named === undefined ? {} : { initiator: named }),
 		},
 		headers,
 	);
@@ -448,6 +513,45 @@ describe("the bearer scope of a stage-bound session", () => {
 		}
 	});
 
+	test("a frame at another origin never receives the token, whatever it asks for", async () => {
+		const idp = provider();
+		try {
+			const deps = build(configRoot(idp.endpoint), createFakeDriver(), {
+				readsProvider: true,
+			});
+			await openStage(deps);
+
+			// The session's own page is one of the stage's origins.
+			expect(
+				await askAuthorization(deps, `${API_URL}/orders`, {}, APP_URL),
+			).toBe(`Bearer ${ACCESS_TOKEN}`);
+			// A frame from somewhere else is not: this stage declares the API origin,
+			// not a licence for any document that can reach it (SEC-002).
+			expect(
+				await askAuthorization(
+					deps,
+					`${API_URL}/orders`,
+					{},
+					"https://widgets.example.test/embed",
+				),
+			).toBeUndefined();
+			// Neither is a request with no document behind it: an initiator has to be
+			// named, or the answer is no.
+			expect(
+				await askAuthorization(deps, `${API_URL}/orders`, {}, NO_INITIATOR),
+			).toBeUndefined();
+			// The API application's own page is a stage origin again.
+			expect(
+				await askAuthorization(deps, `${API_URL}/orders`, {}, API_URL),
+			).toBe(`Bearer ${ACCESS_TOKEN}`);
+			// One token, however many questions: the refused ones never asked.
+			expect(idp.calls()).toBe(1);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
 	test("a token source that cannot answer leaves the request unauthenticated, never aborted", async () => {
 		const idp = provider();
 		try {
@@ -474,16 +578,18 @@ describe("the bearer scope of a stage-bound session", () => {
 });
 
 describe("a token never reaches what an agent reads", () => {
-	test("a navigation is authenticated, and the network report carries a placeholder instead of the header", async () => {
+	test("a page's own request is authenticated, and the network report carries a placeholder instead of the header", async () => {
 		const idp = provider();
 		try {
 			const configDir = configRoot(idp.endpoint);
 			const driver = createFakeDriver();
 			const deps = build(configDir, driver, { readsProvider: true });
-			// A session opened on the API application navigates to the origin the
-			// role declared, so the open's own first request is an authenticated one.
-			const opened = await openStage(deps, { stageApp: "api" });
+			// The session opens on the stage's UI application, and the request that gets
+			// the token is one that page itself makes to the origin its role declared.
+			const opened = await openStage(deps);
 			expect(opened.status).toBe(200);
+			expect(idp.calls()).toBe(0);
+			await driver.pages[0]?.goto(`${API_URL}/orders`, 5_000);
 			expect(idp.calls()).toBe(1);
 			expect(driver.authorized[0]?.header).toBe(`Bearer ${ACCESS_TOKEN}`);
 			// The reported URL carries no authorization: the token lives in the request
@@ -581,6 +687,73 @@ describe("stage_login on an oauth2 role", () => {
 			});
 			expect(again.status).toBe(200);
 			expect(idp.calls()).toBe(1);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("with interactive login denied, an oauth2 role is the login that still works", async () => {
+		const idp = provider();
+		try {
+			const configDir = configRoot(idp.endpoint);
+			// The strictest policy there is: no headed window may be opened at all.
+			writePolicy(configDir, "never");
+			const deps = build(configDir, createFakeDriver(), {
+				readsProvider: true,
+			});
+			expect((await openStage(deps)).status).toBe(200);
+
+			// The login needs no person, so the policy has nothing to deny: the role is
+			// `automated`, not `unavailable` (USAB-003), and the browser tools keep
+			// working under it (OSV-005).
+			const logged = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "api",
+				role: "service",
+			});
+			expect(logged.status).toBe(200);
+			expect(logged.value).toMatchObject({ login: "ok", via: "token" });
+			expect(logged.text).not.toContain(ACCESS_TOKEN);
+
+			// And a page request on the declared origin is authenticated.
+			expect(
+				await askAuthorization(deps, `${API_URL}/orders`, {}, APP_URL),
+			).toBe(`Bearer ${ACCESS_TOKEN}`);
+			expect(idp.calls()).toBe(1);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a refresh_token role is unattended too: it presents the token it holds, under the same denial", async () => {
+		const idp = provider();
+		try {
+			const configDir = configRoot(idp.endpoint, { refreshStage: true });
+			writePolicy(configDir, "never");
+			const deps = build(configDir, createFakeDriver(), {
+				readsProvider: true,
+			});
+			expect(
+				(
+					await call(deps, AGENT_BROWSER_OPEN_PATH, {
+						stage: "grid-refresh",
+						stageApp: "api",
+					})
+				).status,
+			).toBe(200);
+
+			const logged = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "api",
+				role: "service",
+			});
+			expect(logged.status).toBe(200);
+			expect(logged.value).toMatchObject({ login: "ok", via: "token" });
+			// The grant is the one the role declared, and the token it presents is the
+			// one the `.env` holds — never anything the browser or the page supplied.
+			expect(idp.forms[0]?.get("grant_type")).toBe("refresh_token");
+			expect(idp.forms[0]?.get("refresh_token")).toBe(REFRESH_TOKEN);
+			expect(logged.text).not.toContain(REFRESH_TOKEN);
 			await deps.pool.closeAll();
 		} finally {
 			idp.stop();

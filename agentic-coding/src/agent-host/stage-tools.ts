@@ -32,6 +32,10 @@ export const STAGE_EXTENSION = "agentic.stages";
 /** Tool output bound: a larger answer is truncated rather than flooding the
  * session. */
 const MAX_RESULT_CHARS = 40_000;
+/** What is left for a `stage_api_request` body once the envelope's own fields
+ * are counted: the body is the only part that may grow, and a cut inside it
+ * leaves a result that still parses (USAB-001). */
+const MAX_API_BODY_CHARS = MAX_RESULT_CHARS - 2_000;
 /** A version probe is bounded server-side; this is the transport's own
  * patience above it. */
 const READ_TIMEOUT_MS = 120_000;
@@ -59,6 +63,29 @@ function text(value: unknown): Result {
 
 function failure(message: string): Result {
 	return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/**
+ * The result of `stage_api_request`: the envelope's own fields (`status`,
+ * `statusText`, `url`, `truncated`, `bytes`, `renewals`) are never what gets
+ * cut, because a caller has to be able to read them (USAB-001).
+ *
+ * A body above the bound is cut *inside* its own string with a marker, and
+ * `truncated` is forced to `true` so the answer says so — the whole result is
+ * then still valid JSON.
+ */
+function apiResult(value: unknown): Result {
+	if (value === null || typeof value !== "object" || Array.isArray(value))
+		return text(value);
+	const envelope = value as Record<string, unknown>;
+	const body = envelope.body;
+	if (typeof body !== "string" || body.length <= MAX_API_BODY_CHARS)
+		return text(envelope);
+	return text({
+		...envelope,
+		body: `${body.slice(0, MAX_API_BODY_CHARS)}\n… (body truncated)`,
+		truncated: true,
+	});
 }
 
 interface StageBinding {
@@ -104,13 +131,20 @@ async function call(
 		| {
 				ok?: boolean;
 				value?: unknown;
-				error?: { code?: string; message?: string };
+				error?: { code?: string; message?: string; retryAfterMs?: number };
 		  }
 		| undefined;
 	if (!response.ok || !parsed || parsed.ok === false || parsed.error) {
 		const code = parsed?.error?.code;
+		const retryAfterMs = parsed?.error?.retryAfterMs;
+		// A rate limit is only actionable with the wait attached: an agent that
+		// reads it can schedule its retry instead of polling (USAB-005).
+		const retry =
+			typeof retryAfterMs === "number" && retryAfterMs > 0
+				? `; retry in ${Math.ceil(retryAfterMs / 1_000)} s`
+				: "";
 		throw new Error(
-			`${parsed?.error?.message ?? `the stage server answered ${response.status}`}${code ? ` [${code}]` : ""}`,
+			`${parsed?.error?.message ?? `the stage server answered ${response.status}`}${code ? ` [${code}]` : ""}${retry}`,
 		);
 	}
 	return parsed.value;
@@ -139,7 +173,7 @@ const TargetParameters = {
 	),
 	role: Type.String({
 		description:
-			"The role whose token authenticates the call, as `stage_info` lists it.",
+			'The role whose token authenticates the call, as `stage_info` lists it. It has to select the `oauth2` login recipe (`loginKind: "oauth2"`); `stage_info` lists that role\'s provider, grant and `bearerOrigins`.',
 	}),
 };
 
@@ -157,6 +191,7 @@ export function createStageExtension(
 					"List the hosted test stages this configuration allows, or read one stage in detail. It never returns a secret: a credential appears as the *name* of the `.env` variable that has to be set (Settings → Stages), never as a value.",
 					"An entry names the stage's environment and system, its `access` (`read-only` refuses state-changing requests, `writable` allows them), the applications it knows with their URLs, kinds and roles, the role's login recipe kind, each credential field's status (`set` or `missing VAR`), the origin allow-list and the declared read-only exceptions.",
 					"A stage with a version probe resolves it with a bounded timeout: a host that does not answer reports `not discoverable` instead of failing the read.",
+					"A stage that declares `oauth2` providers reports them with their token endpoint, scope, audience and client-authorization mode, and each role reports the `provider`, `grant` and `bearerOrigins` it selected — that is what a run needs to choose a role for `stage_api_request`. An `oauth2` role's `loginMode` is `automated` for the two unattended grants, `unavailable` for a login this build cannot perform (the `authorization_code` grant) or whose references are unset.",
 					'`excluded` lists the stage files that were refused with their value-free diagnostics, so "my stage is not here" has an answer.',
 					"Open a stage with `browser_open({ stage, stageApp })`, then log in with `stage_login({ app, role })`.",
 				].join(" "),
@@ -194,7 +229,7 @@ export function createStageExtension(
 				name: "stage_api_request",
 				description: [
 					"Call a hosted stage's API as one of its roles: the server attaches the role's bearer token and sends the request to that application's configured origin. Use it instead of `browser_run_script` for a `api` application.",
-					"`path` is a path of the application (`/v1/requests?limit=5`), never a URL: the host is the one the stage names, and an absolute URL is refused.",
+					"`path` is a path of the application (`/v1/requests?limit=5`), never a URL: the host is the one the stage names, and an absolute URL is refused. `query` sends the parameters as an object instead; the two are refused together.",
 					"Do not send an `Authorization` header — the server's own token is attached, and an agent-supplied one is refused rather than overwritten.",
 					"A `read-only` stage refuses a state-changing method, a request above 64 KiB, and a response above 256 KiB (the body is truncated and `truncated` says so). A `401` is retried once with a renewed token.",
 					"The answer is redacted: the status, the response headers on the allow-list, and the body. Learn the token's four presentation fields with `stage_token_info`.",
@@ -216,6 +251,12 @@ export function createStageExtension(
 						description:
 							"The path of the application, with an optional query string, e.g. `/v1/requests?limit=5`.",
 					}),
+					query: Type.Optional(
+						Type.Record(Type.String(), Type.String(), {
+							description:
+								"Query parameters of the call, as an object of name to value. Refused together with a `?` inside `path`.",
+						}),
+					),
 					headers: Type.Optional(
 						Type.Record(Type.String(), Type.String(), {
 							description:
@@ -234,25 +275,25 @@ export function createStageExtension(
 					if (!run)
 						return failure("stage_api_request: run context unavailable");
 					try {
-						return text(
-							await call(
-								run.env,
-								AGENT_STAGE_API_REQUEST_PATH,
-								READ_TIMEOUT_MS,
-								send,
-								{
-									...(args.stage === undefined ? {} : { stage: args.stage }),
-									...(args.app === undefined ? {} : { app: args.app }),
-									role: args.role,
-									method: args.method,
-									path: args.path,
-									...(args.headers === undefined
-										? {}
-										: { headers: args.headers }),
-									...(args.body === undefined ? {} : { body: args.body }),
-								},
-							),
+						const value = await call(
+							run.env,
+							AGENT_STAGE_API_REQUEST_PATH,
+							READ_TIMEOUT_MS,
+							send,
+							{
+								...(args.stage === undefined ? {} : { stage: args.stage }),
+								...(args.app === undefined ? {} : { app: args.app }),
+								role: args.role,
+								method: args.method,
+								path: args.path,
+								...(args.query === undefined ? {} : { query: args.query }),
+								...(args.headers === undefined
+									? {}
+									: { headers: args.headers }),
+								...(args.body === undefined ? {} : { body: args.body }),
+							},
 						);
+						return apiResult(value);
 					} catch (error) {
 						return failure(
 							`stage_api_request: ${error instanceof Error ? error.message : String(error)}`,
@@ -263,7 +304,7 @@ export function createStageExtension(
 			defineTool({
 				name: "stage_token_info",
 				description: [
-					"Read the four presentation fields of the token one role holds on a stage: `expiresAt`, `scopes`, `audience` and `issuer`.",
+					"Read the four presentation fields of the token one role holds on a stage: `expiresAt` (epoch **milliseconds**, comparable with `Date.now()`), `scopes`, `audience` and `issuer`.",
 					"A token that does not exist yet is acquired first, so this is also how to check that a role can obtain one at all.",
 					"Nothing else about the token is ever returned — no claim, no subject, no value — so a run can plan around an expiry without ever holding the credential.",
 				].join(" "),

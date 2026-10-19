@@ -533,9 +533,12 @@ async function handleAuthRoute(
 		);
 		return json({ ok: true, value: redactValue(info) });
 	} catch (error) {
+		// The error envelope goes through the same live redactor as the success
+		// value: a token the call just acquired is one of the secrets of its own
+		// answer, and a provider's error description is untrusted input (SEC-001).
 		if (error instanceof StageApiError)
 			return json(
-				{
+				redactValue({
 					error: {
 						code: error.code,
 						message: error.message,
@@ -543,16 +546,16 @@ async function handleAuthRoute(
 							? {}
 							: { retryAfterMs: error.retryAfterMs }),
 					},
-				},
+				}),
 				error.status,
 			);
 		return json(
-			{
+			redactValue({
 				error: {
 					code: "stage-auth-failed",
 					message: error instanceof Error ? error.message : String(error),
 				},
-			},
+			}),
 			500,
 		);
 	}

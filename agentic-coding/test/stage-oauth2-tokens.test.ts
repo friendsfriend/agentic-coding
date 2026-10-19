@@ -20,8 +20,10 @@ import {
 	stageByIdent,
 } from "../src/server/stages/catalog.ts";
 import {
+	DEFAULT_FAILURE_TTL_MS,
 	DEFAULT_TOKEN_ENTRY_CAP,
 	DEFAULT_TOKEN_LIFETIME_MS,
+	DEFAULT_TOKEN_SKEW_MS,
 	forgetStageTokens,
 	roleToken,
 	roleTokenKey,
@@ -46,7 +48,9 @@ interface TokenCall {
 
 /** A fake token endpoint: it records every request and answers the scripted
  * responses in order (the last one repeats). */
-function fakeProvider(responses: Array<(call: TokenCall) => Response>): {
+function fakeProvider(
+	responses: Array<(call: TokenCall) => Response | Promise<Response>>,
+): {
 	readonly calls: TokenCall[];
 	readonly endpoint: string;
 	readonly stop: () => void;
@@ -191,7 +195,9 @@ afterEach(() => {
 	for (const stop of stops.splice(0)) stop();
 });
 
-function provider(...responses: Array<(call: TokenCall) => Response>) {
+function provider(
+	...responses: Array<(call: TokenCall) => Response | Promise<Response>>
+) {
 	const created = fakeProvider(responses);
 	stops.push(created.stop);
 	return created;
@@ -353,6 +359,69 @@ describe("the store", () => {
 		expect(idp.calls).toHaveLength(2);
 	});
 
+	test("a burst of callers inside the skew window is still one renewal", async () => {
+		let clock = 1_000_000;
+		const idp = provider(() =>
+			tokenAnswer({
+				access_token: `token-${idp.calls.length}`,
+				expires_in: 120,
+			}),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "client_credentials",
+		});
+		const { roleInput } = roleOf(configDir);
+		const store = new StageTokenStore({ now: () => clock });
+
+		const first = await roleToken(roleInput, store, { now: () => clock });
+		// The entry is now inside the skew, so every caller renews it — and every
+		// caller has to share the one renewal that is in flight (TQV-006).
+		clock += 120_000 - DEFAULT_TOKEN_SKEW_MS + 1;
+		const renewed = await Promise.all([
+			roleToken(roleInput, store, { now: () => clock }),
+			roleToken(roleInput, store, { now: () => clock }),
+			roleToken(roleInput, store, { now: () => clock }),
+		]);
+
+		expect(idp.calls).toHaveLength(2);
+		expect(new Set(renewed.map((token) => token.accessToken)).size).toBe(1);
+		expect(renewed[0]?.accessToken).not.toBe(first.accessToken);
+		// The renewed entry is what the store holds: the burst did not leave the
+		// older token behind it.
+		expect(store.peek(roleTokenKey(roleInput))?.accessToken).toBe(
+			renewed[0]?.accessToken,
+		);
+	});
+
+	test("a token endpoint that never answers is a timeout, and leaves no entry behind", async () => {
+		const idp = provider(() =>
+			tokenAnswer({ access_token: "never-asked", expires_in: 60 }),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "client_credentials",
+		});
+		const { roleInput } = roleOf(configDir);
+		const store = new StageTokenStore();
+
+		const failure = (await roleToken(roleInput, store, {
+			fetch: (async () => {
+				throw Object.assign(new Error("the operation timed out"), {
+					name: "TimeoutError",
+				});
+			}) as unknown as typeof fetch,
+		}).catch((error: unknown) => error)) as StageAuthError;
+
+		expect(failure).toBeInstanceOf(StageAuthError);
+		expect(failure.code).toBe("login-failed");
+		expect(failure.providerCode).toBe("token_endpoint_unreachable");
+		expect(failure.message).toContain("timeout");
+		expect(failure.message).not.toContain(CLIENT_SECRET_VALUE);
+		expect(idp.calls).toHaveLength(0);
+		expect(store.list()).toEqual([]);
+	});
+
 	test("a refresh_token grant sends the declared token, and a rotated one wins thereafter", async () => {
 		let clock = 5_000_000;
 		const idp = provider(
@@ -459,7 +528,11 @@ describe("the store", () => {
 
 		expect(failure.code).toBe("login-failed");
 		expect(failure.providerCode).toBe("unsupported_grant");
-		expect(failure.message).toContain("add-stage-oauth2-code-pkce");
+		// The message is for its reader: it names the grants that do work here, and
+		// never an internal change id (USAB-004).
+		expect(failure.message).toContain("not supported by this build");
+		expect(failure.message).toContain("client_credentials");
+		expect(failure.message).not.toContain("add-stage");
 		expect(idp.calls).toHaveLength(0);
 	});
 });
@@ -489,7 +562,7 @@ describe("the store's bounds", () => {
 		expect(left[0]?.stage).toBe("b");
 	});
 
-	test("the entry cap evicts the oldest token, and the ceiling bounds a long lifetime", async () => {
+	test("the entry cap evicts the token that expires soonest, and the ceiling bounds a long lifetime", async () => {
 		const store = new StageTokenStore({
 			entryCap: 2,
 			now: () => 1_000,
@@ -508,11 +581,162 @@ describe("the store's bounds", () => {
 		const long = await token("one", 1_000 + 30 * 24 * 60 * 60 * 1000);
 		expect(long.expiresAt).toBe(1_000 + DEFAULT_TOKEN_LIFETIME_MS);
 		await token("two", 1_000 + 60_000);
-		await token("three", 1_000 + 60_000);
+		// The earliest-expiring entry goes, not the oldest insertion: an entry whose
+		// renewal is in flight is never the one evicted (CONC-002).
+		await token("three", 1_000 + 120_000);
 
 		const held = store.list();
 		expect(held).toHaveLength(2);
-		expect(held.map((entry) => entry.role)).toEqual(["two", "three"]);
+		expect(held.map((entry) => entry.role)).toEqual(["one", "three"]);
+	});
+
+	test("a credential written while a token request is in flight is not shadowed by its answer", async () => {
+		// `STAGES_CREDENTIAL_PATH` writes the secret and forgets the stage's entries
+		// while a request the old secret started is still open. Its answer describes a
+		// credential that no longer exists, so the store must not keep it (CONC-001).
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const idp = provider(async () => {
+			await gate;
+			return tokenAnswer({
+				access_token: "token-of-the-old-secret",
+				expires_in: 3600,
+			});
+		});
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "client_credentials",
+		});
+		const { roleInput } = roleOf(configDir);
+		const store = new StageTokenStore();
+
+		const inFlight = roleToken(roleInput, store);
+		forgetStageTokens({ stage: "grid-int" }, store);
+		release?.();
+		const handed = await inFlight;
+
+		// The caller that asked before the write still gets an answer...
+		expect(handed.accessToken).toBe("token-of-the-old-secret");
+		// ...and nothing of it is remembered, so the next call asks again.
+		expect(store.list()).toEqual([]);
+		expect(store.peek(roleTokenKey(roleInput))).toBeUndefined();
+		expect(store.secrets()).toEqual([]);
+		await roleToken(roleInput, store);
+		expect(idp.calls).toHaveLength(2);
+	});
+
+	test("expiring one entry keeps the refresh token it rotated in, and forgetting it does not", async () => {
+		const clock = 5_000_000;
+		const idp = provider(() =>
+			tokenAnswer({
+				access_token: `token-${idp.calls.length}`,
+				refresh_token: ROTATED_REFRESH_TOKEN,
+				expires_in: 3600,
+			}),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "refresh_token",
+		});
+		const { roleInput } = roleOf(configDir);
+		const store = new StageTokenStore({ now: () => clock });
+
+		await roleToken(roleInput, store, { now: () => clock });
+		// A `401` drops the access token the stage refused, and the rotated refresh
+		// token survives it: a provider that rotates keeps only the value it last
+		// issued, so the renewal has to present that one (QA-002).
+		store.expire(roleTokenKey(roleInput));
+		expect(store.peek(roleTokenKey(roleInput))).toBeUndefined();
+		expect(
+			store.refreshTokenFor(roleTokenKey(roleInput), REFRESH_TOKEN_VALUE),
+		).toBe(ROTATED_REFRESH_TOKEN);
+		await roleToken(roleInput, store, { now: () => clock });
+		expect(idp.calls[1]?.form.get("refresh_token")).toBe(ROTATED_REFRESH_TOKEN);
+
+		// A forgotten credential is the opposite case: the `.env` value is current
+		// again, because the entry was dropped together with what it derived.
+		forgetStageTokens({ stage: "grid-int" }, store);
+		expect(
+			store.refreshTokenFor(roleTokenKey(roleInput), REFRESH_TOKEN_VALUE),
+		).toBe(REFRESH_TOKEN_VALUE);
+		await roleToken(roleInput, store, { now: () => clock });
+		expect(idp.calls[2]?.form.get("refresh_token")).toBe(REFRESH_TOKEN_VALUE);
+	});
+
+	test("an unreachable provider is asked once per failure window, not once per call", async () => {
+		let clock = 9_000_000;
+		const idp = provider(() => new Response("{}", { status: 503 }));
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "client_credentials",
+		});
+		const { roleInput } = roleOf(configDir);
+		const store = new StageTokenStore({ now: () => clock });
+
+		const first = await roleToken(roleInput, store, {
+			now: () => clock,
+		}).catch((error: unknown) => error);
+		expect(first).toBeInstanceOf(StageAuthError);
+		// A provider that is down costs one request per window, not one per page
+		// request that asks for a token (PERF-003).
+		const second = await roleToken(roleInput, store, {
+			now: () => clock,
+		}).catch((error: unknown) => error);
+		expect(second).toBe(first);
+		expect(idp.calls).toHaveLength(1);
+
+		// Once the window has passed the provider is asked again.
+		clock += DEFAULT_FAILURE_TTL_MS + 1;
+		await roleToken(roleInput, store, { now: () => clock }).catch(
+			() => undefined,
+		);
+		expect(idp.calls).toHaveLength(2);
+	});
+
+	test("the cap never evicts an entry whose renewal is in flight", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const clock = 1_000_000;
+		const store = new StageTokenStore({ entryCap: 2, now: () => clock });
+		const keyOf = (role: string) => ({
+			stage: "s",
+			app: "api",
+			role,
+			provider: "idp",
+			scope: [],
+		});
+		const acquire = (role: string, expiresAt: number) =>
+			store.token(keyOf(role), async () => ({
+				accessToken: `token-${role}`,
+				expiresAt,
+				scopes: [],
+				provider: "idp",
+			}));
+
+		await acquire("one", clock + 10_000);
+		await acquire("two", clock + 20_000);
+		// A renewal of `one` is in flight, and a third entry arrives: the cap has to
+		// evict something else, because the in-flight key's rotated refresh token is
+		// the one its own acquisition needs (CONC-002).
+		const inFlight = store.token(keyOf("one"), async () => {
+			await gate;
+			return {
+				accessToken: "token-one-again",
+				expiresAt: clock + 30_000,
+				scopes: [],
+				provider: "idp",
+			};
+		});
+		await acquire("three", clock + 40_000);
+		const held = store.list().map((entry) => entry.role);
+		expect(held).toContain("one");
+		expect(held).not.toContain("two");
+		release?.();
+		expect((await inFlight).accessToken).toBe("token-one-again");
 	});
 
 	test("the process store is one store, and it lists metadata that carries no token", async () => {
@@ -562,8 +786,32 @@ describe("the store's bounds", () => {
 		);
 	});
 
-	test("the documented default cap is the one the store applies", () => {
+	test("the documented default cap is the one a default store applies", async () => {
 		expect(DEFAULT_TOKEN_ENTRY_CAP).toBe(32);
+		// A store nobody configured, driven past the cap: the constant and the
+		// default have to be the same number, or the docs describe another store.
+		const store = new StageTokenStore({ now: () => 1_000 });
+		const acquire = (n: number) =>
+			store.token(
+				{ stage: "s", app: "a", role: `r${n}`, provider: "p", scope: [] },
+				async () => ({
+					accessToken: `token-${n}`,
+					expiresAt: 1_000 + n * 1_000,
+					scopes: [],
+					provider: "p",
+				}),
+			);
+		for (let n = 0; n < DEFAULT_TOKEN_ENTRY_CAP + 3; n += 1) await acquire(n);
+
+		const held = store.list();
+		expect(held).toHaveLength(DEFAULT_TOKEN_ENTRY_CAP);
+		// The first three went, earliest expiry first.
+		expect(held.map((entry) => entry.role)).toEqual(
+			Array.from({ length: DEFAULT_TOKEN_ENTRY_CAP }, (_, i) => `r${i + 3}`),
+		);
+	});
+
+	test("the key normalizes the scope set, so two spellings are one entry", () => {
 		expect(
 			tokenKey({
 				stage: "s",

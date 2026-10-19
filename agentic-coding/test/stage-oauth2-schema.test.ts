@@ -46,12 +46,19 @@ const API_APP = {
 function writeStage(
 	overrides: Record<string, unknown> = {},
 	env: Record<string, string> = {},
+	/** The `stages/policy.json` body, when a test needs a policy at all. */
+	policy?: Record<string, unknown>,
 ): string {
 	const configDir = fs.mkdtempSync(
 		path.join(os.tmpdir(), "stage-oauth2-schema-"),
 	);
 	const defsDir = path.join(configDir, "stages", "definitions");
 	fs.mkdirSync(defsDir, { recursive: true });
+	if (policy !== undefined)
+		fs.writeFileSync(
+			path.join(configDir, "stages", "policy.json"),
+			`${JSON.stringify(policy, null, 2)}\n`,
+		);
 	const definition = {
 		ident: "grid-int",
 		displayName: "Grid integration",
@@ -224,8 +231,14 @@ describe("an oauth2 stage is valid configuration", () => {
 
 describe("the oauth2 role's login mode", () => {
 	test("a client_credentials role is automated, whatever the interactive-login policy says", () => {
-		// `local` is the default policy: the token path never opens a window either
-		// way, and it is the unattended case the recipe exists for.
+		// The policy is written, not left at its default: the unattended grant has
+		// to be `automated` under the strictest configuration too, because the
+		// refusal it guards is a window this login never opens (TQV-002).
+		expect(
+			viewOf(writeStage({}, {}, { interactiveLogin: "never" })).view.apps[0]
+				?.roles[0]?.loginMode,
+		).toBe("automated");
+		// And under the default policy, which is what a fresh configuration has.
 		expect(viewOf(writeStage()).view.apps[0]?.roles[0]?.loginMode).toBe(
 			"automated",
 		);
@@ -275,8 +288,9 @@ describe("the oauth2 role's login mode", () => {
 			},
 		};
 		// With the authorization endpoint the flow needs, the file is valid
-		// configuration: a person signs in, so the login is a hand-off, and the
-		// browser flow itself belongs to `add-stage-oauth2-code-pkce`.
+		// configuration; the login itself is not this build's, so the mode is
+		// `unavailable` rather than a hand-off no run could complete (USAB-003).
+		// The browser flow itself belongs to `add-stage-oauth2-code-pkce`.
 		const complete = writeStage({
 			...grant,
 			...provider({
@@ -287,7 +301,7 @@ describe("the oauth2 role's login mode", () => {
 		const role = viewOf(complete).view.apps[0]?.roles[0];
 		expect(role?.grant).toBe("authorization_code");
 		expect(role?.loginKind).toBe("oauth2");
-		expect(role?.loginMode).toBe("handoff");
+		expect(role?.loginMode).toBe("unavailable");
 
 		// Without it the catalog refuses the file rather than accepting a provider
 		// that could never complete the flow.
@@ -458,5 +472,113 @@ describe("what the catalog refuses", () => {
 		});
 		expect(errors(configDir)).toEqual([]);
 		expect(diagnostics(configDir).join("\n")).toContain("warning");
+	});
+
+	test("`insecureHttp` never exempts a provider endpoint, so a token still needs https", () => {
+		// The flag admits an http application on a trusted network. It must not admit
+		// the endpoint a client secret is posted to, or the flag would silently move
+		// the secret onto the wire in clear (SEC-003).
+		const configDir = writeStage({
+			insecureHttp: true,
+			...provider({
+				tokenEndpoint: "http://login.int.example.test/oauth2/token",
+			}),
+		});
+		const reported = errors(configDir).join("\n");
+		expect(reported).toContain("oauth2.providers.idp.tokenEndpoint");
+		expect(reported).toContain("https");
+	});
+
+	test("two roles that would rotate the same refresh token are refused", () => {
+		// A provider that rotates keeps only its last refresh token, so two roles
+		// sharing one reference would invalidate each other's renewal (CONC-003).
+		const configDir = writeStage({
+			apps: {
+				api: {
+					label: "Grid API",
+					url: "https://api.int.example.test",
+					kind: "api",
+					roles: {
+						service: {
+							login: "oauth2",
+							provider: "idp",
+							grant: "refresh_token",
+							refreshToken: "${STAGE_GRID_INT_REFRESH_TOKEN}",
+							bearerOrigins: ["https://api.int.example.test"],
+						},
+						"service-two": {
+							login: "oauth2",
+							provider: "idp",
+							grant: "refresh_token",
+							refreshToken: "${STAGE_GRID_INT_REFRESH_TOKEN}",
+							bearerOrigins: ["https://api.int.example.test"],
+						},
+					},
+				},
+			},
+		});
+		const reported = errors(configDir).join("\n");
+		expect(reported).toContain("service-two");
+		expect(reported).toContain("refresh token");
+		// Value-free: the diagnostic names the variable, never what it holds.
+		expect(reported).not.toContain(REFRESH_TOKEN_VALUE);
+	});
+
+	test("an operator's own recipe named `oauth2` still works, and its role is not reinterpreted", () => {
+		// A stage file written before this build may carry a form recipe called
+		// `oauth2`; a role that points at it and declares no provider is that recipe,
+		// and the reuse of the built-in name is reported rather than silently
+		// applied (MIG-001).
+		const configDir = writeStage({
+			apps: {
+				api: {
+					label: "Grid API",
+					url: "https://api.int.example.test",
+					kind: "api",
+					roles: {
+						service: {
+							login: "oauth2",
+							username: "${STAGE_GRID_INT_CLIENT_ID}",
+							password: "${STAGE_GRID_INT_CLIENT_SECRET}",
+						},
+					},
+				},
+			},
+			logins: {
+				oauth2: {
+					kind: "form",
+					steps: [{ fields: [{ credential: "password", label: "Password" }] }],
+				},
+			},
+		});
+
+		expect(errors(configDir)).toEqual([]);
+		expect(diagnostics(configDir).join("\n")).toContain("warning");
+		const role = viewOf(configDir).view.apps[0]?.roles[0];
+		// The declared recipe, not the built-in one: a form recipe with its references
+		// set is still the automated form login it was before this build.
+		expect(role?.loginKind).toBe("form");
+		expect(role?.grant).toBeUndefined();
+		expect(role?.loginMode).toBe("automated");
+	});
+
+	test("an oauth2 role has to say `login: oauth2`, so a provider is never half-declared", () => {
+		const configDir = writeStage({
+			apps: {
+				api: {
+					label: "Grid API",
+					url: "https://api.int.example.test",
+					kind: "api",
+					roles: {
+						service: {
+							login: "web-form",
+							provider: "idp",
+							grant: "client_credentials",
+						},
+					},
+				},
+			},
+		});
+		expect(errors(configDir).join("\n")).toContain("oauth2");
 	});
 });

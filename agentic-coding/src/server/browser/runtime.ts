@@ -124,11 +124,15 @@ export function browserRuntime(
 		// operations surfaces do that) still has to read *Done* once one exists, so
 		// the adapter is attached to the singleton rather than to its first caller.
 		if (attention) existing.handoff.attachAttention(attention);
+		// The same for the bearer-token source: whichever surface constructed the
+		// runtime first must not decide whether a stage's requests are
+		// authenticated (CONC-004).
+		if (bearerToken) existing.pool.setBearerToken(bearerToken);
 		return existing;
 	}
-	// The token source is fixed with the runtime: one pool per configuration root
-	// is one set of contexts, and a second source would only be able to disagree
-	// with the first.
+	// The token source belongs to the runtime's pool from here on: one pool per
+	// configuration root is one set of contexts, and a later caller replaces the
+	// source through `setBearerToken` rather than adding a second one.
 	const created = createBrowserRuntime({
 		configDir,
 		...(attention === undefined ? {} : { attention }),

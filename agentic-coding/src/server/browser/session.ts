@@ -72,6 +72,11 @@ export type StageSessionBinding = StageSessionPolicy & {
 	 * or absent is the common case: a stage that declares none keeps the
 	 * foundation's behaviour exactly. */
 	readonly bearer?: readonly StageBearerScope[];
+	/** The origins a request may be *issued from* and still receive a bearer
+	 * token: the stage's own origins (`add-stage-oauth2-auth`, SEC-002). A
+	 * foreign-origin subframe inside a stage session never gets one, however
+	 * allow-listed its target is. */
+	readonly initiators?: readonly string[];
 };
 
 /** The selector that covers every password field of a stage screenshot. */

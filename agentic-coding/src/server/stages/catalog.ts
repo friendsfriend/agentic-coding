@@ -28,6 +28,7 @@ import {
 import {
 	decodeStageDefinition,
 	decodeStagePolicy,
+	isOAuth2Role,
 	STAGE_CREDENTIAL_FIELDS,
 	STAGE_IDENT_PATTERN,
 	STAGE_ROLE_CREDENTIAL_FIELDS,
@@ -113,12 +114,13 @@ export function roleLoginMode(input: {
 	if (input.recipeKind === "interactive")
 		return mayOpenWindow ? "handoff" : "unavailable";
 	if (input.recipeKind === "oauth2") {
-		// The authorization code grant is a person's sign-in: a window is the only
-		// way this server can perform it. The two unattended grants need no person
-		// at all; a missing reference is a `.env` gap no window could fill, so it is
-		// `unavailable` rather than a hand-off.
-		if (input.grant === "authorization_code")
-			return mayOpenWindow ? "handoff" : "unavailable";
+		// The authorization code grant is a person's sign-in, and this build cannot
+		// perform it yet: reporting `handoff` would send a run into a hand-off that
+		// is refused, so the honest answer is `unavailable` (USAB-003) — the value
+		// the contract reserves for "needs a person, and this build cannot".
+		if (input.grant === "authorization_code") return "unavailable";
+		// The two unattended grants need no person at all; a missing reference is
+		// a `.env` gap no window could fill, so it is `unavailable` too.
 		return input.grant === undefined || input.credentialStatus !== "set"
 			? "unavailable"
 			: "automated";
@@ -511,6 +513,8 @@ function validateStage(
 		);
 	for (const [name, recipe] of Object.entries(stage.logins ?? {}))
 		validateRecipe(recipe, `logins.${name}`, stage, fail);
+	validateReservedRecipeName(stage, file, diagnostics);
+	validateRefreshTokenSharing(stage, fail);
 	validateOAuth2Providers(stage, policy, fail);
 	// A stage may narrow the operator's policy and never widen it. The stage is
 	// still allow-listed (nothing about it is unsafe to *read*), so the ignored
@@ -564,10 +568,12 @@ function validateRole(
 				"must be exactly one ${VARIABLE} reference resolved from the configuration .env",
 			);
 	}
-	if (role.login === "oauth2") {
+	if (isOAuth2Role(role)) {
 		validateOAuth2Role(stage, role, fail, warn);
 		return;
 	}
+	// A recipe of the stage's own `logins` table is what a role without the new
+	// fields selects, even when that recipe is named `oauth2` (MIG-001).
 	// The `oauth2` recipe's fields mean nothing on any other role: a stage that
 	// declares them there has a typo or an unfinished edit, and a leftover
 	// `bearerOrigins` would install a token on a role that never obtains one.
@@ -610,6 +616,11 @@ function validateOAuth2Role(
 	fail: (sub: string, message: string) => void,
 	warn: (sub: string, message: string) => void,
 ): void {
+	if (role.login !== "oauth2")
+		fail(
+			".login",
+			'is required: a role that declares `provider` or `grant` selects the oauth2 recipe with "login": "oauth2"',
+		);
 	for (const name of STAGE_CREDENTIAL_FIELDS)
 		if (role[name] !== undefined)
 			warn(
@@ -701,8 +712,12 @@ function validateOAuth2Providers(
 			["authorizationEndpoint", provider.authorizationEndpoint],
 		] as const) {
 			if (value === undefined) continue;
-			validateUrl(value, stage, policy, (message) =>
-				fail(`${field}.${key}`, message),
+			validateUrl(
+				value,
+				stage,
+				policy,
+				(message) => fail(`${field}.${key}`, message),
+				{ requireHttps: true },
 			);
 			const origin = originOf(value);
 			if (origin !== undefined && !origins.includes(origin))
@@ -726,6 +741,61 @@ function validateOAuth2Providers(
 				fail(`${field}.scope[${index}]`, "must not be empty");
 		if (provider.audience !== undefined && provider.audience.trim() === "")
 			fail(`${field}.audience`, "must not be empty when declared");
+	}
+}
+
+/**
+ * The reserved recipe name (`add-stage-oauth2-auth`).
+ *
+ * `oauth2` names the built-in token login; a stage that declares a recipe of its
+ * own under that name keeps working (a role without `provider`/`grant` selects
+ * it), but the operator is told why the name is a trap for the next reader.
+ */
+function validateReservedRecipeName(
+	stage: StageDefinition,
+	file: string,
+	diagnostics: StageDiagnostic[],
+): void {
+	if (!Object.hasOwn(stage.logins ?? {}, "oauth2")) return;
+	diagnostics.push({
+		file,
+		field: "logins.oauth2",
+		kind: "warning",
+		message:
+			'is the reserved name of the OAuth 2.0 login: a role that declares `provider` or `grant` selects that built-in recipe and ignores this one. Rename it, e.g. "oauth2-form"',
+	});
+}
+
+/**
+ * Two roles of one stage may not exchange the same refresh token.
+ *
+ * A provider that rotates a refresh token invalidates the one it handed out
+ * before, and this store keeps the rotated value per role. Two roles that name
+ * the same `${VAR}` would therefore desynchronize as soon as either renews: the
+ * second role presents a value the provider has already retired and can never
+ * recover without a credential rewrite (CONC-003). The diagnostic names the
+ * roles and never the reference's value.
+ */
+function validateRefreshTokenSharing(
+	stage: StageDefinition,
+	fail: (field: string, message: string) => void,
+): void {
+	const holders = new Map<string, string[]>();
+	for (const [appKey, app] of Object.entries(stage.apps))
+		for (const [roleName, role] of Object.entries(app.roles ?? {})) {
+			const reference = role.refreshToken;
+			if (reference === undefined) continue;
+			const roles = holders.get(reference) ?? [];
+			roles.push(`${appKey}.${roleName}`);
+			holders.set(reference, roles);
+		}
+	for (const roles of holders.values()) {
+		if (roles.length < 2) continue;
+		for (const role of roles)
+			fail(
+				`apps.${role}.refreshToken`,
+				`is the same refresh token as ${roles.filter((other) => other !== role).join(", ")}: a provider that rotates the token it issued invalidates the other role's copy, so every role needs its own reference`,
+			);
 	}
 }
 
@@ -785,12 +855,16 @@ function locatorNamesSomething(locator: StageLocator): boolean {
 }
 
 /** One application URL or declared origin: `https`, allow-listed host, not a
- * denied host. */
+ * denied host. `requireHttps` is what the OAuth 2.0 provider endpoints use: a
+ * token endpoint carries the client secret and the refresh token, so the
+ * stage-wide `insecureHttp` flag (which exists for a local *application* URL)
+ * never exempts it (SEC-003). */
 function validateUrl(
 	value: string,
 	stage: StageDefinition,
 	policy: StagePolicy,
 	fail: (message: string) => void,
+	options: { readonly requireHttps?: boolean } = {},
 ): void {
 	let url: URL;
 	try {
@@ -807,6 +881,12 @@ function validateUrl(
 		return;
 	}
 	if (url.protocol !== "https:" && !isLoopback(url.hostname)) {
+		if (options.requireHttps === true) {
+			fail(
+				"must use https: a token endpoint carries the client secret and the refresh token, which insecureHttp never allows here",
+			);
+			return;
+		}
 		if (stage.insecureHttp !== true)
 			fail(
 				"must use https unless the host is a loopback address or the stage sets insecureHttp",
@@ -1210,10 +1290,12 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 			...(app.api === undefined ? {} : { api: app.api }),
 			...(app.app === undefined ? {} : { app: app.app }),
 			roles: Object.entries(app.roles ?? {}).map(([role, value]) => {
-				// `oauth2` is a reserved recipe name the role selects instead of a
-				// declared recipe (`add-stage-oauth2-auth`): it types nothing into a page
-				// and obtains its token from a declared provider.
-				const oauth2 = value.login === "oauth2";
+				// `oauth2` is the reserved recipe a role selects with the fields this
+				// change added (`add-stage-oauth2-auth`): it types nothing into a page and
+				// obtains its token from a declared provider. The fields decide, not the
+				// name, so a stage that declares a recipe called `oauth2` keeps it
+				// (MIG-001).
+				const oauth2 = isOAuth2Role(value);
 				const recipe =
 					value.login === undefined || oauth2
 						? undefined

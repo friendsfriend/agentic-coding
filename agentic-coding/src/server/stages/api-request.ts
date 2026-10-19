@@ -17,6 +17,7 @@
 
 import { decodeContract } from "../../contracts/decode.ts";
 import {
+	MAX_STAGE_API_REQUEST_BYTES,
 	type StageApiRequest,
 	type StageApiRequestResponse,
 	type StageTokenInfoRequest,
@@ -27,7 +28,6 @@ import type { StageCatalog, StageEntry } from "./catalog.ts";
 import {
 	readStageCatalog,
 	stageByIdent,
-	stageOrigins,
 	stageRefusalReason,
 } from "./catalog.ts";
 import { readOnlyRefusal } from "./guard.ts";
@@ -36,16 +36,16 @@ import type {
 	StageUsageRegistry,
 } from "./limits.ts";
 import {
+	type ResolvedRoleToken,
+	resolveRoleToken,
 	roleToken,
+	roleTokenFrom,
 	roleTokenKey,
 	StageAuthError,
+	type StageRoleTokenInput,
 	type StageTokenStore,
 	stageTokenStore,
 } from "./oauth2.ts";
-
-/** The most a request body may carry. The stage foundation's bound for a browser
- * script answer, applied to the one write an agent may send directly. */
-export const MAX_API_REQUEST_BYTES = 64 * 1024;
 
 /** The most of an answer that is read at all: the rest is dropped at the source,
  * so a misconfigured endpoint cannot stream a gigabyte into this process. */
@@ -114,14 +114,67 @@ export function apiCatalog(deps: StageApiDeps): StageCatalog {
 }
 
 /**
+ * What one stage-bound session's bearer requests resolve to: the role's token
+ * path, resolved once (PERF-001).
+ *
+ * The catalog read and the resolution are the expensive part of an
+ * authenticated page request, and a page issues one per subresource. The cache
+ * is keyed by the binding object, which lives exactly as long as the session, so
+ * a session resolves each of its roles once; a stage file edited mid-session
+ * applies to the next session, exactly as a `.env` value edited mid-session
+ * applies to the next renewal. Only entries of *this* stage's applications are
+ * ever resolved, and a value is never part of the entry.
+ */
+const bearerTargets = new WeakMap<
+	object,
+	Map<string, Promise<ResolvedRoleToken | undefined>>
+>();
+
+/** One session's resolution of one bearer scope, cached for the session. */
+function bearerTarget(
+	deps: StageApiDeps,
+	binding: object & { readonly ident: string },
+	scope: { readonly app: string; readonly role: string },
+): Promise<ResolvedRoleToken | undefined> {
+	let byScope = bearerTargets.get(binding);
+	if (byScope === undefined) {
+		byScope = new Map();
+		bearerTargets.set(binding, byScope);
+	}
+	const id = `${scope.app}\u0000${scope.role}`;
+	const cached = byScope.get(id);
+	if (cached !== undefined) return cached;
+	const resolved = (async () => {
+		try {
+			const entry = stageByIdent(apiCatalog(deps), binding.ident);
+			if (entry === undefined) return undefined;
+			return resolveRoleToken({
+				stage: entry.stage,
+				appKey: scope.app,
+				role: scope.role,
+				configDir: deps.configDir,
+			});
+		} catch {
+			// A stage that is gone, a role that is not an oauth2 role, a grant this
+			// build cannot perform: the request goes out as the page wrote it.
+			return undefined;
+		}
+	})();
+	byScope.set(id, resolved);
+	return resolved;
+}
+
+/**
  * The `Authorization` value of one origin of one stage-bound session
  * (`add-stage-oauth2-auth`, task 3.3).
  *
  * This is what the pool's route handler asks for each request whose origin a
- * role declared in `bearerOrigins`; the catalog is re-read per request, so a
- * stage file that was edited (or removed) applies to the next one. Every refusal
- * answers `undefined` — a page request is never failed because a token could not
- * be obtained, and the token value never leaves this function.
+ * role declared in `bearerOrigins`. The role's *resolution* is cached per
+ * session and the token itself is cached by the store, so a page load with N
+ * requests on that origin costs N map lookups rather than N catalog and `.env`
+ * reads (PERF-001, PERF-002). Every refusal answers `undefined` — a page request
+ * is never failed because a token could not be obtained, and the token value
+ * never leaves this function.
  */
 export async function stageBearerToken(
 	deps: StageApiDeps,
@@ -129,21 +182,12 @@ export async function stageBearerToken(
 	scope: { readonly app: string; readonly role: string },
 ): Promise<string | undefined> {
 	try {
-		const entry = stageByIdent(apiCatalog(deps), binding.ident);
-		if (entry === undefined) return undefined;
-		const token = await roleToken(
-			{
-				stage: entry.stage,
-				appKey: scope.app,
-				role: scope.role,
-				configDir: deps.configDir,
-			},
-			tokenStore(deps),
-			{
-				...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
-				...(deps.now === undefined ? {} : { now: deps.now }),
-			},
-		);
+		const resolved = await bearerTarget(deps, binding, scope);
+		if (resolved === undefined) return undefined;
+		const token = await roleTokenFrom(resolved, tokenStore(deps), {
+			...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+			...(deps.now === undefined ? {} : { now: deps.now }),
+		});
 		return `Bearer ${token.accessToken}`;
 	} catch {
 		// A missing variable, an unreachable provider, a stage that is gone: the
@@ -273,6 +317,26 @@ export function apiUrl(baseUrl: string, path: string): URL {
 	return url;
 }
 
+/** The URL of one call: the path rule of `apiUrl`, plus the optional `query`
+ * object. A path that already carries a query string and a `query` object are
+ * refused together, so one request cannot express two different queries. */
+export function apiCallUrl(
+	baseUrl: string,
+	path: string,
+	query: Record<string, string> | undefined,
+): URL {
+	const url = apiUrl(baseUrl, path);
+	if (query === undefined || Object.keys(query).length === 0) return url;
+	if (path.includes("?"))
+		throw new StageApiError(
+			"stage-request-invalid",
+			"the path already carries a query string; send the parameters in `query` or in `path`, not both",
+		);
+	for (const [name, value] of Object.entries(query))
+		url.searchParams.append(name, value);
+	return url;
+}
+
 /** The headers of one call, without a credential the agent supplied. */
 function requestHeaders(
 	headers: Record<string, string> | undefined,
@@ -360,16 +424,23 @@ export async function stageApiRequestValue(
 			"this application is gone",
 			404,
 		);
-	const url = apiUrl(app.url, body.path);
+	const url = apiCallUrl(app.url, body.path, body.query);
 	const headers = requestHeaders(body.headers);
-	// The same origin allow-list the browser guard applies: a stage file whose app
-	// url is not one of its own origins is a config error the guard would refuse
-	// anyway, and this route answers it before a credential is attached.
-	if (!stageOrigins(entry.stage).includes(url.origin))
-		throw new StageApiError(
-			"origin-not-allowed",
-			`${url.origin} is not in the allow-list of stage ${entry.ident}`,
-		);
+	// The request bound, in bytes: the contract bounds the field's characters, so a
+	// multi-byte body still has to be measured before it is sent (QA-005).
+	if (body.body !== undefined) {
+		const bytes = Buffer.byteLength(body.body, "utf8");
+		if (bytes > MAX_STAGE_API_REQUEST_BYTES)
+			throw new StageApiError(
+				"stage-request-invalid",
+				`the body is ${bytes} bytes; a stage call may carry at most ${MAX_STAGE_API_REQUEST_BYTES}`,
+				413,
+			);
+	}
+	// The origin rule is the path rule: the URL is built on this application's own
+	// configured origin and a path that resolved anywhere else is refused by
+	// `apiUrl`, so there is nothing left for a second allow-list check to catch
+	// (TQV-007 — see design.md).
 	const refusal = readOnlyRefusal(
 		{
 			ident: entry.ident,
@@ -449,9 +520,11 @@ async function send(
 	if (answer.status === 401) {
 		// One renewal, one retry: the token was refused, which is the one case the
 		// server can fix by itself. The `401` is not reported when the retry
-		// succeeds, because the call is what the agent asked about.
+		// succeeds, because the call is what the agent asked about. `expire` and not
+		// `forget`: the rotated refresh token the provider issued is the only one it
+		// still accepts (QA-002).
 		renewals = 1;
-		tokens.forget({ ...roleTokenKey(roleInput) });
+		tokens.expire(roleTokenKey(roleInput));
 		token = await acquire(deps, tokens, roleInput);
 		answer = await exchange(deps, input, token.accessToken);
 	}
@@ -478,7 +551,7 @@ async function send(
 async function acquire(
 	deps: StageApiDeps,
 	tokens: StageTokenStore,
-	roleInput: Parameters<typeof roleToken>[0],
+	roleInput: StageRoleTokenInput,
 ) {
 	try {
 		return await roleToken(roleInput, tokens, {
@@ -572,27 +645,19 @@ export async function stageTokenInfoValue(
 		configDir: deps.configDir,
 	};
 	const tokens = tokenStore(deps);
-	const info = tokens.info(roleTokenKey(roleInput));
-	if (info === undefined) {
-		await acquire(deps, tokens, roleInput);
-	}
-	const resolved = info ?? tokens.info(roleTokenKey(roleInput));
-	if (resolved === undefined)
-		throw new StageApiError(
-			"stage-token-unavailable",
-			`the token of ${roleInput.appKey}.${role} could not be read back after it was acquired`,
-			502,
-		);
+	const key = roleTokenKey(roleInput);
+	// The token `acquire` answers is the one reported: reading it back out of the
+	// store would report nothing for a provider whose lifetime is already inside
+	// the renewal skew (QA-001).
+	const held = tokens.peek(key) ?? (await acquire(deps, tokens, roleInput));
 	return decodeContract<StageTokenInfoResponse>(
 		"server.agent-env.stage-token-info",
 		stageTokenInfoResponseSchema,
 		{
-			expiresAt: resolved.expiresAt,
-			scopes: [...resolved.scopes],
-			...(resolved.audience === undefined
-				? {}
-				: { audience: resolved.audience }),
-			...(resolved.issuer === undefined ? {} : { issuer: resolved.issuer }),
+			expiresAt: held.expiresAt,
+			scopes: [...held.scopes],
+			...(held.audience === undefined ? {} : { audience: held.audience }),
+			...(held.issuer === undefined ? {} : { issuer: held.issuer }),
 		},
 	);
 }

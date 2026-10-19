@@ -21,13 +21,17 @@
 // to move when its bounded in-memory store lands. Until then this module carries
 // its own, which is why the bounds are constants here rather than configuration.
 import path from "node:path";
-import { envReferenceName, loadEnvFile } from "../../env-file.ts";
+import { loadEnvFile } from "../../env-file.ts";
 import {
 	resolveStageCredential,
 	resolveStageOAuthCredential,
 	StageCredentialError,
 } from "./catalog.ts";
-import type { StageDefinition, StageOAuth2Grant } from "./schema.ts";
+import {
+	isOAuth2Role,
+	type StageDefinition,
+	type StageOAuth2Grant,
+} from "./schema.ts";
 
 /** How many tokens this process may hold at once. A stage has a handful of
  * roles; the cap is what keeps a misconfigured catalog or a per-scope key from
@@ -41,6 +45,12 @@ export const DEFAULT_TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
 /** How long before `exp` a token is renewed, so a call never rides a token that
  * expires while its own request is in flight. */
 export const DEFAULT_TOKEN_SKEW_MS = 60_000;
+
+/** How long one refusal is remembered before the provider is asked again. A
+ * provider that is down must not turn every page request of a bearer origin into
+ * a round trip that waits for its own timeout (PERF-003); five seconds is short
+ * enough that a fixed endpoint is picked up by the next call after it. */
+export const DEFAULT_FAILURE_TTL_MS = 5_000;
 
 /** The bound of one token request. */
 export const TOKEN_REQUEST_TIMEOUT_MS = 15_000;
@@ -377,6 +387,13 @@ export interface StageTokenStoreOptions {
 	readonly entryCap?: number;
 	readonly absoluteLifetimeMs?: number;
 	readonly skewMs?: number;
+	readonly failureTtlMs?: number;
+}
+
+/** One remembered refusal: the provider is not asked again before `until`. */
+interface TokenFailure {
+	readonly until: number;
+	readonly error: unknown;
 }
 
 /**
@@ -392,12 +409,24 @@ export class StageTokenStore {
 	private readonly entryCap: number;
 	private readonly absoluteLifetimeMs: number;
 	private readonly skewMs: number;
+	private readonly failureTtlMs: number;
 	private readonly entries = new Map<string, TokenEntry>();
 	/** The acquisition in flight per key. */
 	private readonly pending = new Map<string, Promise<OAuth2Token>>();
 	/** A refresh token the provider rotated, which wins over the `.env` copy for
 	 * every later renewal of the same key. */
 	private readonly rotated = new Map<string, string>();
+	/** A refusal, remembered for the failure TTL so an unreachable provider is
+	 * asked once per window instead of once per request (PERF-003). */
+	private readonly failures = new Map<string, TokenFailure>();
+	/** Every key id this store has seen, with its parts, so a `forget` filter can
+	 * be matched against the side tables of a key that has no entry right now
+	 * (a rotated refresh token, a remembered refusal, an acquisition in flight). */
+	private readonly ids = new Map<string, OAuth2TokenKey>();
+	/** How many times a key was forgotten or expired. An acquisition that started
+	 * under an older generation is not written back: the credential it used is the
+	 * one a `forget` just replaced (QA-003). */
+	private readonly generations = new Map<string, number>();
 
 	constructor(options: StageTokenStoreOptions = {}) {
 		this.now = options.now ?? (() => Date.now());
@@ -405,6 +434,10 @@ export class StageTokenStore {
 		this.absoluteLifetimeMs =
 			options.absoluteLifetimeMs ?? DEFAULT_TOKEN_LIFETIME_MS;
 		this.skewMs = Math.max(0, options.skewMs ?? DEFAULT_TOKEN_SKEW_MS);
+		this.failureTtlMs = Math.max(
+			0,
+			options.failureTtlMs ?? DEFAULT_FAILURE_TTL_MS,
+		);
 	}
 
 	/**
@@ -413,30 +446,46 @@ export class StageTokenStore {
 	 * `acquire` runs at most once per key at a time whatever the number of
 	 * callers; a renewal that fails evicts the entry (a token whose renewal was
 	 * rejected must not be handed out again) and rethrows the provider's refusal.
+	 * A `forget` or an `expire` while the acquisition runs discards its result
+	 * instead of writing a token built from a credential that is gone.
 	 */
 	async token(
 		key: OAuth2TokenKey,
 		acquire: () => Promise<OAuth2Token>,
 	): Promise<OAuth2Token> {
 		const id = tokenKey(key);
+		this.ids.set(id, key);
 		const existing = this.entries.get(id);
 		if (existing !== undefined && !this.stale(existing.token))
 			return existing.token;
+		const failed = this.recentFailure(id);
+		if (failed !== undefined) throw failed;
 		const inFlight = this.pending.get(id);
 		if (inFlight !== undefined) return await inFlight;
+		const generation = this.generationOf(id);
+		let promise: Promise<OAuth2Token> | undefined;
 		const acquisition = (async () => {
 			try {
 				const acquired = this.clamp(await acquire());
-				this.remember(id, key, acquired);
+				// A `forget` or an `expire` moved the generation on: this token was
+				// built from a credential that is no longer the current one. The caller
+				// still gets it (it asked before the change); the store does not keep it.
+				if (this.generationOf(id) === generation)
+					this.remember(id, key, acquired);
+				this.failures.delete(id);
 				return acquired;
 			} catch (error) {
-				this.entries.delete(id);
-				this.rotated.delete(id);
+				if (this.generationOf(id) === generation) {
+					this.entries.delete(id);
+					this.rotated.delete(id);
+					this.rememberFailure(id, error);
+				}
 				throw error;
 			} finally {
-				this.pending.delete(id);
+				if (this.pending.get(id) === promise) this.pending.delete(id);
 			}
 		})();
+		promise = acquisition;
 		this.pending.set(id, acquisition);
 		return await acquisition;
 	}
@@ -465,15 +514,30 @@ export class StageTokenStore {
 		};
 	}
 
-	/** The forget action: every entry matching the given parts of a key. Called
+	/**
+	 * The forget action: every entry matching the given parts of a key. Called
 	 * when a credential is rewritten, when a stage reloads, and by a run that
-	 * stops using a stage. */
+	 * stops using a stage. The rotated refresh token goes with the entry, because
+	 * the credential it was derived from is the one that changed.
+	 */
 	forget(filter: Partial<OAuth2TokenKey> = {}): void {
-		for (const [id, entry] of [...this.entries]) {
-			if (!matchesFilter(entry.key, filter)) continue;
-			this.entries.delete(id);
-			this.rotated.delete(id);
-		}
+		for (const [id, key] of [...this.ids])
+			if (matchesFilter(key, filter)) this.invalidate(id);
+	}
+
+	/**
+	 * Drop one entry so the next `token()` call renews it, keeping everything the
+	 * credential still needs: the rotated refresh token (the provider keeps only
+	 * the one it last issued, so a `401` retry has to present it — QA-002) and the
+	 * generation that keeps a running acquisition from writing the rejected token
+	 * back.
+	 */
+	expire(key: OAuth2TokenKey): void {
+		const id = tokenKey(key);
+		this.entries.delete(id);
+		this.failures.delete(id);
+		this.pending.delete(id);
+		this.generations.set(id, this.generationOf(id) + 1);
 	}
 
 	/** The refresh token to send for this key: the rotated one when the provider
@@ -525,19 +589,69 @@ export class StageTokenStore {
 		};
 	}
 
+	private generationOf(id: string): number {
+		return this.generations.get(id) ?? 0;
+	}
+
+	/** Drop everything one key id holds, and make a running acquisition of it
+	 * discard its result. */
+	private invalidate(id: string): void {
+		this.entries.delete(id);
+		this.rotated.delete(id);
+		this.failures.delete(id);
+		this.pending.delete(id);
+		this.generations.set(id, this.generationOf(id) + 1);
+	}
+
+	private recentFailure(id: string): unknown {
+		const failure = this.failures.get(id);
+		if (failure === undefined) return undefined;
+		if (failure.until > this.now()) return failure.error;
+		this.failures.delete(id);
+		return undefined;
+	}
+
+	private rememberFailure(id: string, error: unknown): void {
+		if (this.failureTtlMs === 0) return;
+		this.failures.delete(id);
+		this.failures.set(id, { until: this.now() + this.failureTtlMs, error });
+		while (this.failures.size > this.entryCap) {
+			const oldest = this.failures.keys().next();
+			if (oldest.done === true) break;
+			this.failures.delete(oldest.value);
+		}
+	}
+
 	private remember(id: string, key: OAuth2TokenKey, token: OAuth2Token): void {
 		const rotated = token.refreshToken;
 		this.entries.delete(id);
 		this.entries.set(id, { key, token });
 		if (rotated !== undefined && rotated !== "") this.rotated.set(id, rotated);
 		while (this.entries.size > this.entryCap) {
-			// The oldest insertion: an entry being renewed has no token yet, so the
-			// first key of the map is always one that may go.
-			const oldest = this.entries.keys().next();
-			if (oldest.done === true) break;
-			this.entries.delete(oldest.value);
-			this.rotated.delete(oldest.value);
+			const evicted = this.evictionCandidate();
+			if (evicted === undefined) break;
+			this.entries.delete(evicted);
+			// A key whose renewal is in flight keeps its rotated refresh token: that
+			// value is the only one the provider still accepts, and the acquisition
+			// about to answer needs it (CONC-002).
+			if (!this.pending.has(evicted)) this.rotated.delete(evicted);
 		}
+	}
+
+	/** The entry to evict: the one expiring soonest, never a key whose renewal is
+	 * in flight. `undefined` when every entry is being renewed, which is a cap of
+	 * momentarily more entries rather than a lost token. */
+	private evictionCandidate(): string | undefined {
+		let candidate: string | undefined;
+		let earliest = Number.POSITIVE_INFINITY;
+		for (const [id, entry] of this.entries) {
+			if (this.pending.has(id)) continue;
+			if (entry.token.expiresAt < earliest) {
+				earliest = entry.token.expiresAt;
+				candidate = id;
+			}
+		}
+		return candidate;
 	}
 }
 
@@ -612,7 +726,9 @@ export function oauth2RoleOf(
 	roleName: string,
 ): { readonly grant: StageOAuth2Grant; readonly provider: string } | undefined {
 	const role = stage.apps[appKey]?.roles?.[roleName];
-	if (role === undefined || role.login !== "oauth2") return undefined;
+	// The new fields decide, never the bare recipe name: `oauth2` stays a legal
+	// name for a declared recipe of an existing stage file (MIG-001).
+	if (role === undefined || !isOAuth2Role(role)) return undefined;
 	if (role.grant === undefined || role.provider === undefined) return undefined;
 	return { grant: role.grant, provider: role.provider };
 }
@@ -636,19 +752,35 @@ export function roleTokenKey(input: StageRoleTokenInput): OAuth2TokenKey {
 }
 
 /**
- * Obtain the token of one role (`stage_login`, `stage_api_request`, the browser
- * bearer header).
+ * One role's token path, resolved from the catalog alone (`add-stage-oauth2-auth`,
+ * tasks 1.1 and 2.1).
  *
- * Every refusal is a `StageAuthError`: `credential-missing` names the `.env`
- * variable that is unset (`clientId`, `clientSecret`, `refreshToken`), and
- * `login-failed` carries the provider's `error` code. No value of any kind is
- * part of a message.
+ * Nothing here reads the configuration `.env`: the resolution is what the
+ * browser's per-request path caches per session (PERF-001), and the references
+ * are resolved inside the acquisition instead, so a cache hit reads no file at
+ * all (PERF-002).
  */
-export async function roleToken(
+export interface ResolvedRoleToken {
+	readonly input: StageRoleTokenInput;
+	readonly key: OAuth2TokenKey;
+	readonly provider: string;
+	readonly tokenEndpoint: string;
+	readonly clientAuth: "basic" | "body";
+	/** Whether the provider declares a client secret reference; a public
+	 * `authorization_code` client need not. */
+	readonly confidential: boolean;
+	readonly audience?: string;
+	readonly grant: "client_credentials" | "refresh_token";
+}
+
+/**
+ * Resolve one role's `oauth2` recipe: the grant, the provider and the key its
+ * token is stored under. Every refusal is a `StageAuthError`, and none of them
+ * quotes a value.
+ */
+export function resolveRoleToken(
 	input: StageRoleTokenInput,
-	store: StageTokenStore,
-	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
-): Promise<OAuth2Token> {
+): ResolvedRoleToken {
 	const recipe = oauth2RoleOf(input.stage, input.appKey, input.role);
 	if (recipe === undefined)
 		throw new StageAuthError(
@@ -657,10 +789,11 @@ export async function roleToken(
 		);
 	if (recipe.grant === "authorization_code")
 		// The one grant that needs a person is `add-stage-oauth2-code-pkce`: the
-		// stage file is valid, and this build cannot perform that login yet.
+		// stage file is valid, and this build cannot perform that login. The message
+		// is for its reader, so it names the grants that do work here.
 		throw new StageAuthError(
 			"login-failed",
-			`the authorization_code grant needs the browser hand-off of the add-stage-oauth2-code-pkce change; this build performs client_credentials and refresh_token only`,
+			"the authorization_code grant is not supported by this build; client_credentials and refresh_token are",
 			"unsupported_grant",
 		);
 	const provider = input.stage.oauth2?.providers?.[recipe.provider];
@@ -669,61 +802,94 @@ export async function roleToken(
 			"login-failed",
 			`${input.appKey}.${input.role} names the oauth2 provider ${JSON.stringify(recipe.provider)}, which the stage does not declare`,
 		);
-	// Resolve every reference *before* asking the provider anything, so a missing
-	// variable leaves no request and no entry behind.
-	let clientId: string;
-	let clientSecret: string | undefined;
-	let declaredRefreshToken: string | undefined;
-	try {
-		clientId = resolveStageOAuthCredential(
-			input.stage,
-			recipe.provider,
-			"clientId",
-			input.configDir,
-		);
-		if (provider.clientSecret !== undefined)
-			clientSecret = resolveStageOAuthCredential(
-				input.stage,
-				recipe.provider,
-				"clientSecret",
-				input.configDir,
-			);
-		if (recipe.grant === "refresh_token")
-			declaredRefreshToken = resolveStageCredential(
-				input.stage,
-				input.appKey,
-				input.role,
-				"refreshToken",
-				input.configDir,
-			);
-	} catch (error) {
-		if (error instanceof StageCredentialError)
-			throw new StageAuthError("credential-missing", error.message);
-		throw error;
-	}
-	const key = roleTokenKey(input);
-	const secrets: StageTokenSecret[] = [
-		...(clientSecret === undefined
-			? []
-			: [{ name: "stage-client-secret", value: clientSecret }]),
-		...(declaredRefreshToken === undefined
-			? []
-			: [{ name: "stage-refresh-token", value: declaredRefreshToken }]),
-	];
+	return {
+		input,
+		key: roleTokenKey(input),
+		provider: recipe.provider,
+		tokenEndpoint: provider.tokenEndpoint,
+		clientAuth: provider.clientAuth ?? "basic",
+		confidential: provider.clientSecret !== undefined,
+		...(provider.audience === undefined ? {} : { audience: provider.audience }),
+		grant: recipe.grant as "client_credentials" | "refresh_token",
+	};
+}
+
+/**
+ * Obtain the token of one resolved role (`stage_login`, `stage_api_request`, the
+ * browser bearer header).
+ *
+ * Every refusal is a `StageAuthError`: `credential-missing` names the `.env`
+ * variable that is unset (`clientId`, `clientSecret`, `refreshToken`), and
+ * `login-failed` carries the provider's `error` code. No value of any kind is
+ * part of a message.
+ */
+export async function roleTokenFrom(
+	resolved: ResolvedRoleToken,
+	store: StageTokenStore,
+	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
+): Promise<OAuth2Token> {
+	const { input, key } = resolved;
 	return await store.token(key, async () => {
+		// The references are resolved *inside* the acquisition: they run before the
+		// request, so a missing variable still leaves no request and no entry behind,
+		// while a cache hit never touches the `.env` at all (PERF-002).
+		let clientId: string;
+		let clientSecret: string | undefined;
+		let declaredRefreshToken: string | undefined;
+		try {
+			clientId = resolveStageOAuthCredential(
+				input.stage,
+				resolved.provider,
+				"clientId",
+				input.configDir,
+			);
+			if (resolved.confidential)
+				clientSecret = resolveStageOAuthCredential(
+					input.stage,
+					resolved.provider,
+					"clientSecret",
+					input.configDir,
+				);
+			if (resolved.grant === "refresh_token")
+				declaredRefreshToken = resolveStageCredential(
+					input.stage,
+					input.appKey,
+					input.role,
+					"refreshToken",
+					input.configDir,
+				);
+		} catch (error) {
+			if (error instanceof StageCredentialError)
+				throw new StageAuthError("credential-missing", error.message);
+			throw error;
+		}
+		// The value that is actually sent wins: after a rotation the request carries
+		// the store's refresh token, and that is the one a provider's error
+		// description can echo back (SEC-001).
 		const refreshToken = store.refreshTokenFor(key, declaredRefreshToken);
+		const secrets: StageTokenSecret[] = [
+			...(clientSecret === undefined
+				? []
+				: [{ name: "stage-client-secret", value: clientSecret }]),
+			...(declaredRefreshToken === undefined
+				? []
+				: [{ name: "stage-refresh-token", value: declaredRefreshToken }]),
+			...(refreshToken === undefined || refreshToken === declaredRefreshToken
+				? []
+				: [{ name: "stage-refresh-token:rotated", value: refreshToken }]),
+		];
 		return await requestToken(
 			{
-				provider: recipe.provider,
-				tokenEndpoint: provider.tokenEndpoint,
+				provider: resolved.provider,
+				tokenEndpoint: resolved.tokenEndpoint,
 				clientId,
 				...(clientSecret === undefined ? {} : { clientSecret }),
-				clientAuth: provider.clientAuth ?? "basic",
+				clientAuth: resolved.clientAuth,
 				scope: key.scope,
-				...(provider.audience === undefined
+				...(resolved.audience === undefined
 					? {}
-					: { audience: provider.audience }),
-				grant: recipe.grant as "client_credentials" | "refresh_token",
+					: { audience: resolved.audience }),
+				grant: resolved.grant,
 				...(refreshToken === undefined ? {} : { refreshToken }),
 			},
 			{
@@ -733,6 +899,16 @@ export async function roleToken(
 			},
 		);
 	});
+}
+
+/** One role's token, resolving the role first. The browser's hot path resolves a
+ * role once per session and calls `roleTokenFrom` (PERF-001). */
+export async function roleToken(
+	input: StageRoleTokenInput,
+	store: StageTokenStore,
+	options: { readonly fetch?: typeof fetch; readonly now?: () => number } = {},
+): Promise<OAuth2Token> {
+	return await roleTokenFrom(resolveRoleToken(input), store, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -766,25 +942,4 @@ export function stageEnvSecrets(configDir: string): StageTokenSecret[] {
 		if (value.trim() !== "") secrets.push({ name, value });
 	// Longest first, so a value that contains another is replaced as a whole.
 	return secrets.sort((left, right) => right.value.length - left.value.length);
-}
-
-/** The variable names a role's `oauth2` recipe reads, for a diagnostic that
- * wants to say which `.env` key is unset without resolving it. */
-export function oauth2CredentialVariables(
-	stage: StageDefinition,
-	appKey: string,
-	roleName: string,
-): Record<"clientId" | "clientSecret" | "refreshToken", string | undefined> {
-	const role = stage.apps[appKey]?.roles?.[roleName];
-	const provider =
-		role?.login === "oauth2"
-			? stage.oauth2?.providers?.[role.provider ?? ""]
-			: undefined;
-	const name = (reference: string | undefined) =>
-		reference === undefined ? undefined : envReferenceName(reference);
-	return {
-		clientId: name(provider?.clientId),
-		clientSecret: name(provider?.clientSecret),
-		refreshToken: name(role?.refreshToken),
-	};
 }

@@ -396,6 +396,9 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 					throw new Error("net::ERR_CONNECTION_REFUSED");
 				}
 				if (failGoto) throw new Error("net::ERR_CONNECTION_REFUSED");
+				// The document that issues the navigation is the one that is leaving:
+				// a real driver reports that frame's URL, not the target (SEC-002).
+				const from = context.url;
 				context.url = url;
 				const id = `r${++sequence}`;
 				const navigation = {
@@ -403,6 +406,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 					method: "GET",
 					resourceType: "document",
 					isMainFrameNavigation: true,
+					...(from === "" ? {} : { initiator: from }),
 				};
 				const header = await context.askAuthorization(navigation, {});
 				for (const listener of networkListeners)

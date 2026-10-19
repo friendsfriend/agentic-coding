@@ -12,7 +12,7 @@ A stage SHALL be able to declare named OAuth 2.0 providers with a token endpoint
 - **THEN** the stage SHALL be refused
 
 ### Requirement: Tokens are acquired, held and renewed by the server only
-The server SHALL obtain access tokens with the role's grant, hold them in server memory only under the lifetime ceiling, entry cap and forget action of the identity cache, and renew a token when less than the skew interval remains, once at a time per entry, honouring a rotated refresh token. A failed renewal SHALL evict the entry and answer `login-failed` with the provider's `error` code only. The server SHALL NOT write tokens to disk, to the workflow store, to telemetry, evidence, wiki or reports.
+The server SHALL obtain access tokens with the role's grant, hold them in server memory only under the lifetime ceiling, entry cap and forget action of the identity cache, and renew a token when less than the skew interval remains, once at a time per entry, honouring a rotated refresh token. A failed renewal SHALL evict the entry and answer `login-failed` with the provider's `error` code and, at most, its `error_description` after redaction and bounding. The server SHALL NOT write tokens to disk, to the workflow store, to telemetry, evidence, wiki or reports.
 
 #### Scenario: Silent renewal
 - **WHEN** a call needs a token that expires within the skew interval
@@ -22,8 +22,12 @@ The server SHALL obtain access tokens with the role's grant, hold them in server
 - **WHEN** the policy is `interactiveLogin: "never"` and the role uses `client_credentials`
 - **THEN** `stage_login` SHALL succeed without a window or developer prompt
 
+#### Scenario: Rotated refresh token survives a refused access token
+- **WHEN** the application answers `401` for a token whose provider rotated the refresh token
+- **THEN** the retry SHALL present the rotated refresh token, and only a rewritten credential SHALL discard it
+
 ### Requirement: Tokens never reach a model or a log
-Access tokens, refresh tokens, client secrets, authorization codes and every base64url segment of a JWT-shaped token of at least 20 characters SHALL be in the run's redaction set. An `Authorization` header value SHALL NOT appear in any tool result, `browser_network` output, console line, telemetry, log, evidence or report. The agent SHALL be able to learn only the token's `expiresAt`, scopes, audience and issuer through `stage_token_info`.
+Access tokens, refresh tokens, client secrets and every base64url segment of a JWT-shaped token of at least 20 characters SHALL be in the run's redaction set, including a refresh token the provider rotated. An `Authorization` header value SHALL NOT appear in any tool result, `browser_network` output, console line, telemetry, log, evidence or report. The agent SHALL be able to learn only the token's `expiresAt` (epoch milliseconds), scopes, audience and issuer through `stage_token_info`.
 
 #### Scenario: Header masked
 - **WHEN** the agent reads the network log of a session whose requests carried a bearer token
@@ -41,8 +45,12 @@ Access tokens, refresh tokens, client secrets, authorization codes and every bas
 - **THEN** the call SHALL be refused
 
 ### Requirement: The browser bearer header is origin-exact and opt-in
-A role MAY declare `bearerOrigins`. The server SHALL add `Authorization: Bearer` only to browser requests whose origin is exactly one of them, only when the request carries no `Authorization` header, and never after a redirect to another origin.
+A role MAY declare `bearerOrigins`. The server SHALL add `Authorization: Bearer` only to browser requests whose origin is exactly one of them, issued by a document that is itself one of the stage's own origins, only when the request carries no `Authorization` header, and never after a redirect to another origin.
 
 #### Scenario: Other origin untouched
 - **WHEN** the page calls a third-party origin
 - **THEN** no `Authorization` header SHALL be added
+
+#### Scenario: Foreign document inside the session
+- **WHEN** a frame served from an origin the stage does not own asks a declared bearer origin for a resource
+- **THEN** the request SHALL go out without an `Authorization` header

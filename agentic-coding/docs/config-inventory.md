@@ -85,10 +85,11 @@ Ownership is `src/server/stages/`:
 - `oauth2.ts` / `api-request.ts` — the OAuth 2.0 token path (`add-stage-oauth2-auth`):
   the in-memory token store with its single-flight renewal, refresh-token
   rotation, entry cap, absolute lifetime and forget action, and the token
-  call/`stage_api_request` implementation. A token, a client secret, a refresh
-  token and an authorization code are the run's secrets from the moment they
+  call/`stage_api_request` implementation. A token, a client secret and a refresh
+  token are the run's secrets from the moment they
   exist: they join the redaction set, are never journaled, and the only token
-  facts any surface reports are `expiresAt`, `scopes`, `audience` and `issuer`.
+  facts any surface reports are `expiresAt` (epoch milliseconds, comparable with
+  `Date.now()`), `scopes`, `audience` and `issuer`.
 - `routes.ts` / `operations.ts` — the read surfaces and the one write (the
   credential flow above), plus their in-process twin for a transport-less shell.
   The OAuth 2.0 additions are two POST routes on the same owner-scoped agent
