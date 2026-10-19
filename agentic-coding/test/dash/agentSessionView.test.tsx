@@ -1600,6 +1600,103 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 	}
 });
 
+test("rows show their start time, and a tool call its duration, at the right edge", async () => {
+	const at = (h: number, m: number, sec: number) =>
+		new Date(2026, 9, 19, h, m, sec).getTime();
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "u1",
+			kind: "user",
+			text: "run the tests",
+			tone: "accent",
+			startedAt: at(14, 3, 20),
+		},
+		{
+			id: "r1",
+			kind: "reasoning",
+			text: "plan the run",
+			tone: "muted",
+			durationMs: 1600,
+			startedAt: at(14, 3, 21),
+		},
+		{
+			id: "t1",
+			kind: "tool",
+			text: "bash: ok",
+			tone: "success",
+			icon: "✓",
+			tool: "bash",
+			startedAt: at(14, 3, 23),
+			durationMs: 42_000,
+			toolCall: {
+				name: "bash",
+				args: { command: "bun test" },
+				callId: "c1",
+				result: { lines: ["ok"], isError: false, notes: [] },
+			},
+		},
+		{
+			id: "t2",
+			kind: "tool",
+			text: "read: a",
+			tone: "success",
+			icon: "✓",
+			tool: "read",
+			startedAt: at(14, 4, 5),
+			durationMs: 340,
+			toolCall: {
+				name: "read",
+				args: { path: "a.ts" },
+				callId: "c2",
+				result: { lines: ["a"], isError: false, notes: [] },
+			},
+		},
+		{
+			id: "s1",
+			kind: "summary",
+			text: "opencode-go/deepseek · 2.0s",
+			tone: "muted",
+			startedAt: at(14, 4, 6),
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 26 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		const line = (needle: string) =>
+			frame.split("\n").find((row) => row.includes(needle)) ?? "";
+		expect(line("14:03:20").trimEnd().endsWith("14:03:20")).toBe(true);
+		expect(line("Thought: 1.6s").trimEnd().endsWith("14:03:21")).toBe(true);
+		// A tool row: its duration, then its start time, at the right edge.
+		expect(line("bun test").trimEnd()).toMatch(/42\.0s +14:03:23$/);
+		expect(line("a.ts").trimEnd()).toMatch(/340ms +14:04:05$/);
+		expect(line("Worker").trimEnd().endsWith("14:04:06")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a tool call aborted before it ran is marked aborted", async () => {
 	const t = await testRender(
 		() => (

@@ -81,6 +81,14 @@ export interface AgentSessionBlock {
 	/** Measured wall-clock duration, when the host recorded one: a thinking
 	 * block's reasoning time, or an assistant footer's generation time. */
 	readonly durationMs?: number;
+	/** When the block's source began, epoch ms, as the host recorded it: a
+	 * message's generation start, or — for a tool call — the moment the call was
+	 * issued (generation start plus the measured generation time). Absent for a
+	 * live block and for an entry that carries no time. */
+	readonly startedAt?: number;
+	/** When a tool result was recorded, epoch ms. A call's own duration is this
+	 * minus its `startedAt`, worked out when the two rows merge. */
+	readonly endedAt?: number;
 	/** Canonical tool name, so a call and its result can be paired. */
 	readonly tool?: string;
 	/** The call and result behind a tool row, for the specialized tool views. */
@@ -359,24 +367,36 @@ function entryBlocks(
 		case "pi.user":
 			return (
 				model
-					.map((message) => oneLine(isRecord(message) ? message.content : ""))
-					.filter(Boolean)
+					.map((message) => ({
+						text: oneLine(isRecord(message) ? message.content : ""),
+						at: isRecord(message) ? finiteNumber(message.timestamp) : undefined,
+					}))
+					.filter((message) => message.text)
 					// The user's own prompt is the accent-colored box, distinct from the
 					// model's neutral messages.
 					.map(
-						(text, index) =>
-							({
-								id: `${entryKey}:${index}`,
-								kind: "user",
-								text,
-								tone: "accent",
-							}) as const,
+						({ text, at }, index): AgentSessionBlock => ({
+							id: `${entryKey}:${index}`,
+							kind: "user",
+							text,
+							tone: "accent",
+							...(at !== undefined ? { startedAt: at } : {}),
+						}),
 					)
 			);
 		case "pi.assistant": {
 			const blocks: AgentSessionBlock[] = [];
 			for (const message of model) {
 				if (!isRecord(message) || !Array.isArray(message.content)) continue;
+				// The message's timestamp is the generation's start. A tool call is
+				// issued when the generation ends, so its own start adds the measured
+				// generation time — without it the call carries no start rather than
+				// one that would count the model's thinking as the tool's time.
+				const generationStart = finiteNumber(message.timestamp);
+				const callStart =
+					generationStart !== undefined && timing?.generationMs !== undefined
+						? generationStart + timing.generationMs
+						: undefined;
 				for (const block of message.content) {
 					if (!isRecord(block)) continue;
 					const id = `${entryKey}:${blocks.length}`;
@@ -400,6 +420,9 @@ function entryBlocks(
 								...(timing?.thinkingMs !== undefined
 									? { durationMs: timing.thinkingMs }
 									: {}),
+								...(generationStart !== undefined
+									? { startedAt: generationStart }
+									: {}),
 							});
 					} else if (
 						block.type === "toolCall" &&
@@ -418,6 +441,7 @@ function entryBlocks(
 							icon: toolIcon(block.name),
 							tool: block.name,
 							...(aborted ? { aborted: true } : {}),
+							...(callStart !== undefined ? { startedAt: callStart } : {}),
 							toolCall: {
 								name: block.name,
 								args: toolArgs(block.arguments),
@@ -448,6 +472,7 @@ function entryBlocks(
 				const name =
 					typeof message.toolName === "string" ? message.toolName : "tool";
 				const failed = message.isError === true;
+				const endedAt = finiteNumber(message.timestamp);
 				const lines = outputLines(
 					typeof message.content === "string"
 						? message.content
@@ -486,6 +511,7 @@ function entryBlocks(
 						tone: failed ? "error" : "success",
 						icon: failed ? "✗" : "✓",
 						tool: name,
+						...(endedAt !== undefined ? { endedAt } : {}),
 						// All lines, so expanding the paired tool block shows the whole
 						// answer (the collapsed header is `text`).
 						...(lines.length > 0 ? { detail: lines } : {}),
@@ -680,6 +706,8 @@ function blockKey(block: AgentSessionBlock): string {
 		block.tool ?? "",
 		block.request ?? "",
 		block.durationMs ?? "",
+		block.startedAt ?? "",
+		block.endedAt ?? "",
 		liveArgsKey(block),
 		(block.detail ?? []).join("\u0000"),
 	].join("\u0001");
@@ -797,6 +825,14 @@ function mergeToolLifecycle(
 					tone: block.tone,
 					icon: block.icon,
 					pending: false,
+					// How long the call took: its result's recording time minus the
+					// moment it was issued. A call with no known start has no duration
+					// to show; a clock that ran backwards is not shown either.
+					...(call.startedAt !== undefined &&
+					block.endedAt !== undefined &&
+					block.endedAt >= call.startedAt
+						? { durationMs: block.endedAt - call.startedAt }
+						: {}),
 					request: `${call.icon ?? "•"} ${call.text}`,
 					...(block.detail ? { detail: block.detail } : {}),
 					...(call.toolCall
@@ -880,12 +916,14 @@ function assistantSummaryBlock(
 			: undefined,
 	].filter((part): part is string => part !== undefined);
 	if (parts.length === 0) return undefined;
+	const startedAt = finiteNumber(message.timestamp);
 	return {
 		id: `${summaryId}:summary`,
 		kind: "summary",
 		text: parts.join(" · "),
 		tone: "muted",
 		...(duration !== undefined ? { durationMs: duration } : {}),
+		...(startedAt !== undefined ? { startedAt } : {}),
 	};
 }
 
@@ -1171,6 +1209,23 @@ function finiteNumber(value: unknown): number | undefined {
 		? value
 		: undefined;
 }
+
+/** The wall-clock time of day a block started, `14:03:27` in the reader's own
+ * time zone: the transcript is read against the clock on the wall. */
+export function formatClock(epochMs: number): string {
+	const at = new Date(epochMs);
+	const two = (value: number) => String(value).padStart(2, "0");
+	return `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+}
+
+/** A tool call's duration: milliseconds under a second (`340ms`), then the same
+ * `1.6s` / `1m 2s` the rest of the transcript uses. */
+export function formatCallDuration(ms: number): string {
+	return ms < 1000 ? `${Math.round(ms)}ms` : formatDuration(ms);
+}
+
+/** A call slow enough to stand out in the transcript. */
+export const SLOW_CALL_MS = 10_000;
 
 /** `1.6s`, `1m 2s`. */
 export function formatDuration(ms: number): string {

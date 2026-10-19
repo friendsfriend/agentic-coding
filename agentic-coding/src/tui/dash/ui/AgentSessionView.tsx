@@ -61,10 +61,13 @@ import {
 import {
 	type AgentSessionBlock,
 	type AgentSessionTone,
+	formatCallDuration,
+	formatClock,
 	formatCost,
 	formatDuration,
 	formatTokenCount,
 	reuseAgentSessionBlocks,
+	SLOW_CALL_MS,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 import {
@@ -343,6 +346,39 @@ interface TranscriptState {
 	readonly dividerId: string | undefined;
 }
 
+/** The timing of one transcript row, drawn at its right edge: how long a tool
+ * call took (a slow one in the warning color, so the expensive calls stand out
+ * as the transcript scrolls) and the time of day it started. Both are muted
+ * context beside the row's own content, and each is simply absent when the
+ * source recorded no time for it. */
+function Stamp(props: {
+	block: AgentSessionBlock;
+	/** Draw the call's duration too (a tool row); the others show the clock. */
+	duration?: boolean;
+}) {
+	return (
+		<>
+			<Show when={props.duration === true && props.block.durationMs}>
+				{(ms) => (
+					<text
+						fg={ms() >= SLOW_CALL_MS ? uiColors.warning : uiColors.textMuted}
+						flexShrink={0}
+					>
+						{` ${formatCallDuration(ms())}`}
+					</text>
+				)}
+			</Show>
+			<Show when={props.block.startedAt}>
+				{(at) => (
+					<text fg={uiColors.textMuted} flexShrink={0}>
+						{` ${formatClock(at())}`}
+					</text>
+				)}
+			</Show>
+		</>
+	);
+}
+
 /** One row of a specialized tool view. A row with a detail of its own — a
  * codemode call is a whole tool call, a question offers its options — folds
  * open into it, so one part can be read without expanding the rest. */
@@ -452,10 +488,17 @@ function Block(props: {
 	if (props.block.kind === "summary")
 		// opencode's assistant footer: agent · model · duration · tok/s.
 		return (
-			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
-				<text fg={uiColors.textMuted} wrapMode="none" truncate>
+			<box paddingLeft={3} paddingRight={1} flexShrink={0} flexDirection="row">
+				<text
+					fg={uiColors.textMuted}
+					flexGrow={1}
+					minWidth={0}
+					wrapMode="none"
+					truncate
+				>
 					{titlecase(props.role)} · {props.block.text}
 				</text>
+				<Stamp block={props.block} />
 			</box>
 		);
 	if (props.block.kind === "user")
@@ -467,12 +510,15 @@ function Block(props: {
 				border={["left"]}
 				borderColor={uiColors.accent}
 				backgroundColor={uiColors.bgMantle}
-				paddingTop={1}
 				paddingBottom={1}
 				paddingLeft={2}
 				paddingRight={1}
 				flexShrink={0}
 			>
+				{/* The blank line above the prompt carries its time, right-aligned. */}
+				<box flexDirection="row" justifyContent="flex-end" height={1}>
+					<Stamp block={props.block} />
+				</box>
 				<text fg={uiColors.textPrimary}>{props.block.text}</text>
 			</box>
 		);
@@ -500,17 +546,24 @@ function Block(props: {
 				flexShrink={0}
 				{...useTap(() => props.onToggle(props.block.id))}
 			>
-				<text
-					fg={props.block.live === true ? uiColors.textMuted : uiColors.warning}
-					attributes={
-						props.block.live === true ? TextAttributes.DIM : undefined
-					}
-				>
-					{props.expanded ? "▾" : "▸"}{" "}
-					{props.block.durationMs !== undefined
-						? `Thought: ${formatDuration(props.block.durationMs)}`
-						: "Thinking…"}
-				</text>
+				<box flexDirection="row">
+					<text
+						fg={
+							props.block.live === true ? uiColors.textMuted : uiColors.warning
+						}
+						attributes={
+							props.block.live === true ? TextAttributes.DIM : undefined
+						}
+						flexGrow={1}
+						minWidth={0}
+					>
+						{props.expanded ? "▾" : "▸"}{" "}
+						{props.block.durationMs !== undefined
+							? `Thought: ${formatDuration(props.block.durationMs)}`
+							: "Thinking…"}
+					</text>
+					<Stamp block={props.block} />
+				</box>
 				<Show when={props.expanded}>
 					<text
 						fg={uiColors.textMuted}
@@ -583,6 +636,7 @@ function Block(props: {
 								{" aborted"}
 							</text>
 						</Show>
+						<Stamp block={props.block} duration />
 					</box>
 					<Show when={props.expanded}>
 						<box paddingLeft={2} flexDirection="column">
@@ -674,6 +728,7 @@ function Block(props: {
 									{props.expanded ? " ▾" : " ▸"}
 								</text>
 							</Show>
+							<Stamp block={props.block} duration />
 						</box>
 						<Show when={props.expanded}>
 							<box paddingLeft={2} flexDirection="column">

@@ -145,6 +145,130 @@ describe("buildAgentSessionView", () => {
 		);
 	});
 
+	test("carries when each row started and how long a tool call took", () => {
+		const T0 = 1_792_400_000_000;
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					id: "u1",
+					kind: "pi.user",
+					model: [{ role: "user", content: "run it", timestamp: T0 }],
+				},
+				{
+					id: "a1",
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "toolUse",
+							timestamp: T0 + 1_000,
+							content: [
+								{ type: "thinking", thinking: "plan" },
+								{
+									type: "toolCall",
+									id: "c1",
+									name: "bash",
+									arguments: { command: "bun test" },
+								},
+								// A second call of the same message, answered later.
+								{
+									type: "toolCall",
+									id: "c2",
+									name: "read",
+									arguments: { path: "a.ts" },
+								},
+							],
+						},
+					],
+				},
+				{
+					id: "r1",
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolCallId: "c1",
+							toolName: "bash",
+							content: [{ type: "text", text: "ok" }],
+							isError: false,
+							timestamp: T0 + 1_000 + 2_000 + 12_345,
+						},
+					],
+				},
+				{
+					id: "r2",
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolCallId: "c2",
+							toolName: "read",
+							content: [{ type: "text", text: "x" }],
+							isError: false,
+							timestamp: T0 + 1_000 + 2_000 + 12_400,
+						},
+					],
+				},
+			],
+			// The generation took two seconds: the calls were issued then.
+			timings: { a1: { generationMs: 2_000, thinkingMs: 900 } },
+		});
+		expect(blocks.find((block) => block.kind === "user")?.startedAt).toBe(T0);
+		const thought = blocks.find((block) => block.kind === "reasoning");
+		// A thought started with the generation.
+		expect(thought?.startedAt).toBe(T0 + 1_000);
+		const bash = blocks.find((block) => block.tool === "bash");
+		// A call started when the generation ended, and took until its result.
+		expect(bash?.startedAt).toBe(T0 + 3_000);
+		expect(bash?.durationMs).toBe(12_345);
+		const read = blocks.find((block) => block.tool === "read");
+		expect(read?.durationMs).toBe(12_400);
+	});
+
+	test("a call whose generation time is unknown shows no duration rather than a wrong one", () => {
+		const T0 = 1_792_400_000_000;
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					id: "a1",
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "toolUse",
+							timestamp: T0,
+							content: [
+								{
+									type: "toolCall",
+									id: "c1",
+									name: "bash",
+									arguments: { command: "ls" },
+								},
+							],
+						},
+					],
+				},
+				{
+					id: "r1",
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolCallId: "c1",
+							toolName: "bash",
+							content: [{ type: "text", text: "ok" }],
+							isError: false,
+							timestamp: T0 + 40_000,
+						},
+					],
+				},
+			],
+		});
+		const bash = blocks.find((block) => block.tool === "bash");
+		expect(bash?.startedAt).toBeUndefined();
+		expect(bash?.durationMs).toBeUndefined();
+	});
+
 	test("writes one assistant footer per turn, not per generation", () => {
 		const assistant = (
 			stopReason: string,
