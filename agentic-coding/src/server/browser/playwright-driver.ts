@@ -22,6 +22,7 @@ import { bannerRemovalScript } from "./banner.ts";
 import { SNAPSHOT_SCRIPT } from "./snapshot.ts";
 import type {
 	BrowserDriver,
+	DriverAuthorizationProvider,
 	DriverBrowser,
 	DriverConsoleEntry,
 	DriverContext,
@@ -93,8 +94,10 @@ function adaptBrowser(browser: Browser): DriverBrowser {
 			});
 			// The stage guard lives on the context, so a recording's replacement
 			// context carries it too: the pool passes the same guard again rather than
-			// the guard being re-derived from the session.
-			if (options.guard) await routeThroughGuard(context, options.guard);
+			// the guard being re-derived from the session. The bearer authorization is
+			// installed on the same route handler, so one rule decides one request.
+			if (options.guard || options.authorization)
+				await routeThroughGuard(context, options.guard, options.authorization);
 			return adaptContext(context);
 		},
 	};
@@ -118,17 +121,48 @@ function requestInfo(request: Request): DriverRequestInfo {
 	};
 }
 
-/** Install one guard on one context: every request it refuses is aborted. */
+/** Install one guard (and one bearer provider) on one context: every request the
+ * guard refuses is aborted, every request the provider can authenticate is
+ * continued with the `Authorization` header it answers. */
 async function routeThroughGuard(
 	context: BrowserContext,
-	guard: (request: DriverRequestInfo) => boolean,
+	guard: ((request: DriverRequestInfo) => boolean) | undefined,
+	authorization: DriverAuthorizationProvider | undefined,
 ): Promise<void> {
 	await context.route("**/*", async (route) => {
-		const allowed = guard(requestInfo(route.request()));
-		// A race the page itself caused (a navigation the page already replaced) is
-		// not a guard failure: the request is gone either way.
-		if (allowed) await route.continue().catch(() => {});
-		else await route.abort().catch(() => {});
+		const request = route.request();
+		const info = requestInfo(request);
+		if (guard !== undefined && !guard(info)) {
+			// A race the page itself caused (a navigation the page already replaced) is
+			// not a guard failure: the request is gone either way.
+			await route.abort().catch(() => {});
+			return;
+		}
+		if (authorization === undefined) {
+			await route.continue().catch(() => {});
+			return;
+		}
+		let header: string | undefined;
+		try {
+			const headers = await request.allHeaders();
+			// A request that already carries a credential keeps its own: the page's own
+			// session wins, and a second header on top of it would be a token the stage
+			// never asked for.
+			if (headers.authorization === undefined)
+				header = await authorization(info);
+			if (header === undefined) {
+				await route.continue().catch(() => {});
+				return;
+			}
+			await route
+				.continue({ headers: { ...headers, authorization: header } })
+				.catch(() => {});
+		} catch {
+			// A provider that failed, or a request that vanished: the request is
+			// continued as the page wrote it. Never aborted — an unauthenticated page is
+			// a usable page, and an abort would look like a broken application.
+			await route.continue().catch(() => {});
+		}
 	});
 }
 
@@ -219,6 +253,9 @@ function adaptPage(page: Page): DriverPage {
 			method: request.method(),
 			url: request.url(),
 			resourceType: request.resourceType(),
+			// Presence only: the value never enters a network event, so no console or
+			// `browser_network` line can carry a token (`add-stage-oauth2-auth`, 2.3).
+			hasAuthorization: request.headers().authorization !== undefined,
 		});
 	});
 	page.on("response", (response) => {

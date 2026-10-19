@@ -42,9 +42,11 @@ import {
 	BrowserSession,
 	type SessionBrowserSlot,
 	type SessionRecording,
+	type StageBearerScope,
 	type StageSessionBinding,
 } from "./session.ts";
 import type {
+	DriverAuthorizationProvider,
 	DriverBrowser,
 	DriverContext,
 	DriverHttpCredentials,
@@ -78,6 +80,15 @@ export interface BrowserPoolOptions {
 		session: BrowserSession,
 		cause: SessionCloseCause,
 	) => void;
+	/** The bearer token of one origin of one stage-bound session
+	 * (`add-stage-oauth2-auth`, task 3.3). Supplied by the caller that owns the
+	 * token store, so the pool stays catalog-free and never imports the OAuth 2.0
+	 * module: a stage whose role declares no `bearerOrigins` never asks for one,
+	 * and a failure answers `undefined` rather than aborting a page request. */
+	readonly bearerToken?: (
+		binding: StageSessionBinding,
+		scope: StageBearerScope,
+	) => Promise<string | undefined>;
 }
 
 /** Why a session left the pool. `closed` is the caller's own `browser_close`,
@@ -126,6 +137,14 @@ export class BrowserPool {
 	private readonly onSessionClosed:
 		| ((session: BrowserSession, cause: SessionCloseCause) => void)
 		| undefined;
+	/** The caller's bearer-token source, or `undefined` when this process has
+	 * none. */
+	private readonly bearerToken:
+		| ((
+				binding: StageSessionBinding,
+				scope: StageBearerScope,
+		  ) => Promise<string | undefined>)
+		| undefined;
 	private browser: DriverBrowser | undefined;
 	/** The second, lazily launched headed browser. It exists only while a
 	 * promoted session lives in it (task 1.3). */
@@ -166,6 +185,7 @@ export class BrowserPool {
 		this.clock = options.now ?? (() => Date.now());
 		this.log = options.log ?? (() => {});
 		this.onSessionClosed = options.onSessionClosed;
+		this.bearerToken = options.bearerToken;
 	}
 
 	/** Every open session, for a status read. */
@@ -335,9 +355,11 @@ export class BrowserPool {
 						session?.recordRefusal(refusal);
 					})
 				: undefined;
+			const authorization = this.authorizationForBinding(request.stage);
 			const context = await browser.newContext({
 				viewport: request.viewport,
 				...(guard ? { guard } : {}),
+				...(authorization ? { authorization } : {}),
 			});
 			const page = await context.page();
 			session = new BrowserSession({
@@ -512,9 +534,11 @@ export class BrowserPool {
 			try {
 				const browser = await this.ensureBrowser("interactive");
 				const guard = this.guardFor(session);
+				const authorization = this.authorizationFor(session);
 				const context = await browser.newContext({
 					viewport: session.viewport,
 					...(guard ? { guard } : {}),
+					...(authorization ? { authorization } : {}),
 				});
 				session.browserSlot = "interactive";
 				if (prepare) await prepare(context).catch(() => {});
@@ -625,10 +649,19 @@ export class BrowserPool {
 				viewport: session.viewport,
 				recordVideo: { dir: options.dir, size: { ...session.viewport } },
 				...(state === undefined ? {} : { storageState: state }),
-				// The guard and the HTTP credentials survive the swap: a recording is
-				// strictly more observable, never less restricted.
+				// The guard, the bearer authorization and the HTTP credentials survive the
+				// swap: a recording is strictly more observable, never less restricted,
+				// and a re-recorded page that suddenly lost its credential would be a
+				// different session than the one the agent recorded.
 				...(this.guardFor(session)
 					? { guard: this.guardFor(session) as DriverRequestGuard }
+					: {}),
+				...(this.authorizationFor(session)
+					? {
+							authorization: this.authorizationFor(
+								session,
+							) as DriverAuthorizationProvider,
+						}
 					: {}),
 				...(session.httpCredentials
 					? { httpCredentials: session.httpCredentials }
@@ -762,6 +795,13 @@ export class BrowserPool {
 				...(this.guardFor(session)
 					? { guard: this.guardFor(session) as DriverRequestGuard }
 					: {}),
+				...(this.authorizationFor(session)
+					? {
+							authorization: this.authorizationFor(
+								session,
+							) as DriverAuthorizationProvider,
+						}
+					: {}),
 				...(session.httpCredentials
 					? { httpCredentials: session.httpCredentials }
 					: {}),
@@ -801,6 +841,44 @@ export class BrowserPool {
 		return createStageGuard(binding, (refusal) =>
 			session.recordRefusal(refusal),
 		);
+	}
+
+	/**
+	 * The bearer provider of a stage-bound session, or `undefined` when the
+	 * session's role declares no `bearerOrigins` or this pool has no token source
+	 * (`add-stage-oauth2-auth`, task 3.3).
+	 *
+	 * The origin match is exact and happens here, in the driver's call path: a
+	 * request to any other origin — including one a redirect moved it to — is
+	 * answered `undefined`, which leaves it exactly as the page built it. A
+	 * failure of the token source is swallowed for the same reason: an
+	 * unauthenticated request is a page that still works, and an aborted one is a
+	 * page that looks broken.
+	 */
+	private authorizationFor(
+		session: BrowserSession,
+	): DriverAuthorizationProvider | undefined {
+		return this.authorizationForBinding(session.stage);
+	}
+
+	/** The same provider, for the open that has a binding and no session yet. */
+	private authorizationForBinding(
+		binding: StageSessionBinding | undefined,
+	): DriverAuthorizationProvider | undefined {
+		const scopes = binding?.bearer ?? [];
+		const source = this.bearerToken;
+		if (!binding || scopes.length === 0 || !source) return undefined;
+		return async (request) => {
+			const origin = originOf(request.url);
+			if (origin === undefined) return undefined;
+			const scope = scopes.find((candidate) => candidate.origin === origin);
+			if (!scope) return undefined;
+			try {
+				return await source(binding, scope);
+			} catch {
+				return undefined;
+			}
+		};
 	}
 
 	/** Install HTTP basic credentials on a live session, and remember them so a

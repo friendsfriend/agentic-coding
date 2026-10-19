@@ -67,6 +67,12 @@ import {
 	StageLimitError,
 	StageUsageRegistry,
 } from "../stages/limits.ts";
+import {
+	roleToken,
+	StageAuthError,
+	type StageTokenStore,
+	stageTokenStore,
+} from "../stages/oauth2.ts";
 import type { StageLoginRecipe } from "../stages/schema.ts";
 import { BrowserPoolError } from "./errors.ts";
 import {
@@ -88,6 +94,8 @@ import {
 	DEFAULT_ACTION_TIMEOUT_MS,
 	DEFAULT_WAIT_TIMEOUT_MS,
 	MAX_WAIT_TIMEOUT_MS,
+	type NetworkEntry,
+	type StageBearerScope,
 	type StageSessionBinding,
 } from "./session.ts";
 
@@ -127,6 +135,10 @@ export interface BrowserRouteDeps {
 	readonly stages?: StageUsageRegistry;
 	/** Test seam: locate a workflow without the engine. */
 	readonly locate?: (workflowId: string) => LocatedEvidenceWorkflow | undefined;
+	/** The process's token store (`add-stage-oauth2-auth`): the `oauth2` recipe
+	 * acquires into it and every reply is scrubbed with what it holds. Omitted,
+	 * the process store is used. */
+	readonly tokens?: StageTokenStore;
 	readonly now?: () => number;
 }
 
@@ -367,6 +379,27 @@ function looksAborted(text: string): boolean {
 	return text.includes("net::") || text.includes("ERR_ABORTED");
 }
 
+/** What `browser_network` reports in place of an `Authorization` header's value
+ * (`add-stage-oauth2-auth`, task 2.3). The header's *presence* is useful — it is
+ * how a run tells "the request was authenticated" from "it was refused by the
+ * gateway" — and its value is never part of any entry, so the placeholder is
+ * all a caller can ever read. */
+export const AUTHORIZATION_PLACEHOLDER = "«redacted»";
+
+/** One network entry as the agent reads it: a request that carried an
+ * `Authorization` header reports the placeholder in place of a header list. */
+function networkEntryValue(
+	entry: NetworkEntry,
+): Omit<NetworkEntry, "hasAuthorization"> & { authorization?: string } {
+	const { hasAuthorization, ...rest } = entry;
+	return {
+		...rest,
+		...(hasAuthorization === true
+			? { authorization: AUTHORIZATION_PLACEHOLDER }
+			: {}),
+	};
+}
+
 /** One refusal, as prose. The URL is already sanitized (origin and path only),
  * so a refusal can be reported without leaking a query or a fragment. */
 export function refusalMessage(refusal: StageRefusal): string {
@@ -383,15 +416,50 @@ function redactionSecrets(
 	deps: BrowserRouteDeps,
 ): ReturnType<typeof environmentSecrets> {
 	const base = environmentSecrets(deps.configDir ?? "");
-	const encoded = base.flatMap((secret) => {
+	// The tokens this process holds are secrets too (`add-stage-oauth2-auth`,
+	// task 2.3): a page can echo an access token into a console line, a network
+	// URL or a snapshot, and an agent-supplied script can print one, so every
+	// browser reply is scrubbed with the live token map and not only with `.env`.
+	const live = browserTokenStore(deps).secrets();
+	const encoded = [...base, ...live].flatMap((secret) => {
 		const value = encodeURIComponent(secret.value);
 		return value === secret.value
 			? []
 			: [{ name: `${secret.name}:url-encoded`, value }];
 	});
-	return [...base, ...encoded].sort(
+	return [...base, ...live, ...encoded].sort(
 		(left, right) => right.value.length - left.value.length,
 	);
+}
+
+/** The token store this deps object reads: its own, or the process's. */
+function browserTokenStore(deps: BrowserRouteDeps): StageTokenStore {
+	return deps.tokens ?? stageTokenStore();
+}
+
+/**
+ * The origins one stage's browser requests are authenticated for: every `oauth2`
+ * role that declared `bearerOrigins`, by the application that declares the role
+ * (the token is acquired for *that* role, wherever the session itself lives).
+ *
+ * The first declaration of an origin wins, so an origin listed by two roles is
+ * authenticated once, by the role that asked for it first.
+ */
+function bearerScopes(entry: StageEntry): StageBearerScope[] {
+	const scopes: StageBearerScope[] = [];
+	const seen = new Set<string>();
+	for (const [appKey, app] of Object.entries(entry.stage.apps)) {
+		for (const [role, value] of Object.entries(app.roles ?? {})) {
+			if (value.login !== "oauth2") continue;
+			for (const declared of value.bearerOrigins ?? []) {
+				const origin = originOnly(declared);
+				if (origin === "" || seen.has(origin)) continue;
+				seen.add(origin);
+				scopes.push({ origin, app: appKey, role });
+			}
+		}
+	}
+	return scopes;
 }
 
 /** Query parameters whose value never survives a reported URL. */
@@ -591,11 +659,13 @@ async function dispatch(
 		const session = await sessionFor(deps, owner, body.session, used);
 		return {
 			session: session.name,
-			entries: session.networkEntries({
-				...(body.status === undefined ? {} : { status: body.status }),
-				...(body.url === undefined ? {} : { url: body.url }),
-				limit: bounded(body.limit, DEFAULT_LOG_LIMIT, MAX_LOG_LIMIT),
-			}),
+			entries: session
+				.networkEntries({
+					...(body.status === undefined ? {} : { status: body.status }),
+					...(body.url === undefined ? {} : { url: body.url }),
+					limit: bounded(body.limit, DEFAULT_LOG_LIMIT, MAX_LOG_LIMIT),
+				})
+				.map(networkEntryValue),
 		};
 	}
 	if (method === "POST" && path === AGENT_BROWSER_SCREENSHOT_PATH) {
@@ -860,12 +930,16 @@ function resolveStageOpen(
 			409,
 		);
 	const url = joinStagePath(app.url, body.path);
+	const bearer = bearerScopes(entry);
 	const binding: StageSessionBinding = {
 		ident: entry.ident,
 		access: entry.stage.access,
 		origins: entry.origins,
 		readOnlyExceptions: entry.stage.readOnlyExceptions ?? [],
 		limits: entry.limits,
+		// The origins this session's requests are authenticated for, from the
+		// roles that declared them (`add-stage-oauth2-auth`, task 3.3).
+		...(bearer.length === 0 ? {} : { bearer }),
 	};
 	assertAllowedOrigin(binding, url);
 	// The bounds and the lease are claimed before a context exists, and only for a
@@ -1025,6 +1099,43 @@ async function stageLogin(
 		roleView?.login === undefined
 			? undefined
 			: entry.stage.logins?.[roleView.login];
+	// 2b. The `oauth2` recipe (`add-stage-oauth2-auth`, task 3.4): this server
+	// obtains a token from the provider itself, so there is no page to type into,
+	// no window to open and nothing a person could add. The answer is `ok` the
+	// moment an access token exists — and a refusal is the token path's own code:
+	// `credential-missing` names the unset variable, `login-failed` carries the
+	// provider's error code. The token value never leaves this call.
+	if (roleView?.loginKind === "oauth2") {
+		try {
+			await roleToken(
+				{
+					stage: entry.stage,
+					appKey: body.app,
+					role: body.role,
+					configDir: deps.configDir ?? "",
+				},
+				browserTokenStore(deps),
+				{ ...(deps.now ? { now: deps.now } : {}) },
+			);
+		} catch (error) {
+			if (error instanceof StageAuthError)
+				// The same code and status the declared recipes answer a `.env` gap
+				// with: one surface, one meaning for `credential-missing`.
+				throw new BrowserSessionError(
+					error.code,
+					error.message,
+					error.code === "credential-missing" ? 409 : 502,
+				);
+			throw error;
+		}
+		return {
+			session: session.name,
+			stage: entry.ident,
+			login: "ok",
+			via: "token",
+			url: sanitizeStageUrl(session.url),
+		};
+	}
 	// A `http-basic` role never hands off: the browser's own authentication dialog
 	// does not appear in a window this server launched (spike 0.2, D10), so the
 	// automated path keeps the foundation's `credential-missing` answer instead of
