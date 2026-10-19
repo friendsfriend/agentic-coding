@@ -40,7 +40,7 @@ every number quoted here.
 | 19 | 21. Turn/context ceiling with a convergence checkpoint | engine | M | high | 8 / 20 / 40 |
 | 20 | 20. Run window = session window | engine + telemetry | M | high | 0 (156 runs currently mis-attributed) |
 | 21 | 23. Task reference, change existence, keyed status polls | tool definition | M | medium | $2 / $6 / $12 (of that conversation) |
-| 22 | 17. Archive happy path back into a delivery effect | engine | M | medium | 1.0 / 1.6 / 1.85 |
+| 22 | 17. Archive happy path back into a delivery effect — stopped at its own spike gate, see 02i | engine | M | medium | 1.0 / 1.6 / 1.85 |
 | 23 | 22. Fix the harness reader; alarm on a source that parsed nothing | telemetry | L | high | 0 (restores 2,263 turns / 2,803 calls) |
 | 24 | 25. Model tiering for mechanical steps (measure, then pin) | config | M | medium | 20 / 40 / 70, quality-gated |
 | 25 | 24. Per-workflow telemetry that survives the whole run | telemetry | L | high | 0 (21 of 86 modern worker runs are invisible) |
@@ -666,14 +666,20 @@ the resolved change id to be echoed back.
 
 ## 22. Run the archive happy path in the engine again
 
-**Problem (VERIFIED, hypothesis on the counterfactual).** The archive step is a
+**Problem (VERIFIED; the counterfactual is REFUTED).** The archive step is a
 model run for a two-command job: 78 runs, 721 turns, 350 calls, **1.8487 units**;
-72 of the 78 runs use ≤6 calls (487 turns, 1.79 units). In
-2026-07-27…2026-08-14, 32 workflows carry a `delivery.archive_started` →
-`archive_completed` pair (mean **18.2 s**, min 9.7, max 35.2, **no tokens**) with
-no emitter in the current source. Caveat from `02e` itself: `archive`-role runs
-with turns exist in the same window, so the two may have coexisted — settle it
-before building.
+72 of the 78 runs use ≤6 calls (487 turns, 1.79 units). The
+`delivery.archive_started` → `archive_completed` pair of 2026-07-27…2026-08-14
+(32 workflows, mean 18.2 s, "no tokens") was **not** an engine effect: it
+bracketed the archive agent's own run, and "no tokens" was phase-level telemetry
+with no token fields — see
+[`02i-archive-effect-counterfactual.md`](./02i-archive-effect-counterfactual.md).
+
+**Disposition — STOPPED at its own spike gate.** The spike the Verify line asks
+for was run and refutes the counterfactual, so this item is not implemented as
+written. The verified half (a two-command job at ~1.79 units and ~487 turns) is
+still an opportunity, but as a new optimization with its own justification, not
+as "again".
 
 **Change.** Make `openspec validate --strict` + `openspec archive --yes` (+
 `validate --all`) a `delivery` effect and spawn the `archive` role only when the
