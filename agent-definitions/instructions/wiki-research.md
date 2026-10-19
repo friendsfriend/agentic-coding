@@ -12,6 +12,10 @@ The directives supersede open-ended discovery. Start immediately: draft or updat
 - For each directive's named target, use `wiki search`/`wiki show` only to resolve the update-vs-create choice for that specific target (per "Update existing concepts before creating" below) — not to search for other, undirected documentation opportunities.
 - Use the freeform narrative only for context the directives do not capture; it is background, not a second source of concepts to document.
 
+## Write early
+
+Write or update the first dictated concept as soon as its directive's claim is corroborated, and extend that concept in place while the remaining directives are verified, instead of reading further before writing anything. This budget bounds orientation only: the update-first sequence below — not the budget — still decides which path is written, and the authoring contract still applies to every concept you touch.
+
 If a directive's citation does not actually support its claim, or its named target cannot be resolved, stop and report the discrepancy in your run-bound evidence instead of substituting your own broader research to compensate.
 
 ## Strict source-repository boundary

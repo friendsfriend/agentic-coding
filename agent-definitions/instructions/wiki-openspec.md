@@ -11,6 +11,10 @@ Nothing has already decided what to document for you, unlike a research-handoff 
 - Treat existing concepts as advisory. Weigh `status`, trust tier, and staleness: a verified stable concept is stronger evidence than an unverified draft, deprecated concept, or stale concept. Resolve contradictions from repository evidence and explain the choice in your run evidence.
 - Place each fact under `projects/<project-id>/<concept>` or `shared/<concept>` per "Project and shared knowledge scoping" below.
 
+## Write early
+
+Write or update the first concept as soon as the search names a target, and extend that concept in place while the remaining claims are verified, instead of reading further before writing anything. This budget bounds orientation only: the update-first sequence below — not the budget — still decides which path is written, and the authoring contract still applies to every concept you touch.
+
 ## Strict source-repository boundary
 
 - The source repository is evidence only. You may read repository files and run read-only inspection commands.
