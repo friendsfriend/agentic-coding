@@ -46,10 +46,3 @@ A role MAY declare `bearerOrigins`. The server SHALL add `Authorization: Bearer`
 #### Scenario: Other origin untouched
 - **WHEN** the page calls a third-party origin
 - **THEN** no `Authorization` header SHALL be added
-
-### Requirement: Authorization code with PKCE uses the hand-off window
-For the `authorization_code` grant the server SHALL create a PKCE verifier and challenge and a `state`, open the authorization URL through the interactive-login hand-off, receive the code on a single-use loopback receiver on `127.0.0.1` that validates `state`, and exchange it at the token endpoint. The code, verifier and tokens SHALL stay in the server. A deadline, abort or `state` mismatch SHALL end the hand-off without a token.
-
-#### Scenario: State mismatch
-- **WHEN** the receiver gets a callback with a different `state`
-- **THEN** the exchange SHALL NOT happen and the login SHALL fail with a value-free code
