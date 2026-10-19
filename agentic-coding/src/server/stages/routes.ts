@@ -25,6 +25,9 @@ import type {
 	StageApiRequestResponse,
 	StageCredentialRequest,
 	StageCredentialResponse,
+	StageIdentitiesResponse,
+	StageIdentityForgetRequest,
+	StageIdentityForgetResponse,
 	StageStatus,
 	StagesStatusResponse,
 	StageTokenInfoRequest,
@@ -40,6 +43,8 @@ import {
 	AGENT_STAGES_PATH,
 	decodeRouteRequest,
 	STAGES_CREDENTIAL_PATH,
+	STAGES_IDENTITY_FORGET_PATH,
+	STAGES_IDENTITY_PATH,
 } from "../protocol.ts";
 import {
 	StageApiError,
@@ -55,6 +60,7 @@ import {
 	stageRefusalReason,
 	stageView,
 } from "./catalog.ts";
+import { stageIdentityCache } from "./identity-cache.ts";
 import type { StageUsageRegistry } from "./limits.ts";
 import {
 	forgetStageTokens,
@@ -174,6 +180,81 @@ export function stagesStatusValue(deps: StageRouteDeps): StagesStatusResponse {
 		excluded: excludedStatuses(catalog),
 	};
 	return redactor(deps)(value) as StagesStatusResponse;
+}
+
+// ---------------------------------------------------------------------------
+// The identity cache (`add-stage-identity-cache`)
+// ---------------------------------------------------------------------------
+
+/** The live entries, as the dashboard, the CLI and the Settings section render
+ * them. The list is `(stage, role, capturedAt, expiresAt)` and nothing else: the
+ * cache's own `list()` cannot carry a cookie, a name or a value. */
+export function stageIdentitiesValue(): StageIdentitiesResponse {
+	return { entries: stageIdentityCache().list() };
+}
+
+/** Forget one stage's identities — one role of it, or all of them — answering
+ * how many left and the list that remains, so a dashboard needs one round trip.
+ * A forgotten identity is not a logout: the browser sessions that live right now
+ * keep their own state, and only the *next* session starts empty. */
+export function forgetStageIdentity(
+	body: StageIdentityForgetRequest,
+): StageIdentityForgetResponse {
+	const removed = stageIdentityCache().forget({
+		...(body.stage === undefined ? {} : { stage: body.stage }),
+		...(body.role === undefined ? {} : { role: body.role }),
+	});
+	return { removed, entries: stageIdentityCache().list() };
+}
+
+/**
+ * Serve the two instance-authenticated identity routes. They are siblings of the
+ * catalog route and are separate from it because forgetting an identity is an
+ * operator action, not a run's: the agent surface (`/api/v1/agent-env/stages`)
+ * only ever reads.
+ *
+ * Neither answer can contain a value: the store's `list()` is value-free by
+ * construction, which is what makes redaction here a belt rather than the
+ * braces.
+ */
+export async function handleStageIdentityRoute(
+	deps: StageRouteDeps,
+	request: Request,
+	path: string,
+): Promise<Response | undefined> {
+	const method = request.method.toUpperCase();
+	if (path === STAGES_IDENTITY_PATH) {
+		if (method !== "GET")
+			return json(
+				{ error: { code: "method", message: `${path} is read-only` } },
+				405,
+			);
+		return json({ ok: true, value: redactor(deps)(stageIdentitiesValue()) });
+	}
+	if (path !== STAGES_IDENTITY_FORGET_PATH) return undefined;
+	if (method !== "POST")
+		return json(
+			{ error: { code: "method", message: `${path} takes POST` } },
+			405,
+		);
+	let body: StageIdentityForgetRequest;
+	try {
+		body = decodeRouteRequest<StageIdentityForgetRequest>(
+			STAGES_IDENTITY_FORGET_PATH,
+			await readJsonBody(request),
+		);
+	} catch (error) {
+		return json(
+			{
+				error: {
+					code: "bad-request",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			},
+			400,
+		);
+	}
+	return json({ ok: true, value: forgetStageIdentity(body) });
 }
 
 /** The refused stage files, as both read surfaces report them: the file, its
@@ -420,6 +501,15 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 		// numbers it is held to, the cleanup a `writable` stage expects and which wiki
 		// process to read first.
 		limits: { ...view.limits },
+		// The identity cache's bounds, in the units a plan reads them in. A stage
+		// opt-out is reported as `enabled: false` rather than as an absent object,
+		// so "no silent login here" is a fact and not a guess.
+		identityCache: {
+			enabled: view.identityCache.enabled,
+			ttlMinutes: Math.round(view.identityCache.ttlMs / 60_000),
+			maxEntries: view.identityCache.maxEntries,
+			refreshSeconds: Math.round(view.identityCache.refreshMs / 1_000),
+		},
 		data: { ...view.data },
 		wiki: { processes: [...view.wiki.processes] },
 		diagnostics: view.diagnostics.map(

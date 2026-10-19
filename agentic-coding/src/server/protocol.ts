@@ -48,6 +48,7 @@ import {
 import {
 	stageApiRequestSchema,
 	stageCredentialRequestSchema,
+	stageIdentityForgetRequestSchema,
 	stageTokenInfoRequestSchema,
 } from "../contracts/stages.ts";
 import {
@@ -121,6 +122,11 @@ export const AGENT_STAGE_TOKEN_INFO_PATH = `${AGENT_ENVIRONMENT_PREFIX}stage-tok
  * writes one referenced key of the configuration `.env`. */
 export const STAGES_PATH = "/api/v1/stages";
 export const STAGES_CREDENTIAL_PATH = "/api/v1/stages/credential";
+/** `add-stage-identity-cache`: the value-free listing of the live identity cache
+ * and the forget action behind it. Instance-authenticated like the catalog:
+ * forgetting an identity is an operator action, not a run's. */
+export const STAGES_IDENTITY_PATH = "/api/v1/stages/identity";
+export const STAGES_IDENTITY_FORGET_PATH = "/api/v1/stages/identity/forget";
 
 /** The debug surface of one run (`add-agent-debug-tools`): the traces its runs
  * exported, the data the infra services it requires hold, and the endpoints of
@@ -313,6 +319,18 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: STAGES_CREDENTIAL_PATH,
+		owner: "bun",
+		domain: "stages",
+	},
+	{
+		method: "GET",
+		path: STAGES_IDENTITY_PATH,
+		owner: "bun",
+		domain: "stages",
+	},
+	{
+		method: "POST",
+		path: STAGES_IDENTITY_FORGET_PATH,
 		owner: "bun",
 		domain: "stages",
 	},
@@ -740,6 +758,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: STAGES_CREDENTIAL_PATH,
 		schemaId: "server.stages.credential",
 		schema: stageCredentialRequestSchema,
+	},
+	{
+		path: STAGES_IDENTITY_FORGET_PATH,
+		schemaId: "server.stages.identity.forget",
+		schema: stageIdentityForgetRequestSchema,
 	},
 	{
 		path: AGENT_STAGE_API_REQUEST_PATH,

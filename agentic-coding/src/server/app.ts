@@ -99,6 +99,7 @@ import { StageUsageRegistry } from "./stages/limits.ts";
 import { stageTokenStore } from "./stages/oauth2.ts";
 import {
 	handleStageCredentialRoute,
+	handleStageIdentityRoute,
 	handleStageRoute,
 	type StageRouteDeps,
 	stagesStatusValue,
@@ -1111,6 +1112,29 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			if (written.status === 200)
 				events.publish({ domain: "stages", kind: "stages.credential" });
 			return written;
+		}
+
+		// The identity cache (`add-stage-identity-cache`): the value-free listing and
+		// the forget action. Reading the cache is an ordinary dashboard read; a
+		// forget changes what the *next* stage session starts from, so it is
+		// announced like the credential write is.
+		if (method === "GET" && path === "/api/v1/stages/identity") {
+			const listed = await handleStageIdentityRoute(stageDeps(), request, path);
+			if (listed === undefined)
+				throw new Error("the identity cache route did not answer its listing");
+			return listed;
+		}
+		if (method === "POST" && path === "/api/v1/stages/identity/forget") {
+			const forgotten = await handleStageIdentityRoute(
+				stageDeps(),
+				request,
+				path,
+			);
+			if (forgotten === undefined)
+				throw new Error("the identity cache route did not answer the forget");
+			if (forgotten.status === 200)
+				events.publish({ domain: "stages", kind: "stages.identity" });
+			return forgotten;
 		}
 
 		if (method === "POST" && path === "/api/v1/credentials/respond") {

@@ -69,7 +69,6 @@ export interface StageRoleStatus {
 	readonly loginMode: "automated" | "handoff" | "unavailable";
 	readonly credentials: readonly StageCredentialStatus[];
 }
-
 /** One declared version probe, as the agent route reports it. A probe that
  * could not be read is `not discoverable` rather than a failure of the call. */
 export interface StageVersionStatus {
@@ -116,6 +115,16 @@ export interface StageStatus {
 		readonly maxRecordingMinutes: number;
 		readonly maxLoginHandoffSeconds: number;
 	};
+	/** The identity cache's effective bounds (`add-stage-identity-cache`): whether
+	 * a successful login may leave a bounded identity in the server's memory, how
+	 * long it lives, how many entries the process keeps and how often a living
+	 * session refreshes it. Numbers and a boolean only — never a value. */
+	readonly identityCache: {
+		readonly enabled: boolean;
+		readonly ttlMinutes: number;
+		readonly maxEntries: number;
+		readonly refreshSeconds: number;
+	};
 	/** The stage's own data conventions — a row prefix, notes, a cleanup step —
 	 * which is what an agent on a `writable` stage has to follow. */
 	readonly data: {
@@ -146,6 +155,47 @@ export interface StagesStatusResponse {
 	readonly configDir: string;
 	readonly stages: readonly StageStatus[];
 	readonly excluded: readonly ExcludedStageStatus[];
+}
+
+/** One cached stage identity, as every surface reports it
+ * (`add-stage-identity-cache`): the key, when it was captured and when it ends —
+ * and nothing else. No cookie name, no storage key, no value, no token. */
+export interface StageIdentityStatus {
+	readonly stage: string;
+	readonly role: string;
+	/** Epoch milliseconds. */
+	readonly capturedAt: number;
+	/** Epoch milliseconds; an entry past it is not reported and is not installed. */
+	readonly expiresAt: number;
+}
+
+/** `GET /api/v1/stages/identity`: the live entries of this server's cache. */
+export interface StageIdentitiesResponse {
+	readonly entries: readonly StageIdentityStatus[];
+}
+
+/** `POST /api/v1/stages/identity/forget`: forget one stage, one role of it, or
+ * everything. Both fields absent forgets every entry. */
+export const stageIdentityForgetRequestSchema = Schema.Struct({
+	stage: Schema.optional(
+		Schema.String.pipe(
+			Schema.minLength(1),
+			Schema.maxLength(64),
+			Schema.pattern(/^[a-z0-9][a-z0-9-]{0,62}$/),
+		),
+	),
+	role: Schema.optional(
+		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+	),
+});
+export type StageIdentityForgetRequest =
+	typeof stageIdentityForgetRequestSchema.Type;
+
+export interface StageIdentityForgetResponse {
+	/** How many entries left. */
+	readonly removed: number;
+	/** The live entries after the forget, so a dashboard needs one round trip. */
+	readonly entries: readonly StageIdentityStatus[];
 }
 
 /** `GET /api/v1/agent-env/stages`: one run's view. Only allow-listed stages a

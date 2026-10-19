@@ -66,6 +66,11 @@ export const browserOpenRequestSchema = Schema.Struct({
 	endpoint: Schema.optional(browserName(256)),
 	stage: Schema.optional(browserName(64)),
 	stageApp: Schema.optional(browserName(64)),
+	/** The role whose cached identity this session starts from
+	 * (`add-stage-identity-cache`). Absent means the session starts with an empty
+	 * browser, exactly as before: a run that does not ask for an identity never
+	 * gets one installed. */
+	stageRole: Schema.optional(browserName(64)),
 	path: Schema.optional(browserField(1024)),
 	session: sessionField,
 	viewport: Schema.optional(browserViewportSchema),
@@ -237,6 +242,9 @@ export const STAGE_ERROR_CODES = [
 	"login-handoff-timeout",
 	"login-handoff-aborted",
 	"session-held-by-user",
+	// `add-stage-identity-cache`: the role an open names has to be one the
+	// application declares, or there is no identity whose login could establish it.
+	"stage-role-unknown",
 ] as const;
 export type StageErrorCode = (typeof STAGE_ERROR_CODES)[number];
 
