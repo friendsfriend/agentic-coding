@@ -447,3 +447,125 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 		}
 	});
 });
+
+describe("the plan's file list reaches the implementation assignment", () => {
+	/** Drive the openspec family from start to the worker run the approved plan
+	 * launches, with the planner's own payload. */
+	function toWorker(
+		repo: string,
+		payload: Record<string, unknown>,
+		workflowId: string,
+	): { engine: WorkflowEngine; repo: string; view: WorkflowView } {
+		const engine = new WorkflowEngine(registerBuiltins());
+		let view = advanceRouting(
+			engine,
+			repo,
+			engine.start({
+				repo,
+				workflowId,
+				definitionId: "openspec",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: routing(),
+			}).view,
+		);
+		seedChange(repo, "scope-change");
+		view = handoff(engine, repo, view, "planner", payload);
+		view = completeEffect(engine, repo, "openspec.validate");
+		view = advanceRouting(
+			engine,
+			repo,
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: view.revision,
+				actionId: "approve-plan",
+			}).view,
+		);
+		return { engine, repo, view };
+	}
+
+	function workerPrompt(
+		engine: WorkflowEngine,
+		repo: string,
+		view: WorkflowView,
+	): string {
+		const registry = registerBuiltins();
+		const run = runForRole(view, "worker");
+		return effectRunnerTest.renderedAssignment(
+			engine,
+			repo,
+			registry,
+			run.id,
+			launchToken(engine, repo, run.id),
+		).rendered.prompt;
+	}
+
+	test("the declared artifacts are rendered as the plan's file list", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-files-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const { engine, view } = toWorker(
+				repo,
+				{
+					primaryChangeId: "scope-change",
+					artifacts: [
+						"openspec/changes/scope-change/proposal.md",
+						"src/workflow/assignment.ts",
+					],
+				},
+				"plan-files",
+			);
+			const prompt = workerPrompt(engine, repo, view);
+			expect(prompt).toContain(
+				"Plan files: openspec/changes/scope-change/proposal.md src/workflow/assignment.ts",
+			);
+			// The tool surface is in the first lines, before the objective, so a
+			// follow-up attempt that re-sends the dynamic envelope carries it.
+			expect(prompt.indexOf("## Tool surface")).toBeLessThan(
+				prompt.indexOf("## Objective"),
+			);
+			expect(prompt).toContain("Emit every independent call");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("a plan without a file list forwards none, and a lost artifact degrades", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-files-absent-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const { engine, view } = toWorker(
+				repo,
+				{ primaryChangeId: "scope-change" },
+				"plan-files-absent",
+			);
+			expect(workerPrompt(engine, repo, view)).not.toContain("Plan files:");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+
+		const lost = fs.mkdtempSync(path.join(os.tmpdir(), "plan-files-lost-"));
+		try {
+			const repo = repository(path.join(lost, "repo"));
+			const { engine, view } = toWorker(
+				repo,
+				{ primaryChangeId: "scope-change", artifacts: ["src/a.ts"] },
+				"plan-files-lost",
+			);
+			// The recorded plan artifact was removed between the handoff and this
+			// render: the assignment is rendered without the list, and the launch
+			// is not failed.
+			const run = runForRole(view, "worker");
+			const planArtifact = engine
+				.getSnapshot(repo, view.workflowId)
+				.evidence.find((entry) => entry.kind === "core.plan:planner");
+			if (!planArtifact) throw new Error("missing recorded plan artifact");
+			fs.rmSync(planArtifact.path, { force: true });
+			const prompt = workerPrompt(engine, repo, view);
+			expect(prompt).not.toContain("Plan files:");
+			expect(prompt).toContain(`Run: ${run.id}`);
+		} finally {
+			fs.rmSync(lost, { recursive: true, force: true });
+		}
+	});
+});
