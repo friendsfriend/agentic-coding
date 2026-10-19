@@ -171,16 +171,22 @@ describe("the session window of a durable conversation", () => {
 		const [created, closed, opened] = rebound;
 		expect(created?.runId).toBe("run-a");
 		expect(created?.["herdr.session.reason"]).toBe("created");
-		expect(created?.sessionId).toBe(first.conversationId);
+		expect(created?.["herdr.session.conversation_id"]).toBe(
+			first.conversationId,
+		);
 		// The run that is left is named by the event that closes its window, and
 		// the run that continues is named by the one that opens.
 		expect(closed?.runId).toBe("run-a");
 		expect(closed?.["herdr.session.rebound_to"]).toBe("run-b");
-		expect(closed?.sessionId).toBe(first.conversationId);
+		expect(closed?.["herdr.session.conversation_id"]).toBe(
+			first.conversationId,
+		);
 		expect(opened?.runId).toBe("run-b");
 		expect(opened?.["herdr.session.reason"]).toBe("rebound");
 		expect(opened?.["herdr.session.previous_run_id"]).toBe("run-a");
-		expect(opened?.sessionId).toBe(first.conversationId);
+		expect(opened?.["herdr.session.conversation_id"]).toBe(
+			first.conversationId,
+		);
 		// Both session-window events carry the workflow, so the dataset can judge a
 		// tail per workflow.
 		for (const envelope of rebound)
@@ -232,17 +238,30 @@ describe("the session window of a durable conversation", () => {
 			});
 		await ensure();
 		await oneTurn(host, faux, "run-resume");
-		const before = await host.status("run-resume");
+		const before = readEnvelopes(telemetryPath);
 		// The aborted run is resumed: the engine ensures the same run id on the
 		// same conversation, which is `resumed` — the run's window is not reopened.
 		await ensure();
-		const after = await host.status("run-resume");
-		expect(after).toEqual(before);
 		const envelopes = await waitForEnvelopes(
 			telemetryPath,
 			"runtime.session_window.opened",
 			2,
 		);
+		// The resume wrote exactly one envelope and produced no turn: the record
+		// observes the move and nothing else, so nothing the host emits could have
+		// restarted, completed or re-opened the run's own window.
+		expect(envelopes.length).toBe(before.length + 1);
+		expect(
+			envelopes.filter((envelope) => envelope.event === "runtime.turn_started"),
+		).toHaveLength(1);
+		expect(
+			envelopes.filter(
+				(envelope) => envelope.event === "runtime.session_window.closed",
+			),
+		).toEqual([]);
+		expect(
+			envelopes.filter((envelope) => envelope.event === "runtime.settled"),
+		).toHaveLength(1);
 		const sessionEvents = envelopes.filter((envelope) =>
 			SESSION_EVENTS.has(String(envelope.event)),
 		);
@@ -318,8 +337,92 @@ describe("the session window of a durable conversation", () => {
 		expect(sessionEvents[1]?.["herdr.session.reason"]).toBe("adopted");
 		expect(sessionEvents[1]?.runId).toBe("run-after");
 		expect(sessionEvents[1]?.["herdr.session.previous_run_id"]).toBeUndefined();
-		expect(sessionEvents[1]?.sessionId).toBe(before.conversationId);
+		expect(sessionEvents[1]?.["herdr.session.conversation_id"]).toBe(
+			before.conversationId,
+		);
 		await second.shutdown();
+	});
+
+	test("a turn measured after a rebinding is judged by the run the message belongs to", async () => {
+		// Efficiency backlog items 6 and 20 meet here: the cost ceiling is decided
+		// from a measurement delivered on a conversation *another* run created. The
+		// measurement must be charged to the run that produced the message, so it is
+		// judged and reported — charging it to the creating run (which the engine has
+		// already retired, and whose record is gone) silently drops the ceiling for
+		// every run that reuses a conversation, which is every later run of a step.
+		const dir = tempWorkflowDir();
+		const telemetryPath = path.join(dir, "telemetry.jsonl");
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = `${faux.getModel().provider}/${faux.getModel().id}`;
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			compaction: () => ({ ceilingTokens: 30_000 }),
+		});
+		const envFor = (runId: string) =>
+			writeRunEnv(dir, runId, {
+				HERDR_WORKFLOW_ID: "wf-ceiling-window",
+				HERDR_RUN_ID: runId,
+				HERDR_TELEMETRY_PATH: telemetryPath,
+			});
+		try {
+			const first = await host.ensureRun({
+				runId: "run-creator",
+				name: "worker-ceiling-window",
+				cwd: dir,
+				runEnvPath: envFor("run-creator"),
+				toolPolicy: "default",
+				model,
+			});
+			expect(host.ceilingForTest("run-creator")).toMatchObject({
+				ceilingTokens: 30_000,
+				active: true,
+			});
+			// The creator is retired before it ever committed a turn.
+			await host.stopRun("run-creator");
+			const second = await host.ensureRun({
+				runId: "run-successor",
+				name: "worker-ceiling-window",
+				cwd: dir,
+				runEnvPath: envFor("run-successor"),
+				toolPolicy: "default",
+				model,
+			});
+			expect(second.conversationId).toBe(first.conversationId);
+			// Two responses: the turn's answer, then the summarizer's.
+			faux.setResponses([
+				fauxAssistantMessage([fauxText("acknowledged")]),
+				fauxAssistantMessage([fauxText("summary of the older context")]),
+			]);
+			// Roughly 80,000 tokens of prose at pi-ai's four-characters estimate:
+			// far above the 30,000 ceiling, far below the 700,000 overflow guard.
+			const context = "context worth summarizing. ".repeat(12_800);
+			await host.submit("run-successor", context, "req-ceiling-window");
+			const envelopes = await waitForEnvelopes(
+				telemetryPath,
+				"runtime.compaction_ceiling",
+				1,
+			);
+			const ceiling = envelopes.find(
+				(envelope) =>
+					envelope.event === "runtime.compaction_ceiling" &&
+					envelope.status === "compact",
+			);
+			// The successor's measurement was judged, and the envelope names the run
+			// that owns it — not the retired conversation creator.
+			expect(ceiling).toMatchObject({
+				runId: "run-successor",
+				ceilingTokens: 30_000,
+			});
+			expect(ceiling?.contextTokens as number).toBeGreaterThanOrEqual(30_000);
+		} finally {
+			await host.shutdown();
+		}
 	});
 
 	test("a conversation with no run id records nothing", async () => {

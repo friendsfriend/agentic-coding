@@ -1339,13 +1339,15 @@ recorded none — a run labelled `blocked, 4 minutes` covered 45 minutes of work
 most recently bound to it, with that run's identity) and updates it in
 `ensureRun` before the run's first submission:
 
-- the conversation's telemetry stream resolves its identity per envelope
+- the conversation's telemetry stream resolves its identity once per event
   (`attachTelemetry` takes an identity or a getter), so a turn that lands after a
-  rebinding is the later run's turn — and the cost ceiling and the dead-surface
-  monitor follow the same binding, so their decisions are recorded against the
-  run that made them;
+  rebinding is the later run's turn — and the cost ceiling is decided from the
+  measurement of the run that produced the message, while a tool outcome is
+  charged to the run that *started* that call (`tool_execution_start` records the
+  owner), so neither can act on a run other than its own;
 - the move is stated as two runtime envelopes on the same sink, both carrying the
-  conversation id as `sessionId`:
+  conversation id as `herdr.session.conversation_id` (never as `sessionId`, which
+  means *run* id everywhere else):
   - `runtime.session_window.opened` with `herdr.session.reason` — `created` (the
     conversation was made for this run), `rebound` (an existing conversation
     whose previous run is known, with `herdr.session.previous_run_id`), `adopted`
@@ -1365,11 +1367,19 @@ without it. Nothing is recorded for a conversation with no run id in its
 environment (an orchestrator session).
 
 A reader pairs the two: `scripts/efficiency`'s `run-window-drift` query reports,
-per drifting run, the turns in its tail and a `drift_kind` of `attributed` (the
-recording states the session went on under a later run), `clock-artifact` (the
-run's recorded completion is not after its start, so the window cannot be read)
-or `unexplained`; the dataset build fails on an unexplained tail in a workflow
-whose own recording states a session window (see
+per drifting run, the turns in its tail, whether a session-window row names *that
+run* (`session_recorded`) and a `drift_kind` of `attributed` (the recording states
+the session went on under a later run), `resumed` (the run kept its own
+conversation), `clock-artifact` (the run's recorded completion is not after its
+start, so the window cannot be read) or `unexplained` (nothing names the run).
+
+The build's gate is **per run, not per workflow**: a run is recorded iff a
+session-window row names its run id, so a workflow that records one run's move
+still cannot hide another run's lost record. A run with no record of its own is
+either *before the record* (it started before its workflow's first
+session-window event, or its window cannot be read) — counted, never failed — or
+a **broken record** (it started after that event and still has none), which fails
+the build exactly like an unexplained tail does (see
 [`efficiency/01-dataset-tooling.md`](./efficiency/01-dataset-tooling.md)).
 
 **Coverage limit**: the conversation survives everything, but the host's binding
@@ -1380,9 +1390,22 @@ anyone (`watchEvents` streams only what is published after the attachment). That
 hole is *unrecorded*, never misattributed.
 
 `stopRun` deliberately keeps the conversation's binding even though it drops the
-run's own bookkeeping: the conversation is what continues. A conversation reused
-after its run was retired therefore records `rebound` from that run, which is
-what the query's `attributed` class means.
+run's own bookkeeping — and it only drops that bookkeeping when the conversation
+is still bound to the run it is stopping, because a successor can be ensured while
+the abort is in flight. A conversation reused after its run was retired therefore
+records `rebound` from that run, which is what the query's `attributed` class
+means.
+
+Two ordering rules keep the record honest. The stream is drained for one macrotask
+turn before a rebinding, because pi-durable publishes a commit's events
+synchronously and delivers them a microtask later: without the wait, a batch
+already committed under the leaving run would resolve the *new* identity and
+re-stamp that run's turns. And a `closed` record whose append failed (an
+unwritable telemetry path, a removed workspace) is kept per conversation and
+retried on the conversation's next binding, because its absence is what the
+dataset build treats as a defect. The binding map and that retry live as long as
+the host process — the same lifetime as the per-conversation telemetry stream —
+and die with it, never per run.
 
 ### Fail fast on a dead tool surface (efficiency backlog item 3)
 

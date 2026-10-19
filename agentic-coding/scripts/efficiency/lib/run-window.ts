@@ -6,25 +6,31 @@
 // every later run of the same step and role. Before the session window was
 // recorded, the conversation's telemetry kept the identity of the run that
 // created it, so 156 of 1,259 preferred runs carried turns after their own
-// recorded completion (11,960 of 34,711 turns) while the runs that actually did
-// the work recorded none. The recording now states the move
+// recorded completion (11,960 turns) while the runs that actually did the work
+// recorded none. The recording now states the move
 // (`runtime.session_window.opened` / `.closed`), so a tail is either *explained*
 // by the record or a defect.
 //
-// The alarm is the same shape as the empty-source alarm: an unexplained tail is
-// a build failure, not a note. It is deliberately **per workflow**: only a
-// workflow whose own recording states a session window is judged at all, so a
-// generation that predates the record (the whole pinned snapshot) is reported as
-// `unrecorded` and never fails a build.
+// The alarm is the same shape as the empty-source alarm: a tail the recording
+// cannot explain is a build failure, not a note. It is deliberately **per run,
+// not per workflow**: a run is recorded iff a session-window row names *its* run
+// id. A run with no record of its own is either one that began before its
+// workflow started recording (counted, never failed) or a broken record — a run
+// that started after the workflow's first session-window event and still has
+// none of its own — which fails the build like an unexplained tail does.
 
 import { Database } from "bun:sqlite";
 import { RUN_WINDOW_DRIFT_SQL } from "./queries.ts";
 
 /** Why a drifting run's tail is what it is. */
 export type DriftKind =
-	/** The recording states this run's session was rebound to a later run: the
-	 * tail is a continuation, and the later run is the one that did the work. */
+	/** The recording states this run's session was rebound to a later run
+	 * (`closed`): the tail is a continuation, and the later run did the work. */
 	| "attributed"
+	/** The recording states this run kept its own conversation (`opened`, an
+	 * abort and resume, or an adopted session): the tail is the same run working
+	 * on the same session, not a misattribution. */
+	| "resumed"
 	/** The run's own window cannot be read (`completed_at <= started_at`): the
 	 * traces reader dates an `agent.handoff` span by its start (design D5). */
 	| "clock-artifact"
@@ -45,22 +51,54 @@ export interface RunWindowDriftRow {
 	readonly first_turn_at: string | null;
 	readonly last_turn_at: string | null;
 	readonly tail_seconds: number;
+	/** `1` iff a session-window row names this run id. */
+	readonly session_recorded: number;
+	/** The run's own binding reason (`created`/`rebound`/`adopted`/`resumed`), or
+	 * null when the run recorded none. */
+	readonly session_reason: string | null;
+	/** The run a `closed` record moved the session to. */
+	readonly session_rebound_to: string | null;
+	/** The first session-window instant of the run's workflow, or null when the
+	 * workflow never recorded one. */
+	readonly first_session_window_at: string | null;
 	readonly drift_kind: DriftKind;
+}
+
+/** The runs whose own recording explains their tail. */
+export interface JudgedRunWindow {
+	readonly rows: readonly RunWindowDriftRow[];
+	/** The session was rebound to a later run (`closed`). */
+	readonly attributed: number;
+	/** The run kept its own conversation (`opened`: a resume, or an adoption). */
+	readonly resumed: number;
+}
+
+/** The runs whose own recording is missing, split by whether one was due. */
+export interface UnrecordedRunWindow {
+	readonly rows: readonly RunWindowDriftRow[];
+	/** No record is due: the run predates its workflow's first session-window
+	 * event, or its own window cannot be read at all. Reported, never failed. */
+	readonly beforeRecord: number;
+	/** The run started after the workflow already recorded a session window and
+	 * still has no record of its own: a broken record. */
+	readonly afterRecord: number;
 }
 
 export interface RunWindowReport {
 	/** Every drifting run the query reports. */
 	readonly rows: readonly RunWindowDriftRow[];
-	/** The rows the alarm judges: those whose workflow recorded a session window. */
-	readonly judged: readonly RunWindowDriftRow[];
-	/** The rows it cannot judge, because their workflow's recording predates the
-	 * session window. Reported, never failed. */
-	readonly unrecorded: readonly RunWindowDriftRow[];
-	/** Drifting runs per class, over every row. */
-	readonly attributed: number;
-	readonly clockArtifact: number;
+	/** The rows a session-window record names and explains. */
+	readonly judged: JudgedRunWindow;
+	/** The rows it does not cover at all. */
+	readonly unrecorded: UnrecordedRunWindow;
+	/** Unrecorded rows with a readable window: a tail nothing in the recording
+	 * explains (the recorded ones are explained by definition). Named as the
+	 * query's `drift_kind` names them. */
 	readonly unexplained: number;
-	/** The rows that fail the build: an unexplained tail in a judged workflow. */
+	/** Every row whose own window cannot be read (`completed_at <= started_at`,
+	 * design D5), recorded or not. */
+	readonly clockArtifact: number;
+	/** The rows that fail the build: an unrecorded run whose record was due. */
 	readonly failures: readonly RunWindowDriftRow[];
 	/** Workflow ids whose recording carries at least one session-window event. */
 	readonly recordedWorkflows: readonly string[];
@@ -83,6 +121,18 @@ function recordedWorkflows(datasetPath: string): string[] {
 	}
 }
 
+/** Whether this run's missing record is a defect: it started after its workflow
+ * had already recorded a session window, so the record should have named it. An
+ * unreadable window is never judged — there is nothing to compare a tail to. */
+function recordWasDue(row: RunWindowDriftRow): boolean {
+	if (row.drift_kind === "clock-artifact") return false;
+	if (row.first_session_window_at === null || row.run_started_at === null)
+		return false;
+	return (
+		Date.parse(row.run_started_at) >= Date.parse(row.first_session_window_at)
+	);
+}
+
 /**
  * Run the shared run-window statement against a dataset and split its rows by
  * what the recording explains. Uses the statement `run-window-drift` registers
@@ -91,7 +141,6 @@ function recordedWorkflows(datasetPath: string): string[] {
  */
 export function inspectRunWindow(datasetPath: string): RunWindowReport {
 	const recorded = recordedWorkflows(datasetPath);
-	const recordedSet = new Set(recorded);
 	const db = new Database(datasetPath, { readonly: true });
 	let rows: RunWindowDriftRow[];
 	try {
@@ -99,47 +148,55 @@ export function inspectRunWindow(datasetPath: string): RunWindowReport {
 	} finally {
 		db.close();
 	}
-	const judged = rows.filter(
-		(row) => row.workflow_id !== null && recordedSet.has(row.workflow_id),
-	);
-	const count = (kind: DriftKind): number =>
-		rows.filter((row) => row.drift_kind === kind).length;
+	const made = rows.filter((row) => row.session_recorded === 1);
+	const unrecorded = rows.filter((row) => row.session_recorded !== 1);
+	const kind = (k: DriftKind): number =>
+		rows.filter((row) => row.drift_kind === k).length;
+	const due = unrecorded.filter(recordWasDue);
 	return {
 		rows,
-		judged,
-		unrecorded: rows.filter(
-			(row) => row.workflow_id === null || !recordedSet.has(row.workflow_id),
-		),
-		attributed: count("attributed"),
-		clockArtifact: count("clock-artifact"),
-		unexplained: count("unexplained"),
-		failures: judged.filter((row) => row.drift_kind === "unexplained"),
+		judged: {
+			rows: made,
+			attributed: made.filter((row) => row.drift_kind === "attributed").length,
+			resumed: made.filter((row) => row.drift_kind === "resumed").length,
+		},
+		unrecorded: {
+			rows: unrecorded,
+			beforeRecord: unrecorded.length - due.length,
+			afterRecord: due.length,
+		},
+		unexplained: unrecorded.filter((row) => row.drift_kind === "unexplained")
+			.length,
+		clockArtifact: kind("clock-artifact"),
+		failures: due,
 		recordedWorkflows: recorded.sort(),
 	};
 }
 
-/** The build's error message: which runs carry an unexplained tail, and how to
- * inspect them. */
-export function describeUnrecordedRunWindow(
+/** The build's error message: which runs drift with no record of their own, and
+ * how to inspect them. */
+export function describeUnexplainedRunWindow(
 	failures: readonly RunWindowDriftRow[],
 	datasetPath: string,
 ): string {
 	const lines = [
-		`error: ${failures.length} run${failures.length === 1 ? "" : "s"} carr${failures.length === 1 ? "ies" : "y"} turns after its own recorded completion with nothing in the recording that explains them — a run whose session went on under another run must say so (\`runtime.session_window.closed\`), or its status, duration and cost are wrong. The dataset build stops here and writes no dataset.`,
+		`error: ${failures.length} run${failures.length === 1 ? "" : "s"} drift${failures.length === 1 ? "s" : ""} past its own recorded window with no session-window record of its own, although the workflow had already recorded one — a run whose session went on under another run must say so (\`runtime.session_window.closed\`), and a run that reuses a conversation must record its own binding (\`runtime.session_window.opened\`), or its status, duration and cost are wrong. The dataset build stops here and writes no dataset.`,
 		"",
 		...failures.map(
 			(row) =>
 				`  run ${row.run_id}  (workflow ${row.workflow_id ?? "(unset)"}, role ${row.role}, status ${row.status})  ` +
 				`tail ${row.tail_seconds}s over ${row.tail_turns} of ${row.turns} turn(s)  ` +
-				`completed ${row.run_completed_at ?? "(unset)"}, last turn ${row.last_turn_at ?? "(unset)"}`,
+				`completed ${row.run_completed_at ?? "(unset)"}, last turn ${row.last_turn_at ?? "(unset)"}, ` +
+				`started ${row.run_started_at ?? "(unset)"} after the workflow's first record at ${row.first_session_window_at ?? "(unset)"}`,
 		),
 		"",
-		"`bun run scripts/efficiency/analyze.ts run-window-drift --dataset <dir>` lists every drifting run with its `drift_kind`:",
-		"  attributed      the recording states the run's session was rebound to a later run",
+		"`bun run scripts/efficiency/analyze.ts run-window-drift --dataset <dir>` lists every drifting run with its `drift_kind` and `session_reason`:",
+		"  attributed      the recording states the run's session was rebound to a later run (`closed`)",
+		"  resumed         the recording states the run kept its own conversation (`opened`)",
 		"  clock-artifact  the recorded completion is not after the start, so the window cannot be read",
-		"  unexplained     neither — this is the defect the build refuses",
+		"  unexplained     no session-window row names the run — the defect the build refuses when one was due",
 		"",
-		`The dataset written to ${datasetPath} was removed. Only workflows whose own recording carries a \`runtime.session_window.*\` event are judged; a workflow that predates the record is reported as unrecorded.`,
+		`The dataset written to ${datasetPath} was removed. A run that predates its workflow's first session-window event, or whose window cannot be read, is reported as unrecorded instead of failing the build.`,
 	];
 	return `${lines.join("\n")}\n`;
 }

@@ -29,7 +29,7 @@ import {
 import { extractTables } from "./lib/extract.ts";
 import { buildInventory } from "./lib/inventory.ts";
 import {
-	describeUnrecordedRunWindow,
+	describeUnexplainedRunWindow,
 	inspectRunWindow,
 } from "./lib/run-window.ts";
 import { datasetReadme } from "./lib/schema-readme.ts";
@@ -145,7 +145,7 @@ function main(argv: readonly string[]): number {
 		fs.rmSync(write.path, { force: true });
 		fs.rmSync(path.join(outDir, "README.md"), { force: true });
 		process.stderr.write(
-			describeUnrecordedRunWindow(runWindow.failures, write.path),
+			describeUnexplainedRunWindow(runWindow.failures, write.path),
 		);
 		return 1;
 	}
@@ -177,16 +177,25 @@ function main(argv: readonly string[]): number {
 			0,
 		),
 		notes: extraction.tables.notes.length,
-		// The run/session window split: how many drifting runs the build judged,
-		// what the recording explained, and how many belong to a generation that
-		// cannot state a session window at all.
+		// The run/session window split: two populations, never mixed — the runs the
+		// session record covers (and what it says) and the runs it does not cover at
+		// all (and whether a record was due). `drifting` is their sum.
 		runWindow: {
 			drifting: runWindow.rows.length,
-			judged: runWindow.judged.length,
-			attributed: runWindow.attributed,
+			judged: {
+				runs: runWindow.judged.rows.length,
+				attributed: runWindow.judged.attributed,
+				resumed: runWindow.judged.resumed,
+			},
+			unrecorded: {
+				runs: runWindow.unrecorded.rows.length,
+				beforeRecord: runWindow.unrecorded.beforeRecord,
+				afterRecord: runWindow.unrecorded.afterRecord,
+			},
+			// Over every row, recorded or not: the query's `clock-artifact` class.
 			clockArtifact: runWindow.clockArtifact,
 			unexplained: runWindow.unexplained,
-			unrecorded: runWindow.unrecorded.length,
+			recordedWorkflows: runWindow.recordedWorkflows.length,
 		},
 		buildMs: Math.round(performance.now() - started),
 	};

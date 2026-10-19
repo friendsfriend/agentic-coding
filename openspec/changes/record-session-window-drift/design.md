@@ -15,8 +15,8 @@ Measured on the pinned snapshot, restored to the repository's current denominato
 | figure | value |
 | --- | --- |
 | runs carrying turns after their own recorded completion | **156 of 1,259** (12.4 %), in **38** of 668 workflows |
-| turns those runs carry | **11,960 of 34,711** (34.4 %) |
-| preferred cost those runs carry | **114.50 of 441.9321** (25.9 %) |
+| turns those runs carry | **11,960 of 34,711** (34.4 %) — turn counts as the snapshot records them, before the cost repair; they are not a ratio against the repaired cost denominator below |
+| preferred cost those runs carry | **114.50 of the repaired 441.9321** units (25.9 %) |
 | tail after completion | median **1,032 s**, p90 **5,748 s**, max **63,380 s** |
 | runs that record no turns at all | **315 of 1,259** (25.0 %) |
 | sources of the drifting rows | `traces.otel-tui` 78, `telemetry.main-store` 76, `telemetry.backend` 1, `herdr.backend` 1 |
@@ -252,28 +252,75 @@ docs state them, with the fix listed as a follow-up.
 Where the plan left a detail open, these were chosen and are recorded here rather
 than asked about:
 
-- **[The alarm's gate is the drifting run's own workflow]** (`run-window.ts`): a
-  workflow is judged when its own `v_events` rows contain any
-  `runtime.session_window.%` event, so a workflow that mixes a recorded round
-  with an earlier unrecorded one is judged as a whole. The alternative — judging
-  per run on "did *this* run's session emit a window event" — would silently pass
-  an unrecorded tail in a recorded workflow, which is the defect the alarm exists
-  to catch.
-- **[`drift_kind` is decided in the order `attributed` → `clock-artifact` →
-  `unexplained`]**: an explained tail wins over an unreadable window (both are
-  accounted for), and only a row with neither is a defect. `clock-artifact` ranks
-  second because it is a statement about the *reader* (D5), not about the run.
-- **[`tail_turns` counts turns that started after the run's recorded completion]**:
-  the same clock reference `tail_window` already used for `last_turn_at`, so the
-  count and the measured tail can never disagree about which turns are in the
-  tail.
+- **[The alarm's gate is each drifting run, not its workflow]** (`run-window.ts`,
+  `queries.ts`): a run is *recorded* iff a `runtime.session_window.opened` or
+  `.closed` row names **that run id** (`session_recorded`), and a workflow is not
+  judged as a whole. A per-workflow gate passes an unrecorded tail merely because
+  some other run of the same workflow recorded its own move — exactly the defect
+  the alarm exists to catch — and it also has to guess what "the workflow records"
+  means for a workflow that spans generations.
+- **[A run with no record of its own is split by whether one was due]**: it
+  *predates the record* when it started before its workflow's first session-window
+  event (`first_session_window_at`, `lib/run-window.ts`'s `recordWasDue`) or when
+  its own window cannot be read; that is counted and never fails. A run that
+  started after the workflow already recorded a window and still has none is a
+  **broken record** and fails the build, because the record should have named it.
+  Reporting it as merely unrecorded would let the alarm go quiet exactly when the
+  recording regressed.
+- **[`drift_kind` is decided in the order `clock-artifact` → `attributed` →
+  `resumed` → `unexplained`]**: an unreadable window (`completed_at <=
+  started_at`) says nothing about the session, so it wins outright (D5); then the
+  record decides — `attributed` for a `closed` (the session went on under a later
+  run), `resumed` for an `opened` only (the run kept its own conversation); only a
+  run the record does not name is `unexplained`.
+- **[`resumed` is a drift class, not a defect]**: the abort-and-resume path keeps
+  the same run id, and the dataset still dates the run's completion at its last
+  `agent.handoff`, so the turns of the resumed attempt look like a tail of the
+  same run. The `opened` record is the statement that they are that run working
+  on, and classifying it as `unexplained` would fail every resumed run.
+- **[`tail_turns` counts turns that started after the run's recorded completion,
+  and the query's threshold requires one]**: the same clock reference
+  `tail_window` already used for `last_turn_at`, plus `COALESCE(tw.tail_turns, 0)
+  > 0` in the outer filter, so a run whose single turn merely straddles its
+  completion is not drift and the count and the measured tail cannot disagree.
 - **[The alarm deletes the dataset and its README before exiting]** — the shape
   the empty-source alarm already has — so a failed build cannot leave a
   plausible-looking dataset that a later step reads as current.
-- **[`runWindow` is a new object in the build summary]**: `drifting`, `judged`,
-  `attributed`, `clockArtifact`, `unexplained`, `unrecorded`. `drifting` counts
-  every row the query reports, `judged` the rows in recorded workflows, so
-  `judged = attributed + clockArtifact + unexplained` always holds.
+- **[`runWindow` keeps the two populations apart]**: `drifting`, then
+  `judged {runs, attributed, resumed}` and `unrecorded {runs, beforeRecord,
+  afterRecord}`, plus `clockArtifact`, `unexplained` and `recordedWorkflows`. An
+  earlier single bag of numbers made `judged` and `unrecorded` look like one
+  population and left `attributed + clockArtifact + unexplained = judged` holding
+  only by accident.
+- **[The session-window payload travels into the dataset]**: `events` gains
+  `session_reason`, `session_rebound_to`, `session_previous_run_id` and
+  `session_conversation_id` (`DATASET_SCHEMA_VERSION` 3 → 4, append-only), so the
+  query reports the *reason* rather than inferring it from an event name alone.
+- **[The conversation id never travels as `sessionId`]**: `src/server/telemetry-parser.ts`
+  maps `sessionId` to `herdr.session.id`, which is the run id for every other
+  envelope; a second identifier space under the same attribute would collide. The
+  window envelopes carry `herdr.session.conversation_id`.
+- **[A measurement and a tool outcome are charged to their own run]**: the cost
+  ceiling takes the identity the event was delivered under (the run that produced
+  the message) and a tool outcome takes the run that *started* the call
+  (`tool_execution_start` records the owner by `toolCallId`, `telemetry.ts`), and
+  `onToolOutcome` ignores a run the host no longer tracks. Charging the bound run
+  instead would let a late failure of a retired run stop whatever run happens to
+  be bound now, and would let a rebinding drop the ceiling for every later run.
+- **[A rebinding drains the stream for one macrotask turn]**: pi-durable publishes
+  a commit's events synchronously and delivers them a microtask later, so without
+  the wait a frame already committed under the leaving run would resolve the new
+  identity and be re-stamped with the wrong run. The wait costs one turn of the
+  event loop, once per rebinding, inside `ensureRun`.
+- **[A failed `closed` record is retried, not lost]**: `emitSessionWindow` returns
+  whether the append happened and the host keeps an unwritten close per
+  conversation, re-emitting it on the conversation's next binding. A silently
+  dropped close is precisely `unexplained` drift, which the alarm refuses.
+- **[The binding map's lifetime is the host process]**: like the per-conversation
+  telemetry stream it exists so the conversation can attribute later turns, so it
+  is dropped only at shutdown, never on `stopRun`. `stopRun` therefore also guards
+  its conversation-keyed deletes by the current binding: a successor ensured while
+  the abort is in flight keeps the context, ceiling state and identity it wrote.
 - **[`adopted` is tested through a restart, not by reaching into the host]**: the
   test opens a file-backed host, shuts it down and opens a second host over the
   same layout, so the second host finds the run map and the conversation without a
@@ -286,7 +333,8 @@ no session-window events, which is exactly the `unrecorded` case (D4), and every
 reader treats a missing record as "not recorded" rather than "no tail". Rollback
 is the revert of one change: the envelopes stop being written, `run-window-drift`
 still classifies (with every drift row `unexplained` or `clock-artifact`), and the
-build alarm falls back to counting `unrecorded` workflows.
+build alarm reports the drifting runs as unrecorded-before-record instead of
+judging them.
 
 ## Open Questions
 

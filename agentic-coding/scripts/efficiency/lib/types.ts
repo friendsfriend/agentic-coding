@@ -270,6 +270,14 @@ export interface EventRow {
 	/** The wait kind a `workflow.waiting`/`workflow.waiting.ended` row reports
 	 * (efficiency backlog item 12). Append-only: an older dataset reads NULL. */
 	wait_kind: string | null;
+	/** The session window's own vocabulary (efficiency backlog item 20): why a
+	 * conversation was bound to a run (`created`/`rebound`/`adopted`/`resumed`),
+	 * the run it moved to, the run it left, and the conversation it belongs to.
+	 * Append-only: an older dataset reads NULL. */
+	session_reason: string | null;
+	session_rebound_to: string | null;
+	session_previous_run_id: string | null;
+	session_conversation_id: string | null;
 	/** How many effects the repair expired and how many runs it retired. */
 	repair_effects: number | null;
 	repair_runs: number | null;

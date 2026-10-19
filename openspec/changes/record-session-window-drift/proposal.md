@@ -3,8 +3,9 @@
 A run's session outlives the run, and nothing records it: 156 of the 1,259
 preferred runs in the pinned snapshot (12.4 %, in 38 workflows) carry turns after
 their own recorded completion — median tail 1,032 s, p90 5,748 s, max 63,380 s —
-and those 156 runs hold 11,960 turns (34.4 % of the snapshot's 34,711) and 114.50
-of its 441.9321 preferred cost units (25.9 %). A run recorded `complete` with a
+and those 156 runs hold 11,960 turns (34.4 % of the 34,711 the snapshot records;
+the turn counts are pre-repair and not a ratio of the cost denominator) and 114.50
+of the repaired 441.9321 preferred cost units (25.9 %). A run recorded `complete` with a
 6-minute window labels 17 minutes of later work, and 315 of 1,259 runs (25.0 %)
 record no turns at all because their work is attributed to an earlier run of the
 same step and role. Status, duration and cost per run are therefore wrong for a

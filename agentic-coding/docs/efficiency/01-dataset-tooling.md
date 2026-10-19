@@ -178,7 +178,7 @@ Every query reads the preferred rows and runs in a second or less.
 | `verifier-findings` | verifier findings by severity and role | `analyze.ts verifier-findings --dataset <out>` |
 | `runs` | per-run rollup for eyeballing one workflow | `analyze.ts runs --dataset <out> --limit 20` |
 | `source-recording` | per source, month and recording: outcomes, the share of calls with an argument digest, result size, duration and failure kind, and failure-only runs | `analyze.ts source-recording --dataset <out>` |
-| `run-window-drift` | runs whose turns continue past the run's own recorded completion, with the turns in the tail (`tail_turns`) and whether the recording explains it (`drift_kind`, see below) | `analyze.ts run-window-drift --dataset <out> --limit 20` |
+| `run-window-drift` | runs whose turns continue past the run's own recorded completion, with the turns in the tail (`tail_turns`), whether a session-window row names the run (`session_recorded`) and what the recording says (`drift_kind`, see below) | `analyze.ts run-window-drift --dataset <out> --limit 20` |
 
 ### `run-window-drift` and the session window
 
@@ -195,22 +195,46 @@ The query keeps the columns it always had (`run_id`, `workflow_id`, `role`,
 `last_turn_at`, `tail_seconds`, and the one-minute threshold) and adds:
 
 - `tail_turns` — how many of the run's turns started after its recorded
-  completion;
+  completion. The threshold and the count agree: a run with no turn in its tail
+  (`tail_turns` 0) is not drift, however long the one turn that straddles its
+  completion ran;
+- `session_recorded` — `1` iff a `runtime.session_window.opened` or
+  `runtime.session_window.closed` row names this run id. That is the gate: a run
+  the record names is *judged*, a run it does not name is *unrecorded*;
+- `session_reason`, `session_rebound_to`, `first_session_window_at` — the run's
+  own binding reason (`created`/`rebound`/`adopted`/`resumed`), the run it was
+  rebound to, and its workflow's first session-window instant (the moment the
+  workflow started recording one at all);
 - `drift_kind`:
-  - `attributed` — a `runtime.session_window.closed` event exists for this run at
-    or after its completion: the session went on under a later run, which did the
-    work the earlier run's row would otherwise claim;
+  - `attributed` — a `runtime.session_window.closed` event names this run: the
+    session went on under a later run, which did the work the earlier run's row
+    would otherwise claim;
+  - `resumed` — a `runtime.session_window.opened` event names this run: the run
+    kept (or resumed, or adopted) its own conversation, so the tail is the same
+    run working on the same session. This is the abort-and-resume path, where the
+    store clears `completed_at` and the dataset still dates the completion at the
+    last `agent.handoff`;
   - `clock-artifact` — `completed_at <= started_at`, i.e. the run's own window
-    cannot be read (the traces reader dates an `agent.handoff` span by its start);
-  - `unexplained` — neither, so nothing in the recording accounts for the tail.
+    cannot be read at all (the traces reader dates an `agent.handoff` span by its
+    start), so nothing can be concluded from its tail;
+  - `unexplained` — the window is readable and no session-window row names the
+    run, so nothing in the recording accounts for the tail.
 
-The build fails on an unexplained tail — but only in a workflow whose own
-recording carries a session-window event. A workflow that predates the record
-(the whole pinned snapshot) is counted and reported under `runWindow.unrecorded`
-in the build summary and still builds; an `attributed` or `clock-artifact` row is
-counted and passes. On failure the build deletes the dataset and its README,
-names the offending runs, their workflows and the query to inspect, and exits
-non-zero — the same shape as the empty-source alarm.
+The gate is **per run, not per workflow**, and the build summary keeps the two
+populations apart:
+
+- `runWindow.judged {runs, attributed, resumed}` plus a top-level
+  `clockArtifact` and `unexplained` over every row — the runs the record names
+  and what it says. They always build;
+- `runWindow.unrecorded {runs, beforeRecord, afterRecord}` — the runs it does not
+  name. `beforeRecord` counts the ones where no record is due (the run started
+  before its workflow's first session-window event, or its window cannot be
+  read); `afterRecord` counts a **broken record**, which fails the build.
+
+On failure the build deletes the dataset and its README, names the offending runs,
+their workflows and the query to inspect, and exits non-zero — the same shape as
+the empty-source alarm. On the pinned snapshot every drifting run is unrecorded
+and `beforeRecord` (the whole generation predates the record), so it builds.
 
 A query that a later step needs and this list does not have belongs in
 `scripts/efficiency/lib/queries.ts` (name, summary, SQL, columns, one example),

@@ -25,7 +25,10 @@ import {
 // backlog items 11 and 12): what a recorded repair retired, and which kind of
 // developer wait a recorded `workflow.waiting` row reports. Append-only, same
 // rule: a dataset built from an older-only snapshot carries NULL there.
-export const DATASET_SCHEMA_VERSION = 3;
+// 4: `events` gained the session window's own vocabulary (efficiency backlog item
+// 20): `session_reason`, `session_rebound_to`, `session_previous_run_id` and
+// `session_conversation_id`. Append-only, same rule.
+export const DATASET_SCHEMA_VERSION = 4;
 export const DATASET_FILE = "dataset.sqlite";
 
 const TABLES_DDL = `
@@ -186,6 +189,14 @@ CREATE TABLE events (
 	repair_runs INTEGER,
 	repair_count INTEGER,
 	wait_kind TEXT,
+	-- The session-window vocabulary (efficiency backlog item 20): the reason a
+	-- conversation was bound to a run (created, rebound, adopted, resumed), the
+	-- run it left and the run it moved to, and the conversation the window
+	-- belongs to. Append-only: an older dataset has them empty.
+	session_reason TEXT,
+	session_rebound_to TEXT,
+	session_previous_run_id TEXT,
+	session_conversation_id TEXT,
 	detail TEXT,
 	detail_hash TEXT,
 	detail_bytes INTEGER,
@@ -397,8 +408,8 @@ function insertAll(
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const eventStatement = db.prepare(
-		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, repair_effects, repair_runs, repair_count, wait_kind, detail, detail_hash, detail_bytes, confidence, preferred)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, repair_effects, repair_runs, repair_count, wait_kind, session_reason, session_rebound_to, session_previous_run_id, session_conversation_id, detail, detail_hash, detail_bytes, confidence, preferred)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 
 	for (const descriptor of SOURCE_LIST)
@@ -536,6 +547,10 @@ function insertAll(
 			event.repair_runs,
 			event.repair_count,
 			event.wait_kind,
+			event.session_reason,
+			event.session_rebound_to,
+			event.session_previous_run_id,
+			event.session_conversation_id,
 			event.detail,
 			event.detail_hash,
 			event.detail_bytes,

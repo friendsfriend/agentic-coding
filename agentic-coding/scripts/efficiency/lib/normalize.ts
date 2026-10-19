@@ -129,6 +129,13 @@ export interface NormalizedEvent {
 	/** What a workflow wait was about, and its subject (item 12). */
 	waitKind?: string;
 	waitSubject?: string;
+	/** The session window's own vocabulary (efficiency backlog item 20): why a
+	 * conversation was bound to a run, the run it left (`closed`) and the run it
+	 * moved to, and the conversation the window belongs to. */
+	sessionReason?: string;
+	sessionReboundTo?: string;
+	sessionPreviousRunId?: string;
+	sessionConversationId?: string;
 	/** Why a compaction ran, as the envelope's own `kind`: `auto-ceiling`,
 	 * `auto-overflow` or `manual`. Absent on a generation that only spells a
 	 * reason. */
@@ -319,6 +326,10 @@ export function normalizeRecord(
 		repairCount: num(record["herdr.repair.count"]),
 		waitKind: str(record["herdr.wait.kind"]),
 		waitSubject: str(record["herdr.wait.subject"]),
+		sessionReason: str(record["herdr.session.reason"]),
+		sessionReboundTo: str(record["herdr.session.rebound_to"]),
+		sessionPreviousRunId: str(record["herdr.session.previous_run_id"]),
+		sessionConversationId: str(record["herdr.session.conversation_id"]),
 		compactionReason: str(record.reason),
 		compactionKind: str(record.kind),
 		compactionBlocking: bool(record.blocking),

@@ -44,12 +44,15 @@ function redact(text: string): string {
 const CONTENT_LIMIT = 8192;
 
 /** Write one runtime envelope for `identity`'s run: to that run's telemetry
- * file, and to the OTLP receiver when the session exports there. */
+ * file, and to the OTLP receiver when the session exports there. Returns
+ * whether the envelope reached the file: the session window's `closed` record is
+ * the one envelope a reader treats as proof, so its writer has to be able to say
+ * that the append happened. */
 function emitEnvelope(
 	identity: TelemetryIdentity,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
+): boolean {
 	const envelope = {
 		schemaVersion: 1,
 		at: new Date().toISOString(),
@@ -67,6 +70,7 @@ function emitEnvelope(
 		...fields,
 	};
 	const output = identity.telemetryPath;
+	let written = false;
 	// The run environment pins this path inside the run's own worktree. That
 	// worktree is removed when the workflow closes, and a session that outlives it
 	// (or an event that lands after the removal) must not recreate it: the leftover
@@ -76,6 +80,7 @@ function emitEnvelope(
 		try {
 			fs.mkdirSync(path.dirname(output), { recursive: true });
 			fs.appendFileSync(output, `${JSON.stringify(envelope)}\n`);
+			written = true;
 		} catch {
 			/* observational only */
 		}
@@ -89,6 +94,7 @@ function emitEnvelope(
 			signal: AbortSignal.timeout(750),
 		}).catch(() => undefined);
 	}
+	return written;
 }
 
 /** Emit one content-free runtime envelope from a tool boundary, using the
@@ -100,8 +106,8 @@ export function emitToolTelemetry(
 	env: Readonly<Record<string, string>>,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
-	emitEnvelope(
+): boolean {
+	return emitEnvelope(
 		{
 			workflowId: env.HERDR_WORKFLOW_ID,
 			runId: env.HERDR_RUN_ID,
@@ -138,16 +144,27 @@ export interface TelemetryHooks {
 	/** Measured wall-clock timing of one committed assistant entry. */
 	readonly onTiming?: (entryId: string, timing: EntryTiming) => void;
 	/** The context size one committed assistant message carried, with the turn it
-	 * belongs to. The cost ceiling is decided from this measurement. */
-	readonly onMeasuredContext?: (info: {
-		readonly promptTokens: number;
-		readonly turnIndex: number;
-	}) => void;
+	 * belongs to and the identity that message was recorded under. The cost ceiling
+	 * is decided from this measurement, against the ceiling of the run named here
+	 * rather than the run that created the conversation. */
+	readonly onMeasuredContext?: (
+		info: {
+			readonly promptTokens: number;
+			readonly turnIndex: number;
+		},
+		identity: TelemetryIdentity,
+	) => void;
 	/** The kind of a compaction, for one the host admitted itself (`auto-ceiling`).
 	 * Undefined means pi-durable started it, and its own reason decides. */
 	readonly compactionKind?: (taskId: string) => CompactionKind | undefined;
-	/** One observation per finished tool call (the dead-surface rule). */
-	readonly onToolOutcome?: (observation: ToolOutcomeObservation) => void;
+	/** One observation per finished tool call (the dead-surface rule), with the
+	 * identity of the run that *started* that call: a call whose turn began under
+	 * one run stays that run's even if the conversation was rebound before the
+	 * outcome arrived, so a late failure can never be charged to a later run. */
+	readonly onToolOutcome?: (
+		observation: ToolOutcomeObservation,
+		identity: TelemetryIdentity,
+	) => void;
 }
 
 /** The task kind of pi-durable's built-in compaction task. */
@@ -193,8 +210,8 @@ export function emitRuntimeEnvelope(
 	identity: TelemetryIdentity,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
-	emitEnvelope(identity, event, fields);
+): boolean {
+	return emitEnvelope(identity, event, fields);
 }
 
 /** Why a conversation was bound to a run: `created` (the conversation was made
@@ -216,17 +233,20 @@ export type SessionWindowEvent =
 	| "runtime.session_window.closed";
 
 /** Emit one session-window envelope on the run binding it names. Both events
- * carry the conversation id as the envelope's session identity, so one session
- * is one key across all the runs it serves. Best-effort like every other
- * observation here: an unwritable telemetry file records nothing. */
+ * carry the conversation id as `herdr.session.conversation_id`, never as the
+ * envelope's `sessionId`: that field means *run* id everywhere else
+ * (`src/server/telemetry-parser.ts` maps it to `herdr.session.id`), and one
+ * attribute must not carry two identifier spaces. Best-effort like every other
+ * observation here — but the return value lets the host retry a `closed` record
+ * that could not be written, which a reader treats as proof of a continuation. */
 export function emitSessionWindow(
 	conversationId: ConversationId,
 	event: SessionWindowEvent,
 	identity: TelemetryIdentity,
 	fields: Record<string, unknown> = {},
-): void {
-	emitRuntimeEnvelope(identity, event, {
-		sessionId: String(conversationId),
+): boolean {
+	return emitRuntimeEnvelope(identity, event, {
+		"herdr.session.conversation_id": String(conversationId),
 		...fields,
 	});
 }
@@ -269,8 +289,9 @@ export async function attachTelemetry(
 	// working when it was written — not the run that created the conversation.
 	const identityOf = (): TelemetryIdentity =>
 		typeof identity === "function" ? identity() : identity;
-	const emit = (event: string, fields: Record<string, unknown> = {}): void =>
+	const emit = (event: string, fields: Record<string, unknown> = {}): void => {
 		emitEnvelope(identityOf(), event, fields);
+	};
 	let generationStart: number | undefined;
 	let thinkingStart: number | undefined;
 	let thinkingMs = 0;
@@ -283,6 +304,10 @@ export async function attachTelemetry(
 		string,
 		{ startedAt: number; turnIndex: number | undefined }
 	>();
+	// The run that started each in-flight tool call. A rebinding moves the
+	// conversation, not the call, so the outcome is charged to the run that began
+	// it (the dead-surface rule must never stop a run for another run's call).
+	const callOwners = new Map<string, TelemetryIdentity>();
 	/** `turn_start` events seen so far; -1 while the conversation has not started
 	 * a turn, so a call before the first turn records no index rather than 0. */
 	let turnIndex = -1;
@@ -381,6 +406,9 @@ export async function attachTelemetry(
 	const handle = (events: readonly AgentEvent[]) => {
 		for (const event of events) {
 			const now = Date.now();
+			// This event's identity, resolved once: the envelopes it produces and the
+			// measurements it reports are the same run's.
+			const current = identityOf();
 			switch (event.type) {
 				case "message_start":
 					if ((event.message as { role?: string }).role === "assistant") {
@@ -447,7 +475,10 @@ export async function attachTelemetry(
 							// The same measurement decides the cost ceiling: it is taken at the
 							// end of a committed turn, so a ceiling compaction is admitted at a
 							// turn boundary and never inside a tool call.
-							hooks.onMeasuredContext?.({ promptTokens: prompt, turnIndex });
+							hooks.onMeasuredContext?.(
+								{ promptTokens: prompt, turnIndex },
+								current,
+							);
 						}
 						if (tokens > 0 || cost > 0)
 							emit("runtime.usage", {
@@ -476,6 +507,7 @@ export async function attachTelemetry(
 						startedAt: now,
 						turnIndex: turnIndex < 0 ? undefined : turnIndex,
 					});
+					callOwners.set(event.toolCallId, current);
 					emit("runtime.tool_start", {
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
@@ -498,6 +530,9 @@ export async function attachTelemetry(
 				case "tool_execution_end": {
 					const tracked = toolCalls.get(event.toolCallId);
 					toolCalls.delete(event.toolCallId);
+					// The run that began this call, not the run bound when it ended.
+					const owner = callOwners.get(event.toolCallId) ?? current;
+					callOwners.delete(event.toolCallId);
 					const result = toolResultTelemetry(event.entry);
 					// A result entry that never survived is a host error (the tool task
 					// faulted or was orphaned); a surviving one states its own error flag,
@@ -534,13 +569,16 @@ export async function attachTelemetry(
 						// An observer is the run's supervisor, not its runtime: a throw here
 						// would break the event stream it is watching, so it is swallowed.
 						try {
-							hooks.onToolOutcome({
-								tool: event.toolName,
-								ok: !isError,
-								...(failureKind ? { kind: failureKind } : {}),
-								...(turn !== undefined ? { turn } : {}),
-								...(errorLine ? { errorLine } : {}),
-							});
+							hooks.onToolOutcome(
+								{
+									tool: event.toolName,
+									ok: !isError,
+									...(failureKind ? { kind: failureKind } : {}),
+									...(turn !== undefined ? { turn } : {}),
+									...(errorLine ? { errorLine } : {}),
+								},
+								owner,
+							);
 						} catch {
 							/* observation is best-effort */
 						}

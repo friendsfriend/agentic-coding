@@ -56,19 +56,22 @@
 
 - [x] 3.1 Add `scripts/efficiency/lib/run-window.ts`: run the shared run-window SQL
   (the same statement the query registers) against a dataset path and return the
-  drifting rows split by `drift_kind` plus the workflows that recorded no
-  `runtime.session_window.*` event, so the alarm and the query can never disagree
-  about what a tail is.
+  drifting rows split by `drift_kind` and by whether a session-window row names
+  *that run* (`session_recorded`), so the alarm and the query can never disagree
+  about what a tail is and the gate is per run, not per workflow.
 - [x] 3.2 Wire it into `build-dataset.ts` after `writeDataset` and before the
   summary: fail (delete the dataset and its README, print the offending runs,
-  their workflows and `analyze.ts run-window-drift`) when a row is `unexplained`
-  in a workflow whose recording carries a session-window event; report unrecorded,
-  attributed, clock-artifact and unexplained counts under `runWindow` in the
-  summary; never fail a dataset whose workflows recorded no session window.
-- [x] 3.3 Add `test/efficiency/efficiency-run-window-alarm.test.ts`: an unexplained
-  tail in a recorded workflow fails and leaves no dataset behind; the same tail in
-  a workflow with no session-window record passes and is reported unrecorded; an
-  attributed tail and a clock-artifact tail pass.
+  their workflows and `analyze.ts run-window-drift`) when a drifting run has no
+  session-window record of its own although its workflow already recorded one
+  (`unrecorded.afterRecord`); report the judged and unrecorded populations,
+  attributed, resumed, clock-artifact and unexplained counts under `runWindow` in
+  the summary; never fail a run that predates its workflow's record or whose
+  window cannot be read.
+- [x] 3.3 Add `test/efficiency/efficiency-run-window-alarm.test.ts`: a drifting run
+  with no record of its own fails a workflow that already records windows and
+  leaves no dataset behind; the same tail in a workflow with no session-window
+  record passes and is reported `beforeRecord`; an attributed tail, an
+  `opened`-only tail and a clock-artifact tail pass.
 
 ## 4. Document the two windows
 
@@ -78,8 +81,8 @@
   run that continued it, and the coverage limit that a restart between two rounds
   leaves the turns of the detached conversation unrecorded.
 - [x] 4.2 In `docs/efficiency/01-dataset-tooling.md`, list the query's new
-  `tail_turns` and `drift_kind` columns and the meaning of each class, and state
-  the build alarm's rule and its per-workflow gate.
+  `tail_turns`, `session_recorded` and `drift_kind` columns and the meaning of each
+  class, and state the build alarm's rule and its per-run gate.
 
 ## 5. Verify
 

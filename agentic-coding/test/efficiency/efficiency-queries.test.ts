@@ -1048,6 +1048,10 @@ describe("ready-made queries", () => {
 				`INSERT INTO events (workflow_id, run_id, source, source_rank, at, event, event_class, confidence, preferred)
 				 VALUES ('wf-window', ?, 'telemetry.main-store', 0, ?, ?, 'lifecycle', 'exact', 1)`,
 			);
+			const sessionEvent = db.query(
+				`INSERT INTO events (workflow_id, run_id, source, source_rank, at, event, event_class, session_reason, confidence, preferred)
+				 VALUES ('wf-window', ?, 'telemetry.main-store', 0, ?, ?, 'lifecycle', ?, 'exact', 1)`,
+			);
 			/** One run whose second turn starts `tailMinutes` after its completion. */
 			const addRun = (
 				runId: string,
@@ -1079,8 +1083,10 @@ describe("ready-made queries", () => {
 				"2026-03-01T11:10:00.000Z",
 				"2026-03-01T11:20:00.000Z",
 			);
-			// A session-window record that precedes its own completion explains
-			// nothing either: the binding had already moved on before this run ended.
+			// A record that precedes the run's own completion still explains the
+			// tail: the gate is *whether* a session-window row names the run, not
+			// when the row arrived (a resumed run's `opened` lands before its own
+			// handoff, and that is the same continuation).
 			addRun(
 				"run-early-record",
 				"2026-03-01T11:30:00.000Z",
@@ -1091,6 +1097,20 @@ describe("ready-made queries", () => {
 				"run-early-record",
 				"2026-03-01T11:35:00.000Z",
 				"runtime.session_window.closed",
+			);
+			// The same run resumed its own conversation after the abort: the record
+			// is the `opened` row, and the tail is that run working on.
+			addRun(
+				"run-resumed",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-resumed",
+				"2026-03-01T11:15:00.000Z",
+				"runtime.session_window.opened",
+				"resumed",
 			);
 			// A window that cannot be read: the completion is not after the start.
 			addRun(
@@ -1105,6 +1125,19 @@ describe("ready-made queries", () => {
 				"2026-03-01T13:00:00.000Z",
 				"2026-03-01T13:30:00.000Z",
 				"2026-03-01T13:29:00.000Z",
+			);
+			// One turn that starts before the completion and ends after it: over the
+			// threshold, but no turn of the tail, so it is not drift.
+			run.run(
+				"run-straddling",
+				"2026-03-01T14:00:00.000Z",
+				"2026-03-01T14:10:00.000Z",
+			);
+			turn.run(
+				"run-straddling",
+				0,
+				"2026-03-01T14:09:00.000Z",
+				"2026-03-01T14:20:00.000Z",
 			);
 
 			const rows = db
@@ -1125,10 +1158,19 @@ describe("ready-made queries", () => {
 			});
 			expect(byRun.get("run-unexplained")).toMatchObject({
 				drift_kind: "unexplained",
+				session_recorded: 0,
 				tail_turns: 1,
 			});
 			expect(byRun.get("run-early-record")).toMatchObject({
-				drift_kind: "unexplained",
+				drift_kind: "attributed",
+				session_recorded: 1,
+				tail_turns: 1,
+			});
+			// A run that kept its own conversation: recorded, and named as such.
+			expect(byRun.get("run-resumed")).toMatchObject({
+				drift_kind: "resumed",
+				session_recorded: 1,
+				session_reason: "resumed",
 				tail_turns: 1,
 			});
 			expect(byRun.get("run-clock")).toMatchObject({
@@ -1142,6 +1184,10 @@ describe("ready-made queries", () => {
 				expect(byRun.get(runId)?.tail_seconds).toBeGreaterThanOrEqual(599);
 			expect(byRun.get("run-clock")?.tail_seconds).toBeGreaterThanOrEqual(1199);
 			expect(byRun.has("run-inside")).toBe(false);
+			// A tail is a run with turns *after* its completion: a run whose only
+			// turn straddles the completion (`tail_turns` 0) is not drift at all, so
+			// the threshold and the counted tail agree.
+			expect(byRun.has("run-straddling")).toBe(false);
 			// The columns the query has always reported are all still there.
 			for (const column of query?.columns ?? [])
 				expect(rows[0]).toHaveProperty(column);
