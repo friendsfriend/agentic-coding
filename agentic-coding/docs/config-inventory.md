@@ -32,7 +32,7 @@ cannot select the root: a root-selecting key inside it is ignored and reported.
 | `providers/*.json` | JSON | `src/server/integrations/provider-store.ts` | `${VAR}` placeholders only; written 0600. |
 | `apps/definitions/*.json`, `libraries/definitions/*.json`, `infrastructure/definitions/*.json` | JSON | `src/server/environment/manager.ts`, `config.ts` | `${CONFIG}`/`$CONFIG` placeholder expansion. |
 | `apps/defaults/<app>.json` | JSON | `src/server/actions/default-target.ts` | Which target is the default for one app and action, so a choice between runtime families is decided instead of guessed. Read by the agent build/test tools, `env_list`, the developer's UI action, the validation gate and the smoke check; drafted and promoted by `env-setup` like any definition file. |
-| `stages/definitions/*.json` | JSON | `src/server/stages/catalog.ts` | Hosted (non-production) stage definitions: `ident`, `displayName`, `environment`, `system`, `access`, `apps`, `logins`, `allowedOrigins`, `readOnlyExceptions`, `limits`, optional `data`/`wiki`/`planApproval`/`exclusive`/`insecureHttp`. Credential fields are `${VAR}` references, never values. A `app` key names a definition under `apps/definitions/`. |
+| `stages/definitions/*.json` | JSON | `src/server/stages/catalog.ts` | Hosted (non-production) stage definitions: `ident`, `displayName`, `environment`, `system`, `access`, `apps`, `logins`, `allowedOrigins`, `readOnlyExceptions`, `limits`, optional `data`/`wiki`/`planApproval`/`exclusive`/`insecureHttp`, and `oauth2.providers` (token endpoint, client id, optional scope/audience, `clientAuth`). A role may declare `"login": "oauth2"` with `provider`, `grant`, optional `bearerOrigins` and `refreshToken`. Credential fields are `${VAR}` references, never values — including a provider's `clientId` and `clientSecret`. A `app` key names a definition under `apps/definitions/`. |
 | `stages/policy.json` | JSON | `src/server/stages/catalog.ts` | Catalog-wide policy for the stage tree above: `deniedHostPatterns` (hosts a stage may never name), `ceilings` (per-stage limits no definition can raise, including `maxLoginHandoffSeconds`, default ceiling 1800) and `interactiveLogin` (`"local"`, the default, allows a `stage_login` hand-off to open a headed window; `"never"` forbids it for the whole catalog, which is the seam for unattended use). A stage's own `interactiveLogin` may narrow the policy and never widens it. Optional; absent means the built-in defaults. |
 | `scripts/**` | native | `src/server/environment/example-config.ts` | Stay in their own formats. |
 | `environment-server.json` | JSON | environment authority | Server handoff for a spawned backend. |
@@ -82,14 +82,26 @@ Ownership is `src/server/stages/`:
   field path and the rule it broke, never a credential value.
 - `guard.ts` / `limits.ts` — the origin and read-only rules a bound browser
   session enforces, and the per-stage session/action bounds.
+- `oauth2.ts` / `api-request.ts` — the OAuth 2.0 token path (`add-stage-oauth2-auth`):
+  the in-memory token store with its single-flight renewal, refresh-token
+  rotation, entry cap, absolute lifetime and forget action, and the token
+  call/`stage_api_request` implementation. A token, a client secret, a refresh
+  token and an authorization code are the run's secrets from the moment they
+  exist: they join the redaction set, are never journaled, and the only token
+  facts any surface reports are `expiresAt`, `scopes`, `audience` and `issuer`.
 - `routes.ts` / `operations.ts` — the read surfaces and the one write (the
   credential flow above), plus their in-process twin for a transport-less shell.
+  The OAuth 2.0 additions are two POST routes on the same owner-scoped agent
+  surface: `stage-api-request` and `stage-token-info`.
 
 The only function that turns a reference into a value is
 `resolveStageCredential`, called by the login path alone; no route module
 imports it. `.env` therefore stays the sole credential store, and a stage file,
 a log line, a tool result and the Settings section all carry names and presence
-instead of values.
+instead of values. The OAuth 2.0 path reads its own references through
+`resolveStageOAuthCredential` (provider `clientId`/`clientSecret`) and a role's
+`refreshToken`, which have the same contract: the value is resolved at the
+moment a token request is built and never stored.
 
 The reader, the policy it enforces and the Settings section are described in
 `docs/settings-inventory.md` and `docs/agent-environments.md`.

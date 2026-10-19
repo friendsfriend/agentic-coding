@@ -444,6 +444,66 @@ a production-like name is refused by the catalog, and only the operator's own
   the role declares a `totp` reference: the code is derived from the shared
   secret (RFC 6238) at the moment it is typed, so the secret is the only stored
   value.
+- **A role may speak OAuth 2.0 instead, and then the server holds the token.**
+  `"login": "oauth2"` is a third recipe: the role names a `provider`
+  (`oauth2.providers.<name>`: an https `tokenEndpoint`, a `clientId`
+  ``${VAR}``, an optional `clientSecret` ``${VAR}``, `scope`, `audience` and
+  `clientAuth`: `basic` — the default — or `body`), a `grant`
+  (`client_credentials` or `refresh_token`), and optionally `bearerOrigins`.
+  `stage_login` asks the provider for a token and answers `ok` with
+  `via: "token"` once one exists — no page, no window, no typing — so an
+  unattended policy (`interactiveLogin: "never"`) is the normal case for the
+  two grants that need no person: a `client_credentials` role, and a
+  `refresh_token` role whose ``${VAR}`` refresh token the `.env` sets. A missing
+  reference is the familiar `credential-missing` naming the variable, and a
+  provider refusal is `login-failed` with the provider's own `error` code (its
+  `error_description`, scrubbed and bounded, is the message) — never a token.
+  `authorization_code` is *declared* by the schema for the user-delegated case
+  but is not obtained by this phase: `stage_login` answers
+  `login-failed [unsupported_grant]` until the local-redirect hand-off lands.
+- **The token is the server's, and only its shape is ever reported.** The
+  access token lives in an in-memory store keyed by `(stage, app, role,
+  provider, scope set)`, is renewed single-flight when a caller arrives inside
+  the skew window (a rotated refresh token replaces the old one), is forgotten
+  when the role's credential is rewritten in Settings, and is bounded by an
+  absolute lifetime and an entry cap so a long-lived
+  process cannot grow it without limit. It is never written to a file, a store
+  table, a log line, a journal entry, a tool result or an evidence file, and it
+  never reaches the model: `stage_token_info` presents exactly `expiresAt`,
+  `scopes`, `audience` and `issuer`, and every reply passes the redactor over
+  the live token values (and their URL-encoded forms) as well as over `.env`.
+  `browser_network` says whether a request carried an `Authorization` header and
+  shows `authorization: "«redacted»"` in place of its value.
+- **`stage_api_request` is how a run calls an API application.** It sends the
+  role's token to the application's configured origin and nowhere else: the tool
+  takes a **path** (`/v1/requests?limit=5`), never a URL, so the host cannot be
+  redirected by the model; an `Authorization` header the agent supplies is
+  refused (`stage-auth-header`) rather than overwritten; the stage's origin
+  allow-list must contain the result; a `read-only` stage refuses any
+  state-changing method and any declared exception that does not match; the
+  body is bounded at 64 KiB and the response at 256 KiB (truncated, with
+  `truncated: true` and no silent cut); the call is bounded by a 20 s timeout
+  and one renewal-and-retry on `401`; and only allow-listed response headers
+  (`content-type`, `etag`, `location`, `retry-after`, …) are returned — never
+  `set-cookie` or a hop-by-hop header. Calls count against the stage's
+  `maxActionsPerMinute` like any other stage action.
+- **A bearer header is scoped to an exact origin.** `bearerOrigins` declares
+  the origins a *browser session* also authenticates with the role's token. The
+  header is added by the context's route handler, which asks the token store per
+  request: the origin must match one the stage declares exactly, a request that
+  already carries an `Authorization` header is left alone, a cross-origin
+  redirect lands on an unmatched origin and therefore goes out bare, and a token
+  that cannot be obtained leaves the request unauthenticated instead of aborting
+  the page. Nothing about the header is readable — a page can neither read it
+  back nor find it in a tool result.
+- **A client-side token is the limit worth knowing.** The token is held for the
+  session, not *inside* it: this design authenticates the server's own requests,
+  so an application whose JavaScript performs the OAuth 2.0 flow itself (a
+  browser SPA holding the token, calling its API from the page) cannot be driven
+  this way. Such a stage keeps the interactive-application path — a `form`
+  recipe and a hand-off, or a service account the application accepts — and the
+  unattended seam is an `oauth2` role for the API it calls, which is what
+  `stage_api_request` is for.
 - **The session's own identity is not readable.** On a stage-bound session the
   script facade refuses `context.cookies`, `context.storageState`,
   `context.addCookies` and `context.clearCookies`
