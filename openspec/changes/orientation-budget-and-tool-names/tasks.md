@@ -1,21 +1,23 @@
 ## 1. Briefs: budget and the plan's file list
 
-- [x] 1.1 `agent-definitions/instructions/planning.md`: after the
-  `openspec new change` step, add the skeleton-first sentence (create the change
-  directory, write a skeleton of the first artifact, extend it and each later
-  artifact in place); in the domain-surface paragraph add the exploratory budget
-  with the restated dependency-read rule and the `openQuestions` fallback; change
-  the plan-result field description so `artifacts` is documented as the plan's
-  file list (the change's artifact paths, then every repository-relative file the
-  plan creates or changes, forwarded to the implementation assignment). Added
-  bytes: 661 net (skeleton 209, budget sentence 319, `artifacts` description
-  +133), as measured in `design.md` D6.
+- [x] 1.1 `agent-definitions/instructions/planning.md`: after the `openspec
+  status`/`openspec instructions` explanation, add the skeleton-first paragraph
+  keyed on the artifact's `resolvedOutputPath` and returned `template` (write the
+  first artifact's skeleton as soon as that path is known, extend it and each
+  later artifact in place); in the domain-surface paragraph add the exploratory
+  budget with the restated dependency-read rule and the `openQuestions` fallback;
+  change the plan-result field description so `artifacts` is documented as the
+  plan's file list (the change's artifact paths, then every repository-relative
+  file the plan creates or changes, forwarded to the implementation assignment).
+  Added bytes: 846 net (skeleton paragraph 394, budget sentence 319, `artifacts`
+  description +133), as measured in `design.md` D6.
 - [x] 1.2 `agent-definitions/instructions/wiki-openspec.md` and
   `agent-definitions/instructions/wiki-research.md`: insert the `## Write early`
   section after their first section, in each brief's own vocabulary (discovery
   search names a target / first directive's claim is corroborated), keeping the
-  update-first sequence as the thing that decides the write path. Added bytes:
-  413 B (`wiki-openspec.md`) and 438 B (`wiki-research.md`).
+  update-first sequence as the thing that decides the write path, and keying the
+  write on that sequence's own target rather than on the search. Added bytes:
+  485 B (`wiki-openspec.md`) and 487 B (`wiki-research.md`).
 - [x] 1.3 Regenerate `src/workflow/embedded.generated.ts` with
   `bun run scripts/generate-embedded.ts`; confirm the pinned digests match the
   on-disk assets and that the file is only machine-written.
@@ -50,8 +52,10 @@
 - [x] 3.3 Verification changed files: extend the `core.triage`-only condition to
   `core.verification` in `src/workflow/effect-runner.ts` (the launch path at
   `assignmentFor`'s call site plus the two re-render paths) so the existing
-  `Changed files:` line is rendered for verifiers, bounded to 100 paths followed
-  by the count of the remainder. Leave the triage line exactly as it is.
+  `Changed files:` line is rendered for verifiers, bounded to 100 paths and to
+  4 KiB of line text, each path gated like a plan path (repository-relative, no
+  control characters, at most 200 characters) and followed by the count of the
+  remainder. Leave the triage line exactly as it is.
 - [x] 3.4 Prior findings: for `core.verification` runs, decode the latest
   recorded artifact per `core.verification:<role>` evidence kind (validating each
   recorded finding's severity, path, line and detail) and render one
@@ -114,6 +118,13 @@
   preserved `bash` bound, `grep` fallback and `read` description contracts.
 - [x] 6.5 Query test: `explore-tools` over a fixture dataset reports the per-run
   counts, the bash share and the median exploratory result bytes.
+- [x] 6.7 Review-round fixes: one owner for the surface wording
+  (`ASSIGNMENT_TOOL_SURFACE` imported by `assignment.ts`), a `searchRegistered`
+  variant so no description names `grep` on the orchestrator host, the extended
+  `bash` clause (focused builds, tests, `openspec`, the repository's git and
+  handoff commands), the per-path/4 KiB changed-files bound, the multi-line input
+  rendered as its own section, and `resolveCodemodeRegistered` /
+  `toolDescriptionsForTest` with host-level tests.
 - [x] 6.6 Run `bun run type-check` (0 errors), `bun run lint` (zero
   diagnostics), the focused tests above with a temporary `HOME`,
   `AGENTIC_CODING_CONFIG_DIR` and `HERDR_WIKI_DIR`, then `git status --short` is

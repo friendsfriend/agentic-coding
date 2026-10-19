@@ -818,8 +818,9 @@ describe("ready-made queries", () => {
 				`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, call_id, dedupe_key, tool, ok, result_bytes, recording, confidence, preferred)
 				 VALUES ('run-explore', 'explore', 'wf-explore', 'test', 1, ?, ?, ?, 1, ?, 'exact', 'exact', 1)`,
 			);
-			// Three bash calls and one read: the bash share is 75 % of the run's
-			// four calls, and the median exploratory result (100, 300, 900, 2000)
+			// Three bash calls and one read among five calls in all: the bash
+			// share is 60 % of the run, the exploratory set is the four
+			// non-`edit` calls, and the median of its sizes (100, 300, 900, 2000)
 			// is the lower middle.
 			insertCall.run("c1", "d1", "bash", 100);
 			insertCall.run("c2", "d2", "bash", 900);
