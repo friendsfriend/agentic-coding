@@ -53,6 +53,7 @@ import {
 	AGENT_TEST_PATH,
 	decodeRouteRequest,
 } from "../protocol.ts";
+import { MIN_SECRET_CHARS } from "../redaction.ts";
 import {
 	containerNameMatches,
 	type DockerRuntimeSelection,
@@ -112,8 +113,6 @@ const MAX_LOG_CONTAINERS = 8;
 /** The character budget one log collection may accumulate before it stops
  * reading further sources. */
 const MAX_LOG_COLLECT_CHARS = 4 * MAX_OUTPUT_CHARS;
-/** Declared secrets at least this long are replaced wherever they appear. */
-const MIN_SECRET_CHARS = 6;
 
 /** Everything the agent routes read. Absent capabilities answer 503 instead of
  * pretending the environment is empty. */

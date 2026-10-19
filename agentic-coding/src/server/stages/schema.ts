@@ -388,7 +388,14 @@ export type StageIdentityCachePolicy =
 	typeof stageIdentityCachePolicySchema.Type;
 
 /** The global policy file: the operator's deny list and the ceilings no stage
- * may exceed. Both optional; absent means "no denial, documented defaults". */
+ * may exceed. Both optional; absent means "no denial, documented defaults".
+ *
+ * `identityCache` is additive for *this* build only: both documents decode with
+ * `onExcessProperty: "error"`, so a build from before `add-stage-identity-cache`
+ * that meets an upgraded `policy.json` refuses it as unusable and then refuses
+ * every stage ("without a trustworthy policy the deny list is unknown"). A
+ * downgrade is therefore a config rollback, not a code-only one — remove the key
+ * (and a stage's own `identityCache`) before running the older build. */
 export const stagePolicySchema = Schema.Struct({
 	deniedHostPatterns: Schema.optional(Schema.Array(Schema.String)),
 	ceilings: Schema.optional(stageLimitsSchema),
@@ -399,7 +406,8 @@ export const stagePolicySchema = Schema.Struct({
 });
 export type StagePolicy = typeof stagePolicySchema.Type;
 
-/** One value-free complaint about one stage or policy file. It names the file * and the field, and never a value — in particular never a credential that
+/** One value-free complaint about one stage or policy file. It names the file
+ * and the field, and never a value — in particular never a credential that
  * failed the reference check. */
 export interface StageIssue {
 	readonly path: string;

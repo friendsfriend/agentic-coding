@@ -101,6 +101,8 @@ import {
 	handleStageCredentialRoute,
 	handleStageIdentityRoute,
 	handleStageRoute,
+	poolIdentityForget,
+	registerStageIdentityForget,
 	type StageRouteDeps,
 	stagesStatusValue,
 } from "./stages/routes.ts";
@@ -372,8 +374,18 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 
 	/** What both stage read surfaces and the credential flow read: the catalog of
 	 * the canonical configuration root, never a repository overlay. */
+	// The operator forget has to reach the pool, not the store: it is the pool that
+	// moves a key's generation on and clears the live sessions' source, so a
+	// refresh or a clean close cannot re-insert what was forgotten (`design.md`
+	// D5). Registering it makes the transport-less Settings path
+	// (`stages/operations.ts`) take the same code as the route. One process builds
+	// one pool, so the registration lives as long as the process (`CONC-402`).
+	const forgetIdentity = poolIdentityForget(browser.pool);
+	registerStageIdentityForget(forgetIdentity);
+
 	const stageDeps = (): StageRouteDeps => ({
 		configDir: options.configDir ?? "",
+		identityForget: forgetIdentity,
 		...(options.environment?.manager ? { appIdents: () => appIdents() } : {}),
 		// One token store and one rolling minute for the whole process
 		// (`add-stage-oauth2-auth`): the token a `stage_login` acquired is the one

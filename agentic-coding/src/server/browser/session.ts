@@ -95,6 +95,15 @@ export interface SessionIdentity {
 	/** The role whose login this session performs, `stageRole` at open time or the
 	 * role `stage_login` names. */
 	role: string;
+	/** The role a cached entry was *installed* for, when the context started with
+	 * one. A context carries one user's cookies and storage, so a login of a
+	 * different role into the same context is never captured: that would file one
+	 * user's state under another's key (`design.md` D1). */
+	installedRole?: string;
+	/** Every role this context has logged in as, the one it opened with
+	 * included. More than one means the context's jar belongs to two users, and
+	 * no capture of it may fill either role's key (`SEC-001`). */
+	loggedRoles?: readonly string[];
 	/** A cached entry was installed into this session's context before its first
 	 * navigation, so a silent check is worth performing. */
 	cacheInstalled: boolean;
@@ -272,6 +281,15 @@ export class BrowserSession {
 	/** The identity this session's login established, and where it came from
 	 * (`add-stage-identity-cache`). Holds a role and a source, never a value. */
 	identity: SessionIdentity | undefined;
+	/** The values a cached entry installed into this context, kept as the
+	 * redactor's secrets for as long as the context lives: an entry can be
+	 * forgotten (or expire, or be evicted) while the browser still holds its
+	 * cookies and storage, and an echo of one of them must stay masked
+	 * (`design.md` D6). Values, never a read surface of their own. */
+	installedIdentitySecrets: Array<{
+		readonly name: string;
+		readonly value: string;
+	}> = [];
 	viewport: { width: number; height: number };
 	/** Set when the browser process went away under this session. */
 	crashed = false;

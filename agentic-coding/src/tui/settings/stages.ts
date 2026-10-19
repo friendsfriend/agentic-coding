@@ -28,6 +28,10 @@ let cached: StagesStatusResponse | undefined;
 let identities: StageIdentitiesResponse | undefined;
 /** Message from the most recent failed call, consumed by the view's toast. */
 let lastError: string | undefined;
+/** The identity read's own failure. It never hides the catalog: a server that
+ * answered the stages but not their cached sign-ins leaves the credential rows
+ * usable and says so on the identity rows. */
+let lastIdentityError: string | undefined;
 
 /** How long one stage request may take. The section is a read of a local
  * server, and a request that never answers must not leave the section loading
@@ -48,6 +52,11 @@ export function lastStageError(): string | undefined {
 	return lastError;
 }
 
+/** Why the cached sign-ins could not be read, when the catalog itself could. */
+export function lastStageIdentityError(): string | undefined {
+	return lastIdentityError;
+}
+
 export function clearStageError(): void {
 	lastError = undefined;
 }
@@ -57,6 +66,7 @@ export function clearStageSnapshot(): void {
 	cached = undefined;
 	identities = undefined;
 	lastError = undefined;
+	lastIdentityError = undefined;
 }
 
 function message(error: unknown): string {
@@ -68,81 +78,98 @@ function serverUrl(): string | undefined {
 	return backendClient()?.baseUrl;
 }
 
-async function readJson(response: Response): Promise<unknown> {
+/** One JSON answer, or the message that says what failed. The noun is the
+ * caller's: the catalog and the identity listing are two reads, and a failure of
+ * the second must not claim the first is gone. */
+async function readJson(response: Response, noun = "stages"): Promise<unknown> {
 	const parsed = (await response.json().catch(() => undefined)) as
 		| { ok?: boolean; value?: unknown; error?: { message?: string } }
 		| undefined;
 	if (!response.ok || !parsed || parsed.error)
 		throw new Error(
-			parsed?.error?.message ?? `stages unavailable (${response.status})`,
+			parsed?.error?.message ?? `${noun} unavailable (${response.status})`,
 		);
 	return parsed.value;
 }
 
-/** Read the whole catalog: allow-listed stages and the refused files. */
+/** Read the whole catalog: allow-listed stages and the refused files.
+ *
+ * The identity cache is a second read, but a *separate* one: a server that
+ * answers the catalog and refuses the identity route (an older build, a version
+ * skew, an aborted request) must not collapse a stage list that was read fine
+ * into "unavailable", because the credential rows are what this section writes.
+ * A failed identity read keeps the last listing and reports its own message. */
 export async function refreshStageStatus(): Promise<
 	StagesStatusResponse | undefined
 > {
 	const baseUrl = serverUrl();
 	try {
-		if (baseUrl) {
-			const value = await readJson(
-				await createCustomFetch()(`${baseUrl}/api/v1/stages`, {
-					signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
-				}),
-			);
-			cached = value as StagesStatusResponse;
-			// The identity cache rides the same read: it is derived from the same
-			// catalog, so one round trip per section refresh is the bound.
-			identities = (await readJson(
-				await createCustomFetch()(`${baseUrl}/api/v1/stages/identity`, {
-					signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
-				}),
-			)) as StageIdentitiesResponse;
-		} else {
-			// A transport-less shell reads its own configuration root.
-			cached = inProcessStagesStatus();
-			identities = inProcessStageIdentities();
-		}
+		cached = baseUrl
+			? ((await readJson(
+					await createCustomFetch()(`${baseUrl}/api/v1/stages`, {
+						signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
+					}),
+				)) as StagesStatusResponse)
+			: inProcessStagesStatus();
 		lastError = undefined;
 	} catch (error) {
 		// An unread or unauthorized server is a section error, not a stale value.
 		lastError = message(error);
 		cached = undefined;
 		identities = undefined;
+		lastIdentityError = undefined;
+		return cached;
+	}
+	try {
+		identities = baseUrl
+			? ((await readJson(
+					await createCustomFetch()(`${baseUrl}/api/v1/stages/identity`, {
+						signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
+					}),
+					"cached sign-ins",
+				)) as StageIdentitiesResponse)
+			: inProcessStageIdentities();
+		lastIdentityError = undefined;
+	} catch (error) {
+		lastIdentityError = message(error);
 	}
 	return cached;
 }
 
 /**
- * Forget the cached sign-in of one `(stage, role)`. The next session of that role
- * starts empty and logs in the normal way; a session that lives right now keeps
- * the state it already has. Answers whether the call went through, leaving the
- * failure in `lastStageError`.
+ * Forget cached sign-ins: one `(stage, role)`, every role of one stage, or the
+ * whole cache (no filter at all). The next session of a forgotten key starts
+ * empty and logs in the normal way; a session that lives right now keeps the
+ * state it already has. Answers how many entries left, or `undefined` when the
+ * call failed — leaving the failure in `lastStageError`.
  */
-export async function forgetStageIdentity(
-	stage: string,
-	role: string,
-): Promise<boolean> {
+export async function forgetStageIdentity(filter: {
+	readonly stage?: string;
+	readonly role?: string;
+}): Promise<number | undefined> {
 	const baseUrl = serverUrl();
 	try {
-		if (baseUrl) {
-			await readJson(
-				await createCustomFetch()(`${baseUrl}/api/v1/stages/identity/forget`, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ stage, role }),
-					signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
-				}),
-			);
-		} else {
-			inProcessForgetStageIdentity(stage, role);
-		}
+		const answer = baseUrl
+			? ((await readJson(
+					await createCustomFetch()(
+						`${baseUrl}/api/v1/stages/identity/forget`,
+						{
+							method: "POST",
+							headers: { "content-type": "application/json" },
+							body: JSON.stringify({
+								...(filter.stage === undefined ? {} : { stage: filter.stage }),
+								...(filter.role === undefined ? {} : { role: filter.role }),
+							}),
+							signal: AbortSignal.timeout(STAGE_REQUEST_TIMEOUT_MS),
+						},
+					),
+				)) as { readonly removed?: number })
+			: inProcessForgetStageIdentity(filter.stage, filter.role);
 		lastError = undefined;
-		return true;
+		return typeof answer.removed === "number" ? answer.removed : 0;
 	} catch (error) {
 		lastError = message(error);
-		return false;
+		return undefined;
 	}
 }
 

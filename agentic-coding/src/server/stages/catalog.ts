@@ -30,6 +30,7 @@ import {
 	MAX_IDENTITY_CACHE_ENTRIES,
 	MAX_IDENTITY_CACHE_REFRESH_SECONDS,
 	MAX_IDENTITY_CACHE_TTL_MINUTES,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
 } from "./identity-cache.ts";
 import {
 	decodeStageDefinition,
@@ -75,6 +76,7 @@ export {
 	MAX_IDENTITY_CACHE_ENTRIES,
 	MAX_IDENTITY_CACHE_REFRESH_SECONDS,
 	MAX_IDENTITY_CACHE_TTL_MINUTES,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
 };
 
 export interface EffectiveStageLimits {
@@ -114,10 +116,17 @@ export function effectiveIdentityCache(
 		MAX_IDENTITY_CACHE_TTL_MINUTES,
 	);
 	const refreshSeconds = Math.min(
-		declared.refreshSeconds ?? DEFAULT_IDENTITY_CACHE.refreshSeconds,
 		MAX_IDENTITY_CACHE_REFRESH_SECONDS,
+		// A floor, because the refresh is bound to *use*: at a one-second interval a
+		// session whose calls are a second apart re-captures on each of them, which is
+		// the per-call cost the interval exists to keep off the hot path (PERF).
+		Math.max(
+			MIN_IDENTITY_CACHE_REFRESH_SECONDS,
+			declared.refreshSeconds ?? DEFAULT_IDENTITY_CACHE.refreshSeconds,
+		),
 		// A re-capture after the entry has already expired would put a value into
-		// the store that no read could ever install.
+		// the store that no read could ever install, so a short TTL still wins over
+		// the floor.
 		ttlMinutes * 60,
 	);
 	return {
@@ -1351,6 +1360,13 @@ export interface StageRoleView {
 	 * `missing <VAR>`. */
 	readonly credentialStatus: string;
 	readonly loginMode: StageLoginMode;
+	/** Whether a successful login of this role may leave a cached identity
+	 * (`add-stage-identity-cache`). False for a stage that set `identityCache:
+	 * false`, and false for the `http-basic` recipe: the driver cannot observe the
+	 * `Authorization` header a browser's own credential dialog generates, so there
+	 * is nothing to capture (`design.md` D2). A plan that needs the reuse can read
+	 * this instead of inferring it from the login kind. */
+	readonly cacheable: boolean;
 	readonly credentials: readonly StageCredentialView[];
 }
 
@@ -1464,6 +1480,11 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 						credentialStatus,
 						interactiveLogin: entry.interactiveLogin,
 					}),
+					// A `http-basic` credential is entered by the browser itself, and the
+					// driver cannot see the header that produces it, so that login leaves no
+					// capture to reuse (D2). Everything else is cacheable unless the stage
+					// opted out.
+					cacheable: entry.identity.enabled && loginKind !== "http-basic",
 					credentials,
 				};
 			}),

@@ -12,7 +12,10 @@ import os from "node:os";
 import path from "node:path";
 import {
 	credentialVariable,
+	DEFAULT_IDENTITY_CACHE,
 	DEFAULT_STAGE_LIMITS,
+	effectiveIdentityCache,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
 	readStageCatalog,
 	stageByIdent,
 	stageCredentialVariables,
@@ -20,6 +23,7 @@ import {
 	stageRefusalReason,
 	stageView,
 } from "../src/server/stages/catalog.ts";
+import type { StagePolicy } from "../src/server/stages/schema.ts";
 
 const PASSWORD_VARIABLE = "GRID_INT_CLERK_PASSWORD";
 const READER_VARIABLE = "GRID_INT_READER_PASSWORD";
@@ -144,6 +148,7 @@ describe("stage catalog", () => {
 				loginKind: "form",
 				credentialStatus: "set",
 				loginMode: "automated",
+				cacheable: true,
 				credentials: [
 					{
 						field: "username",
@@ -161,6 +166,7 @@ describe("stage catalog", () => {
 				role: "reader",
 				credentialStatus: `missing ${READER_VARIABLE}`,
 				loginMode: "automated",
+				cacheable: true,
 				credentials: [
 					// No value, not even a masked one: a status names the variable — and a
 					// `set` status names it too, because that is the key a *replacement*
@@ -786,5 +792,90 @@ describe("stage catalog", () => {
 			narrowedView.apps[0]?.roles.find((role) => role.role === "interactive")
 				?.loginMode,
 		).toBe("unavailable");
+	});
+
+	test("a role reports whether its login can be cached, and an opted-out stage caches none", () => {
+		// `add-stage-identity-cache`: the identity cache can hold what this server
+		// captured. An `http-basic` login is performed by the browser's own dialog,
+		// whose `Authorization` header no driver here can observe, so that role is
+		// non-cacheable and a surface can say so before the next login.
+		const cacheableFor = (identityCache?: boolean) => {
+			const configDir = configRoot();
+			writeStage(
+				configDir,
+				"grid-int",
+				stageFile({
+					apps: {
+						web: {
+							label: "Grid web",
+							url: "https://grid-int.example.test/",
+							kind: "ui",
+							roles: {
+								automated: {
+									login: "web-form",
+									password: `\${${PASSWORD_VARIABLE}}`,
+								},
+								interactive: { login: "sso" },
+								basic: { login: "https-basic" },
+								none: {},
+							},
+						},
+					},
+					logins: {
+						"web-form": {
+							kind: "form",
+							steps: [
+								{ fields: [{ credential: "password", label: "Password" }] },
+							],
+						},
+						sso: {
+							kind: "interactive",
+							success: { url: "https://grid-int.example.test/home" },
+						},
+						"https-basic": { kind: "http-basic" },
+					},
+					...(identityCache === undefined ? {} : { identityCache }),
+				}),
+			);
+			writeEnv(configDir, { [PASSWORD_VARIABLE]: "clerk-secret-sentinel" });
+			const view = stageView(onlyEntry(readStageCatalog(configDir)), configDir);
+			expect(JSON.stringify(view)).not.toContain("clerk-secret-sentinel");
+			return Object.fromEntries(
+				(view.apps[0]?.roles ?? []).map((role) => [role.role, role.cacheable]),
+			);
+		};
+		expect(cacheableFor()).toEqual({
+			automated: true,
+			interactive: true,
+			// The one recipe the driver cannot observe.
+			basic: false,
+			none: true,
+		});
+		// The stage-level opt-out wins over every recipe: nothing of it is cached,
+		// so no role of it is worth calling cacheable.
+		expect(cacheableFor(false)).toEqual({
+			automated: false,
+			interactive: false,
+			basic: false,
+			none: false,
+		});
+	});
+
+	test("a refresh interval under the floor is raised to it, never above the TTL", () => {
+		const boundsFor = (identityCache: StagePolicy["identityCache"]) =>
+			effectiveIdentityCache({}, { identityCache } as StagePolicy);
+		// A one-second interval would re-capture on nearly every browser call, which
+		// is the per-call cost the interval exists to keep off the hot path (PERF-007).
+		expect(boundsFor({ refreshSeconds: 1 })?.refreshMs).toBe(
+			MIN_IDENTITY_CACHE_REFRESH_SECONDS * 1_000,
+		);
+		expect(boundsFor({ refreshSeconds: 0 })?.refreshMs).toBe(
+			MIN_IDENTITY_CACHE_REFRESH_SECONDS * 1_000,
+		);
+		// Above the floor the declared value stands, up to the ceiling.
+		expect(boundsFor({ refreshSeconds: 600 })?.refreshMs).toBe(600_000);
+		expect(boundsFor({})?.refreshMs).toBe(
+			DEFAULT_IDENTITY_CACHE.refreshSeconds * 1_000,
+		);
 	});
 });

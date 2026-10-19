@@ -37,11 +37,16 @@ import fs from "node:fs";
 import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
 import { createStageGuard, type StageSessionPolicy } from "../stages/guard.ts";
 import {
+	boundIdentityState,
+	carrySessionStorage,
 	identityFromStorageState,
+	identitySecrets,
 	liveCookies,
+	mergeIdentitySecrets,
 	parsedSessionStorage,
 	SESSION_STORAGE_READ_SCRIPT,
 	type StageIdentityCache,
+	type StageIdentityState,
 	stageIdentityCache,
 	storageInitScript,
 	withSessionStorage,
@@ -103,6 +108,10 @@ export interface BrowserPoolOptions {
 	 * (`add-stage-identity-cache`). Absent reads as the process-wide store, and a
 	 * test passes its own so a "restart" is a fresh instance. */
 	readonly identity?: StageIdentityCache;
+	/** How long one identity capture may take. A driver call that never answers
+	 * must not hang the browser call that triggered it, and a test shortens this so
+	 * the bound is exercised instead of waited out. */
+	readonly identityCaptureTimeoutMs?: () => number;
 }
 
 /** Why a session left the pool. `closed` is the caller's own `browser_close`,
@@ -169,6 +178,11 @@ export class BrowserPool {
 	/** The identity cache of this pool: the process-wide one unless a caller
 	 * supplied its own. */
 	private readonly identity: StageIdentityCache;
+	private readonly identityCaptureTimeoutMs: () => number;
+	/** Bumped whenever the identity secret set can have changed — a capture, an
+	 * install, a forget, a close — so a per-reply scrubber can memoise its
+	 * derivation instead of rebuilding it for every browser answer (PERF). */
+	private identitySecretsRevision = 0;
 	private browser: DriverBrowser | undefined;
 	/** The second, lazily launched headed browser. It exists only while a
 	 * promoted session lives in it (task 1.3). */
@@ -203,6 +217,11 @@ export class BrowserPool {
 	 * be taken by a newer open first. */
 	private readonly pending: Array<{ owner: string; token: symbol }> = [];
 	private readonly sessions = new Map<string, BrowserSession>();
+	/** Sessions whose close is in flight: already out of `sessions` (the slot is
+	 * handed on before the capture), still holding a live context whose
+	 * clean-close capture an operator forget has to be able to disarm
+	 * (`CONC-301`). */
+	private readonly closing = new Set<BrowserSession>();
 	/** One open at a time per session key, so two concurrent opens of the same
 	 * `(owner, name)` join one session instead of racing to create two. */
 	private readonly keyGates = new Map<string, Promise<void>>();
@@ -219,6 +238,8 @@ export class BrowserPool {
 		this.onSessionClosed = options.onSessionClosed;
 		this.bearerToken = options.bearerToken;
 		this.identity = options.identity ?? stageIdentityCache();
+		this.identityCaptureTimeoutMs =
+			options.identityCaptureTimeoutMs ?? (() => IDENTITY_CAPTURE_TIMEOUT_MS);
 	}
 
 	/** The identity cache this pool reads and writes, so a surface can report or
@@ -226,6 +247,19 @@ export class BrowserPool {
 	 * back. */
 	identityStore(): StageIdentityCache {
 		return this.identity;
+	}
+
+	/** A number that changes whenever the identity secret set can have changed.
+	 * The browser routes memoise the derived scrubber list against it, so a reply
+	 * does not re-encode and re-sort every cached value it already knows. */
+	secretRevision(): number {
+		return this.identitySecretsRevision;
+	}
+
+	/** Record that a value entered or left the set of secrets this process has to
+	 * mask: a capture, an install, a forget, a session that closed. */
+	private touchIdentitySecrets(): void {
+		this.identitySecretsRevision += 1;
 	}
 
 	/** Every open session, for a status read. */
@@ -283,70 +317,205 @@ export class BrowserPool {
 	 * the document the session is on, which only a live page can be asked for.
 	 * Nothing is captured from a foreign origin a page happened to call.
 	 *
-	 * A capture that finds nothing (a token-only code grant leaves no browser
-	 * state at all) never overwrites an entry that does hold something: an empty
-	 * fact is not a newer truth. And a capture that fails — a closed page, a
-	 * refused storage area — answers `false` instead of failing the login that
-	 * asked for it, because a cache is an optimisation and never a precondition.
+	 * Three rules make the write safe against everything else this server does at
+	 * the same time (`design.md` D7):
+	 *
+	 * * **One capture per `(stage, role)` at a time.** The gate is the store's own
+	 *   unit, so two sessions of one key do not write the same entry out of order;
+	 *   two captures over the same two awaits could otherwise land in either
+	 *   sequence and file a login under the role of an earlier one.
+	 * * **The role has to be the same before and after the read.** A `stage_login`
+	 *   that names another role while this capture is reading wins; the capture is
+	 *   dropped rather than re-attributed.
+	 * * **A generation is observed before the read.** A forget (or an eviction) that
+	 *   lands while the capture reads moves it on, and the write is dropped, so a
+	 *   forget holds until the next successful login.
+	 *
+	 * A caller that decided *outside* the gate that a capture was due — the
+	 * interval refresh and the clean-close capture — also names the source it
+	 * decided on, and a forget or a login that landed while it waited makes the
+	 * decision stale: the capture is dropped instead of resurrecting what was
+	 * removed.
+	 *
+	 * A capture is also bounded and throttled: the two driver calls have a few
+	 * seconds and no more, and the attempt is stamped whether it stored anything or
+	 * not, so a stage whose login leaves no browser state is not re-read on every
+	 * browser call. A capture that finds nothing never overwrites an entry that does
+	 * hold something — an empty fact is not a newer truth — and a capture that fails
+	 * answers `false` instead of failing the login that asked for it, because a
+	 * cache is an optimisation and never a precondition.
 	 */
 	async captureIdentity(
 		session: BrowserSession,
 		source: "cache" | "recipe" | "user",
+		options: {
+			readonly expectedSource?: "cache" | "recipe" | "user";
+			readonly minIntervalMs?: number;
+		} = {},
 	): Promise<boolean> {
 		const policy = session.stage?.identity;
-		const identity = session.identity;
 		const origins = session.stage?.identityOrigins ?? [];
 		const stage = session.stage?.ident;
-		if (!policy?.enabled || identity === undefined || stage === undefined)
+		if (
+			!policy?.enabled ||
+			session.identity === undefined ||
+			stage === undefined
+		)
 			return false;
 		if (origins.length === 0) return false;
-		try {
-			const snapshot = await session.context.storageState();
-			let state = identityFromStorageState(snapshot, origins);
-			// `sessionStorage` is only readable while the document that owns it is the
-			// page's own: the origin is compared, not the URL, so a `/path/` landing
-			// page still belongs to its origin.
-			const current = originOf(session.page.url());
-			if (current !== undefined && origins.includes(current)) {
-				const read = await session.page
-					.evaluate(SESSION_STORAGE_READ_SCRIPT)
-					.catch(() => undefined);
-				state = withSessionStorage(state, current, parsedSessionStorage(read));
-			}
-			const holdsSomething =
-				state.cookies.length > 0 ||
-				state.origins.some(
-					(origin) =>
-						origin.localStorage.length > 0 || origin.sessionStorage.length > 0,
-				);
-			if (
-				!holdsSomething &&
-				this.identity.holds({ stage, role: identity.role })
-			)
-				return false;
-			this.identity.put({ stage, role: identity.role }, state, {
-				ttlMs: policy.ttlMs,
-				maxEntries: policy.maxEntries,
-			});
-			session.identity = {
-				role: identity.role,
-				cacheInstalled: identity.cacheInstalled,
-				source,
-				// The pool's own clock, not the store's: when this session captured is
-				// what the refresh interval counts from, and the two clocks are injected
-				// separately.
-				capturedAt: this.clock(),
-			};
-			return true;
-		} catch {
-			// A capture never fails the login it follows.
-			return false;
-		}
+		const role = session.identity?.role;
+		if (role === undefined) return false;
+		return await this.withKeyGate(
+			`identity:${stage}\u0000${role}`,
+			async () => {
+				const identity = session.identity;
+				if (identity === undefined || identity.role !== role) return false;
+				// The decision is checked again inside the gate: a forget clears the
+				// source and a login replaces the identity, and neither may be undone by a
+				// capture that was already queued when it happened.
+				if (
+					options.expectedSource !== undefined &&
+					identity.source !== options.expectedSource
+				)
+					return false;
+				// The interval is a decision too: two browser calls that both saw it
+				// elapsed before either capture finished must not both read the context.
+				if (
+					options.minIntervalMs !== undefined &&
+					this.clock() - (identity.capturedAt ?? 0) < options.minIntervalMs
+				)
+					return false;
+				// The context was installed for one role: a login of another role into it
+				// is another user's state and does not belong under this key.
+				if (
+					identity.installedRole !== undefined &&
+					identity.installedRole !== role
+				)
+					return false;
+				// A context that logged in as two roles holds one jar for two users — no
+				// install is needed for that to happen (`stage_login` accepts any declared
+				// role on an existing session), and neither role's key may be filled from
+				// it (SEC-001). Conservative on purpose: a mixed jar is never filed, and a
+				// fresh session captures the role it starts with.
+				if ((identity.loggedRoles ?? [role]).some((seen) => seen !== role))
+					return false;
+				const generation = this.identity.generation({ stage, role });
+				// The attempt, not the success, is what the refresh interval counts: a stage
+				// whose login leaves no browser state must not be re-read on every call.
+				const attemptedAt = this.clock();
+				session.identity = { ...identity, role, capturedAt: attemptedAt };
+				let captured: StageIdentityState | undefined;
+				let current: string | undefined;
+				try {
+					const read = await withCaptureTimeout(
+						this.identityCaptureTimeoutMs(),
+						async () => {
+							const snapshot = await session.context.storageState();
+							let state = identityFromStorageState(snapshot, origins);
+							// `sessionStorage` is only readable while the document that owns it is the
+							// page's own: the origin is compared, not the URL, so a `/path/` landing
+							// page still belongs to its origin.
+							const pageOrigin = originOf(session.page.url());
+							// The origin whose storage this capture actually read. Only that one may
+							// be replaced: `carrySessionStorage` keeps every *other* origin's
+							// `sessionStorage` from the entry being replaced.
+							let readOrigin: string | undefined;
+							if (pageOrigin !== undefined && origins.includes(pageOrigin)) {
+								const answer = await session.page
+									.evaluate(SESSION_STORAGE_READ_SCRIPT)
+									.catch(() => undefined);
+								// A failed read is not an empty one: leaving the origin out lets the
+								// carry-forward below keep what the entry it replaces held for it,
+								// instead of replacing a token with an empty list.
+								if (answer !== undefined) {
+									state = withSessionStorage(
+										state,
+										pageOrigin,
+										parsedSessionStorage(answer),
+									);
+									readOrigin = pageOrigin;
+								}
+							}
+							return { state, readOrigin };
+						},
+					);
+					captured = read.state;
+					current = read.readOrigin;
+				} catch {
+					// A capture never fails the login it follows, and never hangs the call that
+					// triggered it.
+					return false;
+				}
+				// What the login named, a forget and an eviction all win over a capture that
+				// was already reading: the role moved, or the key was regenerated.
+				if (session.identity?.role !== role) return false;
+				if (this.identity.generation({ stage, role }) !== generation)
+					return false;
+				// A read that reports nothing is not a newer truth: the token-only login
+				// of D2. Checked on what the driver reported, before anything is carried
+				// forward — otherwise the carry below would make the capture look like it
+				// found something that is only the previous entry.
+				const capturedSomething =
+					captured.cookies.length > 0 ||
+					captured.origins.some(
+						(origin) =>
+							origin.localStorage.length > 0 ||
+							origin.sessionStorage.length > 0,
+					);
+				// The `sessionStorage` of an origin this capture could not read is carried
+				// forward from the entry it replaces: only the page's own origin can be
+				// asked, and a stage with several origins would otherwise lose the other
+				// origin's token on every capture.
+				const previous = this.identity.peek({ stage, role });
+				const state = carrySessionStorage(captured, previous?.state, current);
+				// The second guard is on what the store will *keep*, not on what the
+				// driver reported (QUALITY-201): a capture whose every value is below the
+				// floor stores nothing, and an empty entry must never replace one that
+				// holds something.
+				const bounded = boundIdentityState(state, this.clock()).state;
+				const keptSomething =
+					bounded.cookies.length > 0 ||
+					bounded.origins.some(
+						(origin) =>
+							origin.localStorage.length > 0 ||
+							origin.sessionStorage.length > 0,
+					);
+				if ((!capturedSomething || !keptSomething) && previous !== undefined)
+					return false;
+				const stored = this.identity.put({ stage, role }, state, {
+					ttlMs: policy.ttlMs,
+					maxEntries: policy.maxEntries,
+					generation,
+				});
+				if (stored === undefined) return false;
+				session.identity = {
+					...session.identity,
+					role: identity.role,
+					source,
+					// The pool's own clock, not the store's: when this session captured is what
+					// the refresh interval counts from, and the two clocks are injected
+					// separately.
+					capturedAt: attemptedAt,
+				};
+				// What this context carries stays a secret for as long as it lives, even
+				// after the entry is forgotten, expires or is evicted (`design.md` D6). A
+				// session that logged in itself has no install to record them from, so the
+				// capture is also where they are taken.
+				const kept = this.identity.peek({ stage, role })?.state;
+				if (kept !== undefined)
+					session.installedIdentitySecrets = mergeIdentitySecrets(
+						session.installedIdentitySecrets,
+						identitySecrets(kept),
+					);
+				this.touchIdentitySecrets();
+				return true;
+			},
+		);
 	}
 
 	/**
 	 * Re-capture a living session's identity when its refresh interval has passed
-	 * (`design.md` D5). A long run rotates its refresh token while it works; a
+	 * (`design.md` D2). A long run rotates its refresh token while it works; a
 	 * later session has to reuse what the run *ended* with, not what it started
 	 * with. A session that never logged in, a stage that disabled the cache and a
 	 * session whose interval has not elapsed all answer `false` without touching
@@ -358,7 +527,13 @@ export class BrowserPool {
 		if (!policy?.enabled || identity?.source === undefined) return false;
 		const capturedAt = identity.capturedAt ?? 0;
 		if (this.clock() - capturedAt < policy.refreshMs) return false;
-		return await this.captureIdentity(session, identity.source);
+		// The interval and the source are decisions taken here, so the capture is
+		// told about them: a forget or a login that lands while the capture waits
+		// drops it (`design.md` D7).
+		return await this.captureIdentity(session, identity.source, {
+			expectedSource: identity.source,
+			minIntervalMs: policy.refreshMs,
+		});
 	}
 
 	/** The live identities, as `(stage, role, capturedAt, expiresAt)`: what the
@@ -368,9 +543,54 @@ export class BrowserPool {
 	}
 
 	/** Forget one stage's cached identities (one role of it, when `role` is
-	 * named), answering how many left. */
-	forgetIdentity(filter: { stage: string; role?: string }): number {
-		return this.identity.forget(filter);
+	 * named), answering how many left.
+	 *
+	 * Forgetting also stops the sessions of that key from putting it straight back:
+	 * a live session's next refresh and its clean-close capture would otherwise
+	 * re-insert what the operator just removed (`design.md` D5). The session keeps
+	 * its browser state — a forget never logs anybody out — it just stops
+	 * attributing it to the cache, so the next *login* is what fills the key
+	 * again. */
+	forgetIdentity(filter: { stage?: string; role?: string }): number {
+		const removed = this.identity.forget(filter);
+		// The entries left the set of secrets this process masks; the values the
+		// live contexts still carry stay in it (below).
+		this.touchIdentitySecrets();
+		for (const session of [...this.sessions.values(), ...this.closing]) {
+			const identity = session.identity;
+			const stage = session.stage?.ident;
+			if (identity === undefined || stage === undefined) continue;
+			if (filter.stage !== undefined && stage !== filter.stage) continue;
+			if (filter.role !== undefined && identity.role !== filter.role) continue;
+			// A capture of this key that is reading right now has to lose: the key may
+			// have no entry yet (a first capture), which is why the store is told the
+			// key is gone rather than only its entries being dropped.
+			this.identity.invalidate({ stage, role: identity.role });
+			// Only the attribution goes. The rest of what the session knows about
+			// itself stays, and `loggedRoles` is what the cross-role guard reads: a
+			// rewrite that re-enumerated fields dropped it, so a forget followed by a
+			// second role's login would file the mixed jar again (SEC-001/CONC-401).
+			session.identity = { ...identity };
+			delete session.identity.source;
+			delete session.identity.capturedAt;
+		}
+		return removed;
+	}
+
+	/** The values the *live contexts* of this process installed from the cache. Each
+	 * context's set is bounded by `mergeIdentitySecrets`, so this aggregate cannot
+	 * grow with the length of a run. The
+	 * entry they came from may be gone (forgotten, expired, evicted) while the
+	 * browser still holds the cookies and storage, so the redactor reads these too:
+	 * a value is a secret for as long as a browser this server drives carries it
+	 * (`design.md` D6). */
+	installedIdentitySecrets(): Array<{
+		readonly name: string;
+		readonly value: string;
+	}> {
+		return [...this.sessions.values()].flatMap(
+			(session) => session.installedIdentitySecrets,
+		);
 	}
 
 	/** The capture an open would install, or `undefined` when the stage holds
@@ -381,6 +601,10 @@ export class BrowserPool {
 				readonly role: string;
 				readonly cookies: ReturnType<typeof liveCookies>;
 				readonly script: string;
+				readonly secrets: Array<{
+					readonly name: string;
+					readonly value: string;
+				}>;
 		  }
 		| undefined {
 		const role = request.identityRole;
@@ -393,6 +617,7 @@ export class BrowserPool {
 			role,
 			cookies: liveCookies(entry.state.cookies, this.clock()),
 			script: storageInitScript(entry.state),
+			secrets: identitySecrets(entry.state),
 		};
 	}
 
@@ -561,11 +786,24 @@ export class BrowserPool {
 					: {
 							identity: {
 								role: request.identityRole,
+								loggedRoles: [request.identityRole],
+								...(install === undefined
+									? {}
+									: { installedRole: install.role }),
 								cacheInstalled: install !== undefined,
 							},
 						}),
 				now: this.clock,
 			});
+			// What the installed entry put into this context stays a redaction secret
+			// for as long as the context lives, even if the entry is forgotten
+			// (`design.md` D6).
+			if (install !== undefined)
+				session.installedIdentitySecrets = mergeIdentitySecrets(
+					session.installedIdentitySecrets,
+					install.secrets,
+				);
+			this.touchIdentitySecrets();
 			this.sessions.set(session.id, session);
 			registered = session;
 			// Same rules, and now the session's own guard: it is the one that sees an
@@ -1332,23 +1570,37 @@ export class BrowserPool {
 		// second waiter for the one slot that left. A crashed session never counted
 		// against the cap, so removing it frees nothing.
 		const registered = this.sessions.delete(session.id);
+		// Registered while the context is still readable, so a forget that lands
+		// between here and the capture below disarms it (CONC-301).
+		if (registered) this.closing.add(session);
 		const freed = registered && !session.crashed;
 		this.handoffRedirects.delete(session.id);
-		if (registered) this.onSessionClosed?.(session, cause);
+		if (registered) {
+			this.onSessionClosed?.(session, cause);
+			// The values this context carried leave the set with it.
+			this.touchIdentitySecrets();
+		}
 		session.beginContextSwap();
+		// The slot is handed to the queue *before* the close is awaited, so it never
+		// becomes visible as free while the waiters are still parked — and before the
+		// capture below, which reads a live context and must not delay a queued open.
+		if (freed) this.wakeNext();
 		// A clean close is the last chance to keep what the login established
-		// (`add-stage-identity-cache`, D5): the context is still alive here, and a
+		// (`add-stage-identity-cache`, D2): the context is still alive here, and a
 		// session that ends without one is exactly the session whose next run would
 		// have to sign in again. A crash has nothing left to read, so it is skipped.
 		if (
 			registered &&
 			session.identity?.source !== undefined &&
 			cause !== "crashed"
-		)
-			await this.captureIdentity(session, session.identity.source);
-		// The slot is handed to the queue *before* the close is awaited, so it never
-		// becomes visible as free while the waiters are still parked.
-		if (freed) this.wakeNext();
+		) {
+			const source = session.identity.source;
+			// The source read here is a decision taken outside the capture's gate: a
+			// forget that lands while it waits clears the source and drops the capture
+			// (`design.md` D7).
+			await this.captureIdentity(session, source, { expectedSource: source });
+		}
+		this.closing.delete(session);
 		await session.context.close().catch(() => {});
 		if (session.browserSlot === "interactive")
 			await this.closeInteractiveIfEmpty();
@@ -1512,4 +1764,31 @@ function issuedBy(
 
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** How long one identity capture may take. The two driver calls it makes
+ * (`storageState()` and an `evaluate`) take no timeout of their own, and this path
+ * sits in front of an ordinary browser tool call and in front of handing a slot to
+ * the queue, so it is bounded like everything else on the browser layer: a wedged
+ * page costs a failed capture, never a hung call. */
+const IDENTITY_CAPTURE_TIMEOUT_MS = 5_000;
+
+async function withCaptureTimeout<T>(
+	timeoutMs: number,
+	work: () => Promise<T>,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			work(),
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() => reject(new Error("identity capture timed out")),
+					Math.max(1, timeoutMs),
+				);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }

@@ -133,6 +133,7 @@ function stageStatus(): StagesStatusResponse {
 								loginKind: "form",
 								credentialStatus: `missing ${VARIABLE}`,
 								loginMode: "handoff",
+								cacheable: true,
 								credentials: [
 									{
 										field: "password",

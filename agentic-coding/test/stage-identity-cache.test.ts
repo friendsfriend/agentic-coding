@@ -6,6 +6,8 @@
 // nothing a read surface reports can carry a value.
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
+	boundIdentityState,
+	carrySessionStorage,
 	cookieBelongsTo,
 	DEFAULT_IDENTITY_CACHE,
 	DEFAULT_IDENTITY_MAX_ENTRIES,
@@ -14,16 +16,33 @@ import {
 	identityKey,
 	identitySecrets,
 	liveCookies,
-	MAX_IDENTITY_SECRETS,
+	MAX_IDENTITY_ENTRY_BYTES,
+	MAX_IDENTITY_VALUE_LENGTH,
+	MAX_IDENTITY_VALUES_PER_ENTRY,
+	MAX_LIVE_IDENTITY_SECRET_BYTES,
+	MAX_LIVE_IDENTITY_SECRETS,
+	MIN_IDENTITY_VALUE_LENGTH,
+	mergeIdentitySecrets,
 	parsedSessionStorage,
 	resetStageIdentityCache,
 	SESSION_STORAGE_READ_SCRIPT,
 	StageIdentityCache,
 	type StageIdentityState,
+	type StageIdentitySummary,
 	stageIdentityCache,
 	storageInitScript,
 	withSessionStorage,
 } from "../src/server/stages/identity-cache.ts";
+
+/** A write that must land. The store answers `undefined` only for a write it was
+ * told to drop (a generation the caller has already lost), so a test that does not
+ * race a forget would otherwise assert against a silent no-op. */
+function stored(
+	summary: StageIdentitySummary | undefined,
+): StageIdentitySummary {
+	if (summary === undefined) throw new Error("the store dropped the write");
+	return summary;
+}
 
 const APP = "https://grid-int.example.test";
 const IDP = "https://login.example.test";
@@ -197,7 +216,9 @@ describe("bounds", () => {
 			ttlMs: 60_000,
 			maxEntries: 4,
 		});
-		const summary = cache.put({ stage: "grid-int", role: "clerk" }, state());
+		const summary = stored(
+			cache.put({ stage: "grid-int", role: "clerk" }, state()),
+		);
 		expect(summary.expiresAt - summary.capturedAt).toBe(60_000);
 
 		fake.advance(30_000);
@@ -219,13 +240,17 @@ describe("bounds", () => {
 			ttlMs: 60_000,
 			maxEntries: 4,
 		});
-		const shorter = cache.put({ stage: "s", role: "r" }, state(), {
-			ttlMs: 10_000,
-		});
+		const shorter = stored(
+			cache.put({ stage: "s", role: "r" }, state(), {
+				ttlMs: 10_000,
+			}),
+		);
 		expect(shorter.expiresAt - shorter.capturedAt).toBe(10_000);
-		const longer = cache.put({ stage: "s", role: "r" }, state(), {
-			ttlMs: 10 * 60_000,
-		});
+		const longer = stored(
+			cache.put({ stage: "s", role: "r" }, state(), {
+				ttlMs: 10 * 60_000,
+			}),
+		);
 		expect(longer.expiresAt - longer.capturedAt).toBe(60_000);
 	});
 
@@ -389,7 +414,7 @@ describe("no value ever leaves the store", () => {
 		expect(text).not.toContain("msal.token.keys");
 	}
 
-	test("list, toJSON and toString report the key and the bounds only", () => {
+	test("list, toJSON and toString report the key, the bounds and a count", () => {
 		const cache = new StageIdentityCache();
 		cache.put({ stage: "grid-int", role: "clerk" }, state());
 		const [entry] = cache.list();
@@ -398,8 +423,9 @@ describe("no value ever leaves the store", () => {
 			"expiresAt",
 			"role",
 			"stage",
+			"truncated",
 		]);
-		assertValueFree(JSON.stringify(cache.list()));
+		expect(JSON.stringify(cache.list())).not.toContain("tiny");
 		assertValueFree(JSON.stringify(cache.toJSON()));
 		assertValueFree(JSON.stringify(cache));
 		assertValueFree(cache.toString());
@@ -407,16 +433,235 @@ describe("no value ever leaves the store", () => {
 	});
 });
 
+describe("the capture bounds", () => {
+	test("a value too short or too long to be a credential is not kept", () => {
+		const bounded = boundIdentityState(
+			{
+				cookies: [],
+				origins: [
+					{
+						origin: APP,
+						localStorage: [
+							{ name: "t", value: "1" },
+							{
+								name: "tiny",
+								value: "a".repeat(MIN_IDENTITY_VALUE_LENGTH - 1),
+							},
+							{ name: "edge", value: "a".repeat(MIN_IDENTITY_VALUE_LENGTH) },
+							{
+								name: "huge",
+								value: "a".repeat(MAX_IDENTITY_VALUE_LENGTH + 1),
+							},
+						],
+						sessionStorage: [],
+					},
+				],
+			},
+			Date.now(),
+		);
+		expect(bounded.state.origins[0]?.localStorage.map((e) => e.name)).toEqual([
+			"edge",
+		]);
+		expect(bounded.truncated).toBe(3);
+		// The registered values are exactly the kept ones: the redactor never has to
+		// refuse a value the store holds.
+		const secrets = identitySecrets(bounded.state).map(
+			(secret) => secret.value,
+		);
+		expect(secrets).toContain("a".repeat(MIN_IDENTITY_VALUE_LENGTH));
+	});
+
+	test("an entry stops at its byte cap, counting what it dropped", () => {
+		const value = "b".repeat(64 * 1024);
+		const bounded = boundIdentityState(
+			{
+				cookies: [],
+				origins: [
+					{
+						origin: APP,
+						localStorage: Array.from({ length: 20 }, (_, index) => ({
+							name: `key-${index}`,
+							value,
+						})),
+						sessionStorage: [],
+					},
+				],
+			},
+			Date.now(),
+		);
+		const kept = bounded.state.origins[0]?.localStorage ?? [];
+		expect(kept.length).toBeLessThan(20);
+		expect(kept.length * (value.length + 5)).toBeLessThanOrEqual(
+			MAX_IDENTITY_ENTRY_BYTES,
+		);
+		expect(bounded.truncated).toBe(20 - kept.length);
+	});
+
+	test("an entry stops at its value cap, counting what it dropped", () => {
+		const cache = new StageIdentityCache();
+		stored(
+			cache.put(
+				{ stage: "s", role: "r" },
+				{
+					cookies: [],
+					origins: [
+						{
+							origin: APP,
+							localStorage: Array.from(
+								{ length: MAX_IDENTITY_VALUES_PER_ENTRY + 50 },
+								(_, index) => ({
+									name: `key-${index}`,
+									value: `value-${index}-0123456789`,
+								}),
+							),
+							sessionStorage: [],
+						},
+					],
+				},
+			),
+		);
+		// The capture bounds the entry, so the redaction set is bounded with it:
+		// there is no separate truncation of secrets that could leave a stored value
+		// unregistered (SEC-002).
+		expect(cache.secrets().length).toBe(MAX_IDENTITY_VALUES_PER_ENTRY);
+	});
+
+	test("a truncation is reported as a count, never on a read surface", () => {
+		const cache = new StageIdentityCache({ now: () => Date.now() });
+		cache.put(
+			{ stage: "s", role: "r" },
+			{
+				cookies: [],
+				origins: [
+					{
+						origin: APP,
+						localStorage: [{ name: "t", value: "1" }],
+						sessionStorage: [],
+					},
+				],
+			},
+		);
+		expect(cache.peek({ stage: "s", role: "r" })?.truncated).toBe(1);
+		// The count reaches every read surface — an operator has to be able to see
+		// that a key was stored cut short — and it is the *only* thing about the drop
+		// that does: no name, no value, no origin.
+		const [entry] = cache.list();
+		expect(entry?.truncated).toBe(1);
+		expect(Object.keys(entry ?? {}).sort()).toEqual([
+			"capturedAt",
+			"expiresAt",
+			"role",
+			"stage",
+			"truncated",
+		]);
+		expect(JSON.stringify(cache.list())).not.toContain("tiny");
+	});
+});
+
+describe("a generation makes a forget hold", () => {
+	test("a write whose generation was lost is dropped", () => {
+		const cache = new StageIdentityCache({ now: () => Date.now() });
+		const key = { stage: "s", role: "r" };
+		cache.put(key, state());
+		const generation = cache.generation(key);
+		// A capture that read the store before this forget is still in flight.
+		expect(cache.forget({ stage: "s", role: "r" })).toBe(1);
+		expect(cache.put(key, state(), { generation })).toBeUndefined();
+		expect(cache.holds(key)).toBe(false);
+	});
+
+	test("a forgotten key with no entry yet still refuses the capture in flight", () => {
+		const cache = new StageIdentityCache({ now: () => Date.now() });
+		const key = { stage: "s", role: "r" };
+		const generation = cache.generation(key);
+		// Nothing to remove yet: the entries alone cannot name this key, so the
+		// forget tells the store the key is invalid rather than dropping a row.
+		cache.invalidate(key);
+		expect(cache.put(key, state(), { generation })).toBeUndefined();
+		expect(cache.holds(key)).toBe(false);
+	});
+
+	test("a write of the current generation lands", () => {
+		const cache = new StageIdentityCache({ now: () => Date.now() });
+		const key = { stage: "s", role: "r" };
+		cache.put(key, state());
+		const generation = cache.generation(key);
+		expect(cache.put(key, state(), { generation })).not.toBeUndefined();
+	});
+
+	test("an eviction moves the generation of the key it dropped", () => {
+		const cache = new StageIdentityCache({
+			now: () => Date.now(),
+			maxEntries: 1,
+		});
+		const first = { stage: "s", role: "a" };
+		const generation = cache.generation(first);
+		cache.put(first, state());
+		cache.put({ stage: "s", role: "b" }, state());
+		// `first` left when `b` arrived, so a capture of `first` that started before
+		// the eviction cannot resurrect it.
+		expect(cache.generation(first)).not.toBe(generation);
+		expect(cache.put(first, state(), { generation })).toBeUndefined();
+	});
+});
+
+describe("carrying sessionStorage forward", () => {
+	const OTHER = "https://other.example.test";
+
+	function withOrigins(entries: Record<string, string>): StageIdentityState {
+		return {
+			cookies: [],
+			origins: [APP, OTHER].map((origin) => ({
+				origin,
+				localStorage: [],
+				sessionStorage:
+					entries[origin] === undefined
+						? []
+						: [{ name: "token", value: entries[origin] ?? "" }],
+			})),
+		};
+	}
+
+	test("an origin this capture could not read keeps what it had", () => {
+		const previous = withOrigins({ [OTHER]: "kept-0123456789" });
+		const state = carrySessionStorage(
+			withOrigins({ [APP]: "fresh-0123456789" }),
+			previous,
+			APP,
+		);
+		const session = (origin: string) =>
+			state.origins.find((entry) => entry.origin === origin)?.sessionStorage;
+		// The document's own origin is what was just read, so it is replaced.
+		expect(session(APP)).toEqual([
+			{ name: "token", value: "fresh-0123456789" },
+		]);
+		// The other origin's value would otherwise be lost on every capture.
+		expect(session(OTHER)).toEqual([
+			{ name: "token", value: "kept-0123456789" },
+		]);
+	});
+
+	test("a first capture has nothing to carry", () => {
+		const state = withOrigins({ [APP]: "fresh-0123456789" });
+		expect(carrySessionStorage(state, undefined, APP)).toEqual(state);
+	});
+});
+
 describe("the secret set", () => {
+	// `identitySecrets` registers what the store *holds*, and the capture decides
+	// what it holds: one place refuses a value, and no second place can leave a
+	// stored value unregistered (SEC-002).
 	test("every captured value is registered, longest first", () => {
-		const secrets = identitySecrets(state());
+		// What the store holds, not what a page reported: the capture floor is what
+		// keeps a one-character value out, and a value it kept is never refused here.
+		const kept = boundIdentityState(state(), Date.now());
+		expect(kept.truncated).toBe(1);
+		const secrets = identitySecrets(kept.state);
 		const values = secrets.map((secret) => secret.value);
 		expect(values).toContain(SESSION_COOKIE);
 		expect(values).toContain(APP_TOKEN);
 		expect(values).toContain(IDP_COOKIE);
 		expect(values).toContain("SENTINEL-session-storage-0123456789");
-		// A one-character value is ordinary page text, and scrubbing it would hide
-		// nothing while rewriting the page.
 		expect(values).not.toContain("1");
 		const lengths = values.map((value) => value.length);
 		expect([...lengths].sort((a, b) => b - a)).toEqual(lengths);
@@ -443,28 +688,65 @@ describe("the secret set", () => {
 		for (const part of token.split(".")) expect(values).toContain(part);
 	});
 
-	test("the process store's set is bounded", () => {
+	test("a value the store dropped is not in the set", () => {
 		const cache = new StageIdentityCache();
 		cache.put(
 			{ stage: "s", role: "r" },
 			{
-				cookies: [],
+				cookies: [{ ...capturedCookie("short", -1), value: "1" }],
 				origins: [
 					{
 						origin: APP,
-						localStorage: Array.from(
-							{ length: MAX_IDENTITY_SECRETS + 50 },
-							(_, index) => ({
-								name: `key-${index}`,
-								value: `value-${index}-0123456789`,
-							}),
-						),
+						localStorage: [{ name: "msal.token.keys", value: APP_TOKEN }],
 						sessionStorage: [],
 					},
 				],
 			},
 		);
-		expect(cache.secrets().length).toBe(MAX_IDENTITY_SECRETS);
+		const values = cache.secrets().map((secret) => secret.value);
+		expect(values).toContain(APP_TOKEN);
+		expect(values).not.toContain("1");
+	});
+});
+
+describe("a capture that is stored", () => {
+	test("a cookie whose own expiry has passed is not kept", () => {
+		// TESTQ-008: the entry's TTL is not a cookie's life. A capture taken while a
+		// cookie is already past its own expiry would otherwise store a credential no
+		// browser would send, and install it as a live one.
+		const now = 1_000_000;
+		const cache = new StageIdentityCache({ now: () => now });
+		cache.put(
+			{ stage: "s", role: "r" },
+			{
+				cookies: [
+					{
+						name: "expired",
+						value: "SENT-expired-cookie-value",
+						domain: "app.example.test",
+						path: "/",
+						expires: Math.floor(now / 1_000) - 60,
+						httpOnly: true,
+						secure: true,
+					},
+					{
+						name: "live",
+						value: "SENT-live-cookie-value",
+						domain: "app.example.test",
+						path: "/",
+						expires: Math.floor(now / 1_000) + 60,
+						httpOnly: true,
+						secure: true,
+					},
+				],
+				origins: [],
+			},
+		);
+		expect(
+			cache
+				.peek({ stage: "s", role: "r" })
+				?.state.cookies.map((cookie) => cookie.name),
+		).toEqual(["live"]);
 	});
 });
 
@@ -479,6 +761,11 @@ describe("install", () => {
 		// nothing even though it runs the same script.
 		expect(script).toContain("window.location.origin");
 		expect(script).toContain("setItem");
+		// `setItem` runs only when the key is not already there, so an install never
+		// overwrites a value the page wrote for itself before the script ran
+		// (QUALITY-005).
+		expect(script).toContain("getItem");
+		expect(script.indexOf("getItem")).toBeLessThan(script.indexOf("setItem"));
 		// The values are in the script the browser runs, and nowhere else.
 		expect(script).toContain(APP_TOKEN);
 	});
@@ -497,5 +784,76 @@ describe("install", () => {
 		expect(SESSION_STORAGE_READ_SCRIPT).toContain("window.sessionStorage");
 		expect(SESSION_STORAGE_READ_SCRIPT).toContain("JSON.stringify");
 		expect(SESSION_STORAGE_READ_SCRIPT.trimEnd().endsWith(")()")).toBe(true);
+	});
+});
+
+describe("the secret set a live context registers", () => {
+	test("it is the union of what the context carried, deduped", () => {
+		// A capture re-registers the whole state and an install registered its
+		// snapshot: the union is what a page of that context could still echo, and a
+		// value both saw twice is one secret (TESTQ-020).
+		const merged = mergeIdentitySecrets(
+			[{ name: "stage-identity-cookie", value: "SENT-first-value" }],
+			[
+				{ name: "stage-identity-cookie", value: "SENT-second-value" },
+				// The same value the previous capture registered: one secret, not two.
+				{ name: "stage-identity-cookie", value: "SENT-first-value" },
+			],
+		);
+		expect(merged.map((secret) => secret.value).sort()).toEqual([
+			"SENT-first-value",
+			"SENT-second-value",
+		]);
+		expect(
+			mergeIdentitySecrets(merged, [
+				{ name: "stage-identity-cookie", value: "SENT-second-value" },
+			]),
+		).toHaveLength(2);
+		expect(mergeIdentitySecrets([], [])).toEqual([]);
+	});
+
+	test("it is bounded by count and by bytes, keeping the newest values", () => {
+		// Every capture of a rotating token is a distinct value, so without a bound
+		// the set — and with it the cost of scrubbing every reply — would follow the
+		// length of the run (PERF).
+		const many = Array.from(
+			{ length: MAX_LIVE_IDENTITY_SECRETS + 10 },
+			(_, index) => ({
+				name: "stage-identity-storage",
+				value: `value-${String(index).padStart(4, "0")}`,
+			}),
+		);
+		const merged = mergeIdentitySecrets([], many);
+		expect(merged).toHaveLength(MAX_LIVE_IDENTITY_SECRETS);
+		const kept = new Set(merged.map((secret) => secret.value));
+		const newest = many[many.length - 1];
+		const oldest = many[0];
+		if (!newest || !oldest) throw new Error("the fixture is empty");
+		expect(kept.has(newest.value)).toBe(true);
+		expect(kept.has(oldest.value)).toBe(false);
+		// A byte bound, not only an entry one: a capture of large values cannot
+		// register more than that either.
+		const large = Array.from({ length: 40 }, (_, index) => ({
+			name: "stage-identity-cookie",
+			value: `${String(index).padStart(2, "0")}${"x".repeat(64 * 1024)}`,
+		}));
+		const bounded = mergeIdentitySecrets([], large);
+		expect(
+			bounded.reduce((total, secret) => total + secret.value.length, 0),
+		).toBeLessThanOrEqual(MAX_LIVE_IDENTITY_SECRET_BYTES);
+		expect(bounded.length).toBeGreaterThan(0);
+		// The newest value survives alone above the byte bound: the value a page is
+		// most likely to echo is never the one the bound drops.
+		expect(
+			mergeIdentitySecrets(
+				[],
+				[
+					{
+						name: "stage-identity-cookie",
+						value: "y".repeat(MAX_LIVE_IDENTITY_SECRET_BYTES + 1),
+					},
+				],
+			),
+		).toHaveLength(1);
 	});
 });

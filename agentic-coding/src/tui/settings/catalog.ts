@@ -252,7 +252,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		effect: "immediate",
 		editable: true,
 		items: ["stages.identity"],
-		note: "A cached sign-in is the browser state of one (stage, role): cookies and origin storage captured after a verified login, bounded by stages/policy.json and forgotten on restart. The listing carries the key and two instants; a value is never shown, returned or written anywhere. Enter on an entry forgets it.",
+		note: "A cached sign-in is the browser state of one (stage, role): cookies and origin storage captured after a verified login, bounded by stages/policy.json and forgotten on restart. The listing carries the key, when it was captured, when it expires and a count of the values the capture bounds dropped; a value is never shown, returned or written anywhere. Enter on a single-key row forgets it; the stage row and the whole-cache row are armed by a first Enter and performed by a second.",
 	},
 ];
 

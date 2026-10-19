@@ -37,12 +37,17 @@ import {
 	MAX_IDENTITY_CACHE_ENTRIES,
 	MAX_IDENTITY_CACHE_REFRESH_SECONDS,
 	MAX_IDENTITY_CACHE_TTL_MINUTES,
+	MIN_IDENTITY_CACHE_REFRESH_SECONDS,
 	resetStageIdentityCache,
 	StageIdentityCache,
+	stageIdentityCache,
 } from "../src/server/stages/identity-cache.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
 import {
+	forgetStageIdentity,
 	handleStageIdentityRoute,
+	poolIdentityForget,
+	registerStageIdentityForget,
 	type StageRouteDeps,
 } from "../src/server/stages/routes.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
@@ -67,6 +72,11 @@ const SENTINELS = [
 	THIRD_PARTY_COOKIE,
 	APP_TOKEN,
 	SESSION_TOKEN,
+	// The two values the identity-route test puts into the process store. They
+	// belong to this list: a sentinel the assertion does not name is a sentinel that
+	// can leak unnoticed (TESTQ-002).
+	"LISTED_COOKIE",
+	"LISTED_ADMIN_COOKIE",
 ];
 
 /** What a browser holds after a successful sign-in. */
@@ -205,8 +215,21 @@ function configRoot(
 function build(
 	configDir: string,
 	driver: ReturnType<typeof createFakeDriver>,
-	options: { readonly cache?: StageIdentityCache } = {},
-): BrowserRouteDeps & { readonly pool: BrowserPool; readonly logs: string[] } {
+	options: {
+		readonly cache?: StageIdentityCache;
+		/** Shortens the capture bound, so a driver call that never answers is
+		 * dropped by the test rather than waited out. */
+		readonly identityCaptureTimeoutMs?: number;
+		/** Replaces the pool's clock. The refresh interval is counted from it, so a
+		 * test that has to cross a floor of tens of seconds makes the clock step
+		 * rather than wait. */
+		readonly now?: () => number;
+	} = {},
+): BrowserRouteDeps & {
+	readonly pool: BrowserPool;
+	readonly logs: string[];
+	readonly worktree: string;
+} {
 	const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "stage-identity-wt-"));
 	const chrome = path.join(worktree, "fake-chrome");
 	fs.writeFileSync(chrome, "#!/bin/sh\n");
@@ -223,9 +246,10 @@ function build(
 		maxSessions: () => 4,
 		idleTtlMs: () => 900_000,
 		identity: options.cache,
+		identityCaptureTimeoutMs: () => options.identityCaptureTimeoutMs ?? 5_000,
 		// The same deterministic clock the routes use, advancing a second per read, so
 		// a refresh interval can be crossed by making a call rather than by waiting.
-		now: () => (clock += 1_000),
+		now: options.now ?? (() => (clock += 1_000)),
 	});
 	const handoff = new LoginHandoffCoordinator({
 		pool,
@@ -237,6 +261,12 @@ function build(
 		handoff,
 		pool,
 		configDir,
+		// The seam `app.ts` wires: the forget is the pool's, not the store's, so the
+		// route exercises the implementation the server uses.
+		identityForget: (filter: { stage?: string; role?: string }) => ({
+			removed: pool.forgetIdentity(filter),
+			entries: pool.identityStore().list(),
+		}),
 		worktree,
 		settings: () => ({
 			maxSessions: 4,
@@ -257,6 +287,7 @@ function build(
 	} as unknown as BrowserRouteDeps & {
 		readonly pool: BrowserPool;
 		readonly logs: string[];
+		readonly worktree: string;
 	};
 }
 
@@ -298,13 +329,14 @@ async function call(
 /** One instance-authenticated identity route call. */
 async function identityCall(
 	routePath: string,
-	init: { method?: string; body?: unknown } = {},
+	init: { method?: string; body?: unknown; deps?: StageRouteDeps } = {},
 ): Promise<{ status: number; value: Record<string, unknown>; text: string }> {
 	const url = `http://127.0.0.1:4050${routePath}`;
 	const response = await handleStageIdentityRoute(
-		// The route reads one thing from its deps here — the `.env` whose values it
-		// scrubs — so a throwaway root is enough.
-		{ configDir: identityConfigDir() } as StageRouteDeps,
+		// By default the route reads one thing from its deps — the `.env` whose values
+		// it scrubs — so a throwaway root is enough. A test that exercises the forget
+		// seam passes the deps that carry it.
+		init.deps ?? ({ configDir: identityConfigDir() } as StageRouteDeps),
 		new Request(url, {
 			method: init.method ?? "GET",
 			...(init.body === undefined
@@ -361,6 +393,16 @@ function driverWithState() {
 	});
 }
 
+function everyFile(dir: string): string[] {
+	const found: string[] = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) found.push(...everyFile(full));
+		else if (entry.isFile()) found.push(full);
+	}
+	return found;
+}
+
 function assertValueFree(text: string): void {
 	for (const sentinel of SENTINELS) expect(text).not.toContain(sentinel);
 }
@@ -389,6 +431,10 @@ describe("capture", () => {
 		expect(login.value.login).toBe("ok");
 		expect(login.value.identity).toBe("recipe");
 		assertValueFree(login.text);
+		// The positive control for every test that pins this count: one login
+		// outcome is one `storageState()` read, so a later count that stays where it
+		// was means the capture was refused rather than merely small (TESTQ-014).
+		expect(driver.storageStateCalls).toBe(1);
 
 		// The cache holds one entry, keyed by the stage and the role, and reports
 		// two instants — never a cookie, a name or a value.
@@ -708,14 +754,21 @@ describe("refresh while the session lives", () => {
 	test("a living session re-captures once its refresh interval has passed", async () => {
 		// The store keeps its own clock, so a capture's `capturedAt` advances even when
 		// the two captures happen inside the same millisecond of wall time.
-		let storeClock = 1_800_000_000_000;
-		const cache = new StageIdentityCache({ now: () => (storeClock += 1_000) });
+		// One clock for the pool and the store, so the instants the entry carries are
+		// the ones the refresh interval is measured against.
+		let clock = 1_800_000_000_000;
+		const cache = new StageIdentityCache({ now: () => clock });
+		// Past the refresh floor (`MIN_IDENTITY_CACHE_REFRESH_SECONDS`), which a
+		// declared interval can never go below: one clock step, and the policy's
+		// one-second interval is already exceeded at the floor it was clamped to.
 		const deps = build(
-			// One second of refresh: every later route call is past it, because the
-			// test clock advances a second per call.
 			configRoot({ policy: { identityCache: { refreshSeconds: 1 } } }),
 			driverWithState(),
-			{ cache },
+			{
+				cache,
+				now: () =>
+					(clock += MIN_IDENTITY_CACHE_REFRESH_SECONDS * 1_000 + 1_000),
+			},
 		);
 		const opened = await open(deps, "clerk");
 		const login = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
@@ -833,30 +886,67 @@ describe("no cached value leaves a surface", () => {
 		await deps.pool.closeAll();
 	});
 
-	test("a fresh process has an empty cache: nothing was written anywhere", async () => {
-		const cache = new StageIdentityCache();
-		const root = configRoot();
-		const deps = build(root, driverWithState(), { cache });
-		const opened = await open(deps, "clerk");
-		await call(deps, AGENT_BROWSER_LOGIN_PATH, {
-			app: "web",
-			role: "clerk",
-			session: String(opened.value.session),
-		});
-		expect(cache.size).toBe(1);
-		// Nothing on disk: the throwaway configuration root and its `.env` are the
-		// only files this test wrote, and neither grew a cache.
-		expect(fs.readdirSync(root).sort()).toEqual([".env", "stages"]);
-		const defsDir = stagePaths(root).defsDir;
-		if (defsDir === undefined) throw new Error("the stage root is missing");
-		const stageFiles = fs
-			.readdirSync(defsDir)
-			.flatMap((name) => fs.readFileSync(path.join(defsDir, name), "utf8"));
-		assertValueFree(stageFiles.join("\n"));
-		// A new store — what the process does on restart — holds nothing.
-		expect(new StageIdentityCache().size).toBe(0);
-		expect(new StageIdentityCache().list()).toEqual([]);
-		await deps.pool.closeAll();
+	test("a capture reaches memory only: no file the run can write holds a value", async () => {
+		// Task 3.2's proof, stated for what it can see. Every surface that *could*
+		// record a value is inside one of the three trees walked below — the run's
+		// worktree (where evidence, telemetry and a worktree-local store would land),
+		// the configuration root, and a throwaway HOME this test owns, so a
+		// `$HOME`-relative store, wiki or telemetry file would be found too. A heap
+		// snapshot is memory, not a file any of this writes (design D6).
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "stage-identity-home-"));
+		const saved = {
+			home: process.env.HOME,
+			config: process.env.AGENTIC_CODING_CONFIG_DIR,
+			wiki: process.env.HERDR_WIKI_DIR,
+		};
+		process.env.HOME = home;
+		process.env.AGENTIC_CODING_CONFIG_DIR = path.join(home, "config");
+		process.env.HERDR_WIKI_DIR = path.join(home, "wiki");
+		try {
+			const cache = new StageIdentityCache();
+			const root = configRoot();
+			const deps = build(root, driverWithState(), { cache });
+			const opened = await open(deps, "clerk");
+			await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "clerk",
+				session: String(opened.value.session),
+			});
+			// The guard on the assertion: the capture really happened, so an empty
+			// walk cannot pass by finding nothing anywhere.
+			expect(cache.size).toBe(1);
+			await deps.pool.closeAll();
+			// Two trees are all-but-empty by construction (`HOME` is where a store,
+			// a wiki or a telemetry file would land if anything wrote one), and the
+			// walk has to cover them too — an empty tree is the answer, not an
+			// excuse. The other two are the ones that always hold files, so a broken
+			// walk cannot pass unnoticed.
+			for (const file of everyFile(home))
+				assertValueFree(fs.readFileSync(file, "utf8"));
+			for (const tree of [deps.worktree, root]) {
+				const files = everyFile(tree);
+				expect(files.length).toBeGreaterThan(0);
+				for (const file of files)
+					assertValueFree(fs.readFileSync(file, "utf8"));
+			}
+			// The route log is the one surface the walk above cannot see.
+			assertValueFree(deps.logs.join("\n"));
+			// Nothing on disk: the configuration root still holds only what the
+			// fixture wrote.
+			expect(fs.readdirSync(root).sort()).toEqual([".env", "stages"]);
+			// A new store — what the process does on restart — holds nothing.
+			expect(new StageIdentityCache().size).toBe(0);
+			expect(new StageIdentityCache().list()).toEqual([]);
+		} finally {
+			for (const [key, value] of Object.entries({
+				HOME: saved.home,
+				AGENTIC_CODING_CONFIG_DIR: saved.config,
+				HERDR_WIKI_DIR: saved.wiki,
+			}))
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			fs.rmSync(home, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -870,6 +960,54 @@ describe("the cache is owned by the server, not by a run", () => {
 		expect(refused.value.code).toBe("stage-role-unknown");
 		expect(String(refused.value.message)).toContain("clerk");
 		await deps.pool.closeAll();
+	});
+
+	test("the registered forget answers both halves from its own store", () => {
+		// The Settings path has no transport, so it reaches the process's forget
+		// (D5). Removed count and listing come from one store: a listing taken from
+		// the process store would report another cache's entries
+		// (QUALITY-203/CONC-303).
+		const store = new StageIdentityCache();
+		store.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		registerStageIdentityForget((filter) => ({
+			removed: store.forget(filter),
+			entries: store.list(),
+		}));
+		try {
+			expect(forgetStageIdentity({ stage: "grid-int" })).toEqual({
+				removed: 1,
+				entries: [],
+			});
+		} finally {
+			registerStageIdentityForget();
+		}
+		// With no registration the process store answers both halves; nothing of the
+		// injected seam survives the clear.
+		const fallback = forgetStageIdentity({ stage: "no-such-stage" });
+		expect(fallback.removed).toBe(0);
+		expect(fallback.entries).toEqual(stageIdentityCache().list());
+	});
+
+	test("the shipped forget counts and lists from the pool it was built on", () => {
+		// `app.ts` wires exactly this function (`poolIdentityForget(browser.pool)`),
+		// so it is tested rather than re-implemented: a forget that counted from the
+		// pool and listed from the process store would describe a cache it never
+		// touched (QUALITY-203/CONC-303/TESTQ-016).
+		resetStageIdentityCache();
+		const pool = new StageIdentityCache();
+		pool.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		stageIdentityCache().put(
+			{ stage: "grid-int", role: "admin" },
+			cachedState(),
+		);
+		const shipped = poolIdentityForget({
+			forgetIdentity: (filter) => pool.forget(filter),
+			identityStore: () => pool,
+		});
+		expect(shipped({ stage: "grid-int" })).toEqual({ removed: 1, entries: [] });
+		// The process store was never consulted, in either half.
+		expect(stageIdentityCache().size).toBe(1);
+		resetStageIdentityCache();
 	});
 
 	test("the listing is value-free and the forget removes exactly one key", async () => {
@@ -895,7 +1033,7 @@ describe("the cache is owned by the server, not by a run", () => {
 				cookies: [
 					{
 						name: "listed",
-						value: "SENT-listed-cookie-0123456789",
+						value: "LISTED_COOKIE",
 						domain: "grid-int.example.test",
 						path: "/",
 						expires: -1,
@@ -912,7 +1050,7 @@ describe("the cache is owned by the server, not by a run", () => {
 				cookies: [
 					{
 						name: "listed-admin",
-						value: "SENT-listed-admin-cookie-0123456789",
+						value: "LISTED_ADMIN_COOKIE",
 						domain: "grid-int.example.test",
 						path: "/",
 						expires: -1,
@@ -937,6 +1075,7 @@ describe("the cache is owned by the server, not by a run", () => {
 				"expiresAt",
 				"role",
 				"stage",
+				"truncated",
 			]);
 		assertValueFree(listed.text);
 
@@ -963,5 +1102,683 @@ describe("the cache is owned by the server, not by a run", () => {
 		const wrongMethod = await identityCall(STAGES_IDENTITY_FORGET_PATH);
 		expect(wrongMethod.status).toBe(405);
 		resetStageIdentityCache();
+	});
+});
+
+type CapturedState = Parameters<StageIdentityCache["put"]>[1];
+
+/** The state a cached entry holds for the fake driver: the same sentinels the
+ * driver reports, so an install and a capture are comparable. */
+function cachedState(
+	option: { readonly expired?: boolean } = {},
+): CapturedState {
+	return {
+		cookies: [
+			{
+				name: "cached-session",
+				value: SESSION_COOKIE,
+				domain: "grid-int.example.test",
+				path: "/",
+				expires: -1,
+				httpOnly: true,
+				secure: true,
+				sameSite: "Lax" as const,
+			},
+			...(option.expired === true
+				? [
+						{
+							name: "cached-expired",
+							value: IDP_COOKIE,
+							domain: ".example.test",
+							path: "/",
+							// A cookie's own expiry is independent of the entry's TTL, so an
+							// entry can hold one the browser would discard.
+							expires: 1,
+							httpOnly: true,
+							secure: true,
+						},
+					]
+				: []),
+		],
+		origins: [
+			{
+				origin: APP_ORIGIN,
+				localStorage: [{ name: "msal.token.keys", value: APP_TOKEN }],
+				sessionStorage: [{ name: "session-token", value: SESSION_TOKEN }],
+			},
+			{ origin: IDP_ORIGIN, localStorage: [], sessionStorage: [] },
+		],
+	};
+}
+
+describe("install order and the store's own bounds", () => {
+	test("another origin's sessionStorage survives a capture that read one origin", async () => {
+		const cache = new StageIdentityCache();
+		cache.put(
+			{ stage: "grid-int", role: "clerk" },
+			{
+				cookies: [],
+				origins: [
+					{
+						origin: APP_ORIGIN,
+						localStorage: [{ name: "msal.token.keys", value: APP_TOKEN }],
+						sessionStorage: [],
+					},
+					{
+						origin: IDP_ORIGIN,
+						localStorage: [],
+						// A sign-on token the page cannot be asked for: only a script on
+						// that origin can read it.
+						sessionStorage: [{ name: "idp-session", value: IDP_COOKIE }],
+					},
+				],
+			},
+		);
+		const driver = createFakeDriver({
+			storageState: loggedInState(),
+			sessionStorage: JSON.stringify({ "session-token": SESSION_TOKEN }),
+		});
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(true);
+		const origins =
+			cache.peek({ stage: "grid-int", role: "clerk" })?.state.origins ?? [];
+		// The origin the capture *did* read is the page's new truth...
+		expect(
+			origins.find((origin) => origin.origin === APP_ORIGIN)?.sessionStorage,
+		).toEqual([{ name: "session-token", value: SESSION_TOKEN }]);
+		// ...and the origin it could not read keeps what the entry had, or a stage
+		// with several origins would lose the identity provider's token on every
+		// capture (TESTQ-009).
+		expect(
+			origins.find((origin) => origin.origin === IDP_ORIGIN)?.sessionStorage,
+		).toEqual([{ name: "idp-session", value: IDP_COOKIE }]);
+		await deps.pool.closeAll();
+	});
+
+	test("the cached identity reaches the context before the first navigation", async () => {
+		const cache = new StageIdentityCache();
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		expect(opened.value.identityInstalled).toBe(true);
+		// The order, not merely the presence: cookies and the storage script belong to
+		// the context before a page of it is ever navigated, or the first document
+		// would render a signed-out shell and the token would arrive a round trip too
+		// late (D3).
+		const cookies = driver.events.indexOf("addCookies");
+		const script = driver.events.indexOf("addInitScript");
+		const firstGoto = driver.events.findIndex((event) =>
+			event.startsWith("goto "),
+		);
+		expect(cookies).toBeGreaterThanOrEqual(0);
+		expect(script).toBeGreaterThanOrEqual(0);
+		expect(firstGoto).toBeGreaterThan(cookies);
+		expect(firstGoto).toBeGreaterThan(script);
+		await deps.pool.closeAll();
+	});
+
+	test("a cookie of the entry that has expired is not installed", async () => {
+		// The entry was captured when that cookie had a second of life left, which is
+		// what the store's own clock says here; the install happens now.
+		const cache = new StageIdentityCache({ now: () => 1 });
+		cache.put(
+			{ stage: "grid-int", role: "clerk" },
+			cachedState({ expired: true }),
+		);
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		expect(opened.status).toBe(200);
+		// `put` kept it — a cookie's own expiry is a browser fact, not an entry fact —
+		// and the install drops it, because a browser would discard it anyway.
+		expect(
+			cache.peek({ stage: "grid-int", role: "clerk" })?.state.cookies,
+		).toHaveLength(2);
+		expect(
+			driver.installedCookies.flatMap((cookies) =>
+				cookies.map((cookie) => cookie.name),
+			),
+		).toEqual(["cached-session"]);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("a capture that finds nothing", () => {
+	test("an empty capture does not overwrite an entry that holds something", async () => {
+		// A clock that moves on every read, so "the instant did not change" is a
+		// statement about the store rather than about a frozen clock (TESTQ-011).
+		let clock = 1_700_000_000_000;
+		const cache = new StageIdentityCache({ now: () => (clock += 1_000) });
+		// The context reports no browser state at all — the token-only login D2 names
+		// — and it was opened while the cache was empty, so no install put anything
+		// into it: what it reads really is nothing.
+		const driver = createFakeDriver({
+			storageState: { cookies: [], origins: [] },
+		});
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		const seeded = cache.peek({ stage: "grid-int", role: "clerk" });
+		if (seeded === undefined) throw new Error("the seed entry is missing");
+		const before = seeded.capturedAt;
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(false);
+		// An empty fact is not a newer truth: what the earlier capture held is still
+		// the best thing this server knows about the session.
+		const entry = cache.peek({ stage: "grid-int", role: "clerk" });
+		expect(entry?.state.cookies.map((cookie) => cookie.name)).toEqual([
+			"cached-session",
+		]);
+		expect(entry?.capturedAt).toBe(before);
+		expect(cache.list()[0]?.capturedAt).toBe(before);
+		// The control that makes the assertion above mean something: another key put
+		// through the same store does carry the newer instant.
+		cache.put({ stage: "grid-int", role: "admin" }, cachedState());
+		expect(
+			cache.peek({ stage: "grid-int", role: "admin" })?.capturedAt,
+		).not.toBe(before);
+		await deps.pool.closeAll();
+	});
+
+	test("a capture whose only values are below the floor never replaces an entry", async () => {
+		// The floor is the redactor's own, so a value under it is dropped on the way
+		// in rather than kept and left unmasked. A capture left with nothing is the
+		// same fact as an empty one, and it does not overwrite an entry (TESTQ-019).
+		const cache = new StageIdentityCache();
+		const driver = createFakeDriver({
+			storageState: {
+				cookies: [
+					{
+						name: "tiny",
+						value: "abc",
+						domain: "grid-int.example.test",
+						path: "/",
+						expires: -1,
+						httpOnly: true,
+						secure: true,
+					},
+				],
+				origins: [],
+			},
+		});
+		const deps = build(configRoot(), driver, { cache });
+		// Opened while the cache is empty, so no install put anything into the context.
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		const before = cache.peek({ stage: "grid-int", role: "clerk" })?.capturedAt;
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(false);
+		const entry = cache.peek({ stage: "grid-int", role: "clerk" });
+		expect(entry?.state.cookies.map((cookie) => cookie.name)).toEqual([
+			"cached-session",
+		]);
+		expect(entry?.capturedAt).toBe(before);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("a session that changes role, and the forget against it", () => {
+	test("a login of another role into an installed context is not captured", async () => {
+		const cache = new StageIdentityCache();
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		expect(opened.value.identityInstalled).toBe(true);
+		const reads = driver.storageStateCalls;
+		// The context carries the clerk's cookies; a login that names the admin role
+		// is still the clerk's browser, so its state must not be filed under the
+		// admin key (CONC-001/QUALITY-004).
+		const login = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "admin",
+			session: String(opened.value.session),
+		});
+		expect(login.status).toBe(200);
+		expect(cache.holds({ stage: "grid-int", role: "admin" })).toBe(false);
+		// Refused before the read, not after it: a capture that ran and discarded
+		// the result would still have serialised another user's whole context
+		// (TESTQ-014).
+		expect(driver.storageStateCalls).toBe(reads);
+		// The role it *was* installed for keeps exactly what it had.
+		expect(
+			cache.peek({ stage: "grid-int", role: "clerk" })?.state.cookies,
+		).toHaveLength(1);
+		await deps.pool.closeAll();
+	});
+
+	test("a context that logged in as two roles fills neither key", async () => {
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		// No install and no cache: the mixed jar is two developer logins in one
+		// window, which `stage_login` allows (SEC-001).
+		const opened = await open(deps, "clerk");
+		const session = String(opened.value.session);
+		const clerk = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session,
+		});
+		expect(clerk.status).toBe(200);
+		expect(cache.holds({ stage: "grid-int", role: "clerk" })).toBe(true);
+		const admin = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "admin",
+			session,
+		});
+		expect(admin.status).toBe(200);
+		// The admin login reuses the clerk's context, so the jar it reads now holds
+		// both users' cookies. Filing it under `admin` would hand the clerk's session
+		// to a later admin run, so the second login captures nothing at all — and it
+		// does not capture the clerk's key again either.
+		expect(cache.holds({ stage: "grid-int", role: "admin" })).toBe(false);
+		expect(cache.list().map((entry) => entry.role)).toEqual(["clerk"]);
+		await deps.pool.closeAll();
+	});
+
+	test("a forget keeps the login history the mixed-jar guard reads", async () => {
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		for (const role of ["clerk", "admin"]) {
+			const login = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role,
+				session: String(opened.value.session),
+			});
+			expect(login.status).toBe(200);
+		}
+		expect(session.identity?.loggedRoles).toEqual(["clerk", "admin"]);
+		// The forget rewrites the attribution and nothing else: a rewrite that
+		// re-enumerated the fields dropped `loggedRoles`, so the same context could
+		// file its mixed jar under one user afterwards (SEC-001/CONC-401).
+		deps.pool.forgetIdentity({ stage: "grid-int" });
+		expect(session.identity?.loggedRoles).toEqual(["clerk", "admin"]);
+		expect(session.identity?.source).toBeUndefined();
+		expect(session.identity?.capturedAt).toBeUndefined();
+		const admin = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "admin",
+			session: String(opened.value.session),
+		});
+		expect(admin.status).toBe(200);
+		expect(cache.holds({ stage: "grid-int", role: "admin" })).toBe(false);
+		expect(cache.size).toBe(0);
+		await deps.pool.closeAll();
+	});
+
+	test("a capture adds to the secret set instead of replacing it", async () => {
+		// The install and the capture both write that set, and a capture only reports
+		// what it read: a replace would drop the values an install registered for a
+		// context that still carries them (TESTQ-020).
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		const installedOnly = "SENT-installed-only-value-0123456789";
+		session.installedIdentitySecrets = [
+			{ name: "stage-identity-cookie", value: installedOnly },
+		];
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(true);
+		const registered = session.installedIdentitySecrets.map(
+			(secret) => secret.value,
+		);
+		expect(registered).toContain(installedOnly);
+		// The capture's own values joined it rather than standing in for it.
+		expect(registered).toContain(SESSION_COOKIE);
+		expect(deps.pool.installedIdentitySecrets()).toContainEqual({
+			name: "stage-identity-cookie",
+			value: installedOnly,
+		});
+		await deps.pool.closeAll();
+	});
+
+	test("a capture queued behind another is dropped once the interval has passed", async () => {
+		// The interval is a decision, so it is checked again inside the gate: two
+		// browser calls that both saw it elapsed before either finished must not read
+		// the context twice (TESTQ-018/CONC-302).
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		const reads = driver.storageStateCalls;
+		driver.holdStorageState = true;
+		const first = deps.pool.captureIdentity(session, "recipe", {
+			minIntervalMs: 60_000,
+		});
+		for (
+			let index = 0;
+			index < 200 && driver.pendingStorageStates === 0;
+			index++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(driver.pendingStorageStates).toBe(1);
+		// Admitted before the first one stamped the attempt, so only the in-gate
+		// check can stop it.
+		const second = deps.pool.captureIdentity(session, "recipe", {
+			minIntervalMs: 60_000,
+		});
+		driver.holdStorageState = false;
+		driver.releaseStorageState();
+		expect(await first).toBe(true);
+		expect(await second).toBe(false);
+		// One read for the two captures: the queued one returned before reading.
+		expect(driver.storageStateCalls).toBe(reads + 1);
+		await deps.pool.closeAll();
+	});
+
+	test("a capture that read the store across a role change is dropped", async () => {
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		driver.holdStorageState = true;
+		const capture = deps.pool.captureIdentity(session, "recipe");
+		// Wait for the read to be in flight rather than guessing at it.
+		for (
+			let index = 0;
+			index < 200 && driver.pendingStorageStates === 0;
+			index++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(driver.pendingStorageStates).toBe(1);
+		// `stage_login` naming another role wins over a capture that is already
+		// reading: the write would otherwise file one user's state under another's
+		// key.
+		session.identity = { role: "admin", cacheInstalled: false };
+		driver.releaseStorageState();
+		expect(await capture).toBe(false);
+		expect(cache.size).toBe(0);
+		await deps.pool.closeAll();
+	});
+
+	test("a capture waiting behind another is dropped by a forget that lands first", async () => {
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session: String(opened.value.session),
+		});
+		const source = session.identity?.source;
+		expect(source).toBe("recipe");
+		driver.holdStorageState = true;
+		const first = deps.pool.captureIdentity(session, source ?? "recipe", {
+			expectedSource: source,
+		});
+		for (
+			let index = 0;
+			index < 200 && driver.pendingStorageStates === 0;
+			index++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(driver.pendingStorageStates).toBe(1);
+		// The second capture waits behind the first, so it enters the gate only after
+		// the forget below has moved the key's generation and cleared the session's
+		// source — both re-checks have to drop it, not just the generation (CONC-001,
+		// TESTQ-015).
+		const second = deps.pool.captureIdentity(session, source ?? "recipe", {
+			expectedSource: source,
+		});
+		deps.pool.forgetIdentity({ stage: "grid-int", role: "clerk" });
+		driver.holdStorageState = false;
+		driver.releaseStorageState();
+		expect(await first).toBe(false);
+		expect(await second).toBe(false);
+		expect(cache.size).toBe(0);
+		await deps.pool.closeAll();
+	});
+
+	test("a forget holds against the refresh and the clean close", async () => {
+		const cache = new StageIdentityCache();
+		const deps = build(configRoot(), driverWithState(), { cache });
+		const opened = await open(deps, "clerk");
+		await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session: String(opened.value.session),
+		});
+		expect(cache.size).toBe(1);
+		expect(deps.pool.forgetIdentity({ stage: "grid-int", role: "clerk" })).toBe(
+			1,
+		);
+		// The live session keeps its browser state — a forget is not a logout — but
+		// neither its next refresh nor its clean close may put the key back
+		// (CONC-002).
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(snapshot.status).toBe(200);
+		expect(cache.size).toBe(0);
+		await call(deps, AGENT_BROWSER_CLOSE_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(cache.size).toBe(0);
+		expect(cache.list()).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("the values a live context installed stay redacted after a forget", async () => {
+		// The page echoes the very values the entry installs, so the only thing that
+		// can keep them out of the reply is the redaction set (SEC-001).
+		const driver = createFakeDriver({
+			storageState: { cookies: [], origins: [] },
+			snapshot: `${SESSION_COOKIE}\n${APP_TOKEN}\nbutton "Sign out" [ref=e0]`,
+		});
+		const cache = new StageIdentityCache();
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		expect(opened.value.identityInstalled).toBe(true);
+		expect(deps.pool.installedIdentitySecrets().length).toBeGreaterThan(0);
+		// Forgotten while the context still carries the cookies and the storage: the
+		// values are credentials for as long as a browser this server drives has them.
+		deps.pool.forgetIdentity({ stage: "grid-int", role: "clerk" });
+		expect(cache.size).toBe(0);
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(snapshot.status).toBe(200);
+		expect(snapshot.text).toContain("«redacted:");
+		assertValueFree(snapshot.text);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("a session that logged in itself", () => {
+	test("keeps its captured values masked after the entry is forgotten", async () => {
+		// SEC-002: nothing was installed, so the pool knows these values only because
+		// the capture recorded them on the session itself.
+		const driver = createFakeDriver({
+			storageState: loggedInState(),
+			snapshot: `${APP_TOKEN}\n${IDP_COOKIE}\nbutton "Sign out" [ref=e0]`,
+		});
+		const cache = new StageIdentityCache();
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		expect(opened.value.identityInstalled).toBeUndefined();
+		const login = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session: String(opened.value.session),
+		});
+		expect(login.value.login).toBe("ok");
+		expect(cache.size).toBe(1);
+		expect(deps.pool.installedIdentitySecrets().length).toBeGreaterThan(0);
+		// The entry goes, the browser does not: the values are still credentials for
+		// as long as this server drives that context.
+		deps.pool.forgetIdentity({});
+		expect(cache.size).toBe(0);
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(snapshot.status).toBe(200);
+		expect(snapshot.text).toContain("«redacted:");
+		expect(snapshot.text).not.toContain(APP_TOKEN);
+		expect(snapshot.text).not.toContain(IDP_COOKIE);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("the operator forget, and the pool it has to reach", () => {
+	test("a route forget moves the key on, so the refresh and the clean close cannot restore it", async () => {
+		// SEC-001/QUALITY-101: a forget that only dropped the entry would be undone by
+		// the live session's next capture, which is why the route goes through the
+		// pool's forget rather than the store's.
+		const cache = new StageIdentityCache();
+		const deps = build(configRoot(), driverWithState(), { cache });
+		const opened = await open(deps, "clerk");
+		await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session: String(opened.value.session),
+		});
+		expect(cache.size).toBe(1);
+		const forgotten = await identityCall(STAGES_IDENTITY_FORGET_PATH, {
+			method: "POST",
+			body: { stage: "grid-int", role: "clerk" },
+			deps: deps as unknown as StageRouteDeps,
+		});
+		expect(forgotten.status).toBe(200);
+		expect(forgotten.value.removed).toBe(1);
+		expect(forgotten.value.entries).toEqual([]);
+		// A call that would refresh the session, and then the close that would capture
+		// it one last time: neither may bring the key back.
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(snapshot.status).toBe(200);
+		expect(cache.size).toBe(0);
+		await call(deps, AGENT_BROWSER_CLOSE_PATH, {
+			session: String(opened.value.session),
+		});
+		expect(cache.size).toBe(0);
+		await deps.pool.closeAll();
+	});
+
+	test("the whole-cache scope removes every key", async () => {
+		const cache = new StageIdentityCache();
+		cache.put({ stage: "grid-int", role: "clerk" }, cachedState());
+		cache.put({ stage: "retired", role: "admin" }, cachedState());
+		expect(cache.size).toBe(2);
+		const deps = build(configRoot(), driverWithState(), { cache });
+		const forgotten = await identityCall(STAGES_IDENTITY_FORGET_PATH, {
+			method: "POST",
+			body: {},
+			deps: deps as unknown as StageRouteDeps,
+		});
+		expect(forgotten.value.removed).toBe(2);
+		expect(forgotten.value.entries).toEqual([]);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("a capture that cannot finish", () => {
+	test("a driver read that never answers is dropped instead of hanging the call", async () => {
+		// PERF-005: the bound is what keeps one unresponsive driver call from hanging
+		// the browser call that triggered the capture.
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, {
+			cache,
+			identityCaptureTimeoutMs: 5,
+		});
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		driver.holdStorageState = true;
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(false);
+		expect(cache.size).toBe(0);
+		driver.releaseStorageState();
+		await deps.pool.closeAll();
+	});
+
+	test("two sessions of one key capture one at a time", async () => {
+		// CONC-202: the gate is the store's key, not the session, so two browser
+		// sessions of one `(stage, role)` cannot read the context alongside each other
+		// and write the entry out of order.
+		const cache = new StageIdentityCache();
+		const driver = driverWithState();
+		const deps = build(configRoot(), driver, { cache });
+		await open(deps, "clerk", "first");
+		await open(deps, "clerk", "second");
+		const first = deps.pool.find(OWNER, "first");
+		const second = deps.pool.find(OWNER, "second");
+		if (first === undefined || second === undefined)
+			throw new Error("both sessions have to exist");
+		driver.holdStorageState = true;
+		const one = deps.pool.captureIdentity(first, "user");
+		for (
+			let index = 0;
+			index < 200 && driver.pendingStorageStates === 0;
+			index++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(driver.pendingStorageStates).toBe(1);
+		const two = deps.pool.captureIdentity(second, "user");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		// The second is waiting on the key's gate, not reading beside the first.
+		expect(driver.pendingStorageStates).toBe(1);
+		driver.holdStorageState = false;
+		driver.releaseStorageState();
+		expect(await one).toBe(true);
+		expect(await two).toBe(true);
+		await deps.pool.closeAll();
+	});
+
+	test("a sessionStorage read that failed keeps what the entry had for that origin", async () => {
+		// QUALITY-103: a read that throws is not an empty storage. Replacing the origin
+		// with nothing would drop a token the previous capture had kept, and the next
+		// session would start without it.
+		const cache = new StageIdentityCache();
+		cache.put(
+			{ stage: "grid-int", role: "clerk" },
+			{
+				cookies: [],
+				origins: [
+					{
+						origin: APP_ORIGIN,
+						localStorage: [{ name: "app-token", value: APP_TOKEN }],
+						sessionStorage: [{ name: "session-token", value: SESSION_TOKEN }],
+					},
+				],
+			},
+		);
+		const driver = createFakeDriver({
+			storageState: loggedInState(),
+			failSessionStorage: true,
+		});
+		const deps = build(configRoot(), driver, { cache });
+		const opened = await open(deps, "clerk");
+		const session = deps.pool.find(OWNER, String(opened.value.session));
+		if (session === undefined) throw new Error("the session is missing");
+		expect(await deps.pool.captureIdentity(session, "recipe")).toBe(true);
+		const kept = cache
+			.peek({ stage: "grid-int", role: "clerk" })
+			?.state.origins.find((origin) => origin.origin === APP_ORIGIN);
+		expect(kept?.sessionStorage).toEqual([
+			{ name: "session-token", value: SESSION_TOKEN },
+		]);
+		await deps.pool.closeAll();
 	});
 });

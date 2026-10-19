@@ -40,13 +40,14 @@ export function stageIdentities(): StageIdentitiesResponse {
 	return stageIdentitiesValue();
 }
 
-/** Forget one stage's cached identity (one role of it, or all of them). */
+/** Forget cached sign-ins: one `(stage, role)`, every role of one stage, or the
+ * whole cache when neither is named. */
 export function forgetStageIdentityValue(
-	stage: string,
+	stage?: string,
 	role?: string,
 ): StageIdentityForgetResponse {
 	return forgetStageIdentity({
-		stage,
+		...(stage === undefined ? {} : { stage }),
 		...(role === undefined ? {} : { role }),
 	});
 }

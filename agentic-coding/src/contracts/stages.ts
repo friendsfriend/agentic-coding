@@ -67,6 +67,11 @@ export interface StageRoleStatus {
 	 * the provider's page is the sign-in, and the hand-off's window is where it
 	 * happens. */
 	readonly loginMode: "automated" | "handoff" | "unavailable";
+	/** Whether a successful login of this role is remembered in the identity cache
+	 * (`add-stage-identity-cache`), so a later session of it may sign in silently.
+	 * False when the stage disabled the cache and for the `http-basic` recipe, whose
+	 * credential the driver cannot observe (`design.md` D2). */
+	readonly cacheable: boolean;
 	readonly credentials: readonly StageCredentialStatus[];
 }
 /** One declared version probe, as the agent route reports it. A probe that
@@ -167,6 +172,10 @@ export interface StageIdentityStatus {
 	readonly capturedAt: number;
 	/** Epoch milliseconds; an entry past it is not reported and is not installed. */
 	readonly expiresAt: number;
+	/** How many captured values this entry's bounds dropped — a count, never a
+	 * value. Always present, so a surface has to decide what to say about it
+	 * instead of guessing `undefined` means "none" (it does: 0 is none). */
+	readonly truncated: number;
 }
 
 /** `GET /api/v1/stages/identity`: the live entries of this server's cache. */

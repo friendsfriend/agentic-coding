@@ -66,6 +66,9 @@ export interface FakeDriverOptions {
 	/** The JSON text the `sessionStorage` read answers with
 	 * (`sessionStorage.length`/`key`/`getItem`). Defaults to `{}`. */
 	readonly sessionStorage?: string;
+	/** Refuse the `sessionStorage` read, which is what a page that navigated away
+	 * from the origin looks like to a capture. Defaults to answering. */
+	readonly failSessionStorage?: boolean;
 }
 
 /** The `storageState()`-shaped snapshot a fake context starts with. */
@@ -207,6 +210,23 @@ export interface FakeDriver extends BrowserDriver {
 	/** Every `addCookies` payload, in call order, so an installed identity is
 	 * assertable without a browser. */
 	readonly installedCookies: DriverCookie[][];
+	/** The context set-up steps and the navigations of this driver, in call order:
+	 * `addCookies`, `addInitScript`, `goto`. An identity has to be installed
+	 * *before* the first navigation (`add-stage-identity-cache`, D3), and set-up
+	 * order is exactly what a test of that rule has to see — the per-list arrays
+	 * above cannot answer "before or after the goto". */
+	readonly events: string[];
+	/** How many times `storageState()` was called, so a test can tell a capture that
+	 * read the context from one that decided not to. */
+	readonly storageStateCalls: number;
+	/** Hold every `storageState()` until `releaseStorageState()`, so a capture can be
+	 * observed *while* it is reading: that is the interleaving in which a forget, a
+	 * role switch or a second capture has to win over the write it would make. */
+	holdStorageState: boolean;
+	/** How many `storageState()` calls are held right now, so a test waits for the
+	 * read to be in flight instead of guessing. */
+	readonly pendingStorageStates: number;
+	releaseStorageState(): void;
 	/** Simulate a browser process going away: every slot by default, or only the
 	 * headless one / only the interactive one, so crash isolation between the two
 	 * browsers is assertable. */
@@ -255,6 +275,11 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	const launchOptions: Array<{ readonly headless: boolean }> = [];
 	const initScripts: string[][] = [];
 	const installedCookies: DriverCookie[][] = [];
+	/** Set-up steps and navigations, in the order the driver performed them. */
+	const events: string[] = [];
+	let storageStateCalls = 0;
+	let holdingStorageState = false;
+	const heldStorageStates: Array<() => void> = [];
 	let absentControls: string[] = [];
 	let counts: Record<string, number> = {};
 	/** Requests the page makes while a `goto` is still in flight: the subresources
@@ -408,6 +433,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			closeReasons: [],
 			url: () => context.url,
 			goto: async (url) => {
+				events.push(`goto ${url}`);
 				if (
 					context.askGuard({
 						url,
@@ -468,12 +494,16 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			},
 			title: async () => "Fake",
 			content: async () => context.url,
-			evaluate: async (expression) =>
-				expression.includes("window.sessionStorage")
-					? sessionStorageText
-					: expression.includes("document")
-						? context.url
-						: `evaluated:${expression}`,
+			evaluate: async (expression) => {
+				if (expression.includes("window.sessionStorage")) {
+					if (options.failSessionStorage === true)
+						throw new Error("execution context was destroyed");
+					return sessionStorageText;
+				}
+				return expression.includes("document")
+					? context.url
+					: `evaluated:${expression}`;
+			},
 			snapshot: async () => snapshotText,
 			setViewportSize: async (size) => {
 				page.viewport = { ...size };
@@ -632,6 +662,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			addInitScript: async (script) => {
 				world.scripts.push(script);
 				initScripts.push(world.scripts);
+				events.push("addInitScript");
 				if (!script.includes(BANNER_MARKER)) return;
 				for (const page of own) page.bannerInstalled = true;
 			},
@@ -651,15 +682,23 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			close: async () => {
 				for (const page of own) page.close("server");
 			},
-			storageState: async () => ({
-				cookies: contextCookies.map((cookie) => ({ ...cookie })),
-				origins: (initialSnapshot.origins ?? []).map((origin) => ({
-					origin: origin.origin,
-					localStorage: origin.localStorage.map((entry) => ({ ...entry })),
-				})),
-			}),
+			storageState: async () => {
+				storageStateCalls += 1;
+				if (holdingStorageState)
+					await new Promise<void>((resolve) => {
+						heldStorageStates.push(resolve);
+					});
+				return {
+					cookies: contextCookies.map((cookie) => ({ ...cookie })),
+					origins: (initialSnapshot.origins ?? []).map((origin) => ({
+						origin: origin.origin,
+						localStorage: origin.localStorage.map((entry) => ({ ...entry })),
+					})),
+				};
+			},
 			addCookies: async (cookies) => {
 				installedCookies.push(cookies.map((cookie) => ({ ...cookie })));
+				events.push("addCookies");
 				for (const cookie of cookies)
 					contextCookies = [
 						...contextCookies.filter(
@@ -728,6 +767,24 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		},
 		get installedCookies() {
 			return installedCookies;
+		},
+		get events() {
+			return events;
+		},
+		get storageStateCalls() {
+			return storageStateCalls;
+		},
+		get holdStorageState() {
+			return holdingStorageState;
+		},
+		set holdStorageState(value: boolean) {
+			holdingStorageState = value;
+		},
+		get pendingStorageStates() {
+			return heldStorageStates.length;
+		},
+		releaseStorageState() {
+			for (const resolve of heldStorageStates.splice(0)) resolve();
 		},
 		async launch(options: DriverLaunchOptions) {
 			if (launchError) throw launchError;

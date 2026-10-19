@@ -53,6 +53,7 @@ import {
 	AGENT_BROWSER_WAIT_PATH,
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
+import { StageIdentityCache } from "../src/server/stages/identity-cache.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
 import { pkceSecrets } from "../src/server/stages/oauth2.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
@@ -198,6 +199,9 @@ function build(
 		/** The coordinator's timer, so a test can drive its ticks and its grace
 		 * period instead of sleeping through them. */
 		readonly schedule?: (run: () => void, ms: number) => () => void;
+		/** The identity cache the pool reads, so a test owns the store instead of the
+		 * process-wide one (`add-stage-identity-cache`). */
+		readonly identity?: StageIdentityCache;
 	} = {},
 ): BrowserRouteDeps & {
 	readonly pool: BrowserPool;
@@ -222,6 +226,7 @@ function build(
 		},
 		maxSessions: () => 4,
 		idleTtlMs: () => 900_000,
+		...(options.identity === undefined ? {} : { identity: options.identity }),
 		onSessionClosed: (session, cause) => {
 			void coordinator?.sessionClosed(session, cause);
 		},
@@ -1150,6 +1155,75 @@ describe("stage-bound sessions", () => {
 		expect(reused.value.verified).toBe(true);
 		expect(deps.handoff?.pending(sessionOf(deps, session))).toBeUndefined();
 		expect(sessionOf(deps, session).browserSlot).toBe("interactive");
+		await deps.pool.closeAll();
+	});
+
+	test("a login the developer finished is captured for the next session", async () => {
+		// The spec's first requirement says the state is captured by an automated
+		// recipe *or* by the developer, and the hand-off is the second one: this is
+		// the only path whose capture happens after a wait, not after a recipe.
+		const cache = new StageIdentityCache();
+		const driver = createFakeDriver({
+			storageState: {
+				cookies: [
+					{
+						name: "ESTSAUTH",
+						value: "SENT-handoff-signon-cookie-0123456789",
+						domain: "login.example.test",
+						path: "/",
+						expires: -1,
+						httpOnly: true,
+						secure: true,
+					},
+				],
+				origins: [
+					{
+						origin: "https://grid-int.example.test",
+						localStorage: [
+							{
+								name: "msal.token.keys",
+								value: "SENT-handoff-token-0123456789",
+							},
+						],
+					},
+				],
+			},
+		});
+		const deps = build(configRoot(), driver, { identity: cache });
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		await sessionOf(deps, session).goto(`${APP_URL}home`, 30_000);
+		const ended = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 30,
+		});
+		expect(ended.value.login).toBe("ok");
+		expect(ended.value.identity).toBe("user");
+		// One capture per outcome: the entry is the wait's, and it is the one the
+		// session is remembered by.
+		expect(cache.list().map((entry) => `${entry.stage}/${entry.role}`)).toEqual(
+			["grid-int/sso"],
+		);
+		expect(
+			cache.peek({ stage: "grid-int", role: "sso" })?.state.cookies,
+		).toHaveLength(1);
+		expect(sessionOf(deps, session).identity?.source).toBe("user");
+		// Two call sites could each file the ending — the wait and the route that
+		// answered it — so the count is what pins "one capture per outcome" rather
+		// than the single entry, which either of them would produce (TESTQ-013).
+		expect(driver.storageStateCalls).toBe(1);
+		// A second wait on the same ending is a read-back: it captures nothing new.
+		const again = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 30,
+		});
+		expect(again.value.login).toBe("ok");
+		expect(driver.storageStateCalls).toBe(1);
+		expect(cache.size).toBe(1);
 		await deps.pool.closeAll();
 	});
 

@@ -195,7 +195,7 @@ function printIdentities(
 	const now = Date.now();
 	for (const entry of selected)
 		console.log(
-			`${entry.stage} ${entry.role} captured ${iso(entry.capturedAt)} expires ${iso(entry.expiresAt)} (in ${minutes(Math.max(0, entry.expiresAt - now))})`,
+			`${entry.stage} ${entry.role} captured ${iso(entry.capturedAt)} expires ${iso(entry.expiresAt)} (in ${minutes(Math.max(0, entry.expiresAt - now))})${entry.truncated > 0 ? ` truncated ${entry.truncated} values` : ""}`,
 		);
 }
 

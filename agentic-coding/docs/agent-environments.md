@@ -657,21 +657,37 @@ a production-like name is refused by the catalog, and only the operator's own
   token at load finds it), and `stage_login` then re-checks the recipe's declared
   success condition instead of trusting the cache: accepted answers `ok` with
   `identity: "cache"` and re-captures what the visit left behind, rejected evicts
-  the entry and runs the ordinary login. Every capture reports where it came from
-  (`identity: "cache" | "recipe" | "user"`) and nothing else about it: the
-  listing, the log line and the dashboard show `(stage, role, capturedAt,
-  expiresAt)` and no value. The bounds are per capture — a default
-  `identityCache.ttlMinutes` of 240 (ceiling 1440), `maxEntries` 8 per process
-  (ceiling 50) evicting the oldest capture, expired cookies dropped on the way
-  in, and a re-capture of a living session every `identityCache.refreshSeconds`
-  (default 120, ceiling 3600) so a rotated refresh token — or a recording swap
-  that dropped `sessionStorage` — reaches the cache while the run still works.
+  the entry and runs the ordinary login. A login result is the only place the
+  source is reported: it carries `identity: "cache" | "recipe" | "user"` and
+  nothing else about the state (a capture itself answers only whether it stored
+  something). The listing and the dashboard show `(stage, role, capturedAt,
+  expiresAt)` plus `truncated`, a *count* of the values the capture bounds
+  dropped — a value kept is at least 6 characters (the redactor's own floor, so a
+  stored value is always a scrubbed one) and at most 32 KiB, with at most 256
+  values and 512 KiB per entry — and no name or value, and neither a capture, a
+  refresh, a rejection nor a forget writes a log line about the state. The set
+  those values join while a live context carries them is bounded the same way
+  (`mergeIdentitySecrets`: newest 512 values / 1 MiB per context), so the scrubber
+  cannot grow with the length of a run. The bounds are per capture — a
+  default `identityCache.ttlMinutes` of 240 (ceiling 1440), `maxEntries` 8 per
+  process (ceiling 50) evicting the oldest capture, expired cookies dropped on
+  the way in, and a re-capture of a living session on the first browser call
+  after `identityCache.refreshSeconds` (default 120, floor 30, ceiling 3600, and
+  never longer than the TTL) — so a rotated
+  refresh token, or a recording swap that dropped `sessionStorage`, reaches the
+  cache while the run still works. The refresh is bound to use, not a timer:
+  there is no background sweep, and a session nobody calls captures nothing more.
   `"identityCache": false` on a stage opts out entirely. Forgetting is available
-  three ways — Settings → Stages (Enter on the entry), `agentic-coding stage
-  identity forget [--stage S] [--role R] [--all]`, and `POST
-  /api/v1/stages/identity/forget` — and `agentic-coding stage identity list` (or
-  `GET /api/v1/stages/identity`) shows what is held. Forgetting never logs a live
-  session out: it decides what the *next* one starts from. The `http-basic`
+  at all three granularities — one `(stage, role)`, every role of one stage, and
+  everything — on each of the three surfaces: Settings → Stages (Enter on the
+  entry; the stage row and the section's forget-all row remove every key in their
+  scope, so they are armed by a first Enter and performed by a second),
+  `agentic-coding stage identity forget [--stage S] [--role R] [--all]`, and
+  `POST /api/v1/stages/identity/forget`, while
+  `agentic-coding stage identity list` (or `GET /api/v1/stages/identity`) shows
+  what is held. Forgetting never logs a live session out: it decides what the
+  *next* one starts from, and a forget that a live session's own refresh or clean
+  close would undo is held off until the next successful login. The `http-basic`
   recipe is **not** cacheable — the browser's own authentication dialog never
   shows this server the `Authorization` header it generates, and the change's
   spike confirmed the driver cannot observe it — so such a role installs its
@@ -679,11 +695,19 @@ a production-like name is refused by the catalog, and only the operator's own
   this server acts on by itself either: it is browser state installed into a
   context that already answers to the stage's guard, and the declared success
   condition is what decides whether the login happened. Cached values join the
-  redaction set (each value, the base64url segments of anything JWT-shaped, and
-  their URL-encoded forms), so a page that echoes one into its own text, console
-  or a URL comes back masked. The OAuth 2.0 token store is a separate thing: it
-  holds the token the *server* presents, while this cache holds what a *browser*
-  keeps, and neither can be derived from the other.
+  redaction set (each value the store holds, the base64url segments of anything
+  JWT-shaped, and their URL-encoded forms) — a value too short to be a credential
+  is never captured, so a stored value is always a registered one — and so do the
+  values a live browser context installed, for as long as it exists, so a state
+  stays masked after its entry is forgotten or expires. A page that echoes one
+  into its own text, console or a URL comes back masked. The OAuth 2.0 token
+  store is a separate thing: it holds the token the *server* presents, while this
+  cache holds what a *browser*
+  keeps, and neither can be derived from the other. Rolling the server back is a
+  config step as well as a code one: an older build reads an `identityCache` key
+  in `stages/policy.json` or in a stage definition as an unexpected property,
+  refuses the file, and (for the policy) then refuses every stage, so remove the
+  keys before running the older build.
 - **The hand-off is a policy seam, not an assumption.**
   `interactiveLogin: "local" | "never"` in `stages/policy.json` (default
   `local`); a stage may narrow it to `never` and can never widen it. Under

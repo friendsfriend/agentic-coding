@@ -431,21 +431,114 @@ function redactionSecrets(
 	const live = browserTokenStore(deps).secrets();
 	// Every value the identity cache holds is a credential too
 	// (`add-stage-identity-cache`, SEC): a sign-on cookie or a cached JWT echoed
-	// into a title, a console line or a URL is masked by the same scrubber.
-	const identity = deps.pool.identityStore().secrets();
+	// into a title, a console line or a URL is masked by the same scrubber. The
+	// values a live context *installed* are included even after their entry is
+	// gone (forgotten, expired, evicted): the browser still carries them, so an
+	// echo of one is still an echo of a credential.
+	const identity = identityRedactionSecrets(deps);
 	// The PKCE values of a code-grant login (`add-stage-oauth2-code-pkce`): the
 	// verifier, `state` and the code a receiver took are as secret as the token
 	// they lead to, and the callback URL the window lands on carries the code.
 	const pkce = pkceSecrets();
-	const encoded = [...base, ...live, ...identity, ...pkce].flatMap((secret) => {
+	// Both halves are already longest-first, so merging is linear: the identity set
+	// can hold hundreds of values and sorting it again on every reply is what a
+	// stage application's `localStorage` would otherwise cost the server (PERF).
+	// The encoded copies of the other three sources are derived here, small and per
+	// reply, so no source loses its URL-encoded form to the memoisation (SEC-002).
+	const listed = [...base, ...live, ...pkce];
+	return mergeByLength(
+		sortByLength([...listed, ...encodedVariants(listed)]),
+		identity,
+	);
+}
+
+/** Each value also in its URL-encoded form, because a credential reaches a URL
+ * encoded far more often than plain. A value `encodeURIComponent` leaves alone
+ * contributes nothing. */
+function encodedVariants(
+	secrets: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	return secrets.flatMap((secret) => {
 		const value = encodeURIComponent(secret.value);
 		return value === secret.value
 			? []
 			: [{ name: `${secret.name}:url-encoded`, value }];
 	});
-	return [...base, ...live, ...identity, ...pkce, ...encoded].sort(
+}
+
+/** The identity part of the scrubber, memoised per pool state.
+ *
+ * Every browser reply asks for it, and the set only changes when a capture, an
+ * install, a forget or a close touches it — `secretRevision()` names exactly
+ * those events. The URL-encoded copies are derived once per change rather than
+ * once per reply. */
+let identitySecretCache:
+	| {
+			readonly pool: unknown;
+			readonly revision: number;
+			readonly values: ReturnType<typeof environmentSecrets>;
+	  }
+	| undefined;
+
+function identityRedactionSecrets(
+	deps: BrowserRouteDeps,
+): ReturnType<typeof environmentSecrets> {
+	const pool = deps.pool;
+	const revision = pool.secretRevision();
+	if (
+		identitySecretCache !== undefined &&
+		identitySecretCache.pool === pool &&
+		identitySecretCache.revision === revision
+	)
+		return identitySecretCache.values;
+	const plain = [
+		...pool.identityStore().secrets(),
+		...pool.installedIdentitySecrets(),
+	];
+	const values = sortByLength([...plain, ...encodedVariants(plain)]);
+	identitySecretCache = { pool, revision, values };
+	return values;
+}
+
+function sortByLength(
+	secrets: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	return [...secrets].sort(
 		(left, right) => right.value.length - left.value.length,
 	);
+}
+
+/** Merge two longest-first lists into one without re-sorting either. */
+function mergeByLength(
+	left: ReturnType<typeof environmentSecrets>,
+	right: ReturnType<typeof environmentSecrets>,
+): ReturnType<typeof environmentSecrets> {
+	const merged: ReturnType<typeof environmentSecrets> = [];
+	let i = 0;
+	let j = 0;
+	while (i < left.length && j < right.length) {
+		const a = left[i];
+		const b = right[j];
+		if (
+			a !== undefined &&
+			(b === undefined || a.value.length >= b.value.length)
+		) {
+			merged.push(a);
+			i += 1;
+		} else if (b !== undefined) {
+			merged.push(b);
+			j += 1;
+		}
+	}
+	for (; i < left.length; i += 1) {
+		const value = left[i];
+		if (value !== undefined) merged.push(value);
+	}
+	for (; j < right.length; j += 1) {
+		const value = right[j];
+		if (value !== undefined) merged.push(value);
+	}
+	return merged;
 }
 
 /** The token store this deps object reads: its own, or the process's. */
@@ -1135,7 +1228,15 @@ async function stageLogin(
 	// is kept for the same role and dropped for a different one: an identity of
 	// another role was never installed into this context.
 	session.identity = {
+		...session.identity,
 		role: body.role,
+		// Every role this context logs in as is remembered, not only the one it was
+		// installed for: a second login of a *different* role leaves one jar holding
+		// two users, and `captureIdentity` refuses to file such a context under
+		// either key (SEC-001).
+		loggedRoles: [
+			...new Set([...(session.identity?.loggedRoles ?? []), body.role]),
+		],
 		cacheInstalled:
 			session.identity?.role === body.role &&
 			session.identity.cacheInstalled === true,
@@ -1296,7 +1397,11 @@ async function stageLogin(
 		// Rejected: the entry is evicted *before* the fallback runs, so a login this
 		// call performs is never discredited by the entry it replaced.
 		deps.pool.forgetIdentity({ stage: entry.ident, role: body.role });
-		session.identity = { role: body.role, cacheInstalled: false };
+		session.identity = {
+			...session.identity,
+			role: body.role,
+			cacheInstalled: false,
+		};
 	}
 	const needsPerson =
 		roleView !== undefined &&
@@ -1414,7 +1519,7 @@ async function stageLogin(
 			});
 		throw error;
 	}
-	// Step 6: keep what the login established (`add-stage-identity-cache`, D5). A
+	// Step 6: keep what the login established (`add-stage-identity-cache`, D2). A
 	// login that declared nothing to do established nothing to capture.
 	if (!result.notRequired) await deps.pool.captureIdentity(session, "recipe");
 	return {
@@ -1457,6 +1562,7 @@ async function startHandoff(input: {
 	// session and its role but not this request, and that is what the cache is
 	// keyed by when the login succeeds (`add-stage-identity-cache`).
 	session.identity = {
+		...session.identity,
 		role: input.role,
 		cacheInstalled:
 			session.identity?.role === input.role &&
@@ -1533,7 +1639,11 @@ async function startAuthorizationCodeHandoff(input: {
 	// same reason `startHandoff` does it: the wait is where the identity of a
 	// successful `authorization_code` login is captured
 	// (`add-stage-identity-cache`).
-	session.identity = { role: input.role, cacheInstalled: false };
+	session.identity = {
+		...session.identity,
+		role: input.role,
+		cacheInstalled: false,
+	};
 	// The caller has already checked the role's login mode — a policy that forbids
 	// the window, or a client id that is not set, was refused before this function
 	// was reached — so everything from here on opens machinery that a `handoff`
@@ -1695,10 +1805,10 @@ async function stageLoginWait(
 	const waited = await handoff.wait(session, capMs);
 	const stage = session.stage?.ident;
 	// A hand-off that ended `ok` is a login the developer performed, so this is
-	// where its identity is captured (`add-stage-identity-cache`, D5). The read-back
-	// path above has no live session and therefore no context to read.
-	if (waited.outcome?.outcome === "ok" && session.identity?.role !== undefined)
-		await deps.pool.captureIdentity(session, "user");
+	// where its identity is captured (`add-stage-identity-cache`, D2). The read-back
+	// path above has no live session and therefore no context to read. One capture
+	// per outcome: the attempt stamps the refresh interval, so a second one would
+	// only reset it.
 	if (waited.outcome?.outcome === "ok" && session.identity?.role !== undefined)
 		await deps.pool.captureIdentity(session, "user");
 	if (waited.status)
