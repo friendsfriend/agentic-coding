@@ -26,6 +26,7 @@ import {
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
 	MAX_DIALOGUE_BYTES,
 	QUESTION_WAIT_MS,
+	questionRecordCount,
 	questionRun,
 } from "../dialogue.ts";
 import { enqueue, resumeAskerAfterAnswer } from "../kernel.ts";
@@ -65,7 +66,10 @@ export function agentAsk(
 			"unavailable",
 			`no completed agent is available for role ${command.targetRole}`,
 		);
-	if (snapshot.developerDialogue.length + 1 > MAX_DEVELOPER_DIALOGUE_RECORDS)
+	if (
+		questionRecordCount(snapshot.developerDialogue) + 1 >
+		MAX_DEVELOPER_DIALOGUE_RECORDS
+	)
 		throw new WorkflowRuntimeError(
 			"dialogue-bounds",
 			"dialogue limit reached; resolve the existing questions before asking again",

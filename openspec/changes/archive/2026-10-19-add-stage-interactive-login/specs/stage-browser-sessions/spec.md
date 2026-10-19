@@ -5,17 +5,18 @@
 `stage_login({ session, app, role })` SHALL decide in this order:
 
 1. While the session records, it SHALL be refused with `recording-active`, and no hand-off SHALL start.
-2. When the role's credential status is `set` and its recipe is automatable, the automated recipe SHALL run unchanged.
-3. When the effective interactive-login mode is `local`, the server SHALL start a login hand-off in either of these cases:
+2. When the session already lives in the interactive browser, the recipe declares a success condition and the effective mode is `local`, the silent SSO check SHALL run before anything else is attempted, and a condition that holds SHALL answer `ok` with `via: "existing-session"` and start no hand-off.
+3. When the role's credential status is `set` and its recipe is automatable, the automated recipe SHALL run unchanged.
+4. When the effective interactive-login mode is `local`, the server SHALL start a login hand-off in either of these cases:
    - `reason: "no-credentials"`: the role's credential status is `none` or `missing <VAR>`;
    - `reason: "unautomatable-step"`: the recipe is of kind `interactive`, or the automated recipe ended in `login-mfa-required`. In that case the headless attempt SHALL be discarded, and the hand-off SHALL restart from the application's login URL.
-4. When the effective mode is `never`:
+5. When the effective mode is `never`:
    - a missing variable SHALL answer `credential-missing` naming the variable;
    - a role with status `none` or an `interactive` recipe SHALL answer `login-user-unavailable`;
    - an MFA step SHALL answer `login-mfa-required`.
    No window SHALL open.
 
-An `http-basic` role SHALL hand off under the same triggers. The developer SHALL answer the browser's own authentication dialog in the window, and the hand-off context SHALL set no HTTP credentials. Under the `local` mode, this requirement SHALL take precedence over the foundation's `credential-missing` and `login-mfa-required` results.
+An `http-basic` role SHALL NOT hand off. The browser's own authentication dialog does not appear in a window this server launched (spike 0.2), so a hand-off could never be answered: such a role SHALL keep the foundation's results — `credential-missing` naming the missing variable, `login-user-unavailable`, and the automated `http-basic` recipe when its variables are set — under either policy, and no window SHALL open for it.
 
 #### Scenario: Configured credentials keep the automated path
 

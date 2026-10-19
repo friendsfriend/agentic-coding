@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { bannerScript } from "../src/server/browser/banner.ts";
 import { createFakeDriver } from "../src/server/browser/fake-driver.ts";
 import { BrowserPool } from "../src/server/browser/pool.ts";
 import type { BrowserSession } from "../src/server/browser/session.ts";
@@ -44,6 +45,39 @@ const open = (pool: BrowserPool, owner: string, name = "default") =>
 function scratchDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+/** A pool whose launch options are recorded as given, so a headed launch is
+ * observable, and whose session closes are recorded by cause. */
+function interactivePool(
+	driver: ReturnType<typeof createFakeDriver>,
+	options: { readonly now?: () => number; readonly idleTtlMs?: number } = {},
+) {
+	const closes: Array<{ readonly name: string; readonly cause: string }> = [];
+	const pool = new BrowserPool({
+		driver,
+		// What the installer does: a headed request becomes a real window launch.
+		launch: (launchOptions) => ({ headless: launchOptions?.headed !== true }),
+		maxSessions: () => 4,
+		idleTtlMs: () => options.idleTtlMs ?? 15 * 60_000,
+		...(options.now ? { now: options.now } : {}),
+		onSessionClosed: (session, cause) => {
+			closes.push({ name: session.name, cause });
+		},
+	});
+	return { pool, closes };
+}
+
+const BANNER = {
+	stage: "grid-int",
+	app: "Grid web",
+	role: "clerk",
+	reason: "no-credentials" as const,
+	deadline: "00:00 local (in about 15 minutes)",
+	canConfirm: true,
+};
+
+const promotes = (driver: ReturnType<typeof createFakeDriver>) =>
+	driver.launchOptions.filter((options) => options.headless === false).length;
 
 describe("browser pool lifecycle", () => {
 	test("one browser serves isolated contexts per run", async () => {
@@ -297,6 +331,162 @@ describe("browser pool lifecycle", () => {
 			"workflow:b",
 		]);
 		await pool.closeAll();
+	});
+});
+
+describe("the interactive browser a login hand-off needs", () => {
+	test("nothing headed is launched until a login actually needs one", async () => {
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver);
+		const session = await open(pool, "workflow:a");
+		// Only a hand-off asks for a window.
+		expect(driver.launchOptions).toEqual([{ headless: true }]);
+		expect(session.browserSlot).toBe("headless");
+		// A second, ordinary session still uses the one headless browser.
+		await open(pool, "workflow:b");
+		expect(promotes(driver)).toBe(0);
+		await pool.closeAll();
+	});
+
+	test("promotion keeps the session's identity and moves it into the headed browser", async () => {
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver);
+		const session = await open(pool, "workflow:a", "stage-clerk");
+		const id = session.id;
+		const headlessPage = driver.pages[0];
+		await pool.openInteractive(
+			session,
+			"https://idp.local/login",
+			async (context) => {
+				await context.addInitScript(bannerScript(BANNER));
+			},
+		);
+		// One headed launch, and it is the interactive browser.
+		expect(driver.launchOptions).toHaveLength(2);
+		expect(driver.launchOptions[1]).toEqual({ headless: false });
+		// The session keeps its id, name, owner and slot, and it is still the
+		// pool's session under the same key.
+		expect(session.id).toBe(id);
+		expect(pool.session("workflow:a", "stage-clerk")).toBe(session);
+		expect(session.owner).toBe("workflow:a");
+		expect(session.browserSlot).toBe("interactive");
+		expect(session.url).toBe("https://idp.local/login");
+		// The banner is installed *before* the first navigation, and the headless
+		// context is gone rather than left behind.
+		expect(driver.initScripts.at(-1)?.[0]).toContain("data-ac-handoff-banner");
+		expect(headlessPage?.closeReasons).toEqual(["server"]);
+		expect(session.crashed).toBe(false);
+		await pool.closeAll();
+	});
+
+	test("two promoted sessions share the headed browser and nothing else", async () => {
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver);
+		const first = await open(pool, "workflow:a", "one");
+		const second = await open(pool, "workflow:b", "two");
+		await pool.openInteractive(first, "https://idp.local/one");
+		await pool.openInteractive(second, "https://idp.local/two");
+		expect(promotes(driver)).toBe(1);
+		expect(first.context).not.toBe(second.context);
+		expect(first.browserSlot).toBe("interactive");
+		expect(second.browserSlot).toBe("interactive");
+		// A third promotion of an already promoted session stays in its own
+		// context: its login state is the point of the hand-off.
+		const context = first.context;
+		await pool.openInteractive(first, "https://idp.local/again");
+		expect(first.context).toBe(context);
+		expect(promotes(driver)).toBe(1);
+		await pool.closeAll();
+	});
+
+	test("a crash in one browser never marks the other browser's sessions", async () => {
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver);
+		const promoted = await open(pool, "workflow:a", "promoted");
+		const plain = await open(pool, "workflow:b", "plain");
+		await pool.openInteractive(promoted, "https://idp.local/login");
+		expect(promoted.browserSlot).toBe("interactive");
+		// The headless browser goes away: the promoted session is untouched,
+		// because it no longer lives there.
+		driver.crash("headless");
+		expect(promoted.crashed).toBe(false);
+		expect(plain.crashed).toBe(true);
+		// And the interactive browser's own crash marks only what it holds.
+		const other = await open(pool, "workflow:c", "other");
+		driver.crash("interactive");
+		expect(promoted.crashed).toBe(true);
+		expect(other.crashed).toBe(false);
+		await pool.closeAll();
+	});
+
+	test("the headed browser is closed once it holds no session", async () => {
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver);
+		const session = await open(pool, "workflow:a");
+		await pool.openInteractive(session, "https://idp.local/login");
+		expect(promotes(driver)).toBe(1);
+		await pool.close("workflow:a", "default");
+		// The next promotion is a fresh process, not the one that was kept alive
+		// after its last session left.
+		const next = await open(pool, "workflow:b");
+		await pool.openInteractive(next, "https://idp.local/login");
+		expect(promotes(driver)).toBe(2);
+		await pool.closeAll();
+	});
+
+	test("a held session is never swept out from under the developer", async () => {
+		let clock = 1_000_000;
+		const driver = createFakeDriver();
+		const { pool } = interactivePool(driver, { now: () => clock });
+		const session = await open(pool, "workflow:a");
+		await pool.openInteractive(session, "https://idp.local/login");
+		session.holdForUser({
+			handoffId: "handoff-1",
+			deadlineAt: clock + 900_000,
+		});
+		// Well past the idle TTL, and the hand-off's own deadline is what ends it.
+		clock += 20 * 60_000;
+		expect(await pool.sweepIdle()).toBe(0);
+		expect(pool.session("workflow:a", "default")).toBe(session);
+		// Once the hold is released the idle sweep applies again.
+		session.releaseHold("handoff-1");
+		clock += 20 * 60_000;
+		expect(await pool.sweepIdle()).toBe(1);
+		await pool.closeAll();
+	});
+
+	test("a run ending during a hand-off closes the session and says why", async () => {
+		const driver = createFakeDriver();
+		const { pool, closes } = interactivePool(driver);
+		const session = await open(pool, "workflow:a", "stage-clerk");
+		await pool.openInteractive(session, "https://idp.local/login");
+		session.holdForUser({
+			handoffId: "handoff-1",
+			deadlineAt: 1_000_000 + 1_000,
+		});
+		expect(await pool.closeOwner("workflow:a")).toBe(1);
+		// The cause is what tells the hand-off coordinator that this was the run
+		// ending, not the developer closing the window.
+		expect(closes).toEqual([{ name: "stage-clerk", cause: "owner-closed" }]);
+		expect(session.hold).toBeDefined();
+		await pool.closeAll();
+	});
+
+	test("a recording of a promoted session swaps into the headed browser", async () => {
+		const driver = createFakeDriver({ video: "webm-bytes" });
+		const { pool } = interactivePool(driver);
+		const session = await open(pool, "workflow:a");
+		await pool.openInteractive(session, "https://idp.local/login");
+		const dir = scratchDir("browser-rec-handed-");
+		await pool.startRecording(session, { dir });
+		// The recording context is built in the browser the window lives in: a
+		// second window would replace the one the developer just used.
+		expect(session.browserSlot).toBe("interactive");
+		expect(promotes(driver)).toBe(1);
+		expect(session.recording).toBeDefined();
+		await pool.stopRecording(session, undefined);
+		await pool.closeAll();
+		fs.rmSync(dir, { recursive: true, force: true });
 	});
 });
 

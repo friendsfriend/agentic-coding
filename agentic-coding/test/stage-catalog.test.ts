@@ -27,6 +27,13 @@ const READER_VARIABLE = "GRID_INT_READER_PASSWORD";
  * credential a stage file wrongly inlined instead of referencing. */
 const LITERAL_SECRET = "sentinel-literal-credential-9f2c";
 
+/** The one stage a fixture config declares, or a failure that says so. */
+function onlyEntry(catalog: ReturnType<typeof readStageCatalog>) {
+	const entry = catalog.entries[0];
+	if (!entry) throw new Error("the stage was not allow-listed");
+	return entry;
+}
+
 function configRoot(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "stage-catalog-"));
 }
@@ -135,6 +142,8 @@ describe("stage catalog", () => {
 				role: "clerk",
 				login: "web-form",
 				loginKind: "form",
+				credentialStatus: "set",
+				loginMode: "automated",
 				credentials: [
 					{
 						field: "username",
@@ -150,6 +159,8 @@ describe("stage catalog", () => {
 			},
 			{
 				role: "reader",
+				credentialStatus: `missing ${READER_VARIABLE}`,
+				loginMode: "automated",
 				credentials: [
 					// No value, not even a masked one: a status names the variable — and a
 					// `set` status names it too, because that is the key a *replacement*
@@ -507,5 +518,273 @@ describe("stage catalog", () => {
 		expect(warnings).toContain(
 			"limits.maxWaitSeconds: clamped to the policy ceiling 30",
 		);
+	});
+	test("a stage's interactiveLogin can narrow the policy and never widen it", () => {
+		const configDir = configRoot();
+		writeStage(configDir, "grid-int", stageFile());
+		writePolicy(configDir, { interactiveLogin: "never" });
+		const narrowed = readStageCatalog(configDir);
+		expect(narrowed.entries[0]?.interactiveLogin).toBe("never");
+
+		// The stage asks for a window while the policy denies one: the policy wins
+		// and the ignored field is reported instead of silently honoured.
+		const widening = configRoot();
+		writeStage(widening, "grid-int", stageFile({ interactiveLogin: "local" }));
+		writePolicy(widening, { interactiveLogin: "never" });
+		const entry = readStageCatalog(widening).entries[0];
+		expect(entry?.interactiveLogin).toBe("never");
+		expect(
+			entry?.diagnostics.map(
+				(diagnostic) => `${diagnostic.field}: ${diagnostic.message}`,
+			),
+		).toContain(
+			'interactiveLogin: is ignored: the policy denies interactive login (policy.json interactiveLogin: "never")',
+		);
+
+		// The default is local on both sides.
+		const open = configRoot();
+		writeStage(open, "grid-int", stageFile());
+		expect(readStageCatalog(open).entries[0]?.interactiveLogin).toBe("local");
+	});
+
+	test("the login hand-off bound defaults to 900 s and is clamped by its ceiling", () => {
+		const configDir = configRoot();
+		writeStage(configDir, "grid-int", stageFile());
+		const entry = readStageCatalog(configDir).entries[0];
+		expect(entry?.limits.maxLoginHandoffSeconds).toBe(900);
+
+		const declared = configRoot();
+		writeStage(
+			declared,
+			"grid-int",
+			stageFile({ limits: { maxLoginHandoffSeconds: 1_800 } }),
+		);
+		expect(
+			readStageCatalog(declared).entries[0]?.limits.maxLoginHandoffSeconds,
+		).toBe(1_800);
+
+		const clamped = configRoot();
+		writeStage(
+			clamped,
+			"grid-int",
+			stageFile({ limits: { maxLoginHandoffSeconds: 3_600 } }),
+		);
+		writePolicy(clamped, { ceilings: { maxLoginHandoffSeconds: 1_200 } });
+		const clampedEntry = readStageCatalog(clamped).entries[0];
+		expect(clampedEntry?.limits.maxLoginHandoffSeconds).toBe(1_200);
+		expect(
+			clampedEntry?.diagnostics.map(
+				(diagnostic) => `${diagnostic.field}: ${diagnostic.message}`,
+			),
+		).toContain(
+			"limits.maxLoginHandoffSeconds: clamped to the policy ceiling 1200",
+		);
+	});
+
+	test("a policy ceiling above the hard login hand-off ceiling is reported and cannot lift it", () => {
+		const configDir = configRoot();
+		writeStage(
+			configDir,
+			"grid-int",
+			stageFile({ limits: { maxLoginHandoffSeconds: 3_600 } }),
+		);
+		writePolicy(configDir, { ceilings: { maxLoginHandoffSeconds: 7_200 } });
+		const catalog = readStageCatalog(configDir);
+		// The hard ceiling is the longest a hand-off may block a stage action, so a
+		// policy that declares more is lowered rather than trusted, and the operator
+		// is told which ceiling acted (MIG-006, OSV-104).
+		expect(catalog.entries[0]?.limits.maxLoginHandoffSeconds).toBe(1_800);
+		expect(
+			catalog.diagnostics
+				.filter((diagnostic) => diagnostic.kind === "warning")
+				.map((diagnostic) => `${diagnostic.field}: ${diagnostic.message}`),
+		).toEqual([
+			"ceilings.maxLoginHandoffSeconds: is lowered to the 1800 s login hand-off ceiling, which is the longest one hand-off may block a stage action",
+			"limits.maxLoginHandoffSeconds: clamped to the 1800 s login hand-off ceiling",
+		]);
+		// A stage that stays under the hard ceiling is untouched, and no policy
+		// warning is invented for a policy that declares nothing.
+		const plain = configRoot();
+		writeStage(
+			plain,
+			"grid-int",
+			stageFile({ limits: { maxLoginHandoffSeconds: 1_800 } }),
+		);
+		writePolicy(plain, { ceilings: {} });
+		expect(readStageCatalog(plain).diagnostics).toEqual([]);
+		expect(
+			readStageCatalog(plain).entries[0]?.limits.maxLoginHandoffSeconds,
+		).toBe(1_800);
+	});
+
+	test("an interactive recipe must declare how the login counts as complete, and no steps", () => {
+		const configDir = configRoot();
+		writeStage(
+			configDir,
+			"grid-int",
+			stageFile({
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid-int.example.test/",
+						kind: "ui",
+						roles: { clerk: { login: "sso" } },
+					},
+				},
+				logins: { sso: { kind: "interactive" } },
+			}),
+		);
+		const missingSuccess = readStageCatalog(configDir);
+		// The stage is refused, and the complaint names the field rather than a
+		// generic failure.
+		expect(missingSuccess.entries).toEqual([]);
+		expect(
+			missingSuccess.excluded[0]?.diagnostics.map(
+				(diagnostic) => `${diagnostic.field}: ${diagnostic.message}`,
+			),
+		).toContain(
+			"logins.sso.success: the interactive recipe logins.sso must declare how the login counts as complete",
+		);
+
+		const withSteps = configRoot();
+		writeStage(
+			withSteps,
+			"grid-int",
+			stageFile({
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid-int.example.test/",
+						kind: "ui",
+						roles: { clerk: { login: "sso" } },
+					},
+				},
+				logins: {
+					sso: {
+						kind: "interactive",
+						success: { url: "https://grid-int.example.test/home" },
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+				},
+			}),
+		);
+		expect(readStageCatalog(withSteps).entries).toEqual([]);
+
+		// A complete interactive declaration is accepted, with no credential
+		// reference at all.
+		const valid = configRoot();
+		writeStage(
+			valid,
+			"grid-int",
+			stageFile({
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid-int.example.test/",
+						kind: "ui",
+						roles: { clerk: { login: "sso" } },
+					},
+				},
+				logins: {
+					sso: {
+						kind: "interactive",
+						success: { url: "https://grid-int.example.test/home" },
+					},
+				},
+			}),
+		);
+		const entry = readStageCatalog(valid).entries[0];
+		expect(entry?.ident).toBe("grid-int");
+		if (!entry) throw new Error("the stage was not allow-listed");
+		const role = stageView(entry, valid).apps[0]?.roles[0];
+		expect(role?.loginKind).toBe("interactive");
+		expect(role?.credentialStatus).toBe("none");
+		expect(role?.credentials).toEqual([]);
+		expect(role?.loginMode).toBe("handoff");
+	});
+
+	test("every role reports the login mode the policy and its own declaration allow", () => {
+		const roles = {
+			automated: {
+				login: "web-form",
+				password: `\${${PASSWORD_VARIABLE}}`,
+			},
+			missing: { login: "web-form", password: `\${${READER_VARIABLE}}` },
+			norefs: { login: "web-form" },
+			interactive: { login: "sso" },
+			basic: { login: "https-basic" },
+			none: {},
+		};
+		const definition = (interactiveLogin?: "local" | "never") =>
+			stageFile({
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid-int.example.test/",
+						kind: "ui",
+						roles,
+					},
+				},
+				logins: {
+					"web-form": {
+						kind: "form",
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					sso: {
+						kind: "interactive",
+						success: { url: "https://grid-int.example.test/home" },
+					},
+					"https-basic": { kind: "http-basic" },
+				},
+				...(interactiveLogin ? { interactiveLogin } : {}),
+			});
+		const modesFor = (interactiveLogin?: "local" | "never") => {
+			const configDir = configRoot();
+			writeStage(configDir, "grid-int", definition(interactiveLogin));
+			writeEnv(configDir, { [PASSWORD_VARIABLE]: "clerk-secret-sentinel" });
+			const view = stageView(onlyEntry(readStageCatalog(configDir)), configDir);
+			return Object.fromEntries(
+				(view.apps[0]?.roles ?? []).map((role) => [role.role, role.loginMode]),
+			);
+		};
+		// The view the plan and the Settings section read names variables, never
+		// values.
+		expect(JSON.stringify(modesFor())).not.toContain("clerk-secret-sentinel");
+		// Under the default policy a login needing a person is a hand-off.
+		expect(modesFor()).toEqual({
+			automated: "automated",
+			missing: "handoff",
+			norefs: "handoff",
+			interactive: "handoff",
+			// A `http-basic` role never hands off: the browser's own dialog does not
+			// appear in a window this server launched, so the role stays unavailable.
+			basic: "unavailable",
+			none: "automated",
+		});
+		// Under `never` the same roles are unavailable, not silently automated.
+		expect(modesFor("never")).toEqual({
+			automated: "automated",
+			missing: "unavailable",
+			norefs: "unavailable",
+			interactive: "unavailable",
+			basic: "unavailable",
+			none: "automated",
+		});
+		// And a stage that narrows to `never` says so in its own view.
+		const narrowed = configRoot();
+		writeStage(narrowed, "grid-int", definition("never"));
+		writeEnv(narrowed, { [PASSWORD_VARIABLE]: "clerk-secret-sentinel" });
+		const narrowedView = stageView(
+			onlyEntry(readStageCatalog(narrowed)),
+			narrowed,
+		);
+		expect(
+			narrowedView.apps[0]?.roles.find((role) => role.role === "interactive")
+				?.loginMode,
+		).toBe("unavailable");
 	});
 });

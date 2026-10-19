@@ -266,3 +266,29 @@ test("alt+enter submits a custom response from the focused textarea", async () =
 	expect(advanced).toContain("[1 scope ✓]");
 	t.renderer.destroy();
 });
+
+test("a pending stage_login hand-off opens the same modal with its own answers", async () => {
+	const handoff: DeveloperDialogueRecord = {
+		...pendingQuestion(),
+		id: "handoff-1",
+		ident: undefined,
+		description: "Log in to Grid integration as clerk on stage grid-int",
+		context: undefined,
+		kind: "login-handoff",
+		options: [
+			{ title: "Done", value: "done" },
+			{ title: "Abort", value: "abort" },
+		],
+	};
+	const t = await testRender(
+		() => <TestDashboard testData={fixture([handoff])} />,
+		{ width: 120, height: 40 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("Log in to Grid integration as clerk"),
+	);
+	expect(frame).toContain("Done");
+	expect(frame).toContain("Abort");
+	expect(frame).not.toContain("Custom response");
+	t.renderer.destroy();
+});

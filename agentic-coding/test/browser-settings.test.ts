@@ -17,10 +17,12 @@ import {
 } from "../src/server/browser/bundled-playwright.generated.ts";
 import {
 	BrowserInstaller,
+	displayAvailable,
 	expectedChromiumRevision,
 	findInstalledChromium,
 	INSTALL_COMPLETE_MARKER,
 	installChildEnvironment,
+	installCommand,
 	isCompleteInstall,
 	systemChromeCandidates,
 } from "../src/server/browser/install.ts";
@@ -169,6 +171,94 @@ describe("browser install detection", () => {
 		expect(() => installer.resolveLaunch()).toThrow(/no browser is available/);
 	});
 
+	test("a headed install is told apart from a headless-only one", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-install-"));
+		const browsers = path.join(dir, "browsers");
+		const installer = new BrowserInstaller({
+			configDir: dir,
+			chromeCandidates: [],
+			// The host's own display is not what this test is about.
+			display: () => true,
+		});
+		// Nothing installed: neither the headless tools nor a window.
+		expect(installer.status()).toMatchObject({
+			available: false,
+			headed: false,
+		});
+		expect(installer.headedAvailability()).toEqual({
+			ok: false,
+			reason: "headless-only-browser",
+		});
+		expect(() => installer.resolveLaunch({ headed: true })).toThrow(
+			/no browser that can show a window is installed/,
+		);
+
+		// The full build is what a window is launched from.
+		const full = installChromium(browsers, 1248);
+		expect(installer.status()).toMatchObject({ available: true, headed: true });
+		expect(installer.resolveLaunch({ headed: true })).toMatchObject({
+			headless: false,
+			executablePath: full,
+		});
+		// The headless path is unchanged.
+		expect(installer.resolveLaunch()).toMatchObject({ headless: true });
+	});
+
+	test("a system Chrome is a headed browser even with nothing downloaded", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-install-"));
+		const chrome = path.join(dir, "fake-chrome");
+		fs.writeFileSync(chrome, "#!/bin/sh\n");
+		const installer = new BrowserInstaller({
+			configDir: dir,
+			chromeCandidates: [chrome],
+			display: () => true,
+		});
+		expect(installer.status()).toMatchObject({
+			headed: true,
+			source: "system-chrome",
+		});
+		expect(installer.headedAvailability()).toEqual({ ok: true });
+	});
+
+	test("a machine with a browser but no display cannot show a hand-off window", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-install-"));
+		const chrome = path.join(dir, "fake-chrome");
+		fs.writeFileSync(chrome, "#!/bin/sh\n");
+		const installer = new BrowserInstaller({
+			configDir: dir,
+			chromeCandidates: [chrome],
+			display: () => false,
+		});
+		// The refusal is its own reason, so the message can tell the developer to
+		// move the server rather than to install anything.
+		expect(installer.status()).toMatchObject({ headed: false });
+		expect(installer.headedAvailability()).toEqual({
+			ok: false,
+			reason: "no-display",
+		});
+	});
+
+	test("the opt-in install downloads a browser that can show a window", async () => {
+		// A `chromium-headless-shell` only install would be a browser the hand-off
+		// can never use, so the command must never ask for the shell.
+		const command = await installCommand("/usr/local/bin/bun");
+		expect(command).toBeDefined();
+		expect(command?.slice(-2)).toEqual(["install", "chromium"]);
+		expect(command).not.toContain("--only-shell");
+		expect(command).not.toContain("chromium-headless-shell");
+		expect(await installCommand(null)).toBeUndefined();
+	});
+
+	test("a platform without a display cannot show a hand-off window", () => {
+		// Only Linux can lack one, and the check happens before any launch.
+		expect(displayAvailable("linux", {})).toBe(false);
+		expect(displayAvailable("linux", { DISPLAY: ":0" })).toBe(true);
+		expect(displayAvailable("linux", { WAYLAND_DISPLAY: "wayland-0" })).toBe(
+			true,
+		);
+		expect(displayAvailable("darwin", {})).toBe(true);
+	});
+
 	test("the revision Playwright expects wins, and revisions order numerically", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-install-"));
 		const browsers = path.join(dir, "browsers");
@@ -238,6 +328,7 @@ describe("the Browser settings section", () => {
 	const status: BrowserStatusResponse = {
 		available: false,
 		source: "none",
+		headed: false,
 		browsersPath: "/home/x/.config/agentic-coding/browsers",
 		install: { phase: "idle" },
 		settings: {

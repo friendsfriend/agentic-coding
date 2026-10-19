@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import type {
+	DeveloperDialogueRecord,
 	EffectKind,
 	JsonValue,
 	WorkflowActionView,
@@ -1568,6 +1569,35 @@ export function getSnapshot(
 	const db = openReadStore(repo);
 	try {
 		return decodeSnapshot(JSON.parse(instance(db, workflowId).snapshot_json));
+	} finally {
+		db.close();
+	}
+}
+
+/** One developer-dialogue record, read without decoding the rest of the
+ * snapshot. A login hand-off polls its own record once per second while it
+ * waits, and the snapshot carries the whole workflow history, so the answer to
+ * "has the developer chosen yet?" costs one JSON extraction rather than a
+ * decode of everything (`add-stage-interactive-login`, PERF-001). A record the
+ * workflow does not have, or a workflow this target does not hold, answers
+ * `undefined` either way; a caller that has to tell those apart reads the whole
+ * snapshot instead. */
+export function getDialogueRecord(
+	repo: string,
+	workflowId: string,
+	recordId: string,
+): DeveloperDialogueRecord | undefined {
+	const db = openReadStore(repo);
+	try {
+		const row = db
+			.query(
+				`SELECT json_extract(q.value, '$') AS record
+				 FROM workflow_instances i, json_each(i.snapshot_json, '$.developerDialogue') q
+				 WHERE i.id = ? AND json_extract(q.value, '$.id') = ?`,
+			)
+			.get(workflowId, recordId) as { record: string | null } | null;
+		if (!row?.record) return undefined;
+		return JSON.parse(row.record) as DeveloperDialogueRecord;
 	} finally {
 		db.close();
 	}

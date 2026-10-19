@@ -372,22 +372,79 @@ async function successHolds(
 	recipe: StageLoginRecipe,
 	startedUrl: string,
 ): Promise<boolean> {
-	const success = recipe.success;
+	// A declared condition is used as declared, exactly as the hand-off detector
+	// reads it.
+	if (recipe.success !== undefined)
+		return await declaredSuccessHolds({ session: input.session, recipe });
 	const url = input.session.url;
-	if (success?.text !== undefined)
-		return await input.session
-			.wait({ text: success.text, timeoutMs: 1 })
-			.then(() => true)
-			.catch(() => false);
-	if (success?.url !== undefined) return url.includes(success.url);
-	if (success?.notOrigin !== undefined)
-		return originOf(url) !== originOf(success.notOrigin);
 	if (recipe.origin !== undefined)
 		return originOf(url) !== originOf(recipe.origin);
 	// Nothing declared and no recipe origin: the login is done when the page has
 	// left the page the recipe started on, which the recipe's own submits are the
 	// only way to reach.
 	return url !== startedUrl || originOf(url) !== originOf(startedUrl);
+}
+
+/**
+ * Whether the role's *declared* success condition holds right now.
+ *
+ * The automated recipe wraps this with its started-URL fallback; the login
+ * hand-off (`add-stage-interactive-login`) uses it alone, because a hand-off
+ * with no declared condition has no automatic ending at all — only the
+ * developer saying Done ends it. It answers a boolean and nothing else: no page
+ * text, no URL, no credential.
+ */
+export async function declaredSuccessHolds(input: {
+	readonly session: BrowserSession;
+	readonly recipe: StageLoginRecipe;
+}): Promise<boolean> {
+	const success = input.recipe.success;
+	if (success?.text !== undefined)
+		return await input.session
+			.wait({ text: success.text, timeoutMs: 1 })
+			.then(() => true)
+			.catch(() => false);
+	const url = input.session.url;
+	if (success?.url !== undefined) return url.includes(success.url);
+	if (success?.notOrigin !== undefined)
+		return originOf(url) !== originOf(success.notOrigin);
+	return false;
+}
+
+/**
+ * The silent SSO check (`add-stage-interactive-login`, D2 step 2): a session
+ * that already lives in the interactive browser may hold a login another app on
+ * the same identity provider can use. The server opens the application and
+ * waits up to `timeoutMs` for the recipe's declared condition; it answers a
+ * boolean, and the caller reports `ok` with `via: "existing-session"`.
+ *
+ * Nothing is copied from one session to another: the check only looks at the
+ * session's own context.
+ */
+export async function silentLoginCheck(input: {
+	readonly session: BrowserSession;
+	readonly recipe: StageLoginRecipe;
+	readonly url: string;
+	readonly timeoutMs: number;
+	readonly now?: () => number;
+}): Promise<boolean> {
+	if (input.recipe.success === undefined) return false;
+	const now = input.now ?? (() => Date.now());
+	const deadline = now() + Math.max(1, input.timeoutMs);
+	await input.session
+		.goto(input.url, Math.max(1, input.timeoutMs))
+		.catch(() => null);
+	for (;;) {
+		if (
+			await declaredSuccessHolds({
+				session: input.session,
+				recipe: input.recipe,
+			}).catch(() => false)
+		)
+			return true;
+		if (now() >= deadline) return false;
+		await sleep(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
+	}
 }
 
 function originOf(value: string): string | undefined {

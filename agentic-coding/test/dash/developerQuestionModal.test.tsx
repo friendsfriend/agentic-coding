@@ -141,3 +141,49 @@ test("custom response textarea keeps newline content", async () => {
 	expect(values.at(-1)).toBe("a\nb");
 	t.renderer.destroy();
 });
+
+test("a login hand-off offers Done and Abort and no custom response", async () => {
+	const handoff: DeveloperDialogueRecord = {
+		...question(
+			"handoff",
+			"Log in to Grid integration as clerk on stage grid-int",
+		),
+		kind: "login-handoff",
+		context: "session web · deadline in 15 minutes",
+		options: [
+			{ label: "Done", value: "done", description: "I finished logging in." },
+			{ label: "Abort", value: "abort", description: "Cancel this hand-off." },
+		],
+	};
+	const t = await testRender(
+		() => (
+			<DeveloperQuestionModal
+				{...baseProps}
+				questions={[handoff]}
+				responseState={["unanswered"]}
+			/>
+		),
+		{ width: 110, height: 32 },
+	);
+	let frame = await t.waitForFrame((value) => value.includes("Done"));
+	// The two answers the hand-off accepts are the only rows: no "Custom
+	// response…", because the modal cannot produce one the coordinator would
+	// read (add-stage-interactive-login).
+	expect(frame).toContain("Done");
+	expect(frame).toContain("Abort");
+	expect(frame).not.toContain("Custom response");
+	// Escape is the abort, and the help row says the same word the hand-off's own
+	// option uses: the key never has two names in one dialog.
+	expect(frame).toMatch(/Esc\s+Abort/);
+	expect(frame).not.toMatch(/Esc\s+Cancel/);
+	// The role the record was raised for is in the title, so the developer knows
+	// which workflow is waiting.
+	expect(frame).toContain("Developer input");
+	// The deadline is a local wall-clock time with its remainder, rendered by the
+	// one shared formatter — never the record's own ISO instant (USAB-101).
+	expect(frame).toMatch(/Expires \d{2}:\d{2} local \(/);
+	expect(frame).not.toContain(handoff.expiresAt);
+	frame = t.captureCharFrame();
+	expect(frame).toContain("Log in to Grid integration as clerk");
+	t.renderer.destroy();
+});

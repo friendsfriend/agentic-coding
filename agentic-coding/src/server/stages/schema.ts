@@ -94,14 +94,28 @@ export const stageLoginSuccessSchema = Schema.Struct({
 });
 
 /** A declarative login: an ordered multi-page form (a single-page form is one
- * step), or HTTP basic authentication through the session's credentials. */
+ * step), HTTP basic authentication through the session's credentials, or the
+ * `interactive` kind (`add-stage-interactive-login`): a login this server
+ * cannot perform at all, so the developer performs it in a headed window. An
+ * `interactive` recipe declares no steps — its `success` is the only
+ * declaration, and it is required (`validateRecipe`). */
+export const stageLoginRecipeKindSchema = Schema.Literal(
+	"form",
+	"http-basic",
+	"interactive",
+);
 export const stageLoginRecipeSchema = Schema.Struct({
-	kind: Schema.Literal("form", "http-basic"),
+	kind: stageLoginRecipeKindSchema,
 	/** The origin the recipe's steps run on; informational for `http-basic`. */
 	origin: Schema.optional(Schema.String),
 	steps: Schema.optional(Schema.Array(stageLoginStepSchema)),
 	success: Schema.optional(stageLoginSuccessSchema),
 });
+
+/** Whether this server may open a headed window for a stage whose login it
+ * cannot automate. The operator sets the policy; a stage may only narrow it
+ * (default `local`). */
+export const stageInteractiveLoginSchema = Schema.Literal("local", "never");
 
 /** One role of one staged application. `login` names a recipe of the stage's
  * own `logins` table; a role with no credential reference needs none. */
@@ -177,6 +191,15 @@ export const stageLimitsSchema = Schema.Struct({
 			}),
 		),
 	),
+	/** How long one hand-off may wait for the developer before the deadline ends
+	 * it. Defaults to 900 s, ceilinged at 1800 s. */
+	maxLoginHandoffSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer",
+			}),
+		),
+	),
 });
 
 /** Test-data conventions and cleanup hints. Free text, never a credential. */
@@ -213,6 +236,10 @@ export const stageDefinitionSchema = Schema.Struct({
 	),
 	data: Schema.optional(stageDataSchema),
 	limits: Schema.optional(stageLimitsSchema),
+	/** Narrow the policy for this stage: `never` denies interactive login here
+	 * even where the policy allows it. `local` under a `never` policy is ignored,
+	 * because a stage may never widen what the operator denied. */
+	interactiveLogin: Schema.optional(stageInteractiveLoginSchema),
 	wiki: Schema.optional(stageWikiSchema),
 });
 export type StageDefinition = typeof stageDefinitionSchema.Type;
@@ -223,6 +250,10 @@ export type StageApp = typeof stageAppSchema.Type;
 export type StageRole = typeof stageRoleSchema.Type;
 /** One declared login recipe. */
 export type StageLoginRecipe = typeof stageLoginRecipeSchema.Type;
+/** The recipe kinds a stage may declare. */
+export type StageLoginRecipeKind = typeof stageLoginRecipeKindSchema.Type;
+/** The interactive-login policy value. */
+export type StageInteractiveLogin = typeof stageInteractiveLoginSchema.Type;
 /** One login step of a form recipe. */
 export type StageLoginStep = typeof stageLoginStepSchema.Type;
 /** Where one login field is: label, role+name, or selector. */
@@ -241,6 +272,8 @@ export type StageCredentialField = typeof stageCredentialFieldSchema.Type;
 export const stagePolicySchema = Schema.Struct({
 	deniedHostPatterns: Schema.optional(Schema.Array(Schema.String)),
 	ceilings: Schema.optional(stageLimitsSchema),
+	/** The allow-list-wide interactive-login policy. Absent reads as `local`. */
+	interactiveLogin: Schema.optional(stageInteractiveLoginSchema),
 });
 export type StagePolicy = typeof stagePolicySchema.Type;
 

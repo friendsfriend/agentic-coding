@@ -299,6 +299,8 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 				role: role.role,
 				...(role.login === undefined ? {} : { login: role.login }),
 				...(role.loginKind === undefined ? {} : { loginKind: role.loginKind }),
+				credentialStatus: role.credentialStatus,
+				loginMode: role.loginMode,
 				credentials: role.credentials.map((credential) => ({
 					field: credential.field,
 					variable: credential.variable,

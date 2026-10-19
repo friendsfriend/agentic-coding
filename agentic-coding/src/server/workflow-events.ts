@@ -48,6 +48,9 @@ import { reviewKindForStep } from "./orchestrator-policy.ts";
 export interface WorkflowQuestionRef {
 	readonly id: string;
 	readonly role: string;
+	/** `login-handoff` marks the `stage_login` hand-off dialog rather than a
+	 * developer question (add-stage-interactive-login). */
+	readonly kind?: string;
 }
 
 export interface WorkflowAnsweredQuestionRef extends WorkflowQuestionRef {
@@ -137,11 +140,12 @@ export interface WorkflowEventDeriveContext {
 }
 
 function questionRefs(
-	records: readonly { id: string; role: string }[] | undefined,
+	records: readonly { id: string; role: string; kind?: string }[] | undefined,
 ): WorkflowQuestionRef[] {
 	return (records ?? []).map((record) => ({
 		id: record.id,
 		role: record.role,
+		...(record.kind === undefined ? {} : { kind: record.kind }),
 	}));
 }
 
@@ -336,6 +340,9 @@ export function deriveWorkflowEvents(
 				questionId: question.id,
 				role: question.role,
 				stepId: next.stepId,
+				// `login-handoff` marks the `stage_login` hand-off dialog, so a
+				// subscriber can tell it apart from a developer question.
+				...(question.kind === undefined ? {} : { kind: question.kind }),
 			});
 	const routedBefore = idsOf(previous.routedQuestions);
 	for (const question of next.routedQuestions)

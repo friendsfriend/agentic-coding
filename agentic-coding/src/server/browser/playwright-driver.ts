@@ -18,6 +18,7 @@ import type {
 	Page,
 	Request,
 } from "playwright-core";
+import { bannerRemovalScript } from "./banner.ts";
 import { SNAPSHOT_SCRIPT } from "./snapshot.ts";
 import type {
 	BrowserDriver,
@@ -29,6 +30,7 @@ import type {
 	DriverLocator,
 	DriverNetworkEvent,
 	DriverPage,
+	DriverPageCloseReason,
 	DriverRequestInfo,
 	DriverScreenshotOptions,
 } from "./types.ts";
@@ -36,6 +38,13 @@ import type {
 /** One page, adapted once: the page's listeners are registered a single time
  * however many times the adapter is asked for it. */
 const pageAdapters = new WeakMap<Page, DriverPage>();
+
+/** The contexts this server has asked to close. A page's `close` event fires
+ * for both a window the developer closed and a context the pool dropped, and
+ * this is the only place that knows which one happened: the close is a *server*
+ * close when the context it belongs to was closed through this adapter, and the
+ * developer's own window close otherwise. */
+const serverClosedContexts = new WeakSet<BrowserContext>();
 
 export function createPlaywrightDriver(): BrowserDriver {
 	return {
@@ -146,7 +155,13 @@ function adaptContext(context: BrowserContext): DriverContext {
 		page: async () => adaptPage(await firstPage(context)),
 		pages: () => context.pages().map((page) => adaptPage(page)),
 		close: async () => {
+			serverClosedContexts.add(context);
 			await context.close();
+		},
+		addInitScript: async (script: string) => {
+			// A context-level script, so the banner is installed on every document of
+			// the session, including the IdP redirect that performs the login.
+			await context.addInitScript({ content: script });
 		},
 		storageState: () => context.storageState(),
 		setHttpCredentials: async (credentials: DriverHttpCredentials) => {
@@ -174,7 +189,7 @@ function adaptPage(page: Page): DriverPage {
 	if (cached) return cached;
 	const consoleListeners: Array<(entry: DriverConsoleEntry) => void> = [];
 	const networkListeners: Array<(event: DriverNetworkEvent) => void> = [];
-	const closedListeners: Array<() => void> = [];
+	const closedListeners: Array<(reason: DriverPageCloseReason) => void> = [];
 	const requestIds = new WeakMap<Request, string>();
 	let sequence = 0;
 	const emitNetwork = (event: DriverNetworkEvent) => {
@@ -226,7 +241,12 @@ function adaptPage(page: Page): DriverPage {
 		});
 	});
 	page.on("close", () => {
-		for (const listener of closedListeners) listener();
+		const reason: DriverPageCloseReason = serverClosedContexts.has(
+			page.context(),
+		)
+			? "server"
+			: "user";
+		for (const listener of closedListeners) listener(reason);
 	});
 	const adapter: DriverPage = {
 		url: () => page.url(),
@@ -250,6 +270,16 @@ function adaptPage(page: Page): DriverPage {
 			return typeof value === "string" ? value : JSON.stringify(value);
 		},
 		setViewportSize: (size) => page.setViewportSize(size),
+		bringToFront: async () => {
+			await page.bringToFront();
+		},
+		removeBanner: async () => {
+			// An installed init script cannot be uninstalled, so ending a hand-off
+			// removes the banner from the documents that are already open.
+			await page
+				.evaluate(bannerRemovalScript() as unknown as () => unknown)
+				.catch(() => {});
+		},
 		click: async (selector, timeoutMs) => {
 			await page.locator(selector).first().click({ timeout: timeoutMs });
 		},

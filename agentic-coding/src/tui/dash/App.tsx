@@ -2282,6 +2282,10 @@ export function App(props: {
 						const group = pendingQuestionGroup();
 						const current = group[questionTab()] ?? question;
 						const customIndex = current.options.length;
+						// A `stage_login` hand-off offers only Done and Abort: there is no custom
+						// response, so the row past the last option is not reachable
+						// (add-stage-interactive-login).
+						const offersCustom = current.kind !== "login-handoff";
 						const altEnter =
 							(key === "enter" || key === "return") &&
 							(event.meta || event.option);
@@ -2325,11 +2329,16 @@ export function App(props: {
 								}
 							}
 						} else if (key === "j" || key === "down")
-							setQuestionSelection((index) => Math.min(customIndex, index + 1));
+							setQuestionSelection((index) =>
+								Math.min(
+									offersCustom ? customIndex : customIndex - 1,
+									index + 1,
+								),
+							);
 						else if (key === "k" || key === "up")
 							setQuestionSelection((index) => Math.max(0, index - 1));
 						else if (key === "enter" || key === "return") {
-							if (questionSelection() === customIndex) {
+							if (offersCustom && questionSelection() === customIndex) {
 								setQuestionCustom(true);
 								setQuestionCustomText(
 									questionDrafts()[current.id]?.value ?? "",

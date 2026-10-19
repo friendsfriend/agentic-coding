@@ -17,6 +17,17 @@ import { tokenMatches } from "./capability.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "./store.ts";
 
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
+
+/** The records the *question* budget counts. A `login-handoff` record is
+ * durable bookkeeping for one interactive login, not a question the developer
+ * has to answer, so it never spends a slot the run's real questions need — and
+ * every writer into `developerDialogue` counts through this one function, so the
+ * budget cannot be computed two ways (`add-stage-interactive-login`, MIG-005). */
+export function questionRecordCount(
+	dialogue: readonly DeveloperDialogueRecord[],
+): number {
+	return dialogue.filter((item) => item.kind !== "login-handoff").length;
+}
 /** How long a question record stays pending before its durable expiry. */
 export const QUESTION_WAIT_MS = 24 * 60 * 60_000;
 /** How long the agent-facing `question`/`ask` command waits for an answer
@@ -351,6 +362,11 @@ export function answerQuestion(
 			data: { questionId: question.id, outcome: "expired" },
 		};
 	}
+	if (question.kind === "login-handoff" && answer.kind === "custom")
+		throw new WorkflowRuntimeError(
+			"invalid-command",
+			"a login hand-off is answered with Done or Abort",
+		);
 	if (answer.kind === "option") {
 		if (!question.options.some((option) => option.value === answer.value))
 			throw new WorkflowRuntimeError(
@@ -378,7 +394,6 @@ export function answerQuestion(
 		data: { questionId: question.id, outcome: question.status },
 	};
 }
-
 /** Forward an orchestrator-routed question (or questionnaire group) to the
  * developer. Orchestrator-only: the record must still carry the orchestrator
  * marker and be pending. On success the marker is cleared and the wait window

@@ -47,8 +47,8 @@ A stage's `limits` SHALL accept `maxLoginHandoffSeconds`, default 900. The polic
 `stage_info` and the Settings Stages section SHALL report a `loginMode` for every role, together with its credential status:
 
 - `automated`: every referenced variable is set and the recipe is automatable;
-- `handoff`: the role would hand off under the effective mode `local`;
-- `unavailable`: the role needs a person, but the effective mode is `never`.
+- `handoff`: the role would hand off under the effective mode `local`, per the login hand-off trigger requirement in the browser-sessions spec;
+- `unavailable`: the role cannot be logged in interactively — the effective mode is `never`, or its recipe can never be answered in a hand-off window (an `http-basic` recipe, whose browser authentication dialog does not appear in a window the server launched).
 
 Neither surface SHALL report a credential value or a resolved reference.
 

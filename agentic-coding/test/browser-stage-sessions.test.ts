@@ -15,6 +15,13 @@ import {
 	createFakeDriver,
 	type FakeContext,
 } from "../src/server/browser/fake-driver.ts";
+import {
+	HANDOFF_GRACE_MS,
+	HANDOFF_TICK_MS,
+	type LoginHandoffAttention,
+	type LoginHandoffAvailability,
+	LoginHandoffCoordinator,
+} from "../src/server/browser/handoff.ts";
 import { BrowserInstaller } from "../src/server/browser/install.ts";
 import { totpCode } from "../src/server/browser/login.ts";
 import { BrowserPool } from "../src/server/browser/pool.ts";
@@ -32,12 +39,18 @@ import {
 import { listEvidence } from "../src/server/evidence/store.ts";
 import {
 	AGENT_BROWSER_ACTION_PATH,
+	AGENT_BROWSER_CLOSE_PATH,
+	AGENT_BROWSER_CONSOLE_PATH,
+	AGENT_BROWSER_EVAL_PATH,
 	AGENT_BROWSER_LOGIN_PATH,
+	AGENT_BROWSER_LOGIN_WAIT_PATH,
+	AGENT_BROWSER_NETWORK_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_WAIT_PATH,
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
@@ -85,6 +98,12 @@ function configRoot(overrides: Record<string, unknown> = {}): string {
 						password: "${GRID_INT_CLERK_PASSWORD}",
 					},
 					none: {},
+					// A login no server can perform: the recipe is declared
+					// `interactive`, so only a person can complete it.
+					sso: { login: "sso" },
+					// A recipe the role names without any credential reference: the
+					// server can never log this role in.
+					norefs: { login: "web-form" },
 				},
 			},
 			plain: { label: "Grid plain", url: `${APP_URL}plain/`, kind: "ui" },
@@ -105,6 +124,8 @@ function configRoot(overrides: Record<string, unknown> = {}): string {
 				success: { notOrigin: IDP_URL },
 			},
 			"https-basic": { kind: "http-basic" },
+			// Declared success and nothing else: the whole login is the developer's.
+			sso: { kind: "interactive", success: { notOrigin: IDP_URL } },
 		},
 		allowedOrigins: [IDP_URL],
 		readOnlyExceptions: [
@@ -129,6 +150,15 @@ function configRoot(overrides: Record<string, unknown> = {}): string {
 	return configDir;
 }
 
+/** A configuration that forbids the headed window (`interactiveLogin: "never"`),
+ * so an unautomatable login is refused instead of handed off. */
+function forbidInteractiveLogin(configDir: string): void {
+	fs.writeFileSync(
+		stagePaths(configDir).policyFile,
+		`${JSON.stringify({ interactiveLogin: "never" }, null, 2)}\n`,
+	);
+}
+
 /** One more allow-listed stage, so two opens can disagree about a binding. */
 function addStage(configDir: string, ident: string, url: string): void {
 	fs.writeFileSync(
@@ -151,6 +181,23 @@ function addStage(configDir: string, ident: string, url: string): void {
 function build(
 	configDir: string,
 	driver: ReturnType<typeof createFakeDriver>,
+	options: {
+		/** Every coordination line the hand-off writes, so a leak test can read
+		 * them without a log sink. */
+		readonly log?: string[];
+		/** The attention record's stand-in: the words of the record the workflow
+		 * layer would raise. */
+		readonly attention?: LoginHandoffAttention;
+		/** Whether this machine can show a window at all. Injected so a refusal is
+		 * testable whatever the host's own display and browser are. */
+		readonly availability?: () => LoginHandoffAvailability;
+		/** Make the headed launch fail, as a machine that cannot open its window
+		 * does: the refusal belongs to the wait, never to the login call. */
+		readonly headedLaunchFails?: boolean;
+		/** The coordinator's timer, so a test can drive its ticks and its grace
+		 * period instead of sleeping through them. */
+		readonly schedule?: (run: () => void, ms: number) => () => void;
+	} = {},
 ): BrowserRouteDeps & {
 	readonly pool: BrowserPool;
 	readonly worktree: string;
@@ -161,16 +208,38 @@ function build(
 	const installer = new BrowserInstaller({
 		configDir: path.join(worktree, "config"),
 		chromeCandidates: [chrome],
+		display: () => true,
 	});
 	let clock = 1_000_000;
+	let coordinator: LoginHandoffCoordinator | undefined;
 	const pool = new BrowserPool({
 		driver,
-		launch: () => installer.resolveLaunch(),
+		launch: (launchOptions) => {
+			if (launchOptions?.headed === true && options.headedLaunchFails)
+				throw new Error("the window could not be opened");
+			return installer.resolveLaunch(launchOptions);
+		},
 		maxSessions: () => 4,
 		idleTtlMs: () => 900_000,
+		onSessionClosed: (session, cause) => {
+			void coordinator?.sessionClosed(session, cause);
+		},
+	});
+	// The hand-off is real here, without an attention record: every ending except
+	// the developer's *Done* is exercised, and `Done` is covered at the
+	// coordinator's own boundary.
+	coordinator = new LoginHandoffCoordinator({
+		pool,
+		availability:
+			options.availability ?? (() => installer.headedAvailability()),
+		now: () => clock,
+		...(options.attention ? { attention: options.attention } : {}),
+		...(options.schedule ? { schedule: options.schedule } : {}),
+		log: (line) => options.log?.push(line),
 	});
 	return {
 		installer,
+		handoff: coordinator,
 		pool,
 		configDir,
 		worktree,
@@ -229,6 +298,13 @@ async function call(
 		envelope: parsed,
 		text,
 	};
+}
+
+/** One owner's session, or a failure that says the fixture is wrong. */
+function sessionOf(deps: BrowserRouteDeps, name: string, owner = OWNER) {
+	const session = deps.pool.session(owner, name);
+	if (!session) throw new Error(`no session ${name}`);
+	return session;
 }
 
 /** The fake context of one owner's session, so a test can ask the guard the
@@ -755,6 +831,9 @@ describe("stage-bound sessions", () => {
 
 	test("a login failure is named, and a missing variable is refused before anything is typed", async () => {
 		const configDir = configRoot();
+		// Under a `never` policy an unautomatable login is the automated recipe's
+		// own refusal; the hand-off path is covered by its own test.
+		forbidInteractiveLogin(configDir);
 		// The password variable is dropped from the `.env`.
 		fs.writeFileSync(
 			path.join(configDir, ".env"),
@@ -772,6 +851,1015 @@ describe("stage-bound sessions", () => {
 		expect(String(missing.value.message)).toContain("GRID_INT_CLERK_PASSWORD");
 		// Resolving first means nothing was typed at all.
 		expect(driver.performed).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("a login no recipe can automate is handed to the developer, and the session is held", async () => {
+		const configDir = configRoot();
+		// The password variable is dropped, so the recipe cannot be automated; the
+		// policy keeps the default (`local`), so the developer is asked instead.
+		fs.writeFileSync(
+			path.join(configDir, ".env"),
+			`GRID_INT_CLERK_USERNAME=${USERNAME_SENTINEL}\n`,
+		);
+		const driver = createFakeDriver();
+		const deps = build(configDir, driver);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+		});
+		expect(handoff.status).toBe(200);
+		expect(handoff.value.login).toBe("needs-user");
+		expect(handoff.value.reason).toBe("no-credentials");
+		expect(handoff.value.stage).toBe("grid-int");
+		expect(handoff.value.role).toBe("clerk");
+		expect(typeof handoff.value.handoffId).toBe("string");
+		expect(typeof handoff.value.deadlineAt).toBe("string");
+		// The promotion is a *second*, headed browser: the login page opens in a
+		// window the developer can see, and nothing was typed into it.
+		expect(driver.launchOptions).toContainEqual({ headless: false });
+		expect(driver.performed).toEqual([]);
+		// The session keeps its name and slot, and the visible window carries the
+		// hand-off banner the developer reads.
+		const heldSession = deps.pool.summaries().find((item) => item.heldByUser);
+		expect(heldSession?.heldByUser).toBe(true);
+		expect(
+			deps.pool.find(OWNER, String(handoff.value.session))?.browserSlot,
+		).toBe("interactive");
+		// A second `stage_login` rejoins the same hand-off instead of opening a
+		// second one.
+		const again = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+			session: String(handoff.value.session),
+		});
+		expect(again.value.handoffId).toBe(handoff.value.handoffId);
+		// While the developer owns the window no other tool may drive it.
+		const held = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {
+			session: String(handoff.value.session),
+		});
+		expect(held.status).toBe(409);
+		expect(held.value.code).toBe("session-held-by-user");
+		expect(String(held.value.message)).toContain("login hand-off");
+		// The wait blocks in the server, not in the run: the developer's login is
+		// detected through the recipe's own success condition, and the hand-off
+		// ends as a verified login.
+		const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session: String(handoff.value.session),
+			timeoutSec: 30,
+		});
+		expect(waited.status).toBe(200);
+		expect(waited.value.login).toBe("ok");
+		expect(waited.value.via).toBe("handoff");
+		expect(waited.value.verified).toBe(true);
+		// The session stays open and usable once the developer has finished.
+		expect(deps.pool.find(OWNER, String(handoff.value.session))?.hold).toBe(
+			undefined,
+		);
+		await deps.pool.closeAll();
+	});
+
+	test("a configuration that forbids the window refuses, and says which reason", async () => {
+		const configDir = configRoot();
+		forbidInteractiveLogin(configDir);
+		fs.writeFileSync(path.join(configDir, ".env"), "");
+		const driver = createFakeDriver();
+		const deps = build(configDir, driver);
+		await openStage(deps);
+		const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+		});
+		// Under `never` the automated recipe still runs, so its own refusal is the
+		// answer: the missing variable is named and nothing was typed.
+		expect(refused.status).toBe(409);
+		expect(refused.value.code).toBe("credential-missing");
+		expect(refused.text).toContain("GRID_INT_CLERK_USERNAME");
+		expect(driver.performed).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("an interactive recipe is handed off, never attempted", async () => {
+		const driver = createFakeDriver();
+		const deps = build(configRoot(), driver);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		expect(handoff.status).toBe(200);
+		expect(handoff.value.login).toBe("needs-user");
+		// No step can be automated, so the reason says so — and nothing was typed.
+		expect(handoff.value.reason).toBe("unautomatable-step");
+		expect(driver.performed).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("an http-basic role without a value keeps the missing-credential answer instead of handing off", async () => {
+		const configDir = configRoot();
+		fs.writeFileSync(path.join(configDir, ".env"), "");
+		const driver = createFakeDriver();
+		const deps = build(configDir, driver);
+		await openStage(deps);
+		// The browser's own authentication dialog does not appear in a window this
+		// server launched (spike 0.2, D10), so a hand-off could never be answered:
+		// the role keeps the foundation's refusal, and no window is opened.
+		const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "basic",
+		});
+		expect(refused.status).toBe(409);
+		expect(refused.value.code).toBe("credential-missing");
+		expect(String(refused.value.message)).toContain("GRID_INT_CLERK");
+		expect(refused.text).not.toContain(PASSWORD_SENTINEL);
+		// No window, no promotion, and no credential installed anywhere.
+		expect(
+			deps.handoff?.pending(deps.pool.session(OWNER, "default")),
+		).toBeUndefined();
+		expect(deps.pool.summaries()[0]?.heldByUser ?? false).toBe(false);
+		expect(driver.launchOptions).toEqual([{ headless: true }]);
+		expect(driver.httpCredentials).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("under never, a role this server can never log in is refused as a policy matter", async () => {
+		const configDir = configRoot();
+		forbidInteractiveLogin(configDir);
+		const driver = createFakeDriver();
+		const deps = build(configDir, driver);
+		await openStage(deps);
+		// The role names a recipe but declares no credential reference at all.
+		const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "norefs",
+		});
+		expect(refused.status).toBe(409);
+		expect(refused.value.code).toBe("login-user-unavailable");
+		expect(String(refused.value.message)).toContain("interactiveLogin");
+		expect(driver.launchOptions).toEqual([{ headless: true }]);
+		await deps.pool.closeAll();
+	});
+
+	test("a second factor under local is handed off instead of reported", async () => {
+		const driver = createFakeDriver();
+		// The page asks for a second factor the recipe cannot answer; under the
+		// default policy that is the developer's job, not a failed login.
+		driver.counts = { 'selector=input[autocomplete="one-time-code"]': 1 };
+		const deps = build(
+			configRoot({
+				limits: { maxWaitSeconds: 1 },
+				logins: {
+					"web-form": {
+						kind: "form",
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { notOrigin: IDP_URL } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "clerk",
+		});
+		expect(handoff.status).toBe(200);
+		expect(handoff.value.login).toBe("needs-user");
+		expect(handoff.value.reason).toBe("unautomatable-step");
+		// The credential was typed on the headless attempt, and nothing of it
+		// reached the answer the agent sees.
+		expect(handoff.text).not.toContain(PASSWORD_SENTINEL);
+		await deps.pool.closeAll();
+	});
+
+	test("a server that cannot show a window refuses before anything is queued", async () => {
+		const driver = createFakeDriver();
+		const deps = build(configRoot(), driver, {
+			availability: () => ({ ok: false, reason: "headless-only-browser" }),
+		});
+		await openStage(deps);
+		const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		expect(refused.status).toBe(503);
+		expect(refused.value.code).toBe("login-handoff-unavailable");
+		expect(refused.value.reason).toBe("headless-only-browser");
+		// Where the fix is: the refusal names the install surface, and nothing was
+		// queued, held, launched or recorded for the hand-off.
+		expect(String(refused.value.message)).toContain("Settings → Browser");
+		expect(deps.handoff?.pending(sessionOf(deps, "default"))).toBeUndefined();
+		expect(sessionOf(deps, "default").heldByUser).toBe(false);
+		expect(driver.launchOptions).toEqual([{ headless: true }]);
+		await deps.pool.closeAll();
+	});
+
+	test("a server with no hand-off capability at all refuses the same way", async () => {
+		const driver = createFakeDriver();
+		const deps = build(configRoot(), driver);
+		await openStage(deps);
+		const refused = await call(
+			{ ...deps, handoff: undefined },
+			AGENT_BROWSER_LOGIN_PATH,
+			{ app: "web", role: "sso" },
+		);
+		expect(refused.status).toBe(503);
+		expect(refused.value.code).toBe("login-handoff-unavailable");
+		expect(refused.value.reason).toBe("headless-only-browser");
+		expect(sessionOf(deps, "default").heldByUser).toBe(false);
+		await deps.pool.closeAll();
+	});
+
+	test("a headed launch that fails is the wait's answer, not the login call's", async () => {
+		const driver = createFakeDriver();
+		const deps = build(configRoot(), driver, { headedLaunchFails: true });
+		await openStage(deps);
+		// `stage_login` answers before a launch is attempted, so a window that will
+		// not open cannot turn the tool call into a failure.
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		expect(handoff.status).toBe(200);
+		expect(handoff.value.login).toBe("needs-user");
+		const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session: String(handoff.value.session),
+			timeoutSec: 5,
+		});
+		expect(waited.status).toBe(503);
+		expect(waited.value.code).toBe("login-handoff-unavailable");
+		expect(waited.value.reason).toBe("launch-failed");
+		// The hold is over and the session is the agent's again.
+		expect(sessionOf(deps, String(handoff.value.session)).heldByUser).toBe(
+			false,
+		);
+		await deps.pool.closeAll();
+	});
+
+	test("a session that already lives in the window reuses its login instead of a second hand-off", async () => {
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				apps: {
+					web: {
+						label: "Grid web",
+						url: APP_URL,
+						kind: "ui",
+						roles: { sso: { login: "sso" } },
+					},
+					second: {
+						label: "Grid second",
+						url: `${APP_URL}second/`,
+						kind: "ui",
+						roles: { sso: { login: "sso" } },
+					},
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		// The developer finishes the login in the window: the recipe's declared
+		// condition holds once the page is back on the application.
+		await sessionOf(deps, session).goto(`${APP_URL}home`, 30_000);
+		const ended = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 30,
+		});
+		expect(ended.value.login).toBe("ok");
+		expect(ended.value.via).toBe("handoff");
+
+		// A second application on the same IdP, for the same role: the session's
+		// own login is reused, and no hand-off starts.
+		const reused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "second",
+			role: "sso",
+		});
+		expect(reused.status).toBe(200);
+		expect(reused.value.login).toBe("ok");
+		expect(reused.value.via).toBe("existing-session");
+		expect(reused.value.verified).toBe(true);
+		expect(deps.handoff?.pending(sessionOf(deps, session))).toBeUndefined();
+		expect(sessionOf(deps, session).browserSlot).toBe("interactive");
+		await deps.pool.closeAll();
+	});
+
+	test("a wait that runs out of time answers a timeout and closes the window", async () => {
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				limits: {
+					maxSessions: 1,
+					maxActionsPerMinute: 30,
+					maxLoginHandoffSeconds: 1,
+				},
+				logins: {
+					"web-form": { kind: "http-basic" },
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		expect(handoff.value.deadlineAt).toBeDefined();
+		// The deadline is the request time plus the stage's one second: two calls
+		// that read the clock put it in the past.
+		deps.now?.();
+		deps.now?.();
+		const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 5,
+		});
+		expect(waited.status).toBe(408);
+		expect(waited.value.code).toBe("login-handoff-timeout");
+		expect(waited.value.deadlineAt).toBe(handoff.value.deadlineAt);
+		// The window is closed (spec), so the session stays unusable until the agent
+		// opens it again by name: it is still listed, and every call refuses it.
+		expect(
+			deps.pool.summaries().filter((entry) => entry.name === session),
+		).toHaveLength(1);
+		const after = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, { session });
+		expect(after.value.code).toBe("browser-crashed");
+		await deps.pool.closeAll();
+	});
+
+	test("a wait after the deadline reads the recorded outcome instead of the closed window", async () => {
+		const driver = createFakeDriver();
+		const records: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+			answer: async () => undefined,
+			close: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		const deps = build(
+			configRoot({
+				limits: {
+					maxSessions: 1,
+					maxActionsPerMinute: 30,
+					maxLoginHandoffSeconds: 1,
+				},
+				logins: {
+					"web-form": { kind: "http-basic" },
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+			{ attention },
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		// The record says this hand-off's own state in words — the window that is
+		// opening and the deadline — and never names a key (USAB-101..104).
+		const context = String(records[0]?.context);
+		expect(context).toContain("Its window is opening now.");
+		expect(context).toContain("The hand-off expires at");
+		expect(context).toMatch(/local \(in (about|less than)/);
+		expect(context).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+		expect(context).not.toContain("Escape");
+		// The deadline is the request time plus the stage's one second: two calls
+		// that read the clock put it in the past.
+		deps.now?.();
+		deps.now?.();
+		const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 5,
+		});
+		expect(waited.status).toBe(408);
+		expect(waited.value.code).toBe("login-handoff-timeout");
+		// The deadline closed the window, so the session itself is refused; a wait
+		// that arrives after it still learns how the login ended instead of being
+		// told the browser crashed (SEC-002).
+		const again = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 5,
+		});
+		expect(again.status).toBe(408);
+		expect(again.value.code).toBe("login-handoff-timeout");
+		expect(again.value.deadlineAt).toBe(handoff.value.deadlineAt);
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, { session });
+		expect(snapshot.value.code).toBe("browser-crashed");
+		await deps.pool.closeAll();
+	});
+
+	test("a Done whose success condition never holds is answered as unverified", async () => {
+		const driver = createFakeDriver();
+		const timers: Array<{ run: () => void; ms: number }> = [];
+		const records: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+			// The developer chose *Done*: from here only the grace period ends it.
+			answer: async () => "done" as const,
+			close: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": { kind: "http-basic" },
+					"https-basic": { kind: "http-basic" },
+					// A condition that never holds, so *Done* is the only good ending.
+					sso: { kind: "interactive", success: { url: `${APP_URL}never` } },
+				},
+			}),
+			driver,
+			{
+				attention,
+				schedule: (run, ms) => {
+					timers.push({ run, ms });
+					return () => {};
+				},
+			},
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		const waiting = call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 600,
+		});
+		let settled = false;
+		void waiting.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		// Drive the coordinator's own turns: the clock advances a second per turn,
+		// which is what makes a ten-second grace period observable at all. The
+		// wait's own cap is left parked, so it stays blocked exactly as it would.
+		for (let i = 0; i < 40 && !settled; i++) {
+			for (const timer of timers.splice(0, timers.length)) {
+				if (timer.ms !== HANDOFF_TICK_MS) {
+					timers.push(timer);
+					continue;
+				}
+				deps.now?.();
+				timer.run();
+			}
+			await Bun.sleep(1);
+		}
+		if (!settled) throw new Error("the grace period never ended the hand-off");
+		const waited = await waiting;
+		expect(HANDOFF_GRACE_MS).toBeGreaterThan(0);
+		expect(waited.status).toBe(409);
+		expect(waited.value.code).toBe("login-handoff-unverified");
+		// The landing is the page the session is on, sanitized: origin and path,
+		// never a query or a fragment.
+		expect(String(waited.value.url)).toContain("grid-int.example.test");
+		expect(String(waited.value.url)).not.toContain("?");
+		expect(records).toHaveLength(2);
+		await deps.pool.closeAll();
+	});
+
+	test("a window the developer closes mid-wait is answered as an abort", async () => {
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": { kind: "http-basic" },
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		// The wait blocks in the server; the developer closes the window while it is
+		// blocked, which is how the agent learns the login is over.
+		const waiting = call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 30,
+		});
+		for (let i = 0; i < 400; i++) {
+			if (driver.performed.includes("bringToFront")) break;
+			await Bun.sleep(5);
+		}
+		driver.lastPage()?.close("user");
+		const waited = await waiting;
+		expect(waited.status).toBe(409);
+		expect(waited.value.code).toBe("login-handoff-aborted");
+		expect(waited.value.by).toBe("window-closed");
+		await deps.pool.closeAll();
+	});
+
+	test("no session-addressed tool may drive a session the developer owns", async () => {
+		const driver = createFakeDriver();
+		// The stage's rate limit is tight, and the holds below are many: a refusal
+		// that counted against the run's rolling minute would turn into
+		// `stage-rate-limit` partway through this loop.
+		const deps = build(
+			configRoot({
+				limits: { maxSessions: 4, maxActionsPerMinute: 5 },
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		const guarded: Array<[string, Record<string, unknown>]> = [
+			[AGENT_BROWSER_SNAPSHOT_PATH, { session }],
+			[
+				AGENT_BROWSER_ACTION_PATH,
+				{ session, action: "click", selector: "#go" },
+			],
+			[AGENT_BROWSER_WAIT_PATH, { session, text: "anything" }],
+			[AGENT_BROWSER_EVAL_PATH, { session, code: "1 + 1" }],
+			[AGENT_BROWSER_CONSOLE_PATH, { session }],
+			[AGENT_BROWSER_NETWORK_PATH, { session }],
+			[AGENT_BROWSER_SCREENSHOT_PATH, { session }],
+			[AGENT_BROWSER_SCRIPT_PATH, { session, code: "return 1;" }],
+			[AGENT_BROWSER_RECORD_PATH, { session, action: "start" }],
+			[AGENT_BROWSER_RECORD_PATH, { session, action: "stop" }],
+			[
+				AGENT_BROWSER_OPEN_PATH,
+				{ stage: "grid-int", stageApp: "web", session },
+			],
+		];
+		for (const [routePath, body] of guarded) {
+			for (const attempt of [1, 2]) {
+				const refused = await call(deps, routePath, body);
+				expect(`${routePath}:${attempt}:${refused.value.code}`).toBe(
+					`${routePath}:${attempt}:session-held-by-user`,
+				);
+			}
+		}
+		// A held session still answers what a hold is made of: rejoining it, and
+		// ending it.
+		const rejoined = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		expect(rejoined.value.handoffId).toBe(handoff.value.handoffId);
+		const waited = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session,
+			timeoutSec: 1,
+		});
+		expect(waited.status).toBe(200);
+		// The listing names the hold and the origin, never the page: a URL of a
+		// half-finished login lives in the query.
+		const listed = deps.pool
+			.summaries()
+			.find((entry) => entry.heldByUser === true);
+		expect(listed?.name).toBe(session);
+		expect(listed?.url).toBe(new URL(APP_URL).origin);
+		await deps.pool.closeAll();
+	});
+
+	test("a hand-off invalidates the refs and buffers of the page it replaces", async () => {
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {});
+		expect(snapshot.value.refs).toBeGreaterThan(0);
+		// A buffer entry from the page the developer is about to replace.
+		driver
+			.lastPage()
+			?.emitConsole({ type: "log", text: "before the hand-off" });
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const sessionName = String(handoff.value.session);
+		const session = deps.pool.session(OWNER, sessionName);
+		if (!session) throw new Error("no session");
+		// The promotion opens the window in the background of the tool result: the
+		// focus call is its last step, so waiting for it waits out the swap's own
+		// navigation too.
+		for (let i = 0; i < 400; i++) {
+			if (driver.performed.includes("bringToFront")) break;
+			await Bun.sleep(5);
+		}
+		expect(session.browserSlot).toBe("interactive");
+		expect(session.url).toBe(APP_URL);
+		driver
+			.lastPage()
+			?.emitConsole({ type: "log", text: "during the hand-off" });
+		await session.goto(`${APP_URL}home`, 30_000);
+		const ended = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session: sessionName,
+			timeoutSec: 5,
+		});
+		expect(ended.value.login).toBe("ok");
+		// Both pages' traffic is gone, and so is every ref of the old one.
+		const console = await call(deps, AGENT_BROWSER_CONSOLE_PATH, {
+			session: sessionName,
+		});
+		expect(console.value.entries).toEqual([]);
+		const stale = await call(deps, AGENT_BROWSER_ACTION_PATH, {
+			session: sessionName,
+			action: "click",
+			ref: "e0",
+		});
+		expect(stale.status).toBe(400);
+		expect(stale.value.code).toBe("unknown-ref");
+		// Neither the snapshot nor the click raised the window: the one focus call
+		// belongs to the hand-off, and nothing an agent does makes another.
+		expect(
+			driver.performed.filter((entry) => entry === "bringToFront"),
+		).toHaveLength(1);
+		await deps.pool.closeAll();
+	});
+
+	test("browser_close ends the hand-off as the agent's abort, before the context goes", async () => {
+		const closed: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async () => undefined,
+			answer: async () => undefined,
+			close: async (input: Record<string, unknown>) => {
+				closed.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+			{ attention },
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		expect(
+			deps.pool.summaries().find((item) => item.name === session)?.heldByUser,
+		).toBe(true);
+		const closedRoute = await call(deps, AGENT_BROWSER_CLOSE_PATH, { session });
+		expect(closedRoute.status).toBe(200);
+		expect(closedRoute.value.closed).toBe(true);
+		// The record is resolved as the agent's abort — not the developer's, and not
+		// a timeout — and no session is left behind.
+		expect(closed).toHaveLength(1);
+		expect(closed[0]?.answer).toBe("abort");
+		expect(closed[0]?.by).toBe("system");
+		expect(closed[0]?.outcome).toBe("login-handoff-aborted");
+		expect(deps.pool.summaries()).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("a recording is refused before the login path can hand off", async () => {
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const started = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+		});
+		expect(started.status).toBe(200);
+		// `sso` has no credential reference at all and would otherwise hand off. The
+		// recording is refused first, because a video must never hold a login.
+		const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		expect(refused.status).toBe(409);
+		expect(refused.value.code).toBe("recording-active");
+		// Nothing was handed off and the developer was never asked.
+		expect(deps.handoff?.pending(sessionOf(deps, "default"))).toBeUndefined();
+		expect(deps.pool.summaries()[0]?.heldByUser ?? false).toBe(false);
+		await deps.pool.closeAll();
+	});
+
+	test("a hand-off leaks no credential, code or token into anything an agent or an operator can read", async () => {
+		const CODE_SENTINEL = "idp-code-sentinel-77aa";
+		const STATE_SENTINEL = "idp-state-sentinel-31bc";
+		const drag = `https://login.example.test/cb?code=${CODE_SENTINEL}&state=${STATE_SENTINEL}&login_hint=${USERNAME_SENTINEL}`;
+		const logged: string[] = [];
+		const records: Array<Record<string, unknown>> = [];
+		const attention = {
+			open: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+			answer: async () => undefined,
+			close: async (input: Record<string, unknown>) => {
+				records.push({ ...input });
+			},
+		} as unknown as LoginHandoffAttention;
+		const driver = createFakeDriver();
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+			{ log: logged, attention },
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const sessionName = String(handoff.value.session);
+		const session = deps.pool.session(OWNER, sessionName);
+		if (!session) throw new Error("no session");
+
+		// The developer types their credentials into the visible window, and the
+		// identity provider redirects back with a code, a state and a login hint.
+		// None of that is the agent's traffic: it is simulated on the promoted
+		// page, exactly where a real browser would report it.
+		const page = driver.lastPage();
+		page?.emitConsole({
+			type: "log",
+			text: `signing in ${USERNAME_SENTINEL} with ${PASSWORD_SENTINEL}`,
+		});
+		page?.emitNetwork({
+			kind: "request",
+			id: "dev-1",
+			method: "GET",
+			url: drag,
+			resourceType: "document",
+		});
+		page?.emitNetwork({
+			kind: "response",
+			id: "dev-1",
+			status: 200,
+			ok: true,
+		});
+		await session.goto(
+			`${APP_URL}?code=${CODE_SENTINEL}#access_token=${STATE_SENTINEL}`,
+			30_000,
+		);
+
+		// 1. The agent's tool results: nothing of the developer's session. The
+		// hand-off ends first — the declared success condition holds on the app's
+		// home page — because that is when the agent may look again.
+		const endWait = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session: sessionName,
+			timeoutSec: 1,
+		});
+		expect(endWait.value.login).toBe("needs-user");
+		await session.goto(`${APP_URL}home`, 30_000);
+		const ended = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+			session: sessionName,
+			timeoutSec: 30,
+		});
+		expect(ended.value.login).toBe("ok");
+		const consoleResult = await call(deps, AGENT_BROWSER_CONSOLE_PATH, {
+			session: sessionName,
+		});
+		const networkResult = await call(deps, AGENT_BROWSER_NETWORK_PATH, {
+			session: sessionName,
+		});
+		const refused: string[] = [];
+		for (const [routePath, body] of [
+			[AGENT_BROWSER_SNAPSHOT_PATH, { session: sessionName }],
+			[AGENT_BROWSER_SCRIPT_PATH, { session: sessionName, code: "return 1;" }],
+		] as Array<[string, Record<string, unknown>]>) {
+			const answer = await call(deps, routePath, body);
+			refused.push(answer.text);
+		}
+		const everything = [
+			consoleResult.text,
+			networkResult.text,
+			endWait.text,
+			ended.text,
+			...refused,
+		].join("\n");
+		for (const sentinel of [
+			PASSWORD_SENTINEL,
+			USERNAME_SENTINEL,
+			CODE_SENTINEL,
+			STATE_SENTINEL,
+		]) {
+			expect(everything).not.toContain(sentinel);
+		}
+		// The developer's own traffic is not in the buffers at all: a foreign
+		// login is not the agent's history.
+		expect(consoleResult.value.entries).toEqual([]);
+		expect(networkResult.value.entries).toEqual([]);
+
+		// 2. Server log lines: the shape of each line is the coordinator's own
+		// fields, so no later field can carry anything the page produced. Asserting
+		// the shape rather than one absent string is what makes this leg able to
+		// fail (TQ2-004).
+		expect(logged.length).toBeGreaterThan(0);
+		const LOG_FIELDS = new Set([
+			"stage",
+			"app",
+			"role",
+			"reason",
+			"handoff",
+			"deadlineAt",
+			"at",
+			"queuePosition",
+			"outcome",
+		]);
+		for (const line of logged) {
+			expect(line.startsWith("login hand-off phase=")).toBe(true);
+			for (const token of line.split(" ").slice(3)) {
+				expect(LOG_FIELDS.has(token.split("=")[0] ?? "")).toBe(true);
+			}
+		}
+		expect(logged.join("\n")).not.toContain("https://login.example.test");
+
+		// 3. The attention record, which is what the dashboard and the workflow
+		// store read: exactly the coordination fields, and nothing else. A field
+		// added to either call fails here.
+		expect(records).toHaveLength(2);
+		expect(Object.keys(records[0] ?? {}).sort()).toEqual([
+			"context",
+			"description",
+			"expiresAt",
+			"owner",
+			"recordId",
+		]);
+		expect(Object.keys(records[1] ?? {}).sort()).toEqual([
+			"answer",
+			"by",
+			"outcome",
+			"owner",
+			"recordId",
+		]);
+		expect(JSON.stringify(records)).not.toContain(CODE_SENTINEL);
+		expect(JSON.stringify(records)).not.toContain(STATE_SENTINEL);
+		expect(JSON.stringify(records)).not.toContain("login.example.test/cb");
+
+		// 4. Nothing of the login ends up on disk: no profile, no storage state,
+		// anywhere under either root — not only at its top level (TQ2-004).
+		for (const root of [deps.configDir ?? deps.worktree, deps.worktree]) {
+			const found = fs
+				.readdirSync(root, { recursive: true })
+				.map((entry) => String(entry))
+				.join("\n");
+			expect(found.toLowerCase()).not.toContain("storage");
+			expect(found.toLowerCase()).not.toContain("profile");
+			expect(found.toLowerCase()).not.toContain("cookies");
+		}
+		// 5. Telemetry. The browser routes export no span or log record today —
+		// they are not instrumented, and the coordinator's `log` seam is what the
+		// server records — so there is nothing of the login to inspect here. When a
+		// span processor is attached to the browser path, this test has to assert
+		// its attributes too.
+		await deps.pool.closeAll();
+	});
+
+	test("the banner is installed before the login page and gone once the hand-off ends", async () => {
+		const driver = createFakeDriver();
+		// A login the server can never confirm by itself, so the hand-off stays
+		// open while this test looks at the window.
+		const deps = build(
+			configRoot({
+				logins: {
+					"web-form": {
+						kind: "form",
+						origin: IDP_URL,
+						steps: [
+							{ fields: [{ credential: "password", label: "Password" }] },
+						],
+					},
+					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { url: `${APP_URL}home` } },
+				},
+			}),
+			driver,
+		);
+		await openStage(deps);
+		const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+			app: "web",
+			role: "sso",
+		});
+		const session = String(handoff.value.session);
+		// The window opens in the background of the tool result, so the test waits
+		// for the promotion and its single focus call rather than racing them.
+		for (let i = 0; i < 400; i++) {
+			if (driver.performed.includes("bringToFront")) break;
+			await Bun.sleep(5);
+		}
+		const page = driver.lastPage();
+		// The init script is installed on the promoted context, before its first
+		// navigation, so the very page the developer lands on carries it.
+		const script = driver.initScripts.at(-1)?.[0] ?? "";
+		expect(script).toContain("data-ac-handoff-banner");
+		// The banner is what the requirement is about: it names the stage, the
+		// application and the role, says the agent is waiting, and says that closing
+		// the window aborts the hand-off (OSV-103).
+		expect(script).toContain("Grid integration");
+		expect(script).toContain("Grid web");
+		expect(script).toContain("sso");
+		expect(script).toContain("local (in about");
+		expect(script).toContain("The agent is waiting for this login");
+		expect(script).toMatch(/closing this window aborts (it|the hand-off)/);
+		// The banner is the promoted context's own document state, so the page a
+		// later snapshot reads must not carry it once the hand-off is over.
+		expect(page?.bannerRemoved).toBe(false);
+		// The window is raised once, for the hand-off; no later tool call of the
+		// developer's does it.
+		const focusBefore = driver.pages.reduce(
+			(total, page) => total + page.focusCalls,
+			0,
+		);
+		expect(focusBefore).toBe(1);
+		// End the hand-off from the agent side, as `browser_close` does.
+		const closed = await call(deps, AGENT_BROWSER_CLOSE_PATH, { session });
+		expect(closed.status).toBe(200);
+		const focusAfter = driver.pages.reduce(
+			(total, entry) => total + entry.focusCalls,
+			0,
+		);
+		expect(focusAfter).toBe(focusBefore);
+		// The banner is taken down again, on the live document, when the hand-off
+		// ends: the agent's next snapshot cannot show it.
+		expect(page?.bannerRemoved).toBe(true);
 		await deps.pool.closeAll();
 	});
 
@@ -862,9 +1950,11 @@ describe("stage-bound sessions", () => {
 				// Declared, because a role that names a recipe the stage does not
 				// declare is a refused stage, not a refused login.
 				"https-basic": { kind: "http-basic" },
+				sso: { kind: "interactive", success: { notOrigin: IDP_URL } },
 			},
 		});
 
+		forbidInteractiveLogin(configDir);
 		// The page asks for a second factor the recipe does not provide. The fake
 		// world snapshots the counts at context creation, so the probe answer is
 		// set before the session is opened.
@@ -944,6 +2034,9 @@ describe("stage-bound sessions", () => {
 						success: { notOrigin: IDP_URL },
 					},
 					"https-basic": { kind: "http-basic", origin: APP_URL },
+					// Declared because a role names it; the stage would be refused
+					// otherwise.
+					sso: { kind: "interactive", success: { notOrigin: IDP_URL } },
 				},
 			}),
 			driver,
@@ -986,6 +2079,7 @@ describe("stage-bound sessions", () => {
 						],
 					},
 					"https-basic": { kind: "http-basic" },
+					sso: { kind: "interactive", success: { notOrigin: IDP_URL } },
 				},
 			}),
 			driver,

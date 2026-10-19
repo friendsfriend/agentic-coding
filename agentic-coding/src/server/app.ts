@@ -54,6 +54,7 @@ import {
 	type Principal,
 	readJsonBody,
 } from "./auth.ts";
+import { workflowLoginHandoffAttention } from "./browser/attention.ts";
 import { type BrowserRouteDeps, handleBrowserRoute } from "./browser/routes.ts";
 import { type BrowserRuntime, browserRuntime } from "./browser/runtime.ts";
 import type { CredentialRegistry } from "./credentials.ts";
@@ -277,7 +278,13 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 	// One browser runtime per server process: one Chromium, one session cap, one
 	// opt-in install, shared by every run this server hosts.
 	const browser =
-		options.browser ?? browserRuntime(options.configDir ?? resolveConfigRoot());
+		options.browser ??
+		browserRuntime(
+			options.configDir ?? resolveConfigRoot(),
+			// A hand-off raises its developer dialogue through the workflow engine,
+			// so the two halves are wired here, once per server process.
+			workflowLoginHandoffAttention(),
+		);
 
 	/** One server-owned file watcher per repository, registered on first use
 	 * (scan or the explicit watch route) and announced on the event stream so
@@ -341,6 +348,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		// One registry for the process's life: a rolling minute has to survive
 		// between two requests, and the pool it reads is the same pool.
 		stages: stageUsage,
+		handoff: browser.handoff,
 		...(options.environment?.manager
 			? { apps: options.environment.manager }
 			: {}),

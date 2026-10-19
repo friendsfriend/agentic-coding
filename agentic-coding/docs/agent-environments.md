@@ -460,6 +460,58 @@ a production-like name is refused by the catalog, and only the operator's own
   **recording**: video is bytes, not text, so a credential fill is refused while
   a session is recording (`recording-active`), and the same refusal guards
   `stage_login`.
+- **A login the server cannot automate is handed to you, not failed.** A role
+  whose credentials this `.env` does not set, or whose recipe declares
+  `kind: "interactive"`, needs a person: `stage_login` answers
+  `login-needs-user` with a `handoffId`, the reason (`no-credentials` or
+  `unautomatable-step`) and the deadline, and the server opens a **second,
+  headed browser** and *promotes* the session into it — same session name, same
+  owner, same slot, same stage binding — so the developer logs in in the same
+  context the run will keep using. The headless context is closed; the promoted
+  one carries a banner naming the app, the role and the stage (never a URL with
+  a query or a credential). `stage_login_wait` then blocks *in the server*, so
+  no run is parked and no model turn is spent: each call executes one stage
+  action and answers `login-needs-user` while the developer is still working, or
+  the terminal outcome — `ok` (`via: "handoff"`, with `verified`), or
+  `login-handoff-unverified` / `-timeout` / `-aborted` (`by: developer | agent |
+  window-closed | run-ended`). A terminal outcome is a `blocked` verdict with
+  that code as its reason. A deadline **closes** the window and leaves the
+  session unusable: the next `browser_open` for that name opens a fresh one
+  (until then a call answers `browser-crashed`), because a login nobody finished
+  is not a page the run may read. When the hand-off ends, the window is the
+  agent's again — stop typing in it, since the run drives the same page from
+  there — and the login lives only as long as that session: nothing is written to
+  the configuration directory, no profile or storage-state file is kept, and the
+  next session starts logged out. A conditional-access policy that rejects an
+  unmanaged or non-compliant browser still refuses the login inside the window;
+  that refusal is the tenant's, not this tool's, and the hand-off then ends as
+  `login-handoff-unverified` or on its deadline. One hand-off is active per
+  server and the rest queue
+  FIFO (`queuePosition`), a held session is refused to every other browser tool
+  (`session-held-by-user`), and a recording is refused outright
+  (`recording-active`) so a credential never reaches a video. `http-basic`
+  roles do **not** hand off: the browser's own authentication dialog does not
+  appear in a window this server launched, so such a role keeps
+  `credential-missing` (naming the variable) or `login-user-unavailable`, and
+  the automated `http-basic` recipe when its variables are set. The
+  developer-dialogue record
+  (`kind: "login-handoff"`) is the *Done*/*Abort* surface: it is never routed to
+  the orchestrator, never appears in a run's prior dialogue, and resolving it
+  never resumes a blocked run.
+- **The hand-off is a policy seam, not an assumption.**
+  `interactiveLogin: "local" | "never"` in `stages/policy.json` (default
+  `local`); a stage may narrow it to `never` and can never widen it. Under
+  `never` a login that needs a person is refused — `login-user-unavailable` for
+  an `interactive` recipe or a role that declares no credential reference, and
+  the recipe's own `credential-missing` when only a value is missing — and on a
+  machine with no display or only a `headless_shell` build `stage_login` answers
+  `login-handoff-unavailable` (`reason: "no-display"` or
+  `"headless-only-browser"`) **before any launch is attempted**. `stage_info`
+  and Settings → Stages report the same decision as `loginMode`
+  (`automated` | `handoff` | `unavailable`) next to each role's
+  `credentialStatus`, so an agent can plan for the hand-off instead of
+  discovering it. The deadline is `limits.maxLoginHandoffSeconds` (default
+  900 s, clamped by the policy's ceilings).
 - **Limits are per stage, and a stage can be exclusive.** `limits.maxSessions`
   bounds how many sessions one workflow may hold on a stage at once (a second
   open is refused, not queued: `stage-session-limit`), and

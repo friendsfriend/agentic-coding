@@ -36,6 +36,7 @@ import {
 	type StageLimits,
 	type StageLocator,
 	type StageLoginRecipe,
+	type StageLoginRecipeKind,
 	type StagePolicy,
 	type StageRole,
 } from "./schema.ts";
@@ -48,7 +49,13 @@ export const DEFAULT_STAGE_LIMITS = {
 	maxWaitSeconds: 600,
 	maxScreenshots: 60,
 	maxRecordingMinutes: 30,
+	maxLoginHandoffSeconds: 900,
 } as const;
+
+/** The hard ceiling of a login hand-off, whatever the policy says: 30 minutes of
+ * a developer's window is as long as one hand-off may block a stage action, and
+ * a policy that declares a larger one is clamped to this. */
+export const MAX_LOGIN_HANDOFF_SECONDS = 1800;
 
 export interface EffectiveStageLimits {
 	readonly maxSessions: number;
@@ -56,6 +63,53 @@ export interface EffectiveStageLimits {
 	readonly maxWaitSeconds: number;
 	readonly maxScreenshots: number;
 	readonly maxRecordingMinutes: number;
+	readonly maxLoginHandoffSeconds: number;
+}
+
+/** Whether this server may open a headed window for a stage login it cannot
+ * automate: the policy's value, narrowed by the stage and never widened by it. */
+export type InteractiveLoginMode = "local" | "never";
+
+/** What a run can expect of one role's login, as both read surfaces report it:
+ * `automated` (this server performs it), `handoff` (it needs the developer and
+ * a window may be opened), `unavailable` (it needs the developer and this
+ * configuration forbids the window). */
+export type StageLoginMode = "automated" | "handoff" | "unavailable";
+
+/** The effective interactive-login mode of one stage. The policy decides, the
+ * stage may narrow to `never`, and a stage that asks for `local` under a
+ * `never` policy does not widen it (the widening is reported as a warning). */
+export function effectiveInteractiveLogin(
+	stage: Pick<StageDefinition, "interactiveLogin">,
+	policy: StagePolicy,
+): InteractiveLoginMode {
+	if ((policy.interactiveLogin ?? "local") === "never") return "never";
+	return stage.interactiveLogin ?? "local";
+}
+
+/** The login mode of one role: an unautomatable or credential-less login in a
+ * configuration that forbids a window is `unavailable` rather than a hand-off
+ * that could never happen. */
+export function roleLoginMode(input: {
+	readonly recipeKind?: StageLoginRecipeKind;
+	readonly credentialStatus: string;
+	readonly interactiveLogin: InteractiveLoginMode;
+}): StageLoginMode {
+	const mayOpenWindow = input.interactiveLogin === "local";
+	// A role with no recipe has no login at all: nothing to automate and nothing
+	// to hand off.
+	if (input.recipeKind === undefined) return "automated";
+	if (input.recipeKind === "interactive")
+		return mayOpenWindow ? "handoff" : "unavailable";
+	if (input.credentialStatus === "set") return "automated";
+	// A `http-basic` login cannot be handed off: the browser's own authentication
+	// dialog does not appear in a window this server launched (spike 0.2), so the
+	// role keeps the foundation's `credential-missing` refusal under either
+	// policy instead of handing off to a window that could never accept it.
+	if (input.recipeKind === "http-basic") return "unavailable";
+	// No reference at all, or a reference this `.env` does not set: both need the
+	// developer, and both keep the `credential-missing` refusal under `never`.
+	return mayOpenWindow ? "handoff" : "unavailable";
 }
 
 export interface StageDiagnostic {
@@ -81,6 +135,9 @@ export interface StageEntry {
 	readonly file: string;
 	readonly stage: StageDefinition;
 	readonly limits: EffectiveStageLimits;
+	/** The stage's effective interactive-login mode: the policy's value narrowed
+	 * by the stage. */
+	readonly interactiveLogin: InteractiveLoginMode;
 	/** The stage's allow-list: the origins of its applications together with its
 	 * `allowedOrigins`. */
 	readonly origins: readonly string[];
@@ -196,6 +253,7 @@ export function readStageCatalog(
 			file,
 			stage: pending.stage,
 			limits: pending.limits,
+			interactiveLogin: effectiveInteractiveLogin(pending.stage, policyRead),
 			origins: stageOrigins(pending.stage),
 			diagnostics: pending.diagnostics,
 		});
@@ -292,6 +350,20 @@ function readPolicy(
 			});
 		return undefined;
 	}
+	// A ceiling above the hard one is a value the operator wrote and that no stage
+	// can ever be bounded by, so it says so here instead of reading back lowered
+	// under a stage's own clamp message (MIG-006).
+	const declaredCeiling = decoded.value.ceilings?.maxLoginHandoffSeconds;
+	if (
+		declaredCeiling !== undefined &&
+		declaredCeiling > MAX_LOGIN_HANDOFF_SECONDS
+	)
+		diagnostics.push({
+			file,
+			field: "ceilings.maxLoginHandoffSeconds",
+			kind: "warning",
+			message: `is lowered to the ${MAX_LOGIN_HANDOFF_SECONDS} s login hand-off ceiling, which is the longest one hand-off may block a stage action`,
+		});
 	return decoded.value;
 }
 
@@ -417,6 +489,20 @@ function validateStage(
 		);
 	for (const [name, recipe] of Object.entries(stage.logins ?? {}))
 		validateRecipe(recipe, `logins.${name}`, stage, fail);
+	// A stage may narrow the operator's policy and never widen it. The stage is
+	// still allow-listed (nothing about it is unsafe to *read*), so the ignored
+	// widening is a warning that names the file and the field.
+	if (
+		stage.interactiveLogin === "local" &&
+		(policy.interactiveLogin ?? "local") === "never"
+	)
+		diagnostics.push({
+			file,
+			field: "interactiveLogin",
+			kind: "warning",
+			message:
+				'is ignored: the policy denies interactive login (policy.json interactiveLogin: "never")',
+		});
 	for (const [index, exception] of (stage.readOnlyExceptions ?? []).entries()) {
 		if (exception.origin.trim() === "" || exception.pathPrefix === "")
 			fail(`readOnlyExceptions[${index}]`, "needs an origin and a pathPrefix");
@@ -477,6 +563,18 @@ function validateRecipe(
 	const steps = recipe.steps ?? [];
 	if (recipe.kind === "form" && steps.length === 0)
 		fail(`${field}.steps`, "a form recipe needs at least one step");
+	if (recipe.kind === "interactive") {
+		if (steps.length > 0)
+			fail(
+				`${field}.steps`,
+				`the interactive recipe ${field} declares no steps: the developer performs the login`,
+			);
+		if (!recipe.success)
+			fail(
+				`${field}.success`,
+				`the interactive recipe ${field} must declare how the login counts as complete`,
+			);
+	}
 	for (const [index, step] of steps.entries()) {
 		for (const [position, entry] of step.fields.entries())
 			if (!locatorNamesSomething(entry))
@@ -586,8 +684,10 @@ export function effectiveLimits(
 	const pick = (field: keyof EffectiveStageLimits): number => {
 		const declared = limits?.[field];
 		const base = declared ?? DEFAULT_STAGE_LIMITS[field];
-		const ceiling = ceilings[field];
-		return ceiling === undefined ? base : Math.min(base, ceiling);
+		// The ceiling is the one `effectiveCeiling` resolves, so the bound a value is
+		// clamped to and the bound the clamp *reports* cannot be computed two ways.
+		const ceiling = effectiveCeiling(field, ceilings[field]);
+		return ceiling === undefined ? base : Math.min(base, ceiling.value);
 	};
 	return {
 		maxSessions: pick("maxSessions"),
@@ -595,6 +695,7 @@ export function effectiveLimits(
 		maxWaitSeconds: pick("maxWaitSeconds"),
 		maxScreenshots: pick("maxScreenshots"),
 		maxRecordingMinutes: pick("maxRecordingMinutes"),
+		maxLoginHandoffSeconds: pick("maxLoginHandoffSeconds"),
 	};
 }
 
@@ -613,18 +714,39 @@ function clampDiagnostics(
 		"maxWaitSeconds",
 		"maxScreenshots",
 		"maxRecordingMinutes",
+		"maxLoginHandoffSeconds",
 	] as const) {
 		const declared = limits?.[field];
-		const ceiling = ceilings[field];
+		const ceiling = effectiveCeiling(field, ceilings[field]);
 		if (declared === undefined || ceiling === undefined) continue;
-		if (declared <= ceiling) continue;
+		if (declared <= ceiling.value) continue;
 		diagnostics.push({
 			file,
 			field: `limits.${field}`,
 			kind: "warning",
-			message: `clamped to the policy ceiling ${ceiling}`,
+			message:
+				ceiling.source === "policy"
+					? `clamped to the policy ceiling ${ceiling.value}`
+					: `clamped to the ${ceiling.value} s login hand-off ceiling`,
 		});
 	}
+}
+
+/** The bound a field is clamped to, and which file declared it: the policy's
+ * ceiling when it declares one, or the field's own documented hard ceiling —
+ * which is what answers a policy that declares none, a stage that declares more
+ * than the hard ceiling, and a policy whose own ceiling was above it. */
+function effectiveCeiling(
+	field: keyof EffectiveStageLimits,
+	policyCeiling: number | undefined,
+): { readonly value: number; readonly source: "policy" | "hard" } | undefined {
+	if (field !== "maxLoginHandoffSeconds")
+		return policyCeiling === undefined
+			? undefined
+			: { value: policyCeiling, source: "policy" };
+	if (policyCeiling !== undefined && policyCeiling <= MAX_LOGIN_HANDOFF_SECONDS)
+		return { value: policyCeiling, source: "policy" };
+	return { value: MAX_LOGIN_HANDOFF_SECONDS, source: "hard" };
 }
 
 /** The origins a stage may be driven on: its applications' origins plus its
@@ -760,7 +882,11 @@ export interface StageCredentialView {
 export interface StageRoleView {
 	readonly role: string;
 	readonly login?: string;
-	readonly loginKind?: "form" | "http-basic";
+	readonly loginKind?: StageLoginRecipeKind;
+	/** `set`, `none` (the role references no credential at all) or
+	 * `missing <VAR>`. */
+	readonly credentialStatus: string;
+	readonly loginMode: StageLoginMode;
 	readonly credentials: readonly StageCredentialView[];
 }
 
@@ -819,11 +945,19 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 					value.login === undefined
 						? undefined
 						: entry.stage.logins?.[value.login];
+				const credentials = roleCredentialViews(value, env);
+				const credentialStatus = roleCredentialStatus(credentials);
 				return {
 					role,
 					...(value.login === undefined ? {} : { login: value.login }),
 					...(recipe ? { loginKind: recipe.kind } : {}),
-					credentials: roleCredentialViews(value, env),
+					credentialStatus,
+					loginMode: roleLoginMode({
+						...(recipe === undefined ? {} : { recipeKind: recipe.kind }),
+						credentialStatus,
+						interactiveLogin: entry.interactiveLogin,
+					}),
+					credentials,
 				};
 			}),
 			...(app.version
@@ -863,6 +997,15 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 		wiki: { processes: entry.stage.wiki?.processes ?? [] },
 		diagnostics: entry.diagnostics,
 	};
+}
+
+/** The one status of a role's credential references: `set` when every one of
+ * them is set, `none` when the role references none at all (valid since
+ * `add-stage-interactive-login`), and otherwise the first `missing <VAR>`. */
+function roleCredentialStatus(views: readonly StageCredentialView[]): string {
+	if (views.length === 0) return "none";
+	const missing = views.find((view) => view.status !== "set");
+	return missing ? missing.status : "set";
 }
 
 function roleCredentialViews(

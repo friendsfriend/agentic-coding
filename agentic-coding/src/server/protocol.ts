@@ -25,6 +25,7 @@ import {
 	browserScriptRequestSchema,
 	browserSessionRequestSchema,
 	browserStageLoginRequestSchema,
+	browserStageLoginWaitRequestSchema,
 	browserWaitRequestSchema,
 } from "../contracts/browser.ts";
 import { credentialRespondSchema } from "../contracts/credential.ts";
@@ -95,6 +96,9 @@ export const AGENT_BROWSER_SCRIPT_PATH = `${AGENT_BROWSER_PREFIX}script`;
 export const AGENT_BROWSER_CLOSE_PATH = `${AGENT_BROWSER_PREFIX}close`;
 /** The credential-safe login of a stage-bound session. */
 export const AGENT_BROWSER_LOGIN_PATH = `${AGENT_BROWSER_PREFIX}login`;
+/** `add-stage-interactive-login`: block in the server while a login hand-off is
+ * pending, instead of spending a model turn per poll. */
+export const AGENT_BROWSER_LOGIN_WAIT_PATH = `${AGENT_BROWSER_PREFIX}login-wait`;
 
 /** The stage catalog of one run: the same read surface as the dashboard's, with
  * version probes resolved. It rides the owner capability because a run may only
@@ -695,6 +699,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: AGENT_BROWSER_LOGIN_PATH,
 		schemaId: "server.agent-env.browser.login",
 		schema: browserStageLoginRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_LOGIN_WAIT_PATH,
+		schemaId: "server.agent-env.browser.login-wait",
+		schema: browserStageLoginWaitRequestSchema,
 	},
 	{
 		path: AGENT_OTEL_QUERY_PATH,
