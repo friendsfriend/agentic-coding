@@ -87,10 +87,16 @@ test("triage instructions scope the decided roles instead of selecting them", ()
 
 test("the planner brief writes early and budgets orientation", () => {
 	const planning = AGENT_DEFINITIONS["instructions/planning.md"];
-	// The skeleton first: the artifact exists before the domain is fully
-	// explored, and each later one is extended in place.
+	// The skeleton first, and it triggers on the resolved path openspec names,
+	// not on a directory that exists before the artifact set is known: the
+	// artifact exists early, and each later one is extended in place.
 	expect(planning).toContain(
-		"Immediately after creating the directory, write a skeleton of the first artifact — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn.",
+		"As soon as `openspec status` names the first artifact's `resolvedOutputPath` and `openspec instructions` returns its template, write that artifact's skeleton — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn. Write nothing before the resolved path exists: the artifact set is openspec's to name, not yours to assume.",
+	);
+	// The old trigger is gone rather than sitting beside the new one: one
+	// instruction, not two that can disagree.
+	expect(planning).not.toContain(
+		"Immediately after creating the directory, write a skeleton",
 	);
 	// The budget bounds exploration only: the dependency-read rule it must not
 	// weaken is restated in the same paragraph, and a question that cannot be
@@ -123,19 +129,22 @@ test("both wiki briefs write early and keep their own update-first contract", ()
 			"instead of reading further before writing anything",
 		);
 		expect(brief).toContain(
-			"This budget bounds orientation only: the update-first sequence below — not the budget — still decides which path is written, and the authoring contract still applies to every concept you touch.",
+			"This budget bounds orientation only: the budget moves the write earlier, it does not shorten the sequence — that sequence, not the budget, still decides which path is written, and the authoring contract still applies to every concept you touch.",
 		);
 	}
 	// Each brief keeps its own vocabulary: the search-named target for the
 	// openspec wiki, the corroborated directive for the research wiki.
 	expect(openspec).toContain(
-		"Write or update the first concept as soon as the search names a target",
+		"Write or update the first concept as soon as the update-first sequence below names its target",
 	);
+	// The gate is the sequence's target, not the search: the search can name a
+	// concept the sequence would update elsewhere.
+	expect(openspec).not.toContain("as soon as the search names a target");
 	expect(research).toContain(
 		"Write or update the first dictated concept as soon as its directive's claim is corroborated",
 	);
 	expect(openspec).not.toContain("first dictated concept");
-	expect(research).not.toContain("as soon as the search names a target");
+	expect(research).not.toContain("names its target");
 });
 
 test("the embedded instructions are the briefs on disk, hash included", () => {

@@ -14,7 +14,7 @@ The directives supersede open-ended discovery. Start immediately: draft or updat
 
 ## Write early
 
-Write or update the first dictated concept as soon as its directive's claim is corroborated, and extend that concept in place while the remaining directives are verified, instead of reading further before writing anything. This budget bounds orientation only: the update-first sequence below — not the budget — still decides which path is written, and the authoring contract still applies to every concept you touch.
+Write or update the first dictated concept as soon as its directive's claim is corroborated, and extend that concept in place while the remaining directives are verified, instead of reading further before writing anything. This budget bounds orientation only: the budget moves the write earlier, it does not shorten the sequence — that sequence, not the budget, still decides which path is written, and the authoring contract still applies to every concept you touch.
 
 If a directive's citation does not actually support its claim, or its named target cannot be resolved, stop and report the discrepancy in your run-bound evidence instead of substituting your own broader research to compensate.
 

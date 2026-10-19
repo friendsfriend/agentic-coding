@@ -13,7 +13,7 @@ Nothing has already decided what to document for you, unlike a research-handoff 
 
 ## Write early
 
-Write or update the first concept as soon as the search names a target, and extend that concept in place while the remaining claims are verified, instead of reading further before writing anything. This budget bounds orientation only: the update-first sequence below — not the budget — still decides which path is written, and the authoring contract still applies to every concept you touch.
+Write or update the first concept as soon as the update-first sequence below names its target, and extend that concept in place while the remaining claims are verified, instead of reading further before writing anything. This budget bounds orientation only: the budget moves the write earlier, it does not shorten the sequence — that sequence, not the budget, still decides which path is written, and the authoring contract still applies to every concept you touch.
 
 ## Strict source-repository boundary
 

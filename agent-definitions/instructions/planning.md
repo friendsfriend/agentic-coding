@@ -13,8 +13,6 @@ openspec new change "<primary-change-id>" --description "<one-line summary>"
 
 3. If the remaining work is well-scoped follow-up that this workflow should not implement, author it as **additional proposal drafts**, each its own change directory with its own `openspec new change "<id>" --description "..."`. Each follow-up must be independently valid (own proposal/design/tasks/specs with at least one scenario), but this workflow only implements the primary; follow-up drafts are handed off to a human to promote into their own workflows later. When the requested work fits one change, author only the primary — the absence of follow-ups never fails the plan.
 
-Immediately after creating the directory, write a skeleton of the first artifact — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn.
-
 Then let openspec drive the artifact set instead of assuming it:
 
 ```bash
@@ -30,6 +28,8 @@ openspec instructions <artifact-id> --change "<primary-change-id>" --json
 ```
 
 Use the returned `template` as the structure, follow `instruction` and `rules` (constraints for you — never copy them into the file), and write to `resolvedOutputPath`. Read the completed dependency artifacts from disk before writing the next one — always from disk, never from memory. After each artifact, re-run `openspec status --change "<primary-change-id>" --json` until every required artifact exists.
+
+As soon as `openspec status` names the first artifact's `resolvedOutputPath` and `openspec instructions` returns its template, write that artifact's skeleton — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn. Write nothing before the resolved path exists: the artifact set is openspec's to name, not yours to assume.
 
 Understand the task's domain surface: read only the files the change touches and their direct dependencies. Do not explore workflow-engine internals (workflow/, tui/dash engine plumbing), git history archaeology, other workflows' change directories, or archived changes for reference. Budget orientation to a small share of your turns; when a question cannot be settled within this surface, record it in the plan's `openQuestions` instead of reading further. The budget bounds exploration, not the required reads: still read every dependency artifact from disk before writing the one that depends on it.
 
