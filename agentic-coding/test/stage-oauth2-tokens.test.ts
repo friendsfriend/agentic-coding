@@ -626,6 +626,156 @@ describe("the store", () => {
 		expect(lapsedFailure.providerCode).toBe("interactive_login_required");
 		expect(idp.calls).toHaveLength(1);
 	});
+
+	test("a renewal that never got through keeps the refresh token it would have spent", async () => {
+		let failing = false;
+		const idp = provider(() =>
+			failing
+				? new Response("bad gateway", { status: 502 })
+				: tokenAnswer({
+						access_token: "renewed-by-refresh",
+						expires_in: 3_600,
+						refresh_token: ROTATED_REFRESH_TOKEN,
+					}),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "authorization_code",
+			authorizationEndpoint: true,
+		});
+		const { roleInput } = roleOf(configDir);
+		const key = roleTokenKey(roleInput);
+		// No remembered failure: this test is about what the store kept, not about
+		// the few seconds a refusal is kept for.
+		const store = new StageTokenStore({ failureTtlMs: 0 });
+		await store.token(
+			key,
+			async () => ({
+				accessToken: "signed-in-access-token",
+				expiresAt: Date.now() - 1,
+				scopes: [],
+				provider: "idp",
+				refreshToken: ROTATED_REFRESH_TOKEN,
+			}),
+			{ exclusive: true },
+		);
+
+		failing = true;
+		const failure = (await roleToken(roleInput, store).catch(
+			(error: unknown) => error,
+		)) as StageAuthError;
+		expect(failure.code).toBe("login-failed");
+		expect(failure.providerCode).toBe("http_502");
+
+		// The provider's own trouble did not spend the credential: the next attempt
+		// renews with the same refresh token instead of sending the developer back
+		// to the window (QUALITY-005).
+		failing = false;
+		const renewed = await roleToken(roleInput, store);
+		expect(renewed.accessToken).toBe("renewed-by-refresh");
+		expect(idp.calls).toHaveLength(2);
+		expect(idp.calls[1]?.form.get("grant_type")).toBe("refresh_token");
+		expect(idp.calls[1]?.form.get("refresh_token")).toBe(ROTATED_REFRESH_TOKEN);
+	});
+
+	test("a provider refusal does spend it: the rejected refresh token is dropped", async () => {
+		const idp = provider(
+			() =>
+				new Response(JSON.stringify({ error: "invalid_grant" }), {
+					status: 400,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "authorization_code",
+			authorizationEndpoint: true,
+		});
+		const { roleInput } = roleOf(configDir);
+		const key = roleTokenKey(roleInput);
+		const store = new StageTokenStore({ failureTtlMs: 0 });
+		await store.token(
+			key,
+			async () => ({
+				accessToken: "signed-in-access-token",
+				expiresAt: Date.now() - 1,
+				scopes: [],
+				provider: "idp",
+				refreshToken: ROTATED_REFRESH_TOKEN,
+			}),
+			{ exclusive: true },
+		);
+
+		const failure = (await roleToken(roleInput, store).catch(
+			(error: unknown) => error,
+		)) as StageAuthError;
+		expect(failure.providerCode).toBe("invalid_grant");
+		expect(store.refreshTokenFor(key, undefined)).toBeUndefined();
+		// The next call has nothing to renew with, so it asks for the window rather
+		// than presenting a credential the provider already refused.
+		const lapse = (await roleToken(roleInput, store).catch(
+			(error: unknown) => error,
+		)) as StageAuthError;
+		expect(lapse.providerCode).toBe("interactive_login_required");
+		expect(idp.calls).toHaveLength(1);
+	});
+
+	test("an exclusive acquisition is not joinable, and its refusal evicts nothing", async () => {
+		const store = new StageTokenStore({ failureTtlMs: 0 });
+		const key = {
+			stage: "grid-int",
+			app: "api",
+			role: "user",
+			provider: "idp",
+			scope: [],
+		};
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let refused: unknown;
+		const signIn = store
+			.token(
+				key,
+				async () => {
+					await gate;
+					throw new StageAuthError(
+						"login-failed",
+						"idp: the authorization code was refused",
+						"invalid_grant",
+					);
+				},
+				{ exclusive: true },
+			)
+			.catch((error: unknown) => {
+				refused = error;
+				return undefined;
+			});
+
+		// A caller that merely needs the role's token runs its own acquisition: the
+		// sign-in's promise is not published for it to join, so it is neither blocked
+		// by a person nor answered with a refusal about a code it never sent
+		// (CONC-004).
+		let own = 0;
+		const sibling = await store.token(key, async () => {
+			own += 1;
+			return {
+				accessToken: "own-token",
+				expiresAt: Date.now() + 3_600_000,
+				scopes: [],
+				provider: "idp",
+			};
+		});
+		expect(sibling.accessToken).toBe("own-token");
+		expect(own).toBe(1);
+
+		release?.();
+		await signIn;
+		expect(refused).toBeInstanceOf(StageAuthError);
+		// The failed sign-in never read the entry it would have deleted, so the token
+		// that worked a moment ago is still the key's own (CONC-006).
+		expect(store.peek(key)?.accessToken).toBe("own-token");
+	});
 });
 
 describe("the store's bounds", () => {

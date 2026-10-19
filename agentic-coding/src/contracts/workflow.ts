@@ -1034,6 +1034,10 @@ export type WorkflowCommand =
 			description: string;
 			context?: string;
 			expiresAt: string;
+			/** Whether the record offers *Done*. A hand-off the page can finish offers it;
+			 * a completion-driven login (a code grant, whose ending is the server's own
+			 * receiver) offers *Abort* alone, because no *Done* could verify it. */
+			canConfirm?: boolean;
 			/** The run whose session is held, for the record's provenance only: the
 			 * hand-off is never routed to it and never resumes it. */
 			runId?: string;
@@ -1289,6 +1293,7 @@ const loginHandoffOpenSchema = Schema.Struct({
 	description: text(8192),
 	context: Schema.optional(text(16384)),
 	expiresAt: text(64),
+	canConfirm: Schema.optional(Schema.Boolean),
 	runId: Schema.optional(text(4096)),
 	stepId: Schema.optional(text(4096)),
 	role: Schema.optional(text(4096)),

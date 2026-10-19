@@ -331,15 +331,20 @@ async function readBoundedJson(
  * answer weighs before the cap applied to the string (SEC-002). A declared
  * `content-length` above the cap is refused without reading a byte, and a body
  * without one is read through its reader, which is cancelled as soon as the
- * accumulated bytes pass the cap.
+ * accumulated bytes pass the cap. A refused answer is cancelled too: leaving its
+ * bytes in flight would hold the connection open for as long as the body takes
+ * to be collected, which is exactly what the cap exists to prevent (QUALITY-006).
  */
 async function readBoundedText(
 	response: Response,
 	cap: number,
 ): Promise<string> {
-	const declared = Number(response.headers.get("content-length"));
-	if (Number.isFinite(declared) && declared > cap) return "";
 	const body = response.body;
+	const declared = Number(response.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > cap) {
+		if (body !== null) await body.cancel().catch(() => {});
+		return "";
+	}
 	if (body === null) return (await response.text()).slice(0, cap);
 	const reader = body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -519,6 +524,14 @@ export class StageTokenStore {
 	 * rejected must not be handed out again) and rethrows the provider's refusal.
 	 * A `forget` or an `expire` while the acquisition runs discards its result
 	 * instead of writing a token built from a credential that is gone.
+	 *
+	 * Two rules keep a code-grant credential alive
+	 * (`add-stage-oauth2-code-pkce`): a renewal that did not *reach* the provider
+	 * keeps the rotated refresh token, because for this grant it is the only way
+	 * back to a token and a person would have to sign in again for a hiccup
+	 * (QUALITY-005); and an `exclusive` acquisition — one person's own sign-in,
+	 * with its own authorization code — neither publishes itself for others to
+	 * join nor evicts an entry it never read (CONC-004, CONC-006).
 	 */
 	async token(
 		key: OAuth2TokenKey,
@@ -527,11 +540,12 @@ export class StageTokenStore {
 	): Promise<OAuth2Token> {
 		const id = tokenKey(key);
 		this.ids.set(id, key);
+		const exclusive = options.exclusive === true;
 		// `exclusive` is for the code grant's exchange: that acquisition is one
 		// person's own sign-in, with its own authorization code, so it must neither
 		// join another acquisition of the same key nor be refused by a refusal another
 		// login remembered (CONC-002).
-		if (options.exclusive !== true) {
+		if (!exclusive) {
 			const existing = this.entries.get(id);
 			if (existing !== undefined && !this.stale(existing.token))
 				return existing.token;
@@ -553,9 +567,13 @@ export class StageTokenStore {
 				this.failures.delete(id);
 				return acquired;
 			} catch (error) {
-				if (this.generationOf(id) === generation) {
+				if (this.generationOf(id) === generation && !exclusive) {
 					this.entries.delete(id);
-					this.rotated.delete(id);
+					// The provider's answer is what destroys a credential. A call that did
+					// not get through (an unreachable endpoint, a timeout, a 5xx, an answer
+					// the cap refused) leaves the refresh token in place, so the next attempt
+					// can still renew it.
+					if (this.refused(error)) this.rotated.delete(id);
 					this.rememberFailure(id, error);
 				}
 				throw error;
@@ -564,8 +582,38 @@ export class StageTokenStore {
 			}
 		})();
 		promise = acquisition;
-		this.pending.set(id, acquisition);
+		// An exclusive acquisition is not published: it belongs to the one person
+		// whose code it exchanges, so no other caller may join it or be answered with
+		// its outcome (CONC-004).
+		if (!exclusive) this.pending.set(id, acquisition);
 		return await acquisition;
+	}
+
+	/** Whether a failed acquisition is the provider *refusing* the credential it was
+	 * given. Only a refusal discards a rotated refresh token; a transport failure, a
+	 * server error or an answer this process refused to parse does not
+	 * (QUALITY-005). */
+	private refused(error: unknown): boolean {
+		if (!(error instanceof StageAuthError)) return true;
+		const code = error.providerCode;
+		if (code === undefined) return true;
+		// A 4xx is the provider's verdict on the request; a 429 is a rate limit and a
+		// 5xx is its own trouble, so neither is.
+		if (/^http_4\d\d$/.test(code)) return code !== "http_429";
+		return (
+			code === "invalid_grant" ||
+			code === "invalid_client" ||
+			code === "unauthorized_client" ||
+			code === "invalid_request" ||
+			code === "invalid_scope"
+		);
+	}
+
+	/** Whether this key holds an entry right now, whatever remains of its lifetime.
+	 * The code-grant flow's `ok` means its exchange was *written*, not that a later
+	 * second still finds a usable token (CONC-005). */
+	holds(key: OAuth2TokenKey): boolean {
+		return this.entries.has(tokenKey(key));
 	}
 
 	/** The entry this key currently holds, without acquiring one. */
@@ -1504,7 +1552,21 @@ export async function beginAuthorizationCodeLogin(
 	// unobserved flow quiet until the hand-off asks about it.
 	void token.then(
 		() => {
-			if (!closed) settled = { state: "ok" };
+			if (closed) return;
+			// `ok` means the token is in the store, which is what the wait reports as
+			// `verified: true`. An exchange whose write a `forget` or an `expire`
+			// discarded during the one round trip resolved without keeping anything, so
+			// it is a failed login rather than a success nobody can use (CONC-005).
+			settled = store.holds(key)
+				? { state: "ok" }
+				: {
+						state: "failed",
+						error: new StageAuthError(
+							"login-failed",
+							`${recipe.provider}: the sign-in completed, but the token store discarded the token; call stage_login again`,
+							"interactive_login_required",
+						),
+					};
 		},
 		(error: unknown) => {
 			if (!closed) settled = { state: "failed", error };

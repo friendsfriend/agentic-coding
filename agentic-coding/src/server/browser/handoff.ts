@@ -153,6 +153,10 @@ export interface LoginHandoffAttention {
 		readonly description: string;
 		readonly context: string;
 		readonly expiresAt: string;
+		/** Whether the record offers *Done*. A completion-driven login has no
+		 * success a *Done* could verify, so it is offered *Abort* alone
+		 * (`add-stage-oauth2-code-pkce`, USAB-207). */
+		readonly canConfirm?: boolean;
 	}): Promise<void>;
 	/** The developer's answer, while the record is pending. */
 	answer(input: {
@@ -638,6 +642,10 @@ export class LoginHandoffCoordinator {
 				description: entry.request.description,
 				context: `${entry.request.context} ${this.recordState(entry)}`,
 				expiresAt: isoFrom(entry.deadlineAt),
+				// The record offers the same two answers the banner does: a *Done* for a
+				// login the page can finish, and no *Done* for a completion-driven one,
+				// where it could only end the receiver as unverified (USAB-207).
+				canConfirm: entry.request.completion === undefined,
 			});
 			entry.recorded = true;
 		} catch (error: unknown) {

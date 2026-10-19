@@ -132,6 +132,9 @@ export function workflowLoginHandoffAttention(
 					description: input.description,
 					context: input.context,
 					expiresAt: input.expiresAt,
+					...(input.canConfirm === undefined
+						? {}
+						: { canConfirm: input.canConfirm }),
 					...(role === undefined ? {} : { role }),
 					stepId: located.snapshot.currentStep,
 				});

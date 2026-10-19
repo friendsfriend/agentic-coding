@@ -1758,6 +1758,9 @@ describe("stage-bound sessions", () => {
 		// added to either call fails here.
 		expect(records).toHaveLength(2);
 		expect(Object.keys(records[0] ?? {}).sort()).toEqual([
+			// A page login's record offers *Done*, which a completion-driven one does
+			// not (USAB-207): the flag is data, never a value of the login.
+			"canConfirm",
 			"context",
 			"description",
 			"expiresAt",
@@ -2540,7 +2543,19 @@ describe("the authorization code hand-off", () => {
 		const idp = codeTokenEndpoint();
 		try {
 			const driver = createFakeDriver();
-			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			// A recorded hand-off is what makes the banner's *Done* rule observable at
+			// all: with no record the banner has no *Done* for the other reason, and a
+			// regression of the completion rule would leave the assertion below green
+			// (TQ-007). The record is also the surface the developer answers in.
+			const records: Array<Record<string, unknown>> = [];
+			const attention = {
+				open: async (input: Record<string, unknown>) => {
+					records.push({ ...input });
+				},
+				answer: async () => undefined,
+				close: async () => {},
+			} as unknown as LoginHandoffAttention;
+			const deps = build(codeConfigRoot(idp.endpoint), driver, { attention });
 			await openStage(deps);
 			const handoff = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
 				app: "web",
@@ -2573,8 +2588,13 @@ describe("the authorization code hand-off", () => {
 				"this role signs in with your own identity at the provider",
 			);
 			expect(banner).not.toContain("choose Done");
+			expect(banner).toContain("the hand-off ends when the login is detected");
 			expect(banner).not.toContain(state);
 			expect(banner).not.toContain("code_challenge");
+			// The dashboard record offers the same answers the banner does: *Done* would
+			// end this login without a token, so it is not one of them (USAB-207).
+			expect(records).toHaveLength(1);
+			expect(records[0]?.canConfirm).toBe(false);
 			const origin = deps.pool.handoffRedirect(session);
 			expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 			if (origin === undefined) throw new Error("no loopback allowance");
@@ -3014,10 +3034,15 @@ describe("the authorization code hand-off", () => {
 				role: "user",
 			});
 			// The mode `stage_info` reports is `unavailable` for this role, and the
-			// refusal names the gap: no window, no banner, no receiver, no request.
+			// refusal names the variable that is missing — the client id here, because the
+			// provider's views are read in order and it is the first one unset (USAB-206).
 			expect(refused.status).toBe(409);
 			expect(refused.value.code).toBe("credential-missing");
-			expect(String(refused.value.message)).toContain("client id");
+			expect(String(refused.value.message)).toContain(
+				"GRID_INT_CLIENT_ID is not set in the configuration .env",
+			);
+			expect(String(refused.value.message)).toContain("Settings → Stages");
+			expect(refused.text).not.toContain("client id;");
 			expect(driver.launchOptions).toEqual([{ headless: true }]);
 			expect(driver.performed).toEqual([]);
 			expect(
@@ -3025,6 +3050,116 @@ describe("the authorization code hand-off", () => {
 			).toBeUndefined();
 			expect(pkceValues("stage-oauth2-code-verifier")).toHaveLength(0);
 			expect(idp.calls).toHaveLength(0);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a role whose provider secret is not set names that variable, not the client id", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const configDir = codeConfigRoot(idp.endpoint);
+			// The provider declares both references, so the views are read in order: a
+			// refusal that assumed the client id would name the one credential that *is*
+			// set (USAB-206).
+			fs.writeFileSync(
+				path.join(configDir, ".env"),
+				`GRID_INT_CLIENT_ID=${CODE_CLIENT_ID}\n`,
+			);
+			const driver = createFakeDriver();
+			const deps = build(configDir, driver);
+			await openStage(deps);
+			const refused = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(refused.status).toBe(409);
+			expect(refused.value.code).toBe("credential-missing");
+			expect(String(refused.value.message)).toContain(
+				"GRID_INT_CLIENT_SECRET is not set in the configuration .env",
+			);
+			expect(refused.text).not.toContain("GRID_INT_CLIENT_ID is not set");
+			expect(refused.text).not.toContain(CODE_CLIENT_ID);
+			expect(driver.performed).toEqual([]);
+			await deps.pool.closeAll();
+		} finally {
+			idp.stop();
+		}
+	});
+
+	test("a second sign-in exchanges its own code, even while the store holds the first token", async () => {
+		const idp = codeTokenEndpoint();
+		try {
+			const driver = createFakeDriver();
+			const deps = build(codeConfigRoot(idp.endpoint), driver);
+			await openStage(deps);
+			const session = sessionOf(deps, "default");
+
+			const first = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(first.value.login).toBe("needs-user");
+			await waitForUrl(session, "oauth2/authorize");
+			const firstState = stateOf(session);
+			const firstOrigin = deps.pool.handoffRedirect(session);
+			if (firstOrigin === undefined) throw new Error("no loopback allowance");
+			expect(
+				await fetch(
+					callbackUrl(firstOrigin, {
+						code: CODE_AUTHORIZATION_CODE,
+						state: firstState,
+					}),
+				).then((answer) => answer.status),
+			).toBe(200);
+			const firstWait = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(firstWait.value.login).toBe("ok");
+			expect(idp.calls).toHaveLength(1);
+
+			// A signed-in role is not a reason to skip a sign-in the developer asked for:
+			// the exchange is this login's own acquisition, so it neither returns the
+			// token the store already holds nor joins an acquisition of it (CONC-002,
+			// TQ-009). Without that option the second login would answer `ok` from the
+			// first token and never present its own code.
+			const second = await call(deps, AGENT_BROWSER_LOGIN_PATH, {
+				app: "web",
+				role: "user",
+			});
+			expect(second.value.login).toBe("needs-user");
+			let secondState = firstState;
+			for (let attempt = 0; attempt < 400; attempt += 1) {
+				secondState = stateOf(session);
+				if (
+					session.url.includes("oauth2/authorize") &&
+					secondState !== firstState
+				)
+					break;
+				await Bun.sleep(5);
+			}
+			expect(secondState).not.toBe(firstState);
+			const secondOrigin = deps.pool.handoffRedirect(session);
+			if (secondOrigin === undefined) throw new Error("no loopback allowance");
+			expect(
+				await fetch(
+					callbackUrl(secondOrigin, {
+						code: `${CODE_AUTHORIZATION_CODE}-2`,
+						state: secondState,
+					}),
+				).then((answer) => answer.status),
+			).toBe(200);
+			const secondWait = await call(deps, AGENT_BROWSER_LOGIN_WAIT_PATH, {
+				session: "default",
+				timeoutSec: 30,
+			});
+			expect(secondWait.value.login).toBe("ok");
+			// Two sign-ins, two exchanges: the second presented the second code.
+			expect(idp.calls).toHaveLength(2);
+			expect(idp.calls[1]?.get("grant_type")).toBe("authorization_code");
+			expect(idp.calls[1]?.get("code")).toBe(`${CODE_AUTHORIZATION_CODE}-2`);
 			await deps.pool.closeAll();
 		} finally {
 			idp.stop();

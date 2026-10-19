@@ -18,7 +18,7 @@ This change is the part of the original `add-stage-oauth2-auth` plan that needs 
 
 ### Modified Capabilities
 
-None.
+- `stage-browser-sessions`: the login hand-off a code-grant sign-in reuses gains a third trigger (`reason: "user-identity"`), a fifth terminal outcome (`login-failed`, carrying the server's own value-free refusal), `ok` with `via: "token"`, and the rule that a hand-off whose ending is the server's own receiver offers *Abort* alone. A refusal that names a missing provider credential names the one that is unset.
 
 ## Impact
 

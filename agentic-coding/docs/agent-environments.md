@@ -475,15 +475,22 @@ a production-like name is refused by the catalog, and only the operator's own
   ending path — success, a mismatched `state`, the deadline, an abort — so no
   port stays bound after a login. The authorization code, the verifier and every
   token stay in the server: they are added to the redaction set while the login
-  runs (the code and `state` stay registered for the rest of the process, so
-  even a replay of the callback URL is scrubbed), the callback page reflects no
+  runs (the code and `state` stay registered after the login ends, so a replay
+  of the callback URL is scrubbed too; the set keeps the newest 64 values of
+  each name and a login adds one of each, so only the very oldest pair ever
+  falls out of it), the callback page reflects no
   parameter, and a `state` mismatch, a provider `error` or a refused exchange
   ends the login as `login-failed` with a value-free message. `stage_login_wait`
   answers `ok` (`via: "token"`, `verified: true`) **only** after the exchange
-  succeeded and the token is in the store; a *Done* that never completed is
+  succeeded and the token is in the store — an exchange whose write a
+  credential rewrite discarded during the round trip is not an `ok`; a *Done*
+  that never completed is
   `login-handoff-unverified`, a deadline is `login-handoff-timeout`, a closed
   window or an abort is `login-handoff-aborted`, and a sign-in the provider
-  refuses is `login-handoff-unverified` or `login-failed`, never `ok`. The token
+  refuses is `login-handoff-unverified` or `login-failed`, never `ok`. This
+  grant offers no *Done* to choose — neither in the window's banner nor in the
+  dashboard record, whose only answer is *Abort* — because its ending is the
+  server's own receiver and a *Done* could only close it unverified. The token
   is then an ordinary one: `stage_api_request` and a `bearerOrigins` page use
   it, the completed hand-off returns the window to the application (rather than
   leaving it on a callback page that no longer answers), and no path that merely
@@ -504,7 +511,8 @@ a production-like name is refused by the catalog, and only the operator's own
   at its deadline or by an abort. A policy of `interactiveLogin: "never"`
   refuses the login outright (`login-user-unavailable`, `loginMode:
   "unavailable"`) instead of opening a window, and so does a role whose client
-  id reference the `.env` does not set (`credential-missing`, `loginMode:
+  id — or client secret, when the provider declares one — is not set in the
+  `.env` (`credential-missing` naming that variable, `loginMode:
   "unavailable"`).
 - **A token login still needs the session it runs on.** `stage_login` is a
   browser-layer action on an open, stage-bound session: an *unattended* token

@@ -37,6 +37,14 @@ export const LOGIN_HANDOFF_OPTIONS = [
 	},
 ] as const;
 
+/** The one answer a hand-off whose ending is the server's own completion offers.
+ * A *Done* there can only end the receiver without a token, so offering it would
+ * promise a verification that cannot happen (`add-stage-oauth2-code-pkce`,
+ * USAB-207). */
+export const LOGIN_HANDOFF_ABORT_ONLY_OPTIONS = LOGIN_HANDOFF_OPTIONS.filter(
+	(option) => option.value === "abort",
+);
+
 /** The run id a hand-off record carries. A hand-off belongs to no run: the
  * session outlives the run that opened it, and nothing routes or resumes by
  * this id — which is exactly why it is a value no run can ever have, so a build
@@ -110,7 +118,10 @@ export function loginHandoffOpen(
 		kind: "login-handoff",
 		description: command.description,
 		...(command.context === undefined ? {} : { context: command.context }),
-		options: LOGIN_HANDOFF_OPTIONS.map((option) => ({ ...option })),
+		options: (command.canConfirm === false
+			? LOGIN_HANDOFF_ABORT_ONLY_OPTIONS
+			: LOGIN_HANDOFF_OPTIONS
+		).map((option) => ({ ...option })),
 		// The record expires on the existing question timer, at the hand-off's own
 		// deadline. The timer only unlists the dialog: the browser coordinator
 		// still owns the ending, and an expired record is simply no answer.

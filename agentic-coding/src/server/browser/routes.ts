@@ -53,6 +53,7 @@ import {
 } from "../protocol.ts";
 import type { EnvironmentInstanceController } from "../runtime/instances.ts";
 import {
+	credentialMissingMessage,
 	readStageCatalog,
 	roleLoginMode,
 	type StageCatalog,
@@ -1132,16 +1133,26 @@ async function stageLogin(
 				credentialStatus: roleView.credentialStatus,
 				interactiveLogin: entry.interactiveLogin,
 			});
-			if (mode !== "handoff")
+			if (mode !== "handoff") {
+				// `credentialStatus` is the first unset variable among the role's own
+				// credential views — for this grant the provider's client id and, when it
+				// declares one, its client secret — so the refusal names the variable that
+				// is actually missing instead of assuming it is the client id (USAB-206).
+				const missing = roleView.credentialStatus.startsWith("missing ")
+					? roleView.credentialStatus.slice("missing ".length)
+					: undefined;
 				throw new BrowserSessionError(
 					entry.interactiveLogin === "never"
 						? "login-user-unavailable"
 						: "credential-missing",
 					entry.interactiveLogin === "never"
 						? `${body.app}.${body.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`
-						: `${body.app}.${body.role} signs in with the authorization_code grant, which needs a client id; stage_info names the unset variable`,
+						: missing === undefined
+							? `${body.app}.${body.role} signs in with the authorization_code grant, and none of its credential references can be resolved; stage_info names the variable to set`
+							: credentialMissingMessage(missing),
 					409,
 				);
+			}
 			return await startAuthorizationCodeHandoff({
 				deps,
 				session,

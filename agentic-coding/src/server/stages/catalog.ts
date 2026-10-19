@@ -1045,13 +1045,17 @@ function originOf(value: string): string | undefined {
 // Credentials
 // ---------------------------------------------------------------------------
 
+/** The wording of a `.env` gap, shared by every surface that answers one: the
+ * variable's name and where it is set, never a value. */
+export function credentialMissingMessage(variable: string): string {
+	return `${variable} is not set in the configuration .env; set it in Settings → Stages before this login`;
+}
+
 /** A credential reference that cannot be resolved right now. It names the
  * variable and never a value. */
 export class StageCredentialError extends Error {
 	constructor(readonly variable: string) {
-		super(
-			`${variable} is not set in the configuration .env; set it in Settings → Stages before this login`,
-		);
+		super(credentialMissingMessage(variable));
 		this.name = "StageCredentialError";
 	}
 }

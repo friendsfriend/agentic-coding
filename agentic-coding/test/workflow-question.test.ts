@@ -878,6 +878,34 @@ test("a stage_login hand-off is raised and resolved as workflow state, without r
 	}
 });
 
+test("a hand-off whose ending is the server's own offers Abort alone, never a Done that cannot verify", () => {
+	const { repo, engine, run } = setup();
+	try {
+		const opened = engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-code",
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: "Sign in to Grid integration as your own identity",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+			// A completion-driven login (the authorization code grant): its `ok` is the
+			// server's own receiver, so a *Done* could only end it unverified
+			// (USAB-207).
+			canConfirm: false,
+		});
+		const record = opened.view.developerDialogue?.find(
+			(item) => item.id === "handoff-code",
+		);
+		expect(record?.kind).toBe("login-handoff");
+		expect(record?.options.map((option) => option.value)).toEqual(["abort"]);
+		expect(record?.options[0]?.label).toBe("Abort");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a hand-off record expires on the question timer at its deadline, without resuming anything", () => {
 	const { repo, engine, run, token, now } = setup();
 	try {

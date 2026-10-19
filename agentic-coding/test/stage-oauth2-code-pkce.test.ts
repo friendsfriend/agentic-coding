@@ -606,6 +606,129 @@ describe("the login a flow runs", () => {
 		);
 	});
 
+	test("a token answer above the byte cap is refused instead of parsed", async () => {
+		// The answer carries a perfectly good token and 70 KB of padding: a read that
+		// trusts the endpoint would hand the login a token out of an answer this
+		// process refused to hold (SEC-002, TQ-008).
+		const oversized = JSON.stringify({
+			access_token: ACCESS_TOKEN,
+			expires_in: 3_600,
+			pad: "x".repeat(70_000),
+		});
+		const fake = provider(
+			() =>
+				new Response(oversized, {
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const store = new StageTokenStore();
+		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
+			fetch: fakeEndpointFetch(fake.endpoint),
+		});
+		try {
+			const state = stateOf(flow);
+			expect(
+				await callBack(flow.redirectOrigin, {
+					code: AUTHORIZATION_CODE,
+					state,
+				}).then((answer) => answer.status),
+			).toBe(200);
+			await settle(flow.poll);
+			const settled = flow.poll();
+			expect(settled.state).toBe("failed");
+			if (settled.state !== "failed") throw new Error("the flow succeeded");
+			// A declared length above the cap is refused before a byte is read, so the
+			// refusal is the endpoint's own 200 that could not be parsed.
+			expect((settled.error as StageAuthError).providerCode).toBe("http_200");
+			expect(store.peek(roleTokenKey(fake.roleInput))).toBeUndefined();
+			// The request that carried the code was made once; nothing was retried.
+			expect(fake.calls).toHaveLength(1);
+		} finally {
+			flow.close();
+		}
+	});
+
+	test("a streamed answer that passes the cap is cut, and the login fails without a token", async () => {
+		const chunk = new Uint8Array(40_000).fill(120);
+		const fake = provider(
+			() =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							// Three 40 KB chunks and no content-length: the reader is what bounds
+							// this one.
+							controller.enqueue(chunk);
+							controller.enqueue(chunk);
+							controller.enqueue(chunk);
+							controller.close();
+						},
+					}),
+					{ headers: { "content-type": "application/json" } },
+				),
+		);
+		const store = new StageTokenStore();
+		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
+			fetch: fakeEndpointFetch(fake.endpoint),
+		});
+		try {
+			const state = stateOf(flow);
+			await callBack(flow.redirectOrigin, { code: AUTHORIZATION_CODE, state });
+			await settle(flow.poll);
+			const settled = flow.poll();
+			expect(settled.state).toBe("failed");
+			if (settled.state !== "failed") throw new Error("the flow succeeded");
+			expect(settled.error).toBeInstanceOf(StageAuthError);
+			expect(store.peek(roleTokenKey(fake.roleInput))).toBeUndefined();
+		} finally {
+			flow.close();
+		}
+	});
+
+	test("a token the store discards during the exchange is a failed login, not an ok", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const fake = provider(async () => {
+			await gate;
+			return tokenAnswer();
+		});
+		const store = new StageTokenStore();
+		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
+			fetch: fakeEndpointFetch(fake.endpoint),
+		});
+		try {
+			const key = roleTokenKey(fake.roleInput);
+			const state = stateOf(flow);
+			await callBack(flow.redirectOrigin, {
+				code: AUTHORIZATION_CODE,
+				state,
+			});
+			for (let attempt = 0; attempt < 400; attempt += 1) {
+				if (fake.calls.length > 0) break;
+				await Bun.sleep(5);
+			}
+			expect(fake.calls).toHaveLength(1);
+			// A credential rewrite or a stage reload lands while the token endpoint is
+			// still answering: the store discards the token it gets back, so the login
+			// did not complete however well the exchange went (CONC-005).
+			store.forget(key);
+			release?.();
+			await settle(flow.poll);
+			const settled = flow.poll();
+			expect(settled.state).toBe("failed");
+			if (settled.state !== "failed") throw new Error("the flow succeeded");
+			const failure = settled.error as StageAuthError;
+			expect(failure.code).toBe("login-failed");
+			expect(failure.providerCode).toBe("interactive_login_required");
+			expect(failure.message).toContain("stage_login");
+			expect(failure.message).not.toContain(ACCESS_TOKEN);
+			expect(store.peek(key)).toBeUndefined();
+		} finally {
+			flow.close();
+		}
+	});
+
 	test("a provider whose client id is not set refuses before the window, naming the variable", async () => {
 		const fake = provider(() => tokenAnswer());
 		const missing = seeded({
