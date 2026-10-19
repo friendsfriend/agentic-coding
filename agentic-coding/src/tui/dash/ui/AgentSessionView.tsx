@@ -559,13 +559,12 @@ function Block(props: {
 						<text width={2} flexShrink={0} fg={color()}>
 							{tool.icon}
 						</text>
-						<text
-							fg={color()}
-							flexGrow={1}
-							minWidth={0}
-							wrapMode="none"
-							truncate
-						>
+						{/* The summary is the call's own text — a path, a command — and a
+						    reader folds the row to see the call, not to see a clipped one:
+						    it wraps onto further lines instead of being cut with an
+						    ellipsis. The fold glyph, the icon and the hint stay on the
+						    first line. */}
+						<text fg={color()} flexGrow={1} minWidth={0} wrapMode="word">
 							{tool.summary}
 							{/* The in-progress view carries its own running marker as the hint; a
 							    pending row without one (the generic fallback) still gets the

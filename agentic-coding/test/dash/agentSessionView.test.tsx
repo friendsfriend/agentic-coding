@@ -1532,6 +1532,74 @@ test("a streaming write stays one compact line instead of its content", async ()
 	}
 });
 
+test("a collapsed tool row wraps its whole summary instead of cutting it with an ellipsis", async () => {
+	const command =
+		"cd /Users/dev/project && bun run test --filter alpha-suite --reporter verbose && echo the-very-last-word";
+	const path =
+		"src/some/deeply/nested/directory/with/a/long/path/to/the/module-under-edit.ts";
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "t1",
+			kind: "tool",
+			text: "bash command",
+			tone: "warning",
+			icon: "$",
+			tool: "bash",
+			pending: true,
+			live: true,
+			toolCall: { name: "bash", args: { command }, callId: "c1" },
+		},
+		{
+			id: "t2",
+			kind: "tool",
+			text: "read path",
+			tone: "warning",
+			icon: "→",
+			tool: "read",
+			pending: true,
+			live: true,
+			toolCall: { name: "read", args: { path }, callId: "c2" },
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 50, height: 20 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		// Nothing is cut: the tail of the command and of the path reach the
+		// screen, wrapped over further rows (a hyphen is a break point).
+		expect(frame).toContain("very-last-word");
+		expect(frame).toContain("reporter verbose");
+		expect(frame).toContain("under-edit.ts");
+		// The only ellipses left are the in-progress markers on the hint.
+		expect(frame.split("\u2026").length - 1).toBe(
+			(frame.match(/running\u2026|reading\u2026/g) ?? []).length + 1,
+		);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a tool call aborted before it ran is marked aborted", async () => {
 	const t = await testRender(
 		() => (
