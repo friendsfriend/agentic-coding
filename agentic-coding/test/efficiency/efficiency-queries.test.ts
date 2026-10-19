@@ -3,7 +3,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { writeDataset } from "../../scripts/efficiency/lib/dataset.ts";
-import { extractTables } from "../../scripts/efficiency/lib/extract.ts";
+import {
+	eventClass,
+	extractTables,
+} from "../../scripts/efficiency/lib/extract.ts";
 import { TOOL_FAILURE_KINDS } from "../../scripts/efficiency/lib/normalize.ts";
 import { QUERIES, queryByName } from "../../scripts/efficiency/lib/queries.ts";
 import {
@@ -1019,6 +1022,228 @@ describe("ready-made queries", () => {
 		} finally {
 			db.close();
 			out.cleanup();
+		}
+	});
+
+	test("run-window-drift classifies a tail as attributed, clock-artifact or unexplained", () => {
+		const query = queryByName("run-window-drift");
+		expect(query).toBeDefined();
+		// The session window's two events are readable by class, not only by name.
+		expect(eventClass("runtime.session_window.opened")).toBe("lifecycle");
+		expect(eventClass("runtime.session_window.closed")).toBe("lifecycle");
+		const dir = makeTempDir("efficiency-window-kind-");
+		const copy = path.join(dir.path, "dataset.sqlite");
+		fs.copyFileSync(datasetPath, copy);
+		const db = new Database(copy, { readwrite: true });
+		try {
+			const run = db.query(
+				`INSERT INTO runs (run_id, workflow_id, role, status, started_at, completed_at, source, source_rank, sources, confidence, preferred)
+				 VALUES (?, 'wf-window', 'worker', 'completed', ?, ?, 'telemetry.main-store', 0, 'telemetry.main-store', 'exact', 1)`,
+			);
+			const turn = db.query(
+				`INSERT INTO turns (run_id, workflow_id, source, source_rank, turn_index, started_at, ended_at, confidence, preferred)
+				 VALUES (?, 'wf-window', 'telemetry.main-store', 0, ?, ?, ?, 'exact', 1)`,
+			);
+			const event = db.query(
+				`INSERT INTO events (workflow_id, run_id, source, source_rank, at, event, event_class, confidence, preferred)
+				 VALUES ('wf-window', ?, 'telemetry.main-store', 0, ?, ?, 'lifecycle', 'exact', 1)`,
+			);
+			const sessionEvent = db.query(
+				`INSERT INTO events (workflow_id, run_id, source, source_rank, at, event, event_class, session_reason, confidence, preferred)
+				 VALUES ('wf-window', ?, 'telemetry.main-store', 0, ?, ?, 'lifecycle', ?, 'exact', 1)`,
+			);
+			/** One run whose second turn starts `tailMinutes` after its completion. */
+			const addRun = (
+				runId: string,
+				startedAt: string,
+				completedAt: string,
+				tailAt: string,
+			) => {
+				run.run(runId, startedAt, completedAt);
+				turn.run(runId, 0, startedAt, startedAt);
+				turn.run(runId, 1, tailAt, tailAt);
+			};
+
+			// The recording states that this run's session went on under a later run.
+			addRun(
+				"run-attributed",
+				"2026-03-01T10:00:00.000Z",
+				"2026-03-01T10:10:00.000Z",
+				"2026-03-01T10:20:00.000Z",
+			);
+			event.run(
+				"run-attributed",
+				"2026-03-01T10:11:00.000Z",
+				"runtime.session_window.closed",
+			);
+			// The same shape with nothing that explains it.
+			addRun(
+				"run-unexplained",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			// A record that precedes the run's own completion still explains the
+			// tail: the gate is *whether* a session-window row names the run, not
+			// when the row arrived (a resumed run's `opened` lands before its own
+			// handoff, and that is the same continuation).
+			addRun(
+				"run-early-record",
+				"2026-03-01T11:30:00.000Z",
+				"2026-03-01T11:40:00.000Z",
+				"2026-03-01T11:50:00.000Z",
+			);
+			event.run(
+				"run-early-record",
+				"2026-03-01T11:35:00.000Z",
+				"runtime.session_window.closed",
+			);
+			// The same run resumed its own conversation after the abort: the record
+			// is the `opened` row, and the tail is that run working on.
+			addRun(
+				"run-resumed",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-resumed",
+				"2026-03-01T11:15:00.000Z",
+				"runtime.session_window.opened",
+				"resumed",
+			);
+			// A binding the run's own completion predates is not a continuation: the
+			// session went on under a later run this host cannot name (a handover
+			// across a host lifetime), which is the misattribution item 20 refuses.
+			addRun(
+				"run-created-only",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-created-only",
+				"2026-03-01T11:05:00.000Z",
+				"runtime.session_window.opened",
+				"created",
+			);
+			// The same run bound twice: `created` before its completion, then an
+			// adoption after it (a host restart). The later move is the one the
+			// recording has to report, and what it says the tail is.
+			addRun(
+				"run-bound-twice",
+				"2026-03-01T11:00:00.000Z",
+				"2026-03-01T11:10:00.000Z",
+				"2026-03-01T11:20:00.000Z",
+			);
+			sessionEvent.run(
+				"run-bound-twice",
+				"2026-03-01T11:05:00.000Z",
+				"runtime.session_window.opened",
+				"created",
+			);
+			sessionEvent.run(
+				"run-bound-twice",
+				"2026-03-01T11:15:00.000Z",
+				"runtime.session_window.opened",
+				"adopted",
+			);
+			// A window that cannot be read: the completion is not after the start.
+			addRun(
+				"run-clock",
+				"2026-03-01T12:00:00.000Z",
+				"2026-03-01T12:00:00.000Z",
+				"2026-03-01T12:20:00.000Z",
+			);
+			// Every turn inside the run's own window: not drift at all.
+			addRun(
+				"run-inside",
+				"2026-03-01T13:00:00.000Z",
+				"2026-03-01T13:30:00.000Z",
+				"2026-03-01T13:29:00.000Z",
+			);
+			// One turn that starts before the completion and ends after it: over the
+			// threshold, but no turn of the tail, so it is not drift.
+			run.run(
+				"run-straddling",
+				"2026-03-01T14:00:00.000Z",
+				"2026-03-01T14:10:00.000Z",
+			);
+			turn.run(
+				"run-straddling",
+				0,
+				"2026-03-01T14:09:00.000Z",
+				"2026-03-01T14:20:00.000Z",
+			);
+
+			const rows = db
+				.query<
+					{
+						run_id: string;
+						tail_seconds: number;
+						tail_turns: number;
+						drift_kind: string;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const byRun = new Map(rows.map((row) => [row.run_id, row]));
+			expect(byRun.get("run-attributed")).toMatchObject({
+				drift_kind: "attributed",
+				tail_turns: 1,
+			});
+			expect(byRun.get("run-unexplained")).toMatchObject({
+				drift_kind: "unexplained",
+				session_recorded: 0,
+				tail_turns: 1,
+			});
+			expect(byRun.get("run-early-record")).toMatchObject({
+				drift_kind: "attributed",
+				session_recorded: 1,
+				tail_turns: 1,
+			});
+			// A run that kept its own conversation: recorded, and named as such.
+			expect(byRun.get("run-resumed")).toMatchObject({
+				drift_kind: "resumed",
+				session_recorded: 1,
+				session_reason: "resumed",
+				tail_turns: 1,
+			});
+			// Recorded, but the record does not state that the session continued.
+			expect(byRun.get("run-created-only")).toMatchObject({
+				drift_kind: "unexplained",
+				session_recorded: 1,
+				session_opened_after_completion: 0,
+				tail_turns: 1,
+			});
+			expect(byRun.get("run-bound-twice")).toMatchObject({
+				drift_kind: "resumed",
+				session_recorded: 1,
+				session_reason: "adopted",
+				session_opened_after_completion: 1,
+				tail_turns: 1,
+			});
+			expect(byRun.get("run-clock")).toMatchObject({
+				drift_kind: "clock-artifact",
+				tail_turns: 1,
+			});
+			// The tail is measured from the completion to the last turn's end; the
+			// CAST truncates the julianday difference, so a whole minute may land one
+			// second short.
+			for (const runId of ["run-attributed", "run-unexplained"])
+				expect(byRun.get(runId)?.tail_seconds).toBeGreaterThanOrEqual(599);
+			expect(byRun.get("run-clock")?.tail_seconds).toBeGreaterThanOrEqual(1199);
+			expect(byRun.has("run-inside")).toBe(false);
+			// A tail is a run with turns *after* its completion: a run whose only
+			// turn straddles the completion (`tail_turns` 0) is not drift at all, so
+			// the threshold and the counted tail agree.
+			expect(byRun.has("run-straddling")).toBe(false);
+			// The columns the query has always reported are all still there.
+			for (const column of query?.columns ?? [])
+				expect(rows[0]).toHaveProperty(column);
+		} finally {
+			db.close();
+			dir.cleanup();
 		}
 	});
 

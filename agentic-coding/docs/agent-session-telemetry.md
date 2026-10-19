@@ -87,6 +87,34 @@ carries `peakContextTokens` (the largest prompt the conversation ever carried),
 `turns`, and `compactionsAutoCeiling` / `compactionsAutoOverflow` /
 `compactionsManual`.
 
+The session window (efficiency backlog item 20) records which run a durable
+conversation was bound to, because one conversation serves every later run of the
+same step and role:
+
+| Event | Fields |
+| --- | --- |
+| `runtime.session_window.opened` | `herdr.session.reason` (`created`, `rebound`, `adopted` or `resumed`), `herdr.session.previous_run_id` for `rebound`, and `herdr.session.conversation_id` |
+| `runtime.session_window.closed` | `herdr.session.rebound_to` (the run now bound) and `herdr.session.conversation_id` |
+
+Both name the run they belong to in the envelope's ordinary `runId`, so a
+conversation's move is readable per run; the conversation id travels as
+`herdr.session.conversation_id` and *not* as `sessionId`, which the parser maps to
+`herdr.session.id` — the run id — and one attribute must never carry two
+identifier spaces. Nothing here writes workflow state: the envelopes are
+observational, and `stopRun` never emits a `closed` for the run it stops (a run is
+not closed when its session continues).
+
+A `closed` is the one envelope a reader takes as proof that a session continued,
+so its writer reports whether the append happened: a close that could not be
+written to the leaving run's telemetry path (its workspace is gone, the path is
+unwritable) is retried into the binding that now holds the conversation, and on
+that conversation's later bindings while it stays unwritten, and is written once.
+The transition is serialized per conversation — read the previous binding, drain
+the stream for one macrotask turn so a frame the leaving run already committed is
+still theirs, write the new binding — so two overlapping rebindings cannot close
+one run twice or leave the last run open. `runtime.tool` is emitted under the run
+that *started* the call, not the run bound when the call finished.
+
 The token movement is measured, never invented: `pi-durable` records no counters
 for a compaction, so `tokensBefore` is the newest request's prompt tokens
 (input + cache read/write) before it started and `tokensAfter` is attached only

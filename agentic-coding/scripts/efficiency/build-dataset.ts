@@ -28,6 +28,10 @@ import {
 } from "./lib/empty-sources.ts";
 import { extractTables } from "./lib/extract.ts";
 import { buildInventory } from "./lib/inventory.ts";
+import {
+	describeUnexplainedRunWindow,
+	inspectRunWindow,
+} from "./lib/run-window.ts";
 import { datasetReadme } from "./lib/schema-readme.ts";
 import { discoverEvidence } from "./lib/sources.ts";
 
@@ -131,6 +135,24 @@ function main(argv: readonly string[]): number {
 	);
 	fs.writeFileSync(path.join(outDir, "README.md"), readme, { mode: 0o600 });
 
+	// A run whose session kept working after the run closed is either stated by
+	// the recording or a defect (efficiency backlog item 20): a tail no record
+	// states a continuation for fails the build, the way a source that parses
+	// nothing does. The gate is per *run*, not per workflow: a run's record is the
+	// one that names its own run id, so one run's move cannot hide another's lost
+	// record. A run that began before its workflow's first session-window event
+	// (or whose own window cannot be read) is reported as unrecorded and still
+	// builds; a run that began after that event with no such record fails.
+	const runWindow = inspectRunWindow(write.path);
+	if (runWindow.failures.length > 0) {
+		fs.rmSync(write.path, { force: true });
+		fs.rmSync(path.join(outDir, "README.md"), { force: true });
+		process.stderr.write(
+			describeUnexplainedRunWindow(runWindow.failures, write.path),
+		);
+		return 1;
+	}
+
 	if (inventoryPath !== undefined) {
 		const inventory = buildInventory({
 			datasetPath: write.path,
@@ -158,6 +180,26 @@ function main(argv: readonly string[]): number {
 			0,
 		),
 		notes: extraction.tables.notes.length,
+		// The run/session window split: three populations, never mixed — the runs the
+		// session record explains, the runs whose window cannot be read, and the runs
+		// no record states a continuation for (with whether one was due).
+		runWindow: {
+			drifting: runWindow.rows.length,
+			judged: {
+				runs: runWindow.judged.rows.length,
+				attributed: runWindow.judged.attributed,
+				resumed: runWindow.judged.resumed,
+			},
+			unrecorded: {
+				runs: runWindow.unrecorded.rows.length,
+				beforeRecord: runWindow.unrecorded.beforeRecord,
+				afterRecord: runWindow.unrecorded.afterRecord,
+			},
+			// Over every row, recorded or not: the query's `clock-artifact` class.
+			clockArtifact: runWindow.clockArtifact,
+			unexplained: runWindow.unexplained,
+			recordedWorkflows: runWindow.recordedWorkflows.length,
+		},
 		buildMs: Math.round(performance.now() - started),
 	};
 	process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

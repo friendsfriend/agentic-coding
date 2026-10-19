@@ -119,6 +119,12 @@ export function eventClass(event: string): EventClass {
 			return "effect";
 		case "workflow.started":
 		case "legacy.migrated":
+		// The session window (efficiency backlog item 20): the run's session was
+		// bound to a run, or left one for a later run. Recorded as lifecycle so the
+		// two events are readable by class as well as by name; `run-window-drift`
+		// reads them by name.
+		case "runtime.session_window.opened":
+		case "runtime.session_window.closed":
 			return "lifecycle";
 		default:
 			return "other";
@@ -1142,6 +1148,10 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				repair_effects: null,
 				repair_runs: null,
 				repair_count: null,
+				session_reason: null,
+				session_rebound_to: null,
+				session_previous_run_id: null,
+				session_conversation_id: null,
 				detail_hash: null,
 				detail_bytes: compaction.summaryBytes,
 				confidence: item.confidence,
@@ -1192,6 +1202,13 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 			repair_effects: event.repairEffects ?? null,
 			repair_runs: event.repairRuns ?? null,
 			repair_count: event.repairCount ?? null,
+			// The session window's own vocabulary, so a reader can pair a tail with
+			// the run that continued it (`rebound_to`) and tell a same-run resume from
+			// a restart's `adopted` rebinding (efficiency backlog item 20).
+			session_reason: event.sessionReason ?? null,
+			session_rebound_to: event.sessionReboundTo ?? null,
+			session_previous_run_id: event.sessionPreviousRunId ?? null,
+			session_conversation_id: event.sessionConversationId ?? null,
 			detail_hash: event.detail?.hash ?? null,
 			detail_bytes: event.detail?.bytes ?? null,
 			confidence: "exact",
@@ -1230,6 +1247,12 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 				compaction_blocking: null,
 				detail: detailText === null ? null : redactBounded(detailText, 160),
 				wait_kind: null,
+				// A durable store event is not a telemetry envelope: it carries none of
+				// the session window's own fields.
+				session_reason: null,
+				session_rebound_to: null,
+				session_previous_run_id: null,
+				session_conversation_id: null,
 				repair_effects: idCount(data.expiredEffects),
 				repair_runs: idCount(data.retiredRuns),
 				repair_count:

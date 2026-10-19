@@ -25,8 +25,44 @@ import {
 // backlog items 11 and 12): what a recorded repair retired, and which kind of
 // developer wait a recorded `workflow.waiting` row reports. Append-only, same
 // rule: a dataset built from an older-only snapshot carries NULL there.
-export const DATASET_SCHEMA_VERSION = 3;
+// 4: `events` gained the session window's own vocabulary (efficiency backlog item
+// 20): `session_reason`, `session_rebound_to`, `session_previous_run_id` and
+// `session_conversation_id`. Append-only within a version: a v4 dataset built
+// from an older-only snapshot carries NULL there. A *file* an older build wrote
+// has no such column at all, so reading it is refused
+// (`assertDatasetSchemaVersion`) instead of failing with a bare SQL error.
+export const DATASET_SCHEMA_VERSION = 4;
 export const DATASET_FILE = "dataset.sqlite";
+
+/** A dataset file written by a different build: its `events` table has no column
+ * this build's views read. */
+export class DatasetSchemaError extends Error {}
+
+/** Refuse a dataset file this build cannot read, naming the rebuild instead of
+ * letting a query die on `no such column`. `writeDataset` always writes the
+ * current version and deletes an existing file first, so the fix is always a
+ * rebuild, never a conversion. */
+export function assertDatasetSchemaVersion(
+	db: Database,
+	datasetPath: string,
+): void {
+	let built: number | undefined;
+	try {
+		const row = db
+			.query<{ value: string }, []>(
+				"SELECT value FROM meta WHERE key = 'datasetSchemaVersion'",
+			)
+			.get();
+		built = row === null ? undefined : Number(row.value);
+	} catch {
+		// No `meta` table at all: not a dataset this tooling wrote.
+		built = undefined;
+	}
+	if (built === DATASET_SCHEMA_VERSION) return;
+	throw new DatasetSchemaError(
+		`dataset schema ${built ?? "unknown"} at ${datasetPath}; this build reads ${DATASET_SCHEMA_VERSION} — rebuild it with scripts/efficiency/build-dataset.ts`,
+	);
+}
 
 const TABLES_DDL = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -186,6 +222,16 @@ CREATE TABLE events (
 	repair_runs INTEGER,
 	repair_count INTEGER,
 	wait_kind TEXT,
+	-- The session-window vocabulary (efficiency backlog item 20): the reason a
+	-- conversation was bound to a run (created, rebound, adopted, resumed), the
+	-- run it left and the run it moved to, and the conversation the window
+	-- belongs to. Append-only since schema 4: a v4 dataset built from an
+	-- older-only snapshot has them empty, and a dataset file an earlier build
+	-- wrote must be rebuilt (see assertDatasetSchemaVersion).
+	session_reason TEXT,
+	session_rebound_to TEXT,
+	session_previous_run_id TEXT,
+	session_conversation_id TEXT,
 	detail TEXT,
 	detail_hash TEXT,
 	detail_bytes INTEGER,
@@ -397,8 +443,8 @@ function insertAll(
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 	const eventStatement = db.prepare(
-		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, repair_effects, repair_runs, repair_count, wait_kind, detail, detail_hash, detail_bytes, confidence, preferred)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (workflow_id, run_id, run_label, source, source_rank, at, event, event_class, step_id, role, outcome, error_class, severity, count, trace_id, compaction_kind, compaction_blocking, repair_effects, repair_runs, repair_count, wait_kind, session_reason, session_rebound_to, session_previous_run_id, session_conversation_id, detail, detail_hash, detail_bytes, confidence, preferred)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	);
 
 	for (const descriptor of SOURCE_LIST)
@@ -536,6 +582,10 @@ function insertAll(
 			event.repair_runs,
 			event.repair_count,
 			event.wait_kind,
+			event.session_reason,
+			event.session_rebound_to,
+			event.session_previous_run_id,
+			event.session_conversation_id,
 			event.detail,
 			event.detail_hash,
 			event.detail_bytes,

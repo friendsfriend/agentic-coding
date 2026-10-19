@@ -85,6 +85,15 @@ request), which is what the \`compactions\` query counts per run.
 recorded in); \`wait_kind\` names the developer wait a \`workflow.waiting\` row
 opened, whose subject is the \`detail\` of the row and whose duration is the
 distance to the \`workflow.waiting.ended\` row that closes it.
+\`session_reason\`, \`session_rebound_to\`, \`session_previous_run_id\` and
+\`session_conversation_id\` carry a \`runtime.session_window\` row's own
+vocabulary (efficiency backlog item 20): the reason a conversation was bound to
+the row's run (\`created\`, \`rebound\`, \`adopted\`, \`resumed\`), the run the
+session moved to (\`session_rebound_to\`, on a \`closed\` row) and the run it
+left (\`session_previous_run_id\`, on a \`rebound\` row), and the conversation
+the window belongs to — \`session_conversation_id\` is a conversation id, not a
+run id, which is what \`run_id\` means everywhere else. A file an earlier build
+wrote has none of these columns and must be rebuilt before any query reads it.
 
 ## De-duplication precedence
 

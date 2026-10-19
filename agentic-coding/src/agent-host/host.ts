@@ -71,7 +71,9 @@ import {
 	attachTelemetry,
 	type EntryTiming,
 	emitRuntimeEnvelope,
+	emitSessionWindow,
 	emitToolTelemetry,
+	type SessionWindowReason,
 	type TelemetryIdentity,
 	type ToolOutcomeObservation,
 } from "./telemetry.ts";
@@ -244,6 +246,29 @@ interface RunRecord {
 	model?: string;
 }
 
+/** The run a conversation is currently bound to, with the identity that run
+ * records under (efficiency backlog item 20: a run's window is its session's
+ * window). One conversation serves every later run of the same step and role, so
+ * this is what makes a turn attributable to the run that was working: the
+ * telemetry stream reads it per envelope and the session-window events name it.
+ * It survives the run's retirement (`stopRun` keeps it) because the conversation
+ * is what continues — a host restart is the only thing that loses it. */
+interface SessionBinding {
+	readonly runId: string;
+	readonly identity: TelemetryIdentity;
+}
+
+/** A `runtime.session_window.closed` record that could not be written, kept for the
+ * conversation's next binding. */
+interface PendingSessionClose {
+	readonly identity: TelemetryIdentity;
+	readonly reboundTo: string;
+}
+
+/** How many unwritten closes one conversation keeps: an unwritable sink must not grow
+ * the list without bound, and a stale close is worth less than the next one. */
+const MAX_PENDING_SESSION_CLOSES = 8;
+
 /** What the host remembers about one conversation's cost-ceiling compactions
  * (efficiency backlog item 6): the measured turn, what it decided at, and the
  * turns it compacted at, which is what the floor and the loop guard count. */
@@ -317,6 +342,10 @@ export interface DurableHostOptions {
 export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
+	/** Each run's own environment, keyed by run id. A decision belongs to the run that
+	 * made it: after a rebinding `contexts` holds the successor's, so a retired run's
+	 * late decision read from there would be written under the successor's token. */
+	private readonly runContexts = new Map<string, DurableRunContext>();
 	/** The developer message each conversation's running turn is answering, in
 	 * the developer's own words: the orchestrator's `taskRef.previousMessage`
 	 * substitutes it as the task instead of re-typing prose that was already
@@ -374,6 +403,26 @@ export class DurableHost {
 	private readonly telemetryIdentities = new Map<
 		ConversationId,
 		TelemetryIdentity
+	>();
+	/** The run each conversation is bound to *now* — the session window's binding,
+	 * and the identity the conversation's telemetry stream stamps its envelopes
+	 * with. Deliberately not dropped by `stopRun`: a conversation outlives the run
+	 * it was created for, and the run it left is what a rebinding reports. Its
+	 * lifetime is the host process, shared with `telemetry`'s per-conversation
+	 * stream: both are dropped together when the host shuts down, never per run. */
+	private readonly sessionBindings = new Map<ConversationId, SessionBinding>();
+	/** The `closed` records that could not be written, per conversation, retried on
+	 * its next binding (`recordSessionWindow`). */
+	private readonly pendingSessionCloses = new Map<
+		ConversationId,
+		PendingSessionClose[]
+	>();
+	/** The session-window transition in flight per conversation. A rebinding's
+	 * read-drain-write is one step: two of them must neither interleave nor observe
+	 * each other's previous binding. */
+	private readonly sessionWindowChain = new Map<
+		ConversationId,
+		Promise<void>
 	>();
 	private server: net.Server | undefined;
 	private closing = false;
@@ -601,6 +650,9 @@ export class DurableHost {
 		const readOnly = input.toolPolicy === "read-only";
 		const debugRun = envVars.HERDR_ROLE === "debug";
 		const toolSelection = this.toolSelectionFor(input.toolPolicy, debugRun);
+		// Whether this run is the one the conversation was made for, which is what
+		// separates a `created` session window from an `adopted` one.
+		let createdConversation = false;
 		if (!conversation) {
 			conversation = await this.harness.createConversation(
 				{
@@ -622,6 +674,7 @@ export class DurableHost {
 					conversationId: conversation?.id as unknown as number,
 				};
 			}, context);
+			createdConversation = true;
 		} else if (toolSelection) {
 			await conversation.configure(
 				{ tools: toolSelection, cwd: input.cwd },
@@ -639,6 +692,7 @@ export class DurableHost {
 			...(readJevBinding(envVars) ? { jev: readJevBinding(envVars) } : {}),
 		};
 		this.contexts.set(conversation.id, runContext);
+		this.runContexts.set(input.runId, runContext);
 		const model =
 			(await this.conversationModelRef(conversation)) ?? input.model;
 		this.runs.set(input.runId, {
@@ -661,17 +715,28 @@ export class DurableHost {
 		// The ceiling's own envelopes go to the same file as the run's, including
 		// for a conversation whose telemetry stream could not be attached.
 		this.telemetryIdentities.set(conversation.id, identity);
+		// The conversation's session window: bind it to this run and state the move
+		// (efficiency backlog item 20). Pure observation — it writes no workflow
+		// state, and a failure to emit never fails the run.
+		await this.recordSessionWindow(
+			conversation.id,
+			identity,
+			createdConversation,
+		);
+		// The dead-surface monitor of this run, or none for a session the rule
+		// leaves alone (no run id, or an exempt role such as `env-setup`).
+		const monitor = toolSurfaceMonitorFor(envVars);
 		if (!this.telemetry.has(conversation.id)) {
 			const conversationId = conversation.id;
-			// The dead-surface monitor of this run, or none for a session the rule
-			// leaves alone (no run id, or an exempt role such as `env-setup`).
-			const monitor = toolSurfaceMonitorFor(envVars);
 			try {
 				const stop = await attachTelemetry(
 					this.harness,
 					conversationId,
 					context,
-					identity,
+					// The binding, not this run's identity: the stream outlives the run it
+					// was attached for, and a later run of the same step and role must
+					// record its own turns instead of the creating run's.
+					() => this.sessionBindingOf(conversationId)?.identity ?? identity,
 					{
 						onTiming: (entryId, timing) => {
 							const existing = this.timings.get(conversation.id) ?? {};
@@ -682,9 +747,17 @@ export class DurableHost {
 						},
 						// The measured context of one committed turn is also the cost
 						// ceiling's input, so one event stream serves both and the ceiling
-						// is decided between turns, never inside a tool call.
-						onMeasuredContext: ({ promptTokens, turnIndex }) =>
-							this.observeContext(input.runId, promptTokens, turnIndex),
+						// is decided between turns, never inside a tool call. The ceiling is
+						// resolved for the run the measurement was recorded under, so a run
+						// reusing a conversation is judged by its own window and profile.
+						onMeasuredContext: ({ promptTokens, turnIndex }, measured) =>
+							this.observeContext(
+								measured.runId ??
+									this.boundRunId(conversationId) ??
+									input.runId,
+								promptTokens,
+								turnIndex,
+							),
 						compactionKind: (taskId) => {
 							const pending = this.ceilingPending.get(conversation.id) ?? 0;
 							if (pending > 0) {
@@ -696,28 +769,202 @@ export class DurableHost {
 								? "auto-ceiling"
 								: undefined;
 						},
-						// The dead-surface rule observes every finished tool call of a run
-						// the rule applies to.
-						...(monitor
-							? {
-									onToolOutcome: (observation: ToolOutcomeObservation) =>
-										this.onToolOutcome(
-											input.runId,
-											conversationId,
-											observation,
-										),
-								}
-							: {}),
+						// The dead-surface rule observes every finished tool call, charged to
+						// the run that started the call: a late failure of an earlier run's
+						// call must never stop the run now bound to the conversation.
+						onToolOutcome: (observation: ToolOutcomeObservation, owner) =>
+							this.onToolOutcome(
+								owner.runId ?? this.boundRunId(conversationId) ?? input.runId,
+								conversationId,
+								observation,
+							),
 					},
 				);
 				this.telemetry.set(conversationId, stop);
-				if (monitor) this.toolSurfaces.set(conversationId, monitor);
 			} catch {
 				/* telemetry is observational only; a failed attach never fails the run */
 			}
 		}
+		// The dead-surface monitor is per conversation but belongs to the run
+		// serving it: a run that reuses an already-attached conversation still
+		// installs its own monitor (the hook installed with the stream reads it at
+		// call time), and a run the rule exempts installs none.
+		if (monitor) this.toolSurfaces.set(conversation.id, monitor);
 		this.log(`ensureRun ${input.runId} -> conversation ${conversation.id}`);
 		return { conversationId: String(conversation.id) };
+	}
+
+	/** The conversation's current run binding, or undefined for a session that
+	 * never carried a run id (an orchestrator session records no window). */
+	private sessionBindingOf(
+		conversationId: ConversationId,
+	): SessionBinding | undefined {
+		return this.sessionBindings.get(conversationId);
+	}
+
+	private boundRunId(conversationId: ConversationId): string | undefined {
+		return this.sessionBindings.get(conversationId)?.runId;
+	}
+
+	/** Whether this run still owns the conversation's own state: true while the
+	 * binding still names it (or the conversation never carried a run id), false once
+	 * a successor was bound. Every conversation-keyed delete goes through it, so the
+	 * guard cannot drift between call sites. */
+	private ownsConversation(
+		runId: string,
+		conversationId: ConversationId,
+	): boolean {
+		const bound = this.sessionBindingOf(conversationId)?.runId;
+		return bound === undefined || bound === runId;
+	}
+
+	/** Bind one conversation to the run that is about to work on it and state the
+	 * move as the session window (efficiency backlog item 20). A conversation
+	 * bound to a different run first closes that run's window (`closed`, naming
+	 * the run now bound) and then opens this one's (`opened`, reason `rebound`);
+	 * a conversation made for this run opens with `created`, one whose previous
+	 * run this host cannot name (a restart) with `adopted`, and one bound to the
+	 * same run again (an abort, then a resume) with `resumed`.
+	 *
+	 * Best-effort and observational, like every envelope: it writes no workflow
+	 * state, changes no conversation, and a failed emission leaves the run and the
+	 * workflow exactly as they would be without the record. Nothing is recorded
+	 * for a conversation with no run id in its environment.
+	 *
+	 * Two ordering rules make the record trustworthy rather than lucky:
+	 * - the stream is drained before the binding moves, because pi-durable
+	 *   publishes a commit's events synchronously and delivers them one microtask
+	 *   later: without the wait, a batch already committed under the leaving run
+	 *   would resolve the *new* identity and re-stamp that run's turns;
+	 * - a `closed` record that could not be written (an unwritable telemetry path,
+	 *   a removed workspace) is retried in the same transition, into the binding
+	 *   that now holds the conversation, and on the conversation's next binding if
+	 *   that fails too, because its absence is what a reader treats as a defect.
+	 *
+	 * The transition is serialized per conversation: reading the previous binding,
+	 * draining, writing the new one and emitting are one step, so two overlapping
+	 * rebindings can neither close the same run twice nor name a successor that
+	 * never held the conversation. */
+	private recordSessionWindow(
+		conversationId: ConversationId,
+		identity: TelemetryIdentity,
+		createdConversation: boolean,
+	): Promise<void> {
+		const prior =
+			this.sessionWindowChain.get(conversationId) ?? Promise.resolve();
+		const record = prior.then(() =>
+			this.applySessionWindow(conversationId, identity, createdConversation),
+		);
+		// The chain keeps its place even when one record fails, and is dropped once it
+		// is the last one, so a long-lived conversation does not accumulate entries.
+		const tail = record.catch(() => undefined);
+		this.sessionWindowChain.set(conversationId, tail);
+		void tail.then(() => {
+			if (this.sessionWindowChain.get(conversationId) === tail)
+				this.sessionWindowChain.delete(conversationId);
+		});
+		return tail;
+	}
+
+	/** One session-window transition: the previous binding, the drain, the new
+	 * binding and its two envelopes. Called only through
+	 * {@link recordSessionWindow}, which serializes it per conversation. */
+	private async applySessionWindow(
+		conversationId: ConversationId,
+		identity: TelemetryIdentity,
+		createdConversation: boolean,
+	): Promise<void> {
+		const runId = identity.runId;
+		if (runId === undefined) return;
+		const previous = this.sessionBindings.get(conversationId);
+		const rebinding = previous !== undefined && previous.runId !== runId;
+		if (rebinding) {
+			// One macrotask turn: every frame the leaving run already committed is
+			// delivered first (a delivery is scheduled as a microtask), so it is
+			// stamped with the identity that produced it.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		}
+		this.sessionBindings.set(conversationId, { runId, identity });
+		try {
+			if (previous !== undefined && rebinding) {
+				const written = emitSessionWindow(
+					conversationId,
+					"runtime.session_window.closed",
+					previous.identity,
+					{ "herdr.session.rebound_to": runId },
+				);
+				// A close nobody wrote is a tail nobody can explain: keep it and write it
+				// here, into the binding that now holds the conversation (the path that
+				// failed is the leaving run's, which is what made the write fail), or on
+				// the conversation's next binding if that fails too.
+				if (!written)
+					this.enqueueSessionClose(conversationId, previous.identity, runId);
+				this.flushPendingSessionCloses(conversationId, identity);
+				emitSessionWindow(
+					conversationId,
+					"runtime.session_window.opened",
+					identity,
+					{
+						"herdr.session.reason": "rebound" satisfies SessionWindowReason,
+						"herdr.session.previous_run_id": previous.runId,
+					},
+				);
+				return;
+			}
+			// A binding that closes nothing still carries the retry: a close an earlier
+			// move could not write is written into this binding's own file.
+			this.flushPendingSessionCloses(conversationId, identity);
+			const reason: SessionWindowReason =
+				previous !== undefined
+					? "resumed"
+					: createdConversation
+						? "created"
+						: "adopted";
+			emitSessionWindow(
+				conversationId,
+				"runtime.session_window.opened",
+				identity,
+				{ "herdr.session.reason": reason },
+			);
+		} catch {
+			/* the session window is an observation; it never fails the run */
+		}
+	}
+
+	/** Keep a `closed` record that could not be written, so the conversation's next
+	 * binding can write it into its own run's telemetry file. */
+	private enqueueSessionClose(
+		conversationId: ConversationId,
+		identity: TelemetryIdentity,
+		reboundTo: string,
+	): void {
+		const pending = this.pendingSessionCloses.get(conversationId) ?? [];
+		pending.push({ identity, reboundTo });
+		while (pending.length > MAX_PENDING_SESSION_CLOSES) pending.shift();
+		this.pendingSessionCloses.set(conversationId, pending);
+	}
+
+	/** Retry every close the recording still owes, into this binding's own telemetry
+	 * file — the path that failed was the leaving run's, which is what made the
+	 * write fail — and drop each one only once it landed. */
+	private flushPendingSessionCloses(
+		conversationId: ConversationId,
+		sink: TelemetryIdentity,
+	): void {
+		const pending = this.pendingSessionCloses.get(conversationId);
+		if (pending === undefined || pending.length === 0) return;
+		const kept: PendingSessionClose[] = [];
+		for (const close of pending) {
+			const written = emitSessionWindow(
+				conversationId,
+				"runtime.session_window.closed",
+				{ ...close.identity, telemetryPath: sink.telemetryPath },
+				{ "herdr.session.rebound_to": close.reboundTo },
+			);
+			if (!written) kept.push(close);
+		}
+		if (kept.length === 0) this.pendingSessionCloses.delete(conversationId);
+		else this.pendingSessionCloses.set(conversationId, kept);
 	}
 
 	/** The explicit tool list for a policy, or undefined for the full default
@@ -1170,7 +1417,7 @@ export class DurableHost {
 			// The workflow follows the session: a run parked by a developer abort is
 			// reopened before the message lands, and a run that already finished is
 			// reported instead of being reopened.
-			const reconciled = await this.reconcileRunState(runId, record);
+			const reconciled = await this.reconcileRunState(runId);
 			const conversation = await this.harness.conversation(
 				record.conversationId,
 				BACKGROUND_CONTEXT,
@@ -1297,11 +1544,12 @@ export class DurableHost {
 	 * is the developer's, and the recorded state stays for a later attempt. */
 	private async reconcileRunState(
 		runId: string,
-		record: RunRecord,
 	): Promise<ResumedRunState | undefined> {
 		if (!this.abortedRuns.has(runId) && this.reconciledRuns.has(runId))
 			return undefined;
-		const context = this.contexts.get(record.conversationId);
+		// The run's own environment, not the conversation's: a rebinding must not make
+		// this run reconcile its workflow state under another run's token.
+		const context = this.runContexts.get(runId);
 		if (!context) return undefined;
 		let state: ResumedRunState;
 		try {
@@ -1461,6 +1709,11 @@ export class DurableHost {
 		conversationId: ConversationId,
 		observation: ToolOutcomeObservation,
 	): void {
+		// Only a live run may act on its own tool outcomes: a call of a run the
+		// engine retired can finish after the conversation was rebound, and its
+		// failure must be recorded against that run — never charged to the run now
+		// bound, which would stop an unrelated run (or block the workflow for it).
+		if (!this.runs.has(runId)) return;
 		const monitor = this.toolSurfaces.get(conversationId);
 		if (!monitor) return;
 		const decision = monitor.observe(observation);
@@ -1486,7 +1739,7 @@ export class DurableHost {
 		conversationId: ConversationId,
 		decision: FailFastDecision,
 	): Promise<void> {
-		const context = this.contexts.get(conversationId);
+		const context = this.runContexts.get(runId);
 		if (!context) return;
 		const env = context.env;
 		const facts = decision.facts;
@@ -1498,6 +1751,22 @@ export class DurableHost {
 			"pi.tool.successes": facts.successes,
 			"pi.turn.count": facts.turns,
 		};
+		// The decision belongs to this run only while it still holds the conversation:
+		// aborting the shared conversation would kill the successor's turn, and the
+		// handoff would run under the successor's run token and park a workflow for a
+		// tool surface it never touched. A decision of a superseded run is recorded
+		// against that run (its own environment) and acted on by nobody.
+		if (this.boundRunId(conversationId) !== runId) {
+			emitToolTelemetry(env, "run.fail-fast", {
+				...fields,
+				probed: false,
+				"herdr.fail_fast.scope": "owner-rebound",
+			});
+			this.log(
+				`run ${runId} tool surface looks dead, but the conversation is bound to another run now: recorded and not acted on`,
+			);
+			return;
+		}
 		if (decision.action === "probe") {
 			const probe = this.options.probeToolHost ?? reprobeToolHost;
 			const probed = await probe(env).catch(() => false);
@@ -1532,16 +1801,21 @@ export class DurableHost {
 	): Promise<void> {
 		const record = this.runs.get(runId);
 		if (!record) return;
+		const context = this.runContexts.get(runId);
+		if (!context) return;
+		// Only while this run still holds the conversation, tested again inside the
+		// serialized section below: a rebinding that lands during the abort must not
+		// leave a `blocked` handoff under the successor's token.
+		if (this.boundRunId(conversationId) !== runId) return;
 		this.toolSurfaces.delete(conversationId);
 		this.toolProbes.delete(conversationId);
 		await this.serialized(record, async () => {
+			if (this.boundRunId(record.conversationId) !== runId) return;
 			const conversation = await this.harness.conversation(
 				record.conversationId,
 				BACKGROUND_CONTEXT,
 			);
 			await conversation?.abort(BACKGROUND_CONTEXT);
-			const context = this.contexts.get(record.conversationId);
-			if (!context) return;
 			try {
 				await recordFailFastRunHandoff(context, message);
 			} catch (error) {
@@ -1568,7 +1842,7 @@ export class DurableHost {
 			tracked.conversationId,
 			BACKGROUND_CONTEXT,
 		);
-		const context = this.contexts.get(tracked.conversationId);
+		const context = this.runContexts.get(runId);
 		await conversation?.abort(BACKGROUND_CONTEXT);
 		if (!recordBlocked || !context) return;
 		try {
@@ -1589,8 +1863,14 @@ export class DurableHost {
 		if (!record) return;
 		this.abortedRuns.delete(runId);
 		this.reconciledRuns.delete(runId);
-		this.toolSurfaces.delete(record.conversationId);
-		this.toolProbes.delete(record.conversationId);
+		// The dead-surface monitor and probe belong to the run serving the
+		// conversation, not to the conversation itself: a successor ensured while this
+		// teardown is in flight installed its own, and dropping them here would turn
+		// the rule off for every later run silently.
+		if (this.ownsConversation(runId, record.conversationId)) {
+			this.toolSurfaces.delete(record.conversationId);
+			this.toolProbes.delete(record.conversationId);
+		}
 		await this.serialized(record, async () => {
 			const conversation = await this.harness.conversation(
 				record.conversationId,
@@ -1598,16 +1878,29 @@ export class DurableHost {
 			);
 			await conversation?.abort(BACKGROUND_CONTEXT);
 			this.runs.delete(runId);
-			this.contexts.delete(record.conversationId);
-			// The developer's messages are keyed by conversation, and the
-			// conversation outlives the run: the next `ensureRun` re-opens the one
-			// `RunMapDoc` recorded, and a `previousMessage` start still answers with
-			// the message that session last sent.
-			this.timings.delete(record.conversationId);
-			// The ceiling's bookkeeping is per conversation and dies with it.
-			this.ceilings.delete(record.conversationId);
-			this.telemetryIdentities.delete(record.conversationId);
-			this.ceilingPending.delete(record.conversationId);
+			this.runContexts.delete(runId);
+			// The conversation-keyed state belongs to whatever is bound to it *now*: a
+			// successor run of the same step and role can be ensured while this abort
+			// is in flight, and the context, timing, ceiling state and telemetry
+			// identity it just wrote are not this run's to drop (the binding is what
+			// says whose they are).
+			if (this.ownsConversation(runId, record.conversationId)) {
+				// The developer's messages are keyed by conversation, and the
+				// conversation outlives the run: the next `ensureRun` re-opens the one
+				// `RunMapDoc` recorded, and a `previousMessage` start still answers with
+				// the message that session last sent.
+				this.contexts.delete(record.conversationId);
+				this.timings.delete(record.conversationId);
+				// The ceiling's bookkeeping is per conversation and dies with it.
+				this.ceilings.delete(record.conversationId);
+				this.telemetryIdentities.delete(record.conversationId);
+				this.ceilingPending.delete(record.conversationId);
+			}
+			// The session binding is *not* deleted: the conversation outlives the run,
+			// and a later run of the same step and role recording a rebinding has to
+			// name the run it left (efficiency backlog item 20). The telemetry stream
+			// stays attached for the same reason, so it can attribute the new run's
+			// turns to that run.
 		});
 	}
 

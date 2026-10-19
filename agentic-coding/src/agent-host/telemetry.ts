@@ -43,11 +43,16 @@ function redact(text: string): string {
 }
 const CONTENT_LIMIT = 8192;
 
-function emit(
+/** Write one runtime envelope for `identity`'s run: to that run's telemetry
+ * file, and to the OTLP receiver when the session exports there. Returns
+ * whether the envelope reached the file: the session window's `closed` record is
+ * the one envelope a reader treats as proof, so its writer has to be able to say
+ * that the append happened. */
+function emitEnvelope(
 	identity: TelemetryIdentity,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
+): boolean {
 	const envelope = {
 		schemaVersion: 1,
 		at: new Date().toISOString(),
@@ -65,6 +70,7 @@ function emit(
 		...fields,
 	};
 	const output = identity.telemetryPath;
+	let written = false;
 	// The run environment pins this path inside the run's own worktree. That
 	// worktree is removed when the workflow closes, and a session that outlives it
 	// (or an event that lands after the removal) must not recreate it: the leftover
@@ -74,6 +80,7 @@ function emit(
 		try {
 			fs.mkdirSync(path.dirname(output), { recursive: true });
 			fs.appendFileSync(output, `${JSON.stringify(envelope)}\n`);
+			written = true;
 		} catch {
 			/* observational only */
 		}
@@ -87,6 +94,7 @@ function emit(
 			signal: AbortSignal.timeout(750),
 		}).catch(() => undefined);
 	}
+	return written;
 }
 
 /** Emit one content-free runtime envelope from a tool boundary, using the
@@ -98,8 +106,8 @@ export function emitToolTelemetry(
 	env: Readonly<Record<string, string>>,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
-	emit(
+): boolean {
+	return emitEnvelope(
 		{
 			workflowId: env.HERDR_WORKFLOW_ID,
 			runId: env.HERDR_RUN_ID,
@@ -136,16 +144,27 @@ export interface TelemetryHooks {
 	/** Measured wall-clock timing of one committed assistant entry. */
 	readonly onTiming?: (entryId: string, timing: EntryTiming) => void;
 	/** The context size one committed assistant message carried, with the turn it
-	 * belongs to. The cost ceiling is decided from this measurement. */
-	readonly onMeasuredContext?: (info: {
-		readonly promptTokens: number;
-		readonly turnIndex: number;
-	}) => void;
+	 * belongs to and the identity that message was recorded under. The cost ceiling
+	 * is decided from this measurement, against the ceiling of the run named here
+	 * rather than the run that created the conversation. */
+	readonly onMeasuredContext?: (
+		info: {
+			readonly promptTokens: number;
+			readonly turnIndex: number;
+		},
+		identity: TelemetryIdentity,
+	) => void;
 	/** The kind of a compaction, for one the host admitted itself (`auto-ceiling`).
 	 * Undefined means pi-durable started it, and its own reason decides. */
 	readonly compactionKind?: (taskId: string) => CompactionKind | undefined;
-	/** One observation per finished tool call (the dead-surface rule). */
-	readonly onToolOutcome?: (observation: ToolOutcomeObservation) => void;
+	/** One observation per finished tool call (the dead-surface rule), with the
+	 * identity of the run that *started* that call: a call whose turn began under
+	 * one run stays that run's even if the conversation was rebound before the
+	 * outcome arrived, so a late failure can never be charged to a later run. */
+	readonly onToolOutcome?: (
+		observation: ToolOutcomeObservation,
+		identity: TelemetryIdentity,
+	) => void;
 }
 
 /** The task kind of pi-durable's built-in compaction task. */
@@ -191,8 +210,45 @@ export function emitRuntimeEnvelope(
 	identity: TelemetryIdentity,
 	event: string,
 	fields: Record<string, unknown> = {},
-): void {
-	emit(identity, event, fields);
+): boolean {
+	return emitEnvelope(identity, event, fields);
+}
+
+/** Why a conversation was bound to a run: `created` (the conversation was made
+ * for this run), `rebound` (an existing conversation whose previous run is
+ * known), `adopted` (an existing conversation whose previous run this host
+ * cannot name, as after a restart) or `resumed` (the same run bound again, as
+ * after an abort). */
+export type SessionWindowReason = "created" | "rebound" | "adopted" | "resumed";
+
+/** The two session-window envelopes (efficiency backlog item 20: a run's window
+ * is its session's window). The run window is the engine's — `started_at` to
+ * the run's `agent.handoff` — and keeps its meaning; these state the window of
+ * the *session* that served the run, so a turn a conversation emits after its
+ * run closed is a recorded continuation rather than an unexplained window
+ * error. Additive and observational: no workflow state, no store field, no
+ * schema change, and neither envelope closes a run or a session. */
+export type SessionWindowEvent =
+	| "runtime.session_window.opened"
+	| "runtime.session_window.closed";
+
+/** Emit one session-window envelope on the run binding it names. Both events
+ * carry the conversation id as `herdr.session.conversation_id`, never as the
+ * envelope's `sessionId`: that field means *run* id everywhere else
+ * (`src/server/telemetry-parser.ts` maps it to `herdr.session.id`), and one
+ * attribute must not carry two identifier spaces. Best-effort like every other
+ * observation here — but the return value lets the host retry a `closed` record
+ * that could not be written, which a reader treats as proof of a continuation. */
+export function emitSessionWindow(
+	conversationId: ConversationId,
+	event: SessionWindowEvent,
+	identity: TelemetryIdentity,
+	fields: Record<string, unknown> = {},
+): boolean {
+	return emitRuntimeEnvelope(identity, event, {
+		"herdr.session.conversation_id": String(conversationId),
+		...fields,
+	});
 }
 
 /** One finished tool call, as the run supervisor of a dead surface (see
@@ -213,15 +269,36 @@ export interface ToolOutcomeObservation {
  * uses (`onTiming` for the dashboard's tok/s, `onMeasuredContext` for the cost
  * ceiling, `onToolOutcome` for the dead-surface rule: one observation per
  * finished tool call, which must not throw: an observer's failure is not the
- * run's), so one event stream serves all of them. */
+ * run's), so one event stream serves all of them.
+ *
+ * `identity` is the run's identity, or a getter for the one current now: a
+ * conversation outlives the run that created it, and the host passes a getter so
+ * a later run's events are that run's (see `host.ts`'s session binding). A plain
+ * identity means "this stream belongs to one run". */
 export async function attachTelemetry(
 	harness: Harness,
 	conversationId: ConversationId,
 	context: Context,
-	identity: TelemetryIdentity,
+	identity: TelemetryIdentity | (() => TelemetryIdentity),
 	hooks: TelemetryHooks = {},
 ): Promise<() => void> {
 	const stream = await watchEvents(harness, conversationId, context);
+	// One stream can outlive the run that created it: a later run of the same
+	// step and role is served by the same conversation, so the identity is
+	// resolved at each emission and every envelope carries the run that was
+	// working when it was written — not the run that created the conversation.
+	const identityOf = (): TelemetryIdentity =>
+		typeof identity === "function" ? identity() : identity;
+	/** Emit one envelope under an explicit identity. The identity is passed in, never
+	 * resolved here: one event's envelopes and its measurements must be the same
+	 * run's, and `handle` resolves it once per event for exactly that reason. */
+	const emit = (
+		identity: TelemetryIdentity,
+		event: string,
+		fields: Record<string, unknown> = {},
+	): void => {
+		emitEnvelope(identity, event, fields);
+	};
 	let generationStart: number | undefined;
 	let thinkingStart: number | undefined;
 	let thinkingMs = 0;
@@ -234,6 +311,10 @@ export async function attachTelemetry(
 		string,
 		{ startedAt: number; turnIndex: number | undefined }
 	>();
+	// The run that started each in-flight tool call. A rebinding moves the
+	// conversation, not the call, so the outcome is charged to the run that began
+	// it (the dead-surface rule must never stop a run for another run's call).
+	const callOwners = new Map<string, TelemetryIdentity>();
 	/** `turn_start` events seen so far; -1 while the conversation has not started
 	 * a turn, so a call before the first turn records no index rather than 0. */
 	let turnIndex = -1;
@@ -260,6 +341,7 @@ export async function attachTelemetry(
 	 * when a later generation measured it; the envelope is emitted exactly once,
 	 * either when that measurement arrives or when the stream settles. */
 	const emitCompaction = (
+		identity: TelemetryIdentity,
 		taskId: string,
 		entry: TrackedCompaction,
 		tokensAfter: number | undefined,
@@ -294,23 +376,27 @@ export async function attachTelemetry(
 	 * exclamation mark of honesty: a measured flush never invents a "tokens
 	 * after" — it is attached only when the request is genuinely smaller than
 	 * the one before the compaction, which is what a placed summary does. */
-	const flushCompactions = (measured: boolean, tokensAfter?: number): void => {
+	const flushCompactions = (
+		identity: TelemetryIdentity,
+		measured: boolean,
+		tokensAfter?: number,
+	): void => {
 		for (const [taskId, entry] of [...compactions]) {
 			if (entry.emitted) continue;
 			if (entry.failedClass) {
-				emitCompaction(taskId, entry, undefined);
+				emitCompaction(identity, taskId, entry, undefined);
 				continue;
 			}
 			if (entry.endedAt === undefined) continue;
 			if (!measured) {
-				emitCompaction(taskId, entry, undefined);
+				emitCompaction(identity, taskId, entry, undefined);
 				continue;
 			}
 			const shrank =
 				tokensAfter !== undefined &&
 				entry.tokensBefore !== undefined &&
 				tokensAfter < entry.tokensBefore;
-			if (shrank) emitCompaction(taskId, entry, tokensAfter);
+			if (shrank) emitCompaction(identity, taskId, entry, tokensAfter);
 		}
 	};
 	const closeThinking = (now: number) => {
@@ -329,9 +415,16 @@ export async function attachTelemetry(
 		}
 		if (newest) newest.summaryPlaced = true;
 	};
+	// The handler is deliberately synchronous: a delivered batch is stamped with
+	// the identity current at delivery, and `host.ts`'s rebinding drain waits one
+	// macrotask turn so a frame already committed under the leaving run arrives
+	// first. An `await` inside this handler would reopen that gap.
 	const handle = (events: readonly AgentEvent[]) => {
 		for (const event of events) {
 			const now = Date.now();
+			// This event's identity, resolved once — here and nowhere else: the
+			// envelopes it produces and the measurements it reports are the same run's.
+			const current = identityOf();
 			switch (event.type) {
 				case "message_start":
 					if ((event.message as { role?: string }).role === "assistant") {
@@ -394,14 +487,17 @@ export async function attachTelemetry(
 							// its summary was placed and this request carried the reduced
 							// context, which is the only "tokens after" available (pi-durable
 							// records no counters for a compaction itself).
-							flushCompactions(true, prompt);
+							flushCompactions(current, true, prompt);
 							// The same measurement decides the cost ceiling: it is taken at the
 							// end of a committed turn, so a ceiling compaction is admitted at a
 							// turn boundary and never inside a tool call.
-							hooks.onMeasuredContext?.({ promptTokens: prompt, turnIndex });
+							hooks.onMeasuredContext?.(
+								{ promptTokens: prompt, turnIndex },
+								current,
+							);
 						}
 						if (tokens > 0 || cost > 0)
-							emit(identity, "runtime.usage", {
+							emit(current, "runtime.usage", {
 								inputTokens: usage.input,
 								outputTokens: usage.output,
 								cacheReadTokens: usage.cacheRead,
@@ -419,7 +515,7 @@ export async function attachTelemetry(
 				}
 				case "turn_start":
 					turnIndex += 1;
-					emit(identity, "runtime.turn_started");
+					emit(current, "runtime.turn_started");
 					break;
 				case "tool_execution_start": {
 					const args = toolArgsTelemetry(event.toolName, event.args);
@@ -427,7 +523,8 @@ export async function attachTelemetry(
 						startedAt: now,
 						turnIndex: turnIndex < 0 ? undefined : turnIndex,
 					});
-					emit(identity, "runtime.tool_start", {
+					callOwners.set(event.toolCallId, current);
+					emit(current, "runtime.tool_start", {
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
 						// What was asked, never the payload: the hash joins exact repeats,
@@ -436,7 +533,7 @@ export async function attachTelemetry(
 						"pi.tool.args_digest": args.digest,
 						"pi.tool.argument_bytes": args.bytes,
 						...(turnIndex >= 0 ? { "pi.turn.index": turnIndex } : {}),
-						...(identity.captureContent
+						...(current.captureContent
 							? {
 									"herdr.content.tool_input": redact(
 										JSON.stringify(event.args),
@@ -449,6 +546,9 @@ export async function attachTelemetry(
 				case "tool_execution_end": {
 					const tracked = toolCalls.get(event.toolCallId);
 					toolCalls.delete(event.toolCallId);
+					// The run that began this call, not the run bound when it ended.
+					const owner = callOwners.get(event.toolCallId) ?? current;
+					callOwners.delete(event.toolCallId);
 					const result = toolResultTelemetry(event.entry);
 					// A result entry that never survived is a host error (the tool task
 					// faulted or was orphaned); a surviving one states its own error flag,
@@ -460,7 +560,9 @@ export async function attachTelemetry(
 					const turn =
 						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
 					const errorLine = isError ? toolFailureLine(event.entry) : undefined;
-					emit(identity, "runtime.tool", {
+					// The envelope of the call, under the run that began it — the same identity
+					// the outcome below is reported with.
+					emit(owner, "runtime.tool", {
 						outcome: isError ? "error" : "ok",
 						"pi.tool.name": event.toolName,
 						"pi.tool.call_id": event.toolCallId,
@@ -485,13 +587,16 @@ export async function attachTelemetry(
 						// An observer is the run's supervisor, not its runtime: a throw here
 						// would break the event stream it is watching, so it is swallowed.
 						try {
-							hooks.onToolOutcome({
-								tool: event.toolName,
-								ok: !isError,
-								...(failureKind ? { kind: failureKind } : {}),
-								...(turn !== undefined ? { turn } : {}),
-								...(errorLine ? { errorLine } : {}),
-							});
+							hooks.onToolOutcome(
+								{
+									tool: event.toolName,
+									ok: !isError,
+									...(failureKind ? { kind: failureKind } : {}),
+									...(turn !== undefined ? { turn } : {}),
+									...(errorLine ? { errorLine } : {}),
+								},
+								owner,
+							);
 						} catch {
 							/* observation is best-effort */
 						}
@@ -503,7 +608,7 @@ export async function attachTelemetry(
 					// measurable per run — the peak context and the number of compactions
 					// by kind — so "automatic compactions > 0, peak context < 200k" can be
 					// answered from telemetry alone.
-					emit(identity, "runtime.settled", {
+					emit(current, "runtime.settled", {
 						...(peakContextTokens > 0 ? { peakContextTokens } : {}),
 						...(turnIndex >= 0 ? { turns: turnIndex + 1 } : {}),
 						compactionsAutoCeiling: compactionKinds["auto-ceiling"],
@@ -513,7 +618,11 @@ export async function attachTelemetry(
 					// The run settled: a compaction that never got a measured follow-up
 					// generation still reports what is known (its reason, duration and
 					// before-tokens) instead of being dropped.
-					flushCompactions(false);
+					flushCompactions(current, false);
+					// No call of the settled run is still in flight, so its owner entries are
+					// dropped here rather than kept for the life of the stream (an aborted
+					// conversation never delivers the ends that would prune them).
+					callOwners.clear();
 					break;
 				case "entry_appended":
 					// A `pi.compaction` entry is the placed summary: the receipt that
@@ -538,7 +647,7 @@ export async function attachTelemetry(
 							? { tokensBefore: lastPromptTokens }
 							: {}),
 					});
-					emit(identity, "runtime.compaction_start", {
+					emit(current, "runtime.compaction_start", {
 						reason: event.reason,
 						kind,
 						blocking: event.blocking,
@@ -560,7 +669,7 @@ export async function attachTelemetry(
 					break;
 				}
 				case "task_failed": {
-					emit(identity, "runtime.task_failed", {
+					emit(current, "runtime.task_failed", {
 						"pi.error.class": redact(event.message).slice(0, 160),
 					});
 					if (event.kind === COMPACTION_TASK_KIND) {
@@ -574,7 +683,7 @@ export async function attachTelemetry(
 						};
 						entry.failedClass = redact(event.message).slice(0, 160);
 						compactions.set(taskId, entry);
-						emitCompaction(taskId, entry, undefined);
+						emitCompaction(current, taskId, entry, undefined);
 					}
 					break;
 				}
@@ -586,8 +695,9 @@ export async function attachTelemetry(
 	stream.start(async (events) => handle(events));
 	return () => {
 		// Whatever compaction is still pending when the stream stops is reported
-		// with what is known, so telemetry never silently loses one.
-		flushCompactions(false);
+		// with what is known, so telemetry never silently loses one. The stream is
+		// being detached, so it is the binding's current identity that reports it.
+		flushCompactions(identityOf(), false);
 		void stream.stop();
 	};
 }
