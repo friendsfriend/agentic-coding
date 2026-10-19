@@ -47,10 +47,11 @@ to hand an agent the scope the engine already knows.
   and repeats the batching rule (independent calls in one message, not one call
   per turn). The `read`, `grep`, `bash` and `codemode` descriptions carry the
   same rule where the agent selects a tool.
-- **Measured, budgeted prompt growth.** The fixed net addition is 399 B per
-  assignment (the tool block) plus 491 B in the planning brief and 327 B in each
-  wiki brief; forwarded lists are bounded (40 plan paths, 100 changed files,
-  4 KiB of prior-finding text). Per-role numbers are recorded in `design.md`.
+- **Measured, budgeted prompt growth.** The fixed net addition is 396 B per
+  assignment (the tool block), 661 B in the planning brief, and 413 B / 438 B in
+  the two wiki briefs (measured against the committed briefs); forwarded lists
+  are bounded (40 plan paths, 100 changed files, 4 KiB of prior-finding text).
+  Per-role numbers are recorded in `design.md`.
 - **No new state.** No snapshot schema change (`STORE_SCHEMA_VERSION` stays 6),
   no new effect, step, edge, transition, migration or compatibility shim, no
   migration path; the forwarded data is read from state the engine already holds
@@ -99,5 +100,5 @@ None.
 - Focused tests for the exact brief text, the exact assignment lines and their
   absence, the bounded forwarding, the descriptions per registration, and the
   new query; plus the existing prompt/assignment assertions updated deliberately.
-- Runtime cost: the assignment renders up to 399 B + forwarded lists more per
+- Runtime cost: the assignment renders up to 396 B + forwarded lists more per
   run; no measurable engine cost.
