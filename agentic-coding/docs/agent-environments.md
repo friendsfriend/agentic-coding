@@ -476,16 +476,19 @@ a production-like name is refused by the catalog, and only the operator's own
   port stays bound after a login. The authorization code, the verifier and every
   token stay in the server: they are added to the redaction set while the login
   runs (the code and `state` stay registered after the login ends, so a replay
-  of the callback URL is scrubbed too; the set keeps the newest 64 values of
-  each name and a login adds one of each, so only the very oldest pair ever
-  falls out of it), the callback page reflects no
+  of the callback URL is scrubbed too; the set keeps the newest 64 values in
+  all, and a finished login leaves two of them — its `state` and the code its
+  receiver took — so roughly the 32 most recent logins stay covered and the
+  oldest value falls out, one per new value, to make room), the callback page
+  reflects no
   parameter, and a `state` mismatch, a provider `error` or a refused exchange
   ends the login as `login-failed` with a value-free message. `stage_login_wait`
   answers `ok` (`via: "token"`, `verified: true`) **only** after the exchange
   succeeded and the token is in the store — an exchange whose write a
   credential rewrite discarded during the round trip is not an `ok`; a *Done*
   that never completed is
-  `login-handoff-unverified`, a deadline is `login-handoff-timeout`, a closed
+  `login-handoff-unverified` (the ending of a recipe a page can finish, which
+  this grant never offers), a deadline is `login-handoff-timeout`, a closed
   window or an abort is `login-handoff-aborted`, and a sign-in the provider
   refuses is `login-handoff-unverified` or `login-failed`, never `ok`. This
   grant offers no *Done* to choose — neither in the window's banner nor in the
@@ -510,10 +513,16 @@ a production-like name is refused by the catalog, and only the operator's own
   registration decision rather than an engine fallback: the hand-off then ends
   at its deadline or by an abort. A policy of `interactiveLogin: "never"`
   refuses the login outright (`login-user-unavailable`, `loginMode:
-  "unavailable"`) instead of opening a window, and so does a role whose client
-  id — or client secret, when the provider declares one — is not set in the
-  `.env` (`credential-missing` naming that variable, `loginMode:
-  "unavailable"`).
+  "unavailable"`) instead of opening a window, and that answer wins over the
+  missing-variable one, which belongs to a stage that could hand off: under
+  `never` naming a variable whose setting still could not open a window would
+  send the developer to a dead end. Under `local`, a code role whose client id
+  — or client secret, when the provider declares one — is not set in the `.env`
+  answers `credential-missing` naming that variable (`loginMode:
+  "unavailable"`), and a provider that declares no client id reference at all
+  never reaches a login: its stage file is refused at load with a diagnostic
+  naming `oauth2.providers.<name>.clientId`, because no `.env` value could fill
+  it.
 - **A token login still needs the session it runs on.** `stage_login` is a
   browser-layer action on an open, stage-bound session: an *unattended* token
   login opens no page, window or prompt, but it — and the `authorization_code`

@@ -1494,6 +1494,34 @@ test("the browser's hand-off adapter raises, reads and resolves the record throu
 		expect(
 			engine.getSnapshot(repo, run.workflowId).developerDialogue,
 		).toHaveLength(1);
+
+		// A hand-off whose ending is the server's own arrives with `canConfirm: false`,
+		// and this hop is what turns it into *Abort* alone: dropping it here would put
+		// the *Done* that can only close the receiver back in front of the developer
+		// (USAB-207, TQ-010).
+		const completionDriven = "handoff-adapter-completion";
+		await attention.open({
+			owner,
+			recordId: completionDriven,
+			description: "Sign in to Grid integration as user",
+			context: "stage grid-int, app api, role user",
+			expiresAt: new Date("2026-01-01T00:15:00.000Z").toISOString(),
+			canConfirm: false,
+		});
+		const completionRecord = engine
+			.getSnapshot(repo, run.workflowId)
+			.developerDialogue.find((item) => item.id === completionDriven);
+		expect(completionRecord?.kind).toBe("login-handoff");
+		expect(completionRecord?.options.map((option) => option.value)).toEqual([
+			"abort",
+		]);
+		expect(completionRecord?.options[0]?.label).toBe("Abort");
+		// The record opened without the field keeps both answers, which is what makes
+		// the assertion above about the flag and not about the record kind.
+		expect(opened?.options.map((option) => option.value)).toEqual([
+			"done",
+			"abort",
+		]);
 		// A workflow this server does not host is honestly dialog-less rather than
 		// a failure: a session can outlive the run that opened it.
 		await expect(

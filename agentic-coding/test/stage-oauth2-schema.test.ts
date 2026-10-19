@@ -19,6 +19,7 @@ import path from "node:path";
 import {
 	readStageCatalog,
 	resolveStageOAuthCredential,
+	StageCredentialError,
 	stageByIdent,
 	stageCredentialVariables,
 	stageView,
@@ -410,6 +411,54 @@ describe("what the catalog refuses", () => {
 		expect(reported).toContain("refresh_token");
 		expect(reported).toContain("authorization_code");
 		expect(reported).not.toContain("password");
+	});
+
+	test("a provider that declares no client id never loads, so no login can meet that state", () => {
+		const configDir = writeStage({
+			oauth2: {
+				providers: {
+					idp: {
+						tokenEndpoint: "https://login.example.test/oauth2/token",
+						clientSecret: "${STAGE_GRID_INT_CLIENT_SECRET}",
+					},
+				},
+			},
+		});
+		const catalog = readStageCatalog(configDir);
+		// No `.env` value can fill a reference the stage file never declares, so this is
+		// a load-time refusal with the field named — not a login-time refusal telling
+		// the operator to set a variable that does not exist (USAB-208).
+		expect(catalog.entries).toEqual([]);
+		expect(catalog.excluded[0]?.file).toBe("grid-int.json");
+		const reported = errors(configDir).join("\n");
+		expect(reported).toContain("oauth2.providers.idp.clientId");
+		expect(reported).toContain("is missing");
+		// Value-free: the diagnostic names the field, never what a variable holds.
+		expect(reported).not.toContain(CLIENT_SECRET_VALUE);
+	});
+
+	test("a credential field the stage file never declares names that field, not a variable", () => {
+		const configDir = writeStage();
+		const entry = stageByIdent(readStageCatalog(configDir), "grid-int");
+		if (!entry) throw new Error("the fixture stage is not allow-listed");
+		let failure: unknown;
+		try {
+			resolveStageOAuthCredential(
+				entry.stage,
+				"elsewhere",
+				"clientId",
+				configDir,
+			);
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeInstanceOf(StageCredentialError);
+		const message = (failure as Error).message;
+		// The remedy for an undeclared field is the stage file, not Settings → Stages:
+		// no `.env` write could ever make this reference resolve (USAB-208).
+		expect(message).toContain("oauth2.providers.elsewhere.clientId");
+		expect(message).toContain("not declared in the stage file");
+		expect(message).not.toContain("Settings → Stages");
 	});
 
 	test("a refresh_token grant without a refresh token reference is refused", () => {

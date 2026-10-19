@@ -62,6 +62,7 @@ import {
 	stageCredentialVariables,
 	stageRefusalReason,
 	stageView,
+	undeclaredCredentialMessage,
 } from "../stages/catalog.ts";
 import { type StageRefusal, sanitizeStageUrl } from "../stages/guard.ts";
 import {
@@ -1136,20 +1137,29 @@ async function stageLogin(
 			if (mode !== "handoff") {
 				// `credentialStatus` is the first unset variable among the role's own
 				// credential views — for this grant the provider's client id and, when it
-				// declares one, its client secret — so the refusal names the variable that
-				// is actually missing instead of assuming it is the client id (USAB-206).
+				// declares one, its client secret — so the refusal names the credential that
+				// is actually missing instead of assuming it is the client id (USAB-206). A
+				// provider cannot declare no client id at all — the stage file is refused at
+				// load with that field named — so the fallback only has to keep this refusal
+				// and the deeper one saying the same thing, rather than promise a `.env`
+				// remedy for a missing declaration (USAB-208).
 				const missing = roleView.credentialStatus.startsWith("missing ")
 					? roleView.credentialStatus.slice("missing ".length)
 					: undefined;
+				const provider = roleView.provider ?? "<provider>";
+				const remedy =
+					missing === undefined
+						? undeclaredCredentialMessage(
+								`oauth2.providers.${provider}.clientId`,
+							)
+						: credentialMissingMessage(missing);
 				throw new BrowserSessionError(
 					entry.interactiveLogin === "never"
 						? "login-user-unavailable"
 						: "credential-missing",
 					entry.interactiveLogin === "never"
 						? `${body.app}.${body.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`
-						: missing === undefined
-							? `${body.app}.${body.role} signs in with the authorization_code grant, and none of its credential references can be resolved; stage_info names the variable to set`
-							: credentialMissingMessage(missing),
+						: remedy,
 					409,
 				);
 			}

@@ -14,7 +14,7 @@
 5. When the effective mode is `never`:
    - a missing variable SHALL answer `credential-missing` naming the variable;
    - a role with status `none` or an `interactive` recipe SHALL answer `login-user-unavailable`;
-   - an `authorization_code` role SHALL answer `login-user-unavailable`;
+   - an `authorization_code` role SHALL answer `login-user-unavailable`, even when one of the references it needs is unset: naming a variable whose setting still could not open a window would send the developer to a dead end;
    - an MFA step SHALL answer `login-mfa-required`.
    No window SHALL open.
 
@@ -61,6 +61,11 @@ An `http-basic` role SHALL NOT hand off. The browser's own authentication dialog
 
 - **WHEN** the provider declares a client id that is set and a client secret that is not, and `stage_login` is called for that role
 - **THEN** the result SHALL be `credential-missing` naming the client secret's variable, and no window SHALL open
+
+#### Scenario: A provider that declares no client id never reaches a login
+
+- **WHEN** a stage file's provider declares no client id reference at all
+- **THEN** the stage SHALL be refused at load with a value-free diagnostic naming `oauth2.providers.<name>.clientId`, so no role of it is reachable and `stage_login` never has to name a variable that does not exist
 
 ### Requirement: Hand-off outcome contract
 

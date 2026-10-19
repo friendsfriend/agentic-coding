@@ -591,12 +591,16 @@ export class StageTokenStore {
 
 	/** Whether a failed acquisition is the provider *refusing* the credential it was
 	 * given. Only a refusal discards a rotated refresh token; a transport failure, a
-	 * server error or an answer this process refused to parse does not
-	 * (QUALITY-005). */
+	 * server error, an answer this process refused to parse, or a reference this
+	 * process could not resolve before the request left does not (QUALITY-005,
+	 * OAS-201). */
 	private refused(error: unknown): boolean {
-		if (!(error instanceof StageAuthError)) return true;
+		if (!(error instanceof StageAuthError)) return false;
 		const code = error.providerCode;
-		if (code === undefined) return true;
+		// A credential this process could not resolve never reached the endpoint, so
+		// the refresh token it would have spent stays usable until the variable is
+		// restored.
+		if (code === undefined) return error.code !== "credential-missing";
 		// A 4xx is the provider's verdict on the request; a 429 is a rate limit and a
 		// 5xx is its own trouble, so neither is.
 		if (/^http_4\d\d$/.test(code)) return code !== "http_429";
@@ -1082,10 +1086,12 @@ export const LOOPBACK_HOST = "127.0.0.1";
 /** The one path the receiver answers, and the redirect URI's path. */
 export const LOOPBACK_CALLBACK_PATH = "/callback";
 
-/** How many PKCE values the redaction set remembers. A login in flight owns two
- * (the verifier and `state`); the code a receiver took stays behind after its
- * flow ended, one-shot and short-lived, so the cap is what keeps a long-lived
- * server from growing the list with the history of every login. */
+/** How many PKCE values the redaction set remembers. It is one list with one
+ * total cap: a login in flight owns two of its entries (the verifier and
+ * `state`), and a login that ends leaves two behind — its `state` and the code
+ * its receiver took — so the cap covers roughly the last 32 logins and then
+ * drops the oldest values, one per value added. That bound is what keeps a
+ * long-lived server from growing the list with the history of every login. */
 const PKCE_SECRET_CAP = 64;
 
 /** The PKCE values of the logins this process ran, oldest first. */
@@ -1472,11 +1478,11 @@ export async function beginAuthorizationCodeLogin(
 	const key = roleTokenKey(input);
 	const verifier = createCodeVerifier();
 	const state = createAuthorizationState();
-	// `state` is kept for the process, like the authorization code: a hand-off that
-	// ends without bringing the window back to the application leaves it standing on
-	// the provider's authorization URL, which carries `state=` and the challenge,
-	// and every later `browser_snapshot` of that page would otherwise report it
-	// (OAS-002).
+	// `state` outlives the flow, like the authorization code: a hand-off that ends
+	// without bringing the window back to the application leaves it standing on the
+	// provider's authorization URL, which carries `state=` and the challenge, and
+	// every later `browser_snapshot` of that page would otherwise report it
+	// (OAS-002). The redaction set is bounded, not eternal: see `PKCE_SECRET_CAP`.
 	rememberPkceSecret({ name: "stage-oauth2-state", value: state });
 	// The receiver comes first, and the verifier joins the redaction set only when
 	// there is a login that owns it. A bind that fails therefore leaves nothing

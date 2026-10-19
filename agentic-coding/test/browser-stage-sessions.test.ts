@@ -3132,12 +3132,17 @@ describe("the authorization code hand-off", () => {
 			expect(second.value.login).toBe("needs-user");
 			let secondState = firstState;
 			for (let attempt = 0; attempt < 400; attempt += 1) {
-				secondState = stateOf(session);
+				// Read the URL before parsing it: a fresh login starts with the window still
+				// on the application, which carries no `state` at all (TQ-012).
+				const standing = new URL(session.url).searchParams.get("state");
 				if (
 					session.url.includes("oauth2/authorize") &&
-					secondState !== firstState
-				)
+					standing !== null &&
+					standing !== firstState
+				) {
+					secondState = standing;
 					break;
+				}
 				await Bun.sleep(5);
 			}
 			expect(secondState).not.toBe(firstState);

@@ -86,6 +86,19 @@ function tokenAnswer(accessToken = ACCESS_TOKEN): Response {
 	});
 }
 
+/** One body of `text` streamed in `size`-byte chunks and with no
+ * `content-length`, so the reader is what bounds it (`TQ-011`). */
+function streamedBody(text: string, size: number): ReadableStream<Uint8Array> {
+	const bytes = new TextEncoder().encode(text);
+	return new ReadableStream({
+		start(controller) {
+			for (let at = 0; at < bytes.byteLength; at += size)
+				controller.enqueue(bytes.subarray(at, at + size));
+			controller.close();
+		},
+	});
+}
+
 /** The `.env` and the stage file of one stage whose role signs in with the code
  * grant, pointing at the fake token endpoint. */
 function seeded(options: {
@@ -648,23 +661,20 @@ describe("the login a flow runs", () => {
 		}
 	});
 
-	test("a streamed answer that passes the cap is cut, and the login fails without a token", async () => {
-		const chunk = new Uint8Array(40_000).fill(120);
+	test("a streamed answer above the cap is cut, and a token it carried is not stored", async () => {
+		// A *valid* token answer that only the cap disqualifies: an unbounded read would
+		// parse it and sign the login in, so this is the assertion that fails when the
+		// reader branch (`total > cap`, the subarray, the cancel) is removed (TQ-011).
+		const oversized = JSON.stringify({
+			access_token: ACCESS_TOKEN,
+			expires_in: 3_600,
+			pad: "x".repeat(120_000),
+		});
 		const fake = provider(
 			() =>
-				new Response(
-					new ReadableStream({
-						start(controller) {
-							// Three 40 KB chunks and no content-length: the reader is what bounds
-							// this one.
-							controller.enqueue(chunk);
-							controller.enqueue(chunk);
-							controller.enqueue(chunk);
-							controller.close();
-						},
-					}),
-					{ headers: { "content-type": "application/json" } },
-				),
+				new Response(streamedBody(oversized, 40_000), {
+					headers: { "content-type": "application/json" },
+				}),
 		);
 		const store = new StageTokenStore();
 		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
@@ -678,7 +688,40 @@ describe("the login a flow runs", () => {
 			expect(settled.state).toBe("failed");
 			if (settled.state !== "failed") throw new Error("the flow succeeded");
 			expect(settled.error).toBeInstanceOf(StageAuthError);
+			expect((settled.error as StageAuthError).providerCode).toBe("http_200");
 			expect(store.peek(roleTokenKey(fake.roleInput))).toBeUndefined();
+			expect(fake.calls).toHaveLength(1);
+		} finally {
+			flow.close();
+		}
+	});
+
+	test("a streamed answer under the cap is read in full and signs the login in", async () => {
+		// The other side of the same boundary: streaming is not what fails a login, the
+		// cap is (TQ-011).
+		const streamed = JSON.stringify({
+			access_token: ACCESS_TOKEN,
+			expires_in: 3_600,
+			pad: "x".repeat(60_000),
+		});
+		const fake = provider(
+			() =>
+				new Response(streamedBody(streamed, 40_000), {
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const store = new StageTokenStore();
+		const flow = await beginAuthorizationCodeLogin(fake.roleInput, store, {
+			fetch: fakeEndpointFetch(fake.endpoint),
+		});
+		try {
+			const state = stateOf(flow);
+			await callBack(flow.redirectOrigin, { code: AUTHORIZATION_CODE, state });
+			await settle(flow.poll);
+			expect(flow.poll().state).toBe("ok");
+			expect(store.peek(roleTokenKey(fake.roleInput))?.accessToken).toBe(
+				ACCESS_TOKEN,
+			);
 		} finally {
 			flow.close();
 		}

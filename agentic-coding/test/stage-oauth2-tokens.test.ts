@@ -678,6 +678,62 @@ describe("the store", () => {
 		expect(idp.calls[1]?.form.get("refresh_token")).toBe(ROTATED_REFRESH_TOKEN);
 	});
 
+	test("an unresolvable reference keeps the refresh token too: nothing reached the provider", async () => {
+		const idp = provider(() =>
+			tokenAnswer({
+				access_token: "renewed-by-refresh",
+				expires_in: 3_600,
+				refresh_token: ROTATED_REFRESH_TOKEN,
+			}),
+		);
+		const { configDir } = seeded({
+			endpoint: idp.endpoint,
+			grant: "authorization_code",
+			authorizationEndpoint: true,
+		});
+		const { roleInput } = roleOf(configDir);
+		const key = roleTokenKey(roleInput);
+		const store = new StageTokenStore({ failureTtlMs: 0 });
+		await store.token(
+			key,
+			async () => ({
+				accessToken: "signed-in-access-token",
+				expiresAt: Date.now() - 1,
+				scopes: [],
+				provider: "idp",
+				refreshToken: ROTATED_REFRESH_TOKEN,
+			}),
+			{ exclusive: true },
+		);
+
+		// A hand-edited `.env` loses one of the role's references. No Settings write
+		// ran, so no `forget()` did: the entry is still the rotated token's, and the
+		// renewal stops before a request is made.
+		const envPath = path.join(configDir, ".env");
+		const written = fs.readFileSync(envPath, "utf8");
+		fs.writeFileSync(
+			envPath,
+			written
+				.split("\n")
+				.filter((line) => !line.startsWith("STAGE_GRID_INT_CLIENT_SECRET="))
+				.join("\n"),
+		);
+		const refused = (await roleToken(roleInput, store).catch(
+			(error: unknown) => error,
+		)) as StageAuthError;
+		expect(refused.code).toBe("credential-missing");
+		expect(idp.calls).toHaveLength(0);
+
+		// Restoring the variable costs one request, not a second sign-in: the value
+		// the failed renewal would have spent is still the store's (OAS-201).
+		fs.writeFileSync(envPath, written);
+		const renewed = await roleToken(roleInput, store);
+		expect(renewed.accessToken).toBe("renewed-by-refresh");
+		expect(idp.calls).toHaveLength(1);
+		expect(idp.calls[0]?.form.get("grant_type")).toBe("refresh_token");
+		expect(idp.calls[0]?.form.get("refresh_token")).toBe(ROTATED_REFRESH_TOKEN);
+	});
+
 	test("a provider refusal does spend it: the rejected refresh token is dropped", async () => {
 		const idp = provider(
 			() =>

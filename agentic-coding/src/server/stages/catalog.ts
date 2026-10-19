@@ -1051,11 +1051,21 @@ export function credentialMissingMessage(variable: string): string {
 	return `${variable} is not set in the configuration .env; set it in Settings → Stages before this login`;
 }
 
+/** A credential field the stage file does not declare at all: no `.env` value can
+ * fill it, so the remedy names the stage-file field rather than a variable that
+ * does not exist (USAB-208). */
+export function undeclaredCredentialMessage(path: string): string {
+	return `${path} is not declared in the stage file, so the configuration .env cannot fill it; add the field there before this login`;
+}
+
 /** A credential reference that cannot be resolved right now. It names the
  * variable and never a value. */
 export class StageCredentialError extends Error {
-	constructor(readonly variable: string) {
-		super(credentialMissingMessage(variable));
+	constructor(
+		readonly variable: string,
+		message?: string,
+	) {
+		super(message ?? credentialMissingMessage(variable));
 		this.name = "StageCredentialError";
 	}
 }
@@ -1079,7 +1089,10 @@ export function resolveStageCredential(
 	if (!role) throw new StageCredentialError(`${appKey}.${roleName}.${field}`);
 	const reference = role[field];
 	if (reference === undefined)
-		throw new StageCredentialError(`${appKey}.${roleName}.${field}`);
+		throw new StageCredentialError(
+			`${appKey}.${roleName}.${field}`,
+			undeclaredCredentialMessage(`${appKey}.${roleName}.${field}`),
+		);
 	return resolveReference(
 		reference,
 		`${appKey}.${roleName}.${field}`,
@@ -1102,7 +1115,10 @@ export function resolveStageOAuthCredential(
 ): string {
 	const reference = stage.oauth2?.providers?.[providerName]?.[field];
 	if (reference === undefined)
-		throw new StageCredentialError(`oauth2.providers.${providerName}.${field}`);
+		throw new StageCredentialError(
+			`oauth2.providers.${providerName}.${field}`,
+			undeclaredCredentialMessage(`oauth2.providers.${providerName}.${field}`),
+		);
 	return resolveReference(
 		reference,
 		`oauth2.providers.${providerName}.${field}`,
