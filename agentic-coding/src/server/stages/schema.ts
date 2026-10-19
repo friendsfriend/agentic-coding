@@ -45,7 +45,7 @@ export const stageAppKindSchema = Schema.Literal(
 	"probe",
 );
 
-/** The credential values one role may reference, in section order. */
+/** The credential values a *login form* may type, in section order. */
 export const STAGE_CREDENTIAL_FIELDS = [
 	"username",
 	"password",
@@ -54,6 +54,53 @@ export const STAGE_CREDENTIAL_FIELDS = [
 export const stageCredentialFieldSchema = Schema.Literal(
 	...STAGE_CREDENTIAL_FIELDS,
 );
+
+/** The credential values one role may reference: the login form's three, plus
+ * the OAuth 2.0 refresh token an unattended `refresh_token` role exchanges for
+ * access tokens (`add-stage-oauth2-auth`). A refresh token is never typed into a
+ * page, so it is not a login field. */
+export const STAGE_ROLE_CREDENTIAL_FIELDS = [
+	...STAGE_CREDENTIAL_FIELDS,
+	"refreshToken",
+] as const;
+export const stageRoleCredentialFieldSchema = Schema.Literal(
+	...STAGE_ROLE_CREDENTIAL_FIELDS,
+);
+
+/** The OAuth 2.0 grants a stage role may declare. The implicit and password
+ * grants are deliberately absent: both are refused by the schema, so a stage
+ * file that declares one is excluded with a value-free diagnostic. */
+export const STAGE_OAUTH2_GRANTS = [
+	"client_credentials",
+	"refresh_token",
+	"authorization_code",
+] as const;
+export const stageOAuth2GrantSchema = Schema.Literal(...STAGE_OAUTH2_GRANTS);
+
+/** How a confidential client authenticates at the token endpoint: HTTP basic
+ * (the default) or the client id and secret in the form body. */
+export const stageOAuth2ClientAuthSchema = Schema.Literal("basic", "body");
+
+/** One named OAuth 2.0 provider of a stage. Every credential is a whole
+ * `${VARIABLE}` reference, exactly as a role's are; `catalog.ts` refuses a
+ * literal without quoting it. */
+export const stageOAuth2ProviderSchema = Schema.Struct({
+	tokenEndpoint: Schema.String,
+	authorizationEndpoint: Schema.optional(Schema.String),
+	clientId: Schema.String,
+	clientSecret: Schema.optional(Schema.String),
+	scope: Schema.optional(Schema.Array(Schema.String)),
+	audience: Schema.optional(Schema.String),
+	clientAuth: Schema.optional(stageOAuth2ClientAuthSchema),
+});
+
+/** The OAuth 2.0 providers a stage declares, by name. */
+export const stageOAuth2Schema = Schema.Struct({
+	providers: Schema.Record({
+		key: Schema.String,
+		value: stageOAuth2ProviderSchema,
+	}),
+});
 
 /** Where a login step finds one element: an accessible label, a role plus its
  * accessible name, or a raw selector. At least one is required, and the catalog
@@ -118,13 +165,35 @@ export const stageLoginRecipeSchema = Schema.Struct({
 export const stageInteractiveLoginSchema = Schema.Literal("local", "never");
 
 /** One role of one staged application. `login` names a recipe of the stage's
- * own `logins` table; a role with no credential reference needs none. */
+ * own `logins` table, or the reserved recipe kind `oauth2` — a login this server
+ * performs against a declared provider instead of typing into a page. A role
+ * with no credential reference needs none. */
 export const stageRoleSchema = Schema.Struct({
 	login: Schema.optional(Schema.String),
 	username: Schema.optional(Schema.String),
 	password: Schema.optional(Schema.String),
 	totp: Schema.optional(Schema.String),
+	/** The `oauth2` recipe's own fields: which provider, which grant, and the
+	 * origins a browser request gets the role's bearer token on. */
+	provider: Schema.optional(Schema.String),
+	grant: Schema.optional(stageOAuth2GrantSchema),
+	bearerOrigins: Schema.optional(Schema.Array(Schema.String)),
+	/** The refresh token a `refresh_token` grant exchanges for access tokens. */
+	refreshToken: Schema.optional(Schema.String),
 });
+
+/**
+ * Whether a role selects the `oauth2` recipe.
+ *
+ * The new fields decide, never the bare name: `oauth2` stays a legal name for a
+ * recipe of a stage's own `logins` table, which existing stage files declare
+ * (MIG-001). A role that carries `provider` or `grant` is an OAuth 2.0 role, and
+ * such a role has to say `login: "oauth2"` — the two directions are checked by
+ * `validateOAuth2Role`.
+ */
+export function isOAuth2Role(role: StageRole): boolean {
+	return role.provider !== undefined || role.grant !== undefined;
+}
 
 /** A declared version probe: a path on the application's own origin and the
  * dotted field of its JSON answer that carries the version. */
@@ -230,6 +299,8 @@ export const stageDefinitionSchema = Schema.Struct({
 	logins: Schema.optional(
 		Schema.Record({ key: Schema.String, value: stageLoginRecipeSchema }),
 	),
+	/** The named OAuth 2.0 providers a role's `oauth2` recipe selects from. */
+	oauth2: Schema.optional(stageOAuth2Schema),
 	allowedOrigins: Schema.optional(Schema.Array(Schema.String)),
 	readOnlyExceptions: Schema.optional(
 		Schema.Array(stageReadOnlyExceptionSchema),
@@ -264,8 +335,17 @@ export type StageLimits = typeof stageLimitsSchema.Type;
 export type StageReadOnlyException = typeof stageReadOnlyExceptionSchema.Type;
 /** The declared version probe of one staged application. */
 export type StageVersionProbe = typeof stageVersionProbeSchema.Type;
-/** The credential fields a role may reference. */
+/** The credential fields a login form may type. */
 export type StageCredentialField = typeof stageCredentialFieldSchema.Type;
+/** The credential fields a role may reference. */
+export type StageRoleCredentialField =
+	typeof stageRoleCredentialFieldSchema.Type;
+/** One OAuth 2.0 grant a role may declare. */
+export type StageOAuth2Grant = typeof stageOAuth2GrantSchema.Type;
+/** One named OAuth 2.0 provider of a stage. */
+export type StageOAuth2Provider = typeof stageOAuth2ProviderSchema.Type;
+/** How a client authenticates at the token endpoint. */
+export type StageOAuth2ClientAuth = typeof stageOAuth2ClientAuthSchema.Type;
 
 /** The global policy file: the operator's deny list and the ceilings no stage
  * may exceed. Both optional; absent means "no denial, documented defaults". */

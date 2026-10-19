@@ -45,7 +45,11 @@ import {
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
-import { stageCredentialRequestSchema } from "../contracts/stages.ts";
+import {
+	stageApiRequestSchema,
+	stageCredentialRequestSchema,
+	stageTokenInfoRequestSchema,
+} from "../contracts/stages.ts";
 import {
 	telemetryPruneRequestSchema,
 	telemetryScanRequestSchema,
@@ -104,6 +108,13 @@ export const AGENT_BROWSER_LOGIN_WAIT_PATH = `${AGENT_BROWSER_PREFIX}login-wait`
  * version probes resolved. It rides the owner capability because a run may only
  * be told about the allow-listed stages it is allowed to drive. */
 export const AGENT_STAGES_PATH = `${AGENT_ENVIRONMENT_PREFIX}stages`;
+
+/** `add-stage-oauth2-auth`: one authenticated request to a stage's API, sent by
+ * the server with the role's token (`stage_api_request`), and the four
+ * presentation fields of that token (`stage_token_info`). Both ride the owner
+ * capability: the token exists only for the run that holds the stage. */
+export const AGENT_STAGE_API_REQUEST_PATH = `${AGENT_ENVIRONMENT_PREFIX}stage-api-request`;
+export const AGENT_STAGE_TOKEN_INFO_PATH = `${AGENT_ENVIRONMENT_PREFIX}stage-token-info`;
 
 /** The instance-authenticated stage surface the dashboard and Settings read: the
  * catalog with credential *status*, and the protected credential flow that
@@ -729,6 +740,16 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: STAGES_CREDENTIAL_PATH,
 		schemaId: "server.stages.credential",
 		schema: stageCredentialRequestSchema,
+	},
+	{
+		path: AGENT_STAGE_API_REQUEST_PATH,
+		schemaId: "server.agent-env.stage-api-request",
+		schema: stageApiRequestSchema,
+	},
+	{
+		path: AGENT_STAGE_TOKEN_INFO_PATH,
+		schemaId: "server.agent-env.stage-token-info",
+		schema: stageTokenInfoRequestSchema,
 	},
 	{
 		path: BROWSER_INSTALL_CANCEL_PATH,

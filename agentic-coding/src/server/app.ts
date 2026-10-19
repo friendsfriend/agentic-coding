@@ -94,7 +94,9 @@ import {
 	SERVER_API_VERSION,
 } from "./protocol.ts";
 import { EnvironmentInstanceError } from "./runtime/instances.ts";
+import { stageBearerToken } from "./stages/api-request.ts";
 import { StageUsageRegistry } from "./stages/limits.ts";
+import { stageTokenStore } from "./stages/oauth2.ts";
 import {
 	handleStageCredentialRoute,
 	handleStageRoute,
@@ -284,6 +286,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// A hand-off raises its developer dialogue through the workflow engine,
 			// so the two halves are wired here, once per server process.
 			workflowLoginHandoffAttention(),
+			// The bearer token a stage-bound session adds to the origins its role
+			// declared (`add-stage-oauth2-auth`, task 3.3). Resolved through the same
+			// catalog and token store as `stage_api_request`, so one login serves both.
+			(binding, scope) => stageBearerToken(stageDeps(), binding, scope),
 		);
 
 	/** One server-owned file watcher per repository, registered on first use
@@ -368,6 +374,12 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 	const stageDeps = (): StageRouteDeps => ({
 		configDir: options.configDir ?? "",
 		...(options.environment?.manager ? { appIdents: () => appIdents() } : {}),
+		// One token store and one rolling minute for the whole process
+		// (`add-stage-oauth2-auth`): the token a `stage_login` acquired is the one
+		// `stage_api_request` and the browser bearer header use, and a browser call
+		// spends the same rate as an API call.
+		tokens: stageTokenStore(),
+		usage: stageUsage,
 	});
 
 	/** The app idents a stage may link, read from the same configuration root. */

@@ -54,10 +54,30 @@ export const MAX_GUARD_EVENTS = 20;
  * a login flow could otherwise inflate without bound. */
 export const MAX_CREDENTIAL_FILLS = 32;
 
+/** One origin a stage-bound session's requests are authenticated for
+ * (`add-stage-oauth2-auth`, task 3.3). The origin is matched exactly: a bearer
+ * token belongs to the application it was issued for and to nothing else. */
+export interface StageBearerScope {
+	readonly origin: string;
+	/** The application key, for the error a failed acquisition reports. */
+	readonly app: string;
+	readonly role: string;
+}
+
 /** The bounds and origin rules a stage-bound session carries
  * (`add-stage-testing-foundation`): the guard policy itself, so the pool, the
  * session and the login path all read one object. */
-export type StageSessionBinding = StageSessionPolicy;
+export type StageSessionBinding = StageSessionPolicy & {
+	/** The origins this session's requests get the role's bearer token on. Empty
+	 * or absent is the common case: a stage that declares none keeps the
+	 * foundation's behaviour exactly. */
+	readonly bearer?: readonly StageBearerScope[];
+	/** The origins a request may be *issued from* and still receive a bearer
+	 * token: the stage's own origins (`add-stage-oauth2-auth`, SEC-002). A
+	 * foreign-origin subframe inside a stage session never gets one, however
+	 * allow-listed its target is. */
+	readonly initiators?: readonly string[];
+};
 
 /** The selector that covers every password field of a stage screenshot. */
 export const PASSWORD_MASK: DriverLocator = {
@@ -77,6 +97,11 @@ export interface NetworkEntry {
 	readonly method: string;
 	readonly url: string;
 	readonly resourceType: string;
+	/** Whether the request carried an `Authorization` header. The *value* is not
+	 * part of any entry: the renderers show `authorization: «redacted»` from this
+	 * boolean, which is how `browser_network` reports a credential without ever
+	 * holding one (`add-stage-oauth2-auth`, task 2.3). */
+	readonly hasAuthorization?: boolean;
 	status: number | null;
 	ok: boolean | null;
 	error?: string;
@@ -476,6 +501,9 @@ export class BrowserSession {
 				method: event.method,
 				url: event.url,
 				resourceType: event.resourceType,
+				...(event.hasAuthorization === undefined
+					? {}
+					: { hasAuthorization: event.hasAuthorization }),
 				status: null,
 				ok: null,
 				at: new Date(this.clock()).toISOString(),

@@ -17,6 +17,7 @@ import {
 import { BrowserInstaller } from "./install.ts";
 import { createPlaywrightDriver } from "./playwright-driver.ts";
 import { BrowserPool } from "./pool.ts";
+import type { StageBearerScope, StageSessionBinding } from "./session.ts";
 import type { BrowserDriver } from "./types.ts";
 
 export interface BrowserRuntime {
@@ -50,6 +51,15 @@ export interface BrowserRuntimeOptions {
 	 * still ends, but only through success, the deadline, a closed window or an
 	 * agent abort — there is no *Done* to read. */
 	readonly attention?: LoginHandoffAttention;
+	/** The bearer token of one origin of one stage-bound session
+	 * (`add-stage-oauth2-auth`, task 3.3). The composition supplies it, because
+	 * only it knows the catalog and the token store; without it a stage that
+	 * declares `bearerOrigins` still opens, and its requests are simply not
+	 * authenticated. */
+	readonly bearerToken?: (
+		binding: StageSessionBinding,
+		scope: StageBearerScope,
+	) => Promise<string | undefined>;
 }
 
 export function createBrowserRuntime(
@@ -71,6 +81,9 @@ export function createBrowserRuntime(
 		idleTtlMs: () => settings().idleTtlMs,
 		...(options.now === undefined ? {} : { now: options.now }),
 		...(options.log === undefined ? {} : { log: options.log }),
+		...(options.bearerToken === undefined
+			? {}
+			: { bearerToken: options.bearerToken }),
 		// A session leaving the pool (run end, the idle sweep, a crash) is the end
 		// of the hand-off that held it. The coordinator does not exist yet at this
 		// point, so the callback reads it through the binding below.
@@ -100,6 +113,10 @@ const runtimes = new Map<string, BrowserRuntime>();
 export function browserRuntime(
 	configDir: string,
 	attention?: LoginHandoffAttention,
+	bearerToken?: (
+		binding: StageSessionBinding,
+		scope: StageBearerScope,
+	) => Promise<string | undefined>,
 ): BrowserRuntime {
 	const existing = runtimes.get(configDir);
 	if (existing) {
@@ -107,11 +124,19 @@ export function browserRuntime(
 		// operations surfaces do that) still has to read *Done* once one exists, so
 		// the adapter is attached to the singleton rather than to its first caller.
 		if (attention) existing.handoff.attachAttention(attention);
+		// The same for the bearer-token source: whichever surface constructed the
+		// runtime first must not decide whether a stage's requests are
+		// authenticated (CONC-004).
+		if (bearerToken) existing.pool.setBearerToken(bearerToken);
 		return existing;
 	}
+	// The token source belongs to the runtime's pool from here on: one pool per
+	// configuration root is one set of contexts, and a later caller replaces the
+	// source through `setBearerToken` rather than adding a second one.
 	const created = createBrowserRuntime({
 		configDir,
 		...(attention === undefined ? {} : { attention }),
+		...(bearerToken === undefined ? {} : { bearerToken }),
 	});
 	runtimes.set(configDir, created);
 	return created;

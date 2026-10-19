@@ -28,17 +28,21 @@ import {
 import {
 	decodeStageDefinition,
 	decodeStagePolicy,
+	isOAuth2Role,
 	STAGE_CREDENTIAL_FIELDS,
 	STAGE_IDENT_PATTERN,
+	STAGE_ROLE_CREDENTIAL_FIELDS,
 	type StageApp,
-	type StageCredentialField,
 	type StageDefinition,
 	type StageLimits,
 	type StageLocator,
 	type StageLoginRecipe,
 	type StageLoginRecipeKind,
+	type StageOAuth2Grant,
+	type StageOAuth2Provider,
 	type StagePolicy,
 	type StageRole,
+	type StageRoleCredentialField,
 } from "./schema.ts";
 
 /** The bounds a stage resolves to when it declares none: the documented
@@ -76,6 +80,11 @@ export type InteractiveLoginMode = "local" | "never";
  * configuration forbids the window). */
 export type StageLoginMode = "automated" | "handoff" | "unavailable";
 
+/** The login kinds a read surface reports: a declared recipe of the stage's
+ * `logins` table, or the reserved `oauth2` recipe (`add-stage-oauth2-auth`),
+ * which is performed against a declared provider and types nothing into a page. */
+export type StageLoginKind = StageLoginRecipeKind | "oauth2";
+
 /** The effective interactive-login mode of one stage. The policy decides, the
  * stage may narrow to `never`, and a stage that asks for `local` under a
  * `never` policy does not widen it (the widening is reported as a warning). */
@@ -91,7 +100,10 @@ export function effectiveInteractiveLogin(
  * configuration that forbids a window is `unavailable` rather than a hand-off
  * that could never happen. */
 export function roleLoginMode(input: {
-	readonly recipeKind?: StageLoginRecipeKind;
+	readonly recipeKind?: StageLoginKind;
+	/** The grant of an `oauth2` role, which decides whether the login needs a
+	 * person at all. */
+	readonly grant?: StageOAuth2Grant;
 	readonly credentialStatus: string;
 	readonly interactiveLogin: InteractiveLoginMode;
 }): StageLoginMode {
@@ -101,6 +113,18 @@ export function roleLoginMode(input: {
 	if (input.recipeKind === undefined) return "automated";
 	if (input.recipeKind === "interactive")
 		return mayOpenWindow ? "handoff" : "unavailable";
+	if (input.recipeKind === "oauth2") {
+		// The authorization code grant is a person's sign-in, and this build cannot
+		// perform it yet: reporting `handoff` would send a run into a hand-off that
+		// is refused, so the honest answer is `unavailable` (USAB-003) — the value
+		// the contract reserves for "needs a person, and this build cannot".
+		if (input.grant === "authorization_code") return "unavailable";
+		// The two unattended grants need no person at all; a missing reference is
+		// a `.env` gap no window could fill, so it is `unavailable` too.
+		return input.grant === undefined || input.credentialStatus !== "set"
+			? "unavailable"
+			: "automated";
+	}
 	if (input.credentialStatus === "set") return "automated";
 	// A `http-basic` login cannot be handed off: the browser's own authentication
 	// dialog does not appear in a window this server launched (spike 0.2), so the
@@ -489,6 +513,9 @@ function validateStage(
 		);
 	for (const [name, recipe] of Object.entries(stage.logins ?? {}))
 		validateRecipe(recipe, `logins.${name}`, stage, fail);
+	validateReservedRecipeName(stage, file, diagnostics);
+	validateRefreshTokenSharing(stage, fail);
+	validateOAuth2Providers(stage, policy, fail);
 	// A stage may narrow the operator's policy and never widen it. The stage is
 	// still allow-listed (nothing about it is unsafe to *read*), so the ignored
 	// widening is a warning that names the file and the field.
@@ -523,7 +550,15 @@ function validateRole(
 	const fail = (sub: string, message: string) => {
 		diagnostics.push({ file, field: `${field}${sub}`, kind: "error", message });
 	};
-	for (const name of STAGE_CREDENTIAL_FIELDS) {
+	const warn = (sub: string, message: string) => {
+		diagnostics.push({
+			file,
+			field: `${field}${sub}`,
+			kind: "warning",
+			message,
+		});
+	};
+	for (const name of STAGE_ROLE_CREDENTIAL_FIELDS) {
 		const value = role[name];
 		if (value === undefined) continue;
 		if (!isEnvReference(value))
@@ -533,6 +568,21 @@ function validateRole(
 				"must be exactly one ${VARIABLE} reference resolved from the configuration .env",
 			);
 	}
+	if (isOAuth2Role(role)) {
+		validateOAuth2Role(stage, role, fail, warn);
+		return;
+	}
+	// A recipe of the stage's own `logins` table is what a role without the new
+	// fields selects, even when that recipe is named `oauth2` (MIG-001).
+	// The `oauth2` recipe's fields mean nothing on any other role: a stage that
+	// declares them there has a typo or an unfinished edit, and a leftover
+	// `bearerOrigins` would install a token on a role that never obtains one.
+	for (const sub of [".provider", ".grant", ".bearerOrigins", ".refreshToken"])
+		if (Object.hasOwn(role, sub.slice(1)))
+			fail(
+				sub,
+				`belongs to the oauth2 recipe; add "login": "oauth2" to this role or remove it`,
+			);
 	if (role.login === undefined) return;
 	const recipe = stage.logins?.[role.login];
 	if (!recipe) {
@@ -552,6 +602,201 @@ function validateRole(
 			".login",
 			`uses a TOTP field of ${JSON.stringify(role.login)} but the role declares no totp reference`,
 		);
+}
+
+/**
+ * The `oauth2` recipe of one role (`add-stage-oauth2-auth`, task 1.1).
+ *
+ * Every refusal is value-free: it names the field and, at most, the provider or
+ * the grant that failed, never a reference's value.
+ */
+function validateOAuth2Role(
+	stage: StageDefinition,
+	role: StageRole,
+	fail: (sub: string, message: string) => void,
+	warn: (sub: string, message: string) => void,
+): void {
+	if (role.login !== "oauth2")
+		fail(
+			".login",
+			'is required: a role that declares `provider` or `grant` selects the oauth2 recipe with "login": "oauth2"',
+		);
+	for (const name of STAGE_CREDENTIAL_FIELDS)
+		if (role[name] !== undefined)
+			warn(
+				`.${name}`,
+				"is ignored: the oauth2 recipe types nothing into a page",
+			);
+	const providerName = role.provider;
+	if (providerName === undefined || providerName.trim() === "") {
+		fail(".provider", "names no oauth2 provider of this stage");
+		return;
+	}
+	const provider = stage.oauth2?.providers?.[providerName];
+	if (!provider) {
+		fail(
+			".provider",
+			`names the oauth2 provider ${JSON.stringify(providerName)}, which the stage does not declare`,
+		);
+		return;
+	}
+	const grant = role.grant;
+	if (grant === undefined) {
+		fail(".grant", "names no oauth2 grant");
+		return;
+	}
+	// A confidential client is what the two unattended grants speak as; the
+	// authorization code grant may be a public client, whose secret is optional.
+	if (grant !== "authorization_code" && provider.clientSecret === undefined)
+		fail(
+			".provider",
+			`selects ${JSON.stringify(providerName)}, which declares no clientSecret; the ${grant} grant needs one`,
+		);
+	if (grant === "refresh_token" && role.refreshToken === undefined)
+		fail(
+			".refreshToken",
+			"must reference the refresh token a refresh_token grant exchanges for access tokens",
+		);
+	if (grant !== "refresh_token" && role.refreshToken !== undefined)
+		fail(
+			".refreshToken",
+			`is declared, but only the refresh_token grant uses one (this role's grant is ${grant})`,
+		);
+	if (
+		grant === "authorization_code" &&
+		provider.authorizationEndpoint === undefined
+	)
+		fail(
+			".provider",
+			`selects ${JSON.stringify(providerName)}, which declares no authorizationEndpoint; the authorization_code grant needs one`,
+		);
+	const appOrigins = stageAppOrigins(stage);
+	for (const [index, origin] of (role.bearerOrigins ?? []).entries()) {
+		const parsed = originOf(origin);
+		if (parsed === undefined || origin !== parsed) {
+			fail(
+				`.bearerOrigins[${index}]`,
+				"must be one origin, written exactly as `https://host[:port]`",
+			);
+			continue;
+		}
+		if (!appOrigins.includes(parsed))
+			fail(
+				`.bearerOrigins[${index}]`,
+				`is not the origin of one of this stage's applications (${appOrigins.join(", ") || "none declared"})`,
+			);
+	}
+}
+
+/**
+ * The stage's OAuth 2.0 providers (`add-stage-oauth2-auth`, task 1.1).
+ *
+ * A provider is a host this server sends a credential to, so it gets the
+ * foundation's URL rules *and* the allow-list: an endpoint whose origin the
+ * stage never declared is refused, because nothing else would keep a token
+ * request on the stage's own origins. The client id and secret are references
+ * and nothing else — a literal that failed the check is never quoted.
+ */
+function validateOAuth2Providers(
+	stage: StageDefinition,
+	policy: StagePolicy,
+	fail: (field: string, message: string) => void,
+): void {
+	const origins = stageOrigins(stage);
+	for (const [name, provider] of Object.entries(
+		stage.oauth2?.providers ?? {},
+	)) {
+		const field = `oauth2.providers.${name}`;
+		for (const [key, value] of [
+			["tokenEndpoint", provider.tokenEndpoint],
+			["authorizationEndpoint", provider.authorizationEndpoint],
+		] as const) {
+			if (value === undefined) continue;
+			validateUrl(
+				value,
+				stage,
+				policy,
+				(message) => fail(`${field}.${key}`, message),
+				{ requireHttps: true },
+			);
+			const origin = originOf(value);
+			if (origin !== undefined && !origins.includes(origin))
+				fail(
+					`${field}.${key}`,
+					"is not in the stage's allow-list (add its origin to allowedOrigins)",
+				);
+		}
+		for (const key of ["clientId", "clientSecret"] as const) {
+			const reference = provider[key];
+			if (reference === undefined) continue;
+			if (!isEnvReference(reference))
+				fail(
+					`${field}.${key}`,
+					// biome-ignore lint/suspicious/noTemplateCurlyInString: the diagnostic must show the reference syntax a stage file writes
+					"must be exactly one ${VARIABLE} reference resolved from the configuration .env",
+				);
+		}
+		for (const [index, scope] of (provider.scope ?? []).entries())
+			if (scope.trim() === "")
+				fail(`${field}.scope[${index}]`, "must not be empty");
+		if (provider.audience !== undefined && provider.audience.trim() === "")
+			fail(`${field}.audience`, "must not be empty when declared");
+	}
+}
+
+/**
+ * The reserved recipe name (`add-stage-oauth2-auth`).
+ *
+ * `oauth2` names the built-in token login; a stage that declares a recipe of its
+ * own under that name keeps working (a role without `provider`/`grant` selects
+ * it), but the operator is told why the name is a trap for the next reader.
+ */
+function validateReservedRecipeName(
+	stage: StageDefinition,
+	file: string,
+	diagnostics: StageDiagnostic[],
+): void {
+	if (!Object.hasOwn(stage.logins ?? {}, "oauth2")) return;
+	diagnostics.push({
+		file,
+		field: "logins.oauth2",
+		kind: "warning",
+		message:
+			'is the reserved name of the OAuth 2.0 login: a role that declares `provider` or `grant` selects that built-in recipe and ignores this one. Rename it, e.g. "oauth2-form"',
+	});
+}
+
+/**
+ * Two roles of one stage may not exchange the same refresh token.
+ *
+ * A provider that rotates a refresh token invalidates the one it handed out
+ * before, and this store keeps the rotated value per role. Two roles that name
+ * the same `${VAR}` would therefore desynchronize as soon as either renews: the
+ * second role presents a value the provider has already retired and can never
+ * recover without a credential rewrite (CONC-003). The diagnostic names the
+ * roles and never the reference's value.
+ */
+function validateRefreshTokenSharing(
+	stage: StageDefinition,
+	fail: (field: string, message: string) => void,
+): void {
+	const holders = new Map<string, string[]>();
+	for (const [appKey, app] of Object.entries(stage.apps))
+		for (const [roleName, role] of Object.entries(app.roles ?? {})) {
+			const reference = role.refreshToken;
+			if (reference === undefined) continue;
+			const roles = holders.get(reference) ?? [];
+			roles.push(`${appKey}.${roleName}`);
+			holders.set(reference, roles);
+		}
+	for (const roles of holders.values()) {
+		if (roles.length < 2) continue;
+		for (const role of roles)
+			fail(
+				`apps.${role}.refreshToken`,
+				`is the same refresh token as ${roles.filter((other) => other !== role).join(", ")}: a provider that rotates the token it issued invalidates the other role's copy, so every role needs its own reference`,
+			);
+	}
 }
 
 function validateRecipe(
@@ -610,12 +855,16 @@ function locatorNamesSomething(locator: StageLocator): boolean {
 }
 
 /** One application URL or declared origin: `https`, allow-listed host, not a
- * denied host. */
+ * denied host. `requireHttps` is what the OAuth 2.0 provider endpoints use: a
+ * token endpoint carries the client secret and the refresh token, so the
+ * stage-wide `insecureHttp` flag (which exists for a local *application* URL)
+ * never exempts it (SEC-003). */
 function validateUrl(
 	value: string,
 	stage: StageDefinition,
 	policy: StagePolicy,
 	fail: (message: string) => void,
+	options: { readonly requireHttps?: boolean } = {},
 ): void {
 	let url: URL;
 	try {
@@ -632,6 +881,12 @@ function validateUrl(
 		return;
 	}
 	if (url.protocol !== "https:" && !isLoopback(url.hostname)) {
+		if (options.requireHttps === true) {
+			fail(
+				"must use https: a token endpoint carries the client secret and the refresh token, which insecureHttp never allows here",
+			);
+			return;
+		}
 		if (stage.insecureHttp !== true)
 			fail(
 				"must use https unless the host is a loopback address or the stage sets insecureHttp",
@@ -753,12 +1008,21 @@ function effectiveCeiling(
  * declared `allowedOrigins`. */
 export function stageOrigins(stage: StageDefinition): string[] {
 	const origins = new Set<string>();
-	for (const app of Object.values(stage.apps)) {
-		const origin = originOf(app.url);
-		if (origin) origins.add(origin);
-	}
+	for (const origin of stageAppOrigins(stage)) origins.add(origin);
 	for (const declared of stage.allowedOrigins ?? []) {
 		const origin = originOf(declared);
+		if (origin) origins.add(origin);
+	}
+	return [...origins];
+}
+
+/** The origins of the stage's own applications, and nothing else: this is the
+ * set a `bearerOrigins` entry has to name, because a bearer token belongs to a
+ * page of a staged application and to nowhere else. */
+export function stageAppOrigins(stage: StageDefinition): string[] {
+	const origins = new Set<string>();
+	for (const app of Object.values(stage.apps)) {
+		const origin = originOf(app.url);
 		if (origin) origins.add(origin);
 	}
 	return [...origins];
@@ -799,7 +1063,7 @@ export function resolveStageCredential(
 	stage: StageDefinition,
 	appKey: string,
 	roleName: string,
-	field: StageCredentialField,
+	field: StageRoleCredentialField,
 	configDir: string,
 ): string {
 	const role = stage.apps[appKey]?.roles?.[roleName];
@@ -807,7 +1071,42 @@ export function resolveStageCredential(
 	const reference = role[field];
 	if (reference === undefined)
 		throw new StageCredentialError(`${appKey}.${roleName}.${field}`);
-	const name = envReferenceName(reference) ?? `${appKey}.${roleName}.${field}`;
+	return resolveReference(
+		reference,
+		`${appKey}.${roleName}.${field}`,
+		configDir,
+	);
+}
+
+/**
+ * Resolve one OAuth 2.0 provider credential reference to its value
+ * (`add-stage-oauth2-auth`): the client id, the client secret or the refresh
+ * token of a role's provider. Like every other resolver it answers the value and
+ * is imported by the token path alone, and a missing reference names the
+ * variable, never a value.
+ */
+export function resolveStageOAuthCredential(
+	stage: StageDefinition,
+	providerName: string,
+	field: "clientId" | "clientSecret",
+	configDir: string,
+): string {
+	const reference = stage.oauth2?.providers?.[providerName]?.[field];
+	if (reference === undefined)
+		throw new StageCredentialError(`oauth2.providers.${providerName}.${field}`);
+	return resolveReference(
+		reference,
+		`oauth2.providers.${providerName}.${field}`,
+		configDir,
+	);
+}
+
+function resolveReference(
+	reference: string,
+	fallbackName: string,
+	configDir: string,
+): string {
+	const name = envReferenceName(reference) ?? fallbackName;
 	// An empty root can never resolve a credential: `path.join("", ".env")` is the
 	// working directory's `.env`, which is not a configuration root.
 	if (configDir.trim() === "") throw new StageCredentialError(name);
@@ -822,32 +1121,63 @@ export function credentialVariable(
 	stage: StageDefinition,
 	appKey: string,
 	roleName: string,
-	field: StageCredentialField,
+	field: StageRoleCredentialField,
 ): string | undefined {
 	const role = stage.apps[appKey]?.roles?.[roleName];
 	const reference = role?.[field];
 	return reference === undefined ? undefined : envReferenceName(reference);
 }
 
+/** One credential field a stage file may reference: the login form's three, a
+ * role's refresh token, or a provider's client id and client secret
+ * (`add-stage-oauth2-auth`). */
+export type StageCredentialReference =
+	| StageRoleCredentialField
+	| "clientId"
+	| "clientSecret";
+
 /** Every credential variable an allow-listed stage references, for the Settings
- * credential flow: only a referenced key may be written from a stage section. */
+ * credential flow: only a referenced key may be written from a stage section.
+ * That includes an OAuth 2.0 provider's client id and secret and a role's
+ * refresh token: they are `.env` values like any other, and this flow is the
+ * protected path that writes one. */
 export function stageCredentialVariables(catalog: StageCatalog): Map<
 	string,
 	{
 		readonly stage: string;
 		readonly app: string;
 		readonly role: string;
-		readonly field: StageCredentialField;
+		readonly field: StageCredentialReference;
 	}
 > {
 	const variables = new Map<
 		string,
-		{ stage: string; app: string; role: string; field: StageCredentialField }
+		{
+			stage: string;
+			app: string;
+			role: string;
+			field: StageCredentialReference;
+		}
 	>();
 	for (const entry of catalog.entries) {
+		for (const [providerName, provider] of Object.entries(
+			entry.stage.oauth2?.providers ?? {},
+		))
+			for (const field of ["clientId", "clientSecret"] as const) {
+				const reference = provider[field];
+				if (reference === undefined) continue;
+				const name = envReferenceName(reference);
+				if (!name) continue;
+				variables.set(name, {
+					stage: entry.ident,
+					app: providerName,
+					role: "oauth2",
+					field,
+				});
+			}
 		for (const app of Object.values(entry.stage.apps)) {
 			for (const [roleName, role] of Object.entries(app.roles ?? {})) {
-				for (const field of STAGE_CREDENTIAL_FIELDS) {
+				for (const field of STAGE_ROLE_CREDENTIAL_FIELDS) {
 					const reference = role[field];
 					if (reference === undefined) continue;
 					const name = envReferenceName(reference);
@@ -870,7 +1200,7 @@ export function stageCredentialVariables(catalog: StageCatalog): Map<
 // ---------------------------------------------------------------------------
 
 export interface StageCredentialView {
-	readonly field: StageCredentialField;
+	readonly field: StageCredentialReference;
 	/** The `.env` variable this field references. Reported with *every* status, so
 	 * a value that is already set can still be replaced: the key that would be
 	 * written is the key the row has to name. */
@@ -882,11 +1212,28 @@ export interface StageCredentialView {
 export interface StageRoleView {
 	readonly role: string;
 	readonly login?: string;
-	readonly loginKind?: StageLoginRecipeKind;
+	readonly loginKind?: StageLoginKind;
+	/** The `oauth2` provider and grant this role selects. */
+	readonly provider?: string;
+	readonly grant?: StageOAuth2Grant;
+	/** The origins this role's bearer token is added on. */
+	readonly bearerOrigins?: readonly string[];
 	/** `set`, `none` (the role references no credential at all) or
 	 * `missing <VAR>`. */
 	readonly credentialStatus: string;
 	readonly loginMode: StageLoginMode;
+	readonly credentials: readonly StageCredentialView[];
+}
+
+/** One OAuth 2.0 provider as a read surface reports it: endpoints, scopes and
+ * the *status* of its credential references. Never a value. */
+export interface StageOAuth2ProviderView {
+	readonly name: string;
+	readonly tokenEndpoint: string;
+	readonly authorizationEndpoint?: string;
+	readonly audience?: string;
+	readonly scope: readonly string[];
+	readonly clientAuth: StageOAuth2Provider["clientAuth"];
 	readonly credentials: readonly StageCredentialView[];
 }
 
@@ -925,6 +1272,8 @@ export interface StageView {
 	};
 	readonly limits: EffectiveStageLimits;
 	readonly wiki: { readonly processes: readonly string[] };
+	/** The stage's OAuth 2.0 providers (`add-stage-oauth2-auth`). */
+	readonly oauth2: { readonly providers: readonly StageOAuth2ProviderView[] };
 	readonly diagnostics: readonly StageDiagnostic[];
 }
 
@@ -941,19 +1290,45 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 			...(app.api === undefined ? {} : { api: app.api }),
 			...(app.app === undefined ? {} : { app: app.app }),
 			roles: Object.entries(app.roles ?? {}).map(([role, value]) => {
+				// `oauth2` is the reserved recipe a role selects with the fields this
+				// change added (`add-stage-oauth2-auth`): it types nothing into a page and
+				// obtains its token from a declared provider. The fields decide, not the
+				// name, so a stage that declares a recipe called `oauth2` keeps it
+				// (MIG-001).
+				const oauth2 = isOAuth2Role(value);
 				const recipe =
-					value.login === undefined
+					value.login === undefined || oauth2
 						? undefined
 						: entry.stage.logins?.[value.login];
-				const credentials = roleCredentialViews(value, env);
+				// An `oauth2` role's credentials are the *provider's* client id and
+				// secret plus its own refresh token: that is the set a developer can
+				// fix, and the set whose presence decides whether the login can be
+				// automated at all. A form field the recipe would ignore is not part
+				// of it (it is warned about instead).
+				const credentials = oauth2
+					? oauth2CredentialViews(
+							value,
+							entry.stage.oauth2?.providers?.[value.provider ?? ""],
+							env,
+						)
+					: roleCredentialViews(value, env);
 				const credentialStatus = roleCredentialStatus(credentials);
+				const loginKind: StageLoginKind | undefined = oauth2
+					? "oauth2"
+					: recipe?.kind;
 				return {
 					role,
 					...(value.login === undefined ? {} : { login: value.login }),
-					...(recipe ? { loginKind: recipe.kind } : {}),
+					...(loginKind === undefined ? {} : { loginKind }),
+					...(value.provider === undefined ? {} : { provider: value.provider }),
+					...(value.grant === undefined ? {} : { grant: value.grant }),
+					...(value.bearerOrigins === undefined
+						? {}
+						: { bearerOrigins: [...value.bearerOrigins] }),
 					credentialStatus,
 					loginMode: roleLoginMode({
-						...(recipe === undefined ? {} : { recipeKind: recipe.kind }),
+						...(loginKind === undefined ? {} : { recipeKind: loginKind }),
+						...(value.grant === undefined ? {} : { grant: value.grant }),
 						credentialStatus,
 						interactiveLogin: entry.interactiveLogin,
 					}),
@@ -995,6 +1370,23 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 		},
 		limits: entry.limits,
 		wiki: { processes: entry.stage.wiki?.processes ?? [] },
+		oauth2: {
+			providers: Object.entries(entry.stage.oauth2?.providers ?? {}).map(
+				([name, provider]) => ({
+					name,
+					tokenEndpoint: provider.tokenEndpoint,
+					...(provider.authorizationEndpoint === undefined
+						? {}
+						: { authorizationEndpoint: provider.authorizationEndpoint }),
+					...(provider.audience === undefined
+						? {}
+						: { audience: provider.audience }),
+					scope: [...(provider.scope ?? [])],
+					clientAuth: provider.clientAuth ?? "basic",
+					credentials: providerCredentialViews(provider, env),
+				}),
+			),
+		},
 		diagnostics: entry.diagnostics,
 	};
 }
@@ -1013,20 +1405,68 @@ function roleCredentialViews(
 	env: ReadonlyMap<string, string>,
 ): StageCredentialView[] {
 	const views: StageCredentialView[] = [];
-	for (const field of STAGE_CREDENTIAL_FIELDS) {
+	for (const field of STAGE_ROLE_CREDENTIAL_FIELDS) {
 		const reference = role[field];
 		if (reference === undefined) continue;
 		const name = envReferenceName(reference);
 		if (name === undefined) continue;
-		const value = env.get(name);
-		views.push({
-			field,
-			variable: name,
-			status:
-				value === undefined || value.trim() === "" ? `missing ${name}` : "set",
-		});
+		views.push(credentialView(field, name, env));
 	}
 	return views;
+}
+
+/**
+ * The credential references one `oauth2` role needs, in section order: the
+ * provider's client id and secret (when it declares one), then the role's own
+ * refresh token when the grant is `refresh_token`.
+ *
+ * The provider's own views are the *same objects* the stage's provider list
+ * reports, so a Settings row and the provider status can never disagree about a
+ * variable.
+ */
+function oauth2CredentialViews(
+	role: StageRole,
+	provider: StageOAuth2Provider | undefined,
+	env: ReadonlyMap<string, string>,
+): StageCredentialView[] {
+	const views =
+		provider === undefined ? [] : providerCredentialViews(provider, env);
+	if (role.grant !== "refresh_token") return views;
+	const reference = role.refreshToken;
+	if (reference === undefined) return views;
+	const name = envReferenceName(reference);
+	if (name === undefined) return views;
+	return [...views, credentialView("refreshToken", name, env)];
+}
+
+/** One provider's credential *status*, in section order. */
+function providerCredentialViews(
+	provider: StageOAuth2Provider,
+	env: ReadonlyMap<string, string>,
+): StageCredentialView[] {
+	const views: StageCredentialView[] = [];
+	for (const field of ["clientId", "clientSecret"] as const) {
+		const reference = provider[field];
+		if (reference === undefined) continue;
+		const name = envReferenceName(reference);
+		if (name === undefined) continue;
+		views.push(credentialView(field, name, env));
+	}
+	return views;
+}
+
+function credentialView(
+	field: StageCredentialReference,
+	name: string,
+	env: ReadonlyMap<string, string>,
+): StageCredentialView {
+	const value = env.get(name);
+	return {
+		field,
+		variable: name,
+		status:
+			value === undefined || value.trim() === "" ? `missing ${name}` : "set",
+	};
 }
 
 /** The app idents under `apps/definitions` of the same configuration root. */

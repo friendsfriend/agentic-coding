@@ -9,6 +9,7 @@
 
 import type {
 	BrowserDriver,
+	DriverAuthorizationProvider,
 	DriverBrowser,
 	DriverConsoleEntry,
 	DriverContext,
@@ -77,6 +78,14 @@ interface FakeWorld {
 	 * install (and a page that already existed) both report the banner. */
 	readonly scripts: string[];
 	askGuard(info: DriverRequestInfo): boolean;
+	/** The bearer header this context's routing layer would add to one request,
+	 * asked exactly the way the real driver asks it (`add-stage-oauth2-auth`,
+	 * 3.3): never for a request that already carries an `Authorization` header,
+	 * and never when the provider fails. */
+	askAuthorization(
+		info: DriverRequestInfo,
+		headers: Record<string, string>,
+	): Promise<string | undefined>;
 	/** The browser slot this context and its pages belong to. */
 	readonly slot: FakeBrowserSlot;
 }
@@ -93,6 +102,13 @@ export interface FakeContext extends DriverContext {
 	readonly initScripts: string[];
 	/** Ask the guard about one request, as the routing layer would. */
 	runGuard(request: DriverRequestInfo): boolean;
+	/** The bearer provider this context was created with, if any. */
+	readonly authorization: DriverAuthorizationProvider | undefined;
+	/** Ask the bearer provider about one request, as the routing layer would. */
+	runAuthorization(
+		request: DriverRequestInfo,
+		headers?: Record<string, string>,
+	): Promise<string | undefined>;
 	/** The HTTP credentials installed on this context, if any. */
 	httpCredentials: DriverHttpCredentials | undefined;
 }
@@ -141,6 +157,13 @@ export interface FakeDriver extends BrowserDriver {
 	readonly performed: string[];
 	/** Every request the fake asked a guard about, across contexts. */
 	readonly guarded: DriverRequestInfo[];
+	/** Every request the fake's routing layer authenticated, with the origin it
+	 * authenticated for and the header it added. Never a header value from a page:
+	 * the fake adds only what the provider answers. */
+	readonly authorized: Array<{
+		readonly url: string;
+		readonly header: string;
+	}>;
 	/** Controls a login step must treat as absent, by `driverLocatorKey` of the
 	 * locator descriptor. */
 	absentControls: string[];
@@ -199,6 +222,8 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	const pages: FakePage[] = [];
 	const performed: string[] = [];
 	const guarded: DriverRequestInfo[] = [];
+	const authorized: Array<{ readonly url: string; readonly header: string }> =
+		[];
 	const httpCredentialsCalls: DriverHttpCredentials[] = [];
 	const launchOptions: Array<{ readonly headless: boolean }> = [];
 	const initScripts: string[][] = [];
@@ -371,8 +396,19 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 					throw new Error("net::ERR_CONNECTION_REFUSED");
 				}
 				if (failGoto) throw new Error("net::ERR_CONNECTION_REFUSED");
+				// The document that issues the navigation is the one that is leaving:
+				// a real driver reports that frame's URL, not the target (SEC-002).
+				const from = context.url;
 				context.url = url;
 				const id = `r${++sequence}`;
+				const navigation = {
+					url,
+					method: "GET",
+					resourceType: "document",
+					isMainFrameNavigation: true,
+					...(from === "" ? {} : { initiator: from }),
+				};
+				const header = await context.askAuthorization(navigation, {});
 				for (const listener of networkListeners)
 					listener({
 						kind: "request",
@@ -380,6 +416,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 						method: "GET",
 						url,
 						resourceType: "document",
+						hasAuthorization: header !== undefined,
 					});
 				for (const listener of networkListeners)
 					listener({ kind: "response", id, status: 200, ok: true });
@@ -525,6 +562,20 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 				guarded.push(info);
 				return options.guard(info);
 			},
+			askAuthorization: async (info, headers) => {
+				if (!options.authorization) return undefined;
+				// The page's own credential wins, exactly like the real driver.
+				if (headers.authorization !== undefined) return undefined;
+				try {
+					const header = await options.authorization(info);
+					if (header !== undefined) authorized.push({ url: info.url, header });
+					return header;
+				} catch {
+					// A provider that failed sends the request unauthenticated: an abort
+					// would look like a broken application.
+					return undefined;
+				}
+			},
 			slot,
 		};
 		const own: FakePage[] = [];
@@ -539,6 +590,9 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 				for (const page of own) page.bannerInstalled = true;
 			},
 			runGuard: (info) => world.askGuard(info),
+			authorization: options.authorization,
+			runAuthorization: (info, headers) =>
+				world.askAuthorization(info, headers ?? {}),
 			httpCredentials: options.httpCredentials,
 			page: async () => {
 				const page = makePage(world);
@@ -591,6 +645,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		get guarded() {
 			return guarded;
 		},
+		authorized,
 		get absentControls() {
 			return absentControls;
 		},

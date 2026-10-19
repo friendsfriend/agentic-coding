@@ -201,4 +201,28 @@ describe("the browser runtime composition", () => {
 		expect(browserRuntime(tempConfigDir())).not.toBe(first);
 		resetBrowserRuntimes();
 	});
+
+	test("a runtime built before the workflow composition still gets its bearer-token source", () => {
+		resetBrowserRuntimes();
+		const dir = tempConfigDir();
+		// The settings surface builds the runtime first, with no composition: no
+		// stage request would be authenticated for the life of the process.
+		const first = browserRuntime(dir);
+		const setBearerToken = spyOn(first.pool, "setBearerToken");
+		const source = async () => "Bearer token";
+
+		const second = browserRuntime(dir, undefined, source);
+		expect(second).toBe(first);
+		// The source reaches the pool that already exists (CONC-004), so the next
+		// request a stage-bound session makes is answered by it rather than by nobody.
+		expect(setBearerToken).toHaveBeenCalledWith(source);
+		// A caller without a source leaves the one a previous caller attached alone:
+		// it must not detach what the composition already installed.
+		const replacement = async () => "Bearer other";
+		expect(browserRuntime(dir, undefined, replacement)).toBe(first);
+		expect(setBearerToken).toHaveBeenLastCalledWith(replacement);
+		expect(browserRuntime(dir)).toBe(first);
+		expect(setBearerToken).toHaveBeenCalledTimes(2);
+		resetBrowserRuntimes();
+	});
 });

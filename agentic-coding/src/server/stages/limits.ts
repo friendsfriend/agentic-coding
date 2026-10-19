@@ -136,7 +136,7 @@ export class StageUsageRegistry {
 			const oldest = window[0] ?? now;
 			throw new StageLimitError(
 				"stage-rate-limit",
-				`stage ${input.stage} allows ${input.maxActionsPerMinute} browser calls per minute in this workflow`,
+				`stage ${input.stage} allows ${input.maxActionsPerMinute} stage calls per minute in this workflow`,
 				Math.max(1, oldest + RATE_WINDOW_MS - now),
 			);
 		}

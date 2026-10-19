@@ -21,20 +21,31 @@ import path from "node:path";
 import type {
 	AgentStagesResponse,
 	ExcludedStageStatus,
+	StageApiRequest,
+	StageApiRequestResponse,
 	StageCredentialRequest,
 	StageCredentialResponse,
 	StageStatus,
 	StagesStatusResponse,
+	StageTokenInfoRequest,
+	StageTokenInfoResponse,
 	StageVersionStatus,
 } from "../../contracts/stages.ts";
 import { upsertEnvFile } from "../../env-file.ts";
 import { readJsonBody } from "../auth.ts";
 import { environmentSecrets, redact } from "../environment/agent-routes.ts";
 import {
+	AGENT_STAGE_API_REQUEST_PATH,
+	AGENT_STAGE_TOKEN_INFO_PATH,
 	AGENT_STAGES_PATH,
 	decodeRouteRequest,
 	STAGES_CREDENTIAL_PATH,
 } from "../protocol.ts";
+import {
+	StageApiError,
+	stageApiRequestValue,
+	stageTokenInfoValue,
+} from "./api-request.ts";
 import {
 	readStageCatalog,
 	type StageCatalog,
@@ -44,6 +55,12 @@ import {
 	stageRefusalReason,
 	stageView,
 } from "./catalog.ts";
+import type { StageUsageRegistry } from "./limits.ts";
+import {
+	forgetStageTokens,
+	type StageTokenStore,
+	stageTokenStore,
+} from "./oauth2.ts";
 
 /** How long one version probe may take before it is `not discoverable`. */
 export const VERSION_PROBE_TIMEOUT_MS = 5_000;
@@ -72,6 +89,15 @@ export interface StageRouteDeps {
 	readonly probe?: (url: string) => Promise<unknown>;
 	/** Test seam: the bound a probe is given, whoever supplies it. */
 	readonly probeTimeoutMs?: number;
+	/** The process's token store (`add-stage-oauth2-auth`). Omitted, the process
+	 * store is used; tests pass their own. */
+	readonly tokens?: StageTokenStore;
+	/** The rolling-minute registry `stage_api_request` counts in. The browser
+	 * routes read the same one, so one stage has one rate in this workflow. */
+	readonly usage?: StageUsageRegistry;
+	/** Test seam: the HTTP client of one stage API call. */
+	readonly fetch?: typeof fetch;
+	readonly now?: () => number;
 }
 
 function json(value: unknown, status = 200): Response {
@@ -84,9 +110,45 @@ function json(value: unknown, status = 200): Response {
 	});
 }
 
-function redactor(configDir: string): (value: unknown) => unknown {
-	const secrets = environmentSecrets(configDir);
+/** The run's redactor: the configuration `.env` *and* the tokens this process
+ * holds (`add-stage-oauth2-auth`, D4). A token is acquired at runtime, so it is
+ * not an `.env` value; the store is the second source, and a stage that echoes a
+ * token back in its own body is covered by it. */
+function redactor(deps: StageRouteDeps): (value: unknown) => unknown {
+	const secrets = [
+		...environmentSecrets(deps.configDir),
+		...(deps.tokens ?? stageTokenStore()).secrets(),
+	].sort((left, right) => right.value.length - left.value.length);
 	return (value) => redact(value, secrets);
+}
+
+/**
+ * The same redactor, resolved *per use*.
+ *
+ * An OAuth 2.0 call acquires its token while it runs, so a secret set captured
+ * before the call would not cover the very token the stage answered with. This
+ * is the one place the difference matters, and it is a difference of *when* the
+ * store is read, not of which values are secrets.
+ */
+function liveRedactor(deps: StageRouteDeps): (value: unknown) => unknown {
+	return (value) => redactor(deps)(value);
+}
+
+/** The body of one OAuth 2.0 route, or a refusal that names the route rather
+ * than a decoder. A body the contract rejects is the caller's mistake, so it is
+ * a `400` and not the `500` an unhandled decode would produce. */
+async function decodeAuthBody<T>(request: Request, path: string): Promise<T> {
+	try {
+		return decodeRouteRequest<T>(path, await readJsonBody(request));
+	} catch (error) {
+		throw new StageApiError(
+			"stage-request-invalid",
+			`this is not a valid ${path} request: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+			400,
+		);
+	}
 }
 
 /** The catalog of one configuration root. Read per call: an edited stage file
@@ -106,7 +168,7 @@ export function stagesStatusValue(deps: StageRouteDeps): StagesStatusResponse {
 		stages: catalog.entries.map((entry) => stageStatus(entry, deps.configDir)),
 		excluded: excludedStatuses(catalog),
 	};
-	return redactor(deps.configDir)(value) as StagesStatusResponse;
+	return redactor(deps)(value) as StagesStatusResponse;
 }
 
 /** The refused stage files, as both read surfaces report them: the file, its
@@ -196,7 +258,7 @@ async function resolveVersion(
 	if (value === undefined) return notDiscoverable;
 	// The version is read from another system's answer, so it goes through the
 	// same redactor as every other browser-shaped output.
-	const redacted = redactor(deps.configDir)(String(value));
+	const redacted = redactor(deps)(String(value));
 	return {
 		path: probe.path,
 		field: probe.field,
@@ -299,6 +361,11 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 				role: role.role,
 				...(role.login === undefined ? {} : { login: role.login }),
 				...(role.loginKind === undefined ? {} : { loginKind: role.loginKind }),
+				...(role.provider === undefined ? {} : { provider: role.provider }),
+				...(role.grant === undefined ? {} : { grant: role.grant }),
+				...(role.bearerOrigins === undefined
+					? {}
+					: { bearerOrigins: [...role.bearerOrigins] }),
 				credentialStatus: role.credentialStatus,
 				loginMode: role.loginMode,
 				credentials: role.credentials.map((credential) => ({
@@ -309,6 +376,35 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 			})),
 		})),
 		origins: [...entry.origins],
+		// The declared providers, with the *status* of their client credentials: a
+		// role's token path is only as ready as the variables behind it. Omitted
+		// entirely for a stage that declares none, so the foundation's read surface
+		// is unchanged for every stage that predates OAuth 2.0.
+		...(view.oauth2.providers.length === 0
+			? {}
+			: {
+					oauth2: {
+						providers: view.oauth2.providers.map((provider) => ({
+							name: provider.name,
+							tokenEndpoint: provider.tokenEndpoint,
+							...(provider.authorizationEndpoint === undefined
+								? {}
+								: {
+										authorizationEndpoint: provider.authorizationEndpoint,
+									}),
+							...(provider.audience === undefined
+								? {}
+								: { audience: provider.audience }),
+							scope: [...provider.scope],
+							clientAuth: provider.clientAuth ?? "basic",
+							credentials: provider.credentials.map((credential) => ({
+								field: credential.field,
+								variable: credential.variable,
+								status: credential.status,
+							})),
+						})),
+					},
+				}),
 		readOnlyExceptions: view.readOnlyExceptions.map((exception) => ({
 			origin: exception.origin,
 			pathPrefix: exception.pathPrefix,
@@ -340,9 +436,16 @@ export async function handleStageRoute(
 	deps: StageRouteDeps,
 	request: Request,
 	url: URL,
-	_owner: string,
+	owner: string,
 ): Promise<Response | undefined> {
 	const path = url.pathname;
+	// The two OAuth 2.0 routes (`add-stage-oauth2-auth`) are siblings of the
+	// catalog and are the only stage routes that take a body.
+	if (
+		path === AGENT_STAGE_API_REQUEST_PATH ||
+		path === AGENT_STAGE_TOKEN_INFO_PATH
+	)
+		return await handleAuthRoute(deps, request, path, owner);
 	if (path !== AGENT_STAGES_PATH && !path.startsWith(`${AGENT_STAGES_PATH}/`))
 		return undefined;
 	if (request.method.toUpperCase() !== "GET")
@@ -381,6 +484,84 @@ export async function handleStageRoute(
 }
 
 // ---------------------------------------------------------------------------
+// OAuth 2.0 routes
+// ---------------------------------------------------------------------------
+
+/** `POST …/stage-api-request` and `POST …/stage-token-info`. One envelope per
+ * call, the value redacted on the way out: a token the *stage* echoes back is
+ * still a token. */
+async function handleAuthRoute(
+	deps: StageRouteDeps,
+	request: Request,
+	path: string,
+	owner: string,
+): Promise<Response> {
+	if (request.method.toUpperCase() !== "POST")
+		return json(
+			{
+				error: {
+					code: "method",
+					message: `${path} is answered over POST only`,
+				},
+			},
+			405,
+		);
+	// Resolved per use, not once: the token this call acquires is one of the secrets
+	// the answer has to be redacted of.
+	const redactValue = liveRedactor(deps);
+	try {
+		if (path === AGENT_STAGE_API_REQUEST_PATH) {
+			const decoded = await decodeAuthBody<StageApiRequest>(
+				request,
+				AGENT_STAGE_API_REQUEST_PATH,
+			);
+			const value: StageApiRequestResponse = await stageApiRequestValue(
+				deps,
+				decoded,
+				owner,
+				redactValue,
+			);
+			return json({ ok: true, value: redactValue(value) });
+		}
+		const decoded = await decodeAuthBody<StageTokenInfoRequest>(
+			request,
+			AGENT_STAGE_TOKEN_INFO_PATH,
+		);
+		const info: StageTokenInfoResponse = await stageTokenInfoValue(
+			deps,
+			decoded,
+		);
+		return json({ ok: true, value: redactValue(info) });
+	} catch (error) {
+		// The error envelope goes through the same live redactor as the success
+		// value: a token the call just acquired is one of the secrets of its own
+		// answer, and a provider's error description is untrusted input (SEC-001).
+		if (error instanceof StageApiError)
+			return json(
+				redactValue({
+					error: {
+						code: error.code,
+						message: error.message,
+						...(error.retryAfterMs === undefined
+							? {}
+							: { retryAfterMs: error.retryAfterMs }),
+					},
+				}),
+				error.status,
+			);
+		return json(
+			redactValue({
+				error: {
+					code: "stage-auth-failed",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			}),
+			500,
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Credential flow
 // ---------------------------------------------------------------------------
 
@@ -407,6 +588,12 @@ export async function setStageCredential(
 	const file = path.join(deps.configDir, ".env");
 	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 	upsertEnvFile(file, new Map([[body.variable, body.value]]));
+	// The token this variable helped acquire is stale now: a rotation, a fixed
+	// secret or a reissued refresh token has to reach the provider, not sit behind
+	// a valid-looking entry in the store.
+	const owner = variables.get(body.variable);
+	if (owner !== undefined)
+		forgetStageTokens({ stage: owner.stage }, deps.tokens);
 	return { variable: body.variable, status: "set" };
 }
 

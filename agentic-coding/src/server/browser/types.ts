@@ -30,6 +30,11 @@ export type DriverNetworkEvent =
 			readonly method: string;
 			readonly url: string;
 			readonly resourceType: string;
+			/** Whether the request carried an `Authorization` header at all. The
+			 * *value* is never reported: the network log says "a credential was sent
+			 * here", which is what a run needs to know, and nothing more
+			 * (`add-stage-oauth2-auth`, task 2.3). */
+			readonly hasAuthorization?: boolean;
 	  }
 	| {
 			readonly kind: "response";
@@ -81,11 +86,37 @@ export interface DriverRequestInfo {
 	/** True for a main-frame document navigation: a tool, a script, a redirect
 	 * or a link, but not an image, a font or an XHR. */
 	readonly isMainFrameNavigation: boolean;
+	/** The URL of the frame that issued the request — the document a script runs
+	 * in, `about:blank` for a frame without a document yet, and absent for a
+	 * service worker, which has no frame. A bearer provider needs it: a target
+	 * origin alone would hand the role's token to a foreign document that
+	 * happens to fetch a `bearerOrigins` origin (SEC-002). */
+	readonly initiator?: string;
 }
 
 /** A stage's request guard: `false` aborts the request. Only a stage-bound
  * context has one. */
 export type DriverRequestGuard = (request: DriverRequestInfo) => boolean;
+
+/**
+ * The authorization a stage-bound context adds to its own requests
+ * (`add-stage-oauth2-auth`, task 3.3): the origin check and the token are the
+ * caller's, the header mechanics are the driver's.
+ *
+ * The provider is asked only for a request that carries no `Authorization`
+ * already, and it answers the header value for that request — or `undefined`,
+ * which leaves the request exactly as the page built it. A failure inside the
+ * provider is swallowed by the driver: a request that cannot be authenticated is
+ * sent unauthenticated, never aborted, because the page is still usable and an
+ * abort would look like a broken application.
+ *
+ * A provider also has to decide *who* issued the request: `DriverRequestInfo`
+ * carries the initiating frame, so a foreign-origin document inside a stage
+ * session does not receive a stage role's token (SEC-002).
+ */
+export type DriverAuthorizationProvider = (
+	request: DriverRequestInfo,
+) => string | undefined | Promise<string | undefined>;
 
 export interface DriverHttpCredentials {
 	readonly username: string;
@@ -104,6 +135,9 @@ export interface DriverContextOptions {
 	/** The stage's request guard. It is a context option because the guard must
 	 * survive a recording's context swap. */
 	readonly guard?: DriverRequestGuard;
+	/** The stage's bearer authorization, on the same terms as the guard: installed
+	 * on the context, re-passed when a recording swaps it. */
+	readonly authorization?: DriverAuthorizationProvider;
 }
 
 /** Why a page closed. A window the developer closed is not the same event as a
