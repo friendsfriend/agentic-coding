@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change introduce-okf-wiki. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Centralized bundle location
 The system SHALL store the knowledge bundle in a single machine-wide directory outside every repository, resolved with the precedence `HERDR_WIKI_DIR` environment variable, then the `[wiki] root` configuration key (tilde-expanded), then the default `~/.config/agentic-coding/wiki`. The centralized bundle SHALL support concepts from multiple projects; OKF SHALL NOT be treated as requiring one repository per bundle, and the system SHALL NOT automatically federate multiple bundle roots.
 
@@ -523,3 +521,34 @@ When the developer review gate returns comments, the workflow SHALL expose the b
 #### Scenario: Revision remains unverified
 - **WHEN** the wiki role completes a comment-driven revision
 - **THEN** touched concepts remain drafts without a human verification event until the developer approves again
+
+### Requirement: The wiki role writes early and bounds its discovery
+
+Both wiki instruction assets SHALL state a write budget — the discovery-based
+brief for OpenSpec, implementation and ad-hoc documentation runs, and the
+directive-first brief for research handoffs: the wiki role SHALL write or
+update the first concept as soon as the discovery search has named a target or
+the first directive's claim is corroborated, and SHALL extend that concept in
+place as the remaining claims are verified, rather than reading further before
+writing anything. The budget SHALL bound orientation only and SHALL NOT relax the
+authoring contract: searching for related concepts before choosing a write path,
+inspecting plausible candidates, updating the canonical existing identifier in
+place, and preserving identifiers, unrelated content and unknown frontmatter
+SHALL remain required, and the directive-first brief SHALL keep corroboration
+targeted at the recorded directives.
+
+#### Scenario: The discovery-based brief writes early
+
+- **WHEN** the wiki assignment for an OpenSpec, implementation or ad-hoc task pins the discovery-based brief
+- **THEN** the brief SHALL direct the role to write or update the first concept as soon as the search names a target and to extend it in place
+
+#### Scenario: The directive-first brief bounds corroboration
+
+- **WHEN** the wiki assignment for a research handoff pins the directive-first brief
+- **THEN** the brief SHALL direct the role to write the first dictated concept early and to bound the remaining inspection to corroborating the recorded directives
+
+#### Scenario: The update-first contract still holds
+
+- **WHEN** either brief is rendered
+- **THEN** it SHALL still require the search-then-inspect sequence, the in-place update of the canonical identifier and the preservation of unrelated content and unknown frontmatter
+
