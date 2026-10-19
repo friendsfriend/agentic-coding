@@ -781,6 +781,12 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "local-changes", domain: "git" },
 	{ kind: "local-diff", domain: "git" },
 	{ kind: "changes", domain: "git" },
+	// The repository's active OpenSpec changes read from its working tree, like
+	// `changes`: same domain, richer (still content-free) rows.
+	{ kind: "openspec-changes", domain: "git" },
+	// The board's identity rows, which the orchestrator resolves one workflowId
+	// with: a workflow-domain read, two fields per row.
+	{ kind: "workflow-targets", domain: "workflow" },
 	{ kind: "verifier-findings", domain: "workflow" },
 	{ kind: "verifier-report", domain: "workflow" },
 	{ kind: "developer-review-findings", domain: "workflow" },

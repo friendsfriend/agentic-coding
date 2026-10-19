@@ -65,7 +65,11 @@ export type LaunchOutcome =
 	 * of resubmitting and risking a duplicate workflow. */
 	| { kind: "uncertain"; message: string };
 
-const STARTED = /^Workflow started:\s*(\S+)\s*$/;
+/** The acceptance line's workflow id is its first token. A start that resolved
+ * a task reference appends what it resolved (` — task from change "<id>", <n>
+ * task chars`), so the pattern is deliberately not anchored at the end: the id
+ * is what this reader needs, and a suffix must not read as an unknown outcome. */
+const STARTED = /^Workflow started:\s*(\S+)/;
 
 /** Workflow types a launch context may offer. A repository target (configured
  * project or path) may offer the whole registry; an independent Wiki launch

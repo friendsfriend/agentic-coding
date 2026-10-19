@@ -150,6 +150,21 @@ test("an accepted start names the workflow it created", async () => {
 	});
 });
 
+test("a start that resolved a task reference is still an accepted start", async () => {
+	// A reference start appends what it resolved to the acceptance line; the id is
+	// still its first token, so the answer is not mistaken for an unknown outcome.
+	useBackend(async () =>
+		Response.json({
+			ok: true,
+			value:
+				'Workflow started: add-thing — task from change "add-flag", 640 task chars',
+		}),
+	);
+	const outcome = await launchWorkflow(INPUT);
+	expect(outcome.kind).toBe("accepted");
+	expect(outcome.kind === "accepted" && outcome.workflowId).toBe("add-thing");
+});
+
 test("a refused start over the transport is reported as rejected, not as handoff failure", async () => {
 	useBackend(async () =>
 		Response.json(

@@ -669,4 +669,252 @@ describe("orchestrator host mode", () => {
 			await server.stop();
 		}
 	});
+
+	test("a monitor note is never the previous developer message", async () => {
+		// The orchestrator's own delivered notes reach the session through the same
+		// submit path a developer message does, so `taskRef.previousMessage` must
+		// not turn one into a task: the reference is refused instead.
+		const starts: Array<{ task?: string; taskRef?: unknown }> = [];
+		const server = await startWorkflowServer({
+			operations: {
+				runObservation: async () => [],
+				start: async (request: unknown) => {
+					starts.push(request as { task?: string });
+					return "started wf-1";
+				},
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-previous-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			const startByReference = () =>
+				fauxAssistantMessage(
+					[
+						fauxToolCall("start_workflow", {
+							repo: "/repos/shop",
+							workflowId: "wf-1",
+							workflowType: "solo",
+							taskRef: { previousMessage: true },
+						}),
+					],
+					{ stopReason: "toolUse" },
+				);
+			faux.setResponses([
+				startByReference(),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"[workflow-monitor] wf-1 now waits for your review",
+				"req-note",
+			);
+			const results = await waitForResults(host, "orchestrator", 1);
+			expect(results[0]).toContain("no developer message yet");
+			expect(starts).toHaveLength(0);
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
+
+	test("the developer's own message is what a task reference reuses", async () => {
+		const starts: Array<{ task?: string; taskRef?: unknown }> = [];
+		const server = await startWorkflowServer({
+			operations: {
+				runObservation: async () => [],
+				start: async (request: unknown) => {
+					starts.push(request as { task?: string });
+					return "started wf-1";
+				},
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-previous-message-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			faux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("start_workflow", {
+							repo: "/repos/shop",
+							workflowId: "wf-1",
+							workflowType: "solo",
+							taskRef: { previousMessage: true },
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"make the flag configurable per preset",
+				"req-developer",
+			);
+			const results = await waitForResults(host, "orchestrator", 1);
+			// The host resolves the message (the server holds no conversation), so
+			// the wire carries the developer's own words as the task text.
+			expect(starts[0]?.task).toBe("make the flag configurable per preset");
+			expect(starts[0]?.taskRef).toBeUndefined();
+			expect(results[0]).toContain("task from the previous developer message");
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
+
+	test("a message queued behind the running turn never becomes its task", async () => {
+		// `submit` records the message as soon as it is admitted, but a turn that
+		// is already running answers an earlier message. A `previousMessage` start
+		// inside that turn must substitute the message it is answering, not the one
+		// the developer typed while it worked.
+		const starts: Array<{ task?: string }> = [];
+		let releaseObservations: (() => void) | undefined;
+		const gated = new Promise<void>((resolve) => {
+			releaseObservations = resolve;
+		});
+		let reachedGate = false;
+		const server = await startWorkflowServer({
+			operations: {
+				runObservation: async () => {
+					reachedGate = true;
+					await gated;
+					return [];
+				},
+				start: async (request: unknown) => {
+					starts.push(request as { task?: string });
+					return "started wf-1";
+				},
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-queued-message-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("list_workflows", {})], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[
+						fauxToolCall("start_workflow", {
+							repo: "/repos/shop",
+							workflowId: "wf-1",
+							workflowType: "solo",
+							taskRef: { previousMessage: true },
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+				// The queued message's own turn: it is now the one being answered.
+				fauxAssistantMessage(
+					[
+						fauxToolCall("start_workflow", {
+							repo: "/repos/shop",
+							workflowId: "wf-2",
+							workflowType: "solo",
+							taskRef: { previousMessage: true },
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("queued message answered")]),
+			]);
+			await host.submit("orchestrator", "start the flag work", "req-first");
+			for (let i = 0; i < 100 && !reachedGate; i++)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(reachedGate).toBe(true);
+			// Typed while the first turn is still working: queued, not answered.
+			await host.submit(
+				"orchestrator",
+				"also bump the changelog",
+				"req-queued",
+				"followUp",
+			);
+			releaseObservations?.();
+			await waitForResults(host, "orchestrator", 3);
+			expect(starts[0]?.task).toBe("start the flag work");
+			// Once its own turn runs, the queued message is the answered one: the
+			// queue is promoted on the evidence that it left the inbox.
+			expect(starts[1]?.task).toBe("also bump the changelog");
+		} finally {
+			releaseObservations?.();
+			await host.shutdown();
+			await server.stop();
+		}
+	});
 });

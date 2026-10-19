@@ -162,6 +162,9 @@ export interface BlueprintWorkflowStartInput {
 	readonly workflowId: string;
 	readonly blueprint: unknown;
 	readonly task?: string;
+	/** A task reference instead of inline `task` text: an OpenSpec change the
+	 * shared start boundary resolves (efficiency backlog item 21). */
+	readonly taskRef?: { change: string };
 	readonly ticket?: string;
 	readonly mode?: "worktree" | "checkout";
 	readonly preset?: string;
@@ -196,6 +199,7 @@ export function prepareBlueprintWorkflowStart(
 		definitionId: definition.definitionId,
 		...(mode ? { mode } : {}),
 		...(input.task ? { task: input.task } : {}),
+		...(input.taskRef ? { taskRef: input.taskRef } : {}),
 		...(input.ticket ? { ticket: input.ticket } : {}),
 		...(input.preset ? { preset: input.preset } : {}),
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),

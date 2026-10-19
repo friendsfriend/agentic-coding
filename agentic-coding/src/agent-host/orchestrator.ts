@@ -15,6 +15,7 @@ import {
 	type Extension,
 	section,
 } from "@earendil-works/pi-durable";
+import { TASK_CHAR_BOUND } from "../contracts/actions.ts";
 import { PUBLIC_WORKFLOW_CATALOG } from "../workflow/definitions/catalog.ts";
 import {
 	cachedBranchRefs,
@@ -31,7 +32,12 @@ import {
 	ORCHESTRATOR_TOKEN_ENV,
 	ORCHESTRATOR_URL_ENV,
 } from "./orchestrator-env.ts";
-import type { RunContextLookup } from "./tools.ts";
+import {
+	decodeSinceRevisions,
+	decodeWorkflowIds,
+	rankSimilarIds,
+} from "./orchestrator-resolve.ts";
+import type { DurableRunContext, RunContextLookup } from "./tools.ts";
 
 export const ORCHESTRATOR_EXTENSION = "agentic.orchestrator";
 
@@ -151,6 +157,159 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 	};
 }
 
+/** One workflow board row: the identifier `list_workflows` publishes and the
+ * target the same row reports. The board is the one read both tools share, so
+ * a `workflowId` read from the list resolves here without a second lookup. */
+interface WorkflowBoardRow {
+	workflowId: string;
+	target: string;
+}
+
+async function workflowBoard(
+	env: Readonly<Record<string, string>>,
+): Promise<WorkflowBoardRow[]> {
+	// The identity read, not `workflows`: a resolution needs two fields per row,
+	// while the board's rows carry the task text, every run and the gate
+	// decisions of every workflow on the machine.
+	const rows = (await observe(env, { kind: "workflow-targets" })) as Array<
+		Record<string, unknown>
+	>;
+	return rows
+		.map((row) => ({
+			workflowId: String(row.workflowId ?? ""),
+			target: String(row.target ?? ""),
+		}))
+		.filter((row) => row.workflowId !== "" && row.target !== "");
+}
+
+/** The `workflow_status` call shape the tool accepts: one id or several, each
+ * with its own revision (efficiency backlog item 21). */
+export interface WorkflowStatusToolArgs {
+	repo?: string;
+	workflowId: string | readonly string[];
+	sinceRevision?: number | Readonly<Record<string, number>>;
+	detail?: "full";
+	includeTask?: boolean;
+}
+
+/** `workflow_status`'s whole answer: one entry per (id, repository) in the
+ * requested order. A single id in a single repository answers exactly the
+ * object it answered before; an unknown id answers the closest existing ids
+ * instead of failing the call. */
+async function workflowStatusAnswer(
+	args: WorkflowStatusToolArgs,
+	env: Readonly<Record<string, string>>,
+): Promise<unknown> {
+	const ids = decodeWorkflowIds(args.workflowId);
+	const revisions = decodeSinceRevisions(args.sinceRevision, ids);
+	let board: WorkflowBoardRow[] | undefined;
+	const boardRows = async (): Promise<WorkflowBoardRow[]> => {
+		if (board) return board;
+		board = await workflowBoard(env);
+		return board;
+	};
+	// A repository that has no workflow on the board at all would answer no
+	// candidate, so the whole board is the fallback help.
+	const candidatesFor = async (): Promise<string[]> => {
+		const all = await boardRows();
+		const scoped = args.repo
+			? all.filter((row) => row.target === args.repo)
+			: all;
+		return (scoped.length > 0 ? scoped : all).map((row) => row.workflowId);
+	};
+	const unknownAnswer = async (
+		workflowId: string,
+	): Promise<Record<string, unknown>> => {
+		const ranked = rankSimilarIds(await candidatesFor(), workflowId);
+		return {
+			workflowId,
+			unknown: true,
+			candidates: ranked.candidates,
+			more: ranked.more,
+		};
+	};
+	const targetsOf = async (workflowId: string): Promise<string[]> => {
+		const rows = await boardRows();
+		return [
+			...new Set(
+				rows
+					.filter((row) => row.workflowId === workflowId)
+					.map((row) => row.target),
+			),
+		];
+	};
+	const viewOf = async (
+		target: string,
+		workflowId: string,
+	): Promise<Record<string, unknown> | undefined> => {
+		try {
+			return (await call(
+				env,
+				"GET",
+				`/api/v1/workflow/view?repo=${encodeURIComponent(target)}&workflowId=${encodeURIComponent(workflowId)}`,
+			)) as Record<string, unknown>;
+		} catch (error) {
+			// An id the server does not know is an answer, not a failed call: the
+			// corpus shows a failed poll costs a whole turn, while the candidates
+			// let the model retry with the right id in this same turn.
+			const message = error instanceof Error ? error.message : String(error);
+			if (!message.includes("workflow not found")) throw error;
+			return undefined;
+		}
+	};
+	const answerOf = (
+		workflowId: string,
+		view: Record<string, unknown>,
+		named: boolean,
+	): unknown => {
+		if (args.detail === "full") {
+			noteFullDetail(env, "workflow_status");
+			return summarizeWorkflowView(view);
+		}
+		return compactWorkflowStatus(view, {
+			sinceRevision: revisions.get(workflowId),
+			includeTask: args.includeTask,
+			named,
+		});
+	};
+	const readOne = async (workflowId: string): Promise<unknown[]> => {
+		// A named repository is where to look first, never the whole answer: when
+		// it does not hold the id, the board names the repository that does, and
+		// the row it answers carries that target. Answering "unknown" for an id
+		// the board knows would send the model back to guessing.
+		const hinted = args.repo ? [args.repo] : await targetsOf(workflowId);
+		if (hinted.length === 0) return [await unknownAnswer(workflowId)];
+		const answers: unknown[] = [];
+		for (const target of hinted) {
+			const view = await viewOf(target, workflowId);
+			if (view) {
+				answers.push(
+					answerOf(workflowId, view, ids.length > 1 || hinted.length > 1),
+				);
+				continue;
+			}
+			const elsewhere = args.repo
+				? (await targetsOf(workflowId)).filter((found) => found !== target)
+				: [];
+			if (elsewhere.length === 0) {
+				answers.push(await unknownAnswer(workflowId));
+				continue;
+			}
+			for (const found of elsewhere) {
+				const moved = await viewOf(found, workflowId);
+				// Named, because this entry answers for another repository than the
+				// one the call named: the row says which target it came from.
+				if (moved) answers.push(answerOf(workflowId, moved, true));
+			}
+			if (answers.length === 0) answers.push(await unknownAnswer(workflowId));
+		}
+		return answers;
+	};
+	const answers: unknown[] = [];
+	for (const id of ids) answers.push(...(await readOne(id)));
+	return ids.length === 1 && answers.length === 1 ? answers[0] : answers;
+}
+
 const RepoParameter = Type.String({
 	minLength: 1,
 	maxLength: 4096,
@@ -257,7 +416,8 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 
 - Default to acting yourself, immediately, with read/write/edit/bash: looking something up (files, directories, OpenSpec changes/specs, git state, logs, anything readable) is never a reason to start a workflow or to ask the developer first — read it and answer. The same goes for a small, well-understood edit you can make and verify yourself. Only reach for a workflow when the request needs planning, a developer/plan/findings/wiki review, several coordinated agent steps, or a durable record of the work; say briefly why a workflow fits when you choose one.
 - A workflow target (\`repo\`) is any existing path on this machine, not only one from list_projects or list_workflows; list_projects/list_workflows are for discovering what is already configured and running, not a restriction on where you may work or look.
-- Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows.
+- Discover before acting: list_projects, list_workflow_types, list_agent_config, list_workflows, and list_changes to see a repository's OpenSpec changes instead of guessing their paths with read.
+- start_workflow takes the task as inline \`task\` text or by reference: \`taskRef.change\` names an OpenSpec change of the target repository (list_changes lists them) and \`taskRef.previousMessage\` reuses the developer's own last message; the answer names the resolved source and its length, so a reference that resolved to the wrong change is visible.
 - Before you start a workflow, establish with the developer in this order: ${START_WORKFLOW_CHECKLIST}. list_agent_config shows preset/model-profile choices; respect an existing developer default and ask only if none is set or the request implies a different choice. Read project lists, branches, workflow state and presets yourself; do not ask the developer for facts you can read.
 - An \`env-setup\` workflow authors the environment definitions (run/build/test/infrastructure) for one configured application: name that application's ident as \`app\` when you start one — list_projects reports them with their \`kind\` (\`app\` runs, \`library\` does not). Every other type refuses an \`app\`.
 - Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
@@ -280,6 +440,7 @@ export function createOrchestratorExtension(
 			body: (
 				args: A,
 				env: Readonly<Record<string, string>>,
+				context: DurableRunContext,
 			) => Promise<unknown>,
 		) =>
 		async (
@@ -289,7 +450,7 @@ export function createOrchestratorExtension(
 			const context = lookup(api.conversationId);
 			if (!context) return failure("orchestrator session context unavailable");
 			try {
-				return text(await body(args, context.env));
+				return text(await body(args, context.env, context));
 			} catch (error) {
 				return failure(error instanceof Error ? error.message : String(error));
 			}
@@ -436,19 +597,74 @@ export function createOrchestratorExtension(
 				),
 			}),
 			defineTool({
-				name: "workflow_status",
+				name: "list_changes",
 				description:
-					'Use to inspect one workflow or before an action; returns one compact row — workflowId, target, status, step, attention, current revision, pending questions (the ones routed to you included), available action ids and labels, failed effects, and the current run\'s role/status/model. The task text, the full run history and the gate decisions are NOT in the row: pass detail:"full" for the whole view, or includeTask:true for the task text alone. Pass sinceRevision equal to the previous answer\'s revision and an unchanged workflow answers in a few bytes ("unchanged", revision, status, step).',
+					"Use to see which OpenSpec changes a repository has — before referencing one in start_workflow, instead of guessing a proposal.md path with read; returns one compact row per active change — changeId, title, tasks (checked/total), the change's openspec/changes/<id> path and the workflow already implementing it. The answer is at most the first 100 active changes by changeId, so a change you expected may be past that cut, and a path is exact only for a listed change.",
 				replay: "safe",
 				parameters: Type.Object({
 					repo: RepoParameter,
-					workflowId: WorkflowIdParameter,
-					sinceRevision: Type.Optional(
+					limit: Type.Optional(
 						Type.Integer({
-							minimum: 0,
-							description:
-								"Revision of the previous answer; an unchanged workflow answers with a few bytes instead of the row.",
+							minimum: 1,
+							maximum: 100,
+							description: "Return at most this many rows (default 100).",
 						}),
+					),
+				}),
+				execute: run(async (args: { repo: string; limit?: number }, env) =>
+					observe(env, {
+						kind: "openspec-changes",
+						repo: args.repo,
+						...(args.limit === undefined ? {} : { limit: args.limit }),
+					}),
+				),
+			}),
+			defineTool({
+				name: "workflow_status",
+				description:
+					'Use to inspect one workflow or before an action; returns one compact row — workflowId, target, status, step, attention, current revision, pending questions (the ones routed to you included), available action ids and labels, failed effects, and the current run\'s role/status/model. The task text, the full run history and the gate decisions are NOT in the row: pass detail:"full" for the whole view, or includeTask:true for the task text alone. Pass sinceRevision equal to the previous answer\'s revision and an unchanged workflow answers in a few bytes ("unchanged", revision, status, step). Pass the workflowId list_workflows returned and omit repo to resolve it from the same workflow board; several ids (at most 8) poll in one call, each with its own sinceRevision; `repo` is where to look first and applies to every id in the call, so omit it to resolve each id — or an id in another repository — from the workflow board; an id no workflow has answers with the closest existing ids instead of failing, and when it names no candidate, call list_workflows for the ids that do exist.',
+				replay: "safe",
+				parameters: Type.Object({
+					repo: Type.Optional(RepoParameter),
+					workflowId: Type.Union(
+						[
+							WorkflowIdParameter,
+							Type.Array(WorkflowIdParameter, {
+								maxItems: 8,
+								description:
+									"Several workflow ids, at most 8, polled in one call.",
+							}),
+						],
+						{
+							description:
+								"One workflowId, or several (at most 8) in one call.",
+						},
+					),
+					sinceRevision: Type.Optional(
+						Type.Union(
+							[
+								Type.Integer({
+									minimum: 0,
+									description:
+										"Revision of the previous answer; an unchanged workflow answers with a few bytes instead of the row.",
+								}),
+								Type.Record(
+									Type.String(),
+									Type.Integer({
+										minimum: 0,
+										description: "That workflow's previous revision.",
+									}),
+									{
+										description:
+											"One revision per workflowId, for a multi-id poll; an id it does not name is answered in full.",
+									},
+								),
+							],
+							{
+								description:
+									"One number applies to every polled id, or a record keyed by workflowId.",
+							},
+						),
 					),
 					detail: Type.Optional(
 						Type.Union([Type.Literal("full")], {
@@ -463,28 +679,8 @@ export function createOrchestratorExtension(
 						}),
 					),
 				}),
-				execute: run(
-					async (
-						args: {
-							repo: string;
-							workflowId: string;
-							sinceRevision?: number;
-							detail?: "full";
-							includeTask?: boolean;
-						},
-						env,
-					) => {
-						const view = (await call(
-							env,
-							"GET",
-							`/api/v1/workflow/view?repo=${encodeURIComponent(args.repo)}&workflowId=${encodeURIComponent(args.workflowId)}`,
-						)) as Record<string, unknown>;
-						if (args.detail === "full") {
-							noteFullDetail(env, "workflow_status");
-							return summarizeWorkflowView(view);
-						}
-						return compactWorkflowStatus(view, args);
-					},
+				execute: run(async (args: WorkflowStatusToolArgs, env) =>
+					workflowStatusAnswer(args, env),
 				),
 			}),
 			defineTool({
@@ -511,7 +707,7 @@ export function createOrchestratorExtension(
 			}),
 			defineTool({
 				name: "start_workflow",
-				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase and a configured app for env-setup; returns the start result with human reviews retained.`,
+				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase and a configured app for env-setup; returns the start result with human reviews retained. Pass the task as \`task\` text or as \`taskRef\` — {change:"<id>"} for an OpenSpec change of the target repository (list_changes lists them) or {previousMessage:true} for your own last developer message — and the answer names the resolved change and task length.`,
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -526,12 +722,38 @@ export function createOrchestratorExtension(
 						}),
 					),
 					blueprint: Type.Optional(BlueprintParameter),
-					task: Type.String({
-						minLength: 1,
-						maxLength: 16_000,
-						description:
-							"Task agreed with the developer: goal, constraints and acceptance criteria.",
-					}),
+					task: Type.Optional(
+						Type.String({
+							minLength: 1,
+							maxLength: TASK_CHAR_BOUND,
+							description:
+								"Task agreed with the developer: goal, constraints and acceptance criteria. Exactly one of task/taskRef.",
+						}),
+					),
+					taskRef: Type.Optional(
+						Type.Union(
+							[
+								Type.Object({
+									change: Type.String({
+										minLength: 1,
+										maxLength: 4096,
+										description:
+											"An OpenSpec change of the target repository — its id, or a path inside that repository's openspec/changes (list_changes lists them); the server resolves it to the change's task.",
+									}),
+								}),
+								Type.Object({
+									previousMessage: Type.Literal(true, {
+										description:
+											"Use this session's own last developer message, verbatim, as the task.",
+									}),
+								}),
+							],
+							{
+								description:
+									'The task by reference instead of task text: {change: "<id>"} or {previousMessage: true}.',
+							},
+						),
+					),
 					mode: Type.Optional(
 						Type.Union([Type.Literal("worktree"), Type.Literal("checkout")], {
 							description:
@@ -579,7 +801,8 @@ export function createOrchestratorExtension(
 							workflowId: string;
 							workflowType?: string;
 							blueprint?: unknown;
-							task: string;
+							task?: string;
+							taskRef?: { change?: string; previousMessage?: boolean };
 							mode?: "worktree" | "checkout";
 							preset?: string;
 							app?: string;
@@ -588,6 +811,7 @@ export function createOrchestratorExtension(
 							targetBranch?: string;
 						},
 						env,
+						context,
 					) => {
 						if (args.blueprint !== undefined && args.workflowType !== undefined)
 							throw new Error(
@@ -597,13 +821,60 @@ export function createOrchestratorExtension(
 							throw new Error(
 								"start_workflow needs a workflowType or a validated blueprint",
 							);
+						// Exactly one of `task`/`taskRef`: preferring one silently would hide a
+						// reference that never resolved. The server refuses the pair as well,
+						// because the wire is the boundary.
+						const taskText = args.task?.trim() ? args.task : undefined;
+						if (taskText !== undefined && args.taskRef !== undefined)
+							throw new Error(
+								"start_workflow takes a task or a taskRef, not both: send the agreed task text as `task`, or a reference as `taskRef`",
+							);
+						if (taskText === undefined && args.taskRef === undefined)
+							throw new Error(
+								"start_workflow needs a task: pass `task` text, `taskRef.change` (an OpenSpec change id, see list_changes) or `taskRef.previousMessage`",
+							);
+						let change: string | undefined;
+						let previous: string | undefined;
+						let echo = "";
+						if (args.taskRef !== undefined) {
+							const reference = args.taskRef;
+							if (reference.change && reference.previousMessage === true)
+								throw new Error(
+									'taskRef takes one of {change: "<changeId>"} or {previousMessage: true}, not both',
+								);
+							if (reference.change) change = reference.change;
+							else if (reference.previousMessage === true)
+								previous = await context.lastDeveloperMessage?.();
+							else
+								throw new Error(
+									'taskRef takes {change: "<changeId>"} or {previousMessage: true}',
+								);
+							if (previous === undefined && change === undefined)
+								throw new Error(
+									"this session has no developer message yet: pass `task` or `taskRef.change` (an OpenSpec change id, see list_changes) instead of taskRef.previousMessage",
+								);
+							// The previous message is the host's to resolve (the server holds no
+							// conversation), so it travels as the task text and the echo is added
+							// here; a change reference travels as `taskRef` and the server echoes it.
+							// The previous message travels verbatim (the agreement is that the
+							// developer's own words are the task), so an over-long one is refused
+							// rather than cut: every other task enters inside this bound.
+							if (previous !== undefined && previous.length > TASK_CHAR_BOUND)
+								throw new Error(
+									`the previous developer message is ${previous.length} characters, over the ${TASK_CHAR_BOUND}-character task bound: pass a shorter \`task\`, or \`taskRef.change\` for an OpenSpec change`,
+								);
+							if (previous !== undefined)
+								echo = ` — task from the previous developer message, ${previous.length} task chars`;
+						}
 						const message = await call(env, "POST", "/api/v1/workflow/start", {
 							repo: args.repo,
 							workflowId: args.workflowId,
 							...(args.blueprint === undefined
 								? { workflowType: args.workflowType }
 								: { blueprint: args.blueprint }),
-							task: args.task,
+							...(previous !== undefined ? { task: previous } : {}),
+							...(taskText !== undefined ? { task: taskText } : {}),
+							...(change !== undefined ? { taskRef: { change } } : {}),
 							mode: args.mode ?? "worktree",
 							...(args.preset ? { preset: args.preset } : {}),
 							// The env-setup family's subject: the configured app whose environment
@@ -618,7 +889,7 @@ export function createOrchestratorExtension(
 						// A start can create the workflow's branch, so the cached branch
 						// lists of every repository are dropped before the next poll.
 						invalidateBranchCache();
-						return message;
+						return `${typeof message === "string" ? message : JSON.stringify(message)}${echo}`;
 					},
 				),
 			}),

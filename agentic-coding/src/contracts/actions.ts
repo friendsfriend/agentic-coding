@@ -26,11 +26,22 @@ export const workflowActionRequestSchema = Schema.Struct({
 	input: Schema.optional(Schema.Unknown),
 });
 
+/** The task bound of a start, in characters. Inline text, a change reference
+ * assembled on the server and a `taskRef.previousMessage` substitution all
+ * enter the same start, so they answer to the same bound: a reference never
+ * starts a workflow the typed task could not. */
+export const TASK_CHAR_BOUND = 16_000;
+
 export const workflowStartRequestSchema = Schema.Struct({
 	repo: Schema.String,
 	ticket: Schema.optional(Schema.String),
 	workflowId: Schema.String,
 	task: Schema.optional(Schema.String),
+	/** A task reference instead of inline `task` text (efficiency backlog item
+	 * 21): an OpenSpec change of the target repository, which the server
+	 * resolves into that change's task. Exactly one of `task`/`taskRef` is
+	 * accepted, so a reference can never silently override typed text. */
+	taskRef: Schema.optional(Schema.Struct({ change: Schema.String })),
 	mode: Schema.String,
 	workflowType: Schema.optional(Schema.String),
 	/** A custom-shaped blueprint the server compiles, stores and starts instead
@@ -55,6 +66,13 @@ export const workflowStartRequestSchema = Schema.Struct({
 		{
 			message: () =>
 				"a start request cannot name both a workflowType and a blueprint",
+		},
+	),
+	Schema.filter(
+		(request) => request.task === undefined || request.taskRef === undefined,
+		{
+			message: () =>
+				"a start request cannot carry both a task and a taskRef; send exactly one",
 		},
 	),
 );
