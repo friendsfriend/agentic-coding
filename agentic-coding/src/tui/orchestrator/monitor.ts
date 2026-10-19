@@ -13,6 +13,11 @@
 //   * in `wake` mode a subscribed event becomes a note to the active session,
 //     coalesced by the pure planner so a burst can never be a wake-up storm.
 //
+// The planner also decides what is not worth a turn: a note whose every line is
+// info progress no contributing subscription named is absorbed (the events stay
+// recorded and readable), and an immediate event or a completion of a digest
+// subscription rides the wake window, so a digest delays nothing prompt.
+//
 // `off` observes nothing at all: no subscription, no notification, no note.
 
 import { decodeContract } from "../../contracts/decode.ts";

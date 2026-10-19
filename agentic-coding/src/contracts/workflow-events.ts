@@ -89,6 +89,32 @@ export function severityRank(severity: WorkflowEventSeverity): number {
 	return WORKFLOW_EVENT_SEVERITIES.indexOf(severity);
 }
 
+/** How a delivery must treat one event. `immediate` is everything a note may
+ * never hold back: a warning or above, and any id that names a wait, a block, a
+ * failure, a review or a question (the keyword rule is generic on purpose, so a
+ * future id such as `workflow.waiting` is immediate without another edit here).
+ * `completion` is a workflow reaching its terminal step, which the orchestrator
+ * is promised promptly. `progress` is everything else — info-level step and run
+ * progress — which is what a digest batches, and what a note of nothing else is
+ * absorbed instead of delivered. */
+export type WorkflowEventDeliveryClass =
+	| "immediate"
+	| "completion"
+	| "progress";
+
+const IMMEDIATE_EVENT_ID_PATTERN = /waiting|blocked|failed|question|review/;
+
+export function workflowEventDeliveryClass(
+	record: Pick<WorkflowEventRecord, "id" | "severity">,
+): WorkflowEventDeliveryClass {
+	if (severityRank(record.severity) >= severityRank("warning"))
+		return "immediate";
+	if (IMMEDIATE_EVENT_ID_PATTERN.test(record.id)) return "immediate";
+	if (record.id === "workflow.completed" || record.id === "workflow.closed")
+		return "completion";
+	return "progress";
+}
+
 /** A payload is a bounded, secret-free summary: no credential, no raw
  * transcript, no task text beyond a bounded summary. */
 export type WorkflowEventPayload = Readonly<Record<string, unknown>>;
@@ -366,6 +392,9 @@ export const MAX_NOTES_PER_HOUR = 20;
 /** The delivery cadences an absent override means. */
 export const DEFAULT_COALESCE_MS = 10_000;
 export const DEFAULT_MIN_NOTE_INTERVAL_MS = 60_000;
+/** The digest cadence an explicit `digest` subscription that overrides nothing
+ * means. The implicit default subscription is shorter on purpose (see
+ * `DEFAULT_SUBSCRIPTION_DIGEST_MINUTES`). */
 export const DEFAULT_DIGEST_MINUTES = 5;
 /** The bus's own rate limit: at most `DEFAULT_MAX_EVENTS_PER_WINDOW` of one
  * workflow's events are recorded inside one window, and the remainder are dropped
@@ -375,8 +404,13 @@ export const DEFAULT_DIGEST_MINUTES = 5;
  * and a storm produces thousands per second. */
 export const DEFAULT_MAX_EVENTS_PER_WINDOW = 120;
 export const DEFAULT_EVENT_WINDOW_MS = 10_000;
-/** The implicit subscription that reproduces today's behaviour. */
+/** The implicit subscription a session with none of its own gets. */
 export const DEFAULT_SUBSCRIPTION_ID = "default";
+/** The interval the implicit default subscription digests with. It is short on
+ * purpose: a digest batches progress, while an immediate event and a workflow
+ * completion use the wake window, so nothing the orchestrator must hear about
+ * waits for this interval. */
+export const DEFAULT_SUBSCRIPTION_DIGEST_MINUTES = 1;
 export const DEFAULT_SUBSCRIPTION_EVENT_IDS = [
 	"review.waiting",
 	"question.pending",
@@ -588,6 +622,10 @@ export interface WorkflowEventDeliveryMatch {
 	readonly coalesceMs?: number;
 	readonly minIntervalMs?: number;
 	readonly digestMinutes?: number;
+	/** True when this subscription named the event (its id or its category)
+	 * rather than matching it through a broad filter, so the shell can absorb a
+	 * note of progress nobody asked for. */
+	readonly explicit?: boolean;
 }
 
 export interface WorkflowEventDeliveryFrame {
@@ -605,6 +643,7 @@ export const workflowEventDeliveryFrameSchema = Schema.Struct({
 			coalesceMs: Schema.optional(Schema.Number),
 			minIntervalMs: Schema.optional(Schema.Number),
 			digestMinutes: Schema.optional(Schema.Number),
+			explicit: Schema.optional(Schema.Boolean),
 		}),
 	),
 });

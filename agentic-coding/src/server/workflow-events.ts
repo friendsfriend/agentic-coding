@@ -23,8 +23,8 @@ import {
 	boundedReasons,
 	boundedSummary,
 	DEFAULT_COALESCE_MS,
-	DEFAULT_DIGEST_MINUTES,
 	DEFAULT_MIN_NOTE_INTERVAL_MS,
+	DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
 	DEFAULT_SUBSCRIPTION_EVENT_IDS,
 	DEFAULT_SUBSCRIPTION_ID,
 	severityRank,
@@ -603,9 +603,24 @@ export function matchesSubscriptionFilter(
 	return true;
 }
 
+/** Whether a subscription named this event rather than matching it through a
+ * broad filter: its id in `eventIds` or its category in `categories`. A broad
+ * hit on info progress is a no-op note the shell absorbs, so a note only owes a
+ * model turn for what a subscription actually asked about. */
+export function filterNamesEvent(
+	filter: WorkflowEventSubscriptionFilter,
+	event: WorkflowEventRecord,
+): boolean {
+	if (filter.eventIds?.includes(event.id)) return true;
+	const category = workflowEventCategoryOf(event.id);
+	return filter.categories?.includes(category) === true;
+}
+
 /** The implicit subscription a session with no explicit one carries: exactly
- * the events the monitor delivered before this change, for the orchestrator's
- * own workflows, woken with the current cadence. */
+ * the events the monitor delivers for the orchestrator's own workflows, as a
+ * short digest (one note per interval) rather than an immediate wake per event.
+ * A digest never delays an immediate event or a workflow completion, which the
+ * shell delivers on the wake window. */
 export function defaultSubscription(input: {
 	session: string;
 	now: number;
@@ -618,14 +633,14 @@ export function defaultSubscription(input: {
 		session: input.session,
 		createdAt: new Date(input.now).toISOString(),
 		expiresAt: input.expiresAt,
-		mode: "wake",
+		mode: "digest",
 		filter: {
 			scope: "mine",
 			eventIds: [...DEFAULT_SUBSCRIPTION_EVENT_IDS],
 		},
 		coalesceMs: DEFAULT_COALESCE_MS,
 		minIntervalMs: DEFAULT_MIN_NOTE_INTERVAL_MS,
-		digestMinutes: DEFAULT_DIGEST_MINUTES,
+		digestMinutes: DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
 		implicit: true,
 	};
 }

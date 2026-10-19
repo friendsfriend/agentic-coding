@@ -247,11 +247,17 @@ closing, on a spent event budget and when the session is no longer the active
 one (`/new`). No workflow store is touched, so `STORE_SCHEMA_VERSION` stays 6.
 
 With no explicit subscription the server treats one implicit **`default`**
-subscription as active — the events the monitor delivered before this change
+subscription as active — the events the monitor has always delivered
 (`review.waiting`, `question.pending`, `question.routed`, `attention.raised`,
 `workflow.failed`, `effect.failed`, `workflow.completed`) for the orchestrator's
-own workflows, in `wake` mode. `list_subscriptions` shows it and any explicit
-subscription replaces it.
+own workflows, in `digest` mode with a **one minute** interval rather than an
+immediate wake per event. The digest batches info progress only: an event whose
+severity is `warning` or above, an id that names a wait, a block, a failure, a
+review or a question (`workflow.waiting`, `run.blocked`, `review.waiting`, …),
+and a workflow's `workflow.completed`/`workflow.closed` ride the 10 s wake
+window instead, so nothing the orchestrator must hear about waits for the digest
+interval. `list_subscriptions` shows it and any explicit subscription replaces
+it.
 
 What a subscription does depends on `[agents.orchestrator] monitor`, which stays
 the master switch:
@@ -264,16 +270,22 @@ the master switch:
 
 Notes are submitted to the active session as `whenBusy: "followUp"` input. The
 first line is `[workflow-monitor] subs=<labels>`, naming every subscription that
-asked for the note, followed by one line per event,
-`- <workflowId> → <stepId> (<what changed>)`. Events inside a 10 s coalescing
-window become one note — the window opens with its first event, and an event
-that arrives while it is still open joins it instead of opening a second one —
-the session receives at most one note per minute, and everything beyond that
-bound is merged into the next note. One event matched by
+asked for the note, followed by one line per **(workflow, step, change)**:
+`- <workflowId> → <stepId> (<what changed>)`, with ` ×N` appended when the same
+workflow, step and change repeated inside the note (a failing effect retried
+twelve times is one line, not twelve), then the elision count. Events inside a
+10 s coalescing window become one note — the window opens with its first event,
+and an event that arrives while it is still open joins it instead of opening a
+second one — the session receives at most one note per minute, and everything
+beyond that bound is merged into the next note. One event matched by
 several subscriptions is one line listing all their labels. A note lists at most
-20 event lines, the pending backlog holds at most 200 events (the oldest dropped
+20 lines, the pending backlog holds at most 200 events (the oldest dropped
 and counted in the next note elision) and a session receives at most 20 notes in
-a trailing hour. The host is ensured on the first note, so a wake-up works
+a trailing hour. A **no-op note** — every line of it info progress that no
+contributing subscription named in `eventIds`/`categories` — is absorbed: the
+events stay recorded and readable with `read_events`, and the session is not
+woken for them, because that note is a model turn spent on nothing. The host is
+ensured on the first delivered note, so a wake-up works
 without the page having been opened; a note that cannot be delivered is dropped
 rather than retried, because the workflow's state is still visible in the
 sidebar. A stream gap — and a transport overflow, which the stream reports the

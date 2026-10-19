@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
+	DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
 	DEFAULT_SUBSCRIPTION_EVENT_IDS,
 	HUMAN_NEEDED_EVENT_IDS,
 	isHumanNeededEvent,
@@ -19,6 +20,7 @@ import {
 import {
 	defaultSubscription,
 	deriveWorkflowEvents,
+	filterNamesEvent,
 	matchesSubscriptionFilter,
 	projectWorkflowEvents,
 	type WorkflowEventDraft,
@@ -620,14 +622,20 @@ describe("subscription filter matcher", () => {
 		).toBe(true);
 	});
 
-	test("the default subscription matches exactly today's delivered events", () => {
+	test("the default subscription digests the events it always delivered", () => {
 		const subscription = defaultSubscription({
 			session: "orchestrator",
 			now: Date.parse("2026-01-01T00:00:00.000Z"),
 			expiresAt: "2026-01-02T00:00:00.000Z",
 		});
 		expect(subscription.implicit).toBe(true);
-		expect(subscription.mode).toBe("wake");
+		// A short digest rather than an immediate wake per event; an immediate event
+		// and a completion still ride the wake window, so nothing waits the interval.
+		expect(subscription.mode).toBe("digest");
+		expect(subscription.digestMinutes).toBe(
+			DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
+		);
+		expect(subscription.minIntervalMs).toBe(60_000);
 		expect(subscription.filter.eventIds).toEqual([
 			...DEFAULT_SUBSCRIPTION_EVENT_IDS,
 		]);
@@ -649,6 +657,25 @@ describe("subscription filter matcher", () => {
 				subscription.filter,
 				event({ id: "step.entered" }),
 			),
+		).toBe(false);
+	});
+
+	test("a subscription that named an event is explicit, a broad match is not", () => {
+		// What the shell absorbs a no-op note by: an event the subscription named.
+		expect(
+			filterNamesEvent({ eventIds: ["workflow.completed"] }, event()),
+		).toBe(false);
+		expect(
+			filterNamesEvent(
+				{ eventIds: ["review.waiting"] },
+				event({ id: "review.waiting" }),
+			),
+		).toBe(true);
+		expect(
+			filterNamesEvent({ categories: ["step"] }, event({ id: "step.entered" })),
+		).toBe(true);
+		expect(
+			filterNamesEvent({ minSeverity: "info" }, event({ id: "step.entered" })),
 		).toBe(false);
 	});
 

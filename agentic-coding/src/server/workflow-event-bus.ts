@@ -62,6 +62,7 @@ import {
 	applyEnrichment,
 	defaultSubscription,
 	deriveWorkflowEvents,
+	filterNamesEvent,
 	matchesSubscriptionFilter,
 	orderDrafts,
 	projectWorkflowEvents,
@@ -928,6 +929,9 @@ export function createWorkflowEventBus(
 				id: subscription.id,
 				label: subscription.label,
 				mode: subscription.mode,
+				// Whether this subscription named the event, so the shell can absorb a
+				// note of progress nobody asked about instead of waking a turn for it.
+				explicit: filterNamesEvent(subscription.filter, event),
 				...(subscription.coalesceMs !== undefined
 					? { coalesceMs: subscription.coalesceMs }
 					: {}),

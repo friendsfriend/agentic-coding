@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
+	DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
 	MAX_EVENT_SUBSCRIPTIONS,
 	type WorkflowEventDeliveryFrame,
 } from "../src/contracts/workflow-events.ts";
@@ -673,7 +674,13 @@ describe("delivery frames", () => {
 		);
 		expect(review?.event.humanNeeded).toBe(true);
 		expect(review?.subscriptions).toEqual([
-			{ id: expect.any(String), label: "silent", mode: "silent" },
+			{
+				id: expect.any(String),
+				label: "silent",
+				mode: "silent",
+				// The subscription named `review.waiting`, so the shell may not absorb it.
+				explicit: true,
+			},
 		]);
 		harnessed.bus.stop();
 	});
@@ -747,7 +754,12 @@ describe("the implicit default subscription", () => {
 		expect(raised?.subscriptions.map((match) => match.label)).toEqual([
 			"default",
 		]);
-		expect(raised?.subscriptions[0]?.mode).toBe("wake");
+		expect(raised?.subscriptions[0]?.mode).toBe("digest");
+		expect(raised?.subscriptions[0]?.digestMinutes).toBe(
+			DEFAULT_SUBSCRIPTION_DIGEST_MINUTES,
+		);
+		// The implicit default names its events, so none of its notes is absorbed.
+		expect(raised?.subscriptions[0]?.explicit).toBe(true);
 
 		// One explicit subscription replaces the implicit default entirely.
 		harnessed.bus.subscribe({
@@ -816,6 +828,7 @@ describe("subscription identity and cadence", () => {
 				digestMinutes: 3,
 				coalesceMs: 2_000,
 				minIntervalMs: 9_000,
+				explicit: true,
 			},
 		]);
 		harnessed.bus.stop();

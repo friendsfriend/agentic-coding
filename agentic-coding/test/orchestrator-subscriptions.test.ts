@@ -340,6 +340,10 @@ describe("orchestrator event tools", () => {
 			.join("\n");
 		expect(prompt).toContain("[workflow-monitor]");
 		expect(prompt).toContain("subs=");
+		// The note's own line shape, its count suffix and the absorbed no-op note
+		// are part of what the prompt promises (digest-monitor-notes).
+		expect(prompt).toContain("×12");
+		expect(prompt).toContain("absorbed");
 		for (const name of [
 			"subscribe_events",
 			"unsubscribe_events",

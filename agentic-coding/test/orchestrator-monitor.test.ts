@@ -50,13 +50,15 @@ function event(
 const subscription = (
 	label: string,
 	mode: WorkflowEventDeliveryMatch["mode"] = "wake",
-): WorkflowEventDeliveryMatch & {
-	coalesceMs?: number;
-	digestMinutes?: number;
-} => ({
+	/** A subscription the orchestrator created names what it asked for, so it is
+	 * `explicit` unless a test wants a broad-filter hit it never named. */
+	overrides: Partial<WorkflowEventDeliveryMatch> = {},
+): WorkflowEventDeliveryMatch => ({
 	id: `sub-${label}`,
 	label,
 	mode,
+	explicit: true,
+	...overrides,
 });
 
 const EMPTY = { ...DELIVERY_TIMINGS, maxBacklog: 200 };
@@ -118,13 +120,23 @@ describe("delivery planner", () => {
 
 	test("a digest subscription accumulates to its own interval", () => {
 		const planner = new DeliveryPlanner({ ...EMPTY, digestMs: 300_000 });
+		// Info progress the subscription named: the events a digest batches (an
+		// immediate event or a completion rides the wake window instead).
+		const progress = (sequence: number) =>
+			event({
+				sequence,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: {
+					stepId: "core.planning",
+					stepLabel: "Planning",
+					attempt: sequence,
+				},
+			});
+		planner.record(progress(1), [subscription("digest", "digest")], 0);
 		planner.record(
-			event({ sequence: 1 }),
-			[subscription("digest", "digest")],
-			0,
-		);
-		planner.record(
-			event({ sequence: 2 }),
+			{ ...progress(2), workflowId: "wf-2" },
 			[subscription("digest", "digest")],
 			0,
 		);
@@ -136,7 +148,13 @@ describe("delivery planner", () => {
 	test("a subscription's own digestMinutes overrides the default window", () => {
 		const planner = new DeliveryPlanner({ ...EMPTY, digestMs: 300_000 });
 		planner.record(
-			event({ sequence: 1 }),
+			event({
+				sequence: 1,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: { stepId: "core.planning", stepLabel: "Planning", attempt: 1 },
+			}),
 			[{ ...subscription("digest", "digest"), digestMinutes: 1 }],
 			0,
 		);
@@ -174,12 +192,225 @@ describe("delivery planner", () => {
 			maxNoteLines: 2,
 			maxBacklog: 4,
 		});
+		// Distinct workflows, so every event is its own line and the bound bites.
 		for (let index = 1; index <= 6; index += 1)
-			planner.record(event({ sequence: index }), [subscription("default")], 0);
+			planner.record(
+				event({ sequence: index, workflowId: `wf-${index}` }),
+				[subscription("default")],
+				0,
+			);
 		const note = planner.flush(0);
 		const lines = note?.split("\n") ?? [];
 		expect(lines).toHaveLength(4);
+		expect(lines[1]).not.toBe(lines[2]);
 		expect(lines[3]).toBe("… +4 more");
+	});
+
+	test("the same workflow, step and effect is one line with its attempt count", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		// The shape the backlog measured: one workflow id repeated twelve times, and
+		// two genuinely different changes beside it.
+		for (let attempt = 1; attempt <= 12; attempt += 1)
+			planner.record(
+				event({
+					sequence: attempt,
+					id: "effect.failed",
+					humanNeeded: false,
+					severity: "warning",
+					payload: { effectId: "push", kind: "push", attempts: attempt },
+				}),
+				[subscription("default")],
+				0,
+			);
+		planner.record(
+			event({ sequence: 13, workflowId: "wf-2" }),
+			[subscription("default")],
+			0,
+		);
+		const lines = planner.flush(0)?.split("\n") ?? [];
+		expect(lines).toEqual([
+			"[workflow-monitor] subs=default",
+			"- wf-1 → core.developer-review (effect failed: push) ×12",
+			"- wf-2 → core.developer-review (developer review waiting)",
+		]);
+	});
+
+	test("a digest subscription holds info progress back and never an immediate event", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 10,
+			minNoteIntervalMs: 0,
+			digestMs: 300_000,
+		});
+		const digest = subscription("digest", "digest");
+		planner.record(
+			event({
+				sequence: 1,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: { stepId: "core.planning", stepLabel: "Planning", attempt: 1 },
+			}),
+			[digest],
+			0,
+		);
+		// Progress waits the whole digest interval...
+		expect(planner.flush(30_000)).toBeUndefined();
+		expect(planner.nextDueAt(30_000)).toBe(300_000);
+		// ...while a blocked run inside the same subscription closes on the wake
+		// window, so a digest never delays what must be heard at once.
+		planner.record(
+			event({
+				sequence: 2,
+				id: "run.blocked",
+				humanNeeded: false,
+				severity: "warning",
+				payload: {
+					runId: "run-1",
+					role: "implementer",
+					stepId: "core.implementation",
+				},
+			}),
+			[digest],
+			1_000,
+		);
+		const note = planner.flush(1_010);
+		expect(note).toContain("run blocked: implementer");
+		expect(note).not.toContain("step entered");
+	});
+
+	test("a digest subscription still delivers a completion on the wake window", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 10,
+			minNoteIntervalMs: 0,
+			digestMs: 300_000,
+		});
+		planner.record(
+			event({
+				sequence: 1,
+				id: "workflow.completed",
+				humanNeeded: false,
+				severity: "info",
+				stepId: "core.completed",
+				payload: { stepId: "core.completed", stepLabel: "Completed" },
+			}),
+			[subscription("digest", "digest")],
+			0,
+		);
+		expect(planner.flush(9)).toBeUndefined();
+		expect(planner.flush(10)).toContain("completed");
+	});
+
+	test("progress no subscription named is absorbed, and progress it named is delivered", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		const progress = (sequence: number) =>
+			event({
+				sequence,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: {
+					stepId: "core.planning",
+					stepLabel: "Planning",
+					attempt: 1,
+				},
+			});
+		// A broad filter (`scope: mine`, `minSeverity: info`) caught it, but the
+		// subscription never named step progress: recording it is enough.
+		planner.record(
+			progress(1),
+			[subscription("broad", "wake", { explicit: false })],
+			0,
+		);
+		expect(planner.flush(0)).toBeUndefined();
+		expect(planner.absorbedCount).toBe(1);
+		expect(planner.pendingCount).toBe(0);
+		// The same event, named by the subscription, is a note.
+		planner.record(
+			progress(2),
+			[subscription("steps", "wake", { explicit: true })],
+			0,
+		);
+		expect(planner.flush(0)).toContain("step entered");
+		expect(planner.absorbedCount).toBe(1);
+	});
+
+	test("a note with one line worth waking for carries the absorbed progress too", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		const broad = subscription("broad", "wake", { explicit: false });
+		planner.record(
+			event({
+				sequence: 1,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: {
+					stepId: "core.planning",
+					stepLabel: "Planning",
+					attempt: 1,
+				},
+			}),
+			[broad],
+			0,
+		);
+		planner.record(
+			event({
+				sequence: 2,
+				id: "workflow.completed",
+				humanNeeded: false,
+				severity: "info",
+				stepId: "core.completed",
+				payload: { stepId: "core.completed", stepLabel: "Completed" },
+			}),
+			[broad],
+			0,
+		);
+		const note = planner.flush(0);
+		expect(note).toContain("step entered");
+		expect(note).toContain("completed");
+		expect(planner.absorbedCount).toBe(0);
+	});
+
+	test("an explicit subscription keeps its own cadence", () => {
+		const planner = new DeliveryPlanner({
+			...EMPTY,
+			coalesceMs: 10,
+			minNoteIntervalMs: 0,
+			digestMs: 300_000,
+		});
+		const progress = (sequence: number) =>
+			event({
+				sequence,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: {
+					stepId: "core.planning",
+					stepLabel: "Planning",
+					attempt: sequence,
+				},
+			});
+		// A digest subscription's own digestMinutes sets its window.
+		planner.record(
+			progress(1),
+			[subscription("hourly", "digest", { digestMinutes: 60 })],
+			0,
+		);
+		expect(planner.flush(3_599_999)).toBeUndefined();
+		expect(planner.flush(3_600_000)).toContain("step entered");
 	});
 
 	test("the hard note cap keeps the rest queued", () => {
@@ -197,22 +428,43 @@ describe("delivery planner", () => {
 		expect(planner.flush(60 * 60 * 1000)).toBeDefined();
 	});
 
-	test("a storm is one note, capped at the line bound with an exact remainder", () => {
+	test("a storm of one workflow's identical events is one counted line", () => {
 		const planner = new DeliveryPlanner({
 			...DELIVERY_TIMINGS,
 			coalesceMs: 0,
 			minNoteIntervalMs: 0,
 		});
-		// The shape of the bug this cap defends against: thousands of events for
-		// one workflow inside one window. The note may never grow with them.
-		for (let sequence = 1; sequence <= 1_000; sequence += 1)
+		// The shape of the bug this defends against: a burst of events for one
+		// workflow inside one window, all describing the same change. The note may
+		// never grow with them, and it no longer repeats one workflow id.
+		for (let sequence = 1; sequence <= 100; sequence += 1)
 			planner.record(
 				event({ sequence, workflowId: "wf-1" }),
 				[subscription("default")],
 				0,
 			);
 		const note = planner.flush(0);
-		const lines = note?.split("\n") ?? [];
+		expect(note?.split("\n")).toEqual([
+			"[workflow-monitor] subs=default",
+			"- wf-1 → core.developer-review (developer review waiting) ×100",
+		]);
+		expect(planner.pendingCount).toBe(0);
+		expect(planner.flush(60_000)).toBeUndefined();
+	});
+
+	test("a storm of distinct changes is one capped note with an exact remainder", () => {
+		const planner = new DeliveryPlanner({
+			...DELIVERY_TIMINGS,
+			coalesceMs: 0,
+			minNoteIntervalMs: 0,
+		});
+		for (let sequence = 1; sequence <= 1_000; sequence += 1)
+			planner.record(
+				event({ sequence, workflowId: `wf-${sequence}` }),
+				[subscription("default")],
+				0,
+			);
+		const lines = planner.flush(0)?.split("\n") ?? [];
 		expect(lines).toHaveLength(MAX_NOTE_LINES + 2);
 		expect(lines[0]).toBe("[workflow-monitor] subs=default");
 		expect(lines.at(-1)).toBe(`… +${1_000 - MAX_NOTE_LINES} more`);
@@ -238,7 +490,11 @@ describe("delivery planner", () => {
 				[subscription("default")],
 				at,
 			);
-		expect(planner.flush(5)?.split("\n")).toHaveLength(5);
+		const lines = planner.flush(5)?.split("\n") ?? [];
+		// One line for the four events: they are the same change, so the window's
+		// own contents are still what the note reports.
+		expect(lines).toHaveLength(2);
+		expect(lines[1]).toContain("×4");
 		expect(planner.pendingCount).toBe(0);
 		expect(planner.flush(65_000)).toBeUndefined();
 	});
@@ -250,6 +506,7 @@ describe("delivery planner", () => {
 					{
 						event: event({}),
 						labels: [],
+						explicit: true,
 						dueAt: 0,
 					},
 				],
@@ -416,6 +673,50 @@ describe("monitor delivery", () => {
 		monitor.stop();
 	});
 
+	test("a no-op progress note is absorbed without waking the session", async () => {
+		const clock = { at: 0 };
+		const { gateway, notes, monitor } = harness({
+			timings: { coalesceMs: 10, minNoteIntervalMs: 0 },
+			clock,
+		});
+		// A broad subscription (`minSeverity: info`, no named event) caught a step
+		// progress event it never asked for: the note is a no-op, so the session is
+		// not woken for it (the event stays readable with `read_events`).
+		gateway.frame({
+			event: event({
+				sequence: 1,
+				id: "step.entered",
+				humanNeeded: false,
+				severity: "info",
+				payload: {
+					stepId: "core.planning",
+					stepLabel: "Planning",
+					attempt: 1,
+				},
+			}),
+			subscriptions: [subscription("broad", "wake", { explicit: false })],
+		});
+		clock.at = 10;
+		await sleep(60);
+		expect(notes).toEqual([]);
+		// The completion the same session waits for is still delivered.
+		gateway.frame({
+			event: event({
+				sequence: 2,
+				id: "workflow.completed",
+				humanNeeded: false,
+				severity: "info",
+				stepId: "core.completed",
+				payload: { stepId: "core.completed", stepLabel: "Completed" },
+			}),
+			subscriptions: [subscription("broad", "wake", { explicit: false })],
+		});
+		clock.at = 20;
+		await waitUntil(() => notes.length === 1);
+		expect(notes[0]).toContain("completed");
+		monitor.stop();
+	});
+
 	test("a silent subscription delivers no note but still notifies on a human-needed event", async () => {
 		const { gateway, notes, notifications, monitor } = harness();
 		gateway.frame({
@@ -559,7 +860,9 @@ describe("monitor delivery", () => {
 		// The window closes.
 		clock.at = 5;
 		await waitUntil(() => notes.length === 1);
-		expect(notes[0]?.split("\n")).toHaveLength(MAX_NOTE_LINES + 2);
+		// 200 identical events for one workflow: one counted line, not 200.
+		expect(notes[0]?.split("\n")).toHaveLength(2);
+		expect(notes[0]).toContain("×200");
 		// 400 more inside the minimum interval: the session is not woken again.
 		storm(201);
 		storm(401);
