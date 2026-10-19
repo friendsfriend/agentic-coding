@@ -12,6 +12,8 @@ import path from "node:path";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import {
 	boundedChangedFilesInput,
+	MAX_CHANGED_FILES_BYTES,
+	MAX_FINDING_DETAIL_CHARS,
 	MAX_FINDINGS_PER_ROLE,
 	MAX_PLAN_FILES,
 	MAX_PRIOR_FINDINGS_BYTES,
@@ -263,6 +265,77 @@ test("a verification round's changed files are bounded and labelled", () => {
 	expect(line?.endsWith("(+5 more)")).toBe(true);
 	expect(line).toContain(`src/f${MAX_VERIFICATION_CHANGED_FILES - 1}.ts`);
 	expect(line).not.toContain(`src/f${MAX_VERIFICATION_CHANGED_FILES}.ts`);
+});
+
+test("a changed-files line carries only forwardable paths, within a byte budget", () => {
+	// The count bound is not the only bound: a path is as untrusted as a
+	// finding's location, so an absolute path, a traversing path, a control
+	// character and an over-long path are dropped rather than forwarded.
+	expect(
+		boundedChangedFilesInput([
+			"src/a.ts",
+			"/etc/passwd",
+			"../escape.ts",
+			"src/\u0000nul.ts",
+			`src/${"a".repeat(300)}.ts`,
+			"src/b.ts",
+		]),
+	).toBe("Changed files: src/a.ts src/b.ts");
+	// Duplicates are one path.
+	expect(boundedChangedFilesInput(["src/a.ts", "src/a.ts"])).toBe(
+		"Changed files: src/a.ts",
+	);
+	// Only unusable paths: no line at all, rather than an empty one.
+	expect(
+		boundedChangedFilesInput(["/etc/passwd", "../escape.ts"]),
+	).toBeUndefined();
+	// A hundred legal paths can still be more than an assignment should carry:
+	// the byte budget stops the line and names the remainder.
+	const long = Array.from(
+		{ length: MAX_VERIFICATION_CHANGED_FILES },
+		(_, index) => `src/${"d".repeat(150)}-${index}.ts`,
+	);
+	const line = boundedChangedFilesInput(long) ?? "";
+	expect(Buffer.byteLength(line)).toBeLessThanOrEqual(MAX_CHANGED_FILES_BYTES);
+	expect(line.endsWith(" more)")).toBe(true);
+	expect(line).toContain(`src/${"d".repeat(150)}-0.ts`);
+});
+
+test("the forwarded bounds are the ones this change measured", () => {
+	// Pinned literally: these numbers are quoted in the change's design, and a
+	// silent change to one of them changes what an assignment costs without the
+	// figures being re-measured.
+	expect(MAX_PLAN_FILES).toBe(40);
+	expect(MAX_VERIFICATION_CHANGED_FILES).toBe(100);
+	expect(MAX_CHANGED_FILES_BYTES).toBe(4 * 1024);
+	expect(MAX_FINDINGS_PER_ROLE).toBe(8);
+	expect(MAX_FINDING_DETAIL_CHARS).toBe(200);
+	expect(MAX_PRIOR_FINDINGS_BYTES).toBe(4 * 1024);
+});
+
+test("a sibling verifier's findings are forwarded to this round", () => {
+	// The round is one step with several verifier roles: what the security
+	// verifier reported must reach the next round's assignments, not only the
+	// record of the role that happened to run last.
+	const dir = tempDir();
+	const security = recorded(
+		dir,
+		"core.verification:security-verifier",
+		"security.json",
+		{ findings: [finding({ id: "SEC-1", detail: "unbounded path" })] },
+	);
+	const quality = recorded(
+		dir,
+		"core.verification:quality-verifier",
+		"quality.json",
+		{ findings: [finding({ id: "QV-1", detail: "duplicated literal" })] },
+	);
+	const block = priorFindingsInput(snapshotWith([security, quality])) ?? "";
+	expect(block).toContain("unbounded path");
+	expect(block).toContain("duplicated literal");
+	// Every forwarded line names its severity and location: a reader can tell
+	// which round produced it.
+	expect(block.split("\n")).toHaveLength(4);
 });
 
 test("round one of a verification step forwards no prior findings", () => {

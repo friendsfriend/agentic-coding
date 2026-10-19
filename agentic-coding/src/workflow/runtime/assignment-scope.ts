@@ -42,6 +42,11 @@ export const MAX_FINDINGS_PER_ROLE = 8;
 export const MAX_FINDING_DETAIL_CHARS = 200;
 /** The whole forwarded-findings block, its heading and preamble included. */
 export const MAX_PRIOR_FINDINGS_BYTES = 4 * 1024;
+/** The byte budget for one forwarded changed-file line. The per-path bound and
+ * the count bound are not enough on their own: 100 legal path bytes still add up
+ * to more than an assignment should carry, and the renderer's own ceiling
+ * (`MAX_ASSIGNMENT_BYTES`) must stay unreachable from repository content. */
+export const MAX_CHANGED_FILES_BYTES = 4 * 1024;
 /** A path longer than this is not a repository-relative path a plan names; it
  * is dropped rather than allowed to eat the assignment's byte budget. */
 const MAX_FORWARDED_PATH_CHARS = 200;
@@ -140,16 +145,32 @@ export function planFileInput(snapshot: WorkflowSnapshot): string | undefined {
 	return `Plan files: ${shown.join(" ")}${omitted > 0 ? ` (+${omitted} more)` : ""}`;
 }
 
-/** The `Changed files:` line a verification round carries, bounded to
- * {@link MAX_VERIFICATION_CHANGED_FILES} paths followed by the count of the
- * remainder. `core.triage` keeps its own unbounded line: its completion check
- * scopes against exactly that set. */
+/** The `Changed files:` line a verification round carries: the paths a plan
+ * forwarder would accept (repository-relative, no control characters, bounded in
+ * length), at most {@link MAX_VERIFICATION_CHANGED_FILES} of them and at most
+ * {@link MAX_CHANGED_FILES_BYTES} bytes, followed by the count of the remainder.
+ * `core.triage` keeps its own unbounded line: its completion check scopes
+ * against exactly that set. */
 export function boundedChangedFilesInput(
 	files: readonly string[],
 ): string | undefined {
-	if (!files.length) return undefined;
-	const shown = files.slice(0, MAX_VERIFICATION_CHANGED_FILES);
-	const omitted = files.length - shown.length;
+	const paths = [
+		...new Set(files.map(forwardablePath).filter((item) => item !== undefined)),
+	];
+	if (!paths.length) return undefined;
+	const limit = Math.min(paths.length, MAX_VERIFICATION_CHANGED_FILES);
+	const shown: string[] = [];
+	let bytes = Buffer.byteLength("Changed files: ");
+	for (let index = 0; index < limit; index += 1) {
+		const path = paths[index];
+		if (path === undefined) break;
+		const cost = Buffer.byteLength(`${shown.length ? " " : ""}${path}`);
+		if (bytes + cost > MAX_CHANGED_FILES_BYTES) break;
+		shown.push(path);
+		bytes += cost;
+	}
+	if (!shown.length) return undefined;
+	const omitted = paths.length - shown.length;
 	return `Changed files: ${shown.join(" ")}${omitted > 0 ? ` (+${omitted} more)` : ""}`;
 }
 
