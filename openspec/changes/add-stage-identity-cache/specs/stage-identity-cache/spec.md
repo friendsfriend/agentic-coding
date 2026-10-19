@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Session state is cached in memory per stage and role
-After a stage session's login succeeds, by an automated recipe or by the developer, the server SHALL capture the cookies, localStorage and sessionStorage of the stage's application origins and declared login origins — which is where an application's JWT or cached tokens live — and, for an HTTP-basic login typed by the developer in the browser's own dialog, the Basic credential the browser sent to the application's origin, and keep them in server memory under the key `(stage, role)`. The server SHALL NOT capture any other origin, SHALL NOT write the cache to disk, to the workflow store, to a snapshot, to telemetry or to evidence, and SHALL lose the cache when the server process ends.
+After a stage session's login succeeds, by an automated recipe or by the developer, the server SHALL capture the cookies, localStorage and sessionStorage of the stage's application origins and declared login origins — which is where an application's JWT or cached tokens live — and keep them in server memory under the key `(stage, role)`. For an HTTP-basic login typed by the developer in the browser's own dialog, the server SHALL capture the Basic credential the browser sent to the application's origin only where the driver exposes that request header; where it does not, such a role SHALL be documented and treated as non-cacheable and its login SHALL run per session. The server SHALL NOT capture any other origin, SHALL NOT write the cache to disk, to the workflow store, to a snapshot, to telemetry or to evidence, and SHALL lose the cache when the server process ends.
 
 #### Scenario: Capture after a successful login
 - **WHEN** a login of role `clerk` on stage `grid-int` meets its success condition
@@ -15,6 +15,10 @@ After a stage session's login succeeds, by an automated recipe or by the develop
 - **WHEN** the developer completes an HTTP-basic login in the browser's own dialog and the driver exposes the `Authorization` header
 - **THEN** the credential SHALL be captured in memory for `(stage, role)` and SHALL later be installed only as HTTP credentials for the application's origin, sent only in answer to a `401`
 
+#### Scenario: Basic login the driver cannot observe
+- **WHEN** the driver cannot observe the `Authorization` header the browser's dialog generates
+- **THEN** no Basic credential SHALL be cached, the role SHALL be reported as non-cacheable, and its next login SHALL run the normal path
+
 #### Scenario: Nothing survives a restart
 - **WHEN** the server restarts
 - **THEN** the cache SHALL be empty and the next login SHALL run the normal path
@@ -27,7 +31,7 @@ While a stage session lives, the server SHALL replace the entry with a fresh cap
 - **THEN** the new session SHALL start from the latest captured state and SHALL reach the success condition without a developer prompt
 
 ### Requirement: A cached identity is reused silently but never trusted
-When a stage session for `(stage, role)` is created and a live entry exists, the server SHALL install the cached state into the new context before the first navigation using server-internal paths only (cookies, origin-scoped storage initialisation, and a Basic credential as HTTP credentials limited to the application's origin and sent only on `401`). The login's success condition SHALL still decide whether the session is logged in. If the login form appears instead, the server SHALL evict the entry and continue with the automated recipe or the developer hand-off.
+When a stage session for `(stage, role)` is created and a live entry exists, the server SHALL install the cached state into the new context before the first navigation using server-internal paths only (cookies and origin-scoped storage initialisation, plus a Basic credential as HTTP credentials limited to the application's origin and sent only on `401` where the driver exposes the header to capture it). The login's success condition SHALL still decide whether the session is logged in. If the login form appears instead, the server SHALL evict the entry and continue with the automated recipe or the developer hand-off.
 
 #### Scenario: Silent sign-in
 - **WHEN** a second workflow opens the clerk application on `grid-int` within the entry's lifetime and the identity provider accepts the cached cookie

@@ -90,10 +90,29 @@ Ownership is `src/server/stages/`:
   exist: they join the redaction set, are never journaled, and the only token
   facts any surface reports are `expiresAt` (epoch milliseconds, comparable with
   `Date.now()`), `scopes`, `audience` and `issuer`.
+- `identity-cache.ts` — the in-memory browser identity of a `(stage, role)`
+  (`add-stage-identity-cache`): the cookies and `localStorage`/`sessionStorage`
+  of the stage's own application and login origins, captured after a successful
+  login, re-captured while the session lives, and installed into a later session
+  as a hint the declared success condition still has to confirm. It is bounded by
+  a TTL, an entry cap and a refresh interval, holds no file and no store row, and
+  reports only `(stage, role, capturedAt, expiresAt)`; the values themselves are
+  never listed, logged or returned, and join the redaction set while they are
+  held. A stage sets `"identityCache": false` to opt out, and
+  `stages/policy.json` bounds the whole tree with
+  `identityCache: {ttlMinutes, maxEntries, refreshSeconds}` (defaults 240 / 8 /
+  120, hard ceilings 1440 / 50 / 3600 — a larger policy value is clamped and
+  warned about once). The OAuth 2.0 token store is a separate store: this one
+  holds *browser* state, that one holds the bearer token the server presents.
 - `routes.ts` / `operations.ts` — the read surfaces and the one write (the
   credential flow above), plus their in-process twin for a transport-less shell.
   The OAuth 2.0 additions are two POST routes on the same owner-scoped agent
-  surface: `stage-api-request` and `stage-token-info`.
+  surface: `stage-api-request` and `stage-token-info`. The identity cache adds
+  two instance-authenticated routes — `GET /api/v1/stages/identity` (the
+  value-free listing) and `POST /api/v1/stages/identity/forget`
+  (`{stage?, role?}`, `removed` plus the remaining listing) — used by Settings →
+  Stages and by `agentic-coding stage identity list|forget`; forgetting is an
+  operator action, so there is no agent-facing twin.
 
 The only function that turns a reference into a value is
 `resolveStageCredential`, called by the login path alone; no route module
