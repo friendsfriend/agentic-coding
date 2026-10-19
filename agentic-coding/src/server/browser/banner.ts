@@ -41,7 +41,9 @@ export function handoffBannerText(text: HandoffBannerText): string {
 	const reason =
 		text.reason === "no-credentials"
 			? "this role declares no credentials this server can use"
-			: "this login needs a step the server cannot automate";
+			: text.reason === "user-identity"
+				? "this role signs in with your own identity at the provider"
+				: "this login needs a step the server cannot automate";
 	const ending = text.canConfirm
 		? `The agent is waiting for this login. Sign in in this window, then choose Done in the dashboard; closing this window aborts the hand-off. It expires at ${text.deadline}.`
 		: `The agent is waiting for this login. Sign in in this window; the hand-off ends when the login is detected or at ${text.deadline}, and closing this window aborts it.`;

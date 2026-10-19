@@ -19,6 +19,7 @@ import path from "node:path";
 import {
 	readStageCatalog,
 	resolveStageOAuthCredential,
+	StageCredentialError,
 	stageByIdent,
 	stageCredentialVariables,
 	stageView,
@@ -270,7 +271,7 @@ describe("the oauth2 role's login mode", () => {
 		);
 	});
 
-	test("the authorization_code grant is valid configuration, and its login is not this build's", () => {
+	test("the authorization_code grant is a hand-off, and a policy that forbids a window makes it unavailable", () => {
 		const grant = {
 			apps: {
 				api: {
@@ -288,9 +289,8 @@ describe("the oauth2 role's login mode", () => {
 			},
 		};
 		// With the authorization endpoint the flow needs, the file is valid
-		// configuration; the login itself is not this build's, so the mode is
-		// `unavailable` rather than a hand-off no run could complete (USAB-003).
-		// The browser flow itself belongs to `add-stage-oauth2-code-pkce`.
+		// configuration, and the login is a hand-off (`add-stage-oauth2-code-pkce`):
+		// the window the interactive login already opens is what completes it.
 		const complete = writeStage({
 			...grant,
 			...provider({
@@ -301,10 +301,41 @@ describe("the oauth2 role's login mode", () => {
 		const role = viewOf(complete).view.apps[0]?.roles[0];
 		expect(role?.grant).toBe("authorization_code");
 		expect(role?.loginKind).toBe("oauth2");
-		expect(role?.loginMode).toBe("unavailable");
+		expect(role?.loginMode).toBe("handoff");
 
-		// Without it the catalog refuses the file rather than accepting a provider
-		// that could never complete the flow.
+		// A policy that forbids a window forbids this login too: it is a person's
+		// sign-in, so `unavailable` is the honest mode rather than a hand-off that
+		// would be refused.
+		const forbidden = writeStage(
+			{
+				...grant,
+				...provider({
+					authorizationEndpoint: "https://login.example.test/oauth2/authorize",
+				}),
+			},
+			{},
+			{ interactiveLogin: "never" },
+		);
+		expect(viewOf(forbidden).view.apps[0]?.roles[0]?.loginMode).toBe(
+			"unavailable",
+		);
+
+		// A client id the `.env` does not set is a gap no window could fill, so the
+		// mode is `unavailable` here too — and `stage_login` refuses with the same
+		// mode rather than opening a window nobody can complete (TQ-005).
+		const unset = writeStage(
+			{
+				...grant,
+				...provider({
+					authorizationEndpoint: "https://login.example.test/oauth2/authorize",
+				}),
+			},
+			{ STAGE_GRID_INT_CLIENT_ID: "" },
+		);
+		expect(viewOf(unset).view.apps[0]?.roles[0]?.loginMode).toBe("unavailable");
+
+		// Without the authorization endpoint the catalog refuses the file rather
+		// than accepting a provider that could never complete the flow.
 		const incomplete = writeStage(grant);
 		expect(errors(incomplete).join("\n")).toContain("authorizationEndpoint");
 	});
@@ -380,6 +411,54 @@ describe("what the catalog refuses", () => {
 		expect(reported).toContain("refresh_token");
 		expect(reported).toContain("authorization_code");
 		expect(reported).not.toContain("password");
+	});
+
+	test("a provider that declares no client id never loads, so no login can meet that state", () => {
+		const configDir = writeStage({
+			oauth2: {
+				providers: {
+					idp: {
+						tokenEndpoint: "https://login.example.test/oauth2/token",
+						clientSecret: "${STAGE_GRID_INT_CLIENT_SECRET}",
+					},
+				},
+			},
+		});
+		const catalog = readStageCatalog(configDir);
+		// No `.env` value can fill a reference the stage file never declares, so this is
+		// a load-time refusal with the field named — not a login-time refusal telling
+		// the operator to set a variable that does not exist (USAB-208).
+		expect(catalog.entries).toEqual([]);
+		expect(catalog.excluded[0]?.file).toBe("grid-int.json");
+		const reported = errors(configDir).join("\n");
+		expect(reported).toContain("oauth2.providers.idp.clientId");
+		expect(reported).toContain("is missing");
+		// Value-free: the diagnostic names the field, never what a variable holds.
+		expect(reported).not.toContain(CLIENT_SECRET_VALUE);
+	});
+
+	test("a credential field the stage file never declares names that field, not a variable", () => {
+		const configDir = writeStage();
+		const entry = stageByIdent(readStageCatalog(configDir), "grid-int");
+		if (!entry) throw new Error("the fixture stage is not allow-listed");
+		let failure: unknown;
+		try {
+			resolveStageOAuthCredential(
+				entry.stage,
+				"elsewhere",
+				"clientId",
+				configDir,
+			);
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeInstanceOf(StageCredentialError);
+		const message = (failure as Error).message;
+		// The remedy for an undeclared field is the stage file, not Settings → Stages:
+		// no `.env` write could ever make this reference resolve (USAB-208).
+		expect(message).toContain("oauth2.providers.elsewhere.clientId");
+		expect(message).toContain("not declared in the stage file");
+		expect(message).not.toContain("Settings → Stages");
 	});
 
 	test("a refresh_token grant without a refresh token reference is refused", () => {

@@ -62,9 +62,10 @@ export interface StageRoleStatus {
 	readonly credentialStatus: string;
 	/** What a run can expect of this login: `automated` (this server performs
 	 * it), `handoff` (it needs the developer in a headed window), `unavailable`
-	 * (it needs the developer and this configuration forbids the window, or it is
-	 * a recipe this build cannot perform at all — the `authorization_code` grant
-	 * is `unavailable` until the browser hand-off lands). */
+	 * (it needs the developer and this configuration forbids the window, or a
+	 * reference it needs is unset). The `authorization_code` grant is a hand-off:
+	 * the provider's page is the sign-in, and the hand-off's window is where it
+	 * happens. */
 	readonly loginMode: "automated" | "handoff" | "unavailable";
 	readonly credentials: readonly StageCredentialStatus[];
 }

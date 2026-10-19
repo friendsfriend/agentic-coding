@@ -58,6 +58,7 @@ import {
 import type { StageUsageRegistry } from "./limits.ts";
 import {
 	forgetStageTokens,
+	pkceSecrets,
 	type StageTokenStore,
 	stageTokenStore,
 } from "./oauth2.ts";
@@ -118,6 +119,10 @@ function redactor(deps: StageRouteDeps): (value: unknown) => unknown {
 	const secrets = [
 		...environmentSecrets(deps.configDir),
 		...(deps.tokens ?? stageTokenStore()).secrets(),
+		// The PKCE values of a code-grant login (`add-stage-oauth2-code-pkce`): a
+		// stage route never answers one, and this is what makes that true even if a
+		// value reaches a reply by mistake.
+		...pkceSecrets(),
 	].sort((left, right) => right.value.length - left.value.length);
 	return (value) => redact(value, secrets);
 }

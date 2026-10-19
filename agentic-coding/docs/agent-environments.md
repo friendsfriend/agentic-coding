@@ -450,25 +450,84 @@ a production-like name is refused by the catalog, and only the operator's own
   ``${VAR}``, an optional `clientSecret` ``${VAR}``, `scope`, `audience` and
   `clientAuth`: `basic` — the default — or `body`), a `grant`
   (`client_credentials`, `refresh_token` or `authorization_code`), and
-  optionally `bearerOrigins`. `stage_login` asks the provider for a token and
-  answers `ok` with `via: "token"` once one exists — no login page, no window,
-  no typing, no prompt — so an unattended policy
-  (`interactiveLogin: "never"`) is the normal case for the two grants that need
-  no person: a `client_credentials` role, and a `refresh_token` role whose
-  ``${VAR}`` refresh token the `.env` sets. A missing reference is the familiar
+  optionally `bearerOrigins`. For the two unattended grants `stage_login` asks
+  the provider for a token and answers `ok` with `via: "token"` once one
+  exists — no login page, no window, no typing, no prompt — so an unattended
+  policy (`interactiveLogin: "never"`) is the normal case for them: a
+  `client_credentials` role, and a `refresh_token` role whose ``${VAR}`` refresh
+  token the `.env` sets. A missing reference is the familiar
   `credential-missing` naming the variable, and a provider refusal is
   `login-failed` with the provider's own `error` code (its `error_description`,
   scrubbed and bounded, is the message) — never a token.
-  `authorization_code` is *declared* by the schema for the user-delegated case,
-  and its login is not this build's: `stage_login` answers `login-failed`
-  ("the authorization_code grant is not supported by this build;
-  client_credentials and refresh_token are"), and `stage_info` reports that
-  role's `loginMode` as `unavailable` rather than `handoff`, so a run plans no
-  hand-off that could not be created.
+  `authorization_code` is the third grant: the user-delegated one, where the
+  identity at the provider is the developer's own. It is a **hand-off**, so
+  `stage_info` reports that role's `loginMode` as `handoff`, and `stage_login`
+  answers `login-needs-user` — see the bullet on the code grant below.
+- **The code grant is a person's sign-in on a single-use loopback receiver.**
+  For a role whose grant is `authorization_code`, `stage_login` builds an RFC
+  7636 PKCE pair (a 43-character verifier and its `S256` challenge) and an
+  opaque, unguessable `state`, opens the provider's `authorizationEndpoint` in
+  the *same* hand-off window the interactive login uses (one record, one window,
+  one session lock, one deadline), and listens on
+  `http://127.0.0.1:<ephemeral>/callback` for the redirect. The receiver is
+  bound to the loopback interface only, accepts exactly **one** callback,
+  compares `state` in constant time before anything else, and closes on every
+  ending path — success, a mismatched `state`, the deadline, an abort — so no
+  port stays bound after a login. The authorization code, the verifier and every
+  token stay in the server: they are added to the redaction set while the login
+  runs (the code and `state` stay registered after the login ends, so a replay
+  of the callback URL is scrubbed too; the set keeps the newest 64 values in
+  all, and a finished login leaves two of them — its `state` and the code its
+  receiver took — so roughly the 32 most recent logins stay covered and the
+  oldest value falls out, one per new value, to make room), the callback page
+  reflects no
+  parameter, and a `state` mismatch, a provider `error` or a refused exchange
+  ends the login as `login-failed` with a value-free message. `stage_login_wait`
+  answers `ok` (`via: "token"`, `verified: true`) **only** after the exchange
+  succeeded and the token is in the store — an exchange whose write a
+  credential rewrite discarded during the round trip is not an `ok`; a *Done*
+  that never completed is
+  `login-handoff-unverified` (the ending of a recipe a page can finish, which
+  this grant never offers), a deadline is `login-handoff-timeout`, a closed
+  window or an abort is `login-handoff-aborted`, and a sign-in the provider
+  refuses is `login-handoff-unverified` or `login-failed`, never `ok`. This
+  grant offers no *Done* to choose — neither in the window's banner nor in the
+  dashboard record, whose only answer is *Abort* — because its ending is the
+  server's own receiver and a *Done* could only close it unverified. The token
+  is then an ordinary one: `stage_api_request` and a `bearerOrigins` page use
+  it, the completed hand-off returns the window to the application (rather than
+  leaving it on a callback page that no longer answers), and no path that merely
+  *needs* a token starts a window. A token this grant obtained is renewed like
+  any other **when the provider issued a refresh token**: the store renews it
+  from that token, and a role whose provider issued none has nothing to renew —
+  such a request is `login-failed` ("call stage_login") until the developer
+  signs in again. `scope` and `audience` come from the provider, a provider
+  with no `clientSecret` is a public client (no `Authorization` header is sent,
+  the client id travels in the body), and a provider that returns a refresh
+  token gets it stored like the `refresh_token` grant's. Registering the
+  loopback redirect is the operator's job, and the shape to register is
+  `http://127.0.0.1:<any port>/callback` — loopback, an ephemeral port, the
+  path `/callback`, no query. An identity provider that forbids a loopback
+  `redirect_uri` (or that pins an exact port) reports its own refusal *inside
+  the window* — no redirect comes back, so no code is exchanged — and that is a
+  registration decision rather than an engine fallback: the hand-off then ends
+  at its deadline or by an abort. A policy of `interactiveLogin: "never"`
+  refuses the login outright (`login-user-unavailable`, `loginMode:
+  "unavailable"`) instead of opening a window, and that answer wins over the
+  missing-variable one, which belongs to a stage that could hand off: under
+  `never` naming a variable whose setting still could not open a window would
+  send the developer to a dead end. Under `local`, a code role whose client id
+  — or client secret, when the provider declares one — is not set in the `.env`
+  answers `credential-missing` naming that variable (`loginMode:
+  "unavailable"`), and a provider that declares no client id reference at all
+  never reaches a login: its stage file is refused at load with a diagnostic
+  naming `oauth2.providers.<name>.clientId`, because no `.env` value could fill
+  it.
 - **A token login still needs the session it runs on.** `stage_login` is a
-  browser-layer action on an open, stage-bound session: the token login opens no
-  page, window or prompt, but it does need `browser_open({ stage, stageApp })`
-  first, it counts as one stage action and it holds one session slot. A run that
+  browser-layer action on an open, stage-bound session: an *unattended* token
+  login opens no page, window or prompt, but it — and the `authorization_code`
+  hand-off, which does open one — needs `browser_open({ stage, stageApp })`
+  first, counts as one stage action and holds one session slot. A run that
   only needs an API needs no session at all: `stage_api_request` acquires and
   renews the token itself.
 - **The token is the server's, and only its shape is ever reported.** The
@@ -543,18 +602,22 @@ a production-like name is refused by the catalog, and only the operator's own
 - **A login the server cannot automate is handed to you, not failed.** A role
   whose credentials this `.env` does not set, or whose recipe declares
   `kind: "interactive"`, needs a person: `stage_login` answers
-  `login-needs-user` with a `handoffId`, the reason (`no-credentials` or
-  `unautomatable-step`) and the deadline, and the server opens a **second,
-  headed browser** and *promotes* the session into it — same session name, same
+  `login-needs-user` with a `handoffId`, the reason (`no-credentials`,
+  `unautomatable-step` or `user-identity` for the code grant's own sign-in) and
+  the deadline, and the server opens a **second, headed browser** and *promotes*
+  the session into it — same session name, same
   owner, same slot, same stage binding — so the developer logs in in the same
   context the run will keep using. The headless context is closed; the promoted
   one carries a banner naming the app, the role and the stage (never a URL with
   a query or a credential). `stage_login_wait` then blocks *in the server*, so
   no run is parked and no model turn is spent: each call executes one stage
   action and answers `login-needs-user` while the developer is still working, or
-  the terminal outcome — `ok` (`via: "handoff"`, with `verified`), or
+  the terminal outcome — `ok` (`via: "handoff"` for a page login, `"token"` for
+  the code grant, with `verified`), or
   `login-handoff-unverified` / `-timeout` / `-aborted` (`by: developer | agent |
-  window-closed | run-ended`). A terminal outcome is a `blocked` verdict with
+  window-closed | run-ended`), or `login-failed` when the provider itself
+  refused the sign-in (the code grant's exchange). A terminal outcome is a
+  `blocked` verdict with
   that code as its reason. A deadline **closes** the window and leaves the
   session unusable: the next `browser_open` for that name opens a fresh one
   (until then a call answers `browser-crashed`), because a login nobody finished
@@ -582,7 +645,8 @@ a production-like name is refused by the catalog, and only the operator's own
   `interactiveLogin: "local" | "never"` in `stages/policy.json` (default
   `local`); a stage may narrow it to `never` and can never widen it. Under
   `never` a login that needs a person is refused — `login-user-unavailable` for
-  an `interactive` recipe or a role that declares no credential reference, and
+  an `interactive` recipe, an `authorization_code` role or a role that declares
+  no credential reference, and
   the recipe's own `credential-missing` when only a value is missing — and on a
   machine with no display or only a `headless_shell` build `stage_login` answers
   `login-handoff-unavailable` (`reason: "no-display"` or

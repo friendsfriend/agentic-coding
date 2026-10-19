@@ -114,11 +114,16 @@ export function roleLoginMode(input: {
 	if (input.recipeKind === "interactive")
 		return mayOpenWindow ? "handoff" : "unavailable";
 	if (input.recipeKind === "oauth2") {
-		// The authorization code grant is a person's sign-in, and this build cannot
-		// perform it yet: reporting `handoff` would send a run into a hand-off that
-		// is refused, so the honest answer is `unavailable` (USAB-003) — the value
-		// the contract reserves for "needs a person, and this build cannot".
-		if (input.grant === "authorization_code") return "unavailable";
+		// The authorization code grant is a person's sign-in
+		// (`add-stage-oauth2-code-pkce`): no reference of the role's own decides it,
+		// because the identity is the developer's at the provider. It is a hand-off
+		// whenever a window may be opened, and `unavailable` only under a policy that
+		// forbids one — the value the contract reserves for "needs a person, and this
+		// build cannot".
+		if (input.grant === "authorization_code")
+			return mayOpenWindow && input.credentialStatus === "set"
+				? "handoff"
+				: "unavailable";
 		// The two unattended grants need no person at all; a missing reference is
 		// a `.env` gap no window could fill, so it is `unavailable` too.
 		return input.grant === undefined || input.credentialStatus !== "set"
@@ -1040,13 +1045,27 @@ function originOf(value: string): string | undefined {
 // Credentials
 // ---------------------------------------------------------------------------
 
+/** The wording of a `.env` gap, shared by every surface that answers one: the
+ * variable's name and where it is set, never a value. */
+export function credentialMissingMessage(variable: string): string {
+	return `${variable} is not set in the configuration .env; set it in Settings → Stages before this login`;
+}
+
+/** A credential field the stage file does not declare at all: no `.env` value can
+ * fill it, so the remedy names the stage-file field rather than a variable that
+ * does not exist (USAB-208). */
+export function undeclaredCredentialMessage(path: string): string {
+	return `${path} is not declared in the stage file, so the configuration .env cannot fill it; add the field there before this login`;
+}
+
 /** A credential reference that cannot be resolved right now. It names the
  * variable and never a value. */
 export class StageCredentialError extends Error {
-	constructor(readonly variable: string) {
-		super(
-			`${variable} is not set in the configuration .env; set it in Settings → Stages before this login`,
-		);
+	constructor(
+		readonly variable: string,
+		message?: string,
+	) {
+		super(message ?? credentialMissingMessage(variable));
 		this.name = "StageCredentialError";
 	}
 }
@@ -1070,7 +1089,10 @@ export function resolveStageCredential(
 	if (!role) throw new StageCredentialError(`${appKey}.${roleName}.${field}`);
 	const reference = role[field];
 	if (reference === undefined)
-		throw new StageCredentialError(`${appKey}.${roleName}.${field}`);
+		throw new StageCredentialError(
+			`${appKey}.${roleName}.${field}`,
+			undeclaredCredentialMessage(`${appKey}.${roleName}.${field}`),
+		);
 	return resolveReference(
 		reference,
 		`${appKey}.${roleName}.${field}`,
@@ -1093,7 +1115,10 @@ export function resolveStageOAuthCredential(
 ): string {
 	const reference = stage.oauth2?.providers?.[providerName]?.[field];
 	if (reference === undefined)
-		throw new StageCredentialError(`oauth2.providers.${providerName}.${field}`);
+		throw new StageCredentialError(
+			`oauth2.providers.${providerName}.${field}`,
+			undeclaredCredentialMessage(`oauth2.providers.${providerName}.${field}`),
+		);
 	return resolveReference(
 		reference,
 		`oauth2.providers.${providerName}.${field}`,

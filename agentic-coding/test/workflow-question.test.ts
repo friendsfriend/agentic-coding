@@ -878,6 +878,34 @@ test("a stage_login hand-off is raised and resolved as workflow state, without r
 	}
 });
 
+test("a hand-off whose ending is the server's own offers Abort alone, never a Done that cannot verify", () => {
+	const { repo, engine, run } = setup();
+	try {
+		const opened = engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-code",
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: "Sign in to Grid integration as your own identity",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+			// A completion-driven login (the authorization code grant): its `ok` is the
+			// server's own receiver, so a *Done* could only end it unverified
+			// (USAB-207).
+			canConfirm: false,
+		});
+		const record = opened.view.developerDialogue?.find(
+			(item) => item.id === "handoff-code",
+		);
+		expect(record?.kind).toBe("login-handoff");
+		expect(record?.options.map((option) => option.value)).toEqual(["abort"]);
+		expect(record?.options[0]?.label).toBe("Abort");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("a hand-off record expires on the question timer at its deadline, without resuming anything", () => {
 	const { repo, engine, run, token, now } = setup();
 	try {
@@ -1466,6 +1494,34 @@ test("the browser's hand-off adapter raises, reads and resolves the record throu
 		expect(
 			engine.getSnapshot(repo, run.workflowId).developerDialogue,
 		).toHaveLength(1);
+
+		// A hand-off whose ending is the server's own arrives with `canConfirm: false`,
+		// and this hop is what turns it into *Abort* alone: dropping it here would put
+		// the *Done* that can only close the receiver back in front of the developer
+		// (USAB-207, TQ-010).
+		const completionDriven = "handoff-adapter-completion";
+		await attention.open({
+			owner,
+			recordId: completionDriven,
+			description: "Sign in to Grid integration as user",
+			context: "stage grid-int, app api, role user",
+			expiresAt: new Date("2026-01-01T00:15:00.000Z").toISOString(),
+			canConfirm: false,
+		});
+		const completionRecord = engine
+			.getSnapshot(repo, run.workflowId)
+			.developerDialogue.find((item) => item.id === completionDriven);
+		expect(completionRecord?.kind).toBe("login-handoff");
+		expect(completionRecord?.options.map((option) => option.value)).toEqual([
+			"abort",
+		]);
+		expect(completionRecord?.options[0]?.label).toBe("Abort");
+		// The record opened without the field keeps both answers, which is what makes
+		// the assertion above about the flag and not about the record kind.
+		expect(opened?.options.map((option) => option.value)).toEqual([
+			"done",
+			"abort",
+		]);
 		// A workflow this server does not host is honestly dialog-less rather than
 		// a failure: a session can outlive the run that opened it.
 		await expect(
