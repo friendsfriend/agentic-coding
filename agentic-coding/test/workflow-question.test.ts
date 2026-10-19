@@ -9,6 +9,7 @@ import {
 	decodeDeveloperQuestionAnswer,
 	type ResolvedProfile,
 } from "../src/contracts/workflow.ts";
+import { workflowLoginHandoffAttention } from "../src/server/browser/attention.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
@@ -16,6 +17,10 @@ import {
 	agentEffectHandlers,
 	EffectRunner,
 } from "../src/workflow/effect-runner.ts";
+import {
+	MAX_DEVELOPER_DIALOGUE_RECORDS,
+	questionRecordCount,
+} from "../src/workflow/runtime/dialogue.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import {
 	autoRemoveRepoFixtures,
@@ -674,6 +679,433 @@ test("the orchestrator cannot answer a developer-routed question", () => {
 	}
 });
 
+test("a stage_login hand-off is raised and resolved as workflow state, without routing or resuming anything", async () => {
+	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
+	try {
+		const opened = engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: "Log in to Grid integration as clerk",
+			context: "stage grid-int, session web",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		expect(opened.view.status).toBe("active");
+		const record = opened.view.developerDialogue?.find(
+			(item) => item.id === "handoff-1",
+		);
+		expect(record?.kind).toBe("login-handoff");
+		expect(record?.status).toBe("pending");
+		expect(record?.options.map((option) => option.value)).toEqual([
+			"done",
+			"abort",
+		]);
+		// The developer's dashboard sees it, the orchestrator never does: a login
+		// hand-off is answered by the person at the window, and an orchestrator
+		// that tries anyway is refused like any other developer-routed question.
+		expect(
+			opened.view.pendingQuestions?.map((question) => question.id),
+		).toContain("handoff-1");
+		expect(opened.view.orchestratorQuestions ?? []).toEqual([]);
+		expect(record?.targetRole).toBeUndefined();
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: opened.snapshot.revision,
+				actionId: "answer-question",
+				principal: "orchestrator",
+				input: { questionId: "handoff-1", kind: "option", value: "done" },
+			}),
+		).toThrow(/another responder/);
+		expect(opened.view.runs).toHaveLength(1);
+
+		// The asking run is parked on a bounded blocker, exactly as a real hand-off
+		// would leave it.
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "blocked",
+			message: "waiting for the developer to log in",
+		});
+		expect(blocked.view.status).toBe("attention-required");
+
+		const resolved = engine.dispatch(repo, {
+			type: "login-handoff.resolve",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			answer: "done",
+		});
+		const answered = resolved.view.developerDialogue?.find(
+			(item) => item.id === "handoff-1",
+		);
+		expect(answered?.status).toBe("answered");
+		expect(answered?.answer?.value).toBe("done");
+		expect(resolved.view.pendingQuestions ?? []).toEqual([]);
+		// Nothing is resumed and no successor appears: the browser coordinator owns
+		// the outcome, and the run stays parked until its own hand-off resumes it.
+		expect(resolved.view.runs).toHaveLength(1);
+		expect(
+			resolved.view.runs.every((candidate) => candidate.status !== "pending"),
+		).toBe(true);
+
+		// Resolving the same record again is the same resolution, not a second one.
+		const again = engine.dispatch(repo, {
+			type: "login-handoff.resolve",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			answer: "abort",
+		});
+		const replayed = again.view.developerDialogue?.find(
+			(item) => item.id === "handoff-1",
+		);
+		expect(replayed?.status).toBe("answered");
+		expect(replayed?.answer?.value).toBe("done");
+
+		// Re-opening the same record is a replay of the same hand-off: a restarted
+		// server must not raise a second dialog.
+		const reopened = engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			description: "Log in to Grid integration as clerk",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		expect(
+			reopened.view.developerDialogue?.filter(
+				(item) => item.id === "handoff-1",
+			),
+		).toHaveLength(1);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a hand-off record expires on the question timer at its deadline, without resuming anything", () => {
+	const { repo, engine, run, token, now } = setup();
+	try {
+		const opened = engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: "Log in to Grid integration as clerk",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		// The timer's capability is not part of the view; the snapshot keeps it.
+		const record = opened.snapshot.developerDialogue.find(
+			(item) => item.id === "handoff-1",
+		);
+		// The durable timer is the record's own: without a nonce the question
+		// machinery would never expire it.
+		expect(record?.timerNonce).toBeTruthy();
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "blocked",
+			message: "waiting for the developer to log in",
+		});
+		// Someone else's timer cannot expire this record.
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "timer.question-expire",
+				workflowId: run.workflowId,
+				questionId: "handoff-1",
+				timerNonce: "not-the-nonce",
+			}),
+		).toThrow(/timer capability/);
+		now(new Date(Date.now() + 900_001));
+		const expired = engine.dispatch(repo, {
+			type: "timer.question-expire",
+			workflowId: run.workflowId,
+			questionId: "handoff-1",
+			timerNonce: record?.timerNonce ?? "",
+		});
+		expect(
+			expired.view.developerDialogue?.find((item) => item.id === "handoff-1")
+				?.status,
+		).toBe("expired");
+		expect(expired.view.pendingQuestions ?? []).toEqual([]);
+		// The parked run stays parked: the hand-off's own deadline, not the dialog,
+		// is what ends the wait.
+		expect(
+			expired.view.runs.every((candidate) => candidate.status !== "pending"),
+		).toBe(true);
+		void blocked;
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a hand-off record takes Done or Abort and nothing else", () => {
+	const { repo, engine, run } = setup();
+	try {
+		engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			description: "Log in to Grid integration as clerk",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		const view = engine.status(repo, run.workflowId);
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: view.revision,
+				actionId: "answer-question",
+				input: {
+					questionId: "handoff-1",
+					kind: "custom",
+					value: "typed an answer the modal cannot produce",
+				},
+			}),
+		).toThrow(/Done or Abort/);
+		// A resolve of a record that is not a hand-off is refused by name.
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "login-handoff.resolve",
+				workflowId: run.workflowId,
+				recordId: "not-a-handoff",
+				answer: "done",
+			}),
+		).toThrow(/not a login hand-off/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("one dialogue record is readable on its own, and nothing else is", () => {
+	const { repo, engine, run } = setup();
+	try {
+		engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-narrow",
+			description: "Log in to Grid integration as clerk",
+			context: "stage grid-int, app web, role clerk",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		// The narrow read is the one the coordinator's poll uses each tick: one
+		// record, decoded on its own, instead of the run's whole snapshot.
+		const record = engine.getDialogueRecord(
+			repo,
+			run.workflowId,
+			"handoff-narrow",
+		);
+		expect(record?.kind).toBe("login-handoff");
+		expect(record?.status).toBe("pending");
+		expect(record?.runId).toBe("login-handoff");
+		expect(
+			engine.getDialogueRecord(repo, run.workflowId, "handoff-missing"),
+		).toBeUndefined();
+		// Another workflow's record, and another workflow, are both simply absent:
+		// the reader has no way to reach a snapshot it was not asked about.
+		expect(
+			engine.getDialogueRecord(repo, "wf-nothing", "handoff-narrow"),
+		).toBeUndefined();
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a series of hand-offs is bounded by the dialogue's content budget, not by the question count", () => {
+	const { repo, engine, run } = setup();
+	try {
+		// A hand-off record stays in the workflow for the life of the workflow and
+		// nothing prunes it, so what bounds a series of them is the dialogue's byte
+		// budget — a long description reaches it first — and the question count
+		// stays at zero throughout (MIG-005).
+		const description = "d".repeat(3_000);
+		let opened = 0;
+		let refusal: string | undefined;
+		for (let index = 0; index < MAX_DEVELOPER_DIALOGUE_RECORDS; index++) {
+			try {
+				engine.dispatch(repo, {
+					type: "login-handoff.open",
+					workflowId: run.workflowId,
+					recordId: `handoff-${index}`,
+					description,
+					expiresAt: new Date(Date.now() + 900_000).toISOString(),
+				});
+				opened += 1;
+			} catch (error) {
+				refusal = error instanceof Error ? error.message : String(error);
+				break;
+			}
+		}
+		expect(refusal).toContain("content limit");
+		expect(opened).toBeLessThan(MAX_DEVELOPER_DIALOGUE_RECORDS);
+		const snapshot = engine.getSnapshot(repo, run.workflowId);
+		expect(snapshot.developerDialogue).toHaveLength(opened);
+		expect(questionRecordCount(snapshot.developerDialogue)).toBe(0);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a hand-off record never spends a question's dialogue slot", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		for (let index = 0; index < 3; index++) {
+			engine.dispatch(repo, {
+				type: "login-handoff.open",
+				workflowId: run.workflowId,
+				recordId: `handoff-${index}`,
+				description: `Log in to Grid integration as clerk ${index}`,
+				expiresAt: new Date(Date.now() + 900_000).toISOString(),
+			});
+		}
+		// The question writer counts the shared way, so three hand-off records cost
+		// the run nothing: its own question is created, and it is the only record
+		// the question budget sees.
+		const asked = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which approach?",
+			options: [{ label: "Use A", value: "a" }],
+		});
+		expect(asked.snapshot.developerDialogue).toHaveLength(4);
+		expect(questionRecordCount(asked.snapshot.developerDialogue)).toBe(1);
+		expect(
+			asked.snapshot.developerDialogue.filter(
+				(record) => record.kind !== "login-handoff",
+			),
+		).toHaveLength(1);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a workflow's refusal to raise the record is surfaced, not swallowed", async () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const attention = workflowLoginHandoffAttention({
+			engine: () => engine,
+			targets: () => [repo],
+		});
+		const owner = `workflow:${run.workflowId}`;
+		// A real question, asked the ordinary way: its id can never be a hand-off's,
+		// so asking for it as one is a refusal the workflow itself produces.
+		const asked = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which approach?",
+			options: [{ label: "Use A", value: "a" }],
+		});
+		const questionId = asked.snapshot.developerDialogue.at(-1)?.id;
+		if (!questionId) throw new Error("question missing");
+		await expect(
+			attention.open({
+				owner,
+				recordId: questionId,
+				description: "Log in to Grid integration as clerk",
+				context: "stage grid-int, app web, role clerk",
+				expiresAt: new Date(Date.now() + 900_000).toISOString(),
+			}),
+		).rejects.toThrow(
+			/the login hand-off record was refused: .*not a login hand-off/,
+		);
+		// The refusal leaves no trace: the dialogue is the question and nothing else,
+		// so a hand-off that could not raise its record has no dialog to read.
+		expect(
+			engine.getSnapshot(repo, run.workflowId).developerDialogue,
+		).toHaveLength(1);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("a hand-off record never reaches an assignment's prior dialogue", async () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		engine.dispatch(repo, {
+			type: "login-handoff.open",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: "handoff-sentinel-should-not-reach-a-prompt",
+			expiresAt: new Date(Date.now() + 900_000).toISOString(),
+		});
+		// Resolved, so only the record's kind keeps it out of the assignment: a
+		// pending record would be dropped anyway.
+		engine.dispatch(repo, {
+			type: "login-handoff.resolve",
+			workflowId: run.workflowId,
+			recordId: "handoff-1",
+			answer: "done",
+		});
+		// A real question, asked the ordinary way, is what the resumed attempt
+		// should see.
+		const asked = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			description: "which approach?",
+			options: [{ label: "Use A", value: "a" }],
+		});
+		const questionId = asked.snapshot.developerDialogue.find(
+			(item) => item.description === "which approach?",
+		)?.id;
+		if (!questionId) throw new Error("question missing");
+		const blocked = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "blocked",
+			message: "waiting on the developer",
+		});
+		engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: blocked.snapshot.revision,
+			actionId: "answer-question",
+			input: { questionId, kind: "option", value: "a" },
+		});
+		const resumed = engine
+			.status(repo, run.workflowId)
+			.runs.find(
+				(candidate) =>
+					candidate.role === "worker" && candidate.status === "pending",
+			);
+		if (!resumed) throw new Error("resumed run missing");
+		await drainAssignments(repo, engine);
+		const assignment = fs.readFileSync(
+			engine.getRun(repo, resumed.id).assignmentPath,
+			"utf8",
+		);
+		expect(assignment).toContain("which approach?");
+		expect(assignment).not.toContain(
+			"handoff-sentinel-should-not-reach-a-prompt",
+		);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("an answered question resumes the blocked asking run with the answer in its assignment", async () => {
 	const { repo, engine, run, token } = setup();
 	try {
@@ -864,6 +1296,95 @@ test("an unanswered orchestrator question auto-forwards to the developer on time
 		expect(Date.parse(record?.expiresAt ?? "")).toBe(
 			new Date("2026-01-02T00:00:00.000Z").getTime() + QUESTION_WAIT_MS,
 		);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("the browser's hand-off adapter raises, reads and resolves the record through the real engine", async () => {
+	const { repo, engine, run } = setup({ startedBy: "orchestrator" });
+	try {
+		// The adapter reaches the engine the server would hand it, so this covers
+		// the bridge itself rather than a stub on either end of it.
+		const attention = workflowLoginHandoffAttention({
+			engine: () => engine,
+			targets: () => [repo],
+		});
+		const owner = `workflow:${run.workflowId}`;
+		const recordId = "handoff-adapter";
+		const read = () =>
+			engine
+				.getSnapshot(repo, run.workflowId)
+				.developerDialogue.find((item) => item.id === recordId);
+		await attention.open({
+			owner,
+			recordId,
+			description: "Log in to Grid integration as clerk",
+			context: "stage grid-int, app web, role clerk",
+			expiresAt: new Date("2026-01-01T00:15:00.000Z").toISOString(),
+		});
+		const opened = read();
+		expect(opened?.kind).toBe("login-handoff");
+		expect(opened?.status).toBe("pending");
+		// It belongs to no run: a build that predates `kind` must not be able to
+		// resume anything by this record's run id.
+		expect(opened?.runId).not.toBe(run.id);
+		// While the record is pending the coordinator is told nothing, which is
+		// what keeps its poll loop a poll.
+		expect(await attention.answer({ owner, recordId })).toBeUndefined();
+
+		// An abort — the dashboard's Escape, or the agent's `browser_close` — is
+		// read as the developer's answer.
+		engine.dispatch(repo, {
+			type: "login-handoff.resolve",
+			workflowId: run.workflowId,
+			recordId,
+			answer: "abort",
+		});
+		expect(read()?.status).toBe("cancelled");
+		expect(await attention.answer({ owner, recordId })).toBe("abort");
+
+		// The coordinator's own resolution is idempotent: the record is already
+		// answered, so closing it again resolves nothing a second time.
+		await attention.close({
+			owner,
+			recordId,
+			answer: "abort",
+			by: "system",
+			outcome: "login-handoff-aborted",
+		});
+		expect(read()?.status).toBe("cancelled");
+		// Nothing resumed and nothing completed: the run is still the step's active
+		// one, because resolving a hand-off never frees the asking run.
+		expect(
+			engine.getSnapshot(repo, run.workflowId).step.activeRunIds,
+		).toContain(run.id);
+
+		// A repeated open for the same record is the *same* hand-off — a restarted
+		// server, a retried dispatch — so it replays the record instead of raising a
+		// second dialog, and the developer keeps the words of the first one.
+		await attention.open({
+			owner,
+			recordId: "handoff-adapter",
+			description: "different",
+			context: "different",
+			expiresAt: new Date("2026-01-01T00:15:00.000Z").toISOString(),
+		});
+		expect(read()?.description).toBe("Log in to Grid integration as clerk");
+		expect(
+			engine.getSnapshot(repo, run.workflowId).developerDialogue,
+		).toHaveLength(1);
+		// A workflow this server does not host is honestly dialog-less rather than
+		// a failure: a session can outlive the run that opened it.
+		await expect(
+			attention.open({
+				owner: "workflow:wf-not-hosted-here",
+				recordId: "handoff-elsewhere",
+				description: "Log in to Grid integration as clerk",
+				context: "stage grid-int, app web, role clerk",
+				expiresAt: new Date("2026-01-01T00:15:00.000Z").toISOString(),
+			}),
+		).resolves.toBeUndefined();
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

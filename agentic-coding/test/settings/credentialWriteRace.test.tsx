@@ -131,6 +131,8 @@ function stageStatus(): StagesStatusResponse {
 								role: "clerk",
 								login: "web-form",
 								loginKind: "form",
+								credentialStatus: `missing ${VARIABLE}`,
+								loginMode: "handoff",
 								credentials: [
 									{
 										field: "password",
@@ -150,6 +152,7 @@ function stageStatus(): StagesStatusResponse {
 					maxWaitSeconds: 120,
 					maxScreenshots: 20,
 					maxRecordingMinutes: 5,
+					maxLoginHandoffSeconds: 900,
 				},
 				data: {},
 				wiki: { processes: [] },
@@ -251,8 +254,8 @@ async function openSettings(t: Test, destination: string, marker: string) {
 /** Walk the selection down to the credential row and activate it. */
 async function openCredentialEditor(t: Test) {
 	// The section is the only list on the page: definitions, the stage, the app,
-	// then the credential row the write belongs to.
-	for (let i = 0; i < 3; i++) {
+	// the role's login-mode row, then the credential row the write belongs to.
+	for (let i = 0; i < 4; i++) {
 		t.mockInput.pressKey("j");
 		await t.renderOnce();
 	}

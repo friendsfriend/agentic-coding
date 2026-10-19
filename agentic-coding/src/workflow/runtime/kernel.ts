@@ -521,6 +521,10 @@ export function resumeAskerAfterAnswer(
 		return event;
 	const answered = answeredQuestionRecord(snapshot, event.data);
 	if (!answered) return event;
+	// A `stage_login` hand-off record is answered by the developer so the browser
+	// session can continue; it never resumes a parked run
+	// (add-stage-interactive-login).
+	if (answered.kind === "login-handoff") return event;
 	const resumed = resumeBlockedAsker(
 		db,
 		snapshot,

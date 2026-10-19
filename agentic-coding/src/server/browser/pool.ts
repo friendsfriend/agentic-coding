@@ -36,9 +36,11 @@
 import fs from "node:fs";
 import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
 import { createStageGuard } from "../stages/guard.ts";
+import { bannerRemovalScript } from "./banner.ts";
 import { BrowserPoolError, tooManySessionsMessage } from "./errors.ts";
 import {
 	BrowserSession,
+	type SessionBrowserSlot,
 	type SessionRecording,
 	type StageSessionBinding,
 } from "./session.ts";
@@ -57,15 +59,30 @@ export const DEFAULT_RECORDING_MAX_MS = 10 * 60 * 1000;
 export interface BrowserPoolOptions {
 	readonly driver: import("./types.ts").BrowserDriver;
 	/** Resolve how to launch, or throw `browser-unavailable`. Called again after
-	 * a crash, so an install that finished since the last attempt is picked up. */
-	readonly launch: () => DriverLaunchOptions;
+	 * a crash, so an install that finished since the last attempt is picked up.
+	 * `headed` asks for the interactive browser, and refuses with
+	 * `login-handoff-unavailable` when this machine cannot show a window. */
+	readonly launch: (options?: {
+		readonly headed?: boolean;
+	}) => DriverLaunchOptions;
 	/** Resolved per use, so a `browser.max_sessions` edit applies to the next
 	 * open rather than the next server start. */
 	readonly maxSessions: () => number;
 	readonly idleTtlMs: () => number;
 	readonly now?: () => number;
 	readonly log?: (message: string) => void;
+	/** Told whenever a session leaves the pool for a reason other than the
+	 * caller's own `close`: run end, the idle sweep, a crash. The hand-off
+	 * coordinator ends the hand-off it holds on that session. */
+	readonly onSessionClosed?: (
+		session: BrowserSession,
+		cause: SessionCloseCause,
+	) => void;
 }
+
+/** Why a session left the pool. `closed` is the caller's own `browser_close`,
+ * which the *route* has already turned into an abort with `by: "agent"`. */
+export type SessionCloseCause = "closed" | "owner-closed" | "swept" | "crashed";
 
 export interface OpenSessionRequest {
 	readonly owner: string;
@@ -93,18 +110,37 @@ export interface SessionSummary {
 	readonly createdAt: number;
 	readonly lastUsed: number;
 	readonly recording: boolean;
+	/** True while a login hand-off holds this session. */
+	readonly heldByUser?: boolean;
 }
 
 export class BrowserPool {
 	private readonly driver: import("./types.ts").BrowserDriver;
-	private readonly launchOptions: () => DriverLaunchOptions;
+	private readonly launchOptions: (options?: {
+		readonly headed?: boolean;
+	}) => DriverLaunchOptions;
 	private readonly maxSessions: () => number;
 	private readonly idleTtlMs: () => number;
 	private readonly clock: () => number;
 	private readonly log: (message: string) => void;
+	private readonly onSessionClosed:
+		| ((session: BrowserSession, cause: SessionCloseCause) => void)
+		| undefined;
 	private browser: DriverBrowser | undefined;
-	/** The one in-flight launch, shared by every caller that wants it. */
+	/** The second, lazily launched headed browser. It exists only while a
+	 * promoted session lives in it (task 1.3). */
+	private interactive: DriverBrowser | undefined;
+	/** The one in-flight launch of each slot, shared by every caller that wants
+	 * it. */
 	private launching: Promise<DriverBrowser> | undefined;
+	private interactiveLaunching: Promise<DriverBrowser> | undefined;
+	/** Sessions whose promotion into the interactive browser is in flight, so a
+	 * concurrent close of the last interactive session does not take the browser
+	 * down while a context is being created in it. */
+	private readonly promoting = new Set<string>();
+	/** Contexts that already carry the banner-removal init script. Keyed by the
+	 * context object itself, so a swapped context is collected with the session. */
+	private readonly bannerRemovalInstalled = new WeakSet<object>();
 	/** The acquire critical section: the capacity check and the reservation of
 	 * the slot it grants, with no await between them. */
 	private acquireGate: Promise<void> = Promise.resolve();
@@ -129,6 +165,7 @@ export class BrowserPool {
 		this.idleTtlMs = options.idleTtlMs;
 		this.clock = options.now ?? (() => Date.now());
 		this.log = options.log ?? (() => {});
+		this.onSessionClosed = options.onSessionClosed;
 	}
 
 	/** Every open session, for a status read. */
@@ -136,12 +173,15 @@ export class BrowserPool {
 		return [...this.sessions.values()].map((session) => ({
 			owner: session.owner,
 			name: session.name,
-			url: session.url,
+			// A held session's URL is reported as its origin alone: what the developer
+			// typed into the login page is not the agent's to read.
+			url: session.heldByUser ? originOf(session.url) : session.url,
 			...(session.app ? { app: session.app } : {}),
 			...(session.stage ? { stage: session.stage.ident } : {}),
 			createdAt: session.createdAt,
 			lastUsed: session.lastUsed,
 			recording: session.recording !== undefined,
+			...(session.heldByUser ? { heldByUser: true } : {}),
 		}));
 	}
 
@@ -178,7 +218,7 @@ export class BrowserPool {
 	 * rather than handing back a context the browser already discarded.
 	 */
 	session(owner: string, name: string): BrowserSession {
-		const session = this.sessions.get(key(owner, name));
+		const session = this.sessions.get(sessionKey(owner, name));
 		if (!session)
 			throw new BrowserPoolError(
 				"session-not-open",
@@ -196,7 +236,7 @@ export class BrowserPool {
 
 	/** The owner's session, or `undefined` when it does not hold one. */
 	find(owner: string, name: string): BrowserSession | undefined {
-		const session = this.sessions.get(key(owner, name));
+		const session = this.sessions.get(sessionKey(owner, name));
 		return session && !session.crashed ? session : undefined;
 	}
 
@@ -211,7 +251,7 @@ export class BrowserPool {
 	 */
 	async acquire(request: OpenSessionRequest): Promise<BrowserSession> {
 		await this.sweepIdle();
-		const id = key(request.owner, request.name);
+		const id = sessionKey(request.owner, request.name);
 		// Serialized per key: without this, two concurrent opens of one key each
 		// find no session, each takes a slot, and each registers a context under
 		// the same id — one of them then unreachable and never closed.
@@ -368,7 +408,7 @@ export class BrowserPool {
 	 * reason that has nothing to do with it.
 	 */
 	async close(owner: string, name: string): Promise<boolean> {
-		const session = this.sessions.get(key(owner, name));
+		const session = this.sessions.get(sessionKey(owner, name));
 		if (!session) return false;
 		if (session.busy) {
 			throw new BrowserPoolError(
@@ -377,7 +417,7 @@ export class BrowserPool {
 				409,
 			);
 		}
-		await this.drop(session);
+		await this.drop(session, "closed");
 		return true;
 	}
 
@@ -390,7 +430,7 @@ export class BrowserPool {
 		const owned = [...this.sessions.values()].filter(
 			(session) => session.owner === owner,
 		);
-		for (const session of owned) await this.drop(session);
+		for (const session of owned) await this.drop(session, "owner-closed");
 		return owned.length;
 	}
 
@@ -399,26 +439,158 @@ export class BrowserPool {
 	 *
 	 * A session with a request in flight is never swept: `browser_run_script` may
 	 * legitimately hold a page for minutes, and closing the context under it would
-	 * fail the script and strand the run's session.
+	 * fail the script and strand the run's session. A session *held* by a login
+	 * hand-off is never swept either: the developer may be typing into it, and the
+	 * hand-off's own deadline is what ends it (task 1.3).
 	 */
 	async sweepIdle(): Promise<number> {
 		const idle = [...this.sessions.values()].filter(
 			(session) =>
-				!session.busy && session.idleFor(Math.max(1, this.idleTtlMs())),
+				!session.busy &&
+				!session.heldByUser &&
+				session.idleFor(Math.max(1, this.idleTtlMs())),
 		);
-		for (const session of idle) await this.drop(session);
+		for (const session of idle) await this.drop(session, "swept");
 		return idle.length;
 	}
 
 	/** Close everything and the browser with it. */
 	async closeAll(): Promise<void> {
-		for (const session of [...this.sessions.values()]) await this.drop(session);
+		for (const session of [...this.sessions.values()])
+			await this.drop(session, "closed");
 		const browser = this.browser;
 		this.browser = undefined;
-		if (browser)
-			await browser.close().catch(() => {
-				/* the process is going away anyway */
+		const interactive = this.interactive;
+		this.interactive = undefined;
+		await browser?.close().catch(() => {
+			/* the process is going away anyway */
+		});
+		await interactive?.close().catch(() => {
+			/* the process is going away anyway */
+		});
+	}
+
+	// -- interactive browser (login hand-off) --------------------------------
+
+	/**
+	 * Promote a session into the interactive browser, or keep it in the one it
+	 * already lives in (`add-stage-interactive-login`, tasks 1.3 and 1.4).
+	 *
+	 * A fresh context is created there with the stage's guard attached *before*
+	 * the first navigation, `prepare` runs on that context (the hand-off banner's
+	 * init script), the session's headless context is closed, and the session
+	 * keeps its id, name, owner and pool slot. Nothing is copied over: no cookie,
+	 * no storage, no URL of the headless page. The HTTP credentials of a
+	 * `http-basic` session are deliberately *not* installed, so the browser shows
+	 * its own authentication dialog to the developer.
+	 */
+	async openInteractive(
+		session: BrowserSession,
+		url: string,
+		prepare?: (context: DriverContext) => Promise<void>,
+	): Promise<void> {
+		await this.withKeyGate(session.id, async () => {
+			if (this.sessions.get(session.id) !== session)
+				throw new BrowserPoolError(
+					"session-not-open",
+					"the session was closed while its hand-off was being prepared; call browser_open again",
+					409,
+				);
+			// A session that already lives in the interactive browser navigates in
+			// its own context: its login state, and the whole point of the hand-off,
+			// stays where it is (D1).
+			if (session.browserSlot === "interactive" && !session.crashed) {
+				session.windowClosed = false;
+				if (prepare) await prepare(session.context).catch(() => {});
+				await session.goto(url, 30_000).catch(() => null);
+				return;
+			}
+			// The interactive browser is in use from here on, before any session
+			// claims it: a concurrent close of the last interactive session must not
+			// take the browser down mid-launch.
+			this.promoting.add(session.id);
+			try {
+				const browser = await this.ensureBrowser("interactive");
+				const guard = this.guardFor(session);
+				const context = await browser.newContext({
+					viewport: session.viewport,
+					...(guard ? { guard } : {}),
+				});
+				session.browserSlot = "interactive";
+				if (prepare) await prepare(context).catch(() => {});
+				const previous = session.context;
+				session.beginContextSwap();
+				await previous.close().catch(() => {});
+				await this.finishSwap(session, browser, context, url);
+			} finally {
+				this.promoting.delete(session.id);
+				// A promotion that failed before the session claimed the interactive
+				// browser still launched it. The launch itself was the only "user" it
+				// had, so the second Chromium is closed again rather than left running
+				// for a session that never arrived (PERF-002).
+				if (session.browserSlot !== "interactive" || session.crashed)
+					await this.closeInteractiveIfEmpty().catch(() => {});
+			}
+		});
+	}
+
+	/**
+	 * Close the hand-off window of a session whose hand-off ran out of time
+	 * (`add-stage-interactive-login`: a deadline closes the window).
+	 *
+	 * The session keeps its entry and is marked unusable, so the run's next tool
+	 * call is answered `browser-crashed` with the relaunch hint and the agent
+	 * decides whether the login is worth another window.
+	 */
+	async closeWindow(session: BrowserSession): Promise<void> {
+		await this.withKeyGate(session.id, async () => {
+			if (session.browserSlot !== "interactive" || session.crashed) return;
+			this.markSessionCrashed(session);
+			session.beginContextSwap();
+			await session.context.close().catch(() => {});
+			await this.closeInteractiveIfEmpty();
+		});
+	}
+
+	/** Remove the banner again, from every document this session still has open
+	 * and from every document it opens later: an installed init script cannot be
+	 * uninstalled (Playwright has no `removeInitScript`), so a removal script
+	 * registered after it takes the banner off each new document, and the live
+	 * pages are told explicitly. */
+	async removeBanner(session: BrowserSession): Promise<void> {
+		// Playwright cannot remove an init script, so the removal script is
+		// installed once per context: a second hand-off on the same session reuses
+		// it instead of stacking another copy on every page load.
+		if (!this.bannerRemovalInstalled.has(session.context)) {
+			this.bannerRemovalInstalled.add(session.context);
+			await session.context.addInitScript(bannerRemovalScript()).catch(() => {
+				/* a banner is cosmetic: a context that refuses it must not fail the
+				   hand-off it exists to announce */
 			});
+		}
+		for (const page of session.context.pages()) await page.removeBanner();
+	}
+
+	/** Raise the hand-off window once, when it becomes active. `focus` is passed
+	 * only for that single call: no agent action ever raises a window. */
+	async focusWindow(session: BrowserSession): Promise<void> {
+		await session.page.bringToFront().catch(() => {});
+	}
+
+	/** Close the interactive browser when it holds no session any more, so a
+	 * machine that once handed a login off does not keep a second Chromium
+	 * running. */
+	private async closeInteractiveIfEmpty(): Promise<void> {
+		// A promotion that has not finished claiming its session still counts: the
+		// browser it launched is in use.
+		if (this.promoting.size > 0) return;
+		const holds = [...this.sessions.values()].some(
+			(session) => session.browserSlot === "interactive" && !session.crashed,
+		);
+		if (holds) return;
+		const browser = this.interactive;
+		this.interactive = undefined;
+		await browser?.close().catch(() => {});
 	}
 
 	// -- recording ---------------------------------------------------------
@@ -442,7 +614,7 @@ export class BrowserPool {
 					"this session is already recording; stop it before starting another",
 					409,
 				);
-			const browser = await this.ensureBrowser();
+			const browser = await this.ensureBrowser(session.browserSlot);
 			const state = await session.context.storageState().catch(() => undefined);
 			const url = session.url;
 			const previous = session.context;
@@ -583,7 +755,7 @@ export class BrowserPool {
 		let browser: DriverBrowser;
 		let context: DriverContext;
 		try {
-			browser = await this.ensureBrowser();
+			browser = await this.ensureBrowser(session.browserSlot);
 			context = await browser.newContext({
 				viewport: session.viewport,
 				...(state === undefined ? {} : { storageState: state }),
@@ -720,17 +892,32 @@ export class BrowserPool {
 		}
 	}
 
-	/** One launch for the whole pool, however many callers want it. */
-	private async ensureBrowser(): Promise<DriverBrowser> {
-		if (this.browser?.isConnected()) return this.browser;
-		if (this.launching) return await this.launching;
+	/** One launch per slot, however many callers want it. The interactive slot
+	 * asks `resolveLaunch({ headed: true })`, which refuses with
+	 * `login-handoff-unavailable` when this machine cannot show a window. */
+	private async ensureBrowser(
+		slot: SessionBrowserSlot = "headless",
+	): Promise<DriverBrowser> {
+		const current = slot === "interactive" ? this.interactive : this.browser;
+		if (current?.isConnected()) return current;
+		const inFlight =
+			slot === "interactive" ? this.interactiveLaunching : this.launching;
+		if (inFlight) return await inFlight;
 		const launched = (async (): Promise<DriverBrowser> => {
-			if (this.browser) this.markCrashed(this.browser);
-			const options = this.launchOptions();
+			// A browser that is present but disconnected is the one this launch
+			// replaces: its own sessions are marked before a new one is handed out.
+			if (current) this.markCrashed(current);
+			const options =
+				slot === "interactive"
+					? this.launchOptions({ headed: true })
+					: this.launchOptions();
 			let browser: DriverBrowser;
 			try {
 				browser = await this.driver.launch(options);
 			} catch (error) {
+				// A headed refusal is its own answer: it names the fix (install a full
+				// build, or run where a display exists) instead of a generic failure.
+				if (error instanceof BrowserPoolError) throw error;
 				throw new BrowserPoolError(
 					"browser-unavailable",
 					`the browser could not be launched: ${message(error)}`,
@@ -740,43 +927,73 @@ export class BrowserPool {
 			browser.onDisconnected(() => {
 				// A listener of a browser this pool no longer serves is stale: it must
 				// not mark the sessions of its replacement crashed.
-				if (this.browser !== browser) return;
-				this.log("browser process disconnected; every session is now crashed");
+				if (this.browserFor(slot) !== browser) return;
+				this.log(
+					slot === "interactive"
+						? "interactive browser disconnected; its sessions are now crashed"
+						: "browser process disconnected; every session is now crashed",
+				);
 				this.markCrashed(browser);
 			});
-			this.browser = browser;
+			if (slot === "interactive") this.interactive = browser;
+			else this.browser = browser;
 			return browser;
 		})();
-		this.launching = launched;
+		if (slot === "interactive") this.interactiveLaunching = launched;
+		else this.launching = launched;
 		try {
 			return await launched;
 		} finally {
-			if (this.launching === launched) this.launching = undefined;
+			if (slot === "interactive") {
+				if (this.interactiveLaunching === launched)
+					this.interactiveLaunching = undefined;
+			} else if (this.launching === launched) this.launching = undefined;
 		}
 	}
 
-	/** Mark every session of the browser that went away. The entries stay so a
-	 * later call answers `browser-crashed` (with its relaunch hint) instead of
-	 * pretending the session never existed. */
-	private markCrashed(browser: DriverBrowser): void {
-		if (this.browser !== browser) return;
-		this.browser = undefined;
-		for (const session of this.sessions.values()) session.crashed = true;
-		this.wakeAll();
+	/** The browser one slot currently serves, whoever is asking. */
+	private browserFor(slot: SessionBrowserSlot): DriverBrowser | undefined {
+		return slot === "interactive" ? this.interactive : this.browser;
 	}
 
-	private async drop(session: BrowserSession): Promise<void> {
+	/** Mark the sessions of the browser that went away (`add-stage-interactive-
+	 * login`: *only* that browser's sessions, so one process dying never takes
+	 * the other's sessions with it). The entries stay so a later call answers
+	 * `browser-crashed` (with its relaunch hint) instead of pretending the
+	 * session never existed. */
+	private markCrashed(browser: DriverBrowser): void {
+		const slot: SessionBrowserSlot =
+			this.interactive === browser ? "interactive" : "headless";
+		if (this.browserFor(slot) !== browser) return;
+		if (slot === "interactive") this.interactive = undefined;
+		else this.browser = undefined;
+		for (const session of this.sessions.values()) {
+			if (session.browserSlot !== slot) continue;
+			session.crashed = true;
+			this.onSessionClosed?.(session, "crashed");
+		}
+		if (slot === "headless") this.wakeAll();
+		else void this.closeInteractiveIfEmpty();
+	}
+
+	private async drop(
+		session: BrowserSession,
+		cause: SessionCloseCause = "closed",
+	): Promise<void> {
 		// Whether a slot was freed follows the *map*, not the session's own flag: a
 		// second drop of a session that is no longer registered must not wake a
 		// second waiter for the one slot that left. A crashed session never counted
 		// against the cap, so removing it frees nothing.
 		const registered = this.sessions.delete(session.id);
 		const freed = registered && !session.crashed;
+		if (registered) this.onSessionClosed?.(session, cause);
 		session.beginContextSwap();
 		// The slot is handed to the queue *before* the close is awaited, so it never
 		// becomes visible as free while the waiters are still parked.
 		if (freed) this.wakeNext();
 		await session.context.close().catch(() => {});
+		if (session.browserSlot === "interactive")
+			await this.closeInteractiveIfEmpty();
 		// A recording the run never stopped goes with the session: Playwright
 		// finalizes the WebM when the context closes, and nothing else would ever
 		// remove the directory it wrote into.
@@ -823,7 +1040,10 @@ export class BrowserPool {
 			this.markSessionCrashed(session);
 			throw error;
 		}
-		if (this.browser !== browser || !browser.isConnected()) {
+		if (
+			this.browserFor(session.browserSlot) !== browser ||
+			!browser.isConnected()
+		) {
 			session.endContextSwap();
 			await context.close().catch(() => {});
 			this.markSessionCrashed(session);
@@ -855,6 +1075,7 @@ export class BrowserPool {
 	private markSessionCrashed(session: BrowserSession): void {
 		const freed = !session.crashed;
 		session.markCrashed();
+		this.onSessionClosed?.(session, "crashed");
 		if (freed) this.wakeNext();
 	}
 
@@ -893,8 +1114,21 @@ export class BrowserPool {
 	}
 }
 
-function key(owner: string, name: string): string {
+/** The one key a session is stored under: its owner and its name. Exported so
+ * a hand-off can address the outcome it recorded for a session it can no longer
+ * read from the pool (SEC-002). */
+export function sessionKey(owner: string, name: string): string {
 	return `${owner}\u0000${name}`;
+}
+
+/** A held session reports only where it is, never what is on it or what was
+ * typed into it. An unparseable URL reports nothing at all. */
+function originOf(url: string): string {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "";
+	}
 }
 
 function message(error: unknown): string {

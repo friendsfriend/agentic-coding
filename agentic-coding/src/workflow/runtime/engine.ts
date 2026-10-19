@@ -22,6 +22,7 @@ import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
 import { environmentToolsAvailable } from "../../agent-host/environment-capability.ts";
 import { resolveConfigRoot } from "../../config-root.ts";
 import {
+	type DeveloperDialogueRecord,
 	decodeCommand,
 	type EffectKind,
 	type WorkflowCommand,
@@ -116,6 +117,10 @@ import {
 } from "./reducers/debug-request.ts";
 import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
+import {
+	loginHandoffOpen,
+	loginHandoffResolve,
+} from "./reducers/login-handoff.ts";
 import { repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
 import type { WorkflowClock } from "./services.ts";
@@ -144,6 +149,7 @@ import {
 	activeRunForRole as storeActiveRunForRole,
 	effectIsLive as storeEffectIsLive,
 	effectOwnsLease as storeEffectOwnsLease,
+	getDialogueRecord as storeGetDialogueRecord,
 	getRun as storeGetRun,
 	getSnapshot as storeGetSnapshot,
 	renewEffect as storeRenewEffect,
@@ -1315,6 +1321,30 @@ export class WorkflowEngine {
 			catch: toRuntimeError,
 		});
 	}
+	/** One developer-dialogue record of a workflow, read without decoding its
+	 * whole snapshot: a login hand-off reads the developer's answer once per
+	 * second, and the snapshot holds the run's entire history. */
+	getDialogueRecord(
+		repo: string,
+		workflowId: string,
+		recordId: string,
+	): DeveloperDialogueRecord | undefined {
+		return this.run(this.getDialogueRecordEffect(repo, workflowId, recordId));
+	}
+	getDialogueRecordEffect(
+		repo: string,
+		workflowId: string,
+		recordId: string,
+	): Effect.Effect<
+		DeveloperDialogueRecord | undefined,
+		WorkflowRuntimeError,
+		never
+	> {
+		return Effect.try({
+			try: () => storeGetDialogueRecord(repo, workflowId, recordId),
+			catch: toRuntimeError,
+		});
+	}
 
 	// ---- synchronous orchestration helpers (run inside Effect programs) ----
 
@@ -2482,6 +2512,10 @@ export class WorkflowEngine {
 			return expireQuestion(db, snapshot, command, this.now);
 		if (command.type === "timer.question-expire")
 			return expireQuestionTimer(db, snapshot, command, this.now);
+		if (command.type === "login-handoff.open")
+			return loginHandoffOpen(db, snapshot, command, this.now);
+		if (command.type === "login-handoff.resolve")
+			return loginHandoffResolve(db, snapshot, command, this.now);
 		if (command.type === "agent.handoff") {
 			// A delegated debug side run's handoff finishes its request instead of
 			// reducing through the caller's current step.

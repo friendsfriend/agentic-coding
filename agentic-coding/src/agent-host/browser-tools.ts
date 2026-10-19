@@ -23,6 +23,7 @@ import {
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
 	AGENT_BROWSER_LOGIN_PATH,
+	AGENT_BROWSER_LOGIN_WAIT_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
@@ -45,6 +46,9 @@ export const BROWSER_EXTENSION = "agentic.browser";
 const MAX_RESULT_CHARS = 40_000;
 const READ_TIMEOUT_MS = 120_000;
 const ACTION_TIMEOUT_MS = 180_000;
+/** One `stage_login_wait` call: the server caps the block at 600 s, and the
+ * client bound is a little above it so the server's own answer arrives first. */
+const LOGIN_WAIT_TIMEOUT_MS = 610_000;
 const NAVIGATION_TIMEOUT_MS = 120_000;
 const RECORDING_TIMEOUT_MS = 180_000;
 
@@ -440,7 +444,8 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				description: [
 					"Log a stage-bound session in with the role's declared recipe: the server resolves the role's credential references from the configuration `.env` at call time, types them and waits for the login to complete.",
 					"Use it on a session opened with `browser_open({ stage, stageApp })`; it answers the sanitized landing URL, or `credential-missing` naming the variable to set in Settings → Stages, `login-step-not-found`, `login-mfa-required` (the page asks for a second factor the recipe does not provide), `login-timeout`, `login-failed` or `login-not-required` for an application without roles.",
-					"Its arguments, results, errors and telemetry never contain a credential value — do not try to read one, and never pass one to another tool.",
+					"When no credentials are configured (or the role's login needs a step the server cannot automate), it answers `login-needs-user` and hands the login to the developer in a visible, agentic-coding-owned browser window. Then call `stage_login_wait` and wait *inside* that tool — the run is not blocked, so never hand off `blocked` for a hand-off. Its terminal outcomes are `ok`, `login-handoff-unverified`, `login-handoff-timeout` and `login-handoff-aborted`.",
+					"Its arguments, results, errors and telemetry never contain a credential value — do not try to read one, and never pass one to another tool. While the hand-off runs the session is held by the developer: every other browser tool on it is refused with `session-held-by-user`.",
 				].join(" "),
 				parameters: Type.Object({
 					app: Type.String({
@@ -470,6 +475,44 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						);
 					} catch (error) {
 						return failure(`stage_login: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_login_wait",
+				description: [
+					"Wait in the server for the login hand-off a `stage_login` call started on this session. The block is bounded by the smaller of the hand-off's remaining deadline and 600 s per call; each call counts as one stage action, and no model turn is spent while it waits.",
+					"It answers `login-needs-user` again while the developer is still logging in (call it once more), or one terminal outcome: `ok` with `via`, `verified` and the landing URL; `login-handoff-unverified` when the developer chose Done but the declared success condition did not hold; `login-handoff-timeout` when the deadline passed; `login-handoff-aborted` with `by` (`developer`, `agent`, `window-closed`, `run-ended`).",
+					"A terminal outcome means the login did not happen and the run is blocked with that code as its reason — report it through the normal handoff path with that reason rather than retrying blindly; a retry is a fresh `stage_login`. Do not call this for a session with no pending hand-off.",
+				].join(" "),
+				parameters: Type.Object({
+					session: SessionParameter,
+					timeoutSec: Type.Optional(
+						Type.Number({
+							description:
+								"How long this call may block, in seconds. The server caps it at 600 s and at the hand-off's remaining deadline, whichever is smaller.",
+						}),
+					),
+				}),
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_login_wait: run context unavailable");
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_BROWSER_LOGIN_WAIT_PATH, {
+								timeoutMs: LOGIN_WAIT_TIMEOUT_MS,
+								body: {
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.timeoutSec === undefined
+										? {}
+										: { timeoutSec: args.timeoutSec }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_login_wait: ${message(error)}`);
 					}
 				},
 			}),

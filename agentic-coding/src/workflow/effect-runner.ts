@@ -4182,7 +4182,9 @@ function assignmentFor(
 			: snapshot.step.context;
 	const changed = run.stepId === "core.triage" ? changedFiles : [];
 	const dialogue = snapshot.developerDialogue.filter(
-		(item) => item.status !== "pending",
+		// A `stage_login` hand-off record is browser bookkeeping, not decision
+		// context: it never reaches an assignment (add-stage-interactive-login).
+		(item) => item.status !== "pending" && item.kind !== "login-handoff",
 	);
 	const dialogueInput = dialogue.length
 		? [

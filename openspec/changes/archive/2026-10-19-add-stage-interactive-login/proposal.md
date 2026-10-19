@@ -9,7 +9,7 @@ This change lets a stage session hand its login to the developer in a visible br
 - **Login hand-off.** `stage_login` returns a new non-terminal outcome, `login-needs-user`, in two cases. Both apply only under the local policy:
   - the role has no usable credentials (no references configured, or a referenced `${VAR}` is not set);
   - the recipe cannot be automated (an explicit `interactive` recipe, or an MFA step the recipe cannot answer).
-  When credentials are configured, the automated recipe path is unchanged and is always tried first.
+  When credentials are configured, the automated recipe path is unchanged: it still runs whenever no login can be reused silently and no hand-off is required.
 - **Interactive (headed) browser.** The browser pool lazily launches a second, server-owned Chromium process with a visible window. A session that needs a hand-off is promoted into it: a fresh context opens at the app's login URL and the old headless context is closed. The session then stays in that context, so cookies, localStorage and sessionStorage written by the IdP and the app persist for the rest of the run. Other sessions stay headless.
 - **`stage_login_wait`.** This new agent tool blocks server-side, for a bounded time, until the hand-off reaches one of these outcomes: `ok`, `login-handoff-timeout`, `login-handoff-aborted`, or `login-handoff-unverified`. It never returns page content.
 - **Session lock.** While a hand-off is active, every agent call that would read or drive the session is refused with `session-held-by-user`. Console and network events from the hand-off are not buffered. After the hand-off, the landing URL is reported as origin plus path only.

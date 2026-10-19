@@ -10,6 +10,13 @@ export class BrowserPoolError extends Error {
 		readonly code: string,
 		message: string,
 		readonly status = 400,
+		/** A value-free machine-readable sub-reason, when the code alone is not
+		 * precise enough (`login-handoff-unavailable`: `headless-only-browser`,
+		 * `no-display`). It is a fixed vocabulary member, never page content. */
+		readonly reason?: string,
+		/** Extra value-free fields the error envelope carries (a hand-off's id and
+		 * deadline). Never page content and never a credential. */
+		readonly details?: Readonly<Record<string, unknown>>,
 	) {
 		super(message);
 		this.name = "BrowserPoolError";

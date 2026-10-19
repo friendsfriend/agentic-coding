@@ -707,6 +707,26 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 				editable: false,
 				action: { kind: "none" },
 			});
+			for (const role of app.roles) {
+				// What a run can expect of this role's login: the credential status
+				// decides whether it can be automated at all, and the login mode says
+				// whether this server would perform it or hand it to the developer.
+				items.push({
+					id: `stages.login.${stage.ident}.${app.key}.${role.role}`,
+					label: `${role.role} · login`,
+					value: `${role.loginMode}${role.credentials.length === 0 ? "" : ` · credentials ${role.credentialStatus}`}`,
+					detail: [
+						`${inventoryDetail("stages.credentials")} · ${app.label} · recipe ${role.login ?? "none"}${role.loginKind ? ` (${role.loginKind})` : ""}`,
+						role.loginMode === "handoff"
+							? "the server cannot perform this login: stage_login hands it to you in a headed window, and stage_login_wait blocks until it ends"
+							: role.loginMode === "unavailable"
+								? 'this login needs you and this configuration forbids the headed window (stages/policy.json "interactiveLogin"): stage_login answers login-user-unavailable'
+								: "the server performs this login from the configured credentials",
+					].join(" · "),
+					editable: false,
+					action: { kind: "none" },
+				});
+			}
 			for (const role of app.roles)
 				for (const credential of role.credentials) {
 					// The variable is named with *both* statuses: a value that is already set
@@ -852,7 +872,15 @@ function browserItems(context: SettingsContext): SettingsItem[] {
 		id: "browser.state",
 		label: "Headless browser",
 		value: where,
-		detail: `${inventoryDetail("browser.install")} · agent runs drive one shared process`,
+		detail: [
+			`${inventoryDetail("browser.install")} · agent runs drive one shared process`,
+			// A `stage_login` hand-off needs a browser that can show a window, which
+			// a shell-only install cannot: the row says so before a hand-off is asked
+			// for, instead of the login failing at the last moment.
+			browser.headed
+				? "a login hand-off can open a visible window"
+				: "no login window: install Chromium here (or Google Chrome), and check the display on Linux",
+		].join(" · "),
 		editable: false,
 		action: { kind: "none" },
 	});

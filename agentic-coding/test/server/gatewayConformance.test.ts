@@ -59,6 +59,7 @@ function browserStubStatus() {
 	return {
 		available: false,
 		source: "none" as const,
+		headed: false,
 		browsersPath: "/tmp/browsers",
 		install: { phase: "idle" as const },
 		settings: {

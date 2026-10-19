@@ -14,9 +14,11 @@ import type {
 	DriverContext,
 	DriverContextOptions,
 	DriverHttpCredentials,
+	DriverLaunchOptions,
 	DriverLocator,
 	DriverNetworkEvent,
 	DriverPage,
+	DriverPageCloseReason,
 	DriverRequestGuard,
 	DriverRequestInfo,
 	DriverScreenshotOptions,
@@ -59,18 +61,36 @@ export interface FakeDriverOptions {
 
 /** One fake context's mutable world: the URL it is on, whether it records, the
  * controls a test removed, and the guard it asks before a navigation. */
+/** One launched browser: the headless slot or the interactive one. */
+interface FakeBrowserSlot {
+	readonly headless: boolean | undefined;
+	connected: boolean;
+	disconnected?: () => void;
+}
+
 interface FakeWorld {
 	url: string;
 	readonly recorded: boolean;
 	readonly absent: ReadonlySet<string>;
 	readonly counts: ReadonlyMap<string, number>;
+	/** The init scripts installed on this context, so a page created after the
+	 * install (and a page that already existed) both report the banner. */
+	readonly scripts: string[];
 	askGuard(info: DriverRequestInfo): boolean;
+	/** The browser slot this context and its pages belong to. */
+	readonly slot: FakeBrowserSlot;
 }
+
+/** The marker that tells a hand-off banner script apart from any other init
+ * script, so the fake records *banner* state rather than "a script exists". */
+const BANNER_MARKER = "data-ac-handoff-banner";
 
 export interface FakeContext extends DriverContext {
 	readonly recorded: boolean;
 	/** The stage guard this context was created with, if any. */
 	readonly guard: DriverRequestGuard | undefined;
+	/** The init scripts installed on this context, in order. */
+	readonly initScripts: string[];
 	/** Ask the guard about one request, as the routing layer would. */
 	runGuard(request: DriverRequestInfo): boolean;
 	/** The HTTP credentials installed on this context, if any. */
@@ -78,6 +98,9 @@ export interface FakeContext extends DriverContext {
 }
 
 export interface FakePage extends DriverPage {
+	/** The browser slot this page belongs to, so a crash of one slot can close
+	 * exactly its own pages. */
+	readonly slot: FakeBrowserSlot;
 	/** Every selector an action was performed on, in order. */
 	readonly performed: string[];
 	/** The live viewport, so a narrowed capture is observable. */
@@ -87,9 +110,19 @@ export interface FakePage extends DriverPage {
 	/** The mask each capture was given, so "masking options passed" is
 	 * assertable without a real image. */
 	readonly masked: Array<readonly DriverLocator[]>;
+	/** How many times the window was raised (`stage_login` hand-off focus). */
+	readonly focusCalls: number;
+	/** Whether the hand-off banner was removed from this live document. */
+	bannerRemoved: boolean;
+	/** Whether this document currently carries the hand-off banner. */
+	bannerInstalled: boolean;
+	/** What this page's `close` reported to its listeners. */
+	readonly closeReasons: DriverPageCloseReason[];
 	emitConsole(entry: DriverConsoleEntry): void;
 	emitNetwork(event: DriverNetworkEvent): void;
-	close(): void;
+	/** Close the page. `reason` is what a real close has to decide: `user` for a
+	 * window the developer closed, `server` for a context this server dropped. */
+	close(reason?: DriverPageCloseReason): void;
 }
 
 /** One request a fake page makes while a `goto` is in flight. It is page work by
@@ -119,8 +152,15 @@ export interface FakeDriver extends BrowserDriver {
 	duringGoto: DuringGotoRequest[];
 	/** Every HTTP credential installation, in order. */
 	readonly httpCredentials: DriverHttpCredentials[];
-	/** Simulate the browser process going away. */
-	crash(): void;
+	/** The `headless` flag of every launch, in order, so a headed launch of the
+	 * interactive browser is assertable without a real window. */
+	readonly launchOptions: Array<{ readonly headless: boolean }>;
+	/** The init scripts installed per context, in context order. */
+	readonly initScripts: string[][];
+	/** Simulate a browser process going away: every slot by default, or only the
+	 * headless one / only the interactive one, so crash isolation between the two
+	 * browsers is assertable. */
+	crash(which?: "all" | "headless" | "interactive"): void;
 	/** Make every navigation fail, as an app that is not up yet does. */
 	failGoto: boolean;
 	/** Make exactly the next navigation fail, and no other. */
@@ -160,6 +200,8 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	const performed: string[] = [];
 	const guarded: DriverRequestInfo[] = [];
 	const httpCredentialsCalls: DriverHttpCredentials[] = [];
+	const launchOptions: Array<{ readonly headless: boolean }> = [];
+	const initScripts: string[][] = [];
 	let absentControls: string[] = [];
 	let counts: Record<string, number> = {};
 	/** Requests the page makes while a `goto` is still in flight: the subresources
@@ -172,6 +214,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		new Uint8Array([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00]);
 	const videoBytes = options.video ?? "fake-webm";
 	const failFill = options.failFill ?? false;
+	const launchError = options.launchError;
 	let launchCount = 0;
 	let contextCount = 0;
 	let failGoto = false;
@@ -181,13 +224,15 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	let holding = false;
 	const held: Array<() => void> = [];
 	let navigationStatusValue: number | undefined;
-	let disconnected: (() => void) | undefined;
-	let connected = false;
+	/** One entry per launch: the two browser slots have separate liveness, so a
+	 * crash of one leaves the other's sessions alone. */
+	const slots: FakeBrowserSlot[] = [];
 
 	const makePage = (context: FakeWorld): FakePage => {
 		const consoleListeners: Array<(entry: DriverConsoleEntry) => void> = [];
 		const networkListeners: Array<(event: DriverNetworkEvent) => void> = [];
-		const closedListeners: Array<() => void> = [];
+		const closedListeners: Array<(reason: DriverPageCloseReason) => void> = [];
+		let focusCount = 0;
 		const performedHere: string[] = [];
 		let sequence = 0;
 		/** Whether the control a locator names exists, as a page without it
@@ -285,10 +330,19 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		rawPage.keyboard = { press: async () => {}, page: rawPage };
 		rawPage.mouse = { click: async () => {}, page: rawPage };
 		const page: FakePage = {
+			slot: context.slot,
 			performed: performedHere,
 			viewport: { width: 1280, height: 800 },
 			capturedAt: [],
 			masked: [],
+			get focusCalls() {
+				return focusCount;
+			},
+			bannerRemoved: false,
+			bannerInstalled: context.scripts.some((script: string) =>
+				script.includes(BANNER_MARKER),
+			),
+			closeReasons: [],
 			url: () => context.url,
 			goto: async (url) => {
 				if (
@@ -346,6 +400,17 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			snapshot: async () => snapshotText,
 			setViewportSize: async (size) => {
 				page.viewport = { ...size };
+			},
+			bringToFront: async () => {
+				focusCount += 1;
+				performedHere.push("bringToFront");
+				performed.push("bringToFront");
+			},
+			removeBanner: async () => {
+				page.bannerRemoved = true;
+				page.bannerInstalled = false;
+				performedHere.push("removeBanner");
+				performed.push("removeBanner");
 			},
 			click: async (selector) => {
 				performedHere.push(`click:${selector}`);
@@ -423,8 +488,9 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			emitNetwork: (event) => {
 				for (const listener of networkListeners) listener(event);
 			},
-			close: () => {
-				for (const listener of closedListeners) listener();
+			close: (reason = "user") => {
+				page.closeReasons.push(reason);
+				for (const listener of closedListeners) listener(reason);
 			},
 			raw: () => rawPage,
 		};
@@ -434,31 +500,44 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 
 	const newContextWhenAllowed = async (
 		options: DriverContextOptions,
+		slot: FakeBrowserSlot,
 	): Promise<FakeContext> => {
 		if (holding)
 			await new Promise<void>((resolve) => {
 				held.push(resolve);
 			});
-		return makeContext(options);
+		return makeContext(options, slot);
 	};
 
-	const makeContext = (options: DriverContextOptions): FakeContext => {
+	const makeContext = (
+		options: DriverContextOptions,
+		slot: FakeBrowserSlot,
+	): FakeContext => {
 		contextCount += 1;
 		const world: FakeWorld = {
 			url: "about:blank",
 			recorded: options.recordVideo !== undefined,
 			absent: new Set(absentControls),
 			counts: new Map(Object.entries(counts)),
+			scripts: [],
 			askGuard: (info) => {
 				if (!options.guard) return true;
 				guarded.push(info);
 				return options.guard(info);
 			},
+			slot,
 		};
 		const own: FakePage[] = [];
 		const context: FakeContext = {
 			recorded: world.recorded,
 			guard: options.guard,
+			initScripts: world.scripts,
+			addInitScript: async (script) => {
+				world.scripts.push(script);
+				initScripts.push(world.scripts);
+				if (!script.includes(BANNER_MARKER)) return;
+				for (const page of own) page.bannerInstalled = true;
+			},
 			runGuard: (info) => world.askGuard(info),
 			httpCredentials: options.httpCredentials,
 			page: async () => {
@@ -470,7 +549,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			// Closing a context closes its pages, exactly like a real browser: the
 			// session's swap guard is what has to tell a replacement from a crash.
 			close: async () => {
-				for (const page of own) page.close();
+				for (const page of own) page.close("server");
 			},
 			storageState: async () => ({
 				cookies: [],
@@ -527,19 +606,30 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		get httpCredentials() {
 			return httpCredentialsCalls;
 		},
-		async launch() {
-			if (options.launchError) throw options.launchError;
+		get launchOptions() {
+			return launchOptions;
+		},
+		get initScripts() {
+			return initScripts;
+		},
+		async launch(options: DriverLaunchOptions) {
+			if (launchError) throw launchError;
 			launchCount += 1;
-			connected = true;
+			launchOptions.push({ headless: options.headless });
+			const slot: FakeBrowserSlot = {
+				headless: options.headless,
+				connected: true,
+			};
+			slots.push(slot);
 			const browser: DriverBrowser = {
 				newContext: async (contextOptions) =>
-					await newContextWhenAllowed(contextOptions),
+					await newContextWhenAllowed(contextOptions, slot),
 				close: async () => {
-					connected = false;
+					slot.connected = false;
 				},
-				isConnected: () => connected,
+				isConnected: () => slot.connected,
 				onDisconnected: (listener) => {
-					disconnected = listener;
+					slot.disconnected = listener;
 				},
 			};
 			return browser;
@@ -602,10 +692,18 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			const waiting = held.splice(0, held.length);
 			for (const resolve of waiting) resolve();
 		},
-		crash() {
-			connected = false;
-			disconnected?.();
-			for (const page of pages) page.close();
+		crash(which = "all") {
+			const crashed = slots.filter(
+				(slot) =>
+					which === "all" ||
+					(which === "headless") === (slot.headless !== false),
+			);
+			for (const slot of crashed) {
+				slot.connected = false;
+				slot.disconnected?.();
+			}
+			for (const page of pages)
+				if (crashed.some((slot) => slot === page.slot)) page.close("server");
 		},
 		lastPage: () => pages[pages.length - 1],
 	};

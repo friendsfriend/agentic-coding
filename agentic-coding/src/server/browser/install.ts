@@ -51,6 +51,11 @@ export interface BrowserStatus {
 	readonly channel?: "chrome";
 	readonly browsersPath: string;
 	readonly systemChrome?: string;
+	/** Whether the browser this server would launch can open a *visible* window:
+	 * a system Chrome, or the full installed Chromium build. A `headless_shell`
+	 * only install reports `false`, and a login hand-off is refused before any
+	 * launch is attempted. */
+	readonly headed: boolean;
 	readonly install: BrowserInstallState;
 }
 
@@ -59,6 +64,9 @@ export interface BrowserInstallerOptions {
 	/** The candidates a system Chrome is looked for among. Injected so a test
 	 * never depends on the machine's own installation. */
 	readonly chromeCandidates?: readonly string[];
+	/** Whether this machine can show a window. Injected for the same reason: a
+	 * headless CI host must be testable without being the thing under test. */
+	readonly display?: () => boolean;
 	readonly now?: () => number;
 	readonly log?: (message: string) => void;
 }
@@ -147,6 +155,9 @@ export function findInstalledChromium(
 	browsersPath: string,
 	expectedRevision?: number,
 	maxDepth = 6,
+	/** The executable names that count. A headed resolution passes the subset a
+	 * visible window needs, so a shell-only install resolves to `undefined`. */
+	executableNames: readonly string[] = CHROMIUM_EXECUTABLES,
 ): string | undefined {
 	let revisions: string[];
 	try {
@@ -177,6 +188,7 @@ export function findInstalledChromium(
 			path.join(browsersPath, preferred.name),
 			maxDepth,
 			0,
+			executableNames,
 		);
 	}
 	const ordered = candidates;
@@ -185,10 +197,31 @@ export function findInstalledChromium(
 			path.join(browsersPath, entry.name),
 			maxDepth,
 			0,
+			executableNames,
 		);
 		if (found) return found;
 	}
 	return undefined;
+}
+
+/** The executable names a *headed* launch can use: a `headless_shell` cannot
+ * open a window, so an install that only has one resolves to `undefined` and a
+ * hand-off is refused instead of launching something invisible. */
+const HEADED_EXECUTABLES = CHROMIUM_EXECUTABLES.filter(
+	(name) => name !== "headless_shell",
+);
+
+/**
+ * Whether this platform can show a window at all. Only Linux needs a display
+ * server named before a headed launch can work; macOS and Windows always have
+ * one. Checked *before* any launch is attempted.
+ */
+export function displayAvailable(
+	platform: NodeJS.Platform = process.platform,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+	if (platform !== "linux") return true;
+	return Boolean(env.DISPLAY ?? env.WAYLAND_DISPLAY);
 }
 
 /**
@@ -234,6 +267,7 @@ function searchExecutable(
 	directory: string,
 	maxDepth: number,
 	depth: number,
+	executableNames: readonly string[] = CHROMIUM_EXECUTABLES,
 ): string | undefined {
 	if (depth > maxDepth) return undefined;
 	let entries: fs.Dirent[];
@@ -245,7 +279,7 @@ function searchExecutable(
 	// A `.app` bundle is a directory whose binary lives at a known offset; the
 	// `Contents/MacOS` walk below finds it, so nothing here special-cases macOS.
 	for (const entry of entries) {
-		if (entry.isFile() && CHROMIUM_EXECUTABLES.includes(entry.name))
+		if (entry.isFile() && executableNames.includes(entry.name))
 			return path.join(directory, entry.name);
 	}
 	for (const entry of entries) {
@@ -254,6 +288,7 @@ function searchExecutable(
 			path.join(directory, entry.name),
 			maxDepth,
 			depth + 1,
+			executableNames,
 		);
 		if (found) return found;
 	}
@@ -266,6 +301,7 @@ export class BrowserInstaller {
 	private cancelled = false;
 	private readonly configDir: string;
 	private readonly chromeCandidates: readonly string[];
+	private readonly display: () => boolean;
 	private readonly clock: () => number;
 	private readonly log: (message: string) => void;
 
@@ -273,6 +309,7 @@ export class BrowserInstaller {
 		this.configDir = options.configDir;
 		this.chromeCandidates =
 			options.chromeCandidates ?? systemChromeCandidates();
+		this.display = options.display ?? (() => displayAvailable());
 		this.clock = options.now ?? (() => Date.now());
 		this.log = options.log ?? (() => {});
 	}
@@ -294,7 +331,23 @@ export class BrowserInstaller {
 	/** What is usable now. `install` is reported as its own state, so a UI can
 	 * say "not installed" and "installing" without conflating them. */
 	status(): BrowserStatus {
+		// The cheap answer first: no display means no headed capability at all, and
+		// the resolution below is a synchronous directory walk on the server's
+		// event loop, repeated on every Settings poll (PERF-003).
+		const canShowWindow = this.display();
 		const systemChrome = this.systemChrome();
+		const installed = systemChrome ? undefined : this.installedChromium();
+		// A headed-capable browser *and* a platform that can show a window: a
+		// Chromium that cannot open one is not a capability this server has. One
+		// walk answers both questions, because the resolved executable names which
+		// build it is; only an ambiguous answer (the walk found the shell, though a
+		// revision directory can hold both binaries) pays for the headed-only walk.
+		const headed =
+			canShowWindow &&
+			(systemChrome !== undefined ||
+				(installed !== undefined &&
+					(HEADED_EXECUTABLES.includes(path.basename(installed)) ||
+						this.headedBrowser() !== undefined)));
 		if (systemChrome)
 			return {
 				available: true,
@@ -303,24 +356,93 @@ export class BrowserInstaller {
 				channel: "chrome",
 				browsersPath: this.browsersPath,
 				systemChrome,
+				headed,
 				install: this.state,
 			};
-		const installed = this.installedChromium();
 		return {
 			available: installed !== undefined,
 			source: installed ? "installed-chromium" : "none",
 			...(installed ? { executablePath: installed } : {}),
 			browsersPath: this.browsersPath,
+			headed,
 			install: this.state,
 		};
+	}
+
+	/** The executable a headed launch would use: a system Chrome, or the full
+	 * (non `headless_shell`) Chromium build of the expected revision. */
+	private headedBrowser():
+		| { readonly executablePath: string; readonly channel?: "chrome" }
+		| undefined {
+		const systemChrome = this.systemChrome();
+		if (systemChrome)
+			return { executablePath: systemChrome, channel: "chrome" };
+		const installed = findInstalledChromium(
+			this.browsersPath,
+			expectedChromiumRevision(),
+			6,
+			HEADED_EXECUTABLES,
+		);
+		return installed ? { executablePath: installed } : undefined;
+	}
+
+	/**
+	 * Whether a hand-off could open a window here, and why not when it could not.
+	 * Both checks are cheap and neither launches anything: the routes ask this
+	 * before a hand-off is queued, so a machine that cannot show a window never
+	 * starts a hidden process for one.
+	 */
+	headedAvailability():
+		| { readonly ok: true }
+		| {
+				readonly ok: false;
+				readonly reason: "no-display" | "headless-only-browser";
+		  } {
+		if (!this.display()) return { ok: false, reason: "no-display" };
+		if (!this.headedBrowser())
+			return { ok: false, reason: "headless-only-browser" };
+		return { ok: true };
 	}
 
 	/**
 	 * How to launch a browser, or the refusal the tools report. A system Chrome
 	 * is preferred when present: it costs no download and is what the developer
 	 * already runs. Otherwise the installed Chromium is launched by path.
+	 *
+	 * `headed: true` asks for the interactive browser a login hand-off needs. The
+	 * display and headed-capability checks happen **before** any launch, so a
+	 * machine that cannot show a window never starts a hidden process for it.
 	 */
-	resolveLaunch(): DriverLaunchOptions {
+	resolveLaunch(
+		options: { readonly headed?: boolean } = {},
+	): DriverLaunchOptions {
+		if (options.headed) {
+			const available = this.headedAvailability();
+			if (!available.ok) {
+				if (available.reason === "no-display")
+					throw new BrowserPoolError(
+						"login-handoff-unavailable",
+						'this platform has no display (neither DISPLAY nor WAYLAND_DISPLAY is set), so a login window cannot be shown; run the server where a display exists, or set interactiveLogin to "never" in stages/policy.json',
+						503,
+						"no-display",
+					);
+				throw new BrowserPoolError(
+					"login-handoff-unavailable",
+					"no browser that can show a window is installed: install Chromium from Settings → Browser (Browser → Install), or install Google Chrome, and call stage_login again",
+					503,
+					"headless-only-browser",
+				);
+			}
+			const headed = this.headedBrowser();
+			if (!headed)
+				throw new BrowserPoolError(
+					"login-handoff-unavailable",
+					"no browser that can show a window is installed; install Chromium from Settings → Browser → Install",
+					503,
+					"headless-only-browser",
+				);
+			return { headless: false, ...headed };
+		}
 		const systemChrome = this.systemChrome();
 		if (systemChrome)
 			return {

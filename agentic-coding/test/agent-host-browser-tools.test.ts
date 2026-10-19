@@ -14,6 +14,7 @@ import type { RunContextLookup } from "../src/agent-host/tools.ts";
 const BROWSER_TOOLS = [
 	"browser_open",
 	"stage_login",
+	"stage_login_wait",
 	"browser_snapshot",
 	"browser_click",
 	"browser_fill",
@@ -229,6 +230,26 @@ describe("browser tool surface", () => {
 			session: "clerk",
 			app: "web",
 			role: "clerk",
+		});
+	});
+
+	test("stage_login_wait blocks on the session and never names a credential", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ session: "clerk", login: "needs-user" }],
+		};
+		const { result } = await invoke(
+			"stage_login_wait",
+			{ session: "clerk", timeoutSec: 120 },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/login-wait",
+		);
+		expect(server.calls[0]?.body).toEqual({
+			session: "clerk",
+			timeoutSec: 120,
 		});
 	});
 

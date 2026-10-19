@@ -14,6 +14,7 @@ import {
 	useTerminalDimensions,
 } from "@ui";
 import { createEffect, For, Show, untrack } from "solid-js";
+import { formatHandoffDeadline } from "../../../contracts/handoff-deadline.ts";
 import {
 	type DeveloperDialogueRecord,
 	resolveDeveloperQuestionOption,
@@ -86,6 +87,12 @@ export function DeveloperQuestionModal(props: {
 	const compactHelp = () => compact() || dimensions().width * 0.78 < 95;
 	createEffect(() => contextScroll?.scrollTo(props.promptOffset));
 	const options = () => question()?.options ?? [];
+	// A `stage_login` hand-off is answered with Done or Abort only: no custom text
+	// is offered (add-stage-interactive-login).
+	const offersCustom = () => question()?.kind !== "login-handoff";
+	// The same key, one meaning: a hand-off's Escape is the Abort the record
+	// offers (it ends the login the waiting run needs), not a harmless dismissal.
+	const escapeAction = () => (offersCustom() ? "Cancel" : "Abort");
 	const rows = (): OptionRow[] => [
 		...options().map((option) => {
 			const resolved = resolveDeveloperQuestionOption(option);
@@ -95,7 +102,9 @@ export function DeveloperQuestionModal(props: {
 				hasDetail: Boolean(resolved.description?.trim()),
 			};
 		}),
-		{ label: "Custom response…", recommended: false, hasDetail: false },
+		...(offersCustom()
+			? [{ label: "Custom response…", recommended: false, hasDetail: false }]
+			: []),
 	];
 	const shortLabel = (item: DeveloperDialogueRecord) => {
 		const label = (item.ident ?? item.description).replace(/\s+/g, " ").trim();
@@ -138,23 +147,23 @@ export function DeveloperQuestionModal(props: {
 					? tinyHelp()
 						? [
 								{ key: "A+↵", action: "Submit" },
-								{ key: "Esc", action: "Cancel" },
+								{ key: "Esc", action: escapeAction() },
 							]
 						: compactHelp()
 							? [
 									{ key: "Alt+Enter", action: "Submit" },
-									{ key: "Esc", action: "Cancel" },
+									{ key: "Esc", action: escapeAction() },
 								]
 							: [
 									{ key: "Enter", action: "New line" },
 									{ key: "Alt+Enter", action: "Advance / submit" },
 									{ key: "Ctrl+PgUp/Dn", action: "Scroll context" },
-									{ key: "Esc", action: "Cancel" },
+									{ key: "Esc", action: escapeAction() },
 								]
 					: tinyHelp()
 						? [
 								{ key: "↵", action: "Select" },
-								{ key: "Esc", action: "Cancel" },
+								{ key: "Esc", action: escapeAction() },
 							]
 						: compactHelp()
 							? [
@@ -163,7 +172,7 @@ export function DeveloperQuestionModal(props: {
 									{ key: "↑↓", action: "Choose" },
 									{ key: "↵", action: "Select" },
 									{ key: "d", action: "Option detail" },
-									{ key: "Esc", action: "Cancel" },
+									{ key: "Esc", action: escapeAction() },
 								]
 							: [
 									{ key: "Tab", action: "Next question" },
@@ -172,7 +181,7 @@ export function DeveloperQuestionModal(props: {
 									{ key: "↑↓", action: "Choose" },
 									{ key: "d", action: "Option detail" },
 									{ key: "Alt+Enter", action: "Confirm" },
-									{ key: "Esc", action: "Cancel" },
+									{ key: "Esc", action: escapeAction() },
 								]
 			}
 		>
@@ -253,6 +262,7 @@ export function DeveloperQuestionModal(props: {
 											{item().targetRole
 												? " · also routed to the orchestrator"
 												: ""}
+											{deadlineLine(item().expiresAt)}
 										</text>
 									</box>
 								</Show>
@@ -332,4 +342,13 @@ export function DeveloperQuestionModal(props: {
 			</box>
 		</GenericModal>
 	);
+}
+
+/** The record's own expiry, in the same words the hand-off banner uses
+ * (`formatHandoffDeadline`): a dialog that hides when it stops being answerable
+ * is one the developer cannot answer in time (USAB-101). */
+function deadlineLine(expiresAt: string | undefined): string {
+	if (!expiresAt) return "";
+	const formatted = formatHandoffDeadline(expiresAt, Date.now());
+	return formatted === "an unknown time" ? "" : ` · Expires ${formatted}`;
 }

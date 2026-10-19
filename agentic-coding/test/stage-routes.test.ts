@@ -167,6 +167,7 @@ describe("stage read routes", () => {
 		// stage's cleanup or read its process pages without them.
 		expect(Object.keys(stage?.limits ?? {}).sort()).toEqual([
 			"maxActionsPerMinute",
+			"maxLoginHandoffSeconds",
 			"maxRecordingMinutes",
 			"maxScreenshots",
 			"maxSessions",

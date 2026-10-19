@@ -20,7 +20,14 @@ export interface StageCredentialStatus {
 export interface StageRoleStatus {
 	readonly role: string;
 	readonly login?: string;
-	readonly loginKind?: "form" | "http-basic";
+	readonly loginKind?: "form" | "http-basic" | "interactive";
+	/** `set` when every credential reference the role declares is set, `none`
+	 * when the role declares none at all, otherwise the first `missing <VAR>`. */
+	readonly credentialStatus: string;
+	/** What a run can expect of this login: `automated` (this server performs
+	 * it), `handoff` (it needs the developer in a headed window), `unavailable`
+	 * (it needs the developer and this configuration forbids the window). */
+	readonly loginMode: "automated" | "handoff" | "unavailable";
 	readonly credentials: readonly StageCredentialStatus[];
 }
 
@@ -68,6 +75,7 @@ export interface StageStatus {
 		readonly maxWaitSeconds: number;
 		readonly maxScreenshots: number;
 		readonly maxRecordingMinutes: number;
+		readonly maxLoginHandoffSeconds: number;
 	};
 	/** The stage's own data conventions — a row prefix, notes, a cleanup step —
 	 * which is what an agent on a `writable` stage has to follow. */

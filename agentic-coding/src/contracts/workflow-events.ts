@@ -12,8 +12,11 @@
 import { Schema } from "effect";
 import { redactSecrets, type StartedBy } from "./workflow.ts";
 
-/** Bumped whenever an id, a category or a payload shape changes. */
-export const WORKFLOW_EVENT_CATALOG_VERSION = 2;
+/** Bumped whenever an id, a category or a payload shape changes.
+ *
+ * 3: `question.pending` gained the optional `kind` (a `login-handoff` record).
+ * Optional and additive, so a version-2 reader still decodes every payload. */
+export const WORKFLOW_EVENT_CATALOG_VERSION = 3;
 
 /** The category vocabulary, in the order events of one observation are
  * reported, so a note is deterministic. */
@@ -174,6 +177,7 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		questionId: Schema.String,
 		role: Schema.String,
 		stepId: Schema.String,
+		kind: Schema.optional(Schema.String),
 	}),
 	"question.routed": Schema.Struct({
 		questionId: Schema.String,

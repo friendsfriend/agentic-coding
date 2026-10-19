@@ -491,6 +491,11 @@ export interface ClassifierDecisionRecord {
 		attention?: string;
 	};
 }
+/** What a developer-dialogue record is for. Absent for an ordinary developer
+ * question; `login-handoff` is the `stage_login` hand-off, which is answered by
+ * the developer in the dashboard but never routed to, or resumed by, a run. */
+export type DeveloperDialogueKind = "login-handoff";
+
 export interface DeveloperDialogueRecord {
 	id: string;
 	workflowId: string;
@@ -508,6 +513,9 @@ export interface DeveloperDialogueRecord {
 	timerNonce?: string;
 	/** Present when the question is routed to a peer agent rather than the developer. */
 	targetRole?: string;
+	/** `login-handoff` marks a `stage_login` hand-off (add-stage-interactive-login):
+	 * no custom text, no orchestrator routing, never a reason to resume a run. */
+	kind?: DeveloperDialogueKind;
 	/** Completed peer run the question was delivered to; absent for developer questions. */
 	targetRunId?: string;
 	/** Secret binding for the peer agent's one-shot answer capability. */
@@ -811,6 +819,27 @@ export type WorkflowCommand =
 			timerNonce: string;
 	  }
 	| {
+			type: "login-handoff.open";
+			workflowId: string;
+			recordId: string;
+			description: string;
+			context?: string;
+			expiresAt: string;
+			/** The run whose session is held, for the record's provenance only: the
+			 * hand-off is never routed to it and never resumes it. */
+			runId?: string;
+			stepId?: string;
+			role?: string;
+	  }
+	| {
+			type: "login-handoff.resolve";
+			workflowId: string;
+			recordId: string;
+			/** `done` lets the hand-off verify the login; `abort` ends it. Either way
+			 * the resolution is recorded by the server, not by a run. */
+			answer: "done" | "abort";
+	  }
+	| {
 			type: "agent.handoff";
 			runId: string;
 			generation: number;
@@ -1044,6 +1073,24 @@ const agentAnswerSchema = Schema.Struct({
 	answerNonce: text(1024),
 	answer: text(8192),
 });
+const loginHandoffOpenSchema = Schema.Struct({
+	type: Schema.Literal("login-handoff.open"),
+	workflowId: text(4096),
+	recordId: text(4096),
+	description: text(8192),
+	context: Schema.optional(text(16384)),
+	expiresAt: text(64),
+	runId: Schema.optional(text(4096)),
+	stepId: Schema.optional(text(4096)),
+	role: Schema.optional(text(4096)),
+});
+const loginHandoffResolveSchema = Schema.Struct({
+	type: Schema.Literal("login-handoff.resolve"),
+	workflowId: text(4096),
+	recordId: text(4096),
+	answer: Schema.Literal("done", "abort"),
+});
+
 const agentHandoffSchema = Schema.Struct({
 	type: Schema.Literal("agent.handoff"),
 	runId: text(4096),
@@ -1109,6 +1156,8 @@ export const WorkflowCommandSchema = Schema.Union(
 	agentAskSchema,
 	agentAnswerSchema,
 	timerQuestionExpireSchema,
+	loginHandoffOpenSchema,
+	loginHandoffResolveSchema,
 	agentHandoffSchema,
 	agentResumeSchema,
 	agentResearchHandoffSchema,
@@ -1662,6 +1711,7 @@ const dialogueRecordResponseSchema = Schema.Struct({
 	groupId: Schema.optional(Schema.String),
 	timerNonce: Schema.optional(Schema.String),
 	targetRole: Schema.optional(Schema.String),
+	kind: Schema.optional(Schema.String),
 	targetRunId: Schema.optional(Schema.String),
 	answerNonceHash: Schema.optional(Schema.String),
 	itemIndex: Schema.optional(Schema.Number),

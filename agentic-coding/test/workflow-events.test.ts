@@ -34,7 +34,7 @@ function view(overrides: {
 	effects?: WorkflowView["effects"];
 	runs?: WorkflowView["runs"];
 	attention?: string[];
-	pendingQuestions?: Array<{ id: string; role: string }>;
+	pendingQuestions?: Array<{ id: string; role: string; kind?: string }>;
 	orchestratorQuestions?: Array<{ id: string; role: string }>;
 	developerDialogue?: Array<{
 		id: string;
@@ -103,7 +103,7 @@ function payload(
 
 describe("workflow event catalog", () => {
 	test("every id declares a category, a human-needed flag and a payload schema", () => {
-		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(2);
+		expect(WORKFLOW_EVENT_CATALOG_VERSION).toBe(3);
 		expect(WORKFLOW_EVENT_CATALOG).toHaveLength(WORKFLOW_EVENT_IDS.length);
 		for (const id of WORKFLOW_EVENT_IDS) {
 			const entry = workflowEventCatalogEntry(id);
@@ -254,6 +254,22 @@ describe("questions", () => {
 		);
 		expect(ids(pending)).toEqual(["question.pending"]);
 		expect(payload(pending, "question.pending").questionId).toBe("q-1");
+		// A `stage_login` hand-off is told apart from a developer question by its
+		// kind, so a subscriber can filter it out.
+		expect(payload(pending, "question.pending").kind).toBeUndefined();
+		const handoff = diff(
+			view({ step: "core.planning" }),
+			view({
+				step: "core.planning",
+				pendingQuestions: [
+					{ id: "h-1", role: "worker", kind: "login-handoff" },
+				],
+			}),
+		);
+		expect(ids(handoff)).toEqual(["question.pending"]);
+		expect(payload(handoff, "question.pending").kind).toBe("login-handoff");
+		expect(payload(handoff, "question.pending").questionId).toBe("h-1");
+
 		const answered = diff(
 			view({
 				step: "core.planning",

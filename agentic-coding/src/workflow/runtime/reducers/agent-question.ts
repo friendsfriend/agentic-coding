@@ -18,6 +18,7 @@ import {
 	MAX_DIALOGUE_BYTES,
 	ORCHESTRATOR_QUESTION_TARGET,
 	QUESTION_WAIT_MS,
+	questionRecordCount,
 	questionRun,
 } from "../dialogue.ts";
 import { nowIso } from "../store.ts";
@@ -39,7 +40,7 @@ export function agentQuestion(
 		},
 	];
 	if (
-		snapshot.developerDialogue.length + items.length >
+		questionRecordCount(snapshot.developerDialogue) + items.length >
 		MAX_DEVELOPER_DIALOGUE_RECORDS
 	)
 		throw new WorkflowRuntimeError(

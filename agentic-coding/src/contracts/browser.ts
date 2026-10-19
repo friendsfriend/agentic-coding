@@ -193,6 +193,22 @@ export const browserStageLoginRequestSchema = Schema.Struct({
 export type BrowserStageLoginRequest =
 	typeof browserStageLoginRequestSchema.Type;
 
+/** `stage_login_wait`: block in the server until the hand-off ends or the
+ * timeout is reached. The server caps the wait at the smaller of the remaining
+ * deadline and 600 s, whatever the tool asks for. */
+export const browserStageLoginWaitRequestSchema = Schema.Struct({
+	session: sessionField,
+	timeoutSec: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value > 0, {
+				message: () => "expected a positive number of seconds",
+			}),
+		),
+	),
+});
+export type BrowserStageLoginWaitRequest =
+	typeof browserStageLoginWaitRequestSchema.Type;
+
 /** The refusal codes the stage surfaces answer with
  * (`add-stage-testing-foundation`), declared here so the tool side and the
  * route side name the same vocabulary and a test can assert it. */
@@ -213,6 +229,14 @@ export const STAGE_ERROR_CODES = [
 	"login-timeout",
 	"login-step-not-found",
 	"login-not-required",
+	// `add-stage-interactive-login`: the hand-off vocabulary. `login-needs-user`
+	// is deliberately absent — it is a *result*, not a refusal.
+	"login-user-unavailable",
+	"login-handoff-unavailable",
+	"login-handoff-unverified",
+	"login-handoff-timeout",
+	"login-handoff-aborted",
+	"session-held-by-user",
 ] as const;
 export type StageErrorCode = (typeof STAGE_ERROR_CODES)[number];
 
@@ -229,6 +253,9 @@ export interface BrowserStatusResponse {
 	readonly channel?: "chrome";
 	readonly browsersPath: string;
 	readonly systemChrome?: string;
+	/** Whether this server can open a visible window at all, which is what a
+	 * login hand-off needs. */
+	readonly headed: boolean;
 	readonly install: {
 		readonly phase: "idle" | "downloading" | "ready" | "failed" | "cancelled";
 		readonly detail?: string;
@@ -249,6 +276,7 @@ export const browserStatusResponseSchema: Schema.Schema<BrowserStatusResponse> =
 		channel: Schema.optional(Schema.Literal("chrome")),
 		browsersPath: Schema.String,
 		systemChrome: Schema.optional(Schema.String),
+		headed: Schema.Boolean,
 		install: Schema.Struct({
 			phase: Schema.Literal(
 				"idle",

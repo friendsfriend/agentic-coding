@@ -41,6 +41,7 @@ import {
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
 	AGENT_BROWSER_LOGIN_PATH,
+	AGENT_BROWSER_LOGIN_WAIT_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
@@ -58,6 +59,7 @@ import {
 	stageByIdent,
 	stageCredentialVariables,
 	stageRefusalReason,
+	stageView,
 } from "../stages/catalog.ts";
 import { type StageRefusal, sanitizeStageUrl } from "../stages/guard.ts";
 import {
@@ -65,9 +67,19 @@ import {
 	StageLimitError,
 	StageUsageRegistry,
 } from "../stages/limits.ts";
+import type { StageLoginRecipe } from "../stages/schema.ts";
 import { BrowserPoolError } from "./errors.ts";
+import {
+	HANDOFF_MAX_WAIT_MS,
+	type LoginHandoffCoordinator,
+	type LoginHandoffOutcome,
+} from "./handoff.ts";
 import type { BrowserInstaller } from "./install.ts";
-import { fillStageCredential, runStageLogin } from "./login.ts";
+import {
+	fillStageCredential,
+	runStageLogin,
+	silentLoginCheck,
+} from "./login.ts";
 import type { BrowserPool } from "./pool.ts";
 import { createScriptExpect } from "./script-expect.ts";
 import {
@@ -89,6 +101,8 @@ const DEFAULT_LOG_LIMIT = 50;
 const MAX_LOG_LIMIT = 500;
 /** JPEG quality for a returned screenshot: readable without being huge. */
 const SCREENSHOT_QUALITY = 70;
+/** The silent SSO check a promoted session gets before a new hand-off (D2). */
+const SILENT_SSO_CHECK_MS = 10_000;
 /** The temp root for server-written evidence before it is copied into the
  * workflow's evidence store. Inside the workflow's data root, which is one of
  * the roots the store accepts a source from. */
@@ -97,6 +111,10 @@ const EVIDENCE_SCRATCH_DIR = "browser";
 export interface BrowserRouteDeps {
 	readonly installer: BrowserInstaller;
 	readonly pool: BrowserPool;
+	/** `add-stage-interactive-login`: the login hand-off coordinator. Absent in a
+	 * test that drives no hand-off, where a role that would need one answers
+	 * `login-handoff-unavailable`. */
+	readonly handoff?: LoginHandoffCoordinator;
 	/** Resolved per request, so a configuration edit applies to the next call. */
 	readonly settings: () => ResolvedBrowserSettings;
 	readonly apps?: Pick<EnvironmentManager, "getAppByIdent">;
@@ -162,6 +180,7 @@ export function browserStatusValue(
 		...(status.channel ? { channel: status.channel } : {}),
 		browsersPath: status.browsersPath,
 		...(status.systemChrome ? { systemChrome: status.systemChrome } : {}),
+		headed: status.headed,
 		install: status.install,
 		settings: {
 			maxSessions: settings.maxSessions,
@@ -178,6 +197,24 @@ export function browserStatusValue(
 interface SessionUse {
 	readonly session: BrowserSession;
 	readonly refusalsFrom: number;
+}
+
+/** The refusal every agent route answers while the developer holds a session.
+ * Value-free: the hand-off's id and deadline, and nothing about the page. */
+export function sessionHeldRefusal(session: BrowserSession): BrowserPoolError {
+	const hold = session.hold;
+	return new BrowserPoolError(
+		"session-held-by-user",
+		"a login hand-off holds this session while the developer logs in: wait for it with stage_login_wait, or end it with browser_close",
+		409,
+		undefined,
+		hold
+			? {
+					handoffId: hold.handoffId,
+					deadlineAt: new Date(hold.deadlineAt).toISOString(),
+				}
+			: {},
+	);
 }
 
 /**
@@ -220,7 +257,19 @@ export async function handleBrowserRoute(
 			error instanceof EvidenceError
 		) {
 			status = error.status;
-			envelope = { error: { code: error.code, message: error.message } };
+			envelope = {
+				error: {
+					code: error.code,
+					message: error.message,
+					// A value-free sub-reason (`login-handoff-unavailable`), and the extra
+					// fields a refusal carries (a hand-off's id and deadline). Both are
+					// fixed vocabulary or coordination data — never page content.
+					...("reason" in error && error.reason
+						? { reason: error.reason }
+						: {}),
+					...("details" in error && error.details ? error.details : {}),
+				},
+			};
 		} else {
 			status = 400;
 			envelope = {
@@ -575,11 +624,22 @@ async function dispatch(
 		>(path, await readJsonBody(request));
 		return await stageLogin(deps, owner, used, body);
 	}
+	if (method === "POST" && path === AGENT_BROWSER_LOGIN_WAIT_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserStageLoginWaitRequest
+		>(path, await readJsonBody(request));
+		return await stageLoginWait(deps, owner, used, body);
+	}
 	if (method === "POST" && path === AGENT_BROWSER_CLOSE_PATH) {
 		const body = decodeRouteRequest<
 			import("../../contracts/browser.ts").BrowserSessionRequest
 		>(path, await readJsonBody(request));
 		const name = body.session ?? DEFAULT_BROWSER_SESSION;
+		// Closing a held session is always allowed, and it aborts the hand-off
+		// first: the developer must not be left typing into a context that is about
+		// to disappear (`by: "agent"`).
+		const held = deps.pool.find(owner, name);
+		if (held?.heldByUser) await deps.handoff?.abort(held, "agent");
 		const closed = await deps.pool.close(owner, name);
 		return { session: name, closed };
 	}
@@ -693,6 +753,9 @@ async function openSession(
 	// the first navigation runs (a brand-new one, whose refusal buffer starts
 	// empty, so its fence is 0 and every refusal it records is this open's).
 	const before = deps.pool.find(owner, name);
+	// `browser_open` of a held session name is refused like every other route:
+	// the agent cannot reopen, navigate or read the page the developer is on.
+	if (before?.heldByUser) throw sessionHeldRefusal(before);
 	const fence = before ? before.beginUse() : 0;
 	try {
 		const session = await deps.pool.acquire({
@@ -877,7 +940,12 @@ async function sessionFor(
 	owner: string,
 	name: string | undefined,
 	used: SessionUse[],
-	options: { readonly countAction?: boolean } = {},
+	options: {
+		readonly countAction?: boolean;
+		/** `stage_login`, `stage_login_wait` and `browser_close` are the only
+		 * routes a held session still answers: rejoining, waiting and aborting. */
+		readonly allowHeld?: boolean;
+	} = {},
 ): Promise<BrowserSession> {
 	const session = deps.pool.session(owner, name ?? DEFAULT_BROWSER_SESSION);
 	// In flight for the whole request: the idle sweep must not close this page
@@ -889,6 +957,10 @@ async function sessionFor(
 	// pool serializes this with an explicit stop, so two concurrent requests
 	// cannot both stop the same recording.
 	await deps.pool.autoStopIfExpired(session);
+	// The hold is checked *before* the stage's rolling minute is charged: a
+	// refusal because the developer is logging in is not an action of the run.
+	if (session.heldByUser && options.allowHeld !== true)
+		throw sessionHeldRefusal(session);
 	// One browser call on a stage is one action of the stage's rolling minute.
 	if (options.countAction !== false && session.stage)
 		stageUsage(deps).countAction({
@@ -917,7 +989,9 @@ async function stageLogin(
 	used: SessionUse[],
 	body: import("../../contracts/browser.ts").BrowserStageLoginRequest,
 ): Promise<unknown> {
-	const session = await sessionFor(deps, owner, body.session, used);
+	const session = await sessionFor(deps, owner, body.session, used, {
+		allowHeld: true,
+	});
 	const binding = session.stage;
 	if (!binding)
 		throw new BrowserSessionError(
@@ -926,20 +1000,146 @@ async function stageLogin(
 			409,
 		);
 	const entry = stageEntryFor(deps, binding.ident);
-	const result = await withoutCredentialEcho(
-		async () =>
-			await runStageLogin({
+	// 1. Recording first, before any hand-off is considered (spec trigger order):
+	// a credential must never reach a video.
+	if (session.recording)
+		throw new BrowserSessionError(
+			"recording-active",
+			"this session is recording; stop the recording before logging in, so a credential is never written to a video",
+			409,
+		);
+	// 2. A second `stage_login` on a held session rejoins the pending hand-off;
+	// it never starts a second one.
+	const pending = deps.handoff?.pending(session);
+	if (pending)
+		return { session: session.name, login: "needs-user", ...pending };
+
+	// The role's facts come from the same view `stage_info` reports, so the
+	// decision here and the mode the plan sees can never disagree.
+	const view = stageView(entry, deps.configDir ?? "");
+	const appView = view.apps.find((candidate) => candidate.key === body.app);
+	const roleView = appView?.roles.find(
+		(candidate) => candidate.role === body.role,
+	);
+	const recipe =
+		roleView?.login === undefined
+			? undefined
+			: entry.stage.logins?.[roleView.login];
+	// A `http-basic` role never hands off: the browser's own authentication dialog
+	// does not appear in a window this server launched (spike 0.2, D10), so the
+	// automated path keeps the foundation's `credential-missing` answer instead of
+	// sending a developer to a window that cannot ask for anything.
+	const needsPerson =
+		roleView !== undefined &&
+		roleView.login !== undefined &&
+		roleView.loginKind !== "http-basic" &&
+		(roleView.loginKind === "interactive" ||
+			roleView.credentialStatus !== "set");
+	const reason =
+		roleView?.loginKind === "interactive"
+			? "unautomatable-step"
+			: "no-credentials";
+
+	// 3. The silent SSO check, *before* any hand-off is queued (spec trigger
+	// order, D2): a session that already lives in the interactive browser may hold
+	// a login another app on the same IdP can use, and reusing it is not a
+	// hand-off.
+	if (
+		entry.interactiveLogin === "local" &&
+		session.browserSlot === "interactive" &&
+		recipe?.success !== undefined &&
+		appView
+	) {
+		const reused = await silentLoginCheck({
+			session,
+			recipe,
+			url: appView.url,
+			timeoutMs: SILENT_SSO_CHECK_MS,
+			...(deps.now ? { now: deps.now } : {}),
+		});
+		if (reused)
+			return {
+				session: session.name,
+				stage: entry.ident,
+				login: "ok",
+				via: "existing-session",
+				verified: true,
+				url: sanitizeStageUrl(session.url),
+			};
+	}
+
+	// 4. The interactive-login policy decides who may be asked (D7).
+	if (
+		needsPerson &&
+		entry.interactiveLogin === "local" &&
+		appView &&
+		roleView
+	) {
+		return await startHandoff({
+			deps,
+			owner,
+			session,
+			entry,
+			appKey: body.app,
+			appLabel: appView.label,
+			appUrl: appView.url,
+			role: body.role,
+			reason,
+			...(recipe === undefined ? {} : { recipe }),
+		});
+	}
+	if (needsPerson && entry.interactiveLogin === "never") {
+		// A missing variable still names itself (the foundation's answer); a role
+		// that declares nothing this server could ever use, or one whose login can
+		// only be performed by a person, is refused as a policy matter.
+		if (
+			roleView?.loginKind === "interactive" ||
+			roleView?.credentialStatus === "none"
+		)
+			throw new BrowserSessionError(
+				"login-user-unavailable",
+				`${body.app}.${body.role} can only be logged in by a person, and stages/policy.json sets interactiveLogin to "never"`,
+				409,
+			);
+	}
+
+	// 5. The automated recipe, unchanged. Under `local`, an MFA step the recipe
+	// cannot answer is what triggers an `unautomatable-step` hand-off.
+	let result: Awaited<ReturnType<typeof runStageLogin>>;
+	try {
+		result = await withoutCredentialEcho(
+			async () =>
+				await runStageLogin({
+					session,
+					entry,
+					appKey: body.app,
+					role: body.role,
+					configDir: deps.configDir ?? "",
+					installHttpCredentials: async (credentials) => {
+						await deps.pool.setHttpCredentials(session, credentials);
+					},
+					...(deps.now ? { now: deps.now } : {}),
+				}),
+		);
+	} catch (error) {
+		const mfa =
+			error instanceof BrowserSessionError &&
+			error.code === "login-mfa-required";
+		if (mfa && entry.interactiveLogin === "local" && appView && roleView)
+			return await startHandoff({
+				deps,
+				owner,
 				session,
 				entry,
 				appKey: body.app,
+				appLabel: appView.label,
+				appUrl: appView.url,
 				role: body.role,
-				configDir: deps.configDir ?? "",
-				installHttpCredentials: async (credentials) => {
-					await deps.pool.setHttpCredentials(session, credentials);
-				},
-				...(deps.now ? { now: deps.now } : {}),
-			}),
-	);
+				reason: "unautomatable-step",
+				...(recipe === undefined ? {} : { recipe }),
+			});
+		throw error;
+	}
 	return {
 		session: session.name,
 		stage: entry.ident,
@@ -950,6 +1150,206 @@ async function stageLogin(
 			? { login: "not-required", code: "login-not-required" }
 			: { login: "ok" }),
 	};
+}
+
+/**
+ * Start (or rejoin) one login hand-off (task 3.2).
+ *
+ * The headed capability is checked *before* anything is queued, so a machine
+ * that cannot show a window never opens one and never raises an attention
+ * record. Everything after that is queued in the server, and `stage_login`
+ * answers the non-terminal `login-needs-user` immediately.
+ */
+async function startHandoff(input: {
+	readonly deps: BrowserRouteDeps;
+	readonly owner: string;
+	readonly session: BrowserSession;
+	readonly entry: StageEntry;
+	readonly appKey: string;
+	readonly appLabel: string;
+	readonly appUrl: string;
+	readonly role: string;
+	readonly reason: "no-credentials" | "unautomatable-step";
+	readonly recipe?: StageLoginRecipe;
+}): Promise<unknown> {
+	const { deps, session, entry } = input;
+	const handoff = deps.handoff;
+	if (!handoff)
+		throw new BrowserPoolError(
+			"login-handoff-unavailable",
+			"this server has no login hand-off capability attached",
+			503,
+			"headless-only-browser",
+		);
+	const available = handoff.available();
+	if (!available.ok)
+		throw new BrowserPoolError(
+			"login-handoff-unavailable",
+			available.reason === "no-display"
+				? "this platform has no display, so a login window cannot be shown"
+				: "no browser that can show a window is installed: install Chromium from Settings → Browser (Browser → Install)",
+			503,
+			available.reason,
+		);
+	const label = entry.stage.displayName;
+	const status = await handoff.request({
+		session,
+		stage: entry.ident,
+		stageLabel: label,
+		app: input.appKey,
+		appLabel: input.appLabel,
+		role: input.role,
+		reason: input.reason,
+		loginUrl: input.appUrl,
+		recipe: input.recipe ?? { kind: "form" },
+		maxSeconds: entry.limits.maxLoginHandoffSeconds,
+		description: `Log in to ${input.appLabel} as ${input.role} on stage ${label}`,
+		context: handoffContext(input.reason, input.appUrl, label),
+	});
+	return { session: session.name, login: "needs-user", ...status };
+}
+
+/** The attention record's context: the reason, the window to look for and how
+ * the hand-off ends. The application's *origin* is the only URL in it (D5). The
+ * queue position and the deadline are appended by the coordinator, which is the
+ * only place that knows them (USAB-101, USAB-102), and the key name is left to
+ * the modal footer, which owns keybinds (USAB-104). */
+function handoffContext(
+	reason: string,
+	appUrl: string,
+	stageLabel: string,
+): string {
+	const origin = originOnly(appUrl);
+	return [
+		`Reason: ${reason === "no-credentials" ? "this role declares no credentials this server can use" : "the login needs a step this server cannot automate"}.`,
+		`The agent is waiting for ${stageLabel}. Sign in inside the browser window agentic-coding opened for ${origin} — do not type into the terminal.`,
+		"Choose Done when the application has loaded, or Abort to end the hand-off and let the agent continue without a login.",
+		"Closing the window aborts the hand-off.",
+	].join(" ");
+}
+
+/** Just the origin of a configured URL; an unparseable one reports nothing. */
+function originOnly(url: string): string {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "the application";
+	}
+}
+
+/**
+ * `stage_login_wait`: block in the server while a hand-off is pending.
+ *
+ * It answers either the non-terminal `login-needs-user` again (the agent calls
+ * it once more) or one terminal outcome. Each call counts as one stage action,
+ * which is why the agent waits *inside* the tool instead of spending a turn per
+ * poll (D3).
+ */
+async function stageLoginWait(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserStageLoginWaitRequest,
+): Promise<unknown> {
+	const handoff = deps.handoff;
+	if (!handoff)
+		throw new BrowserPoolError(
+			"login-handoff-unavailable",
+			"this server has no login hand-off capability attached",
+			503,
+			"headless-only-browser",
+		);
+	// A hand-off that has already ended is answered from its recorded outcome
+	// *before* the session is resolved: a deadline closes the window, which makes
+	// the session unusable and the pool refuses to hand it out, so the run would
+	// otherwise meet `browser-crashed` instead of learning how its login ended
+	// (SEC-002).
+	const name = body.session ?? DEFAULT_BROWSER_SESSION;
+	const recorded = handoff.recordedOutcome(owner, name);
+	if (recorded) return terminalLoginAnswer(recorded, name);
+	const session = await sessionFor(deps, owner, body.session, used, {
+		allowHeld: true,
+	});
+	const capMs = Math.min(
+		Math.max(1, (body.timeoutSec ?? HANDOFF_MAX_WAIT_MS / 1_000) * 1_000),
+		HANDOFF_MAX_WAIT_MS,
+	);
+	const waited = await handoff.wait(session, capMs);
+	const stage = session.stage?.ident;
+	if (waited.status)
+		return {
+			session: session.name,
+			...(stage ? { stage } : {}),
+			login: "needs-user",
+			...waited.status,
+		};
+	return terminalLoginAnswer(waited.outcome, session.name, stage);
+}
+
+/** How one ended hand-off is answered, whether it was waited for or read back
+ * from the outcome still recorded for its session. `stage` is unknown on the
+ * read-back path: a session whose window the deadline closed is not readable
+ * any more, and the outcome is what the run needs. */
+function terminalLoginAnswer(
+	outcome: LoginHandoffOutcome,
+	sessionName: string,
+	stage?: string,
+): unknown {
+	const named = { session: sessionName, ...(stage ? { stage } : {}) };
+	switch (outcome.outcome) {
+		case "ok":
+			return {
+				...named,
+				login: "ok",
+				via: outcome.via,
+				verified: outcome.verified,
+				url: outcome.url,
+			};
+		case "unverified":
+			throw new BrowserSessionError(
+				"login-handoff-unverified",
+				"the developer chose Done, but the recipe's success condition did not hold within its grace period; the session is logged in only as far as the window shows",
+				409,
+				undefined,
+				{ url: outcome.url },
+			);
+		case "timeout":
+			throw new BrowserSessionError(
+				"login-handoff-timeout",
+				`the login hand-off was not completed before ${outcome.deadlineAt}, so its window was closed`,
+				408,
+				undefined,
+				{ deadlineAt: outcome.deadlineAt },
+			);
+		case "aborted":
+			throw new BrowserSessionError(
+				"login-handoff-aborted",
+				abortMessage(outcome.by),
+				409,
+				undefined,
+				{ by: outcome.by },
+			);
+		case "unavailable":
+			throw new BrowserPoolError(
+				"login-handoff-unavailable",
+				"the interactive browser could not be launched for this hand-off",
+				503,
+				"launch-failed",
+			);
+	}
+}
+
+function abortMessage(by: string): string {
+	switch (by) {
+		case "developer":
+			return "the developer aborted the login hand-off";
+		case "agent":
+			return "the agent closed the held session, which aborted the login hand-off";
+		case "window-closed":
+			return "the developer closed the login window, which aborted the hand-off";
+		default:
+			return "the run ended while the login hand-off was pending, which aborted it";
+	}
 }
 
 // ---------------------------------------------------------------------------

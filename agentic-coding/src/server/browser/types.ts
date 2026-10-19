@@ -106,6 +106,12 @@ export interface DriverContextOptions {
 	readonly guard?: DriverRequestGuard;
 }
 
+/** Why a page closed. A window the developer closed is not the same event as a
+ * context this server dropped: the first ends a hand-off (`window-closed`), the
+ * second is the pool's own bookkeeping. The driver is where the distinction can
+ * actually be made, because only it knows whether a close was requested. */
+export type DriverPageCloseReason = "user" | "server";
+
 /** One page of one session. Everything a tool can do to a page is one method
  * here; the session's `ref` resolution happens above this line. */
 export interface DriverPage {
@@ -151,10 +157,17 @@ export interface DriverPage {
 	waitForUrl(pattern: string, timeoutMs: number): Promise<void>;
 	textContent(selector: string, timeoutMs: number): Promise<string>;
 	screenshot(options: DriverScreenshotOptions): Promise<Uint8Array>;
+	/** Raise this page's window above the others (`stage_login` hand-off). */
+	bringToFront(): Promise<void>;
+	/** Remove the hand-off banner from this live document. An installed init
+	 * script cannot be uninstalled, so ending a hand-off removes the banner from
+	 * the open pages explicitly (task 3.5). */
+	removeBanner(): Promise<void>;
 	onConsole(listener: (entry: DriverConsoleEntry) => void): void;
 	onNetwork(listener: (event: DriverNetworkEvent) => void): void;
-	/** A page that closed on its own (a crashed renderer, a closed tab). */
-	onClosed(listener: () => void): void;
+	/** A page that closed. `reason` tells a window the developer closed apart
+	 * from a context this server closed itself. */
+	onClosed(listener: (reason: DriverPageCloseReason) => void): void;
 	/** The underlying page object, handed only to `browser_run_script`. It is
 	 * the session's page and nothing else — never the server's own handles. */
 	raw(): unknown;
@@ -173,6 +186,9 @@ export interface DriverContext {
 	 * pool asks for its page after construction. */
 	page(): Promise<DriverPage>;
 	close(): Promise<void>;
+	/** Install one script to run in every document of this context, before the
+	 * page's own scripts (the hand-off banner). */
+	addInitScript(script: string): Promise<void>;
 	storageState(): Promise<unknown>;
 	/** Install HTTP credentials on a live context (`http-basic` login, and the
 	 * credential flow's own reload). */

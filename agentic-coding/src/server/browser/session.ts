@@ -103,6 +103,12 @@ export class RingBuffer<T> {
 		return [...this.items];
 	}
 
+	/** Drop every entry. A promoted session's history belongs to the headless
+	 * context it left behind, so a hand-off clears both buffers (task 3.4). */
+	clear(): void {
+		this.items = [];
+	}
+
 	get size(): number {
 		return this.items.length;
 	}
@@ -137,11 +143,30 @@ export class BrowserSessionError extends Error {
 		readonly code: string,
 		message: string,
 		readonly status = 400,
+		/** A value-free machine-readable sub-reason, when the code alone is not
+		 * precise enough (`login-handoff-unavailable`: a fixed vocabulary member).
+		 */
+		readonly reason?: string,
+		/** Extra value-free fields the error envelope carries (a hand-off's id and
+		 * deadline). Never page content and never a credential. */
+		readonly details?: Readonly<Record<string, unknown>>,
 	) {
 		super(message);
 		this.name = "BrowserSessionError";
 	}
 }
+
+/** The hold one login hand-off puts on a session: while a hand-off is queued or
+ * active the session belongs to the developer, so the pool never sweeps it and
+ * the routes never drive it. */
+export interface SessionHold {
+	readonly handoffId: string;
+	readonly deadlineAt: number;
+}
+
+/** Which browser process serves a session: the shared headless one, or the
+ * second, interactive one a hand-off promoted it into. */
+export type SessionBrowserSlot = "headless" | "interactive";
 
 export interface SessionOptions {
 	readonly owner: string;
@@ -190,6 +215,14 @@ export class BrowserSession {
 	viewport: { width: number; height: number };
 	/** Set when the browser process went away under this session. */
 	crashed = false;
+	/** Set when the *developer* closed this session's window: a hand-off ends
+	 * `window-closed` rather than reading as a crash. */
+	windowClosed = false;
+	/** The browser slot this session lives in. A promoted session stays in the
+	 * interactive browser for the rest of its life. */
+	browserSlot: SessionBrowserSlot = "headless";
+	/** The pending hand-off, while one holds this session. */
+	hold: SessionHold | undefined;
 	recording: SessionRecording | undefined;
 	readonly createdAt: number;
 	lastUsed: number;
@@ -252,6 +285,7 @@ export class BrowserSession {
 		this.page = page;
 		this.swapping = false;
 		this.crashed = false;
+		this.windowClosed = false;
 		this.wire(page);
 	}
 
@@ -271,6 +305,40 @@ export class BrowserSession {
 	 * keeps the entry, so the next call answers `browser-crashed`. */
 	markCrashed(): void {
 		this.crashed = true;
+	}
+
+	/** Whether a login hand-off holds this session. A held session is exempt from
+	 * the idle sweep and is refused to every agent route. */
+	get heldByUser(): boolean {
+		return this.hold !== undefined;
+	}
+
+	/** Hold the session for a hand-off, and clear what the headless context left
+	 * behind: the console and network buffers belong to the page the developer is
+	 * about to replace, and a ref taken before the promotion names an element of
+	 * that page. */
+	holdForUser(hold: SessionHold): void {
+		this.hold = hold;
+		this.clearTrace();
+	}
+
+	/** Release the hold, so the agent may drive the session again. Only the
+	 * hand-off that took the hold may release it: a second hand-off on the same
+	 * session can have replaced it, and ending the older one must not hand the
+	 * developer's session back mid-login (QUALITY-103). Answers whether the hold
+	 * was this hand-off's. */
+	releaseHold(handoffId: string): boolean {
+		if (this.hold?.handoffId !== handoffId) return false;
+		this.hold = undefined;
+		return true;
+	}
+
+	/** Forget everything the hand-off's own traffic produced, and every ref. */
+	clearTrace(): void {
+		this.console.clear();
+		this.network.clear();
+		this.inFlight.clear();
+		this.refs = new Set<string>();
 	}
 
 	/** How many requests are in flight on this session. */
@@ -376,14 +444,23 @@ export class BrowserSession {
 	private wire(page: DriverPage): void {
 		page.onConsole((entry) => this.recordConsole(entry));
 		page.onNetwork((event) => this.recordNetwork(event));
-		page.onClosed(() => {
-			// A close during a recording swap is the pool replacing this session's
+		page.onClosed((reason) => {
+			// A close during a context swap is the pool replacing this session's
 			// context on purpose, not the browser going away.
-			if (!this.swapping) this.crashed = true;
+			if (this.swapping || reason === "server") return;
+			// The developer closed the window. The context is gone either way, so the
+			// session is unusable, but a hand-off has to read this as `window-closed`
+			// rather than as a crash.
+			this.windowClosed = true;
+			this.crashed = true;
 		});
 	}
 
 	private recordConsole(entry: DriverConsoleEntry): void {
+		// Nothing an agent can read is buffered while a hand-off holds the session:
+		// the login page's console and network traffic are the developer's, and
+		// `browser_console`/`browser_network` must not surface them afterwards.
+		if (this.hold) return;
 		this.console.push({
 			level: entry.type === "warning" ? "warn" : entry.type,
 			text: entry.text,
@@ -392,6 +469,7 @@ export class BrowserSession {
 	}
 
 	private recordNetwork(event: DriverNetworkEvent): void {
+		if (this.hold) return;
 		if (event.kind === "request") {
 			const entry: NetworkEntry = {
 				id: event.id,
