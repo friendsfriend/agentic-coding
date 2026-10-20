@@ -41,10 +41,13 @@ function overview(options: {
 	stepId?: string;
 	startedBy?: WorkflowOverview["startedBy"];
 	definitionOrigin?: WorkflowOverview["state"]["definitionOrigin"];
+	verification?: WorkflowOverview["verification"];
+	tasks?: [number, number];
 }): WorkflowOverview {
 	return {
 		target: options.repository ?? "/repo",
 		...(options.startedBy ? { startedBy: options.startedBy } : {}),
+		...(options.verification ? { verification: options.verification } : {}),
 		state: {
 			workflowId: options.workflowId,
 			changeId: "",
@@ -85,7 +88,7 @@ function overview(options: {
 				? { phaseStartedAt: options.phaseStartedAt }
 				: {}),
 		},
-		tasks: [0, 0],
+		tasks: options.tasks ?? [0, 0],
 		...(options.projectIdent ? { projectIdent: options.projectIdent } : {}),
 		agents: [],
 	};
@@ -479,7 +482,13 @@ describe("workspace sidebar rows", () => {
 				0,
 				4,
 			),
-		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "1" });
+		).toEqual({
+			glyph: "…",
+			tone: "info",
+			needsReader: false,
+			detail: "1",
+			detailTone: "info",
+		});
 		expect(
 			sidebarCollapsedRow(
 				overview({
@@ -490,7 +499,13 @@ describe("workspace sidebar rows", () => {
 				2,
 				4,
 			),
-		).toEqual({ glyph: "?", tone: "warning", needsReader: true, index: "3" });
+		).toEqual({
+			glyph: "?",
+			tone: "warning",
+			needsReader: true,
+			detail: "3",
+			detailTone: "warning",
+		});
 		// The review gate and the completed workflow share the `✓`, so the tone —
 		// and the emphasis it drives — is what tells "waiting for a reader" from
 		// "done".
@@ -504,14 +519,26 @@ describe("workspace sidebar rows", () => {
 				0,
 				4,
 			),
-		).toEqual({ glyph: "✓", tone: "info", needsReader: true, index: "1" });
+		).toEqual({
+			glyph: "✓",
+			tone: "info",
+			needsReader: true,
+			detail: "1",
+			detailTone: "info",
+		});
 		expect(
 			sidebarCollapsedRow(
 				overview({ workflowId: "d", status: "completed" }),
 				0,
 				4,
 			),
-		).toEqual({ glyph: "✓", tone: "success", needsReader: false, index: "1" });
+		).toEqual({
+			glyph: "✓",
+			tone: "success",
+			needsReader: false,
+			detail: "1",
+			detailTone: "success",
+		});
 	});
 
 	test("a collapsed row clips its position before the glyph", () => {
@@ -523,14 +550,26 @@ describe("workspace sidebar rows", () => {
 				119,
 				4,
 			),
-		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "1…" });
+		).toEqual({
+			glyph: "…",
+			tone: "info",
+			needsReader: false,
+			detail: "1…",
+			detailTone: "info",
+		});
 		expect(
 			sidebarCollapsedRow(
 				overview({ workflowId: "a", status: "active" }),
 				0,
 				1,
 			),
-		).toEqual({ glyph: "…", tone: "info", needsReader: false, index: "" });
+		).toEqual({
+			glyph: "…",
+			tone: "info",
+			needsReader: false,
+			detail: "",
+			detailTone: "info",
+		});
 	});
 
 	test("a state waiting on a reader is marked for emphasis", () => {

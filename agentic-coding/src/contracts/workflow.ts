@@ -1607,6 +1607,21 @@ export interface WorkflowState {
 	};
 }
 
+/** The active verification round as the sidebar reads it: the findings the
+ * verifiers have committed so far, and how many of the round's runs completed.
+ * Absent unless the workflow is currently at the verification step. */
+export interface VerificationOverview {
+	findings: FindingCounts;
+	/** Verifier runs in the round that finished, whether clean or with findings. */
+	completedVerifiers: number;
+	/** Every verifier run selected for the round. */
+	totalVerifiers: number;
+	/** True when a verifier run failed, blocked, or expired rather than still
+	 * running, so the row can flag the round without calling a pending run a
+	 * failure. */
+	failed: boolean;
+}
+
 export interface WorkflowOverview {
 	state: WorkflowState;
 	/** The workflow target that owns this workflow's store: a canonical
@@ -1623,6 +1638,8 @@ export interface WorkflowOverview {
 	/** Stable configured project ident resolved from the catalog, when the
 	 * workflow's repository is a configured project (environment cross-link). */
 	projectIdent?: string;
+	/** Current verification round, present only while the workflow verifies. */
+	verification?: VerificationOverview;
 	// WorkflowOverview agents: role/status/model plus lifetime cost.
 	agents: Array<{
 		role: string;

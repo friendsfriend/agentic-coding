@@ -7,8 +7,9 @@
 // clicks report back through the same callbacks the key layer uses.
 //
 // The panel is collapsible: focused it expands to its full width, unfocused it
-// collapses to the workspace index. Either way a row leads with its status
-// glyph, so the collapsed strip still says which workspace needs a reader.
+// collapses to the workspace index or, while a workflow verifies, its critical
+// finding count. Either way a row leads with its status glyph, so the collapsed
+// strip still says which workspace needs a reader.
 // Expanding is a short width tween, so focus movement reads as a slide rather
 // than a jump; collapsing is a cut to the fixed compact width, because the
 // compact strip is the whole collapsed view and neither its rows nor the columns
@@ -33,6 +34,7 @@ import {
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
 	clip,
+	clipMetaSegments,
 	filterLabel,
 	SIDEBAR_FILTERS,
 	type SidebarFilter,
@@ -41,8 +43,9 @@ import {
 	type StatusTone,
 	sidebarCollapsedRow,
 	sidebarStatusGlyph,
-	workflowMeta,
+	workflowProjectName,
 	workflowRowLabel,
+	workflowStageMeta,
 } from "../app/sidebar-model.ts";
 
 /** Expanded sidebar width: wide enough for a clipped workflow id plus its
@@ -51,7 +54,7 @@ import {
 export const SIDEBAR_WIDTH = 34;
 
 /** Columns a compact row's own content needs: the status glyph, the gap after
- * it, and the two digits a position takes up to 99 workflows. */
+ * it, and the two digits a position — or a critical-finding count — takes. */
 const SIDEBAR_COLLAPSED_ROW_WIDTH = 4;
 
 /** Collapsed width: the selection marker, one gap column and the compact row.
@@ -60,7 +63,15 @@ const SIDEBAR_COLLAPSED_ROW_WIDTH = 4;
  * not depend on an animation. */
 export const SIDEBAR_COLLAPSED_WIDTH = SIDEBAR_COLLAPSED_ROW_WIDTH + 2;
 
-/** Width at which the full row content replaces the glyph-and-index rows. */
+/** Text columns an expanded workflow row has after the panel chrome (border,
+ * padding) and its own selection marker and gap: `SIDEBAR_WIDTH` minus five. */
+const SIDEBAR_ROW_TEXT_WIDTH = SIDEBAR_WIDTH - 5;
+
+/** The name line spends one column on the status glyph and one on the space
+ * after it, leaving this many columns for the workflow label. */
+const SIDEBAR_ROW_LABEL_WIDTH = SIDEBAR_ROW_TEXT_WIDTH - 2;
+
+/** Width at which the full row content replaces the glyph-and-detail rows. */
 const SIDEBAR_EXPANDED_THRESHOLD = 14;
 
 /** What the panel paints for one sidebar state and the width the slide has
@@ -289,7 +300,8 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 				when={panel().expanded}
 				fallback={
 					// Collapsed: a toggle glyph, the pinned entry as its mark, then one row
-					// per workflow carrying its status glyph and its index, so the strip
+					// per workflow carrying its status glyph and one compact detail: its
+					// index, or the critical-finding count while it verifies. The strip
 					// stays a jump list that also flags the workspace waiting on a reader,
 					// without names or metadata.
 					<>
@@ -342,21 +354,34 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 									// The strip carries the row's status mark in its tone colour,
 									// so the glance the collapsed width affords is the state that
 									// needs a reader; a state waiting on the developer is bold
-									// as well.
+									// as well. The detail after it is the jump-list position, or
+									// the critical-finding count while the workflow verifies.
 									const row = sidebarCollapsedRow(
 										overview,
 										index,
 										SIDEBAR_COLLAPSED_ROW_WIDTH,
 									);
 									return (
-										<text fg={toneColor(row.tone)}>
-											{row.needsReader ? (
-												<strong>{row.glyph}</strong>
-											) : (
-												row.glyph
-											)}
-											{row.index ? ` ${row.index}` : ""}
-										</text>
+										<box
+											style={{
+												height: 1,
+												flexDirection: "row",
+												overflow: "hidden",
+											}}
+										>
+											<text fg={toneColor(row.tone)}>
+												{row.needsReader ? (
+													<strong>{row.glyph}</strong>
+												) : (
+													row.glyph
+												)}
+											</text>
+											<Show when={row.detail}>
+												<text fg={toneColor(row.detailTone)}>
+													{` ${row.detail}`}
+												</text>
+											</Show>
+										</box>
 									);
 								}}
 							/>
@@ -438,7 +463,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 						<SelectableList
 							items={props.overviews}
 							selectedIndex={props.selectedIndex - pinOffset()}
-							itemHeight={2}
+							itemHeight={3}
 							availableLines={listLines()}
 							onSelect={(index) => {
 								props.onFocus();
@@ -448,18 +473,64 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 							}}
 							renderItem={(overview, selected) => {
 								const status = sidebarStatusGlyph(overview);
+								const nameTone = selected
+									? uiColors.textPrimary
+									: uiColors.textSecondary;
 								return (
-									<box style={{ flexDirection: "column" }}>
-										<text
-											fg={
-												selected ? uiColors.textPrimary : uiColors.textSecondary
-											}
+									<box
+										style={{
+											height: 3,
+											minWidth: 0,
+											flexDirection: "column",
+											overflow: "hidden",
+										}}
+									>
+										<box
+											style={{
+												height: 1,
+												minWidth: 0,
+												flexDirection: "row",
+												overflow: "hidden",
+											}}
 										>
-											<strong>{status.glyph}</strong>
-											{` ${clip(workflowRowLabel(overview), SIDEBAR_WIDTH - 8)}`}
-										</text>
-										<text fg={toneColor(status.tone)}>
-											{clip(workflowMeta(overview), SIDEBAR_WIDTH - 8)}
+											<text fg={toneColor(status.tone)}>
+												<strong>{status.glyph}</strong>
+											</text>
+											<text fg={nameTone}>
+												<strong>
+													{` ${clip(
+														workflowRowLabel(overview),
+														SIDEBAR_ROW_LABEL_WIDTH,
+													)}`}
+												</strong>
+											</text>
+										</box>
+										<box
+											style={{
+												height: 1,
+												minWidth: 0,
+												flexDirection: "row",
+												overflow: "hidden",
+											}}
+										>
+											<For
+												each={clipMetaSegments(
+													workflowStageMeta(overview),
+													SIDEBAR_ROW_TEXT_WIDTH,
+												)}
+											>
+												{(segment) => (
+													<text fg={toneColor(segment.tone)}>
+														{segment.text}
+													</text>
+												)}
+											</For>
+										</box>
+										<text fg={uiColors.textMuted}>
+											{clip(
+												workflowProjectName(overview),
+												SIDEBAR_ROW_TEXT_WIDTH,
+											)}
 										</text>
 									</box>
 								);

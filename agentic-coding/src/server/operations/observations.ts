@@ -32,6 +32,7 @@ import type {
 	DeveloperReviewFinding,
 	FindingCounts,
 	PlanReviewComment,
+	VerificationOverview,
 	VerifierFinding,
 	WikiReviewComment,
 	WorkflowOverview,
@@ -291,6 +292,44 @@ function workflowTargetFor(repo: string, definitionId: string): string {
 	}
 }
 
+/** The verifier runs that ended without completing: a verifier that failed,
+ * was blocked, or expired leaves the round short of its selected roles. A
+ * pending or working run is not a failure yet. */
+const FAILED_VERIFIER_STATUSES = new Set(["blocked", "failed", "expired"]);
+
+/** The active verification round for the sidebar: findings committed by the
+ * round's verifiers, and how many of the round's runs completed. Only the
+ * workflow that is actually verifying carries this — a completed workflow's
+ * last round is history, not a status. Reads only the current round's completed
+ * artifacts, so an earlier round's evidence cannot colour the row. */
+export function verificationSummaryForView(
+	view: WorkflowView,
+): VerificationOverview | undefined {
+	if (view.currentStep.id !== "core.verification") return undefined;
+	const verifierRuns = view.runs.filter(
+		(run) => run.stepId === "core.verification",
+	);
+	const round = Math.max(0, ...verifierRuns.map((run) => run.attempt));
+	const current = verifierRuns.filter((run) => run.attempt === round);
+	if (current.length === 0) return undefined;
+	const findings: FindingCounts = { critical: 0, warning: 0, info: 0 };
+	for (const run of current) {
+		const committed = committedVerifierRun(run);
+		if (!committed) continue;
+		const counts = countVerifierFindings(committed.findings);
+		findings.critical += counts.critical;
+		findings.warning += counts.warning;
+		findings.info += counts.info;
+	}
+	return {
+		findings,
+		completedVerifiers: current.filter((run) => run.status === "completed")
+			.length,
+		totalVerifiers: current.length,
+		failed: current.some((run) => FAILED_VERIFIER_STATUSES.has(run.status)),
+	};
+}
+
 function buildWorkflows(roots: string[]): WorkflowOverview[] {
 	const found: WorkflowOverview[] = [];
 	const seen = new Set<string>();
@@ -327,6 +366,7 @@ function buildWorkflows(roots: string[]): WorkflowOverview[] {
 						"tasks.md",
 					),
 				);
+				const verification = verificationSummaryForView(view);
 				found.push({
 					state,
 					target,
@@ -334,6 +374,7 @@ function buildWorkflows(roots: string[]): WorkflowOverview[] {
 					// attribution is operator-started work.
 					startedBy: view.startedBy ?? "developer",
 					tasks: [items.filter((item) => item.done).length, items.length],
+					...(verification ? { verification } : {}),
 					agents: view.runs.map((run) => ({
 						role: run.role,
 						status: run.status,

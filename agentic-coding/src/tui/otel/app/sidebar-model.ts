@@ -5,6 +5,7 @@
 // panel directions the sidebar sits on. No renderer, no gateway, no Effect
 // wrapper — the component and the shell key layer read these functions, and a
 // unit test can pin them without a terminal.
+import { basename } from "node:path";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 
 /** Which workflows the sidebar lists. `active` is the default filter. */
@@ -199,7 +200,7 @@ export function sidebarStatusNeedsReader(overview: WorkflowOverview): boolean {
 	return isReviewStep(state.stepId ?? state.phase);
 }
 
-/** One row of the collapsed strip: the status mark and the workflow's position,
+/** One row of the collapsed strip: the status mark and one compact signal,
  * which is all the strip has room for. */
 export interface SidebarCollapsedRow {
 	/** The status glyph — the strip's whole status signal. */
@@ -208,17 +209,23 @@ export interface SidebarCollapsedRow {
 	/** True when the state waits on a reader, so the strip paints the glyph bold
 	 * as well as in the tone colour and those rows stand out at a glance. */
 	readonly needsReader: boolean;
-	/** The 1-based position drawn after the glyph, clipped to the columns the
-	 * row has left (empty when the glyph is all that fits). */
-	readonly index: string;
+	/** The compact signal after the glyph: the workflow's 1-based position, or
+	 * the critical-finding count while the workflow is verifying. Clipped to the
+	 * columns the row has left (empty when the glyph is all that fits). */
+	readonly detail: string;
+	/** Tone for `detail`; a verification row with critical findings is red even
+	 * though its status glyph stays the review tone. */
+	readonly detailTone: StatusTone;
 }
 
 /**
  * The collapsed strip's row for one workflow: the same status glyph and tone
- * the expanded row shows, then the workflow's 1-based position in the strip.
- * The strip names nothing, so a long id cannot overflow it; only the position
- * digits of a very long list can, and they give way while the glyph — the row's
- * reason to exist — never does.
+ * the expanded row shows, then one compact signal. A verifying workflow spends
+ * that signal on its critical findings — the one number worth the strip's width
+ * — while every other row keeps its jump-list position. The strip names
+ * nothing, so a long id cannot overflow it; only the detail digits of a long
+ * list or a large finding count can, and they give way while the glyph — the
+ * row's reason to exist — never does.
  */
 export function sidebarCollapsedRow(
 	overview: WorkflowOverview,
@@ -226,12 +233,18 @@ export function sidebarCollapsedRow(
 	width: number,
 ): SidebarCollapsedRow {
 	const status = sidebarStatusGlyph(overview);
-	const room = width - status.glyph.length - 1;
+	const room = Math.max(0, width - status.glyph.length - 1);
+	const critical = overview.verification?.findings.critical;
+	const detail: { text: string; tone: StatusTone } =
+		critical === undefined
+			? { text: `${position + 1}`, tone: status.tone }
+			: { text: `${critical}`, tone: critical > 0 ? "error" : "muted" };
 	return {
 		glyph: status.glyph,
 		tone: status.tone,
 		needsReader: sidebarStatusNeedsReader(overview),
-		index: room > 0 ? clip(`${position + 1}`, room) : "",
+		detail: clip(detail.text, room),
+		detailTone: detail.tone,
 	};
 }
 
@@ -287,6 +300,92 @@ export function workflowMeta(overview: WorkflowOverview): string {
 	const phase = overview.state.stepLabel ?? overview.state.phase;
 	const project = overview.projectIdent ?? overview.state.repository;
 	return `${phase} · ${project}`;
+}
+
+/** One colour-coded segment of an expanded row's stage line. The renderer owns
+ * the colour tokens, so the projection stays renderer-free. */
+export interface SidebarMetaSegment {
+	readonly text: string;
+	readonly tone: StatusTone;
+}
+
+/** The expanded row's stage line. Verification leads with the active round's
+ * finding counts (critical, warning, info) and completed verifier runs; every
+ * other stage keeps its phase and, when the workflow has a task list, its
+ * progress. */
+export function workflowStageMeta(
+	overview: WorkflowOverview,
+): SidebarMetaSegment[] {
+	const phase = overview.state.stepLabel ?? overview.state.phase;
+	const phaseTone = sidebarStatusGlyph(overview).tone;
+	const verification = overview.verification;
+	if (verification) {
+		const { findings, completedVerifiers, totalVerifiers, failed } =
+			verification;
+		return [
+			{ text: phase, tone: phaseTone },
+			{ text: " · ", tone: "muted" },
+			{ text: `${findings.critical}`, tone: "error" },
+			{ text: " ", tone: "muted" },
+			{ text: `${findings.warning}`, tone: "warning" },
+			{ text: " ", tone: "muted" },
+			{ text: `${findings.info}`, tone: "info" },
+			{ text: " · ", tone: "muted" },
+			{
+				text: `${completedVerifiers}`,
+				tone: failed
+					? "error"
+					: completedVerifiers === totalVerifiers
+						? "success"
+						: "muted",
+			},
+			{ text: `/${totalVerifiers}`, tone: "muted" },
+			{
+				text: "✓",
+				tone: completedVerifiers === totalVerifiers ? "success" : "muted",
+			},
+		];
+	}
+	const segments: SidebarMetaSegment[] = [{ text: phase, tone: phaseTone }];
+	const [done, total] = overview.tasks;
+	if (total > 0) {
+		segments.push(
+			{ text: " · ", tone: "muted" },
+			{
+				text: `${done}/${total} tasks`,
+				tone: done === total ? "success" : "muted",
+			},
+		);
+	}
+	return segments;
+}
+
+/** The expanded row's third line: the configured project ident, or the last
+ * segment of the repository/target path. */
+export function workflowProjectName(overview: WorkflowOverview): string {
+	const ident = overview.projectIdent?.trim();
+	if (ident) return ident;
+	const project = overview.state.repository || overview.target;
+	return basename(project) || project;
+}
+
+/** Clip colour-coded segments to `max` cells, keeping each segment's tone. */
+export function clipMetaSegments(
+	segments: readonly SidebarMetaSegment[],
+	max: number,
+): SidebarMetaSegment[] {
+	const clipped: SidebarMetaSegment[] = [];
+	let remaining = Math.max(0, max);
+	for (const segment of segments) {
+		if (remaining <= 0) break;
+		const text =
+			segment.text.length <= remaining
+				? segment.text
+				: clip(segment.text, remaining);
+		if (text) clipped.push({ ...segment, text });
+		remaining -= text.length;
+	}
+	return clipped;
 }
 
 /** Clip one string to `max` cells with an ellipsis, never exceeding `max`. */
