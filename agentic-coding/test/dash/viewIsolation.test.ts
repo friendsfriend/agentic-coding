@@ -188,6 +188,8 @@ describe("the dashboard route is a coordinator", () => {
 			expect([
 				"busy",
 				"data",
+				// Whether the cheap seed has been replaced by the full observation.
+				"dashboardLoaded",
 				"demoIndex",
 				"reviewFinishing",
 				"reviewFinishingMessage",

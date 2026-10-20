@@ -81,6 +81,114 @@ test("an inactive activity keeps the status badge", async () => {
 	t.renderer.destroy();
 });
 
+test("a provisional status gathers instead of naming the seed's guess", async () => {
+	const data = {
+		...testDashboard(),
+		agents: [{ role: "worker", status: "pending" as const }],
+		verifierTimeline: [],
+	};
+	const t = await testRender(
+		() => (
+			<AgentsPanel
+				data={data}
+				active
+				selectedIndex={0}
+				narrow={false}
+				statusPending={() => true}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await t.waitForFrame((frame) => frame.includes("loading"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("loading");
+	expect(frame).not.toContain("pending");
+	t.renderer.destroy();
+});
+
+test("the gathering badge swaps to the status when the observation lands", async () => {
+	const [loaded, setLoaded] = createSignal(false);
+	const data = {
+		...testDashboard(),
+		agents: [{ role: "worker", status: "working" as const }],
+		verifierTimeline: [],
+	};
+	const t = await testRender(
+		() => (
+			<AgentsPanel
+				data={data}
+				active
+				selectedIndex={0}
+				narrow={false}
+				statusPending={() => !loaded()}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await t.waitForFrame((frame) => frame.includes("loading"));
+	setLoaded(true);
+	await t.renderOnce();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("working");
+	expect(frame).not.toContain("loading");
+	t.renderer.destroy();
+});
+
+test("a live step outranks the gathering badge", async () => {
+	const data = {
+		...testDashboard(),
+		agents: [{ role: "worker", status: "working" as const }],
+		verifierTimeline: [],
+	};
+	const t = await testRender(
+		() => (
+			<AgentsPanel
+				data={data}
+				active
+				selectedIndex={0}
+				narrow={false}
+				statusPending={() => true}
+				activity={() => ({ label: "bash", active: true, tone: "working" })}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await t.waitForFrame((frame) => frame.includes("bash"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("bash");
+	expect(frame).not.toContain("loading");
+	t.renderer.destroy();
+});
+
+test("the verifier verdict waits for the full observation", async () => {
+	const data = testDashboard("verify");
+	const pending = await testRender(
+		() => (
+			<AgentsPanel
+				data={data}
+				active
+				selectedIndex={0}
+				narrow={false}
+				detailsPending
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await pending.renderOnce();
+	// The seed derives PASS from run completion; until findings are committed
+	// that verdict must not be shown as if it were final.
+	expect(pending.captureCharFrame()).not.toContain("PASS");
+	pending.renderer.destroy();
+
+	const loaded = await testRender(
+		() => <AgentsPanel data={data} active selectedIndex={0} narrow={false} />,
+		{ width: 120, height: 40 },
+	);
+	await loaded.waitForFrame((frame) => frame.includes("PASS"));
+	expect(loaded.captureCharFrame()).toContain("PASS");
+	loaded.renderer.destroy();
+});
+
 test("a live activity change swaps in the same frame, without a wipe", async () => {
 	const [activity, setActivity] = createSignal<AgentActivity>({
 		label: "bash",

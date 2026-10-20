@@ -254,7 +254,13 @@ export function App(props: {
 	const [data, setData] = createSignal<DashboardData>(initialData);
 	let refreshGeneration = 0;
 	let refreshRunning = false;
-	let dashboardLoaded = false;
+	// The test profile and an explicit fixture are already the full observation;
+	// a live view starts from the cheap seed and hydrates below. The Agents panel
+	// reads this to keep provisional seed statuses and verifier verdicts off
+	// screen until the authoritative observation lands.
+	const [dashboardLoaded, setDashboardLoaded] = createSignal(
+		props.profile === "test" || props.testData !== undefined,
+	);
 	let refreshQueued = false;
 	// A queued refresh must keep the force flag: a safety resync that arrives
 	// while a read is in flight still has to bypass the cache when it runs.
@@ -715,6 +721,15 @@ export function App(props: {
 		agentActivity.sync(data().agents);
 	});
 	onCleanup(() => agentActivity.dispose());
+	/** A nonterminal status is provisional until the full observation has landed
+	 * and, for a durable agent, its activity watch has delivered a first frame.
+	 * Terminal statuses are real verdicts, not a guess, so they stay on screen. */
+	const agentStatusPending = (role: string) => {
+		const agent = data().agents.find((item) => item.role === role);
+		if (!agent) return false;
+		if (agent.status !== "pending" && agent.status !== "working") return false;
+		return !dashboardLoaded() || agentActivity.pending(role);
+	};
 	/**
 	 * Leave the view for the dashboard grid. The run keeps streaming into the
 	 * session state, so reopening the panel's agent lands on the live view
@@ -1649,7 +1664,7 @@ export function App(props: {
 		})
 			.then((next) => {
 				if (next && !refreshDisposed && generation === refreshGeneration) {
-					dashboardLoaded = true;
+					setDashboardLoaded(true);
 					lastRefreshError = undefined;
 					setData(next);
 					traceTui("tui.dashboard.refresh", {
@@ -1980,7 +1995,7 @@ export function App(props: {
 				seedController.signal,
 			)
 				.then((seed) => {
-					if (seed && !refreshDisposed && !dashboardLoaded) setData(seed);
+					if (seed && !refreshDisposed && !dashboardLoaded()) setData(seed);
 				})
 				.catch(() => undefined);
 			onCleanup(() => seedController.abort());
@@ -3477,6 +3492,8 @@ export function App(props: {
 									selectedIndex={selectedAgent()}
 									narrow={dimensions().width < 90}
 									activity={agentActivity.activity}
+									statusPending={agentStatusPending}
+									detailsPending={!dashboardLoaded()}
 									onSelectIndex={setSelectedAgent}
 									onActivateRow={activatePanelRow(setSelectedAgent)}
 									onFocusRequest={() => focusPanelFromPointer(1)}

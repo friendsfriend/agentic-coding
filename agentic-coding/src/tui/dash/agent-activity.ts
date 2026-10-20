@@ -40,6 +40,10 @@ export interface AgentActivityTarget {
 	readonly conversationId?: string;
 }
 
+/** The connection state an activity watch reports: `connecting` has an attempt
+ * in flight, `open` is streaming, `closed` is a failed attempt or a drop. */
+export type AgentActivityWatchState = "connecting" | "open" | "closed";
+
 /** Starts one run's live watch. Injectable so the store is testable without a
  * socket; the default dynamically imports the host client. */
 export type AgentActivityWatch = (
@@ -54,11 +58,20 @@ export type AgentActivityWatch = (
 		readonly view: "docs";
 	},
 	onValue: (value: unknown) => void,
+	/** Optional connection-state notification. A watch that never receives a
+	 * frame reports `closed`, so the panel stops showing the gathering indicator
+	 * and falls back to the workflow status instead of waiting forever. */
+	onState?: (state: AgentActivityWatchState) => void,
 ) => Promise<() => void>;
 
 export interface AgentActivitySource {
 	/** The role's current activity, or undefined while nothing is in flight. */
 	readonly activity: (role: string) => AgentActivity | undefined;
+	/** True while a watch exists but has not delivered its first frame yet: the
+	 * panel then shows a progress indicator instead of the provisional workflow
+	 * status. A missing target or a failed watch is not pending — the panel falls
+	 * back to the status it has. */
+	readonly pending: (role: string) => boolean;
 	/** Reconcile the watched set with the dashboard's current durable agents. */
 	readonly sync: (agents: readonly AgentActivityTarget[]) => void;
 	/** Stop every watch; the dashboard owner calls this on unmount. */
@@ -187,7 +200,7 @@ export function agentActivityFromValue(
  * the resilient stream reconnects, and clears the badge (fall back to the
  * workflow status) while it is down so a disconnected run never reads as still
  * running its last tool. */
-const hostWatch: AgentActivityWatch = async (target, onValue) => {
+const hostWatch: AgentActivityWatch = async (target, onValue, onState) => {
 	const { HostClient, watchStream } = await import(
 		"../../agent-host/client.ts"
 	);
@@ -198,6 +211,7 @@ const hostWatch: AgentActivityWatch = async (target, onValue) => {
 		onFrame: onValue,
 		onState: (state) => {
 			if (state !== "open") onValue(undefined);
+			onState?.(state);
 		},
 	});
 };
@@ -215,12 +229,26 @@ export function createAgentActivitySource(
 	const [activities, setActivities] = createSignal<
 		ReadonlyMap<string, AgentActivity>
 	>(new Map());
+	/** Roles whose watch exists but has not delivered its first frame yet. */
+	const [pendingRoles, setPendingRoles] = createSignal<ReadonlySet<string>>(
+		new Set(),
+	);
 	/** Started watches by role; `stop` is a no-op until the socket resolves. */
 	const watches = new Map<
 		string,
 		{ readonly key: string; stop: () => void; started: boolean }
 	>();
 	let disposed = false;
+
+	const setPending = (role: string, pending: boolean) => {
+		setPendingRoles((current) => {
+			if (current.has(role) === pending) return current;
+			const next = new Set(current);
+			if (pending) next.add(role);
+			else next.delete(role);
+			return next;
+		});
+	};
 
 	const setActivity = (role: string, activity: AgentActivity | undefined) => {
 		setActivities((current) => {
@@ -247,6 +275,9 @@ export function createAgentActivitySource(
 	const start = (agent: AgentActivityTarget, key: string) => {
 		const entry = { key, stop: () => {}, started: false };
 		watches.set(agent.role, entry);
+		// The row's status is provisional until the host shows its first frame
+		// (or the watch gives up): the panel gathers instead of guessing.
+		setPending(agent.role, true);
 		void (async () => {
 			try {
 				const stop = await watch(
@@ -261,7 +292,17 @@ export function createAgentActivitySource(
 					(value) => {
 						if (disposed) return;
 						if (watches.get(agent.role) !== entry) return;
+						// `watchStream` reports a drop by replaying `undefined`; only a
+						// real frame proves the live documents are now known.
+						if (value !== undefined) setPending(agent.role, false);
 						setActivity(agent.role, agentActivityFromValue(value));
+					},
+					(state) => {
+						if (disposed) return;
+						if (watches.get(agent.role) !== entry) return;
+						// A watch that never connects must fall back to the workflow
+						// status instead of leaving the row gathering forever.
+						if (state === "closed") setPending(agent.role, false);
 					},
 				);
 				// The agent or its run changed while the socket was connecting: the
@@ -274,7 +315,10 @@ export function createAgentActivitySource(
 				entry.started = true;
 			} catch {
 				// Host unavailable: the badge falls back to the workflow status.
-				if (watches.get(agent.role) === entry) watches.delete(agent.role);
+				if (watches.get(agent.role) === entry) {
+					watches.delete(agent.role);
+					setPending(agent.role, false);
+				}
 			}
 		})();
 	};
@@ -284,6 +328,7 @@ export function createAgentActivitySource(
 		if (!entry) return;
 		entry.stop();
 		watches.delete(role);
+		setPending(role, false);
 		setActivity(role, undefined);
 	};
 
@@ -309,12 +354,14 @@ export function createAgentActivitySource(
 		for (const [role, entry] of watches) {
 			entry.stop();
 			watches.delete(role);
+			setPending(role, false);
 			setActivity(role, undefined);
 		}
 	};
 
 	return {
 		activity: (role) => activities().get(role),
+		pending: (role) => pendingRoles().has(role),
 		sync,
 		dispose,
 	};

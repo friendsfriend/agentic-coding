@@ -165,14 +165,16 @@ function fakeWatch() {
 		hostSocket: string;
 		view: "docs";
 		onValue: (value: unknown) => void;
+		onState?: (state: "connecting" | "open" | "closed") => void;
 		stopped: boolean;
 	}> = [];
-	const watch: AgentActivityWatch = async (target, onValue) => {
+	const watch: AgentActivityWatch = async (target, onValue, onState) => {
 		const call = {
 			runId: target.runId,
 			hostSocket: target.hostSocket,
 			view: target.view,
 			onValue,
+			...(onState ? { onState } : {}),
 			stopped: false,
 		};
 		calls.push(call);
@@ -212,6 +214,64 @@ test("the source watches each durable agent and reports its frames", async () =>
 	calls[0]?.onValue(liveFrame({}));
 	expect(source.activity("worker")).toBeUndefined();
 	source.dispose();
+});
+
+test("a watched role is pending until its first real frame arrives", async () => {
+	const { calls, watch } = fakeWatch();
+	const source = createAgentActivitySource({ watch });
+	source.sync([
+		{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+		// No run identity: nothing to watch, so nothing to gather.
+		{ role: "planner" },
+	]);
+	await settle();
+	expect(source.pending("worker")).toBe(true);
+	expect(source.pending("planner")).toBe(false);
+	// The `undefined` replay `watchStream` sends on a drop is not a frame: the
+	// row keeps gathering until the host actually reports the live documents.
+	calls[0]?.onValue(undefined);
+	expect(source.pending("worker")).toBe(true);
+	calls[0]?.onValue(
+		liveFrame({ run: {}, tools: [{ name: "bash", status: "running" }] }),
+	);
+	expect(source.pending("worker")).toBe(false);
+	source.dispose();
+});
+
+test("a watch that never connects stops gathering and falls back to the status", async () => {
+	const { calls, watch } = fakeWatch();
+	const source = createAgentActivitySource({ watch });
+	source.sync([
+		{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+	]);
+	await settle();
+	expect(source.pending("worker")).toBe(true);
+	// A reconnect attempt keeps gathering; giving up hands the row back to the
+	// workflow status instead of spinning forever.
+	calls[0]?.onState?.("connecting");
+	expect(source.pending("worker")).toBe(true);
+	calls[0]?.onState?.("closed");
+	expect(source.pending("worker")).toBe(false);
+	source.dispose();
+});
+
+test("removing an agent and disposing the source clear the gathering state", async () => {
+	const { watch } = fakeWatch();
+	const source = createAgentActivitySource({ watch });
+	source.sync([
+		{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+	]);
+	await settle();
+	expect(source.pending("worker")).toBe(true);
+	source.sync([]);
+	expect(source.pending("worker")).toBe(false);
+	source.sync([
+		{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+	]);
+	await settle();
+	expect(source.pending("worker")).toBe(true);
+	source.dispose();
+	expect(source.pending("worker")).toBe(false);
 });
 
 test("every activity watch asks the host for the live documents alone", async () => {
@@ -291,5 +351,7 @@ test("an unreachable host is not reported as activity", async () => {
 	]);
 	await settle();
 	expect(source.activity("worker")).toBeUndefined();
+	// A host that cannot be reached must not leave the row gathering forever.
+	expect(source.pending("worker")).toBe(false);
 	source.dispose();
 });

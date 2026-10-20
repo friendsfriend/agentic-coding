@@ -24,6 +24,13 @@ export interface AgentsPanelProps {
 	/** What a durable run is doing right now, from its host watch. Absent (or
 	 * nothing in flight) keeps the workflow status badge. */
 	readonly activity?: (role: string) => AgentActivity | undefined;
+	/** True while the row's status is still provisional: the cheap seed before
+	 * the full observation lands, or a durable watch before its first frame.
+	 * The badge then gathers instead of naming a status that may be wrong. */
+	readonly statusPending?: (role: string) => boolean;
+	/** True while per-agent details (the verifier verdict) are still derived
+	 * from the seed rather than the full observation. */
+	readonly detailsPending?: boolean;
 	/** Pointer: a tap selects a row (the keyboard's `j`/`k`). */
 	readonly onSelectIndex?: (index: number) => void;
 	/** Pointer: a tap on the selected row activates it (the keyboard's `Enter`). */
@@ -109,7 +116,12 @@ export function AgentsPanel(props: AgentsPanelProps) {
 							const current = props.activity?.(agent.role);
 							return current?.active ? current : undefined;
 						};
+						// A live step is already the truth; otherwise a provisional
+						// status gathers instead of painting the seed's guess.
+						const statusLoading = () =>
+							!activity() && props.statusPending?.(agent.role) === true;
 						const highlight = (): Highlight => {
+							if (statusLoading()) return "highlight2";
 							const running = activity();
 							if (running)
 								return running.tone === "blocked" ? "warning" : "highlight2";
@@ -140,13 +152,18 @@ export function AgentsPanel(props: AgentsPanelProps) {
 										</text>
 									</box>
 									<Badge
-										text={activity()?.label ?? agent.status}
+										text={
+											statusLoading()
+												? "loading"
+												: (activity()?.label ?? agent.status)
+										}
 										appearance="text"
 										highlight={highlight()}
 										{...(activity()?.tone === "blocked"
 											? { animatedTone: "warning" as const }
 											: {})}
 										animation={
+											statusLoading() ||
 											activity()?.tone === "working" ||
 											(!activity() && agent.status === "working")
 												? "aurora"
@@ -170,7 +187,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 														: "Interactive workflow agent")}
 										</text>
 									</box>
-									<Show when={timeline()}>
+									<Show when={props.detailsPending ? undefined : timeline()}>
 										{(entry) => {
 											const duration = entry().durationSeconds;
 											return (
