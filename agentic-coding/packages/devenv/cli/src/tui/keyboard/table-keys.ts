@@ -725,6 +725,19 @@ export async function handleTableKeys(
 			if (appStore.activeTab() !== "scripts" && appList.length > 0)
 				gitActions.openBranchSelector();
 			break;
+		case "o": {
+			// Open a configured stage in the browser. Offered on the three
+			// environment table pages; the kubernetes page owns its own `o`.
+			const tab = appStore.activeTab();
+			if (
+				tab !== "applications" &&
+				tab !== "libraries" &&
+				tab !== "infrastructure"
+			)
+				break;
+			void actions.stageActions.openStagePicker();
+			break;
+		}
 		case "w": {
 			// Start workflow for the selected application/library. The unified
 			// shell owns form and start boundary; without a reporter there is no

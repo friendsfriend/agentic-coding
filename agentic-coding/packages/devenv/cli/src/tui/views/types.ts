@@ -11,6 +11,7 @@ import type {
 	PipelineActions,
 	ProviderActions,
 	SlotActions,
+	StageActions,
 	UtilActions,
 } from "../actions/index.ts";
 import type {
@@ -52,6 +53,7 @@ export interface ViewActions {
 	pipelineActions: PipelineActions;
 	helpActions: HelpActions;
 	slotActions: SlotActions;
+	stageActions: StageActions;
 }
 
 export interface ContentRouterProps {

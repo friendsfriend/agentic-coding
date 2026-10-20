@@ -19,6 +19,9 @@ const TABLE_PRIORITY = 100;
 const KUBERNETES_PRIORITY = 120;
 /** Above the table handler: list-row workflow launch owns `w` where offered. */
 const START_WORKFLOW_PRIORITY = TABLE_PRIORITY + 10;
+/** Above the table handler and below the kubernetes page (which owns its own
+ * `o`): the stage picker is offered on the environment table pages. */
+const STAGE_PICKER_PRIORITY = TABLE_PRIORITY + 15;
 
 /** Keys the table handler implements but that no view context declares, plus
  * the structural navigation every list needs. */
@@ -213,8 +216,51 @@ export function registerTableKeymapLayer(
 			})
 		: [];
 
+	/**
+	 * Open a configured stage in the browser (`o`): one layer per environment
+	 * table page, so the footer and `?` help advertise the key exactly where the
+	 * picker is offered. The kubernetes page keeps its own `o` (higher priority).
+	 */
+	const stagePickerLayers = (
+		["applications", "libraries", "infrastructure"] as const
+	).map((tab) => {
+		const command = `table.${tab}.open-stage`;
+		return keymap.registerLayer({
+			name: `Table: open stage in browser (${tab})`,
+			priority: STAGE_PICKER_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
+			shutdown: false,
+			envModal: "none",
+			appViewMode: "table",
+			activeTab: tab,
+			commands: [
+				{
+					name: command,
+					context: "table",
+					category: "Environment",
+					title: "Open stage in browser",
+					desc: "Pick a configured stage and open one of its UI applications in the default browser.",
+					footer: "o",
+					discoverable: true,
+					run: ({ event }) => runTable(event),
+				},
+			],
+			bindings: [
+				{
+					key: "o",
+					cmd: command,
+					context: "table",
+					category: "Environment",
+					footer: "o",
+					discoverable: true,
+				},
+			],
+		});
+	});
+
 	const disposers = [
 		...startWorkflowLayers,
+		...stagePickerLayers,
 		keymap.registerLayer({
 			name: "Table/List",
 			priority: TABLE_PRIORITY,

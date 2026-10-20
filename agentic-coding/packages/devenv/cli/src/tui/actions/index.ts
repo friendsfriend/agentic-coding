@@ -10,4 +10,5 @@ export * from "./log-actions.ts";
 export * from "./pipeline-actions.ts";
 export * from "./provider-actions.ts";
 export * from "./slot-actions.ts";
+export * from "./stage-actions.ts";
 export * from "./util-actions.ts";

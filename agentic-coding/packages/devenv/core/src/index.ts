@@ -140,6 +140,7 @@ import {
 	getScripts,
 	linkScript,
 } from "./scripts-client.ts";
+import { getStages, type StagesStatusResponse } from "./stages-client.ts";
 
 function createFetch(): FetchFunction {
 	console.error(
@@ -223,6 +224,12 @@ export class DevEnvClient {
 	}
 	getScripts(): Promise<import("@devenv/types").ScriptListResponse> {
 		return getScripts(this.deps);
+	}
+	/** The configured, allow-listed stages (`GET /api/v1/stages`). A picker reads
+	 * labels, idents, environments, access markers and application URLs; nothing
+	 * here can carry a credential value. */
+	getStages(signal?: AbortSignal): Promise<StagesStatusResponse> {
+		return getStages(this.deps, signal);
 	}
 	executeScript(
 		relativePath: string,
@@ -840,4 +847,5 @@ export * from "./domain-events-client.ts";
 export * from "./environment-client.ts";
 export * from "./logger.ts";
 export * from "./projects-client.ts";
+export * from "./stages-client.ts";
 export type { FetchFunction };

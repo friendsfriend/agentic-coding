@@ -741,6 +741,19 @@ a production-like name is refused by the catalog, and only the operator's own
   allow-list, so an agent cannot leave the stage by passing a URL, and it cannot
   re-bind a session to a different stage (`stage-mismatch`).
 
+- **A developer opens a stage from the environment list, and that is not a
+  session.** `o` on the Applications, Libraries or Infrastructure page reads the
+  same allow-listed catalog (`GET /api/v1/stages`) and lists the configured
+  stages with display name, ident, environment and access marker; an excluded
+  file is absent rather than greyed out, and a failed read is the picker's own
+  message. Choosing a stage hands one of its `kind: "ui"` applications to the
+  platform's opener (`open`, `xdg-open`, `cmd /c start`) — the URL exactly as the
+  stage declares it, with no token, no query parameter and no login recipe — so
+  the browser is the developer's own. A stage with several UI applications
+  offers them in a second step, the one whose `app` matches the highlighted row
+  first. It is local and read-only: no stage session, no identity-cache entry,
+  no `stage_*` tool and no server mutation is involved.
+
 ## One composition for both server roots
 
 Two composition roots own a server: the headless `agentic-coding server`

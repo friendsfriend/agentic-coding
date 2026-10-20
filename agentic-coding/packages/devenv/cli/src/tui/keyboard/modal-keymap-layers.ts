@@ -146,6 +146,12 @@ export function registerModalKeymapLayers(
 			run: runGlobalModal,
 		},
 		{
+			modal: "stage-picker",
+			command: "modal.stage-picker.handle",
+			title: "Stage picker",
+			run: runGlobalModal,
+		},
+		{
 			modal: "profile-picker",
 			command: "modal.profile-picker.handle",
 			title: "Profile picker",

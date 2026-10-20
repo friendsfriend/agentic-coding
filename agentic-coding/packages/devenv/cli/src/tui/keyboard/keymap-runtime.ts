@@ -31,6 +31,7 @@ function modalProbes(stores: KeyboardStores): Array<[string, boolean]> {
 		["confirm", bool(uiStore.showConfirmDialog)],
 		["markdown", bool(uiStore.showMarkdownModal)],
 		["theme-picker", bool(uiStore.showThemePicker)],
+		["stage-picker", bool(uiStore.showStagePicker)],
 		["profile-picker", bool(uiStore.showProfilePicker)],
 		["action-target-picker", bool(uiStore.showActionTargetPicker)],
 		["add-repository", bool(providerStore.showAddRepositoryModal)],
@@ -106,6 +107,7 @@ export function isKeymapTextEntryActive(stores: KeyboardStores): boolean {
 			bool(uiStore.branchFilterActive) ||
 			bool(uiStore.showCreateBranchModal) ||
 			bool(uiStore.themePickerFilterActive) ||
+			bool(uiStore.stagePickerFilterActive) ||
 			bool(uiStore.taskArgsEditing) ||
 			bool(uiStore.showTaskAddModal) ||
 			bool(logStore.logSearchMode) ||

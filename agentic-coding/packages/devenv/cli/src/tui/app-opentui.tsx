@@ -32,6 +32,7 @@ import {
 	createPipelineActions,
 	createProviderActions,
 	createSlotActions,
+	createStageActions,
 	createUtilActions,
 	initializeApp,
 } from "./actions/index.ts";
@@ -247,6 +248,7 @@ export function TUIApp(props: TUIAppProps) {
 		client,
 		props.onOpenWorkflow,
 	);
+	const stageActions = createStageActions({ uiStore, appStore, client });
 
 	const clearGlobalSelectionMouseUpHandler = setGlobalSelectionMouseUpHandler(
 		utilActions.handleCopySelection,
@@ -587,6 +589,7 @@ export function TUIApp(props: TUIAppProps) {
 		pipelineActions,
 		helpActions,
 		slotActions,
+		stageActions,
 	};
 	const kbCtx: KeyboardContext = {
 		renderer,
@@ -710,6 +713,7 @@ export function TUIApp(props: TUIAppProps) {
 		pipelineActions,
 		helpActions,
 		slotActions,
+		stageActions,
 	};
 
 	const headerDeps = {

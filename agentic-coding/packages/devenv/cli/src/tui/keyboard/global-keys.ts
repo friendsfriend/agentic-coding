@@ -4,6 +4,7 @@ import { applyTheme, saveThemeName } from "../theme-settings.ts";
 
 import { isDownKey, isUpKey } from "./nav-keys.ts";
 import { routePastedText } from "./paste-handler.ts";
+import { handleStagePickerKeys } from "./stage-picker-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
@@ -43,6 +44,7 @@ const isTextEntryActive = (stores: KeyboardStores): boolean => {
 			uiStore.branchFilterActive() ||
 			uiStore.showCreateBranchModal() ||
 			uiStore.themePickerFilterActive() ||
+			uiStore.stagePickerFilterActive() ||
 			uiStore.taskArgsEditing() ||
 			uiStore.showTaskAddModal() ||
 			logStore.logSearchMode() ||
@@ -596,10 +598,14 @@ export async function handleGlobalKeys(
 	 * only a *tie-break* — with one dialog open (the normal case) it is the same
 	 * dispatch as before.
 	 */
+	const handleStagePicker: ModalKeyHandler = () =>
+		handleStagePickerKeys(event, stores, actions);
+
 	const modalHandlers: Array<[string, ModalKeyHandler]> = [
 		["error", handleErrorDialogKeys],
 		["markdown", handleMarkdownModalKeys],
 		["theme-picker", handleThemePickerKeys],
+		["stage-picker", handleStagePicker],
 		["confirm", handleConfirmDialogKeys],
 		["action-target-picker", handleActionTargetPickerKeys],
 		["profile-picker", handleProfilePickerKeys],

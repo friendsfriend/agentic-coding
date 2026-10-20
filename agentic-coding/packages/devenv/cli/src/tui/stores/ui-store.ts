@@ -1,3 +1,4 @@
+import type { StageAppStatus, StageStatus } from "@devenv/core";
 import type {
 	ActionTarget,
 	App,
@@ -97,6 +98,31 @@ export function createUiStore() {
 	const [showThemePicker, setShowThemePicker] = createSignal(false);
 	const [themePickerSelectedIndex, setThemePickerSelectedIndex] =
 		createSignal(0);
+	// Stage picker (`open-stage-from-environments`): the allow-listed catalog the
+	// server answered, the chosen stage's UI applications and the filter/list
+	// cursor. Two steps in one dialog: stages, then (for a stage with several UI
+	// applications) the application to open.
+	const [showStagePicker, setShowStagePicker] = createSignal(false);
+	const [stagePickerStages, setStagePickerStages] = createSignal<StageStatus[]>(
+		[],
+	);
+	const [stagePickerLoading, setStagePickerLoading] = createSignal(false);
+	const [stagePickerError, setStagePickerError] = createSignal<string | null>(
+		null,
+	);
+	const [stagePickerQuery, setStagePickerQuery] = createSignal("");
+	const [stagePickerFilterActive, setStagePickerFilterActive] =
+		createSignal(false);
+	const [stagePickerIndex, setStagePickerIndex] = createSignal(0);
+	const [stagePickerStep, setStagePickerStep] = createSignal<"stages" | "apps">(
+		"stages",
+	);
+	const [stagePickerStage, setStagePickerStage] =
+		createSignal<StageStatus | null>(null);
+	const [stagePickerApps, setStagePickerApps] = createSignal<StageAppStatus[]>(
+		[],
+	);
+	const [stagePickerAppIndex, setStagePickerAppIndex] = createSignal(0);
 	const [themePickerFilterActive, setThemePickerFilterActive] =
 		createSignal(false);
 	const [themePickerFilterQuery, setThemePickerFilterQuery] = createSignal("");
@@ -261,6 +287,28 @@ export function createUiStore() {
 		setEditorPickerOptions,
 		showThemePicker,
 		setShowThemePicker,
+		showStagePicker,
+		setShowStagePicker,
+		stagePickerStages,
+		setStagePickerStages,
+		stagePickerLoading,
+		setStagePickerLoading,
+		stagePickerError,
+		setStagePickerError,
+		stagePickerQuery,
+		setStagePickerQuery,
+		stagePickerFilterActive,
+		setStagePickerFilterActive,
+		stagePickerIndex,
+		setStagePickerIndex,
+		stagePickerStep,
+		setStagePickerStep,
+		stagePickerStage,
+		setStagePickerStage,
+		stagePickerApps,
+		setStagePickerApps,
+		stagePickerAppIndex,
+		setStagePickerAppIndex,
 		themePickerSelectedIndex,
 		setThemePickerSelectedIndex,
 		themePickerFilterActive,

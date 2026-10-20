@@ -11,6 +11,7 @@ import type {
 	PipelineActions,
 	ProviderActions,
 	SlotActions,
+	StageActions,
 	UtilActions,
 } from "../actions/index.ts";
 import type {
@@ -64,6 +65,7 @@ export interface KeyboardActions {
 	pipelineActions: PipelineActions;
 	helpActions: HelpActions;
 	slotActions: SlotActions;
+	stageActions: StageActions;
 }
 
 /** Extra context that dispatchers may need beyond stores/actions */

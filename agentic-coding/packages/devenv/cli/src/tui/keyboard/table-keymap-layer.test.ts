@@ -95,6 +95,8 @@ function makeStores(
 		uiStore: signalStore({ activeThemeName: () => "default", ...uiOverrides }),
 		agentStore: signalStore(),
 		appDetailStore: signalStore(),
+		actionRunStore: signalStore(),
+		slotStore: signalStore({ visible: () => [] }),
 	} as unknown as KeyboardStores;
 }
 
@@ -408,6 +410,71 @@ describe("table keymap layer", () => {
 			expect(advertised()).toBe(true);
 			setRuntime(keymap, "infrastructure");
 			expect(advertised()).toBe(false);
+			setRuntime(keymap, "scripts");
+			expect(advertised()).toBe(false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("o opens the stage picker on the environment pages only", () => {
+		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
+		let opened = 0;
+		let activeTab = "applications";
+		const stores = makeStores({ activeTab: () => activeTab });
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap, "applications");
+			registerTableKeymapLayer(keymap as never, {
+				stores,
+				actions: actions({
+					stageActions: signalStore({
+						openStagePicker: () => {
+							opened += 1;
+						},
+					}) as never,
+				}),
+				ctx: ctx(),
+			});
+			host.press("o");
+			expect(opened).toBe(1);
+			for (const tab of ["libraries", "infrastructure"]) {
+				activeTab = tab;
+				setRuntime(keymap, tab);
+				host.press("o");
+			}
+			expect(opened).toBe(3);
+			// The kubernetes page keeps its own `o`, and the other pages do not
+			// offer the picker at all.
+			for (const tab of ["kubernetes", "scripts", "slots"]) {
+				activeTab = tab;
+				setRuntime(keymap, tab);
+				host.press("o");
+			}
+			expect(opened).toBe(3);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("o is advertised as Open stage in browser on the environment pages", () => {
+		const { keymap, cleanup } = createTestKeymap({ defaultKeys: true });
+		try {
+			setupDevenvKeymap(keymap as never);
+			registerTableKeymapLayer(keymap as never, {
+				stores: makeStores(),
+				actions: actions(),
+				ctx: ctx(),
+			});
+			const advertised = () =>
+				getActiveFooterKeybindsFromKeymap(keymap as never).some(
+					(entry) =>
+						entry.key === "o" && entry.action === "Open stage in browser",
+				);
+			for (const tab of ["applications", "libraries", "infrastructure"]) {
+				setRuntime(keymap, tab);
+				expect(advertised()).toBe(true);
+			}
 			setRuntime(keymap, "scripts");
 			expect(advertised()).toBe(false);
 		} finally {

@@ -268,6 +268,16 @@ const RAW_KEYBINDS: KeybindDef[] = [
 	// a workflow, and it registers the binding itself when it hosts this table
 	// (`table-keymap-layer.ts`), so the footer never advertises a dead key in a
 	// standalone environment run.
+	// `o` is advertised on the environment table pages by the per-tab layers in
+	// `table-keymap-layer.ts`; the kubernetes page keeps its own `o` for its
+	// cluster panel.
+	{
+		keys: ["o"],
+		description: "Open stage in browser",
+		footerDescription: "Open stage",
+		context: "table",
+		category: "Actions",
+	},
 	{
 		keys: ["+"],
 		description: "Add repository or task",

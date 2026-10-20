@@ -37,7 +37,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 ```
 
-Infrastructure services appear in the **Infrastructure** tab of the TUI. Docker services support `s` (start), `S` (stop), `R` (restart), and container logs (`l`).
+Infrastructure services appear in the **Infrastructure** tab of the TUI. Docker services support `s` (start), `S` (stop), `R` (restart), and container logs (`l`). Press `o` on the Applications, Libraries or Infrastructure tab to open a configured stage's UI application in your own browser: the picker lists the stages of `stages/definitions` and opens nothing but the URL a stage declares.
 
 ## 3. Script-backed services
 

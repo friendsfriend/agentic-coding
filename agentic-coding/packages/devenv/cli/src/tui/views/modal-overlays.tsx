@@ -36,6 +36,7 @@ import { Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides/index.ts";
 import { ActionRunModal } from "./action-run-modal.tsx";
 import { FirstStepsView } from "./first-steps-view.tsx";
+import { StagePickerModal } from "./stage-picker-view.tsx";
 import type { ModalOverlaysProps } from "./types.ts";
 
 export function ModalOverlays(props: ModalOverlaysProps) {
@@ -50,6 +51,7 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 	} = props.stores;
 	const { dockerActions, crActions, logActions, issueActions, helpActions } =
 		props.actions;
+	const stageActions = props.actions.stageActions;
 
 	return (
 		<>
@@ -101,6 +103,25 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 								)
 							: themeNames
 					}
+				/>
+			</Show>
+			<Show when={uiStore.showStagePicker()}>
+				<StagePickerModal
+					step={uiStore.stagePickerStep()}
+					stageName={uiStore.stagePickerStage()?.displayName}
+					stages={stageActions.visibleStages()}
+					apps={stageActions.visibleApps()}
+					selectedIndex={uiStore.stagePickerIndex()}
+					appIndex={uiStore.stagePickerAppIndex()}
+					filterQuery={uiStore.stagePickerQuery()}
+					filterActive={uiStore.stagePickerFilterActive()}
+					loading={uiStore.stagePickerLoading()}
+					error={uiStore.stagePickerError()}
+					onSelectIndex={uiStore.setStagePickerIndex}
+					onSelectAppIndex={uiStore.setStagePickerAppIndex}
+					onFilterChange={stageActions.setFilter}
+					onActivate={() => void stageActions.confirm()}
+					onBackdropClick={stageActions.close}
 				/>
 			</Show>
 			<Show when={uiStore.showMarkdownModal()}>
