@@ -462,6 +462,21 @@ export const CHECKPOINT_RULE_IDS = [
 	"default",
 ] as const;
 export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
+/** One line per checkpoint action: the question option's text and the decision
+ * record's `criteria`. It lives in the contract for the same reason the
+ * vocabulary does — the record boundary refuses an option whose criteria is not
+ * exactly this line, so a caller cannot smuggle prose into the bounded history
+ * through the option list. */
+export const CHECKPOINT_ACTION_SUMMARY: Readonly<
+	Record<CheckpointAction, string>
+> = {
+	continue: "Keep the run going as it is.",
+	steer: "Send one fixed nudge from the catalog at the next turn boundary.",
+	compact: "Compact the conversation through the cost ceiling's admission.",
+	"switch-model":
+		"Move the run to another model (vocabulary only in this release).",
+	escalate: "Ask the developer through a normal developer question.",
+};
 /** The id every checkpoint decision records as its decider, and the classifier
  * integration it records under. Both are contract-level because the record
  * boundary (`workflow checkpoint --record`) refuses any other value. */

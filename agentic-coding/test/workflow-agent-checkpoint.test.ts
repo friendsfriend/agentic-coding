@@ -394,14 +394,14 @@ test("the boundary refuses text and vocabulary outside the closed set", () => {
 			},
 			"probabilities",
 		],
-		// Attention is one line of printable ASCII, so nothing can be smuggled in.
+		// Attention is a rule id and a closed reason, so nothing can be smuggled in.
 		[
 			"a newline",
 			{
 				...base,
 				result: { ...base.result, attention: "rule no-progress\nrm -rf" },
 			},
-			"printable",
+			"attention",
 		],
 		// The record names the run that recorded it, and the caller's own step.
 		["another run's id", { ...base, questionId: "checkpoint:run-y:1" }, "run"],
@@ -443,6 +443,211 @@ test("the boundary refuses text and vocabulary outside the closed set", () => {
 	expect(
 		checkpointRecords(started.engine.getSnapshot(started.repo, "change")),
 	).toHaveLength(0);
+});
+
+/** One digest built by the decider itself, with `tool` as the failing streak:
+ * `"a tool"` is what the accumulator writes for a name the host did not
+ * publish. */
+function digestWithFailingTool(tool: string): string {
+	const checkpoint = new ProgressCheckpoint({
+		checkpointClass: "worker",
+		thresholds: { softTurns: 10, hardTurns: 50 },
+	});
+	for (let turn = 1; turn <= 40; turn += 1)
+		checkpoint.observeTurn({ turn, costUnits: 0.01, contextTokens: 1000 });
+	checkpoint.observeTool({ tool: "read", ok: true, argsHash: "a" });
+	for (let index = 0; index < 5; index += 1)
+		checkpoint.observeTool({ tool, ok: false, argsHash: `h${index}` });
+	return checkpointDigestInput(checkpoint.takeDigest("stall"));
+}
+
+test("the boundary accepts the digest the decider itself builds", () => {
+	// The host publishes dotted tool names (`agentic.codemode`), and the decider
+	// writes the literal `a tool` for a name it cannot vouch for. Both are the
+	// digest's own vocabulary, so both are recorded — the record boundary is what
+	// the host's own `workflow checkpoint --record` call goes through, and a
+	// boundary that refuses the digest it documents loses every decision.
+	for (const [tool, expected] of [
+		["agentic.codemode", "agentic.codemode"],
+		["agentic.ask-jev", "agentic.ask-jev"],
+		["../../etc/passwd", "a tool"],
+		["a tool", "a tool"],
+	] as const) {
+		const input = digestWithFailingTool(tool);
+		expect(
+			(JSON.parse(input) as Record<string, unknown>).failingTool,
+			`${tool} reached the digest as recorded`,
+		).toBe(expected);
+		expect(
+			checkpointRecordProblems(
+				{ ...recordInput("run-x", 1), input },
+				"run-x",
+				CHECKPOINT_RECORD_LIMIT,
+			),
+			`${tool} was refused`,
+		).toEqual([]);
+	}
+	// And the reducer really appends it, not just the pure check.
+	const started = startedRun();
+	started.engine.dispatch(
+		started.repo,
+		checkpointCommand(started, {
+			...recordInput(started.runId, 1),
+			input: digestWithFailingTool("agentic.codemode"),
+		}),
+	);
+	const [record] = checkpointRecords(
+		started.engine.getSnapshot(started.repo, "change"),
+	);
+	expect(record?.integration).toBe(CHECKPOINT_RECORD_INTEGRATION);
+	expect(
+		(JSON.parse(record?.input ?? "{}") as Record<string, unknown>).failingTool,
+	).toBe("agentic.codemode");
+});
+
+test("the boundary checks the digest's shape, not only its key names", () => {
+	const base = recordInput("run-x", 1);
+	const digest = JSON.parse(base.input) as Record<string, unknown>;
+	const withDigest = (patch: Record<string, unknown>) => ({
+		...base,
+		input: JSON.stringify({ ...digest, ...patch }),
+	});
+	const cases: [string, ReturnType<typeof recordInput>, string][] = [
+		// A sentence where a count belongs is content trying to reach the history.
+		[
+			"a string for a number",
+			withDigest({ turns: "273 turns of rereading" }),
+			"number",
+		],
+		["a string for a boolean", withDigest({ readOnly: "yes" }), "boolean"],
+		["a null for a number", withDigest({ contextTokens: null }), "number"],
+		[
+			"an unknown nested key",
+			withDigest({ window: { turns: 4, progress: 1, note: "/Users/me/x" } }),
+			"unknown key",
+		],
+		["a missing nested key", withDigest({ window: { turns: 4 } }), "missing"],
+		[
+			"a sentence in a list",
+			withDigest({ steeredSignals: ["repeats", "a whole sentence"] }),
+			"closed",
+		],
+		[
+			"a record instead of a list",
+			withDigest({ steeredSignals: { note: "x" } }),
+			"list",
+		],
+		["a missing key", withDigest({ diff: { files: 1 } }), "missing"],
+		[
+			"a list instead of the digest",
+			{ ...base, input: JSON.stringify([base.input]) },
+			"object",
+		],
+	];
+	for (const [what, record, expected] of cases) {
+		const problems = checkpointRecordProblems(
+			record,
+			"run-x",
+			CHECKPOINT_RECORD_LIMIT,
+		);
+		expect(problems.length, `${what} was accepted`).toBeGreaterThan(0);
+		expect(problems[0], `${what} was refused for another reason`).toContain(
+			expected,
+		);
+	}
+	// The nullable keys are the ones the digest declares nullable, and no other.
+	expect(
+		checkpointRecordProblems(
+			withDigest({ diff: null, tickedTasks: null, previous: null }),
+			"run-x",
+			CHECKPOINT_RECORD_LIMIT,
+		),
+	).toEqual([]);
+	expect(
+		checkpointRecordProblems(
+			withDigest({ window: null }),
+			"run-x",
+			CHECKPOINT_RECORD_LIMIT,
+		)[0],
+	).toContain("object");
+});
+
+test("the boundary pins the option criteria and the attention line", () => {
+	const base = recordInput("run-x", 1);
+	const options = base.options as unknown as Array<Record<string, unknown>>;
+	const withOptions = (patch: Record<string, unknown>) => ({
+		...base,
+		options: options.map((option, index) =>
+			index === 1 ? { ...option, ...patch } : option,
+		),
+	});
+	// The options are rendered in the dashboard: free text here would be a second
+	// way around the digest's content-free rule.
+	expect(
+		checkpointRecordProblems(
+			withOptions({ criteria: "/Users/someone/secret.txt" }),
+			"run-x",
+			CHECKPOINT_RECORD_LIMIT,
+		)[0],
+	).toContain("criteria");
+	expect(
+		checkpointRecordProblems(
+			withOptions({ criteria: CHECKPOINT_ACTION_SUMMARY.steer }),
+			"run-x",
+			CHECKPOINT_RECORD_LIMIT,
+		),
+	).toEqual([]);
+	for (const attention of [
+		"rule hard-limit; question q-checkpoint-7 unanswered",
+		"rule hard-limit; question checkpoint:run-x:3 cancelled",
+		"rule no-progress; steer disabled; context above limit, compaction not admissible",
+		"rule failing-tool; steer not delivered",
+		"rule context; compaction not admitted",
+		"rule default",
+	])
+		expect(
+			checkpointRecordProblems(
+				{ ...base, result: { ...base.result, attention } },
+				"run-x",
+				CHECKPOINT_RECORD_LIMIT,
+			),
+			`"${attention}" was refused`,
+		).toEqual([]);
+	for (const attention of [
+		"rule default; /Users/someone/secret.txt",
+		"rule no-progress; and then some prose the caller chose",
+		"the run looked stuck",
+	]) {
+		expect(
+			checkpointRecordProblems(
+				{ ...base, result: { ...base.result, attention } },
+				"run-x",
+				CHECKPOINT_RECORD_LIMIT,
+			)[0],
+			`"${attention}" was accepted`,
+		).toContain("attention");
+	}
+});
+
+test("a repeated question id is one record, however often it is sent", () => {
+	const started = startedRun();
+	const { engine, repo } = started;
+	// The same checkpoint reported twice — a retried command, or two evaluations
+	// the same run started — is one record, and the answer says it was recorded
+	// because the history really holds it.
+	const record = recordInput(started.runId, 1);
+	for (let attempt = 0; attempt < 3; attempt += 1)
+		engine.dispatch(repo, checkpointCommand(started, record));
+	const snapshot = engine.getSnapshot(repo, "change");
+	expect(runCheckpointRecords(snapshot, started.runId)).toHaveLength(1);
+	// A later checkpoint of the same run is a different record.
+	engine.dispatch(
+		repo,
+		checkpointCommand(started, recordInput(started.runId, 2)),
+	);
+	expect(
+		runCheckpointRecords(engine.getSnapshot(repo, "change"), started.runId),
+	).toHaveLength(2);
 });
 
 test("the record cap counts one run's records, never the workflow's", () => {

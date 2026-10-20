@@ -16,6 +16,7 @@
 // the five classes, the five actions, the four stall signals and the rule ids.
 
 import {
+	CHECKPOINT_ACTION_SUMMARY,
 	CHECKPOINT_ACTIONS,
 	CHECKPOINT_CLASSES,
 	CHECKPOINT_DECIDER,
@@ -63,24 +64,15 @@ export const DEFAULT_CHECKPOINT_CONTEXT_TOKENS = 200_000;
 /** The decider's id, recorded on every decision. */
 /** The classifier-decision integration every checkpoint records under. */
 /** The fixed decision vocabulary, in the order the question offers it. */
+/** One line per action, used for the question options and the decision
+ * record's `criteria`. Closed: no decider may add a label, and the record
+ * boundary refuses an option whose criteria is anything else. */
 export {
+	CHECKPOINT_ACTION_SUMMARY,
 	CHECKPOINT_ACTIONS,
 	CHECKPOINT_DECIDER,
 	CHECKPOINT_INTEGRATION,
 	type CheckpointAction,
-};
-
-/** One line per action, used for the question options and the decision
- * record's `criteria`. Closed: no decider may add a label. */
-export const CHECKPOINT_ACTION_SUMMARY: Readonly<
-	Record<CheckpointAction, string>
-> = {
-	continue: "Keep the run going as it is.",
-	steer: "Send one fixed nudge from the catalog at the next turn boundary.",
-	compact: "Compact the conversation through the cost ceiling's admission.",
-	"switch-model":
-		"Move the run to another model (vocabulary only in this release).",
-	escalate: "Ask the developer through a normal developer question.",
 };
 
 /** The stall signals a checkpoint can measure. `context` is a trigger, not a
@@ -747,14 +739,26 @@ export class ProgressCheckpoint {
 		};
 	}
 
-	/** Record what was decided and applied, so the next digest can see it. */
-	noteDecision(decision: CheckpointDecision, digest: CheckpointDigest): void {
+	/** Record what was decided *and applied*, so the next digest can see what
+	 * really happened. A decision that failed open left the run running and
+	 * changed nothing: it reads back as a `continue`, and the signal its nudge was
+	 * meant to answer stays open, so the next checkpoint nudges again instead of
+	 * escalating a steer the run never received. */
+	noteDecision(
+		decision: CheckpointDecision,
+		digest: CheckpointDigest,
+		outcome: { applied: boolean } = { applied: true },
+	): void {
 		this.lastDecision = {
-			decision: decision.action,
-			rule: decision.rule,
+			decision: outcome.applied ? decision.action : "continue",
+			rule: outcome.applied ? decision.rule : "default",
 			progress: digest.window.progress,
 		};
-		if (decision.action === "steer" && decision.signal !== undefined)
+		if (
+			outcome.applied &&
+			decision.action === "steer" &&
+			decision.signal !== undefined
+		)
 			this.steered.add(decision.signal);
 	}
 

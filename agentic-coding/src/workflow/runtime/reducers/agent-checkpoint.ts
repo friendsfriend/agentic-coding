@@ -15,10 +15,12 @@ import type {
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import {
+	CHECKPOINT_ACTION_SUMMARY,
 	CHECKPOINT_ACTIONS,
 	CHECKPOINT_DECIDER,
 	CHECKPOINT_INTEGRATION,
 	CHECKPOINT_RECORD_LIMIT,
+	CHECKPOINT_RULE_IDS,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { tokenMatches } from "../capability.ts";
@@ -33,58 +35,99 @@ import {
  * envelope uses the same string. */
 export const CHECKPOINT_RECORD_INTEGRATION = CHECKPOINT_INTEGRATION;
 
-/** The digest's key vocabulary, as the record boundary checks it: the
- * checkpoint's content-free digest is the only `input` a record may carry, and
- * these are exactly the keys `CheckpointDigest` has. A test keeps them equal. */
-const CHECKPOINT_DIGEST_KEYS: ReadonlySet<string> = new Set([
-	"ordinal",
-	"trigger",
-	"checkpointClass",
-	"readOnly",
-	"turns",
-	"costUnits",
-	"contextTokens",
-	"peakContextTokens",
-	"softTurns",
-	"hardTurns",
-	"contextLimit",
-	"compactionAdmissible",
-	"successfulCalls",
-	"failingToolEligible",
-	"failingTool",
-	"failingToolStreak",
-	"repeatCalls",
-	"windowCalls",
-	"turnsSinceProgress",
-	"costRisingRatio",
-	"window",
-	"diff",
-	"tickedTasks",
-	"previous",
-	"steeredSignals",
-]);
+/** The digest's shape, as the record boundary checks it: one entry per key of
+ * `CheckpointDigest`, each with the kind of value that key carries. The boundary
+ * refuses an unknown key at any depth, a missing key, and a value of the wrong
+ * kind — a sentence where a count belongs is content trying to reach the
+ * history, so the check is structural rather than a list of forbidden strings. A
+ * test keeps this table and the interface equal. */
+type DigestShapes = Readonly<Record<string, DigestShape>>;
+type DigestShape =
+	| "number"
+	| "boolean"
+	| "token"
+	| "nullable-token"
+	| "tool"
+	| "nullable-tool"
+	| "nullable-number"
+	| "token-list"
+	| { readonly fields: DigestShapes }
+	| { readonly nullableFields: DigestShapes };
 
-/** The keys of the digest's three nested objects. */
-const CHECKPOINT_DIGEST_NESTED_KEYS: Readonly<
-	Record<string, ReadonlySet<string>>
-> = {
-	window: new Set(["turns", "progress"]),
-	diff: new Set(["files", "insertions", "deletions"]),
-	previous: new Set(["decision", "rule", "progress"]),
+const CHECKPOINT_DIGEST_SHAPE: DigestShapes = {
+	ordinal: "number",
+	trigger: "token",
+	checkpointClass: "token",
+	readOnly: "boolean",
+	turns: "number",
+	costUnits: "number",
+	contextTokens: "number",
+	peakContextTokens: "number",
+	softTurns: "number",
+	hardTurns: "number",
+	contextLimit: "number",
+	compactionAdmissible: "boolean",
+	successfulCalls: "number",
+	failingToolEligible: "boolean",
+	failingTool: "nullable-tool",
+	failingToolStreak: "number",
+	repeatCalls: "number",
+	windowCalls: "number",
+	turnsSinceProgress: "number",
+	costRisingRatio: "number",
+	window: { fields: { turns: "number", progress: "number" } },
+	diff: {
+		nullableFields: {
+			files: "number",
+			insertions: "number",
+			deletions: "number",
+		},
+	},
+	tickedTasks: "nullable-number",
+	previous: {
+		nullableFields: { decision: "token", rule: "token", progress: "number" },
+	},
+	steeredSignals: "token-list",
 };
 
 /** What every string inside a digest may look like: a lowercase closed token
- * (a class, an action, a rule id, a signal, a trigger or a registered tool
- * name). No path, sentence, excerpt or credential matches it. */
-const CHECKPOINT_TOKEN = /^[a-z][a-z0-9_-]{0,63}$/;
-/** A record's free-ish text (a step id, an attention line, option criteria):
- * printable ASCII only, so no escape or control sequence can be persisted. */
-const CHECKPOINT_PRINTABLE = /^[\x20-\x7e]*$/;
-const CHECKPOINT_TEXT_LIMIT = 200;
+ * (a class, an action, a rule id, a signal, a trigger) or a registered tool
+ * name. The host publishes dotted tool names (`agentic.codemode`), which is why
+ * the dot is part of the shape. No path, sentence, excerpt or credential
+ * matches it. */
+const CHECKPOINT_TOKEN = /^[a-z][a-z0-9_.-]{0,63}$/;
+/** The decider's own stand-in for a failing tool name the host did not publish:
+ * the digest records `"a tool"` rather than a name it cannot vouch for, so the
+ * boundary admits exactly this one string with a space and nothing else. */
+const CHECKPOINT_UNREGISTERED_TOOL = "a tool";
 const CHECKPOINT_QUESTION_ID = /^checkpoint:[A-Za-z0-9-]{1,64}:\d{1,4}$/;
 /** A step id: lowercase words joined by `.`, `-` or `_`. A path, a URL or a
  * sentence cannot match it, so the recorded phase cannot name a file. */
 const CHECKPOINT_STEP_ID = /^[a-z][a-z0-9_.-]{0,63}$/;
+/** The exact reasons this feature writes after a rule id: the attention line is
+ * read by a developer and measured by the queries, so it is a closed
+ * vocabulary, not free text a caller chooses. The question's own fate is the
+ * one reason that carries an id. */
+const CHECKPOINT_ATTENTION_REASONS = [
+	"steer disabled",
+	"steer not delivered",
+	"no signal to steer",
+	"switch-model is not enabled",
+	"compaction not admitted",
+	"compaction failed",
+	"context above limit, compaction not admissible",
+	"question not filed",
+] as const;
+const CHECKPOINT_QUESTION_FATE =
+	"question [A-Za-z0-9_.:-]{1,80} (?:answered|unanswered|cancelled)";
+/** `rule <id>`, then up to three closed reasons — a steer disabled over a
+ * blocked context states both. */
+const CHECKPOINT_ATTENTION = new RegExp(
+	`^rule (?:${CHECKPOINT_RULE_IDS.join("|")})(?:; (?:${[
+		...CHECKPOINT_ATTENTION_REASONS,
+		CHECKPOINT_QUESTION_FATE,
+	].join("|")})){0,3}$`,
+);
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -92,47 +135,79 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
-function boundedPrintable(value: unknown): boolean {
+function closedToken(value: unknown): boolean {
 	return (
 		typeof value === "string" &&
-		value.length <= CHECKPOINT_TEXT_LIMIT &&
-		CHECKPOINT_PRINTABLE.test(value)
+		(value === CHECKPOINT_UNREGISTERED_TOOL || CHECKPOINT_TOKEN.test(value))
 	);
 }
 
 function digestWalk(
 	value: unknown,
-	keys: ReadonlySet<string> | undefined,
+	shape: DigestShape,
+	path: string,
 	problems: string[],
 ): void {
-	if (typeof value === "number") {
-		if (!Number.isFinite(value))
-			problems.push("input carries a non-finite number");
-		return;
-	}
-	if (typeof value === "boolean" || value === null || value === undefined)
-		return;
-	if (typeof value === "string") {
-		if (!CHECKPOINT_TOKEN.test(value))
-			problems.push("input carries text outside the closed vocabulary");
-		return;
-	}
-	if (Array.isArray(value)) {
-		for (const item of value) digestWalk(item, undefined, problems);
-		return;
-	}
-	const object = asObject(value);
-	if (!object) {
-		problems.push("input carries an unsupported value");
-		return;
-	}
-	for (const [key, child] of Object.entries(object)) {
-		if (keys !== undefined && !keys.has(key)) {
-			problems.push(`input carries the unknown key "${key}"`);
-			continue;
+	if (typeof shape === "object") {
+		const fields =
+			"fields" in shape ? shape.fields : (shape.nullableFields ?? {});
+		if (value === null && "nullableFields" in shape) return;
+		const object = asObject(value);
+		if (!object) {
+			problems.push(`input ${path} must be an object`.trimStart());
+			return;
 		}
-		digestWalk(child, CHECKPOINT_DIGEST_NESTED_KEYS[key], problems);
+		for (const [key, child] of Object.entries(object)) {
+			const childShape = fields[key];
+			if (childShape === undefined) {
+				problems.push(`input carries the unknown key "${key}"`);
+				continue;
+			}
+			digestWalk(
+				child,
+				childShape,
+				path === "" ? key : `${path}.${key}`,
+				problems,
+			);
+		}
+		for (const key of Object.keys(fields))
+			if (!(key in object)) problems.push(`input is missing the key "${key}"`);
+		return;
 	}
+	if (value === null || value === undefined) {
+		if (
+			shape === "nullable-token" ||
+			shape === "nullable-tool" ||
+			shape === "nullable-number"
+		)
+			return;
+		problems.push(`input ${path} must be a ${shape}`.trimStart());
+		return;
+	}
+	if (shape === "number" || shape === "nullable-number") {
+		if (typeof value !== "number")
+			problems.push(`input ${path} must be a number`.trimStart());
+		else if (!Number.isFinite(value))
+			problems.push(`input ${path} carries a non-finite number`.trimStart());
+		return;
+	}
+	if (shape === "boolean") {
+		if (typeof value !== "boolean")
+			problems.push(`input ${path} must be a boolean`.trimStart());
+		return;
+	}
+	if (shape === "token-list") {
+		if (!Array.isArray(value) || !value.every((item) => closedToken(item)))
+			problems.push(
+				`input ${path} must be a list of closed tokens`.trimStart(),
+			);
+		return;
+	}
+	// `token`, `tool`, `nullable-token` and `nullable-tool` carry one string.
+	if (!closedToken(value))
+		problems.push(
+			`input ${path} carries text outside the closed vocabulary`.trimStart(),
+		);
 }
 
 /** Everything `workflow checkpoint --record` accepts, checked at the boundary
@@ -175,7 +250,7 @@ export function checkpointRecordProblems(
 			problems.push("input must be the digest as JSON");
 		}
 		if (digest !== undefined)
-			digestWalk(digest, CHECKPOINT_DIGEST_KEYS, problems);
+			digestWalk(digest, { fields: CHECKPOINT_DIGEST_SHAPE }, "", problems);
 	}
 	if (!Array.isArray(record.options))
 		problems.push("options must list the five checkpoint actions");
@@ -187,9 +262,12 @@ export function checkpointRecordProblems(
 			const expected = CHECKPOINT_ACTIONS[index];
 			if (!option || option.label !== expected || option.profile !== expected)
 				problems.push(`option ${index + 1} must be "${expected}"`);
-			if (option?.criteria !== undefined && !boundedPrintable(option.criteria))
+			// The criteria is the action's own closed line: the options are
+			// rendered in the dashboard, so free text here would be a way around
+			// the digest's content-free rule.
+			if (option?.criteria !== CHECKPOINT_ACTION_SUMMARY[expected])
 				problems.push(
-					`option ${index + 1} criteria must be short printable text`,
+					`option ${index + 1} criteria must be the action's own line`,
 				);
 		}
 	}
@@ -218,8 +296,13 @@ export function checkpointRecordProblems(
 		for (const profile of profiles)
 			if (!isAction(profile))
 				problems.push("result profiles must be checkpoint actions");
-	if (result?.attention !== undefined && !boundedPrintable(result.attention))
-		problems.push("result attention must be short printable text");
+	if (
+		result?.attention !== undefined &&
+		!(typeof result.attention === "string"
+			? CHECKPOINT_ATTENTION.test(result.attention)
+			: false)
+	)
+		problems.push("result attention must be a rule id and a closed reason");
 	if (maxRecords < 1) problems.push("no checkpoint record may be written");
 	return problems;
 }
@@ -301,7 +384,20 @@ export function agentCheckpoint(
 				: { attention: command.record.result.attention }),
 		},
 	};
-	const before = runCheckpointRecords(snapshot, run.id).length;
+	// One question id is one record: a retried command — a timeout, a second
+	// report of the same checkpoint — must not consume a second slot of the
+	// run's budget or push an identical row into the history.
+	const existing = runCheckpointRecords(snapshot, run.id);
+	if (existing.some((entry) => entry.questionId === command.record.questionId))
+		return {
+			type: "agent.checkpoint",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: {
+				recorded: true,
+				records: existing.length,
+			} satisfies RecordedCheckpoint,
+		};
+	const before = existing.length;
 	if (before >= CHECKPOINT_RECORD_LIMIT)
 		return {
 			type: "agent.checkpoint",

@@ -779,6 +779,36 @@ describe("the accumulator", () => {
 		]);
 	});
 
+	test("a decision that failed open reads back as the run continuing", () => {
+		// A steer the harness refused was never delivered: remembering it as
+		// delivered would escalate the same signal as `steer-ignored` on a nudge the
+		// developer never received, and would also stop the `no-progress-twice` rule
+		// (which needs a `continue`) from ever firing on it.
+		const checkpoint = worker({ softTurns: 280 });
+		observe(checkpoint, 40);
+		const digest = checkpoint.takeDigest("stall");
+		const steer = decideCheckpoint(digest);
+		expect(steer.action).toBe("steer");
+		checkpoint.noteDecision(steer, digest, { applied: false });
+		expect(checkpoint.digestPreview().steeredSignals).toEqual([]);
+		expect(checkpoint.digestPreview().previous).toEqual({
+			decision: "continue",
+			rule: "default",
+			progress: 0,
+		});
+		// The counterpart: a delivered steer is remembered, so the signal it
+		// answered escalates when it comes back.
+		const delivered = worker({ softTurns: 280 });
+		observe(delivered, 40);
+		const stall = delivered.takeDigest("stall");
+		const nudge = decideCheckpoint(stall);
+		delivered.noteDecision(nudge, stall, { applied: true });
+		expect(delivered.digestPreview().steeredSignals).toEqual([
+			nudge.signal as CheckpointSignal,
+		]);
+		expect(delivered.digestPreview().previous?.decision).toBe("steer");
+	});
+
 	test("the repeats share counts calls with an argument hash only", () => {
 		const checkpoint = worker({ softTurns: 280 });
 		observe(checkpoint, 10);
