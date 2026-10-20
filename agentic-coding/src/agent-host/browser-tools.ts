@@ -41,6 +41,7 @@ import {
 	ENVIRONMENT_URL_ENV,
 	environmentOwnerFor,
 } from "./environment-capability.ts";
+import { withoutBlankOptionals } from "./optional-arguments.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const BROWSER_EXTENSION = "agentic.browser";
@@ -106,7 +107,9 @@ async function call(
 				? {}
 				: { "content-type": "application/json" }),
 		},
-		...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+		...(init.body === undefined
+			? {}
+			: { body: JSON.stringify(withoutBlankOptionals(init.body)) }),
 		signal: AbortSignal.timeout(init.timeoutMs),
 	});
 	const parsed = (await response.json().catch(() => undefined)) as

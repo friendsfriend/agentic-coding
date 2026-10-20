@@ -25,6 +25,7 @@ import {
 	ENVIRONMENT_URL_ENV,
 	environmentOwnerFor,
 } from "./environment-capability.ts";
+import { withoutBlankOptionals } from "./optional-arguments.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const STAGE_EXTENSION = "agentic.stages";
@@ -124,7 +125,9 @@ async function call(
 			[ENVIRONMENT_OWNER_HEADER]: binding.owner,
 			...(body === undefined ? {} : { "content-type": "application/json" }),
 		},
-		...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		...(body === undefined
+			? {}
+			: { body: JSON.stringify(withoutBlankOptionals(body)) }),
 		signal: AbortSignal.timeout(timeoutMs),
 	});
 	const parsed = (await response.json().catch(() => undefined)) as

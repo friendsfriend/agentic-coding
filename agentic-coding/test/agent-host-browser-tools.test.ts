@@ -195,6 +195,37 @@ describe("browser tool surface", () => {
 		});
 	});
 
+	test("a strict-schema model's blank optional arguments are treated as absent", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ session: "customer", url: "https://stage.example.test/" }],
+		};
+		await invoke(
+			"browser_open",
+			{
+				url: "",
+				app: "",
+				endpoint: "",
+				stage: "qa-ava",
+				stageApp: "customer",
+				stageRole: "",
+				path: "",
+				session: "customer",
+				viewport: { width: 1280, height: 900 },
+			},
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			stage: "qa-ava",
+			stageApp: "customer",
+			session: "customer",
+			viewport: { width: 1280, height: 900 },
+		});
+		const click: FakeServer = { calls: [], replies: [{ action: "click" }] };
+		await invoke("browser_click", { ref: "", selector: "#go" }, click);
+		expect(click.calls[0]?.body).toEqual({ action: "click", selector: "#go" });
+	});
+
 	test("a stage open sends the stage, its app key and a path instead of a url", async () => {
 		const server: FakeServer = {
 			calls: [],

@@ -27,6 +27,7 @@ import {
 	ENVIRONMENT_URL_ENV,
 	environmentOwnerFor,
 } from "./environment-capability.ts";
+import { withoutBlankOptionals } from "./optional-arguments.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const ENVIRONMENT_EXTENSION = "agentic.environment";
@@ -316,7 +317,9 @@ export function createEnvironmentExtension(
 					? {}
 					: { "content-type": "application/json" }),
 			},
-			...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+			...(init.body === undefined
+				? {}
+				: { body: JSON.stringify(withoutBlankOptionals(init.body)) }),
 			signal: AbortSignal.any(signals),
 		});
 		const parsed = (await response.json().catch(() => undefined)) as
