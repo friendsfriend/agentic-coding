@@ -181,7 +181,15 @@ export function EvidencePanel(props: EvidencePanelProps) {
 	 * with the body. */
 	const accessory = (): { text: string; failure: boolean } | undefined => {
 		if (collapsed()) {
-			if (rows().length > 0) return undefined;
+			// A collapsed panel is its title row, so what the body would have said
+			// moves up: the read state when there is nothing to list, and otherwise
+			// the count of rows the host gave no space for — a bare title would read
+			// as an empty panel rather than as a clipped one.
+			if (rows().length > 0)
+				return {
+					text: `${rows().length} rows, no room`,
+					failure: false,
+				};
 			return { text: bodyMessage(), failure: props.state === "error" };
 		}
 		const marker = staleMarker();

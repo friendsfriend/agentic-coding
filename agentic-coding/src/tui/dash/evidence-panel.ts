@@ -52,14 +52,17 @@ const EVIDENCE_PANEL_SHARE = 0.3;
  * windows itself instead.
  */
 export function evidencePanelLines(input: {
-	/** How many entries the read answered with. */
-	readonly entries: number;
+	/** How many rows the listing paints — evidence *and* journal steps. The count
+	 * is of rows, not of entries, because a workflow whose flow journal holds steps
+	 * and no evidence has a listing to show: an entry count would collapse the panel
+	 * onto its title row and clip the very list the journal was written for. */
+	readonly rows: number;
 	readonly state: EvidenceReadState;
 	/** The terminal's rows. A cap only: the host's chrome may leave the dashboard
 	 * fewer rows than this, which is why the panels measure their own body. */
 	readonly terminalLines: number;
 }): number {
-	if (input.entries === 0)
+	if (input.rows === 0)
 		return input.state === "ready"
 			? EVIDENCE_EMPTY_LINES
 			: EVIDENCE_MESSAGE_LINES;
@@ -208,7 +211,6 @@ function evidenceFlowRows(
 	entries: readonly EvidenceEntry[],
 	journal: StageJournal,
 ): EvidenceListRow[] {
-	const byId = new Map(entries.map((entry) => [entry.id, entry]));
 	/** Segment order is journal order: the first step's segment comes first. */
 	const segments = new Map<number, StageJournalEntry[]>();
 	const loose: StageJournalEntry[] = [];
@@ -269,7 +271,6 @@ function evidenceFlowRows(
 		...[...entries]
 			.filter((entry) => !claimed.has(entry.id))
 			.sort((left, right) => right.id.localeCompare(left.id))
-			.filter((entry) => byId.has(entry.id))
 			.map((entry) => ({ entry, label: evidenceRowLabel(entry) })),
 	];
 	rest.forEach((row, index) => {

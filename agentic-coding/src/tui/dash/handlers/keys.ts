@@ -437,10 +437,16 @@ export function createDashboardKeyHandler(
 			return;
 		}
 		if (name === "y" && activePanel() === EVIDENCE_PANEL) {
-			// A step row names no file: it is part of the segment heading's
-			// narrative, and copying its "path" would copy nothing.
-			const entry = evidenceRows()[selectedEvidence()]?.entry;
-			if (entry) context.copyEvidencePath(entry);
+			// A step row names no file of its own: it is part of the segment heading's
+			// narrative, so copying it would copy nothing — and saying so is better
+			// than a key that silently does nothing on the row it is pressed on.
+			const row = evidenceRows()[selectedEvidence()];
+			if (row?.entry) context.copyEvidencePath(row.entry);
+			else if (row?.step)
+				notify(
+					"A stage flow step has no file of its own; the segment's evidence rows do",
+					"info",
+				);
 			return;
 		}
 		if (name === "f" && activePanel() === EVIDENCE_PANEL) {
@@ -583,10 +589,12 @@ export function createDashboardKeyHandler(
 			}
 			if (activePanel() === EVIDENCE_PANEL) {
 				// Every kind opens the stored file externally — including a video,
-				// whose bytes are never rendered inline. A journal step row opens
-				// nothing: it has no file of its own.
-				const entry = evidenceRows()[selectedEvidence()]?.entry;
-				if (entry) context.openEvidence(entry);
+				// whose bytes are never rendered inline. A journal step row has no file
+				// of its own, so it opens the flow page the step is written into: the
+				// step's own record, in the order it happened.
+				const row = evidenceRows()[selectedEvidence()];
+				if (row?.entry) context.openEvidence(row.entry);
+				else if (row?.step !== undefined) context.openEvidenceFlow();
 				return;
 			}
 			const approval = gate();

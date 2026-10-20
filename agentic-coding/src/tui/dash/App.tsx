@@ -374,6 +374,7 @@ export function App(props: {
 	>(undefined);
 	let stageJournalGeneration = 0;
 	let stageJournalController: AbortController | undefined;
+	let lastStageJournalError: string | undefined;
 	const [evidencePreview, setEvidencePreview] = createSignal<
 		Uint8Array | undefined
 	>(undefined);
@@ -401,15 +402,15 @@ export function App(props: {
 	 * budget rather than a share of the terminal is what leaves the agents list
 	 * the rest of the grid — and it scrolls inside its own height, so a long
 	 * manifest costs the panels above it nothing. */
-	const evidencePanelHeight = () =>
-		evidencePanelLines({
-			entries: evidence().entries.length,
-			state: evidenceState(),
-			terminalLines: dimensions().height,
-		});
 	const evidenceListRows = createMemo(() =>
 		evidenceRows(evidence().entries, stageJournal()),
 	);
+	const evidencePanelHeight = () =>
+		evidencePanelLines({
+			rows: evidenceListRows().length,
+			state: evidenceState(),
+			terminalLines: dimensions().height,
+		});
 	const selectedEvidenceEntry = createMemo(
 		() => evidenceListRows()[selectedEvidence()]?.entry,
 	);
@@ -491,14 +492,23 @@ export function App(props: {
 			.then((next) => {
 				if (generation !== stageJournalGeneration) return;
 				setStageJournal(next);
+				lastStageJournalError = undefined;
 			})
 			.catch((error) => {
 				if (generation !== stageJournalGeneration) return;
 				if (error instanceof DOMException && error.name === "AbortError")
 					return;
-				// No journal is the same rendering as a journal that could not be
-				// read: the panel falls back to its request grouping.
+				// The panel falls back to its request grouping either way, but a
+				// journal that exists and cannot be read is not a workflow that ran no
+				// stage flow: the flow silently disappearing would look like the run
+				// never recorded one, so the developer hears it once per distinct
+				// failure.
+				const message = error instanceof Error ? error.message : String(error);
 				setStageJournal(undefined);
+				if (message !== lastStageJournalError) {
+					lastStageJournalError = message;
+					notify(`Stage flow journal could not be read: ${message}`, "error");
+				}
 			});
 	});
 	// The delegated debug request read follows every dashboard refresh, exactly
