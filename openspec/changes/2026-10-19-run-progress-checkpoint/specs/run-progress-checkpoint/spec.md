@@ -211,8 +211,14 @@ escalation whose question was not recorded.
 
 The checkpoint SHALL fail open: an exception, a timeout, a missing measurement,
 a failed decision-record write, a failed steer or compaction, or a failed
-question SHALL leave the run running as if the decision were `continue`, and
-SHALL be recorded with `status: "error"` and a bounded error class. One
+question SHALL leave the run running — the run is never stopped, steered,
+compacted or escalated by an action that did not happen — and SHALL be recorded
+with `status: "error"` and a bounded error class. Failing open describes the
+*run*, not the record: an envelope for a decision that was already made SHALL
+keep that decision and its rule with `applied: false`, and the next digest's
+`previous` SHALL state the decision that was taken, because a rule whose
+precondition is the previous decision (`no-progress-twice`) must read what was
+decided rather than what happened to it. One
 checkpoint SHALL export at most one `runtime.checkpoint` envelope, and a failure
 that happens before a decision was made SHALL use that envelope with no
 decision and no rule; a failure after the decision (an escalation whose question
@@ -252,6 +258,12 @@ remain 6.
 
 - **WHEN** a run evaluates its 13th checkpoint
 - **THEN** its `runtime.checkpoint` envelope SHALL say `recorded: false` and no decision record SHALL be appended
+
+#### Scenario: A repeated ordinal
+
+- **WHEN** a record arrives for a question id the run already used, and its digest or answer differs from the stored one
+- **THEN** the command SHALL answer `recorded: false, reason: "duplicate"` and the stored record SHALL be left as it was
+- **AND** a run id that is ensured again after a stop SHALL continue its checkpoint numbering instead of re-using an ordinal
 
 ### Requirement: Run-progress telemetry and the missing-decision alarm
 

@@ -1706,7 +1706,16 @@ failed compaction or a failed record write happens *after* the decision, so its
 envelope keeps the decision, the rule and the applied result and only adds
 `status: "error"` with `error_class: "steer"`, `"compact"` or `"record"` — the
 failure belongs to the action, not to the decision, and the decision
-distribution still counts it once. A question that cannot be
+distribution still counts it once. "Fails open" is about the *run*, never about
+the record: the run continues as if the decision had been `continue`, while the
+envelope and the workflow record still say what was decided (`decision:
+"compact"`, `rule: "context"`, `applied: false`, `status: "error"`,
+`error_class: "compact"`), and the next digest's `previous` carries the decision
+that was taken — `no-progress-twice` reads a previous *decision*, so storing the
+`continue` a failed action fell back to would make the next zero-progress window
+escalate under a rule whose precondition the run never met. Only the steer
+bookkeeping follows the outcome: an undelivered nudge answered no signal. A
+question that cannot be
 filed happens *after* the decision, and is reported on the escalation's envelope
 instead (`outcome: "filing-failed"`, `status: "error"`, `error_class: "question"`):
 one checkpoint exports at most one `runtime.checkpoint`, so a re-emitted decision
@@ -1723,14 +1732,24 @@ five actions as options, the decision as its answer and the applied profile plus
 one bounded attention line as its result. It commits an event with no lifecycle
 transition, refuses a run that is not active, and is capped at the first 12
 checkpoints of a run (`recorded: false, reason: "record-cap"` beyond that). The
-store schema is unchanged (`STORE_SCHEMA_VERSION` stays 6).
+question id is the record's idempotency key, so a retried command answers
+`recorded: true` for the record it already stored, and a *second* decision under
+an id the run already used answers `recorded: false, reason: "duplicate"` — it is
+a different decision, not a replay, and the caller must not believe it was
+recorded. The ordinal is therefore a run-lifetime number, not an accumulator's:
+the host keeps a bounded high-water mark per run id across `stopRun`, so a run id
+that is ensured again continues the numbering instead of re-issuing
+`checkpoint:<run>:1`. The store schema is unchanged (`STORE_SCHEMA_VERSION` stays
+6).
 
 **Telemetry.** Each checkpoint emits `runtime.checkpoint` with
 `herdr.checkpoint.*` — ordinal, trigger, class, read-only flag, turns, cost units,
 context and peak context, the thresholds in force, the signals present, the
 counters behind them, the window, the sampled diff and ticked tasks, the decision
 with its rule, whether it was applied, the decider, the latency and the record
-status. An escalation emits `runtime.checkpoint_escalation` with its outcome
+status. A post-decision failure keeps `decision` and `rule` beside `status:
+"error"` and its `error_class`; a failure *before* the decision (`sample`,
+`evaluate`) is the one envelope shape that carries neither key. An escalation emits `runtime.checkpoint_escalation` with its outcome
 (`answered`, `cancelled`, `pending-parked`, `filing-failed`) and question id.
 `runtime.settled` carries the run's `costUnits`, its per-kind compaction counts
 (including `auto-checkpoint`) and `checkpoints` / `checkpointEscalations`, so "no

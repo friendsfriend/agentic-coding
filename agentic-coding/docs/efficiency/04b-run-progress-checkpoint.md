@@ -195,7 +195,9 @@ Four queries in `scripts/efficiency/lib/queries.ts` verify the targets:
   first-half cost ratio, outcome, and whether the run passed its soft or hard
   threshold.
 - `progress-checkpoints` — decisions by class × decision × rule, escalations per
-  100 runs, filing failures, steers and steers after which progress followed.
+  100 runs, filing failures, steers and steers after which progress followed, plus
+  `errored` / `errored_runs` so a rule that always fails open is visible instead
+  of looking like a healthy decision row.
   It returns **0 rows** on this dataset: no checkpoint has ever been recorded,
   which is the correct baseline before the feature ships.
 - `checkpoint-gaps` — **the alarm**: runs that passed their soft threshold with
