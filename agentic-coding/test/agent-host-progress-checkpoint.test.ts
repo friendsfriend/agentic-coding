@@ -22,7 +22,7 @@ import {
 	CHECKPOINT_STEER_CATALOG_VERSION,
 	type CheckpointDigest,
 	type CheckpointSignal,
-	checkpointAnswer,
+	checkpointAnswerMessage,
 	checkpointClassOf,
 	checkpointClassOfRole,
 	checkpointDigestInput,
@@ -323,7 +323,9 @@ describe("rules/v1", () => {
 		] as const) {
 			const decision = decideCheckpoint(withSignal(signal), { steer: false });
 			expect(decision.action).toBe("continue");
-			expect(decision.rule).toBe("steer-disabled");
+			// The rule keeps its own id: `steer-disabled` is not in the closed set.
+			expect(decision.rule).toBe(signal);
+			expect(CHECKPOINT_RULE_IDS).toContain(decision.rule);
 			expect(decision.attention).toBe("steer disabled");
 		}
 		// steer-ignored cannot apply when nothing was steered.
@@ -331,7 +333,7 @@ describe("rules/v1", () => {
 			steeredSignals: ["no-progress"],
 		});
 		expect(decideCheckpoint(ignored, { steer: false }).rule).toBe(
-			"steer-disabled",
+			"no-progress",
 		);
 		// The context rule still compacts with steering off.
 		expect(
@@ -342,9 +344,63 @@ describe("rules/v1", () => {
 		).toBe("compact");
 	});
 
+	test("a blocked compaction never shadows a signal", () => {
+		// The context rule compacts only when the ceiling admits it; otherwise the
+		// signal rules still decide, with the blocked context as attention.
+		const digest = withSignal("repeats", {
+			contextTokens: DEFAULT_CHECKPOINT_CONTEXT_TOKENS,
+			compactionAdmissible: false,
+		});
+		const decision = decideCheckpoint(digest);
+		expect(decision.action).toBe("steer");
+		expect(decision.rule).toBe("repeats");
+		expect(decision.attention).toBe(
+			"context above limit, compaction not admissible",
+		);
+		// Nothing else wrong: a continue that still states why it did not compact.
+		expect(
+			decideCheckpoint(
+				baseDigest({
+					contextTokens: DEFAULT_CHECKPOINT_CONTEXT_TOKENS,
+					compactionAdmissible: false,
+				}),
+			),
+		).toEqual({
+			action: "continue",
+			rule: "default",
+			attention: "context above limit, compaction not admissible",
+		});
+	});
+
+	test("the shipped thresholds are the recorded distribution's, rounded up", () => {
+		for (const row of Object.values(DEFAULT_CHECKPOINT_THRESHOLDS)) {
+			expect(row.softTurns % 10).toBe(0);
+			expect(row.hardTurns % 50).toBe(0);
+			expect(row.hardTurns).toBeGreaterThanOrEqual(5 * row.softTurns);
+		}
+		// The D3 formula on the recorded mechanical distribution (p99 114):
+		// max(5 x 30, 1.2 x 114, 1.2 x 114) = 150, rounded up to 50.
+		expect(DEFAULT_CHECKPOINT_THRESHOLDS.mechanical).toEqual({
+			softTurns: 30,
+			hardTurns: 150,
+		});
+	});
+
 	test("every rule id is in the closed set", () => {
 		const decision = decideCheckpoint(baseDigest());
 		expect(CHECKPOINT_RULE_IDS).toContain(decision.rule);
+		// The approved first-release set, exactly: no rule the design never named.
+		expect([...CHECKPOINT_RULE_IDS]).toEqual([
+			"hard-limit",
+			"no-progress-twice",
+			"steer-ignored",
+			"context",
+			"failing-tool",
+			"repeats",
+			"no-progress",
+			"cost-rising",
+			"default",
+		]);
 		expect(Object.keys(CHECKPOINT_ACTION_SUMMARY).sort()).toEqual(
 			[...CHECKPOINT_ACTIONS].sort(),
 		);
@@ -423,26 +479,43 @@ describe("the closed steer catalog", () => {
 });
 
 describe("the escalation is a developer question", () => {
-	test("the summary names the class, the thresholds, the cost and the rule", () => {
+	test("the summary names the class, the step, the role, the thresholds, the cost and the rule", () => {
 		const digest = withSignal("failing-tool", { turns: 1400, trigger: "hard" });
-		const question = checkpointQuestion(digest);
+		const question = checkpointQuestion(digest, {
+			rule: "hard-limit",
+			step: "implement-the-change",
+			role: "worker",
+		});
 		expect(question.description).toContain("worker");
+		expect(question.description).toContain("implement-the-change");
 		expect(question.description).toContain("1400 turns");
+		// The firing rule, not the trigger's label: `hard` is why it was taken.
+		expect(question.description).toContain("rule hard-limit");
+		expect(question.description).not.toContain("rule hard)");
+		expect(question.context).toContain("role worker");
 		expect(question.context).toContain("soft 280 and hard 1400");
 		expect(question.context).toContain("failing-tool");
+		expect(question.context).toContain("rule hard-limit");
 		expect(question.context).toContain(
 			"Cancelling this question stops the run",
 		);
 	});
 
 	test("an answered escalation carries the developer's words as quoted input", () => {
-		const answered = checkpointAnswer({
-			action: "escalate",
-			rule: "hard-limit",
-		});
-		expect(answered.choice).toBe("escalate");
-		expect(answered.probabilities.escalate).toBe(1);
-		expect(answered.probabilities.continue).toBe(0);
+		const fixed = checkpointAnswerMessage();
+		expect(fixed).toContain("let this run continue");
+		const answered = checkpointAnswerMessage("  focus on the failing test  ");
+		expect(answered.startsWith(fixed)).toBe(true);
+		expect(answered).toContain("<<<\nfocus on the failing test\n>>>");
+		// Developer-provided, so it is marked as content and never as a system
+		// instruction — and it is bounded.
+		expect(answered).toContain("not a system instruction");
+		const long = checkpointAnswerMessage("x".repeat(5000));
+		expect(long).toContain("x".repeat(2000));
+		expect(long).not.toContain("x".repeat(2001));
+		// Blank direction adds nothing at all.
+		expect(checkpointAnswerMessage("   ")).toBe(fixed);
+		expect(checkpointAnswerMessage(undefined)).toBe(fixed);
 	});
 
 	test("the record cap is smaller than the shared decision history", () => {
@@ -488,7 +561,11 @@ describe("the content-free digest", () => {
 
 	test("the escalation text carries no digest-external content", () => {
 		const digest = withSignal("repeats");
-		const question = checkpointQuestion(digest);
+		const question = checkpointQuestion(digest, {
+			rule: "repeats",
+			step: "implement-the-change",
+			role: "worker",
+		});
 		const text = `${question.description}\n${question.context}`;
 		expect(text).not.toContain("/");
 		expect(text).not.toContain("hash");
@@ -656,6 +733,50 @@ describe("the accumulator", () => {
 		expect(checkpointSignalState(exempt.digestPreview())).not.toContain(
 			"failing-tool",
 		);
+	});
+
+	test("a later failed sample reports unknown, not the last numbers", () => {
+		const checkpoint = worker({ softTurns: 280 });
+		observe(checkpoint, 50);
+		checkpoint.noteSample({
+			diff: { files: 2, insertions: 3, deletions: 1 },
+			head: "aaa",
+			tickedTasks: 4,
+		});
+		expect(checkpoint.digestPreview().diff).toEqual({
+			files: 2,
+			insertions: 3,
+			deletions: 1,
+		});
+		checkpoint.noteSample({ diff: null, head: null, tickedTasks: null });
+		expect(checkpoint.digestPreview().diff).toBeNull();
+		expect(checkpoint.digestPreview().tickedTasks).toBeNull();
+	});
+
+	test("a decision is remembered for the next digest", () => {
+		const checkpoint = worker({ softTurns: 10, hardTurns: 50 });
+		observe(checkpoint, 10);
+		const digest = checkpoint.takeDigest("soft");
+		const decision = decideCheckpoint(digest);
+		expect(decision.action).toBe("continue");
+		checkpoint.noteDecision(decision, digest);
+		expect(checkpoint.digestPreview().previous).toEqual({
+			decision: "continue",
+			rule: "default",
+			progress: 0,
+		});
+		expect(checkpoint.digestPreview().steeredSignals).toEqual([]);
+		// A steer records the signal it answered, which is what escalates when the
+		// same signal comes back.
+		const steered = worker({ softTurns: 280 });
+		observe(steered, 40);
+		const stall = steered.takeDigest("stall");
+		const steer = decideCheckpoint(stall);
+		expect(steer.action).toBe("steer");
+		steered.noteDecision(steer, stall);
+		expect(steered.digestPreview().steeredSignals).toEqual([
+			steer.signal as CheckpointSignal,
+		]);
 	});
 
 	test("the repeats share counts calls with an argument hash only", () => {

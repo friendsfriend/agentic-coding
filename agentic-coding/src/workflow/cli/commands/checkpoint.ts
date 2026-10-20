@@ -8,7 +8,8 @@ import { CHECKPOINT_RECORD_LIMIT } from "../../../contracts/workflow.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import {
 	CHECKPOINT_RECORD_INTEGRATION,
-	checkpointRecords,
+	checkpointRecordProblems,
+	runCheckpointRecords,
 } from "../../runtime/reducers/agent-checkpoint.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import { parseInlineJson, requireFlag } from "../args.ts";
@@ -48,13 +49,24 @@ export function runCheckpoint(
 			`checkpoint: --record integration must be "${CHECKPOINT_RECORD_INTEGRATION}"`,
 		);
 	const identity = resolveHandoffIdentity(workflowEngine, target, application);
+	// The record is rendered in the developer's dashboard and measured by the
+	// efficiency queries, so the boundary that persists it enforces the feature's
+	// closed vocabulary and its content-free digest for every caller — the
+	// reducer enforces the same rules again inside the command transaction.
+	const problems = checkpointRecordProblems(
+		record,
+		identity.runId,
+		CHECKPOINT_RECORD_LIMIT,
+	);
+	if (problems.length > 0)
+		throw new Error(`checkpoint: --record refused: ${problems[0]}`);
+	const questionId = record.questionId as string;
 	const readSnapshot = () =>
 		application
 			? application.runSync(
 					workflowEngine.getSnapshotEffect(target, identity.workflowId),
 				)
 			: workflowEngine.getSnapshot(target, identity.workflowId);
-	const before = checkpointRecords(readSnapshot()).length;
 	const command = {
 		type: "agent.checkpoint",
 		workflowId: identity.workflowId,
@@ -72,9 +84,29 @@ export function runCheckpoint(
 		role: identity.role,
 	};
 	try {
-		if (application)
-			application.runSync(workflowEngine.dispatchEffect(target, command));
-		else workflowEngine.dispatch(target, command);
+		// The verdict is read from the snapshot this very command committed — the
+		// reducer's own answer — never from a count compared across two reads that
+		// another workflow run may have moved in between.
+		const committed = application
+			? application.runSync(workflowEngine.dispatchEffect(target, command))
+			: workflowEngine.dispatch(target, command);
+		const records = runCheckpointRecords(committed.snapshot, identity.runId);
+		const recorded = records.some((entry) => entry.questionId === questionId);
+		console.log(
+			JSON.stringify({
+				...base,
+				recorded,
+				records: records.length,
+				...(recorded
+					? {}
+					: {
+							reason:
+								records.length >= CHECKPOINT_RECORD_LIMIT
+									? "record-cap"
+									: "not-stored",
+						}),
+			} satisfies CheckpointRecordView),
+		);
 	} catch (error) {
 		// A refused record leaves the workflow exactly where it was; the caller
 		// reports it and keeps working (fail-open).
@@ -82,24 +114,9 @@ export function runCheckpoint(
 			JSON.stringify({
 				...base,
 				recorded: false,
-				records: before,
+				records: runCheckpointRecords(readSnapshot(), identity.runId).length,
 				reason: error instanceof Error ? error.message : String(error),
 			} satisfies CheckpointRecordView),
 		);
-		return;
 	}
-	const records = checkpointRecords(readSnapshot()).length;
-	console.log(
-		JSON.stringify(
-			records > before
-				? { ...base, recorded: true, records }
-				: {
-						...base,
-						recorded: false,
-						records,
-						reason:
-							before >= CHECKPOINT_RECORD_LIMIT ? "record-cap" : "not-stored",
-					},
-		),
-	);
 }

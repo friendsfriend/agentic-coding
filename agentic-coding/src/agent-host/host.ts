@@ -73,6 +73,7 @@ import {
 	CHECKPOINT_QUESTION_OPTION,
 	type CheckpointDecision,
 	type CheckpointDigest,
+	type CheckpointRuleId,
 	type CheckpointSample,
 	type CheckpointTrigger,
 	checkpointAnswer,
@@ -116,6 +117,7 @@ import {
 	type ToolSurfaceOptions,
 } from "./tool-surface.ts";
 import {
+	type CheckpointQuestionReply,
 	codingTools,
 	createAskJevExtension,
 	createDebugRequestExtension,
@@ -324,7 +326,29 @@ interface RunCheckpointState {
 	readonly accumulator: ProgressCheckpoint;
 	readonly steer: boolean;
 	readonly stepId: string;
+	readonly role: string;
 	escalations: number;
+}
+
+/** What filing one escalation's question said about it: the closed outcome the
+ * dataset counts, the question it created, and the attention line the record
+ * carries, so "the developer was asked" and "the question could not be filed"
+ * never read the same. */
+interface CheckpointEscalationSummary {
+	readonly outcome:
+		| "answered"
+		| "cancelled"
+		| "pending-parked"
+		| "filing-failed";
+	readonly questionId?: string;
+	readonly attention: string;
+}
+
+/** A filed question, kept by the caller until the record is written and only
+ * then settled: a record never states an intended question as a filed one. */
+interface CheckpointEscalationFiling {
+	readonly summary: CheckpointEscalationSummary;
+	readonly reply: CheckpointQuestionReply;
 }
 
 /** What applying one decision did, for the record and the envelope: whether an
@@ -453,9 +477,13 @@ export class DurableHost {
 	/** The run whose checkpoint is being evaluated: one at a time per run, which
 	 * is also what keeps at most one checkpoint question open. */
 	private readonly checkpointInFlight = new Set<string>();
-	/** Compaction tasks a checkpoint's `compact` decision admitted, and the claims
-	 * taken before `conversation.compact()` publishes its start. */
-	private readonly checkpointCompactions = new Set<string>();
+	/** Compaction tasks a checkpoint's `compact` decision admitted, per
+	 * conversation: a task's attribution belongs to the conversation whose
+	 * summarizer ran, so one conversation's teardown never rewrites another's. */
+	private readonly checkpointCompactions = new Map<
+		ConversationId,
+		Set<string>
+	>();
 	private readonly checkpointPending = new Map<ConversationId, number>();
 	/** The published tool names, read once: the digest may name a tool only when
 	 * it is one the run's surface really registered. */
@@ -896,7 +924,7 @@ export class DurableHost {
 									conversation.id,
 									pendingCheckpoint - 1,
 								);
-								this.checkpointCompactions.add(taskId);
+								this.checkpointCompactionsFor(conversation.id).add(taskId);
 								return "auto-checkpoint";
 							}
 							const pending = this.ceilingPending.get(conversation.id) ?? 0;
@@ -905,7 +933,7 @@ export class DurableHost {
 								this.ceilingCompactions.add(taskId);
 								return "auto-ceiling";
 							}
-							if (this.checkpointCompactions.has(taskId))
+							if (this.checkpointCompactionsFor(conversation.id).has(taskId))
 								return "auto-checkpoint";
 							return this.ceilingCompactions.has(taskId)
 								? "auto-ceiling"
@@ -1414,7 +1442,7 @@ export class DurableHost {
 				const claimed =
 					kind === "auto-ceiling"
 						? this.ceilingCompactions
-						: this.checkpointCompactions;
+						: this.checkpointCompactionsFor(record.conversationId);
 				const pending = pendingClaims.get(record.conversationId) ?? 0;
 				// The kind is claimed before the call: pi-durable publishes
 				// `compaction_start` while `compact()` is still in flight.
@@ -1516,8 +1544,20 @@ export class DurableHost {
 			}),
 			steer: config.steer,
 			stepId: env.HERDR_STEP_ID ?? "",
+			role: env.HERDR_ROLE ?? "",
 			escalations: 0,
 		});
+	}
+
+	/** One conversation's checkpoint-compaction task ids, created on first use. */
+	private checkpointCompactionsFor(
+		conversationId: ConversationId,
+	): Set<string> {
+		const existing = this.checkpointCompactions.get(conversationId);
+		if (existing) return existing;
+		const created = new Set<string>();
+		this.checkpointCompactions.set(conversationId, created);
+		return created;
 	}
 
 	/** One committed turn for the run's checkpoint. Feeds the accumulator and
@@ -1639,9 +1679,13 @@ export class DurableHost {
 		}
 	}
 
-	/** Decide, apply, record and report one checkpoint. `escalate` files the
-	 * developer question as its own last step, because that step is the only one
-	 * that may stop the run and it may only do so after the question exists. */
+	/** Decide, apply, file and record one checkpoint, then report it. `escalate`
+	 * files its developer question before the record is written, so the record
+	 * states what happened to the question (filed and answered, filed and
+	 * unanswered, or not filed at all) instead of what was intended — and only
+	 * after that may the run stop. One checkpoint exports exactly one
+	 * `runtime.checkpoint` envelope; the question's fate has its own
+	 * `runtime.checkpoint_escalation` envelope. */
 	private async evaluateCheckpoint(
 		runId: string,
 		state: RunCheckpointState,
@@ -1657,24 +1701,34 @@ export class DurableHost {
 		const decision = decideCheckpoint(digest, { steer: state.steer });
 		state.accumulator.noteDecision(decision, digest);
 		const applied = await this.applyCheckpointDecision(runId, digest, decision);
+		const filed =
+			decision.action === "escalate"
+				? await this.fileCheckpointEscalation(
+						context,
+						digest,
+						decision.rule,
+						state,
+					)
+				: undefined;
 		const recording = await this.recordCheckpoint(
 			context,
 			state,
 			digest,
 			decision,
 			applied,
+			filed?.summary,
 		);
 		this.emitCheckpoint(context, digest, decision, applied, recording, {
 			startedAt,
 			...(sampleErrorClass === undefined ? {} : { sampleErrorClass }),
 		});
-		if (decision.action === "escalate")
-			await this.escalateCheckpoint(
+		if (filed)
+			await this.settleCheckpointEscalation(
 				runId,
 				state,
 				digest,
 				decision.rule,
-				startedAt,
+				filed,
 			);
 	}
 
@@ -1754,9 +1808,9 @@ export class DurableHost {
 		if (decision.action === "switch-model")
 			// Vocabulary only: no rule selects it, and nothing here would act on it.
 			return { applied: false, attention: "switch-model is not enabled" };
-		// `escalate` is applied by the escalation path, and only once its question
-		// exists; until then nothing about the run has changed.
-		return { applied: false, attention: "escalated as a developer question" };
+		// `escalate` is applied by the escalation path once its question exists;
+		// until then nothing about the run has changed.
+		return { applied: false };
 	}
 
 	/** Run the ceiling's summarizer for a `compact` decision, counted as
@@ -1794,20 +1848,24 @@ export class DurableHost {
 
 	/** Write the decision into the workflow's bounded history, up to the caps the
 	 * contract declares. A refusal is reported as `recorded: false`; a command
-	 * that failed is reported as an error and never ends the run. */
+	 * that failed is reported as an error and never ends the run. The attention
+	 * line states what the decision did — and, for an escalation, what became of
+	 * its question. */
 	private async recordCheckpoint(
 		context: DurableRunContext,
 		state: RunCheckpointState,
 		digest: CheckpointDigest,
 		decision: CheckpointDecision,
 		applied: CheckpointApplied,
+		escalation?: CheckpointEscalationSummary,
 	): Promise<CheckpointRecording> {
 		if (digest.ordinal > CHECKPOINT_RECORD_LIMIT)
 			return { recorded: false, failed: false };
+		const outcome = escalation?.attention ?? applied.attention;
 		const attention =
-			applied.attention === undefined
+			outcome === undefined
 				? `rule ${decision.rule}`
-				: `rule ${decision.rule}; ${applied.attention}`;
+				: `rule ${decision.rule}; ${outcome}`;
 		const record: ClassifierDecisionInput = {
 			integration: CHECKPOINT_INTEGRATION,
 			phase: state.stepId,
@@ -1881,8 +1939,10 @@ export class DurableHost {
 		});
 	}
 
-	/** A checkpoint that failed open: the run keeps running, and the failure is
-	 * stated in the checkpoint's own envelope. */
+	/** A checkpoint that failed open before it decided anything: the run keeps
+	 * running, and the failure is stated as its own error report. It carries no
+	 * decision or rule because none was made — the decision distribution counts
+	 * decisions, not failures. */
 	private checkpointErrored(
 		runId: string,
 		errorClass: string,
@@ -1894,11 +1954,14 @@ export class DurableHost {
 			`run ${runId}: progress checkpoint failed open (${errorClass}): ${messageOf(error)}`,
 		);
 		const context = this.runContexts.get(runId);
-		if (!context) return;
+		const state = this.checkpoints.get(runId);
+		if (!context || !state) return;
+		const preview = state.accumulator.digestPreview();
 		emitToolTelemetry(context.env, "runtime.checkpoint", {
+			"herdr.checkpoint.ordinal": preview.ordinal,
 			"herdr.checkpoint.trigger": trigger,
-			"herdr.checkpoint.decision": "continue",
-			"herdr.checkpoint.rule": "default",
+			"herdr.checkpoint.class": preview.checkpointClass,
+			"herdr.checkpoint.turns": preview.turns,
 			"herdr.checkpoint.applied": false,
 			"herdr.checkpoint.decider": CHECKPOINT_DECIDER,
 			"herdr.checkpoint.latency_ms": Math.max(0, Date.now() - startedAt),
@@ -1908,20 +1971,21 @@ export class DurableHost {
 		});
 	}
 
-	/** File the developer question an `escalate` decision asks, then apply its
-	 * answer: answered re-arms the run, unanswered or cancelled stops it. This is
-	 * the only place a checkpoint can stop a run, and the stop always names a
-	 * question the durable store holds. */
-	private async escalateCheckpoint(
-		runId: string,
-		state: RunCheckpointState,
+	/** File the developer question an `escalate` decision asks, without acting on
+	 * its answer yet. The caller writes the record from what this returns, and
+	 * only then applies the answer — so a run can never stop before both the
+	 * question and the record naming it exist. */
+	private async fileCheckpointEscalation(
+		context: DurableRunContext,
 		digest: CheckpointDigest,
-		rule: string,
-		startedAt: number,
-	): Promise<void> {
-		const context = this.runContexts.get(runId);
-		if (!context) return;
-		const text = checkpointQuestion(digest);
+		rule: CheckpointRuleId,
+		state: RunCheckpointState,
+	): Promise<CheckpointEscalationFiling> {
+		const text = checkpointQuestion(digest, {
+			rule,
+			step: state.stepId,
+			role: state.role,
+		});
 		const reply = await fileCheckpointQuestion(context, {
 			description: text.description,
 			context: text.context,
@@ -1937,24 +2001,59 @@ export class DurableHost {
 			reply.failed === true ||
 			reply.id === undefined ||
 			reply.status === undefined
-		) {
+		)
+			// A question that cannot be filed is one of the fail-open outcomes: the
+			// run continues, and the escalation's own envelope states the bounded
+			// error class.
+			return {
+				summary: { outcome: "filing-failed", attention: "question not filed" },
+				reply,
+			};
+		const outcome: CheckpointEscalationSummary["outcome"] =
+			reply.status === "answered"
+				? "answered"
+				: reply.status === "pending"
+					? "pending-parked"
+					: "cancelled";
+		return {
+			summary: {
+				outcome,
+				questionId: reply.id,
+				attention:
+					outcome === "answered"
+						? `question ${reply.id} answered`
+						: outcome === "pending-parked"
+							? `question ${reply.id} unanswered`
+							: `question ${reply.id} cancelled`,
+			},
+			reply,
+		};
+	}
+
+	/** Apply a filed question's answer. Answered re-arms the run and delivers the
+	 * developer's direction; unanswered or cancelled stops it. This is the only
+	 * place a checkpoint can stop a run, and the stop always names a question
+	 * the durable store holds. */
+	private async settleCheckpointEscalation(
+		runId: string,
+		state: RunCheckpointState,
+		digest: CheckpointDigest,
+		rule: CheckpointRuleId,
+		filed: CheckpointEscalationFiling,
+	): Promise<void> {
+		const context = this.runContexts.get(runId);
+		if (!context) return;
+		const { summary, reply } = filed;
+		if (summary.outcome === "filing-failed") {
 			this.emitCheckpointEscalation(context, digest, rule, {
-				outcome: "filing-failed",
+				...summary,
+				errorClass: "question",
 				...(reply.reason === undefined ? {} : { reason: reply.reason }),
 			});
-			// A question that cannot be filed is one of the fail-open outcomes: the
-			// run continues, and its own envelope states the bounded error class.
-			this.checkpointErrored(
-				runId,
-				"question",
-				reply.reason ?? "question not filed",
-				digest.trigger,
-				startedAt,
-			);
 			return;
 		}
 		state.escalations += 1;
-		if (reply.status === "answered") {
+		if (summary.outcome === "answered" && reply.id !== undefined) {
 			const custom =
 				reply.answer?.kind === "custom" ? reply.answer.value : undefined;
 			try {
@@ -1972,37 +2071,35 @@ export class DurableHost {
 			// The answer resets the baseline: the hard limit moves ahead and the
 			// no-progress counter starts again, or the same digest escalates at once.
 			state.accumulator.rearmAfterEscalation();
-			this.emitCheckpointEscalation(context, digest, rule, {
-				outcome: "answered",
-				questionId: reply.id,
-			});
+			this.emitCheckpointEscalation(context, digest, rule, summary);
 			return;
 		}
 		// The question exists and was not answered in the grace window: now, and
 		// only now, the run stops and the developer is left with the question.
-		const park = reply.status === "pending";
-		this.emitCheckpointEscalation(context, digest, rule, {
-			outcome: park ? "pending-parked" : "cancelled",
-			questionId: reply.id,
-		});
+		const park = summary.outcome === "pending-parked";
+		this.emitCheckpointEscalation(context, digest, rule, summary);
 		await this.parkForCheckpoint(
 			runId,
 			park
-				? `progress checkpoint: the developer question ${reply.id} is still unanswered; the run is stopped and is re-issued when it is answered`
-				: `progress checkpoint: developer question ${reply.id} was cancelled, so the run is stopped`,
+				? `progress checkpoint: the developer question ${summary.questionId} is still unanswered; the run is stopped and is re-issued when it is answered`
+				: `progress checkpoint: developer question ${summary.questionId} was cancelled, so the run is stopped`,
 		);
 	}
 
 	/** Publish one escalation's outcome. `outcome` is one of the four the dataset
-	 * counts, so the attribute is a closed vocabulary. */
+	 * counts, so the attribute is a closed vocabulary, and a question that could
+	 * not be filed is marked `status: "error"` with its bounded error class —
+	 * this envelope, not a second decision envelope, is the checkpoint's
+	 * fail-open record for that attempt. */
 	private emitCheckpointEscalation(
 		context: DurableRunContext,
 		digest: CheckpointDigest,
-		rule: string,
-		fields: {
-			outcome: "answered" | "cancelled" | "pending-parked" | "filing-failed";
-			questionId?: string;
-			reason?: string;
+		rule: CheckpointRuleId,
+		fields: CheckpointEscalationSummary & {
+			/** Set only when the question could not be filed: the escalation is
+			 * then the checkpoint's fail-open record for that attempt. */
+			readonly errorClass?: string;
+			readonly reason?: string;
 		},
 	): void {
 		emitToolTelemetry(context.env, "runtime.checkpoint_escalation", {
@@ -2011,6 +2108,11 @@ export class DurableHost {
 			"herdr.checkpoint.rule": rule,
 			"herdr.checkpoint.turns": digest.turns,
 			"herdr.checkpoint.outcome": fields.outcome,
+			"herdr.checkpoint.status":
+				fields.errorClass === undefined ? "ok" : "error",
+			...(fields.errorClass === undefined
+				? {}
+				: { "herdr.checkpoint.error_class": fields.errorClass }),
 			...(fields.questionId === undefined
 				? {}
 				: { "herdr.checkpoint.question_id": fields.questionId }),
@@ -2060,6 +2162,26 @@ export class DurableHost {
 	ceilingStateForTest(runId: string): CeilingRecord | undefined {
 		const record = this.runs.get(runId);
 		return record ? this.ceilings.get(record.conversationId) : undefined;
+	}
+
+	/** Test-only: run the host's own apply step for one decision, so a fail-open
+	 * path a scripted run cannot produce — a submission the harness refuses
+	 * because the run is already gone — is still asserted where it is
+	 * implemented. `runGone` drops the run record first, which is exactly the
+	 * race the paths guard against. Not part of the control protocol. */
+	async applyCheckpointForTest(
+		runId: string,
+		decision: CheckpointDecision,
+		options: { readonly runGone?: boolean } = {},
+	): Promise<CheckpointApplied> {
+		const state = this.checkpoints.get(runId);
+		if (!state) return { applied: false };
+		if (options.runGone) this.runs.delete(runId);
+		return await this.applyCheckpointDecision(
+			runId,
+			state.accumulator.digestPreview(),
+			decision,
+		);
 	}
 
 	/**
@@ -2674,7 +2796,8 @@ export class DurableHost {
 				this.telemetryIdentities.delete(record.conversationId);
 				this.ceilingPending.delete(record.conversationId);
 				this.checkpointPending.delete(record.conversationId);
-				this.checkpointCompactions.clear();
+				// Only this conversation's compaction attribution dies with it.
+				this.checkpointCompactions.delete(record.conversationId);
 			}
 			// The session binding is *not* deleted: the conversation outlives the run,
 			// and a later run of the same step and role recording a rebinding has to

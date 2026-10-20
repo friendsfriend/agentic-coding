@@ -32,20 +32,39 @@ export interface CheckpointSampleInput {
 }
 
 /** Run one bounded command in the worktree; `undefined` when it failed, timed
- * out or printed more than the buffer allows. */
+ * out or printed more than the buffer allows. The bound is the promise's own:
+ * `execFile`'s `timeout` only asks the child to stop, so a `git` that ignores
+ * the signal would otherwise leave this checkpoint's supervisor waiting for
+ * ever. The deadline here settles the promise and kills the child outright. */
 function git(
 	cwd: string,
 	args: readonly string[],
 	timeoutMs: number,
 ): Promise<string | undefined> {
 	return new Promise((resolve) => {
-		execFile(
+		let settled = false;
+		const finish = (value: string | undefined): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(deadline);
+			resolve(value);
+		};
+		let child: ReturnType<typeof execFile> | undefined;
+		const deadline = setTimeout(() => {
+			try {
+				child?.kill("SIGKILL");
+			} catch {
+				/* the child was already gone */
+			}
+			finish(undefined);
+		}, timeoutMs);
+		child = execFile(
 			"git",
 			["-C", cwd, ...args],
 			{ timeout: timeoutMs, maxBuffer: CHECKPOINT_SAMPLE_MAX_BYTES },
 			(error, stdout) => {
-				if (error) resolve(undefined);
-				else resolve(String(stdout));
+				if (error) finish(undefined);
+				else finish(String(stdout));
 			},
 		);
 	});

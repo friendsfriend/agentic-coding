@@ -437,10 +437,41 @@ export const CHECKPOINT_CLASSES = [
 	"other",
 ] as const;
 export type CheckpointClass = (typeof CHECKPOINT_CLASSES)[number];
-/** How many run-progress checkpoint records one workflow keeps. The bound is
- * per feature rather than per workflow: a single long run records at most this
- * many decisions, so it can never evict every classifier record from the shared
- * bounded history. */
+/** The checkpoint's fixed decision vocabulary, in the order a checkpoint offers
+ * it, and the closed rule-id set of the `rules/v1` decider. Both live in the
+ * contract because three layers enforce them: the decider produces them, the
+ * record boundary (`workflow checkpoint --record`) refuses anything else, and
+ * the dashboard renders only these. */
+export const CHECKPOINT_ACTIONS = [
+	"continue",
+	"steer",
+	"compact",
+	"switch-model",
+	"escalate",
+] as const;
+export type CheckpointAction = (typeof CHECKPOINT_ACTIONS)[number];
+export const CHECKPOINT_RULE_IDS = [
+	"hard-limit",
+	"no-progress-twice",
+	"steer-ignored",
+	"context",
+	"failing-tool",
+	"repeats",
+	"no-progress",
+	"cost-rising",
+	"default",
+] as const;
+export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
+/** The id every checkpoint decision records as its decider, and the classifier
+ * integration it records under. Both are contract-level because the record
+ * boundary (`workflow checkpoint --record`) refuses any other value. */
+export const CHECKPOINT_DECIDER = "rules/v1";
+export const CHECKPOINT_INTEGRATION = "progress-checkpoint";
+/** How many run-progress checkpoint records one *run* keeps. The bound is per
+ * run rather than per workflow: a single long run records at most this many
+ * decisions (its 13th onwards are refused), and a later run of the same
+ * workflow starts with its own budget, so it can never evict every classifier
+ * record from the shared bounded history. */
 export const CHECKPOINT_RECORD_LIMIT = 12;
 
 /** One triage pass records one record per role question it asked, and every

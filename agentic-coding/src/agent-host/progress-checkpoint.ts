@@ -16,9 +16,15 @@
 // the five classes, the five actions, the four stall signals and the rule ids.
 
 import {
+	CHECKPOINT_ACTIONS,
 	CHECKPOINT_CLASSES,
+	CHECKPOINT_DECIDER,
+	CHECKPOINT_INTEGRATION,
 	CHECKPOINT_RECORD_LIMIT,
+	CHECKPOINT_RULE_IDS,
+	type CheckpointAction,
 	type CheckpointClass,
+	type CheckpointRuleId,
 } from "../contracts/workflow.ts";
 
 /** The checkpoint classes and their vocabulary are the contract's
@@ -46,7 +52,7 @@ export const DEFAULT_CHECKPOINT_THRESHOLDS: Readonly<
 	worker: { softTurns: 280, hardTurns: 1400 },
 	planner: { softTurns: 60, hardTurns: 300 },
 	verifier: { softTurns: 70, hardTurns: 350 },
-	mechanical: { softTurns: 30, hardTurns: 250 },
+	mechanical: { softTurns: 30, hardTurns: 150 },
 	other: { softTurns: 280, hardTurns: 1400 },
 };
 
@@ -55,20 +61,14 @@ export const DEFAULT_CHECKPOINT_THRESHOLDS: Readonly<
 export const DEFAULT_CHECKPOINT_CONTEXT_TOKENS = 200_000;
 
 /** The decider's id, recorded on every decision. */
-export const CHECKPOINT_DECIDER = "rules/v1";
-
 /** The classifier-decision integration every checkpoint records under. */
-export const CHECKPOINT_INTEGRATION = "progress-checkpoint";
-
 /** The fixed decision vocabulary, in the order the question offers it. */
-export const CHECKPOINT_ACTIONS = [
-	"continue",
-	"steer",
-	"compact",
-	"switch-model",
-	"escalate",
-] as const;
-export type CheckpointAction = (typeof CHECKPOINT_ACTIONS)[number];
+export {
+	CHECKPOINT_ACTIONS,
+	CHECKPOINT_DECIDER,
+	CHECKPOINT_INTEGRATION,
+	type CheckpointAction,
+};
 
 /** One line per action, used for the question options and the decision
  * record's `criteria`. Closed: no decider may add a label. */
@@ -103,26 +103,12 @@ export const CHECKPOINT_TRIGGERS = [
 ] as const;
 export type CheckpointTrigger = (typeof CHECKPOINT_TRIGGERS)[number];
 
-/** The rule ids of `rules/v1`, in evaluation order. `steer-disabled` is the
- * rule a steer signal resolves to when the operator turned steering off. */
-export const CHECKPOINT_RULE_IDS = [
-	"hard-limit",
-	"no-progress-twice",
-	"steer-ignored",
-	"context",
-	"failing-tool",
-	"repeats",
-	"no-progress",
-	"cost-rising",
-	"steer-disabled",
-	"default",
-] as const;
-export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
-
+/** The rule ids of `rules/v1`, in evaluation order. With `steer` disabled a
+ * steer rule yields `continue` under its own id, so the set stays closed. */
 /** How many checkpoints of one run are recorded in the workflow's decision
  * history. The history is shared with every other integration (100 records), so
  * a run's own cap is smaller; later checkpoints stay telemetry-only. */
-export { CHECKPOINT_RECORD_LIMIT };
+export { CHECKPOINT_RECORD_LIMIT, CHECKPOINT_RULE_IDS, type CheckpointRuleId };
 
 /** From this turn on a stall signal may fire a checkpoint between the scheduled
  * ones, so an early run is never interrupted by its own warm-up. */
@@ -316,27 +302,39 @@ export function decideCheckpoint(
 			if (digest.steeredSignals.includes(signal))
 				return { action: "escalate", rule: "steer-ignored", signal };
 	// 4. Context over the threshold compacts — but only when the ceiling admits
-	// it. Context alone never escalates: it falls through to the signals below.
-	if (digest.contextTokens >= digest.contextLimit)
-		return digest.compactionAdmissible
-			? { action: "compact", rule: "context" }
-			: {
-					action: "continue",
-					rule: "default",
-					attention: "context above limit, compaction not admissible",
-				};
+	// it. Context alone never escalates and never shadows a stall signal: when
+	// the compaction is not admissible, the signal rules below still decide, and
+	// the blocked context is carried as attention.
+	const contextBlocked = digest.contextTokens >= digest.contextLimit;
+	if (contextBlocked && digest.compactionAdmissible)
+		return { action: "compact", rule: "context" };
 	// 5–8. One fixed nudge per signal, or a plain continue when steering is off.
 	const signal = signals[0];
 	if (signal !== undefined) {
 		if (!options.steer)
 			return {
 				action: "continue",
-				rule: "steer-disabled",
+				rule: signal,
 				signal,
-				attention: "steer disabled",
+				attention: contextBlocked
+					? "steer disabled; context above limit, compaction not admissible"
+					: "steer disabled",
 			};
-		return { action: "steer", rule: signal, signal };
+		return {
+			action: "steer",
+			rule: signal,
+			signal,
+			...(contextBlocked
+				? { attention: "context above limit, compaction not admissible" }
+				: {}),
+		};
 	}
+	if (contextBlocked)
+		return {
+			action: "continue",
+			rule: "default",
+			attention: "context above limit, compaction not admissible",
+		};
 	// 9. Nothing is wrong.
 	return { action: "continue", rule: "default" };
 }
@@ -399,17 +397,24 @@ export const CHECKPOINT_QUESTION_OPTION = {
 	label: "Let the run continue",
 } as const;
 
-/** The question a checkpoint files when it decides `escalate`. Built from the
- * digest only; the developer's answer carries any direction. */
-export function checkpointQuestion(digest: CheckpointDigest): {
+/** The question a checkpoint files when it decides `escalate`. The numbers come
+ * from the digest; the rule that fired, the step and the role are the three
+ * facts the host holds beside it (the digest's closed vocabulary has no step or
+ * role). The developer's answer carries any direction. */
+export function checkpointQuestion(
+	digest: CheckpointDigest,
+	facts: { rule: CheckpointRuleId; step: string; role: string },
+): {
 	description: string;
 	context: string;
 } {
 	const signals = checkpointSignalState(digest);
+	const step = facts.step.length === 0 ? "this step" : `step ${facts.step}`;
 	return {
-		description: `Progress checkpoint: the ${digest.checkpointClass} run is at ${digest.turns} turns (rule ${digest.trigger}).`,
+		description: `Progress checkpoint: the ${digest.checkpointClass} run in ${step} is at ${digest.turns} turns (rule ${facts.rule}).`,
 		context: [
-			`Class ${digest.checkpointClass}, step turns ${digest.turns} against soft ${digest.softTurns} and hard ${digest.hardTurns}.`,
+			`Class ${digest.checkpointClass}, role ${facts.role}, ${step}, trigger ${digest.trigger}, rule ${facts.rule}.`,
+			`Turns ${digest.turns} against soft ${digest.softTurns} and hard ${digest.hardTurns}.`,
 			`Cost ${digest.costUnits} units, context ${digest.contextTokens} tokens (peak ${digest.peakContextTokens}, limit ${digest.contextLimit}).`,
 			`Signals: ${signals.length === 0 ? "none" : signals.join(", ")}.`,
 			`Progress in this window: ${digest.window.progress} event(s) over ${digest.window.turns} turn(s).`,
@@ -479,7 +484,17 @@ export class ProgressCheckpoint {
 
 	private turn = 0;
 	private costUnits = 0;
-	private turnCosts: number[] = [];
+	/** Every turn's cost, in order: the first half's mean is the baseline the
+	 * window is compared against, and that sum is kept incrementally (see
+	 * `noteCost`) so a per-turn `due()` never walks it. */
+	private readonly turnCosts: number[] = [];
+	private firstHalfSum = 0;
+	private firstHalfCount = 0;
+	/** A ring over the last `interval` costs, with their running sum. */
+	private readonly costWindow: number[];
+	private costWindowSum = 0;
+	private costWindowNext = 0;
+	private costWindowFilled = 0;
 	private contextTokensSeen = 0;
 	private peakContextTokens = 0;
 	private successfulCalls = 0;
@@ -520,6 +535,7 @@ export class ProgressCheckpoint {
 			options.isRegisteredTool ?? ((tool) => TOOL_NAME_PATTERN.test(tool));
 		this.nextTurn = this.thresholds.softTurns;
 		this.hardLimit = this.thresholds.hardTurns;
+		this.costWindow = new Array<number>(Math.max(1, this.interval)).fill(0);
 	}
 
 	/** Turns observed so far. */
@@ -548,13 +564,34 @@ export class ProgressCheckpoint {
 			? Math.max(0, observation.costUnits)
 			: 0;
 		this.costUnits += cost;
-		this.turnCosts.push(cost);
+		this.noteCost(cost);
 		if (Number.isFinite(observation.contextTokens))
 			this.contextTokensSeen = Math.max(0, observation.contextTokens);
 		this.peakContextTokens = Math.max(
 			this.peakContextTokens,
 			this.contextTokensSeen,
 		);
+	}
+
+	/** Cost bookkeeping in O(1) per turn: the run's first-half sum gains its next
+	 * member exactly when the turn count becomes even (and that member was
+	 * recorded earlier), and the interval window is a ring of fixed size. */
+	private noteCost(cost: number): void {
+		this.turnCosts.push(cost);
+		const count = this.turnCosts.length;
+		if (count % 2 === 0) {
+			this.firstHalfSum += this.turnCosts[count / 2 - 1] ?? 0;
+			this.firstHalfCount = count / 2;
+		}
+		if (this.costWindowFilled < this.costWindow.length) {
+			this.costWindow[this.costWindowFilled] = cost;
+			this.costWindowFilled += 1;
+			this.costWindowSum += cost;
+			return;
+		}
+		this.costWindowSum += cost - (this.costWindow[this.costWindowNext] ?? 0);
+		this.costWindow[this.costWindowNext] = cost;
+		this.costWindowNext = (this.costWindowNext + 1) % this.costWindow.length;
 	}
 
 	observeTool(observation: ToolObservation): void {
@@ -621,8 +658,8 @@ export class ProgressCheckpoint {
 				this.noteProgress();
 			this.lastTickedTasks = sample.tickedTasks;
 		}
-		this.sampledDiff = this.lastDiff;
-		this.sampledTickedTasks = this.lastTickedTasks;
+		this.sampledDiff = sample.diff ?? null;
+		this.sampledTickedTasks = sample.tickedTasks ?? null;
 	}
 
 	private signalsNow(): CheckpointSignal[] {
@@ -632,21 +669,12 @@ export class ProgressCheckpoint {
 	/** The digest as it would be taken now, without advancing the schedule. */
 	digestPreview(): CheckpointDigest {
 		const windowTurns = Math.max(0, this.turn - this.lastCheckpointTurn);
-		const windowCosts = this.turnCosts.slice(
-			Math.max(0, this.turnCosts.length - Math.max(1, this.interval)),
-		);
-		const half = Math.floor(this.turnCosts.length / 2);
-		const firstHalf = this.turnCosts.slice(0, half);
 		const windowMean =
-			windowCosts.length === 0
+			this.costWindowFilled === 0
 				? 0
-				: windowCosts.reduce((total, value) => total + value, 0) /
-					windowCosts.length;
+				: this.costWindowSum / this.costWindowFilled;
 		const firstHalfMean =
-			firstHalf.length === 0
-				? 0
-				: firstHalf.reduce((total, value) => total + value, 0) /
-					firstHalf.length;
+			this.firstHalfCount === 0 ? 0 : this.firstHalfSum / this.firstHalfCount;
 		const repeats = this.recentCalls.filter((call) => call.repeat).length;
 		return {
 			ordinal: this.ordinal + 1,

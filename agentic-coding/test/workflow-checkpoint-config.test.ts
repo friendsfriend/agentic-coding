@@ -35,7 +35,7 @@ describe("checkpoint configuration defaults", () => {
 				DEFAULT_CHECKPOINT_THRESHOLDS[checkpointClass],
 			);
 		// The measured table itself: worker 280/1400, planner 60/300,
-		// verifier 70/350, mechanical 30/250, and `other` is the worker row.
+		// verifier 70/350, mechanical 30/150, and `other` is the worker row.
 		expect(DEFAULT_CHECKPOINT_THRESHOLDS.worker).toEqual({
 			softTurns: 280,
 			hardTurns: 1400,
@@ -50,7 +50,7 @@ describe("checkpoint configuration defaults", () => {
 		});
 		expect(DEFAULT_CHECKPOINT_THRESHOLDS.mechanical).toEqual({
 			softTurns: 30,
-			hardTurns: 250,
+			hardTurns: 150,
 		});
 		expect(DEFAULT_CHECKPOINT_THRESHOLDS.other).toEqual(
 			DEFAULT_CHECKPOINT_THRESHOLDS.worker,

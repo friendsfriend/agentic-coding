@@ -23,6 +23,13 @@ import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import type { CheckpointThresholds } from "../src/agent-host/progress-checkpoint.ts";
 import type { ResolvedCheckpointConfig } from "../src/workflow/checkpoint.ts";
+import type { CompactionConfig } from "../src/workflow/compaction.ts";
+
+/** A message long enough that the measured prompt is over any ceiling a test
+ * sets, at pi-ai's four-characters-per-token estimate. */
+function contextText(tokens: number): string {
+	return "context worth summarizing. ".repeat(Math.ceil((tokens * 4) / 25));
+}
 
 // Every test drives a real durable host over a scripted provider and waits for a
 // turn boundary; the waits are bounded by the module's own interval, not by the
@@ -155,6 +162,14 @@ async function runCheckpointRun(options: {
 	sampleThrows?: boolean;
 	role?: string;
 	checkpointClass?: string;
+	/** The checkpoint's own context threshold, in tokens. */
+	contextTokens?: number;
+	/** The cost ceiling the checkpoint's `compact` has to be admitted by. */
+	compaction?: CompactionConfig;
+	/** Submit a message long enough to put the measured context over both. */
+	longPrompt?: boolean;
+	/** Run something against the live host just before it is shut down. */
+	beforeShutdown?: (host: DurableHost) => Promise<void>;
 	/** Leave `HERDR_RUN_ID` out of the environment, as an orchestrator session has
 	 * no run id to be supervised under. */
 	noRunId?: boolean;
@@ -171,7 +186,7 @@ async function runCheckpointRun(options: {
 	const config: ResolvedCheckpointConfig = {
 		enabled: options.enabled ?? true,
 		steer: options.steer ?? true,
-		contextTokens: 200_000,
+		contextTokens: options.contextTokens ?? 200_000,
 		thresholds: { worker: options.thresholds },
 	};
 	const host = await DurableHost.open({
@@ -181,6 +196,9 @@ async function runCheckpointRun(options: {
 		storage: new MemoryStorage(),
 		models,
 		checkpoint: () => config,
+		...(options.compaction
+			? { compaction: () => options.compaction ?? {} }
+			: {}),
 		checkpointSample: async () => {
 			if (options.sampleThrows)
 				throw new Error("git diff timed out after 2000 ms");
@@ -227,7 +245,11 @@ async function runCheckpointRun(options: {
 			fauxAssistantMessage([fauxText("noted")]),
 		),
 	]);
-	await host.submit("run-checkpoint", "work", "req-checkpoint");
+	await host.submit(
+		"run-checkpoint",
+		options.longPrompt ? contextText(20_000) : "work",
+		"req-checkpoint",
+	);
 	// The first checkpoint is the thing to wait for: it is evaluated once a turn
 	// has been measured, and everything else follows on the same chain. A feature
 	// that is switched off never writes one, so that run waits on its turns.
@@ -245,8 +267,9 @@ async function runCheckpointRun(options: {
 			shimCalls(options.shimLog).includes("workflow handoff"),
 		100,
 	);
-	// A decision that files a question settles after the question and, when it
-	// parks, after the handoff: wait until neither is still coming.
+	// A decision that files a question settles after the question and, when the
+	// run is stopped for it, after the handoff: the escalation envelope states the
+	// outcome first, so wait for both before reading the calls.
 	await until(() => {
 		const calls = shimCalls(options.shimLog);
 		if (!calls.includes("workflow question")) return true;
@@ -256,12 +279,28 @@ async function runCheckpointRun(options: {
 		);
 		if (escalation.length === 0) return false;
 		const outcome = escalation.at(-1)?.["herdr.checkpoint.outcome"];
-		if (outcome !== "pending-parked") return true;
+		if (outcome === "answered" || outcome === "filing-failed") return true;
 		return calls.includes("workflow handoff");
 	});
 	const calls = shimCalls(options.shimLog);
+	await options.beforeShutdown?.(host);
 	await host.shutdown();
 	return { telemetryPath, calls };
+}
+
+/** The `--record` payload of every checkpoint command the shim saw. */
+function recordedDecisions(log: string): Array<Record<string, unknown>> {
+	return shimCalls(log)
+		.split("\n")
+		.filter((line) => line.includes("checkpoint --record"))
+		.map((line) => line.slice(line.indexOf("--record ") + 9))
+		.flatMap((json) => {
+			try {
+				return [JSON.parse(json) as Record<string, unknown>];
+			} catch {
+				return [];
+			}
+		});
 }
 
 describe("a run-progress checkpoint in the durable host", () => {
@@ -328,8 +367,73 @@ describe("a run-progress checkpoint in the durable host", () => {
 		});
 		const first = checkpointLines(run.telemetryPath)[0] ?? {};
 		expect(first["herdr.checkpoint.decision"]).toBe("continue");
-		expect(first["herdr.checkpoint.rule"]).toBe("steer-disabled");
+		// The rule keeps the signal's own id: `steer-disabled` is not a rule.
+		expect(first["herdr.checkpoint.rule"]).toBe("repeats");
 		expect(run.calls).not.toContain("workflow question");
+		expect(run.calls).not.toContain("workflow handoff");
+	});
+
+	test("the recorded decision is the digest and the five actions, and nothing else", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_SOFT,
+			calls: 12,
+		});
+		const [record] = recordedDecisions(shim.log);
+		if (!record) throw new Error("no checkpoint record was sent");
+		// The same fields the reducer enforces, so the command cannot be fed a
+		// decision the workflow never declared.
+		expect(record.integration).toBe("progress-checkpoint");
+		expect(record.model).toBe("rules/v1");
+		expect(record.phase).toBe("core.implementation");
+		expect(record.questionId).toBe("checkpoint:run-checkpoint:1");
+		expect(
+			(record.options as Array<Record<string, unknown>>).map(
+				(option) => option.label,
+			),
+		).toEqual(["continue", "steer", "compact", "switch-model", "escalate"]);
+		const answer = record.answer as Record<string, unknown>;
+		expect(answer.type).toBe("choice");
+		expect(answer.choice).toBe("continue");
+		expect(answer.confidence).toBeUndefined();
+		const result = record.result as Record<string, unknown>;
+		expect(result.applied).toBe(true);
+		expect(result.profiles).toEqual(["continue"]);
+		// The digest is the accumulator's own and carries no transcript.
+		const digest = JSON.parse(String(record.input)) as Record<string, unknown>;
+		expect(digest.checkpointClass).toBe("worker");
+		expect(digest.trigger).toBe("soft");
+		expect(JSON.stringify(digest)).not.toContain("note-");
+	});
+
+	test("a context above the limit compacts through the ceiling and records it", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		// A 22k-token prompt is over both the checkpoint's context threshold and
+		// the ceiling's minimum, which is what makes a compaction admissible.
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: { softTurns: 1, hardTurns: 1000 },
+			calls: 6,
+			contextTokens: 16_500,
+			compaction: { ceilingTokens: 16_384 },
+			longPrompt: true,
+		});
+		const compact = checkpointLines(run.telemetryPath).find(
+			(line) => line["herdr.checkpoint.decision"] === "compact",
+		);
+		expect(compact).toBeDefined();
+		expect(compact?.["herdr.checkpoint.rule"]).toBe("context");
+		expect(compact?.["herdr.checkpoint.applied"]).toBe(true);
+		expect(compact?.["herdr.checkpoint.recorded"]).toBe(true);
+		expect(compact?.["herdr.checkpoint.status"]).toBe("ok");
+		// One summarizer ran, not two: the ceiling and the checkpoint share the
+		// same serialized admission.
+		expect(
+			checkpointLines(run.telemetryPath, "runtime.compaction_start"),
+		).toHaveLength(1);
 		expect(run.calls).not.toContain("workflow handoff");
 	});
 
@@ -457,15 +561,16 @@ describe("a run-progress checkpoint in the durable host", () => {
 			"runtime.checkpoint_escalation",
 		);
 		expect(escalation[0]?.["herdr.checkpoint.outcome"]).toBe("filing-failed");
-		// The failure is stated as a fail-open checkpoint envelope with a bounded
-		// error class, and the run was not stopped.
+		// The failure is stated on the escalation's own envelope with a bounded
+		// error class — the checkpoint keeps exactly one decision envelope, and it
+		// is not an error report — and the run was not stopped.
+		expect(escalation[0]?.["herdr.checkpoint.status"]).toBe("error");
+		expect(escalation[0]?.["herdr.checkpoint.error_class"]).toBe("question");
 		expect(
-			checkpointLines(run.telemetryPath).some(
-				(line) =>
-					line["herdr.checkpoint.status"] === "error" &&
-					line["herdr.checkpoint.error_class"] === "question",
+			checkpointLines(run.telemetryPath).filter(
+				(line) => line["herdr.checkpoint.status"] === "error",
 			),
-		).toBe(true);
+		).toEqual([]);
 		expect(run.calls).not.toContain("workflow handoff");
 	});
 
@@ -529,6 +634,38 @@ describe("a run-progress checkpoint in the durable host", () => {
 		expect(checkpointLines(run.telemetryPath)).toEqual([]);
 		expect(run.calls).not.toContain("workflow checkpoint");
 		expect(run.calls).not.toContain("workflow question");
+	});
+
+	test("a steer the harness refuses is a reported error, never a stop", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		let applied:
+			| Awaited<ReturnType<DurableHost["applyCheckpointForTest"]>>
+			| undefined;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_SOFT,
+			calls: 12,
+			beforeShutdown: async (host) => {
+				// The run the checkpoint belongs to is gone by the time the steer is
+				// delivered: the submission is refused, and the decision says so
+				// instead of throwing into the conversation.
+				applied = await host.applyCheckpointForTest(
+					"run-checkpoint",
+					{
+						action: "steer",
+						rule: "no-progress",
+						signal: "no-progress",
+					},
+					{ runGone: true },
+				);
+			},
+		});
+		expect(applied?.applied).toBe(false);
+		expect(applied?.attention).toBe("steer not delivered");
+		expect(applied?.errorClass).toBe("steer");
+		// Nothing was stopped for it.
+		expect(run.calls).not.toContain("workflow handoff");
 	});
 
 	test("an undeclared class runs on the worker row", async () => {

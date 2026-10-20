@@ -159,6 +159,32 @@ describe("one checkpoint sample", () => {
 		expect(sample.tickedTasks).toBeUndefined();
 	});
 
+	test("a git that ignores the stop signal still cannot hold the sample", async () => {
+		// `execFile`'s own timeout only asks the child to stop, so a `git` in an
+		// uninterruptible wait would leave the promise — and the run's checkpoint
+		// supervisor — pending for ever. The sample's own deadline decides.
+		const bin = tempDir("checkpoint-stuckgit-");
+		const script = path.join(bin, "git");
+		fs.writeFileSync(script, "#!/bin/sh\ntrap '' TERM\nsleep 30\n", {
+			mode: 0o700,
+		});
+		const previous = process.env.PATH;
+		process.env.PATH = `${bin}${path.delimiter}${previous ?? ""}`;
+		const started = Date.now();
+		try {
+			const sample = await sampleCheckpoint({
+				cwd: tempDir("checkpoint-cwd-"),
+				timeoutMs: 300,
+			});
+			// Unknown, never a value, and answered long before the child would.
+			expect(sample).toEqual({});
+			expect(Date.now() - started).toBeLessThan(2_000);
+		} finally {
+			if (previous === undefined) delete process.env.PATH;
+			else process.env.PATH = previous;
+		}
+	});
+
 	test("the sample's own bound is the two seconds the design states", () => {
 		expect(CHECKPOINT_SAMPLE_TIMEOUT_MS).toBe(2_000);
 	});
