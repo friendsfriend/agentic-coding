@@ -63,6 +63,9 @@ export interface DashboardKeyContext {
 	readonly openEvidence: (entry: EvidenceEntry) => void;
 	/** Copy one evidence file's local path to the clipboard. */
 	readonly copyEvidencePath: (entry: EvidenceEntry) => void;
+	/** Open the workflow's `stage-flow.html` with the system opener, when it has
+	 * a stage flow journal. */
+	readonly openEvidenceFlow: () => void;
 	readonly artifacts: () => string[];
 	readonly data: () => DashboardData;
 	readonly dimensions: () => { width: number; height: number };
@@ -434,8 +437,17 @@ export function createDashboardKeyHandler(
 			return;
 		}
 		if (name === "y" && activePanel() === EVIDENCE_PANEL) {
-			const row = evidenceRows()[selectedEvidence()];
-			if (row) context.copyEvidencePath(row.entry);
+			// A step row names no file: it is part of the segment heading's
+			// narrative, and copying its "path" would copy nothing.
+			const entry = evidenceRows()[selectedEvidence()]?.entry;
+			if (entry) context.copyEvidencePath(entry);
+			return;
+		}
+		if (name === "f" && activePanel() === EVIDENCE_PANEL) {
+			// The flow page of a workflow that has a journal: one keybind away, like
+			// the evidence files themselves. A workflow without a journal offers no
+			// page, and the action is a no-op there.
+			context.openEvidenceFlow();
 			return;
 		}
 		if (name === "r") {
@@ -571,9 +583,10 @@ export function createDashboardKeyHandler(
 			}
 			if (activePanel() === EVIDENCE_PANEL) {
 				// Every kind opens the stored file externally — including a video,
-				// whose bytes are never rendered inline.
-				const row = evidenceRows()[selectedEvidence()];
-				if (row) context.openEvidence(row.entry);
+				// whose bytes are never rendered inline. A journal step row opens
+				// nothing: it has no file of its own.
+				const entry = evidenceRows()[selectedEvidence()]?.entry;
+				if (entry) context.openEvidence(entry);
 				return;
 			}
 			const approval = gate();

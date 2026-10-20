@@ -37,6 +37,7 @@ import type {
 	EvidenceEntry,
 	EvidenceManifest,
 } from "../../contracts/environment.ts";
+import type { StageJournal } from "../../contracts/stages.ts";
 import {
 	type DashboardData,
 	type DeveloperDialogueRecord,
@@ -50,6 +51,7 @@ import {
 	evidenceFileKey,
 	loadEvidence,
 	loadEvidenceFile,
+	loadStageJournal,
 } from "../data/evidence.ts";
 import { loadArtifact, loadArtifacts } from "../data/git.ts";
 import { gatewayOrUndefined, invalidateKey } from "../data/index.ts";
@@ -81,7 +83,11 @@ import {
 	debugRequestsKeyAction,
 } from "./debug-requests-panel.ts";
 import { testDashboard } from "./demo.ts";
-import { evidenceLocalPath, openEvidenceExternally } from "./evidence-open.ts";
+import {
+	evidenceLocalPath,
+	openEvidenceExternally,
+	openStageFlowExternally,
+} from "./evidence-open.ts";
 import {
 	type EvidenceReadState,
 	evidencePanelLines,
@@ -360,6 +366,14 @@ export function App(props: {
 	let evidenceGeneration = 0;
 	let evidenceController: AbortController | undefined;
 	let lastEvidenceError: string | undefined;
+	/** The workflow's stage flow journal (`add-stage-flow-evidence`). `empty` is
+	 * an answer — the workflow ran no stage flow — and it is what keeps the panel
+	 * rendering exactly as it did before the journal existed. */
+	const [stageJournal, setStageJournal] = createSignal<
+		StageJournal | undefined
+	>(undefined);
+	let stageJournalGeneration = 0;
+	let stageJournalController: AbortController | undefined;
 	const [evidencePreview, setEvidencePreview] = createSignal<
 		Uint8Array | undefined
 	>(undefined);
@@ -393,7 +407,9 @@ export function App(props: {
 			state: evidenceState(),
 			terminalLines: dimensions().height,
 		});
-	const evidenceListRows = createMemo(() => evidenceRows(evidence().entries));
+	const evidenceListRows = createMemo(() =>
+		evidenceRows(evidence().entries, stageJournal()),
+	);
 	const selectedEvidenceEntry = createMemo(
 		() => evidenceListRows()[selectedEvidence()]?.entry,
 	);
@@ -454,6 +470,35 @@ export function App(props: {
 					lastEvidenceError = message;
 					notify(`Evidence could not be read: ${message}`, "error");
 				}
+			});
+	});
+	// The stage flow journal follows the same refresh: a run writes steps while it
+	// works, and the panel's flow grouping and its open-flow action both depend on
+	// it. A failed read leaves the manifest's own grouping in place rather than
+	// tearing the panel down.
+	createEffect(() => {
+		data();
+		if (props.profile === "test" || !gatewayOrUndefined()) return;
+		const generation = ++stageJournalGeneration;
+		stageJournalController?.abort();
+		stageJournalController = new AbortController();
+		void loadStageJournal(
+			props.repo,
+			props.workflowId,
+			stageJournalController.signal,
+			{ refresh: true },
+		)
+			.then((next) => {
+				if (generation !== stageJournalGeneration) return;
+				setStageJournal(next);
+			})
+			.catch((error) => {
+				if (generation !== stageJournalGeneration) return;
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				// No journal is the same rendering as a journal that could not be
+				// read: the panel falls back to its request grouping.
+				setStageJournal(undefined);
 			});
 	});
 	// The delegated debug request read follows every dashboard refresh, exactly
@@ -588,6 +633,25 @@ export function App(props: {
 		}
 		if (copyToClipboard(file)) notify(`Copied ${file}`, "success");
 		else notify("Copy failed", "error");
+	};
+	/** Open `stage-flow.html` with the system opener. A workflow without a journal
+	 * has no page, which is reported rather than opening a stale one. */
+	const openEvidenceFlow = async () => {
+		const journal = stageJournal();
+		if (journal?.flowPage === undefined) {
+			notify("This workflow has no stage flow page", "info");
+			return;
+		}
+		try {
+			await openStageFlowExternally(data().state, journal.flowPage);
+		} catch (error) {
+			notify(
+				`Could not open the stage flow: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"error",
+			);
+		}
 	};
 	// Every classification the workflow recorded, in the order it happened:
 	// model-pool routing, verifier-role triage, stage gates, and the per-file
@@ -1811,6 +1875,7 @@ export function App(props: {
 			: dashboardDetailKeybindCatalog({
 					artifactsVisible: artifacts().length > 0,
 					definitionId: data().state.definition?.id,
+					evidenceFlow: stageJournal()?.flowPage !== undefined,
 				}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
@@ -2075,6 +2140,7 @@ export function App(props: {
 		setSelectedEvidence,
 		evidenceRows: () => evidenceListRows(),
 		openEvidence: (entry) => void openEvidence(entry),
+		openEvidenceFlow: () => void openEvidenceFlow(),
 		copyEvidencePath,
 		artifacts,
 		data,
@@ -3486,6 +3552,7 @@ export function App(props: {
 							    evidence a run produced is never a panel that appears late. */}
 							<EvidencePanel
 								entries={evidence().entries}
+								journal={stageJournal()}
 								active={activePanel() === EVIDENCE_PANEL}
 								selectedIndex={selectedEvidence()}
 								kitty={kittyGraphics()}

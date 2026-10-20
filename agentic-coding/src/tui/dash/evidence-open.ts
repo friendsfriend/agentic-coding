@@ -107,3 +107,56 @@ export async function openEvidenceExternally(
 			`${file}: ${outcome.stderr?.trim() || `the opener exited ${outcome.status}`}`,
 		);
 }
+
+/** The absolute path of one workflow's flow page, composed by the same store
+ * module the writer uses. A workflow whose evidence root would not hold the name
+ * answers `undefined` rather than a path outside it. */
+export function stageFlowPath(
+	state: EvidenceLocationState,
+	flowPage: string,
+): string | undefined {
+	return (
+		workflowEvidenceFilePath(
+			{
+				workflowId: state.workflowId,
+				worktree: state.worktree,
+				...(state.definition ? { definitionId: state.definition.id } : {}),
+			},
+			flowPage,
+		) ?? undefined
+	);
+}
+
+/**
+ * Open `stage-flow.html` with the platform's system opener — the Evidence
+ * panel's "open flow" action.
+ *
+ * Note that the journal may name no page at all (`flowPage` absent), which is
+ * the caller's business to report; a named page that is not on this machine, is
+ * not a regular file, or was replaced by a symlink is refused here rather than
+ * handed to an opener.
+ */
+export async function openStageFlowExternally(
+	state: EvidenceLocationState,
+	flowPage: string,
+	open: (request: SideAppRequest) => Promise<SideAppOutcome> = runSideApp,
+): Promise<void> {
+	const file = stageFlowPath(state, flowPage);
+	if (file === undefined)
+		throw new EvidencePathError(
+			`${JSON.stringify(flowPage)} is not a path inside this workflow's evidence`,
+		);
+	let stat: fs.Stats;
+	try {
+		stat = fs.lstatSync(file);
+	} catch {
+		throw new EvidencePathError(`${file} is not on this machine`);
+	}
+	if (!stat.isFile())
+		throw new EvidencePathError(`${file} is not a regular file`);
+	const outcome = await open(systemOpenerSideApp(file));
+	if (outcome.status !== undefined && outcome.status !== 0)
+		throw new EvidencePathError(
+			`${file}: ${outcome.stderr?.trim() || `the opener exited ${outcome.status}`}`,
+		);
+}
