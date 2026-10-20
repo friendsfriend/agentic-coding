@@ -29,7 +29,9 @@ let timer: ReturnType<typeof setInterval> | undefined;
  * with the first live spinner and stops with the last, so an idle transcript
  * keeps no animation timer. */
 export function useSpinnerFrame(): () => string {
+	let active = false;
 	onMount(() => {
+		active = true;
 		mounted++;
 		timer ??= setInterval(
 			() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length),
@@ -37,7 +39,11 @@ export function useSpinnerFrame(): () => string {
 		);
 	});
 	onCleanup(() => {
-		mounted = Math.max(0, mounted - 1);
+		// A cleanup can run for a component whose mount never happened; it must
+		// not decrement another spinner's reference.
+		if (!active) return;
+		active = false;
+		mounted--;
 		if (mounted > 0 || timer === undefined) return;
 		clearInterval(timer);
 		timer = undefined;

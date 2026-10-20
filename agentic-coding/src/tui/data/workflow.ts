@@ -236,9 +236,24 @@ export function mergeDashboardLive(
 	const prior = new Map<string, DashboardData["agents"][number]>();
 	for (const agent of current.agents)
 		prior.set(`${agent.role}:${agent.runId ?? ""}`, agent);
+	// The full read appends the coordinator's execution error to `state.health`;
+	// the cheap view does not, so a live overlay must not erase a failure before
+	// the next full read can confirm it. Attention is unioned, validity is
+	// conservative, and a live diagnostic wins when it carries one.
+	const currentHealth = current.state.health;
+	const liveHealth = live.state.health;
+	const diagnostic = liveHealth.diagnostic ?? currentHealth.diagnostic;
+	const health = {
+		...liveHealth,
+		valid: currentHealth.valid && liveHealth.valid,
+		attention: [
+			...new Set([...currentHealth.attention, ...liveHealth.attention]),
+		],
+		...(diagnostic ? { diagnostic } : {}),
+	};
 	return {
 		...current,
-		state: { ...current.state, ...live.state },
+		state: { ...current.state, ...live.state, health },
 		// The seed uses a sentinel when the view carries no task; the full read may
 		// have recovered the request from `request.md`. Do not replace that with
 		// the sentinel on a live update.

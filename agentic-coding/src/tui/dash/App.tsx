@@ -2215,9 +2215,6 @@ export function App(props: {
 		const debounced = debounce(() => {
 			refresh();
 		}, 200);
-		const liveDebounced = debounce(() => {
-			refreshLive();
-		}, 200);
 		if (serverOwnsExecutionEvents()) {
 			// Attached: the server owns execution and publishes `workflow.updated`;
 			// the data layer applies each envelope to the cache.
@@ -2239,11 +2236,12 @@ export function App(props: {
 					if (phase === "progress") {
 						// An effect commit changes the view, not the telemetry log or the
 						// worktree Git state. Overlay the view and leave the full read for a
-						// drain boundary or the safety resync.
-						liveDebounced.trigger();
+						// drain boundary or the safety resync. The live throttle is
+						// leading-and-trailing, so the first commit paints immediately and a
+						// burst still collapses to one read a second.
+						refreshLive();
 						return;
 					}
-					liveDebounced.cancel();
 					debounced.trigger();
 				},
 				onResync: () => refresh(true),
@@ -2253,7 +2251,7 @@ export function App(props: {
 			const disposeResync = startSafetyResync(refresh);
 			onCleanup(() => {
 				debounced.cancel();
-				liveDebounced.cancel();
+				refreshLiveThrottle.cancel();
 				dispose();
 				disposeResync();
 			});

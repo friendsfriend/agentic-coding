@@ -63,6 +63,11 @@ test("a live view overlay keeps the heavy dashboard fields", () => {
 		status: "working",
 		ticket: "T-1",
 		stage: "build",
+		health: {
+			valid: false,
+			attention: ["run failed"],
+			diagnostic: "run failed",
+		},
 	};
 	current.request = "full request";
 	current.agents = [
@@ -82,6 +87,7 @@ test("a live view overlay keeps the heavy dashboard fields", () => {
 		...live.state,
 		revision: 8,
 		status: "blocked",
+		health: { valid: true, attention: [] },
 	};
 	live.request = "live request";
 	live.agents = [
@@ -98,6 +104,11 @@ test("a live view overlay keeps the heavy dashboard fields", () => {
 	// The live view does not carry the plan-stage fields; the full state does.
 	expect(merged.state.ticket).toBe("T-1");
 	expect(merged.state.stage).toBe("build");
+	// The seed does not carry the coordinator's execution error; the live
+	// overlay must not hide it before the next full observation.
+	expect(merged.state.health.valid).toBe(false);
+	expect(merged.state.health.attention).toContain("run failed");
+	expect(merged.state.health.diagnostic).toBe("run failed");
 	expect(merged.request).toBe("live request");
 	expect(merged.agents[0]).toMatchObject({
 		runId: "run-1",
