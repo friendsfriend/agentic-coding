@@ -48,9 +48,9 @@ import {
 	workflowStageMeta,
 } from "../app/sidebar-model.ts";
 
-/** Expanded sidebar width: wide enough for a clipped workflow id plus its
- * phase, narrow enough to leave the main content usable on an 80-column
- * terminal. */
+/** Expanded sidebar width: wide enough for a clipped workflow id, its stage
+ * line and its project name, narrow enough to leave the main content usable on
+ * an 80-column terminal. */
 export const SIDEBAR_WIDTH = 34;
 
 /** Columns a compact row's own content needs: the status glyph, the gap after
@@ -125,9 +125,9 @@ function toneColor(tone: StatusTone): string {
 	}
 }
 
-/** The pinned entry's row: the same two-line shape a workflow row uses (mark
- * and name, then one line of meta), so the fixed entry reads as a row and not
- * as panel chrome. Collapsed, only the mark fits. */
+/** The pinned entry's row: mark and name, then one line of meta, so the fixed
+ * entry reads as a row and not as panel chrome. Workflow rows add their project
+ * line below it; the pin has no project. Collapsed, only the mark fits. */
 function PinRow(props: {
 	pin: SidebarPin;
 	selected: boolean;

@@ -395,9 +395,10 @@ test("the collapsed strip keeps its shape with many workflows", async () => {
 });
 
 /** The compact strip's whole vocabulary: the toggle glyph, the pinned entry's
- * mark, its rule, and one status mark plus position per workflow. The collapsed
- * sidebar names nothing, so a *letter* in the strip is expanded content — an id,
- * a phase, a panel title or a filter label — that leaked into it. */
+ * mark, its rule, and one status mark plus one detail (position or critical
+ * finding count) per workflow. The collapsed sidebar names nothing, so a
+ * *letter* in the strip is expanded content — an id, a phase, a panel title or a
+ * filter label — that leaked into it. */
 const COMPACT_STRIP = /^[^A-Za-z]*$/;
 
 /** The column the page body starts at, read from the Home destination list
