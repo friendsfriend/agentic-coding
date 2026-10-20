@@ -2,6 +2,13 @@
 // item 19): the defaults it ships with, the bounds its load enforces, and the
 // lenient resolution the durable host reads per run start.
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+	liveCheckpointSection,
+	loadCheckpointSection,
+} from "../src/agent-host/host-main.ts";
 import {
 	CHECKPOINT_CLASSES,
 	DEFAULT_CHECKPOINT_CONTEXT_TOKENS,
@@ -245,5 +252,114 @@ describe("the section inside a whole agents configuration", () => {
 		expect(() => parseAgentsConfig({ profiles: {}, checkpoint: [] })).toThrow(
 			/agents\.checkpoint must be a table/,
 		);
+	});
+});
+
+describe("the section the durable host reads per run start", () => {
+	function withConfigFile(body: unknown): {
+		file: string;
+		restore: () => void;
+	} {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "checkpoint-section-"));
+		const file = path.join(dir, "config.json");
+		fs.writeFileSync(file, JSON.stringify(body));
+		// `liveCheckpointSection` honours the explicit replacement file too, so a
+		// test cannot read one file while the host reads another.
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		return {
+			file,
+			restore: () => {
+				if (previous !== undefined)
+					process.env.HERDR_WORKFLOW_CONFIG = previous;
+			},
+		};
+	}
+
+	test("the file's own section is resolved, and an absent one is the default", () => {
+		const configured = withConfigFile({
+			agents: {
+				checkpoint: {
+					enabled: false,
+					steer: false,
+					contextTokens: 90_000,
+					mechanical: { softTurns: 40, hardTurns: 200 },
+				},
+			},
+		});
+		try {
+			const resolved = loadCheckpointSection(configured.file);
+			expect(resolved.enabled).toBe(false);
+			expect(resolved.steer).toBe(false);
+			expect(resolved.contextTokens).toBe(90_000);
+			expect(checkpointThresholdsForClass(resolved, "mechanical")).toEqual({
+				softTurns: 40,
+				hardTurns: 200,
+			});
+			// A class the file does not mention keeps its measured row.
+			expect(checkpointThresholdsForClass(resolved, "worker")).toEqual(
+				DEFAULT_CHECKPOINT_THRESHOLDS.worker,
+			);
+		} finally {
+			configured.restore();
+		}
+		expect(
+			loadCheckpointSection(configured.file.replace(".json", "-2.json")),
+		).toEqual(DEFAULT_CHECKPOINT_CONFIG);
+	});
+
+	test("a mistyped hot edit falls back to the default instead of failing a run", () => {
+		// The configuration load refuses these; this reader is the per-run-start
+		// getter, and a bad value there must not keep a run from starting.
+		for (const section of [
+			[],
+			{ enabled: "maybe" },
+			{ contextTokens: "a lot" },
+			{ mechanical: { softTurns: 3 } },
+		]) {
+			const file = withConfigFile({ agents: { checkpoint: section } });
+			try {
+				const resolved = loadCheckpointSection(file.file);
+				expect(resolved.enabled).toBe(true);
+				expect(resolved.steer).toBe(true);
+				expect(resolved.contextTokens).toBe(DEFAULT_CHECKPOINT_CONTEXT_TOKENS);
+				expect(checkpointThresholdsForClass(resolved, "mechanical")).toEqual(
+					DEFAULT_CHECKPOINT_THRESHOLDS.mechanical,
+				);
+			} finally {
+				file.restore();
+			}
+		}
+	});
+
+	test("the live accessor re-reads only when the file changed", () => {
+		const configured = withConfigFile({
+			agents: { checkpoint: { enabled: false } },
+		});
+		try {
+			const live = liveCheckpointSection(configured.file);
+			// A getter, resolved per run start: no copy, so a Settings save reaches the
+			// next run without restarting the host.
+			expect(live().enabled).toBe(false);
+			// The same file answers the same object, which is what makes the per-run
+			// getter a stat plus a pure computation.
+			const first = live();
+			expect(live()).toBe(first);
+			// A save (a different size and mtime) is a new resolution.
+			fs.writeFileSync(
+				configured.file,
+				JSON.stringify({ agents: { checkpoint: { enabled: true } } }),
+			);
+			const stat = fs.statSync(configured.file);
+			fs.utimesSync(
+				configured.file,
+				new Date(stat.atimeMs + 5000),
+				new Date(stat.mtimeMs + 5000),
+			);
+			expect(live().enabled).toBe(true);
+			expect(live()).not.toBe(first);
+		} finally {
+			configured.restore();
+		}
 	});
 });
