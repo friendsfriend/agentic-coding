@@ -779,11 +779,10 @@ describe("the accumulator", () => {
 		]);
 	});
 
-	test("a decision that failed open reads back as the run continuing", () => {
+	test("a decision that failed open keeps its decision and drops only the nudge", () => {
 		// A steer the harness refused was never delivered: remembering it as
 		// delivered would escalate the same signal as `steer-ignored` on a nudge the
-		// developer never received, and would also stop the `no-progress-twice` rule
-		// (which needs a `continue`) from ever firing on it.
+		// developer never received.
 		const checkpoint = worker({ softTurns: 280 });
 		observe(checkpoint, 40);
 		const digest = checkpoint.takeDigest("stall");
@@ -791,9 +790,12 @@ describe("the accumulator", () => {
 		expect(steer.action).toBe("steer");
 		checkpoint.noteDecision(steer, digest, { applied: false });
 		expect(checkpoint.digestPreview().steeredSignals).toEqual([]);
+		// The decision itself is what was taken, not what happened to it: a later
+		// checkpoint reports the steer it decided and the rule it decided it under,
+		// so the recorded history matches the decision the run acted out.
 		expect(checkpoint.digestPreview().previous).toEqual({
-			decision: "continue",
-			rule: "default",
+			decision: "steer",
+			rule: steer.rule,
 			progress: 0,
 		});
 		// The counterpart: a delivered steer is remembered, so the signal it

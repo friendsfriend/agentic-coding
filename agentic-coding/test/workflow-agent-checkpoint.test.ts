@@ -3,6 +3,7 @@
 // classifier-decision history. The reducer authenticates the caller, appends and
 // changes nothing else — no transition, no status, no run set — because the
 // checkpoint is diagnostic and the run keeps working whatever the record does.
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import {
 	CHECKPOINT_ACTION_SUMMARY,
@@ -23,11 +24,13 @@ import {
 import { runCheckpoint } from "../src/workflow/cli/commands/checkpoint.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
+	agentCheckpoint,
 	CHECKPOINT_RECORD_INTEGRATION,
 	checkpointRecordProblems,
 	checkpointRecords,
 	runCheckpointRecords,
 } from "../src/workflow/runtime/reducers/agent-checkpoint.ts";
+import { canonicalStorePath } from "../src/workflow/runtime/targets.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
 import {
 	autoRemoveRepoFixtures,
@@ -380,6 +383,38 @@ test("the boundary refuses text and vocabulary outside the closed set", () => {
 		],
 		["a free-text tool", withDigest({ failingTool: "read a file" }), "closed"],
 		["a fenced string", withDigest({ trigger: "```" }), "closed"],
+		// Every value set is the contract's: a token-shaped word that is not a
+		// member is refused, so the recorded digest's vocabulary cannot drift from
+		// the decider's.
+		[
+			"a class outside the set",
+			withDigest({ checkpointClass: "architect" }),
+			"closed",
+		],
+		[
+			"a rule outside the set",
+			withDigest({
+				previous: { decision: "continue", rule: "made-up-rule", progress: 0 },
+			}),
+			"closed",
+		],
+		[
+			"a previous decision outside the set",
+			withDigest({
+				previous: { decision: "pause", rule: "default", progress: 0 },
+			}),
+			"closed",
+		],
+		[
+			"a signal outside the set",
+			withDigest({ steeredSignals: ["wait"] }),
+			"closed",
+		],
+		// `a tool` is the tool-name sentinel, not a vocabulary value: it fills
+		// `failingTool` and nothing else.
+		["a sentinel trigger", withDigest({ trigger: "a tool" }), "closed"],
+		["a sentinel class", withDigest({ checkpointClass: "a tool" }), "closed"],
+		["a sentinel signal", withDigest({ steeredSignals: ["a tool"] }), "closed"],
 		// The recorded answer is one of the five actions.
 		[
 			"a pause",
@@ -650,6 +685,46 @@ test("a repeated question id is one record, however often it is sent", () => {
 	).toHaveLength(2);
 });
 
+test("a second record under the same id that says something else is refused", () => {
+	const started = startedRun();
+	const { engine, repo } = started;
+	engine.dispatch(
+		repo,
+		checkpointCommand(started, recordInput(started.runId, 1)),
+	);
+	// A relaunched run id that re-issues an ordinal its predecessor used would
+	// otherwise be told its own decision was recorded while the history still
+	// holds the other one.
+	const contradicting = checkpointCommand(started, {
+		...recordInput(started.runId, 1),
+		answer: checkpointAnswer({ action: "continue", rule: "default" }),
+	});
+	engine.dispatch(repo, contradicting);
+	// The reducer's own verdict, read the way the engine reads it: the caller is
+	// told what it was not told, without a second record and without an edit.
+	const db = new Database(canonicalStorePath(repo));
+	try {
+		const reduced = agentCheckpoint(
+			db,
+			engine.getSnapshot(repo, "change"),
+			contradicting,
+			() => new Date("2026-01-01T00:00:00Z"),
+		);
+		expect(reduced.data).toEqual({
+			recorded: false,
+			reason: "duplicate",
+			records: 1,
+		});
+	} finally {
+		db.close();
+	}
+	const [stored] = runCheckpointRecords(
+		engine.getSnapshot(repo, "change"),
+		started.runId,
+	);
+	expect(stored?.answer.choice).toBe("steer");
+});
+
 test("the record cap counts one run's records, never the workflow's", () => {
 	const started = startedRun();
 	const { engine, repo } = started;
@@ -743,6 +818,40 @@ test("the CLI records the caller's own decision and reports it", () => {
 		expect(
 			checkpointRecords(started.engine.getSnapshot(started.repo, "change")),
 		).toHaveLength(1);
+	} finally {
+		restoreEnvironment();
+	}
+});
+
+test("the CLI reports a record that contradicts the stored one as not recorded", () => {
+	const started = startedRun();
+	const restoreEnvironment = asManagedRun(started);
+	try {
+		printedView(() =>
+			runCheckpoint(
+				["--record", JSON.stringify(recordInput(started.runId, 1))],
+				started.engine,
+				undefined,
+				started.repo,
+			),
+		);
+		const view = printedView(() =>
+			runCheckpoint(
+				[
+					"--record",
+					JSON.stringify({
+						...recordInput(started.runId, 1),
+						answer: checkpointAnswer({ action: "continue", rule: "default" }),
+					}),
+				],
+				started.engine,
+				undefined,
+				started.repo,
+			),
+		);
+		expect(view.recorded).toBe(false);
+		expect(view.reason).toBe("duplicate");
+		expect(view.records).toBe(1);
 	} finally {
 		restoreEnvironment();
 	}

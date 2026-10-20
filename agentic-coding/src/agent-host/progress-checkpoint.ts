@@ -23,9 +23,13 @@ import {
 	CHECKPOINT_INTEGRATION,
 	CHECKPOINT_RECORD_LIMIT,
 	CHECKPOINT_RULE_IDS,
+	CHECKPOINT_SIGNALS,
+	CHECKPOINT_TRIGGERS,
 	type CheckpointAction,
 	type CheckpointClass,
 	type CheckpointRuleId,
+	type CheckpointSignal,
+	type CheckpointTrigger,
 } from "../contracts/workflow.ts";
 
 /** The checkpoint classes and their vocabulary are the contract's
@@ -61,46 +65,39 @@ export const DEFAULT_CHECKPOINT_THRESHOLDS: Readonly<
  * trigger only fires when ceiling compaction did not hold the context. */
 export const DEFAULT_CHECKPOINT_CONTEXT_TOKENS = 200_000;
 
-/** The decider's id, recorded on every decision. */
-/** The classifier-decision integration every checkpoint records under. */
-/** The fixed decision vocabulary, in the order the question offers it. */
-/** One line per action, used for the question options and the decision
- * record's `criteria`. Closed: no decider may add a label, and the record
- * boundary refuses an option whose criteria is anything else. */
+/** The feature's closed vocabulary, re-exported from the contract
+ * (`src/contracts/workflow.ts`) because three layers read it: the decider
+ * produces it, the record boundary refuses anything outside it, and the
+ * dashboard renders only it. The contract is where the sets live, so the host
+ * and the boundary can never hold two different copies.
+ *
+ * - `CHECKPOINT_ACTIONS` is the decision vocabulary, in the order the question
+ *   offers it;
+ * - `CHECKPOINT_ACTION_SUMMARY` is one line per action, used for the question
+ *   options and the record's `criteria`;
+ * - `CHECKPOINT_SIGNALS` and `CHECKPOINT_TRIGGERS` are the digest's closed sets
+ *   (what stalled, and why the checkpoint fired);
+ * - `CHECKPOINT_RULE_IDS` is `rules/v1`'s rule set, in evaluation order — with
+ *   `steer` disabled a steer rule yields `continue` under its own id;
+ * - `CHECKPOINT_RECORD_LIMIT` is how many checkpoints of one *run* are recorded
+ *   (the shared history holds 100 records, so a run's own cap is smaller and
+ *   later checkpoints stay telemetry-only);
+ * - `CHECKPOINT_DECIDER` and `CHECKPOINT_INTEGRATION` are the decider id and the
+ *   record integration every decision carries. */
 export {
 	CHECKPOINT_ACTION_SUMMARY,
 	CHECKPOINT_ACTIONS,
 	CHECKPOINT_DECIDER,
 	CHECKPOINT_INTEGRATION,
+	CHECKPOINT_RECORD_LIMIT,
+	CHECKPOINT_RULE_IDS,
+	CHECKPOINT_SIGNALS,
+	CHECKPOINT_TRIGGERS,
 	type CheckpointAction,
+	type CheckpointRuleId,
+	type CheckpointSignal,
+	type CheckpointTrigger,
 };
-
-/** The stall signals a checkpoint can measure. `context` is a trigger, not a
- * signal: it is never answered with a nudge. */
-export const CHECKPOINT_SIGNALS = [
-	"failing-tool",
-	"repeats",
-	"no-progress",
-	"cost-rising",
-] as const;
-export type CheckpointSignal = (typeof CHECKPOINT_SIGNALS)[number];
-
-/** Why a checkpoint fired. Closed vocabulary, recorded in the digest. */
-export const CHECKPOINT_TRIGGERS = [
-	"soft",
-	"interval",
-	"hard",
-	"context",
-	"stall",
-] as const;
-export type CheckpointTrigger = (typeof CHECKPOINT_TRIGGERS)[number];
-
-/** The rule ids of `rules/v1`, in evaluation order. With `steer` disabled a
- * steer rule yields `continue` under its own id, so the set stays closed. */
-/** How many checkpoints of one run are recorded in the workflow's decision
- * history. The history is shared with every other integration (100 records), so
- * a run's own cap is smaller; later checkpoints stay telemetry-only. */
-export { CHECKPOINT_RECORD_LIMIT, CHECKPOINT_RULE_IDS, type CheckpointRuleId };
 
 /** From this turn on a stall signal may fire a checkpoint between the scheduled
  * ones, so an early run is never interrupted by its own warm-up. */
@@ -452,6 +449,10 @@ export interface CheckpointSample {
 
 export interface ProgressCheckpointOptions {
 	checkpointClass: CheckpointClass;
+	/** The ordinal this instance continues from. A run id that is ensured again
+	 * after a stop resumes its numbering, so `checkpoint:<run>:<ordinal>` — the
+	 * record's idempotency key — is never re-issued. */
+	ordinal?: number;
 	thresholds?: CheckpointThresholds;
 	contextTokens?: number;
 	/** The run cannot change files, so a new call is its progress. */
@@ -525,6 +526,7 @@ export class ProgressCheckpoint {
 		this.failingToolEligible = options.failingToolEligible ?? true;
 		this.isRegisteredTool =
 			options.isRegisteredTool ?? ((tool) => TOOL_NAME_PATTERN.test(tool));
+		this.ordinal = Math.max(0, Math.floor(options.ordinal ?? 0));
 		this.nextTurn = this.thresholds.softTurns;
 		this.hardLimit = this.thresholds.hardTurns;
 		this.costWindow = new Array<number>(Math.max(1, this.interval)).fill(0);
@@ -749,9 +751,15 @@ export class ProgressCheckpoint {
 		digest: CheckpointDigest,
 		outcome: { applied: boolean } = { applied: true },
 	): void {
+		// What the next digest reads is what was *decided*, not what happened to
+		// it: `no-progress-twice` is defined on the previous decision being
+		// `continue`, so a refused steer that stored `continue` would make the next
+		// zero-progress window escalate under a rule whose precondition it fails.
+		// Only the signal bookkeeping follows the outcome — an undelivered nudge
+		// answered nothing, so the signal stays open for the next checkpoint.
 		this.lastDecision = {
-			decision: outcome.applied ? decision.action : "continue",
-			rule: outcome.applied ? decision.rule : "default",
+			decision: decision.action,
+			rule: decision.rule,
 			progress: digest.window.progress,
 		};
 		if (

@@ -462,6 +462,27 @@ export const CHECKPOINT_RULE_IDS = [
 	"default",
 ] as const;
 export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
+/** The stall signals a checkpoint can measure, and the reasons it fired. Both
+ * are written into the digest, which the record boundary persists, so both are
+ * declared here for the same reason the rule ids are: the boundary refuses a
+ * value outside the set, and the host and the efficiency queries read one
+ * declaration. `context` is a trigger, never a signal — it is not answered with
+ * a nudge. */
+export const CHECKPOINT_SIGNALS = [
+	"failing-tool",
+	"repeats",
+	"no-progress",
+	"cost-rising",
+] as const;
+export type CheckpointSignal = (typeof CHECKPOINT_SIGNALS)[number];
+export const CHECKPOINT_TRIGGERS = [
+	"soft",
+	"interval",
+	"hard",
+	"context",
+	"stall",
+] as const;
+export type CheckpointTrigger = (typeof CHECKPOINT_TRIGGERS)[number];
 /** One line per checkpoint action: the question option's text and the decision
  * record's `criteria`. It lives in the contract for the same reason the
  * vocabulary does — the record boundary refuses an option whose criteria is not

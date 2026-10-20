@@ -17,10 +17,13 @@ import type {
 import {
 	CHECKPOINT_ACTION_SUMMARY,
 	CHECKPOINT_ACTIONS,
+	CHECKPOINT_CLASSES,
 	CHECKPOINT_DECIDER,
 	CHECKPOINT_INTEGRATION,
 	CHECKPOINT_RECORD_LIMIT,
 	CHECKPOINT_RULE_IDS,
+	CHECKPOINT_SIGNALS,
+	CHECKPOINT_TRIGGERS,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { tokenMatches } from "../capability.ts";
@@ -50,14 +53,22 @@ type DigestShape =
 	| "tool"
 	| "nullable-tool"
 	| "nullable-number"
-	| "token-list"
+	/** One value of a closed set the contract declares — a class, an action, a
+	 * rule id, a signal or a trigger — or, with `list`, a list of them. Pinning
+	 * the *set* rather than the string shape is what keeps the digest's
+	 * vocabulary equal to the decider's: "token-shaped" would admit any lowercase
+	 * word a caller chose. */
+	| {
+			readonly oneOf: readonly string[];
+			readonly list?: boolean;
+	  }
 	| { readonly fields: DigestShapes }
 	| { readonly nullableFields: DigestShapes };
 
 const CHECKPOINT_DIGEST_SHAPE: DigestShapes = {
 	ordinal: "number",
-	trigger: "token",
-	checkpointClass: "token",
+	trigger: { oneOf: CHECKPOINT_TRIGGERS },
+	checkpointClass: { oneOf: CHECKPOINT_CLASSES },
 	readOnly: "boolean",
 	turns: "number",
 	costUnits: "number",
@@ -85,16 +96,20 @@ const CHECKPOINT_DIGEST_SHAPE: DigestShapes = {
 	},
 	tickedTasks: "nullable-number",
 	previous: {
-		nullableFields: { decision: "token", rule: "token", progress: "number" },
+		nullableFields: {
+			decision: { oneOf: CHECKPOINT_ACTIONS },
+			rule: { oneOf: CHECKPOINT_RULE_IDS },
+			progress: "number",
+		},
 	},
-	steeredSignals: "token-list",
+	steeredSignals: { oneOf: CHECKPOINT_SIGNALS, list: true },
 };
 
-/** What every string inside a digest may look like: a lowercase closed token
- * (a class, an action, a rule id, a signal, a trigger) or a registered tool
- * name. The host publishes dotted tool names (`agentic.codemode`), which is why
- * the dot is part of the shape. No path, sentence, excerpt or credential
- * matches it. */
+/** The shape of a tool name in a digest. The host publishes dotted tool names
+ * (`agentic.codemode`), which is why the dot is part of the shape, and the
+ * decider writes its own sentinel for a name it cannot vouch for. No path,
+ * sentence, excerpt or credential matches it. Every *other* string in the digest
+ * is a member of a closed set, and the sentinel is not one. */
 const CHECKPOINT_TOKEN = /^[a-z][a-z0-9_.-]{0,63}$/;
 /** The decider's own stand-in for a failing tool name the host did not publish:
  * the digest records `"a tool"` rather than a name it cannot vouch for, so the
@@ -136,10 +151,14 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 }
 
 function closedToken(value: unknown): boolean {
-	return (
-		typeof value === "string" &&
-		(value === CHECKPOINT_UNREGISTERED_TOOL || CHECKPOINT_TOKEN.test(value))
-	);
+	return typeof value === "string" && CHECKPOINT_TOKEN.test(value);
+}
+
+/** A registered tool name, or the decider's one stand-in for a name the host
+ * did not publish. Only `failingTool` carries this kind, so the sentinel cannot
+ * reach a class, a rule id, a signal or a trigger. */
+function toolName(value: unknown): boolean {
+	return value === CHECKPOINT_UNREGISTERED_TOOL || closedToken(value);
 }
 
 function digestWalk(
@@ -148,6 +167,26 @@ function digestWalk(
 	path: string,
 	problems: string[],
 ): void {
+	if (typeof shape === "object" && "oneOf" in shape) {
+		const set = shape.oneOf as readonly string[];
+		if (shape.list === true) {
+			if (
+				!Array.isArray(value) ||
+				!value.every(
+					(item): boolean => typeof item === "string" && set.includes(item),
+				)
+			)
+				problems.push(
+					`input ${path} must be a list of closed tokens`.trimStart(),
+				);
+			return;
+		}
+		if (typeof value !== "string" || !set.includes(value))
+			problems.push(
+				`input ${path} carries text outside the closed vocabulary`.trimStart(),
+			);
+		return;
+	}
 	if (typeof shape === "object") {
 		const fields =
 			"fields" in shape ? shape.fields : (shape.nullableFields ?? {});
@@ -196,15 +235,13 @@ function digestWalk(
 			problems.push(`input ${path} must be a boolean`.trimStart());
 		return;
 	}
-	if (shape === "token-list") {
-		if (!Array.isArray(value) || !value.every((item) => closedToken(item)))
-			problems.push(
-				`input ${path} must be a list of closed tokens`.trimStart(),
-			);
-		return;
-	}
-	// `token`, `tool`, `nullable-token` and `nullable-tool` carry one string.
-	if (!closedToken(value))
+	// `token`, `tool`, `nullable-token` and `nullable-tool` carry one string; only
+	// the two tool kinds admit the decider's sentinel.
+	const closed =
+		shape === "tool" || shape === "nullable-tool"
+			? toolName(value)
+			: closedToken(value);
+	if (!closed)
 		problems.push(
 			`input ${path} carries text outside the closed vocabulary`.trimStart(),
 		);
@@ -310,7 +347,7 @@ export function checkpointRecordProblems(
 export interface RecordedCheckpoint {
 	recorded: boolean;
 	/** Why nothing was appended, for the caller's log line. */
-	reason?: "record-cap" | "storage-error";
+	reason?: "record-cap" | "duplicate" | "storage-error";
 	/** How many checkpoint records the workflow holds after this command. */
 	records: number;
 }
@@ -386,17 +423,30 @@ export function agentCheckpoint(
 	};
 	// One question id is one record: a retried command — a timeout, a second
 	// report of the same checkpoint — must not consume a second slot of the
-	// run's budget or push an identical row into the history.
+	// run's budget or push an identical row into the history. A second record
+	// under the *same* id that says something else is not a replay (a relaunched
+	// run id re-issuing an ordinal it already used), so it is refused instead of
+	// being reported as the stored decision.
 	const existing = runCheckpointRecords(snapshot, run.id);
-	if (existing.some((entry) => entry.questionId === command.record.questionId))
+	const duplicate = existing.find(
+		(entry) => entry.questionId === command.record.questionId,
+	);
+	if (duplicate) {
+		const same =
+			duplicate.input === record.input &&
+			duplicate.answer.choice === record.answer.choice;
 		return {
 			type: "agent.checkpoint",
 			actor: { kind: "agent", runId: run.id, role: run.role },
-			data: {
-				recorded: true,
-				records: existing.length,
-			} satisfies RecordedCheckpoint,
+			data: (same
+				? { recorded: true, records: existing.length }
+				: {
+						recorded: false,
+						reason: "duplicate",
+						records: existing.length,
+					}) satisfies RecordedCheckpoint,
 		};
+	}
 	const before = existing.length;
 	if (before >= CHECKPOINT_RECORD_LIMIT)
 		return {
