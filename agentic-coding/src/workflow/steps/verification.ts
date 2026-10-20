@@ -443,6 +443,7 @@ function arrivingRoles(
 export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.triage": {
 		classification: "single",
+		checkpointClass: "mechanical",
 		roles: () => ["triage"],
 		candidateRoles: () => ["triage"],
 		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
@@ -463,6 +464,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"core.verification": {
 		classification: "single",
+		checkpointClass: "verifier",
 		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
 		onAgentComplete: verificationCompletion,
 		// Candidate roles configure routing before a run exists; active roles use

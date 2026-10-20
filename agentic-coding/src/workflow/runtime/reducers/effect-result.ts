@@ -697,7 +697,7 @@ function normalizeJson(value: unknown): JsonValue | undefined {
 	}
 }
 
-function truncateClassifierInput(
+export function truncateClassifierInput(
 	input: string,
 	limit = CLASSIFIER_DECISION_INPUT_MAX_BYTES,
 ): {
@@ -712,7 +712,7 @@ function truncateClassifierInput(
 	return { input: truncated, inputTruncated: true };
 }
 
-function appendClassifierDecisions(
+export function appendClassifierDecisions(
 	snapshot: WorkflowSnapshot,
 	decisions: ClassifierDecisionRecord[],
 ): void {

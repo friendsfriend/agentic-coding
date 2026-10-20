@@ -128,6 +128,22 @@ function classificationFixture() {
 			attention: "judged 3, cleared 2, flagged 1, unsure 0, not judged 0",
 		},
 	};
+	const checkpoint: ClassifierDecisionRecord = {
+		id: "e-checkpoint",
+		at: "2026-01-01T00:00:05Z",
+		integration: "progress-checkpoint",
+		questionId: "checkpoint:run-1:3",
+		model: "rules/v1",
+		input: '{"class":"worker","turns":40}',
+		inputTruncated: false,
+		options: [{ label: "steer", profile: "steer", criteria: "nudge the run" }],
+		answer: { type: "choice", choice: "steer", probabilities: { steer: 1 } },
+		result: {
+			applied: true,
+			profiles: ["steer"],
+			attention: "rule no-progress",
+		},
+	};
 	const gate: GateDecisionRecord = {
 		id: "a-gate",
 		at: "2026-01-01T00:00:01Z",
@@ -138,7 +154,7 @@ function classificationFixture() {
 		forced: false,
 		noul: 0.12,
 	};
-	return { routing, triage, sweep, gate };
+	return { routing, triage, sweep, checkpoint, gate };
 }
 
 test("the classification history is every recorded classification, oldest first", () => {
@@ -161,11 +177,11 @@ test("the classification history is every recorded classification, oldest first"
 });
 
 test("each classification kind renders a row that names what it decided", () => {
-	const { routing, triage, sweep, gate } = classificationFixture();
+	const { routing, triage, sweep, checkpoint, gate } = classificationFixture();
 	expect(
 		classificationRows(
 			classificationEntries({
-				classifierDecisions: [routing, triage, sweep],
+				classifierDecisions: [routing, triage, sweep, checkpoint],
 				gateDecisions: [gate],
 			}),
 		),
@@ -174,6 +190,7 @@ test("each classification kind renders a row that names what it decided", () => 
 		"routing · core.implementation · applied base",
 		"verifier roles · needs_security_verifier · selected security-verifier",
 		"file sweep · leak · judged 3, cleared 2, flagged 1, unsure 0, not judged 0",
+		"checkpoint · checkpoint:run-1:3 · decided steer (rule no-progress)",
 	]);
 });
 

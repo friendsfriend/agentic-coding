@@ -26,6 +26,7 @@ const INTEGRATION_LABELS: Readonly<Record<string, string>> = Object.freeze({
 	routing: "routing",
 	triage: "verifier roles",
 	"file-judgment": "file sweep",
+	"progress-checkpoint": "checkpoint",
 });
 
 /** The outcome half of a classifier row, per integration. A `noul` question
@@ -38,6 +39,12 @@ function classifierOutcome(decision: ClassifierDecisionRecord): string {
 	// A sweep answers once per file, so its counts are its outcome.
 	if (decision.integration === "file-judgment")
 		return decision.result.attention ?? "no bands reported";
+	// A checkpoint decides what should happen to a long run; its rule id (and any
+	// fail-open reason the applier added) is its outcome.
+	if (decision.integration === "progress-checkpoint")
+		return `decided ${decision.answer.choice ?? "continue"} (${
+			decision.result.attention ?? "rule unknown"
+		})`;
 	return decision.result.applied ? `applied ${profiles}` : `kept ${profiles}`;
 }
 

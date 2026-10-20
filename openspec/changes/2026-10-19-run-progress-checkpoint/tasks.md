@@ -12,9 +12,9 @@
 
 ## 3. Recording in the engine
 
-- [ ] 3.1 Add the step-declared checkpoint class to the registered step behaviors and pass it to the run environment as `HERDR_CHECKPOINT_CLASS`; test that a worker, a planner, a verifier and a mechanical step carry their class and an undeclared step carries none
-- [ ] 3.2 Add the authenticated `workflow checkpoint --record <json>` run command and its reducer: validate the bounded record, append one `progress-checkpoint` classifier decision record within the existing schema, commit an event with no lifecycle transition, refuse a run that is not active; tests for append, refusal and unchanged lifecycle state; `STORE_SCHEMA_VERSION` stays 6
-- [ ] 3.3 Give the dashboard classifier panel a one-line outcome for the `progress-checkpoint` integration (`decided <label> (rule <id>)`) with a projection test
+- [x] 3.1 Add the step-declared checkpoint class to the registered step behaviors and pass it to the run environment as `HERDR_CHECKPOINT_CLASS`; test that a worker, a planner, a verifier and a mechanical step carry their class and an undeclared step carries none
+- [x] 3.2 Add the authenticated `workflow checkpoint --record <json>` run command and its reducer: validate the bounded record, append one `progress-checkpoint` classifier decision record within the existing schema, commit an event with no lifecycle transition, refuse a run that is not active; tests for append, refusal and unchanged lifecycle state; `STORE_SCHEMA_VERSION` stays 6
+- [x] 3.3 Give the dashboard classifier panel a one-line outcome for the `progress-checkpoint` integration (`decided <label> (rule <id>)`) with a projection test
 
 ## 4. Host wiring
 

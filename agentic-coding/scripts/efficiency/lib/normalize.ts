@@ -344,9 +344,7 @@ export function normalizeRecord(
 			str(record["herdr.checkpoint.decision"]) ?? normalized.outcome;
 		const rule = str(record["herdr.checkpoint.rule"]);
 		normalized.reasonCode =
-			rule !== undefined && looksLikeCode(rule)
-				? rule
-				: normalized.reasonCode;
+			rule !== undefined && looksLikeCode(rule) ? rule : normalized.reasonCode;
 		normalized.errorClass =
 			str(record["herdr.checkpoint.status"]) === "error"
 				? (str(record["herdr.checkpoint.error_class"]) ?? "checkpoint_error")

@@ -15,16 +15,18 @@
 // The digest's vocabulary is closed: numbers, booleans, registered tool names,
 // the five classes, the five actions, the four stall signals and the rule ids.
 
-/** The checkpoint classes. `other` is every undeclared step, and it uses the
- * worker values (an undeclared run is usually a worker). */
-export const CHECKPOINT_CLASSES = [
-	"worker",
-	"planner",
-	"verifier",
-	"mechanical",
-	"other",
-] as const;
-export type CheckpointClass = (typeof CHECKPOINT_CLASSES)[number];
+import {
+	CHECKPOINT_CLASSES,
+	CHECKPOINT_RECORD_LIMIT,
+	type CheckpointClass,
+} from "../contracts/workflow.ts";
+
+/** The checkpoint classes and their vocabulary are the contract's
+ * (`src/contracts/workflow.ts`): a step declares one, the runner passes it to the
+ * run as `HERDR_CHECKPOINT_CLASS`, and this module reads it back. `other` is
+ * every undeclared step, and it uses the worker values (an undeclared run is
+ * usually a worker). */
+export { CHECKPOINT_CLASSES, type CheckpointClass };
 
 export interface CheckpointThresholds {
 	/** The turn count that starts evaluation. It never stops anything. */
@@ -120,7 +122,7 @@ export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
 /** How many checkpoints of one run are recorded in the workflow's decision
  * history. The history is shared with every other integration (100 records), so
  * a run's own cap is smaller; later checkpoints stay telemetry-only. */
-export const CHECKPOINT_RECORD_LIMIT = 12;
+export { CHECKPOINT_RECORD_LIMIT };
 
 /** From this turn on a stall signal may fire a checkpoint between the scheduled
  * ones, so an early run is never interrupted by its own warm-up. */
