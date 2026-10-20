@@ -190,8 +190,63 @@ test("each classification kind renders a row that names what it decided", () => 
 		"routing · core.implementation · applied base",
 		"verifier roles · needs_security_verifier · selected security-verifier",
 		"file sweep · leak · judged 3, cleared 2, flagged 1, unsure 0, not judged 0",
-		"checkpoint · checkpoint:run-1:3 · decided steer (rule no-progress)",
+		// A checkpoint's row is its action, its rule and the fate of its question:
+		// the ordinal identifies the checkpoint without a run UUID eating the panel.
+		"checkpoint · #3 · steer · no-progress",
 	]);
+});
+
+test("a checkpoint row tells an answered escalation from one that was never filed", () => {
+	const { checkpoint } = classificationFixture();
+	const rowsFor = (attention: string) =>
+		classificationRows(
+			classificationEntries({
+				classifierDecisions: [
+					{
+						...checkpoint,
+						questionId: "checkpoint:8a:4",
+						answer: { type: "choice", choice: "escalate" },
+						result: { ...checkpoint.result, applied: false, attention },
+					},
+				],
+			}),
+		);
+	// Filed and answered, filed and parked, and never filed read differently, so
+	// the dashboard never claims a developer question that could not be asked.
+	expect(rowsFor("rule hard-limit; question q-1 answered")).toEqual([
+		"checkpoint · #4 · escalate · hard-limit · filed",
+	]);
+	expect(rowsFor("rule hard-limit; question q-1 unanswered")).toEqual([
+		"checkpoint · #4 · escalate · hard-limit · filed",
+	]);
+	expect(rowsFor("rule hard-limit; question not filed")).toEqual([
+		"checkpoint · #4 · escalate · hard-limit · not filed",
+	]);
+	// A record from before this projection, or one with no rule, still renders.
+	expect(rowsFor("escalate")).toEqual([
+		"checkpoint · #4 · escalate · rule unknown",
+	]);
+	expect(rowsFor("")).toEqual(["checkpoint · #4 · escalate · rule unknown"]);
+});
+
+test("a rule set's decision is not reported as a missing confidence", () => {
+	const { checkpoint } = classificationFixture();
+	const detail = classificationDetail({
+		kind: "classifier",
+		record: checkpoint,
+	});
+	expect(detail.content).toContain(
+		"Confidence: none (a deterministic rule set)",
+	);
+	expect(detail.content).not.toContain("not provided");
+	// Every other integration keeps the sparse-record wording.
+	const { triage } = classificationFixture();
+	expect(
+		classifierDecisionDetail({
+			...triage,
+			answer: { type: "choice", choice: "x" },
+		}).content,
+	).toContain("Confidence: not provided");
 });
 
 test("a necessity answer is shown as a value, never defaulted to zero", () => {
