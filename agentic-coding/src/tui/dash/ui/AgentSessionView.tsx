@@ -209,6 +209,8 @@ function tint(color: string, amount: number): string {
  * not the transcript's own bound. */
 const TRANSCRIPT_WINDOW = 60;
 const TRANSCRIPT_PAGE = 40;
+/** Compact user prompts while preserving the full text for click-to-expand. */
+const USER_PROMPT_PREVIEW_LINES = 5;
 
 /** The separator between the transcript and its newest output: a rule in the
  * theme's accent with `new` and a down arrow centered on it, so the boundary is
@@ -537,7 +539,7 @@ function Block(props: {
 	if (props.block.kind === "user")
 		// opencode's user prompt: the prompt box's own raised block, with a blank
 		// line above and below the text so a message reads as a paragraph of its
-		// own instead of a dense row.
+		// own instead of a dense row. Long prompts fold to a short preview.
 		return (
 			<box
 				border={["left"]}
@@ -547,12 +549,23 @@ function Block(props: {
 				paddingLeft={2}
 				paddingRight={1}
 				flexShrink={0}
+				{...useTap(() => props.onToggle(props.block.id))}
 			>
-				{/* The blank line above the prompt carries its time, right-aligned. */}
+				{/* The blank line above the prompt carries its disclosure and time. */}
 				<box flexDirection="row" justifyContent="flex-end" height={1}>
+					<text fg={uiColors.textMuted}>{props.expanded ? "▾ " : "▸ "}</text>
 					<Stamp block={props.block} />
 				</box>
-				<text fg={uiColors.textPrimary}>{props.block.text}</text>
+				<box
+					maxHeight={
+						props.expanded
+							? props.block.text.length + 1
+							: USER_PROMPT_PREVIEW_LINES
+					}
+					overflow="hidden"
+				>
+					<text fg={uiColors.textPrimary}>{props.block.text}</text>
+				</box>
 			</box>
 		);
 	if (props.block.kind === "assistant")

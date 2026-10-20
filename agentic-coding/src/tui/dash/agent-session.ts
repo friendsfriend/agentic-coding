@@ -367,10 +367,17 @@ function entryBlocks(
 		case "pi.user":
 			return (
 				model
-					.map((message) => ({
-						text: oneLine(isRecord(message) ? message.content : ""),
-						at: isRecord(message) ? finiteNumber(message.timestamp) : undefined,
-					}))
+					.map((message) => {
+						const content = isRecord(message) ? message.content : undefined;
+						return {
+							// Keep the original prompt text: the view folds long messages
+							// visually and must still be able to reveal the complete message.
+							text: typeof content === "string" ? content.trim() : "",
+							at: isRecord(message)
+								? finiteNumber(message.timestamp)
+								: undefined,
+						};
+					})
 					.filter((message) => message.text)
 					// The user's own prompt is the accent-colored box, distinct from the
 					// model's neutral messages.

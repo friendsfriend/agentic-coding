@@ -62,6 +62,20 @@ describe("buildAgentSessionView", () => {
 		]);
 	});
 
+	test("keeps the complete multiline user message for disclosure in the view", () => {
+		const prompt = Array.from(
+			{ length: 40 },
+			(_, index) => `user prompt line ${index} with the complete sentence`,
+		).join("\n");
+		expect(
+			blocksOf({
+				entries: [
+					{ kind: "pi.user", model: [{ role: "user", content: prompt }] },
+				],
+			}),
+		).toEqual([{ kind: "user", text: prompt, tone: "accent" }]);
+	});
+
 	test("renders tool results with a success or error tone", () => {
 		const result = (isError: boolean) =>
 			buildAgentSessionView({

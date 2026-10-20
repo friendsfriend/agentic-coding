@@ -87,6 +87,56 @@ test("the page is body content: no title row, and the prompt ends it", async () 
 	t.renderer.destroy();
 });
 
+test("a long sent message expands and collapses on click", async () => {
+	const prompt = Array.from(
+		{ length: 12 },
+		(_, index) => `prompt line ${index}`,
+	).join("\n");
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[
+					{ id: "user:long", kind: "user", text: prompt, tone: "accent" },
+				]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 24 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("prompt line 0");
+		expect(collapsed).not.toContain("prompt line 8");
+		const firstLine = collapsed
+			.split("\n")
+			.findIndex((line) => line.includes("prompt line 0"));
+		const firstColumn =
+			collapsed.split("\n")[firstLine]?.indexOf("prompt line 0") ?? 0;
+		await t.mockMouse.click(firstColumn, firstLine);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("prompt line 11");
+		await t.mockMouse.click(firstColumn, firstLine);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("prompt line 8");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("the reader can jump back to the newest transcript output", async () => {
 	let scroll:
 		| {
