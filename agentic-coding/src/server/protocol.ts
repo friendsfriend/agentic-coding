@@ -24,8 +24,11 @@ import {
 	browserScreenshotRequestSchema,
 	browserScriptRequestSchema,
 	browserSessionRequestSchema,
+	browserStageJournalRequestSchema,
 	browserStageLoginRequestSchema,
 	browserStageLoginWaitRequestSchema,
+	browserStageStepRequestSchema,
+	browserStageWaitRequestSchema,
 	browserWaitRequestSchema,
 } from "../contracts/browser.ts";
 import { credentialRespondSchema } from "../contracts/credential.ts";
@@ -104,6 +107,12 @@ export const AGENT_BROWSER_LOGIN_PATH = `${AGENT_BROWSER_PREFIX}login`;
 /** `add-stage-interactive-login`: block in the server while a login hand-off is
  * pending, instead of spending a model turn per poll. */
 export const AGENT_BROWSER_LOGIN_WAIT_PATH = `${AGENT_BROWSER_PREFIX}login-wait`;
+
+// `add-stage-flow-evidence`: the step journal, its read-back, and the wait that
+// polls inside the server.
+export const AGENT_BROWSER_STAGE_STEP_PATH = `${AGENT_BROWSER_PREFIX}stage-step`;
+export const AGENT_BROWSER_STAGE_JOURNAL_PATH = `${AGENT_BROWSER_PREFIX}stage-journal`;
+export const AGENT_BROWSER_STAGE_WAIT_PATH = `${AGENT_BROWSER_PREFIX}stage-wait`;
 
 /** The stage catalog of one run: the same read surface as the dashboard's, with
  * version probes resolved. It rides the owner capability because a run may only
@@ -735,6 +744,21 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		schema: browserStageLoginWaitRequestSchema,
 	},
 	{
+		path: AGENT_BROWSER_STAGE_STEP_PATH,
+		schemaId: "server.agent-env.browser.stage-step",
+		schema: browserStageStepRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_JOURNAL_PATH,
+		schemaId: "server.agent-env.browser.stage-journal",
+		schema: browserStageJournalRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_WAIT_PATH,
+		schemaId: "server.agent-env.browser.stage-wait",
+		schema: browserStageWaitRequestSchema,
+	},
+	{
 		path: AGENT_OTEL_QUERY_PATH,
 		schemaId: "server.agent-env.debug.otel",
 		schema: agentOtelQuerySchema,
@@ -836,6 +860,9 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 	{ kind: "developer-review-findings", domain: "workflow" },
 	{ kind: "repair-preview", domain: "workflow" },
 	{ kind: "evidence", domain: "evidence" },
+	// The stage flow's step journal, which lives beside the evidence manifest and
+	// is read by the panel that groups evidence into segments.
+	{ kind: "stage-journal", domain: "evidence" },
 	// The delegated debug requests of one workflow: they are durable workflow
 	// rows, so they belong to the workflow domain.
 	{ kind: "debug-requests", domain: "workflow" },

@@ -105,6 +105,14 @@ const observationSchema = Schema.Union(
 		repo: Schema.String,
 		workflowId: Schema.String,
 	}),
+	// The stage flow's step journal (`add-stage-flow-evidence`): the entries the
+	// Evidence panel groups into segments. A workflow without one answers empty,
+	// which is what the panel's unchanged rendering keys off.
+	Schema.Struct({
+		kind: Schema.Literal("stage-journal"),
+		repo: Schema.String,
+		workflowId: Schema.String,
+	}),
 	Schema.Struct({
 		kind: Schema.Literal("sessions-report"),
 		since: Schema.optional(Schema.String),
@@ -461,6 +469,15 @@ export const evidenceEntrySchema = Schema.Struct({
 	/** Pinned evidence is kept by any future prune and is not charged against
 	 * the workflow's cap. */
 	pinned: Schema.optional(Schema.Boolean),
+	/** The flow segment a kept recording belongs to (`add-stage-flow-evidence`):
+	 * journal steps of that segment link to this video at their own offset. */
+	segment: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "expected a positive integer segment",
+			}),
+		),
+	),
 });
 export type EvidenceEntry = typeof evidenceEntrySchema.Type;
 

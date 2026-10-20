@@ -212,6 +212,12 @@ export class BrowserPool {
 	/** One recording critical section *per session*, so a start/stop on one page
 	 * cannot serialize every other session's tool calls. */
 	private readonly recordingGates = new Map<string, Promise<void>>();
+	/** The last recording segment handed out, per owner (`add-stage-flow-evidence`).
+	 * A segment number is what a journal step names to be linked into the kept
+	 * recording, so it has to be unique across the owner's sessions and stable
+	 * across restarts of the flow: it is derived from the pool's own count of
+	 * started recordings, not from anything the agent says. */
+	private readonly recordingSegments = new Map<string, number>();
 	/** Slots reserved for a caller whose context is still being created. A token
 	 * travels with the reservation, so a slot handed to the oldest waiter cannot
 	 * be taken by a newer open first. */
@@ -1064,7 +1070,7 @@ export class BrowserPool {
 	async startRecording(
 		session: BrowserSession,
 		options: { readonly dir: string; readonly maxMs?: number },
-	): Promise<{ startedAt: number; url: string }> {
+	): Promise<{ startedAt: number; url: string; segment: number }> {
 		return await this.withRecordingGate(session, async () => {
 			if (session.recording)
 				throw new BrowserPoolError(
@@ -1075,6 +1081,14 @@ export class BrowserPool {
 			const browser = await this.ensureBrowser(session.browserSlot);
 			const state = await session.context.storageState().catch(() => undefined);
 			const url = session.url;
+			// `sessionStorage` is not part of a `storageState()` snapshot: only the
+			// live document can read it, so it is read here — before the current
+			// context is closed — and seeded into the recording context instead
+			// (`add-stage-flow-evidence`, spec "Recording segments").
+			const carried = await session
+				.evaluate(SESSION_STORAGE_READ_SCRIPT)
+				.then(parsedSessionStorage)
+				.catch(() => []);
 			const previous = session.context;
 			// The replacement is created *before* the swap is announced, so a failure
 			// here leaves the session with the page it had rather than with a swap
@@ -1101,6 +1115,19 @@ export class BrowserPool {
 					? { httpCredentials: session.httpCredentials }
 					: {}),
 			});
+			if (carried.length > 0) {
+				const script = storageInitScript({
+					cookies: [],
+					origins: [
+						{
+							origin: originOf(url),
+							localStorage: [],
+							sessionStorage: carried,
+						},
+					],
+				});
+				if (script !== "") await context.addInitScript(script).catch(() => {});
+			}
 			// The close that follows is this swap, not a crash.
 			session.beginContextSwap();
 			await previous.close().catch(() => {});
@@ -1115,15 +1142,18 @@ export class BrowserPool {
 					"the session was closed while its recording context was being created; call browser_open again",
 					409,
 				);
+			const segment = (this.recordingSegments.get(session.owner) ?? 0) + 1;
+			this.recordingSegments.set(session.owner, segment);
 			const recording: SessionRecording = {
 				startedAt: this.clock(),
 				startedUrl: url,
 				maxMs: options.maxMs ?? DEFAULT_RECORDING_MAX_MS,
 				dir: options.dir,
 				autoStopped: false,
+				segment,
 			};
 			session.attachRecording(recording);
-			return { startedAt: recording.startedAt, url };
+			return { startedAt: recording.startedAt, url, segment };
 		});
 	}
 
@@ -1172,6 +1202,12 @@ export class BrowserPool {
 		readonly posterSaved: boolean;
 		readonly autoStopped: boolean;
 		readonly url: string;
+		/** The segment this stop closed, so the route can back-fill its kept
+		 * video into the journal's steps of the same segment. */
+		readonly segment: number;
+		/** How long the segment actually ran, which is what a kept recording is
+		 * charged against the stage's recording minutes. */
+		readonly elapsedMs: number;
 	}> {
 		return await this.withRecordingGate(
 			session,
@@ -1189,6 +1225,8 @@ export class BrowserPool {
 		readonly posterSaved: boolean;
 		readonly autoStopped: boolean;
 		readonly url: string;
+		readonly segment: number;
+		readonly elapsedMs: number;
 	}> {
 		const recording = session.detachRecording();
 		if (!recording)
@@ -1198,6 +1236,7 @@ export class BrowserPool {
 				409,
 			);
 		const url = session.url;
+		const elapsedMs = Math.max(0, this.clock() - recording.startedAt);
 		let posterSaved = false;
 		if (keep) {
 			try {
@@ -1262,7 +1301,14 @@ export class BrowserPool {
 				});
 		}
 		await this.finishSwap(session, browser, context, url);
-		return { videoSaved, posterSaved, autoStopped: recording.autoStopped, url };
+		return {
+			videoSaved,
+			posterSaved,
+			autoStopped: recording.autoStopped,
+			url,
+			segment: recording.segment,
+			elapsedMs,
+		};
 	}
 
 	// -- internals ---------------------------------------------------------

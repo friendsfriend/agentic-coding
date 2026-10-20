@@ -197,6 +197,11 @@ export interface SessionRecording {
 	 * `keep: false` rather than attaching a truncated video as if it were asked
 	 * for. */
 	autoStopped: boolean;
+	/** This recording's segment number, unique per owner (`add-stage-flow-evidence`).
+	 * A journal step written while the segment records names it, so the kept video
+	 * can be back-filled onto exactly those steps and the flow page can seek each
+	 * one to its offset. */
+	readonly segment: number;
 }
 
 /** A refusal the routes translate one-to-one into their error envelope. */

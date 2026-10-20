@@ -70,7 +70,12 @@ export type EvidenceRefusalCode =
 	| "evidence-kind"
 	| "evidence-quota"
 	| "evidence-missing"
-	| "evidence-manifest";
+	| "evidence-manifest"
+	// `add-stage-flow-evidence`: a journal at its per-file cap and a stored
+	// screenshot past the stage's own bound. Both are evidence refusals the
+	// browser route answers with, in the same vocabulary as the rest.
+	| "stage-journal-full"
+	| "stage-screenshot-limit";
 
 /** A bounded, typed refusal: the route layer maps `status` and `code` onto the
  * wire, and the agent tool reports `code: message`. */
@@ -525,6 +530,9 @@ export interface EvidenceAttachRequest {
 	readonly url?: string;
 	readonly poster?: string;
 	readonly pinned?: boolean;
+	/** The recording segment a kept video belongs to
+	 * (`add-stage-flow-evidence`): the journal steps of that segment link to it. */
+	readonly segment?: number;
 	/** Test seam: the clock the id and `createdAt` are derived from. */
 	readonly now?: () => Date;
 	/** Test seam: the randomness the ULID is filled with. */
@@ -761,6 +769,7 @@ export async function attachEvidence(
 					...(input.app ? { app: input.app } : {}),
 					...(input.url ? { url: input.url } : {}),
 					...(input.poster ? { poster: input.poster } : {}),
+					...(input.segment === undefined ? {} : { segment: input.segment }),
 					bytes: source.size,
 					...(input.pinned ? { pinned: true } : {}),
 				};

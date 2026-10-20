@@ -154,14 +154,18 @@ export const browserLogRequestSchema = Schema.Struct({
 });
 export type BrowserLogRequest = typeof browserLogRequestSchema.Type;
 
-/** `browser_screenshot`: returned to the model always, stored only when the
- * agent asked for evidence. */
+/** `browser_screenshot`: returned to the model by default, stored only when the
+ * agent asked for evidence. `view: false` stores it without returning the
+ * image (`add-stage-flow-evidence`), which is what keeps a process-flow test
+ * from inflating the model's context; it is valid only together with
+ * `evidence: true`. */
 export const browserScreenshotRequestSchema = Schema.Struct({
 	session: sessionField,
 	ref: refField,
 	selector: selectorField,
 	fullPage: Schema.optional(Schema.Boolean),
 	evidence: Schema.optional(Schema.Boolean),
+	view: Schema.optional(Schema.Boolean),
 	caption: Schema.optional(browserField(512)),
 });
 export type BrowserScreenshotRequest =
@@ -214,6 +218,116 @@ export const browserStageLoginWaitRequestSchema = Schema.Struct({
 export type BrowserStageLoginWaitRequest =
 	typeof browserStageLoginWaitRequestSchema.Type;
 
+/** One agent-captured value: a name and a short text, both redacted before the
+ * journal is written. */
+const stageCaptureKey = browserText(128).pipe(Schema.minLength(1));
+const stageCaptures = Schema.Record({
+	key: stageCaptureKey,
+	value: browserFreeText(1024),
+});
+
+/** The optional knowledge observation a journal step may carry
+ * (`add-stage-flow-evidence`): what the step showed about the process being
+ * tested, and — for a contradiction — which cause the agent suspects. */
+export const stageKnowledgeSchema = Schema.Struct({
+	concept: browserField(256).pipe(Schema.minLength(1)),
+	section: Schema.optional(browserField(256)),
+	kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+	suspectedCause: Schema.optional(
+		Schema.Literal("product-change", "regression", "unknown"),
+	),
+});
+export type StageKnowledge = typeof stageKnowledgeSchema.Type;
+
+/** `stage_step`: append one server-timestamped step to the workflow's journal.
+ * Everything the server already knows — the time, the session's application and
+ * role, its current URL, the recording segment and offset — is filled in by the
+ * server, never accepted from the caller. */
+export const browserStageStepRequestSchema = Schema.Struct({
+	session: sessionField,
+	label: browserField(512).pipe(Schema.minLength(1)),
+	expected: Schema.optional(browserFreeText(4096)),
+	observed: Schema.optional(browserFreeText(4096)),
+	captures: Schema.optional(stageCaptures),
+	evidence: Schema.optional(
+		Schema.Array(browserName(32)).pipe(Schema.maxItems(64)),
+	),
+	knowledge: Schema.optional(stageKnowledgeSchema),
+});
+export type BrowserStageStepRequest = typeof browserStageStepRequestSchema.Type;
+
+/** `stage_journal`: read the latest journal entries back, bounded and optionally
+ * narrowed to one session or application. */
+export const browserStageJournalRequestSchema = Schema.Struct({
+	session: sessionField,
+	app: Schema.optional(browserName(64)),
+	limit: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter(
+				(value) => Number.isInteger(value) && value > 0 && value <= 200,
+				{ message: () => "limit must be an integer between 1 and 200" },
+			),
+		),
+	),
+});
+export type BrowserStageJournalRequest =
+	typeof browserStageJournalRequestSchema.Type;
+
+/** The one condition a `stage_wait` waits for: a mail caught by the stage's mail
+ * catcher, named by recipient and subject. */
+export const stageWaitMailSchema = Schema.Struct({
+	to: Schema.optional(browserField(320)),
+	subject: Schema.optional(browserField(256)),
+});
+export type StageWaitMail = typeof stageWaitMailSchema.Type;
+
+/** `until`: exactly one of `text`, `selector`, `url` or `mail`. The filter is
+ * what makes "exactly one" a contract rather than a convention the route would
+ * have to police. */
+export const stageWaitConditionSchema = Schema.Struct({
+	text: Schema.optional(browserField(2048)),
+	selector: Schema.optional(browserField(1024)),
+	url: Schema.optional(browserField(2048)),
+	mail: Schema.optional(stageWaitMailSchema),
+}).pipe(
+	Schema.filter(
+		(value) =>
+			[
+				value.text !== undefined,
+				value.selector !== undefined,
+				value.url !== undefined,
+				value.mail !== undefined,
+			].filter(Boolean).length === 1,
+		{
+			message: () => "`until` takes exactly one of text, selector, url or mail",
+		},
+	),
+);
+export type StageWaitCondition = typeof stageWaitConditionSchema.Type;
+
+/** `stage_wait`: poll one condition *inside the server* until it holds or the
+ * bound elapses, so a wait costs one tool call rather than one call per poll. */
+export const browserStageWaitRequestSchema = Schema.Struct({
+	session: sessionField,
+	until: stageWaitConditionSchema,
+	reload: Schema.optional(Schema.Boolean),
+	intervalSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value > 0, {
+				message: () => "intervalSeconds must be a positive number",
+			}),
+		),
+	),
+	timeoutSeconds: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isFinite(value) && value > 0, {
+				message: () => "timeoutSeconds must be a positive number",
+			}),
+		),
+	),
+});
+export type BrowserStageWaitRequest = typeof browserStageWaitRequestSchema.Type;
+
 /** The refusal codes the stage surfaces answer with
  * (`add-stage-testing-foundation`), declared here so the tool side and the
  * route side name the same vocabulary and a test can assert it. */
@@ -245,6 +359,13 @@ export const STAGE_ERROR_CODES = [
 	// `add-stage-identity-cache`: the role an open names has to be one the
 	// application declares, or there is no identity whose login could establish it.
 	"stage-role-unknown",
+	// `add-stage-flow-evidence`: the per-run bounds of a flow test — kept video,
+	// stored screenshots and the journal's own file cap — plus a `mail` wait on a
+	// session whose application is not a Mailpit mail catcher.
+	"stage-recording-limit",
+	"stage-screenshot-limit",
+	"stage-journal-full",
+	"stage-mail-unsupported",
 ] as const;
 export type StageErrorCode = (typeof STAGE_ERROR_CODES)[number];
 

@@ -17,7 +17,16 @@
 // round trip, and two workflows could drive one exclusive stage.
 export class StageLimitError extends Error {
 	constructor(
-		readonly code: "stage-held" | "stage-rate-limit" | "stage-session-limit",
+		readonly code:
+			| "stage-held"
+			| "stage-rate-limit"
+			| "stage-session-limit"
+			// `add-stage-flow-evidence`: the flow test's own bounds — kept video
+			// minutes and stored screenshots, both per workflow and stage.
+			| "stage-recording-limit"
+			| "stage-screenshot-limit"
+			// A `mail` wait on a session whose application is not a mail catcher.
+			| "stage-mail-unsupported",
 		message: string,
 		/** How long the caller should wait, for a rate limit. */
 		readonly retryAfterMs?: number,
@@ -44,6 +53,10 @@ export interface StageAdmission {
 /** One rolling minute, the window `maxActionsPerMinute` counts in. */
 const RATE_WINDOW_MS = 60_000;
 
+/** The least recording a start is still worth: below this the budget is spent
+ * and a start would produce a segment too short to seek into. */
+const MIN_RECORDING_MS = 1_000;
+
 /** The rate window and the pending count are keyed differently on purpose:
  * `release(owner)` drops the windows of a finished workflow and must never
  * touch an admission, which is live by definition. */
@@ -64,6 +77,12 @@ export class StageUsageRegistry {
 	private readonly leases = new Map<string, string>();
 	/** Opens admitted and not yet settled, per `stage\1owner`. */
 	private readonly pending = new Map<string, number>();
+	/** Screenshots stored per `stage\0owner` (`add-stage-flow-evidence`). Only a
+	 * screenshot the agent asked to keep is counted: a viewed one costs no file. */
+	private readonly screenshots = new Map<string, number>();
+	/** Milliseconds of kept recording per `stage\0owner`. Settled when a segment's
+	 * video is kept, so a discarded recording spends nothing. */
+	private readonly recordedMs = new Map<string, number>();
 
 	constructor(options: StageUsageOptions) {
 		this.now = options.now ?? (() => Date.now());
@@ -144,6 +163,59 @@ export class StageUsageRegistry {
 		this.actions.set(key, window);
 	}
 
+	/**
+	 * Count one stored screenshot, or refuse it (`stage-screenshot-limit`). The
+	 * count happens *before* the file is written, so a refusal leaves no bytes
+	 * behind.
+	 */
+	countScreenshot(input: {
+		readonly stage: string;
+		readonly owner: string;
+		readonly maxScreenshots: number;
+	}): number {
+		const key = windowKey(input.stage, input.owner);
+		const used = this.screenshots.get(key) ?? 0;
+		if (used >= input.maxScreenshots)
+			throw new StageLimitError(
+				"stage-screenshot-limit",
+				`stage ${input.stage} already stored ${used} of ${input.maxScreenshots} screenshots in this workflow; describe the page in a stage_step instead`,
+			);
+		this.screenshots.set(key, used + 1);
+		return used + 1;
+	}
+
+	/** How many more milliseconds of recording this workflow may keep on a stage.
+	 * Refuses with `stage-recording-limit` once the budget is spent, and otherwise
+	 * answers the remainder so the recording is bounded by whichever is smaller:
+	 * the per-recording default and what is left of the stage's budget. */
+	recordingAllowance(input: {
+		readonly stage: string;
+		readonly owner: string;
+		readonly maxRecordingMinutes: number;
+	}): number {
+		const budget = Math.max(0, input.maxRecordingMinutes) * 60_000;
+		const used = this.recordedMs.get(windowKey(input.stage, input.owner)) ?? 0;
+		const remaining = budget - used;
+		if (remaining < MIN_RECORDING_MS)
+			throw new StageLimitError(
+				"stage-recording-limit",
+				`stage ${input.stage} already kept ${Math.round(used / 60_000)} of ${input.maxRecordingMinutes} recording minutes in this workflow; describe the remaining steps in stage_step without a recording`,
+			);
+		return remaining;
+	}
+
+	/** Settle the milliseconds one kept recording actually used. A discarded
+	 * recording calls nothing, so it spends nothing. */
+	recordKept(input: {
+		readonly stage: string;
+		readonly owner: string;
+		readonly elapsedMs: number;
+	}): void {
+		if (!Number.isFinite(input.elapsedMs) || input.elapsedMs <= 0) return;
+		const key = windowKey(input.stage, input.owner);
+		this.recordedMs.set(key, (this.recordedMs.get(key) ?? 0) + input.elapsedMs);
+	}
+
 	/** The workflow currently holding an exclusive stage, if any. A lease whose
 	 * holder has neither a session left nor an open in flight is gone: closing a
 	 * session, the idle sweep and run end all release it. */
@@ -166,6 +238,10 @@ export class StageUsageRegistry {
 		const suffix = `\u0000${owner}`;
 		for (const key of [...this.actions.keys()])
 			if (key.endsWith(suffix)) this.actions.delete(key);
+		for (const key of [...this.screenshots.keys()])
+			if (key.endsWith(suffix)) this.screenshots.delete(key);
+		for (const key of [...this.recordedMs.keys()])
+			if (key.endsWith(suffix)) this.recordedMs.delete(key);
 	}
 
 	/** Whether one owner still holds a stage: a registered session, or an admitted
