@@ -75,16 +75,18 @@ Formula, applied to the table above:
 | worker (and `other`) | 271 | 1,010 | 1,010 | **280** | **1,400** | 140 | 1,400 > 1,010 |
 | planner | 56 | 95 | 166 | **60** | **300** | 30 | 300 > 166 |
 | verifier | 65 | 194 | 228 | **70** | **350** | 35 | 350 > 228 |
-| mechanical | 30 | 114 | 114 | **30** | **250** | 15 | 250 > 114 |
+| mechanical | 30 | 114 | 114 | **30** | **150** | 15 | 150 > 114 |
 
-The formula moved two values against the planning table in `design.md`:
+The formula moved one value against the planning table in `design.md`:
 
 - **worker soft 250 → 280.** The planning measurement's worker p90 was 242; the
   rebuilt dataset's nearest-rank p90 is 271, which rounds to 280.
-- **mechanical hard 150 → 250.** The planning measurement had a mechanical p99
-  of 110; the rebuilt dataset's all-runs p99 is 188, and 1.2 × 188 = 225.6
-  rounds up to 250. The hard limit also takes the all-runs p99 because the
-  successful samples are tiny (planner n = 3).
+- **mechanical hard 150 stays 150.** The planning measurement had a mechanical
+  p99 of 110 and the rebuilt dataset's is 114, so `max(5 × 30, 1.2 × 114,
+  1.2 × 114)` = 150 — the `5 × soft` term binds. (The 188 in the distribution
+  is the all-runs *maximum*, not its p99, so it does not enter the formula.) The
+  hard limit also takes the all-runs p99 because the successful samples are tiny
+  (planner n = 3).
 
 `other` uses the worker row (an undeclared run is usually a worker), and its own
 14-run distribution (p90 110, p99/max 570) is too small and too bimodal to pin

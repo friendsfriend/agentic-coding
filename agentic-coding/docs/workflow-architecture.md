@@ -1592,7 +1592,7 @@ formula of the change's design applied to the snapshot's turn distribution (see
 | `worker` | 280 | 1400 |
 | `planner` | 60 | 300 |
 | `verifier` | 70 | 350 |
-| `mechanical` | 30 | 250 |
+| `mechanical` | 30 | 150 |
 | `other` | the worker row | the worker row |
 
 The context threshold is 200,000 tokens — above the shipped 150,000-token
@@ -1632,13 +1632,17 @@ same digest always gives the same decision:
 | 1 | `hard-limit` | `escalate` |
 | 2 | `no-progress-twice` | `escalate` — a previous `continue` whose window and the current window both made no progress |
 | 3 | `steer-ignored` | `escalate` — a signal already steered earlier in the run came back |
-| 4 | `context` | `compact` when the ceiling's floor and loop guard admit one, else `continue` (`not-admissible`) |
-| 5 | `steer-disabled` | `continue` — with `steer = false` every steer rule decides this instead |
-| 6 | `failing-tool` | `steer` |
-| 7 | `repeats` | `steer` |
-| 8 | `no-progress` | `steer` |
-| 9 | `cost-rising` | `steer` |
-| 10 | `default` | `continue` |
+| 4 | `context` | `compact` when the ceiling's floor and loop guard admit one; otherwise it decides nothing and the signal rules are evaluated on the same digest, with the blocked compaction as the attention |
+| 5 | `failing-tool` | `steer` |
+| 6 | `repeats` | `steer` |
+| 7 | `no-progress` | `steer` |
+| 8 | `cost-rising` | `steer` |
+| 9 | `default` | `continue` |
+
+The set is closed: `CHECKPOINT_RULE_IDS` names exactly these nine and the record
+boundary refuses a rule outside it. With `steer = false` the steer rules decide
+`continue` **under their own signal's rule id** with the attention `steer
+disabled`, so there is no tenth rule for "steering is off".
 
 **The steer catalog** is closed and versioned (`CHECKPOINT_STEER_CATALOG_VERSION =
 1`): one fixed message per signal, rendered from the catalog and never composed
@@ -1668,7 +1672,14 @@ applies the answer:
   turn boundary with `outcome: "pending-parked"`;
 - `cancelled` — the run stops at the next turn boundary with `outcome:
   "cancelled"`;
-- `filing-failed` — nothing stops: the run continues and the failure is reported.
+- `filing-failed` — nothing stops: the run continues and the failure is reported
+  on the escalation's envelope.
+
+The decision is recorded **after** the question is filed and **before** the run is
+parked, so its result's one attention line reads `rule <id>; question <id>
+answered|unanswered|cancelled`, or `rule <id>; question not filed` when filing
+failed — the dashboard's row can therefore say whether a developer was actually
+asked.
 
 A stop is always an aborted conversation plus the run's own `blocked` handoff
 (`recordCheckpointRunHandoff`), which names the question id, so the developer sees
@@ -1678,11 +1689,16 @@ as a question first.
 
 **Fail-open, everywhere.** The whole evaluation is guarded. A sample that throws
 or times out (`CHECKPOINT_SAMPLE_TIMEOUT_MS = 2000`), a digest that cannot be
-built, a record write that fails, a question that cannot be filed — each leaves
+built, a failed steer or compaction, or a record write that fails — each leaves
 the run running and reports `status: "error"` with a bounded `error_class`
-(`sample`, `evaluate`, `record`, `question`) on the checkpoint's own envelope. A
-missing measurement is *unknown*, not zero: the digest carries `null`/`-1` for a
-failed worktree sample rather than a clean tree.
+(`sample`, `evaluate`, `steer`, `compact`, `record`) on the checkpoint's own
+envelope, which then carries no decision and no rule. A question that cannot be
+filed happens *after* the decision, and is reported on the escalation's envelope
+instead (`outcome: "filing-failed"`, `status: "error"`, `error_class: "question"`):
+one checkpoint exports at most one `runtime.checkpoint`, so a re-emitted decision
+envelope with `status: "error"` would count the same checkpoint twice in the
+decision distribution. A missing measurement is *unknown*, not zero: the digest
+carries `null`/`-1` for a failed worktree sample rather than a clean tree.
 
 **The record.** A decision is recorded through the authenticated
 `workflow checkpoint --record <json>` run command (`src/workflow/cli/commands/checkpoint.ts`,

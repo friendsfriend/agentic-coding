@@ -101,7 +101,11 @@ the window, the sampled diff and ticked tasks, the decision with its rule, wheth
 it was applied, the decider, the latency, whether the record was written, and
 `status` / `error_class` when it failed open — and `runtime.checkpoint_escalation`
 carries the escalation's `outcome` (`answered`, `cancelled`, `pending-parked`,
-`filing-failed`) and the question id. See
+`filing-failed`), its `status` / `error_class` (`question` for a question that
+could not be filed) and the question id. A checkpoint exports at most one
+`runtime.checkpoint`: a failure after the decision — the question itself — is
+reported on the escalation's envelope with `status: "error"` instead, and a
+failure before it carries no `decision` and no `rule`. See
 [`workflow-architecture.md`](./workflow-architecture.md#the-run-progress-checkpoint-efficiency-backlog-item-19).
 
 The session window (efficiency backlog item 20) records which run a durable

@@ -142,15 +142,16 @@ Values pinned by task 1 on the rebuilt dataset (nearest-rank percentiles over
 every run with turns; `docs/efficiency/04b-run-progress-checkpoint.md` has the
 distribution and the per-step arithmetic). The formula moved two values against
 the planning table: the worker soft threshold is 280 (measured p90 271, not
-242) and the mechanical hard limit is 250 (the all-runs p99 is 188, and
-1.2 × 188 rounds up to 250). `other` uses the worker row.
+242) and the mechanical hard limit is 150 (`max(5 × 30, 1.2 × 114, 1.2 × 114)`
+= 150; the 188 in the distribution is the class's *maximum*, not its p99, so it
+does not enter the formula). `other` uses the worker row.
 
 | class | runs | p90 | all-runs p99 | successful max | softTurns | hardTurns | interval | hard vs successful p99 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | worker (and `other`) | 117 | 271 | 1,010 | 1,010 | 280 | 1,400 | 140 | 1,400 > 1,010 |
 | planner | 212 | 56 | 95 | 166 | 60 | 300 | 30 | 300 > 166 |
 | verifier | 383 | 65 | 194 | 228 | 70 | 350 | 35 | 350 > 228 |
-| mechanical | 218 | 30 | 114 | 114 | 30 | 250 | 15 | 250 > 114 |
+| mechanical | 218 | 30 | 114 | 114 | 30 | 150 | 15 | 150 > 114 |
 
 Successful samples are small (worker n = 14, planner n = 3, verifier n = 42,
 mechanical n = 14), which is why `hardTurns` also takes 1.2 × the all-runs p99:
@@ -175,7 +176,7 @@ binds every threshold that can escalate **without** a stall signal — the hard
 limit. The soft threshold only starts evaluation and its default answer is
 `continue`, so it is placed at p90 (≈ 10 % of runs evaluated) rather than above
 the successful p99; this is lower than the ~150-turn starting point only for
-planners, verifiers and mechanical steps and higher (250) for workers, because
+planners, verifiers and mechanical steps and higher (280) for workers, because
 the measured worker p90 is 242. If task 1's measurement moves a value, the
 formula wins over this table.
 
@@ -223,7 +224,9 @@ Evaluated on the digest only; ordered; first match wins. Decider id `rules/v1`.
 8. `cost-rising` → `steer` (`converge`).
 9. `default` → `continue`.
 
-With `steer = false`, rules 5–8 yield `continue` (attention "steer disabled")
+With `steer = false`, rules 5–8 yield `continue` under the signal's own rule id
+(attention "steer disabled"), so no rule id exists that the set below does not
+name
 and rule 3 cannot apply; rules 1–2 still escalate. The previous decision and the
 already-steered signals are part of the digest, so the same digest always
 yields the same decision.
