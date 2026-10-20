@@ -1353,6 +1353,7 @@ them:
 | `fail-fast.ts` | The per-run dead-tool-surface rule: the consecutive-failure and success counters, the failure kinds that mean a broken surface, the exempt roles, and the bounded secret-free `blocked` message. Pure logic, no harness and no I/O. | No. |
 | `tool-suggestions.ts` | What a failed `read`/`edit`/`grep` call adds to its own error text (efficiency backlog item 12): the nearest whitespace-normalised region of the file with line numbers, the lines a non-unique `oldText` occurs at, the overlapping edit indexes, the nearest existing path for a path that is not there, or the first entries of a path that is a directory. Pure text logic plus one bounded path search, wrapped around pi-durable's `read` and `edit` by name. | Yes. |
 | `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations, records a developer abort as the run's `blocked` handoff (`abort`; never on teardown), serializes a conversation's mutating requests so a prompt cannot race the abort's withdrawal, reconciles the workflow state before delivering a prompt to an aborted run, and feeds every finished tool call to that run's dead-surface monitor (`onToolOutcome`). | Yes. |
+| `configured-models.ts` | The one durable model collection (`durableModels`): pi-ai's built-in providers with the custom providers of global pi's `models.json` composed over them by pi's own loader, plus the configured-provider / `provider/model` enumeration the `/model` picker, the Settings agent-profile select and a run's model resolution all read. A `models.json` that cannot be used adds nothing and reports one content-free diagnostic; an absent one adds nothing and reports nothing. | Yes, through a dynamic `await import()` inside the builder, so a caller that supplies its own collection never loads the `models.json` loader. |
 | `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
 
 `src/cli.ts`'s `agent host` mode reaches `host-main.ts` through a dynamic
@@ -1365,13 +1366,46 @@ reviewing `workflow/adapters.ts` and `tui/dash/handlers/keys.ts`'s own imports
 (they import `client.ts`/`protocol.ts` only), not by a dedicated static rule —
 a narrower guarantee than a hard import-allowlist would give.
 
+### Global pi `models.json` custom providers (fix-custom-provider-models-in-pickers)
+
+The durable model set is pi's own two layers, not just the built-in half: the
+providers pi-ai ships **plus** the custom providers of the user's global pi
+`models.json` (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent`). `configured-models.ts`'s
+`durableModels()` composes them with pi's loader rather than a second reading of
+the file — `ModelRuntime.create` loads `models.json` through `ModelConfig` and
+composes each provider with `composeModelProvider`, so pi's schema, its `apiKey`
+forms (literal, `$ENV_VAR` template, `!command`) and its header handling are the
+ones in force. That is also pi's precedence rule for a provider id that collides
+with a built-in one: the file is overlaid on the built-in provider, which keeps
+its api and gains the configured `baseUrl`, models and auth. `create` is called
+with `refreshOnCreate: false` and an in-memory models store, because this is a
+read of `models.json` and never a catalog refresh — the durable host must not
+write `models-store.json` behind pi's back.
+
+The host builds that collection once (`DurableHost.open`) and hands the same one
+to the `Harness`, to `catalog()` and to `configuredModelList()`, so the `/model`
+picker, the Settings profile select and a run's launch-time model resolution
+cannot drift apart. A `models.json` that is unreadable, malformed or
+schema-invalid leaves the built-in providers intact, is logged once as one
+content-free diagnostic (pi's own message: the file and the offending paths,
+never the content and never a key) and never fails the host or a picker. A
+custom provider counts as configured when pi-ai's side-effect-free `checkAuth`
+accepts it, which includes a `models.json` `apiKey` and — deliberately — a
+`!command` key without executing the command, so rendering a picker runs nothing
+from that file. `workflow/profiles.ts` keeps its small synchronous reader for
+workflow-start validation; the two agree on the same file because both answer
+for the providers and model ids that file declares.
+
 **Known gaps in this pass** (add-pi-durable-runtime, deliberately deferred):
 the `use-default-model` built-in preset still defaults to `pi`, not
 `pi-durable`, because flipping that sitewide default has a blast radius this
 implementation pass could not fully verify with focused tests; `pi-durable`
 model validation at workflow start accepts a built-in provider's model on
 shape alone rather than enumerating pi-ai's full catalog (a locally configured
-custom provider's models are still validated exactly).
+custom provider's models are still validated exactly). The host side of that
+custom-provider half is closed by the section above: the durable collection
+composes the same global pi `models.json`, so every model validation accepts is
+also offered by the pickers and resolvable at launch.
 
 ### The environment capability handoff (fix-env-tools-for-all-runs)
 

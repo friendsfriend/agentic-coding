@@ -5,7 +5,6 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type {
 	CompactionResult,
 	Storage,
@@ -37,8 +36,7 @@ import {
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
-import { configuredProviderIds } from "./configured-models.ts";
-import { PiAuthCredentialStore } from "./credentials.ts";
+import { configuredProviderIds, durableModels } from "./configured-models.ts";
 import { createDebugExtension } from "./debug-tools.ts";
 import {
 	ENVIRONMENT_URL_ENV,
@@ -590,13 +588,19 @@ export class DurableHost {
 		// orchestrator never gets it: its tool surface is exactly its own.
 		const codemode = codemodeRegistered ? createDurableCodemode() : undefined;
 		if (codemode) registry.install(codemode.extension);
+		// The one collection this host resolves and offers models from: pi-ai's
+		// built-ins with the user's global-pi `models.json` custom providers
+		// composed in (`configured-models.ts`), so the `/model` picker, the Settings
+		// profile select and a run's own model resolution agree on what exists. A
+		// `models.json` that cannot be used degrades to the built-ins and reports one
+		// diagnostic, logged below once the host can log it.
+		const modelDiagnostics: string[] = [];
 		const models =
 			options.models ??
 			withDurableSession(
-				builtinModels({
-					credentials: new PiAuthCredentialStore(
-						options.credentialsPath,
-					) as never,
+				await durableModels({
+					credentialsPath: options.credentialsPath,
+					onDiagnostic: (message) => modelDiagnostics.push(message),
 				}),
 			);
 		const storage =
@@ -651,6 +655,7 @@ export class DurableHost {
 			registry,
 		);
 		host.instance = instance;
+		for (const diagnostic of modelDiagnostics) instance.log(diagnostic);
 		return instance;
 	}
 
