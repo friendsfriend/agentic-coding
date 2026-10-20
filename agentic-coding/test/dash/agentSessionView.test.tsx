@@ -87,6 +87,75 @@ test("the page is body content: no title row, and the prompt ends it", async () 
 	t.renderer.destroy();
 });
 
+test("the reader can jump back to the newest transcript output", async () => {
+	let scroll:
+		| {
+				scrollTop: number;
+				scrollHeight: number;
+				viewport: { height: number };
+		  }
+		| undefined;
+	const blocks: AgentSessionBlock[] = Array.from(
+		{ length: 40 },
+		(_, index) => ({
+			id: `row-${index}`,
+			kind: "result",
+			text: `transcript row ${index}`,
+			tone: "success",
+		}),
+	);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+				onScrollBoxReady={(box) => {
+					scroll = box as unknown as typeof scroll;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		if (scroll) scroll.scrollTop = 0;
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		const lines = frame.split("\n");
+		const actionLine = lines.findIndex((line) =>
+			line.includes("Jump to latest"),
+		);
+		expect(actionLine).toBeGreaterThanOrEqual(0);
+		const actionColumn = lines[actionLine]?.indexOf("Jump to latest") ?? 0;
+		await t.mockMouse.click(actionColumn, actionLine);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("transcript row 39");
+		expect(t.captureCharFrame()).not.toContain("Jump to latest");
+		expect(scroll?.scrollTop).toBeGreaterThanOrEqual(
+			Math.max(
+				0,
+				(scroll?.scrollHeight ?? 0) - (scroll?.viewport.height ?? 0) - 1,
+			),
+		);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("renders a provider error block", async () => {
 	const t = await testRender(
 		() => (
@@ -510,6 +579,8 @@ test("typing / opens the command autocomplete and Tab completes the command", as
 	await t.renderOnce();
 	const open = t.captureCharFrame();
 	expect(open).toContain("/model");
+	expect(open).toContain("/timeline");
+	expect(open).toContain("/latest");
 	expect(open).toContain("Change the model for this run");
 	expect(open).toContain("Change the thinking level");
 	// Tab completes the highlighted command into the draft.
@@ -661,6 +732,7 @@ test("/compact is offered, forwards its instructions and never sends a prompt", 
 function PickerRoute(props: {
 	onSubmit: (text: string) => void;
 	onConfigure: (change: { model?: string; thinking?: string }) => void;
+	blocks?: readonly AgentSessionBlock[];
 }) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
@@ -683,7 +755,7 @@ function PickerRoute(props: {
 	return (
 		<AgentSessionView
 			role="worker"
-			blocks={[]}
+			blocks={props.blocks ?? []}
 			working={false}
 			models={["opencode-go/deepseek-v4.1-flash", "openai-codex/gpt-5.6-luna"]}
 			thinkingLevels={["off", "low"]}
@@ -702,6 +774,63 @@ function PickerRoute(props: {
 		/>
 	);
 }
+
+test("/timeline lists prompts and jumps to older messages outside the live window", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "user:early",
+			kind: "user",
+			text: "Earlier request: inspect the parser",
+			tone: "accent",
+			startedAt: 1_700_000_000_000,
+		},
+		...Array.from({ length: 80 }, (_, index) => ({
+			id: `output:${index}`,
+			kind: "result" as const,
+			text: `output row ${index}`,
+			tone: "success" as const,
+		})),
+		{
+			id: "user:latest",
+			kind: "user",
+			text: "Latest follow-up",
+			tone: "accent",
+		},
+		{
+			id: "assistant:latest",
+			kind: "assistant",
+			text: "The parser is fixed",
+			tone: "base",
+		},
+	];
+	const t = await testRender(
+		() => (
+			<PickerRoute blocks={blocks} onSubmit={() => {}} onConfigure={() => {}} />
+		),
+		{ width: 100, height: 24 },
+	);
+	try {
+		await t.flush();
+		for (const character of "/timeline") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		const picker = t.captureCharFrame();
+		expect(picker).toContain("Jump to message");
+		expect(picker).toContain("Latest follow-up");
+		expect(picker).toContain("Earlier request: inspect the parser");
+		// Newest prompt is first; one `j` selects the older prompt.
+		t.mockInput.pressKey("j");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain(
+			"Earlier request: inspect the parser",
+		);
+		expect(t.captureCharFrame()).not.toContain("Jump to message");
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 test("the picker layer selects on the terminal's Enter spelling", async () => {
 	const configured: Array<{ model?: string; thinking?: string }> = [];
@@ -1419,6 +1548,95 @@ test("tool rows get a view from their call and result, and a generic default", a
 		};
 		expect(rgb(foreground("+const b = 2;"))).toBe(theme(uiColors.success));
 		expect(rgb(foreground("-const a = 1;"))).toBe(theme(uiColors.error));
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("consecutive successful reads group without adding or replacing tools", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "read-a",
+			kind: "tool",
+			text: "read: alpha contents",
+			tone: "success",
+			icon: "✓",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/alpha.ts" },
+				callId: "call-a",
+				result: { lines: ["alpha contents"], isError: false, notes: [] },
+			},
+			detail: ["alpha contents"],
+		},
+		{
+			id: "read-b",
+			kind: "tool",
+			text: "read: beta contents",
+			tone: "success",
+			icon: "✓",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/beta.ts" },
+				callId: "call-b",
+				result: { lines: ["beta contents"], isError: false, notes: [] },
+			},
+			detail: ["beta contents"],
+		},
+		{
+			id: "read-pending",
+			kind: "tool",
+			text: "read path=src/gamma.ts",
+			tone: "warning",
+			icon: "→",
+			tool: "read",
+			pending: true,
+			live: true,
+			toolCall: {
+				name: "read",
+				args: { path: "src/gamma.ts" },
+				callId: "call-gamma",
+			},
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 18 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("2 reads");
+		expect(collapsed).not.toContain("src/alpha.ts");
+		expect(collapsed).toContain("src/gamma.ts");
+		const groupLine = collapsed
+			.split("\n")
+			.findIndex((line) => line.includes("2 reads"));
+		await t.mockMouse.click(8, groupLine);
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("src/alpha.ts");
+		expect(expanded).toContain("src/beta.ts");
 	} finally {
 		t.renderer.destroy();
 	}

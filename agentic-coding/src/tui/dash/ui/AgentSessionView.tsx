@@ -148,6 +148,8 @@ export const ABORT_COMMAND = "/abort";
 export const CLOSE_COMMAND = "/hide";
 export const MODEL_COMMAND = "/model";
 export const THINKING_COMMAND = "/thinking";
+export const TIMELINE_COMMAND = "/timeline";
+export const LATEST_COMMAND = "/latest";
 /** Summarize the conversation's context (`add-agent-compaction`). An optional
  * free-text argument is passed to the summarizer as its instructions, exactly
  * as a `/model` or `/thinking` argument is passed to the host. */
@@ -167,6 +169,8 @@ const SESSION_COMMANDS: readonly SessionCommand[] = [
 		name: COMPACT_COMMAND,
 		description: "Summarize the context (optional instructions)",
 	},
+	{ name: TIMELINE_COMMAND, description: "Jump to a user message" },
+	{ name: LATEST_COMMAND, description: "Jump to the latest output" },
 	{ name: ABORT_COMMAND, description: "Abort the running turn" },
 	{ name: CLOSE_COMMAND, description: "Hide this session view" },
 ];
@@ -345,6 +349,32 @@ interface TranscriptState {
 	readonly rows: readonly AgentSessionBlock[];
 	/** The block the newest-output divider sits above, by id. */
 	readonly dividerId: string | undefined;
+}
+
+interface ReadActivityGroup {
+	readonly displayKind: "read-activity-group";
+	readonly id: string;
+	readonly blocks: readonly AgentSessionBlock[];
+}
+
+type TranscriptDisplayRow = AgentSessionBlock | ReadActivityGroup;
+
+/** Only successful, completed reads can disappear into a summary. Pending,
+ * aborted, and failed calls stay individually visible. */
+function canGroupRead(
+	block: AgentSessionBlock | undefined,
+): block is AgentSessionBlock {
+	return (
+		block?.kind === "tool" &&
+		block.tool?.toLowerCase() === "read" &&
+		block.pending !== true &&
+		block.aborted !== true &&
+		block.tone === "success"
+	);
+}
+
+function readGroupLabel(blocks: readonly AgentSessionBlock[]): string {
+	return `${blocks.length} reads`;
 }
 
 /** The timing of one transcript row, drawn at its right edge: how long a tool
@@ -849,12 +879,19 @@ export const SESSION_PICKER_KEYS = [
 	..."abcdefghijklmnopqrstuvwxyz".split(""),
 ];
 
-type PickerKind = "model" | "thinking";
+type PickerKind = "model" | "thinking" | "timeline";
 interface PickerState {
 	readonly kind: PickerKind;
 	readonly selected: number;
 	readonly filter: string;
 	readonly filtering: boolean;
+}
+
+interface PickerItem {
+	readonly value: string;
+	readonly label: string;
+	readonly detail?: string;
+	readonly blockId?: string;
 }
 
 export function AgentSessionView(props: AgentSessionViewProps) {
@@ -968,17 +1005,73 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	// than a screenful, so reaching the top loads the older rows the window left
 	// out rather than dropping them.
 	const [anchor, setAnchor] = createSignal<AgentSessionBlock | undefined>();
+	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
+	const [latestHovered, setLatestHovered] = createSignal(false);
 	const windowRows = () => {
 		const rows = transcript().rows;
 		const oldest = anchor();
-		const start = oldest ? rows.indexOf(oldest) : -1;
-		if (start >= 0) return rows.slice(start);
-		return rows.slice(Math.max(0, rows.length - TRANSCRIPT_WINDOW));
+		const anchoredStart = oldest ? rows.indexOf(oldest) : -1;
+		let start =
+			anchoredStart >= 0
+				? anchoredStart
+				: Math.max(0, rows.length - TRANSCRIPT_WINDOW);
+		// Do not cut a run of reads at the render-window seam: its summary should
+		// describe the same complete run whether history was loaded or jumped to.
+		while (
+			start > 0 &&
+			canGroupRead(rows[start - 1]) &&
+			canGroupRead(rows[start])
+		)
+			start--;
+		return rows.slice(start);
 	};
+	const displayRows = createMemo<readonly TranscriptDisplayRow[]>(
+		(previous) => {
+			const existing = new Map<string, ReadActivityGroup>();
+			for (const row of previous ?? [])
+				if ("displayKind" in row) existing.set(row.id, row);
+			const blocks = windowRows();
+			const result: TranscriptDisplayRow[] = [];
+			for (let index = 0; index < blocks.length; ) {
+				if (!canGroupRead(blocks[index])) {
+					const block = blocks[index];
+					if (block) result.push(block);
+					index++;
+					continue;
+				}
+				const start = index++;
+				while (canGroupRead(blocks[index])) index++;
+				const group = blocks.slice(start, index);
+				if (group.length < 2) {
+					result.push(...group);
+					continue;
+				}
+				const first = group[0];
+				if (!first) continue;
+				const id = `read-activity:${first.id}`;
+				const before = existing.get(id);
+				const unchanged =
+					before !== undefined &&
+					before.blocks.length === group.length &&
+					before.blocks.every((block, offset) => block === group[offset]);
+				result.push(
+					unchanged
+						? before
+						: { displayKind: "read-activity-group", id, blocks: group },
+				);
+			}
+			return result;
+		},
+		[],
+	);
 	let scrollBox: ScrollBoxRenderable | undefined;
 	/** A load in flight: the frame that lays the older rows out moves the
 	 * viewport down by their height, so the reader keeps their place. */
 	let pendingLoad: { height: number; top: number } | undefined;
+	let pendingJump:
+		| { readonly kind: "latest" }
+		| { readonly kind: "block"; readonly blockId: string }
+		| undefined;
 	/**
 	 * The row the viewport was resting on before a fold, and where it was. A
 	 * fold grows or shrinks the content above the reader, and the scroll box
@@ -1026,6 +1119,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
+	const [expandedReadGroups, setExpandedReadGroups] = createSignal<
+		ReadonlySet<string>
+	>(new Set());
 	// Which tool-view rows are folded open, by `${block.id}:${row.id}`: a
 	// codemode call row opens into that call's own view, and stays shut until
 	// asked for so the call list keeps its overview.
@@ -1080,11 +1176,44 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const ids = props.blocks.flatMap((block) =>
 			block.kind === kind ? [block.id] : [],
 		);
-		setExpandedBlocks((current) =>
-			ids.some((id) => current.has(id))
-				? new Set<string>()
-				: new Set<string>(ids),
+		const groups =
+			kind === "tool"
+				? displayRows().flatMap((row) => ("displayKind" in row ? [row.id] : []))
+				: [];
+		const collapse =
+			ids.some((id) => expandedBlocks().has(id)) ||
+			groups.some((id) => expandedReadGroups().has(id));
+		setExpandedBlocks(collapse ? new Set<string>() : new Set<string>(ids));
+		setExpandedReadGroups(
+			collapse ? new Set<string>() : new Set<string>(groups),
 		);
+	};
+	const toggleReadGroup = (id: string) => {
+		keepPlace();
+		setExpandedReadGroups((current) => {
+			const next = new Set(current);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	};
+	const jumpToLatest = () => {
+		pendingAnchor = undefined;
+		pendingLoad = undefined;
+		pendingJump = { kind: "latest" };
+		setAnchor(undefined);
+		setAwayFromBottom(false);
+		setLatestHovered(false);
+	};
+	const jumpToBlock = (blockId: string) => {
+		const block = transcript().rows.find((row) => row.id === blockId);
+		if (!block) return;
+		pendingAnchor = undefined;
+		pendingLoad = undefined;
+		pendingJump = { kind: "block", blockId };
+		// Pin the window at the target so a timeline jump also mounts a message
+		// that is older than the currently rendered tail.
+		setAnchor(block);
 	};
 
 	const thinkingLevels = () =>
@@ -1152,11 +1281,34 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const pickerItems = () => {
 		const state = picker();
 		if (!state) return [];
-		const source = state.kind === "model" ? props.models : thinkingLevels();
+		const source: PickerItem[] =
+			state.kind === "model"
+				? props.models.map((value) => ({ value, label: value }))
+				: state.kind === "thinking"
+					? thinkingLevels().map((value) => ({ value, label: value }))
+					: props.blocks
+							.filter((block) => block.kind === "user" && block.text.trim())
+							.reverse()
+							.map((block) => {
+								const text = block.text.replace(/\s+/g, " ").trim();
+								return {
+									value: block.id,
+									label: text.length > 160 ? `${text.slice(0, 159)}…` : text,
+									detail:
+										block.startedAt === undefined
+											? undefined
+											: formatClock(block.startedAt),
+									blockId: block.id,
+								};
+							});
 		const query = state.filter.trim().toLowerCase();
 		return query
-			? source.filter((item) => item.toLowerCase().includes(query))
-			: [...source];
+			? source.filter(
+					(item) =>
+						item.label.toLowerCase().includes(query) ||
+						item.detail?.toLowerCase().includes(query),
+				)
+			: source;
 	};
 
 	const closePicker = () => {
@@ -1167,14 +1319,18 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		setPicker({ kind, selected: 0, filter: "", filtering: false });
 		props.onPickerActiveChange?.(true);
 	};
-	const selectPicker = () => {
+	const selectPicker = (selectedIndex?: number) => {
 		const state = picker();
 		if (!state) return;
-		const value = pickerItems()[state.selected];
+		const value = pickerItems()[selectedIndex ?? state.selected];
 		if (value) {
-			props.onConfigure(
-				state.kind === "model" ? { model: value } : { thinking: value },
-			);
+			if (state.kind === "timeline") jumpToBlock(value.value);
+			else
+				props.onConfigure(
+					state.kind === "model"
+						? { model: value.value }
+						: { thinking: value.value },
+				);
 		}
 		closePicker();
 	};
@@ -1185,13 +1341,17 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const items = pickerItems();
 		if (state.filtering) {
 			if (name === "escape")
-				setPicker({ ...state, filtering: false, filter: "" });
+				setPicker({ ...state, filtering: false, filter: "", selected: 0 });
 			else if (name === "enter" || name === "return")
 				setPicker({ ...state, filtering: false });
 			else if (name === "backspace")
-				setPicker({ ...state, filter: state.filter.slice(0, -1) });
+				setPicker({
+					...state,
+					filter: state.filter.slice(0, -1),
+					selected: 0,
+				});
 			else if (event.name.length === 1)
-				setPicker({ ...state, filter: state.filter + event.name });
+				setPicker({ ...state, filter: state.filter + event.name, selected: 0 });
 			return true;
 		}
 		if (name === "escape") closePicker();
@@ -1202,7 +1362,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			});
 		else if (name === "k" || name === "up")
 			setPicker({ ...state, selected: Math.max(0, state.selected - 1) });
-		else if (name === "/") setPicker({ ...state, filtering: true, filter: "" });
+		else if (name === "/")
+			setPicker({ ...state, filtering: true, filter: "", selected: 0 });
 		// Terminals report Enter either name, so both must select.
 		else if (name === "enter" || name === "return") selectPicker();
 		return true;
@@ -1220,6 +1381,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		historyIndex = 0;
 		if (name === MODEL_COMMAND) openPicker("model");
 		else if (name === THINKING_COMMAND) openPicker("thinking");
+		else if (name === TIMELINE_COMMAND) openPicker("timeline");
+		else if (name === LATEST_COMMAND) jumpToLatest();
 		else if (
 			name === COMPACT_COMMAND ||
 			name.startsWith(`${COMPACT_COMMAND} `)
@@ -1266,16 +1429,45 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const onFrame = () => {
 			const box = scrollBox;
 			if (!box) return;
+			const jump = pendingJump;
+			if (jump?.kind === "latest") {
+				pendingJump = undefined;
+				box.stickyScroll = true;
+				box.scrollTo(box.scrollHeight);
+			} else if (jump?.kind === "block") {
+				const index = displayRows().findIndex((row) =>
+					"displayKind" in row
+						? row.blocks.some((block) => block.id === jump.blockId)
+						: row.id === jump.blockId,
+				);
+				const row = box.content.getChildren()[0]?.getChildren()[index];
+				if (index >= 0 && row && !row.isDestroyed) {
+					pendingJump = undefined;
+					box.stickyScroll = false;
+					box.scrollTo(
+						Math.max(0, box.scrollTop + row.screenY - box.viewport.screenY),
+					);
+				}
+			}
 			if (pendingAnchor) {
 				const moved = pendingAnchor.row.screenY - pendingAnchor.screenY;
 				pendingAnchor = undefined;
 				if (moved !== 0) box.scrollTop += moved;
 			}
-			if (!pendingLoad) return;
-			const grown = box.scrollHeight - pendingLoad.height;
-			if (grown <= 0) return;
-			box.scrollTop = pendingLoad.top + grown;
-			pendingLoad = undefined;
+			if (pendingLoad) {
+				const grown = box.scrollHeight - pendingLoad.height;
+				if (grown > 0) {
+					box.scrollTop = pendingLoad.top + grown;
+					pendingLoad = undefined;
+				}
+			}
+			const away =
+				box.scrollTop < Math.max(0, box.scrollHeight - box.viewport.height);
+			if (away !== awayFromBottom()) setAwayFromBottom(away);
+			if (!away) {
+				setAnchor(undefined);
+				setLatestHovered(false);
+			}
 		};
 		renderer.on(CliRenderEvents.FRAME, onFrame);
 		onCleanup(() => renderer.off(CliRenderEvents.FRAME, onFrame));
@@ -1284,6 +1476,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	/** Stop the window sliding: the rows on screen keep their place while the
 	 * reader is not following the newest output. */
 	const freezeWindow = () => {
+		setAwayFromBottom(true);
 		if (anchor()) return;
 		const rows = transcript().rows;
 		setAnchor(rows[Math.max(0, rows.length - TRANSCRIPT_WINDOW)]);
@@ -1297,8 +1490,18 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			// bypasses: without this the next frame would yank the viewport back
 			// down to the bottom.
 			box.scrollTo(box.scrollTop);
-			if (box.scrollTop < box.scrollHeight - box.viewport.height)
-				freezeWindow();
+			// Changing the loaded window for an explicit timeline jump can itself
+			// emit a scrollbar change. Let the pending jump place the target before
+			// treating that layout event as reader navigation.
+			if (pendingJump) return;
+			const away =
+				box.scrollTop < Math.max(0, box.scrollHeight - box.viewport.height);
+			setAwayFromBottom(away);
+			if (away) freezeWindow();
+			else {
+				setAnchor(undefined);
+				setLatestHovered(false);
+			}
 			if (box.scrollTop <= 0) loadOlder();
 		};
 		box.verticalScrollBar.on("change", onScroll);
@@ -1331,34 +1534,113 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						// One blank line between the transcript and the prompt: the
 						// transcript owns it, so the autocomplete stays attached to the
 						// prompt it completes.
-						style={{ marginBottom: 1 }}
+						style={{ marginBottom: 0 }}
 					>
 						<box flexDirection="column" gap={1}>
-							<For each={windowRows()}>
-								{(block) => (
-									<box width="100%" flexDirection="column">
-										{/* Above the newest output's first block, and only there:
-										    the divider is the boundary, not a mark on the
-										    content. */}
-										<Show when={block.id === transcript().dividerId}>
-											<NewContentDivider />
-										</Show>
-										<Block
-											block={block}
-											role={props.role}
-											expanded={expandedBlocks().has(block.id)}
-											onToggle={toggleBlock}
-											toggledSections={toggledSections}
-											onToggleSection={toggleSection}
-											openRows={expandedRows}
-											onToggleRow={toggleRow}
-											transcript={markdownParts}
-										/>
-									</box>
-								)}
+							<For each={displayRows()}>
+								{(row) => {
+									if ("displayKind" in row) {
+										const expanded = () => expandedReadGroups().has(row.id);
+										const latest = row.blocks.at(-1);
+										return (
+											<box width="100%" flexDirection="column">
+												<Show
+													when={row.blocks.some(
+														(block) => block.id === transcript().dividerId,
+													)}
+												>
+													<NewContentDivider />
+												</Show>
+												<box
+													paddingLeft={3}
+													flexDirection="row"
+													{...useTap(() => toggleReadGroup(row.id))}
+												>
+													<text
+														width={2}
+														flexShrink={0}
+														fg={uiColors.textMuted}
+													>
+														{expanded() ? "▾" : "▸"}
+													</text>
+													<text fg={uiColors.textMuted} flexGrow={1}>
+														→ {readGroupLabel(row.blocks)}
+													</text>
+													<Show when={latest}>
+														{(block) => <Stamp block={block()} />}
+													</Show>
+												</box>
+												<Show when={expanded()}>
+													<box flexDirection="column" gap={1}>
+														<For each={row.blocks}>
+															{(block) => (
+																<Block
+																	block={block}
+																	role={props.role}
+																	expanded={expandedBlocks().has(block.id)}
+																	onToggle={toggleBlock}
+																	toggledSections={toggledSections}
+																	onToggleSection={toggleSection}
+																	openRows={expandedRows}
+																	onToggleRow={toggleRow}
+																	transcript={markdownParts}
+																/>
+															)}
+														</For>
+													</box>
+												</Show>
+											</box>
+										);
+									}
+									const block = row;
+									return (
+										<box width="100%" flexDirection="column">
+											{/* Above the newest output's first block, and only there:
+											    the divider is the boundary, not a mark on the
+											    content. */}
+											<Show when={block.id === transcript().dividerId}>
+												<NewContentDivider />
+											</Show>
+											<Block
+												block={block}
+												role={props.role}
+												expanded={expandedBlocks().has(block.id)}
+												onToggle={toggleBlock}
+												toggledSections={toggledSections}
+												onToggleSection={toggleSection}
+												openRows={expandedRows}
+												onToggleRow={toggleRow}
+												transcript={markdownParts}
+											/>
+										</box>
+									);
+								}}
 							</For>
 						</box>
 					</ScrollableContent>
+					<box
+						width="100%"
+						height={1}
+						flexShrink={0}
+						flexDirection="row"
+						justifyContent="flex-end"
+					>
+						<Show when={awayFromBottom()}>
+							<box
+								id="agent-session-jump-to-latest"
+								paddingLeft={1}
+								onMouseOver={() => setLatestHovered(true)}
+								onMouseOut={() => setLatestHovered(false)}
+								onMouseUp={jumpToLatest}
+							>
+								<text
+									fg={latestHovered() ? uiColors.primary : uiColors.textMuted}
+								>
+									Jump to latest ↓
+								</text>
+							</box>
+						</Show>
+					</box>
 					{/* opencode-style command autocomplete: appears above the prompt
 					    while the draft is a bare `/prefix`. */}
 					<Show when={autocompleteItems().length > 0}>
@@ -1633,18 +1915,31 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						onActivate={(index) => {
 							const current = picker();
 							if (current) setPicker({ ...current, selected: index });
-							selectPicker();
+							selectPicker(index);
 						}}
 						title={
 							state().kind === "model"
 								? "Select model"
-								: "Select thinking level"
+								: state().kind === "thinking"
+									? "Select thinking level"
+									: "Jump to message"
 						}
 						items={pickerItems()}
 						selectedIndex={state().selected}
-						filterPlaceholder="Filter"
+						filterPlaceholder={
+							state().kind === "timeline" ? "Filter prompts" : "Filter"
+						}
 						filterActive={state().filtering}
 						filterQuery={state().filter}
+						{...(state().kind === "timeline"
+							? {
+									emptyContent: (
+										<text fg={uiColors.textMuted}>
+											No user messages to show.
+										</text>
+									),
+								}
+							: {})}
 						help={
 							state().filtering
 								? [
@@ -1660,9 +1955,24 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 									]
 						}
 						renderItem={(item, isActive) => (
-							<text fg={isActive() ? uiColors.primary : uiColors.textSecondary}>
-								{item}
-							</text>
+							<box flexDirection="row" minWidth={0}>
+								<text
+									fg={isActive() ? uiColors.primary : uiColors.textSecondary}
+									flexGrow={1}
+									minWidth={0}
+									wrapMode="none"
+									truncate
+								>
+									{item.label}
+								</text>
+								<Show when={item.detail}>
+									{(text) => (
+										<text fg={uiColors.textMuted} flexShrink={0}>
+											{text()}
+										</text>
+									)}
+								</Show>
+							</box>
 						)}
 					/>
 				)}

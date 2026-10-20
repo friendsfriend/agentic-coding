@@ -795,6 +795,8 @@ describe("stage-test handoff and render wiring", () => {
 			await expect(Effect.runPromise(handler.execute(effect))).resolves.toEqual(
 				{ worktree, branch: "" },
 			);
+			if (!handler.observe)
+				throw new Error("workspace.setup observer is missing");
 			await expect(Effect.runPromise(handler.observe(effect))).resolves.toEqual(
 				{ worktree, branch: "" },
 			);
