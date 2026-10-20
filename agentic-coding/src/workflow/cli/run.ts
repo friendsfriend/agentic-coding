@@ -15,7 +15,6 @@ import { verificationPosition } from "../run-projections.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
-import { runCheckpoint } from "./commands/checkpoint.ts";
 import {
 	runDebugCancel,
 	runDebugRequest,
@@ -131,8 +130,6 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 		runHandoff(rest, workflowEngine, application),
 	"resume-run": (rest, workflowEngine, _repo, application) =>
 		runResumeRun(rest, workflowEngine, application),
-	checkpoint: (rest, workflowEngine, _repo, application) =>
-		runCheckpoint(rest, workflowEngine, application),
 	repair: runRepair,
 	repin: runRepin,
 	"debug-request": runDebugRequest,

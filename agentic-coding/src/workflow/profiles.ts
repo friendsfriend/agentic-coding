@@ -12,10 +12,6 @@ import {
 	DEFAULT_EVENT_WINDOW_MS,
 	DEFAULT_MAX_EVENTS_PER_WINDOW,
 } from "../contracts/workflow-events.ts";
-import {
-	type CheckpointConfig,
-	validateCheckpointConfig,
-} from "./checkpoint.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
@@ -111,10 +107,6 @@ export interface AgentsConfig {
 	 * (`[agents.orchestrator]`). Absent means the durable host's default model
 	 * and thinking level, and the default `monitor` mode. */
 	orchestrator?: OrchestratorConfig;
-	/** The run-progress checkpoint (`[agents.checkpoint]`, efficiency backlog item
-	 * 19). Absent means enabled with the measured defaults, so a configuration
-	 * that says nothing behaves as the change shipped it. */
-	checkpoint?: CheckpointConfig;
 }
 
 /** What the shell's workflow monitor does with a detected transition:
@@ -361,15 +353,6 @@ export function parseAgentsConfig(
 					),
 				}
 			: {}),
-		...(input.checkpoint !== undefined
-			? {
-					checkpoint: validateCheckpoint(
-						input.checkpoint,
-						"agents.checkpoint",
-						source,
-					),
-				}
-			: {}),
 		...(input.file_judgment !== undefined
 			? {
 					file_judgment: validateFileJudgment(
@@ -591,23 +574,6 @@ function validateClassifier(
 			? { options: table.options as Record<string, unknown> }
 			: {}),
 	};
-}
-
-/** The run-progress checkpoint section (`[agents.checkpoint]`). Validation is
- * the pure module's (one declaration of the bounds), and the first problem is
- * raised as this load's configuration error; a table that breaks an invariant
- * names the key that carries it, so the operator knows which table to fix. */
-function validateCheckpoint(
-	value: unknown,
-	where: string,
-	source?: string,
-): CheckpointConfig {
-	const location = source ? `${where} (${source})` : where;
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error(`${location} must be a table`);
-	const first = validateCheckpointConfig(value)[0];
-	if (first) throw new Error(`${location}: ${first.message}`);
-	return value as CheckpointConfig;
 }
 
 function validateFileJudgment(

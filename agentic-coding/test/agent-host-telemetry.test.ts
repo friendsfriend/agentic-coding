@@ -55,22 +55,6 @@ async function waitForLines(
 		: [];
 }
 
-/** The first envelope of one event, read once the run's stream has written it. */
-async function waitForEvent(
-	telemetryPath: string,
-	event: string,
-	attempts = 100,
-): Promise<Record<string, unknown> | undefined> {
-	for (let i = 0; i < attempts; i++) {
-		const found = (await waitForLines(telemetryPath, 1, 1)).find(
-			(line) => (JSON.parse(line) as Record<string, unknown>).event === event,
-		);
-		if (found) return JSON.parse(found) as Record<string, unknown>;
-		await new Promise((resolve) => setTimeout(resolve, 20));
-	}
-	return undefined;
-}
-
 describe("tool-call telemetry shape", () => {
 	/** One faux turn whose tool call fails, plus one that succeeds. */
 	async function runToolTurn(options: {
@@ -174,20 +158,6 @@ describe("tool-call telemetry shape", () => {
 		expect(end?.outcome).toBe("ok");
 		expect(end?.["pi.tool.failure_kind"]).toBeUndefined();
 		expect(end?.["pi.tool.result_bytes"]).toBeGreaterThan(0);
-		// `bash` is not a mutating tool: a run-progress checkpoint counts only a
-		// successful `edit`/`write` as progress, so the envelope says which it was.
-		expect(end?.["pi.tool.mutated"]).toBeUndefined();
-	});
-
-	test("a mutating call is flagged as progress", async () => {
-		const { envelopes } = await runToolTurn({
-			tool: "write",
-			args: { path: "written.txt", content: "hello" },
-			callId: "req-shape-4",
-		});
-		const end = envelopes.find((e) => e.event === "runtime.tool");
-		expect(end?.["pi.tool.ok"]).toBe(true);
-		expect(end?.["pi.tool.mutated"]).toBe(true);
 	});
 
 	test("a secret-looking argument never reaches the telemetry file", async () => {
@@ -276,53 +246,6 @@ describe("durable host telemetry", () => {
 		const metrics = agentMetrics(envelopes).get("worker");
 		expect(metrics?.outputTokens).toBeGreaterThan(0);
 		expect(metrics?.inputTokens).toBeGreaterThan(0);
-		await host.shutdown();
-	});
-
-	test("the settled envelope carries the run's checkpoint counters", async () => {
-		const dir = tempWorkflowDir();
-		const layout = hostLayout(dir);
-		const faux = fauxProvider();
-		const models = createModels();
-		models.setProvider(faux.provider);
-		const host = await DurableHost.open({
-			layout,
-			settings: {},
-			globalAgentDir: dir,
-			storage: new MemoryStorage(),
-			models,
-			// A run whose class is off keeps the counters at zero: the envelope
-			// reports what the host measured, not what the feature could measure.
-			checkpoint: () => ({
-				enabled: false,
-				steer: true,
-				contextTokens: 200_000,
-				thresholds: {},
-			}),
-		});
-		const telemetryPath = path.join(dir, "telemetry.jsonl");
-		const runEnvPath = writeRunEnv(dir, {
-			HERDR_WORKFLOW_ID: "wf-settled",
-			HERDR_RUN_ID: "run-settled",
-			HERDR_STEP_ID: "core.implementation",
-			HERDR_ROLE: "worker",
-			HERDR_CHECKPOINT_CLASS: "worker",
-			HERDR_TELEMETRY_PATH: telemetryPath,
-		});
-		await host.ensureRun({
-			runId: "run-settled",
-			name: "worker-settled",
-			cwd: dir,
-			runEnvPath,
-			toolPolicy: "default",
-			model: `${faux.getModel().provider}/${faux.getModel().id}`,
-		});
-		faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
-		await host.submit("run-settled", "work", "req-settled");
-		const settled = await waitForEvent(telemetryPath, "runtime.settled");
-		expect(settled?.checkpoints).toBe(0);
-		expect(settled?.checkpointEscalations).toBe(0);
-		expect(settled?.compactionsAutoCheckpoint).toBe(0);
 		await host.shutdown();
 	});
 

@@ -11,7 +11,6 @@ export const SUBCOMMANDS: readonly string[] = [
 	"action",
 	"handoff",
 	"resume-run",
-	"checkpoint",
 	"question",
 	"ask",
 	"answer",
@@ -38,7 +37,6 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	repair: ["repo", "workflow-id", "revision", "step"],
 	repin: ["repo", "workflow-id"],
 	handoff: ["outcome"],
-	checkpoint: ["record"],
 	question: ["description"],
 	ask: ["role", "description"],
 	answer: ["question-id", "answer", "nonce"],
@@ -113,7 +111,6 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	"resume-run": { values: [], positionals: [0, 0] },
-	checkpoint: { values: ["record"], positionals: [0, 0] },
 	question: {
 		values: ["description", "context", "options", "questions", "timeout"],
 		positionals: [0, 0],

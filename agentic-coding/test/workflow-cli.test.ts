@@ -84,10 +84,6 @@ describe("breaking workflow CLI surface", () => {
 			// The durable host reconciles a run parked by a developer abort right
 			// before it delivers the developer's next prompt.
 			"resume-run",
-			// The run-progress checkpoint's decision record (efficiency backlog item
-			// 19): the run records what it decided about itself, and nothing
-			// transitions, so it sits with the other local commands.
-			"checkpoint",
 			"question",
 			"ask",
 			"answer",

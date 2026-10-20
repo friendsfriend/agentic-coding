@@ -103,7 +103,6 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
-import { agentCheckpoint } from "./reducers/agent-checkpoint.ts";
 import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
@@ -2788,8 +2787,6 @@ export class WorkflowEngine {
 				this.registry,
 				this.now,
 			);
-		if (command.type === "agent.checkpoint")
-			return agentCheckpoint(db, snapshot, command, this.now);
 		if (command.type === "agent.resume")
 			return agentResume(db, snapshot, definition, command, this.now);
 		if (command.type === "effect.result")

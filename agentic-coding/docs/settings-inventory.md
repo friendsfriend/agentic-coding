@@ -39,7 +39,6 @@ unavailable or unauthorized server is a section error with a retry.
 | Browser sessions | Browser | `src/workflow/effects.ts` | user | `browser.max_sessions`, `browser.idle_ttl_minutes` and `browser.viewport` in the layered workflow config | no | immediate | no (file-only bounds, shown read-only) |
 | Telemetry receiver binds | — | `src/workflow/effects.ts` | user | `telemetry.receiver.container_bind` in the layered workflow config: `auto` (the container bridge gateway, on a Linux engine), `off` (loopback only) or one explicit address; a wildcard address is never bound | no | next start | no (file-only; read when the receivers bind) |
 | Compaction | Compaction | `src/workflow/compaction.ts` (write through `src/server/config.ts`) | user | `[agents.compaction]` in the layered workflow config — `enabled`, `reserveTokens`, `backgroundTokens`, `keepRecentTokens` and `ceilingTokens`; the window-relative fields accept a whole token count or a percentage of the model's context window (`"15%"`), while the cost ceiling is absolute tokens (`0` turns it off); a present `agentHost.compaction` overrides the section, and a project overlay's `[agents]` is not read at all | no | immediate (the durable host re-reads the policy at every generation) | yes (bounded numeric editor / on-off row) |
-| Run-progress checkpoint | Compaction | `src/workflow/checkpoint.ts` | user | `[agents.checkpoint]` in the layered workflow config — `enabled`, `steer`, `contextTokens` and one `softTurns`/`hardTurns` table per checkpoint class (`worker`, `planner`, `verifier`, `mechanical`, `other`); absent keys use the measured per-class defaults, and `hardTurns` is resolved to at least twice `softTurns` | no | next run start (the durable host re-reads the section at every run start) | no (file-only; edit the config file) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
 | Hosted stages | Stages | `src/server/stages/catalog.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/stages/definitions/*.json` and `stages/policy.json`, read from the canonical configuration root only (a repository overlay is ignored). The policy's `interactiveLogin` (`"local"`, the default, or `"never"`) decides whether a login the server cannot automate opens a headed window — a stage may narrow `local` to `never` with a diagnostic and can never widen `never` — and `limits.maxLoginHandoffSeconds` (default 900 s, hard ceiling 1800 s, only clamped down further by `ceilings.maxLoginHandoffSeconds`) bounds one hand-off, queue time included. Under the default, a role whose credential variables are unset now opens a window instead of answering `credential-missing` | no | immediate (every read re-reads the files; a durable run sees the same catalog through `stage_info`) | no (structure is read-only: a stage file is edited on disk) |
@@ -265,45 +264,6 @@ a run the host no longer tracks is reported as finished. Both paths emit the
 (`auto-ceiling`, `auto-overflow` or `manual`); the ceiling's own decisions are
 reported by `runtime.compaction_ceiling`, and `runtime.settled` carries the peak
 context and the per-kind counts of the run.
-
-## The run-progress checkpoint (`[agents.checkpoint]`)
-
-A durable run's supervisor is `src/agent-host/progress-checkpoint.ts` with its
-thresholds in the section below, resolved by the pure
-`src/workflow/checkpoint.ts`. The durable host re-reads the section at every run
-start, so a save reaches the next run without a host restart, and none of it can
-stop a run on a turn count alone — see
-[`workflow-architecture.md`](./workflow-architecture.md#the-run-progress-checkpoint-efficiency-backlog-item-19).
-
-```json
-{ "agents": { "checkpoint": {
-  "enabled": true,
-  "steer": true,
-  "contextTokens": 200000,
-  "worker": { "softTurns": 280, "hardTurns": 1400 }
-} } }
-```
-
-| Value | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | `false` evaluates no checkpoint at all: the whole rollback |
-| `steer` | `true` | Whether a `steer` decision submits its catalog nudge; `false` turns every steer rule into `continue`, and a steered signal can then never escalate |
-| `contextTokens` | `200000` | The measured-context threshold: at or above it the checkpoint may `compact` (through the cost ceiling's admission), never stop |
-| `worker` / `planner` / `verifier` / `mechanical` / `other` | the measured table | One table per checkpoint class: `softTurns` (the first checkpoint, and the base of the interval) and `hardTurns` (the limit whose only decision is an escalation) |
-
-A class table may set only one of the two values: the other comes from the
-class's default, and the resolved hard limit is never below twice the resolved
-soft threshold. The class comes from the step's registered behaviour
-(`HERDR_CHECKPOINT_CLASS`); a step that declares none uses the `other` row, which
-is the worker row. The shipped defaults are the measured ones for each class
-(`worker` 280/1400, `planner` 60/300, `verifier` 70/350, `mechanical` 30/250);
-`softTurns` must be at least 10.
-
-Validation is strict where the section is loaded (a non-boolean `enabled`, a
-non-positive `contextTokens`, a table that is not a table, or a soft/hard pair
-that breaks the invariant is refused with the field that carries it) and lenient
-where the host reads it live (a mistyped hot edit falls back to the documented
-default for that key rather than failing a running conversation).
 
 ## Credentials
 

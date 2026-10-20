@@ -6,10 +6,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-	type ResolvedCheckpointConfig,
-	resolveCheckpointConfig,
-} from "../workflow/checkpoint.ts";
-import {
 	type CompactionConfig,
 	type CompactionSource,
 	resolveCompactionSection,
@@ -128,48 +124,6 @@ export function liveCompactionSection(
 	};
 }
 
-/** The effective run-progress checkpoint section of one configuration file
- * (`[agents.checkpoint]`, efficiency backlog item 19). The configuration load
- * already refused a malformed section, so this reader is lenient: a mistyped hot
- * edit falls back to the default for that key instead of failing a starting
- * run. */
-export function loadCheckpointSection(
-	configPath: string,
-): ResolvedCheckpointConfig {
-	const config = readJsonFile(configPath) ?? {};
-	const agents = config.agents;
-	const section =
-		agents && typeof agents === "object" && !Array.isArray(agents)
-			? (agents as Record<string, unknown>).checkpoint
-			: undefined;
-	return resolveCheckpointConfig(section);
-}
-
-/**
- * Live accessor for the effective checkpoint section, for the same reason the
- * compaction section has one: a Settings save reaches the next run start
- * without restarting the host, and the file is re-read only when its mtime or
- * size changes.
- */
-export function liveCheckpointSection(
-	configPath: string,
-): () => ResolvedCheckpointConfig {
-	let cached: { key: string; config: ResolvedCheckpointConfig } | undefined;
-	return () => {
-		const file = compactionConfigPath(configPath);
-		let key = `missing:${file}`;
-		try {
-			const stat = fs.statSync(file);
-			key = `${file}:${stat.mtimeMs}:${stat.size}`;
-		} catch {
-			/* an unreadable file is the same as an absent section */
-		}
-		if (!cached || cached.key !== key)
-			cached = { key, config: loadCheckpointSection(file) };
-		return cached.config;
-	};
-}
-
 export async function runAgentHost(
 	argv: readonly string[],
 	options: AgentHostMainOptions,
@@ -189,9 +143,6 @@ export async function runAgentHost(
 			compactionConfigPath(options.configPath),
 			settings.compaction,
 		),
-		// The same user-scope file, read per run start: a checkpoint is a property
-		// of the runs a host starts, not of the process it started in.
-		checkpoint: liveCheckpointSection(compactionConfigPath(options.configPath)),
 		globalAgentDir: piAgentDir(),
 		...(argv.includes("--orchestrator") ? { orchestrator: true } : {}),
 		// Test-only hook (unified-application-distribution: "Compiled executable

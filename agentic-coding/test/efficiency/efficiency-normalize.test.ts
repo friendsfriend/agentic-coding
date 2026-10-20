@@ -55,59 +55,6 @@ describe("normalizeRecord", () => {
 		expect(normalizeRecord({})).toBeUndefined();
 	});
 
-	test("a checkpoint's decision and an escalation's outcome become the event's outcome", () => {
-		const span = (event: string, attributes: Record<string, unknown>) => ({
-			...SPAN,
-			event,
-			"pi.error.class": undefined,
-			...attributes,
-		});
-		const checkpoint = normalizeRecord(
-			span("runtime.checkpoint", {
-				"herdr.checkpoint.decision": "steer",
-				"herdr.checkpoint.rule": "repeats",
-				"herdr.checkpoint.status": "ok",
-			}),
-		);
-		expect(checkpoint?.outcome).toBe("steer");
-		expect(checkpoint?.reasonCode).toBe("repeats");
-		expect(checkpoint?.errorClass).toBeUndefined();
-		// A fail-open evaluation is the only checkpoint that carries an error class.
-		const errored = normalizeRecord(
-			span("runtime.checkpoint", {
-				"herdr.checkpoint.decision": "continue",
-				"herdr.checkpoint.rule": "default",
-				"herdr.checkpoint.status": "error",
-				"herdr.checkpoint.error_class": "record",
-			}),
-		);
-		expect(errored?.errorClass).toBe("record");
-		// The escalation's fate lives only in the dotted attribute; without this
-		// branch the outcome column is NULL and every query counts zero.
-		for (const outcome of [
-			"answered",
-			"cancelled",
-			"pending-parked",
-			"filing-failed",
-		] as const) {
-			const escalation = normalizeRecord(
-				span("runtime.checkpoint_escalation", {
-					"herdr.checkpoint.outcome": outcome,
-					"herdr.checkpoint.rule": "hard-limit",
-					"herdr.checkpoint.status":
-						outcome === "filing-failed" ? "error" : "ok",
-					...(outcome === "filing-failed"
-						? { "herdr.checkpoint.error_class": "question" }
-						: {}),
-				}),
-			);
-			expect(escalation?.outcome).toBe(outcome);
-			expect(escalation?.errorClass).toBe(
-				outcome === "filing-failed" ? "question" : undefined,
-			);
-		}
-	});
-
 	test("reads the legacy envelope without inventing a workflow or run id", () => {
 		const event = normalizeRecord(LEGACY);
 		expect(event?.workflowId).toBeUndefined();

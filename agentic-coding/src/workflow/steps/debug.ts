@@ -24,7 +24,6 @@ const REVIEW_COMMENTS_INPUT = {
 export const debugBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"debug.investigate": {
 		classification: "single",
-		checkpointClass: "worker",
 		roles: () => [DEBUG_ROLE],
 		candidateRoles: () => [DEBUG_ROLE],
 		instructionAssetForRole: () => "debug.md",

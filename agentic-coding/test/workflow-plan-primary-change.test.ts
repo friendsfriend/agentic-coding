@@ -374,9 +374,6 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 			).assignment;
 			expect(plannerAssignment.environment.HERDR_WORKFLOW_ID).toBe("env-guard");
 			expect(plannerAssignment.environment.HERDR_CHANGE_ID).toBeUndefined();
-			expect(plannerAssignment.environment.HERDR_CHECKPOINT_CLASS).toBe(
-				"planner",
-			);
 			seedChange(repo, "env-primary");
 			view = handoff(engine, repo, view, "planner", {
 				primaryChangeId: "env-primary",
@@ -402,9 +399,6 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 				"token",
 			).assignment;
 			expect(workerAssignment.environment.HERDR_CHANGE_ID).toBe("env-primary");
-			expect(workerAssignment.environment.HERDR_CHECKPOINT_CLASS).toBe(
-				"worker",
-			);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

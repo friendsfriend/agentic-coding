@@ -2,7 +2,6 @@ import type { StepBehavior } from "./types.ts";
 
 export const researchBehavior: StepBehavior = {
 	classification: "single",
-	checkpointClass: "worker",
 	onAgentComplete: ({ outcome }) =>
 		outcome === "blocked" ? { transition: { outcome: "blocked" } } : undefined,
 	roles: () => ["researcher"],

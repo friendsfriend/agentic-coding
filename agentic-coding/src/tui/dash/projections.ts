@@ -26,7 +26,6 @@ const INTEGRATION_LABELS: Readonly<Record<string, string>> = Object.freeze({
 	routing: "routing",
 	triage: "verifier roles",
 	"file-judgment": "file sweep",
-	"progress-checkpoint": "checkpoint",
 });
 
 /** The outcome half of a classifier row, per integration. A `noul` question
@@ -39,51 +38,7 @@ function classifierOutcome(decision: ClassifierDecisionRecord): string {
 	// A sweep answers once per file, so its counts are its outcome.
 	if (decision.integration === "file-judgment")
 		return decision.result.attention ?? "no bands reported";
-	// A checkpoint decides what should happen to a long run. Its row is
-	// `<action> · <rule> · <question fate>`: about 45 columns, so the decision
-	// survives the half-width panel a 100-column terminal gives it.
-	if (decision.integration === "progress-checkpoint")
-		return checkpointOutcome(decision);
 	return decision.result.applied ? `applied ${profiles}` : `kept ${profiles}`;
-}
-
-/** A checkpoint record's three short facts: the action it decided, the rule that
- * fired, and whether the escalated question was ever filed. `null` when the
- * record predates this projection or carries no rule. */
-function checkpointParts(decision: ClassifierDecisionRecord): {
-	action: string;
-	rule?: string;
-	question?: "filed" | "not filed";
-} {
-	const attention = decision.result.attention ?? "";
-	const rule = /^rule ([a-z][a-z0-9-]*)/.exec(attention)?.[1];
-	const question = attention.includes("question not filed")
-		? ("not filed" as const)
-		: /question \S+/.test(attention)
-			? ("filed" as const)
-			: undefined;
-	return {
-		action: decision.answer.choice ?? "continue",
-		...(rule === undefined ? {} : { rule }),
-		...(question === undefined ? {} : { question }),
-	};
-}
-
-function checkpointOutcome(decision: ClassifierDecisionRecord): string {
-	const parts = checkpointParts(decision);
-	return [parts.action, parts.rule ?? "rule unknown", parts.question]
-		.filter((part): part is string => part !== undefined)
-		.join(" · ");
-}
-
-/** The one-line label of a record's question. A checkpoint's question id is
- * `checkpoint:<36-char run id>:<ordinal>`, which would fill the panel with UUID
- * prefixes; the ordinal is the part that identifies it to the developer. */
-function questionLabel(decision: ClassifierDecisionRecord): string {
-	if (decision.integration !== "progress-checkpoint")
-		return decision.questionId;
-	const ordinal = /:(\d+)$/.exec(decision.questionId)?.[1];
-	return ordinal === undefined ? "checkpoint" : `#${ordinal}`;
 }
 
 /** Every classification a workflow made, oldest first. Two append-only
@@ -120,7 +75,7 @@ export function classificationRows(
 			: [
 					INTEGRATION_LABELS[entry.record.integration] ??
 						entry.record.integration,
-					questionLabel(entry.record),
+					entry.record.questionId,
 					classifierOutcome(entry.record),
 				].join(" · "),
 	);
@@ -288,14 +243,7 @@ export function classifierDecisionDetail(decision: ClassifierDecisionRecord): {
 			...(answer.type === "choice"
 				? [
 						`Choice: ${answer.choice ?? "none"}`,
-						// A rule set has no confidence to withhold, so "not provided" would
-						// read as a sparse record rather than a deterministic decision.
-						`Confidence: ${
-							answer.confidence ??
-							(decision.integration === "progress-checkpoint"
-								? "none (a deterministic rule set)"
-								: "not provided")
-						}`,
+						`Confidence: ${answer.confidence ?? "not provided"}`,
 					]
 				: noulLine(answer)),
 			"",

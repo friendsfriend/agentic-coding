@@ -138,35 +138,14 @@ Formula, applied by task 1 to the latest snapshot:
   all-runs p99 where the successful sample is small;
 - checkpoint interval after the first checkpoint = max(10, soft / 2).
 
-Values pinned by task 1 on the rebuilt dataset (nearest-rank percentiles over
-every run with turns; `docs/efficiency/04b-run-progress-checkpoint.md` has the
-distribution and the per-step arithmetic). The formula moved two values against
-the planning table: the worker soft threshold is 280 (measured p90 271, not
-242) and the mechanical hard limit is 150 (`max(5 × 30, 1.2 × 114, 1.2 × 114)`
-= 150; the 188 in the distribution is the class's *maximum*, not its p99, so it
-does not enter the formula). `other` uses the worker row.
+Provisional values from the planning measurement:
 
-| class | runs | p90 | all-runs p99 | successful max | softTurns | hardTurns | interval | hard vs successful p99 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| worker (and `other`) | 117 | 271 | 1,010 | 1,010 | 280 | 1,400 | 140 | 1,400 > 1,010 |
-| planner | 212 | 56 | 95 | 166 | 60 | 300 | 30 | 300 > 166 |
-| verifier | 383 | 65 | 194 | 228 | 70 | 350 | 35 | 350 > 228 |
-| mechanical | 218 | 30 | 114 | 114 | 30 | 150 | 15 | 150 > 114 |
-
-Successful samples are small (worker n = 14, planner n = 3, verifier n = 42,
-mechanical n = 14), which is why `hardTurns` also takes 1.2 × the all-runs p99:
-every class's hard limit sits above both its successful p99 and above every
-successful run's observed maximum.
-
-Measurement recorded in `docs/efficiency/04b-run-progress-checkpoint.md`
-together with the replay of all 944 runs that carry turns (263 checkpoints, 104
-steers, 138 continues, 21 escalations — 4 of them on runs that still completed;
-the replay's escalation count is an upper bound because a replayed steer cannot
-change the run's behaviour). From that: `enabled` and `steer` ship **true**. The
-evaluation cannot stop a run by itself, an escalation costs one developer
-question, and 104 of 125 steer opportunities resolve without a question; a
-false alarm answered `continue` changes no lifecycle. `enabled = false` remains
-the whole rollback.
+| class | softTurns | hardTurns | interval | hard vs successful max |
+| --- | ---: | ---: | ---: | --- |
+| worker (and `other`) | 250 | 1,250 | 125 | 1,250 > 1,010 |
+| planner | 60 | 300 | 30 | 300 > 166 |
+| verifier | 70 | 350 | 35 | 350 > 228 |
+| mechanical | 30 | 150 | 15 | 150 > 114 |
 
 `contextTokens` = 200,000 for every class: above the shipped 150,000 compaction
 ceiling, so it fires only when ceiling compaction did not hold the context.
@@ -176,7 +155,7 @@ binds every threshold that can escalate **without** a stall signal — the hard
 limit. The soft threshold only starts evaluation and its default answer is
 `continue`, so it is placed at p90 (≈ 10 % of runs evaluated) rather than above
 the successful p99; this is lower than the ~150-turn starting point only for
-planners, verifiers and mechanical steps and higher (280) for workers, because
+planners, verifiers and mechanical steps and higher (250) for workers, because
 the measured worker p90 is 242. If task 1's measurement moves a value, the
 formula wins over this table.
 
@@ -224,9 +203,7 @@ Evaluated on the digest only; ordered; first match wins. Decider id `rules/v1`.
 8. `cost-rising` → `steer` (`converge`).
 9. `default` → `continue`.
 
-With `steer = false`, rules 5–8 yield `continue` under the signal's own rule id
-(attention "steer disabled"), so no rule id exists that the set below does not
-name
+With `steer = false`, rules 5–8 yield `continue` (attention "steer disabled")
 and rule 3 cannot apply; rules 1–2 still escalate. The previous decision and the
 already-steered signals are part of the digest, so the same digest always
 yields the same decision.
@@ -306,28 +283,15 @@ Bounds: the decision history is shared (100 records), so a run writes at most
 12 checkpoint records; later checkpoints are telemetry-only (`recorded: false`).
 The `runtime.checkpoint` envelope carries the same digest, options, answer and
 result for every checkpoint, so telemetry is the complete record and the
-history the bounded, reviewable one. The dashboard renders the row from the
-record itself, in the narrow panel: the label is the question's ordinal
-(`#<ordinal>`) and the one-line outcome states the three facts the panel must
-show — `<action> · <rule> · filed|not filed` (`checkpointOutcome` in
-`src/tui/dash/projections.ts`). The exact rendering belongs to the dashboard;
-what is pinned here is that the action, the rule and the question's fate are all
-visible in one row.
+history the bounded, reviewable one. The dashboard outcome line for the
+integration reads `decided <label> (rule <id>)`.
 
 ### D9. `compact` reuses the ceiling path; `switch-model` is vocabulary only
 
 `compact` is admitted through the same serialized admission as the cost ceiling
-(same summarizer, no instructions, same floor and loop guard); when the
-checkpoint's admission is the one that starts the summarizer, its compaction
+(same summarizer, no instructions, same floor and loop guard); its compaction
 envelope carries the additive kind `auto-checkpoint` and `runtime.settled`
-counts it. Both supervisors read the same measured turn and the ceiling is
-scheduled first, so in practice a checkpoint's `compact` usually finds that
-summarizer already running: the decision is then recorded `applied: false` with
-the attention line `compaction not admitted`, the compaction keeps the kind of
-the supervisor that started it (`auto-ceiling`), and `applied` therefore never
-claims an action the run did not take. A context whose compaction is already
-claimed, or whose reduced context has not been measured yet, is not admissible,
-so the context rule falls through to the signal rules. `switch-model`: a seam exists (`configureRun`, the dashboard
+counts it. `switch-model`: a seam exists (`configureRun`, the dashboard
 `/model` override), but no safe target policy does — the target's window must
 hold the current context, its provider must have credentials, and the step's
 pool semantics would be bypassed. No first-release rule selects it; if a future
