@@ -2,12 +2,26 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
+import type { AgentHandle } from "../src/contracts/workflow.ts";
+import { stagePaths } from "../src/server/stages/catalog.ts";
+import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { run as runWorkflow } from "../src/workflow/cli.ts";
+import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	agentEffectHandlers,
+	EffectRunner,
+} from "../src/workflow/effect-runner.ts";
+import { stageTestWorkflowTarget } from "../src/workflow/runtime/targets.ts";
+import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { prepareWorkflowStart } from "../src/workflow/startup.ts";
+import { CLASSIFIABLE_STEPS } from "../src/workflow/steps/index.ts";
 import {
 	appendLog,
 	checkConformance,
 	citationReport,
 	conceptPath,
+	containsConfiguredSecret,
 	effectiveStatus,
 	ensureBundle,
 	isStale,
@@ -24,6 +38,35 @@ import {
 	verifyConcept,
 	writeConcept,
 } from "../src/workflow/wiki.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+	removeRepoFixture,
+} from "./support/git-fixture.ts";
+
+autoRemoveRepoFixtures();
+
+class StageWikiStubAdapter implements AgentAdapter {
+	readonly id = "pi-durable" as const;
+	launch(ctx: LaunchContext) {
+		return Effect.succeed({
+			runtime: "pi-durable" as const,
+			name: ctx.name,
+			hostSocket: "/tmp/host.sock",
+			sessionId: ctx.assignment.runId,
+		});
+	}
+	preflight() {}
+	prompt() {
+		return Effect.void;
+	}
+	observe(_handle: AgentHandle) {
+		return Effect.succeed({ status: "working" as const });
+	}
+	stop() {
+		return Effect.void;
+	}
+}
 
 let root = "";
 let cwd = "";
@@ -125,6 +168,25 @@ describe("OKF wiki bundle", () => {
 			}),
 		).toBe(true);
 	});
+	test("scoped searches rank only concepts inside the requested system namespace", () => {
+		for (const [id, title] of [
+			["projects/grid-allocation/processes/request", "Request process"],
+			["projects/other/processes/request", "Request process"],
+		] as const) {
+			writeConcept(id, {
+				type: "process",
+				title,
+				description: "Process notes",
+				sources: [{ id: "ticket", resource: "ticket://request" }],
+				body: "The request enters review.[^ticket]",
+			});
+		}
+		expect(
+			searchConcepts(["request"], 20, "projects/grid-allocation/").map(
+				({ id }) => id,
+			),
+		).toEqual(["projects/grid-allocation/processes/request"]);
+	});
 	test("snapshots first touch and verifies idempotently", () => {
 		writeConcept("existing", {
 			type: "concept",
@@ -148,6 +210,16 @@ describe("OKF wiki bundle", () => {
 		verifyConcept("existing", "process:archive");
 		verifyConcept("existing", "process:archive");
 		expect(readConceptForTest("existing").frontmatter.verified).toHaveLength(1);
+	});
+	test("a stage draft containing a configured secret is refused without naming it", () => {
+		const values = ["", "declared-value"];
+		expect(
+			containsConfiguredSecret(
+				JSON.stringify({ body: "use declared-value here" }),
+				values,
+			),
+		).toBe(true);
+		expect(containsConfiguredSecret("a clean draft", values)).toBe(false);
 	});
 	test("managed wiki writes are isolated to the wiki role", async () => {
 		const args = [
@@ -193,12 +265,21 @@ describe("OKF wiki bundle", () => {
 				await expect(runWorkflow(args)).rejects.toThrow(/not permitted/);
 				expect(fs.readFileSync(file, "utf8")).toBe(before);
 			}
-			for (const wikiRole of ["wiki", "research-wiki"]) {
+			for (const wikiRole of ["wiki", "research-wiki", "stage-wiki"]) {
 				process.env.HERDR_ROLE = wikiRole;
 				process.env.HERDR_RUN_TOKEN = "managed";
-				await expect(
-					runWorkflow([...args, "--status", "stable"]),
-				).rejects.toThrow(/authenticated core\.wiki run/);
+				const authorization = runWorkflow([...args, "--status", "stable"]);
+				// A stage-wiki write needs the authenticated stage-test boundary;
+				// the write it guards is covered below by the real stage-wiki run.
+				if (wikiRole === "stage-wiki") {
+					await expect(authorization).rejects.toThrow(
+						/authenticated stage-test step/,
+					);
+				} else {
+					await expect(authorization).rejects.toThrow(
+						/authenticated core\.wiki run/,
+					);
+				}
 			}
 			delete process.env.HERDR_WORKFLOW_ID;
 			delete process.env.HERDR_STEP_ID;
@@ -234,6 +315,227 @@ describe("OKF wiki bundle", () => {
 			else process.env.HERDR_RUN_TOKEN = saved.token;
 			if (saved.change === undefined) delete process.env.HERDR_CHANGE_ID;
 			else process.env.HERDR_CHANGE_ID = saved.change;
+		}
+	});
+	test("an authenticated stage-wiki run writes only inside the pinned stage scope", async () => {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "agentic-stage-wiki-"),
+		);
+		const repo = createTempRepoFixture("agentic-stage-wiki-repo-", {
+			files: { "README.md": "stage wiki\n" },
+		});
+		const saved = {
+			configDir: process.env.AGENTIC_CODING_CONFIG_DIR,
+			workflowConfig: process.env.HERDR_WORKFLOW_CONFIG,
+			wikiDir: process.env.HERDR_WIKI_DIR,
+			target: process.env.HERDR_WORKFLOW_TARGET,
+		};
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(repo);
+			process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+			delete process.env.HERDR_WORKFLOW_CONFIG;
+			// The pinned root is the configured one: the write guard compares the
+			// resolved destination with the snapshot's `wikiRoot`, which the start
+			// pinned from the configuration and not from the process environment.
+			delete process.env.HERDR_WIKI_DIR;
+			process.env.HERDR_WORKFLOW_TARGET = stageTestWorkflowTarget();
+			const pools = Object.fromEntries(
+				Object.entries(CLASSIFIABLE_STEPS).map(([stepId, mode]) => [
+					stepId,
+					Array.from({ length: mode === "roster" ? 2 : 1 }, (_, index) => ({
+						label: `p${index + 1}`,
+						profile: `p${index + 1}`,
+						default: true,
+					})),
+				]),
+			);
+			fs.writeFileSync(
+				path.join(configDir, "config.json"),
+				JSON.stringify({
+					wiki: { root },
+					agents: {
+						default_profile: "p1",
+						profiles: Object.fromEntries(
+							["p1", "p2"].map((name) => [
+								name,
+								{
+									runtime: "pi-durable",
+									executable: "/bin/true",
+									capabilities: [
+										"prompt",
+										"run-environment",
+										"observe",
+										"vision",
+										"shell",
+										"edit",
+									],
+								},
+							]),
+						),
+						presets: {
+							fixed: { default_profile: "p1", pools },
+						},
+					},
+				}),
+			);
+			fs.mkdirSync(stagePaths(configDir).defsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(stagePaths(configDir).defsDir, "grid-int.json"),
+				JSON.stringify({
+					ident: "grid-int",
+					displayName: "Grid integration",
+					environment: "integration",
+					system: "grid-allocation",
+					access: "read-only",
+					apps: {
+						web: {
+							label: "Grid web",
+							url: "https://grid.example.test/",
+							kind: "ui",
+						},
+					},
+					wiki: { processes: ["grid-connection-request"] },
+				}),
+			);
+			const workflowId = "stage-wiki-write";
+			const registry = registerBuiltins();
+			const engine = new WorkflowEngine(registry);
+			const prepared = prepareWorkflowStart({
+				repo,
+				workflowId,
+				definitionId: "stage-test",
+				task: "check the grid connection request status",
+				stage: "grid-int",
+				preset: "fixed",
+			});
+			engine.start(prepared.input);
+			engine.dispatch(prepared.target, {
+				type: "operator.repair",
+				workflowId,
+				revision: engine.getSnapshot(prepared.target, workflowId).revision,
+				targetStep: "core.wiki",
+				reason: "stage wiki write fixture",
+			});
+			await new EffectRunner(
+				prepared.target,
+				engine,
+				agentEffectHandlers(prepared.target, engine, {
+					registry,
+					adapters: new Map([["pi-durable", new StageWikiStubAdapter()]]),
+				}),
+			).drain(5);
+			const run = engine
+				.status(prepared.target, workflowId)
+				.runs.find(({ stepId }) => stepId === "core.wiki");
+			if (!run) throw new Error("missing core.wiki run");
+			process.env.HERDR_WORKFLOW_ID = workflowId;
+			process.env.HERDR_STEP_ID = "core.wiki";
+			process.env.HERDR_ROLE = "stage-wiki";
+			process.env.HERDR_RUN_ID = run.id;
+			process.env.HERDR_RUN_TOKEN = engine.issueRunCapability(
+				prepared.target,
+				run.id,
+			);
+			const body = [
+				"## Covers",
+				"## Actors & apps",
+				"## Steps",
+				"## Hand-overs",
+				"## Asynchronous steps",
+				"## Test data",
+				"## Assertions that matter",
+				"## Gotchas",
+			]
+				.map((heading) => `${heading}\n\nObserved.[^stage]`)
+				.join("\n\n");
+			const runOutputPath = engine.getRun(prepared.target, run.id).outputPath;
+			if (!runOutputPath) throw new Error("missing wiki run output path");
+			const bodyFile = path.join(path.dirname(runOutputPath), "process.md");
+			fs.mkdirSync(path.dirname(bodyFile), { recursive: true });
+			fs.writeFileSync(bodyFile, body);
+			const citation = `stage://grid-int/${workflowId}`;
+			const argsFor = (path: string, sources: string) => [
+				"wiki",
+				"write",
+				"--path",
+				path,
+				"--type",
+				"process",
+				"--title",
+				"Grid connection request",
+				"--description",
+				"Observed process",
+				"--sources",
+				sources,
+				"--body-file",
+				bodyFile,
+			];
+			const args = argsFor(
+				"projects/grid-allocation/processes/grid-connection-request",
+				JSON.stringify([{ id: "stage", resource: citation }]),
+			);
+			await runWorkflow(args);
+			const concept = readConceptForTest(
+				"projects/grid-allocation/processes/grid-connection-request",
+			);
+			expect(concept.frontmatter.status).toBe("draft");
+			expect(JSON.stringify(concept.frontmatter.sources)).toContain(citation);
+
+			// The sibling wiki roles are not admitted to a stage-test run.
+			for (const role of ["wiki", "research-wiki"]) {
+				process.env.HERDR_ROLE = role;
+				await expect(runWorkflow(args)).rejects.toThrow();
+			}
+			process.env.HERDR_ROLE = "stage-wiki";
+
+			// The pinned system's namespace is the only writable one.
+			await expect(
+				runWorkflow(
+					argsFor(
+						"projects/other/processes/grid-connection-request",
+						JSON.stringify([{ id: "stage", resource: citation }]),
+					),
+				),
+			).rejects.toThrow(/outside the pinned system/);
+			// The stage citation is mandatory.
+			await expect(
+				runWorkflow(
+					argsFor(
+						"projects/grid-allocation/processes/grid-connection-request",
+						JSON.stringify([{ id: "ticket", resource: "ticket://x" }]),
+					),
+				),
+			).rejects.toThrow(/must cite stage:\/\/grid-int/);
+
+			// A declared configuration secret is refused by the write command and
+			// the message never repeats the value.
+			fs.writeFileSync(
+				path.join(configDir, ".env"),
+				"STAGE_SECRET=declared-secret-value\n",
+			);
+			fs.writeFileSync(
+				bodyFile,
+				body.replace("Observed.", "Observed with declared-secret-value."),
+			);
+			const refusal = runWorkflow(args).catch((error: unknown) => error);
+			const error = await refusal;
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toMatch(/configured secret/);
+			expect((error as Error).message).not.toContain("declared-secret-value");
+		} finally {
+			process.chdir(previousCwd);
+			removeRepoFixture(repo);
+			fs.rmSync(configDir, { recursive: true, force: true });
+			for (const [key, value] of [
+				["AGENTIC_CODING_CONFIG_DIR", saved.configDir],
+				["HERDR_WORKFLOW_CONFIG", saved.workflowConfig],
+				["HERDR_WIKI_DIR", saved.wikiDir],
+				["HERDR_WORKFLOW_TARGET", saved.target],
+			] as const) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
 		}
 	});
 	test("groups log entries by newest ISO date heading", () => {

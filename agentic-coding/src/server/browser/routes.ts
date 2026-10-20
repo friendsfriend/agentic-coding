@@ -32,8 +32,8 @@ import {
 } from "../../workflow/effects.ts";
 import { workflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts";
 import { readJsonBody } from "../auth.ts";
-import { environmentSecrets, redact } from "../environment/agent-routes.ts";
 import type { EnvironmentManager } from "../environment/manager.ts";
+import { environmentSecrets, redact } from "../environment/secrets.ts";
 import {
 	appendStageJournalEntry,
 	backfillStageJournalVideo,
@@ -457,6 +457,8 @@ function networkEntryValue(
 /** One refusal, as prose. The URL is already sanitized (origin and path only),
  * so a refusal can be reported without leaking a query or a fragment. */
 export function refusalMessage(refusal: StageRefusal): string {
+	if (refusal.code === "stage-plan-write-not-approved")
+		return `the approved stage-test plan permits POST for planned data creation only; the ${refusal.method} request to ${refusal.url} was aborted`;
 	if (refusal.code === "stage-read-only")
 		return `this stage is read-only, so the ${refusal.method} request to ${refusal.url} was aborted; a declared readOnlyExceptions entry is what allows one`;
 	return `${refusal.url} is not in this stage's origin allow-list, so the navigation was aborted; use an origin the stage declares in allowedOrigins`;
@@ -723,6 +725,21 @@ async function dispatch(
 	 * the request ends. */
 	used: SessionUse[],
 ): Promise<unknown> {
+	const workflowId = ownerWorkflowId(owner);
+	const workflow = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	if (
+		workflow?.definitionId === "stage-test" &&
+		path !== AGENT_BROWSER_CLOSE_PATH &&
+		(workflow.currentStep !== "stage.execute" ||
+			!workflow.selectedRoles?.includes("stage-tester"))
+	)
+		throw new BrowserPoolError(
+			"stage-test-tool-restricted",
+			"stage browser tools are available to stage-tester only during stage.execute",
+			403,
+		);
 	// Every call releases what the idle TTL has expired, so an abandoned run's
 	// sessions cannot hold the cap until a timer nobody owns fires.
 	await deps.pool.sweepIdle();
@@ -1070,10 +1087,62 @@ async function resolveOpenTarget(
 }> {
 	const existing = deps.pool.find(owner, name);
 	const stageIdent = body.stage?.trim();
+	const workflowId = ownerWorkflowId(owner);
+	const location = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	if (location?.definitionId === "stage-test") {
+		if (
+			body.url !== undefined ||
+			body.app !== undefined ||
+			body.endpoint !== undefined
+		)
+			throw new BrowserPoolError(
+				"stage-test-browsing-restricted",
+				"stage-test browser opens cannot use a raw URL or an application endpoint; use the pinned stage and a declared stageApp",
+				403,
+			);
+		if (!stageIdent)
+			throw new BrowserPoolError(
+				"stage-test-browsing-restricted",
+				"stage-test browser sessions must be opened with the workflow's pinned stage and a declared stageApp",
+				403,
+			);
+		if (!location.stage || stageIdent !== location.stage)
+			throw new BrowserPoolError(
+				"stage-mismatch",
+				"stage-test browser open must use the exact stage pinned by this workflow",
+				403,
+			);
+	}
 	if (stageIdent) return resolveStageOpen(deps, owner, body, name, stageIdent);
 	const resolved = await resolveOpenUrl(deps, owner, body);
 	if (existing?.stage) assertAllowedOrigin(existing.stage, resolved.url);
 	return resolved;
+}
+
+function assertStageTestRoute(
+	workflow: LocatedEvidenceWorkflow | undefined,
+	app: string,
+	role: string | undefined,
+): void {
+	if (workflow?.definitionId !== "stage-test") return;
+	const plan = workflow.stageTestPlan as
+		| {
+				route?: readonly { application?: string; role?: string }[];
+		  }
+		| undefined;
+	if (
+		!plan?.route?.some(
+			(route) =>
+				route.application === app && (route.role ?? undefined) === role,
+		)
+	)
+		throw new BrowserPoolError(
+			"stage-route-not-approved",
+			"stage application and role must match the approved test plan",
+			403,
+		);
 }
 
 function resolveStageOpen(
@@ -1129,6 +1198,21 @@ function resolveStageOpen(
 	}
 	const identityRole =
 		roleKey === undefined || roleKey === "" ? undefined : roleKey;
+	const workflowId = ownerWorkflowId(owner);
+	const workflow = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	assertStageTestRoute(workflow, appKey, identityRole);
+	const plan = workflow?.stageTestPlan as { createsData?: boolean } | undefined;
+	const stageTestPlan = workflow?.definitionId === "stage-test";
+	const writeAllowed =
+		!stageTestPlan ||
+		(workflow?.stageAccess === "writable" && plan?.createsData === true);
+	// A writable stage whose plan approved no creation is narrowed to read-only
+	// as its own policy, not merely a false `writeAllowed`: the refusal must not
+	// fall through to the stage's read-only exceptions (SEC-002).
+	const planNarrowed =
+		stageTestPlan && workflow?.stageAccess === "writable" && !writeAllowed;
 	const bearer = bearerScopes(entry);
 	const binding: StageSessionBinding = {
 		ident: entry.ident,
@@ -1136,6 +1220,13 @@ function resolveStageOpen(
 		origins: entry.origins,
 		readOnlyExceptions: entry.stage.readOnlyExceptions ?? [],
 		limits: entry.limits,
+		...(stageTestPlan
+			? {
+					writeAllowed,
+					planNarrowed,
+					writeMethods: ["POST"],
+				}
+			: {}),
 		// The stage's identity-cache bounds and the origins one entry covers: the
 		// applications and the login recipes, never a third-party host.
 		identity: entry.identity,
@@ -1291,6 +1382,19 @@ async function stageLogin(
 			409,
 		);
 	const entry = stageEntryFor(deps, binding.ident);
+	const workflowId = ownerWorkflowId(owner);
+	const workflow = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	if (workflow?.definitionId === "stage-test") {
+		if (body.app !== session.app)
+			throw new BrowserPoolError(
+				"stage-app-unknown",
+				"stage login application must match the stage-bound session",
+				403,
+			);
+		assertStageTestRoute(workflow, body.app, body.role);
+	}
 	// The role is remembered on the session from here on, so a successful login of
 	// any path — the cached one, the silent SSO check, the recipe, the hand-off —
 	// captures into the right key (`add-stage-identity-cache`). `cacheInstalled`

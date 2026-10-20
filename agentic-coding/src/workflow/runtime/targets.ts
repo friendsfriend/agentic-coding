@@ -136,11 +136,26 @@ export function canonicalRepository(repo: string): string {
 /** Explicit locator for workflows that review the centralized wiki without a repository. */
 export const WIKI_WORKFLOW_TARGET = "wiki://centralized";
 export const RESEARCH_WORKFLOW_TARGET = "research://standalone";
+export const STAGE_TEST_WORKFLOW_TARGET = "stage-test://hosted";
+/** The targets that review centralized, non-repository state. They share one
+ * data root and record no target marker: lookups always include them, and a
+ * marker write would only add a file whose loss silently narrows a lookup. */
+export const NON_REPOSITORY_WORKFLOW_TARGETS: readonly string[] = [
+	WIKI_WORKFLOW_TARGET,
+	RESEARCH_WORKFLOW_TARGET,
+	STAGE_TEST_WORKFLOW_TARGET,
+];
 export function wikiWorkflowTarget(): string {
 	return WIKI_WORKFLOW_TARGET;
 }
 export function researchWorkflowTarget(): string {
 	return RESEARCH_WORKFLOW_TARGET;
+}
+export function stageTestWorkflowTarget(): string {
+	return STAGE_TEST_WORKFLOW_TARGET;
+}
+export function isStageTestWorkflowTarget(repo: string): boolean {
+	return repo === STAGE_TEST_WORKFLOW_TARGET;
 }
 export function isWikiWorkflowTarget(repo: string): boolean {
 	return repo === WIKI_WORKFLOW_TARGET;
@@ -204,7 +219,11 @@ export function verifyCanonicalStorePath(repo: string, file: string): void {
 }
 
 export function canonicalStorePath(repo: string): string {
-	if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) {
+	if (
+		isWikiWorkflowTarget(repo) ||
+		isResearchWorkflowTarget(repo) ||
+		isStageTestWorkflowTarget(repo)
+	) {
 		const root = wikiWorkflowDataRoot();
 		const file = path.join(root, "herdr.db");
 		rejectSymlinkComponents(root, file);

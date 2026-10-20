@@ -53,6 +53,7 @@ import {
 	AGENT_BROWSER_WAIT_PATH,
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
+import { createStageGuard } from "../src/server/stages/guard.ts";
 import { StageIdentityCache } from "../src/server/stages/identity-cache.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
 import { pkceSecrets } from "../src/server/stages/oauth2.ts";
@@ -340,6 +341,136 @@ async function openStage(
 }
 
 describe("stage-bound sessions", () => {
+	test("a stage-test write plan allows creation but refuses replacement and deletion", () => {
+		const origin = new URL(APP_URL).origin;
+		const refusals: Array<{ code: string; method: string; url: string }> = [];
+		const guard = createStageGuard(
+			{
+				ident: "grid-int",
+				access: "writable",
+				writeAllowed: true,
+				writeMethods: ["POST"],
+				origins: [origin],
+				readOnlyExceptions: [],
+				limits: {
+					maxSessions: 1,
+					maxActionsPerMinute: 60,
+					maxWaitSeconds: 60,
+					maxScreenshots: 20,
+					maxRecordingMinutes: 1,
+					maxLoginHandoffSeconds: 60,
+				},
+			},
+			(refusal) => refusals.push(refusal),
+		);
+		const request = {
+			url: `${origin}/requests/one`,
+			resourceType: "xhr",
+			isMainFrameNavigation: false,
+		};
+		expect(guard({ ...request, method: "GET" })).toBe(true);
+		expect(guard({ ...request, method: "POST" })).toBe(true);
+		expect(guard({ ...request, method: "PUT" })).toBe(false);
+		expect(guard({ ...request, method: "PATCH" })).toBe(false);
+		expect(guard({ ...request, method: "DELETE" })).toBe(false);
+		expect(refusals.map(({ code, method }) => ({ code, method }))).toEqual([
+			{ code: "stage-plan-write-not-approved", method: "PUT" },
+			{ code: "stage-plan-write-not-approved", method: "PATCH" },
+			{ code: "stage-plan-write-not-approved", method: "DELETE" },
+		]);
+	});
+
+	test("the route derives a stage-test session's write policy from the pinned plan", async () => {
+		const cases = [
+			{ access: "read-only", createsData: true, writeAllowed: false },
+			{ access: "writable", createsData: false, writeAllowed: false },
+			{ access: "writable", createsData: true, writeAllowed: true },
+		] as const;
+		for (const [index, item] of cases.entries()) {
+			const deps = build(
+				configRoot({ access: item.access }),
+				createFakeDriver(),
+			);
+			const stageDeps: BrowserRouteDeps = {
+				...deps,
+				locate: () => ({
+					workflowId: "wf-stage",
+					worktree: deps.worktree,
+					definitionId: "stage-test",
+					stage: "grid-int",
+					stageAccess: item.access,
+					currentStep: "stage.execute",
+					selectedRoles: ["stage-tester"],
+					stageTestPlan: {
+						route: [{ application: "web" }],
+						createsData: item.createsData,
+					},
+				}),
+			};
+			const opened = await openStage(stageDeps, {
+				session: `policy-${index}`,
+			});
+			expect(opened.status).toBe(200);
+			const session = sessionOf(stageDeps, `policy-${index}`);
+			expect(session.stage?.writeAllowed).toBe(item.writeAllowed);
+			expect(session.stage?.writeMethods).toEqual(["POST"]);
+		}
+	});
+
+	test("a stage-test plan can narrow a writable stage to read-only", () => {
+		const origin = new URL(APP_URL).origin;
+		const refusals: Array<{ code: string; method: string; url: string }> = [];
+		// A declared read-only exception belongs to the stage's own read-only
+		// policy; a plan that approved no creation must not fall through to it
+		// (SEC-002).
+		const guard = createStageGuard(
+			{
+				ident: "grid-int",
+				access: "writable",
+				writeAllowed: false,
+				planNarrowed: true,
+				origins: [origin],
+				readOnlyExceptions: [
+					{ origin, pathPrefix: "/search", methods: ["POST"] },
+				],
+				limits: {
+					maxSessions: 1,
+					maxActionsPerMinute: 60,
+					maxWaitSeconds: 60,
+					maxScreenshots: 20,
+					maxRecordingMinutes: 1,
+					maxLoginHandoffSeconds: 60,
+				},
+			},
+			(refusal) => refusals.push(refusal),
+		);
+		const request = {
+			url: `${origin}/requests`,
+			resourceType: "xhr",
+			isMainFrameNavigation: false,
+		};
+		expect(guard({ ...request, method: "GET" })).toBe(true);
+		expect(guard({ ...request, method: "POST" })).toBe(false);
+		expect(
+			guard({
+				...request,
+				url: `${origin}/search`,
+				method: "POST",
+			}),
+		).toBe(false);
+		expect(refusals).toEqual([
+			{
+				code: "stage-plan-write-not-approved",
+				method: "POST",
+				url: `${origin}/requests`,
+			},
+			{
+				code: "stage-plan-write-not-approved",
+				method: "POST",
+				url: `${origin}/search`,
+			},
+		]);
+	});
 	test("a derived one-time code matches RFC 6238, and only the code is typed", () => {
 		// RFC 6238 Appendix B (SHA-1) at the RFC's own counters, truncated to the six
 		// digits a login form takes. The dynamic-truncation offset is the low nibble

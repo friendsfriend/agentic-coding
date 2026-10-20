@@ -4,10 +4,14 @@
 // in `src/workflow/steps`; this reducer owns authentication and bookkeeping.
 import type { Database } from "bun:sqlite";
 import path from "node:path";
+import { resolveConfigRoot } from "../../../config-root.ts";
 import type {
 	WorkflowCommand,
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
+import { readStageJournal } from "../../../server/evidence/journal.ts";
+import { listEvidence } from "../../../server/evidence/store.ts";
+import { readStageCatalog } from "../../../server/stages/catalog.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
 import { redactTelemetryText } from "../../observability.ts";
@@ -22,6 +26,7 @@ import {
 	openDebugRequestsForRun,
 } from "../debug-requests.ts";
 import { sourceContentFingerprint } from "../evidence.ts";
+import { workflowEvidenceScope } from "../evidence-store.ts";
 import {
 	applyCompletionResult,
 	expireSiblingRuns,
@@ -146,6 +151,48 @@ export function agentHandoff(
 					digest: outputDigest,
 				}
 			: undefined;
+	// Stage-test validation needs facts the pure step cannot read itself. They are
+	// read here, at the handoff boundary, so a citation typo rejects the handoff
+	// and the same tester run can correct it instead of parking the workflow in
+	// attention-required once the render effect notices.
+	const stageContext =
+		definition.id === "stage-test"
+			? (() => {
+					try {
+						const scope = workflowEvidenceScope({
+							workflowId: snapshot.workflowId,
+							worktree: snapshot.metadata.worktree,
+							definitionId: definition.id,
+						});
+						const journal = readStageJournal(scope).map((entry) => ({
+							seq: entry.seq,
+							...(entry.knowledge
+								? {
+										knowledge: {
+											concept: entry.knowledge.concept,
+											kind: entry.knowledge.kind,
+										},
+									}
+								: {}),
+						}));
+						const stageEntry = readStageCatalog(
+							resolveConfigRoot(),
+						).entries.find((entry) => entry.ident === snapshot.metadata.stage);
+						return {
+							stageJournal: journal,
+							stageEvidenceIds: listEvidence(scope).entries.map(
+								(entry) => entry.id,
+							),
+							...(stageEntry
+								? { stageApps: Object.keys(stageEntry.stage.apps) }
+								: {}),
+						};
+					} catch {
+						/* validation context is best-effort; the render effect still checks */
+						return {};
+					}
+				})()
+			: {};
 	const completion = step.behavior?.onAgentComplete?.({
 		snapshot: structuredClone(snapshot),
 		definitionId: definition.id,
@@ -165,6 +212,7 @@ export function agentHandoff(
 		evidence: handoffEvidence
 			? [...snapshot.evidence, handoffEvidence]
 			: snapshot.evidence,
+		...stageContext,
 	});
 	if (completion?.metadata?.changeId !== undefined)
 		snapshot.metadata.changeId = completion.metadata.changeId;

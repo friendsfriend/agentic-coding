@@ -31,6 +31,8 @@ import {
 	CLASSIFIER_DECISION_MAX_RECORDS,
 	GATE_DECISION_MAX_RECORDS,
 	questionOptions,
+	STAGE_SYSTEM_MAX_BYTES,
+	STAGE_WIKI_PROCESS_MAX_BYTES,
 	VERIFICATION_SCOPE_DIGEST_LENGTH,
 	VERIFICATION_SCOPE_MAX_FILES,
 	VERIFICATION_SCOPE_MAX_PATH_BYTES,
@@ -52,6 +54,13 @@ const definitionPinSchema = Schema.Struct({
 	digest: text(4096),
 	stepRefs: Schema.optionalWith(Schema.Array(stepRefSchema), { exact: true }),
 });
+// Persisted snapshot capability enum. Extending this list does NOT bump
+// STORE_SCHEMA_VERSION: a stage-test start writes `vision` into the resolved
+// profile, so a build that predates that literal cannot decode the same
+// version-6 store. Upgrade is safe (old snapshots lack the key); rolling the
+// release back requires closing or deleting those workflows first
+// (STAGE-MIG-002). A tolerant transform is the alternative once an older build
+// must keep reading a store a newer one wrote.
 const capabilitiesSchema = Schema.Array(
 	Schema.Literal(
 		"interactive",
@@ -63,6 +72,7 @@ const capabilitiesSchema = Schema.Array(
 		"shell",
 		"edit",
 		"runtime-bridge",
+		"vision",
 	),
 );
 /** Persisted runtime ids: the current runtime plus the retired pane-hosted ids,
@@ -420,6 +430,109 @@ const researchHandoffDirectiveSchema = Schema.Struct({
 	),
 });
 
+export const StageTestPlanSchema = Schema.Struct({
+	ticketSummary: boundedText(8192),
+	knowledgeStatus: Schema.Literal("found", "none"),
+	expectations: Schema.Array(
+		Schema.Struct({
+			id: boundedText(64),
+			statement: boundedText(4096),
+			source: Schema.Literal("ticket", "wiki"),
+			priority: Schema.Literal("critical", "high", "medium", "low"),
+		}),
+	).pipe(Schema.minItems(1), Schema.maxItems(50)),
+	knowledgeUsed: Schema.Array(
+		Schema.Struct({
+			concept: boundedText(512),
+			trustTier: boundedText(64),
+			stale: Schema.Boolean,
+		}),
+	).pipe(Schema.maxItems(100)),
+	route: Schema.Array(
+		Schema.Struct({
+			id: boundedText(64),
+			application: boundedText(64),
+			role: Schema.optional(boundedText(64)),
+			action: boundedText(2048),
+			expected: boundedText(4096),
+			capture: Schema.Array(boundedText(256)).pipe(Schema.maxItems(30)),
+		}),
+	).pipe(Schema.minItems(1), Schema.maxItems(100)),
+	asyncWaits: Schema.Array(
+		Schema.Struct({
+			stepId: boundedText(64),
+			condition: boundedText(1024),
+			maxSeconds: integer(1).pipe(Schema.lessThanOrEqualTo(600)),
+		}),
+	).pipe(Schema.maxItems(30)),
+	createsData: Schema.Boolean,
+	dataCreated: Schema.Array(boundedText(1024)).pipe(Schema.maxItems(30)),
+	notTested: Schema.Array(
+		Schema.Struct({
+			expectationId: Schema.optional(boundedText(64)),
+			reason: boundedText(2048),
+		}),
+	).pipe(Schema.maxItems(50)),
+});
+
+export const StageTestReportSchema = Schema.Struct({
+	expectations: Schema.Array(
+		Schema.Struct({
+			id: boundedText(64),
+			verdict: Schema.Literal("pass", "fail", "blocked", "inconclusive"),
+			severity: Schema.optional(
+				Schema.Literal("critical", "major", "minor", "info"),
+			),
+			expected: boundedText(4096),
+			observed: boundedText(8192),
+			stepIds: Schema.Array(boundedText(64)).pipe(Schema.maxItems(100)),
+			evidenceIds: Schema.Array(boundedText(64)).pipe(Schema.maxItems(100)),
+		}),
+	).pipe(Schema.minItems(1), Schema.maxItems(50)),
+	applicationVersions: Schema.Array(
+		Schema.Struct({
+			application: boundedText(64),
+			status: Schema.Literal("available", "unavailable"),
+			version: Schema.optional(boundedText(256)),
+			reason: Schema.optional(boundedText(1024)),
+		}).pipe(
+			Schema.filter(
+				(item) =>
+					item.status === "available"
+						? Boolean(item.version?.trim()) && item.reason === undefined
+						: item.version === undefined && Boolean(item.reason?.trim()),
+				{
+					message: () =>
+						"available versions need a version; unavailable versions need a reason",
+				},
+			),
+		),
+	).pipe(Schema.maxItems(100)),
+	createdData: Schema.Array(
+		Schema.Struct({
+			description: boundedText(1024),
+			cleanupHint: Schema.optional(boundedText(2048)),
+		}),
+	).pipe(Schema.maxItems(30)),
+	knowledgeObservations: Schema.Array(
+		Schema.Struct({
+			concept: boundedText(512),
+			kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+			statement: Schema.optional(boundedText(2048)),
+			observed: Schema.optional(boundedText(2048)),
+			suspectedCause: Schema.optional(
+				Schema.Literal("product-change", "regression", "unknown"),
+			),
+		}),
+	).pipe(Schema.maxItems(100)),
+	notTested: Schema.Array(
+		Schema.Struct({
+			expectationId: Schema.optional(boundedText(64)),
+			reason: boundedText(2048),
+		}),
+	).pipe(Schema.maxItems(50)),
+});
+
 export const ResearchHandoffSchema = Schema.Struct({
 	subject: text(512),
 	canonicalTarget: Schema.optionalWith(text(512), { exact: true }),
@@ -633,6 +746,28 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		workspace: Schema.optionalWith(text(4096), { exact: true }),
 		task: Schema.optionalWith(text(65536), { exact: true }),
 		ticket: Schema.optionalWith(text(4096), { exact: true }),
+		stage: Schema.optionalWith(boundedText(64), { exact: true }),
+		stageSystem: Schema.optionalWith(boundedText(STAGE_SYSTEM_MAX_BYTES), {
+			exact: true,
+		}),
+		stageWikiProcesses: Schema.optionalWith(
+			Schema.Array(boundedText(STAGE_WIKI_PROCESS_MAX_BYTES)),
+			{ exact: true },
+		),
+		stageAccess: Schema.optionalWith(Schema.Literal("read-only", "writable"), {
+			exact: true,
+		}),
+		stagePlanApproval: Schema.optionalWith(
+			Schema.Literal("always", "when-writing", "never"),
+			{ exact: true },
+		),
+		stageTestPlan: Schema.optionalWith(StageTestPlanSchema, { exact: true }),
+		stageTestReport: Schema.optionalWith(StageTestReportSchema, {
+			exact: true,
+		}),
+		stageTestReportMarkdown: Schema.optionalWith(text(2 * 1024 * 1024), {
+			exact: true,
+		}),
 		createdAt: text(4096),
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),

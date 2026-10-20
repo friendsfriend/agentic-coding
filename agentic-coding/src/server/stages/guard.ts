@@ -20,6 +20,19 @@ import type { StageReadOnlyException } from "./schema.ts";
 export interface StageSessionPolicy {
 	readonly ident: string;
 	readonly access: "read-only" | "writable";
+	/** A stage-test plan may further narrow a writable stage to read-only for
+	 * this session when it did not approve any data creation. */
+	readonly writeAllowed?: boolean;
+	/** The plan approved no record creation, so this session is narrowed to
+	 * read-only even though the stage itself is writable. It is separate from
+	 * `writeAllowed` because a narrowed plan must not fall through to the
+	 * stage's `readOnlyExceptions` (SEC-002): those exceptions describe a
+	 * read-only stage's own safe forms, not permission for a plan that promised
+	 * not to write. */
+	readonly planNarrowed?: boolean;
+	/** A stage-test write plan only authorizes record creation; methods that can
+	 * replace or remove existing records stay refused. */
+	readonly writeMethods?: readonly string[];
 	readonly origins: readonly string[];
 	readonly readOnlyExceptions: readonly StageReadOnlyException[];
 	readonly limits: EffectiveStageLimits;
@@ -40,7 +53,10 @@ export interface StageRequestInfo {
 
 /** One refused request, as the driving tool call reports it. */
 export interface StageRefusal {
-	readonly code: "origin-not-allowed" | "stage-read-only";
+	readonly code:
+		| "origin-not-allowed"
+		| "stage-read-only"
+		| "stage-plan-write-not-approved";
 	/** Origin plus pathname: never the query, never the fragment, both of which
 	 * can carry a token. */
 	readonly url: string;
@@ -99,13 +115,9 @@ export function createStageGuard(
 			});
 			return false;
 		}
-		if (policy.access === "writable") return true;
-		if (readOnlyRefusal(policy, url, method) === undefined) return true;
-		record({
-			code: "stage-read-only",
-			url: sanitizeStageUrl(request.url),
-			method,
-		});
+		const refusal = readOnlyRefusal(policy, url, method);
+		if (refusal === undefined) return true;
+		record(refusal);
 		return false;
 	};
 }
@@ -123,9 +135,26 @@ export function readOnlyRefusal(
 	url: URL,
 	method: string,
 ): StageRefusal | undefined {
-	if (policy.access === "writable") return undefined;
 	const upper = method.toUpperCase();
 	if (SAFE_METHODS.has(upper)) return undefined;
+	if (policy.planNarrowed)
+		return {
+			code: "stage-plan-write-not-approved",
+			url: sanitizeStageUrl(url.toString()),
+			method: upper,
+		};
+	if (policy.access === "writable" && policy.writeAllowed !== false) {
+		if (
+			policy.writeMethods === undefined ||
+			policy.writeMethods.some((candidate) => candidate.toUpperCase() === upper)
+		)
+			return undefined;
+		return {
+			code: "stage-plan-write-not-approved",
+			url: sanitizeStageUrl(url.toString()),
+			method: upper,
+		};
+	}
 	if (hasReadOnlyException(policy, url, upper)) return undefined;
 	return {
 		code: "stage-read-only",

@@ -3,13 +3,22 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import type {
+	AgentHandle,
 	WorkflowExecutionSettings,
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
+import { stagePaths } from "../src/server/stages/catalog.ts";
+import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
 import { definitionVersionForStagedRoot } from "../src/workflow/definitions/manifest-policy.ts";
-import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
+import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	agentEffectHandlers,
+	EffectRunner,
+	effectRunnerTest,
+} from "../src/workflow/effect-runner.ts";
 import {
 	executionSettings,
 	loadConfigWithProvenance,
@@ -17,6 +26,8 @@ import {
 	settingsFingerprint,
 } from "../src/workflow/effects.ts";
 import { parseAgentsConfig } from "../src/workflow/profiles.ts";
+import { stageTestWorkflowTarget } from "../src/workflow/runtime/targets.ts";
+import { WorkflowEngine } from "../src/workflow/runtime.ts";
 import {
 	prepareWorkflowStart,
 	taskReferenceSuffix,
@@ -35,6 +46,166 @@ function repository(): string {
 	return createTempRepoFixture("workflow-startup-", {
 		files: { "README.md": "startup\n" },
 	});
+}
+
+class StageStartupStubAdapter implements AgentAdapter {
+	readonly id = "pi-durable" as const;
+	launch(ctx: LaunchContext) {
+		return Effect.succeed({
+			runtime: "pi-durable" as const,
+			name: ctx.name,
+			hostSocket: "/tmp/host.sock",
+			sessionId: ctx.assignment.runId,
+		});
+	}
+	preflight() {}
+	prompt() {
+		return Effect.void;
+	}
+	observe(_handle: AgentHandle) {
+		return Effect.succeed({ status: "working" as const });
+	}
+	stop() {
+		return Effect.void;
+	}
+}
+
+/** Start a real stage-test workflow, enter `stage.plan`, complete the planner
+ * run through the engine's own handoff and return the step it routed to. The
+ * gate decision is made by the registered step and the graph, not by calling
+ * the completion function in isolation. */
+async function completeStagePlanThroughEngine(input: {
+	planApproval?: "always" | "when-writing" | "never";
+	createsData: boolean;
+	workflowId: string;
+}): Promise<string> {
+	const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "stage-plan-gate-"));
+	const wiki = fs.mkdtempSync(path.join(os.tmpdir(), "stage-plan-gate-wiki-"));
+	const repo = repository();
+	const previousRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
+	const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+	try {
+		process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		const config = JSON.parse(
+			presetConfig(["stage.plan", "stage.execute", "core.wiki"], undefined, [
+				"prompt",
+				"run-environment",
+				"observe",
+				"vision",
+				"shell",
+				"edit",
+			]),
+		);
+		config.wiki = { root: wiki };
+		fs.writeFileSync(
+			path.join(configDir, "config.json"),
+			JSON.stringify(config),
+		);
+		fs.mkdirSync(stagePaths(configDir).defsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(stagePaths(configDir).defsDir, "grid-int.json"),
+			JSON.stringify({
+				ident: "grid-int",
+				displayName: "Grid integration",
+				environment: "integration",
+				system: "grid-allocation",
+				access: input.createsData ? "writable" : "read-only",
+				...(input.planApproval ? { planApproval: input.planApproval } : {}),
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid.example.test/",
+						kind: "ui",
+					},
+				},
+				wiki: { processes: ["grid-connection-request"] },
+			}),
+		);
+		const prepared = prepareWorkflowStart({
+			repo,
+			workflowId: input.workflowId,
+			definitionId: "stage-test",
+			task: "check the grid connection request status",
+			stage: "grid-int",
+			preset: "fixed",
+		});
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const target = stageTestWorkflowTarget();
+		engine.start(prepared.input);
+		engine.dispatch(target, {
+			type: "operator.repair",
+			workflowId: input.workflowId,
+			revision: engine.getSnapshot(target, input.workflowId).revision,
+			targetStep: "stage.plan",
+			reason: "plan gate fixture",
+		});
+		await new EffectRunner(
+			target,
+			engine,
+			agentEffectHandlers(target, engine, {
+				registry,
+				adapters: new Map([["pi-durable", new StageStartupStubAdapter()]]),
+			}),
+		).drain(2);
+		const run = engine
+			.status(target, input.workflowId)
+			.runs.find(({ stepId }) => stepId === "stage.plan");
+		if (!run?.outputPath) throw new Error("missing planner run artifact path");
+		fs.mkdirSync(path.dirname(run.outputPath), { recursive: true });
+		fs.writeFileSync(
+			run.outputPath,
+			JSON.stringify({
+				runId: run.id,
+				schemaId: "core.stage-test-plan",
+				schemaVersion: 1,
+				payload: {
+					ticketSummary: "Check request status",
+					knowledgeStatus: "none",
+					expectations: [
+						{
+							id: "E1",
+							statement: "The request is visible",
+							source: "ticket",
+							priority: "high",
+						},
+					],
+					knowledgeUsed: [],
+					route: [
+						{
+							id: "R1",
+							application: "web",
+							action: "open the request",
+							expected: "Request details are visible",
+							capture: [],
+						},
+					],
+					asyncWaits: [],
+					createsData: input.createsData,
+					dataCreated: input.createsData ? ["one test request"] : [],
+					notTested: [],
+				},
+			}),
+		);
+		engine.dispatch(target, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: engine.getRun(target, run.id).generation,
+			token: engine.issueRunCapability(target, run.id),
+			outcome: "complete",
+			artifact: run.outputPath,
+		});
+		return engine.status(target, input.workflowId).currentStep.id;
+	} finally {
+		if (previousRoot === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previousRoot;
+		if (previousConfig === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
+		fs.rmSync(configDir, { recursive: true, force: true });
+		fs.rmSync(wiki, { recursive: true, force: true });
+	}
 }
 
 const config = `${JSON.stringify({
@@ -66,11 +237,22 @@ function fixedPools(stepIds: readonly string[]): Record<string, unknown[]> {
 	);
 }
 
-function presetConfig(stepIds: readonly string[], provider?: string): string {
+function presetConfig(
+	stepIds: readonly string[],
+	provider?: string,
+	capabilities?: readonly string[],
+): string {
 	return `${JSON.stringify({
 		agents: {
 			default_profile: "p",
-			profiles: { p: { runtime: "pi-durable", executable: "/bin/true" } },
+			profiles: {
+				p: {
+					runtime: "pi-durable",
+					executable: "/bin/true",
+					...(capabilities ? { capabilities } : {}),
+				},
+			},
+
 			presets: { fixed: { default_profile: "p", pools: fixedPools(stepIds) } },
 			...(provider ? { classifier: { provider } } : {}),
 		},
@@ -133,6 +315,103 @@ describe("classifier provider pinning", () => {
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;
 			fs.rmSync(repo, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("stage-test startup", () => {
+	test("pins the allow-listed stage before creating workflow state", () => {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "stage-test-startup-"),
+		);
+		const previousRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
+		const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		try {
+			const stepIds = ["stage.plan", "stage.execute", "core.wiki"];
+			fs.writeFileSync(
+				path.join(configDir, "config.json"),
+				presetConfig(stepIds, undefined, [
+					"prompt",
+					"run-environment",
+					"observe",
+					"vision",
+					"shell",
+					"edit",
+				]),
+			);
+			fs.mkdirSync(stagePaths(configDir).defsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(stagePaths(configDir).defsDir, "grid-int.json"),
+				JSON.stringify({
+					ident: "grid-int",
+					displayName: "Grid integration",
+					environment: "integration",
+					system: "grid-allocation",
+					access: "read-only",
+					apps: {
+						web: {
+							label: "Grid web",
+							url: "https://grid.example.test/",
+							kind: "ui",
+						},
+					},
+					wiki: { processes: ["grid-connection-request"] },
+				}),
+			);
+			const prepared = prepareWorkflowStart({
+				workflowId: "stage-startup",
+				definitionId: "stage-test",
+				task: "check the grid connection request status",
+				stage: "grid-int",
+				preset: "fixed",
+			});
+			expect(prepared.input.metadata.stage).toBe("grid-int");
+			expect(prepared.input.metadata.stageSystem).toBe("grid-allocation");
+			expect(prepared.input.metadata.stageAccess).toBe("read-only");
+			expect(prepared.input.metadata.stageWikiProcesses).toEqual([
+				"grid-connection-request",
+			]);
+			let refusal: unknown;
+			try {
+				prepareWorkflowStart({
+					workflowId: "stage-unknown",
+					definitionId: "stage-test",
+					task: "check a request",
+					stage: "not-allowed",
+					preset: "fixed",
+				});
+			} catch (error) {
+				refusal = error;
+			}
+			expect(refusal).toMatchObject({ code: "stage-not-configured" });
+		} finally {
+			if (previousRoot === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previousRoot;
+			if (previousConfig === undefined)
+				delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
+			fs.rmSync(configDir, { recursive: true, force: true });
+		}
+	});
+	test("an always-approve stage plan routes the engine to plan review", async () => {
+		expect(
+			await completeStagePlanThroughEngine({
+				planApproval: "always",
+				createsData: false,
+				workflowId: "stage-plan-always",
+			}),
+		).toBe("stage.plan-review");
+	});
+	test("a when-writing stage plan that creates data routes the engine to plan review", async () => {
+		expect(
+			await completeStagePlanThroughEngine({
+				planApproval: "when-writing",
+				createsData: true,
+				workflowId: "stage-plan-writing",
+			}),
+		).toBe("stage.plan-review");
 	});
 });
 
@@ -410,7 +689,15 @@ describe("environment-setup startup", () => {
 		const file = path.join(configDir, "config.json");
 		fs.writeFileSync(file, config);
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		const previousConfigDir = process.env.AGENTIC_CODING_CONFIG_DIR;
+		const previousWiki = process.env.HERDR_WIKI_DIR;
 		process.env.HERDR_WORKFLOW_CONFIG = file;
+		// A fresh data root keeps the sweep's "known workflow" check to this test's
+		// own store: another test file's leftover target markers must not decide
+		// whether the sweep may run (TQV-012). `HERDR_WIKI_DIR` is the wiki root
+		// the sandbox preload pins, so it has to move with the configuration root.
+		process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+		process.env.HERDR_WIKI_DIR = path.join(configDir, "wiki");
 		try {
 			expect(() =>
 				prepareWorkflowStart({
@@ -478,8 +765,10 @@ describe("environment-setup startup", () => {
 				mode: "checkout",
 				app: "shop",
 			});
-			for (let attempt = 0; attempt < 100 && fs.existsSync(stale); attempt++)
-				await Bun.sleep(20);
+			// The sweep is fire-and-forget, so the poll has to outlast the
+			// largest concurrent focused run rather than one quiet file.
+			for (let attempt = 0; attempt < 300 && fs.existsSync(stale); attempt++)
+				await Bun.sleep(100);
 			expect(fs.existsSync(stale)).toBe(false);
 
 			const started = prepareWorkflowStart({
@@ -497,10 +786,15 @@ describe("environment-setup startup", () => {
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			if (previousConfigDir === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfigDir;
+			if (previousWiki === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWiki;
 			fs.rmSync(repo, { recursive: true, force: true });
 			fs.rmSync(configDir, { recursive: true, force: true });
 		}
-	});
+	}, 45_000);
 });
 
 // The debug family's start boundary (`add-debug-workflow`, task 3.3): the

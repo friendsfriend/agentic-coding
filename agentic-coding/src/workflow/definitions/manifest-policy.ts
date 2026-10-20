@@ -69,6 +69,13 @@ export function definitionVersionForStagedRoot(rounds: number): number {
 	return rounds + 900;
 }
 
+/** New-start tier for the pinned hosted-stage test family. Older families keep
+ * resolving at the staged-root tier; this independent family has no historical
+ * definitions to migrate. */
+export function definitionVersionForStageTest(rounds: number): number {
+	return rounds + 1000;
+}
+
 /** The declared family traits, per repository code-change family
  * (add-definition-family-traits). This table is both the source of the traits
  * tier's manifests and the fallback `effectiveFamilyTraits` reads for a
@@ -269,6 +276,11 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 		targetKind: "research",
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: true,
+	},
+	"stage-test": {
+		targetKind: "stage-test",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
 	},
 };
 

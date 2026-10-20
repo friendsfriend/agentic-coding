@@ -28,6 +28,8 @@ export interface WorkflowEvidenceLocation {
 	/** The workflow's definition id, which decides whether its data lives in
 	 * its checkout or in the shared wiki/research data root. */
 	readonly definitionId?: string;
+	/** Pinned stage identity for stage-test browser route authorization. */
+	readonly stage?: string;
 }
 
 /** Everything one workflow's evidence store is addressed by. `root` is the

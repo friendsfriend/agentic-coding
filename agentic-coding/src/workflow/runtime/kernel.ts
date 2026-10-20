@@ -322,6 +322,27 @@ export function applyCompletionResult(
 			throw new WorkflowRuntimeError("reducer-contract", "invalid change ID");
 		snapshot.metadata.changeId = result.metadata.changeId;
 	}
+	if (result.metadata?.stageTestReportMarkdown !== undefined) {
+		if (typeof result.metadata.stageTestReportMarkdown !== "string")
+			throw new WorkflowRuntimeError(
+				"reducer-contract",
+				"invalid stageTestReportMarkdown",
+			);
+		snapshot.metadata.stageTestReportMarkdown =
+			result.metadata.stageTestReportMarkdown;
+	}
+	for (const key of ["stageTestPlan", "stageTestReport"] as const) {
+		const value = result.metadata?.[key];
+		if (value !== undefined) {
+			try {
+				snapshot.metadata[key] = JSON.parse(
+					JSON.stringify(value),
+				) as JsonValueType;
+			} catch {
+				throw new WorkflowRuntimeError("reducer-contract", `invalid ${key}`);
+			}
+		}
+	}
 	if (result.step) {
 		if (
 			(result.step.selectedRoles !== undefined &&
@@ -493,7 +514,8 @@ export function createRun(
 			`missing pinned route for ${step.id}/${role}`,
 		);
 	const directory =
-		snapshot.definition.id === "wiki-comments"
+		snapshot.definition.id === "wiki-comments" ||
+		snapshot.definition.id === "stage-test"
 			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 			: path.join(
 					snapshot.metadata.worktree,

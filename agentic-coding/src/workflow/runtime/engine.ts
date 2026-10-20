@@ -171,6 +171,7 @@ import { recordWorkflowTarget } from "./target-registry.ts";
 import {
 	canonicalRepository,
 	isResearchWorkflowTarget,
+	isStageTestWorkflowTarget,
 	isWikiWorkflowTarget,
 	validateWorkflowId,
 	wikiWorkflowDataRoot,
@@ -628,7 +629,9 @@ export class WorkflowEngine {
 					payload: committed.telemetry.rollupPayload,
 				});
 			self.onCommitted(
-				isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
+				isWikiWorkflowTarget(repo) ||
+					isResearchWorkflowTarget(repo) ||
+					isStageTestWorkflowTarget(repo)
 					? wikiRoot(true)
 					: canonicalRepository(repo),
 			);
@@ -1419,37 +1422,43 @@ export class WorkflowEngine {
 		const traits = effectiveFamilyTraits(definition);
 		const wikiTarget = isWikiWorkflowTarget(input.repo);
 		const researchTarget = isResearchWorkflowTarget(input.repo);
+		const stageTestTarget = isStageTestWorkflowTarget(input.repo);
 		const validTarget =
 			policy.targetKind === "wiki"
 				? wikiTarget
 				: policy.targetKind === "research"
 					? researchTarget
-					: !wikiTarget && !researchTarget;
+					: policy.targetKind === "stage-test"
+						? stageTestTarget
+						: !wikiTarget && !researchTarget && !stageTestTarget;
 		if (!validTarget)
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				"the workflow target does not match its declared manifest policy",
 			);
 		const wikiOnlyTarget = wikiTarget;
-		const repository = researchTarget
-			? input.repositoryContext
-				? canonicalRepository(input.repositoryContext)
-				: ""
-			: wikiOnlyTarget
-				? ""
-				: canonicalRepository(input.repo);
+		const repository =
+			researchTarget || stageTestTarget
+				? input.repositoryContext
+					? canonicalRepository(input.repositoryContext)
+					: ""
+				: wikiOnlyTarget
+					? ""
+					: canonicalRepository(input.repo);
 		// Keep an explicitly supplied worktree path for the workflow view while
 		// resolving it separately for repository guards. On macOS, /var is a
 		// symlink to /private/var; canonicalizing the stored path would make the
 		// view differ from the path the caller supplied.
-		const worktree = researchTarget
-			? path.resolve(wikiWorkflowDataRoot())
-			: wikiOnlyTarget
-				? path.resolve(ensureBundle())
-				: input.worktree === undefined
-					? fs.realpathSync(path.resolve(input.repo))
-					: path.resolve(input.worktree);
-		if (researchTarget) fs.mkdirSync(worktree, { recursive: true });
+		const worktree =
+			researchTarget || stageTestTarget
+				? path.resolve(wikiWorkflowDataRoot())
+				: wikiOnlyTarget
+					? path.resolve(ensureBundle())
+					: input.worktree === undefined
+						? fs.realpathSync(path.resolve(input.repo))
+						: path.resolve(input.worktree);
+		if (researchTarget || stageTestTarget)
+			fs.mkdirSync(worktree, { recursive: true });
 		const resolvedWorktree = fs.realpathSync(worktree);
 		if (policy.requiresReadOnlyResearcher) {
 			const route = input.routing.routes.find(
@@ -1472,10 +1481,10 @@ export class WorkflowEngine {
 		// required — `openspec-propose`/`openspec-fusion-propose` also require
 		// checkout but never seed this baseline.
 		const wikiOnly = definition.id === "wiki";
-		if (researchTarget && !input.metadata.task?.trim())
+		if ((researchTarget || stageTestTarget) && !input.metadata.task?.trim())
 			throw new WorkflowRuntimeError(
 				"start-guard",
-				"research requires non-empty task",
+				`${definition.id} requires non-empty task`,
 			);
 		const sameCheckout = policy.checkoutRequired;
 		if (sameCheckout) {
@@ -1496,7 +1505,7 @@ export class WorkflowEngine {
 					"proposal workflows require the named current branch",
 				);
 		}
-		if (!wikiOnlyTarget && !researchTarget)
+		if (!wikiOnlyTarget && !researchTarget && !stageTestTarget)
 			validateStartEvidence(repository, input, definition);
 		// A fusion definition seeds a planner roster, so its routing carries the
 		// planner fan-out the fusion validation requires.
@@ -1582,7 +1591,9 @@ export class WorkflowEngine {
 		};
 		validateSnapshot(snapshot, definition, [], this.registry);
 		const storeTarget =
-			wikiOnlyTarget || researchTarget ? input.repo : repository;
+			wikiOnlyTarget || researchTarget || stageTestTarget
+				? input.repo
+				: repository;
 		return { snapshot, storeTarget, sameCheckout };
 	}
 
@@ -2654,7 +2665,8 @@ export class WorkflowEngine {
 		// run env and bridge telemetry under the wiki data root; the engine must
 		// share that directory so engine and runtime events correlate (QUAL-008).
 		return snapshot.definition.id === "wiki-comments" ||
-			snapshot.definition.id === "research"
+			snapshot.definition.id === "research" ||
+			snapshot.definition.id === "stage-test"
 			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
 			: path.join(
 					snapshot.metadata.worktree,

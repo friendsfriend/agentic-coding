@@ -159,8 +159,16 @@ export interface ReviewFeatureContext {
 export interface ReviewFeature {
 	reviewOpen: () => boolean;
 	setReviewOpen: Setter<boolean>;
-	reviewKind: () => "developer" | "plan" | "wiki" | "setup";
-	setReviewKind: Setter<"developer" | "plan" | "wiki" | "setup">;
+	reviewKind: () => "developer" | "plan" | "wiki" | "setup" | "stage";
+	setReviewKind: Setter<"developer" | "plan" | "wiki" | "setup" | "stage">;
+	stageWikiUpdateAvailable: () => boolean;
+	/** True while the stage-test plan gate owns the review; its synthetic plan
+	 * row cannot be reloaded from a worktree, so refresh must preserve it. */
+	stagePlanReview: () => boolean;
+	/** Whether the engine offers the plan-rejection action right now; the
+	 * footer and the `r` key both read it so an unavailable action is never
+	 * advertised (USAB-002). */
+	rejectPlanAvailable: () => boolean;
 	reviewView: () => "files" | "diff";
 	setReviewView: Setter<"files" | "diff">;
 	reviewLoading: () => boolean;
@@ -309,7 +317,7 @@ export function createReviewFeature(
 
 	const [reviewOpen, setReviewOpen] = createSignal(false);
 	const [reviewKind, setReviewKind] = createSignal<
-		"developer" | "plan" | "wiki" | "setup"
+		"developer" | "plan" | "wiki" | "setup" | "stage"
 	>("developer");
 	const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
 	const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
@@ -532,6 +540,190 @@ export function createReviewFeature(
 				: ([...lines].reverse().find((line) => line < current) ?? lines.at(-1));
 		if (next !== undefined) setReviewLine(next);
 	};
+	const stageReportContent = () => {
+		const state = data().state;
+		if (typeof state.stageTestReportMarkdown === "string")
+			return state.stageTestReportMarkdown;
+		const plan = state.stageTestPlan as
+			| {
+					ticketSummary?: string;
+					expectations?: readonly {
+						id: string;
+						statement: string;
+						priority: string;
+					}[];
+					knowledgeUsed?: readonly {
+						concept: string;
+						trustTier: string;
+						stale: boolean;
+					}[];
+			  }
+			| undefined;
+		const report = state.stageTestReport as
+			| {
+					expectations?: readonly {
+						id: string;
+						verdict: string;
+						expected: string;
+						observed: string;
+						severity?: string;
+						evidenceIds: readonly string[];
+						stepIds: readonly string[];
+					}[];
+					applicationVersions?: readonly {
+						application: string;
+						status: "available" | "unavailable";
+						version?: string;
+						reason?: string;
+					}[];
+					createdData?: readonly {
+						description: string;
+						cleanupHint?: string;
+					}[];
+					knowledgeObservations?: readonly {
+						concept: string;
+						kind: string;
+						statement?: string;
+						observed?: string;
+					}[];
+					notTested?: readonly { expectationId?: string; reason: string }[];
+			  }
+			| undefined;
+		return [
+			"# Stage test report",
+			"",
+			`- **Stage:** ${state.stage ?? "unknown"}`,
+			`- **System:** ${state.stageSystem ?? "unknown"}`,
+			`- **Ticket:** ${state.ticket ?? "not supplied"}`,
+			"",
+			"## Plan",
+			"",
+			plan?.ticketSummary ?? "Plan summary unavailable.",
+			"",
+			"### Expectations",
+			"",
+			...(plan?.expectations?.map(
+				(item) => `- **${item.id} (${item.priority}):** ${item.statement}`,
+			) ?? ["Plan expectations unavailable."]),
+			"",
+			"### Process knowledge used",
+			"",
+			...(plan?.knowledgeUsed?.map(
+				(item) =>
+					`- ${item.concept} (trust: ${item.trustTier}; stale: ${item.stale ? "yes" : "no"})`,
+			) ?? ["No process knowledge was recorded."]),
+			"",
+			"## Findings",
+			"",
+			...(report?.expectations?.map(
+				(item) =>
+					`- **${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""} — ${item.id}:** expected ${item.expected}; observed ${item.observed}. Steps: ${item.stepIds.join(", ") || "none"}. Evidence: ${item.evidenceIds.join(", ") || "none"}.`,
+			) ?? ["Report findings unavailable."]),
+			"",
+			"## Application versions",
+			"",
+			...(report?.applicationVersions?.map(
+				(item) =>
+					`- ${item.application}: ${item.status === "available" ? (item.version ?? "version not reported") : `unavailable — ${item.reason ?? "reason not reported"}`}`,
+			) ?? ["No application versions were recorded."]),
+			"",
+			"## Process knowledge observations",
+			"",
+			...(report?.knowledgeObservations?.map(
+				(item) =>
+					`- **${item.kind}: ${item.concept}**${item.statement ? ` — ${item.statement}` : ""}${item.observed ? ` Observed: ${item.observed}` : ""}`,
+			) ?? ["No process knowledge observations were recorded."]),
+			"",
+			"## Created data",
+			"",
+			...(report?.createdData?.map(
+				(item) =>
+					`- ${item.description}${item.cleanupHint ? `; cleanup: ${item.cleanupHint}` : ""}`,
+			) ?? ["No data creation was reported."]),
+			"",
+			"## Not tested",
+			"",
+			...(report?.notTested?.map(
+				(item) =>
+					`- ${item.expectationId ? `${item.expectationId}: ` : ""}${item.reason}`,
+			) ?? ["None reported."]),
+		].join("\n");
+	};
+	const stagePlanContent = () => {
+		const state = data().state;
+		const plan = state.stageTestPlan as
+			| {
+					ticketSummary?: string;
+					createsData?: boolean;
+					dataCreated?: readonly string[];
+					knowledgeStatus?: string;
+					knowledgeUsed?: readonly {
+						concept: string;
+						trustTier: string;
+						stale: boolean;
+					}[];
+					expectations?: readonly {
+						id: string;
+						statement: string;
+						priority: string;
+					}[];
+					routes?: readonly {
+						app: string;
+						step: string;
+					}[];
+			  }
+			| undefined;
+		if (!plan) return "# Stage test plan\n\n_No pinned plan is available._";
+		return [
+			"# Stage test plan",
+			"",
+			`- **Stage:** ${state.stage ?? "unknown"}`,
+			`- **System:** ${state.stageSystem ?? "unknown"}`,
+			`- **Access:** ${state.stageAccess ?? "unknown"}`,
+			"",
+			"## Ticket summary",
+			"",
+			plan.ticketSummary ?? "No summary was recorded.",
+			"",
+			"## Data creation",
+			"",
+			plan.createsData
+				? `This plan creates data: ${(plan.dataCreated ?? []).join("; ") || "the plan declares creation without naming it"}.`
+				: "This plan creates no data.",
+			"",
+			"## Expectations",
+			"",
+			...(plan.expectations?.map(
+				(item) => `- **${item.id} (${item.priority}):** ${item.statement}`,
+			) ?? ["No expectations were recorded."]),
+			"",
+			"## Process knowledge",
+			"",
+			`Status: ${plan.knowledgeStatus ?? "unknown"}.`,
+			...(plan.knowledgeUsed?.map(
+				(item) =>
+					`- ${item.concept} (trust: ${item.trustTier}; stale: ${item.stale ? "yes" : "no"})`,
+			) ?? []),
+			"",
+			"## Planned routes",
+			"",
+			...(plan.routes?.map((route) => `- ${route.app}: ${route.step}`) ?? [
+				"No routes were recorded.",
+			]),
+		].join("\n");
+	};
+	const stageWikiUpdateAvailable = () =>
+		data().state.definition?.id === "stage-test" &&
+		(data().state.availableActions ?? []).some(
+			(action) => action.id === "approve-and-update-wiki",
+		);
+	const stagePlanReview = () =>
+		reviewKind() === "plan" && data().state.definition?.id === "stage-test";
+	const rejectPlanAvailable = () =>
+		reviewKind() === "plan" &&
+		(data().state.availableActions ?? []).some(
+			(action) => action.id === "reject-plan",
+		);
 	const openDeveloperReview = async () => {
 		if (reviewLoading()) return;
 		setReviewLoading(true);
@@ -539,6 +731,40 @@ export function createReviewFeature(
 		reviewController?.abort();
 		reviewController = new AbortController();
 		try {
+			if (data().state.definition?.id === "stage-test") {
+				const content = stageReportContent();
+				setReviewChanges([
+					{
+						newPath: "stage-report.md",
+						linesAdded: content.split("\n").length,
+						linesDeleted: 0,
+						newFile: false,
+						deletedFile: false,
+						renamedFile: false,
+					},
+				]);
+				setReviewChangeIndex(0);
+				setReviewLine(0);
+				setReviewComments([]);
+				setReviewFindings([]);
+				setSelectedReviewFindingIds(new Set<string>());
+				setReviewVisualMode(false);
+				setReviewVisualStart(0);
+				setReviewSourceRange({});
+				setReviewDiscussionLineIndices([]);
+				setReviewSelectableLineCount(0);
+				setReviewSelectedLineFindingIds([]);
+				setReviewSearchMode(false);
+				setReviewSearchQuery("");
+				setReviewSplitView(null);
+				setReviewDiff(content);
+				setReviewView("diff");
+				setReviewOpen(true);
+				setReviewKind("stage");
+				queueMicrotask(() => setModalActive("developer-review"));
+				traceReview("stage-report-open");
+				return;
+			}
 			const changes =
 				profile === "test"
 					? [
@@ -615,6 +841,12 @@ export function createReviewFeature(
 	const openReviewDiff = async () => {
 		const file = reviewVisibleChanges()[reviewChangeIndex()];
 		if (!file) return;
+		if (reviewKind() === "stage") {
+			setReviewDiff(stageReportContent());
+			setReviewLine(0);
+			setReviewView("diff");
+			return;
+		}
 		reviewDiffController?.abort();
 		reviewDiffController = new AbortController();
 		try {
@@ -636,7 +868,7 @@ export function createReviewFeature(
 	};
 	const developerReviewPhase = () =>
 		requiredUserAction()?.key === "developer-review";
-	const finishDeveloperReview = async () => {
+	const finishDeveloperReview = async (approvalAction = "approve-review") => {
 		if (busy()) return;
 		// Finishing dispatches the workflow gate, so it is only meaningful while
 		// the workflow actually waits in the developer review phase.
@@ -666,10 +898,11 @@ export function createReviewFeature(
 				}));
 			const comments = [...reviewComments(), ...findingComments];
 			if (profile !== "test") {
-				await saveDeveloperReview(repo, workflowId, comments);
+				if (reviewKind() !== "stage")
+					await saveDeveloperReview(repo, workflowId, comments);
 				const engineComments = reviewCommentsForEngine(comments, true);
 				await runWorkflow(
-					comments.length ? "review-comments" : "approve-review",
+					comments.length ? "review-comments" : approvalAction,
 					repo,
 					workflowId,
 					data().state.revision,
@@ -785,29 +1018,43 @@ export function createReviewFeature(
 			const actionKey = requiredUserAction()?.key;
 			const setupReview = actionKey === "setup-review";
 			const wikiReview = actionKey === "wiki-review";
-			const changes: LocalChange[] = setupReview
-				? await loadSetupChangesOrEmpty(
-						repo,
-						workflowId,
-						reviewDiffController.signal,
-						{ refresh: true },
-					)
-				: wikiReview
-					? await loadWikiChangesOrEmpty(
+			const stagePlanReview =
+				actionKey === "plan-review" &&
+				data().state.definition?.id === "stage-test";
+			const changes: LocalChange[] = stagePlanReview
+				? [
+						{
+							newPath: "stage-plan.md",
+							linesAdded: stagePlanContent().split("\n").length,
+							linesDeleted: 0,
+							newFile: true,
+							deletedFile: false,
+							renamedFile: false,
+						},
+					]
+				: setupReview
+					? await loadSetupChangesOrEmpty(
 							repo,
 							workflowId,
 							reviewDiffController.signal,
 							{ refresh: true },
 						)
-					: profile === "test"
-						? demoPlanArtifacts()
-						: await loadPlanReviewChanges(reviewDiffController.signal);
+					: wikiReview
+						? await loadWikiChangesOrEmpty(
+								repo,
+								workflowId,
+								reviewDiffController.signal,
+								{ refresh: true },
+							)
+						: profile === "test"
+							? demoPlanArtifacts()
+							: await loadPlanReviewChanges(reviewDiffController.signal);
 			if (generation !== reviewGeneration) return;
 			setReviewKind(setupReview ? "setup" : wikiReview ? "wiki" : "plan");
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);
-			setReviewDiff("");
+			setReviewDiff(stagePlanReview ? stagePlanContent() : "");
 			setReviewComments([]);
 			setReviewFindings([]);
 			setSelectedReviewFindingIds(new Set<string>());
@@ -820,7 +1067,7 @@ export function createReviewFeature(
 			setReviewSearchMode(false);
 			setReviewSearchQuery("");
 			setReviewSplitView(null);
-			setReviewView("files");
+			setReviewView(stagePlanReview ? "diff" : "files");
 			setReviewOpen(true);
 			queueMicrotask(() => setModalActive("plan-review"));
 		} catch {
@@ -835,6 +1082,17 @@ export function createReviewFeature(
 		reviewRefreshController = new AbortController();
 		try {
 			const kind = reviewKind();
+			// A stage-test plan and a stage report are synthetic single-row
+			// reviews: their document is composed from the workflow snapshot, not
+			// from a worktree diff. Reloading would replace that row with an empty
+			// local change list and lose the document the developer is reading
+			// (USAB-001), so refresh only re-renders the same synthetic content.
+			if (kind === "stage" || stagePlanReview()) {
+				setReviewDiff(
+					kind === "stage" ? stageReportContent() : stagePlanContent(),
+				);
+				return;
+			}
 			const changes =
 				kind === "plan"
 					? await loadPlanReviewChanges(reviewRefreshController.signal)
@@ -878,6 +1136,15 @@ export function createReviewFeature(
 	const openPlanMarkdown = async () => {
 		const file = reviewVisibleChanges()[reviewChangeIndex()];
 		if (!file) return;
+		if (
+			reviewKind() === "plan" &&
+			data().state.definition?.id === "stage-test"
+		) {
+			setReviewDiff(stagePlanContent());
+			setReviewLine(0);
+			setReviewView("diff");
+			return;
+		}
 		reviewDiffController?.abort();
 		reviewDiffController = new AbortController();
 		try {
@@ -963,6 +1230,14 @@ export function createReviewFeature(
 		}
 	};
 	const navigatePlanMarkdownFile = async (direction: 1 | -1) => {
+		if (
+			reviewKind() === "plan" &&
+			data().state.definition?.id === "stage-test"
+		) {
+			setReviewDiff(stagePlanContent());
+			setReviewLine(0);
+			return;
+		}
 		const previous = reviewChangeIndex();
 		reviewDiffController?.abort();
 		reviewDiffController = new AbortController();
@@ -1077,14 +1352,25 @@ export function createReviewFeature(
 				traceReview("plan-rejected");
 				refresh();
 			}
-		} catch {
+		} catch (error) {
+			// A refused rejection must stay visible: the review remains open so
+			// the developer can retry or approve instead of the dialog vanishing
+			// as if the decision had been recorded (USAB-002).
+			notify(
+				error instanceof Error
+					? error.message
+					: "The plan rejection could not be recorded",
+				"error",
+			);
 			traceReview("plan-reject", "error");
-		} finally {
 			setPlanRejectionOpen(false);
-			setReviewOpen(false);
-			setModalActive("none");
 			setBusy(false);
+			return;
 		}
+		setPlanRejectionOpen(false);
+		setReviewOpen(false);
+		setModalActive("none");
+		setBusy(false);
 	};
 	const handleReviewKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
@@ -1109,7 +1395,18 @@ export function createReviewFeature(
 			return true;
 		}
 		if (key === "escape") {
-			if (reviewView() === "diff") {
+			if (
+				reviewView() === "diff" &&
+				(reviewKind() === "stage" || stagePlanReview())
+			) {
+				// The stage report is the whole review: the file list holds one
+				// synthetic row that cannot be re-read from a worktree diff, so Esc
+				// closes the review instead of dropping the report.
+				setReviewVisualMode(false);
+				setReviewCommentMode(false);
+				setReviewOpen(false);
+				setModalActive("none");
+			} else if (reviewView() === "diff") {
 				setReviewVisualMode(false);
 				setReviewView("files");
 			} else if (reviewSearchQuery()) {
@@ -1122,10 +1419,16 @@ export function createReviewFeature(
 			}
 		} else if (
 			key === "r" &&
-			reviewKind() === "plan" &&
-			reviewView() === "files"
+			rejectPlanAvailable() &&
+			(reviewView() === "files" || stagePlanReview())
 		) {
 			openPlanRejection();
+		} else if (
+			key === "w" &&
+			reviewKind() === "stage" &&
+			stageWikiUpdateAvailable()
+		) {
+			void finishDeveloperReview("approve-and-update-wiki");
 		} else if (key === "f" && !event.shift) {
 			if (
 				reviewKind() === "plan" ||
@@ -1150,9 +1453,11 @@ export function createReviewFeature(
 		else if (
 			reviewView() === "files" &&
 			key === "c" &&
-			reviewKind() === "developer" &&
-			data().state.definition?.id === "debug" &&
-			reviewVisibleChanges().length === 0
+			((reviewKind() === "developer" &&
+				data().state.definition?.id === "debug" &&
+				reviewVisibleChanges().length === 0) ||
+				(reviewKind() === "stage" &&
+					data().state.definition?.id === "stage-test"))
 		) {
 			// A report-only investigation has no diff to anchor a comment to. The
 			// follow-up is authored directly against the report, so the debug gate can
@@ -1235,6 +1540,9 @@ export function createReviewFeature(
 		setReviewOpen,
 		reviewKind,
 		setReviewKind,
+		stageWikiUpdateAvailable,
+		stagePlanReview,
+		rejectPlanAvailable,
 		reviewView,
 		setReviewView,
 		reviewLoading,

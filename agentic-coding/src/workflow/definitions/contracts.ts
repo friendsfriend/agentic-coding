@@ -20,6 +20,8 @@ import {
 	PlanDraftSchema,
 	PlanResultSchema,
 	ResearchHandoffSchema,
+	StageTestPlanSchema,
+	StageTestReportSchema,
 	TriagePlanSchema,
 } from "../schema.ts";
 
@@ -37,6 +39,77 @@ export const DEBUG_REPORT_HEADINGS = [
 	"Code changes",
 	"Open questions",
 ] as const;
+
+export type StageTestPlan = typeof StageTestPlanSchema.Type;
+export type StageTestReport = typeof StageTestReportSchema.Type;
+
+export const stageTestPlan: Contract<StageTestPlan> = {
+	id: "core.stage-test-plan",
+	version: 1,
+	parse(value) {
+		const parsed = decodeContract<StageTestPlan>(
+			this.id,
+			StageTestPlanSchema,
+			value,
+		);
+		if (parsed.createsData !== parsed.dataCreated.length > 0)
+			throw new ContractFailure(this.id, [
+				{
+					path: "$.dataCreated",
+					message: "must list created data exactly when createsData is true",
+				},
+			]);
+		if (
+			new Set(parsed.expectations.map(({ id }) => id)).size !==
+			parsed.expectations.length
+		)
+			throw new ContractFailure(this.id, [
+				{ path: "$.expectations", message: "expectation ids must be unique" },
+			]);
+		if (new Set(parsed.route.map(({ id }) => id)).size !== parsed.route.length)
+			throw new ContractFailure(this.id, [
+				{ path: "$.route", message: "route ids must be unique" },
+			]);
+		if (
+			(parsed.knowledgeStatus === "none" && parsed.knowledgeUsed.length > 0) ||
+			(parsed.knowledgeStatus === "found" && parsed.knowledgeUsed.length === 0)
+		)
+			throw new ContractFailure(this.id, [
+				{ path: "$.knowledgeStatus", message: "must agree with knowledgeUsed" },
+			]);
+		if (
+			new Set(parsed.knowledgeUsed.map(({ concept }) => concept)).size !==
+			parsed.knowledgeUsed.length
+		)
+			throw new ContractFailure(this.id, [
+				{
+					path: "$.knowledgeUsed",
+					message: "knowledge concepts must be unique",
+				},
+			]);
+		return parsed;
+	},
+};
+
+export const stageTestReport: Contract<StageTestReport> = {
+	id: "core.stage-report",
+	version: 1,
+	parse(value) {
+		const parsed = decodeContract<StageTestReport>(
+			this.id,
+			StageTestReportSchema,
+			value,
+		);
+		if (
+			new Set(parsed.expectations.map(({ id }) => id)).size !==
+			parsed.expectations.length
+		)
+			throw new ContractFailure(this.id, [
+				{ path: "$.expectations", message: "expectation ids must be unique" },
+			]);
+		return parsed;
+	},
+};
 
 export const debugReport: Contract<{ report: string }> = {
 	id: "core.debug-report",

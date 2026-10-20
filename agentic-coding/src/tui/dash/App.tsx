@@ -99,6 +99,10 @@ import {
 	agentSessionKeybindCatalog,
 	dashboardDetailKeybindCatalog,
 	panelContext,
+	stagePlanReviewKeybindCatalog,
+	stagePlanReviewKeybindsForView,
+	stageReportReviewKeybindCatalog,
+	stageReportReviewKeybindsForView,
 } from "./keybinds.ts";
 import {
 	onWorkflowExecutionError,
@@ -1553,7 +1557,9 @@ export function App(props: {
 					prompt:
 						data().state.phase === "debug.review"
 							? "Press Enter to review the debug report"
-							: "Press Enter to review changed files",
+							: data().state.phase === "stage.review"
+								? "Press Enter to review the stage test report"
+								: "Press Enter to review changed files",
 					action: "review",
 				};
 			case "plan-review":
@@ -1849,6 +1855,10 @@ export function App(props: {
 		reviewChangeIndex,
 		reviewKind,
 		reviewOpen,
+		reviewView,
+		stageWikiUpdateAvailable,
+		stagePlanReview,
+		rejectPlanAvailable,
 		dispose: reviewFeatureDispose,
 	} = reviewFeature;
 	createEffect(() => {
@@ -1901,11 +1911,18 @@ export function App(props: {
 	const keybindCatalog = createMemo(() =>
 		agentSessionOpen()
 			? agentSessionKeybindCatalog()
-			: dashboardDetailKeybindCatalog({
-					artifactsVisible: artifacts().length > 0,
-					definitionId: data().state.definition?.id,
-					evidenceFlow: stageJournal()?.flowPage !== undefined,
-				}),
+			: reviewOpen() && reviewKind() === "stage"
+				? stageReportReviewKeybindCatalog(
+						stageWikiUpdateAvailable(),
+						reviewView(),
+					)
+				: reviewOpen() && stagePlanReview()
+					? stagePlanReviewKeybindCatalog(rejectPlanAvailable(), reviewView())
+					: dashboardDetailKeybindCatalog({
+							artifactsVisible: artifacts().length > 0,
+							definitionId: data().state.definition?.id,
+							evidenceFlow: stageJournal()?.flowPage !== undefined,
+						}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store; the route publishes the panel-scoped catalog here, or the
@@ -3788,6 +3805,22 @@ export function App(props: {
 					props.keymap.setData("modal.active", modal)
 				}
 				fallbackTitle={requiredUserAction()?.title}
+				stageReportKeybinds={
+					reviewKind() === "stage"
+						? stageReportReviewKeybindsForView(
+								stageWikiUpdateAvailable(),
+								reviewView(),
+							)
+						: undefined
+				}
+				stagePlanKeybinds={
+					stagePlanReview()
+						? stagePlanReviewKeybindsForView(
+								rejectPlanAvailable(),
+								reviewView(),
+							)
+						: undefined
+				}
 			/>
 			<DialogueRoute
 				dialogue={dialogue}

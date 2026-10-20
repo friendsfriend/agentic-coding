@@ -37,7 +37,8 @@ export function decodeSnapshot(value: unknown): WorkflowSnapshot {
 	// these functions normalize/validate across fields without services.
 	const repoIndependent =
 		snapshot.definition.id === "wiki-comments" ||
-		snapshot.definition.id === "research";
+		snapshot.definition.id === "research" ||
+		snapshot.definition.id === "stage-test";
 	const metadata: WorkflowSnapshot["metadata"] = { ...snapshot.metadata };
 	metadata.repository =
 		repoIndependent && metadata.repository === ""

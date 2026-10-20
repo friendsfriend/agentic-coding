@@ -337,6 +337,7 @@ export const STAGE_ERROR_CODES = [
 	"stage-mismatch",
 	"origin-not-allowed",
 	"stage-read-only",
+	"stage-plan-write-not-approved",
 	"stage-rate-limit",
 	"stage-held",
 	"stage-session-limit",

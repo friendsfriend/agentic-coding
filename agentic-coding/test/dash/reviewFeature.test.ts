@@ -454,3 +454,66 @@ test("a report-only developer review can author a follow-up comment", () => {
 		dispose();
 	});
 });
+
+test("a dashboard refresh keeps the synthetic stage plan and report documents", async () => {
+	await createRoot(async (dispose) => {
+		const base = testDashboard();
+		const stageState = {
+			...base.state,
+			definition: { ...base.state.definition, id: "stage-test" },
+			revision: 7,
+			stage: "grid-int",
+			stageSystem: "grid-allocation",
+			stageAccess: "read-only",
+			stageTestPlan: {
+				ticketSummary: "Check request status",
+				createsData: false,
+				dataCreated: [],
+				knowledgeStatus: "none",
+				knowledgeUsed: [],
+				expectations: [
+					{ id: "E1", statement: "The request is visible", priority: "high" },
+				],
+				routes: [{ app: "web", step: "open the request" }],
+			},
+			stageTestReportMarkdown: "# Stage test report\n\nRendered report body.",
+			availableActions: [{ id: "approve-plan", label: "Approve plan" }],
+		};
+		const data = () =>
+			({ ...base, state: stageState }) as unknown as ReturnType<
+				typeof testDashboard
+			>;
+		const feature = createReviewFeature(
+			context({
+				data,
+				requiredUserAction: () => ({
+					key: "plan-review",
+					title: "Plan review",
+					prompt: "Review the plan",
+					items: [],
+				}),
+			}),
+		);
+
+		// The plan gate's synthetic row and diff survive the 5-second resync.
+		await feature.openPlanReview();
+		expect(feature.reviewKind()).toBe("plan");
+		expect(feature.reviewChanges()[0]?.newPath).toBe("stage-plan.md");
+		await feature.refreshReviewFiles(true);
+		expect(feature.reviewChanges().map((change) => change.newPath)).toEqual([
+			"stage-plan.md",
+		]);
+		expect(feature.reviewView()).toBe("diff");
+		expect(feature.reviewDiff()).toContain("Check request status");
+
+		// The same resync must not replace the engine-rendered report either.
+		await feature.openDeveloperReview();
+		expect(feature.reviewKind()).toBe("stage");
+		await feature.refreshReviewFiles(true);
+		expect(feature.reviewChanges().map((change) => change.newPath)).toEqual([
+			"stage-report.md",
+		]);
+		expect(feature.reviewDiff()).toContain("Rendered report body.");
+		dispose();
+	});
+});

@@ -88,6 +88,12 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			description: "Research with research, wiki, wiki review phases",
 		}),
 		Object.freeze({
+			id: "stage-test",
+			label: "Stage test",
+			description:
+				"Plan and verify a hosted application on one pinned stage, review the report, and write confirmed process knowledge to the centralized wiki.",
+		}),
+		Object.freeze({
 			id: "verify",
 			label: "Verify",
 			description:

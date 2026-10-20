@@ -58,6 +58,7 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"environment.setup-smoke",
 	"environment.setup-rollback",
 	"environment.setup-cleanup",
+	"stage.report.render",
 	"debug.request.run",
 	"debug.request.deliver",
 ]);

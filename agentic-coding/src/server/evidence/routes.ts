@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import type { EvidenceAttachRequest } from "../../contracts/environment.ts";
 import type {
+	JsonValue,
 	WorkflowSnapshot,
 	WorkflowStatus,
 } from "../../contracts/workflow.ts";
@@ -24,8 +25,7 @@ import {
 	workflowEvidenceScope,
 } from "../../workflow/runtime/evidence-store.ts";
 import {
-	researchWorkflowTarget,
-	wikiWorkflowTarget,
+	NON_REPOSITORY_WORKFLOW_TARGETS,
 	workflowTargets,
 } from "../../workflow/runtime.ts";
 import { readJsonBody } from "../auth.ts";
@@ -61,6 +61,11 @@ export interface LocatedEvidenceWorkflow extends WorkflowEvidenceLocation {
 	/** The workflow's own status. `closed` means its workspace cleanup already
 	 * removed the evidence directory. */
 	readonly status?: WorkflowStatus;
+	/** Engine-owned stage-test authorization context, never request input. */
+	readonly currentStep?: string;
+	readonly selectedRoles?: readonly string[];
+	readonly stageAccess?: "read-only" | "writable";
+	readonly stageTestPlan?: JsonValue;
 }
 
 /** Everything the evidence routes read. `locate` resolves a workflow id to the
@@ -80,8 +85,10 @@ export function locateEvidenceWorkflow(
 	try {
 		targets = [
 			...workflowTargets(),
-			wikiWorkflowTarget(),
-			researchWorkflowTarget(),
+			// The repository-independent stores are always listed, so a missing
+			// best-effort marker can never hide one. The list is shared with
+			// `recordWorkflowTarget`, which skips exactly these targets.
+			...NON_REPOSITORY_WORKFLOW_TARGETS,
 		];
 	} catch {
 		return undefined;
@@ -91,13 +98,31 @@ export function locateEvidenceWorkflow(
 		try {
 			const snapshot: Pick<
 				WorkflowSnapshot,
-				"workflowId" | "metadata" | "definition" | "status"
+				| "workflowId"
+				| "metadata"
+				| "definition"
+				| "status"
+				| "currentStep"
+				| "step"
 			> = engine.getSnapshot(target, workflowId);
 			if (snapshot.workflowId !== workflowId) continue;
 			return {
 				workflowId,
 				worktree: snapshot.metadata.worktree,
 				definitionId: snapshot.definition.id,
+				...(snapshot.metadata.stage ? { stage: snapshot.metadata.stage } : {}),
+				...(snapshot.definition.id === "stage-test"
+					? {
+							currentStep: snapshot.currentStep,
+							selectedRoles: [...snapshot.step.selectedRoles],
+							...(snapshot.metadata.stageAccess
+								? { stageAccess: snapshot.metadata.stageAccess }
+								: {}),
+							...(snapshot.metadata.stageTestPlan
+								? { stageTestPlan: snapshot.metadata.stageTestPlan }
+								: {}),
+						}
+					: {}),
 				status: snapshot.status,
 			};
 		} catch {

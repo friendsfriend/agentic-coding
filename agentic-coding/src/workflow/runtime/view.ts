@@ -303,6 +303,27 @@ export function viewFromRows(
 			...(snapshot.metadata.task !== undefined
 				? { task: snapshot.metadata.task }
 				: {}),
+			...(snapshot.metadata.ticket !== undefined
+				? { ticket: snapshot.metadata.ticket }
+				: {}),
+			...(snapshot.metadata.stage !== undefined
+				? { stage: snapshot.metadata.stage }
+				: {}),
+			...(snapshot.metadata.stageSystem !== undefined
+				? { stageSystem: snapshot.metadata.stageSystem }
+				: {}),
+			...(snapshot.metadata.stageAccess !== undefined
+				? { stageAccess: snapshot.metadata.stageAccess }
+				: {}),
+			...(snapshot.metadata.stageTestPlan !== undefined
+				? { stageTestPlan: snapshot.metadata.stageTestPlan }
+				: {}),
+			...(snapshot.metadata.stageTestReport !== undefined
+				? { stageTestReport: snapshot.metadata.stageTestReport }
+				: {}),
+			...(snapshot.metadata.stageTestReportMarkdown !== undefined
+				? { stageTestReportMarkdown: snapshot.metadata.stageTestReportMarkdown }
+				: {}),
 			createdAt: snapshot.metadata.createdAt,
 			updatedAt: snapshot.metadata.updatedAt,
 			...(snapshot.metadata.selectedPreset

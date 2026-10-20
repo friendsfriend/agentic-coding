@@ -36,7 +36,11 @@ import type {
 } from "../../contracts/stages.ts";
 import { upsertEnvFile } from "../../env-file.ts";
 import { readJsonBody } from "../auth.ts";
-import { environmentSecrets, redact } from "../environment/agent-routes.ts";
+import { environmentSecrets, redact } from "../environment/secrets.ts";
+import {
+	type LocatedEvidenceWorkflow,
+	locateEvidenceWorkflow,
+} from "../evidence/routes.ts";
 import {
 	AGENT_STAGE_API_REQUEST_PATH,
 	AGENT_STAGE_TOKEN_INFO_PATH,
@@ -105,6 +109,10 @@ export interface StageRouteDeps {
 	/** Test seam: the HTTP client of one stage API call. */
 	readonly fetch?: typeof fetch;
 	readonly now?: () => number;
+	/** Test seam for the engine-owned stage-test workflow policy. */
+	readonly locateWorkflow?: (
+		workflowId: string,
+	) => LocatedEvidenceWorkflow | undefined;
 	/** The process's browser pool, as the one forget implementation
 	 * (`add-stage-identity-cache`, D5). A forget that only dropped the entry would
 	 * be undone by a live session's next refresh or clean-close capture; the pool
@@ -591,6 +599,85 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 // Owner-scoped routing
 // ---------------------------------------------------------------------------
 
+function stageWorkflowForOwner(
+	deps: StageRouteDeps,
+	owner: string,
+): LocatedEvidenceWorkflow | undefined {
+	const prefix = "workflow:";
+	if (!owner.startsWith(prefix)) return undefined;
+	const workflowId = owner.slice(prefix.length).trim();
+	if (!workflowId) return undefined;
+	return (deps.locateWorkflow ?? locateEvidenceWorkflow)(workflowId);
+}
+
+function assertStageTestToolStep(
+	workflow: LocatedEvidenceWorkflow | undefined,
+	step: "stage.plan" | "stage.execute",
+	role: "stage-planner" | "stage-tester",
+): void {
+	if (workflow?.definitionId !== "stage-test") return;
+	if (workflow.currentStep !== step || !workflow.selectedRoles?.includes(role))
+		throw new StageRouteError(
+			"stage-test-tool-restricted",
+			`stage tools are available to ${role} only during ${step}`,
+			403,
+		);
+}
+
+function assertStageTestTarget(
+	workflow: LocatedEvidenceWorkflow | undefined,
+	input: { stage?: string; app?: string; role?: string; method?: string },
+): void {
+	if (workflow?.definitionId !== "stage-test") return;
+	if (
+		!workflow.stage ||
+		(input.stage !== undefined && input.stage !== workflow.stage)
+	)
+		throw new StageRouteError(
+			"stage-mismatch",
+			"stage request must target the stage pinned by this workflow",
+			403,
+		);
+	const plan = workflow.stageTestPlan as
+		| {
+				createsData?: boolean;
+				route?: readonly { application?: string; role?: string }[];
+		  }
+		| undefined;
+	const plannedRoutes =
+		plan?.route?.filter(
+			(route) => (route.role ?? undefined) === (input.role ?? undefined),
+		) ?? [];
+	const planned =
+		input.app === undefined
+			? plannedRoutes.length === 1
+			: plannedRoutes.some((route) => route.application === input.app);
+	if (!planned)
+		throw new StageRouteError(
+			"stage-route-not-approved",
+			"stage application and role must match the approved test plan",
+			403,
+		);
+	const method = input.method?.toUpperCase();
+	if (method && !["GET", "HEAD", "POST"].includes(method))
+		throw new StageRouteError(
+			"stage-plan-write-not-approved",
+			"stage-test API requests may create planned data with POST, but may not replace or delete existing records",
+			403,
+		);
+	if (
+		method &&
+		!["GET", "HEAD"].includes(method) &&
+		workflow.stageAccess === "writable" &&
+		plan?.createsData !== true
+	)
+		throw new StageRouteError(
+			"stage-plan-write-not-approved",
+			"state-changing stage requests require a writable stage and an approved plan that declares data creation",
+			403,
+		);
+}
+
 /**
  * The stage routes of one run. Answers `undefined` for a path this module does
  * not own, so `app.ts` can keep handing the capability prefix on.
@@ -617,10 +704,35 @@ export async function handleStageRoute(
 			405,
 		);
 	try {
-		const ident =
+		let ident =
 			path === AGENT_STAGES_PATH
 				? undefined
 				: decodeURIComponent(path.slice(AGENT_STAGES_PATH.length + 1));
+		const workflow = stageWorkflowForOwner(deps, owner);
+		if (workflow?.definitionId === "stage-test") {
+			assertStageTestToolStep(
+				workflow,
+				workflow.currentStep === "stage.execute"
+					? "stage.execute"
+					: "stage.plan",
+				workflow.currentStep === "stage.execute"
+					? "stage-tester"
+					: "stage-planner",
+			);
+			if (!workflow.stage)
+				throw new StageRouteError(
+					"stage-mismatch",
+					"stage-test workflow has no pinned stage",
+					403,
+				);
+			if (ident !== undefined && ident !== workflow.stage)
+				throw new StageRouteError(
+					"stage-mismatch",
+					"stage_info is limited to the stage pinned by this workflow",
+					403,
+				);
+			ident = workflow.stage;
+		}
 		if (ident !== undefined && !/^[a-z0-9][a-z0-9-]{0,62}$/.test(ident))
 			throw new StageRouteError(
 				"stage-not-configured",
@@ -678,9 +790,20 @@ async function handleAuthRoute(
 				request,
 				AGENT_STAGE_API_REQUEST_PATH,
 			);
+			const workflow = stageWorkflowForOwner(deps, owner);
+			assertStageTestToolStep(workflow, "stage.execute", "stage-tester");
+			assertStageTestTarget(workflow, { ...decoded, method: decoded.method });
+			const pinnedStage =
+				workflow?.definitionId === "stage-test"
+					? workflow.stage
+					: decoded.stage;
+			const requestValue = {
+				...decoded,
+				...(pinnedStage ? { stage: pinnedStage } : {}),
+			};
 			const value: StageApiRequestResponse = await stageApiRequestValue(
 				deps,
-				decoded,
+				requestValue,
 				owner,
 				redactValue,
 			);
@@ -690,15 +813,29 @@ async function handleAuthRoute(
 			request,
 			AGENT_STAGE_TOKEN_INFO_PATH,
 		);
+		const workflow = stageWorkflowForOwner(deps, owner);
+		assertStageTestToolStep(workflow, "stage.execute", "stage-tester");
+		assertStageTestTarget(workflow, decoded);
+		const pinnedStage =
+			workflow?.definitionId === "stage-test" ? workflow.stage : decoded.stage;
+		const requestValue = {
+			...decoded,
+			...(pinnedStage ? { stage: pinnedStage } : {}),
+		};
 		const info: StageTokenInfoResponse = await stageTokenInfoValue(
 			deps,
-			decoded,
+			requestValue,
 		);
 		return json({ ok: true, value: redactValue(info) });
 	} catch (error) {
 		// The error envelope goes through the same live redactor as the success
 		// value: a token the call just acquired is one of the secrets of its own
 		// answer, and a provider's error description is untrusted input (SEC-001).
+		if (error instanceof StageRouteError)
+			return json(
+				redactValue({ error: { code: error.code, message: error.message } }),
+				error.status,
+			);
 		if (error instanceof StageApiError)
 			return json(
 				redactValue({

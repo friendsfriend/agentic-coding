@@ -6,16 +6,23 @@
 // task 2.1).
 import fs from "node:fs";
 import path from "node:path";
+import { resolveConfigRoot } from "../../../config-root.ts";
+import { loadEnvFile } from "../../../env-file.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import { engine } from "../../operations.ts";
 import {
+	workflowDataRoot,
+	workflowEvidenceScope,
+} from "../../runtime/evidence-store.ts";
+import {
 	researchWorkflowTarget,
+	stageTestWorkflowTarget,
 	type WorkflowEngine,
-	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "../../runtime.ts";
 import {
 	appendLog,
+	containsConfiguredSecret,
 	ensureBundle,
 	listConcepts,
 	readConcept,
@@ -42,7 +49,11 @@ function wikiRole(): string | undefined {
  * research-handoff "research-wiki") may write centralized drafts; they
  * differ only in drafting approach (agent-definitions/instructions), never
  * in write authorization or promotion rights. */
-const WIKI_WRITER_ROLES: readonly string[] = ["wiki", "research-wiki"];
+const WIKI_WRITER_ROLES: readonly string[] = [
+	"wiki",
+	"research-wiki",
+	"stage-wiki",
+];
 function authorizeWikiWriter(
 	application?: WorkflowApplication,
 ): ReturnType<WorkflowEngine["getSnapshot"]> {
@@ -61,7 +72,8 @@ function authorizeWikiWriter(
 	const workflowEngine = engine(application);
 	const target =
 		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget() ||
-		process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget()
+		process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget() ||
+		process.env.HERDR_WORKFLOW_TARGET === stageTestWorkflowTarget()
 			? process.env.HERDR_WORKFLOW_TARGET
 			: process.cwd();
 	if (application)
@@ -89,7 +101,8 @@ function authorizeWikiWriter(
 		snapshot.currentStep !== "core.wiki" &&
 		snapshot.definition.id !== "research" &&
 		snapshot.definition.id !== "wiki" &&
-		snapshot.definition.id !== "wiki-comments"
+		snapshot.definition.id !== "wiki-comments" &&
+		snapshot.definition.id !== "stage-test"
 	)
 		throw new Error("wiki writes require a documentation workflow stage");
 	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
@@ -99,6 +112,66 @@ function authorizeWikiWriter(
 		);
 	return snapshot;
 }
+function stageWikiReadPrefix(
+	application?: WorkflowApplication,
+): string | undefined {
+	const role = wikiRole();
+	if (!role || !["stage-planner", "stage-tester", "stage-wiki"].includes(role))
+		return undefined;
+	const stepId = process.env.HERDR_STEP_ID;
+	const expectedStep =
+		role === "stage-planner"
+			? "stage.plan"
+			: role === "stage-tester"
+				? "stage.execute"
+				: "core.wiki";
+	const workflowId = process.env.HERDR_WORKFLOW_ID;
+	const token = process.env.HERDR_RUN_TOKEN;
+	if (
+		!workflowId ||
+		!token ||
+		stepId !== expectedStep ||
+		process.env.HERDR_WORKFLOW_TARGET !== stageTestWorkflowTarget()
+	)
+		throw new Error(
+			"stage wiki reads require an authenticated stage-test step",
+		);
+	const workflowEngine = engine(application);
+	const target = stageTestWorkflowTarget();
+	if (application)
+		application.runSync(
+			workflowEngine.authorizeAgentCapabilityEffect(
+				target,
+				workflowId,
+				stepId,
+				role,
+				token,
+			),
+		);
+	else
+		workflowEngine.authorizeAgentCapability(
+			target,
+			workflowId,
+			stepId,
+			role,
+			token,
+		);
+	const snapshot = application
+		? application.runSync(workflowEngine.getSnapshotEffect(target, workflowId))
+		: workflowEngine.getSnapshot(target, workflowId);
+	if (
+		snapshot.definition.id !== "stage-test" ||
+		snapshot.currentStep !== expectedStep
+	)
+		throw new Error(
+			"stage wiki reads are limited to the authenticated stage-test step",
+		);
+	const system = snapshot.metadata.stageSystem;
+	if (typeof system !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(system))
+		throw new Error("stage-test workflow has no valid system namespace");
+	return `projects/${system}/`;
+}
+
 function safeWikiBodyFile(
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]> | undefined,
 	value: string,
@@ -107,16 +180,20 @@ function safeWikiBodyFile(
 	const file = fs.realpathSync(path.resolve(value));
 	const roots = [
 		path.join(
-			snapshot.definition.id === "wiki-comments"
-				? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
-				: path.join(
-						snapshot.metadata.worktree,
-						".herdr-workflow",
-						snapshot.workflowId,
-					),
+			workflowDataRoot({
+				workflowId: snapshot.workflowId,
+				worktree: snapshot.metadata.worktree,
+				definitionId: snapshot.definition.id,
+			}),
+			snapshot.workflowId,
 			"runs",
 		),
-		wikiRoot(true),
+		workflowEvidenceScope({
+			workflowId: snapshot.workflowId,
+			worktree: snapshot.metadata.worktree,
+			definitionId: snapshot.definition.id,
+		}).root,
+		...(snapshot.definition.id === "stage-test" ? [] : [wikiRoot(true)]),
 	];
 	const operational = [
 		path.join(snapshot.metadata.worktree, "runtime-bin"),
@@ -182,10 +259,17 @@ export async function runWiki(
 			`unknown wiki command: ${operation ?? "(none)"}; usage: agentic-coding workflow wiki list|search|show|write|verify|log`,
 		);
 	const role = wikiRole();
+	const stageReadPrefix = stageWikiReadPrefix(application);
 	if (operation === "list") {
+		const concepts = listConcepts({
+			tag: flag(rest, "tag"),
+			type: flag(rest, "type"),
+		});
 		wikiOutput(
 			rest,
-			listConcepts({ tag: flag(rest, "tag"), type: flag(rest, "type") }),
+			stageReadPrefix
+				? concepts.filter((concept) => concept.id.startsWith(stageReadPrefix))
+				: concepts,
 		);
 		return;
 	}
@@ -198,12 +282,16 @@ export async function runWiki(
 		const limit = rawLimit === undefined ? 20 : Number(rawLimit);
 		if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
 			throw new Error("wiki search --limit must be an integer from 1 to 1000");
-		wikiOutput(rest, searchConcepts(terms, limit));
+		wikiOutput(rest, searchConcepts(terms, limit, stageReadPrefix));
 		return;
 	}
 	if (operation === "show") {
 		if (!terms[0])
 			throw new Error("wiki show requires a concept id; usage: wiki show ID");
+		if (stageReadPrefix && !terms[0].startsWith(stageReadPrefix))
+			throw new Error(
+				"stage-test wiki reads are limited to the pinned system namespace",
+			);
 		wikiOutput(rest, readConcept(terms[0]));
 		return;
 	}
@@ -286,39 +374,140 @@ export async function runWiki(
 		const safeBodyFile = bodyFile
 			? safeWikiBodyFile(authorizedSnapshot, bodyFile)
 			: undefined;
-		wikiOutput(
-			rest,
-			writeConcept(concept, {
-				type,
-				title,
-				description,
-				...(flag(rest, "tags")
-					? {
-							tags: flag(rest, "tags")
-								?.split(",")
-								.map((tag) => tag.trim())
-								.filter(Boolean),
-						}
-					: {}),
-				...(sources ? { sources } : {}),
-				status: role ? "draft" : requestedStatus,
-				...(flag(rest, "stale-after")
-					? { stale_after: flag(rest, "stale-after") }
-					: {}),
-				...(safeBodyFile
-					? { body: fs.readFileSync(safeBodyFile, "utf8") }
-					: {}),
-				generatedBy: requestedActor ?? wikiActor(role),
-				...(requestedVerified
-					? {
-							verified: [
-								{ by: requestedVerified, at: new Date().toISOString() },
-							],
-						}
-					: {}),
-				changeId: process.env.HERDR_CHANGE_ID,
-			}),
-		);
+		const bodyText = safeBodyFile ? fs.readFileSync(safeBodyFile, "utf8") : "";
+		const tags = flag(rest, "tags")
+			?.split(",")
+			.map((tag) => tag.trim())
+			.filter(Boolean);
+		const staleAfter = flag(rest, "stale-after");
+		// One object is both scanned and written, so a field added here can never
+		// be written without also passing the secret scan (SEC-003).
+		const writeInput = {
+			type,
+			title,
+			description,
+			...(tags ? { tags } : {}),
+			...(sources ? { sources } : {}),
+			status: role ? "draft" : requestedStatus,
+			...(staleAfter ? { stale_after: staleAfter } : {}),
+			...(safeBodyFile ? { body: bodyText } : {}),
+			generatedBy: requestedActor ?? wikiActor(role),
+			...(requestedVerified
+				? {
+						verified: [{ by: requestedVerified, at: new Date().toISOString() }],
+					}
+				: {}),
+			changeId: process.env.HERDR_CHANGE_ID,
+		};
+		// Every managed draft write refuses a declared configuration secret, not
+		// only the stage-test role: the capability contract has no family carve-out,
+		// and the message never names the value.
+		const secretValues = [
+			...loadEnvFile(path.join(resolveConfigRoot(), ".env")).values(),
+		].filter(Boolean);
+		if (
+			containsConfiguredSecret(
+				JSON.stringify({ concept, ...writeInput }),
+				secretValues,
+			)
+		)
+			throw new Error(
+				"wiki draft contains a configured secret; remove it before writing",
+			);
+		if (authorizedSnapshot?.definition.id === "stage-test") {
+			const system = authorizedSnapshot.metadata.stageSystem;
+			const stage = authorizedSnapshot.metadata.stage;
+			if (
+				!system ||
+				!stage ||
+				!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(system) ||
+				!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(stage)
+			)
+				throw new Error("stage wiki write requires a safe pinned stage system");
+			const normalized = concept.replaceAll("\\", "/").replace(/\.md$/, "");
+			const segments = normalized.split("/");
+			if (segments.some((part) => !part || part === "." || part === ".."))
+				throw new Error("stage wiki write has an invalid concept path");
+			const base = `projects/${system}`;
+			const allowedProcess =
+				segments.length === 4 &&
+				segments[0] === "projects" &&
+				segments[1] === system &&
+				segments[2] === "processes" &&
+				segments[3] !== "index" &&
+				type === "process";
+			const allowedHub =
+				normalized === `${base}/processes/index` && type === "process-index";
+			const allowedStage =
+				normalized === `${base}/stages/${stage}` && type === "stage-notes";
+			if (!allowedProcess && !allowedHub && !allowedStage)
+				throw new Error(
+					"stage wiki write is outside the pinned system's process/stage knowledge scope",
+				);
+			const stageCitation = `stage://${stage}/${authorizedSnapshot.workflowId}`;
+			if (
+				!sources?.some(
+					(source) =>
+						source &&
+						typeof source === "object" &&
+						"resource" in source &&
+						(source as { resource?: unknown }).resource === stageCitation,
+				)
+			)
+				throw new Error(`stage wiki write must cite ${stageCitation}`);
+			if (type === "process" && !safeBodyFile)
+				throw new Error(
+					"stage process concepts require a body file with the standard process sections",
+				);
+			if (type === "process-index" && !safeBodyFile)
+				throw new Error(
+					"stage process indexes require a body file linking every process concept",
+				);
+			const body = bodyText;
+			if (type === "process") {
+				const headings = [
+					"Covers",
+					"Actors & apps",
+					"Steps",
+					"Hand-overs",
+					"Asynchronous steps",
+					"Test data",
+					"Assertions that matter",
+					"Gotchas",
+				];
+				const escapeRegex = (value: string) =>
+					value.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
+				if (
+					headings.some(
+						(heading) =>
+							!new RegExp(`^#{1,6}\\s+${escapeRegex(heading)}\\s*$`, "im").test(
+								body,
+							),
+					)
+				)
+					throw new Error(
+						"stage process concepts must include every required process section",
+					);
+			}
+			if (type === "process-index") {
+				const processIds = listConcepts({ type: "process" })
+					.map(({ id }) => id)
+					.filter(
+						(id) =>
+							id.startsWith(`${base}/processes/`) &&
+							id !== `${base}/processes/index`,
+					);
+				const unlinked = processIds.filter((id) => {
+					const slug = id.slice(`${base}/processes/`.length);
+					return !body.includes(`](${slug}.md`) && !body.includes(`](${id}.md`);
+				});
+				if (unlinked.length)
+					throw new Error(
+						"stage process index must link every process concept in the pinned system",
+					);
+			}
+		}
+		wikiOutput(rest, writeConcept(concept, writeInput));
 		return;
 	}
 	if (operation === "verify") {

@@ -269,6 +269,125 @@ const apiRequest = (deps: StageRouteDeps, body: unknown) =>
 const tokenInfo = (deps: StageRouteDeps, body: unknown) =>
 	call(deps, AGENT_STAGE_TOKEN_INFO_PATH, body);
 
+const stageTestWorkflow = (overrides: Record<string, unknown> = {}) => ({
+	workflowId: "wf-stage-oauth2",
+	definitionId: "stage-test",
+	stage: "grid-int",
+	currentStep: "stage.execute",
+	selectedRoles: ["stage-tester"],
+	stageAccess: "writable" as const,
+	stageTestPlan: {
+		createsData: false,
+		route: [{ application: "api", role: "service" }],
+	},
+	...overrides,
+});
+
+describe("stage-test stage API authorization", () => {
+	test("requests stay on the pinned stage and approved plan role in the executor step", async () => {
+		await withFixture({ access: "writable" }, async (fixture) => {
+			const deps: StageRouteDeps = {
+				...fixture.deps,
+				locateWorkflow: () => stageTestWorkflow(),
+			};
+			const otherStage = await apiRequest(deps, {
+				stage: "other-stage",
+				app: "api",
+				role: "service",
+				method: "GET",
+				path: "/orders",
+			});
+			expect(otherStage.status).toBe(403);
+			expect(otherStage.code).toBe("stage-mismatch");
+			const otherRole = await apiRequest(deps, {
+				stage: "grid-int",
+				app: "api",
+				role: "other",
+				method: "GET",
+				path: "/orders",
+			});
+			expect(otherRole.status).toBe(403);
+			expect(otherRole.code).toBe("stage-route-not-approved");
+			const outsideExecutor = await apiRequest(
+				{
+					...deps,
+					locateWorkflow: () =>
+						stageTestWorkflow({ currentStep: "stage.review" }),
+				},
+				{
+					stage: "grid-int",
+					app: "api",
+					role: "service",
+					method: "GET",
+					path: "/orders",
+				},
+			);
+			expect(outsideExecutor.status).toBe(403);
+			expect(outsideExecutor.code).toBe("stage-test-tool-restricted");
+			expect(fixture.api.calls).toHaveLength(0);
+		});
+	});
+
+	test("a writable stage still refuses state changes unless the plan declares data creation", async () => {
+		await withFixture({ access: "writable" }, async (fixture) => {
+			const deps: StageRouteDeps = {
+				...fixture.deps,
+				locateWorkflow: () => stageTestWorkflow(),
+			};
+			const answer = await apiRequest(deps, {
+				stage: "grid-int",
+				app: "api",
+				role: "service",
+				method: "POST",
+				path: "/orders",
+				body: "{}",
+			});
+			expect(answer.status).toBe(403);
+			expect(answer.code).toBe("stage-plan-write-not-approved");
+			expect(fixture.api.calls).toHaveLength(0);
+		});
+	});
+
+	test("a data-creating plan may POST but cannot replace or delete records", async () => {
+		await withFixture({ access: "writable" }, async (fixture) => {
+			const deps: StageRouteDeps = {
+				...fixture.deps,
+				locateWorkflow: () =>
+					stageTestWorkflow({
+						stageTestPlan: {
+							createsData: true,
+							dataCreated: ["prefixed test request"],
+							route: [{ application: "api", role: "service" }],
+						},
+					}),
+			};
+			for (const method of ["PUT", "PATCH", "DELETE"] as const) {
+				const refused = await apiRequest(deps, {
+					stage: "grid-int",
+					app: "api",
+					role: "service",
+					method,
+					path: "/orders/foreign-record",
+					body: "{}",
+				});
+				expect(refused.status).toBe(403);
+				expect(refused.code).toBe("stage-plan-write-not-approved");
+			}
+			expect(fixture.api.calls).toHaveLength(0);
+			const created = await apiRequest(deps, {
+				stage: "grid-int",
+				app: "api",
+				role: "service",
+				method: "POST",
+				path: "/orders",
+				body: JSON.stringify({ reference: "wf-stage-oauth2-test" }),
+			});
+			expect(created.status).toBe(200);
+			expect(fixture.api.calls).toHaveLength(1);
+		});
+	});
+});
+
 describe("stage_api_request sends the role's own credential", () => {
 	test("the call carries the bearer token, and the answer carries no token", async () => {
 		await withFixture({}, async (fixture) => {

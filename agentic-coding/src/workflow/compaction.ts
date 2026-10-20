@@ -140,6 +140,8 @@ export const COMPACTION_PERCENT_MAX = 90;
  * analysis query exist so it can be re-measured after a week.
  */
 export const COMPACTION_CEILING_DEFAULT = 150_000;
+/** Stage reports and approved plans should remain usable across long tool flows. */
+export const STAGE_TESTER_COMPACTION_CEILING_TOKENS = 50_000;
 
 /** Smallest accepted *enabled* ceiling. Below it the summary plus a workable
  * kept tail would be most of the budget, which is the compaction loop the

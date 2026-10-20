@@ -243,6 +243,37 @@ describe("breaking workflow CLI surface", () => {
 		expect(
 			appFailure instanceof Error ? appFailure.message : appFailure,
 		).not.toContain("unknown flag");
+		// The stage-test family's pinned stage is parsed at the CLI boundary:
+		// an unknown stage is refused by the start guard, never as an unknown flag.
+		const stageFailure = await run([
+			"start",
+			"--repo",
+			".",
+			"--workflow-id",
+			"x",
+			"--mode",
+			"checkout",
+			"--workflow",
+			"stage-test",
+			"--stage",
+			"grid-int",
+		]).catch((error: unknown) => error);
+		const stageText =
+			stageFailure instanceof Error ? stageFailure.message : stageFailure;
+		expect(stageText).not.toContain("unknown flag");
+		expect(String(stageText)).toMatch(/stage/i);
+		const missingStage = await run([
+			"start",
+			"--repo",
+			".",
+			"--workflow-id",
+			"x",
+			"--mode",
+			"checkout",
+			"--workflow",
+			"stage-test",
+		]).catch((error: unknown) => error);
+		expect(String(missingStage)).toMatch(/stage/i);
 	});
 	test("detached drain argv works in source-tree and compiled runners", () => {
 		const source = cliTest.detachedDrainArgv("/abs/src/cli.ts", "/repo", "c1");

@@ -52,6 +52,8 @@ export const STEP_ROUTES: Readonly<Record<string, StepRoute>> = Object.freeze({
 	"core.route-debug": { target: "debug.investigate", phase: "apply" },
 	"core.route-archive": { target: "core.archive", phase: "apply" },
 	"core.route-research": { target: "core.research", phase: "apply" },
+	"core.route-stage-plan": { target: "stage.plan", phase: "plan" },
+	"core.route-stage-execute": { target: "stage.execute", phase: "apply" },
 });
 
 /** Pre-per-step routing steps that definitions pinned to an older tier still

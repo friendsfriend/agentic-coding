@@ -272,6 +272,63 @@ function scopeOf(deps: BrowserRouteDeps & { readonly worktree: string }) {
 	});
 }
 
+describe("stage-test browser restrictions", () => {
+	test("raw URLs and app endpoints are rejected, and another stage cannot be opened", async () => {
+		const fixture = build(configRoot(), createFakeDriver());
+		const deps: BrowserRouteDeps = {
+			...fixture,
+			locate: (workflowId) =>
+				workflowId === "wf-flow"
+					? {
+							workflowId,
+							worktree: fixture.worktree,
+							definitionId: "stage-test",
+							stage: "grid-flow",
+							currentStep: "stage.execute",
+							selectedRoles: ["stage-tester"],
+							stageAccess: "read-only",
+							stageTestPlan: {
+								createsData: false,
+								route: [{ application: "other-app" }],
+							},
+						}
+					: undefined,
+		};
+		try {
+			const raw = await call(deps, AGENT_BROWSER_OPEN_PATH, { url: APP_URL });
+			expect(raw.status).toBe(403);
+			expect(raw.value.code).toBe("stage-test-browsing-restricted");
+			const endpoint = await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				app: "local-app",
+				endpoint: "web",
+			});
+			expect(endpoint.status).toBe(403);
+			expect(endpoint.value.code).toBe("stage-test-browsing-restricted");
+			const rawWithStage = await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				url: APP_URL,
+				stage: "grid-flow",
+				stageApp: "web",
+			});
+			expect(rawWithStage.status).toBe(403);
+			expect(rawWithStage.value.code).toBe("stage-test-browsing-restricted");
+			const mismatch = await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				stage: "other-stage",
+				stageApp: "web",
+			});
+			expect(mismatch.status).toBe(403);
+			expect(mismatch.value.code).toBe("stage-mismatch");
+			const unapprovedRoute = await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				stage: "grid-flow",
+				stageApp: "web",
+			});
+			expect(unapprovedRoute.status).toBe(403);
+			expect(unapprovedRoute.value.code).toBe("stage-route-not-approved");
+		} finally {
+			await fixture.pool.closeAll();
+		}
+	});
+});
+
 describe("stage wait timing", () => {
 	test("the timeout is clamped to the stage's own bound and the interval to five seconds", () => {
 		// A request longer than the stage allows is cut to the stage's bound: a wait

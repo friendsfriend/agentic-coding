@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
@@ -18,6 +18,7 @@ import {
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
+import { loadEnvFile } from "../env-file.ts";
 import {
 	compareSetupDefaults,
 	resolveLiveDefaults,
@@ -28,6 +29,7 @@ import {
 	backendClient,
 	backendClientFromEnv,
 } from "../server/client.ts";
+import { environmentSecrets, redact } from "../server/environment/secrets.ts";
 import {
 	draftSourceRoot,
 	fingerprintCheckout,
@@ -56,7 +58,9 @@ import {
 	type SetupTargetStartResult,
 	validateSetupDrafts,
 } from "../server/environment/setup-validate.ts";
-import { listEvidence } from "../server/evidence/store.ts";
+import { readStageJournal } from "../server/evidence/journal.ts";
+import { attachEvidence, listEvidence } from "../server/evidence/store.ts";
+import { readStageCatalog } from "../server/stages/catalog.ts";
 import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
@@ -175,6 +179,7 @@ import {
 	changedFilesIn,
 	changedFilesInAsync,
 	isResearchWorkflowTarget,
+	isStageTestWorkflowTarget,
 	isWikiWorkflowTarget,
 	type WorkflowEngine,
 	wikiWorkflowDataRoot,
@@ -182,11 +187,149 @@ import {
 
 export { PermanentFailure, TransientFailure };
 
+function stageReportMarkdown(
+	stage: string,
+	ticket: string | undefined,
+	stageInfo: { environment: string; system: string; access: string },
+	plan: StageTestPlan,
+	report: StageTestReport,
+	journal: ReturnType<typeof readStageJournal>,
+	evidence: ReturnType<typeof listEvidence>["entries"],
+	createdAt: string,
+): string {
+	const verdicts = report.expectations.map(({ verdict }) => verdict);
+	const evidenceById = new Map(evidence.map((entry) => [entry.id, entry]));
+	const overall = verdicts.includes("fail")
+		? "FAIL"
+		: verdicts.includes("blocked")
+			? "BLOCKED"
+			: verdicts.includes("inconclusive")
+				? "INCONCLUSIVE"
+				: "PASS";
+	const lines = [
+		"# Stage test report",
+		"",
+		`- **Overall:** ${overall}`,
+		`- **Stage:** ${stage}`,
+		`- **Ticket reference:** ${ticket ?? "not supplied"}`,
+		`- **Environment:** ${stageInfo.environment}`,
+		`- **System:** ${stageInfo.system}`,
+		`- **Access:** ${stageInfo.access}`,
+		`- **Generated:** ${createdAt}`,
+		"",
+		"## Summary",
+		"",
+		`- Expectations: ${report.expectations.length}`,
+		`- Journal steps: ${journal.length}`,
+		`- Evidence items: ${evidence.length}`,
+		"",
+		"## Plan",
+		"",
+		plan.ticketSummary,
+		"",
+		"### Expectations",
+		"",
+		...plan.expectations.map(
+			(item) =>
+				`- **${item.id} (${item.priority}, ${item.source}):** ${item.statement}`,
+		),
+		"",
+		"### Knowledge used",
+		"",
+		...(plan.knowledgeUsed.length
+			? plan.knowledgeUsed.map(
+					(item) =>
+						`- ${item.concept} (trust: ${item.trustTier}; stale: ${item.stale ? "yes" : "no"})`,
+				)
+			: [
+					"No process knowledge was found; the route was derived from the ticket.",
+				]),
+		"",
+		"### Application versions",
+		"",
+		...(report.applicationVersions.length
+			? report.applicationVersions.map(
+					(item) =>
+						`- ${item.application}: ${item.status === "available" ? (item.version ?? "version not reported") : `unavailable — ${item.reason ?? "reason not reported"}`}`,
+				)
+			: ["No application versions were resolved."]),
+		"",
+		`- Creates data: ${plan.createsData ? "yes" : "no"}`,
+		...(plan.dataCreated.length
+			? plan.dataCreated.map((value) => `- Planned data: ${value}`)
+			: []),
+		"",
+		"## Execution",
+		"",
+		...(journal.length
+			? journal.map(
+					(entry) =>
+						`- Step ${entry.seq} (${entry.app ?? "stage"}${entry.role ? ` / ${entry.role}` : ""}): ${entry.label}${entry.expected ? `; expected: ${entry.expected}` : ""}${entry.observed ? `; observed: ${entry.observed}` : ""}${entry.segment && entry.offsetMs !== undefined ? `; video ${entry.video ?? "segment"} at ${entry.offsetMs}ms` : ""}`,
+				)
+			: ["No stage journal steps were recorded."]),
+		"",
+		"## Findings",
+		"",
+		...report.expectations.map((item) => {
+			const captions = item.evidenceIds.map((id) => {
+				const entry = evidenceById.get(id);
+				return entry ? `${id}: ${entry.caption || entry.file}` : id;
+			});
+			return `- **${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""} — ${item.id}:** expected ${item.expected}; observed ${item.observed}. Steps: ${item.stepIds.join(", ") || "none"}. Evidence: ${captions.join("; ") || "none"}.`;
+		}),
+		"",
+		"## Evidence",
+		"",
+		...(evidence.length
+			? evidence.map(
+					(entry) =>
+						`- ${entry.id} (${entry.kind}): ${entry.caption || entry.file}`,
+				)
+			: ["No evidence was attached."]),
+		"",
+		"## Process knowledge",
+		"",
+		...(report.knowledgeObservations.length
+			? report.knowledgeObservations.map(
+					(item) =>
+						`- **${item.kind}: ${item.concept}**${item.statement ? ` — ${item.statement}` : ""}${item.observed ? ` Observed: ${item.observed}` : ""}${item.suspectedCause ? ` Cause: ${item.suspectedCause}` : ""}`,
+				)
+			: ["No reusable process knowledge was observed."]),
+		"",
+		"## Created data",
+		"",
+		...(report.createdData.length
+			? report.createdData.map(
+					(item) =>
+						`- ${item.description}${item.cleanupHint ? `; cleanup: ${item.cleanupHint}` : ""}`,
+				)
+			: ["No data creation was reported."]),
+		"",
+		"## Not tested",
+		"",
+		...(report.notTested.length
+			? report.notTested.map(
+					(item) =>
+						`- ${item.expectationId ? `${item.expectationId}: ` : ""}${item.reason}`,
+				)
+			: ["None reported."]),
+		"",
+	].join("\n");
+	return `${lines}\n`;
+}
+
+import {
+	type StageTestPlan,
+	type StageTestReport,
+	stageTestPlan,
+	stageTestReport,
+} from "./definitions/contracts.ts";
 import { hashToken } from "./runtime/capability.ts";
 import { renderAgentQuestionMessage } from "./runtime/dialogue.ts";
 import {
 	removeWorkflowEvidence,
 	type WorkflowEvidenceLocation,
+	withEvidenceRootLock,
 	workflowEvidencePresent,
 	workflowEvidenceScope,
 } from "./runtime/evidence-store.ts";
@@ -196,6 +339,7 @@ import {
 	writeAtomicPrivateFile,
 } from "./secure-fs.ts";
 import { stepBehavior } from "./steps/index.ts";
+import { stageReportIssues } from "./steps/stage-test.ts";
 import {
 	conceptPath,
 	snapshotList,
@@ -893,7 +1037,8 @@ export function agentEffectHandlers(
 	})();
 	const telemetryDirectory = (snapshot: WorkflowSnapshot): string =>
 		snapshot.definition.id === "wiki-comments" ||
-		snapshot.definition.id === "research"
+		snapshot.definition.id === "research" ||
+		snapshot.definition.id === "stage-test"
 			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
 			: path.join(
 					snapshot.metadata.worktree,
@@ -1468,6 +1613,201 @@ export function agentEffectHandlers(
 					};
 				}),
 		},
+		"stage.report.render": {
+			observe: () => Effect.succeed(undefined),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = engine.getSnapshot(repo, effect.workflowId);
+					if (
+						snapshot.definition.id !== "stage-test" ||
+						!snapshot.metadata.stage
+					)
+						throw new PermanentFailure(
+							"stage report effect is not attached to a pinned stage-test workflow",
+						);
+					const payload = effect.payload as {
+						plan?: unknown;
+						report?: unknown;
+					};
+					const plan = stageTestPlan.parse(payload.plan);
+					const report = stageTestReport.parse(payload.report);
+					const scope = workflowEvidenceScope({
+						workflowId: snapshot.workflowId,
+						worktree: snapshot.metadata.worktree,
+						definitionId: snapshot.definition.id,
+					});
+					const journal = readStageJournal(scope);
+					const evidence = listEvidence(scope).entries;
+					const stageEntry = readStageCatalog(resolveConfigRoot()).entries.find(
+						(entry) => entry.ident === snapshot.metadata.stage,
+					);
+					if (!stageEntry)
+						throw new PermanentFailure(
+							"pinned stage is no longer configured; report rendering refused",
+						);
+					const declaredApps = Object.keys(stageEntry.stage.apps);
+					const secretValues = [
+						...loadEnvFile(path.join(resolveConfigRoot(), ".env")).values(),
+					].filter(Boolean);
+					const issues = stageReportIssues({
+						plan,
+						report,
+						journal,
+						evidenceIds: evidence.map((entry) => entry.id),
+						declaredApps,
+						secrets: secretValues,
+					});
+					if (issues[0]) throw new PermanentFailure(issues[0]);
+					const secrets = environmentSecrets(resolveConfigRoot());
+					const safePlan = redact(plan, secrets) as typeof plan;
+					const safeReport = redact(report, secrets) as typeof report;
+					const rendered = stageReportMarkdown(
+						snapshot.metadata.stage,
+						snapshot.metadata.ticket,
+						{
+							environment: stageEntry.stage.environment,
+							system: stageEntry.stage.system,
+							access: stageEntry.stage.access,
+						},
+						safePlan,
+						safeReport,
+						journal,
+						evidence,
+						new Date().toISOString(),
+					);
+					if (secretValues.some((secret) => rendered.includes(secret)))
+						throw new PermanentFailure(
+							"stage report contains a configured secret; remove it and retry without including credential values",
+						);
+					// The renderer has no bound of its own; a maximal journal would exceed
+					// the snapshot field's own 2 MiB cap and turn a completed test into a
+					// contract failure. Truncate with a visible marker instead.
+					// 500k UTF-16 units is at most 1.5 MiB of UTF-8, inside the field's
+					// 2 MiB cap whatever the journal contained.
+					const RENDER_MAX_CHARS = 500_000;
+					const renderedText = redact(rendered, secrets) as string;
+					const markdown =
+						renderedText.length > RENDER_MAX_CHARS
+							? `${renderedText.slice(0, RENDER_MAX_CHARS)}\n\n_Report truncated: the stage journal exceeded the review bound._`
+							: renderedText;
+					const reportName = "stage-report.md";
+					// The revision is the identity of one stage-report render: a follow-up
+					// loop re-enters stage.execute at a new revision but reuses the attempt
+					// number, and two revisions must never look like the same report entry
+					// (CONC-004). The attach below dedupes on this exact caption.
+					const caption = `Engine-rendered stage-test report (revision ${snapshot.revision}, attempt ${snapshot.step.attempt})`;
+					// The documented artifact lives at a stable path in the workflow's
+					// evidence directory. Every writer of that root takes its lock, so a
+					// concurrent workflow delete cannot interleave with this write. Lock
+					// order is fixed: the stable report is written under the root lock
+					// first, then released, and only afterwards does the attach take the
+					// same lock for the manifest. Nothing here holds two evidence locks at
+					// once, so a delete waiting on either cannot deadlock with a render
+					// (CONC-006).
+					const reportPath = yield* Effect.tryPromise({
+						try: () =>
+							withEvidenceRootLock(scope.root, () => {
+								fs.mkdirSync(scope.dataRoot, {
+									recursive: true,
+									mode: 0o700,
+								});
+								const directory = openSecureDirectory(
+									scope.root,
+									scope.dataRoot,
+									true,
+								);
+								try {
+									writeAtomicPrivateFile(
+										directory,
+										reportName,
+										markdown,
+										0o600,
+									);
+								} finally {
+									closeSecureDirectory(directory);
+								}
+								return path.join(scope.root, reportName);
+							}),
+						catch: (error) =>
+							new PermanentFailure(
+								error instanceof Error
+									? error.message
+									: "stage report could not be rendered",
+							),
+					});
+					// A re-claimed effect (a drain that failed after the attach committed)
+					// must not append a second report entry for the same attempt.
+					const alreadyStored = listEvidence(scope).entries.find(
+						(entry) => entry.caption === caption,
+					);
+					if (alreadyStored)
+						return {
+							plan: safePlan,
+							report: safeReport,
+							markdown,
+							reportPath,
+						};
+					if (
+						signal?.aborted ||
+						!engine.effectIsLive(repo, effect.id, effect.lease ?? "")
+					)
+						throw new Error("stage report render lost its effect lease");
+					// The attach source must live outside the evidence root (which the
+					// store refuses as a source) and inside an attach root; the data root
+					// is both. A unique name keeps two executors from sharing a file.
+					const sourceName = `stage-report-${snapshot.workflowId}-${snapshot.revision}-${randomUUID()}.md`;
+					const sourcePath = path.join(scope.dataRoot, sourceName);
+					fs.mkdirSync(scope.dataRoot, { recursive: true, mode: 0o700 });
+					const staging = openSecureDirectory(
+						scope.dataRoot,
+						scope.dataRoot,
+						true,
+					);
+					try {
+						writeAtomicPrivateFile(staging, sourceName, markdown, 0o600);
+					} finally {
+						closeSecureDirectory(staging);
+					}
+					yield* Effect.tryPromise({
+						try: () =>
+							attachEvidence(scope, {
+								path: sourcePath,
+								kind: "other",
+								caption,
+								step: "stage.execute",
+								// Re-check under the evidence-root lock, the way the evidence
+								// route does: a workflow delete that landed during the render
+								// wins, and this effect does not recreate a removed report
+								// (CONC-005).
+								verify: () => {
+									const current = engine.getSnapshot(repo, effect.workflowId);
+									if (current.status === "closed")
+										throw new Error(
+											`workflow ${effect.workflowId} is closed; its evidence was removed and is not recreated`,
+										);
+								},
+							}).finally(() => {
+								try {
+									fs.rmSync(sourcePath, { force: true });
+								} catch {
+									/* best-effort temp cleanup */
+								}
+							}),
+						catch: (error) =>
+							new PermanentFailure(
+								error instanceof Error
+									? error.message
+									: "stage report evidence could not be stored",
+							),
+					});
+					return {
+						plan: safePlan,
+						report: safeReport,
+						markdown,
+						reportPath,
+					};
+				}),
+		},
 		"agent.launch": {
 			observe: (effect, signal) =>
 				Effect.gen(function* () {
@@ -1502,12 +1842,14 @@ export function agentEffectHandlers(
 					);
 					yield* Effect.sync(() => {
 						writeRunEnvironment(
-							snapshot.definition.id === "wiki-comments"
+							snapshot.definition.id === "wiki-comments" ||
+								snapshot.definition.id === "stage-test"
 								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 								: snapshot.metadata.worktree,
 							run.id,
 							expected.assignment.environment,
-							snapshot.definition.id === "wiki-comments"
+							snapshot.definition.id === "wiki-comments" ||
+								snapshot.definition.id === "stage-test"
 								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 								: undefined,
 						);
@@ -1624,7 +1966,8 @@ export function agentEffectHandlers(
 					const assetRoot = workflowAssets(
 						snapshot.metadata.worktree,
 						snapshot.workflowId,
-						snapshot.definition.id === "wiki-comments"
+						snapshot.definition.id === "wiki-comments" ||
+							snapshot.definition.id === "stage-test"
 							? wikiWorkflowDataRoot()
 							: undefined,
 					);
@@ -1650,7 +1993,8 @@ export function agentEffectHandlers(
 					// The telemetry bridge recovers the run env through this pointer, so it
 					// must exist before the agent process boots inside adapter.launch.
 					const runDirectory =
-						snapshot.definition.id === "wiki-comments"
+						snapshot.definition.id === "wiki-comments" ||
+						snapshot.definition.id === "stage-test"
 							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: undefined;
 					if (!live(effect)) return { cancelled: true };
@@ -1936,7 +2280,8 @@ export function agentEffectHandlers(
 					let concepts = snapshotList(
 						snapshot.metadata.changeId || snapshot.workflowId,
 						snapshot.definition.id === "wiki-comments" ||
-							snapshot.definition.id === "research"
+							snapshot.definition.id === "research" ||
+							snapshot.definition.id === "stage-test"
 							? wikiWorkflowDataRoot()
 							: snapshot.metadata.worktree,
 					);
@@ -2273,7 +2618,9 @@ export function agentEffectHandlers(
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
-						snapshot.definition.id === "research"
+						isStageTestWorkflowTarget(repo) ||
+						snapshot.definition.id === "research" ||
+						snapshot.definition.id === "stage-test"
 					)
 						return true;
 					return (
@@ -2295,7 +2642,9 @@ export function agentEffectHandlers(
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
-						snapshot.definition.id === "research"
+						isStageTestWorkflowTarget(repo) ||
+						snapshot.definition.id === "research" ||
+						snapshot.definition.id === "stage-test"
 					)
 						return { cleaned: true };
 					if (snapshot.metadata.worktree !== snapshot.metadata.repository)
@@ -3494,7 +3843,8 @@ function durableHandleFor(
 ): AgentHandle {
 	const runtimeDir =
 		snapshot.definition.id === "wiki-comments" ||
-		snapshot.definition.id === "research"
+		snapshot.definition.id === "research" ||
+		snapshot.definition.id === "stage-test"
 			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
 			: path.join(snapshot.metadata.worktree, ".herdr-workflow");
 	return {
@@ -3524,6 +3874,7 @@ function writeRunEnvironment(
 }
 export const effectRunnerTest = {
 	announceGateSkipBoundary,
+	renderStageReport: stageReportMarkdown,
 	canonicalAgentName,
 	commitAndPushWiki,
 	gateClassification,
@@ -4203,7 +4554,8 @@ function renderedAssignment(
 			`${workflowAssets(
 				snapshot.metadata.worktree,
 				snapshot.workflowId,
-				snapshot.definition.id === "wiki-comments"
+				snapshot.definition.id === "wiki-comments" ||
+					snapshot.definition.id === "stage-test"
 					? wikiWorkflowDataRoot()
 					: undefined,
 			)}/instructions`,
@@ -4256,7 +4608,8 @@ async function renderedAssignmentAsync(
 			`${workflowAssets(
 				snapshot.metadata.worktree,
 				snapshot.workflowId,
-				snapshot.definition.id === "wiki-comments"
+				snapshot.definition.id === "wiki-comments" ||
+					snapshot.definition.id === "stage-test"
 					? wikiWorkflowDataRoot()
 					: undefined,
 			)}/instructions`,
@@ -4456,7 +4809,9 @@ function assignmentFor(
 					? "wiki://centralized"
 					: snapshot.definition.id === "research"
 						? "research://standalone"
-						: snapshot.metadata.repository,
+						: snapshot.definition.id === "stage-test"
+							? `stage-test://${snapshot.metadata.stage ?? "unknown"}`
+							: snapshot.metadata.repository,
 			HERDR_RUNTIME: run.profile.runtime,
 			// Session content capture is the same explicit opt-in the engine uses for
 			// its own payloads; the runtime bridges read it from the run environment
@@ -4467,7 +4822,8 @@ function assignmentFor(
 			...environmentRunEnv(run.workflowId),
 			HERDR_TELEMETRY_PATH:
 				snapshot.definition.id === "wiki-comments" ||
-				snapshot.definition.id === "research"
+				snapshot.definition.id === "research" ||
+				snapshot.definition.id === "stage-test"
 					? `${wikiWorkflowDataRoot()}/${snapshot.workflowId}/telemetry.jsonl`
 					: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.workflowId}/telemetry.jsonl`,
 			TRACEPARENT: traceparent(workflowTraceContext(run.workflowId)),
