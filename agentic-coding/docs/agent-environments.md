@@ -614,6 +614,13 @@ a production-like name is refused by the catalog, and only the operator's own
   names its shape (`"v": 1`); a journal a newer build wrote is read-only to this
   one — the read, the step and the panel say so with the version — because the
   two operations that rewrite the file would drop every field they do not know.
+  The cap holds for a rewrite too: back-filling a kept video grows the lines it
+  touches, and a rewrite that would cross the cap is refused whole (the file is
+  left exactly as it was, still readable) rather than landing a journal no reader
+  can parse. The parsed journal is cached by the *file* — one workflow's journal,
+  not the data root every workflow of a worktree shares — and only for an
+  unchanged `(mtime, size)`, so two workflows of one checkout never read each
+  other's steps.
   `stage_journal({ session?, app?, limit? })` reads the latest entries back,
   bounded, which is what a compacted run reads instead of its own history. A step
   is not an action *of the stage*: `stage_journal` charges no stage action, while
@@ -629,7 +636,14 @@ a production-like name is refused by the catalog, and only the operator's own
   `limits.maxRecordingMinutes`: a start is bounded by what is left of it and is
   refused with `stage-recording-limit` once the budget is spent — the refusal
   suggests `stage_step` without a recording, because a flow is documentation
-  first and footage second. The swap into the recording context carries the
+  first and footage second. The grant is held *by the session that took it*, for
+  `min(one segment's ceiling, what is left)` and only until that segment ends, so
+  two sessions cannot be told the same remainder, a refusal can only release its
+  own grant, and a segment that is stopped out of order, auto-stopped for
+  outliving its bound, or lost with its session gives its minutes back rather
+  than holding the budget until it expires. A start on a session that is already
+  recording is refused as `recording-active` (409) — that is what it is — rather
+  than by the budget its own live grant has spent. The swap into the recording context carries the
   cookies and `localStorage` it always did, and now also the live page's own
   origin's `sessionStorage` (read from the page before its context closes,
   installed as an origin-scoped init script), so an SPA that keeps its token
@@ -658,10 +672,13 @@ a production-like name is refused by the catalog, and only the operator's own
   costs no context. `view: false` without `evidence: true` is refused
   (`view-requires-evidence`): a screenshot that is neither shown nor stored is a
   call that did nothing. On a stage session, stored screenshots count against
-  `limits.maxScreenshots` per workflow: the bound is checked before the capture,
-  so a refused one (`stage-screenshot-limit`) takes no picture at all, and it is
-  charged only once the entry exists, so a capture that fails spends nothing.
-  Merely viewing a screenshot spends nothing either.
+  `limits.maxScreenshots` per workflow: a stored screenshot is *reserved* in one
+  synchronous step before the capture, so a refused one
+  (`stage-screenshot-limit`) takes no picture at all and two calls that overlap
+  in their capture cannot both pass the same bound; a capture or an attach that
+  fails gives its reservation back, so nothing is stored beyond the bound and the
+  refusal only ever answers a call that stored nothing. Merely viewing a
+  screenshot spends nothing either.
 - **The flow page is the run's own report, and it needs nothing to open.**
   `stage-flow.html` is written beside the evidence from the journal and the
   manifest alone — segments in journal order, each with its kept video by
@@ -670,7 +687,11 @@ a production-like name is refused by the catalog, and only the operator's own
   no binary dependency, and the same journal and manifest always render the same
   bytes. It is regenerated whenever the journal or the manifest changes (a step,
   a kept recording, an attached file) and is written through the same redactor, so
-  it can never show a value the journal does not already hold. The whole artifact
+  it can never show a value the journal does not already hold. The write happens
+  inside the evidence root's lock, and the writer renders from the journal and
+  manifest it has already parsed in that same section, so one step costs one
+  parse of each file rather than two and no page can be written from a snapshot
+  older than the step it shows. The whole artifact
   disappears with the workflow's evidence directory, which
   `workspace.cleanup` already removes.
 - **A login the server cannot automate is handed to you, not failed.** A role

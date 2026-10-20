@@ -31,3 +31,12 @@
 - [x] 5.7 `stage-flow.html` is written under the evidence root lock and re-checks the journal inside it, so a render cannot resurrect a removed workflow's evidence; the dashboard's journal read is cached by `(mtime, size)`.
 - [x] 5.8 Redaction is composed with URL sanitizing for the journal and the page, and a `sessionStorage` carry verifies the origin before and after its read — in both directions of the recording swap.
 - [x] 5.9 Evidence panel: height counts painted rows (a journal-only flow keeps its listing), a collapsed panel says how many rows it has no room for, `Enter` on a step row opens the flow page, `y` explains there is no file to copy, and a journal read failure is reported once instead of silently dropping the flow.
+
+## 6. Second verification round
+
+- [x] 6.1 The parsed journal is cached by the workflow's own journal file, not by the data root every workflow of a worktree shares, and a rewrite that would cross the file cap is refused whole so the file stays readable (`MIG-005`, `MIG-006`).
+- [x] 6.2 The flow page is rendered from the journal and manifest the writer has already parsed inside its own lock section — once per step instead of twice — and a step whose segment ended between its read and its commit is regrouped without a segment (`PERF-004`, `QUAL-003`, `CONC-104`).
+- [x] 6.3 A stored screenshot reserves its place in one synchronous step before the capture and releases it on a failed capture or a refused attach, so two overlapping calls cannot both pass the bound and store one too many (`SEC-001`, `CONC-101`).
+- [x] 6.4 A recording grant belongs to the session that took it, covers `min(one segment, what is left)`, and is settled on keep, discard, empty, auto-stop and session close; a start on a session that is already recording is refused as `recording-active` (`CONC-102`, `CONC-103`, `QUAL-001`, `QUAL-002`).
+- [x] 6.5 The Evidence selection is clamped by the rows the panel paints, so a refresh cannot snap a developer off a step row, and the copy key's message holds for a step with no segment (`USAB-005`, `USAB-006`).
+- [x] 6.6 Tests for the round's own gaps: a `text`/`selector` wait that answers `met`, the reload branch, the exact Mailpit query for a spaced subject, the page re-rendered by an attached screenshot, overlapping screenshots at the bound, the session-keyed grants, two workflows' journals with equal size and mtime, the cap-refusing rewrite, the `f` key, a step's knowledge lines, and the stage tools' request bodies plus the one-condition refusal (`TQV-001`–`TQV-007`, `OSV-003`).
