@@ -443,8 +443,12 @@ export function createDashboardKeyHandler(
 			const row = evidenceRows()[selectedEvidence()];
 			if (row?.entry) context.copyEvidencePath(row.entry);
 			else if (row?.step)
+				// Only what always holds: a step row can sit in a segment, in the
+				// trailing "unreferenced" group, or in a segment whose recording was
+				// discarded — naming "the segment's evidence rows" would be false in two
+				// of the three, and point at rows the panel is not showing.
 				notify(
-					"A stage flow step has no file of its own; the segment's evidence rows do",
+					"A stage flow step names no file — press f for the flow page, or pick an evidence row to copy a path",
 					"info",
 				);
 			return;

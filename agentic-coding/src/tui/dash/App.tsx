@@ -672,7 +672,11 @@ export function App(props: {
 			agents: data().agents.length,
 			artifacts: artifacts().length,
 			classifications: classifications().length,
-			evidence: evidence().entries.length,
+			// The rows the panel paints, not the manifest's entries: a stage flow
+			// lists a row per journal step too, and clamping by the shorter list would
+			// snap the selection back to the top on every dashboard refresh — making
+			// exactly the step rows this change exists to show unselectable.
+			evidence: evidenceListRows().length,
 		}),
 	);
 	const requiredUserAction = createMemo(() =>
