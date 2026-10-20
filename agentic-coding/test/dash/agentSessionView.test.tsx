@@ -1539,6 +1539,19 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		"src/some/deeply/nested/directory/with/a/long/path/to/the/module-under-edit.ts";
 	const blocks: AgentSessionBlock[] = [
 		{
+			id: "t3",
+			kind: "tool",
+			text: "custom_tool query=src/some/deeply/nested/directory/with/a/long/value/that/reachesTheLastWord",
+			tone: "muted",
+			icon: "•",
+			tool: "custom_tool",
+			toolCall: {
+				name: "custom_tool",
+				args: { query: "src/a.ts" },
+				callId: "c3",
+			},
+		},
+		{
 			id: "t1",
 			kind: "tool",
 			text: "bash command",
@@ -1591,10 +1604,120 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		expect(frame).toContain("very-last-word");
 		expect(frame).toContain("reporter verbose");
 		expect(frame).toContain("under-edit.ts");
+		// A tool without a specialized view wraps its own summary too.
+		expect(frame).toContain("reachesTheLastWord");
 		// The only ellipses left are the in-progress markers on the hint.
 		expect(frame.split("\u2026").length - 1).toBe(
 			(frame.match(/running\u2026|reading\u2026/g) ?? []).length + 1,
 		);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a generic tool view wraps its request and output instead of truncating them", async () => {
+	const block: AgentSessionBlock = {
+		id: "g1",
+		kind: "tool",
+		text: "custom_tool query=src/some/deeply/nested/value/that/reachesTheLastWord",
+		tone: "muted",
+		icon: "•",
+		tool: "custom_tool",
+		toolCall: {
+			name: "custom_tool",
+			args: { query: "src/a.ts" },
+			callId: "c1",
+		},
+		request: "custom_tool query=aRequestThatReachesItsOwnLastWord",
+		detail: ["anOutputLineThatReachesItsOwnLastWord"],
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 50, height: 20 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("reachesTheLastWord");
+		expect(collapsed).not.toContain("...");
+		expect(collapsed).not.toContain("ItsOwnLastWord");
+
+		// Ctrl+O opens the fold: the request line and the output rows are read
+		// whole too, not cut in the middle.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("aRequestThatReachesItsOwnLastWord");
+		expect(expanded).toContain("anOutputLineThatReachesItsOwnLastWord");
+		expect(expanded).not.toContain("...");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("an expanded specialized tool wraps its output rows instead of truncating them", async () => {
+	const line = `${"prefix ".repeat(12)}theLastOutputWord`;
+	const block: AgentSessionBlock = {
+		id: "r1",
+		kind: "tool",
+		text: "read path=src/a.ts",
+		tone: "success",
+		icon: "→",
+		tool: "read",
+		toolCall: {
+			name: "read",
+			args: { path: "src/a.ts" },
+			callId: "c1",
+			result: { lines: [line], isError: false, notes: [] },
+		},
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 50, height: 20 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("theLastOutputWord");
+		expect(frame).not.toContain("...");
 	} finally {
 		t.renderer.destroy();
 	}

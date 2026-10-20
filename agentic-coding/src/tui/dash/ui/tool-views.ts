@@ -23,9 +23,8 @@ export interface ToolViewRow {
 	readonly id?: string;
 	readonly text: string;
 	readonly tone: "base" | "muted" | "error" | "warning" | "success" | "info";
-	/** The text is markdown, drawn rendered instead of as a line. It is the body
-	 * of a fold — a question's context — not a header: a header stays a plain,
-	 * truncated line. */
+	/** The text is markdown, drawn rendered instead of as a plain line. It is
+	 * the body of a fold — a question's context — not a header. */
 	readonly markdown?: boolean;
 	/** The text is source in this tree-sitter filetype (a codemode script): drawn
 	 * as one highlighted code block instead of a line. */
@@ -44,9 +43,10 @@ export interface ToolViewSection {
 	readonly collapsed?: boolean;
 }
 
-/** A tool call's transcript view: the summary line, the hint beside it, the
- * rows under it (only visible once the row is expanded), and the sections a
- * long view splits into so its parts can be read one at a time. */
+/** A tool call's transcript view: the summary (wrapped to the row's width),
+ * the hint beside it, the rows under it (only visible once the row is
+ * expanded), and the sections a long view splits into so its parts can be read
+ * one at a time. */
 export interface ToolView {
 	readonly icon: string;
 	readonly summary: string;

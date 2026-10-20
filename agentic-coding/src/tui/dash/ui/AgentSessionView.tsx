@@ -422,7 +422,9 @@ function ToolRow(props: {
 				<Show
 					when={props.row.markdown}
 					fallback={
-						<text fg={markerColor(props.row.tone)} wrapMode="none" truncate>
+						// A row is read in place: a long output line wraps onto the
+						// next rows instead of losing its middle to an ellipsis.
+						<text fg={markerColor(props.row.tone)} wrapMode="word">
 							{props.row.text}
 						</text>
 					}
@@ -668,7 +670,7 @@ function Block(props: {
 												flexDirection="row"
 												{...useTap(() => props.onToggleSection(key))}
 											>
-												<text fg={uiColors.textMuted} wrapMode="none" truncate>
+												<text fg={uiColors.textMuted} wrapMode="word">
 													{open() ? "▾" : "▸"} {section.label}{" "}
 													{`(${sectionLineCount(section)} lines)`}
 												</text>
@@ -713,13 +715,10 @@ function Block(props: {
 							<text width={2} flexShrink={0} fg={color()}>
 								{props.block.icon ?? "•"}
 							</text>
-							<text
-								fg={color()}
-								flexGrow={1}
-								minWidth={0}
-								wrapMode="none"
-								truncate
-							>
+							{/* A tool without a specialized view still names its whole
+							    call: the summary wraps instead of being cut in the middle
+							    when the tool's own text is wider than the row. */}
+							<text fg={color()} flexGrow={1} minWidth={0} wrapMode="word">
 								{props.block.text}
 								{props.block.pending ? " …" : ""}
 							</text>
@@ -734,7 +733,7 @@ function Block(props: {
 							<box paddingLeft={2} flexDirection="column">
 								<Show when={props.block.request}>
 									{(request) => (
-										<text fg={uiColors.textMuted} wrapMode="none" truncate>
+										<text fg={uiColors.textMuted} wrapMode="word">
 											{request()}
 										</text>
 									)}
