@@ -377,12 +377,16 @@ async function successHolds(
 	if (recipe.success !== undefined)
 		return await declaredSuccessHolds({ session: input.session, recipe });
 	const url = input.session.url;
-	if (recipe.origin !== undefined)
-		return originOf(url) !== originOf(recipe.origin);
+	// A page that is not an http(s) page (a failed navigation's error page, a
+	// blank page, an unparseable address) is never the application: leaving the
+	// identity provider for it is not a login.
+	const current = httpOriginOf(url);
+	if (current === undefined) return false;
+	if (recipe.origin !== undefined) return current !== originOf(recipe.origin);
 	// Nothing declared and no recipe origin: the login is done when the page has
 	// left the page the recipe started on, which the recipe's own submits are the
 	// only way to reach.
-	return url !== startedUrl || originOf(url) !== originOf(startedUrl);
+	return url !== startedUrl || current !== originOf(startedUrl);
 }
 
 /**
@@ -406,8 +410,13 @@ export async function declaredSuccessHolds(input: {
 			.catch(() => false);
 	const url = input.session.url;
 	if (success?.url !== undefined) return url.includes(success.url);
-	if (success?.notOrigin !== undefined)
-		return originOf(url) !== originOf(success.notOrigin);
+	if (success?.notOrigin !== undefined) {
+		// Only an http(s) page can be "somewhere other than the identity
+		// provider": a refused or failed navigation leaves the session on an error
+		// page whose origin is `null`, and that must not count as logged in.
+		const current = httpOriginOf(url);
+		return current !== undefined && current !== originOf(success.notOrigin);
+	}
 	return false;
 }
 
@@ -444,6 +453,18 @@ export async function silentLoginCheck(input: {
 			return true;
 		if (now() >= deadline) return false;
 		await sleep(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - now())));
+	}
+}
+
+/** The origin of an http(s) address; anything else answers `undefined`. */
+function httpOriginOf(value: string): string | undefined {
+	try {
+		const parsed = new URL(value);
+		return parsed.protocol === "http:" || parsed.protocol === "https:"
+			? parsed.origin
+			: undefined;
+	} catch {
+		return undefined;
 	}
 }
 
