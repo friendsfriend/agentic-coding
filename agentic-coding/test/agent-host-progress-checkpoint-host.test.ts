@@ -145,6 +145,10 @@ const WORKER_SOFT: CheckpointThresholds = { softTurns: 10, hardTurns: 40 };
 const WORKER_REPEAT: CheckpointThresholds = { softTurns: 11, hardTurns: 44 };
 const WORKER_HARD_SOON: CheckpointThresholds = { softTurns: 3, hardTurns: 6 };
 
+async function sampleNothing(): Promise<never> {
+	throw new Error("unreachable");
+}
+
 /** One run of the real durable host, driven by a scripted faux provider that
  * reads one file per turn. Distinct paths are progress-free but never repeats;
  * one repeated path is the repeat-stall the decider steers. */
@@ -160,6 +164,9 @@ async function runCheckpointRun(options: {
 	mutating?: boolean;
 	/** Throw from the injected sample, as a `git` timeout would. */
 	sampleThrows?: boolean;
+	/** Resolve a value the accumulator cannot read, as a sampler that answered
+	 * nothing would: the evaluation fails before it decides anything. */
+	sampleNull?: boolean;
 	role?: string;
 	checkpointClass?: string;
 	/** The checkpoint's own context threshold, in tokens. */
@@ -202,7 +209,11 @@ async function runCheckpointRun(options: {
 		checkpointSample: async () => {
 			if (options.sampleThrows)
 				throw new Error("git diff timed out after 2000 ms");
-			return {};
+			// A sampler that resolves nothing is a broken measurement, not a clean
+			// tree: the evaluation fails open before it decides.
+			return options.sampleNull === true
+				? (null as unknown as Awaited<ReturnType<typeof sampleNothing>>)
+				: {};
 		},
 	});
 	const telemetryPath = path.join(dir, "telemetry.jsonl");
@@ -408,7 +419,7 @@ describe("a run-progress checkpoint in the durable host", () => {
 		expect(JSON.stringify(digest)).not.toContain("note-");
 	});
 
-	test("a context above the limit compacts through the ceiling and records it", async () => {
+	test("a context above the limit is compacted once, by the supervisor that started it", async () => {
 		const shim = installShim({});
 		restore = shim.restore;
 		// A 22k-token prompt is over both the checkpoint's context threshold and
@@ -421,20 +432,43 @@ describe("a run-progress checkpoint in the durable host", () => {
 			compaction: { ceilingTokens: 16_384 },
 			longPrompt: true,
 		});
-		const compact = checkpointLines(run.telemetryPath).find(
-			(line) => line["herdr.checkpoint.decision"] === "compact",
+		// The context rule fires, and it never claims an action it did not take: the
+		// ceiling admits the same context on the same measured turn, so this
+		// checkpoint either falls through on a blocked context or reports its
+		// `compact` as not admitted.
+		const context = checkpointLines(run.telemetryPath).filter(
+			(line) => line["herdr.checkpoint.rule"] === "context",
 		);
-		expect(compact).toBeDefined();
-		expect(compact?.["herdr.checkpoint.rule"]).toBe("context");
-		expect(compact?.["herdr.checkpoint.applied"]).toBe(true);
-		expect(compact?.["herdr.checkpoint.recorded"]).toBe(true);
-		expect(compact?.["herdr.checkpoint.status"]).toBe("ok");
-		// One summarizer ran, not two: the ceiling and the checkpoint share the
-		// same serialized admission.
-		expect(
-			checkpointLines(run.telemetryPath, "runtime.compaction_start"),
-		).toHaveLength(1);
+		expect(context.length).toBeGreaterThan(0);
+		for (const line of context)
+			expect(line["herdr.checkpoint.applied"]).not.toBe(true);
 		expect(run.calls).not.toContain("workflow handoff");
+		// One summarizer ran, not two: the ceiling and the checkpoint share the same
+		// serialized admission, and the envelope says which supervisor admitted it.
+		const started = checkpointLines(
+			run.telemetryPath,
+			"runtime.compaction_start",
+		);
+		expect(started).toHaveLength(1);
+		expect(started[0]?.kind).toBe("auto-ceiling");
+		expect(
+			checkpointLines(run.telemetryPath, "runtime.compaction_ceiling"),
+		).toHaveLength(1);
+		// The run's own counters are what `runtime.settled` reports, and they count
+		// the compaction under the supervisor that started it — once.
+		await until(
+			() =>
+				telemetryLines(run.telemetryPath).filter(
+					(line) => line.event === "runtime.settled",
+				).length > 0,
+		);
+		const settled = telemetryLines(run.telemetryPath).find(
+			(line) => line.event === "runtime.settled",
+		);
+		expect(settled?.compactionsAutoCeiling).toBe(1);
+		expect(settled?.compactionsAutoCheckpoint).toBe(0);
+		expect(settled?.checkpoints).toBeGreaterThanOrEqual(1);
+		expect(settled?.checkpointEscalations).toBe(0);
 	});
 
 	test("a run far above its soft threshold keeps running on plain continues", async () => {
@@ -609,6 +643,27 @@ describe("a run-progress checkpoint in the durable host", () => {
 		expect(run.calls).not.toContain("workflow handoff");
 	});
 
+	test("a checkpoint that cannot evaluate reports its class and decides nothing", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_SOFT,
+			calls: 12,
+			sampleNull: true,
+		});
+		const first = checkpointLines(run.telemetryPath)[0] ?? {};
+		expect(first["herdr.checkpoint.status"]).toBe("error");
+		expect(first["herdr.checkpoint.error_class"]).toBe("evaluate");
+		// A failure before the decision has no decision to report: the distribution
+		// counts decisions, and no record was written for a decision nobody made.
+		expect(first["herdr.checkpoint.decision"]).toBeUndefined();
+		expect(first["herdr.checkpoint.rule"]).toBeUndefined();
+		expect(first["herdr.checkpoint.recorded"]).toBe(false);
+		expect(run.calls).not.toContain("workflow checkpoint");
+		expect(run.calls).not.toContain("workflow handoff");
+	});
+
 	test("a configuration with the feature off evaluates nothing", async () => {
 		const shim = installShim({});
 		restore = shim.restore;
@@ -659,12 +714,69 @@ describe("a run-progress checkpoint in the durable host", () => {
 					},
 					{ runGone: true },
 				);
+				host.emitCheckpointForTest("run-checkpoint", applied);
 			},
 		});
 		expect(applied?.applied).toBe(false);
 		expect(applied?.attention).toBe("steer not delivered");
 		expect(applied?.errorClass).toBe("steer");
 		// Nothing was stopped for it.
+		expect(run.calls).not.toContain("workflow handoff");
+		// And the envelope the decision reports on keeps the decision while stating
+		// the failure: the class belongs to the action, not to the decision.
+		const failed = checkpointLines(run.telemetryPath).at(-1) ?? {};
+		expect(failed["herdr.checkpoint.status"]).toBe("error");
+		expect(failed["herdr.checkpoint.error_class"]).toBe("steer");
+		expect(failed["herdr.checkpoint.decision"]).toBe("steer");
+		expect(failed["herdr.checkpoint.rule"]).toBe("no-progress");
+		expect(failed["herdr.checkpoint.recorded"]).toBe(true);
+		expect(failed["herdr.checkpoint.applied"]).toBe(false);
+	});
+
+	test("the settled envelope counts the escalations the run filed", async () => {
+		const shim = installShim({
+			question: { id: "q-checkpoint-11", status: "answered" },
+		});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_HARD_SOON,
+			calls: 16,
+		});
+		await until(
+			() =>
+				telemetryLines(run.telemetryPath).filter(
+					(line) => line.event === "runtime.settled",
+				).length > 0,
+		);
+		const settled = telemetryLines(run.telemetryPath)
+			.filter((line) => line.event === "runtime.settled")
+			.at(-1);
+		expect(settled?.checkpointEscalations).toBe(1);
+		expect(settled?.checkpoints).toBeGreaterThanOrEqual(2);
+	});
+
+	test("a failed compaction reports its class on the decision's envelope", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_SOFT,
+			calls: 12,
+			beforeShutdown: async (host) => {
+				expect(
+					host.emitCheckpointForTest("run-checkpoint", {
+						applied: false,
+						attention: "compaction failed",
+						errorClass: "compact",
+					}),
+				).toBe(true);
+			},
+		});
+		const failed = checkpointLines(run.telemetryPath).at(-1) ?? {};
+		expect(failed["herdr.checkpoint.status"]).toBe("error");
+		expect(failed["herdr.checkpoint.error_class"]).toBe("compact");
+		expect(failed["herdr.checkpoint.decision"]).toBe("steer");
 		expect(run.calls).not.toContain("workflow handoff");
 	});
 

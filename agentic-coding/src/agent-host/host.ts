@@ -474,9 +474,16 @@ export class DurableHost {
 	 * conversation: a checkpoint belongs to the run that earned it, and a run
 	 * that reuses a conversation starts a fresh one. */
 	private readonly checkpoints = new Map<string, RunCheckpointState>();
-	/** The run whose checkpoint is being evaluated: one at a time per run, which
-	 * is also what keeps at most one checkpoint question open. */
-	private readonly checkpointInFlight = new Set<string>();
+	/** Which evaluation of a run's checkpoint is the current one. One runs at a
+	 * time per run (which is also what keeps at most one checkpoint question
+	 * open), and the *token* is what decides whether the one still running may
+	 * write anything: a run that was stopped, or whose checkpoint state was
+	 * re-installed, bumps the token, so the evaluation that started earlier can
+	 * neither park the successor run nor spend its question. */
+	private readonly checkpointEvals = new Map<
+		string,
+		{ token: number; running: boolean }
+	>();
 	/** Compaction tasks a checkpoint's `compact` decision admitted, per
 	 * conversation: a task's attribution belongs to the conversation whose
 	 * summarizer ran, so one conversation's teardown never rewrites another's. */
@@ -1421,16 +1428,18 @@ export class DurableHost {
 		ceiling: CompactionCeiling,
 		contextTokens: number,
 		kind: "auto-ceiling" | "auto-checkpoint",
-	): Promise<void> {
+	): Promise<boolean> {
 		try {
-			await this.serialized(record, async () => {
+			return await this.serialized(record, async () => {
 				const conversation = await this.harness.conversation(
 					record.conversationId,
 					BACKGROUND_CONTEXT,
 				);
-				if (!conversation) return;
-				// A summarizer already in flight is summarizing the same context.
-				if ((await this.liveCompactions(conversation)).length > 0) return;
+				if (!conversation) return false;
+				// A summarizer already in flight is summarizing the same context, so
+				// this admission starts nothing and says so: the envelope of the
+				// supervisor that did start it carries the kind.
+				if ((await this.liveCompactions(conversation)).length > 0) return false;
 				// No instructions on purpose: both paths run exactly the summarizer the
 				// overflow path runs (same prompt, same head retention), so a worker's
 				// assignment and a verifier's plan/finding references survive a proactive
@@ -1474,6 +1483,7 @@ export class DurableHost {
 						floorTokens: ceiling.floorTokens,
 						taskId: String(taskId),
 					});
+				return true;
 			});
 		} catch (error) {
 			this.log(
@@ -1481,6 +1491,7 @@ export class DurableHost {
 					error instanceof Error ? error.message : String(error)
 				}`,
 			);
+			return false;
 		}
 	}
 
@@ -1526,26 +1537,35 @@ export class DurableHost {
 		env: Readonly<Record<string, string>>,
 		readOnly: boolean,
 	): void {
+		const previous = this.checkpoints.get(runId);
 		this.checkpoints.delete(runId);
+		// Whatever was evaluating this run's previous checkpoint is now stale.
+		this.invalidateCheckpointEval(runId);
 		const config = this.checkpointConfig();
 		if (!config.enabled || this.options.orchestrator === true) return;
 		if (!env.HERDR_RUN_ID) return;
 		const checkpointClass = checkpointClassOf(env.HERDR_CHECKPOINT_CLASS);
 		this.checkpoints.set(runId, {
-			accumulator: new ProgressCheckpoint({
-				checkpointClass,
-				thresholds: checkpointThresholdsForClass(config, checkpointClass),
-				contextTokens: config.contextTokens,
-				readOnly,
-				// The fail-fast monitor owns a dead surface, so its exempt roles never
-				// report the failing-tool signal here either.
-				failingToolEligible: failFastEligibleRole(env.HERDR_ROLE),
-				isRegisteredTool: (tool) => this.registeredToolNames().has(tool),
-			}),
+			// A re-installed run is the same run: its ordinal continues where it was,
+			// so two checkpoints of one run can never both be recorded as
+			// `checkpoint:<run>:1`, and its escalation count still reaches
+			// `runtime.settled`.
+			accumulator:
+				previous?.accumulator ??
+				new ProgressCheckpoint({
+					checkpointClass,
+					thresholds: checkpointThresholdsForClass(config, checkpointClass),
+					contextTokens: config.contextTokens,
+					readOnly,
+					// The fail-fast monitor owns a dead surface, so its exempt roles never
+					// report the failing-tool signal here either.
+					failingToolEligible: failFastEligibleRole(env.HERDR_ROLE),
+					isRegisteredTool: (tool) => this.registeredToolNames().has(tool),
+				}),
 			steer: config.steer,
 			stepId: env.HERDR_STEP_ID ?? "",
 			role: env.HERDR_ROLE ?? "",
-			escalations: 0,
+			escalations: previous?.escalations ?? 0,
 		});
 	}
 
@@ -1627,31 +1647,60 @@ export class DurableHost {
 	 * whole body is fail-open: nothing here may throw into the conversation. */
 	private async maybeCheckpoint(runId: string): Promise<void> {
 		const state = this.checkpoints.get(runId);
-		if (!state || this.checkpointInFlight.has(runId)) return;
+		if (!state || this.checkpointEvals.get(runId)?.running === true) return;
 		if (!state.accumulator.due()) return;
-		this.checkpointInFlight.add(runId);
+		const token = (this.checkpointEvals.get(runId)?.token ?? 0) + 1;
+		this.checkpointEvals.set(runId, { token, running: true });
 		const startedAt = Date.now();
+		// Every wait below may outlive the run that started it: `stopped` says so,
+		// and the evaluation writes nothing once it is true.
+		const stopped = () =>
+			this.checkpointEvals.get(runId)?.token !== token ||
+			this.checkpoints.get(runId) !== state;
+		// Which checkpoint this attempt took, once it took one: a failure *after*
+		// the digest was taken is reported on the decision's own envelope (or its
+		// escalation's), never as a second, decision-less `runtime.checkpoint`.
+		let taken: number | undefined;
 		let trigger: CheckpointTrigger = "soft";
 		try {
 			// The sample is only taken at a boundary: no run pays for a `git` call on
 			// a turn it does not checkpoint.
 			const { sample, errorClass } = await this.checkpointSampleFor(runId);
+			if (stopped()) return;
 			const due = state.accumulator.due();
 			if (!due) return;
 			trigger = due;
 			state.accumulator.noteSample(sample);
-			await this.evaluateCheckpoint(
+			taken = await this.evaluateCheckpoint(
 				runId,
 				state,
 				trigger,
 				startedAt,
 				errorClass,
+				stopped,
 			);
 		} catch (error) {
-			this.checkpointErrored(runId, "evaluate", error, trigger, startedAt);
+			this.checkpointErrored(
+				runId,
+				"evaluate",
+				error,
+				trigger,
+				startedAt,
+				taken,
+			);
 		} finally {
-			this.checkpointInFlight.delete(runId);
+			if (this.checkpointEvals.get(runId)?.token === token)
+				this.checkpointEvals.set(runId, { token, running: false });
 		}
+	}
+
+	/** Retire whatever evaluation is running for one run's checkpoint, so the
+	 * evaluation that started earlier writes nothing after its next await. The
+	 * token only moves forward, so a later evaluation can never be confused with
+	 * the one it replaced. */
+	private invalidateCheckpointEval(runId: string): void {
+		const token = this.checkpointEvals.get(runId)?.token ?? 0;
+		this.checkpointEvals.set(runId, { token: token + 1, running: false });
 	}
 
 	/** The bounded worktree sample of one checkpoint. A sampler that fails is a
@@ -1691,16 +1740,26 @@ export class DurableHost {
 		state: RunCheckpointState,
 		trigger: CheckpointTrigger,
 		startedAt: number,
-		sampleErrorClass?: string,
-	): Promise<void> {
+		sampleErrorClass: string | undefined,
+		stopped: () => boolean,
+	): Promise<number | undefined> {
 		const context = this.runContexts.get(runId);
-		if (!context || !this.runs.has(runId)) return;
+		if (!context || !this.runs.has(runId) || stopped()) return undefined;
 		const digest = state.accumulator.takeDigest(trigger, {
 			compactionAdmissible: this.checkpointCompactionAdmissible(runId, state),
 		});
 		const decision = decideCheckpoint(digest, { steer: state.steer });
-		state.accumulator.noteDecision(decision, digest);
+		// The digest advanced the schedule; a run that was stopped or re-installed
+		// meanwhile gets no action, no question and no envelope from this attempt.
+		if (stopped()) return digest.ordinal;
 		const applied = await this.applyCheckpointDecision(runId, digest, decision);
+		// What the next digest reads is what happened, not what was decided: a
+		// steer the harness refused was never delivered, so the signal it was meant
+		// to answer stays open and the next checkpoint may nudge again instead of
+		// escalating it as `steer-ignored`.
+		state.accumulator.noteDecision(decision, digest, {
+			applied: applied.applied,
+		});
 		const filed =
 			decision.action === "escalate"
 				? await this.fileCheckpointEscalation(
@@ -1718,18 +1777,35 @@ export class DurableHost {
 			applied,
 			filed?.summary,
 		);
+		// The record command has no timeout, so this is the longest wait of the
+		// whole evaluation.
+		if (stopped()) return digest.ordinal;
 		this.emitCheckpoint(context, digest, decision, applied, recording, {
 			startedAt,
 			...(sampleErrorClass === undefined ? {} : { sampleErrorClass }),
 		});
-		if (filed)
-			await this.settleCheckpointEscalation(
-				runId,
-				state,
-				digest,
-				decision.rule,
-				filed,
-			);
+		if (filed) {
+			// The envelope above is this checkpoint's one decision record. Settling is
+			// the only part that can still fail (a submission the harness refuses, a
+			// handoff record the engine rejects), and its own escalation envelope was
+			// already written, so a failure here is logged and never re-reported as a
+			// second checkpoint.
+			try {
+				await this.settleCheckpointEscalation(
+					runId,
+					state,
+					digest,
+					decision.rule,
+					filed,
+					stopped,
+				);
+			} catch (error) {
+				this.log(
+					`run ${runId}: checkpoint escalation not settled: ${messageOf(error)}`,
+				);
+			}
+		}
+		return digest.ordinal;
 	}
 
 	/** Whether the cost ceiling's floor and loop guard admit a compaction now, so
@@ -1743,6 +1819,17 @@ export class DurableHost {
 		const ceiling = this.resolveRunCeiling(record);
 		const ceilingState = this.ceilings.get(record.conversationId);
 		if (!ceiling.active || !ceilingState) return false;
+		// A compaction the ceiling (or an earlier checkpoint) already admitted is
+		// summarizing exactly this context, and one whose reduced context has not
+		// been measured yet is still in effect: a second admission would summarize
+		// the same context twice, so the context rule falls through to the signal
+		// rules instead of deciding an action that cannot happen.
+		if (ceilingState.awaitingBaseline) return false;
+		if (
+			(this.ceilingPending.get(record.conversationId) ?? 0) > 0 ||
+			(this.checkpointPending.get(record.conversationId) ?? 0) > 0
+		)
+			return false;
 		const decision = evaluateCompactionCeiling({
 			ceiling,
 			contextTokens: state.accumulator.digestPreview().contextTokens,
@@ -1835,7 +1922,11 @@ export class DurableHost {
 			},
 		});
 		if (decision.kind !== "compact") return false;
-		await this.admitCompaction(
+		// The admission may find a summarizer already in flight — the cost ceiling
+		// admits the same context on the same measured turn — and then this decision
+		// started nothing. Reporting that keeps `applied` honest and the compaction
+		// counted once, under the supervisor that really started it.
+		return await this.admitCompaction(
 			runId,
 			record,
 			ceilingState,
@@ -1843,7 +1934,6 @@ export class DurableHost {
 			digest.contextTokens,
 			"auto-checkpoint",
 		);
-		return true;
 	}
 
 	/** Write the decision into the workflow's bounded history, up to the caps the
@@ -1949,10 +2039,15 @@ export class DurableHost {
 		error: unknown,
 		trigger: CheckpointTrigger,
 		startedAt: number,
+		/** The ordinal this attempt already took, when it took one: the decision
+		 * envelope for that checkpoint is written, so this attempt has nothing
+		 * left to report. */
+		taken?: number,
 	): void {
 		this.log(
 			`run ${runId}: progress checkpoint failed open (${errorClass}): ${messageOf(error)}`,
 		);
+		if (taken !== undefined) return;
 		const context = this.runContexts.get(runId);
 		const state = this.checkpoints.get(runId);
 		if (!context || !state) return;
@@ -2040,6 +2135,7 @@ export class DurableHost {
 		digest: CheckpointDigest,
 		rule: CheckpointRuleId,
 		filed: CheckpointEscalationFiling,
+		stopped: () => boolean,
 	): Promise<void> {
 		const context = this.runContexts.get(runId);
 		if (!context) return;
@@ -2075,7 +2171,10 @@ export class DurableHost {
 			return;
 		}
 		// The question exists and was not answered in the grace window: now, and
-		// only now, the run stops and the developer is left with the question.
+		// only now, the run stops and the developer is left with the question — and
+		// only while this evaluation still owns the run, because a run that was
+		// stopped or re-issued meanwhile is not this question's to stop.
+		if (stopped()) return;
 		const park = summary.outcome === "pending-parked";
 		this.emitCheckpointEscalation(context, digest, rule, summary);
 		await this.parkForCheckpoint(
@@ -2182,6 +2281,37 @@ export class DurableHost {
 			state.accumulator.digestPreview(),
 			decision,
 		);
+	}
+
+	/** Test-only: publish one checkpoint's envelope for a decision whose action
+	 * was applied out of band, so the two post-decision fail-open classes
+	 * (`steer`, `compact`) are asserted where they are emitted. The digest is the
+	 * accumulator's own preview; nothing is recorded and nothing is stopped. Not
+	 * part of the control protocol. */
+	emitCheckpointForTest(
+		runId: string,
+		applied: CheckpointApplied,
+		options: {
+			readonly decision?: CheckpointDecision;
+			readonly recording?: CheckpointRecording;
+		} = {},
+	): boolean {
+		const context = this.runContexts.get(runId);
+		const state = this.checkpoints.get(runId);
+		if (!context || !state) return false;
+		this.emitCheckpoint(
+			context,
+			state.accumulator.digestPreview(),
+			options.decision ?? {
+				action: "steer",
+				rule: "no-progress",
+				signal: "no-progress",
+			},
+			applied,
+			options.recording ?? { recorded: true, failed: false },
+			{ startedAt: Date.now() },
+		);
+		return true;
 	}
 
 	/**
@@ -2762,7 +2892,7 @@ export class DurableHost {
 		// The checkpoint belongs to this run alone, so it is dropped with it rather
 		// than with the conversation the run happened to hold.
 		this.checkpoints.delete(runId);
-		this.checkpointInFlight.delete(runId);
+		this.invalidateCheckpointEval(runId);
 		// The dead-surface monitor and probe belong to the run serving the
 		// conversation, not to the conversation itself: a successor ensured while this
 		// teardown is in flight installed its own, and dropping them here would turn
