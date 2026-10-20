@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
 import type { EvidenceEntry } from "../../src/contracts/environment.ts";
+import type { StageJournal } from "../../src/contracts/stages.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { evidenceRows } from "../../src/tui/dash/evidence-panel.ts";
 import {
@@ -42,6 +43,8 @@ function harness(rows: ReturnType<typeof evidenceRows>) {
 	const copied: EvidenceEntry[] = [];
 	const moved: number[] = [];
 	const otherPanels: string[] = [];
+	const notified: string[] = [];
+	let flowOpened = 0;
 	let selected = 0;
 	const keymap = { getData: () => "none", setData: () => {} };
 	const context = {
@@ -65,10 +68,13 @@ function harness(rows: ReturnType<typeof evidenceRows>) {
 		evidenceRows: () => rows,
 		openEvidence: (item: EvidenceEntry) => opened.push(item),
 		copyEvidencePath: (item: EvidenceEntry) => copied.push(item),
+		openEvidenceFlow: () => {
+			flowOpened += 1;
+		},
 		artifacts: () => [],
 		data: () => testDashboard(),
 		dimensions: () => ({ width: 120, height: 40 }),
-		notify: () => {},
+		notify: (message: string) => notified.push(message),
 		trace: () => {},
 		routeModalHelp: () => false,
 		props: { repo: "/repo", workflowId: "wf-1", keymap },
@@ -80,6 +86,8 @@ function harness(rows: ReturnType<typeof evidenceRows>) {
 		opened,
 		copied,
 		moved,
+		notified,
+		flowOpened: () => flowOpened,
 		otherPanels,
 		selected: () => selected,
 	};
@@ -123,6 +131,35 @@ describe("the Evidence panel's keys", () => {
 		await handle(keyEvent("y"));
 		expect(opened).toEqual([]);
 		expect(copied).toEqual([]);
+	});
+
+	test("Enter on a stage flow step row opens the flow page, and y says why it copied nothing", async () => {
+		// A journal step names no file of its own, so the two keys that act on a file
+		// act on the page the step is written into instead — and the copy key says so
+		// rather than looking broken on the row it was pressed on.
+		const journal: StageJournal = {
+			workflowId: "wf-flow",
+			entries: [
+				{
+					seq: 1,
+					at: "2026-01-01T12:00:00.000Z",
+					session: "default",
+					label: "open the cart",
+					segment: 1,
+					offsetMs: 2_000,
+				},
+			],
+			flowPage: "stage-flow.html",
+		};
+		const stepRows = evidenceRows([], journal);
+		expect(stepRows[0]?.step?.label).toBe("open the cart");
+		const { handle, opened, copied, notified, flowOpened } = harness(stepRows);
+		await handle(keyEvent("enter"));
+		expect(flowOpened()).toBe(1);
+		expect(opened).toEqual([]);
+		await handle(keyEvent("y"));
+		expect(copied).toEqual([]);
+		expect(notified[0]).toContain("no file of its own");
 	});
 
 	test("j and k move the selection within the rows and stop at both ends", async () => {

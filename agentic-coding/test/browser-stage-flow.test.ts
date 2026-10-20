@@ -11,6 +11,8 @@ import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Schema } from "effect";
+import { stageJournalSchema } from "../src/contracts/stages.ts";
 import {
 	createFakeDriver,
 	type FakeContext,
@@ -24,9 +26,11 @@ import {
 } from "../src/server/browser/routes.ts";
 import type { BrowserSession } from "../src/server/browser/session.ts";
 import {
+	appendStageJournalEntry,
 	hasStageJournal,
 	readStageJournal,
 	STAGE_FLOW_FILE,
+	writeStageFlowPage,
 } from "../src/server/evidence/journal.ts";
 import { listEvidence } from "../src/server/evidence/store.ts";
 import {
@@ -41,7 +45,10 @@ import { stagePaths } from "../src/server/stages/catalog.ts";
 import { SESSION_STORAGE_READ_SCRIPT } from "../src/server/stages/identity-cache.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
-import { workflowEvidenceScope } from "../src/workflow/runtime/evidence-store.ts";
+import {
+	removeWorkflowEvidence,
+	workflowEvidenceScope,
+} from "../src/workflow/runtime/evidence-store.ts";
 
 const OWNER = "workflow:wf-flow";
 const PASSWORD_SENTINEL = "flow-pw-sentinel-91ab";
@@ -56,7 +63,14 @@ const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
 
 /** One throwaway configuration root: a UI app with a clerk role, and a mail
  * catcher pointing at the caller's fake Mailpit. */
-function configRoot(options: { readonly mailUrl?: string } = {}): string {
+function configRoot(
+	options: {
+		readonly mailUrl?: string;
+		/** Declare the mail app under a configured ident (`apps.mail.app`), which is
+		 * how a stage app links a system the configuration already knows. */
+		readonly mailAlias?: boolean;
+	} = {},
+): string {
 	const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "stage-flow-"));
 	const defsDir = stagePaths(configDir).defsDir;
 	fs.mkdirSync(defsDir, { recursive: true });
@@ -87,6 +101,7 @@ function configRoot(options: { readonly mailUrl?: string } = {}): string {
 							url: options.mailUrl,
 							kind: "mail-catcher",
 							api: "mailpit",
+							...(options.mailAlias ? { app: "mailpit" } : {}),
 						},
 					}),
 		},
@@ -120,6 +135,16 @@ function configRoot(options: { readonly mailUrl?: string } = {}): string {
 		path.join(defsDir, "grid-flow.json"),
 		`${JSON.stringify(definition, null, 2)}\n`,
 	);
+	// `apps.mail.app` may only name an application the configuration knows, so the
+	// alias fixture declares the ident under `apps/definitions`.
+	if (options.mailAlias === true) {
+		const appsDir = path.join(configDir, "apps", "definitions");
+		fs.mkdirSync(appsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(appsDir, "mailpit.json"),
+			`${JSON.stringify({ ident: "mailpit", displayName: "Mailpit", appType: "APP" }, null, 2)}\n`,
+		);
+	}
 	fs.writeFileSync(
 		path.join(configDir, ".env"),
 		[
@@ -449,10 +474,10 @@ describe("the stage step journal over the browser routes", () => {
 		await openStage(deps);
 		// Half of the stage's one minute is already kept, so this segment may only
 		// run for the remaining thirty seconds.
-		usageOf(deps).recordKept({
+		usageOf(deps).settleRecording({
 			stage: "grid-flow",
 			owner: OWNER,
-			elapsedMs: 30_000,
+			keptMs: 30_000,
 		});
 		const started = await call(deps, AGENT_BROWSER_RECORD_PATH, {
 			action: "start",
@@ -465,10 +490,10 @@ describe("the stage step journal over the browser routes", () => {
 		// touched, and the refusal says what to do instead.
 		const spent = build(configRoot(), createFakeDriver());
 		await openStage(spent);
-		usageOf(spent).recordKept({
+		usageOf(spent).settleRecording({
 			stage: "grid-flow",
 			owner: OWNER,
-			elapsedMs: 60_000,
+			keptMs: 60_000,
 		});
 		const refused = await call(spent, AGENT_BROWSER_RECORD_PATH, {
 			action: "start",
@@ -503,6 +528,20 @@ describe("the stage step journal over the browser routes", () => {
 		expect(seed).not.toContain("evil.example.test");
 		// The read the carry is built from is the live document's own.
 		expect(SESSION_STORAGE_READ_SCRIPT).toContain("window.sessionStorage");
+
+		// The carry runs the other way too: the recording's page owns the tab state,
+		// and closing its context must not cost the flow what it captured.
+		const stopped = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "stop",
+		});
+		expect(stopped.status).toBe(200);
+		const restored = sessionOf(deps).context as unknown as FakeContext;
+		expect(restored).not.toBe(after);
+		const carriedBack = restored.initScripts.find((script) =>
+			script.includes("session-abc"),
+		);
+		expect(carriedBack).toBeDefined();
+		expect(carriedBack).toContain("https://grid-flow.example.test");
 		await deps.pool.closeAll();
 	});
 
@@ -603,6 +642,29 @@ describe("the stage wait over the browser routes", () => {
 			// The search is Mailpit's own syntax, one field prefix per term.
 			expect(seen.length).toBeGreaterThan(0);
 			await deps.pool.closeAll();
+
+			// A stage app that names a configured ident is the same application: the
+			// session's `app` is then that ident, not the key, and the catcher has to be
+			// found by either — otherwise every mail wait on such a stage would refuse
+			// `stage-mail-unsupported`.
+			const aliased = build(
+				configRoot({ mailUrl: server.url.href, mailAlias: true }),
+				createFakeDriver(),
+			);
+			const aliasedMailbox = await call(aliased, AGENT_BROWSER_OPEN_PATH, {
+				stage: "grid-flow",
+				stageApp: "mail",
+				session: "mailbox",
+			});
+			expect(aliasedMailbox.status).toBe(200);
+			expect(sessionOf(aliased, "mailbox").app).toBe("mailpit");
+			const aliasedWait = await call(aliased, AGENT_BROWSER_STAGE_WAIT_PATH, {
+				session: "mailbox",
+				until: { mail: { to: "clerk@grid.example.test" } },
+			});
+			expect(aliasedWait.status).toBe(200);
+			expect(aliasedWait.value.met).toBe(true);
+			await aliased.pool.closeAll();
 		} finally {
 			server.stop(true);
 		}
@@ -699,6 +761,234 @@ describe("screenshot context control and its limit", () => {
 		expect(refused.text).toContain("stage_step");
 		// The refusal wrote nothing: the manifest still holds the two it allowed.
 		expect(listEvidence(scopeOf(deps)).entries).toHaveLength(2);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("the journal's write-time bounds and its version", () => {
+	test("a discarded recording takes its segment off the steps it filed", async () => {
+		const deps = build(
+			configRoot(),
+			createFakeDriver({ video: WEBM, screenshot: JPEG }),
+		);
+		await openStage(deps);
+		expect(
+			(await call(deps, AGENT_BROWSER_RECORD_PATH, { action: "start" })).status,
+		).toBe(200);
+		const step = await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, {
+			label: "the cart is empty",
+		});
+		expect(step.value.segment).toBe(1);
+		// Keeping it and discarding it are the two ends of one segment: a discard
+		// leaves no video, so no step may still name the segment one would have been
+		// seekable in.
+		const stopped = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "stop",
+		});
+		expect(stopped.status).toBe(200);
+		expect(stopped.value.segment).toBe(1);
+		const [entry] = readStageJournal(scopeOf(deps));
+		expect(entry?.label).toBe("the cart is empty");
+		expect(entry?.segment).toBeUndefined();
+		expect(entry?.offsetMs).toBeUndefined();
+		const page = fs.readFileSync(
+			path.join(scopeOf(deps).root, STAGE_FLOW_FILE),
+			"utf8",
+		);
+		expect(page).not.toContain("Segment 1");
+		// The step kept its place in the sequence: a discard rewrites the step, it
+		// does not renumber the run.
+		expect(entry?.seq).toBe(1);
+		await deps.pool.closeAll();
+	});
+
+	test("the journal folds and bounds what it is handed, not only what a route sends", async () => {
+		// A request's own contract already refuses a caller's control characters and
+		// an over-long URL. This is the writer's own guarantee for the text no
+		// request bound covers — a redirected page's URL is the one shape that can
+		// outgrow it — so the file it writes still decodes through the journal's own
+		// read contract.
+		const scope = workflowEvidenceScope({
+			workflowId: "wf-flow",
+			worktree: fs.mkdtempSync(path.join(os.tmpdir(), "stage-journal-text-")),
+			definitionId: "core",
+		});
+		const entry = await appendStageJournalEntry(scope, {
+			label: "a long page\nand a second line",
+			url: `https://grid-flow.example.test/${"a".repeat(3_000)}\nafter`,
+			captures: { note: "line\r\nbreak" },
+		});
+		expect(entry.label).toBe("a long page and a second line");
+		expect(entry.captures?.note).toBe("line  break");
+		expect((entry.url ?? "").length).toBe(2_048);
+		expect(entry.url).not.toContain("\n");
+		const decoded = Schema.decodeUnknownSync(stageJournalSchema)({
+			workflowId: "wf-flow",
+			entries: readStageJournal(scope),
+		});
+		expect(decoded.entries.map((each) => each.label)).toEqual([
+			"a long page and a second line",
+		]);
+	});
+
+	test("a URL in a step's own text loses its query, like the entry's URL", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		const step = await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, {
+			label: "the reset link arrived",
+			captures: {
+				link: `${APP_URL}reset?sessionid=leak-me`,
+			},
+		});
+		expect(step.status).toBe(200);
+		// Redaction masks the configuration's secrets; sanitizing is the second pass,
+		// because an application's own query is not a configured secret and would
+		// otherwise outlive the call that saw it.
+		expect(step.text).not.toContain("leak-me");
+		const journal = fs.readFileSync(
+			path.join(scopeOf(deps).root, "stage-journal.jsonl"),
+			"utf8",
+		);
+		expect(journal).not.toContain("leak-me");
+		expect(journal).toContain("redacted");
+		await deps.pool.closeAll();
+	});
+
+	test("a journal a newer build wrote is reported, never rewritten", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, { label: "first" });
+		const file = path.join(scopeOf(deps).root, "stage-journal.jsonl");
+		// A line from a format this build does not know: rewriting the file from what
+		// parsed would silently drop every field it does not understand.
+		const newer = `${JSON.stringify({
+			v: 2,
+			seq: 1,
+			at: "2026-01-01T00:00:00.000Z",
+			label: "first",
+			somethingNew: true,
+		})}\n`;
+		fs.writeFileSync(file, newer);
+		const read = await call(deps, AGENT_BROWSER_STAGE_JOURNAL_PATH, {});
+		expect(read.status).toBe(500);
+		expect(read.text).toContain("newer build");
+		expect(read.text).toContain("2");
+		// And the write path refuses too, rather than appending to a file it would
+		// rewrite from a partial parse.
+		const step = await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, {
+			label: "second",
+		});
+		expect(step.status).toBe(500);
+		expect(fs.readFileSync(file, "utf8")).toBe(newer);
+		await deps.pool.closeAll();
+	});
+
+	test("a page is not written back for a workflow whose evidence was removed", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, { label: "the only step" });
+		const scope = scopeOf(deps);
+		expect(fs.existsSync(path.join(scope.root, STAGE_FLOW_FILE))).toBe(true);
+		expect(
+			await removeWorkflowEvidence({
+				workflowId: "wf-flow",
+				worktree: deps.worktree,
+				definitionId: "core",
+			}),
+		).toBe(true);
+		// The writer re-checks the journal inside the lock: a render that interleaved
+		// with the deletion must not recreate the directory chain it just lost.
+		expect(await writeStageFlowPage(scope)).toBeUndefined();
+		expect(fs.existsSync(scope.root)).toBe(false);
+		await deps.pool.closeAll();
+	});
+});
+
+describe("the stage's recording and screenshot budgets under concurrency", () => {
+	test("two starts cannot be told the same remaining recording minutes", async () => {
+		const deps = build(
+			configRoot(),
+			createFakeDriver({ video: WEBM, screenshot: JPEG }),
+		);
+		await openStage(deps);
+		const first = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+		});
+		expect(first.status).toBe(200);
+		// The stage allows one minute in total, and the segment just started may keep
+		// all of it: the grant is reserved the moment it is told out, so a second
+		// start hears the remainder that is actually left (nothing) rather than the
+		// same minute.
+		expect(sessionOf(deps).recording?.maxMs).toBe(60_000);
+		await call(deps, AGENT_BROWSER_OPEN_PATH, {
+			stage: "grid-flow",
+			stageApp: "web",
+			session: "second",
+			path: "/two",
+		});
+		const second = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+			session: "second",
+		});
+		expect(second.status).toBe(409);
+		expect(second.value.code).toBe("stage-recording-limit");
+		// Discarding the first gives the reservation back: a spent budget is what a
+		// discard must not be confused with.
+		expect(
+			(await call(deps, AGENT_BROWSER_RECORD_PATH, { action: "stop" })).status,
+		).toBe(200);
+		const retried = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+			session: "second",
+		});
+		expect(retried.status).toBe(200);
+		expect(retried.value.segment).toBe(2);
+		await deps.pool.closeAll();
+	});
+
+	test("a capture that fails spends nothing of the screenshot bound", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		// A ref the page does not have: the capture fails, so nothing was stored and
+		// the bound counts what it says it counts.
+		const failed = await call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+			evidence: true,
+			view: false,
+			ref: "e999",
+		});
+		expect(failed.status).toBeGreaterThanOrEqual(400);
+		expect(failed.value.code).not.toBe("stage-screenshot-limit");
+		expect(listEvidence(scopeOf(deps)).entries).toEqual([]);
+		for (let index = 0; index < 2; index += 1) {
+			const kept = await call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+				evidence: true,
+				view: false,
+			});
+			expect(kept.status).toBe(200);
+		}
+		const refused = await call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+			evidence: true,
+			view: false,
+		});
+		expect(refused.value.code).toBe("stage-screenshot-limit");
+		await deps.pool.closeAll();
+	});
+
+	test("a glob condition is matched in linear time, whatever the pattern looks like", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps, { path: `/${"a".repeat(64)}` });
+		const started = Date.now();
+		// A pattern built into a regular expression backtracks catastrophically on
+		// exactly this shape, and the poll would sit still instead of answering the one
+		// time it is asked. The walk visits each literal once.
+		const waited = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { url: `${"*a".repeat(12)}*b` },
+			timeoutSeconds: 1,
+			intervalSeconds: 30,
+		});
+		expect(Date.now() - started).toBeLessThan(5_000);
+		expect(waited.status).toBe(200);
+		expect(waited.value.met).toBe(false);
 		await deps.pool.closeAll();
 	});
 });

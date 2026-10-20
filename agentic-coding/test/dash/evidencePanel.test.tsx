@@ -171,32 +171,38 @@ test("the panel's height is compact, collapses when empty and is capped on a sho
 	// A manifest with entries gets the fixed compact height, however long the
 	// manifest is: the listing windows itself instead of growing the row.
 	expect(
-		evidencePanelLines({ entries: 1, state: "ready", terminalLines: 60 }),
+		evidencePanelLines({ rows: 1, state: "ready", terminalLines: 60 }),
 	).toBe(EVIDENCE_PANEL_LINES);
 	expect(
-		evidencePanelLines({ entries: 40, state: "ready", terminalLines: 60 }),
+		evidencePanelLines({ rows: 40, state: "ready", terminalLines: 60 }),
 	).toBe(EVIDENCE_PANEL_LINES);
 	// Nothing attached, and the read that established it succeeded: the title row
 	// carries the empty state, so the panel is one line.
 	expect(
-		evidencePanelLines({ entries: 0, state: "ready", terminalLines: 60 }),
+		evidencePanelLines({ rows: 0, state: "ready", terminalLines: 60 }),
 	).toBe(EVIDENCE_EMPTY_LINES);
 	// A read in flight, or one that failed with nothing to list, keeps the row
 	// that says so.
 	expect(
-		evidencePanelLines({ entries: 0, state: "loading", terminalLines: 60 }),
+		evidencePanelLines({ rows: 0, state: "loading", terminalLines: 60 }),
 	).toBe(EVIDENCE_MESSAGE_LINES);
 	expect(
-		evidencePanelLines({ entries: 0, state: "error", terminalLines: 60 }),
+		evidencePanelLines({ rows: 0, state: "error", terminalLines: 60 }),
 	).toBe(EVIDENCE_MESSAGE_LINES);
 	// A short terminal scales the panel down instead of letting it crowd the grid
 	// above it.
 	expect(
-		evidencePanelLines({ entries: 3, state: "ready", terminalLines: 12 }),
+		evidencePanelLines({ rows: 3, state: "ready", terminalLines: 12 }),
 	).toBe(4);
 	expect(
-		evidencePanelLines({ entries: 3, state: "ready", terminalLines: 8 }),
+		evidencePanelLines({ rows: 3, state: "ready", terminalLines: 8 }),
 	).toBe(EVIDENCE_MESSAGE_LINES);
+	// A workflow whose flow journal wrote steps and attached no evidence has rows
+	// to paint, so it gets the fixed height rather than the empty state's one line:
+	// the count is of painted rows, not of entries.
+	expect(
+		evidencePanelLines({ rows: 2, state: "ready", terminalLines: 60 }),
+	).toBe(EVIDENCE_PANEL_LINES);
 });
 
 test("an empty listing collapses the panel to its title row", async () => {

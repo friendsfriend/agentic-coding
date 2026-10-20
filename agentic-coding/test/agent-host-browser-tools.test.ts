@@ -303,6 +303,34 @@ describe("browser tool surface", () => {
 		});
 	});
 
+	test("`view: false` answers with the stored id and the caption the panel shows", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					url: "http://app.local/cart",
+					evidence: { id: "01ABC", caption: "the empty cart" },
+					notice: "the screenshot was stored as evidence and not returned",
+				},
+			],
+		};
+		const { result } = await invoke(
+			"browser_screenshot",
+			{ evidence: true, view: false, caption: "the empty cart" },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			evidence: true,
+			view: false,
+			caption: "the empty cart",
+		});
+		// No image block for a picture this call deliberately did not look at, and
+		// the caption is what tells the model which step the id belongs to.
+		expect(result.content.map((block) => block.type)).toEqual(["text"]);
+		expect(textOf(result.content)).toContain("01ABC");
+		expect(textOf(result.content)).toContain("the empty cart");
+	});
+
 	test("a server refusal keeps its code and is an error result", async () => {
 		const server: FakeServer = {
 			calls: [],

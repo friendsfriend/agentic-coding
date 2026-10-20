@@ -21,7 +21,9 @@ import {
 	stageFlowPath,
 } from "../../src/tui/dash/evidence-open.ts";
 import {
+	EVIDENCE_EMPTY_LINES,
 	EVIDENCE_PANEL_LINES,
+	evidencePanelLines,
 	evidenceRows,
 	evidenceStepDetailLines,
 } from "../../src/tui/dash/evidence-panel.ts";
@@ -243,5 +245,71 @@ test("the rendered panel shows the segment, its steps and their detail", async (
 	expect(frame).toContain("00:02 open the cart");
 	expect(frame).toContain("expected cart is empty");
 	expect(frame).toContain("Unreferenced");
+	t.renderer.destroy();
+});
+
+test("a workflow whose journal holds only steps still lists them", async () => {
+	// The height is the painted row count, not the manifest's: a journal-only flow
+	// has no evidence file at all, and the empty state's one title row would clip
+	// the very listing the journal was written for.
+	expect(
+		evidencePanelLines({ rows: 3, state: "ready", terminalLines: 40 }),
+	).toBe(EVIDENCE_PANEL_LINES);
+	const t = await testRender(
+		() => (
+			<EvidencePanel
+				entries={[]}
+				journal={{
+					workflowId: "wf-flow",
+					entries: [FIRST, SECOND],
+					flowPage: "stage-flow.html",
+				}}
+				active
+				selectedIndex={0}
+				kitty={false}
+				height={evidencePanelLines({
+					rows: 2,
+					state: "ready",
+					terminalLines: 40,
+				})}
+				state="ready"
+			/>
+		),
+		{ width: 120, height: 24 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("00:02 open the cart"),
+	);
+	expect(frame).not.toContain("No evidence attached yet");
+	expect(frame).toContain("Segment 1");
+	t.renderer.destroy();
+});
+
+test("a collapsed panel says how many rows it has no room for", async () => {
+	const t = await testRender(
+		() => (
+			<EvidencePanel
+				entries={[]}
+				journal={JOURNAL}
+				active
+				selectedIndex={0}
+				kitty={false}
+				height={EVIDENCE_EMPTY_LINES}
+				state="ready"
+			/>
+		),
+		{ width: 120, height: 8 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("rows, no room"),
+	);
+	const rows = frame.split("\n");
+	// One title row, and the accessory says the listing exists rather than that the
+	// workflow recorded nothing.
+	expect(rows[0]).toContain("Evidence");
+	expect(rows[0]).toContain(
+		`${evidenceRows([], JOURNAL).length} rows, no room`,
+	);
+	expect(frame).not.toContain("No evidence attached yet");
 	t.renderer.destroy();
 });
