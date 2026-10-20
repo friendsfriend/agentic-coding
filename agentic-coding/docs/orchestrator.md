@@ -89,13 +89,14 @@ refused with the existing workflow's status. The task-reference variant of
 The Orchestrator should establish these choices with the developer, in order:
 repository/project; task (goal, constraints, acceptance); workflow type and why;
 agent preset/model profile; mode (`worktree` or `checkout`); branch/base; ticket;
-and `app` for `env-setup`. `list_agent_config` shows preset/profile choices: use
-a configured developer default without asking, and ask about a profile only if
-none is set or the request implies a different one. Read project lists, branches,
-workflow state and presets with tools rather than asking the developer for
-readable facts. A rebase start needs both `sourceBranch` and `targetBranch`;
-`env-setup` needs the configured app ident from `list_projects`; validate a
-blueprint before starting it.
+`app` for `env-setup`; and `stage` for `stage-test`. `list_agent_config` shows
+preset/profile choices: use a configured developer default without asking, and
+ask about a profile only if none is set or the request implies a different one.
+Read project lists, branches, workflow state and presets with tools rather than
+asking the developer for readable facts. A rebase start needs both
+`sourceBranch` and `targetBranch`; `env-setup` needs the configured app ident
+from `list_projects`; `stage-test` needs the stage the developer established
+(see below); validate a blueprint before starting it.
 
 ## Shaping workflows
 
@@ -130,6 +131,27 @@ as the CLI's `workflow start --app IDENT` does, and
 before anything is written — an ident no configuration knows is answered
 `400 app-not-configured`, and the family's own start guard refuses an
 `env-setup` request without one.
+
+### Starting a `stage-test` workflow
+
+A stage test plans and executes a verification on exactly one allow-listed
+hosted stage, so its start carries a `stage` (the ident the stage catalog
+reports). `start_workflow` forwards it in the start request exactly as the CLI's
+`workflow start --workflow stage-test --stage IDENT` does:
+
+- The developer establishes the stage. Never guess one: the orchestrator's
+  tool surface has no stage catalog (it is read by the dashboard form and by
+  durable runs), so a developer who names a system rather than a stage is asked
+  which of its stages to use, and the chosen ident is named back to them for
+  confirmation before the start.
+- The task is the ticket text the developer supplied (the Stage test form's
+  multi-line field), and an optional ticket reference travels as `ticket` and is
+  shown in the report. Nothing here contacts a ticket system: resolving a
+  reference into task text is a later integration.
+- The server validates `stage` against the stage catalog before anything is
+  written. An unknown or excluded ident is answered `409 stage-not-configured`,
+  no workflow starts, and the tool result carries the code. `stage` means
+  nothing to any other workflow type, so it is never sent with one.
 
 Because the compiler's human-review invariant applies to every blueprint, a
 shape that routes around plan approval, developer review or wiki approval is

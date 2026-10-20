@@ -375,6 +375,45 @@ describe("stage-test planning and report contracts", () => {
 			).toThrow(message);
 	});
 
+	test("the report schema refuses one verdict covering two planned expectations", () => {
+		const twoExpectations = plan({
+			expectations: [
+				{
+					id: "E1",
+					statement: "The request is visible",
+					source: "ticket",
+					priority: "high",
+				},
+				{
+					id: "E2",
+					statement: "The request can be approved",
+					source: "ticket",
+					priority: "high",
+				},
+			],
+		});
+		const verdict = {
+			id: "E1",
+			verdict: "pass",
+			expected: "The request is visible",
+			observed: "The request is visible",
+			stepIds: ["1"],
+			evidenceIds: ["ev-1"],
+		};
+		// Two verdicts against two planned ids: only the distinct ids show that E2
+		// was never executed, so a count alone would accept this report. The report
+		// schema owns that rule and refuses the duplicate while parsing, before the
+		// entry guard runs, so this pins the schema rather than the guard (whose
+		// count and membership check is the one above).
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: twoExpectations }),
+				report({ expectations: [verdict, { ...verdict }] }),
+			),
+		).toThrow(/expectation ids must be unique/);
+	});
+
 	test("a report is refused when its versions, evidence, steps, knowledge or secrets do not line up", () => {
 		const journal = [
 			{

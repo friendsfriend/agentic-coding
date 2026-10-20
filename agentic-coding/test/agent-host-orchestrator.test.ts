@@ -27,6 +27,7 @@ import { orchestratorTokenFor } from "../src/server/auth.ts";
 import type { EnvironmentAuthority } from "../src/server/environment/private-api.ts";
 import type { ServerOperations } from "../src/server/handlers.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
+import { WorkflowRuntimeError } from "../src/workflow/contracts.ts";
 
 function toolResults(entries: readonly unknown[]): string[] {
 	const texts: string[] = [];
@@ -76,6 +77,7 @@ describe("orchestrator host mode", () => {
 			"branch/base",
 			"ticket",
 			"`app` for env-setup",
+			"`stage` for stage-test",
 		];
 		for (const text of [start, ORCHESTRATOR_PROMPT]) {
 			let previous = -1;
@@ -91,6 +93,8 @@ describe("orchestrator host mode", () => {
 		expect(start).toContain("validate blueprints first");
 		expect(start).toContain("sourceBranch and targetBranch");
 		expect(start).toContain("configured app for env-setup");
+		expect(start).toContain("allow-listed stage for stage-test");
+		expect(ORCHESTRATOR_PROMPT).toContain("stage-not-configured");
 		expect(start).toContain("human reviews retained");
 		expect(ORCHESTRATOR_PROMPT).toContain("Before you start a workflow");
 
@@ -663,6 +667,111 @@ describe("orchestrator host mode", () => {
 			});
 			// The unknown app never reaches the operation: the transport answers first.
 			expect(results[1]).toContain("is not a configured application");
+			expect(starts).toHaveLength(1);
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
+
+	test("starts a stage-test workflow with the allow-listed stage and surfaces a refusal", async () => {
+		// A stage test runs on exactly one allow-listed hosted stage, and the
+		// orchestrator has no other way to name it: the tool forwards `stage`, and
+		// the server refuses an ident that is not in the allow-list with
+		// `stage-not-configured` before a workflow exists (`add-stage-test-launch`).
+		// The allow-list check itself lives in prepareWorkflowStart
+		// (test/workflow-startup.test.ts); here the operation raises the same coded
+		// failure the route turns into a 409, so the tool result is what is asserted.
+		const starts: unknown[] = [];
+		const server = await startWorkflowServer({
+			operations: {
+				start: async (request: unknown) => {
+					const stage = (request as { stage?: string }).stage;
+					if (stage === "nope")
+						throw new WorkflowRuntimeError(
+							"stage-not-configured",
+							'stage-test stage "nope" is not in the configured allow-list',
+						);
+					starts.push(request);
+					return "Workflow started: wf-stage-test";
+				},
+				loadAgents: () => ({
+					agents: {},
+				}),
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-stage-test-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			const start = (overrides: Record<string, unknown>) => ({
+				repo: "/repos/grid",
+				workflowId: "wf-stage-test",
+				workflowType: "stage-test",
+				task: "checkout rejects an expired card",
+				ticket: "GRID-1234",
+				mode: "worktree",
+				stage: "grid-int",
+				...overrides,
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("start_workflow", start({}))], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[
+						fauxToolCall(
+							"start_workflow",
+							start({ workflowId: "wf-unknown-stage", stage: "nope" }),
+						),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"verify the grid stage test",
+				"req-stage",
+			);
+			const results = await waitForResults(host, "orchestrator", 2);
+			expect(results[0]).toContain("wf-stage-test");
+			expect(starts[0]).toMatchObject({
+				repo: "/repos/grid",
+				workflowId: "wf-stage-test",
+				workflowType: "stage-test",
+				mode: "worktree",
+				ticket: "GRID-1234",
+				stage: "grid-int",
+			});
+			// The refused ident reports the server's own code, and no workflow was
+			// started for it.
+			expect(results[1]).toContain("is not in the configured allow-list");
+			expect(results[1]).toContain("[stage-not-configured]");
 			expect(starts).toHaveLength(1);
 		} finally {
 			await host.shutdown();

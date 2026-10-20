@@ -54,6 +54,8 @@ export interface WorkflowLaunchInput {
 	/** Environment setup only: the configured app whose environment definitions
 	 * the workflow drafts. */
 	app?: string;
+	/** Stage test only: the allow-listed hosted stage the workflow runs on. */
+	stage?: string;
 }
 
 export type LaunchOutcome =
@@ -73,12 +75,15 @@ const STARTED = /^Workflow started:\s*(\S+)/;
 
 /** Workflow types a launch context may offer. A repository target (configured
  * project or path) may offer the whole registry; an independent Wiki launch
- * offers repository-independent research only. `wiki` itself is repository-
- * backed (it edits a checkout), so it is not an independent target. */
+ * offers the repository-independent types only: research, and a stage test,
+ * which runs against a hosted stage rather than a checkout. `wiki` itself is
+ * repository-backed (it edits a checkout), so it is not an independent target. */
 export function workflowTypesForContext(
 	context: WorkflowLaunchContext,
 ): string[] | undefined {
-	return context.kind === "independent" ? ["research"] : undefined;
+	return context.kind === "independent"
+		? ["research", "stage-test"]
+		: undefined;
 }
 
 /**
@@ -124,6 +129,7 @@ export async function launchWorkflow(
 			...(input.sourceBranch ? { sourceBranch: input.sourceBranch } : {}),
 			...(input.targetBranch ? { targetBranch: input.targetBranch } : {}),
 			...(input.app ? { app: input.app } : {}),
+			...(input.stage ? { stage: input.stage } : {}),
 		});
 		const workflowId = STARTED.exec(message)?.[1];
 		if (workflowId) return { kind: "accepted", workflowId, message };
