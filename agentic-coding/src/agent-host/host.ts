@@ -484,6 +484,14 @@ export class DurableHost {
 		string,
 		{ token: number; running: boolean }
 	>();
+	/** The highest checkpoint ordinal each run id ever reached. A run id can be
+	 * ensured again after a stop or a retried launch, and its ordinal must never
+	 * restart: `checkpoint:<run>:<ordinal>` is the record's idempotency key, so a
+	 * repeated ordinal would be dropped as a duplicate of a decision that has
+	 * nothing to do with the new one. The table is bounded — a host process serves
+	 * a repository for weeks — and evicting the oldest entry only means a run that
+	 * has not been seen for that many other runs restarts its numbering. */
+	private readonly checkpointOrdinals = new Map<string, number>();
 	/** Compaction tasks a checkpoint's `compact` decision admitted, per
 	 * conversation: a task's attribution belongs to the conversation whose
 	 * summarizer ran, so one conversation's teardown never rewrites another's. */
@@ -1539,11 +1547,20 @@ export class DurableHost {
 	): void {
 		const previous = this.checkpoints.get(runId);
 		this.checkpoints.delete(runId);
+		const config = this.checkpointConfig();
+		if (!config.enabled || this.options.orchestrator === true) {
+			// Dropping the state is enough to retire a running evaluation (it compares
+			// state identity), and the feature is off: nothing else is kept for this
+			// run, so a disabled host retains no checkpoint entry at all.
+			this.checkpointEvals.delete(runId);
+			return;
+		}
+		if (!env.HERDR_RUN_ID) {
+			this.checkpointEvals.delete(runId);
+			return;
+		}
 		// Whatever was evaluating this run's previous checkpoint is now stale.
 		this.invalidateCheckpointEval(runId);
-		const config = this.checkpointConfig();
-		if (!config.enabled || this.options.orchestrator === true) return;
-		if (!env.HERDR_RUN_ID) return;
 		const checkpointClass = checkpointClassOf(env.HERDR_CHECKPOINT_CLASS);
 		this.checkpoints.set(runId, {
 			// A re-installed run is the same run: its ordinal continues where it was,
@@ -1554,6 +1571,9 @@ export class DurableHost {
 				previous?.accumulator ??
 				new ProgressCheckpoint({
 					checkpointClass,
+					// A stopped run's ordinal is remembered, so a re-issued run id continues
+					// the numbering instead of re-issuing a record id it already used.
+					ordinal: this.checkpointOrdinals.get(runId) ?? 0,
 					thresholds: checkpointThresholdsForClass(config, checkpointClass),
 					contextTokens: config.contextTokens,
 					readOnly,
@@ -1703,6 +1723,30 @@ export class DurableHost {
 		this.checkpointEvals.set(runId, { token: token + 1, running: false });
 	}
 
+	/** How many run ids the ordinal high-water table remembers. One entry is a run
+	 * id and a number, and the table only has to cover runs a host may re-issue. */
+	private static readonly CHECKPOINT_ORDINAL_MEMORY = 256;
+
+	private rememberCheckpointOrdinal(
+		runId: string,
+		state: RunCheckpointState,
+	): void {
+		const ordinal = Math.max(
+			this.checkpointOrdinals.get(runId) ?? 0,
+			state.accumulator.checkpoints,
+		);
+		if (ordinal <= 0) return;
+		this.checkpointOrdinals.delete(runId);
+		this.checkpointOrdinals.set(runId, ordinal);
+		while (
+			this.checkpointOrdinals.size > DurableHost.CHECKPOINT_ORDINAL_MEMORY
+		) {
+			const oldest = this.checkpointOrdinals.keys().next().value;
+			if (oldest === undefined) break;
+			this.checkpointOrdinals.delete(oldest);
+		}
+	}
+
 	/** The bounded worktree sample of one checkpoint. A sampler that fails is a
 	 * missing measurement: the checkpoint still evaluates on what it has, and the
 	 * failure is stated as its bounded error class rather than delaying the run. */
@@ -1745,8 +1789,12 @@ export class DurableHost {
 	): Promise<number | undefined> {
 		const context = this.runContexts.get(runId);
 		if (!context || !this.runs.has(runId) || stopped()) return undefined;
+		const preview = state.accumulator.digestPreview();
 		const digest = state.accumulator.takeDigest(trigger, {
-			compactionAdmissible: this.checkpointCompactionAdmissible(runId, state),
+			compactionAdmissible: this.checkpointCompactionAdmissible(
+				runId,
+				preview.contextTokens,
+			),
 		});
 		const decision = decideCheckpoint(digest, { steer: state.steer });
 		// The digest advanced the schedule; a run that was stopped or re-installed
@@ -1760,6 +1808,10 @@ export class DurableHost {
 		state.accumulator.noteDecision(decision, digest, {
 			applied: applied.applied,
 		});
+		// Filing and recording are the two subprocess waits of this evaluation, and
+		// either may outlive the run: a superseded attempt must then neither file a
+		// question nor write a record for a run that is no longer its own.
+		if (decision.action === "escalate" && stopped()) return digest.ordinal;
 		const filed =
 			decision.action === "escalate"
 				? await this.fileCheckpointEscalation(
@@ -1769,6 +1821,13 @@ export class DurableHost {
 						state,
 					)
 				: undefined;
+		if (stopped()) {
+			// The decision envelope belongs to whoever owns the run now, but a question
+			// the developer can see is owed its fate: exactly one escalation envelope
+			// per filed question, and never a park for a run that is no longer ours.
+			if (filed) this.emitFiledFate(context, digest, decision.rule, filed);
+			return digest.ordinal;
+		}
 		const recording = await this.recordCheckpoint(
 			context,
 			state,
@@ -1779,7 +1838,10 @@ export class DurableHost {
 		);
 		// The record command has no timeout, so this is the longest wait of the
 		// whole evaluation.
-		if (stopped()) return digest.ordinal;
+		if (stopped()) {
+			if (filed) this.emitFiledFate(context, digest, decision.rule, filed);
+			return digest.ordinal;
+		}
 		this.emitCheckpoint(context, digest, decision, applied, recording, {
 			startedAt,
 			...(sampleErrorClass === undefined ? {} : { sampleErrorClass }),
@@ -1809,10 +1871,13 @@ export class DurableHost {
 	}
 
 	/** Whether the cost ceiling's floor and loop guard admit a compaction now, so
-	 * the decider can only pick `compact` when the summarizer would run. */
+	 * the decider can only pick `compact` when the summarizer would run. The
+	 * context is the digest's own — the one number the decision and the admission
+	 * both use — so a plan can never say `compact` about a context the admission
+	 * then evaluates differently. */
 	private checkpointCompactionAdmissible(
 		runId: string,
-		state: RunCheckpointState,
+		contextTokens: number,
 	): boolean {
 		const record = this.runs.get(runId);
 		if (!record) return false;
@@ -1832,7 +1897,7 @@ export class DurableHost {
 			return false;
 		const decision = evaluateCompactionCeiling({
 			ceiling,
-			contextTokens: state.accumulator.digestPreview().contextTokens,
+			contextTokens,
 			state: {
 				...ceilingState,
 				...(ceilingState.baselineTokens !== undefined
@@ -1951,11 +2016,22 @@ export class DurableHost {
 	): Promise<CheckpointRecording> {
 		if (digest.ordinal > CHECKPOINT_RECORD_LIMIT)
 			return { recorded: false, failed: false };
-		const outcome = escalation?.attention ?? applied.attention;
+		// One attention line, saying what happened: the decider's own note (steering
+		// was off, the context was over its limit and the compaction refused) and
+		// the applied/filed outcome are both facts a reader needs, and the record
+		// boundary accepts up to three closed reasons after the rule id.
+		const reasons = [
+			...new Set(
+				[decision.attention, escalation?.attention ?? applied.attention].filter(
+					(reason): reason is string =>
+						reason !== undefined && reason.length > 0,
+				),
+			),
+		];
 		const attention =
-			outcome === undefined
+			reasons.length === 0
 				? `rule ${decision.rule}`
-				: `rule ${decision.rule}; ${outcome}`;
+				: `rule ${decision.rule}; ${reasons.join("; ")}`;
 		const record: ClassifierDecisionInput = {
 			integration: CHECKPOINT_INTEGRATION,
 			phase: state.stepId,
@@ -2174,7 +2250,12 @@ export class DurableHost {
 		// only now, the run stops and the developer is left with the question — and
 		// only while this evaluation still owns the run, because a run that was
 		// stopped or re-issued meanwhile is not this question's to stop.
-		if (stopped()) return;
+		if (stopped()) {
+			// The run is no longer this evaluation's to stop, but the question exists:
+			// its fate is still published (once), just without the park.
+			this.emitCheckpointEscalation(context, digest, rule, summary);
+			return;
+		}
 		const park = summary.outcome === "pending-parked";
 		this.emitCheckpointEscalation(context, digest, rule, summary);
 		await this.parkForCheckpoint(
@@ -2182,6 +2263,31 @@ export class DurableHost {
 			park
 				? `progress checkpoint: the developer question ${summary.questionId} is still unanswered; the run is stopped and is re-issued when it is answered`
 				: `progress checkpoint: developer question ${summary.questionId} was cancelled, so the run is stopped`,
+		);
+	}
+
+	/** Publish a filed question's fate exactly once, for an evaluation that was
+	 * superseded after the question was filed: the dataset must never hold a
+	 * developer question whose outcome is missing. A filing failure has no
+	 * question to report, and is stated as the escalation's error instead. */
+	private emitFiledFate(
+		context: DurableRunContext,
+		digest: CheckpointDigest,
+		rule: CheckpointRuleId,
+		filed: CheckpointEscalationFiling,
+	): void {
+		const { summary, reply } = filed;
+		this.emitCheckpointEscalation(
+			context,
+			digest,
+			rule,
+			summary.outcome === "filing-failed"
+				? {
+						...summary,
+						errorClass: "question",
+						...(reply.reason === undefined ? {} : { reason: reply.reason }),
+					}
+				: summary,
 		);
 	}
 
@@ -2271,14 +2377,20 @@ export class DurableHost {
 	async applyCheckpointForTest(
 		runId: string,
 		decision: CheckpointDecision,
-		options: { readonly runGone?: boolean } = {},
+		options: {
+			readonly runGone?: boolean;
+			/** The digest fields the scenario is about, when the accumulator's own
+			 * preview cannot state them (its context is the last measured turn, and
+			 * only a measured context can be admissible). */
+			readonly digest?: Partial<CheckpointDigest>;
+		} = {},
 	): Promise<CheckpointApplied> {
 		const state = this.checkpoints.get(runId);
 		if (!state) return { applied: false };
 		if (options.runGone) this.runs.delete(runId);
 		return await this.applyCheckpointDecision(
 			runId,
-			state.accumulator.digestPreview(),
+			{ ...state.accumulator.digestPreview(), ...options.digest },
 			decision,
 		);
 	}
@@ -2288,6 +2400,17 @@ export class DurableHost {
 	 * (`steer`, `compact`) are asserted where they are emitted. The digest is the
 	 * accumulator's own preview; nothing is recorded and nothing is stopped. Not
 	 * part of the control protocol. */
+	/** The checkpoint ordinal this run id owns: the live accumulator's when it is
+	 * installed, the remembered high-water mark when the run was stopped. A
+	 * re-issued run id must answer a number that is not `0` again. */
+	checkpointOrdinalForTest(runId: string): number {
+		return (
+			this.checkpoints.get(runId)?.accumulator.checkpoints ??
+			this.checkpointOrdinals.get(runId) ??
+			0
+		);
+	}
+
 	emitCheckpointForTest(
 		runId: string,
 		applied: CheckpointApplied,
@@ -2890,9 +3013,16 @@ export class DurableHost {
 		this.abortedRuns.delete(runId);
 		this.reconciledRuns.delete(runId);
 		// The checkpoint belongs to this run alone, so it is dropped with it rather
-		// than with the conversation the run happened to hold.
+		// than with the conversation the run happened to hold. Its ordinal survives
+		// as a high-water mark: a re-issued run id must not re-issue a question id
+		// that already names a stored decision.
+		const checkpoint = this.checkpoints.get(runId);
+		if (checkpoint) this.rememberCheckpointOrdinal(runId, checkpoint);
 		this.checkpoints.delete(runId);
 		this.invalidateCheckpointEval(runId);
+		// A missing entry already reads as a mismatched token, so the run's slot goes
+		// with the run instead of being retained for the life of the process.
+		this.checkpointEvals.delete(runId);
 		// The dead-surface monitor and probe belong to the run serving the
 		// conversation, not to the conversation itself: a successor ensured while this
 		// teardown is in flight installed its own, and dropping them here would turn

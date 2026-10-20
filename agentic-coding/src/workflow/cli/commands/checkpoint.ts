@@ -18,6 +18,14 @@ import { resolveHandoffIdentity } from "../identity.ts";
 
 type App = WorkflowApplication;
 
+/** The choice a `--record` payload claims, already validated as one of the five
+ * actions by `checkpointRecordProblems`. */
+function answerChoice(answer: unknown): string | undefined {
+	if (typeof answer !== "object" || answer === null) return undefined;
+	const choice = (answer as Record<string, unknown>).choice;
+	return typeof choice === "string" ? choice : undefined;
+}
+
 /** What one `checkpoint --record` call answers with: the record's fate, never a
  * state edit the caller may apply. A refused or dropped record is reported as
  * such and the run keeps working — the checkpoint is fail-open by contract. */
@@ -28,6 +36,9 @@ export interface CheckpointRecordView {
 	readonly role: string;
 	readonly recorded: boolean;
 	readonly records?: number;
+	/** Why the record was not stored: the run's record cap, a `duplicate` — the
+	 * history already holds another decision under this id — or the reducer's own
+	 * `not-stored` / refusal message. */
 	readonly reason?: string;
 }
 
@@ -91,7 +102,16 @@ export function runCheckpoint(
 			? application.runSync(workflowEngine.dispatchEffect(target, command))
 			: workflowEngine.dispatch(target, command);
 		const records = runCheckpointRecords(committed.snapshot, identity.runId);
-		const recorded = records.some((entry) => entry.questionId === questionId);
+		// The history holds a record under this id, but the answer says *this*
+		// decision was stored: a stored record that names the same id with another
+		// digest or answer is a different decision (a relaunched run re-issuing an
+		// ordinal), and reporting it as this call's own would let a caller believe a
+		// decision the history never took.
+		const stored = records.find((entry) => entry.questionId === questionId);
+		const recorded =
+			stored !== undefined &&
+			stored.input === record.input &&
+			stored.answer.choice === answerChoice(record.answer);
 		console.log(
 			JSON.stringify({
 				...base,
@@ -101,9 +121,11 @@ export function runCheckpoint(
 					? {}
 					: {
 							reason:
-								records.length >= CHECKPOINT_RECORD_LIMIT
-									? "record-cap"
-									: "not-stored",
+								stored !== undefined
+									? "duplicate"
+									: records.length >= CHECKPOINT_RECORD_LIMIT
+										? "record-cap"
+										: "not-stored",
 						}),
 			} satisfies CheckpointRecordView),
 		);

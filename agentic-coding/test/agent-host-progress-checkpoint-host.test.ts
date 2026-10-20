@@ -59,6 +59,9 @@ function writeRunEnv(dir: string, vars: Record<string, string>): string {
 function installShim(options: {
 	question?: Record<string, unknown>;
 	fail?: "checkpoint" | "question" | "handoff";
+	/** Keep the question command in flight this long, so a test can act while the
+	 * evaluation is waiting for it. */
+	questionDelayMs?: number;
 }): { log: string; restore: () => void } {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-coding-shim-"));
 	const log = path.join(dir, "calls.log");
@@ -71,7 +74,15 @@ function installShim(options: {
 		`printf '%s\\n' "$*" >> "${log}"`,
 		'case "$2" in',
 		`  checkpoint) ${options.fail === "checkpoint" ? "exit 1" : `printf '%s\\n' '${record}'`} ;;`,
-		`  question) ${options.fail === "question" ? "exit 1" : `printf '%s\\n' '${questionPayload}'`} ;;`,
+		`  question) ${
+			options.fail === "question"
+				? "exit 1"
+				: `${
+						options.questionDelayMs === undefined
+							? ""
+							: `sleep ${options.questionDelayMs / 1000}; `
+					}printf '%s\\n' '${questionPayload}'`
+		} ;;`,
 		`  handoff) ${options.fail === "handoff" ? "exit 1" : "exit 0"} ;;`,
 		"esac",
 		"exit 0",
@@ -176,7 +187,25 @@ async function runCheckpointRun(options: {
 	/** Submit a message long enough to put the measured context over both. */
 	longPrompt?: boolean;
 	/** Run something against the live host just before it is shut down. */
-	beforeShutdown?: (host: DurableHost) => Promise<void>;
+	beforeShutdown?: (
+		host: DurableHost,
+		run: {
+			readonly dir: string;
+			readonly runEnvPath: string;
+			readonly model: string;
+			readonly telemetryPath: string;
+		},
+	) => Promise<void>;
+	/** Run something the moment a checkpoint question has been filed — the
+	 * shim's own command is still in flight — e.g. to stop the run underneath an
+	 * evaluation that is waiting for it. */
+	duringQuestion?: (host: DurableHost) => Promise<void>;
+	/** Run something while the run is still working, as soon as it has exported
+	 * `whenCheckpoints` (default 1) checkpoint envelopes. */
+	duringRun?: {
+		readonly whenCheckpoints?: number;
+		readonly run: (host: DurableHost) => Promise<void>;
+	};
 	/** Leave `HERDR_RUN_ID` out of the environment, as an orchestrator session has
 	 * no run id to be supervised under. */
 	noRunId?: boolean;
@@ -256,6 +285,30 @@ async function runCheckpointRun(options: {
 			fauxAssistantMessage([fauxText("noted")]),
 		),
 	]);
+	// Started before the turn, so the hook lands inside the filing's own wait
+	// instead of after it: the question command answers only once the shim's
+	// delay has passed.
+	const runWatch = options.duringRun
+		? (async () => {
+				const wanted = options.duringRun?.whenCheckpoints ?? 1;
+				if (
+					!(await until(() => checkpointLines(telemetryPath).length >= wanted))
+				)
+					return;
+				await options.duringRun?.run(host);
+			})()
+		: undefined;
+	const questionWatch = options.duringQuestion
+		? (async () => {
+				if (
+					!(await until(() =>
+						shimCalls(options.shimLog).includes("workflow question"),
+					))
+				)
+					return;
+				await options.duringQuestion?.(host);
+			})()
+		: undefined;
 	await host.submit(
 		"run-checkpoint",
 		options.longPrompt ? contextText(20_000) : "work",
@@ -294,7 +347,14 @@ async function runCheckpointRun(options: {
 		return calls.includes("workflow handoff");
 	});
 	const calls = shimCalls(options.shimLog);
-	await options.beforeShutdown?.(host);
+	await runWatch;
+	await questionWatch;
+	await options.beforeShutdown?.(host, {
+		dir,
+		runEnvPath,
+		telemetryPath,
+		model: `${faux.getModel().provider}/${faux.getModel().id}`,
+	});
 	await host.shutdown();
 	return { telemetryPath, calls };
 }
@@ -382,6 +442,30 @@ describe("a run-progress checkpoint in the durable host", () => {
 		expect(first["herdr.checkpoint.rule"]).toBe("repeats");
 		expect(run.calls).not.toContain("workflow question");
 		expect(run.calls).not.toContain("workflow handoff");
+	});
+
+	test("the recorded attention carries the decision's own note, not just its outcome", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		// The decision explains itself here — steering is off and the context is
+		// over its limit — and the record is where a reader looks for it: an
+		// attention line that only stated the outcome would lose the reason the
+		// checkpoint decided `continue` under a stall rule.
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_REPEAT,
+			calls: 12,
+			repeat: true,
+			steer: false,
+			longPrompt: true,
+			contextTokens: 16_500,
+		});
+		const [record] = recordedDecisions(shim.log);
+		const result = record?.result as { attention?: string } | undefined;
+		expect(result?.attention).toBe(
+			"rule repeats; steer disabled; context above limit, compaction not admissible",
+		);
+		expect(run.calls).not.toContain("workflow question");
 	});
 
 	test("the recorded decision is the digest and the five actions, and nothing else", async () => {
@@ -778,6 +862,177 @@ describe("a run-progress checkpoint in the durable host", () => {
 		expect(failed["herdr.checkpoint.error_class"]).toBe("compact");
 		expect(failed["herdr.checkpoint.decision"]).toBe("steer");
 		expect(run.calls).not.toContain("workflow handoff");
+	});
+
+	test("a compact decision with an admissible context runs the checkpoint's summarizer", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		// The run's measured context is small, so the digests it takes never state
+		// an admissible one: the decision the context rule would make for a large
+		// context is injected instead, so the *applied* branch is reached
+		// deterministically rather than waited for.
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: { softTurns: 3, hardTurns: 1_000 },
+			calls: 12,
+			mutating: true,
+			contextTokens: 16_500,
+			compaction: { ceilingTokens: 16_384 },
+			// Applied while turns remain: the summarizer's own counters reach the
+			// run's settled envelope only if it started before the run did.
+			duringRun: {
+				whenCheckpoints: 1,
+				run: async (host) => {
+					expect(
+						await host.applyCheckpointForTest(
+							"run-checkpoint",
+							{ action: "compact", rule: "context" },
+							{
+								digest: { contextTokens: 20_000, compactionAdmissible: true },
+							},
+						),
+					).toEqual({ applied: true });
+				},
+			},
+		});
+		// The summarizer the ceiling owns ran under the checkpoint's own kind, and
+		// the run's counters distinguish the two supervisors.
+		const started = checkpointLines(
+			run.telemetryPath,
+			"runtime.compaction_start",
+		).filter((line) => line.kind === "auto-checkpoint");
+		expect(started).toHaveLength(1);
+		await until(
+			() =>
+				telemetryLines(run.telemetryPath).filter(
+					(line) => line.event === "runtime.settled",
+				).length > 0,
+		);
+		const settled = telemetryLines(run.telemetryPath).find(
+			(line) => line.event === "runtime.settled",
+		);
+		expect(settled?.compactionsAutoCheckpoint).toBe(1);
+		expect(settled?.compactionsAutoCeiling).toBe(0);
+	});
+
+	test("a compaction that cannot run claims nothing and reports its class", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: { softTurns: 3, hardTurns: 1_000 },
+			calls: 12,
+			mutating: true,
+			compaction: { ceilingTokens: 16_384 },
+			beforeShutdown: async (host) => {
+				// The ceiling's own resolution throws, as a broken configuration read
+				// would: the action failed, so the decision reports it and the run keeps
+				// going.
+				const seam = host as unknown as { resolveRunCeiling: () => never };
+				const resolve = seam.resolveRunCeiling;
+				seam.resolveRunCeiling = () => {
+					throw new Error("compaction ceiling could not be resolved");
+				};
+				try {
+					expect(
+						await host.applyCheckpointForTest(
+							"run-checkpoint",
+							{ action: "compact", rule: "context" },
+							{ digest: { contextTokens: 20_000, compactionAdmissible: true } },
+						),
+					).toEqual({
+						applied: false,
+						attention: "compaction failed",
+						errorClass: "compact",
+					});
+				} finally {
+					seam.resolveRunCeiling = resolve;
+				}
+			},
+		});
+		expect(run.calls).not.toContain("workflow handoff");
+		expect(run.calls).not.toContain("workflow question");
+	});
+
+	test("a re-issued run id continues its checkpoint numbering", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		// The ordinal is the record's idempotency key (`checkpoint:<run>:<ordinal>`),
+		// so it must survive the teardown that ends the run: a run id ensured again —
+		// a retried launch, a resumed assignment — may never re-issue an ordinal that
+		// already names a stored decision.
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: { softTurns: 3, hardTurns: 1_000 },
+			calls: 12,
+			mutating: true,
+			beforeShutdown: async (host, wiring) => {
+				// The evaluation is detached from the turn stream, so a checkpoint the
+				// run took may still be landing when the scripted turns are done.
+				expect(
+					await until(() => checkpointLines(wiring.telemetryPath).length > 0),
+				).toBe(true);
+				const taken = host.checkpointOrdinalForTest("run-checkpoint");
+				expect(taken).toBeGreaterThan(0);
+				// A checkpoint the run takes after this read still only moves the
+				// number up, so the exported envelopes are bounded by it.
+				for (const line of checkpointLines(wiring.telemetryPath))
+					expect(Number(line["herdr.checkpoint.ordinal"])).toBeLessThanOrEqual(
+						taken,
+					);
+				await host.stopRun("run-checkpoint");
+				// Stopped: the live accumulator is gone, and the remembered high-water
+				// mark answers the same numbering instead of 0.
+				const remembered = host.checkpointOrdinalForTest("run-checkpoint");
+				expect(remembered).toBeGreaterThanOrEqual(taken);
+				await host.ensureRun({
+					runId: "run-checkpoint",
+					name: "worker-checkpoint",
+					cwd: wiring.dir,
+					runEnvPath: wiring.runEnvPath,
+					toolPolicy: "default",
+					model: wiring.model,
+				});
+				// Re-installed: the new accumulator continues exactly where the stopped
+				// one ended, so no record id (`checkpoint:<run>:<ordinal>`) is re-used.
+				expect(host.checkpointOrdinalForTest("run-checkpoint")).toBe(
+					remembered,
+				);
+			},
+		});
+		expect(run.calls).not.toContain("workflow handoff");
+	});
+
+	test("a question filed by an evaluation the run outlived still reports its fate", async () => {
+		// The question command stays in flight while the run is stopped underneath
+		// it. The evaluation is then no longer the run's, so it must neither park the
+		// run nor leave a developer question without an outcome: exactly one
+		// escalation envelope, stating what became of the question it filed.
+		const shim = installShim({
+			question: { id: "q-checkpoint-9", status: "answered" },
+			questionDelayMs: 600,
+		});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_HARD_SOON,
+			calls: 16,
+			duringQuestion: async (host) => {
+				await host.stopRun("run-checkpoint");
+			},
+		});
+		const escalation = checkpointLines(
+			run.telemetryPath,
+			"runtime.checkpoint_escalation",
+		);
+		expect(escalation).toHaveLength(1);
+		expect(escalation[0]?.["herdr.checkpoint.outcome"]).toBe("answered");
+		expect(escalation[0]?.["herdr.checkpoint.question_id"]).toBe(
+			"q-checkpoint-9",
+		);
+		// No park: the run that is gone is not handed off `blocked` by an evaluation
+		// it no longer owns.
+		expect(run.calls).not.toContain("workflow handoff --outcome blocked");
 	});
 
 	test("an undeclared class runs on the worker row", async () => {
