@@ -610,7 +610,10 @@ a production-like name is refused by the catalog, and only the operator's own
   never smuggle a credential into a file that outlives the call. An `evidence`
   id that the manifest does not hold is refused (`evidence-missing`, 404) with
   the journal untouched, and the file is capped at the evidence per-file limit
-  (`stage-journal-full`, 409) rather than grown or silently truncated.
+  (`stage-journal-full`, 409) rather than grown or silently truncated. Each line
+  names its shape (`"v": 1`); a journal a newer build wrote is read-only to this
+  one — the read, the step and the panel say so with the version — because the
+  two operations that rewrite the file would drop every field they do not know.
   `stage_journal({ session?, app?, limit? })` reads the latest entries back,
   bounded, which is what a compacted run reads instead of its own history. A step
   is not an action *of the stage*: `stage_journal` charges no stage action, while
@@ -620,8 +623,9 @@ a production-like name is refused by the catalog, and only the operator's own
   and every step written while it runs carries that segment and its
   `offsetMs` since the recording started. A stop with `keep: true` stores the
   video with the same `segment` and back-fills the video's evidence id onto the
-  segment's steps; a discarded recording leaves them unsheared and spends no
-  budget. Kept video time is bounded per workflow and stage by the stage's
+  segment's steps, and a discarded recording takes the segment and offset back off
+  them and re-renders the page: a step must never name a video nobody kept. The
+  steps keep their sequence numbers, and a discard spends no budget. Kept video time is bounded per workflow and stage by the stage's
   `limits.maxRecordingMinutes`: a start is bounded by what is left of it and is
   refused with `stage-recording-limit` once the budget is spent — the refusal
   suggests `stage_step` without a recording, because a flow is documentation
@@ -629,7 +633,9 @@ a production-like name is refused by the catalog, and only the operator's own
   cookies and `localStorage` it always did, and now also the live page's own
   origin's `sessionStorage` (read from the page before its context closes,
   installed as an origin-scoped init script), so an SPA that keeps its token
-  there stays logged in.
+  there stays logged in. A stop carries that state back the same way — the
+  recording's page is the one that owns the tab by then — so the flow continues
+  in the context it started in.
 - **`stage_wait` waits inside the server, so a wait costs one tool call.**
   `until` takes exactly one of `text`, `selector`, `url` (matched as a substring,
   or as a glob when it holds `*`) or `mail` (`{ to?, subject? }`, at least one).
@@ -642,17 +648,20 @@ a production-like name is refused by the catalog, and only the operator's own
   only on the session of a stage application of `kind: "mail-catcher"` declaring
   `api: "mailpit"` (`stage-mail-unsupported` otherwise) and is checked through
   that application's own `GET /api/v1/search` with a `to:`/`subject:` query; a
-  catcher that is not up yet is a condition that does not hold, not a failure. The
-  wait is one stage action for the rate limit.
+  catcher that is not up yet is a condition that does not hold, not a failure. Each
+  poll step is itself bounded, and the session is re-checked between polls: a page
+  that never answers, or a session closed underneath the wait, ends it instead of
+  holding past its own bound. The wait is one stage action for the rate limit.
 - **A screenshot can be stored without being seen.** `browser_screenshot({
   evidence: true, view: false, caption })` stores the picture and answers its
   evidence id, caption and a notice instead of the image, so documenting a step
   costs no context. `view: false` without `evidence: true` is refused
   (`view-requires-evidence`): a screenshot that is neither shown nor stored is a
   call that did nothing. On a stage session, stored screenshots count against
-  `limits.maxScreenshots` per workflow and are charged *before* the capture, so a
-  refused one (`stage-screenshot-limit`) leaves no bytes and no manifest entry
-  behind; merely viewing a screenshot spends nothing.
+  `limits.maxScreenshots` per workflow: the bound is checked before the capture,
+  so a refused one (`stage-screenshot-limit`) takes no picture at all, and it is
+  charged only once the entry exists, so a capture that fails spends nothing.
+  Merely viewing a screenshot spends nothing either.
 - **The flow page is the run's own report, and it needs nothing to open.**
   `stage-flow.html` is written beside the evidence from the journal and the
   manifest alone — segments in journal order, each with its kept video by
