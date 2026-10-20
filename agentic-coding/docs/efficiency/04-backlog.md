@@ -587,6 +587,13 @@ the cost of the turns that follow them. Baseline: 86 notes, 64 poll-only turns
 
 ## 19. Turn and context ceiling with a convergence checkpoint
 
+> **Status: implemented, then reverted (2026-10-20).** The run-progress checkpoint
+> (`e6a2e01`, reverted) interrupted a healthy stage-testing run that was waiting for a
+> login hand-off and was not going in circles; its rules cannot yet tell a slow
+> wait from a loop. The change is back in `openspec/changes/2026-10-19-run-progress-checkpoint`
+> as an unshipped proposal. Do not re-ship it before the rules can tell waiting
+> on a person or a hand-off from a loop.
+
 **Problem (VERIFIED).** One worker run spent **1,072 turns, 66.3814 units (17 %
 of the corpus), 911,257 tokens of context** and handed off `blocked`; its second
 half cost 43.217 against 23.165 for the first. Four more long runs show the same
