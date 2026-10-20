@@ -274,46 +274,70 @@ function collapsedStrip(frame: string): string {
 		.join("\n");
 }
 
-/** The status mark of the strip row at `position`, as the renderer painted it:
- * the char frame names the row (`<glyph> <position>` in the strip's columns) and
- * the captured spans of the same line carry the tone colour and the weight. */
+/** One stacked row of the collapsed strip, as the renderer painted it: the
+ * index line names the row, then the glyph and phase signal follow on the next
+ * two lines. Captured spans carry each line's tone colour and weight. */
 function collapsedMark(
 	t: Test,
 	position: number,
-): { bold: boolean; fg: string } {
+): {
+	index: string;
+	indexBold: boolean;
+	glyph: string;
+	bold: boolean;
+	fg: string;
+	signal: string;
+	signalFg: string;
+} {
 	const rows = t.captureCharFrame().split("\n");
-	const row = rows.findIndex((line) =>
-		new RegExp(`^..\\S ${position}$`).test(
-			line.slice(0, SIDEBAR_COLLAPSED_WIDTH).trimEnd(),
-		),
+	const row = rows.findIndex(
+		(line) =>
+			line.slice(0, SIDEBAR_COLLAPSED_WIDTH).slice(2).trimEnd() ===
+			String(position),
 	);
 	if (row < 0) throw new Error(`no collapsed row at position ${position}`);
-	const cell = rows[row].slice(0, SIDEBAR_COLLAPSED_WIDTH).trim();
-	const glyph = cell.slice(0, cell.indexOf(" "));
-	// A bold glyph is its own span; a plain one shares the row's span with its
-	// position digits. Either way the glyph's colour and weight are on the span
-	// that holds it.
-	const span = t
-		.captureSpans()
-		.lines[row]?.spans.find((entry) => entry.text.includes(glyph));
-	if (!span) throw new Error(`no span holds ${glyph} on line ${row}`);
+	const content = (offset: number): string =>
+		rows[row + offset]?.slice(0, SIDEBAR_COLLAPSED_WIDTH).slice(2).trim() ?? "";
+	const index = content(0);
+	const glyph = content(1);
+	const signal = content(2);
+	const spans = t.captureSpans().lines;
+	const indexSpan = spans[row]?.spans.find(
+		(entry) => entry.text.trim() === index,
+	);
+	const glyphSpan = spans[row + 1]?.spans.find(
+		(entry) => entry.text.trim() === glyph,
+	);
+	const signalSpan = spans[row + 2]?.spans.find(
+		(entry) => entry.text.trim() === signal,
+	);
+	if (!indexSpan || !glyphSpan || !signalSpan) {
+		throw new Error(`missing spans for the collapsed row at ${position}`);
+	}
 	return {
-		bold: (span.attributes & TextAttributes.BOLD) !== 0,
-		fg: span.fg.buffer.slice(0, 3).join(","),
+		index,
+		indexBold: (indexSpan.attributes & TextAttributes.BOLD) !== 0,
+		glyph,
+		bold: (glyphSpan.attributes & TextAttributes.BOLD) !== 0,
+		fg: glyphSpan.fg.buffer.slice(0, 3).join(","),
+		signal,
+		signalFg: signalSpan.fg.buffer.slice(0, 3).join(","),
 	};
 }
 
-/** One expected mark: the row's glyph and position in the strip, then the tone
+/** One expected mark: the row's index and glyph in the strip, then the tone
  * colour and whether the glyph is painted bold. */
 function expectMark(
 	t: Test,
 	position: number,
-	cell: string,
+	glyph: string,
 	color: string,
 	bold: boolean,
 ): void {
 	const mark = collapsedMark(t, position);
-	expect(collapsedStrip(t.captureCharFrame())).toContain(cell);
+	expect(mark.index).toBe(String(position));
+	expect(mark.indexBold).toBe(true);
+	expect(mark.glyph).toBe(glyph);
 	expect(mark.fg).toBe(rgb(color).join(","));
 	expect(mark.bold).toBe(bold);
 }
@@ -333,7 +357,7 @@ test("the sidebar collapses to indices while unfocused and expands on focus", as
 		// The default filter hides completed workflows.
 		expect(t.captureCharFrame()).not.toContain("wf-done");
 
-		// Unfocus: the panel slides back to the glyph-and-index strip.
+		// Unfocus: the panel slides back to the three-line strip.
 		await unfocusSidebar(t);
 		expect(t.captureCharFrame()).not.toContain("wf-active");
 	} finally {
@@ -352,15 +376,20 @@ test("the collapsed strip carries each workflow's status glyph", async () => {
 	]);
 	const t = await renderShell();
 	try {
-		// Unfocused, each row leads with the same status mark the expanded row
+		// Unfocused, each row carries the same status mark the expanded row
 		// shows, in its tone colour; a state waiting on a reader is bold as well, so
 		// `?`, `!` and the review `✓` stand out at the collapsed width while the
 		// running and paused rows stay plain.
-		expectMark(t, 1, "… 1", uiColors.info, false);
-		expectMark(t, 2, "✓ 2", uiColors.info, true);
-		expectMark(t, 3, "? 3", uiColors.warning, true);
-		expectMark(t, 4, "! 4", uiColors.error, true);
-		expectMark(t, 5, "◦ 5", uiColors.textMuted, false);
+		expectMark(t, 1, "…", uiColors.info, false);
+		expectMark(t, 2, "✓", uiColors.info, true);
+		expectMark(t, 3, "?", uiColors.warning, true);
+		expectMark(t, 4, "!", uiColors.error, true);
+		expectMark(t, 5, "◦", uiColors.textMuted, false);
+		// The third line only spends a review marker where a reader is needed;
+		// the other quiet phases settle on the muted dot.
+		expect(
+			[1, 2, 3, 4, 5].map((position) => collapsedMark(t, position).signal),
+		).toEqual(["·", "?", "·", "·", "·"]);
 		// The strip names nothing: no workflow id reaches it.
 		expect(collapsedStrip(t.captureCharFrame())).not.toContain("wf-");
 	} finally {
@@ -378,13 +407,10 @@ test("the collapsed strip keeps its shape with many workflows", async () => {
 	const t = await renderShell();
 	try {
 		// Long ids never reach the strip, so many rows and long names leave its shape
-		// alone: one mark plus its position per row, inside the collapsed width.
-		const rows = collapsedStrip(t.captureCharFrame())
-			.split("\n")
-			.map((line) => line.slice(2).trimEnd());
-		const marks = rows.filter((row) => /^\S \d+$/.test(row));
-		expect(marks[0]).toBe("… 1");
-		expect(marks[9]).toBe("… 10");
+		// alone: one three-line stack per row, inside the collapsed width.
+		const rows = compactWorkflowRows(t.captureCharFrame());
+		expect(rows[0]).toEqual(["1", "…", "·"]);
+		expect(rows[9]).toEqual(["10", "…", "·"]);
 		expect(collapsedStrip(t.captureCharFrame())).not.toContain(
 			"wf-a-very-long",
 		);
@@ -395,10 +421,10 @@ test("the collapsed strip keeps its shape with many workflows", async () => {
 });
 
 /** The compact strip's whole vocabulary: the toggle glyph, the pinned entry's
- * mark, its rule, and one status mark plus one detail (position or critical
- * finding count) per workflow. The collapsed sidebar names nothing, so a
- * *letter* in the strip is expanded content — an id, a phase, a panel title or a
- * filter label — that leaked into it. */
+ * mark, its rule, and three lines per workflow (position, status glyph and one
+ * phase character). The collapsed sidebar names nothing, so a *letter* in the
+ * strip is expanded content — an id, a phase, a panel title or a filter label —
+ * that leaked into it. */
 const COMPACT_STRIP = /^[^A-Za-z]*$/;
 
 /** The column the page body starts at, read from the Home destination list
@@ -430,13 +456,25 @@ function compactStrip(frame: string): string {
 		.join("\n");
 }
 
-/** The compact strip's non-empty rows, read past its selection marker and gap:
- * the pinned entry's mark, its rule, then one mark plus position (or critical
- * finding count) per workflow. */
+/** The compact strip's non-empty cells, read past its selection marker and gap:
+ * the pinned entry's mark, its rule, then three cells (position, status glyph,
+ * phase signal) per workflow. */
 function compactRows(frame: string): string[] {
 	return sidebarBand(frame)
 		.map((line) => line.slice(0, SIDEBAR_COLLAPSED_WIDTH).slice(2).trimEnd())
 		.filter((line) => line.length > 0);
+}
+
+/** The strip's workflow cells grouped by row, skipping the pinned entry's mark
+ * and rule when present. */
+function compactWorkflowRows(frame: string): string[][] {
+	const cells = compactRows(frame);
+	const start = cells[0] === "⌂" ? 2 : 0;
+	const rows: string[][] = [];
+	for (let index = start; index + 2 < cells.length; index += 3) {
+		rows.push(cells.slice(index, index + 3));
+	}
+	return rows;
 }
 
 test("the collapsed panel is the compact strip whatever the width is", () => {
@@ -457,13 +495,12 @@ test("the collapsed panel is the compact strip whatever the width is", () => {
 		sidebarPanelView({ expandedByState: true, animatedWidth: SIDEBAR_WIDTH }),
 	).toEqual({ width: SIDEBAR_WIDTH, expanded: true });
 	// The compact width is exactly what a compact row needs and no more: the
-	// selection marker, its gap column, the status glyph, the gap after it and the
-	// two digits a position or a critical-finding count takes.
-	expect(SIDEBAR_COLLAPSED_WIDTH).toBe(1 + 1 + 1 + 1 + 2);
+	// selection marker, its gap column and four cells for the bold position.
+	expect(SIDEBAR_COLLAPSED_WIDTH).toBe(1 + 1 + 4);
 });
 
-test("the collapsed strip paints only the status glyph and the position", async () => {
-	for (const count of [1, 3, 12]) {
+test("the collapsed strip paints only the position, status glyph and phase signal", async () => {
+	for (const count of [1, 3, 10]) {
 		stubGateway(
 			Array.from({ length: count }, (_, index) =>
 				overview(`wf-a-very-long-workflow-id-${index}`, "active"),
@@ -474,13 +511,10 @@ test("the collapsed strip paints only the status glyph and the position", async 
 			const frame = t.captureCharFrame();
 			// Long ids, and the phase meta under them, never reach the strip.
 			expect(compactStrip(frame)).toMatch(COMPACT_STRIP);
-			// One row per workflow, each exactly its status glyph and its position,
-			// under the pinned entry's own compact mark.
-			expect(compactRows(frame)).toEqual([
-				"⌂",
-				"──",
-				...Array.from({ length: count }, (_, index) => `… ${index + 1}`),
-			]);
+			// One three-line row per workflow, under the pinned entry's own mark.
+			expect(compactWorkflowRows(frame)).toEqual(
+				Array.from({ length: count }, (_, index) => [`${index + 1}`, "…", "·"]),
+			);
 			// The body keeps the columns the strip does not take.
 			expect(bodyColumn(frame)).toBe(SIDEBAR_COLLAPSED_WIDTH + 1);
 		} finally {
@@ -490,7 +524,7 @@ test("the collapsed strip paints only the status glyph and the position", async 
 	}
 });
 
-test("a verifying workflow spends the collapsed detail on its critical findings", async () => {
+test("a verifying workflow spends the collapsed phase line on its running verifiers", async () => {
 	stubGateway([
 		overview("wf-verify", "active", {
 			stepId: "core.verification",
@@ -499,6 +533,7 @@ test("a verifying workflow spends the collapsed detail on its critical findings"
 				findings: { critical: 3, warning: 1, info: 3 },
 				completedVerifiers: 3,
 				totalVerifiers: 7,
+				runningVerifiers: 2,
 				failed: true,
 			},
 		}),
@@ -507,18 +542,13 @@ test("a verifying workflow spends the collapsed detail on its critical findings"
 	const t = await renderShell();
 	try {
 		const frame = t.captureCharFrame();
-		expect(compactRows(frame)).toEqual(["⌂", "──", "✓ 3", "… 2"]);
-		const rows = frame.split("\n");
-		const row = rows.findIndex((line) =>
-			/^..✓ 3$/.test(line.slice(0, SIDEBAR_COLLAPSED_WIDTH).trimEnd()),
-		);
-		expect(row).toBeGreaterThan(-1);
-		const detail = t
-			.captureSpans()
-			.lines[row]?.spans.find((span) => span.text.trim() === "3");
-		expect(detail?.fg.buffer.slice(0, 3).join(",")).toBe(
-			rgb(uiColors.error).join(","),
-		);
+		expect(compactWorkflowRows(frame)).toEqual([
+			["1", "✓", "2"],
+			["2", "…", "·"],
+		]);
+		const mark = collapsedMark(t, 1);
+		expect(mark.signal).toBe("2");
+		expect(mark.signalFg).toBe(rgb(uiColors.error).join(","));
 	} finally {
 		t.renderer.destroy();
 		clearGateway();
@@ -534,6 +564,7 @@ test("a verifying workflow's expanded row carries findings, verifiers and projec
 				findings: { critical: 0, warning: 1, info: 3 },
 				completedVerifiers: 3,
 				totalVerifiers: 7,
+				runningVerifiers: 2,
 				failed: true,
 			},
 		}),
@@ -584,7 +615,10 @@ test("Ctrl+S collapses to the compact strip at once and expands to the full rows
 		// Startup: `expanding` mode and no focus, so the sidebar is already the
 		// compact strip and the body has the freed columns.
 		const start = t.captureCharFrame();
-		expect(compactRows(start)).toEqual(["⌂", "──", "… 1", "! 2"]);
+		expect(compactWorkflowRows(start)).toEqual([
+			["1", "…", "·"],
+			["2", "!", "·"],
+		]);
 		expect(bodyColumn(start)).toBe(SIDEBAR_COLLAPSED_WIDTH + 1);
 
 		// Focus (Ctrl+S): the full rows (id, phase meta, filter row) appear with the
@@ -623,11 +657,9 @@ test("Ctrl+S collapses to the compact strip at once and expands to the full rows
 
 		// Settled (the slide has finished): still the compact strip.
 		await advance(t, 4, 60);
-		expect(compactRows(t.captureCharFrame())).toEqual([
-			"⌂",
-			"──",
-			"… 1",
-			"! 2",
+		expect(compactWorkflowRows(t.captureCharFrame())).toEqual([
+			["1", "…", "·"],
+			["2", "!", "·"],
 		]);
 	} finally {
 		t.renderer.destroy();

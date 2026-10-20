@@ -410,6 +410,7 @@ test("verification overview counts the current round's findings and completed ve
 			findings: { critical: 0, warning: 1, info: 3 },
 			completedVerifiers: 1,
 			totalVerifiers: 3,
+			runningVerifiers: 1,
 			failed: true,
 		});
 		current.currentStep = {

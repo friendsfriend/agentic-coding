@@ -74,12 +74,12 @@ order, wrapping at both ends — and are host keys for the same reason. A
 terminal without the kitty keyboard protocol reports `Ctrl+H` as the Backspace
 byte, so a Backspace counts as `Ctrl+H` only while the sidebar holds focus:
 that is the one surface where the two cannot be told apart from text editing.
-The sidebar collapses to
-each workspace's status glyph and one compact detail while unfocused — its
-index, or the critical-finding count while the workflow verifies. The glyph is
-the expanded row's status glyph in its tone colour, bold while the state waits
-on a reader; `ui.sidebar_mode: "permanent"` keeps it
-expanded, and the `e` toggle (or the title/strip glyph) writes that value back
+The sidebar collapses to a three-line stack while unfocused: the workspace index
+in bold, its status glyph, and one phase-specific character (remaining running
+verifiers while verifying, remaining tasks or a review marker for other stages).
+The glyph is the expanded row's status glyph in its tone colour, bold while the
+state waits on a reader; `ui.sidebar_mode: "permanent"` keeps it expanded, and
+the `e` toggle (or the title/strip glyph) writes that value back
 to the user configuration so it survives restarts. Side apps that used to run in a pane (the editor opened
 from a finding) go through `src/tui/shared/side-app.ts`: a new tmux window when
 the shell runs inside a tmux client, a local spawn with the renderer suspended

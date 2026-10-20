@@ -7,9 +7,9 @@
 // clicks report back through the same callbacks the key layer uses.
 //
 // The panel is collapsible: focused it expands to its full width, unfocused it
-// collapses to the workspace index or, while a workflow verifies, its critical
-// finding count. Either way a row leads with its status glyph, so the collapsed
-// strip still says which workspace needs a reader.
+// collapses to a three-line stack per workflow: bold index, status glyph, and
+// one phase-specific character. The glyph and its tone still say which
+// workspace needs a reader.
 // Expanding is a short width tween, so focus movement reads as a slide rather
 // than a jump; collapsing is a cut to the fixed compact width, because the
 // compact strip is the whole collapsed view and neither its rows nor the columns
@@ -53,8 +53,9 @@ import {
  * an 80-column terminal. */
 export const SIDEBAR_WIDTH = 34;
 
-/** Columns a compact row's own content needs: the status glyph, the gap after
- * it, and the two digits a position — or a critical-finding count — takes. */
+/** Columns a compact row's content needs: four cells, enough for a four-digit
+ * jump-list position. The status glyph and phase character each use one of those
+ * cells on their own lines. */
 const SIDEBAR_COLLAPSED_ROW_WIDTH = 4;
 
 /** Collapsed width: the selection marker, one gap column and the compact row.
@@ -71,7 +72,7 @@ const SIDEBAR_ROW_TEXT_WIDTH = SIDEBAR_WIDTH - 5;
  * after it, leaving this many columns for the workflow label. */
 const SIDEBAR_ROW_LABEL_WIDTH = SIDEBAR_ROW_TEXT_WIDTH - 2;
 
-/** Width at which the full row content replaces the glyph-and-detail rows. */
+/** Width at which the full row content replaces the three-line compact rows. */
 const SIDEBAR_EXPANDED_THRESHOLD = 14;
 
 /** What the panel paints for one sidebar state and the width the slide has
@@ -299,11 +300,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 			<Show
 				when={panel().expanded}
 				fallback={
-					// Collapsed: a toggle glyph, the pinned entry as its mark, then one row
-					// per workflow carrying its status glyph and one compact detail: its
-					// index, or the critical-finding count while it verifies. The strip
-					// stays a jump list that also flags the workspace waiting on a reader,
-					// without names or metadata.
+					// Collapsed: a toggle glyph, the pinned entry as its mark, then one
+					// three-line row per workflow — its bold jump-list position, its status
+					// glyph, and one phase-specific character — so the strip matches the
+					// expanded row's height while staying nameless.
 					<>
 						<box
 							style={{
@@ -339,9 +339,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 							<SelectableList
 								items={props.overviews}
 								selectedIndex={props.selectedIndex - pinOffset()}
-								itemHeight={1}
+								itemHeight={3}
 								availableLines={Math.max(
-									1,
+									3,
 									dimensions().height -
 										4 -
 										(props.pin ? SIDEBAR_PIN_COLLAPSED_LINES : 0),
@@ -350,12 +350,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 									props.onFocus();
 									props.onSelectIndex(index + pinOffset());
 								}}
-								renderItem={(overview, _selected, index) => {
-									// The strip carries the row's status mark in its tone colour,
-									// so the glance the collapsed width affords is the state that
-									// needs a reader; a state waiting on the developer is bold
-									// as well. The detail after it is the jump-list position, or
-									// the critical-finding count while the workflow verifies.
+								renderItem={(overview, selected, index) => {
+									// The collapsed row is the expanded row's height: the bold
+									// jump-list position, then the status mark in its tone colour
+									// (bold while it waits on a reader), then one phase-specific
+									// character. The strip stays nameless and metadata-free.
 									const row = sidebarCollapsedRow(
 										overview,
 										index,
@@ -364,11 +363,21 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 									return (
 										<box
 											style={{
-												height: 1,
-												flexDirection: "row",
+												height: 3,
+												minWidth: 0,
+												flexDirection: "column",
 												overflow: "hidden",
 											}}
 										>
+											<text
+												fg={
+													selected
+														? uiColors.textPrimary
+														: uiColors.textSecondary
+												}
+											>
+												<strong>{row.index}</strong>
+											</text>
 											<text fg={toneColor(row.tone)}>
 												{row.needsReader ? (
 													<strong>{row.glyph}</strong>
@@ -376,11 +385,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 													row.glyph
 												)}
 											</text>
-											<Show when={row.detail}>
-												<text fg={toneColor(row.detailTone)}>
-													{` ${row.detail}`}
-												</text>
-											</Show>
+											<text fg={toneColor(row.signal.tone)}>
+												{row.signal.text}
+											</text>
 										</box>
 									);
 								}}

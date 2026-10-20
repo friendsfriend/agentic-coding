@@ -21,6 +21,7 @@ import {
 	sidebarCursorCount,
 	sidebarCursorForWorkflow,
 	sidebarIndexFor,
+	sidebarPhaseSignal,
 	sidebarStatusGlyph,
 	sidebarStatusNeedsReader,
 	sidebarWorkflowIndex,
@@ -46,6 +47,7 @@ function overview(options: {
 	definitionOrigin?: WorkflowOverview["state"]["definitionOrigin"];
 	verification?: WorkflowOverview["verification"];
 	tasks?: [number, number];
+	agents?: WorkflowOverview["agents"];
 }): WorkflowOverview {
 	return {
 		target: options.repository ?? "/repo",
@@ -93,7 +95,7 @@ function overview(options: {
 		},
 		tasks: options.tasks ?? [0, 0],
 		...(options.projectIdent ? { projectIdent: options.projectIdent } : {}),
-		agents: [],
+		agents: options.agents ?? [],
 	};
 }
 
@@ -284,6 +286,7 @@ describe("workspace sidebar rows", () => {
 				findings: { critical: 0, warning: 1, info: 3 },
 				completedVerifiers: 3,
 				totalVerifiers: 7,
+				runningVerifiers: 2,
 				failed: true,
 			},
 		});
@@ -314,6 +317,7 @@ describe("workspace sidebar rows", () => {
 				findings: { critical: 0, warning: 0, info: 0 },
 				completedVerifiers: 7,
 				totalVerifiers: 7,
+				runningVerifiers: 0,
 				failed: false,
 			},
 		});
@@ -387,6 +391,7 @@ describe("workspace sidebar rows", () => {
 				findings: { critical: 0, warning: 1, info: 3 },
 				completedVerifiers: 3,
 				totalVerifiers: 7,
+				runningVerifiers: 2,
 				failed: true,
 			},
 		});
@@ -612,50 +617,110 @@ describe("workspace sidebar rows", () => {
 		).toBe("◊ a-very-lo…");
 	});
 
-	test("a verifying row spends its compact detail on critical findings", () => {
-		const row = sidebarCollapsedRow(
-			overview({
-				workflowId: "wf",
-				status: "active",
-				phase: "Verification",
-				stepId: "core.verification",
-				verification: {
-					findings: { critical: 3, warning: 1, info: 3 },
-					completedVerifiers: 3,
-					totalVerifiers: 7,
-					failed: true,
-				},
-			}),
-			4,
-			4,
-		);
-		expect(row).toMatchObject({
-			glyph: "✓",
-			tone: "info",
-			detail: "3",
-			detailTone: "error",
+	test("a verifying row's phase signal counts the verifiers still running", () => {
+		const row = overview({
+			workflowId: "wf",
+			status: "active",
+			phase: "Verification",
+			stepId: "core.verification",
+			verification: {
+				findings: { critical: 3, warning: 1, info: 3 },
+				completedVerifiers: 3,
+				totalVerifiers: 7,
+				runningVerifiers: 2,
+				failed: true,
+			},
 		});
-		const clean = sidebarCollapsedRow(
-			overview({
-				workflowId: "wf",
-				status: "active",
-				phase: "Verification",
-				stepId: "core.verification",
-				verification: {
-					findings: { critical: 0, warning: 1, info: 3 },
-					completedVerifiers: 3,
-					totalVerifiers: 7,
-					failed: false,
-				},
-			}),
-			4,
-			4,
-		);
-		expect(clean.detail).toBe("0");
-		expect(clean.detailTone).toBe("muted");
+		expect(sidebarPhaseSignal(row)).toEqual({ text: "2", tone: "error" });
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "clean",
+					status: "active",
+					phase: "Verification",
+					stepId: "core.verification",
+					verification: {
+						findings: { critical: 0, warning: 0, info: 0 },
+						completedVerifiers: 7,
+						totalVerifiers: 7,
+						runningVerifiers: 0,
+						failed: false,
+					},
+				}),
+			),
+		).toEqual({ text: "0", tone: "success" });
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "busy",
+					status: "active",
+					phase: "Verification",
+					stepId: "core.verification",
+					verification: {
+						findings: { critical: 0, warning: 0, info: 0 },
+						completedVerifiers: 0,
+						totalVerifiers: 12,
+						runningVerifiers: 12,
+						failed: false,
+					},
+				}),
+			),
+		).toEqual({ text: "+", tone: "info" });
 	});
 
-	test("the collapsed strip row carries the glyph, the tone and the position", () => {
+	test("other phases pick one phase-specific character", () => {
+		// Task-backed stages show what still has to be done.
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "impl",
+					status: "active",
+					phase: "Implementation",
+					tasks: [3, 7],
+				}),
+			),
+		).toEqual({ text: "4", tone: "info" });
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "done-tasks",
+					status: "active",
+					phase: "Implementation",
+					tasks: [7, 7],
+				}),
+			),
+		).toEqual({ text: "0", tone: "success" });
+		// A review/approval asks for a reader rather than a progress count.
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "review",
+					status: "active",
+					stepId: "core.developer-review",
+					tasks: [7, 7],
+				}),
+			),
+		).toEqual({ text: "?", tone: "warning" });
+		// A stage with no task list falls back to its live agent count.
+		expect(
+			sidebarPhaseSignal(
+				overview({
+					workflowId: "agents",
+					status: "active",
+					agents: [
+						{ role: "worker", status: "working" },
+						{ role: "audit", status: "completed" },
+					],
+				}),
+			),
+		).toEqual({ text: "1", tone: "info" });
+		// Quiet terminal rows have nothing left to report.
+		expect(
+			sidebarPhaseSignal(overview({ workflowId: "done", status: "completed" })),
+		).toEqual({ text: "·", tone: "muted" });
+	});
+
+	test("the collapsed strip row stacks the index, glyph and phase signal", () => {
 		expect(
 			sidebarCollapsedRow(
 				overview({ workflowId: "a", status: "active" }),
@@ -663,11 +728,11 @@ describe("workspace sidebar rows", () => {
 				4,
 			),
 		).toEqual({
+			index: "1",
 			glyph: "…",
 			tone: "info",
 			needsReader: false,
-			detail: "1",
-			detailTone: "info",
+			signal: { text: "·", tone: "muted" },
 		});
 		expect(
 			sidebarCollapsedRow(
@@ -680,15 +745,15 @@ describe("workspace sidebar rows", () => {
 				4,
 			),
 		).toEqual({
+			index: "3",
 			glyph: "?",
 			tone: "warning",
 			needsReader: true,
-			detail: "3",
-			detailTone: "warning",
+			signal: { text: "·", tone: "muted" },
 		});
 		// The review gate and the completed workflow share the `✓`, so the tone —
 		// and the emphasis it drives — is what tells "waiting for a reader" from
-		// "done".
+		// "done"; the phase line adds the review marker.
 		expect(
 			sidebarCollapsedRow(
 				overview({
@@ -700,11 +765,11 @@ describe("workspace sidebar rows", () => {
 				4,
 			),
 		).toEqual({
+			index: "1",
 			glyph: "✓",
 			tone: "info",
 			needsReader: true,
-			detail: "1",
-			detailTone: "info",
+			signal: { text: "?", tone: "warning" },
 		});
 		expect(
 			sidebarCollapsedRow(
@@ -713,42 +778,42 @@ describe("workspace sidebar rows", () => {
 				4,
 			),
 		).toEqual({
+			index: "1",
 			glyph: "✓",
 			tone: "success",
 			needsReader: false,
-			detail: "1",
-			detailTone: "success",
+			signal: { text: "·", tone: "muted" },
 		});
 	});
 
-	test("a collapsed row clips its position before the glyph", () => {
+	test("a collapsed row clips only its position to the strip width", () => {
 		// A list long enough to outgrow the strip loses the tail of its index,
-		// never the mark: the glyph leads the row.
+		// never the mark below it.
 		expect(
 			sidebarCollapsedRow(
 				overview({ workflowId: "a", status: "active" }),
-				119,
+				9999,
 				4,
 			),
 		).toEqual({
+			index: "100…",
 			glyph: "…",
 			tone: "info",
 			needsReader: false,
-			detail: "1…",
-			detailTone: "info",
+			signal: { text: "·", tone: "muted" },
 		});
 		expect(
 			sidebarCollapsedRow(
 				overview({ workflowId: "a", status: "active" }),
 				0,
-				1,
+				0,
 			),
 		).toEqual({
+			index: "",
 			glyph: "…",
 			tone: "info",
 			needsReader: false,
-			detail: "",
-			detailTone: "info",
+			signal: { text: "·", tone: "muted" },
 		});
 	});
 

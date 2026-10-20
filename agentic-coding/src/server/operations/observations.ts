@@ -296,6 +296,9 @@ function workflowTargetFor(repo: string, definitionId: string): string {
  * was blocked, or expired leaves the round short of its selected roles. A
  * pending or working run is not a failure yet. */
 const FAILED_VERIFIER_STATUSES = new Set(["blocked", "failed", "expired"]);
+/** The verifier runs still waiting to finish: the collapsed strip's remaining
+ * work signal for a verification row. */
+const RUNNING_VERIFIER_STATUSES = new Set(["pending", "working"]);
 
 /** The active verification round for the sidebar: findings committed by the
  * round's verifiers, and how many of the round's runs completed. Only the
@@ -326,6 +329,9 @@ export function verificationSummaryForView(
 		completedVerifiers: current.filter((run) => run.status === "completed")
 			.length,
 		totalVerifiers: current.length,
+		runningVerifiers: current.filter((run) =>
+			RUNNING_VERIFIER_STATUSES.has(run.status),
+		).length,
 		failed: current.some((run) => FAILED_VERIFIER_STATUSES.has(run.status)),
 	};
 }

@@ -1616,6 +1616,9 @@ export interface VerificationOverview {
 	completedVerifiers: number;
 	/** Every verifier run selected for the round. */
 	totalVerifiers: number;
+	/** Verifier runs still pending or working; the collapsed strip's one-char
+	 * verification signal. */
+	runningVerifiers: number;
 	/** True when a verifier run failed, blocked, or expired rather than still
 	 * running, so the row can flag the round without calling a pending run a
 	 * failure. */

@@ -200,32 +200,73 @@ export function sidebarStatusNeedsReader(overview: WorkflowOverview): boolean {
 	return isReviewStep(state.stepId ?? state.phase);
 }
 
-/** One row of the collapsed strip: the status mark and one compact signal,
- * which is all the strip has room for. */
+/** One character of phase-specific information for a collapsed row. */
+export interface SidebarPhaseSignal {
+	readonly text: string;
+	readonly tone: StatusTone;
+}
+
+/** Counts that fit one terminal cell: 0-9, then `+` for ten or more. */
+function oneCharCount(value: number): string {
+	const count = Math.max(0, Math.trunc(value));
+	return count > 9 ? "+" : `${count}`;
+}
+
+/** The collapsed row's third line: one character that says what the current
+ * phase is doing. Verification shows the verifier runs still pending or
+ * working; a review/approval step asks for a reader; task-backed stages show
+ * their remaining tasks; an agent-only stage shows its live agents. Terminal
+ * or quiet rows settle on `·`. */
+export function sidebarPhaseSignal(
+	overview: WorkflowOverview,
+): SidebarPhaseSignal {
+	const verification = overview.verification;
+	if (verification) {
+		const running = verification.runningVerifiers;
+		return {
+			text: oneCharCount(running),
+			tone: verification.failed ? "error" : running > 0 ? "info" : "success",
+		};
+	}
+	const stepId = overview.state.stepId ?? overview.state.phase;
+	if (isReviewStep(stepId)) return { text: "?", tone: "warning" };
+	const [done, total] = overview.tasks;
+	if (total > 0) {
+		const remaining = Math.max(0, total - done);
+		return {
+			text: oneCharCount(remaining),
+			tone: remaining === 0 ? "success" : "info",
+		};
+	}
+	const active = overview.agents.filter(
+		(agent) => agent.status === "working" || agent.status === "pending",
+	).length;
+	if (active > 0) return { text: oneCharCount(active), tone: "info" };
+	return { text: "·", tone: "muted" };
+}
+
+/** One row of the collapsed strip: three stacked signals, exactly the height of
+ * an expanded row. */
 export interface SidebarCollapsedRow {
+	/** The workflow's 1-based jump-list position, painted bold on the first
+	 * line. Clipped to the strip width for a very long list. */
+	readonly index: string;
 	/** The status glyph — the strip's whole status signal. */
 	readonly glyph: string;
 	readonly tone: StatusTone;
 	/** True when the state waits on a reader, so the strip paints the glyph bold
 	 * as well as in the tone colour and those rows stand out at a glance. */
 	readonly needsReader: boolean;
-	/** The compact signal after the glyph: the workflow's 1-based position, or
-	 * the critical-finding count while the workflow is verifying. Clipped to the
-	 * columns the row has left (empty when the glyph is all that fits). */
-	readonly detail: string;
-	/** Tone for `detail`; a verification row with critical findings is red even
-	 * though its status glyph stays the review tone. */
-	readonly detailTone: StatusTone;
+	/** The phase-specific third line. */
+	readonly signal: SidebarPhaseSignal;
 }
 
 /**
- * The collapsed strip's row for one workflow: the same status glyph and tone
- * the expanded row shows, then one compact signal. A verifying workflow spends
- * that signal on its critical findings — the one number worth the strip's width
- * — while every other row keeps its jump-list position. The strip names
- * nothing, so a long id cannot overflow it; only the detail digits of a long
- * list or a large finding count can, and they give way while the glyph — the
- * row's reason to exist — never does.
+ * The collapsed strip's row for one workflow: its jump-list position, then the
+ * same status glyph and tone the expanded row shows, then one phase-specific
+ * character. The strip names nothing, so a long id cannot overflow it; only the
+ * position digits of a very long list can, and they give way while the glyph —
+ * the row's reason to exist — never does.
  */
 export function sidebarCollapsedRow(
 	overview: WorkflowOverview,
@@ -233,18 +274,12 @@ export function sidebarCollapsedRow(
 	width: number,
 ): SidebarCollapsedRow {
 	const status = sidebarStatusGlyph(overview);
-	const room = Math.max(0, width - status.glyph.length - 1);
-	const critical = overview.verification?.findings.critical;
-	const detail: { text: string; tone: StatusTone } =
-		critical === undefined
-			? { text: `${position + 1}`, tone: status.tone }
-			: { text: `${critical}`, tone: critical > 0 ? "error" : "muted" };
 	return {
+		index: clip(`${position + 1}`, width),
 		glyph: status.glyph,
 		tone: status.tone,
 		needsReader: sidebarStatusNeedsReader(overview),
-		detail: clip(detail.text, room),
-		detailTone: detail.tone,
+		signal: sidebarPhaseSignal(overview),
 	};
 }
 
