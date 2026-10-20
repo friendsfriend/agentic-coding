@@ -24,7 +24,16 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
+import type { ClassifierDecisionInput } from "../contracts/workflow.ts";
+import {
+	CHECKPOINT_RECORD_LIMIT,
+	DEVELOPER_ABORT_MESSAGE,
+} from "../contracts/workflow.ts";
+import {
+	checkpointThresholdsForClass,
+	type ResolvedCheckpointConfig,
+	resolveCheckpointConfig,
+} from "../workflow/checkpoint.ts";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
 	type CompactionCeiling,
@@ -36,6 +45,8 @@ import {
 } from "../workflow/compaction.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
+import type { CheckpointSampleInput } from "./checkpoint-sample.ts";
+import { sampleCheckpoint } from "./checkpoint-sample.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
@@ -47,12 +58,33 @@ import {
 import { createEnvironmentExtension } from "./environment-tools.ts";
 import {
 	type FailFastDecision,
+	failFastEligibleRole,
 	type ToolSurfaceMonitor,
 	toolSurfaceMonitorFor,
 } from "./fail-fast.ts";
 import { createFrameThrottle } from "./frame-throttle.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
+import {
+	CHECKPOINT_ACTION_SUMMARY,
+	CHECKPOINT_ACTIONS,
+	CHECKPOINT_DECIDER,
+	CHECKPOINT_INTEGRATION,
+	CHECKPOINT_QUESTION_OPTION,
+	type CheckpointDecision,
+	type CheckpointDigest,
+	type CheckpointSample,
+	type CheckpointTrigger,
+	checkpointAnswer,
+	checkpointAnswerMessage,
+	checkpointClassOf,
+	checkpointDigestInput,
+	checkpointQuestion,
+	checkpointSignalState,
+	checkpointSteerMessage,
+	decideCheckpoint,
+	ProgressCheckpoint,
+} from "./progress-checkpoint.ts";
 import {
 	decodeFrame,
 	encodeFrame,
@@ -91,9 +123,12 @@ import {
 	createSearchExtension,
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
+	fileCheckpointQuestion,
 	type ResumedRunState,
 	type RunContextLookup,
 	recordAbortedRunHandoff,
+	recordCheckpointDecision,
+	recordCheckpointRunHandoff,
 	recordFailFastRunHandoff,
 	recordResumedRunHandoff,
 	withoutDebugRequestTools,
@@ -108,6 +143,11 @@ registerBunOAuthFlows();
  * transcript live (about 20 frames a second) while bounding what each frame
  * costs the watcher. */
 const STATE_FRAME_COALESCE_MS = 50;
+
+/** One line for a log: an Error's message, or the thrown value as a string. */
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
 
 /** The one cheap tool-host re-probe a run's dead surface gets before it is
  * stopped (efficiency backlog item 3). The host behind a run's `env_*`,
@@ -277,6 +317,32 @@ const MAX_PENDING_SESSION_CLOSES = 8;
 /** What the host remembers about one conversation's cost-ceiling compactions
  * (efficiency backlog item 6): the measured turn, what it decided at, and the
  * turns it compacted at, which is what the floor and the loop guard count. */
+/** One live run's run-progress checkpoint: the accumulator, the section's
+ * `steer` switch resolved for this run, its step id (the record's `phase`) and
+ * how many escalations it has filed (the `runtime.settled` counter). */
+interface RunCheckpointState {
+	readonly accumulator: ProgressCheckpoint;
+	readonly steer: boolean;
+	readonly stepId: string;
+	escalations: number;
+}
+
+/** What applying one decision did, for the record and the envelope: whether an
+ * action was taken, why not when it was not, and the bounded error class of a
+ * fail-open path. */
+interface CheckpointApplied {
+	readonly applied: boolean;
+	readonly attention?: string;
+	readonly errorClass?: string;
+}
+
+/** One checkpoint record's fate: whether the workflow's decision history took
+ * it, and whether the command itself failed (an error, unlike a refusal). */
+interface CheckpointRecording {
+	readonly recorded: boolean;
+	readonly failed: boolean;
+}
+
 export interface CeilingRecord {
 	turnIndex: number;
 	lastCompactionTurn?: number;
@@ -320,6 +386,17 @@ export interface DurableHostOptions {
 	 * Absent, the static `settings.compaction` is used, and with neither the
 	 * documented defaults apply. */
 	readonly compaction?: () => CompactionConfig;
+	/** The effective `[agents.checkpoint]` section, read at every run start
+	 * (efficiency backlog item 19): `host-main.ts` supplies a file-backed
+	 * accessor, tests supply a constant. Absent, the documented defaults apply —
+	 * enabled, steering on, the pinned class thresholds. */
+	readonly checkpoint?: () => ResolvedCheckpointConfig;
+	/** Test-only injection for the checkpoint's bounded worktree sample (`git`
+	 * diff numbers, `HEAD`, ticked tasks). Production leaves it unset, and the
+	 * fixture under `checkpoint-sample.ts` runs with its own 2 s bound. */
+	readonly checkpointSample?: (
+		input: CheckpointSampleInput,
+	) => Promise<CheckpointSample>;
 	readonly globalAgentDir: string;
 	readonly credentialsPath?: string;
 	/** Orchestrator mode (`--orchestrator`): the host installs only the coding
@@ -368,6 +445,21 @@ export class DurableHost {
 	/** The per-run dead-surface monitors, keyed like the telemetry attachments:
 	 * one counter per conversation, dropped with the run. */
 	private readonly toolSurfaces = new Map<ConversationId, ToolSurfaceMonitor>();
+	/** Each live run's run-progress checkpoint accumulator and what the host has
+	 * decided about it (efficiency backlog item 19). Keyed by run id, never by
+	 * conversation: a checkpoint belongs to the run that earned it, and a run
+	 * that reuses a conversation starts a fresh one. */
+	private readonly checkpoints = new Map<string, RunCheckpointState>();
+	/** The run whose checkpoint is being evaluated: one at a time per run, which
+	 * is also what keeps at most one checkpoint question open. */
+	private readonly checkpointInFlight = new Set<string>();
+	/** Compaction tasks a checkpoint's `compact` decision admitted, and the claims
+	 * taken before `conversation.compact()` publishes its start. */
+	private readonly checkpointCompactions = new Set<string>();
+	private readonly checkpointPending = new Map<ConversationId, number>();
+	/** The published tool names, read once: the digest may name a tool only when
+	 * it is one the run's surface really registered. */
+	private registeredToolNamesCache: ReadonlySet<string> | undefined;
 	/** What the one tool-host re-probe of a run answered, so the run's own
 	 * `blocked` event reports the mechanism honestly instead of assuming one. */
 	private readonly toolProbes = new Map<ConversationId, boolean>();
@@ -750,6 +842,9 @@ export class DurableHost {
 		// The dead-surface monitor of this run, or none for a session the rule
 		// leaves alone (no run id, or an exempt role such as `env-setup`).
 		const monitor = toolSurfaceMonitorFor(envVars);
+		// The run-progress checkpoint of this run, or none for the same sessions
+		// (plus a configuration that switched the feature off).
+		this.installCheckpoint(input.runId, envVars, readOnly);
 		if (!this.telemetry.has(conversation.id)) {
 			const conversationId = conversation.id;
 			try {
@@ -774,21 +869,44 @@ export class DurableHost {
 						// is decided between turns, never inside a tool call. The ceiling is
 						// resolved for the run the measurement was recorded under, so a run
 						// reusing a conversation is judged by its own window and profile.
-						onMeasuredContext: ({ promptTokens, turnIndex }, measured) =>
-							this.observeContext(
+						onMeasuredContext: (
+							{ promptTokens, turnIndex, costUnits },
+							measured,
+						) => {
+							const measuredRunId =
 								measured.runId ??
-									this.boundRunId(conversationId) ??
-									input.runId,
-								promptTokens,
+								this.boundRunId(conversationId) ??
+								input.runId;
+							this.observeContext(measuredRunId, promptTokens, turnIndex);
+							// The same measured turn is the checkpoint's turn: one event stream
+							// feeds both supervisors, and the checkpoint's own evaluation runs
+							// detached from this handler.
+							this.observeCheckpointTurn(
+								measuredRunId,
 								turnIndex,
-							),
+								promptTokens,
+								costUnits,
+							);
+						},
 						compactionKind: (taskId) => {
+							const pendingCheckpoint =
+								this.checkpointPending.get(conversation.id) ?? 0;
+							if (pendingCheckpoint > 0) {
+								this.checkpointPending.set(
+									conversation.id,
+									pendingCheckpoint - 1,
+								);
+								this.checkpointCompactions.add(taskId);
+								return "auto-checkpoint";
+							}
 							const pending = this.ceilingPending.get(conversation.id) ?? 0;
 							if (pending > 0) {
 								this.ceilingPending.set(conversation.id, pending - 1);
 								this.ceilingCompactions.add(taskId);
 								return "auto-ceiling";
 							}
+							if (this.checkpointCompactions.has(taskId))
+								return "auto-checkpoint";
 							return this.ceilingCompactions.has(taskId)
 								? "auto-ceiling"
 								: undefined;
@@ -802,6 +920,9 @@ export class DurableHost {
 								conversationId,
 								observation,
 							),
+						// The run's own checkpoint counters travel with its settled envelope,
+						// resolved for the run the conversation is bound to now.
+						runCounters: () => this.checkpointCounters(conversationId),
 					},
 				);
 				this.telemetry.set(conversationId, stop);
@@ -1231,12 +1352,13 @@ export class DurableHost {
 			},
 		});
 		if (decision.kind === "compact") {
-			void this.admitCeilingCompaction(
+			void this.admitCompaction(
 				runId,
 				record,
 				state,
 				ceiling,
 				promptTokens,
+				"auto-ceiling",
 			);
 			return;
 		}
@@ -1260,14 +1382,17 @@ export class DurableHost {
 		}
 	}
 
-	/** Admit one ceiling compaction, serially with the conversation's other
-	 * mutations, at most one per conversation. */
-	private async admitCeilingCompaction(
+	/** Admit one compaction, serially with the conversation's other mutations, at
+	 * most one per conversation. `kind` names what decided it: the cost ceiling or
+	 * a run-progress checkpoint's `compact`, which is the same summarizer under a
+	 * different reason and so lands in its own telemetry counter. */
+	private async admitCompaction(
 		runId: string,
 		record: RunRecord,
 		state: CeilingRecord,
 		ceiling: CompactionCeiling,
 		contextTokens: number,
+		kind: "auto-ceiling" | "auto-checkpoint",
 	): Promise<void> {
 		try {
 			await this.serialized(record, async () => {
@@ -1278,23 +1403,31 @@ export class DurableHost {
 				if (!conversation) return;
 				// A summarizer already in flight is summarizing the same context.
 				if ((await this.liveCompactions(conversation)).length > 0) return;
-				// No instructions on purpose: the ceiling path runs exactly the summarizer
-				// the overflow path runs (same prompt, same head retention), so a worker's
+				// No instructions on purpose: both paths run exactly the summarizer the
+				// overflow path runs (same prompt, same head retention), so a worker's
 				// assignment and a verifier's plan/finding references survive a proactive
 				// compaction the way they survive a forced one.
-				const pending = this.ceilingPending.get(record.conversationId) ?? 0;
+				const pendingClaims =
+					kind === "auto-ceiling"
+						? this.ceilingPending
+						: this.checkpointPending;
+				const claimed =
+					kind === "auto-ceiling"
+						? this.ceilingCompactions
+						: this.checkpointCompactions;
+				const pending = pendingClaims.get(record.conversationId) ?? 0;
 				// The kind is claimed before the call: pi-durable publishes
 				// `compaction_start` while `compact()` is still in flight.
-				this.ceilingPending.set(record.conversationId, pending + 1);
+				pendingClaims.set(record.conversationId, pending + 1);
 				let taskId: Awaited<ReturnType<typeof conversation.compact>>;
 				try {
 					taskId = await conversation.compact(undefined, BACKGROUND_CONTEXT);
 				} finally {
 					// A task that never started (nothing to compact) must not leave a claim
 					// behind for a later manual compaction to inherit.
-					this.ceilingPending.set(record.conversationId, pending);
+					pendingClaims.set(record.conversationId, pending);
 				}
-				this.ceilingCompactions.add(String(taskId));
+				claimed.add(String(taskId));
 				state.compactionTurns.push(state.turnIndex);
 				state.lastCompactionTurn = state.turnIndex;
 				state.lastCompactionTokens = contextTokens;
@@ -1305,6 +1438,7 @@ export class DurableHost {
 				if (identity)
 					emitRuntimeEnvelope(identity, "runtime.compaction_ceiling", {
 						status: "compact",
+						kind,
 						ceilingTokens: ceiling.ceilingTokens,
 						contextTokens,
 						turnIndex: state.turnIndex,
@@ -1315,11 +1449,605 @@ export class DurableHost {
 			});
 		} catch (error) {
 			this.log(
-				`run ${runId}: cost-ceiling compaction not admitted: ${
+				`run ${runId}: ${kind} compaction not admitted: ${
 					error instanceof Error ? error.message : String(error)
 				}`,
 			);
 		}
+	}
+
+	// ---- run-progress checkpoint (efficiency backlog item 19) --------------
+	//
+	// One supervisor per run, fed by the telemetry stream the host already
+	// consumes, deciding over a fixed vocabulary every N turns and at a stall.
+	// Two rules hold the whole feature together and are enforced here rather
+	// than by any caller:
+	//
+	//  1. A turn count never stops or blocks a run. The only stop in this
+	//     section is reached after a developer question was recorded and is
+	//     still unanswered or was cancelled — never from a threshold alone.
+	//  2. Every step fails open. An exception, a sample that fails, a record the
+	//     workflow refuses or a question that cannot be filed leaves the run
+	//     running and marks only the checkpoint's own envelope `status: error`.
+
+	/** The effective `[agents.checkpoint]` section: a constant in tests, the
+	 * configuration file read per run start in production. */
+	private checkpointConfig(): ResolvedCheckpointConfig {
+		return this.options.checkpoint?.() ?? resolveCheckpointConfig(undefined);
+	}
+
+	/** The published tool names, read once: the digest may name a tool only when
+	 * the run's own surface registered it. */
+	private registeredToolNames(): ReadonlySet<string> {
+		if (this.registeredToolNamesCache === undefined) {
+			const names = new Set<string>();
+			for (const { tool } of this.registry.snapshot().tools()) {
+				const name = (tool as { readonly name?: unknown }).name;
+				if (typeof name === "string") names.add(name);
+			}
+			this.registeredToolNamesCache = names;
+		}
+		return this.registeredToolNamesCache;
+	}
+
+	/** Give one run its checkpoint, or none when the feature leaves it alone: a
+	 * session without a run id (the orchestrator's own), a host in orchestrator
+	 * mode, or a configuration with the feature off. */
+	private installCheckpoint(
+		runId: string,
+		env: Readonly<Record<string, string>>,
+		readOnly: boolean,
+	): void {
+		this.checkpoints.delete(runId);
+		const config = this.checkpointConfig();
+		if (!config.enabled || this.options.orchestrator === true) return;
+		if (!env.HERDR_RUN_ID) return;
+		const checkpointClass = checkpointClassOf(env.HERDR_CHECKPOINT_CLASS);
+		this.checkpoints.set(runId, {
+			accumulator: new ProgressCheckpoint({
+				checkpointClass,
+				thresholds: checkpointThresholdsForClass(config, checkpointClass),
+				contextTokens: config.contextTokens,
+				readOnly,
+				// The fail-fast monitor owns a dead surface, so its exempt roles never
+				// report the failing-tool signal here either.
+				failingToolEligible: failFastEligibleRole(env.HERDR_ROLE),
+				isRegisteredTool: (tool) => this.registeredToolNames().has(tool),
+			}),
+			steer: config.steer,
+			stepId: env.HERDR_STEP_ID ?? "",
+			escalations: 0,
+		});
+	}
+
+	/** One committed turn for the run's checkpoint. Feeds the accumulator and
+	 * starts a due evaluation detached from the telemetry handler: a checkpoint
+	 * never delays the turn that triggered it. */
+	private observeCheckpointTurn(
+		runId: string,
+		turnIndex: number,
+		contextTokens: number,
+		costUnits: number,
+	): void {
+		const state = this.checkpoints.get(runId);
+		if (!state || !this.runs.has(runId)) return;
+		try {
+			state.accumulator.observeTurn({
+				turn: Math.max(1, turnIndex + 1),
+				contextTokens,
+				costUnits,
+			});
+		} catch (error) {
+			// An accumulator that cannot observe a turn must not break the turn.
+			this.log(
+				`run ${runId}: checkpoint observation failed: ${messageOf(error)}`,
+			);
+			return;
+		}
+		void this.maybeCheckpoint(runId).catch(() => undefined);
+	}
+
+	/** One finished tool call, which is the checkpoint's progress evidence. */
+	private observeCheckpointTool(
+		runId: string,
+		observation: ToolOutcomeObservation,
+	): void {
+		const state = this.checkpoints.get(runId);
+		if (!state) return;
+		try {
+			state.accumulator.observeTool({
+				tool: observation.tool,
+				ok: observation.ok,
+				...(observation.argsHash !== undefined
+					? { argsHash: observation.argsHash }
+					: {}),
+			});
+		} catch (error) {
+			this.log(
+				`run ${runId}: checkpoint tool observation failed: ${messageOf(error)}`,
+			);
+		}
+	}
+
+	/** The counters the run's `runtime.settled` envelope carries. */
+	private checkpointCounters(conversationId: ConversationId): {
+		checkpoints: number;
+		checkpointEscalations: number;
+	} {
+		const runId = this.boundRunId(conversationId);
+		const state = runId === undefined ? undefined : this.checkpoints.get(runId);
+		if (!state) return { checkpoints: 0, checkpointEscalations: 0 };
+		return {
+			checkpoints: state.accumulator.checkpoints,
+			checkpointEscalations: state.escalations,
+		};
+	}
+
+	/** Evaluate one checkpoint when one is due. One at a time per run, and the
+	 * whole body is fail-open: nothing here may throw into the conversation. */
+	private async maybeCheckpoint(runId: string): Promise<void> {
+		const state = this.checkpoints.get(runId);
+		if (!state || this.checkpointInFlight.has(runId)) return;
+		if (!state.accumulator.due()) return;
+		this.checkpointInFlight.add(runId);
+		const startedAt = Date.now();
+		let trigger: CheckpointTrigger = "soft";
+		try {
+			// The sample is only taken at a boundary: no run pays for a `git` call on
+			// a turn it does not checkpoint.
+			const { sample, errorClass } = await this.checkpointSampleFor(runId);
+			const due = state.accumulator.due();
+			if (!due) return;
+			trigger = due;
+			state.accumulator.noteSample(sample);
+			await this.evaluateCheckpoint(
+				runId,
+				state,
+				trigger,
+				startedAt,
+				errorClass,
+			);
+		} catch (error) {
+			this.checkpointErrored(runId, "evaluate", error, trigger, startedAt);
+		} finally {
+			this.checkpointInFlight.delete(runId);
+		}
+	}
+
+	/** The bounded worktree sample of one checkpoint. A sampler that fails is a
+	 * missing measurement: the checkpoint still evaluates on what it has, and the
+	 * failure is stated as its bounded error class rather than delaying the run. */
+	private async checkpointSampleFor(runId: string): Promise<{
+		sample: CheckpointSample;
+		errorClass?: string;
+	}> {
+		const context = this.runContexts.get(runId);
+		if (!context) return { sample: {} };
+		const sample = this.options.checkpointSample ?? sampleCheckpoint;
+		try {
+			return {
+				sample: await sample({
+					cwd: context.cwd,
+					...(context.env.HERDR_CHANGE_ID === undefined
+						? {}
+						: { changeId: context.env.HERDR_CHANGE_ID }),
+				}),
+			};
+		} catch (error) {
+			this.log(`run ${runId}: checkpoint sample failed: ${messageOf(error)}`);
+			return { sample: {}, errorClass: "sample" };
+		}
+	}
+
+	/** Decide, apply, record and report one checkpoint. `escalate` files the
+	 * developer question as its own last step, because that step is the only one
+	 * that may stop the run and it may only do so after the question exists. */
+	private async evaluateCheckpoint(
+		runId: string,
+		state: RunCheckpointState,
+		trigger: CheckpointTrigger,
+		startedAt: number,
+		sampleErrorClass?: string,
+	): Promise<void> {
+		const context = this.runContexts.get(runId);
+		if (!context || !this.runs.has(runId)) return;
+		const digest = state.accumulator.takeDigest(trigger, {
+			compactionAdmissible: this.checkpointCompactionAdmissible(runId, state),
+		});
+		const decision = decideCheckpoint(digest, { steer: state.steer });
+		state.accumulator.noteDecision(decision, digest);
+		const applied = await this.applyCheckpointDecision(runId, digest, decision);
+		const recording = await this.recordCheckpoint(
+			context,
+			state,
+			digest,
+			decision,
+			applied,
+		);
+		this.emitCheckpoint(context, digest, decision, applied, recording, {
+			startedAt,
+			...(sampleErrorClass === undefined ? {} : { sampleErrorClass }),
+		});
+		if (decision.action === "escalate")
+			await this.escalateCheckpoint(
+				runId,
+				state,
+				digest,
+				decision.rule,
+				startedAt,
+			);
+	}
+
+	/** Whether the cost ceiling's floor and loop guard admit a compaction now, so
+	 * the decider can only pick `compact` when the summarizer would run. */
+	private checkpointCompactionAdmissible(
+		runId: string,
+		state: RunCheckpointState,
+	): boolean {
+		const record = this.runs.get(runId);
+		if (!record) return false;
+		const ceiling = this.resolveRunCeiling(record);
+		const ceilingState = this.ceilings.get(record.conversationId);
+		if (!ceiling.active || !ceilingState) return false;
+		const decision = evaluateCompactionCeiling({
+			ceiling,
+			contextTokens: state.accumulator.digestPreview().contextTokens,
+			state: {
+				...ceilingState,
+				...(ceilingState.baselineTokens !== undefined
+					? { lastCompactionTokens: ceilingState.baselineTokens }
+					: {}),
+			},
+		});
+		return decision.kind === "compact";
+	}
+
+	/** Take the decision's action. `continue` is a no-op, `steer` submits one
+	 * catalog message, `compact` runs the ceiling's summarizer under its own
+	 * kind, and the two remaining actions act only through the escalation path.
+	 * A failed action is reported, never re-thrown. */
+	private async applyCheckpointDecision(
+		runId: string,
+		digest: CheckpointDigest,
+		decision: CheckpointDecision,
+	): Promise<CheckpointApplied> {
+		if (decision.action === "continue") return { applied: true };
+		if (decision.action === "steer") {
+			if (decision.signal === undefined)
+				return { applied: false, attention: "no signal to steer" };
+			try {
+				await this.submit(
+					runId,
+					checkpointSteerMessage(decision.signal, digest),
+					randomUUID(),
+					"steer",
+				);
+				return { applied: true };
+			} catch (error) {
+				this.log(
+					`run ${runId}: checkpoint steer not delivered: ${messageOf(error)}`,
+				);
+				return {
+					applied: false,
+					attention: "steer not delivered",
+					errorClass: "steer",
+				};
+			}
+		}
+		if (decision.action === "compact") {
+			try {
+				const admitted = await this.compactForCheckpoint(runId, digest);
+				return admitted
+					? { applied: true }
+					: { applied: false, attention: "compaction not admitted" };
+			} catch (error) {
+				this.log(
+					`run ${runId}: checkpoint compaction failed: ${messageOf(error)}`,
+				);
+				return {
+					applied: false,
+					attention: "compaction failed",
+					errorClass: "compact",
+				};
+			}
+		}
+		if (decision.action === "switch-model")
+			// Vocabulary only: no rule selects it, and nothing here would act on it.
+			return { applied: false, attention: "switch-model is not enabled" };
+		// `escalate` is applied by the escalation path, and only once its question
+		// exists; until then nothing about the run has changed.
+		return { applied: false, attention: "escalated as a developer question" };
+	}
+
+	/** Run the ceiling's summarizer for a `compact` decision, counted as
+	 * `auto-checkpoint` rather than `auto-ceiling`. */
+	private async compactForCheckpoint(
+		runId: string,
+		digest: CheckpointDigest,
+	): Promise<boolean> {
+		const record = this.runs.get(runId);
+		if (!record) return false;
+		const ceiling = this.resolveRunCeiling(record);
+		const ceilingState = this.ceilings.get(record.conversationId);
+		if (!ceiling.active || !ceilingState) return false;
+		const decision = evaluateCompactionCeiling({
+			ceiling,
+			contextTokens: digest.contextTokens,
+			state: {
+				...ceilingState,
+				...(ceilingState.baselineTokens !== undefined
+					? { lastCompactionTokens: ceilingState.baselineTokens }
+					: {}),
+			},
+		});
+		if (decision.kind !== "compact") return false;
+		await this.admitCompaction(
+			runId,
+			record,
+			ceilingState,
+			ceiling,
+			digest.contextTokens,
+			"auto-checkpoint",
+		);
+		return true;
+	}
+
+	/** Write the decision into the workflow's bounded history, up to the caps the
+	 * contract declares. A refusal is reported as `recorded: false`; a command
+	 * that failed is reported as an error and never ends the run. */
+	private async recordCheckpoint(
+		context: DurableRunContext,
+		state: RunCheckpointState,
+		digest: CheckpointDigest,
+		decision: CheckpointDecision,
+		applied: CheckpointApplied,
+	): Promise<CheckpointRecording> {
+		if (digest.ordinal > CHECKPOINT_RECORD_LIMIT)
+			return { recorded: false, failed: false };
+		const attention =
+			applied.attention === undefined
+				? `rule ${decision.rule}`
+				: `rule ${decision.rule}; ${applied.attention}`;
+		const record: ClassifierDecisionInput = {
+			integration: CHECKPOINT_INTEGRATION,
+			phase: state.stepId,
+			questionId: `checkpoint:${context.runId}:${digest.ordinal}`,
+			model: CHECKPOINT_DECIDER,
+			input: checkpointDigestInput(digest),
+			options: CHECKPOINT_ACTIONS.map((action) => ({
+				label: action,
+				profile: action,
+				criteria: CHECKPOINT_ACTION_SUMMARY[action],
+			})),
+			answer: checkpointAnswer(decision),
+			result: {
+				applied: applied.applied,
+				profiles: applied.applied ? [decision.action] : [],
+				attention,
+			},
+		};
+		const reply = await recordCheckpointDecision(context, record);
+		return { recorded: reply.recorded, failed: reply.failed === true };
+	}
+
+	/** Publish one checkpoint's fixed-field envelope. Every field is a number, a
+	 * boolean, a closed-vocabulary token or a registered tool name. */
+	private emitCheckpoint(
+		context: DurableRunContext,
+		digest: CheckpointDigest,
+		decision: CheckpointDecision,
+		applied: CheckpointApplied,
+		recording: CheckpointRecording,
+		timing: { startedAt: number; sampleErrorClass?: string },
+	): void {
+		const signals = checkpointSignalState(digest);
+		const errorClass =
+			applied.errorClass ??
+			timing.sampleErrorClass ??
+			(recording.failed ? "record" : undefined);
+		emitToolTelemetry(context.env, "runtime.checkpoint", {
+			"herdr.checkpoint.ordinal": digest.ordinal,
+			"herdr.checkpoint.trigger": digest.trigger,
+			"herdr.checkpoint.class": digest.checkpointClass,
+			"herdr.checkpoint.read_only": digest.readOnly,
+			"herdr.checkpoint.turns": digest.turns,
+			"herdr.checkpoint.cost_units": digest.costUnits,
+			"herdr.checkpoint.context_tokens": digest.contextTokens,
+			"herdr.checkpoint.peak_context_tokens": digest.peakContextTokens,
+			"herdr.checkpoint.soft_turns": digest.softTurns,
+			"herdr.checkpoint.hard_turns": digest.hardTurns,
+			"herdr.checkpoint.context_limit": digest.contextLimit,
+			"herdr.checkpoint.signals":
+				signals.length === 0 ? "none" : signals.join(","),
+			"herdr.checkpoint.turns_since_progress": digest.turnsSinceProgress,
+			"herdr.checkpoint.repeat_calls": digest.repeatCalls,
+			"herdr.checkpoint.window_calls": digest.windowCalls,
+			"herdr.checkpoint.failing_tool_streak": digest.failingToolStreak,
+			"herdr.checkpoint.cost_rising_ratio": digest.costRisingRatio,
+			"herdr.checkpoint.window_turns": digest.window.turns,
+			"herdr.checkpoint.window_progress": digest.window.progress,
+			"herdr.checkpoint.diff_files": digest.diff?.files ?? -1,
+			"herdr.checkpoint.ticked_tasks": digest.tickedTasks ?? -1,
+			"herdr.checkpoint.decision": decision.action,
+			"herdr.checkpoint.rule": decision.rule,
+			"herdr.checkpoint.applied": applied.applied,
+			"herdr.checkpoint.decider": CHECKPOINT_DECIDER,
+			"herdr.checkpoint.latency_ms": Math.max(0, Date.now() - timing.startedAt),
+			"herdr.checkpoint.recorded": recording.recorded,
+			"herdr.checkpoint.status": errorClass === undefined ? "ok" : "error",
+			...(errorClass === undefined
+				? {}
+				: { "herdr.checkpoint.error_class": errorClass }),
+		});
+	}
+
+	/** A checkpoint that failed open: the run keeps running, and the failure is
+	 * stated in the checkpoint's own envelope. */
+	private checkpointErrored(
+		runId: string,
+		errorClass: string,
+		error: unknown,
+		trigger: CheckpointTrigger,
+		startedAt: number,
+	): void {
+		this.log(
+			`run ${runId}: progress checkpoint failed open (${errorClass}): ${messageOf(error)}`,
+		);
+		const context = this.runContexts.get(runId);
+		if (!context) return;
+		emitToolTelemetry(context.env, "runtime.checkpoint", {
+			"herdr.checkpoint.trigger": trigger,
+			"herdr.checkpoint.decision": "continue",
+			"herdr.checkpoint.rule": "default",
+			"herdr.checkpoint.applied": false,
+			"herdr.checkpoint.decider": CHECKPOINT_DECIDER,
+			"herdr.checkpoint.latency_ms": Math.max(0, Date.now() - startedAt),
+			"herdr.checkpoint.recorded": false,
+			"herdr.checkpoint.status": "error",
+			"herdr.checkpoint.error_class": errorClass,
+		});
+	}
+
+	/** File the developer question an `escalate` decision asks, then apply its
+	 * answer: answered re-arms the run, unanswered or cancelled stops it. This is
+	 * the only place a checkpoint can stop a run, and the stop always names a
+	 * question the durable store holds. */
+	private async escalateCheckpoint(
+		runId: string,
+		state: RunCheckpointState,
+		digest: CheckpointDigest,
+		rule: string,
+		startedAt: number,
+	): Promise<void> {
+		const context = this.runContexts.get(runId);
+		if (!context) return;
+		const text = checkpointQuestion(digest);
+		const reply = await fileCheckpointQuestion(context, {
+			description: text.description,
+			context: text.context,
+			options: [
+				{
+					title: CHECKPOINT_QUESTION_OPTION.label,
+					value: CHECKPOINT_QUESTION_OPTION.id,
+					recommended: true,
+				},
+			],
+		});
+		if (
+			reply.failed === true ||
+			reply.id === undefined ||
+			reply.status === undefined
+		) {
+			this.emitCheckpointEscalation(context, digest, rule, {
+				outcome: "filing-failed",
+				...(reply.reason === undefined ? {} : { reason: reply.reason }),
+			});
+			// A question that cannot be filed is one of the fail-open outcomes: the
+			// run continues, and its own envelope states the bounded error class.
+			this.checkpointErrored(
+				runId,
+				"question",
+				reply.reason ?? "question not filed",
+				digest.trigger,
+				startedAt,
+			);
+			return;
+		}
+		state.escalations += 1;
+		if (reply.status === "answered") {
+			const custom =
+				reply.answer?.kind === "custom" ? reply.answer.value : undefined;
+			try {
+				await this.submit(
+					runId,
+					checkpointAnswerMessage(custom),
+					randomUUID(),
+					"steer",
+				);
+			} catch (error) {
+				this.log(
+					`run ${runId}: checkpoint answer not delivered: ${messageOf(error)}`,
+				);
+			}
+			// The answer resets the baseline: the hard limit moves ahead and the
+			// no-progress counter starts again, or the same digest escalates at once.
+			state.accumulator.rearmAfterEscalation();
+			this.emitCheckpointEscalation(context, digest, rule, {
+				outcome: "answered",
+				questionId: reply.id,
+			});
+			return;
+		}
+		// The question exists and was not answered in the grace window: now, and
+		// only now, the run stops and the developer is left with the question.
+		const park = reply.status === "pending";
+		this.emitCheckpointEscalation(context, digest, rule, {
+			outcome: park ? "pending-parked" : "cancelled",
+			questionId: reply.id,
+		});
+		await this.parkForCheckpoint(
+			runId,
+			park
+				? `progress checkpoint: the developer question ${reply.id} is still unanswered; the run is stopped and is re-issued when it is answered`
+				: `progress checkpoint: developer question ${reply.id} was cancelled, so the run is stopped`,
+		);
+	}
+
+	/** Publish one escalation's outcome. `outcome` is one of the four the dataset
+	 * counts, so the attribute is a closed vocabulary. */
+	private emitCheckpointEscalation(
+		context: DurableRunContext,
+		digest: CheckpointDigest,
+		rule: string,
+		fields: {
+			outcome: "answered" | "cancelled" | "pending-parked" | "filing-failed";
+			questionId?: string;
+			reason?: string;
+		},
+	): void {
+		emitToolTelemetry(context.env, "runtime.checkpoint_escalation", {
+			"herdr.checkpoint.ordinal": digest.ordinal,
+			"herdr.checkpoint.class": digest.checkpointClass,
+			"herdr.checkpoint.rule": rule,
+			"herdr.checkpoint.turns": digest.turns,
+			"herdr.checkpoint.outcome": fields.outcome,
+			...(fields.questionId === undefined
+				? {}
+				: { "herdr.checkpoint.question_id": fields.questionId }),
+			...(fields.reason === undefined
+				? {}
+				: { "herdr.checkpoint.reason": fields.reason }),
+		});
+	}
+
+	/** Stop the run because its own recorded question is unanswered. Mirrors the
+	 * fail-fast stop: abort the conversation, then record the `blocked` handoff
+	 * that tells the developer what the run is waiting for. */
+	private async parkForCheckpoint(
+		runId: string,
+		message: string,
+	): Promise<void> {
+		const record = this.runs.get(runId);
+		const context = this.runContexts.get(runId);
+		if (!record || !context) return;
+		if (this.boundRunId(record.conversationId) !== runId) return;
+		await this.serialized(record, async () => {
+			// The run may have handed off on its own while the question waited: then
+			// there is nothing left to stop, and no handoff to overwrite.
+			if (this.boundRunId(record.conversationId) !== runId) return;
+			const conversation = await this.harness.conversation(
+				record.conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			await conversation?.abort(BACKGROUND_CONTEXT);
+			try {
+				await recordCheckpointRunHandoff(context, message);
+			} catch (error) {
+				this.log(
+					`run ${runId}: checkpoint handoff not recorded: ${messageOf(error)}`,
+				);
+			}
+		});
 	}
 
 	/** Test-only: the cost ceiling resolved for one run, and what the host has
@@ -1756,6 +2484,10 @@ export class DurableHost {
 		// failure must be recorded against that run — never charged to the run now
 		// bound, which would stop an unrelated run (or block the workflow for it).
 		if (!this.runs.has(runId)) return;
+		// The checkpoint sees every finished call, whatever its monitor decided: a
+		// failing streak is one of its stall signals, and a successful `edit` is its
+		// clearest progress event.
+		this.observeCheckpointTool(runId, observation);
 		const monitor = this.toolSurfaces.get(conversationId);
 		if (!monitor) return;
 		const decision = monitor.observe(observation);
@@ -1905,6 +2637,10 @@ export class DurableHost {
 		if (!record) return;
 		this.abortedRuns.delete(runId);
 		this.reconciledRuns.delete(runId);
+		// The checkpoint belongs to this run alone, so it is dropped with it rather
+		// than with the conversation the run happened to hold.
+		this.checkpoints.delete(runId);
+		this.checkpointInFlight.delete(runId);
 		// The dead-surface monitor and probe belong to the run serving the
 		// conversation, not to the conversation itself: a successor ensured while this
 		// teardown is in flight installed its own, and dropping them here would turn
@@ -1937,6 +2673,8 @@ export class DurableHost {
 				this.ceilings.delete(record.conversationId);
 				this.telemetryIdentities.delete(record.conversationId);
 				this.ceilingPending.delete(record.conversationId);
+				this.checkpointPending.delete(record.conversationId);
+				this.checkpointCompactions.clear();
 			}
 			// The session binding is *not* deleted: the conversation outlives the run,
 			// and a later run of the same step and role recording a rebinding has to
