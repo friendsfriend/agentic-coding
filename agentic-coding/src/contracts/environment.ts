@@ -469,6 +469,11 @@ export const evidenceEntrySchema = Schema.Struct({
 	/** Pinned evidence is kept by any future prune and is not charged against
 	 * the workflow's cap. */
 	pinned: Schema.optional(Schema.Boolean),
+	/** This entry is the workflow's markdown report (`evidence-summary-subview`).
+	 * The newest flagged entry is the effective report; a manifest written before
+	 * the flag existed reads exactly as before, so the manifest version is
+	 * unchanged. */
+	report: Schema.optional(Schema.Boolean),
 	/** The flow segment a kept recording belongs to (`add-stage-flow-evidence`):
 	 * journal steps of that segment link to this video at their own offset. */
 	segment: Schema.optional(
@@ -560,6 +565,9 @@ export const evidenceAttachRequestSchema = Schema.Struct({
 	url: Schema.optional(evidenceText(2048)),
 	poster: Schema.optional(evidenceText(64)),
 	pinned: Schema.optional(Schema.Boolean),
+	/** Flag this entry as the workflow's report: `other` kind, `md`/`markdown`
+	 * text. The store refuses anything else under this flag. */
+	report: Schema.optional(Schema.Boolean),
 });
 export type EvidenceAttachRequest = typeof evidenceAttachRequestSchema.Type;
 

@@ -8,7 +8,13 @@ import type {
 	ObservationRequest,
 } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
-import { loadEvidence, loadEvidenceFile } from "../../src/tui/data/evidence.ts";
+import {
+	EVIDENCE_TEXT_MAX_CHARS,
+	EVIDENCE_TEXT_WINDOW_BYTES,
+	loadEvidence,
+	loadEvidenceFile,
+	loadEvidenceText,
+} from "../../src/tui/data/evidence.ts";
 import {
 	cache,
 	clearGateway,
@@ -145,4 +151,87 @@ test("an event for another repository leaves this workflow's evidence cached", a
 
 	expect((await loadEvidence("/repo", "wf-1"))?.entries).toHaveLength(1);
 	expect(observes).toBe(1);
+});
+
+test("a report is decoded from the same immutable bytes, and a missing file is absent", async () => {
+	const answers = new Map<string, Uint8Array | undefined>([
+		[
+			"01JREPORT",
+			new TextEncoder().encode("# Run report\n\nThe cart was empty.\n"),
+		],
+		["01JMISSING", undefined],
+	]);
+	const files: string[] = [];
+	configureGateway({
+		evidenceFile: async (_workflowId: string, id: string) => {
+			files.push(id);
+			return answers.get(id);
+		},
+	} as unknown as DashboardGateway);
+
+	expect(await loadEvidenceText("/repo", "wf-1", "01JREPORT")).toBe(
+		"# Run report\n\nThe cart was empty.\n",
+	);
+	// The report comes from the entry-bytes key, so re-opening it is a cache hit:
+	// a report's bytes are immutable once written.
+	expect(await loadEvidenceText("/repo", "wf-1", "01JREPORT")).toBe(
+		"# Run report\n\nThe cart was empty.\n",
+	);
+	expect(files).toEqual(["01JREPORT"]);
+
+	// A file the gateway answers as gone is `undefined`, which the subview reports
+	// as an absent report rather than an empty one.
+	expect(await loadEvidenceText("/repo", "wf-1", "01JMISSING")).toBeUndefined();
+});
+
+test("a report longer than the bound is truncated instead of rendered whole", async () => {
+	configureGateway({
+		evidenceFile: async () =>
+			new TextEncoder().encode("x".repeat(EVIDENCE_TEXT_MAX_CHARS + 500)),
+	} as unknown as DashboardGateway);
+
+	const text = await loadEvidenceText("/repo", "wf-1", "01JLONG");
+	expect(text).toHaveLength(EVIDENCE_TEXT_MAX_CHARS);
+});
+
+test("a report's bytes that are not UTF-8 decode without throwing", async () => {
+	// The store refuses a non-text report, but a manifest written by another
+	// revision could still name one: the read answers text rather than failing the
+	// page on a decoder error.
+	configureGateway({
+		evidenceFile: async () => new Uint8Array([0x23, 0x20, 0xff, 0xfe, 0x0a]),
+	} as unknown as DashboardGateway);
+
+	const text = await loadEvidenceText("/repo", "wf-1", "01JBINARY");
+	expect(text?.startsWith("# ")).toBe(true);
+	expect(text).toContain("\n");
+});
+
+test("a report's decode is bounded before the text bound is applied", async () => {
+	// The visible outcome (a long report is cut to `EVIDENCE_TEXT_MAX_CHARS`) is
+	// satisfied by decoding the whole file and then slicing, so this asserts what
+	// the decoder was handed instead: a multi-megabyte report costs one window.
+	const decode = TextDecoder.prototype.decode;
+	let decodedBytes = -1;
+	TextDecoder.prototype.decode = function (
+		this: TextDecoder,
+		input?: AllowSharedBufferSource,
+		options?: TextDecodeOptions,
+	) {
+		decodedBytes =
+			input instanceof Uint8Array ? input.byteLength : (input?.byteLength ?? 0);
+		return decode.call(this, input, options);
+	};
+	try {
+		configureGateway({
+			evidenceFile: async () =>
+				new Uint8Array(EVIDENCE_TEXT_WINDOW_BYTES + 4_000_000),
+		} as unknown as DashboardGateway);
+		expect(
+			await loadEvidenceText("/repo", "wf-1", "01JHUGEWINDOW"),
+		).toHaveLength(EVIDENCE_TEXT_MAX_CHARS);
+		expect(decodedBytes).toBe(EVIDENCE_TEXT_WINDOW_BYTES);
+	} finally {
+		TextDecoder.prototype.decode = decode;
+	}
 });

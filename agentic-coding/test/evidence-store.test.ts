@@ -138,6 +138,44 @@ describe("evidence layout and manifest", () => {
 		);
 	});
 
+	test("two attaches in the same millisecond keep commit order", async () => {
+		const { scope, write } = fixture();
+		const at = new Date(1_000_000_400_000);
+		// The same millisecond, and the second attach draws the *smaller* random
+		// tail: sorting by id would then put the revision before the report it
+		// revises, and "the workflow's report" is the greatest id.
+		const earlier = await attachEvidence(scope, {
+			path: write(
+				"report.md",
+				Buffer.from("# Run report\n\nThe cart was empty.\n"),
+			),
+			kind: "other",
+			caption: "run report",
+			report: true,
+			now: () => at,
+			random: () => new Uint8Array(16).fill(31),
+		});
+		const later = await attachEvidence(scope, {
+			path: write(
+				"report-2.md",
+				Buffer.from("# Run report\n\nThe cart was empty.\n"),
+			),
+			kind: "other",
+			caption: "run report, revised",
+			report: true,
+			now: () => at,
+			random: () => new Uint8Array(16).fill(0),
+		});
+		expect(later.id.localeCompare(earlier.id)).toBeGreaterThan(0);
+		expect(listEvidence(scope).entries.map((entry) => entry.caption)).toEqual([
+			"run report",
+			"run report, revised",
+		]);
+		// The nudge is confined to the ordering key: the wall clock the entry
+		// records is still the one the attach was given.
+		expect(later.createdAt).toBe(at.toISOString());
+	});
+
 	test("evidence for one debug request is stored under its own directory", async () => {
 		const { scope, write } = fixture();
 		const source = write("trace.zip", ZIP);
@@ -240,6 +278,101 @@ describe("kind and content checks", () => {
 				caption: "wrong bytes",
 			}),
 		).rejects.toMatchObject({ code: "evidence-kind" });
+	});
+
+	test("a report is markdown text, and the flag is what makes one", async () => {
+		const { scope, write } = fixture();
+		const entry = await attachEvidence(scope, {
+			path: write(
+				"report.md",
+				Buffer.from(
+					"# Run report\n\nThe cart was empty [^01JCAAAAAAAAAAAAAAAAAAAAAA].\n",
+				),
+			),
+			kind: "other",
+			caption: "run report",
+			report: true,
+		});
+		expect(entry.report).toBe(true);
+		expect(entry.kind).toBe("other");
+		expect(entry.file).toBe(`${entry.id}.md`);
+		// The flag is recorded in the manifest, not only in the answer.
+		expect(writtenManifest(scope).entries[0]?.report).toBe(true);
+
+		// The same file without the flag is an ordinary entry: markdown is already
+		// storable, and only the flag says it is the run's report.
+		const plain = await attachEvidence(scope, {
+			path: write("notes.md", Buffer.from("# Notes\n")),
+			kind: "other",
+			caption: "notes",
+		});
+		expect(plain.report).toBeUndefined();
+		expect(writtenManifest(scope).entries[1]?.report).toBeUndefined();
+	});
+
+	test("a report that is not markdown text is refused rather than stored", async () => {
+		const { scope, write } = fixture();
+		// A report is read as markdown, so a picture cannot be one…
+		await expect(
+			attachEvidence(scope, {
+				path: write("shot.png", PNG),
+				kind: "screenshot",
+				caption: "a picture",
+				report: true,
+			}),
+		).rejects.toMatchObject({ code: "evidence-kind" });
+		// …nor can markdown text stored under an extension no renderer reads…
+		await expect(
+			attachEvidence(scope, {
+				path: write("report.txt", Buffer.from("# Run report\n")),
+				kind: "other",
+				caption: "wrong name",
+				report: true,
+			}),
+		).rejects.toMatchObject({ code: "evidence-kind" });
+		// …nor bytes that are not text at all.
+		await expect(
+			attachEvidence(scope, {
+				path: write("report.md", Buffer.from([0x00, 0x01, 0x02, 0x00])),
+				kind: "other",
+				caption: "binary",
+				report: true,
+			}),
+		).rejects.toMatchObject({ code: "evidence-kind" });
+		// A refusal stores nothing.
+		expect(listEvidence(scope).entries).toEqual([]);
+	});
+
+	test("a manifest written before the report flag keeps working", async () => {
+		const { scope, write } = fixture();
+		const older = await attachEvidence(scope, {
+			path: write("one.log", Buffer.from("a line\n")),
+			kind: "log",
+			caption: "before the flag",
+		});
+		// An entry with no `flag` field and no manifest version, exactly what an
+		// earlier server wrote.
+		const manifest = writtenManifest(scope);
+		delete (manifest as { version?: number }).version;
+		fs.writeFileSync(
+			path.join(scope.root, "manifest.json"),
+			JSON.stringify(manifest),
+		);
+		expect(listEvidence(scope).entries.map((entry) => entry.id)).toEqual([
+			older.id,
+		]);
+		expect(listEvidence(scope).entries[0]?.report).toBeUndefined();
+		// A newer report attaches onto the older manifest instead of resetting it.
+		const report = await attachEvidence(scope, {
+			path: write("report.md", Buffer.from("# Run report\n")),
+			kind: "other",
+			caption: "run report",
+			report: true,
+		});
+		expect(listEvidence(scope).entries.map((entry) => entry.id)).toEqual([
+			older.id,
+			report.id,
+		]);
 	});
 
 	test("video, trace and script accept their own content", async () => {

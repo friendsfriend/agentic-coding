@@ -8,6 +8,7 @@ import path from "node:path";
 import { decodeContract } from "../src/contracts/decode.ts";
 import {
 	evidenceAttachRequestSchema,
+	evidenceEntrySchema,
 	observeRequestSchema,
 } from "../src/contracts/environment.ts";
 import {
@@ -104,6 +105,70 @@ describe("the owner-scoped evidence routes", () => {
 		expect(value.workflowId).toBe(WORKFLOW_ID);
 		expect(value.entries).toHaveLength(1);
 		expect(value.quotaBytes).toBeGreaterThan(0);
+	});
+
+	test("a report flag is forwarded, and only a markdown file may carry it", async () => {
+		const { worktree } = fixture();
+		const report = path.join(worktree, "report.md");
+		fs.writeFileSync(report, "# Run report\n\nThe cart was empty.\n");
+		const deps = { locate: locateFor(worktree) };
+		const attached = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{
+				body: {
+					path: report,
+					kind: "other",
+					caption: "run report",
+					report: true,
+				},
+			},
+		);
+		expect(attached.status).toBe(201);
+		expect((attached.body.value as Record<string, unknown>).report).toBe(true);
+		// The flag is recorded on the manifest entry, which is what makes the entry
+		// the run's report rather than one attachment among others.
+		const listed = await callAgentRoute(deps, "GET", EVIDENCE_AGENT_LIST_PATH);
+		const value = listed.body.value as {
+			entries: Array<Record<string, unknown>>;
+		};
+		expect(value.entries[0]).toMatchObject({
+			kind: "other",
+			report: true,
+		});
+
+		// A markdown file attached without the flag is an ordinary entry.
+		const plain = path.join(worktree, "notes.md");
+		fs.writeFileSync(plain, "# Notes\n");
+		const ordinary = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{ body: { path: plain, kind: "other", caption: "notes" } },
+		);
+		expect(
+			(ordinary.body.value as Record<string, unknown>).report,
+		).toBeUndefined();
+
+		// The flag is a claim the store checks: a picture is not a report.
+		const shot = path.join(worktree, "shot.png");
+		fs.writeFileSync(shot, PNG);
+		const refused = await callAgentRoute(
+			deps,
+			"POST",
+			EVIDENCE_AGENT_ATTACH_PATH,
+			{
+				body: {
+					path: shot,
+					kind: "screenshot",
+					caption: "not a report",
+					report: true,
+				},
+			},
+		);
+		expect(refused.status).toBe(400);
+		expect((refused.body.error as { code: string }).code).toBe("evidence-kind");
 	});
 
 	test("an attach outside the workflow's checkout is refused", async () => {
@@ -409,6 +474,52 @@ describe("evidence contracts", () => {
 		).toThrow();
 		expect(() =>
 			decodeRouteRequest(url, { kind: "screenshot", caption: "shot" }),
+		).toThrow();
+		// The report flag is a boolean on the same body: a markdown attach may set
+		// it, and a value that is not a boolean is not a report.
+		expect(() =>
+			decodeRouteRequest(url, {
+				path: "/tmp/report.md",
+				kind: "other",
+				caption: "run report",
+				report: true,
+			}),
+		).not.toThrow();
+		expect(() =>
+			decodeRouteRequest(url, {
+				path: "/tmp/report.md",
+				kind: "other",
+				caption: "run report",
+				report: "yes",
+			}),
+		).toThrow();
+	});
+
+	test("a manifest entry decodes with and without the report flag", () => {
+		// The flag is additive: a manifest an earlier server wrote carries no
+		// `report` key, and its entries still decode to a listed entry.
+		const base = {
+			id: "01JENTRY0000000000000000000",
+			kind: "other",
+			file: "01JENTRY0000000000000000000.md",
+			caption: "run report",
+			createdAt: "2026-01-01T12:04:05.000Z",
+			bytes: 300,
+		};
+		expect(
+			decodeContract("test.entry", evidenceEntrySchema, base),
+		).not.toHaveProperty("report");
+		const flagged = decodeContract("test.entry", evidenceEntrySchema, {
+			...base,
+			report: true,
+		}) as { report?: boolean };
+		expect(flagged.report).toBe(true);
+		// A value that is not a boolean is not a report flag.
+		expect(() =>
+			decodeContract("test.entry", evidenceEntrySchema, {
+				...base,
+				report: "yes",
+			}),
 		).toThrow();
 	});
 

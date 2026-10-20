@@ -15,6 +15,7 @@ import { createSignal } from "solid-js";
 import {
 	agentSessionKeybindCatalog,
 	dashboardDetailKeybindCatalog,
+	evidenceSubviewKeybindCatalog,
 	panelContext,
 	workflowLaunchKeybindCatalog,
 } from "../../src/tui/dash/keybinds.ts";
@@ -73,20 +74,36 @@ describe("keybind catalog contract", () => {
 	});
 
 	it("scopes the Evidence panel's actions to the evidence context", () => {
-		// The panel is always rendered (empty state included), so `Enter` and `y`
-		// are always in the catalog and always context-scoped.
+		// The panel is always rendered (empty state included), so the way into the
+		// evidence view is always in the catalog and always context-scoped. The
+		// listing's own actions belong to the view's catalog, not the grid's.
 		const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: false });
 		expect(catalogKeybinds(catalog).map((keybind) => keybind.action)).toContain(
-			"Open evidence externally",
+			"Open the evidence view",
 		);
 		const evidence = footerKeybinds(catalog, "evidence").map(
 			(keybind) => keybind.action,
 		);
-		expect(evidence).toContain("Open evidence externally");
-		expect(evidence).toContain("Copy evidence path");
+		expect(evidence).toContain("Open the evidence view");
+		// The listing's own actions are the view's, so the grid advertises neither.
+		expect(evidence).not.toContain("Copy selected evidence path");
+		expect(evidence).not.toContain("Open stage flow page");
 		expect(
 			footerKeybinds(catalog, "change").map((keybind) => keybind.action),
-		).not.toContain("Open evidence externally");
+		).not.toContain("Open the evidence view");
+		// The view publishes its own surface while it replaces the grid.
+		const view = evidenceSubviewKeybindCatalog({ flow: true });
+		expect(view.map((section) => section.title)).toEqual(["Evidence view"]);
+		expect(footerKeybinds(view).map((keybind) => keybind.short)).toEqual([
+			"back",
+			"open",
+			"copy",
+			"scroll",
+			"flow",
+		]);
+		expect(catalogKeybinds(view).map((keybind) => keybind.action)).toContain(
+			"Move in the evidence list",
+		);
 	});
 
 	it("publishes the session's keys while the agent page replaces the grid", () => {
@@ -211,6 +228,32 @@ test("help modal lists every keybind from the active catalog", async () => {
 	expect(frame).toContain("Open selected artifact");
 	expect(frame).toContain("View selected verifier result");
 	expect(frame).toContain("View selected classification");
+	t.renderer.destroy();
+});
+
+test("the `?` help lists the evidence view's own catalog while the view is open", async () => {
+	// The view replaces the grid, so it publishes its catalog like the agent
+	// session does: the `?` modal then lists the sidebar actions, the report scroll
+	// (standard keys included) and, with a journal, the open-flow action.
+	setActiveKeybindCatalog(
+		evidenceSubviewKeybindCatalog({ flow: true }),
+		undefined,
+	);
+	const t = await testRender(
+		() => <HelpModal title="Dashboard keybindings" offset={0} lines={40} />,
+		{ width: 100, height: 40 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Evidence view");
+	expect(frame).toContain("Back to the dashboard panels");
+	expect(frame).toContain("Open selected evidence");
+	expect(frame).toContain("Copy selected evidence path");
+	expect(frame).toContain("Scroll the report");
+	expect(frame).toContain("Open stage flow page");
+	// The grid's panel actions are not part of the page's catalog.
+	expect(frame).not.toContain("Open the evidence view");
+	expect(frame).not.toContain("Move between panels");
 	t.renderer.destroy();
 });
 

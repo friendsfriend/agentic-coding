@@ -103,6 +103,12 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 				agentView(value, ctx) {
 					ctx.require("agent.view", String(value));
 				},
+				// The evidence subview is the same kind of page: it owns `/`, `f`, `y`,
+				// `Enter` and `Esc` while it is open, so it needs its own field. Sharing
+				// `agent.view` would make one page close the other's key layer.
+				evidenceView(value, ctx) {
+					ctx.require("evidence.view", String(value));
+				},
 				// The Home Orchestrator session page has its own field: the workflow
 				// dashboard repairs `agent.view` before every key, so sharing it would
 				// let a mounted dashboard close the orchestrator's model picker.

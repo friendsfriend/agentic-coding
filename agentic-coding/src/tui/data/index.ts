@@ -67,8 +67,24 @@ interface InternalEntry {
 	generation: number;
 }
 
+/** A read that completed after its key moved on — a newer generation, an
+ * invalidation or a cleared cache. The cache discards such an answer, which is a
+ * different fact from the loader answering `undefined`: a caller that has to tell
+ * "gone" from "outdated" asks for `superseded: "reject"` and gets this error
+ * instead of a `undefined` it cannot interpret. */
+export class SupersededRead extends Error {
+	constructor(readonly key: DataKey) {
+		super(`superseded read: ${key}`);
+		this.name = "SupersededRead";
+	}
+}
+
 export interface ReadOptions {
 	readonly signal?: AbortSignal;
+	/** What a completion the key moved on from answers. The default (`"undefined"`)
+	 * keeps the historical `undefined`; `"reject"` throws `SupersededRead`, for a
+	 * caller whose loader can legitimately answer `undefined` itself. */
+	readonly superseded?: "undefined" | "reject";
 	/** Workflow revision the caller rendered; a read at a new revision replaces
 	 * the cached value, and a late result from an older generation is dropped. */
 	readonly revision?: number;
@@ -128,7 +144,10 @@ export class DataCache {
 		try {
 			const value = await loader(controller.signal);
 			// A read that started before the selection changed must not publish.
-			if (entry.generation !== generation) return undefined;
+			if (entry.generation !== generation) {
+				if (options.superseded === "reject") throw new SupersededRead(key);
+				return undefined;
+			}
 			entry.set({
 				value,
 				...(options.revision !== undefined

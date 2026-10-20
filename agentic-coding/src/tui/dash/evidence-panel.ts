@@ -1,17 +1,18 @@
-// The Evidence panel's pure view model (add-dashboard-evidence-panel, tasks
-// 2.1/2.2).
+// The Evidence panel's pure view model (`add-dashboard-evidence-panel` tasks
+// 2.1/2.2, reworked into the summary by `evidence-summary-subview`).
 //
-// Manifest in, display data out: the grouping by debug request, the one-line
-// label of each entry, the entry whose bytes the preview renders, and the
-// metadata lines a terminal without kitty graphics gets instead. No I/O and no
-// clock — the manifest already carries every timestamp this reads.
+// Manifest in, display data out: the one-line kind summary the panel paints, the
+// report entry the subview renders, the grouping by debug request or stage flow,
+// the one-line label of each row, and the metadata lines beside the list. No I/O
+// and no clock — the manifest already carries every timestamp this reads.
 //
 // The request an entry belongs to is read from the stored file name through the
 // evidence store's own inverse (`evidenceRequestIdOf`), never re-derived from
 // the `req-` convention here.
-import type {
-	EvidenceEntry,
-	EvidenceKind,
+import {
+	EVIDENCE_KINDS as CONTRACT_EVIDENCE_KINDS,
+	type EvidenceEntry,
+	type EvidenceKind,
 } from "../../contracts/environment.ts";
 import type {
 	StageJournal,
@@ -25,55 +26,135 @@ import { evidenceRequestIdOf } from "../../workflow/runtime/evidence-store.ts";
 export type EvidenceReadState = "loading" | "ready" | "error";
 
 /** The Evidence panel's height in lines when the manifest has something to
- * list: its title row and a short body. The listing scrolls inside that body,
- * so the panel's height is a display budget and never the manifest's length. */
-export const EVIDENCE_PANEL_LINES = 8;
-
-/** The height for a read in flight or a read that failed with nothing to list:
- * the title row and the one message that says so. */
-export const EVIDENCE_MESSAGE_LINES = 2;
+ * summarise or the read did not succeed: its title row and the one summary
+ * line. The height is a display budget and never the manifest's length — the
+ * reading surface is the subview, so a long manifest costs the panels above it
+ * nothing. */
+export const EVIDENCE_PANEL_LINES = 2;
 
 /** The height for a read that succeeded with nothing attached: the single title
  * row carries the empty state, so a run with no evidence spends one line. */
 export const EVIDENCE_EMPTY_LINES = 1;
 
-/** The share of the host's rows the compact height is allowed to fill. Only a
- * short terminal reads it: the fixed height is what the panel asks for, and
- * this keeps the grid above it from being crowded on a very small window. */
-const EVIDENCE_PANEL_SHARE = 0.3;
+/** The order the summary counts kinds in: the contract's own list, which is fixed,
+ * so the same manifest always paints the same line and a kind added to the
+ * contract cannot silently drop out of the summary. */
+export const EVIDENCE_KINDS: readonly EvidenceKind[] = Object.freeze([
+	...CONTRACT_EVIDENCE_KINDS,
+]);
+
+/** The plural each kind is counted under. */
+const KIND_PLURAL: Readonly<Record<EvidenceKind, string>> = Object.freeze({
+	screenshot: "screenshots",
+	video: "videos",
+	trace: "traces",
+	script: "scripts",
+	log: "logs",
+	other: "others",
+});
 
 /**
  * The Evidence row's height in lines for one read state.
  *
  * Bounded on purpose: the panel is the last row of the detail grid, so every
- * line it takes is a line the panels above it (the agents list in particular)
- * do not get. It is compact by default, collapses to its title row while the
- * run has attached nothing, and never grows with the manifest — the listing
- * windows itself instead.
+ * line it takes is a line the panels above it (the agents list in particular) do
+ * not get. It is the title row plus at most one summary row, and collapses to
+ * the title row while the run has attached nothing.
  */
 export function evidencePanelLines(input: {
-	/** How many rows the listing paints — evidence *and* journal steps. The count
-	 * is of rows, not of entries, because a workflow whose flow journal holds steps
-	 * and no evidence has a listing to show: an entry count would collapse the panel
-	 * onto its title row and clip the very list the journal was written for. */
-	readonly rows: number;
+	/** How many entries the manifest holds: the summary is one line whether the
+	 * manifest has one entry or a thousand. */
+	readonly entries: number;
 	readonly state: EvidenceReadState;
-	/** The terminal's rows. A cap only: the host's chrome may leave the dashboard
-	 * fewer rows than this, which is why the panels measure their own body. */
-	readonly terminalLines: number;
 }): number {
-	if (input.rows === 0)
-		return input.state === "ready"
-			? EVIDENCE_EMPTY_LINES
-			: EVIDENCE_MESSAGE_LINES;
-	const cap = Math.max(
-		EVIDENCE_MESSAGE_LINES,
-		Math.round(input.terminalLines * EVIDENCE_PANEL_SHARE),
-	);
-	return Math.min(EVIDENCE_PANEL_LINES, cap);
+	if (input.state !== "ready") return EVIDENCE_PANEL_LINES;
+	return input.entries > 0 ? EVIDENCE_PANEL_LINES : EVIDENCE_EMPTY_LINES;
 }
 
-/** One row of the panel's list. A row either selects an evidence entry or — in
+/** How many entries of each kind the manifest holds. */
+export function evidenceKindCounts(
+	entries: readonly EvidenceEntry[],
+): Readonly<Record<EvidenceKind, number>> {
+	const counts: Record<EvidenceKind, number> = {
+		screenshot: 0,
+		video: 0,
+		trace: 0,
+		script: 0,
+		log: 0,
+		other: 0,
+	};
+	for (const entry of entries) counts[entry.kind] += 1;
+	return counts;
+}
+
+/**
+ * The panel's one summary line: the kind counts in fixed order, singular and
+ * plural correct, with zero-count kinds omitted (`3 screenshots · 10 logs ·
+ * 1 video`). A manifest with no entries has nothing to count, so the caller
+ * paints its empty state instead.
+ */
+export function evidenceKindSummary(entries: readonly EvidenceEntry[]): string {
+	const counts = evidenceKindCounts(entries);
+	return EVIDENCE_KINDS.filter((kind) => counts[kind] > 0)
+		.map((kind) =>
+			counts[kind] === 1 ? `1 ${kind}` : `${counts[kind]} ${KIND_PLURAL[kind]}`,
+		)
+		.join(" · ");
+}
+
+/**
+ * The workflow's report: the newest entry carrying the `report` flag. The store's
+ * ids are its own ordering key — an id's time prefix is creation order, and
+ * attaches are serialized under the evidence-root lock and nudged forward when
+ * two land in the same millisecond, so the greatest id is the last report
+ * committed. A revised report is a second flagged entry, so an older one stays an
+ * ordinary listed entry and reading "the report" needs no mutation of the
+ * manifest.
+ *
+ * A scan, not a sort: the answer is one maximum, and this runs on every manifest
+ * refresh from two memos (the route's report read and the panel's marker).
+ */
+export function evidenceReportEntry(
+	entries: readonly EvidenceEntry[],
+): EvidenceEntry | undefined {
+	let newest: EvidenceEntry | undefined;
+	for (const entry of entries)
+		if (
+			entry.report === true &&
+			(newest === undefined || entry.id.localeCompare(newest.id) > 0)
+		)
+			newest = entry;
+	return newest;
+}
+
+/** Whether the manifest holds a report at all: the panel's `report` marker needs
+ * existence, never the entry, so it costs one pass and no comparator. */
+export function evidenceHasReport(entries: readonly EvidenceEntry[]): boolean {
+	return entries.some((entry) => entry.report === true);
+}
+
+/** One marker on an Evidence surface's title row. */
+export interface EvidenceMarker {
+	readonly text: string;
+	readonly failure: boolean;
+}
+
+/**
+ * The marker a surface carries for the manifest read once it already paints a
+ * listing: a refresh that failed is marked wherever the entries are shown — the
+ * grid's summary row and the subview's sidebar both — so a stale list is never
+ * passed off as a live one. A read in flight over rows that are already painted
+ * needs no marker; the rows are the answer until the read replaces them.
+ */
+export function evidenceReadFailureMarker(
+	state: EvidenceReadState,
+): EvidenceMarker | undefined {
+	return state === "error"
+		? { text: "last read failed", failure: true }
+		: undefined;
+}
+
+/** One row of the evidence list. A row either selects an evidence entry or — in
  * a workflow that has a stage flow journal — a journal step, which has no file
  * to open; the row that opens a group carries its heading. */
 export interface EvidenceListRow {
@@ -109,9 +190,12 @@ function recordedTime(entry: EvidenceEntry): string {
 		: entry.createdAt;
 }
 
-/** One entry's row label: kind, caption, producing step or role, time, size. */
+/** One entry's row label: kind, caption, producing step or role, time, size. A
+ * flagged report says so, so the sidebar does not mistake it for browsing
+ * material. */
 export function evidenceRowLabel(entry: EvidenceEntry): string {
 	const parts = [entry.caption.trim() || entry.kind];
+	if (entry.report === true) parts.push("report");
 	const producer = entry.step ?? entry.role;
 	if (producer) parts.push(producer);
 	parts.push(recordedTime(entry));
@@ -126,7 +210,8 @@ export function evidenceRowLabel(entry: EvidenceEntry): string {
  * ordered by their newest entry, so the most recent work is at the top.
  *
  * A workflow that has a stage flow journal gets the flow grouping instead
- * (`add-stage-flow-evidence`); one that has none renders exactly as before.
+ * (`add-stage-flow-evidence`), which is the grouping the subview's sidebar keeps;
+ * one that has none renders exactly as before.
  */
 export function evidenceRows(
 	entries: readonly EvidenceEntry[],
@@ -178,7 +263,7 @@ export function evidenceStepLabel(step: StageJournalEntry): string {
 	return `${STEP_GLYPH} ${parts}${where === "" ? "" : ` · ${where}`}`;
 }
 
-/** What one journal step says, for the panel's detail column: where and when it
+/** What one journal step says, for the sidebar's detail rows: where and when it
  * ran, what it expected and saw, and what it captured. A step has no file, so
  * this is all a developer can be told about it besides its row. */
 export function evidenceStepDetailLines(step: StageJournalEntry): string[] {
@@ -280,32 +365,10 @@ function evidenceFlowRows(
 }
 
 /**
- * The entry whose bytes the preview renders for `selectedIndex`: the entry
- * itself when it is a screenshot, or the screenshot a video names as its
- * poster. Every other kind — and a video without a poster — has no image of its
- * own, so the preview stays metadata: a video's bytes are never decoded inline.
- */
-export function evidencePreviewEntry(
-	rows: readonly EvidenceListRow[],
-	selectedIndex: number,
-): EvidenceEntry | undefined {
-	const entry = rows[selectedIndex]?.entry;
-	if (!entry) return undefined;
-	if (entry.kind === "screenshot") return entry;
-	if (entry.kind !== "video" || !entry.poster) return undefined;
-	const poster = rows.find(
-		(candidate) => candidate.entry?.id === entry.poster,
-	)?.entry;
-	// Only a screenshot is an image: a poster that names a trace, a log or
-	// another video leaves the preview at metadata rather than mounting bytes the
-	// renderer cannot decode.
-	return poster?.kind === "screenshot" ? poster : undefined;
-}
-
-/**
- * The metadata lines the preview shows: what the entry is and how large it is,
- * when it was recorded, who produced it, where it came from, its caption, and —
- * when the route could compose it — the local path of the stored file.
+ * The metadata lines beside the sidebar list: what the entry is and how large it
+ * is, when it was recorded, who produced it, where it came from, its caption,
+ * and — when the route could compose it — the local path of the stored file.
+ * This is the non-kitty text fallback the report pane and the sidebar share.
  */
 export function evidenceDetailLines(
 	entry: EvidenceEntry,

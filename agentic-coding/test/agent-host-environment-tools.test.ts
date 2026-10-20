@@ -290,6 +290,44 @@ describe("evidence tools", () => {
 		});
 	});
 
+	test("a report attach forwards the flag, and an ordinary attach does not", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ id: "01JCAAAAAAAAAAAAAAAAAAAAAA", kind: "other" }],
+		};
+		await callEvidence(
+			"evidence_attach",
+			{
+				path: "/tmp/evidence-run/report.md",
+				kind: "other",
+				caption: "run report",
+				report: true,
+			},
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			path: "/tmp/evidence-run/report.md",
+			kind: "other",
+			caption: "run report",
+			step: "core.implementation",
+			role: "worker",
+			report: true,
+		});
+		// The flag is absent unless it was set: an allow-list body that always
+		// carried `report: false` would make every attachment look like a decision
+		// about the run's report.
+		await callEvidence(
+			"evidence_attach",
+			{
+				path: "/tmp/evidence-run/notes.md",
+				kind: "other",
+				caption: "notes",
+			},
+			server,
+		);
+		expect(server.calls[1]?.body).not.toHaveProperty("report");
+	});
+
 	test("a relative path is resolved against the run's own directory", async () => {
 		const server: FakeServer = { calls: [], replies: [{ id: "x" }] };
 		await callEvidence(

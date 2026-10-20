@@ -234,6 +234,18 @@ routes, the observation and the engine cannot disagree about where evidence is.
   workspace (and reports remaining evidence in its observation, so a
   repository-mode workflow still loses it), and workflow deletion removes it in
   the same step.
+- **The report is an entry, not a kind.** `evidence_attach` takes a `report`
+  flag: the store accepts it only on kind `other` with a `.md`/`.markdown` text
+  file, so a report is an ordinary manifest entry (`report: true` — no new kind,
+  no renamed path, no manifest version bump, and a manifest written before the
+  flag reads exactly as before). A revised report is a second flagged entry and
+  the newest one is the effective report, so replacing it never mutates the
+  manifest. The dashboard's Evidence panel is a one-line kind summary; `Enter`
+  opens the evidence subview, whose report pane renders that markdown with the
+  wiki's own renderer and resolves `[^<evidence-id>]` citations against the
+  manifest, with cited screenshots inline on kitty terminals.
+  `src/tui/dash/evidence-panel.ts` and `evidence-report.ts` hold both view
+  models (`evidence-summary-subview`).
 
 ## Custom workflow definitions
 
