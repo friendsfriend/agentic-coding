@@ -63,6 +63,9 @@ export interface DashboardKeyContext {
 	readonly openEvidence: (entry: EvidenceEntry) => void;
 	/** Copy one evidence file's local path to the clipboard. */
 	readonly copyEvidencePath: (entry: EvidenceEntry) => void;
+	/** Open the workflow's `stage-flow.html` with the system opener, when it has
+	 * a stage flow journal. */
+	readonly openEvidenceFlow: () => void;
 	readonly artifacts: () => string[];
 	readonly data: () => DashboardData;
 	readonly dimensions: () => { width: number; height: number };
@@ -434,8 +437,27 @@ export function createDashboardKeyHandler(
 			return;
 		}
 		if (name === "y" && activePanel() === EVIDENCE_PANEL) {
+			// A step row names no file of its own: it is part of the segment heading's
+			// narrative, so copying it would copy nothing — and saying so is better
+			// than a key that silently does nothing on the row it is pressed on.
 			const row = evidenceRows()[selectedEvidence()];
-			if (row) context.copyEvidencePath(row.entry);
+			if (row?.entry) context.copyEvidencePath(row.entry);
+			else if (row?.step)
+				// Only what always holds: a step row can sit in a segment, in the
+				// trailing "unreferenced" group, or in a segment whose recording was
+				// discarded — naming "the segment's evidence rows" would be false in two
+				// of the three, and point at rows the panel is not showing.
+				notify(
+					"A stage flow step names no file — press f for the flow page, or pick an evidence row to copy a path",
+					"info",
+				);
+			return;
+		}
+		if (name === "f" && activePanel() === EVIDENCE_PANEL) {
+			// The flow page of a workflow that has a journal: one keybind away, like
+			// the evidence files themselves. A workflow without a journal offers no
+			// page, and the action is a no-op there.
+			context.openEvidenceFlow();
 			return;
 		}
 		if (name === "r") {
@@ -571,9 +593,12 @@ export function createDashboardKeyHandler(
 			}
 			if (activePanel() === EVIDENCE_PANEL) {
 				// Every kind opens the stored file externally — including a video,
-				// whose bytes are never rendered inline.
+				// whose bytes are never rendered inline. A journal step row has no file
+				// of its own, so it opens the flow page the step is written into: the
+				// step's own record, in the order it happened.
 				const row = evidenceRows()[selectedEvidence()];
-				if (row) context.openEvidence(row.entry);
+				if (row?.entry) context.openEvidence(row.entry);
+				else if (row?.step !== undefined) context.openEvidenceFlow();
 				return;
 			}
 			const approval = gate();

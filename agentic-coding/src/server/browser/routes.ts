@@ -21,7 +21,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
-import type { EvidenceEntry } from "../../contracts/environment.ts";
+import type {
+	EvidenceEntry,
+	EvidenceManifest,
+} from "../../contracts/environment.ts";
+import type { StageJournalEntry } from "../../contracts/stages.ts";
 import {
 	BROWSER_MAX_IMAGE_WIDTH,
 	type ResolvedBrowserSettings,
@@ -30,6 +34,16 @@ import { workflowEvidenceScope } from "../../workflow/runtime/evidence-store.ts"
 import { readJsonBody } from "../auth.ts";
 import { environmentSecrets, redact } from "../environment/agent-routes.ts";
 import type { EnvironmentManager } from "../environment/manager.ts";
+import {
+	appendStageJournalEntry,
+	backfillStageJournalVideo,
+	clearStageJournalSegment,
+	highestStageSegment,
+	type JournalRedactor,
+	journalSummary,
+	writeStageFlowPage,
+	writeStageFlowPageUnlocked,
+} from "../evidence/journal.ts";
 import {
 	type LocatedEvidenceWorkflow,
 	locateEvidenceWorkflow,
@@ -48,6 +62,9 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_JOURNAL_PATH,
+	AGENT_BROWSER_STAGE_STEP_PATH,
+	AGENT_BROWSER_STAGE_WAIT_PATH,
 	AGENT_BROWSER_WAIT_PATH,
 	decodeRouteRequest,
 } from "../protocol.ts";
@@ -91,7 +108,7 @@ import {
 	runStageLogin,
 	silentLoginCheck,
 } from "./login.ts";
-import type { BrowserPool } from "./pool.ts";
+import { type BrowserPool, DEFAULT_RECORDING_MAX_MS } from "./pool.ts";
 import { createScriptExpect } from "./script-expect.ts";
 import {
 	type BrowserSession,
@@ -120,6 +137,16 @@ const SILENT_SSO_CHECK_MS = 10_000;
  * workflow's evidence store. Inside the workflow's data root, which is one of
  * the roots the store accepts a source from. */
 const EVIDENCE_SCRATCH_DIR = "browser";
+/** `stage_wait`'s default poll interval, floor and ceiling, and the bound a
+ * session without stage limits gets (`add-stage-flow-evidence`). A wait polls
+ * inside the server, so it costs one tool call rather than one per poll. */
+const DEFAULT_STAGE_WAIT_INTERVAL_MS = 5_000;
+const MIN_STAGE_WAIT_INTERVAL_MS = 5_000;
+const MAX_STAGE_WAIT_INTERVAL_MS = 60_000;
+const DEFAULT_STAGE_WAIT_MAX_SECONDS = 600;
+/** How long one poll's page read may take: a navigation in flight must not make
+ * the whole wait hang. */
+const STAGE_WAIT_POLL_TIMEOUT_MS = 15_000;
 
 export interface BrowserRouteDeps {
 	readonly installer: BrowserInstaller;
@@ -164,6 +191,25 @@ function stageUsage(deps: BrowserRouteDeps): StageUsageRegistry {
 	});
 	registries.set(deps, created);
 	return created;
+}
+
+/** Settle one session's recording grant: nothing is kept by a discard, by an
+ * expired segment or by a refused keep, and a kept segment charges what it ran.
+ * Keyed by the session, so a settle can only ever release the grant its own
+ * segment took. */
+function settleSessionRecording(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	keptMs: number,
+): void {
+	if (!session.stage) return;
+	stageUsage(deps).settleRecording({
+		stage: session.stage.ident,
+		owner,
+		session: session.name,
+		keptMs,
+	});
 }
 
 /** The catalog of this request, read fresh so a stage file the developer just
@@ -705,6 +751,24 @@ async function dispatch(
 		>(path, await readJsonBody(request));
 		return await act(deps, owner, used, body);
 	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_STEP_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserStageStepRequest
+		>(path, await readJsonBody(request));
+		return await stageStep(deps, owner, used, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_JOURNAL_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserStageJournalRequest
+		>(path, await readJsonBody(request));
+		return await stageJournalRead(deps, owner, used, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_WAIT_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserStageWaitRequest
+		>(path, await readJsonBody(request));
+		return await stageWait(deps, owner, used, body);
+	}
 	if (method === "POST" && path === AGENT_BROWSER_WAIT_PATH) {
 		const body = decodeRouteRequest<
 			import("../../contracts/browser.ts").BrowserWaitRequest
@@ -1172,7 +1236,12 @@ async function sessionFor(
 	// recording that outlived it is discarded before anything else happens. The
 	// pool serializes this with an explicit stop, so two concurrent requests
 	// cannot both stop the same recording.
-	await deps.pool.autoStopIfExpired(session);
+	const expired = await deps.pool.autoStopIfExpired(session);
+	// The pool stops a recording that outlived its bound and discards it: this is
+	// the only place that learns of it, so it is where the grant that segment held
+	// is given back (a stop that never comes would otherwise hold the budget for
+	// the segment's own bound).
+	if (expired !== undefined) settleSessionRecording(deps, owner, session, 0);
 	// The hold is checked *before* the stage's rolling minute is charged: a
 	// refusal because the developer is logging in is not an action of the run.
 	if (session.heldByUser && options.allowHeld !== true)
@@ -2008,40 +2077,88 @@ async function screenshot(
 	body: import("../../contracts/browser.ts").BrowserScreenshotRequest,
 ): Promise<unknown> {
 	const session = await sessionFor(deps, owner, body.session, used);
-	const bytes = await session.screenshot(
-		{
-			type: "jpeg",
-			quality: SCREENSHOT_QUALITY,
-			// The whole page unless the agent asks for the viewport: an investigation
-			// reads the page below the fold too (a viewport-height shot is the
-			// exception, not the default).
-			fullPage: body.fullPage ?? true,
-			...(body.ref === undefined ? {} : { ref: body.ref }),
-			...(body.selector === undefined ? {} : { selector: body.selector }),
-		},
-		BROWSER_MAX_IMAGE_WIDTH,
-	);
+	const keeping = body.evidence === true;
+	// A screenshot that is stored but not returned is the flow test's way of
+	// documenting a step without paying for the image in the model's context
+	// (`add-stage-flow-evidence`, spec "Screenshot context control"). It only
+	// makes sense together with `evidence: true`: a `view: false` that stored
+	// nothing would answer with nothing at all.
+	if (body.view === false && !keeping)
+		throw new BrowserPoolError(
+			"view-requires-evidence",
+			"`view: false` stores the screenshot instead of returning it, so it needs `evidence: true`",
+			400,
+		);
+	// The screenshot bound is *reserved* before the capture, in one synchronous
+	// step: a check that refused before the capture and charged after it would let
+	// two overlapping calls each pass the same bound during their captures, store
+	// one screenshot too many, and answer one of them a refusal for a file it did
+	// store. A capture or attach that fails gives the reservation back, so nothing
+	// is stored beyond the bound and the refusal only ever answers a call that
+	// stored nothing.
+	const reservation =
+		keeping && session.stage
+			? stageUsage(deps).reserveScreenshot({
+					stage: session.stage.ident,
+					owner,
+					maxScreenshots: session.stage.limits.maxScreenshots,
+				})
+			: undefined;
+	const release = () => {
+		if (reservation !== undefined)
+			stageUsage(deps).releaseScreenshot(reservation);
+	};
+	let bytes: Uint8Array;
+	try {
+		bytes = await session.screenshot(
+			{
+				type: "jpeg",
+				quality: SCREENSHOT_QUALITY,
+				// The whole page unless the agent asks for the viewport: an
+				// investigation reads the page below the fold too (a viewport-height
+				// shot is the exception, not the default).
+				fullPage: body.fullPage ?? true,
+				...(body.ref === undefined ? {} : { ref: body.ref }),
+				...(body.selector === undefined ? {} : { selector: body.selector }),
+			},
+			BROWSER_MAX_IMAGE_WIDTH,
+		);
+	} catch (error) {
+		release();
+		throw error;
+	}
 	const value: Record<string, unknown> = {
 		session: session.name,
 		url: session.url,
 		mediaType: "image/jpeg",
-		base64: Buffer.from(bytes).toString("base64"),
-		bytes: bytes.byteLength,
+		...(body.view === false
+			? {}
+			: {
+					base64: Buffer.from(bytes).toString("base64"),
+					bytes: bytes.byteLength,
+				}),
 	};
-	if (body.evidence === true) {
+	if (keeping) {
 		// The stored entry carries a sanitized URL, and a caption that embeds one
 		// carries the same: an evidence entry outlives the call that made it.
 		const url = evidenceUrl(deps, session.url);
-		const entry = await storeEvidence(deps, owner, {
-			bytes,
-			kind: "screenshot",
-			caption: body.caption?.trim() || `Screenshot of ${url}`,
-			url,
-			extension: "jpg",
-			...(session.app ? { app: session.app } : {}),
-		});
-		value.evidence = entry;
+		try {
+			value.evidence = await storeEvidence(deps, owner, {
+				bytes,
+				kind: "screenshot",
+				caption: body.caption?.trim() || `Screenshot of ${url}`,
+				url,
+				extension: "jpg",
+				...(session.app ? { app: session.app } : {}),
+			});
+		} catch (error) {
+			release();
+			throw error;
+		}
 	}
+	if (body.view === false)
+		value.notice =
+			"the screenshot was stored as evidence and not returned to this call";
 	return value;
 }
 
@@ -2062,19 +2179,62 @@ async function recordStart(
 	const parent = path.join(scope.dataRoot, EVIDENCE_SCRATCH_DIR, "video");
 	fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
 	const dir = fs.mkdtempSync(path.join(parent, "recording-"));
+	// A second start on a recording session is refused for what it is — this
+	// session already has a segment — rather than by the budget below, which the
+	// live grant has (correctly) already spent.
+	if (session.recording)
+		throw new BrowserPoolError(
+			"recording-active",
+			"this session is already recording; stop it before starting another",
+			409,
+		);
+	// The stage's kept minutes are a workflow-wide budget
+	// (`add-stage-flow-evidence`, spec "Flow segments carry offsets"): what is
+	// left of it bounds this segment, so a flow test can never keep more video
+	// than the stage allows. The grant is reserved under this session until the
+	// stop settles it, so two sessions of one workflow cannot both be told the
+	// same remainder — and a start that is refused *after* reserving gives back
+	// exactly its own grant, never a live segment's.
+	let allowanceMs: number | undefined;
+	if (session.stage) {
+		allowanceMs = stageUsage(deps).recordingAllowance({
+			stage: session.stage.ident,
+			owner,
+			session: session.name,
+			maxRecordingMinutes: session.stage.limits.maxRecordingMinutes,
+			maxSegmentMs: DEFAULT_RECORDING_MAX_MS,
+		});
+	}
 	try {
-		const started = await deps.pool.startRecording(session, { dir });
+		const started = await deps.pool.startRecording(session, {
+			dir,
+			// A segment number is a reference the journal's steps carry, so it is only
+			// ever issued above the highest one this workflow's journal already names —
+			// a resumed run shares that directory, and a reused number would link a new
+			// recording into an old segment's steps.
+			minSegment: highestStageSegment(scope) + 1,
+			// What is left of the budget bounds the segment, so the minutes this
+			// recording may keep are the minutes that were reserved for it.
+			...(allowanceMs === undefined
+				? {}
+				: { maxMs: Math.min(DEFAULT_RECORDING_MAX_MS, allowanceMs) }),
+		});
 		return {
 			session: session.name,
 			recording: true,
 			url: started.url,
 			startedAt: new Date(started.startedAt).toISOString(),
+			segment: started.segment,
 		};
 	} catch (error) {
-		// A start that failed owns nothing: the directory it created is removed
-		// rather than left behind as an empty recording. Asynchronous, because a
-		// failed start (a session that was closed under it, a browser that went
-		// away) must not block the event loop on a recursive remove.
+		// A start that failed keeps nothing: the minutes it actually reserved are
+		// given back — and nothing at all when it never reserved any — and the
+		// directory it created is removed rather than left behind as an empty
+		// recording. Asynchronous, because a failed start (a session that was closed
+		// under it, a browser that went away) must not block the event loop on a
+		// recursive remove.
+		if (allowanceMs !== undefined)
+			settleSessionRecording(deps, owner, session, 0);
 		await fs.promises
 			.rm(dir, { recursive: true, force: true })
 			.catch(() => undefined);
@@ -2140,14 +2300,27 @@ async function finishRecordingStop(
 		keep ? { posterPath, videoPath } : undefined,
 	);
 	if (!keep || !result.videoSaved) {
-		if (!keep)
+		if (!keep) {
+			// A discarded recording spends no minutes but gives its grant back, and its
+			// steps lose the segment they were filed under: the spec is explicit that a
+			// discarded recording leaves no segment reference behind, so neither the
+			// journal nor the panel can point at a video nobody has.
+			settleSessionRecording(deps, owner, session, 0);
+			await clearRecordingSegment(deps, owner, session, {
+				segment: result.segment,
+			});
 			return {
 				session: session.name,
-				keeper: false,
+				kept: false,
 				video: false,
+				segment: result.segment,
 				notice:
-					"the recording was discarded; no video and no evidence entry were kept",
+					"the recording was discarded; no video and no evidence entry were kept, and its steps no longer name a segment",
 			};
+		}
+		// A stop that kept nothing at all must still give its grant back, or the
+		// budget would read as spent for a video nobody has.
+		settleSessionRecording(deps, owner, session, 0);
 		throw new BrowserPoolError(
 			"recording-empty",
 			"the recording produced no video file, so nothing was kept",
@@ -2174,10 +2347,22 @@ async function finishRecordingStop(
 		extension: "webm",
 		...(session.app ? { app: session.app } : {}),
 		...(poster ? { poster: poster.id } : {}),
+		// The segment is what links the kept recording to the journal steps that
+		// were written while it ran.
+		segment: result.segment,
+	});
+	// A kept recording is charged against the stage's recording minutes — settling
+	// the grant the start reserved — and the journal's own steps of this segment
+	// learn its evidence id so the flow page can seek each one into the video.
+	settleSessionRecording(deps, owner, session, result.elapsedMs);
+	await backfillRecordingSegment(deps, owner, session, {
+		segment: result.segment,
+		video: video.id,
 	});
 	return {
 		session: session.name,
 		kept: true,
+		segment: result.segment,
 		video,
 		...(poster ? { poster } : {}),
 		...(result.autoStopped
@@ -2187,6 +2372,489 @@ async function finishRecordingStop(
 				}
 			: {}),
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Stage flow: the step journal and the server-side wait
+// (`add-stage-flow-evidence`)
+// ---------------------------------------------------------------------------
+
+/** The redactor the journal and the flow page are written through: the same
+ * secret set every browser reply is scrubbed with, *and* the same URL sanitizer.
+ *
+ * Redaction alone masks only the values the configuration knows as secrets, so an
+ * application's own `?ticket=…` or `?sessionid=…` — or a fragment carrying a code
+ * — would survive in a step's free text. A journal entry outlives the call that
+ * wrote it, so a value it carries is scrubbed exactly like a reply.
+ */
+function journalRedactor(deps: BrowserRouteDeps): JournalRedactor {
+	const secrets = redactionSecrets(deps);
+	return (value: string) => {
+		const redacted = redact(value, secrets);
+		const sanitized = sanitizeUrlsIn(
+			typeof redacted === "string" ? redacted : value,
+		);
+		return typeof sanitized === "string" ? sanitized : value;
+	};
+}
+
+/** Regenerate the flow page. A workflow that never wrote a step has no page, and
+ * the writer answers that itself — under the evidence root lock, so no listing
+ * here can disagree with the write it guards. */
+async function refreshFlowPage(
+	deps: BrowserRouteDeps,
+	scope: ReturnType<typeof workflowEvidenceScope>,
+	preloaded: {
+		readonly entries?: readonly StageJournalEntry[];
+		readonly manifest?: EvidenceManifest;
+	} = {},
+): Promise<void> {
+	const redact = journalRedactor(deps);
+	// A caller that just parsed the journal and the manifest hands them in: the page
+	// is then rendered from that snapshot instead of a second read of the same two
+	// files, which is what makes one step cost one parse rather than two.
+	if (preloaded.entries !== undefined || preloaded.manifest !== undefined)
+		await writeStageFlowPageUnlocked(scope, redact, preloaded);
+	else await writeStageFlowPage(scope, redact);
+}
+
+/** Back-fill one kept segment's video onto its journal steps, then re-render the
+ * page that links them. A journal without a step in that segment is untouched. */
+async function backfillRecordingSegment(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	input: { readonly segment: number; readonly video: string },
+): Promise<void> {
+	const scope = evidenceScope(deps, owner);
+	const changed = await backfillStageJournalVideo(
+		scope,
+		{ segment: input.segment, video: input.video, session: session.name },
+		// The rewrite already holds the entries it wrote, and it owns the lock: the
+		// page is rendered inside it from those entries rather than from a second read.
+		async ({ entries }) => {
+			await refreshFlowPage(deps, scope, { entries });
+		},
+	);
+	if (changed === 0) return;
+}
+
+/** Drop one discarded segment's reference from its steps, then re-render the page
+ * so no section stands for a recording nobody kept. */
+async function clearRecordingSegment(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	input: { readonly segment: number },
+): Promise<void> {
+	const scope = evidenceScope(deps, owner);
+	const changed = await clearStageJournalSegment(
+		scope,
+		{ segment: input.segment, session: session.name },
+		async ({ entries }) => {
+			await refreshFlowPage(deps, scope, { entries });
+		},
+	);
+	if (changed === 0) return;
+}
+
+/** `stage_step`: append one server-timestamped step. Everything the server knows
+ * — the time, the session's application and role, the sanitized URL, and the
+ * recording segment and offset the step was written at — is filled in here; the
+ * caller supplies only its own text. */
+async function stageStep(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserStageStepRequest,
+): Promise<unknown> {
+	const session = await sessionFor(deps, owner, body.session, used);
+	const scope = evidenceScope(deps, owner);
+	const recording = session.recording;
+	const segment = recording?.segment;
+	const now = deps.now?.() ?? Date.now();
+	let answered: StageJournalEntry | undefined;
+	const entry = await appendStageJournalEntry(
+		scope,
+		{
+			session: session.name,
+			...(session.app ? { app: session.app } : {}),
+			...(session.identity?.role ? { role: session.identity.role } : {}),
+			// Sanitized like any evidence URL: the journal outlives the call, so a
+			// token in a query string must never reach it.
+			url: evidenceUrl(deps, session.url),
+			label: body.label,
+			...(body.expected === undefined ? {} : { expected: body.expected }),
+			...(body.observed === undefined ? {} : { observed: body.observed }),
+			...(body.captures === undefined ? {} : { captures: body.captures }),
+			...(body.evidence === undefined ? {} : { evidence: body.evidence }),
+			...(body.knowledge === undefined ? {} : { knowledge: body.knowledge }),
+			...(recording
+				? {
+						segment: recording.segment,
+						offsetMs: Math.max(0, now - recording.startedAt),
+					}
+				: {}),
+		},
+		journalRedactor(deps),
+		// The append owns the lock and has both the entries and the manifest in
+		// hand, so the page is rendered from them here: one step then costs one read
+		// of the journal and one of the manifest, and no other writer of this
+		// workflow's evidence waits behind a second read outside this section.
+		async ({ entries, manifest }) => {
+			// A segment can end between this step's read of the recording and its
+			// commit: `record_stop` finalises segment N's steps and then this line
+			// lands, naming a segment a video was already kept for — or one that was
+			// just discarded. The read below is the same tick as the write, so the
+			// correction is only ever taken when the segment really did end under it;
+			// the step keeps its sequence number and everything else, and is grouped
+			// as a step without a recording, which is what it now is.
+			const written = entries[entries.length - 1];
+			const open = session.recording?.segment;
+			const stillOpen =
+				segment === undefined ? open === undefined : open === segment;
+			const corrected =
+				stillOpen || written === undefined
+					? entries
+					: entries.map((each) =>
+							each.seq === written.seq
+								? (Object.fromEntries(
+										Object.entries(each).filter(
+											([key]) => key !== "segment" && key !== "offsetMs",
+										),
+									) as StageJournalEntry)
+								: each,
+						);
+			answered = corrected.find((each) => each.seq === written?.seq) ?? entry;
+			await refreshFlowPage(deps, scope, {
+				entries: corrected,
+				manifest,
+			});
+		},
+	);
+	const step = answered ?? entry;
+	return {
+		session: session.name,
+		step,
+		...(step.segment === undefined
+			? {}
+			: { segment: step.segment, offsetMs: step.offsetMs }),
+	};
+}
+
+/** `stage_journal`: read the latest steps back, bounded and optionally narrowed
+ * to one session or application. */
+async function stageJournalRead(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserStageJournalRequest,
+): Promise<unknown> {
+	// Naming a session resolves it (and refuses one this run does not hold), but a
+	// read is not an action of the stage: it drives no page.
+	const session =
+		body.session === undefined
+			? undefined
+			: await sessionFor(deps, owner, body.session, used, {
+					countAction: false,
+				});
+	const scope = evidenceScope(deps, owner);
+	return journalSummary(scope, {
+		...(session === undefined ? {} : { session: session.name }),
+		...(body.app === undefined ? {} : { app: body.app }),
+		...(body.limit === undefined ? {} : { limit: body.limit }),
+	});
+}
+
+/** Whether a URL matches a `stage_wait` pattern: a glob in which `*` matches any
+ * run of characters, matched against the whole URL. A pattern without a `*` is a
+ * substring, which is what an operator writes for "somewhere on this route". */
+function urlMatchesPattern(url: string, pattern: string): boolean {
+	if (!pattern.includes("*")) return url.includes(pattern);
+	const parts = pattern.split("*");
+	const first = parts[0] ?? "";
+	const last = parts[parts.length - 1] ?? "";
+	const anchoredStart = !pattern.startsWith("*");
+	const anchoredEnd = !pattern.endsWith("*");
+	if (anchoredStart && !url.startsWith(first)) return false;
+	// The tail is what the walk may not run past, so a pattern like `*a*b` cannot
+	// consume the `b` it has to end with.
+	const end = anchoredEnd ? url.length - last.length : url.length;
+	if (anchoredEnd && (end < 0 || !url.endsWith(last))) return false;
+	const middle = parts.slice(
+		anchoredStart ? 1 : 0,
+		anchoredEnd ? -1 : undefined,
+	);
+	let at = anchoredStart ? first.length : 0;
+	for (const part of middle) {
+		if (at > end) return false;
+		if (part === "") continue;
+		const found = url.indexOf(part, at);
+		if (found < 0 || found + part.length > end) return false;
+		at = found + part.length;
+	}
+	return at <= end;
+}
+
+/** The one shape a mail-catcher read answers with, as much of it as this module
+ * reads: Mailpit's search endpoint reports a `total` (and the messages). */
+async function mailCaught(
+	deps: BrowserRouteDeps,
+	session: BrowserSession,
+	condition: import("../../contracts/browser.ts").StageWaitMail,
+): Promise<{ met: boolean; detail?: string }> {
+	if (!session.stage)
+		throw new StageLimitError(
+			"stage-mail-unsupported",
+			"a `mail` wait reads the stage's mail catcher, and this session is not bound to a stage",
+		);
+	const entry = stageByIdent(stageCatalog(deps), session.stage.ident);
+	// A session's `app` is the stage app's key *or*, when the stage app links a
+	// configured ident, that ident (`resolveOpenTarget`): both name the same app, so
+	// the catcher is found by either rather than by the key alone.
+	const app =
+		entry === undefined
+			? undefined
+			: (Object.entries(entry.stage.apps).find(
+					([key, candidate]) =>
+						key === session.app || candidate.app === session.app,
+				) ?? [])[1];
+	if (!entry || !app || app.kind !== "mail-catcher" || app.api !== "mailpit")
+		throw new StageLimitError(
+			"stage-mail-unsupported",
+			`a \`mail\` wait needs a mail-catcher application speaking mailpit; open one of the stage's mail-catcher apps (this session is on ${JSON.stringify(session.app ?? "no app")})`,
+		);
+	if (condition.to === undefined && condition.subject === undefined)
+		throw new BrowserPoolError(
+			"mail-condition-empty",
+			"a `mail` wait needs `to` or `subject` to search by",
+			400,
+		);
+	// The search query is Mailpit's own syntax: a field prefix per term, quoted so
+	// a subject's spaces stay one term.
+	const terms: string[] = [];
+	if (condition.to !== undefined) terms.push(`to:${quotedTerm(condition.to)}`);
+	if (condition.subject !== undefined)
+		terms.push(`subject:${quotedTerm(condition.subject)}`);
+	let url: URL;
+	try {
+		url = new URL("/api/v1/search", app.url);
+	} catch {
+		throw new BrowserPoolError(
+			"mail-catcher-unreachable",
+			`the mail catcher's url ${JSON.stringify(app.url)} is not a URL`,
+			500,
+		);
+	}
+	url.searchParams.set("query", terms.join(" "));
+	url.searchParams.set("limit", "1");
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			headers: { accept: "application/json" },
+			signal: AbortSignal.timeout(STAGE_WAIT_POLL_TIMEOUT_MS),
+		});
+	} catch {
+		// A catcher that is not up yet is a condition that does not hold, not a
+		// failure of the wait: the next poll tries again.
+		return { met: false };
+	}
+	if (!response.ok) return { met: false };
+	const body = (await response.json().catch(() => undefined)) as
+		| { total?: unknown; messages?: unknown }
+		| undefined;
+	const total = typeof body?.total === "number" ? body.total : undefined;
+	const messages = Array.isArray(body?.messages) ? body.messages.length : 0;
+	return { met: (total ?? messages) > 0 };
+}
+
+/** One search term, quoted for Mailpit's query syntax with any quote removed so
+ * a term cannot end its own quoting. */
+function quotedTerm(value: string): string {
+	const cleaned = value.replace(/"/g, "").trim();
+	return cleaned.includes(" ") ? `"${cleaned}"` : cleaned;
+}
+
+/** Whether the one condition holds right now. Never throws for a condition that
+ * simply is not true yet. */
+async function waitConditionMet(
+	deps: BrowserRouteDeps,
+	session: BrowserSession,
+	until: import("../../contracts/browser.ts").StageWaitCondition,
+): Promise<{ met: boolean; url: string }> {
+	if (until.mail !== undefined) {
+		const mail = await mailCaught(deps, session, until.mail);
+		return { met: mail.met, url: session.url };
+	}
+	if (until.selector !== undefined) {
+		const selector = until.selector;
+		const found = await session
+			.evaluate(
+				`(() => { try { return document.querySelector(${JSON.stringify(selector)}) !== null; } catch { return false; } })()`,
+			)
+			.catch(() => false);
+		return { met: found === true, url: session.url };
+	}
+	if (until.text !== undefined) {
+		const text = until.text;
+		const found = await session
+			.evaluate(
+				`(() => { try { return (document.body && document.body.innerText ? document.body.innerText : "").includes(${JSON.stringify(text)}); } catch { return false; } })()`,
+			)
+			.catch(() => false);
+		return { met: found === true, url: session.url };
+	}
+	return {
+		met: urlMatchesPattern(session.url, until.url ?? ""),
+		url: session.url,
+	};
+}
+
+/**
+ * The bounded timing of one `stage_wait`: the requested timeout clamped to the
+ * stage's own `limits.maxWaitSeconds`, and the poll interval clamped to the floor
+ * and ceiling the tool allows. Pure, so the clamps are testable without a clock,
+ * and the floor is the one a run is told about: a poll tighter than five seconds
+ * is a page being hammered, not a flow being observed.
+ */
+export function stageWaitTiming(
+	limits: { readonly maxWaitSeconds?: number } | undefined,
+	body: {
+		readonly timeoutSeconds?: number;
+		readonly intervalSeconds?: number;
+	},
+): { timeoutMs: number; intervalMs: number; timeoutSeconds: number } {
+	const maxSeconds = Math.max(
+		1,
+		limits?.maxWaitSeconds ?? DEFAULT_STAGE_WAIT_MAX_SECONDS,
+	);
+	const timeoutSeconds =
+		body.timeoutSeconds === undefined
+			? maxSeconds
+			: Math.min(maxSeconds, Math.max(1, Math.round(body.timeoutSeconds)));
+	const intervalMs = Math.min(
+		MAX_STAGE_WAIT_INTERVAL_MS,
+		Math.max(
+			MIN_STAGE_WAIT_INTERVAL_MS,
+			Math.round(
+				(body.intervalSeconds ?? DEFAULT_STAGE_WAIT_INTERVAL_MS / 1_000) *
+					1_000,
+			),
+		),
+	);
+	return { timeoutMs: timeoutSeconds * 1_000, intervalMs, timeoutSeconds };
+}
+
+/**
+ * `stage_wait`: poll one condition *here*, until it holds or the bound elapses,
+ * and answer once.
+ *
+ * The bound is the stage's `maxWaitSeconds` (a session without a stage gets the
+ * default), so a wait can never outlast what the stage allows; `reload` re-opens
+ * the session's current URL between polls, which is what a mail-driven flow needs
+ * when the page must be re-read to show the message's effect.
+ *
+ * Every step is bounded and every step re-checks the session, because the wait is
+ * the one tool that holds a page for minutes: a page that never answers a
+ * `document.querySelector` would otherwise hold the call past its own bound, and a
+ * session the developer closed underneath it would be driven forever. The answer
+ * is still exactly one, and it names which of the two ended the wait.
+ */
+async function stageWait(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserStageWaitRequest,
+): Promise<unknown> {
+	const session = await sessionFor(deps, owner, body.session, used);
+	const { timeoutMs, intervalMs, timeoutSeconds } = stageWaitTiming(
+		session.stage?.limits,
+		body,
+	);
+	const started = deps.now?.() ?? Date.now();
+	const now = () => deps.now?.() ?? Date.now();
+	let met = false;
+	/** Set when the session went away under the wait: the one end that is not the
+	 * bound and not the condition. */
+	let closed = false;
+	let url = session.url;
+	for (;;) {
+		const remaining = timeoutMs - (now() - started);
+		const answer = await withPollTimeout(
+			waitConditionMet(deps, session, body.until),
+			Math.min(STAGE_WAIT_POLL_TIMEOUT_MS, Math.max(1, remaining)),
+		);
+		// A closed or swept session is not a condition that has not held yet: the
+		// next poll would drive a page nobody owns, so the wait ends here.
+		if (deps.pool.find(owner, session.name) !== session) {
+			closed = true;
+			break;
+		}
+		if (answer !== "timeout") {
+			url = answer.url;
+			if (answer.met) {
+				met = true;
+				break;
+			}
+		}
+		const elapsed = now() - started;
+		if (elapsed >= timeoutMs) break;
+		await sleep(Math.min(intervalMs, timeoutMs - elapsed));
+		// A reload of the page the session is on, bounded like any navigation, and
+		// skipped once the bound has passed: the last poll must not open a page it
+		// then has to abandon.
+		if (body.reload === true && now() - started < timeoutMs)
+			await withPollTimeout(
+				session.goto(session.url, STAGE_WAIT_POLL_TIMEOUT_MS).catch(() => null),
+				STAGE_WAIT_POLL_TIMEOUT_MS,
+			);
+	}
+	const elapsedMs = Math.max(0, now() - started);
+	const notice = closed
+		? "the session was closed while waiting; open it again to continue the flow"
+		: met
+			? undefined
+			: `the condition did not hold within ${timeoutSeconds}s; the session is still usable`;
+	return {
+		session: session.name,
+		met,
+		// The bound is named explicitly, so a caller does not have to read `!met`
+		// as a failure of the session: it is the wait that ended, nothing else.
+		timeout: !met && !closed,
+		...(closed ? { closed: true } : {}),
+		elapsedMs,
+		condition: body.until,
+		url,
+		...(notice === undefined ? {} : { notice }),
+	};
+}
+
+/**
+ * Bound one poll step. The abandoned promise is not cancelled — a page that never
+ * answers is a page the session keeps working with, and the next poll re-checks —
+ * so a hung `evaluate` cannot hold `stage_wait` past its own bound.
+ */
+async function withPollTimeout<T>(
+	work: Promise<T>,
+	ms: number,
+): Promise<T | "timeout"> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<"timeout">((resolve) => {
+				timer = setTimeout(() => resolve("timeout"), Math.max(1, ms));
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+/** Sleep for a bounded stretch without blocking the event loop. */
+async function sleep(ms: number): Promise<void> {
+	if (ms <= 0) return;
+	await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
@@ -2827,6 +3495,7 @@ async function storeEvidence(
 		readonly extension: string;
 		readonly app?: string;
 		readonly poster?: string;
+		readonly segment?: number;
 	},
 ): Promise<EvidenceEntry> {
 	const scope = evidenceScope(deps, owner);
@@ -2841,18 +3510,25 @@ async function storeEvidence(
 		// both live inside the workflow's scratch area and are only used once.
 		await Bun.write(file, Bun.file(input.file));
 	}
+	let entry: EvidenceEntry;
 	try {
-		return await attachEvidence(scope, {
+		entry = await attachEvidence(scope, {
 			path: file,
 			kind: input.kind,
 			caption: input.caption,
 			url: input.url,
 			...(input.app === undefined ? {} : { app: input.app }),
 			...(input.poster === undefined ? {} : { poster: input.poster }),
+			...(input.segment === undefined ? {} : { segment: input.segment }),
 		});
 	} finally {
 		fs.rmSync(file, { force: true });
 	}
+	// An evidence attach can change what the flow page shows (a caption, a new
+	// poster, a kept recording), so a workflow that has a journal gets its page
+	// re-rendered here — and one that has none gets no page at all.
+	await refreshFlowPage(deps, scope).catch(() => undefined);
+	return entry;
 }
 
 // ---------------------------------------------------------------------------

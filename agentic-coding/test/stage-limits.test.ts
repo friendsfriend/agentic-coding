@@ -218,4 +218,123 @@ describe("stage limits", () => {
 		).toBe("stage-session-limit");
 		admission.settle();
 	});
+
+	test("a recording grant belongs to the session that took it, and expires with it", () => {
+		const { registry, advance } = fixture();
+		const budget = { stage: "grid-int", owner: OWNER, maxRecordingMinutes: 20 };
+		const segment = 10 * 60_000;
+		// Two sessions take a segment each, out of a twenty-minute budget.
+		expect(
+			registry.recordingAllowance({
+				...budget,
+				session: "default",
+				maxSegmentMs: segment,
+			}),
+		).toBe(20 * 60_000);
+		expect(
+			registry.recordingAllowance({
+				...budget,
+				session: "second",
+				maxSegmentMs: segment,
+			}),
+		).toBe(10 * 60_000);
+		// A third session hears nothing: both segments are still live, and each is
+		// reserved for as long as it can actually run — not for the whole remainder.
+		expect(
+			refusal(() =>
+				registry.recordingAllowance({
+					...budget,
+					session: "third",
+					maxSegmentMs: segment,
+				}),
+			).code,
+		).toBe("stage-recording-limit");
+
+		// Settling a session that holds no grant charges its minutes and releases
+		// nothing: a refusal path can only ever give back its own grant.
+		registry.settleRecording({
+			stage: "grid-int",
+			owner: OWNER,
+			session: "third",
+			keptMs: 0,
+		});
+		expect(
+			refusal(() =>
+				registry.recordingAllowance({
+					...budget,
+					session: "third",
+					maxSegmentMs: segment,
+				}),
+			).code,
+		).toBe("stage-recording-limit");
+
+		// Stopping the second segment out of order releases the second's grant and
+		// charges what it kept; the first's stays exactly where it was.
+		registry.settleRecording({
+			stage: "grid-int",
+			owner: OWNER,
+			session: "second",
+			keptMs: 30_000,
+		});
+		expect(
+			registry.recordingAllowance({
+				...budget,
+				session: "third",
+				maxSegmentMs: segment,
+			}),
+		).toBe(9.5 * 60_000);
+		expect(
+			refusal(() =>
+				registry.recordingAllowance({
+					...budget,
+					session: "fourth",
+					maxSegmentMs: segment,
+				}),
+			).code,
+		).toBe("stage-recording-limit");
+
+		// A grant nobody settles expires with the segment it was granted for, so a
+		// dropped session cannot hold the budget forever.
+		advance(segment + 60_000 + 1);
+		expect(
+			registry.recordingAllowance({
+				...budget,
+				session: "fourth",
+				maxSegmentMs: segment,
+			}),
+		).toBe(19.5 * 60_000);
+		// Releasing the workflow drops its grants with the rest of its counters: a
+		// finished run leaves nothing behind that a later one could wait on.
+		registry.release(OWNER);
+		expect(
+			registry.recordingAllowance({
+				...budget,
+				session: "fifth",
+				maxSegmentMs: segment,
+			}),
+		).toBe(20 * 60_000);
+	});
+
+	test("a screenshot reservation is the charge, and its release gives one back", () => {
+		const { registry } = fixture();
+		const bound = { stage: "grid-int", owner: OWNER, maxScreenshots: 1 };
+		// The reservation happens before the capture, so two calls that overlap in
+		// it cannot both pass the bound.
+		const first = registry.reserveScreenshot(bound);
+		expect(refusal(() => registry.reserveScreenshot(bound)).code).toBe(
+			"stage-screenshot-limit",
+		);
+		// A release is what a failed capture or a refused attach answers, and it can
+		// never take the count below zero.
+		registry.releaseScreenshot(first);
+		registry.releaseScreenshot(first);
+		expect(() => registry.reserveScreenshot(bound)).not.toThrow();
+		expect(refusal(() => registry.reserveScreenshot(bound)).code).toBe(
+			"stage-screenshot-limit",
+		);
+		// Another workflow counts its own screenshots.
+		expect(() =>
+			registry.reserveScreenshot({ ...bound, owner: OTHER }),
+		).not.toThrow();
+	});
 });

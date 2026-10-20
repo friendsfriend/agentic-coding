@@ -25,6 +25,7 @@ import { resolveImageRenderProtocol, TextAttributes } from "@opentui/core";
 import { Panel, SelectableList, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
 import type { EvidenceEntry } from "../../../contracts/environment.ts";
+import type { StageJournal } from "../../../contracts/stages.ts";
 import {
 	EVIDENCE_EMPTY_LINES,
 	EVIDENCE_PANEL_LINES,
@@ -32,6 +33,7 @@ import {
 	evidenceDetailLines,
 	evidencePreviewEntry,
 	evidenceRows,
+	evidenceStepDetailLines,
 } from "../evidence-panel.ts";
 
 /**
@@ -66,6 +68,11 @@ const MIN_IMAGE_LINES = 3;
 
 export interface EvidencePanelProps {
 	readonly entries: readonly EvidenceEntry[];
+	/** The workflow's stage step journal, when it has one: the listing then groups
+	 * by recording segment and lists the steps between the evidence they produced
+	 * (`add-stage-flow-evidence`). Without it the panel groups by debug request,
+	 * exactly as before. */
+	readonly journal?: StageJournal;
 	readonly active: boolean;
 	readonly selectedIndex: number;
 	/** The renderer reports kitty graphics support (`inlineImagePreview`). */
@@ -98,7 +105,7 @@ export interface EvidencePanelProps {
 }
 
 export function EvidencePanel(props: EvidencePanelProps) {
-	const rows = createMemo(() => evidenceRows(props.entries));
+	const rows = createMemo(() => evidenceRows(props.entries, props.journal));
 	// The panel is a compact fixed-height row: the listing scrolls inside the
 	// body rather than growing the panel, and a caller may go as low as the one
 	// title row (the empty state the route asks for with nothing attached).
@@ -110,9 +117,14 @@ export function EvidencePanel(props: EvidencePanelProps) {
 	const image = createMemo(() =>
 		props.kitty ? evidencePreviewEntry(rows(), props.selectedIndex) : undefined,
 	);
+	const selectedStep = createMemo(() => rows()[props.selectedIndex]?.step);
 	const detailLines = createMemo(() => {
 		const entry = selected();
-		return entry ? evidenceDetailLines(entry, props.path) : [];
+		if (entry) return evidenceDetailLines(entry, props.path);
+		// A journal step has no file: its own expectations and captures are what
+		// the detail column has to say about it.
+		const step = selectedStep();
+		return step ? evidenceStepDetailLines(step) : [];
 	});
 	// The preview column paints at most three things: a one-line message, the
 	// image, and the metadata — and the metadata is the part that must never be
@@ -169,7 +181,15 @@ export function EvidencePanel(props: EvidencePanelProps) {
 	 * with the body. */
 	const accessory = (): { text: string; failure: boolean } | undefined => {
 		if (collapsed()) {
-			if (rows().length > 0) return undefined;
+			// A collapsed panel is its title row, so what the body would have said
+			// moves up: the read state when there is nothing to list, and otherwise
+			// the count of rows the host gave no space for — a bare title would read
+			// as an empty panel rather than as a clipped one.
+			if (rows().length > 0)
+				return {
+					text: `${rows().length} rows, no room`,
+					failure: false,
+				};
 			return { text: bodyMessage(), failure: props.state === "error" };
 		}
 		const marker = staleMarker();
@@ -274,7 +294,9 @@ export function EvidencePanel(props: EvidencePanelProps) {
 							flexDirection: "column",
 						}}
 					>
-						<Show when={selected() !== undefined}>
+						<Show
+							when={selected() !== undefined || selectedStep() !== undefined}
+						>
 							<Show when={showsImage()}>
 								<box
 									style={{

@@ -38,6 +38,7 @@ import { BROWSER_MAX_IMAGE_WIDTH } from "../../workflow/effects.ts";
 import { createStageGuard, type StageSessionPolicy } from "../stages/guard.ts";
 import {
 	boundIdentityState,
+	type CapturedStorageEntry,
 	carrySessionStorage,
 	identityFromStorageState,
 	identitySecrets,
@@ -212,6 +213,12 @@ export class BrowserPool {
 	/** One recording critical section *per session*, so a start/stop on one page
 	 * cannot serialize every other session's tool calls. */
 	private readonly recordingGates = new Map<string, Promise<void>>();
+	/** The last recording segment handed out, per owner (`add-stage-flow-evidence`).
+	 * A segment number is what a journal step names to be linked into the kept
+	 * recording, so it has to be unique across the owner's sessions and stable
+	 * across restarts of the flow: it is derived from the pool's own count of
+	 * started recordings, not from anything the agent says. */
+	private readonly recordingSegments = new Map<string, number>();
 	/** Slots reserved for a caller whose context is still being created. A token
 	 * travels with the reservation, so a slot handed to the oldest waiter cannot
 	 * be taken by a newer open first. */
@@ -887,6 +894,11 @@ export class BrowserPool {
 			(session) => session.owner === owner,
 		);
 		for (const session of owned) await this.drop(session, "owner-closed");
+		// The segment counter is the run's, like the sessions: leaving it behind
+		// would keep one number per workflow that ever recorded, forever. Numbers a
+		// journal already used are still skipped, because the route hands the start
+		// the highest segment the journal holds as its floor.
+		this.recordingSegments.delete(owner);
 		return owned.length;
 	}
 
@@ -1054,6 +1066,30 @@ export class BrowserPool {
 	// -- recording ---------------------------------------------------------
 
 	/**
+	 * The live page's `sessionStorage`, with the origin that owns it.
+	 *
+	 * A read is only meaningful for the document that owns the storage, so the
+	 * origin is read before *and* after the evaluation and both have to agree: a
+	 * page that was navigating while the script ran could otherwise hand one
+	 * origin's keys to another. A document with no origin (`about:blank`, an empty
+	 * page) owns no storage, and a failed read is not an empty one — both answer
+	 * `undefined`, so a caller seeds nothing rather than wiping what it carried.
+	 */
+	private async carriedSessionStorage(
+		session: BrowserSession,
+	): Promise<CarriedSessionStorage | undefined> {
+		const before = originOf(session.page.url());
+		if (before === "") return undefined;
+		const answer = await session.page
+			.evaluate(SESSION_STORAGE_READ_SCRIPT)
+			.catch(() => undefined);
+		if (answer === undefined) return undefined;
+		const after = originOf(session.page.url());
+		if (after !== before) return undefined;
+		return { origin: before, entries: parsedSessionStorage(answer) };
+	}
+
+	/**
 	 * Begin recording this session. The recording context inherits the live page
 	 * exactly: the cookies and storage are carried over as `storageState`, and the
 	 * current URL is re-opened in the new context, so the recording starts on the
@@ -1063,8 +1099,15 @@ export class BrowserPool {
 	 */
 	async startRecording(
 		session: BrowserSession,
-		options: { readonly dir: string; readonly maxMs?: number },
-	): Promise<{ startedAt: number; url: string }> {
+		options: {
+			readonly dir: string;
+			readonly maxMs?: number;
+			/** The lowest segment number this start may take: the highest the
+			 * workflow's journal already used (`+ 1`). A run that resumes with the
+			 * same evidence directory must not reuse a number its own steps name. */
+			readonly minSegment?: number;
+		},
+	): Promise<{ startedAt: number; url: string; segment: number }> {
 		return await this.withRecordingGate(session, async () => {
 			if (session.recording)
 				throw new BrowserPoolError(
@@ -1075,6 +1118,11 @@ export class BrowserPool {
 			const browser = await this.ensureBrowser(session.browserSlot);
 			const state = await session.context.storageState().catch(() => undefined);
 			const url = session.url;
+			// `sessionStorage` is not part of a `storageState()` snapshot: only the
+			// live document can read it, so it is read here — before the current
+			// context is closed — and seeded into the recording context instead
+			// (`add-stage-flow-evidence`, spec "Recording segments").
+			const carried = await this.carriedSessionStorage(session);
 			const previous = session.context;
 			// The replacement is created *before* the swap is announced, so a failure
 			// here leaves the session with the page it had rather than with a swap
@@ -1101,6 +1149,7 @@ export class BrowserPool {
 					? { httpCredentials: session.httpCredentials }
 					: {}),
 			});
+			if (carried !== undefined) await seedSessionStorage(context, carried);
 			// The close that follows is this swap, not a crash.
 			session.beginContextSwap();
 			await previous.close().catch(() => {});
@@ -1115,15 +1164,21 @@ export class BrowserPool {
 					"the session was closed while its recording context was being created; call browser_open again",
 					409,
 				);
+			const segment = Math.max(
+				(this.recordingSegments.get(session.owner) ?? 0) + 1,
+				options.minSegment ?? 1,
+			);
+			this.recordingSegments.set(session.owner, segment);
 			const recording: SessionRecording = {
 				startedAt: this.clock(),
 				startedUrl: url,
 				maxMs: options.maxMs ?? DEFAULT_RECORDING_MAX_MS,
 				dir: options.dir,
 				autoStopped: false,
+				segment,
 			};
 			session.attachRecording(recording);
-			return { startedAt: recording.startedAt, url };
+			return { startedAt: recording.startedAt, url, segment };
 		});
 	}
 
@@ -1131,25 +1186,35 @@ export class BrowserPool {
 	 * Stop a recording that outlived its bound, discarding it, before the session
 	 * is used again: the length cap is enforced on the next request rather than by
 	 * a timer nobody owns. Idempotent and serialized with `stopRecording`, so two
-	 * concurrent requests cannot both stop the same recording.
+	 * concurrent requests cannot both stop the same recording. Answers the segment
+	 * it discarded, once, so its recording grant is settled by the only caller that
+	 * learns the segment ended.
 	 */
-	async autoStopIfExpired(session: BrowserSession): Promise<boolean> {
+	async autoStopIfExpired(
+		session: BrowserSession,
+	): Promise<
+		{ readonly segment: number; readonly elapsedMs: number } | undefined
+	> {
 		// The overwhelmingly common case is "not recording at all", and this runs on
 		// the hot path of every session-using request: answer it without taking the
 		// gate, and re-check inside the gate before stopping anything.
 		const open = session.recording;
-		if (!open) return false;
-		if (this.clock() - open.startedAt <= open.maxMs) return false;
+		if (!open) return undefined;
+		if (this.clock() - open.startedAt <= open.maxMs) return undefined;
 		return await this.withRecordingGate(session, async () => {
 			const recording = session.recording;
-			if (!recording) return false;
-			if (this.clock() - recording.startedAt <= recording.maxMs) return false;
+			if (!recording) return undefined;
+			const elapsed = this.clock() - recording.startedAt;
+			if (elapsed <= recording.maxMs) return undefined;
 			recording.autoStopped = true;
 			this.log(
 				`browser recording of ${session.owner} exceeded ${recording.maxMs} ms and was stopped without keeping it`,
 			);
+			// The segment it closed is answered, not just "something was stopped": the
+			// route settles that segment's recording grant, and a discarded segment
+			// nobody reports would hold the budget until its reservation expired.
 			await this.stopRecordingLocked(session, undefined);
-			return true;
+			return { segment: recording.segment, elapsedMs: elapsed };
 		});
 	}
 
@@ -1172,6 +1237,12 @@ export class BrowserPool {
 		readonly posterSaved: boolean;
 		readonly autoStopped: boolean;
 		readonly url: string;
+		/** The segment this stop closed, so the route can back-fill its kept
+		 * video into the journal's steps of the same segment. */
+		readonly segment: number;
+		/** How long the segment actually ran, which is what a kept recording is
+		 * charged against the stage's recording minutes. */
+		readonly elapsedMs: number;
 	}> {
 		return await this.withRecordingGate(
 			session,
@@ -1189,6 +1260,8 @@ export class BrowserPool {
 		readonly posterSaved: boolean;
 		readonly autoStopped: boolean;
 		readonly url: string;
+		readonly segment: number;
+		readonly elapsedMs: number;
 	}> {
 		const recording = session.detachRecording();
 		if (!recording)
@@ -1198,6 +1271,7 @@ export class BrowserPool {
 				409,
 			);
 		const url = session.url;
+		const elapsedMs = Math.max(0, this.clock() - recording.startedAt);
 		let posterSaved = false;
 		if (keep) {
 			try {
@@ -1213,6 +1287,10 @@ export class BrowserPool {
 			}
 		}
 		const recordingContext = session.context;
+		// The recording's page owns its own `sessionStorage`, and closing its context
+		// would drop it: a recording must not cost the flow the tab state it captured,
+		// so it is read before the close and seeded into the plain context below.
+		const carried = await this.carriedSessionStorage(session);
 		const state = await recordingContext.storageState().catch(() => undefined);
 		// Grabbed before the close: Playwright finalizes the WebM when the context
 		// closes, so saving it first would wait for a file that does not exist yet.
@@ -1244,6 +1322,7 @@ export class BrowserPool {
 			session.attachRecording(recording);
 			throw error;
 		}
+		if (carried !== undefined) await seedSessionStorage(context, carried);
 		session.beginContextSwap();
 		await recordingContext.close().catch(() => {});
 		const videoSaved =
@@ -1262,7 +1341,14 @@ export class BrowserPool {
 				});
 		}
 		await this.finishSwap(session, browser, context, url);
-		return { videoSaved, posterSaved, autoStopped: recording.autoStopped, url };
+		return {
+			videoSaved,
+			posterSaved,
+			autoStopped: recording.autoStopped,
+			url,
+			segment: recording.segment,
+			elapsedMs,
+		};
 	}
 
 	// -- internals ---------------------------------------------------------
@@ -1729,6 +1815,38 @@ export class BrowserPool {
  * read from the pool (SEC-002). */
 export function sessionKey(owner: string, name: string): string {
 	return `${owner}\u0000${name}`;
+}
+
+/** One origin's `sessionStorage`, as read from a live document. */
+interface CarriedSessionStorage {
+	readonly origin: string;
+	readonly entries: readonly CapturedStorageEntry[];
+}
+
+/**
+ * Seed one origin's `sessionStorage` into a context that was just created.
+ *
+ * An init script is the only way in: `storageState` cannot express `sessionStorage`,
+ * and writing it from outside the page would need a navigation first. The script
+ * keys on `window.location.origin`, so it lands on that origin's documents only —
+ * a context reused for another origin's page keeps that origin's own storage.
+ */
+async function seedSessionStorage(
+	context: DriverContext,
+	carried: CarriedSessionStorage,
+): Promise<void> {
+	if (carried.entries.length === 0 || carried.origin === "") return;
+	const script = storageInitScript({
+		cookies: [],
+		origins: [
+			{
+				origin: carried.origin,
+				localStorage: [],
+				sessionStorage: [...carried.entries],
+			},
+		],
+	});
+	if (script !== "") await context.addInitScript(script).catch(() => {});
 }
 
 /** A held session reports only where it is, never what is on it or what was

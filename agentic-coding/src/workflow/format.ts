@@ -44,3 +44,13 @@ export function formatBytes(bytes: number): string {
 		if (value >= size) return `${(value / size).toFixed(1)} ${label}`;
 	return `${Math.round(value)} B`;
 }
+
+/** One flow step's offset into its recording, as `mm:ss`
+ * (`add-stage-flow-evidence`). Pure, so the flow page and the dashboard's
+ * Evidence panel render the same label for the same offset. */
+export function flowOffsetLabel(offsetMs: number): string {
+	const total = Math.max(0, Math.round(offsetMs / 1000));
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}

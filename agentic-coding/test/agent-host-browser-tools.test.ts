@@ -22,6 +22,9 @@ const BROWSER_TOOLS = [
 	"browser_select",
 	"browser_hover",
 	"browser_wait",
+	"stage_wait",
+	"stage_step",
+	"stage_journal",
 	"browser_eval",
 	"browser_console",
 	"browser_network",
@@ -300,6 +303,34 @@ describe("browser tool surface", () => {
 		});
 	});
 
+	test("`view: false` answers with the stored id and the caption the panel shows", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					url: "http://app.local/cart",
+					evidence: { id: "01ABC", caption: "the empty cart" },
+					notice: "the screenshot was stored as evidence and not returned",
+				},
+			],
+		};
+		const { result } = await invoke(
+			"browser_screenshot",
+			{ evidence: true, view: false, caption: "the empty cart" },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			evidence: true,
+			view: false,
+			caption: "the empty cart",
+		});
+		// No image block for a picture this call deliberately did not look at, and
+		// the caption is what tells the model which step the id belongs to.
+		expect(result.content.map((block) => block.type)).toEqual(["text"]);
+		expect(textOf(result.content)).toContain("01ABC");
+		expect(textOf(result.content)).toContain("the empty cart");
+	});
+
 	test("a server refusal keeps its code and is an error result", async () => {
 		const server: FakeServer = {
 			calls: [],
@@ -335,6 +366,24 @@ describe("browser tool surface", () => {
 		);
 		expect(result.isError).toBe(true);
 		expect(textOf(result.content)).toContain("no agent environment capability");
+	});
+
+	test("stage_wait refuses an `until` that names more than one condition", async () => {
+		// Exactly one condition is the tool's contract: the server would have to pick
+		// one of the two, and a wait that quietly ignored `text` would report a page
+		// ready on a URL match alone.
+		const server: FakeServer = { calls: [], replies: [{}] };
+		const { result } = await invoke(
+			"stage_wait",
+			{ until: { text: "ready", url: "*/done" } },
+			server,
+		);
+		expect(result.isError).toBe(true);
+		expect(textOf(result.content)).toContain(
+			"exactly one of text, selector, url or mail",
+		);
+		// Nothing was sent: a refused wait never polls.
+		expect(server.calls).toEqual([]);
 	});
 
 	test("browser_record_stop defaults to discarding the recording", async () => {
@@ -406,6 +455,38 @@ describe("browser tool surface", () => {
 				args: { session: "second" },
 				body: { session: "second" },
 				path: "close",
+			},
+			{
+				tool: "stage_wait",
+				args: { until: { text: "ready" }, timeoutSeconds: 20, reload: true },
+				body: {
+					until: { text: "ready" },
+					reload: true,
+					timeoutSeconds: 20,
+				},
+				path: "stage-wait",
+			},
+			{
+				tool: "stage_step",
+				args: {
+					label: "the cart is empty",
+					expected: "no items",
+					captures: { total: "0.00 EUR" },
+					session: "second",
+				},
+				body: {
+					label: "the cart is empty",
+					expected: "no items",
+					captures: { total: "0.00 EUR" },
+					session: "second",
+				},
+				path: "stage-step",
+			},
+			{
+				tool: "stage_journal",
+				args: { session: "second", app: "web", limit: 5 },
+				body: { session: "second", app: "web", limit: 5 },
+				path: "stage-journal",
 			},
 		];
 		for (const entry of cases) {

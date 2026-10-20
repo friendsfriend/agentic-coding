@@ -341,3 +341,87 @@ export interface StageTokenInfoResponse {
 	readonly audience?: string;
 	readonly issuer?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Step journal (`add-stage-flow-evidence`)
+// ---------------------------------------------------------------------------
+// The journal one workflow's stage flow writes beside its evidence manifest.
+// Every field is either server-derived (the sequence number, the time, the
+// session, the application, the role, the sanitized URL, the segment and the
+// offset) or already redacted agent text: the reader here is the dashboard, and
+// it must never be handed a value the store would not have written.
+
+/** A bounded, control-character-free journal text field. */
+const journalText = (max: number) =>
+	Schema.String.pipe(Schema.maxLength(max)).pipe(
+		Schema.filter(
+			(value) => {
+				for (let index = 0; index < value.length; index++) {
+					const code = value.charCodeAt(index);
+					if (code < 0x20 || code === 0x7f) return false;
+				}
+				return true;
+			},
+			{ message: () => "control characters are not allowed" },
+		),
+	);
+
+/** What the step showed about the process being tested. */
+export const stageJournalKnowledgeSchema = Schema.Struct({
+	concept: journalText(256),
+	section: Schema.optional(journalText(256)),
+	kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+	suspectedCause: Schema.optional(
+		Schema.Literal("product-change", "regression", "unknown"),
+	),
+});
+export type StageJournalKnowledge = typeof stageJournalKnowledgeSchema.Type;
+
+/** One journal entry, exactly as the file holds it. `segment` and `offsetMs` are
+ * present only for a step written while its session recorded, and `video` is
+ * back-filled with the kept segment's evidence id. */
+export const stageJournalEntrySchema = Schema.Struct({
+	seq: Schema.Number.pipe(
+		Schema.filter((value) => Number.isInteger(value) && value > 0, {
+			message: () => "seq must be a positive integer",
+		}),
+	),
+	at: journalText(64),
+	session: Schema.optional(journalText(64)),
+	app: Schema.optional(journalText(64)),
+	role: Schema.optional(journalText(128)),
+	url: Schema.optional(journalText(2048)),
+	label: journalText(512),
+	expected: Schema.optional(journalText(4096)),
+	observed: Schema.optional(journalText(4096)),
+	captures: Schema.optional(
+		Schema.Record({ key: journalText(128), value: journalText(1024) }),
+	),
+	evidence: Schema.optional(Schema.Array(journalText(32))),
+	knowledge: Schema.optional(stageJournalKnowledgeSchema),
+	segment: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value > 0, {
+				message: () => "segment must be a positive integer",
+			}),
+		),
+	),
+	offsetMs: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
+				message: () => "offsetMs must be a non-negative integer",
+			}),
+		),
+	),
+	video: Schema.optional(journalText(64)),
+});
+export type StageJournalEntry = typeof stageJournalEntrySchema.Type;
+
+/** What `stage_journal` and the dashboard's journal read answer with: the
+ * entries in journal order, and whether the workflow has a flow page yet. */
+export const stageJournalSchema = Schema.Struct({
+	workflowId: journalText(80),
+	entries: Schema.Array(stageJournalEntrySchema),
+	flowPage: Schema.optional(journalText(64)),
+});
+export type StageJournal = typeof stageJournalSchema.Type;

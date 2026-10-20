@@ -13,7 +13,11 @@ import type {
 	EvidenceEntry,
 	EvidenceKind,
 } from "../../contracts/environment.ts";
-import { formatBytes } from "../../workflow/format.ts";
+import type {
+	StageJournal,
+	StageJournalEntry,
+} from "../../contracts/stages.ts";
+import { flowOffsetLabel, formatBytes } from "../../workflow/format.ts";
 import { evidenceRequestIdOf } from "../../workflow/runtime/evidence-store.ts";
 
 /** What the manifest read is doing. `ready` with nothing attached is a fact the
@@ -48,14 +52,17 @@ const EVIDENCE_PANEL_SHARE = 0.3;
  * windows itself instead.
  */
 export function evidencePanelLines(input: {
-	/** How many entries the read answered with. */
-	readonly entries: number;
+	/** How many rows the listing paints — evidence *and* journal steps. The count
+	 * is of rows, not of entries, because a workflow whose flow journal holds steps
+	 * and no evidence has a listing to show: an entry count would collapse the panel
+	 * onto its title row and clip the very list the journal was written for. */
+	readonly rows: number;
 	readonly state: EvidenceReadState;
 	/** The terminal's rows. A cap only: the host's chrome may leave the dashboard
 	 * fewer rows than this, which is why the panels measure their own body. */
 	readonly terminalLines: number;
 }): number {
-	if (input.entries === 0)
+	if (input.rows === 0)
 		return input.state === "ready"
 			? EVIDENCE_EMPTY_LINES
 			: EVIDENCE_MESSAGE_LINES;
@@ -66,15 +73,22 @@ export function evidencePanelLines(input: {
 	return Math.min(EVIDENCE_PANEL_LINES, cap);
 }
 
-/** One row of the panel's list. Every row selects an entry; the row that opens
- * a debug request's group also carries its heading. */
+/** One row of the panel's list. A row either selects an evidence entry or — in
+ * a workflow that has a stage flow journal — a journal step, which has no file
+ * to open; the row that opens a group carries its heading. */
 export interface EvidenceListRow {
-	readonly entry: EvidenceEntry;
+	readonly entry?: EvidenceEntry;
+	/** The journal step this row stands for, when it is a step row. */
+	readonly step?: StageJournalEntry;
 	/** The one-line label the list paints. */
 	readonly label: string;
 	/** Heading of the group this row opens, when it opens one. */
 	readonly header?: string;
 }
+
+/** The glyph a journal step row leads with, so a step is distinguishable from
+ * the evidence rows around it. */
+const STEP_GLYPH = "›";
 
 /** The glyph each kind leads with, so a row is scannable without reading the
  * caption. */
@@ -110,8 +124,21 @@ export function evidenceRowLabel(entry: EvidenceEntry): string {
  * attached under. ULIDs are time-ordered, so newest-first is the id sorted
  * descending; a request's entries stay together and the groups themselves are
  * ordered by their newest entry, so the most recent work is at the top.
+ *
+ * A workflow that has a stage flow journal gets the flow grouping instead
+ * (`add-stage-flow-evidence`); one that has none renders exactly as before.
  */
 export function evidenceRows(
+	entries: readonly EvidenceEntry[],
+	journal?: StageJournal,
+): EvidenceListRow[] {
+	if (journal === undefined || journal.entries.length === 0)
+		return evidenceRequestRows(entries);
+	return evidenceFlowRows(entries, journal);
+}
+
+/** The grouping this panel has always had: by debug request, newest first. */
+function evidenceRequestRows(
 	entries: readonly EvidenceEntry[],
 ): EvidenceListRow[] {
 	const newestFirst = [...entries].sort((left, right) =>
@@ -139,6 +166,119 @@ export function evidenceRows(
 	return rows;
 }
 
+/** One journal step's row label: its offset, its label, and where it ran. */
+export function evidenceStepLabel(step: StageJournalEntry): string {
+	const parts = [
+		step.offsetMs === undefined ? "" : flowOffsetLabel(step.offsetMs),
+		step.label,
+	]
+		.filter(Boolean)
+		.join(" ");
+	const where = [step.app, step.role].filter(Boolean).join("/");
+	return `${STEP_GLYPH} ${parts}${where === "" ? "" : ` · ${where}`}`;
+}
+
+/** What one journal step says, for the panel's detail column: where and when it
+ * ran, what it expected and saw, and what it captured. A step has no file, so
+ * this is all a developer can be told about it besides its row. */
+export function evidenceStepDetailLines(step: StageJournalEntry): string[] {
+	const lines: string[] = [];
+	const where = [step.app, step.role].filter(Boolean).join(" / ");
+	const when =
+		step.offsetMs === undefined ? "" : flowOffsetLabel(step.offsetMs);
+	lines.push(
+		[when, where].filter(Boolean).join(" · ") ||
+			(step.segment === undefined ? "step" : `segment ${step.segment}`),
+	);
+	if (step.url !== undefined) lines.push(step.url);
+	if (step.expected !== undefined) lines.push(`expected ${step.expected}`);
+	if (step.observed !== undefined) lines.push(`observed ${step.observed}`);
+	for (const [name, value] of Object.entries(step.captures ?? {}))
+		lines.push(`${name} ${value}`);
+	if (step.knowledge !== undefined) {
+		const { concept, section, kind } = step.knowledge;
+		lines.push(
+			`knowledge ${kind} ${concept}${section === undefined ? "" : ` § ${section}`}`,
+		);
+	}
+	return lines;
+}
+
+/** The flow grouping: one group per recording segment in journal order, each
+ * with the steps written during it and the evidence they reference, then a
+ * trailing group for whatever no segment claimed. */
+function evidenceFlowRows(
+	entries: readonly EvidenceEntry[],
+	journal: StageJournal,
+): EvidenceListRow[] {
+	/** Segment order is journal order: the first step's segment comes first. */
+	const segments = new Map<number, StageJournalEntry[]>();
+	const loose: StageJournalEntry[] = [];
+	for (const step of journal.entries) {
+		if (step.segment === undefined) {
+			loose.push(step);
+			continue;
+		}
+		const group = segments.get(step.segment);
+		if (group) group.push(step);
+		else segments.set(step.segment, [step]);
+	}
+	/** Which segment an entry belongs to: the one a step of it referenced, the
+	 * one the kept video itself names, or the one whose poster it is. A
+	 * screenshot taken while a recording ran carries no segment of its own, so
+	 * the step that named it is what files it. */
+	const segmentOf = new Map<string, number>();
+	for (const [segment, steps] of segments)
+		for (const step of steps)
+			for (const id of step.evidence ?? [])
+				if (!segmentOf.has(id)) segmentOf.set(id, segment);
+	for (const entry of entries) {
+		if (entry.segment !== undefined && !segmentOf.has(entry.id))
+			segmentOf.set(entry.id, entry.segment);
+		if (entry.poster !== undefined && !segmentOf.has(entry.poster)) {
+			const owner = segmentOf.get(entry.id);
+			if (owner !== undefined) segmentOf.set(entry.poster, owner);
+		}
+	}
+	const claimed = new Set<string>();
+	const rows: EvidenceListRow[] = [];
+	for (const [segment, steps] of segments) {
+		const groupEntries = [...entries]
+			.filter((entry) => segmentOf.get(entry.id) === segment)
+			.sort((left, right) => right.id.localeCompare(left.id));
+		for (const entry of groupEntries) claimed.add(entry.id);
+		const video = groupEntries.find(
+			(entry) => entry.kind === "video" && entry.segment === segment,
+		);
+		const heading = [
+			`Segment ${segment}`,
+			video ? evidenceRowLabel(video).replace(/^▶ /, "") : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+		steps.forEach((step, index) => {
+			rows.push({
+				step,
+				label: evidenceStepLabel(step),
+				...(index === 0 ? { header: heading } : {}),
+			});
+		});
+		for (const entry of groupEntries)
+			rows.push({ entry, label: evidenceRowLabel(entry) });
+	}
+	const rest = [
+		...loose.map((step) => ({ step, label: evidenceStepLabel(step) })),
+		...[...entries]
+			.filter((entry) => !claimed.has(entry.id))
+			.sort((left, right) => right.id.localeCompare(left.id))
+			.map((entry) => ({ entry, label: evidenceRowLabel(entry) })),
+	];
+	rest.forEach((row, index) => {
+		rows.push({ ...row, ...(index === 0 ? { header: "Unreferenced" } : {}) });
+	});
+	return rows;
+}
+
 /**
  * The entry whose bytes the preview renders for `selectedIndex`: the entry
  * itself when it is a screenshot, or the screenshot a video names as its
@@ -154,7 +294,7 @@ export function evidencePreviewEntry(
 	if (entry.kind === "screenshot") return entry;
 	if (entry.kind !== "video" || !entry.poster) return undefined;
 	const poster = rows.find(
-		(candidate) => candidate.entry.id === entry.poster,
+		(candidate) => candidate.entry?.id === entry.poster,
 	)?.entry;
 	// Only a screenshot is an image: a poster that names a trace, a log or
 	// another video leaves the preview at metadata rather than mounting bytes the

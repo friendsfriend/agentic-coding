@@ -10,6 +10,8 @@
 // Reads only: the panel offers no mutating action, so this module has none.
 import type { EvidenceManifest } from "../../contracts/environment.ts";
 import { evidenceManifestSchema } from "../../contracts/environment.ts";
+import type { StageJournal } from "../../contracts/stages.ts";
+import { stageJournalSchema } from "../../contracts/stages.ts";
 import { cache, gateway } from "./index.ts";
 
 type Signal = AbortSignal | undefined;
@@ -67,5 +69,31 @@ export async function loadEvidenceFile(
 		evidenceFileKey(repo, workflowId, id),
 		(readSignal) => gateway().evidenceFile(workflowId, id, readSignal),
 		{ signal },
+	);
+}
+
+/** One workflow's stage step journal (`add-stage-flow-evidence`). It lives in the
+ * same `evidence:` key family as the manifest, so a workflow event drops both:
+ * steps are written while a run works, exactly like attached evidence. A
+ * workflow that ran no stage flow answers with no entries. */
+export function stageJournalKey(repo: string, workflowId: string): string {
+	return `evidence:${repo}:${workflowId}:journal`;
+}
+
+export async function loadStageJournal(
+	repo: string,
+	workflowId: string,
+	signal?: Signal,
+	options: EvidenceReadOptions = {},
+): Promise<StageJournal | undefined> {
+	return cache.load(
+		stageJournalKey(repo, workflowId),
+		(readSignal) =>
+			gateway().observe<StageJournal>(
+				{ kind: "stage-journal", repo, workflowId },
+				stageJournalSchema,
+				readSignal,
+			),
+		{ signal, ...options },
 	);
 }

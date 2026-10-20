@@ -30,6 +30,9 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_JOURNAL_PATH,
+	AGENT_BROWSER_STAGE_STEP_PATH,
+	AGENT_BROWSER_STAGE_WAIT_PATH,
 	AGENT_BROWSER_WAIT_PATH,
 } from "../server/protocol.ts";
 import {
@@ -51,6 +54,12 @@ const ACTION_TIMEOUT_MS = 180_000;
 const LOGIN_WAIT_TIMEOUT_MS = 610_000;
 const NAVIGATION_TIMEOUT_MS = 120_000;
 const RECORDING_TIMEOUT_MS = 180_000;
+/** A `stage_step` or `stage_journal` call is a page read plus a file write. */
+const JOURNAL_TIMEOUT_MS = 60_000;
+/** One `stage_wait`: the server caps its own poll at the stage's
+ * `maxWaitSeconds`, and the client bound sits just above the largest cap so the
+ * server's own answer arrives first. */
+const STAGE_WAIT_TIMEOUT_MS = 660_000;
 
 type ContentBlock =
 	| { type: "text"; text: string }
@@ -351,10 +360,127 @@ const BrowserScreenshotParameters = Type.Object({
 				"Store the screenshot as evidence (default false: it is only returned to you).",
 		}),
 	),
+	view: Type.Optional(
+		Type.Boolean({
+			description:
+				"`view: false` stores the screenshot (needs `evidence: true`) and answers with the evidence id and caption only, so a long flow test does not inflate your context with images you would not inspect anyway.",
+		}),
+	),
 	caption: Type.Optional(
 		Type.String({
 			description:
 				"One line the developer reads next to the evidence, saying what it shows.",
+		}),
+	),
+});
+
+const StageWaitParameters = Type.Object({
+	session: SessionParameter,
+	until: Type.Object({
+		text: Type.Optional(
+			Type.String({ description: "Wait until this text is on the page." }),
+		),
+		selector: Type.Optional(
+			Type.String({ description: "Wait until this CSS selector matches." }),
+		),
+		url: Type.Optional(
+			Type.String({
+				description:
+					"Wait until the URL matches this pattern (`*` wildcards; without one it is a substring).",
+			}),
+		),
+		mail: Type.Optional(
+			Type.Object({
+				to: Type.Optional(
+					Type.String({
+						description: "Mailpit search: the recipient address.",
+					}),
+				),
+				subject: Type.Optional(
+					Type.String({ description: "Mailpit search: the subject." }),
+				),
+			}),
+		),
+	}),
+	reload: Type.Optional(
+		Type.Boolean({
+			description:
+				"Re-open the session's current URL between polls (a mail-driven page has to be re-read to show the message's effect).",
+		}),
+	),
+	intervalSeconds: Type.Optional(
+		Type.Number({ description: "How often to poll, in seconds (default 5)." }),
+	),
+	timeoutSeconds: Type.Optional(
+		Type.Number({
+			description:
+				"How long to wait, in seconds; capped by the stage's `maxWaitSeconds`.",
+		}),
+	),
+});
+
+const StageStepParameters = Type.Object({
+	session: SessionParameter,
+	label: Type.String({
+		description:
+			"The step itself, in the operator's words (e.g. `submit the request`). The server adds the time, the application, the role, the URL and — while a recording runs — the segment and offset.",
+	}),
+	expected: Type.Optional(
+		Type.String({ description: "What should have happened, if it matters." }),
+	),
+	observed: Type.Optional(
+		Type.String({ description: "What actually happened." }),
+	),
+	captures: Type.Optional(
+		Type.Record(Type.String(), Type.String(), {
+			description:
+				"Values this step produced, as name → value (a reference number, a status, an amount). Redacted before the journal is written.",
+		}),
+	),
+	evidence: Type.Optional(
+		Type.Array(
+			Type.String({
+				description: "The id of a screenshot or video already attached.",
+			}),
+			{
+				description:
+					"The evidence ids this step shows. An id the manifest does not hold is refused.",
+			},
+		),
+	),
+	knowledge: Type.Optional(
+		Type.Object({
+			concept: Type.String({
+				description: "The process concept or rule the step illustrates.",
+			}),
+			section: Type.Optional(
+				Type.String({ description: "Where the concept is documented." }),
+			),
+			kind: Type.Union(
+				[
+					Type.Literal("confirmed"),
+					Type.Literal("contradicted"),
+					Type.Literal("missing"),
+					Type.Literal("new"),
+				],
+				{
+					description:
+						"What the step showed about that concept: confirmed, contradicted, missing or new.",
+				},
+			),
+			suspectedCause: Type.Optional(
+				Type.Union(
+					[
+						Type.Literal("product-change"),
+						Type.Literal("regression"),
+						Type.Literal("unknown"),
+					],
+					{
+						description:
+							"For a contradiction: whether the product changed on purpose, regressed, or you cannot tell.",
+					},
+				),
+			),
 		}),
 	),
 });
@@ -645,6 +771,137 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				},
 			}),
 			defineTool({
+				name: "stage_wait",
+				description: [
+					"Poll one condition *inside the server* until it holds or the bound elapses, and answer once — so a wait costs one tool call instead of one per poll.",
+					"`until` takes exactly one of `text`, `selector`, `url` or `mail` (the last reads the stage's Mailpit mail catcher, by `to` and/or `subject`).",
+					"The bound is the stage's `maxWaitSeconds`; `reload: true` re-opens the session's URL between polls.",
+				].join(" "),
+				parameters: StageWaitParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_wait: run context unavailable");
+					const until = args.until as {
+						text?: string;
+						selector?: string;
+						url?: string;
+						mail?: { to?: string; subject?: string };
+					};
+					const named = [
+						until.text !== undefined,
+						until.selector !== undefined,
+						until.url !== undefined,
+						until.mail !== undefined,
+					].filter(Boolean).length;
+					if (named !== 1)
+						return failure(
+							"stage_wait: `until` takes exactly one of text, selector, url or mail",
+						);
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_WAIT_PATH, {
+								timeoutMs: STAGE_WAIT_TIMEOUT_MS,
+								body: {
+									until,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.reload === undefined ? {} : { reload: args.reload }),
+									...(args.intervalSeconds === undefined
+										? {}
+										: { intervalSeconds: args.intervalSeconds }),
+									...(args.timeoutSeconds === undefined
+										? {}
+										: { timeoutSeconds: args.timeoutSeconds }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_wait: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_step",
+				description: [
+					"Append one step to this workflow's journal, which becomes the `stage-flow.html` page the developer reads: the step, what it expected and observed, the values it captured, the evidence it shows, and what it taught about the process being tested.",
+					"The server stamps the time, the session's application and role, the sanitized URL and — while a recording runs — the segment and the offset into it, so you never write a timestamp or a link yourself; everything is redacted on write.",
+				].join(" "),
+				parameters: StageStepParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_step: run context unavailable");
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_STEP_PATH, {
+								timeoutMs: JOURNAL_TIMEOUT_MS,
+								body: {
+									label: args.label,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.expected === undefined
+										? {}
+										: { expected: args.expected }),
+									...(args.observed === undefined
+										? {}
+										: { observed: args.observed }),
+									...(args.captures === undefined
+										? {}
+										: { captures: args.captures }),
+									...(args.evidence === undefined
+										? {}
+										: { evidence: args.evidence }),
+									...(args.knowledge === undefined
+										? {}
+										: { knowledge: args.knowledge }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_step: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_journal",
+				description:
+					"Read the latest journal steps back (bounded by `limit`, optionally narrowed to one session or `app`), with the flow page's file name when there is one.",
+				parameters: Type.Object({
+					session: SessionParameter,
+					app: Type.Optional(
+						Type.String({
+							description: "Only this application's steps.",
+						}),
+					),
+					limit: Type.Optional(
+						Type.Number({
+							description: "How many of the newest steps to return (1–200).",
+						}),
+					),
+				}),
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_journal: run context unavailable");
+					try {
+						return text(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_JOURNAL_PATH, {
+								timeoutMs: JOURNAL_TIMEOUT_MS,
+								body: {
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.app === undefined ? {} : { app: args.app }),
+									...(args.limit === undefined ? {} : { limit: args.limit }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_journal: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
 				name: "browser_eval",
 				description:
 					"Evaluate JavaScript in the session's page and return the resolved value. Bounded by `timeoutMs`; the session stays usable afterwards.",
@@ -717,6 +974,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				description: [
 					"Capture the session's page (or one element, by ref or selector) as a JPEG and return it to you as an image.",
 					"`evidence: true` also stores it in this workflow's evidence store under `caption`, so the developer can review it; without it, only you see the image.",
+					"`view: false` (with `evidence: true`) stores it without returning the image, which is how a long flow test documents its steps without filling your context with pictures.",
 				].join(" "),
 				parameters: BrowserScreenshotParameters,
 				execute: async (args, api) => {
@@ -744,6 +1002,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.evidence === undefined
 										? {}
 										: { evidence: args.evidence }),
+									...(args.view === undefined ? {} : { view: args.view }),
 									...(args.caption === undefined
 										? {}
 										: { caption: args.caption }),
@@ -752,25 +1011,32 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						)) as {
 							url?: string;
 							mediaType?: string;
-							base64: string;
-							evidence?: { id?: string };
+							base64?: string;
+							evidence?: { id?: string; caption?: string };
 						};
+						// The caption comes back with the id: a `view: false` call answers
+						// without the image, so the caption is the one thing that tells the
+						// model which of its steps the stored screenshot belongs to (and it is
+						// what the developer reads in the Evidence panel).
+						const caption = value.evidence?.caption?.trim();
 						const note = value.evidence?.id
-							? `\nstored as evidence ${value.evidence.id}`
+							? `\nstored as evidence ${value.evidence.id}${caption === undefined || caption === "" ? "" : ` — ${caption}`}`
 							: "\nstored as evidence: no (pass evidence: true to keep it)";
-						return {
-							content: [
-								{
-									type: "text",
-									text: `screenshot of ${value.url ?? "the page"}${note}`,
-								},
-								{
-									type: "image",
-									data: value.base64,
-									mimeType: value.mediaType ?? "image/jpeg",
-								},
-							],
-						};
+						const summary = `screenshot of ${value.url ?? "the page"}${note}`;
+						// `view: false` answers with the evidence id alone, so no image block
+						// is built for a picture this call deliberately did not look at.
+						return value.base64 === undefined
+							? { content: [{ type: "text", text: summary }] }
+							: {
+									content: [
+										{ type: "text", text: summary },
+										{
+											type: "image",
+											data: value.base64,
+											mimeType: value.mediaType ?? "image/jpeg",
+										},
+									],
+								};
 					} catch (error) {
 						return failure(`browser_screenshot: ${message(error)}`);
 					}

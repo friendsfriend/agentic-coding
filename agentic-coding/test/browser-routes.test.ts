@@ -249,7 +249,10 @@ describe("agent browser routes", () => {
 			action: "stop",
 			keep: false,
 		});
-		expect(stopped.value.kept).toBeUndefined();
+		// A discard answers the same shape a keep does, with `kept: false`: one
+		// answer for one action, so a caller reads `kept` and never a second field.
+		expect(stopped.value.kept).toBe(false);
+		expect(stopped.value.video).toBe(false);
 		expect(String(stopped.value.notice)).toContain("discarded");
 		const scope = workflowEvidenceScope({
 			workflowId: WORKFLOW_ID,

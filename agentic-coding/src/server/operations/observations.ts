@@ -25,6 +25,7 @@ import type {
 	LocalChange,
 	WorktreeGitStatus,
 } from "../../contracts/integration";
+import type { StageJournal } from "../../contracts/stages.ts";
 import type {
 	DashboardData,
 	DeveloperReviewComment,
@@ -95,6 +96,7 @@ import {
 	setupDraftsDir,
 	setupReviewDrift,
 } from "../environment/setup-drafts.ts";
+import { stageJournalSnapshot } from "../evidence/journal.ts";
 import { listEvidence } from "../evidence/store.ts";
 import {
 	answerWorkflowQuestion,
@@ -154,6 +156,9 @@ export type DashboardObservation =
 			requestId?: string;
 	  }
 	| { kind: "debug-requests"; repo: string; workflowId: string }
+	// The stage flow's step journal (`add-stage-flow-evidence`): the Evidence
+	// panel groups its rows by the segments these entries name.
+	| { kind: "stage-journal"; repo: string; workflowId: string }
 	| { kind: "sessions-report"; since?: string };
 
 /** Run an observation in-process. This is the server-side dispatch the HTTP
@@ -238,6 +243,8 @@ export async function runLocalObservation(
 				observation.workflowId,
 				observation.requestId,
 			);
+		case "stage-journal":
+			return loadStageJournal(observation.repo, observation.workflowId);
 		case "debug-requests":
 			return loadDebugRequests(observation.repo, observation.workflowId);
 		case "sessions-report":
@@ -1154,6 +1161,29 @@ export function loadEvidence(
 		definitionId: state.definition?.id,
 	});
 	return listEvidence(scope, requestId === undefined ? {} : { requestId });
+}
+
+/**
+ * One workflow's stage step journal (`add-stage-flow-evidence`): every step, in
+ * write order, with the flow page's name when there is one. Read-only, and
+ * authorized through the same `dashboardState` read as every sibling — a workflow
+ * that never ran a stage flow answers with an empty journal, which is what the
+ * Evidence panel's unchanged rendering keys off.
+ */
+export function loadStageJournal(
+	repo: string,
+	workflowId: string,
+): StageJournal {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
+	const scope = workflowEvidenceScope({
+		workflowId,
+		worktree: state.worktree,
+		definitionId: state.definition?.id,
+	});
+	// One cached read answers both the entries and whether a page exists: this
+	// observation runs on every dashboard refresh, and an unchanged journal must
+	// cost a `stat`, not a parse of a file that can reach the evidence cap.
+	return stageJournalSnapshot(scope);
 }
 
 /** One workflow's delegated debug requests, oldest first, each with the report

@@ -752,7 +752,14 @@ describe("session refs, buffers and recording", () => {
 			pool.autoStopIfExpired(session),
 			pool.autoStopIfExpired(session),
 		]);
-		expect(results.filter((stopped) => stopped)).toHaveLength(1);
+		// Exactly one call discards it, and that call answers *which* segment it
+		// discarded and how long it ran: the route settles that segment's recording
+		// grant by it, so a bare `true` would leave the budget held by a segment
+		// nobody was told about.
+		const stopped = results.filter((each) => each !== undefined);
+		expect(stopped).toHaveLength(1);
+		expect(stopped[0]?.segment).toBe(1);
+		expect(stopped[0]?.elapsedMs).toBe(5_000);
 		expect(session.recording).toBeUndefined();
 		expect(fs.existsSync(dir)).toBe(false);
 		await pool.closeAll();
