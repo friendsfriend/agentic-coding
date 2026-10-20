@@ -30,7 +30,7 @@ export const CHECKPOINT_THRESHOLDS: Readonly<
 	worker: { softTurns: 280, hardTurns: 1400 },
 	planner: { softTurns: 60, hardTurns: 300 },
 	verifier: { softTurns: 70, hardTurns: 350 },
-	mechanical: { softTurns: 30, hardTurns: 250 },
+	mechanical: { softTurns: 30, hardTurns: 150 },
 	other: { softTurns: 280, hardTurns: 1400 },
 };
 

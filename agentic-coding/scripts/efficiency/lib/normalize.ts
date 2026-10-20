@@ -351,6 +351,17 @@ export function normalizeRecord(
 				: undefined;
 	}
 
+	// An escalation's fate is the event's outcome too, and it is the only place
+	// the query can count it: `answered`, `cancelled`, `pending-parked` or
+	// `filing-failed` lives in the dotted attribute, never in `outcome`.
+	if (event === "runtime.checkpoint_escalation") {
+		normalized.outcome =
+			str(record["herdr.checkpoint.outcome"]) ?? normalized.outcome;
+		if (str(record["herdr.checkpoint.status"]) === "error")
+			normalized.errorClass =
+				str(record["herdr.checkpoint.error_class"]) ?? "checkpoint_question";
+	}
+
 	// A tool outcome that is neither "ok" nor absent stays as recorded; the
 	// dataset never rewrites an outcome it cannot interpret. The fallback error
 	// class is only derived for a tool event — an unrelated event's `status`

@@ -155,7 +155,10 @@ function replayRun(
 	}
 	const decisions: ReplayDecision[] = [];
 	const decide = (trigger: CheckpointTrigger) => {
-		const digest = tracker.takeDigest(trigger);
+		// The dataset records no ceiling state, so a replay can never observe the
+		// summarizer's admission: the context rule's `compact` stays unreachable
+		// here, and the header says so. Everything else is the live rule set.
+		const digest = tracker.takeDigest(trigger, { compactionAdmissible: false });
 		const decision = decideCheckpoint(digest, { steer: true });
 		tracker.noteDecision(decision, digest);
 		decisions.push({
@@ -178,7 +181,10 @@ function replayRun(
 	const feed = (call: CallRow) =>
 		tracker.observeTool({
 			tool: call.tool,
-			ok: call.ok === 1,
+			// A NULL outcome is *unknown*, not a failure: older envelope generations
+			// record no `pi.tool.ok`, and counting those as failures would replay a
+			// productive run as a run that never made progress.
+			ok: call.ok !== 0,
 			...(call.args_hash ? { argsHash: call.args_hash } : {}),
 		});
 	for (const call of early) feed(call);
@@ -186,7 +192,9 @@ function replayRun(
 	let stopped = false;
 	for (const turn of turns) {
 		tracker.observeTurn({
-			turn: turn.turn_index,
+			// The dataset's turn index is 0-based; the live host observes the 1-based
+			// turn number, and the schedule is compared against it.
+			turn: turn.turn_index + 1,
 			costUnits: turn.cost ?? 0,
 			contextTokens:
 				(turn.input_tokens ?? 0) +
@@ -322,7 +330,8 @@ function main(): void {
 		);
 		console.log(
 			`\n${runs.length} run(s) replayed; ${CHECKPOINT_ACTIONS.length} possible actions. ` +
-				"Tick-task, diff and HEAD progress are unknown offline; only edits, writes and, for a read-only run, new calls count.",
+				"Tick-task, diff and HEAD progress are unknown offline; only edits, writes and, for a read-only run, new calls count. " +
+				"The cost ceiling's admission is not recorded, so the context rule can only continue here — never compact.",
 		);
 	} finally {
 		db.close();
