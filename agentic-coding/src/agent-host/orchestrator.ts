@@ -96,12 +96,21 @@ async function call(
 		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 	});
 	const parsed = (await response.json().catch(() => undefined)) as
-		| { ok?: boolean; value?: unknown; error?: { message?: string } }
+		| {
+				ok?: boolean;
+				value?: unknown;
+				error?: { code?: string; message?: string };
+		  }
 		| undefined;
-	if (!response.ok || !parsed || parsed.ok === false || parsed.error)
+	if (!response.ok || !parsed || parsed.ok === false || parsed.error) {
+		// The server's own code travels with the message: a refusal that only said
+		// "stage … is not in the configured allow-list" hides which rule refused it,
+		// and the code is what the developer and the guidance name.
+		const code = parsed?.error?.code;
 		throw new Error(
-			parsed?.error?.message ?? `server answered ${response.status}`,
+			`${parsed?.error?.message ?? `server answered ${response.status}`}${code ? ` [${code}]` : ""}`,
 		);
+	}
 	return parsed.value;
 }
 
@@ -410,7 +419,7 @@ const BlueprintParameter = Type.Object(
 );
 
 const START_WORKFLOW_CHECKLIST =
-	"repository/project → task (goal, constraints, acceptance) → workflow type and why → agent preset/model profile → mode (worktree or checkout) → branch/base → ticket → `app` for env-setup";
+	"repository/project → task (goal, constraints, acceptance) → workflow type and why → agent preset/model profile → mode (worktree or checkout) → branch/base → ticket → `app` for env-setup → `stage` for stage-test";
 
 export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You talk with the developer, make direct edits with your own coding tools (read/write/edit/bash) and launch, monitor and manage coding workflows through your other tools.
 
@@ -420,6 +429,7 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - start_workflow takes the task as inline \`task\` text or by reference: \`taskRef.change\` names an OpenSpec change of the target repository (list_changes lists them) and \`taskRef.previousMessage\` reuses the developer's own last message; the answer names the resolved source and its length, so a reference that resolved to the wrong change is visible.
 - Before you start a workflow, establish with the developer in this order: ${START_WORKFLOW_CHECKLIST}. list_agent_config shows preset/model-profile choices; respect an existing developer default and ask only if none is set or the request implies a different choice. Read project lists, branches, workflow state and presets yourself; do not ask the developer for facts you can read.
 - An \`env-setup\` workflow authors the environment definitions (run/build/test/infrastructure) for one configured application: name that application's ident as \`app\` when you start one — list_projects reports them with their \`kind\` (\`app\` runs, \`library\` does not). Every other type refuses an \`app\`.
+- A \`stage-test\` workflow plans and executes a verification on exactly one allow-listed hosted stage: name that stage's ident as \`stage\` when you start one. The developer establishes the stage — you have no stage catalog of your own, so never guess one, and when the developer names a system rather than a stage, ask which of its stages to use and name it back for confirmation. The server validates the ident against the stage allow-list and refuses an unknown one with \`stage-not-configured\`, so no workflow starts; \`stage\` means nothing to any other workflow type, so never send it with one.
 - Prefer a built-in workflow type when one fits. When none does, shape one: list_steps gives the logical steps you may compose, validate_blueprint compiles a candidate and answers with its summary or the reasons it was refused, and start_workflow takes the validated blueprint instead of a workflow type. Always validate before starting a blueprint, and state the rationale to the developer: every shape you start keeps its human reviews.
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
@@ -707,7 +717,7 @@ export function createOrchestratorExtension(
 			}),
 			defineTool({
 				name: "start_workflow",
-				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase and a configured app for env-setup; returns the start result with human reviews retained. Pass the task as \`task\` text or as \`taskRef\` — {change:"<id>"} for an OpenSpec change of the target repository (list_changes lists them) or {previousMessage:true} for your own last developer message — and the answer names the resolved change and task length.`,
+				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase, a configured app for env-setup and the allow-listed stage for stage-test; returns the start result with human reviews retained. Pass the task as \`task\` text or as \`taskRef\` — {change:"<id>"} for an OpenSpec change of the target repository (list_changes lists them) or {previousMessage:true} for your own last developer message — and the answer names the resolved change and task length.`,
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -774,6 +784,14 @@ export function createOrchestratorExtension(
 								"The configured application an `env-setup` workflow drafts definitions for, by the ident list_projects reports (`kind` `app`). Required for workflowType `env-setup`; refused for every other type.",
 						}),
 					),
+					stage: Type.Optional(
+						Type.String({
+							minLength: 1,
+							maxLength: 128,
+							description:
+								"The allow-listed hosted stage a `stage-test` workflow runs on, by the ident the stage catalog reports. Required for workflowType `stage-test`; the server refuses an ident that is not in the allow-list with `stage-not-configured`. `stage` means nothing to any other workflow type, so never send it with one.",
+						}),
+					),
 					ticket: Type.Optional(
 						Type.String({
 							maxLength: 128,
@@ -806,6 +824,7 @@ export function createOrchestratorExtension(
 							mode?: "worktree" | "checkout";
 							preset?: string;
 							app?: string;
+							stage?: string;
 							ticket?: string;
 							sourceBranch?: string;
 							targetBranch?: string;
@@ -882,6 +901,11 @@ export function createOrchestratorExtension(
 							// configured applications, so an unknown ident is refused before a
 							// workflow exists.
 							...(args.app ? { app: args.app } : {}),
+							// The stage-test family's subject: the allow-listed hosted stage the
+							// workflow runs on. The server validates it against the stage catalog,
+							// so an unknown ident is refused with `stage-not-configured` before a
+							// workflow exists.
+							...(args.stage ? { stage: args.stage } : {}),
 							...(args.ticket ? { ticket: args.ticket } : {}),
 							...(args.sourceBranch ? { sourceBranch: args.sourceBranch } : {}),
 							...(args.targetBranch ? { targetBranch: args.targetBranch } : {}),

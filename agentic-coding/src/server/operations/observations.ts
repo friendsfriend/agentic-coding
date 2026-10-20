@@ -2430,6 +2430,8 @@ export async function startWorkflow(input: {
 	preset?: string;
 	sourceBranch?: string;
 	targetBranch?: string;
+	/** The allow-listed hosted stage a `stage-test` start runs on. */
+	stage?: string;
 }) {
 	const repo =
 		input.workflowType === "research" && !input.repo

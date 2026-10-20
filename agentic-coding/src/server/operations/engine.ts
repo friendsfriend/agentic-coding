@@ -213,6 +213,8 @@ export function startArgs(input: {
 	targetBranch?: string;
 	/** The configured app an env-setup launch drafts definitions for. */
 	app?: string;
+	/** The allow-listed hosted stage a `stage-test` workflow runs on. */
+	stage?: string;
 }) {
 	const definitionId =
 		input.workflowType === "quick"
@@ -266,6 +268,7 @@ export function startArgs(input: {
 			? { preset: input.preset }
 			: {}),
 		...(input.app ? { app: input.app } : {}),
+		...(input.stage ? { stage: input.stage } : {}),
 	};
 }
 /** The presets a launch may select, plus the reason the agents config could not
@@ -319,6 +322,7 @@ export async function startWorkflowInProcess(
 		sourceBranch: args.sourceBranch,
 		targetBranch: args.targetBranch,
 		app: args.app,
+		...(args.stage ? { stage: args.stage } : {}),
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 		...(input.startedBy ? { startedBy: input.startedBy } : {}),
 	});

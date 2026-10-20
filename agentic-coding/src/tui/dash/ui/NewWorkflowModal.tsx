@@ -39,6 +39,16 @@ import {
 	PRESET_CONFIG_DEFAULTS,
 	PUBLIC_WORKFLOW_CATALOG,
 } from "../live.ts";
+import {
+	clearStageCatalogSnapshot,
+	refreshStageCatalog,
+	STAGE_CATALOG_EMPTY,
+	type StageChoice,
+	stageCatalogSnapshot,
+	stageChoiceRefusal,
+	stageChoiceSelectable,
+	stageChoices,
+} from "../stage-catalog.ts";
 
 /** Task-driven registry types: the wizard renders and submits the task step for
  * these, and `openspec` runs the classifier-routed plan-first graph. Every
@@ -57,6 +67,7 @@ const TASK_TYPES = new Set([
 	"research",
 	"no-openspec",
 	"solo",
+	"stage-test",
 ]);
 
 /** One repository-step entry: a configured application/library, the directory
@@ -75,9 +86,11 @@ type RepoEntry =
 	| { kind: "current"; path: string }
 	| { kind: "custom" };
 
-/** One entry of the current step: the plain value every other step submits, or
- * a repository entry the repository step resolves itself. */
-type StepEntry = string | RepoEntry;
+/** One entry of the current step: the plain value every other step submits, a
+ * repository entry the repository step resolves itself, or a stage entry the
+ * stage step resolves itself (an allow-listed stage, or a refused file kept
+ * visible with its reason). */
+type StepEntry = string | RepoEntry | StageChoice;
 
 /** How many times a superseded catalog read is retried before the picker
  * reports it. */
@@ -92,7 +105,9 @@ function repoEntryKey(entry: RepoEntry): string {
 
 /** The identity of any step's entry, used as the cursor's anchor. */
 function entryKey(item: StepEntry): string {
-	return typeof item === "string" ? `value:${item}` : repoEntryKey(item);
+	if (typeof item === "string") return `value:${item}`;
+	if ("kind" in item && item.kind === "stage") return item.key;
+	return repoEntryKey(item);
 }
 
 /** Why a configured project cannot be started, or `undefined` when it can. */
@@ -191,10 +206,41 @@ export function NewWorkflowModal(props: {
 		!catalogLoading()
 			? "No configured applications are available — configure an application or library first; an environment setup workflow drafts for one configured app."
 			: undefined;
-	// The catalog read's own failure outranks the app step's "nothing is
+	/** The stage catalog the stage step picks from, and its own loading/failure
+	 * state (`add-stage-test-launch`). A stage test runs on one allow-listed
+	 * stage, so the step reads the catalog instead of asking for a free ident. */
+	const [stageCatalog, setStageCatalog] = createSignal<
+		ReturnType<typeof stageCatalogSnapshot>
+	>(stageCatalogSnapshot());
+	const [stageLoading, setStageLoading] = createSignal(false);
+	const [stageReadError, setStageReadError] = createSignal<
+		string | undefined
+	>();
+	/** The stage step's own empty state: with nothing configured there is no
+	 * stage to test, and the generic "No items" placeholder would leave the
+	 * developer without the remedy the other steps give. A read that has not
+	 * answered yet is not an empty catalog, so nothing is claimed before it does. */
+	const stageNotice = () =>
+		field() === "stage" &&
+		stageChoices(stageCatalog()).length === 0 &&
+		!filter() &&
+		!stageLoading()
+			? stageReadError()
+				? `Stages could not be read: ${stageReadError()}. Press Esc and re-enter this step to retry.`
+				: stageCatalog() === undefined
+					? undefined
+					: STAGE_CATALOG_EMPTY
+			: undefined;
+	// The configured-project catalog explains the repository and app steps only: a
+	// stale project-read failure must never be shown as the reason the stage step
+	// is empty. The catalog read's own failure outranks the app step's "nothing is
 	// configured" notice: the remedy differs, and only one of the two is true.
 	const notice = () =>
-		refusal() ?? branchNotice() ?? catalogNotice() ?? appNotice();
+		refusal() ??
+		branchNotice() ??
+		(pathTarget() || field() === "app" ? catalogNotice() : undefined) ??
+		appNotice() ??
+		stageNotice();
 	const repository = () =>
 		props.context.kind === "project" || props.context.kind === "path"
 			? props.context.repository
@@ -351,6 +397,32 @@ export function NewWorkflowModal(props: {
 		onCleanup(() => controller.abort());
 	});
 
+	// The stage step offers only what the stage catalog allow-lists
+	// (`add-stage-test-launch`): the picker is read when the step is entered, so a
+	// stage added or fixed in the configuration is offered without reopening the
+	// form. Refused files stay in the list with their first diagnostic, and a
+	// failed read is reported instead of an empty picker.
+	createEffect(() => {
+		if (!(field() === "stage" && isStageTest(values().workflowType))) {
+			setStageLoading(false);
+			setStageReadError(undefined);
+			return;
+		}
+		let disposed = false;
+		setStageLoading(true);
+		void (async () => {
+			const read = await refreshStageCatalog();
+			if (disposed) return;
+			setStageCatalog(read.snapshot);
+			setStageReadError(read.error);
+			setStageLoading(false);
+		})();
+		onCleanup(() => {
+			disposed = true;
+		});
+	});
+	onCleanup(() => clearStageCatalogSnapshot());
+
 	const isProposal = (type: string) =>
 		type === "openspec-propose" || type === "openspec-fusion-propose";
 	const isRepositoryBacked = (type: string) =>
@@ -374,6 +446,10 @@ export function NewWorkflowModal(props: {
 	 * branch that is already checked out against the configured base branch, so it
 	 * has neither a task step nor a checkout-mode choice. */
 	const isVerify = (type: string) => type === "verify";
+	/** The stage-test type plans and executes a verification on one allow-listed
+	 * hosted stage (`add-stage-test-launch`): it needs that stage and the ticket
+	 * text as its task, and no branch, worktree or checkout mode. */
+	const isStageTest = (type: string) => type === "stage-test";
 	/** Context-restricted type set; `undefined` means the whole registry. */
 	const allowedTypes = () => workflowTypesForContext(props.context);
 	const workflowTypeChoices = () => {
@@ -383,6 +459,19 @@ export function NewWorkflowModal(props: {
 		).filter((choice) => !allowed || allowed.includes(choice));
 	};
 	const fields = (): (keyof WorkflowLaunchInput)[] => {
+		// The stage-test type names the allow-listed stage it runs on before the
+		// ticket text (the task): a stage test is repository-independent, so it has
+		// no checkout-mode step of its own.
+		if (isStageTest(values().workflowType))
+			return [
+				...(pathTarget() ? (["repo"] as const) : []),
+				"workflowType",
+				"preset",
+				"stage",
+				"ticket",
+				"workflowId",
+				"task",
+			];
 		// The rebase type replaces the task and checkout steps with its two branch
 		// pickers: it needs no task and forces the checkout mode itself.
 		if (isRebase(values().workflowType))
@@ -429,20 +518,45 @@ export function NewWorkflowModal(props: {
 		repo: "Repository path",
 		workflowType: "Workflow type",
 		preset: "Agent preset",
-		ticket: "Ticket identifier optional",
+		ticket: "Ticket reference optional",
 		workflowId: "Workflow ID",
 		task: "Task required for debug, wiki, research, no OpenSpec, and solo",
 		mode: "Checkout mode",
 		sourceBranch: "Branch to rebase",
 		targetBranch: "Branch to rebase onto",
 		app: "Configured app to set up",
+		stage: "Stage to test",
 	};
-	/** The field's label, with the one type-specific rename: the debug branch
-	 * picker selects the branch to investigate, not to rebase. */
+	/** The field's label, with the two type-specific renames: the debug branch
+	 * picker selects the branch to investigate (not to rebase), and a stage test's
+	 * task is the ticket text the developer pasted, not a generic task. */
 	const labelFor = (key: keyof WorkflowLaunchInput | undefined): string =>
 		key === "sourceBranch" && isDebug(values().workflowType)
 			? "Branch to investigate"
-			: ((key ? fieldLabels[key] : undefined) ?? "");
+			: key === "task" && isStageTest(values().workflowType)
+				? "Ticket text (the task)"
+				: ((key ? fieldLabels[key] : undefined) ?? "");
+
+	/** Why the confirmation refused, in one short line. The field labels are whole
+	 * sentences for some types, so they cannot be spliced into a sentence: each
+	 * field that can be missing at the confirmation gets its own phrase. */
+	const missingRequirement = (
+		key: keyof WorkflowLaunchInput | undefined,
+	): string => {
+		if (key === "task")
+			return isStageTest(values().workflowType)
+				? "The ticket text is required before the workflow can start."
+				: "The task is required before the workflow can start.";
+		if (key === "stage")
+			return "A stage to test is required before the workflow can start.";
+		if (key === "sourceBranch")
+			return isDebug(values().workflowType)
+				? "The branch to investigate is required before the workflow can start."
+				: "The branch to rebase is required before the workflow can start.";
+		if (key === "targetBranch")
+			return "The branch to rebase onto is required before the workflow can start.";
+		return "A required value is still empty; go back to it before starting.";
+	};
 
 	const workflowTypeEntry = (choice: string) =>
 		PUBLIC_WORKFLOW_CATALOG.find(
@@ -544,12 +658,28 @@ export function NewWorkflowModal(props: {
 		return entries.filter((entry) => repoEntryMatches(entry, query));
 	};
 
+	/** The stage step's entries: the allow-listed stages, then the refused files
+	 * with their first diagnostic. The filter searches the label, the ident and
+	 * the detail line, so a stage is findable by ident, name or environment. */
+	const stageEntries = (): StageChoice[] => {
+		const query = filter().trim().toLowerCase();
+		return stageChoices(stageCatalog()).filter((entry) =>
+			`${entry.label} ${entry.ident} ${entry.detail}`
+				.toLowerCase()
+				.includes(query),
+		);
+	};
+
 	/** The entries of the current step. */
 	// Pointer parity: a tap selects an option; a second tap on the selected
 	// option dispatches the wizard's own plain `Enter` (advance/create).
 	const dispatch = useKeyDispatch();
-	const entries = (): StepEntry[] =>
-		field() === "repo" ? repoEntries() : choices();
+	const entries = (): StepEntry[] => {
+		const f = field();
+		if (f === "repo") return repoEntries();
+		if (f === "stage") return stageEntries();
+		return choices();
+	};
 
 	/** Where the cursor is now. A cursor identity the current list does not hold
 	 * (a filter hid it, or the list shrank) falls back to the first entry, so the
@@ -582,6 +712,7 @@ export function NewWorkflowModal(props: {
 			f === "workflowType" ||
 			f === "preset" ||
 			f === "app" ||
+			f === "stage" ||
 			(f === "workflowId" && values().workflowType === "openspec-apply") ||
 			f === "mode" ||
 			branchField() !== undefined
@@ -600,6 +731,10 @@ export function NewWorkflowModal(props: {
 			if (!values().sourceBranch) return fields().indexOf("sourceBranch");
 			return fields().indexOf("task");
 		}
+		if (isStageTest(values().workflowType)) {
+			if (!values().stage) return fields().indexOf("stage");
+			return fields().indexOf("task");
+		}
 		return fields().indexOf("task");
 	};
 	const canSubmit = () => {
@@ -609,6 +744,10 @@ export function NewWorkflowModal(props: {
 			// Both refs are the whole input of a rebase, and neither has a fallback
 			// the workflow could pick on its own.
 			return Boolean(values().sourceBranch && values().targetBranch);
+		// A stage test names its stage and its ticket text: neither has a fallback
+		// the workflow could pick on its own, and a stage is never guessed.
+		if (isStageTest(values().workflowType))
+			return Boolean(values().stage && values().task?.trim());
 		return (
 			!["wiki", "research", "quick", "no-openspec", "solo"].includes(
 				values().workflowType,
@@ -623,12 +762,35 @@ export function NewWorkflowModal(props: {
 			: props.context.kind === "path"
 				? { label: "Repository", value: values().repo || "—" }
 				: { label: "Target", value: "Independent (no repository)" };
+	/** The stage row of the confirmation: the picker's own label and its
+	 * environment · access marker, which is what says whether the run may change
+	 * the hosted system. The bare ident is the fallback for a stage the catalog no
+	 * longer holds. */
+	const stageSummary = (ident: string | undefined) => {
+		if (!ident) return "—";
+		const picked = stageChoices(stageCatalog()).find(
+			(candidate) => candidate.ident === ident,
+		);
+		return picked ? `${picked.label} — ${picked.detail}` : ident;
+	};
 	const summary = () => [
 		targetSummary(),
 		...fields().map((key) => ({
 			label: labelFor(key),
-			value: values()[key] || "—",
+			value:
+				(key === "stage" ? stageSummary(values().stage) : values()[key]) || "—",
 		})),
+		// Confirming a form that cannot start sends the developer back to the
+		// missing step; naming it here keeps that bounce from reading as a lost
+		// keypress.
+		...(canSubmit()
+			? []
+			: [
+					{
+						label: "Still required",
+						value: labelFor(fields()[Math.max(0, firstMissingStep())]),
+					},
+				]),
 	];
 
 	/** One field's editor value, addressed by the field it renders rather than
@@ -713,6 +875,17 @@ export function NewWorkflowModal(props: {
 		setCursor(target === undefined ? undefined : entryKey(target));
 		setRefusal(undefined);
 	};
+	/** Selecting a stage entry: an allow-listed stage submits its ident, and a
+	 * refused file is kept visible with the reason it cannot be selected rather
+	 * than silently launching a start the server would refuse. */
+	const selectStageEntry = (entry: StageChoice) => {
+		if (!stageChoiceSelectable(entry)) {
+			setRefusal(stageChoiceRefusal(entry));
+			return;
+		}
+		next(entry.ident);
+	};
+
 	/** Selecting a repository entry: a usable project or the opened directory
 	 * submits its path, `custom` opens the free-path editor, and a project that
 	 * cannot be started is refused with its reason instead of launching work
@@ -757,10 +930,15 @@ export function NewWorkflowModal(props: {
 				if (!canSubmit()) {
 					// Send the cursor to the field that is actually missing: the task for
 					// the task-required types, the unset branch for a rebase.
+					const missing = fields()[Math.max(0, firstMissingStep())];
 					setStep(Math.max(0, firstMissingStep()));
 					setCursor(undefined);
 					setFilter("");
 					setFiltering(false);
+					// The step change alone would look like the form bouncing: name the
+					// field that is missing instead. The text steps render it above the
+					// editor, the list steps in their header.
+					setRefusal(missingRequirement(missing));
 				} else void submit();
 				return true;
 			}
@@ -818,6 +996,7 @@ export function NewWorkflowModal(props: {
 			const choice = items[selectedIndex()];
 			if (!choice) return true;
 			if (typeof choice === "string") next(choice);
+			else if (choice.kind === "stage") selectStageEntry(choice);
 			else selectRepoEntry(choice);
 			return true;
 		}
@@ -875,6 +1054,15 @@ export function NewWorkflowModal(props: {
 												]
 									}
 								>
+									{/* The refusal a bounce carries is the only notice this step has: a text
+									    step has no list header to put it in, so it is shown above the editor. */}
+									<Show when={refusal()}>
+										<box width="100%" height={2} flexShrink={0}>
+											<text fg={uiColors.warning} wrapMode="word">
+												{refusal()}
+											</text>
+										</box>
+									</Show>
 									<Show
 										when={field() === "task"}
 										fallback={
@@ -951,31 +1139,39 @@ export function NewWorkflowModal(props: {
 								itemHeight={
 									field() === "workflowType" ||
 									field() === "repo" ||
-									field() === "app"
+									field() === "app" ||
+									field() === "stage"
 										? 2
 										: 1
 								}
 								reservedHeight={3}
-								{...(field() === "app" && entries().length === 0
+								{...((field() === "app" || field() === "stage") &&
+								entries().length === 0 &&
+								(field() === "stage"
+									? stageLoading() || filter()
+									: catalogLoading() || filter())
 									? {
-											// The list's own placeholder would repeat the header notice
-											// without its remedy, so the step supplies its own — and a
-											// query that matched nothing says so instead of claiming
-											// nothing is configured.
-											emptyContent: catalogLoading() ? (
+											// The header notice owns the "nothing configured" and "could not be
+											// read" reasons; the list only explains the two states the header
+											// stays quiet about, so one state never gets two explanations.
+											emptyContent: (
+												field() === "stage"
+													? stageLoading()
+													: catalogLoading()
+											) ? (
 												// The read is in flight: saying nothing is configured
 												// would be false (and no animated reader, so the surface
 												// stays still while it lands).
 												<text fg={uiColors.textMuted}>
-													Reading configured applications…
-												</text>
-											) : filter() ? (
-												<text fg={uiColors.warning}>
-													{`No application matches "${filter()}"`}
+													{field() === "stage"
+														? "Reading the configured stages…"
+														: "Reading configured applications…"}
 												</text>
 											) : (
 												<text fg={uiColors.warning}>
-													Configure an application or library first.
+													{field() === "stage"
+														? `No stage matches "${filter()}"`
+														: `No application matches "${filter()}"`}
 												</text>
 											),
 										}
@@ -1017,6 +1213,42 @@ export function NewWorkflowModal(props: {
 								}
 								renderItem={(item, isActive) => {
 									const active = isActive;
+									// A stage entry carries the ident it submits and the diagnostic that
+									// keeps a refused file out of the allow-list, so it renders its own
+									// two lines: what the stage is, and how it is reached.
+									if (typeof item !== "string" && item.kind === "stage")
+										return (
+											<box
+												width="100%"
+												flexShrink={0}
+												flexDirection="column"
+												height={2}
+												overflow="hidden"
+											>
+												<text
+													height={1}
+													flexShrink={0}
+													fg={
+														item.reason
+															? uiColors.textMuted
+															: active()
+																? uiColors.primary
+																: uiColors.textSecondary
+													}
+												>
+													{item.label}
+												</text>
+												<text
+													height={1}
+													flexShrink={0}
+													fg={
+														item.reason ? uiColors.warning : uiColors.textMuted
+													}
+												>
+													{item.detail}
+												</text>
+											</box>
+										);
 									// A repository entry carries the path it submits, so it renders its
 									// own two lines: what the entry is, and where it points.
 									if (typeof item !== "string")

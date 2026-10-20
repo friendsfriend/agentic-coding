@@ -233,6 +233,7 @@ export function startWorkflow(
 		sourceBranch: request.sourceBranch,
 		targetBranch: request.targetBranch,
 		app: request.app,
+		stage: request.stage,
 	});
 }
 

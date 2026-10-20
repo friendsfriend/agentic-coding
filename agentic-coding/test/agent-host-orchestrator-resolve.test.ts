@@ -596,9 +596,11 @@ describe("cheap wake-up tools", () => {
 			);
 		});
 	});
-	test("a start refusal is relayed verbatim, dirty paths included", async () => {
+	test("a start refusal is relayed verbatim and carries the server's code", async () => {
 		// The refusal is the answer: the model has to see which paths are dirty to
-		// act on them, so the tool never rewraps or truncates it.
+		// act on them, so the message itself is neither rewrapped nor truncated. The
+		// server's error code follows it as a separate bracketed token, which is what
+		// `[stage-not-configured]` relies on too.
 		const refusal =
 			"working tree must be clean before workflow start: 23 dirty path(s): " +
 			"dirty-00.txt, dirty-01.txt, dirty-02.txt, dirty-03.txt, " +
@@ -617,7 +619,7 @@ describe("cheap wake-up tools", () => {
 					task: "add a flag",
 				})) as ToolResult;
 				expect(answer.isError).toBe(true);
-				expect(answer.content[0]?.text).toBe(refusal);
+				expect(answer.content[0]?.text).toBe(`${refusal} [bad-request]`);
 			},
 			{ startError: refusal },
 		);

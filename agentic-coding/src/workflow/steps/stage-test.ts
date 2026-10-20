@@ -96,6 +96,10 @@ function validReport(
 	stageEvidenceIds?: readonly string[],
 ): void {
 	const expectedIds = new Set(plan.expectations.map(({ id }) => id));
+	// The count and the membership, not distinct ids: the report schema owns
+	// uniqueness (`stageTestReport.parse` refuses a repeated id before this guard
+	// runs), so a duplicate id can only reach here from a report that was never
+	// parsed, and the count covers the missing verdict that matters.
 	if (
 		report.expectations.length !== expectedIds.size ||
 		report.expectations.some(({ id }) => !expectedIds.has(id))

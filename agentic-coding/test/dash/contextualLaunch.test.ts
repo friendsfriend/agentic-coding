@@ -80,10 +80,12 @@ test("the registry catalog is the single workflow-type authority", () => {
 		"stage-test",
 	]);
 	// A project page may offer the whole registry; Wiki may offer the
-	// repository-independent type only.
+	// repository-independent types only: a wiki research run, and a stage test,
+	// which runs against a hosted stage rather than a checkout.
 	expect(workflowTypesForContext(PROJECT)).toBeUndefined();
 	expect(workflowTypesForContext({ kind: "independent" })).toEqual([
 		"research",
+		"stage-test",
 	]);
 });
 

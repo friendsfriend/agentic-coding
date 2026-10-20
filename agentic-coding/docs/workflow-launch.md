@@ -33,24 +33,27 @@ therefore has no workflow list, history or browser, and the sidebar carries no
 | --- | --- | --- |
 | Configured application or library | The Applications/Libraries list's `w` (Start workflow) and the resource page's `w` (Start workflow) | The whole `PUBLIC_WORKFLOW_CATALOG` (openspec family, no-openspec, repository-bound wiki, repository-bound research) |
 | Any directory outside the configured projects | The workspace sidebar's `+` (working directory or entered path) | The whole `PUBLIC_WORKFLOW_CATALOG` |
-| Wiki | The Wiki page's `w` (New workflow) | `research` only, with no repository context |
+| Wiki | The Wiki page's `w` (New workflow) | `research` and `stage-test`, with no repository context |
 | Wiki comments | The Wiki page's `f` (Finish review) | The `wiki-comments` review workflow, unchanged |
 
 The environment list moves the worktree manager to `W` (Shift+W) so `w` starts
 work for the highlighted row.
 
 Repository-related research and wiki work therefore launches from
-application/library pages; Wiki launches repository-independent work only. This
-is a launch-location rule, not a restriction on browsing centralized knowledge
-that mentions repositories.
+application/library pages; Wiki launches repository-independent work only: a
+wiki research run, and a stage test, which runs against a hosted stage rather
+than a checkout. This is a launch-location rule, not a restriction on browsing
+centralized knowledge that mentions repositories.
 
 ## The launch context
 
 `WorkflowLaunchContext` is immutable: `{kind: "project", ident, name,
 repository}`, `{kind: "path", repository}` or `{kind: "independent"}`. The
 creation form has **no** repository, custom-path or standalone-target selector —
-only workflow type, agent preset, ticket, workflow id, task and (where the
-target allows a choice) the checkout mode. The `path` context is the one
+only workflow type, agent preset, ticket, workflow id, task, the stage a stage
+test runs on (read from the server's stage catalog, exactly like the app an
+environment setup drafts for) and (where the target allows a choice) the
+checkout mode. The `path` context is the one
 exception: it shows its `repository` as an editable first step, so the working
 directory stays a confirmation instead of a silent default. Types come from
 `PUBLIC_WORKFLOW_CATALOG`; the context only restricts the permitted set, so
