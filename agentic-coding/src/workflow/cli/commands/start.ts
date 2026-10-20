@@ -45,8 +45,11 @@ export async function runStart(
 		);
 	const definitionId = workflowFlag ?? typeFlag ?? "openspec";
 	const research = definitionId === "research";
-	const repo = research ? flag(rest, "repo") : requireFlag(rest, "repo");
-	const mode = research ? undefined : parseMode(flag(rest, "mode"));
+	const stageTest = definitionId === "stage-test";
+	const repo =
+		research || stageTest ? flag(rest, "repo") : requireFlag(rest, "repo");
+	const mode =
+		research || stageTest ? undefined : parseMode(flag(rest, "mode"));
 	const prepared = prepareWorkflowStart({
 		definitionId,
 		repo: repo ? fs.realpathSync(path.resolve(repo)) : undefined,
@@ -62,6 +65,7 @@ export async function runStart(
 		targetBranch: flag(rest, "onto"),
 		// The env-setup family's subject: the configured app it drafts for.
 		app: flag(rest, "app"),
+		stage: flag(rest, "stage"),
 	});
 	if (application)
 		application.runSync(workflowEngine.startEffect(prepared.input));

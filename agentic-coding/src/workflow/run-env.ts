@@ -32,7 +32,9 @@ export function agentRunEnvironmentFile(input: {
 	runId: string;
 }): string {
 	const runDirectory =
-		input.definitionId === "wiki-comments" || input.definitionId === "research"
+		input.definitionId === "wiki-comments" ||
+		input.definitionId === "research" ||
+		input.definitionId === "stage-test"
 			? path.join(wikiWorkflowDataRoot(), input.workflowId, "runs")
 			: path.join(input.worktree, ".herdr-workflow");
 	return path.join(runDirectory, "runtime-bin", input.runId, "run.env");

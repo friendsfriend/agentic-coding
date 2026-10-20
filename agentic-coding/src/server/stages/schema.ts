@@ -17,9 +17,14 @@
 import { Schema } from "effect";
 import { ArrayFormatter, ParseError } from "effect/ParseResult";
 import {
+	boundedText,
 	formatIssuePath,
 	sanitizeIssueMessage,
 } from "../../contracts/decode.ts";
+import {
+	STAGE_SYSTEM_MAX_BYTES,
+	STAGE_WIKI_PROCESS_MAX_BYTES,
+} from "../../contracts/workflow.ts";
 
 /** The ident grammar a stage file stem has to match. */
 export const STAGE_IDENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -280,7 +285,9 @@ export const stageDataSchema = Schema.Struct({
 
 /** Where the process knowledge of this stage lives in the wiki. */
 export const stageWikiSchema = Schema.Struct({
-	processes: Schema.optional(Schema.Array(Schema.String)),
+	processes: Schema.optional(
+		Schema.Array(boundedText(STAGE_WIKI_PROCESS_MAX_BYTES)),
+	),
 });
 
 /** One stage definition file. The ident has to equal the file stem. */
@@ -288,7 +295,7 @@ export const stageDefinitionSchema = Schema.Struct({
 	ident: Schema.String,
 	displayName: Schema.String,
 	environment: Schema.String,
-	system: Schema.String,
+	system: boundedText(STAGE_SYSTEM_MAX_BYTES),
 	access: stageAccessSchema,
 	planApproval: Schema.optional(stagePlanApprovalSchema),
 	exclusive: Schema.optional(Schema.Boolean),

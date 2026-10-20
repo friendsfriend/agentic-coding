@@ -32,6 +32,7 @@ import {
 	evaluateCompactionCeiling,
 	resolveCompactionCeiling,
 	resolveCompactionPolicy,
+	STAGE_TESTER_COMPACTION_CEILING_TOKENS,
 } from "../workflow/compaction.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
@@ -243,6 +244,8 @@ function sleep(ms: number): Promise<void> {
 interface RunRecord {
 	conversationId: ConversationId;
 	readOnly: boolean;
+	/** Role-bound ceilings let narrowly scoped workflow agents use less context. */
+	role?: string;
 	/** The `provider/modelId` this run's conversation uses, tracked so a
 	 * percentage compaction threshold can be resolved against a real context
 	 * window. Absent when nothing named a model and `pi.agent` carries none. */
@@ -727,6 +730,7 @@ export class DurableHost {
 		this.runs.set(input.runId, {
 			conversationId: conversation.id,
 			readOnly,
+			...(envVars.HERDR_ROLE ? { role: envVars.HERDR_ROLE } : {}),
 			...(model ? { model } : {}),
 		});
 		const identity: TelemetryIdentity = {
@@ -1172,7 +1176,15 @@ export class DurableHost {
 		const window =
 			(record.model ? this.modelWindow(record.model) : undefined) ??
 			this.referenceWindow();
-		return resolveCompactionCeiling(this.compactionConfig(), window);
+		const config = this.compactionConfig();
+		if (record.role !== "stage-tester")
+			return resolveCompactionCeiling(config, window);
+		const resolved = resolveCompactionCeiling(config, window);
+		const ceilingTokens = Math.min(
+			resolved.ceilingTokens,
+			STAGE_TESTER_COMPACTION_CEILING_TOKENS,
+		);
+		return resolveCompactionCeiling({ ...config, ceilingTokens }, window);
 	}
 
 	/**

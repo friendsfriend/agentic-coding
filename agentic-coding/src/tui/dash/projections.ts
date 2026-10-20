@@ -494,6 +494,31 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
+	// The stage-test plan gate is engine-owned: the developer has to read the
+	// pinned plan (expectations, knowledge and declared data creation) before a
+	// state-changing run on a live stage may start.
+	if (phase === "stage.plan-review") {
+		if (!hasAction("approve-plan")) return undefined;
+		return {
+			key: "plan-review",
+			title: "Action required · Stage test plan",
+			prompt:
+				"Review the pinned plan — expectations, process knowledge and any declared data creation — before the tester runs it.",
+			items: [],
+		};
+	}
+	// A stage-test report review reuses the developer review surface and action
+	// dispatch; its carried report context is shown alongside the workflow detail.
+	if (phase === "stage.review") {
+		if (!hasAction("approve-review")) return undefined;
+		return {
+			key: "developer-review",
+			title: "Action required · Stage test report",
+			prompt:
+				"Review the hosted-stage report before approving or requesting a follow-up.",
+			items: [],
+		};
+	}
 	// The debug family's review (`add-debug-workflow`): the same popup and the
 	// same dispatch as the developer review, over the investigation report —
 	// approve it, or request a bounded follow-up investigation with a comment.

@@ -4,6 +4,7 @@ import { rolesForDefinition } from "../src/workflow/cli.ts";
 import {
 	definitionVersionForFamilyTraits,
 	definitionVersionForStageGates,
+	definitionVersionForStageTest,
 	definitionVersionForStepRouting,
 	effectiveFamilyTraits,
 } from "../src/workflow/definitions/manifest-policy.ts";
@@ -171,7 +172,13 @@ describe("workflow registry", () => {
 		// it rather than at the legacy policy version.
 		for (const entry of PUBLIC_WORKFLOW_CATALOG)
 			expect(
-				registry.definition(entry.id, definitionVersionForFamilyTraits(6)),
+				registry.definition(
+					entry.id,
+					// The pinned-stage family is registered only in its own tier.
+					entry.id === "stage-test"
+						? definitionVersionForStageTest(6)
+						: definitionVersionForFamilyTraits(6),
+				),
 			).toBeTruthy();
 		expect(
 			PUBLIC_WORKFLOW_CATALOG.find((entry) => entry.alias === "quick")?.id,
@@ -632,19 +639,19 @@ describe("workflow registry", () => {
 			// tier since the manifest-policy one (including the
 			// classifier-driven triage-routing, stage-gate, step-routing, and
 			// family-traits tiers) declares a policy.
-			for (const definition of registry
-				.definitions()
-				.filter(
-					(definition) =>
-						(definition.version < 201 || definition.version > 220) &&
-						(definition.version < 301 || definition.version > 320) &&
-						(definition.version < 401 || definition.version > 420) &&
-						(definition.version < 501 || definition.version > 520) &&
-						(definition.version < 601 || definition.version > 620) &&
-						(definition.version < 701 || definition.version > 720) &&
-						(definition.version < 801 || definition.version > 820) &&
-						(definition.version < 901 || definition.version > 920),
-				))
+			for (const definition of registry.definitions().filter(
+				(definition) =>
+					(definition.version < 201 || definition.version > 220) &&
+					(definition.version < 301 || definition.version > 320) &&
+					(definition.version < 401 || definition.version > 420) &&
+					(definition.version < 501 || definition.version > 520) &&
+					(definition.version < 601 || definition.version > 620) &&
+					(definition.version < 701 || definition.version > 720) &&
+					(definition.version < 801 || definition.version > 820) &&
+					(definition.version < 901 || definition.version > 920) &&
+					// The pinned-stage family's own tier declares a policy too.
+					(definition.version < 1001 || definition.version > 1020),
+			))
 				expect(definition.policy).toBeUndefined();
 		});
 	});

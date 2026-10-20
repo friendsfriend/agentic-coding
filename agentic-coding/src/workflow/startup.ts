@@ -25,9 +25,10 @@ import {
 	setupStagedStateIds,
 	sweepStaleSetupState,
 } from "../server/environment/setup-staged.ts";
+import { readStageCatalog } from "../server/stages/catalog.ts";
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
-import type { WorkflowRuntimeError } from "./contracts.ts";
+import { WorkflowRuntimeError } from "./contracts.ts";
 import {
 	CUSTOM_DEFINITION_VERSION,
 	isCustomDefinitionId,
@@ -36,6 +37,7 @@ import {
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
 	definitionVersionForStagedRoot,
+	definitionVersionForStageTest,
 	effectiveFamilyTraits,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";
@@ -78,6 +80,7 @@ import { knownWorkflowIds } from "./runtime/store.ts";
 import { workflowTargets } from "./runtime/target-registry.ts";
 import {
 	researchWorkflowTarget,
+	stageTestWorkflowTarget,
 	validateWorkflowId,
 	type WorkflowEngine,
 	wikiWorkflowTarget,
@@ -104,6 +107,8 @@ export interface WorkflowStartRequest {
 	targetBranch?: string;
 	/** The configured app an `env-setup` workflow drafts definitions for. */
 	app?: string;
+	/** The allow-listed hosted stage pinned by a stage-test workflow. */
+	stage?: string;
 	/** Pin the plan, developer, and wiki review gates to `always`. Set by the
 	 * server for orchestrator-started work, never from a wire request. */
 	enforceHumanReviewGates?: boolean;
@@ -161,9 +166,9 @@ export function validateStart(
 	} = {},
 	definition?: { id: string; policy?: WorkflowManifestPolicy },
 ): void {
-	if (workflow === "research") {
+	if (workflow === "research" || workflow === "stage-test") {
 		if (!task?.trim())
-			throw new Error("research workflow requires non-empty task");
+			throw new Error(`${workflow} workflow requires non-empty task`);
 		if (repo)
 			runGit(
 				fs.realpathSync(path.resolve(repo)),
@@ -698,6 +703,13 @@ interface PreparedStartContext {
 	independent: boolean;
 	options: ConfigOptions;
 	workflowId: string;
+	stage?: {
+		ident: string;
+		system: string;
+		access: "read-only" | "writable";
+		planApproval: "always" | "when-writing" | "never";
+		wikiProcesses: string[];
+	};
 }
 
 function registeredDefinition(id: string): boolean {
@@ -730,20 +742,51 @@ function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 		throw new Error(removedDefinitionDiagnostic(request.definitionId));
 	const workflowId = validateWorkflowId(request.workflowId);
 	const research = request.definitionId === "research";
+	const stageTest = request.definitionId === "stage-test";
 	const wikiOnly = request.definitionId === "wiki-comments";
-	const repo = research
-		? request.repositoryContext
-			? fs.realpathSync(path.resolve(request.repositoryContext))
-			: ""
-		: wikiOnly
-			? ""
-			: fs.realpathSync(path.resolve(request.repo ?? ""));
-	const target = research
-		? researchWorkflowTarget()
-		: wikiOnly
-			? wikiWorkflowTarget()
-			: repo;
-	const independent = wikiOnly || (research && !request.repositoryContext);
+	let pinnedStage: PreparedStartContext["stage"];
+	if (stageTest) {
+		const stage = request.stage?.trim();
+		if (!stage)
+			throw new WorkflowRuntimeError(
+				"stage-not-configured",
+				"stage-test workflow requires --stage",
+			);
+		const entry = readStageCatalog(resolveConfigRoot()).entries.find(
+			(candidate) => candidate.ident === stage,
+		);
+		if (!entry)
+			throw new WorkflowRuntimeError(
+				"stage-not-configured",
+				`stage-test stage ${JSON.stringify(stage)} is not in the configured allow-list`,
+			);
+		pinnedStage = {
+			ident: entry.ident,
+			system: entry.stage.system,
+			access: entry.stage.access,
+			planApproval: entry.stage.planApproval ?? "when-writing",
+			wikiProcesses: [...(entry.stage.wiki?.processes ?? [])],
+		};
+	}
+	const repositoryContext =
+		request.repositoryContext ?? (stageTest ? request.repo : undefined);
+	const repo =
+		research || stageTest
+			? repositoryContext
+				? fs.realpathSync(path.resolve(repositoryContext))
+				: ""
+			: wikiOnly
+				? ""
+				: fs.realpathSync(path.resolve(request.repo ?? ""));
+	const target = stageTest
+		? stageTestWorkflowTarget()
+		: research
+			? researchWorkflowTarget()
+			: wikiOnly
+				? wikiWorkflowTarget()
+				: repo;
+	const independent =
+		wikiOnly || ((research || stageTest) && !repositoryContext);
 	return {
 		repo,
 		target,
@@ -753,6 +796,7 @@ function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 			repositoryIndependent: independent,
 		},
 		workflowId,
+		...(pinnedStage ? { stage: pinnedStage } : {}),
 	};
 }
 
@@ -768,9 +812,10 @@ function prepareFromContext(
 	// Every family now declares its repository traits and selects its step
 	// models with the classifier, so a new start resolves the family-traits
 	// tier.
-	const definitionVersion = definitionVersionForStagedRoot(
-		config.workflow.max_verification_rounds,
-	);
+	const definitionVersion =
+		request.definitionId === "stage-test"
+			? definitionVersionForStageTest(config.workflow.max_verification_rounds)
+			: definitionVersionForStagedRoot(config.workflow.max_verification_rounds);
 	const registry = registerBuiltins(
 		undefined,
 		config.workflow.max_verification_rounds,
@@ -815,6 +860,7 @@ function prepareFromContext(
 	const wikiOnly =
 		request.definitionId === "wiki-comments" ||
 		ctx.target === wikiWorkflowTarget();
+	const stageTest = request.definitionId === "stage-test";
 	const traits = effectiveFamilyTraits(definition);
 	const requirements = new Set(traits?.startRequirements ?? []);
 	const rebase = requirements.has("rebase-refs");
@@ -944,13 +990,14 @@ function prepareFromContext(
 	// happens to be checked out — so it requires checkout mode and nothing else.
 	if (
 		!research &&
+		!stageTest &&
 		!wikiOnly &&
 		(sameCheckout || rebase || verify) &&
 		request.mode !== "checkout"
 	)
 		throw new Error("repository-backed workflows require checkout mode");
 	const baseCommit =
-		research || wikiOnly
+		research || stageTest || wikiOnly
 			? ""
 			: sameCheckout
 				? runGit(ctx.repo, "rev-parse", "HEAD")
@@ -971,10 +1018,18 @@ function prepareFromContext(
 								);
 	// A verify-only run may legitimately have no remote at all when its base
 	// branch is local, so the remote is not required for it.
-	if (!research && !wikiOnly && !sameCheckout && !rebase && !verify && !debug)
+	if (
+		!research &&
+		!stageTest &&
+		!wikiOnly &&
+		!sameCheckout &&
+		!rebase &&
+		!verify &&
+		!debug
+	)
 		runGit(ctx.repo, "remote", "get-url", config.workflow.remote);
 	const branch =
-		research || wikiOnly
+		research || stageTest || wikiOnly
 			? ""
 			: verify
 				? runGit(ctx.repo, "branch", "--show-current")
@@ -985,7 +1040,13 @@ function prepareFromContext(
 						: sameCheckout
 							? runGit(ctx.repo, "branch", "--show-current")
 							: `${config.workflow.branch_prefix}${ctx.workflowId}`;
-	if (!research && !wikiOnly && (sameCheckout || verify) && !branch)
+	if (
+		!research &&
+		!stageTest &&
+		!wikiOnly &&
+		(sameCheckout || verify) &&
+		!branch
+	)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
 		);
@@ -1003,7 +1064,9 @@ function prepareFromContext(
 			: {}),
 		input: {
 			repo: ctx.target,
-			...(research && ctx.repo ? { repositoryContext: ctx.repo } : {}),
+			...((research || stageTest) && ctx.repo
+				? { repositoryContext: ctx.repo }
+				: {}),
 			...(request.mode ? { mode: request.mode } : {}),
 			sameCheckout,
 			workflowId: ctx.workflowId,
@@ -1014,8 +1077,17 @@ function prepareFromContext(
 				: {}),
 			metadata: {
 				branch,
+				...(ctx.stage
+					? {
+							stage: ctx.stage.ident,
+							stageSystem: ctx.stage.system,
+							stageWikiProcesses: ctx.stage.wikiProcesses,
+							stageAccess: ctx.stage.access,
+							stagePlanApproval: ctx.stage.planApproval,
+						}
+					: {}),
 				baseBranch:
-					research || wikiOnly
+					research || stageTest || wikiOnly
 						? ""
 						: (rebaseTarget ?? config.workflow.base_branch),
 				baseCommit,

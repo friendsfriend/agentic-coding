@@ -8,6 +8,7 @@ import { planningBehaviors } from "./planning.ts";
 import { rebaseBehavior } from "./rebase.ts";
 import { researchBehavior } from "./research.ts";
 import { routingBehaviors } from "./routing.ts";
+import { stageTestBehaviors } from "./stage-test.ts";
 import type { StepBehavior } from "./types.ts";
 import { verificationBehaviors } from "./verification.ts";
 import { wikiBehavior } from "./wiki.ts";
@@ -22,6 +23,7 @@ export const STEP_BEHAVIORS: Readonly<Record<string, StepBehavior>> =
 		...verificationBehaviors,
 		...envSetupBehaviors,
 		...debugBehaviors,
+		...stageTestBehaviors,
 		"core.wiki": wikiBehavior,
 		"core.research": researchBehavior,
 		...lifecycleBehaviors,

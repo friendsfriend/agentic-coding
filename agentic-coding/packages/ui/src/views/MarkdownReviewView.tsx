@@ -4,6 +4,7 @@ import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
 import { GenericModal } from "../components/GenericModal.tsx";
 import { formatHelpTextLines } from "../components/HelpText.tsx";
+import type { Keybind } from "../components/keybinds.ts";
 import { MarkdownBlockView } from "../components/MarkdownViewer.tsx";
 import {
 	blockSelectionToLines,
@@ -35,6 +36,8 @@ export interface MarkdownReviewViewProps {
 	onSelectableLineCountChange?: (count: number) => void;
 	onClose: () => void;
 	onNavigateFile?: (direction: 1 | -1) => void;
+	/** Override the read-mode footer for surfaces with additional review actions. */
+	footerKeybinds?: readonly Keybind[];
 	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
 	/**
 	 * Render as a page instead of a dialog (the shell's wiki note page): the
@@ -207,14 +210,14 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 						{ key: "Ctrl+Enter", action: "Submit" },
 						{ key: "Esc", action: "Cancel" },
 					]
-				: [
+				: (props.footerKeybinds ?? [
 						{ key: "j/k", action: "Nav" },
 						{ key: "n/N", action: "Next/Prev" },
 						{ key: "v", action: "Visual" },
 						{ key: "c", action: "Comment" },
 						{ key: "f", action: "Finish" },
 						{ key: "Esc", action: "Close" },
-					],
+					]),
 			Math.max(1, Math.floor(dimensions().width * 0.9) - 4),
 		);
 

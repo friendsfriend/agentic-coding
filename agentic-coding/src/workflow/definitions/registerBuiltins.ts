@@ -19,6 +19,7 @@ import { openspecManifests } from "./graphs/openspec.ts";
 import { rebaseManifests } from "./graphs/rebase.ts";
 import { researchManifests } from "./graphs/research.ts";
 import { soloManifests } from "./graphs/solo.ts";
+import { stageTestManifests } from "./graphs/stage-test.ts";
 import { verifyManifests } from "./graphs/verify.ts";
 import { wikiManifests } from "./graphs/wiki.ts";
 import {
@@ -28,6 +29,7 @@ import {
 	definitionVersionForResearchTools,
 	definitionVersionForStagedRoot,
 	definitionVersionForStageGates,
+	definitionVersionForStageTest,
 	definitionVersionForStepRouting,
 	definitionVersionForTriageRouting,
 	withFamilyTraits,
@@ -59,6 +61,7 @@ const EFFECTS: EffectKind[] = [
 	"environment.setup-smoke",
 	"environment.setup-rollback",
 	"environment.setup-cleanup",
+	"stage.report.render",
 	// The delegated debug request lifecycle (add-debug-subagent-requests). Both
 	// are emitted outside a step's own contract: by the request command, and by
 	// the delegated run's handoff.
@@ -75,6 +78,7 @@ const CAPABILITIES: AdapterCapability[] = [
 	"shell",
 	"edit",
 	"runtime-bridge",
+	"vision",
 ];
 export const BUILTIN_EFFECTS = EFFECTS;
 export const BUILTIN_CAPABILITIES = CAPABILITIES;
@@ -341,6 +345,25 @@ export function registerBuiltins(
 				stepRefs: exactStepReferences(pinnedBase.steps, {
 					"core.triage-route": 2,
 				}),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// The stage-test family is new and therefore needs no legacy definition
+	// tiers. Register only the current pinned-stage contract, while preserving
+	// all published versions of every existing workflow family.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForStageTest(rounds);
+		for (const definition of stageTestManifests(version)) {
+			// The family's two agent steps declare `classification: "single"`, so
+			// they are entered through their own route steps like every other
+			// classifiable step; without the routing pass the declaration would be
+			// inert and the preset pools it advertises would never be consulted.
+			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps),
 			};
 			assertStepBehaviorCoverage(pinned.steps);
 			registry.registerWorkflow(pinned);

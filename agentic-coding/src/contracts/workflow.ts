@@ -158,7 +158,8 @@ export type AdapterCapability =
 	| "read-only"
 	| "shell"
 	| "edit"
-	| "runtime-bridge";
+	| "runtime-bridge"
+	| "vision";
 export type EffectKind =
 	| "workspace.setup"
 	| "artifact.write"
@@ -192,6 +193,8 @@ export type EffectKind =
 	| "environment.setup-rollback"
 	/** Removes a setup workflow's staged state at close (staged-env-setup-config-root). */
 	| "environment.setup-cleanup"
+	/** Validates and renders a stage-test report from its structured output. */
+	| "stage.report.render"
 	/** Starts one delegated debug request's run: captures the baseline and
 	 * enqueues the run's own launch (add-debug-subagent-requests). */
 	| "debug.request.run"
@@ -268,6 +271,12 @@ export interface WorkflowExecutionSettings {
 	};
 }
 
+/** Bounds the persisted snapshot places on the stage fields pinned at start.
+ * The stage catalog decodes against them too, so a stage document can never be
+ * accepted and then be impossible to pin. */
+export const STAGE_SYSTEM_MAX_BYTES = 256;
+export const STAGE_WIKI_PROCESS_MAX_BYTES = 512;
+
 export interface WorkflowMetadata {
 	/** Empty for repository-independent workflows such as wiki-comments. */
 	repository: string;
@@ -283,6 +292,17 @@ export interface WorkflowMetadata {
 	baseCommit: string;
 	task?: string;
 	ticket?: string;
+	/** The hosted stage pinned by a stage-test workflow at start. */
+	stage?: string;
+	stageSystem?: string;
+	stageWikiProcesses?: string[];
+	stageAccess?: "read-only" | "writable";
+	stagePlanApproval?: "always" | "when-writing" | "never";
+	/** Engine-pinned plan/report payloads; the agents cannot replace these. */
+	stageTestPlan?: JsonValue;
+	stageTestReport?: JsonValue;
+	/** Engine-rendered, secret-scrubbed stage report shown in dashboard review. */
+	stageTestReportMarkdown?: string;
 	createdAt: string;
 	updatedAt: string;
 	stepEnteredAt: string;
@@ -894,6 +914,13 @@ export interface WorkflowView {
 	branch: string;
 	baseCommit: string;
 	task?: string;
+	ticket?: string;
+	stage?: string;
+	stageSystem?: string;
+	stageAccess?: "read-only" | "writable";
+	stageTestPlan?: JsonValue;
+	stageTestReport?: JsonValue;
+	stageTestReportMarkdown?: string;
 	createdAt: string;
 	updatedAt: string;
 	/** The selected agent preset, or absent when using configuration defaults. */
@@ -1561,6 +1588,13 @@ export interface WorkflowState {
 	 * not be resolved. */
 	definitionGraph?: WorkflowDefinitionGraph;
 	task?: string;
+	ticket?: string;
+	stage?: string;
+	stageSystem?: string;
+	stageAccess?: "read-only" | "writable";
+	stageTestPlan?: JsonValue;
+	stageTestReport?: JsonValue;
+	stageTestReportMarkdown?: string;
 	verificationRound: number;
 	baseCommit?: string;
 	createdAt?: string;
@@ -1988,6 +2022,13 @@ export const workflowViewSchema = Schema.Struct({
 	branch: Schema.String,
 	baseCommit: Schema.String,
 	task: Schema.optional(Schema.String),
+	ticket: Schema.optional(Schema.String),
+	stage: Schema.optional(Schema.String),
+	stageSystem: Schema.optional(Schema.String),
+	stageAccess: Schema.optional(Schema.Literal("read-only", "writable")),
+	stageTestPlan: Schema.optional(Schema.Unknown),
+	stageTestReport: Schema.optional(Schema.Unknown),
+	stageTestReportMarkdown: Schema.optional(boundedString(2 * 1024 * 1024)),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
 	selectedPreset: Schema.optional(Schema.String),

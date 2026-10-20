@@ -143,6 +143,27 @@ test("dashboard projection carries optional custom-definition presentation field
 	expect(legacy.blueprintRationale).toBeUndefined();
 	expect(legacy.definitionGraph).toBeUndefined();
 });
+test("dashboard projection carries the sanitized stage-test report review data", () => {
+	const stageView = view("stage.review");
+	stageView.ticket = "GRID-42";
+	stageView.stage = "grid-int";
+	stageView.stageSystem = "grid-allocation";
+	stageView.stageAccess = "read-only";
+	stageView.stageTestPlan = { ticketSummary: "Check request status" };
+	stageView.stageTestReport = { expectations: [{ id: "E1", verdict: "pass" }] };
+	stageView.stageTestReportMarkdown = "# Stage test report\\n\\nPASS\\n";
+	const state = viewToDashboardState(stageView);
+	expect(state).toMatchObject({
+		ticket: "GRID-42",
+		stage: "grid-int",
+		stageSystem: "grid-allocation",
+		stageAccess: "read-only",
+		stageTestPlan: { ticketSummary: "Check request status" },
+		stageTestReport: { expectations: [{ id: "E1", verdict: "pass" }] },
+		stageTestReportMarkdown: "# Stage test report\\n\\nPASS\\n",
+	});
+});
+
 test("dashboard projection carries classifier decisions and defaults to an empty list", () => {
 	const withoutDecisions = viewToDashboardState(view());
 	expect(withoutDecisions.classifierDecisions).toEqual([]);

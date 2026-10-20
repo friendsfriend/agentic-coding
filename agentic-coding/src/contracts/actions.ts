@@ -59,6 +59,8 @@ export const workflowStartRequestSchema = Schema.Struct({
 	/** Only the env-setup type reads this: the configured app whose environment
 	 * definitions the workflow drafts. */
 	app: Schema.optional(Schema.String),
+	/** The operator-selected hosted stage for a stage-test workflow. */
+	stage: Schema.optional(Schema.String),
 }).pipe(
 	Schema.filter(
 		(request) =>

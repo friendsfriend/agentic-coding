@@ -105,4 +105,10 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			description:
 				"Investigate a behavior or reproduce a bug on one selected branch in a detached worktree, report with evidence, and wait for the developer to approve or request a follow-up.",
 		}),
+		Object.freeze({
+			id: "stage-test",
+			label: "Stage test",
+			description:
+				"Plan and verify a hosted application on one pinned stage, review the report, and write confirmed process knowledge to the centralized wiki.",
+		}),
 	] as const);

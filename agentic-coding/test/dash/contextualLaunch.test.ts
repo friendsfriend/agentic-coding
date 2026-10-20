@@ -77,6 +77,7 @@ test("the registry catalog is the single workflow-type authority", () => {
 		"verify",
 		"env-setup",
 		"debug",
+		"stage-test",
 	]);
 	// A project page may offer the whole registry; Wiki may offer the
 	// repository-independent type only.

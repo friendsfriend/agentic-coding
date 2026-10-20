@@ -4,6 +4,8 @@
  * as one route module. Props-in: the review feature owns its state and actions,
  * the route only decides what is visible and hands key ownership back to the
  * shell. */
+
+import type { Keybind } from "@ui";
 import {
 	ChangedFilesView,
 	DiffReviewView as DiffViewModal,
@@ -22,6 +24,10 @@ export interface ReviewRouteProps {
 	readonly setModalActive: (modal: string) => void;
 	/** Title fallback when no user action names the review. */
 	readonly fallbackTitle?: string;
+	/** Shared dashboard catalog entries for the stage report review surface. */
+	readonly stageReportKeybinds?: readonly Keybind[];
+	/** The stage-test plan gate's own catalog (USAB-003). */
+	readonly stagePlanKeybinds?: readonly Keybind[];
 }
 
 export function ReviewRoute(props: ReviewRouteProps) {
@@ -33,6 +39,8 @@ export function ReviewRoute(props: ReviewRouteProps) {
 		developerReviewPhase,
 		reviewOpen,
 		reviewKind,
+		stageWikiUpdateAvailable,
+		stagePlanReview,
 		reviewView,
 		setReviewOpen,
 		setReviewView,
@@ -80,37 +88,48 @@ export function ReviewRoute(props: ReviewRouteProps) {
 								? "Wiki review"
 								: reviewKind() === "setup"
 									? "Environment review"
-									: (props.fallbackTitle ?? "Developer review")
+									: reviewKind() === "stage"
+										? "Stage test report"
+										: (props.fallbackTitle ?? "Developer review")
 					}
 					widthPercent={0.9}
 					heightPercent={0.75}
-					helpText={[
-						{ key: "j/k", action: "Navigate" },
-						{
-							key: "Enter",
-							action:
-								reviewKind() === "plan"
-									? "Open artifact"
-									: reviewKind() === "wiki"
-										? "Open document"
-										: "Open diff",
-						},
-						{ key: "/", action: "Search files" },
-						...(reviewKind() === "plan" ||
-						reviewKind() === "wiki" ||
-						reviewKind() === "setup" ||
-						developerReviewPhase()
-							? [{ key: "f", action: "Finish review" }]
-							: []),
-						...(reviewKind() === "plan"
-							? [{ key: "r", action: "Reject plan" }]
-							: []),
-						...(reviewKind() === "developer" &&
-						reviewVisibleChanges().length === 0
-							? [{ key: "c", action: "Comment on the report" }]
-							: []),
-						{ key: "Esc", action: "Postpone" },
-					]}
+					helpText={
+						reviewKind() === "stage" && props.stageReportKeybinds
+							? props.stageReportKeybinds
+							: [
+									{ key: "j/k", action: "Navigate" },
+									{
+										key: "Enter",
+										action:
+											reviewKind() === "plan"
+												? "Open artifact"
+												: reviewKind() === "wiki"
+													? "Open document"
+													: reviewKind() === "stage"
+														? "Read report"
+														: "Open diff",
+									},
+									{ key: "/", action: "Search files" },
+									...(reviewKind() === "plan" ||
+									reviewKind() === "wiki" ||
+									reviewKind() === "setup" ||
+									developerReviewPhase()
+										? [{ key: "f", action: "Finish review" }]
+										: []),
+									...(reviewKind() === "plan"
+										? [{ key: "r", action: "Reject plan" }]
+										: []),
+									...(reviewKind() === "stage" && stageWikiUpdateAvailable()
+										? [{ key: "w", action: "Approve and update wiki" }]
+										: []),
+									...(reviewKind() === "developer" &&
+									reviewVisibleChanges().length === 0
+										? [{ key: "c", action: "Comment on the report" }]
+										: []),
+									{ key: "Esc", action: "Postpone" },
+								]
+					}
 					{...reviewFilesBackdrop}
 				>
 					<ChangedFilesView
@@ -132,7 +151,7 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					reviewOpen() &&
 					props.modalTop() === "review" &&
 					reviewView() === "diff" &&
-					reviewKind() === "plan" &&
+					(reviewKind() === "plan" || reviewKind() === "stage") &&
 					reviewFile()
 				}
 			>
@@ -146,6 +165,13 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					visualModeStart={reviewVisualStart()}
 					commentMode={reviewCommentMode()}
 					commentText={reviewCommentText()}
+					footerKeybinds={
+						reviewKind() === "stage"
+							? props.stageReportKeybinds
+							: stagePlanReview()
+								? props.stagePlanKeybinds
+								: undefined
+					}
 					discussions={currentReviewDiscussions()}
 					onSelectedLineChange={setReviewLine}
 					onSelectedSourceRangeChange={(start, end) =>
@@ -156,10 +182,17 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					onClose={() => {
 						setReviewVisualMode(false);
 						setReviewCommentMode(false);
-						setReviewView("files");
+						if (reviewKind() === "stage" || stagePlanReview()) {
+							setReviewOpen(false);
+							props.setModalActive("none");
+						} else {
+							setReviewView("files");
+						}
 					}}
 					onNavigateFile={(direction) =>
-						void navigatePlanMarkdownFile(direction)
+						reviewKind() === "stage" || stagePlanReview()
+							? undefined
+							: void navigatePlanMarkdownFile(direction)
 					}
 				/>
 			</Show>

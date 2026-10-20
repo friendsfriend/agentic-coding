@@ -16,7 +16,12 @@ const REVIEW_COMMENTS_INPUT = {
  * holdout list the trait read falls back to, not a repository code-change
  * family (`read-family-traits-instead-of-ids` keeps the documentation
  * families' own id checks by design). */
-const DOCUMENTATION_CLOSE_ONLY = new Set(["wiki", "wiki-comments", "research"]);
+const DOCUMENTATION_CLOSE_ONLY = new Set([
+	"wiki",
+	"wiki-comments",
+	"research",
+	"stage-test",
+]);
 
 /** Whether a definition's `core.completed` offers only `close`: every family
  * that delivers no pull request — the proposal-only workflows, which never

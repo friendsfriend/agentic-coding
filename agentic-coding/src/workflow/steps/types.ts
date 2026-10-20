@@ -51,7 +51,12 @@ export interface CompletionResult {
 		testRunStarted?: boolean;
 		appendResults?: readonly WorkflowSnapshot["step"]["results"][number][];
 	};
-	metadata?: { changeId?: string };
+	metadata?: {
+		changeId?: string;
+		stageTestPlan?: JsonValue;
+		stageTestReport?: JsonValue;
+		stageTestReportMarkdown?: string;
+	};
 	transition?: { outcome: string; output?: unknown };
 	deferTransition?: boolean;
 	runs?: readonly { role: string }[];
@@ -84,6 +89,19 @@ export interface AgentCompletionContext {
 	remainingActiveRunIds: readonly string[];
 	loopMaxAttempts?: number;
 	evidence: readonly WorkflowSnapshot["evidence"][number][];
+	/** Stage-test handoff facts (`stage-test-workflow`): the workflow's stage
+	 * journal and the pinned stage's declared application names, so the execute
+	 * step's own validator can refuse a dangling citation or a missing version
+	 * before the engine renders the report. Absent for every other family. */
+	stageJournal?: readonly {
+		seq: number;
+		knowledge?: { concept: string; kind: string };
+	}[];
+	stageApps?: readonly string[];
+	/** Every evidence id already attached to this workflow, so the execute
+	 * validator can refuse a citation of evidence that does not exist before the
+	 * render effect sees it. */
+	stageEvidenceIds?: readonly string[];
 }
 
 export interface EffectCompletionContext {

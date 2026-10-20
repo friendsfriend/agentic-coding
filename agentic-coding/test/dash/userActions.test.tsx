@@ -415,7 +415,24 @@ test("developer review shows a finding whose anchor line is outside the diff", a
 });
 
 test("plan review exposes a bounded rejection action", async () => {
-	const t = await testRender(() => <TestDashboard />, {
+	// `r` is offered only while the engine lists `reject-plan` for the gate
+	// (`core.plan-approval` does), so the fixture carries it next to the approval.
+	const demo = testDashboard();
+	const testData: DashboardData = {
+		...demo,
+		state: {
+			...demo.state,
+			availableActions: [
+				{ id: "approve-plan", label: "Approve plan", confirmation: "confirm" },
+				{
+					id: "reject-plan",
+					label: "Reject plan",
+					confirmation: "reason",
+				},
+			],
+		},
+	};
+	const t = await testRender(() => <TestDashboard testData={testData} />, {
 		width: 120,
 		height: 40,
 	});

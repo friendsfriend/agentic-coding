@@ -69,7 +69,11 @@ export interface WorkflowEdge {
 		payload: unknown;
 	}[];
 }
-export type WorkflowTargetKind = "repository" | "wiki" | "research";
+export type WorkflowTargetKind =
+	| "repository"
+	| "wiki"
+	| "research"
+	| "stage-test";
 /** Whether a repository family produces OpenSpec change artifacts. */
 export type WorkflowChangeArtifacts = "openspec" | "none";
 /** How a repository family plans: no planner, one planner, or a classified
@@ -130,6 +134,7 @@ const TARGET_KINDS: readonly WorkflowTargetKind[] = [
 	"repository",
 	"wiki",
 	"research",
+	"stage-test",
 ];
 const CHANGE_ARTIFACTS_TRAITS: readonly WorkflowChangeArtifacts[] = [
 	"openspec",

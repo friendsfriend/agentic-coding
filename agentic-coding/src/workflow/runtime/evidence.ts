@@ -528,7 +528,8 @@ export function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 		// and research workflows have no planner to record a change).
 		snapshot.metadata.changeId || snapshot.workflowId,
 		snapshot.definition.id === "wiki-comments" ||
-			snapshot.definition.id === "research"
+			snapshot.definition.id === "research" ||
+			snapshot.definition.id === "stage-test"
 			? wikiWorkflowDataRoot()
 			: snapshot.metadata.worktree,
 	);

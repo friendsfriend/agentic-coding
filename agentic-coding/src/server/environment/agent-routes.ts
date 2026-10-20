@@ -25,7 +25,6 @@ import type {
 	AgentEnvironmentAcquire,
 	AgentEnvironmentBuild,
 } from "../../contracts/environment.ts";
-import { loadEnvFile } from "../../env-file.ts";
 import {
 	type DefaultCandidate,
 	decideDefaultTarget,
@@ -53,7 +52,6 @@ import {
 	AGENT_TEST_PATH,
 	decodeRouteRequest,
 } from "../protocol.ts";
-import { MIN_SECRET_CHARS } from "../redaction.ts";
 import {
 	containerNameMatches,
 	type DockerRuntimeSelection,
@@ -74,7 +72,14 @@ import {
 import type { App } from "./config.ts";
 import { parseEnvironmentOwner } from "./instances/model.ts";
 import type { EnvironmentManager } from "./manager.ts";
+import {
+	type EnvironmentSecret,
+	environmentSecrets,
+	redact,
+} from "./secrets.ts";
 import { stagedSymlinkedDefinitions } from "./setup-drafts.ts";
+
+export { environmentSecrets, redact } from "./secrets.ts";
 
 /** The infrastructure-service fields the log reader and the listing need. The
  * configured and runtime models both carry them, so either is accepted rather
@@ -150,23 +155,6 @@ export interface AgentEnvironmentDeps {
 // Redaction
 // ---------------------------------------------------------------------------
 
-interface EnvironmentSecret {
-	readonly name: string;
-	readonly value: string;
-}
-
-/** The values a response must never carry: the configuration `.env` and every
- * secret or ephemeral action input's declared value. Longest first, so a value
- * that contains another is replaced whole. */
-export function environmentSecrets(configDir: string): EnvironmentSecret[] {
-	const secrets: EnvironmentSecret[] = [];
-	if (configDir !== "") {
-		for (const [name, value] of loadEnvFile(path.join(configDir, ".env")))
-			if (value.trim() !== "") secrets.push({ name, value });
-	}
-	return secrets.sort((left, right) => right.value.length - left.value.length);
-}
-
 /** The secret values the action registry's definitions declare. Read per call:
  * a reloaded configuration must redact immediately, not after a restart. */
 function actionSecrets(
@@ -192,59 +180,6 @@ function redactorFor(deps: AgentEnvironmentDeps): (value: unknown) => unknown {
 		...actionSecrets(deps.registry),
 	].sort((left, right) => right.value.length - left.value.length);
 	return (value) => redact(value, secrets);
-}
-
-/** Escape one literal for use inside a regular expression. */
-function escapePattern(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
- * Replace the declared secret values in one string.
- *
- * A value of any length is a secret, but a two-character value redacted
- * everywhere would make ordinary output unreadable (`PORT=80` would rewrite
- * every `80`). So a value below the literal threshold is still redacted, in the
- * one form that names it — `NAME=value` / `NAME: value`, with optional quotes —
- * which is exactly how an app prints its own environment or connection string.
- * Nothing a caller declared as a secret survives, and the noise stays bounded.
- */
-function redactString(
-	value: string,
-	secrets: readonly EnvironmentSecret[],
-): string {
-	let redacted = value;
-	for (const secret of secrets) {
-		// A cheap scan first: replacing a secret allocates a fresh copy of the
-		// payload even when that secret does not occur in it.
-		if (!redacted.includes(secret.value)) continue;
-		const marker = `«redacted:${secret.name}»`;
-		if (secret.value.length >= MIN_SECRET_CHARS) {
-			redacted = redacted.split(secret.value).join(marker);
-			continue;
-		}
-		const assignment = new RegExp(
-			`(${escapePattern(secret.name)}\\s*[=:]\\s*['"]?)${escapePattern(secret.value)}(['"]?)`,
-			"g",
-		);
-		redacted = redacted.replace(assignment, `$1${marker}$2`);
-	}
-	return redacted;
-}
-
-/** Deep-replace the declared secret values in a response value. */
-export function redact(
-	value: unknown,
-	secrets: readonly EnvironmentSecret[],
-): unknown {
-	if (secrets.length === 0) return value;
-	if (typeof value === "string") return redactString(value, secrets);
-	if (Array.isArray(value)) return value.map((item) => redact(item, secrets));
-	if (value === null || typeof value !== "object") return value;
-	const out: Record<string, unknown> = {};
-	for (const [key, item] of Object.entries(value))
-		out[key] = redact(item, secrets);
-	return out;
 }
 
 // ---------------------------------------------------------------------------

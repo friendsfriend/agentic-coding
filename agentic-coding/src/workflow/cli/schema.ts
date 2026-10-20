@@ -91,6 +91,8 @@ const FLAG_SCHEMA: Record<
 			"onto",
 			// The configured app an env-setup workflow drafts definitions for.
 			"app",
+			// The allow-listed hosted stage a stage-test workflow pins.
+			"stage",
 		],
 		positionals: [0, 0],
 	},

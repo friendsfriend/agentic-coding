@@ -1,4 +1,4 @@
-import type { KeybindSection } from "@ui";
+import type { Keybind, KeybindSection } from "@ui";
 import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 import {
 	AGENTS_PANEL,
@@ -18,6 +18,81 @@ export const OPENSPEC_PANEL_CONTEXT = "openspec";
 export const AGENTS_PANEL_CONTEXT = "agents";
 export const CLASSIFIER_PANEL_CONTEXT = "classifier";
 export const EVIDENCE_PANEL_CONTEXT = "evidence";
+
+/** The stage-report review dialog shares its footer and the dashboard's `?` help. */
+export function stageReportReviewKeybinds(
+	wikiUpdateAvailable: boolean,
+): Keybind[] {
+	return [
+		{ key: "j/k", action: "Navigate report", standard: true },
+		{ key: "Enter", action: "Read report" },
+		{ key: "/", action: "Search report files" },
+		{ key: "n/N", action: "Next/previous comment", standard: true },
+		{ key: "v", action: "Select report lines", standard: true },
+		{ key: "c", action: "Add follow-up comment" },
+		{ key: "f", action: "Finish review" },
+		...(wikiUpdateAvailable
+			? [{ key: "w", action: "Approve and update wiki" }]
+			: []),
+		{ key: "Esc", action: "Back or close report", short: "back" },
+	];
+}
+
+/** The body of the stage report owns the screen once it is open: `Enter` and
+ * `/` only drive the file list, so publishing them there would advertise keys
+ * that do nothing. One helper so the footer and the `?` help agree. */
+export function stageReportReviewKeybindsForView(
+	wikiUpdateAvailable: boolean,
+	view: "files" | "diff",
+): Keybind[] {
+	const keybinds = stageReportReviewKeybinds(wikiUpdateAvailable);
+	return view === "diff"
+		? keybinds.filter(({ key }) => key !== "Enter" && key !== "/")
+		: keybinds;
+}
+
+export function stageReportReviewKeybindCatalog(
+	wikiUpdateAvailable: boolean,
+	view: "files" | "diff" = "files",
+): KeybindSection[] {
+	return [
+		{
+			title: "Stage report review",
+			keybinds: stageReportReviewKeybindsForView(wikiUpdateAvailable, view),
+		},
+	];
+}
+
+/** The stage-test plan gate's own catalog: one synthetic plan document, no
+ * file list to search, and `r` only while the engine offers plan rejection
+ * (USAB-002/USAB-003). Esc closes the plan, matching the report review. */
+export function stagePlanReviewKeybindsForView(
+	rejectAvailable: boolean,
+	view: "files" | "diff",
+): Keybind[] {
+	const keybinds: Keybind[] = [
+		{ key: "j/k", action: "Navigate plan", standard: true },
+		...(view === "files" ? [{ key: "Enter", action: "Read plan" }] : []),
+		{ key: "v", action: "Select plan lines", standard: true },
+		{ key: "c", action: "Add review comment" },
+		{ key: "f", action: "Finish plan review" },
+		...(rejectAvailable ? [{ key: "r", action: "Reject plan" }] : []),
+		{ key: "Esc", action: "Close plan review", short: "close" },
+	];
+	return keybinds;
+}
+
+export function stagePlanReviewKeybindCatalog(
+	rejectAvailable: boolean,
+	view: "files" | "diff" = "diff",
+): KeybindSection[] {
+	return [
+		{
+			title: "Stage plan review",
+			keybinds: stagePlanReviewKeybindsForView(rejectAvailable, view),
+		},
+	];
+}
 
 export function panelContext(panel: number): string {
 	if (panel === EVIDENCE_PANEL) return EVIDENCE_PANEL_CONTEXT;

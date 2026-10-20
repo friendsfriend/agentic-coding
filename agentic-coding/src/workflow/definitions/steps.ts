@@ -14,6 +14,8 @@ import {
 	findings,
 	passthrough,
 	planDraft,
+	stageTestPlan,
+	stageTestReport,
 	triage,
 } from "./contracts.ts";
 
@@ -44,6 +46,7 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"workflow-agent-protocol.md",
 		"wiki-openspec.md",
 		"wiki-research.md",
+		"wiki-stage-test.md",
 	],
 	// The `env-setup` family's one agent: its role brief is the only asset of
 	// the step it receives (instructionAssetForRole).
@@ -51,6 +54,8 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	// The debug family's one agent: its role brief is the only asset of the step
 	// it receives (instructionAssetForRole).
 	"debug.investigate": ["workflow-agent-protocol.md", "debug.md"],
+	"stage.plan": ["workflow-agent-protocol.md", "stage-test-plan.md"],
+	"stage.execute": ["workflow-agent-protocol.md", "stage-test-execute.md"],
 	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
@@ -273,6 +278,20 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		{ allowedEffects: ["model.classify"], retryLimit: 3 },
 	),
 	step(
+		"core.route-stage-plan",
+		"Stage planner model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step(
+		"core.route-stage-execute",
+		"Stage tester model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step(
 		"core.implementation",
 		"Implementation",
 		"agent",
@@ -490,6 +509,51 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 			retryLimit: 3,
 		},
 	),
+	// --- pinned hosted stage test (add-stage-test-workflow) -------------------
+	step(
+		"stage.plan",
+		"Stage test plan",
+		"agent",
+		["complete", "needs-approval", "execute", "blocked", "failed"],
+		{
+			output: stageTestPlan,
+			retryLimit: 3,
+			requirements: ["prompt", "run-environment", "observe", "read-only"],
+		},
+	),
+	step("stage.plan-review", "Stage test plan review", "developer", [
+		"approve",
+		"comments",
+	]),
+	step(
+		"stage.execute",
+		"Stage test execution",
+		"agent",
+		["complete", "blocked", "failed"],
+		{
+			output: stageTestReport,
+			retryLimit: 3,
+			requirements: [
+				"prompt",
+				"run-environment",
+				"observe",
+				"read-only",
+				"vision",
+			],
+			allowedEffects: [
+				"artifact.write",
+				"agent.launch",
+				"agent.prompt",
+				"agent.stop",
+				"stage.report.render",
+			],
+		},
+	),
+	step("stage.review", "Stage test report review", "developer", [
+		"approve",
+		"approve-and-update-wiki",
+		"comments",
+	]),
 	// --- debug family (add-debug-workflow) ------------------------------------
 	// The one agent of the family: it probes a running app and may edit code to
 	// prove a candidate fix. Its edits are captured as a `changes.patch`

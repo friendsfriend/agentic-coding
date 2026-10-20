@@ -762,10 +762,25 @@ function snippet(text: string, terms: string[]): string {
 		.slice(Math.max(0, index - 60), index + 180)
 		.trim();
 }
-export function searchConcepts(terms: string[], limit = 20): WikiSearchHit[] {
+/** The stage wiki draft gate: a declared configuration secret must never be
+ * copied into a concept, and the refusal never echoes the value. */
+export function containsConfiguredSecret(
+	text: string,
+	values: Iterable<string>,
+): boolean {
+	for (const value of values) if (value && text.includes(value)) return true;
+	return false;
+}
+
+export function searchConcepts(
+	terms: string[],
+	limit = 20,
+	scopePrefix?: string,
+): WikiSearchHit[] {
 	const wanted = terms.map((term) => term.toLowerCase()).filter(Boolean);
 	if (!wanted.length) return [];
 	return listConcepts()
+		.filter((concept) => !scopePrefix || concept.id.startsWith(scopePrefix))
 		.map((concept) => {
 			const title = String(concept.frontmatter.title ?? "");
 			const tags = Array.isArray(concept.frontmatter.tags)
@@ -967,7 +982,7 @@ export function writeConcept(
 			: defaultStaleAfter(now);
 	if (
 		existing?.frontmatter.verified !== undefined ||
-		["wiki", "research-wiki", "planner", "consolidator"].includes(
+		["wiki", "research-wiki", "stage-wiki", "planner", "consolidator"].includes(
 			process.env.HERDR_ROLE ?? "",
 		)
 	) {

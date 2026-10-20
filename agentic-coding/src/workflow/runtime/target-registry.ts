@@ -16,8 +16,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-	isResearchWorkflowTarget,
-	isWikiWorkflowTarget,
+	NON_REPOSITORY_WORKFLOW_TARGETS,
 	wikiWorkflowDataRoot,
 } from "./targets.ts";
 
@@ -32,12 +31,7 @@ export function targetRegistryDirectory(): string {
  * target that cannot be recorded must never fail the start it describes, and
  * the wiki/research targets are always listed anyway. */
 export function recordWorkflowTarget(target: string): void {
-	if (
-		!target ||
-		isWikiWorkflowTarget(target) ||
-		isResearchWorkflowTarget(target)
-	)
-		return;
+	if (!target || NON_REPOSITORY_WORKFLOW_TARGETS.includes(target)) return;
 	try {
 		const directory = targetRegistryDirectory();
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });

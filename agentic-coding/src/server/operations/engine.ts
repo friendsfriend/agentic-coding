@@ -443,6 +443,23 @@ export function viewToDashboardState(view: WorkflowView) {
 		task: view.task,
 		verificationRound,
 		baseCommit: view.baseCommit,
+		...(view.ticket !== undefined ? { ticket: view.ticket } : {}),
+		...(view.stage !== undefined ? { stage: view.stage } : {}),
+		...(view.stageSystem !== undefined
+			? { stageSystem: view.stageSystem }
+			: {}),
+		...(view.stageAccess !== undefined
+			? { stageAccess: view.stageAccess }
+			: {}),
+		...(view.stageTestPlan !== undefined
+			? { stageTestPlan: view.stageTestPlan }
+			: {}),
+		...(view.stageTestReport !== undefined
+			? { stageTestReport: view.stageTestReport }
+			: {}),
+		...(view.stageTestReportMarkdown !== undefined
+			? { stageTestReportMarkdown: view.stageTestReportMarkdown }
+			: {}),
 		createdAt: view.createdAt,
 		phaseStartedAt: view.currentStep.enteredAt,
 		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),

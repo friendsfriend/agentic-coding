@@ -8834,8 +8834,16 @@ function expectedCandidateRoles(
 			"migration-verifier",
 			"test-quality-verifier",
 		];
+	if (stepId === "stage.plan") return ["stage-planner"];
+	if (stepId === "stage.execute") return ["stage-tester"];
 	if (stepId === "core.wiki")
-		return [definitionId === "research" ? "research-wiki" : "wiki"];
+		return [
+			definitionId === "research"
+				? "research-wiki"
+				: definitionId === "stage-test"
+					? "stage-wiki"
+					: "wiki",
+		];
 	if (stepId === "core.research") return ["researcher"];
 	if (stepId === "core.archive") return ["archive"];
 	if (stepId === "setup.author") return ["env-setup"];
