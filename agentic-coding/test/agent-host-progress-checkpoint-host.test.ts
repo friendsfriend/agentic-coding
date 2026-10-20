@@ -155,6 +155,9 @@ async function runCheckpointRun(options: {
 	sampleThrows?: boolean;
 	role?: string;
 	checkpointClass?: string;
+	/** Leave `HERDR_RUN_ID` out of the environment, as an orchestrator session has
+	 * no run id to be supervised under. */
+	noRunId?: boolean;
 }): Promise<{ telemetryPath: string; calls: string }> {
 	const dir = tempWorkflowDir();
 	fs.writeFileSync(path.join(dir, "work.txt"), "one\ntwo\n");
@@ -187,7 +190,7 @@ async function runCheckpointRun(options: {
 	const telemetryPath = path.join(dir, "telemetry.jsonl");
 	const runEnvPath = writeRunEnv(dir, {
 		HERDR_WORKFLOW_ID: "wf-checkpoint",
-		HERDR_RUN_ID: "run-checkpoint",
+		...(options.noRunId ? {} : { HERDR_RUN_ID: "run-checkpoint" }),
 		HERDR_STEP_ID: "core.implementation",
 		HERDR_ROLE: options.role ?? "worker",
 		HERDR_PROFILE: "durable-default",
@@ -512,6 +515,20 @@ describe("a run-progress checkpoint in the durable host", () => {
 		});
 		expect(checkpointLines(run.telemetryPath)).toEqual([]);
 		expect(run.calls).not.toContain("workflow checkpoint");
+	});
+
+	test("a session with no run id in its environment is never supervised", async () => {
+		const shim = installShim({});
+		restore = shim.restore;
+		const run = await runCheckpointRun({
+			shimLog: shim.log,
+			thresholds: WORKER_HARD_SOON,
+			calls: 12,
+			noRunId: true,
+		});
+		expect(checkpointLines(run.telemetryPath)).toEqual([]);
+		expect(run.calls).not.toContain("workflow checkpoint");
+		expect(run.calls).not.toContain("workflow question");
 	});
 
 	test("an undeclared class runs on the worker row", async () => {
