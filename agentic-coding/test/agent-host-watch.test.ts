@@ -105,6 +105,76 @@ describe("watch streams the conversation view over the control socket", () => {
 		}
 	});
 
+	test("a patch watcher receives an initial snapshot and applied view operations", async () => {
+		// The dashboard asks for patches: the host sends the acquisition snapshot
+		// once, then only the chord operations that advance it. The client applies
+		// them locally, so every frame the caller sees is still a complete view.
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		await host.listen();
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='patch-run'\n");
+			await host.ensureRun({
+				runId: "patch-run",
+				name: "patch-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+
+			const client = new HostClient(layout.socketPath, 10_000);
+			const frames: unknown[] = [];
+			const stop = await client.watch(
+				"patch-run",
+				(value) => frames.push(value),
+				{ patches: true },
+			);
+			try {
+				expect(frames.length).toBeGreaterThanOrEqual(1);
+				expect(isBusy(frames[0])).toBe(false);
+				expect(entryCount(frames[0])).toBe(0);
+
+				faux.setResponses([fauxAssistantMessage([fauxText("patched")])]);
+				await client.submit("patch-run", "say something", "req-patch");
+
+				for (
+					let i = 0;
+					i < 50 &&
+					!(
+						entryCount(frames[frames.length - 1]) > 0 &&
+						!isBusy(frames[frames.length - 1])
+					);
+					i++
+				)
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				expect(frames.length).toBeGreaterThan(1);
+				expect(isBusy(frames[frames.length - 1])).toBe(false);
+				expect(entryCount(frames[frames.length - 1])).toBeGreaterThan(0);
+				expect(
+					buildAgentSessionView(frames[frames.length - 1]).some((block) =>
+						block.text.includes("patched"),
+					),
+				).toBe(true);
+			} finally {
+				stop();
+			}
+		} finally {
+			await host.shutdown();
+		}
+	});
+
 	test("a docs-only watcher receives the live documents and never the transcript", async () => {
 		// The activity badge of the Agents panel watches every durable run at
 		// once and reads only `pi.live`/`pi.inbox`; a frame that also carried the
@@ -143,6 +213,7 @@ describe("watch streams the conversation view over the control socket", () => {
 				(value) => docs.push(value),
 				{
 					view: "docs",
+					patches: true,
 				},
 			);
 			const stopFull = await client.watch("docs-run", (value) =>

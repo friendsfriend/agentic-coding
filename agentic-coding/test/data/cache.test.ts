@@ -135,6 +135,50 @@ describe("data cache", () => {
 		expect(cache.has("telemetry:traces:*:1")).toBe(true);
 	});
 
+	test("a workflow event with a run id leaves other workflows cached", async () => {
+		const cache = new DataCache();
+		const loader = async () => "v";
+		for (const key of [
+			"workflow:/repo:wf-1",
+			"workflow:/repo:wf-1:findings:verifier",
+			"dashboard:/repo:wf-1",
+			"artifacts:/repo:wf-1",
+			"wiki:/repo:wf-1",
+			"git:/repo:wf-1",
+			"evidence:/repo:wf-1",
+			"workflow:/repo:wf-2",
+			"dashboard:/repo:wf-2",
+			"views:/repo",
+		])
+			await cache.load(key, loader);
+		await cache.load("workflows", loader);
+		cache.applyEvent({
+			instance: "server",
+			sequence: 2,
+			domain: "workflow",
+			kind: "workflow.updated",
+			resource: "/repo",
+			runId: "wf-1",
+			at: new Date(0).toISOString(),
+			payload: { phase: "progress" },
+		});
+		for (const key of [
+			"workflow:/repo:wf-1",
+			"workflow:/repo:wf-1:findings:verifier",
+			"dashboard:/repo:wf-1",
+			"artifacts:/repo:wf-1",
+			"wiki:/repo:wf-1",
+			"git:/repo:wf-1",
+			"evidence:/repo:wf-1",
+			"views:/repo",
+			"workflows",
+		])
+			expect(cache.has(key)).toBe(false);
+		// Another workflow's detail was not named by the event and stays cached.
+		expect(cache.has("workflow:/repo:wf-2")).toBe(true);
+		expect(cache.has("dashboard:/repo:wf-2")).toBe(true);
+	});
+
 	test("a telemetry event invalidates telemetry reads only", async () => {
 		const cache = new DataCache();
 		const loader = async () => "v";

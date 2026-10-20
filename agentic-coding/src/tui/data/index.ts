@@ -169,8 +169,9 @@ export class DataCache {
 			entry.generation += 1;
 			entry.set(undefined);
 			this.notify(key);
-			return;
 		}
+		// An exact entry can also own child reads (`workflow:<repo>:<id>` and its
+		// `:findings:<role>`), so invalidating it must not stop at the parent.
 		for (const existing of [...this.entries.keys()])
 			if (existing.startsWith(`${key}:`)) this.invalidate(existing);
 	}
@@ -182,24 +183,32 @@ export class DataCache {
 
 	/** Apply one domain event: the resource and revision it names are stale. A
 	 * workflow event invalidates that workflow's reads; an event without a
-	 * resource falls back to a full invalidation rather than guessing. */
+	 * resource falls back to a full invalidation rather than guessing. When the
+	 * event names the workflow (`runId`), only that workflow's caches are
+	 * dropped: another dashboard's progress is not this dashboard's read. */
 	applyEvent(event: EventEnvelope): void {
 		if (event.domain === "workflow" && event.resource) {
-			this.invalidate(`workflow:${event.resource}`);
-			this.invalidate(`views:${event.resource}`);
-			this.invalidate(`dashboard:${event.resource}`);
-			this.invalidate(`artifacts:${event.resource}`);
-			this.invalidate(`wiki:${event.resource}`);
-			this.invalidate(`git:${event.resource}`);
+			const scoped = event.runId
+				? `${event.resource}:${event.runId}`
+				: undefined;
+			const invalidateScoped = (family: string) =>
+				this.invalidate(
+					scoped ? `${family}:${scoped}` : `${family}:${event.resource}`,
+				);
+			invalidateScoped("workflow");
+			invalidateScoped("dashboard");
+			invalidateScoped("artifacts");
+			invalidateScoped("wiki");
+			invalidateScoped("git");
 			// Evidence is attached while a run works, so any event on the workflow
 			// may have brought new entries: the manifest is dropped and re-read. The
 			// entry bytes live in their own `evidence-file:` family instead, because a
 			// stored file is immutable once written — only a full invalidation drops
 			// them.
-			this.invalidate(`evidence:${event.resource}`);
-			// The overview catalog is one unkeyed read over every configured root
-			// (store rows plus each workflow's tasks.md), so a workflow event makes
-			// it stale; the sidebar's bounded poll is what re-reads it.
+			invalidateScoped("evidence");
+			// The catalog is one unkeyed read over every configured root, so any
+			// workflow event makes it stale; the sidebar's bounded poll re-reads it.
+			this.invalidate(`views:${event.resource}`);
 			this.invalidate("workflows");
 			return;
 		}

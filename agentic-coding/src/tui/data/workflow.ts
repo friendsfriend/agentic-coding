@@ -221,6 +221,42 @@ export async function loadDashboardSeed(
 	};
 }
 
+/** Overlay a live workflow-view projection on an already loaded dashboard.
+ *
+ * The dashboard's full observation also reads telemetry, Git, evidence and
+ * artifact files. A committed effect only changes the workflow view, so a
+ * progress event can update the state and agent rows from the cheap view read
+ * and keep every heavier field already on screen. The view's partial state is
+ * merged over the full state so fields it does not carry (classifier inputs,
+ * stage reports) survive. */
+export function mergeDashboardLive(
+	current: DashboardData,
+	live: DashboardData,
+): DashboardData {
+	const prior = new Map<string, DashboardData["agents"][number]>();
+	for (const agent of current.agents)
+		prior.set(`${agent.role}:${agent.runId ?? ""}`, agent);
+	return {
+		...current,
+		state: { ...current.state, ...live.state },
+		// The seed uses a sentinel when the view carries no task; the full read may
+		// have recovered the request from `request.md`. Do not replace that with
+		// the sentinel on a live update.
+		request:
+			live.request === "No request recorded" && current.request
+				? current.request
+				: live.request,
+		agents: live.agents.map((agent) => {
+			const before = prior.get(`${agent.role}:${agent.runId ?? ""}`);
+			// Keep the measured cost/metrics the full observation recorded for this
+			// exact run; the view carries identity and status, not usage.
+			return before ? { ...before, ...agent } : agent;
+		}),
+		updated: live.updated,
+		age: live.age,
+	};
+}
+
 /** The dashboard projection for one workflow (server-composed read).
  * `refresh: true` bypasses the cache for an authoritative re-read — the
  * periodic safety resync uses it so a dropped backend event cannot leave the

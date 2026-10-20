@@ -233,6 +233,55 @@ describe("HostClient over the control socket", () => {
 		});
 	});
 
+	test("a patch frame advances the snapshot the client already holds", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = net.createServer((socket) => {
+			const reader = new FrameReader();
+			socket.setEncoding("utf8");
+			socket.on("data", (chunk: string) => {
+				for (const line of reader.push(chunk)) {
+					const decoded = decodeFrame(line);
+					if (!decoded.ok || decoded.value.type !== "watch") continue;
+					const runId = decoded.value.runId;
+					socket.write(
+						encodeFrame({
+							type: "watchFrame",
+							runId,
+							value: {
+								entries: [{ id: "a", text: "he" }],
+								timings: { a: { durationMs: 12 } },
+							},
+						} as never),
+					);
+					socket.write(
+						encodeFrame({
+							type: "watchFrame",
+							runId,
+							patch: { ops: [["a", ["entries", 0, "text"], "llo"]] },
+						} as never),
+					);
+				}
+			});
+		});
+		await new Promise<void>((resolve) =>
+			server?.listen(layout.socketPath, resolve),
+		);
+		const client = new HostClient(layout.socketPath, 2_000);
+		const frames: unknown[] = [];
+		const stop = await client.watch("run-1", (value) => frames.push(value), {
+			patches: true,
+		});
+		await waitFor(() => frames.length >= 2);
+		stop();
+		expect(frames[1]).toEqual({
+			entries: [{ id: "a", text: "hello" }],
+			// Timings are not part of the view delta; the client carries the
+			// snapshot's map forward.
+			timings: { a: { durationMs: 12 } },
+		});
+	});
+
 	test("ensureHostRunning spawns nothing once the host already answers hello", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });

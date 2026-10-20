@@ -127,7 +127,7 @@ class RepositoryExecutionCoordinator {
 	private readonly workflowErrors = new Map<string, string>();
 	private readonly listeners = new Set<(workflowId: string) => void>();
 	private readonly settledListeners = new Set<(workflowId: string) => void>();
-	private readonly progressListeners = new Set<() => void>();
+	private readonly progressListeners = new Set<(workflowId: string) => void>();
 	/** Every workflow id coalesced into the next drain, in request order. */
 	private queuedWorkflowIds: Array<string | undefined> = [];
 	/** Ids coalesced while a drain was in flight; carried onto the drain that
@@ -180,8 +180,8 @@ class RepositoryExecutionCoordinator {
 				this.workflowErrors.set(workflowId, message);
 				for (const listener of this.listeners) listener(workflowId);
 			},
-			() => {
-				for (const listener of this.progressListeners) listener();
+			(workflowId) => {
+				for (const listener of this.progressListeners) listener(workflowId);
 			},
 		)
 			.then(() => {
@@ -215,7 +215,7 @@ class RepositoryExecutionCoordinator {
 		return () => this.settledListeners.delete(listener);
 	}
 
-	onProgress(listener: () => void): () => void {
+	onProgress(listener: (workflowId: string) => void): () => void {
 		this.progressListeners.add(listener);
 		return () => this.progressListeners.delete(listener);
 	}
@@ -326,10 +326,12 @@ export function onWorkflowExecutionSettled(
 }
 
 /** Fires after each committed effect, without waiting for continuation polling
- * to finish. Consumers use this for prompt dashboard refreshes. */
+ * to finish. Consumers use this for prompt dashboard refreshes. The listener
+ * receives the workflow the effect belonged to, so a repository-wide drain does
+ * not make every open dashboard re-read. */
 export function onWorkflowExecutionProgress(
 	repo: string,
-	listener: () => void,
+	listener: (workflowId: string) => void,
 ): () => void {
 	return executionCoordinator(repo).onProgress(listener);
 }

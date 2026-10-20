@@ -70,7 +70,7 @@ export async function drainEffects(
 	waitMs = 0,
 	signal?: AbortSignal,
 	onFailure?: (workflowId: string, message: string) => void,
-	onProgress?: () => void,
+	onProgress?: (workflowId: string) => void,
 ): Promise<number> {
 	// The durable host is the one managed runtime (multiplexer removal).
 	const adapters = new Map<string, AgentAdapter>([

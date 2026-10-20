@@ -70,6 +70,7 @@ import {
 	SLOW_CALL_MS,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
+import { Spinner } from "./Spinner.tsx";
 import {
 	type ToolViewRow,
 	type ToolViewSection,
@@ -549,21 +550,52 @@ function Block(props: {
 				{...useTap(() => props.onToggle(props.block.id))}
 			>
 				<box flexDirection="row">
-					<text
-						fg={
-							props.block.live === true ? uiColors.textMuted : uiColors.warning
-						}
-						attributes={
-							props.block.live === true ? TextAttributes.DIM : undefined
-						}
-						flexGrow={1}
-						minWidth={0}
-					>
-						{props.expanded ? "▾" : "▸"}{" "}
-						{props.block.durationMs !== undefined
-							? `Thought: ${formatDuration(props.block.durationMs)}`
-							: "Thinking…"}
-					</text>
+					<box flexGrow={1} minWidth={0} flexDirection="row">
+						<text
+							fg={
+								props.block.live === true
+									? uiColors.textMuted
+									: uiColors.warning
+							}
+							attributes={
+								props.block.live === true ? TextAttributes.DIM : undefined
+							}
+							flexShrink={0}
+						>
+							{props.expanded ? "▾" : "▸"}{" "}
+						</text>
+						<Show
+							when={
+								props.block.live === true &&
+								props.block.durationMs === undefined
+							}
+						>
+							{/* opencode's thinking row: an animated marker while the model is
+							    still producing the thought, replaced by the measured duration
+							    once it commits. */}
+							<Spinner
+								color={uiColors.textMuted}
+								attributes={TextAttributes.DIM}
+							/>
+							<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
+								{" "}
+							</text>
+						</Show>
+						<text
+							fg={
+								props.block.live === true
+									? uiColors.textMuted
+									: uiColors.warning
+							}
+							attributes={
+								props.block.live === true ? TextAttributes.DIM : undefined
+							}
+						>
+							{props.block.durationMs !== undefined
+								? `Thought: ${formatDuration(props.block.durationMs)}`
+								: "Thinking…"}
+						</text>
+					</box>
 					<Stamp block={props.block} />
 				</box>
 				<Show when={props.expanded}>
@@ -628,9 +660,12 @@ function Block(props: {
 						</text>
 						<Show when={tool.hint}>
 							{(hint) => (
-								<text fg={uiColors.textMuted} flexShrink={0}>
-									{` ${hint()}`}
-								</text>
+								<box flexDirection="row" flexShrink={0}>
+									<Show when={props.block.pending}>
+										<Spinner color={uiColors.textMuted} />
+									</Show>
+									<text fg={uiColors.textMuted}>{` ${hint()}`}</text>
+								</box>
 							)}
 						</Show>
 						<Show when={props.block.aborted}>
@@ -715,6 +750,10 @@ function Block(props: {
 							<text width={2} flexShrink={0} fg={color()}>
 								{props.block.icon ?? "•"}
 							</text>
+							<Show when={props.block.pending}>
+								<Spinner color={color()} />
+								<text fg={color()}> </text>
+							</Show>
 							{/* A tool without a specialized view still names its whole
 							    call: the summary wraps instead of being cut in the middle
 							    when the tool's own text is wider than the row. */}

@@ -279,7 +279,8 @@ export function createWorkflowEventBus(
 	const recordedMemory = new Map<string, RecordedMemory>();
 	const suppressionWindows = new Map<string, SuppressionWindow>();
 	/** One pending coalesced repository refresh per repository named by a
-	 * runId-less `workflow.updated` (the hub's progress listener). */
+	 * runId-less `workflow.updated` (a repository-scoped change that names no
+	 * workflow). */
 	/** The repositories whose re-list is on the stack right now, and the ones that
 	 * asked for one while it ran (one entry each, never a queue). */
 	const refreshingRepos = new Set<string>();
@@ -1155,10 +1156,10 @@ export function createWorkflowEventBus(
 		);
 	}
 
-	/** A `workflow.updated` naming only a repository (the refresh hub's progress
-	 * listener) is coalesced into one re-list of that repository per debounce
-	 * window: a drain publishes one per committed effect, and listing per event
-	 * would read every workflow of the repository on each of them. */
+	/** A `workflow.updated` naming only a repository is coalesced into one
+	 * re-list of that repository per debounce window: a repository-scoped event
+	 * can cover several workflows, and listing per event would read every
+	 * workflow of the repository on each of them. */
 	function scheduleRepoRefresh(repository: string): void {
 		if (modeOf() === "off") return;
 		const existing = repoTimers.get(repository);
@@ -1219,10 +1220,10 @@ export function createWorkflowEventBus(
 			if (event.kind !== "workflow.updated" && event.kind !== "workflow.start")
 				return;
 			if (!event.resource) return;
-			// No workflow id: the event is about the repository as a whole (a
-			// committed effect of a drain), so the repository is re-listed once the
-			// burst settles. The repo-level refresh is what reports a change no
-			// workflow-id-carrying event ever named.
+			// No workflow id: the event is about the repository as a whole, so the
+			// repository is re-listed once the burst settles. The repo-level
+			// refresh is what reports a change no workflow-id-carrying event ever
+			// named.
 			if (!event.runId) {
 				scheduleRepoRefresh(event.resource);
 				return;

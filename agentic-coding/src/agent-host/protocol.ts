@@ -94,6 +94,11 @@ export interface WatchRequest {
 	 * otherwise cross the socket again on every token-rate frame. Absent means
 	 * the full conversation view, which the session page needs. */
 	readonly view?: "docs";
+	/** Ask for an initial snapshot followed by operation patches
+	 * (`WatchFrame.patch`) instead of a full snapshot per change. The host
+	 * serves full snapshots when this is absent, so an older client keeps the
+	 * protocol it knows. */
+	readonly patch?: boolean;
 }
 export interface HelloRequest {
 	readonly type: "hello";
@@ -201,12 +206,22 @@ export interface ErrorResponse {
 		| "internal";
 	readonly message: string;
 }
-/** One `watch` frame: the conversation's view snapshot, coalesced by the host
- * (durable-agent-host D3 / pi-durable's own watch coalescing). */
+/** One incremental view update: chord operations applied to the previous
+ * `value`, plus the measured timings when they changed. `ops` may be empty for
+ * a timings-only update. */
+export interface WatchPatch {
+	readonly ops: readonly unknown[];
+	readonly timings?: Readonly<Record<string, unknown>>;
+}
+/** One `watch` frame: either the conversation's full view snapshot or, when
+ * the watcher asked for patches, the operations that advance its previous
+ * snapshot. Coalesced by the host (durable-agent-host D3 / pi-durable's own
+ * watch coalescing). */
 export interface WatchFrame {
 	readonly type: "watchFrame";
 	readonly runId: string;
-	readonly value: unknown;
+	readonly value?: unknown;
+	readonly patch?: WatchPatch;
 }
 export type HostResponse =
 	| HelloResponse

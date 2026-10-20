@@ -365,6 +365,9 @@ test("a live thinking block collapses, expands, and keeps streaming into it", as
 		// Collapsed by default, exactly like a committed one.
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("Thinking…");
+		// A live thinking block carries the same animated marker as a running
+		// tool; a committed thought does not.
+		expect(collapsed).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+Thinking…/);
 		expect(collapsed).not.toContain("weighing options");
 		t.mockInput.pressKey("t", { ctrl: true });
 		await t.renderOnce();
@@ -1484,6 +1487,8 @@ test("a running tool shows an in-progress row that its result replaces in place"
 		// The call's subject appears as soon as it starts, with the running marker.
 		expect(pending).toContain("$ npm test");
 		expect(pending).toContain("running…");
+		// The running marker carries opencode's animated braille glyph.
+		expect(pending).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+running…/);
 		// No result section yet: the answer is not on screen while the call runs.
 		expect(pending).not.toContain("all good");
 		expect(pending.match(/npm test/g)).toHaveLength(1);

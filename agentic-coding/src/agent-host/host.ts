@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue, Op } from "@earendil-works/chord/delta";
 import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import type {
@@ -49,7 +50,7 @@ import {
 	type ToolSurfaceMonitor,
 	toolSurfaceMonitorFor,
 } from "./fail-fast.ts";
-import { createFrameThrottle } from "./frame-throttle.ts";
+import { createBatchThrottle, createFrameThrottle } from "./frame-throttle.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
 import {
@@ -63,6 +64,7 @@ import {
 	type RunStatus,
 	type SubmitWorkflowState,
 	type ToolPolicy,
+	type WatchPatch,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
 import { createStageExtension } from "./stage-tools.ts";
@@ -107,6 +109,14 @@ registerBunOAuthFlows();
  * transcript live (about 20 frames a second) while bounding what each frame
  * costs the watcher. */
 const STATE_FRAME_COALESCE_MS = 50;
+/** Patch frames carry only the changed paths, so the same token-rate stream is
+ * cheap enough to advance at 30 frames a second. This is the same trade
+ * opencode's client makes: an initial snapshot, then fine-grained updates as
+ * the server commits them. */
+const PATCH_FRAME_COALESCE_MS = 33;
+/** A stable empty timing map, so a conversation with no measured turns does not
+ * look "changed" on every patch delivery. */
+const NO_TIMINGS: Record<string, EntryTiming> = {};
 
 /** The one cheap tool-host re-probe a run's dead surface gets before it is
  * stopped (efficiency backlog item 3). The host behind a run's `env_*`,
@@ -378,6 +388,10 @@ export class DurableHost {
 		ConversationId,
 		Record<string, EntryTiming>
 	>();
+	/** Watchers that asked for patch frames, woken when a measured timing
+	 * arrives. The timing is not part of the conversation view, so it can change
+	 * without an operation to carry it. */
+	private readonly timingListeners = new Map<ConversationId, Set<() => void>>();
 	private readonly watchers = new Map<net.Socket, Set<() => void>>();
 	/** Runs whose `blocked` handoff this host recorded as a developer abort.
 	 * The developer's next message reconciles the workflow state for exactly
@@ -777,6 +791,10 @@ export class DurableHost {
 								...existing,
 								[entryId]: timing,
 							});
+							for (const listener of this.timingListeners.get(
+								conversation.id,
+							) ?? [])
+								listener();
 						},
 						// The measured context of one committed turn is also the cost
 						// ceiling's input, so one event stream serves both and the ceiling
@@ -1968,6 +1986,10 @@ export class DurableHost {
 		onValue: (value: unknown) => void,
 		recoveredConversationId?: string,
 		view: "docs" | undefined = undefined,
+		options: {
+			readonly patches?: boolean;
+			readonly onPatch?: (patch: WatchPatch) => void;
+		} = {},
 	): Promise<() => void> {
 		// A host that restarted no longer tracks the runs it served before, and the
 		// run id lives only in that in-memory map. The conversation is durable, so a
@@ -1984,33 +2006,107 @@ export class DurableHost {
 			BACKGROUND_CONTEXT,
 		);
 		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
-		const state = await conversation.viewState(BACKGROUND_CONTEXT);
+		// `watch` gives the acquisition snapshot and every later revision's
+		// operations. The dashboard's session page applies those operations to the
+		// snapshot it already holds, so only the changed paths cross the socket
+		// instead of a fresh conversation view per token-rate frame.
+		const watch = await conversation.watch(BACKGROUND_CONTEXT);
+		const measuredTimings = () =>
+			this.timings.get(conversationId) ?? NO_TIMINGS;
 		// The measured timings travel with the conversation view, the only place
 		// the dashboard can read them (pi-durable stores no timing itself). A
 		// docs-only watcher reads the live documents and nothing else, so the
 		// committed transcript never crosses the socket for it.
-		const augment = (value: unknown) => {
+		const augment = (
+			value: unknown,
+			timings: Record<string, EntryTiming> = measuredTimings(),
+		) => {
 			const record = value as Record<string, unknown> | undefined;
 			if (view === "docs") return { docs: record?.docs ?? {} };
 			return {
 				...(record ?? {}),
-				timings: this.timings.get(conversationId) ?? {},
+				timings,
 			};
 		};
-		onValue(augment(state.value));
-		// Coalesce what follows: a generating model changes this state at token
-		// rate, and every frame crosses the socket and rebuilds the watcher's whole
-		// transcript. The initial frame above is delivered directly, because a
-		// watcher's handshake resolves on it.
-		const frames = createFrameThrottle<unknown>({
-			windowMs: STATE_FRAME_COALESCE_MS,
-			deliver: (value) => onValue(value),
+		// Capture the initial timings and publish them together, so the patch
+		// baseline is exactly what the watcher received (a timing committed
+		// between the two reads must not be mistaken for "already delivered").
+		const initialTimings = measuredTimings();
+		onValue(augment(watch.value, initialTimings));
+		if (options.patches !== true || options.onPatch === undefined) {
+			// Coalesce what follows: a generating model changes this state at token
+			// rate, and every frame crosses the socket and rebuilds the watcher's
+			// whole transcript. The initial frame above is delivered directly,
+			// because a watcher's handshake resolves on it.
+			const frames = createFrameThrottle<unknown>({
+				windowMs: STATE_FRAME_COALESCE_MS,
+				deliver: (value) => onValue(value),
+			});
+			watch.start(async (value) => {
+				frames.push(augment(value));
+			});
+			return () => {
+				frames.dispose();
+				void watch.stop();
+			};
+		}
+
+		const onPatch = options.onPatch;
+		let lastTimings = initialTimings;
+		// A docs-only watcher sees only paths under `docs`; an overflow root
+		// replacement is narrowed to the docs it carries. Ops for the committed
+		// transcript are dropped before they are queued, so they never take up a
+		// patch slot.
+		const projectOps = (ops: readonly Op[]): Op[] => {
+			if (view !== "docs") return [...ops];
+			const projected: Op[] = [];
+			for (const op of ops) {
+				if (op[0] === "r") {
+					const record = op[1] as Record<string, unknown> | undefined;
+					projected.push([
+						"r",
+						{ docs: (record?.docs ?? {}) as JsonValue } as JsonValue,
+					]);
+					continue;
+				}
+				const path = op[1];
+				if (Array.isArray(path) && path[0] === "docs") projected.push(op);
+			}
+			return projected;
+		};
+		// Ordered batches: every operation builds on the previous one, so unlike a
+		// full-snapshot frame none can be dropped. A burst is concatenated and
+		// delivered once at the window boundary.
+		const frames = createBatchThrottle<Op>({
+			windowMs: PATCH_FRAME_COALESCE_MS,
+			deliver: (ops) => {
+				const timings = measuredTimings();
+				const timingsChanged = timings !== lastTimings;
+				if (ops.length === 0 && !timingsChanged) return;
+				lastTimings = timings;
+				onPatch({
+					ops,
+					...(timingsChanged ? { timings } : {}),
+				});
+			},
 		});
-		const unsubscribe = state.subscribe((value) => frames.push(augment(value)));
+		// Timing arrives after the conversation operation that produced it, and
+		// it is not part of the view's delta. Wake the patch queue so a duration
+		// can advance without waiting for the next token.
+		const wake = () => frames.wake();
+		const listeners =
+			this.timingListeners.get(conversationId) ?? new Set<() => void>();
+		listeners.add(wake);
+		this.timingListeners.set(conversationId, listeners);
+		watch.start(async (_value, ops) => {
+			const projected = projectOps(ops);
+			if (projected.length > 0) frames.push(projected);
+		});
 		return () => {
-			unsubscribe();
 			frames.dispose();
-			state.dispose();
+			listeners.delete(wake);
+			if (listeners.size === 0) this.timingListeners.delete(conversationId);
+			void watch.stop();
 		};
 	}
 
@@ -2220,6 +2316,12 @@ export class DurableHost {
 						},
 						request.conversationId,
 						request.view,
+						{
+							patches: request.patch === true,
+							onPatch: (patch) => {
+								send({ type: "watchFrame", runId: request.runId, patch });
+							},
+						},
 					);
 					cleanups.add(stop);
 					return;

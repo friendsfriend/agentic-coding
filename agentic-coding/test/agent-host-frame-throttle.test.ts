@@ -5,7 +5,10 @@
 // sleeping: a burst costs one frame, and the newest value in that burst is the
 // one that arrives.
 import { expect, test } from "bun:test";
-import { createFrameThrottle } from "../src/agent-host/frame-throttle.ts";
+import {
+	createBatchThrottle,
+	createFrameThrottle,
+} from "../src/agent-host/frame-throttle.ts";
 
 /** A clock and timer the test drives by hand. */
 function fakeClock() {
@@ -66,6 +69,53 @@ test("a burst costs one frame, and the newest value is the one delivered", () =>
 	frames.push(5);
 	expect(delivered).toEqual([1, 4, 5]);
 	expect(clock.pending()).toBe(0);
+});
+
+test("a batch throttle keeps every operation in order", () => {
+	const clock = fakeClock();
+	const delivered: number[][] = [];
+	const batches = createBatchThrottle<number>({
+		windowMs: 50,
+		deliver: (batch) => delivered.push([...batch]),
+		now: clock.now,
+		setTimer: clock.setTimer,
+		clearTimer: clock.clearTimer,
+	});
+	// Quiet: the first batch goes out immediately.
+	batches.push([1]);
+	expect(delivered).toEqual([[1]]);
+	// A burst is concatenated in arrival order; none of its operations may be
+	// dropped, because each one builds on the previous value.
+	batches.push([2]);
+	batches.push([3, 4]);
+	expect(delivered).toEqual([[1]]);
+	expect(clock.pending()).toBe(1);
+	expect(clock.fireNext()).toBe(true);
+	expect(delivered).toEqual([[1], [2, 3, 4]]);
+	// A wake with no operations still requests a delivery, for a side-channel
+	// update carried in the same patch.
+	batches.wake();
+	expect(clock.pending()).toBe(1);
+	expect(clock.fireNext()).toBe(true);
+	expect(delivered).toEqual([[1], [2, 3, 4], []]);
+});
+
+test("a batch throttle drops queued operations when disposed", () => {
+	const clock = fakeClock();
+	const delivered: string[][] = [];
+	const batches = createBatchThrottle<string>({
+		windowMs: 50,
+		deliver: (batch) => delivered.push([...batch]),
+		now: clock.now,
+		setTimer: clock.setTimer,
+		clearTimer: clock.clearTimer,
+	});
+	batches.push(["a"]);
+	batches.push(["b"]);
+	batches.dispose();
+	expect(delivered).toEqual([["a"]]);
+	expect(clock.pending()).toBe(0);
+	expect(clock.fireNext()).toBe(false);
 });
 
 test("flush delivers what is queued and dispose drops it", () => {

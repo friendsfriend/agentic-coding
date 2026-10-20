@@ -67,6 +67,7 @@ import {
 	loadDashboardSeed,
 	loadVerifierFindings,
 	loadVerifierReport,
+	mergeDashboardLive,
 	previewRepair,
 	requestExecution,
 	runWorkflow,
@@ -288,6 +289,8 @@ export function App(props: {
 	let refreshForceQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
+	let liveGeneration = 0;
+	let liveController: AbortController | undefined;
 	let refreshReviewFiles: ((force?: boolean) => void) | undefined;
 	// The last observation failure surfaced in the error modal. A persistent
 	// failure must not reopen the modal on every refresh (watchDirectories
@@ -326,20 +329,35 @@ export function App(props: {
 	const artifacts = panels.artifacts;
 	const setArtifacts = panels.setArtifacts;
 	let artifactGeneration = 0;
+	let artifactRevision: string | undefined;
+	let artifactReadAt = 0;
 	let artifactController: AbortController | undefined;
 	createEffect(() => {
+		const state = data().state;
+		if (props.profile === "test") {
+			setArtifacts(openSpecArtifacts(state));
+			return;
+		}
+		// The observation invalidates its caches on every event, but this panel
+		// does not need a filesystem read on every effect commit. A new workflow
+		// revision reads immediately; otherwise the five-second safety resync is
+		// the next authoritative look, which also catches an out-of-band edit.
+		const revision = `${state.workflowId}:${state.revision}`;
+		if (revision === artifactRevision && Date.now() - artifactReadAt < 5_000)
+			return;
+		const readAt = Date.now();
 		const generation = ++artifactGeneration;
 		artifactController?.abort();
 		artifactController = new AbortController();
-		if (props.profile === "test") {
-			setArtifacts(openSpecArtifacts(data().state));
-			return;
-		}
-		void loadArtifacts(data().state, artifactController.signal, {
+		void loadArtifacts(state, artifactController.signal, {
 			refresh: true,
 		})
 			.then((next) => {
-				if (next && generation === artifactGeneration) setArtifacts(next);
+				if (next && generation === artifactGeneration) {
+					setArtifacts(next);
+					artifactRevision = revision;
+					artifactReadAt = readAt;
+				}
 			})
 			.catch((error) => {
 				if (
@@ -1939,11 +1957,48 @@ export function App(props: {
 				}
 			});
 	};
+	const runRefreshLive = () => {
+		if (refreshDisposed) return;
+		// A view update must not overtake a full observation that started after it
+		// was requested, and a newer live request supersedes this one. Track both
+		// generations instead of serializing behind `refreshRunning`: the live read
+		// is cheap and is the path that keeps a streaming workflow moving.
+		const generation = ++liveGeneration;
+		const fullGeneration = refreshGeneration;
+		liveController?.abort();
+		liveController = new AbortController();
+		void loadDashboardSeed(props.repo, props.workflowId, liveController.signal)
+			.then((live) => {
+				if (
+					!live ||
+					refreshDisposed ||
+					generation !== liveGeneration ||
+					fullGeneration !== refreshGeneration
+				)
+					return;
+				setData((current) => mergeDashboardLive(current, live));
+				traceTui("tui.dashboard.refresh", {
+					surface: "dashboard",
+					action: "refresh-live",
+				});
+			})
+			.catch((error) => {
+				if (refreshDisposed || error instanceof DOMException) return;
+				traceTui(
+					"tui.dashboard.refresh",
+					{ surface: "dashboard", action: "refresh-live" },
+					"error",
+				);
+			});
+	};
 	// Reads are spaced by `REFRESH_MIN_INTERVAL_MS`: a streaming agent used to
 	// start the next read the moment the previous one finished, so a burst of
 	// workflow events turned into back-to-back reads of identical data.
 	const refreshThrottle = throttle(runRefresh, REFRESH_MIN_INTERVAL_MS);
+	const refreshLiveThrottle = throttle(runRefreshLive, REFRESH_MIN_INTERVAL_MS);
 	const refresh = (force = false) => {
+		// A full observation supersedes a queued view-only update.
+		refreshLiveThrottle.cancel();
 		// `force` is the safety resync's authoritative read; a push-event refresh
 		// must not force the review's file list past the cache.
 		refreshReviewFiles?.(force);
@@ -1956,6 +2011,16 @@ export function App(props: {
 			return;
 		}
 		refreshThrottle.trigger(force);
+	};
+	/** Apply the workflow view without reading telemetry, Git, evidence or
+	 * artifacts. Progress events use this; a drain boundary (settled/error), an
+	 * action, and the safety resync still use the full `refresh`. */
+	const refreshLive = () => {
+		if (props.profile === "test" || !gatewayOrUndefined()) {
+			refresh();
+			return;
+		}
+		refreshLiveThrottle.trigger();
 	};
 
 	// Review feature: plan/developer/wiki review state, drafts, and submission
@@ -2150,6 +2215,9 @@ export function App(props: {
 		const debounced = debounce(() => {
 			refresh();
 		}, 200);
+		const liveDebounced = debounce(() => {
+			refreshLive();
+		}, 200);
 		if (serverOwnsExecutionEvents()) {
 			// Attached: the server owns execution and publishes `workflow.updated`;
 			// the data layer applies each envelope to the cache.
@@ -2157,6 +2225,25 @@ export function App(props: {
 				onEvent: (event) => {
 					if (event.domain !== "workflow") return;
 					if (event.resource && event.resource !== props.repo) return;
+					// A progress event names the workflow whose effect committed. Every
+					// dashboard in the repository used to re-read for every other
+					// workflow's progress; only the affected one needs the update.
+					if (event.runId && event.runId !== props.workflowId) return;
+					const payload = event.payload;
+					const phase =
+						typeof payload === "object" &&
+						payload !== null &&
+						"phase" in payload
+							? (payload as { phase?: unknown }).phase
+							: undefined;
+					if (phase === "progress") {
+						// An effect commit changes the view, not the telemetry log or the
+						// worktree Git state. Overlay the view and leave the full read for a
+						// drain boundary or the safety resync.
+						liveDebounced.trigger();
+						return;
+					}
+					liveDebounced.cancel();
 					debounced.trigger();
 				},
 				onResync: () => refresh(true),
@@ -2166,6 +2253,7 @@ export function App(props: {
 			const disposeResync = startSafetyResync(refresh);
 			onCleanup(() => {
 				debounced.cancel();
+				liveDebounced.cancel();
 				dispose();
 				disposeResync();
 			});
@@ -2234,9 +2322,9 @@ export function App(props: {
 		const disposeExecutionProgress =
 			props.profile === "test" || !localSettle
 				? undefined
-				: onWorkflowExecutionProgress(props.repo, () => {
+				: onWorkflowExecutionProgress(props.repo, (workflowId) => {
 						if (props.active && !props.active()) return;
-						refresh();
+						if (workflowId === props.workflowId) refreshLive();
 					});
 		// The cheap first paint, so the hydrate below can wait for it (see the
 		// `refresh()` call at the end of this mount).
@@ -2292,6 +2380,8 @@ export function App(props: {
 			refreshDisposed = true;
 			agentSessionStopProjection();
 			refreshController?.abort();
+			liveController?.abort();
+			refreshLiveThrottle.cancel();
 			disposeExecutionError?.();
 			disposeExecutionProgress?.();
 			disposeExecutionSettled?.();

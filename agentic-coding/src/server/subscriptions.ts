@@ -22,12 +22,20 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 	const watched = new Set<string>();
 	const disposers: Array<() => void> = [];
 	let stopped = false;
-	const publish = (repo: string, workflowId?: string): void => {
+	/** `phase` tells the dashboard whether this is a live effect commit (apply a
+	 * view update) or a drain boundary (read the full observation). Other
+	 * consumers only read the domain/kind. */
+	const publish = (
+		repo: string,
+		workflowId: string | undefined,
+		phase: "progress" | "settled" | "error",
+	): void => {
 		events.publish({
 			domain: "workflow",
 			kind: "workflow.updated",
 			resource: repo,
 			...(workflowId ? { runId: workflowId } : {}),
+			payload: { phase },
 		});
 	};
 	return {
@@ -37,12 +45,14 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 			if (stopped || watched.has(repo)) return;
 			watched.add(repo);
 			disposers.push(
-				onWorkflowExecutionProgress(repo, () => publish(repo)),
+				onWorkflowExecutionProgress(repo, (workflowId) =>
+					publish(repo, workflowId, "progress"),
+				),
 				onWorkflowExecutionSettled(repo, (workflowId) =>
-					publish(repo, workflowId),
+					publish(repo, workflowId, "settled"),
 				),
 				onWorkflowExecutionError(repo, (workflowId) =>
-					publish(repo, workflowId),
+					publish(repo, workflowId, "error"),
 				),
 			);
 		},

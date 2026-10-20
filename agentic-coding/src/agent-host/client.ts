@@ -19,6 +19,7 @@ import {
 	type StatusResponse,
 	type SubmitResponse,
 } from "./protocol.ts";
+import { applyWatchPatch } from "./view-ops.ts";
 
 export class HostUnavailableError extends Error {}
 
@@ -290,6 +291,11 @@ export class HostClient {
 			/** What each frame must carry (`WatchRequest.view`): `docs` asks for
 			 * the live documents alone, which is all the activity badge reads. */
 			view?: "docs";
+			/** Ask the host for an initial snapshot and operation patches instead of
+			 * a full snapshot per change. The stream still hands `onFrame` a full
+			 * value: patches are applied to the cached snapshot here, so callers
+			 * keep the same shape. */
+			patches?: boolean;
 			/** Called once if the stream drops *after* it had started — the socket
 			 * closed or errored past the handshake. Not called when the caller stops
 			 * the watch itself. A single-shot watch swallowed a post-start close,
@@ -302,6 +308,10 @@ export class HostClient {
 			const socket = net.createConnection(this.socketPath);
 			const reader = new FrameReader();
 			let settled = false;
+			// The latest full value, kept only when the watcher asked for patches.
+			// Every patch is applied to this value before the caller sees it.
+			let current: unknown;
+			let hasCurrent = false;
 			// Once the watch has started the caller already holds `stop`, so a later
 			// drop must notify `onClose` rather than be swallowed; `done` guards both
 			// an intentional stop and a doubled close/error event.
@@ -338,6 +348,7 @@ export class HostClient {
 							? { conversationId: options.conversationId }
 							: {}),
 						...(options.view ? { view: options.view } : {}),
+						...(options.patches ? { patch: true } : {}),
 					}),
 				),
 			);
@@ -354,7 +365,22 @@ export class HostClient {
 						return;
 					}
 					if (value.type === "watchFrame" && value.runId === runId) {
-						onFrame(value.value);
+						if (value.patch !== undefined) {
+							// A patch before the first snapshot has nothing to advance; ignore it
+							// rather than resolving the handshake on an unusable value.
+							if (!hasCurrent) continue;
+							try {
+								current = applyWatchPatch(current, value.patch);
+							} catch (error) {
+								fail(error instanceof Error ? error : new Error(String(error)));
+								return;
+							}
+							onFrame(current);
+						} else {
+							current = value.value;
+							hasCurrent = true;
+							onFrame(current);
+						}
 						if (!settled) {
 							settled = true;
 							clearTimeout(timer);
@@ -395,6 +421,10 @@ export interface WatchStreamOptions {
 	readonly onState?: (state: WatchStreamState) => void;
 	/** What each frame must carry (`WatchRequest.view`). */
 	readonly view?: "docs";
+	/** Request incremental patches from the host (default true). The stream still
+	 * calls `onFrame` with a full value, so the shape a caller reads is
+	 * unchanged; an older host that ignores the request simply sends snapshots. */
+	readonly patches?: boolean;
 	/** First reconnect backoff, doubling up to `maxBackoffMs`. */
 	readonly backoffMs?: number;
 	readonly maxBackoffMs?: number;
@@ -439,6 +469,7 @@ export function watchStream(
 							? { conversationId: options.conversationId }
 							: {}),
 						...(options.view ? { view: options.view } : {}),
+						patches: options.patches ?? true,
 						onClose: () => {
 							dropped = true;
 							wake?.();

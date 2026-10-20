@@ -760,8 +760,13 @@ const isWorkflowMetadataPath = (path: string) =>
 /** The untracked-path walk is the expensive half of `git status`: a full tree
  * scan (~100 ms here) against ~10 ms for the tracked half, and it is the half a
  * viewer tolerates lagging. Only that half is cached; branch, ahead/behind and
- * tracked/staged/deleted state stay authoritative on every read. */
-const UNTRACKED_PATHS_TTL_MS = 3_000;
+ * tracked/staged/deleted state stay authoritative on every read.
+ *
+ * The dashboard re-reads about once a second while a run works. A 3 s window
+ * made nearly every other read pay the walk on the same event loop as the
+ * transcript; 15 s covers several progress reads and the 5 s safety resync
+ * while keeping the untracked list usefully live. */
+const UNTRACKED_PATHS_TTL_MS = 15_000;
 const untrackedPathsCache = new Map<string, { at: number; paths: string[] }>();
 /** One walk per worktree at a time: the dashboard's refresh and the review's
  * file list can ask for the same worktree before the first answer lands, and

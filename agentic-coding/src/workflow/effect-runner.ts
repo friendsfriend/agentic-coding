@@ -516,7 +516,7 @@ export class EffectRunner {
 		leaseMs: number,
 		signal?: AbortSignal,
 		onFailure?: (workflowId: string, message: string) => void,
-		onProgress?: () => void,
+		onProgress?: (workflowId: string) => void,
 	): Effect.Effect<number, never, never> {
 		const self = this;
 		return Effect.gen(function* () {
@@ -567,7 +567,7 @@ export class EffectRunner {
 				);
 				if (outcome._tag === "completed") {
 					completed++;
-					onProgress?.();
+					onProgress?.(effect.workflowId);
 				}
 			}
 			return completed;

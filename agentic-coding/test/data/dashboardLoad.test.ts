@@ -9,7 +9,10 @@ import type { DashboardGateway } from "../../src/contracts/gateway.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { loadArtifacts } from "../../src/tui/data/git.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
-import { loadDashboard } from "../../src/tui/data/workflow.ts";
+import {
+	loadDashboard,
+	mergeDashboardLive,
+} from "../../src/tui/data/workflow.ts";
 
 afterEach(() => clearGateway());
 
@@ -50,4 +53,62 @@ test("loadDashboard re-reads the gateway only when refresh is requested", async 
 	// A forced read bypasses the cached value and reaches the gateway again.
 	await loadDashboard("/repo", "wf-1", undefined, { refresh: true });
 	expect(observes).toBe(2);
+});
+
+test("a live view overlay keeps the heavy dashboard fields", () => {
+	const current = testDashboard();
+	current.state = {
+		...current.state,
+		revision: 7,
+		status: "working",
+		ticket: "T-1",
+		stage: "build",
+	};
+	current.request = "full request";
+	current.agents = [
+		{
+			role: "worker",
+			status: "working",
+			runId: "run-1",
+			cost: 12,
+			metrics: { inputTokens: 100, outputTokens: 20 },
+		},
+	];
+	current.events = [{ at: "2026-01-01T00:00:00Z", event: "measured" }];
+	current.health = { dirty: true, ahead: 2, behind: 0, branch: "main" };
+
+	const live = testDashboard();
+	live.state = {
+		...live.state,
+		revision: 8,
+		status: "blocked",
+	};
+	live.request = "live request";
+	live.agents = [
+		{ role: "worker", status: "blocked", runId: "run-1", model: "new-model" },
+	];
+	live.updated = "2026-01-01T00:01:00Z";
+	live.age = "1 minute";
+	live.events = [];
+	live.health = { dirty: false, ahead: 0, behind: 0, branch: "" };
+
+	const merged = mergeDashboardLive(current, live);
+	expect(merged.state.revision).toBe(8);
+	expect(merged.state.status).toBe("blocked");
+	// The live view does not carry the plan-stage fields; the full state does.
+	expect(merged.state.ticket).toBe("T-1");
+	expect(merged.state.stage).toBe("build");
+	expect(merged.request).toBe("live request");
+	expect(merged.agents[0]).toMatchObject({
+		runId: "run-1",
+		status: "blocked",
+		model: "new-model",
+		// Usage belongs to the full observation; the view read must not erase it.
+		cost: 12,
+		metrics: { inputTokens: 100, outputTokens: 20 },
+	});
+	expect(merged.events).toBe(current.events);
+	expect(merged.health).toBe(current.health);
+	expect(merged.updated).toBe("2026-01-01T00:01:00Z");
+	expect(merged.age).toBe("1 minute");
 });
