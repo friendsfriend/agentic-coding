@@ -1188,11 +1188,17 @@ export function extractTables(options: ExtractOptions): ExtractResult {
 					? null
 					: Number(event.compactionBlocking),
 			detail: (() => {
+				// The detail column means "the bounded reason this event states",
+				// which is what the repair and reconciliation queries read it as. A
+				// post-decision checkpoint envelope carries both a rule and the stage
+				// that failed, and the failing stage already has its own column
+				// (`error_class`); preferring it here would hide the rule the row is
+				// grouped by.
 				const text = str(
 					event.repairReason ??
+						event.reasonCode ??
 						event.errorClass ??
 						event.handoffReason ??
-						event.reasonCode ??
 						event.waitSubject ??
 						null,
 				);

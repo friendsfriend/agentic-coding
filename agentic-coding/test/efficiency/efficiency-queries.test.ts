@@ -1775,4 +1775,78 @@ describe("run-progress checkpoint queries", () => {
 			copy.cleanup();
 		}
 	});
+
+	test("progress-checkpoints reads an unrecorded tool outcome as progress and a failure as none", () => {
+		const query = queryByName("progress-checkpoints");
+		expect(query).toBeDefined();
+		const copy = emptyCopy();
+		if (!copy) throw new Error("no copy");
+		try {
+			insertRun(copy.db, { runId: "unknown-ok", role: "worker", turns: 300 });
+			insertRun(copy.db, { runId: "failed-ok", role: "worker", turns: 300 });
+			for (const runId of ["unknown-ok", "failed-ok"])
+				insertCheckpoint(copy.db, {
+					runId,
+					at: "2026-02-01T00:00:00.000Z",
+					decision: "steer",
+					rule: "repeats",
+				});
+			// One rule that always fails open: its decisions are still counted, and
+			// the class's errored runs are what tell the two apart.
+			insertCheckpoint(copy.db, {
+				runId: "failed-ok",
+				at: "2026-02-01T00:00:00.000Z",
+				decision: "compact",
+				rule: "context",
+				errored: true,
+			});
+			// An older envelope generation writes no `pi.tool.ok` at all, and the
+			// replay reads that as unknown rather than failed; a recorded failure is
+			// an explicit 0.
+			copy.db
+				.query(
+					`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, call_id, dedupe_key, tool, started_at, recording, confidence, preferred)
+					 VALUES ('unknown-ok', 'unknown-ok', 'wf-checkpoint', 'test', 1, 'c1', 'c1', 'write', '2026-02-01T00:01:00.000Z', 'exact', 'exact', 1)`,
+				)
+				.run();
+			copy.db
+				.query(
+					`INSERT INTO tool_calls (run_id, run_label, workflow_id, source, source_rank, call_id, dedupe_key, tool, started_at, ok, recording, confidence, preferred)
+					 VALUES ('failed-ok', 'failed-ok', 'wf-checkpoint', 'test', 1, 'c2', 'c2', 'write', '2026-02-01T00:01:00.000Z', 0, 'exact', 'exact', 1)`,
+				)
+				.run();
+			const rows = copy.db
+				.query<
+					{
+						decision: string;
+						rule: string;
+						runs: number;
+						evaluated_runs: number;
+						errored_runs: number;
+						errored: number;
+						steers: number;
+						steers_with_progress: number;
+					},
+					[]
+				>(`${query?.sql}`)
+				.all();
+			const unknown = rows.find(
+				(row) => row.rule === "repeats" && row.runs === 2,
+			);
+			// Two runs steered under `repeats`: only the one whose write had no
+			// recorded outcome counts as followed.
+			expect(unknown?.steers).toBe(2);
+			expect(unknown?.steers_with_progress).toBe(1);
+			const compact = rows.find((row) => row.decision === "compact");
+			expect(compact).toMatchObject({
+				rule: "context",
+				errored: 1,
+				errored_runs: 1,
+				evaluated_runs: 2,
+			});
+		} finally {
+			copy.db.close();
+			copy.cleanup();
+		}
+	});
 });

@@ -2067,7 +2067,7 @@ ORDER BY s.turns DESC, s.cost DESC`,
 	{
 		name: "progress-checkpoints",
 		summary:
-			"Checkpoint decisions by class, decision and rule, with the runs evaluated, escalations per 100 evaluated runs and how many steers were followed by an edit or write whose outcome was not recorded as a failure. The effect measure: a decision nobody records is invisible here, and a dataset built before the escalation branch was normalised reports zero escalations — rebuild it with build-dataset.ts before reading that column.",
+			"Checkpoint decisions by class, decision and rule, with the runs evaluated, escalations per 100 evaluated runs and how many steers were followed by an edit or write whose outcome was not recorded as a failure. `errored` counts the decisions whose envelope carried an `error_class` — a rule that always fails open shows up there rather than as a healthy row — and `errored_runs` counts the runs of the class that took at least one failed checkpoint. The effect measure: a decision nobody records is invisible here, and a dataset built before the escalation branch was normalised reports zero escalations — rebuild it with build-dataset.ts before reading that column.",
 		example:
 			"bun run scripts/efficiency/analyze.ts progress-checkpoints --dataset ~/ev/dataset-2026",
 		columns: [
@@ -2077,9 +2077,11 @@ ORDER BY s.turns DESC, s.cost DESC`,
 			"checkpoints",
 			"runs",
 			"evaluated_runs",
+			"errored_runs",
 			"escalations",
 			"escalations_per_100_runs",
 			"filing_failures",
+			"errored",
 			"steers",
 			"steers_with_progress",
 		],
@@ -2140,9 +2142,11 @@ SELECT
 	COUNT(*) AS checkpoints,
 	COUNT(DISTINCT cp.run_id) AS runs,
 	rs.evaluated_runs AS evaluated_runs,
+	COALESCE(rs.errored_runs, 0) AS errored_runs,
 	COALESCE(re.escalations, 0) AS escalations,
 	ROUND(100.0 * COALESCE(re.escalations, 0) / NULLIF(rs.evaluated_runs, 0), 2) AS escalations_per_100_runs,
 	COALESCE(re.filing_failures, 0) AS filing_failures,
+	SUM(CASE WHEN cp.ok = 0 THEN 1 ELSE 0 END) AS errored,
 	SUM(CASE WHEN cp.decision = 'steer' THEN 1 ELSE 0 END) AS steers,
 	SUM(CASE WHEN cp.decision = 'steer' AND cp.progressed_after = 1 THEN 1 ELSE 0 END) AS steers_with_progress
 FROM checkpoint cp

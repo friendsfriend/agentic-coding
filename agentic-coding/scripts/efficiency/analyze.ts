@@ -82,19 +82,22 @@ function main(argv: readonly string[]): number {
 	try {
 		assertDatasetSchemaVersion(db, datasetPath);
 		const rows = db.query<Record<string, unknown>, []>(sql).all();
+		// The build date is the only signal that an older file's zeros may be "not
+		// recorded yet" rather than measurements: the schema version changes only
+		// with the file's shape. Both output modes state it — the JSON on stderr, so
+		// stdout stays byte-identical for the parsers that read it.
+		const meta = datasetMeta(db);
+		const provenance = `dataset ${path.basename(
+			path.dirname(datasetPath),
+		)} built ${meta.builtAt ?? "(unknown)"} (schema ${
+			meta.schemaVersion ?? "unknown"
+		})\n`;
 		if (args.flags.has("json")) {
+			process.stderr.write(provenance);
 			process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
 			return 0;
 		}
-		// The build date is the only signal that an older file's zeros may be "not
-		// recorded yet" rather than measurements: the schema version changes only
-		// with the file's shape.
-		const meta = datasetMeta(db);
-		process.stdout.write(
-			`dataset ${path.basename(path.dirname(datasetPath))} built ${
-				meta.builtAt ?? "(unknown)"
-			} (schema ${meta.schemaVersion ?? "unknown"})\n`,
-		);
+		process.stdout.write(provenance);
 		const columns = query.columns.filter(
 			(column) => rows.length === 0 || column in (rows[0] ?? {}),
 		);

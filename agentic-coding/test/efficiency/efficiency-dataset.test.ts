@@ -323,6 +323,41 @@ describe("events and redaction", () => {
 		expect(row?.detail).toBe(row?.error_class);
 	});
 
+	test("keeps an errored checkpoint's rule and its error class apart", () => {
+		// A post-decision checkpoint envelope carries both the rule it decided under
+		// and the stage that failed. The rule is what `progress-checkpoints` groups
+		// by, so the bounded `detail` column has to keep it; the error class has its
+		// own column and is read by `checkpoint-gaps`.
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "efficiency-checkpoint-extract-"),
+		);
+		try {
+			const dir = path.join(root, "backend", "telemetry");
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(
+				path.join(dir, "wf-checkpoint.jsonl"),
+				`${JSON.stringify({
+					event: "runtime.checkpoint",
+					runId: "run-errored",
+					workflowId: "wf-checkpoint",
+					at: "2026-02-01T00:00:00.000Z",
+					"herdr.checkpoint.rule": "context",
+					"herdr.checkpoint.decision": "compact",
+					"herdr.checkpoint.status": "error",
+					"herdr.checkpoint.error_class": "compact",
+				})}\n`,
+			);
+			const { tables } = extractTables({ evidenceDir: root });
+			const row = tables.events.find(
+				(event) => event.event === "runtime.checkpoint",
+			);
+			expect(row?.detail).toBe("context");
+			expect(row?.error_class).toBe("compact");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("stores a verifier finding's severity but only a digest of its body", () => {
 		const row = query<{
 			severity: string;
