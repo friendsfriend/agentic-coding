@@ -477,6 +477,7 @@ describe("the stage step journal over the browser routes", () => {
 		usageOf(deps).settleRecording({
 			stage: "grid-flow",
 			owner: OWNER,
+			session: "default",
 			keptMs: 30_000,
 		});
 		const started = await call(deps, AGENT_BROWSER_RECORD_PATH, {
@@ -493,6 +494,7 @@ describe("the stage step journal over the browser routes", () => {
 		usageOf(spent).settleRecording({
 			stage: "grid-flow",
 			owner: OWNER,
+			session: "default",
 			keptMs: 60_000,
 		});
 		const refused = await call(spent, AGENT_BROWSER_RECORD_PATH, {
@@ -596,8 +598,104 @@ describe("the stage wait over the browser routes", () => {
 		await deps.pool.closeAll();
 	});
 
+	test("a selector condition answers met when the page grows the element", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		// The fake driver answers a `document` expression with the page URL, which is
+		// never `true`: a met selector has to be decided by the page, so the session's
+		// own evaluate is what the test drives.
+		const evaluate = spyOn(sessionOf(deps), "evaluate").mockResolvedValue(true);
+		const waited = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { selector: "[data-testid='order-total']" },
+		});
+		expect(waited.status).toBe(200);
+		expect(waited.value.met).toBe(true);
+		// The answer always names the bound explicitly, so a caller never has to read
+		// `!met` as a failure of the session.
+		expect(waited.value.timeout).toBe(false);
+		expect(waited.value.notice).toBeUndefined();
+		// The selector reaches the page quoted and as one element query: an
+		// interpolation bug would poll a selector nobody declared.
+		const expression = String(evaluate.mock.calls[0]?.[0] ?? "");
+		expect(expression).toContain(
+			`document.querySelector("[data-testid='order-total']")`,
+		);
+
+		// The same condition, not (yet) true: the wait answers unmet at its bound.
+		evaluate.mockResolvedValue(false);
+		const unmet = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { selector: "[data-testid='order-total']" },
+			timeoutSeconds: 1,
+			intervalSeconds: 30,
+		});
+		expect(unmet.status).toBe(200);
+		expect(unmet.value.met).toBe(false);
+		expect(unmet.value.timeout).toBe(true);
+		await deps.pool.closeAll();
+	});
+
+	test("a text condition answers met when the page grows the text, and unmet while not", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		const evaluate = spyOn(sessionOf(deps), "evaluate").mockResolvedValue(true);
+		const waited = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { text: "the payment cleared" },
+		});
+		expect(waited.value.met).toBe(true);
+		const expression = String(evaluate.mock.calls[0]?.[0] ?? "");
+		expect(expression).toContain(".innerText");
+		expect(expression).toContain('.includes("the payment cleared")');
+
+		// A page that throws instead of answering is a condition that does not hold,
+		// not a failed wait: the `catch` around the evaluate is what says so.
+		evaluate.mockRejectedValue(new Error("execution context was destroyed"));
+		const thrown = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { text: "the payment cleared" },
+			timeoutSeconds: 1,
+			intervalSeconds: 30,
+		});
+		expect(thrown.status).toBe(200);
+		expect(thrown.value.met).toBe(false);
+		await deps.pool.closeAll();
+	});
+
+	test("`reload: true` re-opens the page between polls, and its absence does not", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		const session = sessionOf(deps);
+		// Never met: every poll asks the page again, so the reload has to happen
+		// between the first and the second.
+		spyOn(session, "evaluate").mockResolvedValue(false);
+		const goto = spyOn(session, "goto");
+		// One poll interval: the wait answers unmet at its bound only after asking
+		// the page a second time, and the reload is what stands between the two.
+		const reloaded = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { text: "the receipt" },
+			timeoutSeconds: 6,
+			intervalSeconds: 5,
+			reload: true,
+		});
+		expect(reloaded.status).toBe(200);
+		expect(reloaded.value.met).toBe(false);
+		expect(goto.mock.calls.length).toBeGreaterThan(0);
+		expect(String(goto.mock.calls[0]?.[0])).toBe(APP_URL);
+		goto.mockClear();
+
+		// Meeting on the first poll reloads nothing: there is no second page to load.
+		spyOn(session, "evaluate").mockResolvedValue(true);
+		const met = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
+			until: { text: "the receipt" },
+			reload: true,
+		});
+		expect(met.value.met).toBe(true);
+		expect(goto.mock.calls.length).toBe(0);
+		await deps.pool.closeAll();
+		// The poll floor is five real seconds, so crossing it once is this test's cost.
+	}, 20_000);
+
 	test("a mail wait reads the stage's mail catcher and answers when the mail lands", async () => {
 		const seen: string[] = [];
+		const queries: string[] = [];
 		const server = Bun.serve({
 			port: 0,
 			fetch: (request) => {
@@ -606,7 +704,13 @@ describe("the stage wait over the browser routes", () => {
 				if (url.pathname !== "/api/v1/search")
 					return new Response("not found", { status: 404 });
 				const query = url.searchParams.get("query") ?? "";
-				const matches = query.includes("to:clerk@grid.example.test");
+				queries.push(query);
+				// Both terms have to survive, and a spaced subject has to keep its
+				// quoting: a wait that lost one of them would match the wrong mail.
+				const matches =
+					query.includes("to:clerk@grid.example.test") &&
+					(!query.includes("subject:") ||
+						query.includes('subject:"Your sign-in code"'));
 				return Response.json({
 					total: matches ? 1 : 0,
 					messages: matches ? [{ ID: "m1", Subject: "Your sign-in code" }] : [],
@@ -634,13 +738,18 @@ describe("the stage wait over the browser routes", () => {
 			expect(mailbox.status).toBe(200);
 			const waited = await call(deps, AGENT_BROWSER_STAGE_WAIT_PATH, {
 				session: "mailbox",
-				until: { mail: { to: "clerk@grid.example.test", subject: "sign-in" } },
+				until: {
+					mail: { to: "clerk@grid.example.test", subject: "Your sign-in code" },
+				},
 			});
 			expect(waited.status).toBe(200);
 			expect(waited.value.met).toBe(true);
 			expect(seen).toContain("/api/v1/search");
-			// The search is Mailpit's own syntax, one field prefix per term.
-			expect(seen.length).toBeGreaterThan(0);
+			// The search is Mailpit's own syntax: one field prefix per term, and a
+			// subject with spaces quoted so it stays a single term.
+			expect(queries[0]).toBe(
+				'to:clerk@grid.example.test subject:"Your sign-in code"',
+			);
 			await deps.pool.closeAll();
 
 			// A stage app that names a configured ident is the same application: the
@@ -733,6 +842,41 @@ describe("screenshot context control and its limit", () => {
 		expect(refused.status).toBe(400);
 		expect(refused.value.code).toBe("view-requires-evidence");
 		expect(listEvidence(scopeOf(deps)).entries).toEqual([]);
+		await deps.pool.closeAll();
+	});
+
+	test("a stored screenshot re-renders the flow page, and a viewed one does not", async () => {
+		const deps = build(configRoot(), createFakeDriver());
+		await openStage(deps);
+		await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, {
+			label: "the cart loaded",
+		});
+		const page = path.join(scopeOf(deps).root, STAGE_FLOW_FILE);
+		expect(fs.readFileSync(page, "utf8")).toContain("the cart loaded");
+		// A page left stale by a hand edit stands in for any render that has to follow
+		// a new file: what is asserted is that the page was written again, which a
+		// byte-identical rewrite would not show.
+		fs.writeFileSync(page, "stale");
+		const viewed = await call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {});
+		expect(viewed.status).toBe(200);
+		expect(fs.readFileSync(page, "utf8")).toBe("stale");
+		const kept = await call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+			evidence: true,
+			view: false,
+			caption: "the empty cart",
+		});
+		expect(kept.status).toBe(200);
+		expect(fs.readFileSync(page, "utf8")).toContain("the cart loaded");
+
+		// A step that names the screenshot shows its caption on the page, so the file
+		// the flow points at is the one the panel counts.
+		const id = String((kept.value.evidence as Record<string, unknown>).id);
+		const step = await call(deps, AGENT_BROWSER_STAGE_STEP_PATH, {
+			label: "the cart is empty",
+			evidence: [id],
+		});
+		expect(step.status).toBe(200);
+		expect(fs.readFileSync(page, "utf8")).toContain("the empty cart");
 		await deps.pool.closeAll();
 	});
 
@@ -946,6 +1090,67 @@ describe("the stage's recording and screenshot budgets under concurrency", () =>
 		await deps.pool.closeAll();
 	});
 
+	test("a second start on a recording session is refused as active, not as a spent budget", async () => {
+		const deps = build(
+			configRoot(),
+			createFakeDriver({ video: WEBM, screenshot: JPEG }),
+		);
+		await openStage(deps);
+		expect(
+			(await call(deps, AGENT_BROWSER_RECORD_PATH, { action: "start" })).status,
+		).toBe(200);
+		// This session already has a segment: the answer names that, rather than the
+		// budget its own live grant has (correctly) already spent — and the grant
+		// stays exactly as it was, so the segment can still be kept for its minute.
+		const again = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+		});
+		expect(again.status).toBe(409);
+		expect(again.value.code).toBe("recording-active");
+		expect(sessionOf(deps).recording?.maxMs).toBe(60_000);
+		expect(
+			(
+				await call(deps, AGENT_BROWSER_RECORD_PATH, {
+					action: "stop",
+					keep: true,
+					caption: "checkout flow",
+				})
+			).status,
+		).toBe(200);
+		await deps.pool.closeAll();
+	});
+
+	test("a refused start leaves another session's grant where it was", async () => {
+		const deps = build(
+			configRoot(),
+			createFakeDriver({ video: WEBM, screenshot: JPEG }),
+		);
+		await openStage(deps);
+		await call(deps, AGENT_BROWSER_RECORD_PATH, { action: "start" });
+		await call(deps, AGENT_BROWSER_OPEN_PATH, {
+			stage: "grid-flow",
+			stageApp: "web",
+			session: "second",
+			path: "/two",
+		});
+		// The budget is fully granted to the first session, so this start is refused
+		// before it reserves anything — and a refusal that settled "a grant" rather
+		// than *its own* would release the live one, letting the retry through.
+		const refused = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+			session: "second",
+		});
+		expect(refused.status).toBe(409);
+		expect(refused.value.code).toBe("stage-recording-limit");
+		const retried = await call(deps, AGENT_BROWSER_RECORD_PATH, {
+			action: "start",
+			session: "second",
+		});
+		expect(retried.status).toBe(409);
+		expect(sessionOf(deps).recording?.maxMs).toBe(60_000);
+		await deps.pool.closeAll();
+	});
+
 	test("a capture that fails spends nothing of the screenshot bound", async () => {
 		const deps = build(configRoot(), createFakeDriver());
 		await openStage(deps);
@@ -971,6 +1176,46 @@ describe("the stage's recording and screenshot budgets under concurrency", () =>
 			view: false,
 		});
 		expect(refused.value.code).toBe("stage-screenshot-limit");
+		await deps.pool.closeAll();
+	});
+
+	test("two overlapping screenshots cannot both pass the bound", async () => {
+		const deps = build(configRoot(), createFakeDriver({ screenshot: JPEG }));
+		await openStage(deps);
+		// One of the stage's two screenshots is already reserved, so exactly one of
+		// the two calls below can be stored. Reserving before the capture and
+		// charging after it would let both pass the bound inside their capture and
+		// answer one of them a refusal for a file it had stored.
+		usageOf(deps).reserveScreenshot({
+			stage: "grid-flow",
+			owner: OWNER,
+			maxScreenshots: 2,
+		});
+		const [first, second] = await Promise.all([
+			call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+				evidence: true,
+				view: false,
+				caption: "the cart",
+			}),
+			call(deps, AGENT_BROWSER_SCREENSHOT_PATH, {
+				evidence: true,
+				view: false,
+				caption: "the cart again",
+			}),
+		]);
+		const stored = [first, second].filter((each) => each.status === 200);
+		const refused = [first, second].filter((each) => each.status === 409);
+		expect(stored).toHaveLength(1);
+		expect(refused).toHaveLength(1);
+		expect(refused[0]?.value.code).toBe("stage-screenshot-limit");
+		// Exactly the two the bound allows are on disk: the refusal left no
+		// reservation behind, and the stored one is the entry its answer names.
+		const entries = listEvidence(scopeOf(deps)).entries;
+		expect(entries).toHaveLength(1);
+		const answered = stored[0]?.value.evidence as
+			| Record<string, unknown>
+			| undefined;
+		expect(answered?.id).toBe(entries[0]?.id);
 		await deps.pool.closeAll();
 	});
 

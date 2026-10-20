@@ -15,7 +15,7 @@ import {
 	createDashboardKeyHandler,
 	type DashboardKeyContext,
 } from "../../src/tui/dash/handlers/keys.ts";
-import { EVIDENCE_PANEL } from "../../src/tui/dash/panel-grid.ts";
+import { AGENTS_PANEL, EVIDENCE_PANEL } from "../../src/tui/dash/panel-grid.ts";
 
 function entry(id: string, caption: string): EvidenceEntry {
 	return {
@@ -38,7 +38,10 @@ function keyEvent(name: string, shift = false): KeyEvent {
 	return { name, shift, ctrl: false, meta: false } as unknown as KeyEvent;
 }
 
-function harness(rows: ReturnType<typeof evidenceRows>) {
+function harness(
+	rows: ReturnType<typeof evidenceRows>,
+	activePanel: number = EVIDENCE_PANEL,
+) {
 	const opened: EvidenceEntry[] = [];
 	const copied: EvidenceEntry[] = [];
 	const moved: number[] = [];
@@ -51,7 +54,7 @@ function harness(rows: ReturnType<typeof evidenceRows>) {
 		keymap,
 		renderer: { getSelection: () => null, destroy: () => {} },
 		busy: () => false,
-		activePanel: () => EVIDENCE_PANEL,
+		activePanel: () => activePanel,
 		setActivePanel: () => {},
 		refresh: () => {},
 		selectedAgent: () => 0,
@@ -159,7 +162,58 @@ describe("the Evidence panel's keys", () => {
 		expect(opened).toEqual([]);
 		await handle(keyEvent("y"));
 		expect(copied).toEqual([]);
-		expect(notified[0]).toContain("no file of its own");
+		// The message holds for a step in a kept segment *and* for one that has none:
+		// it names what always exists (the flow page) instead of "the segment's rows",
+		// which two of the three groupings do not show.
+		expect(notified[0]).toContain("names no file");
+		expect(notified[0]).toContain("press f");
+	});
+
+	test("y on a step without a segment says the same thing", async () => {
+		const journal: StageJournal = {
+			workflowId: "wf-flow",
+			entries: [
+				{
+					seq: 1,
+					at: "2026-01-01T12:00:00.000Z",
+					session: "default",
+					label: "before recording",
+				},
+				{
+					seq: 2,
+					at: "2026-01-01T12:01:00.000Z",
+					session: "default",
+					label: "inside a segment",
+					segment: 1,
+					offsetMs: 1_000,
+				},
+			],
+			flowPage: "stage-flow.html",
+		};
+		const rows = evidenceRows([], journal);
+		expect(rows.every((row) => row.step !== undefined)).toBe(true);
+		for (const index of [0, 1]) {
+			const { handle, copied, notified } = harness(rows);
+			for (let step = 0; step < index; step += 1) await handle(keyEvent("j"));
+			await handle(keyEvent("y"));
+			expect(copied).toEqual([]);
+			expect(notified[0]).toContain("names no file");
+		}
+	});
+
+	test("f opens the flow page from the Evidence panel only", async () => {
+		const rows = evidenceRows(MANIFEST);
+		// With a row selected, an evidence row selected, whatever: `f` is the panel's
+		// own action and never a file's.
+		const { handle, flowOpened, opened } = harness(rows);
+		await handle(keyEvent("f"));
+		expect(flowOpened()).toBe(1);
+		expect(opened).toEqual([]);
+		// The same key on another panel is not the Evidence panel's, so it opens no
+		// page — the binding is bound only while this panel is focused.
+		const elsewhere = harness(rows, AGENTS_PANEL);
+		await elsewhere.handle(keyEvent("f"));
+		expect(elsewhere.flowOpened()).toBe(0);
 	});
 
 	test("j and k move the selection within the rows and stop at both ends", async () => {

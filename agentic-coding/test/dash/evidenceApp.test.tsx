@@ -17,6 +17,10 @@ import type {
 	DashboardGateway,
 	GatewayEventHandlers,
 } from "../../src/contracts/gateway.ts";
+import type {
+	StageJournal,
+	StageJournalEntry,
+} from "../../src/contracts/stages.ts";
 import type { DashboardData } from "../../src/contracts/workflow.ts";
 import { App } from "../../src/tui/dash/App.tsx";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
@@ -84,6 +88,8 @@ function fakeGateway(
 		readonly file?: FileAnswer;
 		/** The dashboard the panels render, when a test needs its own rows. */
 		readonly dashboard?: DashboardData;
+		/** The stage step journal the route reads, when a test paints flow rows. */
+		readonly journal?: StageJournal;
 	} = {},
 ): FakeGateway {
 	const files: string[] = [];
@@ -95,6 +101,8 @@ function fakeGateway(
 		observe: async (observation: ObservationRequest) => {
 			if (observation.kind === "dashboard")
 				return options.dashboard ?? testDashboard();
+			if (observation.kind === "stage-journal" && options.journal !== undefined)
+				return options.journal;
 			if (observation.kind === "evidence") {
 				observes.push(observes.length + 1);
 				const answer = typeof evidence === "function" ? evidence() : evidence;
@@ -281,6 +289,62 @@ test("the workflow's evidence reaches the panel and its bytes are read only unde
 	t.renderer.destroy();
 	await loadEvidenceFile("/demo", "demo", LATER.id);
 	expect(fake.files).toEqual([LATER.id, EARLIER.id, LATER.id, LATER.id]);
+}, 20000);
+
+test("a refresh keeps the selection on a stage flow step row", async () => {
+	// Two steps in two segments, and one manifest entry. The rows the panel paints
+	// are the two steps and that one entry: a clamp that counted the manifest's
+	// entries would bound the selection at 0, so a developer parked on the second
+	// step would be thrown back to the first on every refresh.
+	const step = (
+		seq: number,
+		segment: number,
+		label: string,
+		expected: string,
+	): StageJournalEntry => ({
+		seq,
+		at: "2026-01-01T12:04:05.000Z",
+		session: "default",
+		label,
+		segment,
+		offsetMs: seq * 1_000,
+		expected,
+	});
+	const journal: StageJournal = {
+		workflowId: "demo",
+		entries: [
+			step(1, 1, "open the cart", "empty cart"),
+			step(2, 2, "checkout", "total 0.00"),
+		],
+		flowPage: "stage-flow.html",
+	};
+	const fake = fakeGateway({ ...MANIFEST, entries: [LATER] }, { journal });
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await t.waitForFrame((frame) => frame.includes("open the cart"));
+
+	// Focus the Evidence panel and move one row down, onto the second step: its
+	// detail only paints while that row is the selected one.
+	t.mockInput.pressKey("k", { shift: true });
+	await t.renderOnce();
+	t.mockInput.pressKey("j");
+	await t.renderOnce();
+	expect(
+		await t.waitForFrame((frame) => frame.includes("total 0.00")),
+	).toBeTruthy();
+
+	// A workflow event refreshes the dashboard — the route throttles refreshes to
+	// one per second, so the refreshed listing is awaited rather than inspected on
+	// the next frame — and the selection stays where the developer left it.
+	await publishEvent(t, fake);
+	await waitFor(t, () => false, 60);
+	const after = await t.waitForFrame(() => true);
+	expect(after).toContain("total 0.00");
+	t.renderer.destroy();
 }, 20000);
 
 test("a failed manifest read is reported once per distinct failure, and not as an empty listing", async () => {

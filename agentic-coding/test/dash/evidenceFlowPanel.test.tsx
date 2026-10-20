@@ -150,6 +150,27 @@ test("a step's detail lines say where it ran and what it saw", () => {
 	// A step that never ran inside a recording says so rather than showing a
 	// zero offset it does not have.
 	expect(evidenceStepDetailLines(WITHOUT_SEGMENT)).toEqual(["step"]);
+	// A step that named the knowledge it acted on says which entry it was, with the
+	// section when the developer named one: a flow is read to learn where a
+	// concept is documented, so the concept alone is not enough.
+	expect(
+		evidenceStepDetailLines({
+			...WITHOUT_SEGMENT,
+			knowledge: { kind: "confirmed", concept: "checkout-spec" },
+		}),
+	).toEqual(["step", "knowledge confirmed checkout-spec"]);
+	expect(
+		evidenceStepDetailLines({
+			...FIRST,
+			knowledge: { kind: "new", concept: "payments", section: "Refunds" },
+		}),
+	).toEqual([
+		"00:02 · web / clerk",
+		"https://grid.example.test/cart",
+		"expected cart is empty",
+		"observed cart is empty",
+		"knowledge new payments § Refunds",
+	]);
 });
 
 test("a workflow without a journal keeps the debug-request grouping", () => {

@@ -188,6 +188,59 @@ describe("stage step journal", () => {
 		expect(readStageJournal(scope)).toHaveLength(1);
 	});
 
+	test("two workflows of one worktree never read each other's journal", async () => {
+		const { worktree } = fixture();
+		const first = workflowEvidenceScope({ workflowId: "wf-a", worktree });
+		const second = workflowEvidenceScope({ workflowId: "wf-b", worktree });
+		await appendStageJournalEntry(first, { label: "step aaa" });
+		await appendStageJournalEntry(second, { label: "step bbb" });
+		// The cached file is identified by what it is — one workflow's journal — and
+		// not by the directory the two share: with equal sizes and mtimes a
+		// directory-keyed cache cannot tell the two files apart at all.
+		const one = path.join(first.root, STAGE_JOURNAL_FILE);
+		const other = path.join(second.root, STAGE_JOURNAL_FILE);
+		expect(fs.statSync(one).size).toBe(fs.statSync(other).size);
+		const stamp = new Date(1_700_000_000_000);
+		fs.utimesSync(one, stamp, stamp);
+		fs.utimesSync(other, stamp, stamp);
+		expect(readStageJournal(first).map((entry) => entry.label)).toEqual([
+			"step aaa",
+		]);
+		expect(readStageJournal(second).map((entry) => entry.label)).toEqual([
+			"step bbb",
+		]);
+		expect(readStageJournal(first).map((entry) => entry.label)).toEqual([
+			"step aaa",
+		]);
+	});
+
+	test("a rewrite that would push the journal past its cap changes nothing", async () => {
+		const { scope } = fixture();
+		// One step that fills the file to within a few dozen bytes of its cap, so
+		// naming a video on it cannot fit: the entry's own envelope leaves less room
+		// than the `video` field needs.
+		await appendStageJournalEntry(scope, {
+			label: "x".repeat(EVIDENCE_FILE_MAX_BYTES - 100),
+			segment: 1,
+		});
+		const file = path.join(scope.root, STAGE_JOURNAL_FILE);
+		expect(EVIDENCE_FILE_MAX_BYTES - fs.statSync(file).size).toBeLessThan(38);
+		const before = fs.readFileSync(file);
+		// Naming the kept video on that step grows the line past the file cap: the
+		// rewrite is refused as a whole rather than leaving a truncated journal that
+		// no reader can parse.
+		expect(
+			await backfillStageJournalVideo(scope, {
+				segment: 1,
+				video: "01J0VIDEO0000000000000000AB",
+			}),
+		).toBe(0);
+		expect(fs.readFileSync(file).equals(before)).toBe(true);
+		const [entry] = readStageJournal(scope);
+		expect(entry?.label.startsWith("xxx")).toBe(true);
+		expect(entry?.video).toBeUndefined();
+	});
+
 	test("a read answers the latest steps, bounded and optionally narrowed", async () => {
 		const { scope } = fixture();
 		for (let index = 1; index <= 3; index += 1)
