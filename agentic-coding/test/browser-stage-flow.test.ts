@@ -323,6 +323,9 @@ describe("stage-test browser restrictions", () => {
 			});
 			expect(unapprovedRoute.status).toBe(403);
 			expect(unapprovedRoute.value.code).toBe("stage-route-not-approved");
+			expect(String(unapprovedRoute.value.message)).toContain(
+				'the plan routes "web" as nothing',
+			);
 		} finally {
 			await fixture.pool.closeAll();
 		}

@@ -1140,7 +1140,21 @@ function assertStageTestRoute(
 	)
 		throw new BrowserPoolError(
 			"stage-route-not-approved",
-			"stage application and role must match the approved test plan",
+			`stage application and role must match the approved test plan; the plan routes ${JSON.stringify(app)} as ${
+				[
+					...new Set(
+						(plan?.route ?? [])
+							.filter((route) => route.application === app)
+							.map((route) => route.role ?? "(no role)"),
+					),
+				]
+					.map((planned) =>
+						planned === "(no role)"
+							? "no role (omit stageRole)"
+							: `stageRole ${JSON.stringify(planned)}`,
+					)
+					.join(" or ") || "nothing (the application is not in the plan)"
+			}`,
 			403,
 		);
 }
