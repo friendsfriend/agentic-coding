@@ -599,6 +599,71 @@ a production-like name is refused by the catalog, and only the operator's own
   **recording**: video is bytes, not text, so a credential fill is refused while
   a session is recording (`recording-active`), and the same refusal guards
   `stage_login`.
+- **A flow test narrates itself in a journal, and the server owns the facts.**
+  `stage_step({ session, label, expected?, observed?, captures?, evidence?,
+  knowledge? })` appends one entry to the workflow's `stage-journal.jsonl` beside
+  its evidence manifest. The sequence number, the time, the session, the session's
+  stage application and role, the current URL and — while a recording runs — the
+  segment and offset are all derived by the server; the agent supplies only its
+  own text. Every written value passes the same redactor and URL sanitizer a
+  browser reply does, before the bytes land, so a step's label or capture can
+  never smuggle a credential into a file that outlives the call. An `evidence`
+  id that the manifest does not hold is refused (`evidence-missing`, 404) with
+  the journal untouched, and the file is capped at the evidence per-file limit
+  (`stage-journal-full`, 409) rather than grown or silently truncated.
+  `stage_journal({ session?, app?, limit? })` reads the latest entries back,
+  bounded, which is what a compacted run reads instead of its own history. A step
+  is not an action *of the stage*: `stage_journal` charges no stage action, while
+  `stage_step` is one browser call like any other.
+- **A recording is a segment, and its steps are seekable.** Each
+  `browser_record_start` answers a `segment` number the pool assigns per workflow,
+  and every step written while it runs carries that segment and its
+  `offsetMs` since the recording started. A stop with `keep: true` stores the
+  video with the same `segment` and back-fills the video's evidence id onto the
+  segment's steps; a discarded recording leaves them unsheared and spends no
+  budget. Kept video time is bounded per workflow and stage by the stage's
+  `limits.maxRecordingMinutes`: a start is bounded by what is left of it and is
+  refused with `stage-recording-limit` once the budget is spent — the refusal
+  suggests `stage_step` without a recording, because a flow is documentation
+  first and footage second. The swap into the recording context carries the
+  cookies and `localStorage` it always did, and now also the live page's own
+  origin's `sessionStorage` (read from the page before its context closes,
+  installed as an origin-scoped init script), so an SPA that keeps its token
+  there stays logged in.
+- **`stage_wait` waits inside the server, so a wait costs one tool call.**
+  `until` takes exactly one of `text`, `selector`, `url` (matched as a substring,
+  or as a glob when it holds `*`) or `mail` (`{ to?, subject? }`, at least one).
+  The server re-checks it every `intervalSeconds` — the floor is 5 s, whatever
+  the caller asks for, because a flow is observed rather than hammered — re-opens
+  the session's URL between polls when `reload: true`, and answers once with
+  `met`, `timeout`, `elapsedMs` and the URL. `timeoutSeconds` is capped by the
+  stage's `limits.maxWaitSeconds` (default 600 s), and the client's own bound sits
+  just above that cap so the server's answer wins. A `mail` condition is valid
+  only on the session of a stage application of `kind: "mail-catcher"` declaring
+  `api: "mailpit"` (`stage-mail-unsupported` otherwise) and is checked through
+  that application's own `GET /api/v1/search` with a `to:`/`subject:` query; a
+  catcher that is not up yet is a condition that does not hold, not a failure. The
+  wait is one stage action for the rate limit.
+- **A screenshot can be stored without being seen.** `browser_screenshot({
+  evidence: true, view: false, caption })` stores the picture and answers its
+  evidence id, caption and a notice instead of the image, so documenting a step
+  costs no context. `view: false` without `evidence: true` is refused
+  (`view-requires-evidence`): a screenshot that is neither shown nor stored is a
+  call that did nothing. On a stage session, stored screenshots count against
+  `limits.maxScreenshots` per workflow and are charged *before* the capture, so a
+  refused one (`stage-screenshot-limit`) leaves no bytes and no manifest entry
+  behind; merely viewing a screenshot spends nothing.
+- **The flow page is the run's own report, and it needs nothing to open.**
+  `stage-flow.html` is written beside the evidence from the journal and the
+  manifest alone — segments in journal order, each with its kept video by
+  *relative* file name, and each step a link to its own offset through a `#t=`
+  media fragment — so it opens from a `file://` URL with no server, no network and
+  no binary dependency, and the same journal and manifest always render the same
+  bytes. It is regenerated whenever the journal or the manifest changes (a step,
+  a kept recording, an attached file) and is written through the same redactor, so
+  it can never show a value the journal does not already hold. The whole artifact
+  disappears with the workflow's evidence directory, which
+  `workspace.cleanup` already removes.
 - **A login the server cannot automate is handed to you, not failed.** A role
   whose credentials this `.env` does not set, or whose recipe declares
   `kind: "interactive"`, needs a person: `stage_login` answers
