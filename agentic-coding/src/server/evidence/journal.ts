@@ -21,11 +21,24 @@
 //   that is not there.
 // * **The file is capped.** Past the evidence per-file cap further steps are
 //   refused with `stage-journal-full` rather than silently dropping a step or
-//   growing forever.
+//   growing forever. The cap measures the file's own size, so the writer refuses
+//   past exactly the size the reader refuses to parse.
+// * **An entry names its version.** Every line carries `v`, and a journal a newer
+//   build wrote is reported instead of reinterpreted: `backfillStageJournalVideo`
+//   and `clearStageJournalSegment` rewrite the whole file from the entries this
+//   build parsed, so an unknown field would otherwise be dropped silently. A new
+//   per-step field therefore needs a `JOURNAL_VERSION` bump, not just a writer
+//   change.
+// * **The values are the shape the reader accepts.** The caller's own text is
+//   free-form (a page excerpt is multi-line by nature), so control characters are
+//   folded to spaces *before* the bytes land: the journal's read contract rejects
+//   them, and one such value would otherwise make the whole journal undecodable
+//   for a dashboard that reads it through that contract.
 //
 // The flow page (`stage-flow.html`) is rendered from the journal and the manifest
 // and is deterministic: the same two inputs always produce the same bytes.
 import fs from "node:fs";
+import path from "node:path";
 import type {
 	EvidenceEntry,
 	EvidenceManifest,
@@ -64,6 +77,12 @@ export const DEFAULT_STAGE_JOURNAL_LIMIT = 50;
 /** Most entries the file may hold: the per-file cap in entries, so a file of
  * tiny steps cannot grow without the byte cap noticing late. */
 const MAX_JOURNAL_SEQUENCES = 5_000;
+/** The entry format this build writes and reads. A journal whose lines name
+ * another version is reported, never rewritten: a rewrite would drop every field
+ * this build does not know. */
+const JOURNAL_VERSION = 1;
+/** The URL bound the journal's read contract enforces (`journalText(2048)`). */
+const MAX_JOURNAL_URL = 2_048;
 /** How much of the journal one read parses. The file is capped at the evidence
  * per-file limit, so this is the same bound the writer enforces. */
 const MAX_JOURNAL_READ_BYTES = EVIDENCE_FILE_MAX_BYTES;
@@ -126,6 +145,16 @@ function unreadableJournal(
 	);
 }
 
+/** The journal as the file holds it: the entries the reader accepted, the file's
+ * own size, and whether the workflow has one at all. */
+interface JournalRead {
+	readonly entries: StageJournalEntry[];
+	/** The file's own size in bytes — what the append cap measures, because those
+	 * are the bytes the reader refuses past, including a line it skipped. */
+	readonly bytes: number;
+	readonly present: boolean;
+}
+
 function parseEntry(line: string): StageJournalEntry | undefined {
 	let parsed: unknown;
 	try {
@@ -136,30 +165,39 @@ function parseEntry(line: string): StageJournalEntry | undefined {
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
 		return undefined;
 	const record = parsed as Record<string, unknown>;
+	// An absent `v` is the format this build wrote before the marker existed, so it
+	// reads as 1. Any other version is a journal this build cannot rewrite safely.
+	if (record.v !== undefined && record.v !== JOURNAL_VERSION)
+		throw new EvidenceError(
+			"evidence-manifest",
+			`the stage journal was written by a newer build (entry version ${String(
+				record.v,
+			)}); this build reads version ${JOURNAL_VERSION}`,
+			500,
+		);
 	if (typeof record.seq !== "number" || typeof record.at !== "string")
 		return undefined;
 	if (typeof record.label !== "string") return undefined;
 	return record as unknown as StageJournalEntry;
 }
 
-/** Every entry of one workflow's journal, in write order. A workflow that never
- * wrote a step answers with none — that is what the panel's unchanged rendering
- * and `stage_journal`'s empty answer both key off. */
-export function readStageJournal(
-	scope: WorkflowEvidenceScope,
-): StageJournalEntry[] {
+/** The journal, with the file's own size. One open, one `fstat`, one read: the
+ * append and the summary both need the size, and neither may derive it by
+ * re-serializing what it parsed. */
+function readJournalFile(scope: WorkflowEvidenceScope): JournalRead {
 	let directory: number | undefined;
 	try {
 		directory = openJournalDirectory(scope);
 	} catch {
-		return [];
+		return { entries: [], bytes: 0, present: false };
 	}
 	let fd: number | undefined;
 	try {
 		fd = openSecureFile(directory, STAGE_JOURNAL_FILE);
 	} catch {
 		// No journal yet: the workflow simply recorded no step.
-		return [];
+		closeSecureDirectory(directory);
+		return { entries: [], bytes: 0, present: false };
 	}
 	try {
 		const stat = fs.fstatSync(fd);
@@ -184,12 +222,116 @@ export function readStageJournal(
 			// because the writer only ever appends whole lines.
 			if (entry !== undefined) entries.push(entry);
 		}
-		return entries;
+		return { entries, bytes: stat.size, present: true };
 	} catch (error) {
 		if (error instanceof EvidenceError) throw error;
 		throw unreadableJournal(scope, error);
 	} finally {
 		fs.closeSync(fd);
+		closeSecureDirectory(directory);
+	}
+}
+
+/** Every entry of one workflow's journal, in write order. A workflow that never
+ * wrote a step answers with none — that is what the panel's unchanged rendering
+ * and `stage_journal`'s empty answer both key off. */
+export function readStageJournal(
+	scope: WorkflowEvidenceScope,
+): StageJournalEntry[] {
+	return readJournalFile(scope).entries;
+}
+
+/** The highest segment number the journal already names, or 0 when it names none:
+ * the floor a new recording's segment number is issued above, so a resumed run
+ * cannot hand a segment the number its own steps link. */
+export function highestStageSegment(scope: WorkflowEvidenceScope): number {
+	return readStageJournal(scope).reduce(
+		(highest, entry) => Math.max(highest, entry.segment ?? 0),
+		0,
+	);
+}
+
+/** The one cached parse the dashboard reads through. It is keyed by the file's own
+ * `(path, mtime, size)` and every writer clears it, so a mutation can never be
+ * served from it — only an unchanged file can. */
+let journalCache:
+	| {
+			readonly path: string;
+			readonly mtimeMs: number;
+			readonly size: number;
+			readonly entries: StageJournalEntry[];
+			readonly present: boolean;
+	  }
+	| undefined;
+
+/** The journal as one dashboard observation wants it: every entry, plus the flow
+ * page's name when there is one.
+ *
+ * Cached by `(mtime, size)`: the dashboard re-reads its observations on every
+ * refresh, and an unchanged journal must cost a `stat` rather than re-parsing a
+ * file that can reach 20 MB — the same bound the tool read puts on itself, where
+ * a *read per second* would still be the whole history. */
+export function stageJournalSnapshot(
+	scope: WorkflowEvidenceScope,
+): StageJournal {
+	const stat = journalStat(scope);
+	if (stat === undefined) return { workflowId: scope.workflowId, entries: [] };
+	if (
+		journalCache !== undefined &&
+		journalCache.path === stat.path &&
+		journalCache.mtimeMs === stat.mtimeMs &&
+		journalCache.size === stat.size
+	)
+		return {
+			workflowId: scope.workflowId,
+			entries: journalCache.entries,
+			...(journalCache.present ? { flowPage: STAGE_FLOW_FILE } : {}),
+		};
+	const journal = readJournalFile(scope);
+	journalCache = {
+		path: stat.path,
+		mtimeMs: stat.mtimeMs,
+		size: stat.size,
+		entries: journal.entries,
+		present: journal.present,
+	};
+	return {
+		workflowId: scope.workflowId,
+		entries: journal.entries,
+		...(journal.present ? { flowPage: STAGE_FLOW_FILE } : {}),
+	};
+}
+
+/** The journal file's identity, or `undefined` when the workflow has none. */
+function journalStat(
+	scope: WorkflowEvidenceScope,
+): { path: string; mtimeMs: number; size: number } | undefined {
+	let directory: number | undefined;
+	try {
+		directory = openJournalDirectory(scope);
+	} catch {
+		return undefined;
+	}
+	let fd: number | undefined;
+	try {
+		fd = openSecureFile(directory, STAGE_JOURNAL_FILE);
+	} catch {
+		closeSecureDirectory(directory);
+		return undefined;
+	}
+	try {
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile()) return undefined;
+		return {
+			path: path.join(scope.dataRoot, STAGE_JOURNAL_FILE),
+			mtimeMs: stat.mtimeMs,
+			size: stat.size,
+		};
+	} catch {
+		return undefined;
+	} finally {
+		fs.closeSync(fd);
+		closeSecureDirectory(directory);
 	}
 }
 
@@ -226,7 +368,11 @@ export function journalSummary(
 		MAX_STAGE_JOURNAL_ENTRIES,
 		Math.max(1, Math.floor(options.limit ?? DEFAULT_STAGE_JOURNAL_LIMIT)),
 	);
-	const matching = readStageJournal(scope).filter(
+	// One read answers both the entries and whether a page exists: the file's own
+	// presence is what the page is rendered from, so a second directory listing
+	// cannot disagree with it.
+	const journal = readJournalFile(scope);
+	const matching = journal.entries.filter(
 		(entry) =>
 			(options.session === undefined || entry.session === options.session) &&
 			(options.app === undefined || entry.app === options.app),
@@ -234,7 +380,7 @@ export function journalSummary(
 	return {
 		workflowId: scope.workflowId,
 		entries: matching.slice(Math.max(0, matching.length - limit)),
-		...(hasStageJournal(scope) ? { flowPage: STAGE_FLOW_FILE } : {}),
+		...(journal.present ? { flowPage: STAGE_FLOW_FILE } : {}),
 	};
 }
 
@@ -242,14 +388,42 @@ export function journalSummary(
 // Write
 // ---------------------------------------------------------------------------
 
+/** Fold the control characters a free-form value may carry, so what is written is
+ * what the journal's read contract accepts: a copied page excerpt is multi-line
+ * by nature, and one newline would otherwise make the whole journal undecodable
+ * in the dashboard. */
+function journalText(value: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are exactly what this folds.
+	return value.replace(/[\u0000-\u001f\u007f]/g, " ");
+}
+
+/** The one path a written text takes: the caller's redactor, then the shape the
+ * reader accepts. */
+function cleanText(redact: JournalRedactor, value: string): string {
+	return journalText(redact(value));
+}
+
 /** Redact one optional text, keeping `undefined` as absent. */
 function redactText(
 	redact: JournalRedactor,
 	value: string | undefined,
 ): string | undefined {
 	if (value === undefined) return undefined;
-	const redacted = redact(value);
+	const redacted = cleanText(redact, value);
 	return redacted === "" ? undefined : redacted;
+}
+
+/** A URL is text too, and the journal's own contract bounds it at 2048: the
+ * server derives it from the page, so the bound is applied here rather than
+ * trusted from the caller. */
+function cleanUrl(
+	redact: JournalRedactor,
+	value: string | undefined,
+): string | undefined {
+	const redacted = redactText(redact, value);
+	return redacted === undefined
+		? undefined
+		: redacted.slice(0, MAX_JOURNAL_URL);
 }
 
 function redactCaptures(
@@ -259,7 +433,7 @@ function redactCaptures(
 	if (captures === undefined) return undefined;
 	const out: Record<string, string> = {};
 	for (const [name, value] of Object.entries(captures))
-		out[redact(name)] = redact(value);
+		out[cleanText(redact, name)] = cleanText(redact, value);
 	return Object.keys(out).length === 0 ? undefined : out;
 }
 
@@ -293,7 +467,8 @@ export async function appendStageJournalEntry(
 	redact: JournalRedactor = identityRedactor,
 ): Promise<StageJournalEntry> {
 	return await withEvidenceRootLock(scope.root, async () => {
-		const existing = readStageJournal(scope);
+		const journal = readJournalFile(scope);
+		const existing = journal.entries;
 		if (existing.length >= MAX_JOURNAL_SEQUENCES)
 			throw new EvidenceError(
 				"stage-journal-full",
@@ -310,11 +485,13 @@ export async function appendStageJournalEntry(
 			at,
 			...(input.session === undefined
 				? {}
-				: { session: redact(input.session) }),
-			...(input.app === undefined ? {} : { app: redact(input.app) }),
-			...(input.role === undefined ? {} : { role: redact(input.role) }),
-			...textField("url", redactText(redact, input.url)),
-			label: redact(input.label),
+				: { session: cleanText(redact, input.session) }),
+			...(input.app === undefined ? {} : { app: cleanText(redact, input.app) }),
+			...(input.role === undefined
+				? {}
+				: { role: cleanText(redact, input.role) }),
+			...textField("url", cleanUrl(redact, input.url)),
+			label: cleanText(redact, input.label),
 			...textField("expected", redactText(redact, input.expected)),
 			...textField("observed", redactText(redact, input.observed)),
 			...(captures === undefined ? {} : { captures }),
@@ -323,10 +500,10 @@ export async function appendStageJournalEntry(
 				? {}
 				: {
 						knowledge: {
-							concept: redact(knowledge.concept),
+							concept: cleanText(redact, knowledge.concept),
 							...(knowledge.section === undefined
 								? {}
-								: { section: redact(knowledge.section) }),
+								: { section: cleanText(redact, knowledge.section) }),
 							kind: knowledge.kind,
 							...(knowledge.suspectedCause === undefined
 								? {}
@@ -336,14 +513,12 @@ export async function appendStageJournalEntry(
 			...(input.segment === undefined ? {} : { segment: input.segment }),
 			...(input.offsetMs === undefined ? {} : { offsetMs: input.offsetMs }),
 		};
-		const line = `${JSON.stringify(entry)}\n`;
+		const line = lineOf(entry);
 		const bytes = Buffer.byteLength(line, "utf8");
-		const held = existing.reduce(
-			(total, each) =>
-				total + Buffer.byteLength(`${JSON.stringify(each)}\n`, "utf8"),
-			0,
-		);
-		if (held + bytes > EVIDENCE_FILE_MAX_BYTES)
+		// The file's own size, not a re-serialization of what parsed: a line the reader
+		// skipped still occupies bytes, and the writer must refuse past exactly the
+		// size the reader refuses to parse.
+		if (journal.bytes + bytes > EVIDENCE_FILE_MAX_BYTES)
 			throw new EvidenceError(
 				"stage-journal-full",
 				`the stage journal of ${scope.workflowId} is at its ${EVIDENCE_FILE_MAX_BYTES}-byte cap; no further step is recorded and nothing was discarded`,
@@ -365,7 +540,14 @@ function textField<K extends string>(
 	};
 }
 
+/** One journal line, including the version marker and the terminating newline. */
+function lineOf(entry: StageJournalEntry): string {
+	return `${JSON.stringify({ v: JOURNAL_VERSION, ...entry })}\n`;
+}
+
 function appendLine(scope: WorkflowEvidenceScope, line: string): void {
+	// A write is what makes a cached parse stale; nothing may serve it afterwards.
+	journalCache = undefined;
 	const directory = openJournalDirectoryToWrite(scope);
 	let fd: number | undefined;
 	try {
@@ -421,17 +603,53 @@ function writeJournal(
 	scope: WorkflowEvidenceScope,
 	entries: readonly StageJournalEntry[],
 ): void {
+	journalCache = undefined;
 	const directory = openJournalDirectoryToWrite(scope);
 	try {
 		writeAtomicPrivateFile(
 			directory,
 			STAGE_JOURNAL_FILE,
-			entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""),
+			entries.map(lineOf).join(""),
 			0o600,
 		);
 	} finally {
 		closeSecureDirectory(directory);
 	}
+}
+
+/**
+ * Drop one discarded segment's reference from its entries (`task 1.2`, spec "Flow
+ * segments carry offsets"): when a recording is stopped without keeping it, the
+ * steps written while it ran name a video nobody has. They keep their sequence
+ * numbers and every other field; only `segment` and `offsetMs` go, so the flow
+ * page has no section to link and the panel groups them as unreferenced.
+ *
+ * Answers how many entries changed; a segment with no step is untouched.
+ */
+export async function clearStageJournalSegment(
+	scope: WorkflowEvidenceScope,
+	input: { readonly segment: number; readonly session?: string },
+): Promise<number> {
+	return await withEvidenceRootLock(scope.root, async () => {
+		const entries = readStageJournal(scope);
+		let changed = 0;
+		const updated = entries.map((entry) => {
+			if (entry.segment !== input.segment) return entry;
+			if (input.session !== undefined && entry.session !== input.session)
+				return entry;
+			changed += 1;
+			// Only the segment reference goes; a field a later format adds survives,
+			// because the entry is filtered rather than rebuilt.
+			return Object.fromEntries(
+				Object.entries(entry).filter(
+					([key]) => key !== "segment" && key !== "offsetMs",
+				),
+			) as StageJournalEntry;
+		});
+		if (changed === 0) return 0;
+		writeJournal(scope, updated);
+		return changed;
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -621,20 +839,31 @@ export function renderStageFlowPage(
  * Render and write the flow page beside the evidence. A workflow without a
  * journal has no flow page, so nothing is written: the panel's unchanged
  * rendering and "no open-flow action" both depend on that.
+ *
+ * It takes the evidence root lock, like every other writer of that directory,
+ * and re-checks the journal *inside* it: a render that interleaved with
+ * `removeWorkflowEvidence` would otherwise recreate the directory chain of a
+ * workflow whose evidence was just removed — the exact failure the lock exists to
+ * prevent. The read-render-rename then happens in one lock section, so a slow
+ * write can never land an older snapshot after a newer one.
  */
 export async function writeStageFlowPage(
 	scope: WorkflowEvidenceScope,
 	redact: JournalRedactor = identityRedactor,
 ): Promise<string | undefined> {
-	if (!hasStageJournal(scope)) return undefined;
-	const entries = readStageJournal(scope);
-	const manifest = listEvidence(scope);
-	const html = redact(renderStageFlowPage(scope.workflowId, entries, manifest));
-	const directory = openJournalDirectoryToWrite(scope);
-	try {
-		writeAtomicPrivateFile(directory, STAGE_FLOW_FILE, html, 0o600);
-	} finally {
-		closeSecureDirectory(directory);
-	}
-	return STAGE_FLOW_FILE;
+	return await withEvidenceRootLock(scope.root, async () => {
+		const journal = readJournalFile(scope);
+		if (!journal.present) return undefined;
+		const manifest = listEvidence(scope);
+		const html = redact(
+			renderStageFlowPage(scope.workflowId, journal.entries, manifest),
+		);
+		const directory = openJournalDirectoryToWrite(scope);
+		try {
+			writeAtomicPrivateFile(directory, STAGE_FLOW_FILE, html, 0o600);
+		} finally {
+			closeSecureDirectory(directory);
+		}
+		return STAGE_FLOW_FILE;
+	});
 }

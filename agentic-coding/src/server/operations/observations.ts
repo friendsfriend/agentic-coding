@@ -96,11 +96,7 @@ import {
 	setupDraftsDir,
 	setupReviewDrift,
 } from "../environment/setup-drafts.ts";
-import {
-	hasStageJournal,
-	readStageJournal,
-	STAGE_FLOW_FILE,
-} from "../evidence/journal.ts";
+import { stageJournalSnapshot } from "../evidence/journal.ts";
 import { listEvidence } from "../evidence/store.ts";
 import {
 	answerWorkflowQuestion,
@@ -1184,12 +1180,10 @@ export function loadStageJournal(
 		worktree: state.worktree,
 		definitionId: state.definition?.id,
 	});
-	const entries = readStageJournal(scope);
-	return {
-		workflowId,
-		entries,
-		...(hasStageJournal(scope) ? { flowPage: STAGE_FLOW_FILE } : {}),
-	};
+	// One cached read answers both the entries and whether a page exists: this
+	// observation runs on every dashboard refresh, and an unchanged journal must
+	// cost a `stat`, not a parse of a file that can reach the evidence cap.
+	return stageJournalSnapshot(scope);
 }
 
 /** One workflow's delegated debug requests, oldest first, each with the report
