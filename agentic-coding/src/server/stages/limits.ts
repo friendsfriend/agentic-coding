@@ -50,6 +50,13 @@ export interface StageAdmission {
 	settle(): void;
 }
 
+/** One reserved, and therefore stored, stage screenshot. Its reservation is the
+ * charge; a failed capture or a refused attach gives it back. */
+export interface StageScreenshotReservation {
+	readonly stage: string;
+	readonly owner: string;
+}
+
 /** One rolling minute, the window `maxActionsPerMinute` counts in. */
 const RATE_WINDOW_MS = 60_000;
 
@@ -84,15 +91,23 @@ export class StageUsageRegistry {
 	 * video is kept, so a discarded recording spends nothing. */
 	private readonly recordedMs = new Map<string, number>();
 	/** Milliseconds of recording granted to a start that has not stopped yet, per
-	 * `stage\0owner`. A grant is *reserved* the moment it is told out, because the
-	 * budget is settled minutes later: without it, two sessions of one workflow
-	 * would both be told the whole remainder and could each keep it. An entry also
-	 * expires on its own (a recording cannot outlive its own bound), so a stop that
-	 * never happens — a run that ended, an auto-stopped segment nobody reported —
-	 * cannot hold the budget forever. */
+	 * `stage\0owner\0session`. A grant is *reserved* the moment it is told out,
+	 * because the budget is settled minutes later: without it, two sessions of one
+	 * workflow would both be told the remainder and could each keep it.
+	 *
+	 * It is identified by the session it was granted to, not by its position in a
+	 * list: a stop settles the grant of the session that stopped, so two segments
+	 * stopped out of order (or a start that was refused after another session's
+	 * grant) can neither release nor leave behind the wrong one. An entry also
+	 * expires on its own bound, so a stop that never happens — a dropped session,
+	 * a run that ended — cannot hold the budget forever. */
 	private readonly reservedMs = new Map<
 		string,
-		{ readonly ms: number; readonly expiresAt: number }[]
+		{
+			readonly windowKey: string;
+			readonly ms: number;
+			readonly expiresAt: number;
+		}
 	>();
 
 	constructor(options: StageUsageOptions) {
@@ -175,18 +190,22 @@ export class StageUsageRegistry {
 	}
 
 	/**
-	 * Count one stored screenshot, or refuse it (`stage-screenshot-limit`).
+	 * Reserve one stored screenshot, or refuse it (`stage-screenshot-limit`).
 	 *
-	 * Two calls, because a screenshot can fail between the bound and the file: the
-	 * `allowance` refuses *before* the capture so nothing is written, and `stored`
-	 * charges only the capture that became an evidence entry. A failed capture
-	 * therefore costs nothing, and the refusal's "already stored N" stays true.
+	 * The reservation *is* the charge, taken in one synchronous step: a check that
+	 * refuses before the capture and charges after it lets two calls that overlap
+	 * during the capture and the attach each pass the same bound, store `max + 1`
+	 * screenshots, and answer one of them a `stage-screenshot-limit` for a file it
+	 * actually stored (the reference to that file would be lost with it). A capture
+	 * that fails, or an attach that refuses, gives its reservation back with
+	 * `releaseScreenshot` — so nothing is stored beyond the bound, and
+	 * `stage-screenshot-limit` only ever answers a call that stored nothing.
 	 */
-	screenshotAllowance(input: {
+	reserveScreenshot(input: {
 		readonly stage: string;
 		readonly owner: string;
 		readonly maxScreenshots: number;
-	}): number {
+	}): StageScreenshotReservation {
 		const key = windowKey(input.stage, input.owner);
 		const used = this.screenshots.get(key) ?? 0;
 		if (used >= input.maxScreenshots)
@@ -194,20 +213,16 @@ export class StageUsageRegistry {
 				"stage-screenshot-limit",
 				`stage ${input.stage} already stored ${used} of ${input.maxScreenshots} screenshots in this workflow; describe the page in a stage_step instead`,
 			);
-		return used;
+		this.screenshots.set(key, used + 1);
+		return { stage: input.stage, owner: input.owner };
 	}
 
-	/** Count one screenshot that is now an evidence entry. */
-	countScreenshot(input: {
-		readonly stage: string;
-		readonly owner: string;
-		readonly maxScreenshots: number;
-	}): number {
-		this.screenshotAllowance(input);
-		const key = windowKey(input.stage, input.owner);
-		const used = (this.screenshots.get(key) ?? 0) + 1;
-		this.screenshots.set(key, used);
-		return used;
+	/** Give one reservation back: the capture failed, or the attach was refused. */
+	releaseScreenshot(reservation: StageScreenshotReservation): void {
+		const key = windowKey(reservation.stage, reservation.owner);
+		const used = this.screenshots.get(key) ?? 0;
+		if (used <= 1) this.screenshots.delete(key);
+		else this.screenshots.set(key, used - 1);
 	}
 
 	/**
@@ -223,7 +238,13 @@ export class StageUsageRegistry {
 	recordingAllowance(input: {
 		readonly stage: string;
 		readonly owner: string;
+		/** The session that will record: its grant is the one its stop settles. */
+		readonly session: string;
 		readonly maxRecordingMinutes: number;
+		/** The longest one segment can run (`DEFAULT_RECORDING_MAX_MS`), which is
+		 * what is reserved: the remainder bounds the segment, but only this much of
+		 * it can actually be spent before the recording stops itself. */
+		readonly maxSegmentMs: number;
 	}): number {
 		const budget = Math.max(0, input.maxRecordingMinutes) * 60_000;
 		const key = windowKey(input.stage, input.owner);
@@ -238,48 +259,56 @@ export class StageUsageRegistry {
 				"stage-recording-limit",
 				`stage ${input.stage} already kept ${Math.round(used / 60_000)} of ${input.maxRecordingMinutes} recording minutes in this workflow; describe the remaining steps in stage_step without a recording`,
 			);
-		this.reservedMs.set(key, [
-			...this.liveReservations(key),
-			// The grant replaces its own reservation at `settleRecording`, and expires
-			// with the recording's own bound if no stop ever reports it.
-			{ ms: remaining, expiresAt: this.now() + remaining + RATE_WINDOW_MS },
-		]);
+		const ms = Math.min(input.maxSegmentMs, remaining);
+		this.reservedMs.set(this.grantKey(key, input.session), {
+			windowKey: key,
+			ms,
+			// Expires with the segment it was granted for, plus the window a settle
+			// has to land in — not with the whole remainder of the budget.
+			expiresAt: this.now() + ms + RATE_WINDOW_MS,
+		});
 		return remaining;
 	}
 
 	/**
-	 * Settle one recording: give its reservation back and charge what was kept.
-	 * A discarded recording settles with `keptMs: 0`, so it spends nothing but
+	 * Settle one recording: give its reservation back and charge what was kept. A
+	 * discarded recording settles with `keptMs: 0`, so it spends nothing but
 	 * releases the grant it held while it ran.
+	 *
+	 * The grant belongs to the session that took it, so settling twice, settling a
+	 * start that was refused before it reserved anything, and settling two segments
+	 * out of order are all harmless: an unknown grant settles nothing but its kept
+	 * minutes.
 	 */
 	settleRecording(input: {
 		readonly stage: string;
 		readonly owner: string;
+		readonly session: string;
 		readonly keptMs: number;
 	}): void {
 		const key = windowKey(input.stage, input.owner);
-		const live = this.liveReservations(key);
-		// The oldest live grant is this recording's — a stop ends one segment per
-		// session, and a grant that already expired stopped counting.
-		const rest = live.slice(1);
-		if (live.length > 0) {
-			if (rest.length === 0) this.reservedMs.delete(key);
-			else this.reservedMs.set(key, rest);
-		}
+		this.liveReservations(key);
+		this.reservedMs.delete(this.grantKey(key, input.session));
 		if (!Number.isFinite(input.keptMs) || input.keptMs <= 0) return;
 		this.recordedMs.set(key, (this.recordedMs.get(key) ?? 0) + input.keptMs);
 	}
 
-	/** The grants of one key that still count, pruning the ones that expired. */
-	private liveReservations(
-		key: string,
-	): { readonly ms: number; readonly expiresAt: number }[] {
+	/** One session's grant of one budget. */
+	private grantKey(key: string, session: string): string {
+		return `${key}\u0000${session}`;
+	}
+
+	/** The grants of one budget that still count, pruning the ones that expired. */
+	private liveReservations(key: string): { readonly ms: number }[] {
 		const now = this.now();
-		const live = (this.reservedMs.get(key) ?? []).filter(
-			(each) => each.expiresAt > now,
-		);
-		if (live.length === 0) this.reservedMs.delete(key);
-		else this.reservedMs.set(key, live);
+		const live: { readonly ms: number }[] = [];
+		for (const [id, grant] of [...this.reservedMs]) {
+			if (grant.expiresAt <= now || grant.windowKey !== key) {
+				if (grant.expiresAt <= now) this.reservedMs.delete(id);
+				continue;
+			}
+			live.push(grant);
+		}
 		return live;
 	}
 
@@ -309,8 +338,8 @@ export class StageUsageRegistry {
 			if (key.endsWith(suffix)) this.screenshots.delete(key);
 		for (const key of [...this.recordedMs.keys()])
 			if (key.endsWith(suffix)) this.recordedMs.delete(key);
-		for (const key of [...this.reservedMs.keys()])
-			if (key.endsWith(suffix)) this.reservedMs.delete(key);
+		for (const [key, grant] of [...this.reservedMs])
+			if (grant.windowKey.endsWith(suffix)) this.reservedMs.delete(key);
 	}
 
 	/** Whether one owner still holds a stage: a registered session, or an admitted

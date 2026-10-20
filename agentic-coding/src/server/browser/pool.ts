@@ -1186,25 +1186,35 @@ export class BrowserPool {
 	 * Stop a recording that outlived its bound, discarding it, before the session
 	 * is used again: the length cap is enforced on the next request rather than by
 	 * a timer nobody owns. Idempotent and serialized with `stopRecording`, so two
-	 * concurrent requests cannot both stop the same recording.
+	 * concurrent requests cannot both stop the same recording. Answers the segment
+	 * it discarded, once, so its recording grant is settled by the only caller that
+	 * learns the segment ended.
 	 */
-	async autoStopIfExpired(session: BrowserSession): Promise<boolean> {
+	async autoStopIfExpired(
+		session: BrowserSession,
+	): Promise<
+		{ readonly segment: number; readonly elapsedMs: number } | undefined
+	> {
 		// The overwhelmingly common case is "not recording at all", and this runs on
 		// the hot path of every session-using request: answer it without taking the
 		// gate, and re-check inside the gate before stopping anything.
 		const open = session.recording;
-		if (!open) return false;
-		if (this.clock() - open.startedAt <= open.maxMs) return false;
+		if (!open) return undefined;
+		if (this.clock() - open.startedAt <= open.maxMs) return undefined;
 		return await this.withRecordingGate(session, async () => {
 			const recording = session.recording;
-			if (!recording) return false;
-			if (this.clock() - recording.startedAt <= recording.maxMs) return false;
+			if (!recording) return undefined;
+			const elapsed = this.clock() - recording.startedAt;
+			if (elapsed <= recording.maxMs) return undefined;
 			recording.autoStopped = true;
 			this.log(
 				`browser recording of ${session.owner} exceeded ${recording.maxMs} ms and was stopped without keeping it`,
 			);
+			// The segment it closed is answered, not just "something was stopped": the
+			// route settles that segment's recording grant, and a discarded segment
+			// nobody reports would hold the budget until its reservation expired.
 			await this.stopRecordingLocked(session, undefined);
-			return true;
+			return { segment: recording.segment, elapsedMs: elapsed };
 		});
 	}
 

@@ -21,7 +21,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserStatusResponse } from "../../contracts/browser.ts";
-import type { EvidenceEntry } from "../../contracts/environment.ts";
+import type {
+	EvidenceEntry,
+	EvidenceManifest,
+} from "../../contracts/environment.ts";
+import type { StageJournalEntry } from "../../contracts/stages.ts";
 import {
 	BROWSER_MAX_IMAGE_WIDTH,
 	type ResolvedBrowserSettings,
@@ -38,6 +42,7 @@ import {
 	type JournalRedactor,
 	journalSummary,
 	writeStageFlowPage,
+	writeStageFlowPageUnlocked,
 } from "../evidence/journal.ts";
 import {
 	type LocatedEvidenceWorkflow,
@@ -186,6 +191,25 @@ function stageUsage(deps: BrowserRouteDeps): StageUsageRegistry {
 	});
 	registries.set(deps, created);
 	return created;
+}
+
+/** Settle one session's recording grant: nothing is kept by a discard, by an
+ * expired segment or by a refused keep, and a kept segment charges what it ran.
+ * Keyed by the session, so a settle can only ever release the grant its own
+ * segment took. */
+function settleSessionRecording(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	keptMs: number,
+): void {
+	if (!session.stage) return;
+	stageUsage(deps).settleRecording({
+		stage: session.stage.ident,
+		owner,
+		session: session.name,
+		keptMs,
+	});
 }
 
 /** The catalog of this request, read fresh so a stage file the developer just
@@ -1212,7 +1236,12 @@ async function sessionFor(
 	// recording that outlived it is discarded before anything else happens. The
 	// pool serializes this with an explicit stop, so two concurrent requests
 	// cannot both stop the same recording.
-	await deps.pool.autoStopIfExpired(session);
+	const expired = await deps.pool.autoStopIfExpired(session);
+	// The pool stops a recording that outlived its bound and discards it: this is
+	// the only place that learns of it, so it is where the grant that segment held
+	// is given back (a stop that never comes would otherwise hold the budget for
+	// the segment's own bound).
+	if (expired !== undefined) settleSessionRecording(deps, owner, session, 0);
 	// The hold is checked *before* the stage's rolling minute is charged: a
 	// refusal because the developer is logging in is not an action of the run.
 	if (session.heldByUser && options.allowHeld !== true)
@@ -2060,26 +2089,41 @@ async function screenshot(
 			"`view: false` stores the screenshot instead of returning it, so it needs `evidence: true`",
 			400,
 		);
-	// The screenshot bound is checked *before* the capture, so a refused one leaves
-	// no bytes behind — and charged only once the capture became an evidence entry,
-	// so a failed selector or a refused attach costs nothing: the bound counts
-	// stored screenshots, which is what its refusal says it counts.
-	if (keeping && session.stage)
-		stageUsage(deps).screenshotAllowance({
-			stage: session.stage.ident,
-			owner,
-			maxScreenshots: session.stage.limits.maxScreenshots,
-		});
-	const bytes = await session.screenshot(
-		{
-			type: "jpeg",
-			quality: SCREENSHOT_QUALITY,
-			fullPage: body.fullPage ?? false,
-			...(body.ref === undefined ? {} : { ref: body.ref }),
-			...(body.selector === undefined ? {} : { selector: body.selector }),
-		},
-		BROWSER_MAX_IMAGE_WIDTH,
-	);
+	// The screenshot bound is *reserved* before the capture, in one synchronous
+	// step: a check that refused before the capture and charged after it would let
+	// two overlapping calls each pass the same bound during their captures, store
+	// one screenshot too many, and answer one of them a refusal for a file it did
+	// store. A capture or attach that fails gives the reservation back, so nothing
+	// is stored beyond the bound and the refusal only ever answers a call that
+	// stored nothing.
+	const reservation =
+		keeping && session.stage
+			? stageUsage(deps).reserveScreenshot({
+					stage: session.stage.ident,
+					owner,
+					maxScreenshots: session.stage.limits.maxScreenshots,
+				})
+			: undefined;
+	const release = () => {
+		if (reservation !== undefined)
+			stageUsage(deps).releaseScreenshot(reservation);
+	};
+	let bytes: Uint8Array;
+	try {
+		bytes = await session.screenshot(
+			{
+				type: "jpeg",
+				quality: SCREENSHOT_QUALITY,
+				fullPage: body.fullPage ?? false,
+				...(body.ref === undefined ? {} : { ref: body.ref }),
+				...(body.selector === undefined ? {} : { selector: body.selector }),
+			},
+			BROWSER_MAX_IMAGE_WIDTH,
+		);
+	} catch (error) {
+		release();
+		throw error;
+	}
 	const value: Record<string, unknown> = {
 		session: session.name,
 		url: session.url,
@@ -2095,21 +2139,19 @@ async function screenshot(
 		// The stored entry carries a sanitized URL, and a caption that embeds one
 		// carries the same: an evidence entry outlives the call that made it.
 		const url = evidenceUrl(deps, session.url);
-		const entry = await storeEvidence(deps, owner, {
-			bytes,
-			kind: "screenshot",
-			caption: body.caption?.trim() || `Screenshot of ${url}`,
-			url,
-			extension: "jpg",
-			...(session.app ? { app: session.app } : {}),
-		});
-		if (session.stage)
-			stageUsage(deps).countScreenshot({
-				stage: session.stage.ident,
-				owner,
-				maxScreenshots: session.stage.limits.maxScreenshots,
+		try {
+			value.evidence = await storeEvidence(deps, owner, {
+				bytes,
+				kind: "screenshot",
+				caption: body.caption?.trim() || `Screenshot of ${url}`,
+				url,
+				extension: "jpg",
+				...(session.app ? { app: session.app } : {}),
 			});
-		value.evidence = entry;
+		} catch (error) {
+			release();
+			throw error;
+		}
 	}
 	if (body.view === false)
 		value.notice =
@@ -2134,19 +2176,33 @@ async function recordStart(
 	const parent = path.join(scope.dataRoot, EVIDENCE_SCRATCH_DIR, "video");
 	fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
 	const dir = fs.mkdtempSync(path.join(parent, "recording-"));
+	// A second start on a recording session is refused for what it is — this
+	// session already has a segment — rather than by the budget below, which the
+	// live grant has (correctly) already spent.
+	if (session.recording)
+		throw new BrowserPoolError(
+			"recording-active",
+			"this session is already recording; stop it before starting another",
+			409,
+		);
+	// The stage's kept minutes are a workflow-wide budget
+	// (`add-stage-flow-evidence`, spec "Flow segments carry offsets"): what is
+	// left of it bounds this segment, so a flow test can never keep more video
+	// than the stage allows. The grant is reserved under this session until the
+	// stop settles it, so two sessions of one workflow cannot both be told the
+	// same remainder — and a start that is refused *after* reserving gives back
+	// exactly its own grant, never a live segment's.
+	let allowanceMs: number | undefined;
+	if (session.stage) {
+		allowanceMs = stageUsage(deps).recordingAllowance({
+			stage: session.stage.ident,
+			owner,
+			session: session.name,
+			maxRecordingMinutes: session.stage.limits.maxRecordingMinutes,
+			maxSegmentMs: DEFAULT_RECORDING_MAX_MS,
+		});
+	}
 	try {
-		// The stage's kept minutes are a workflow-wide budget
-		// (`add-stage-flow-evidence`, spec "Flow segments carry offsets"): what is
-		// left of it bounds this segment, so a flow test can never keep more video
-		// than the stage allows. The grant is reserved until the stop settles it, so
-		// two sessions of one workflow cannot both be told the same remainder.
-		const allowance = session.stage
-			? stageUsage(deps).recordingAllowance({
-					stage: session.stage.ident,
-					owner,
-					maxRecordingMinutes: session.stage.limits.maxRecordingMinutes,
-				})
-			: undefined;
 		const started = await deps.pool.startRecording(session, {
 			dir,
 			// A segment number is a reference the journal's steps carry, so it is only
@@ -2154,9 +2210,11 @@ async function recordStart(
 			// a resumed run shares that directory, and a reused number would link a new
 			// recording into an old segment's steps.
 			minSegment: highestStageSegment(scope) + 1,
-			...(allowance === undefined
+			// What is left of the budget bounds the segment, so the minutes this
+			// recording may keep are the minutes that were reserved for it.
+			...(allowanceMs === undefined
 				? {}
-				: { maxMs: Math.min(DEFAULT_RECORDING_MAX_MS, allowance) }),
+				: { maxMs: Math.min(DEFAULT_RECORDING_MAX_MS, allowanceMs) }),
 		});
 		return {
 			session: session.name,
@@ -2166,17 +2224,14 @@ async function recordStart(
 			segment: started.segment,
 		};
 	} catch (error) {
-		// A start that failed keeps nothing: its granted minutes are given back, and
-		// the directory it created is removed rather than left behind as an empty
+		// A start that failed keeps nothing: the minutes it actually reserved are
+		// given back — and nothing at all when it never reserved any — and the
+		// directory it created is removed rather than left behind as an empty
 		// recording. Asynchronous, because a failed start (a session that was closed
 		// under it, a browser that went away) must not block the event loop on a
 		// recursive remove.
-		if (session.stage)
-			stageUsage(deps).settleRecording({
-				stage: session.stage.ident,
-				owner,
-				keptMs: 0,
-			});
+		if (allowanceMs !== undefined)
+			settleSessionRecording(deps, owner, session, 0);
 		await fs.promises
 			.rm(dir, { recursive: true, force: true })
 			.catch(() => undefined);
@@ -2247,12 +2302,7 @@ async function finishRecordingStop(
 			// steps lose the segment they were filed under: the spec is explicit that a
 			// discarded recording leaves no segment reference behind, so neither the
 			// journal nor the panel can point at a video nobody has.
-			if (session.stage)
-				stageUsage(deps).settleRecording({
-					stage: session.stage.ident,
-					owner,
-					keptMs: 0,
-				});
+			settleSessionRecording(deps, owner, session, 0);
 			await clearRecordingSegment(deps, owner, session, {
 				segment: result.segment,
 			});
@@ -2265,6 +2315,9 @@ async function finishRecordingStop(
 					"the recording was discarded; no video and no evidence entry were kept, and its steps no longer name a segment",
 			};
 		}
+		// A stop that kept nothing at all must still give its grant back, or the
+		// budget would read as spent for a video nobody has.
+		settleSessionRecording(deps, owner, session, 0);
 		throw new BrowserPoolError(
 			"recording-empty",
 			"the recording produced no video file, so nothing was kept",
@@ -2298,12 +2351,7 @@ async function finishRecordingStop(
 	// A kept recording is charged against the stage's recording minutes — settling
 	// the grant the start reserved — and the journal's own steps of this segment
 	// learn its evidence id so the flow page can seek each one into the video.
-	if (session.stage)
-		stageUsage(deps).settleRecording({
-			stage: session.stage.ident,
-			owner,
-			keptMs: result.elapsedMs,
-		});
+	settleSessionRecording(deps, owner, session, result.elapsedMs);
 	await backfillRecordingSegment(deps, owner, session, {
 		segment: result.segment,
 		video: video.id,
@@ -2353,8 +2401,18 @@ function journalRedactor(deps: BrowserRouteDeps): JournalRedactor {
 async function refreshFlowPage(
 	deps: BrowserRouteDeps,
 	scope: ReturnType<typeof workflowEvidenceScope>,
+	preloaded: {
+		readonly entries?: readonly StageJournalEntry[];
+		readonly manifest?: EvidenceManifest;
+	} = {},
 ): Promise<void> {
-	await writeStageFlowPage(scope, journalRedactor(deps));
+	const redact = journalRedactor(deps);
+	// A caller that just parsed the journal and the manifest hands them in: the page
+	// is then rendered from that snapshot instead of a second read of the same two
+	// files, which is what makes one step cost one parse rather than two.
+	if (preloaded.entries !== undefined || preloaded.manifest !== undefined)
+		await writeStageFlowPageUnlocked(scope, redact, preloaded);
+	else await writeStageFlowPage(scope, redact);
 }
 
 /** Back-fill one kept segment's video onto its journal steps, then re-render the
@@ -2366,13 +2424,16 @@ async function backfillRecordingSegment(
 	input: { readonly segment: number; readonly video: string },
 ): Promise<void> {
 	const scope = evidenceScope(deps, owner);
-	const changed = await backfillStageJournalVideo(scope, {
-		segment: input.segment,
-		video: input.video,
-		session: session.name,
-	});
+	const changed = await backfillStageJournalVideo(
+		scope,
+		{ segment: input.segment, video: input.video, session: session.name },
+		// The rewrite already holds the entries it wrote, and it owns the lock: the
+		// page is rendered inside it from those entries rather than from a second read.
+		async ({ entries }) => {
+			await refreshFlowPage(deps, scope, { entries });
+		},
+	);
 	if (changed === 0) return;
-	await refreshFlowPage(deps, scope);
 }
 
 /** Drop one discarded segment's reference from its steps, then re-render the page
@@ -2384,12 +2445,14 @@ async function clearRecordingSegment(
 	input: { readonly segment: number },
 ): Promise<void> {
 	const scope = evidenceScope(deps, owner);
-	const changed = await clearStageJournalSegment(scope, {
-		segment: input.segment,
-		session: session.name,
-	});
+	const changed = await clearStageJournalSegment(
+		scope,
+		{ segment: input.segment, session: session.name },
+		async ({ entries }) => {
+			await refreshFlowPage(deps, scope, { entries });
+		},
+	);
 	if (changed === 0) return;
-	await refreshFlowPage(deps, scope);
 }
 
 /** `stage_step`: append one server-timestamped step. Everything the server knows
@@ -2405,7 +2468,9 @@ async function stageStep(
 	const session = await sessionFor(deps, owner, body.session, used);
 	const scope = evidenceScope(deps, owner);
 	const recording = session.recording;
+	const segment = recording?.segment;
 	const now = deps.now?.() ?? Date.now();
+	let answered: StageJournalEntry | undefined;
 	const entry = await appendStageJournalEntry(
 		scope,
 		{
@@ -2429,14 +2494,48 @@ async function stageStep(
 				: {}),
 		},
 		journalRedactor(deps),
+		// The append owns the lock and has both the entries and the manifest in
+		// hand, so the page is rendered from them here: one step then costs one read
+		// of the journal and one of the manifest, and no other writer of this
+		// workflow's evidence waits behind a second read outside this section.
+		async ({ entries, manifest }) => {
+			// A segment can end between this step's read of the recording and its
+			// commit: `record_stop` finalises segment N's steps and then this line
+			// lands, naming a segment a video was already kept for — or one that was
+			// just discarded. The read below is the same tick as the write, so the
+			// correction is only ever taken when the segment really did end under it;
+			// the step keeps its sequence number and everything else, and is grouped
+			// as a step without a recording, which is what it now is.
+			const written = entries[entries.length - 1];
+			const open = session.recording?.segment;
+			const stillOpen =
+				segment === undefined ? open === undefined : open === segment;
+			const corrected =
+				stillOpen || written === undefined
+					? entries
+					: entries.map((each) =>
+							each.seq === written.seq
+								? (Object.fromEntries(
+										Object.entries(each).filter(
+											([key]) => key !== "segment" && key !== "offsetMs",
+										),
+									) as StageJournalEntry)
+								: each,
+						);
+			answered = corrected.find((each) => each.seq === written?.seq) ?? entry;
+			await refreshFlowPage(deps, scope, {
+				entries: corrected,
+				manifest,
+			});
+		},
 	);
-	await refreshFlowPage(deps, scope);
+	const step = answered ?? entry;
 	return {
 		session: session.name,
-		step: entry,
-		...(entry.segment === undefined
+		step,
+		...(step.segment === undefined
 			? {}
-			: { segment: entry.segment, offsetMs: entry.offsetMs }),
+			: { segment: step.segment, offsetMs: step.offsetMs }),
 	};
 }
 
