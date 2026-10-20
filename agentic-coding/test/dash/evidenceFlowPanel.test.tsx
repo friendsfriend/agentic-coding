@@ -1,15 +1,19 @@
 /** @jsxImportSource @opentui/solid */
-// The Evidence panel's stage flow grouping (`add-stage-flow-evidence`, task 3.1).
+// The stage flow grouping (`add-stage-flow-evidence`, task 3.1, kept by
+// `evidence-summary-subview`).
 //
 // A workflow that recorded a stage flow lists it by recording segment: each
 // segment's heading, the journal steps written during it with their offsets, and
 // the evidence those steps reference. A workflow without a journal keeps the
-// grouping it always had, which is the point of the journal being optional.
+// grouping it always had, which is the point of the journal being optional. The
+// listing moved from the Evidence panel into the evidence subview, so the
+// grouping, its rows and the open-flow action are asserted here against the same
+// view model and the subview's own keybind catalog; the rendered panel only says
+// that a flow exists.
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { testRender } from "@opentui/solid";
 import type { EvidenceEntry } from "../../src/contracts/environment.ts";
 import type {
 	StageJournal,
@@ -21,17 +25,14 @@ import {
 	stageFlowPath,
 } from "../../src/tui/dash/evidence-open.ts";
 import {
-	EVIDENCE_EMPTY_LINES,
-	EVIDENCE_PANEL_LINES,
-	evidencePanelLines,
 	evidenceRows,
 	evidenceStepDetailLines,
 } from "../../src/tui/dash/evidence-panel.ts";
 import {
 	dashboardDetailKeybindCatalog,
 	EVIDENCE_PANEL_CONTEXT,
+	evidenceSubviewKeybindCatalog,
 } from "../../src/tui/dash/keybinds.ts";
-import { EvidencePanel } from "../../src/tui/dash/panels/EvidencePanel.tsx";
 
 function entry(
 	overrides: Partial<EvidenceEntry> & { id: string },
@@ -186,17 +187,21 @@ test("a workflow without a journal keeps the debug-request grouping", () => {
 
 test("the open-flow keybind is offered only where a flow page exists", () => {
 	const keys = (flow: boolean) =>
-		dashboardDetailKeybindCatalog({
-			artifactsVisible: true,
-			evidenceFlow: flow,
-		})
+		evidenceSubviewKeybindCatalog({ flow })
 			.flatMap((section) => section.keybinds)
-			.filter((keybind) => keybind.context === EVIDENCE_PANEL_CONTEXT)
 			.map((keybind) => keybind.key);
 	expect(keys(true)).toContain("f");
 	// A workflow that recorded no step has no page to open, so the footer and the
 	// help modal do not advertise a key that would do nothing.
 	expect(keys(false)).not.toContain("f");
+	// The grid's own Evidence section advertises only the way into the view: the
+	// listing's actions are the page's.
+	expect(
+		dashboardDetailKeybindCatalog({ artifactsVisible: true })
+			.flatMap((section) => section.keybinds)
+			.filter((keybind) => keybind.context === EVIDENCE_PANEL_CONTEXT)
+			.map((keybind) => keybind.key),
+	).toEqual(["Enter"]);
 });
 
 test("the flow page is opened by the path the evidence store composes", async () => {
@@ -242,95 +247,4 @@ test("the flow page is opened by the path the evidence store composes", async ()
 	expect(evidenceOpenRequest(state, SHOT).args).toContain(
 		`${worktree}/.herdr-workflow/evidence/wf-flow/${SHOT.file}`,
 	);
-});
-
-test("the rendered panel shows the segment, its steps and their detail", async () => {
-	const t = await testRender(
-		() => (
-			<EvidencePanel
-				entries={[SHOT, VIDEO, POSTER, LOOSE]}
-				journal={JOURNAL}
-				active
-				selectedIndex={0}
-				kitty={false}
-				height={EVIDENCE_PANEL_LINES + 6}
-				state="ready"
-			/>
-		),
-		{ width: 120, height: 24 },
-	);
-	const frame = await t.waitForFrame((value) =>
-		value.includes("open the cart"),
-	);
-	expect(frame).toContain("Segment 1");
-	expect(frame).toContain("00:02 open the cart");
-	expect(frame).toContain("expected cart is empty");
-	expect(frame).toContain("Unreferenced");
-	t.renderer.destroy();
-});
-
-test("a workflow whose journal holds only steps still lists them", async () => {
-	// The height is the painted row count, not the manifest's: a journal-only flow
-	// has no evidence file at all, and the empty state's one title row would clip
-	// the very listing the journal was written for.
-	expect(
-		evidencePanelLines({ rows: 3, state: "ready", terminalLines: 40 }),
-	).toBe(EVIDENCE_PANEL_LINES);
-	const t = await testRender(
-		() => (
-			<EvidencePanel
-				entries={[]}
-				journal={{
-					workflowId: "wf-flow",
-					entries: [FIRST, SECOND],
-					flowPage: "stage-flow.html",
-				}}
-				active
-				selectedIndex={0}
-				kitty={false}
-				height={evidencePanelLines({
-					rows: 2,
-					state: "ready",
-					terminalLines: 40,
-				})}
-				state="ready"
-			/>
-		),
-		{ width: 120, height: 24 },
-	);
-	const frame = await t.waitForFrame((value) =>
-		value.includes("00:02 open the cart"),
-	);
-	expect(frame).not.toContain("No evidence attached yet");
-	expect(frame).toContain("Segment 1");
-	t.renderer.destroy();
-});
-
-test("a collapsed panel says how many rows it has no room for", async () => {
-	const t = await testRender(
-		() => (
-			<EvidencePanel
-				entries={[]}
-				journal={JOURNAL}
-				active
-				selectedIndex={0}
-				kitty={false}
-				height={EVIDENCE_EMPTY_LINES}
-				state="ready"
-			/>
-		),
-		{ width: 120, height: 8 },
-	);
-	const frame = await t.waitForFrame((value) =>
-		value.includes("rows, no room"),
-	);
-	const rows = frame.split("\n");
-	// One title row, and the accessory says the listing exists rather than that the
-	// workflow recorded nothing.
-	expect(rows[0]).toContain("Evidence");
-	expect(rows[0]).toContain(
-		`${evidenceRows([], JOURNAL).length} rows, no room`,
-	);
-	expect(frame).not.toContain("No evidence attached yet");
-	t.renderer.destroy();
 });

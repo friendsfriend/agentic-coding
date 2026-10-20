@@ -212,6 +212,12 @@ const EvidenceAttachParameters = Type.Object({
 				"Store it under one debug request's evidence when it belongs to one.",
 		}),
 	),
+	report: Type.Optional(
+		Type.Boolean({
+			description:
+				"Mark this file as the run's markdown report: kind other, a .md/.markdown text file. The newest flagged entry is the report the dashboard reads beside the evidence list; the flag needs no new kind and no rename of the stored path.",
+		}),
+	),
 });
 
 /** `evidence_list`: what this workflow has already stored. */
@@ -598,6 +604,7 @@ export function createEnvironmentExtension(
 					"Store one file this run produced — a screenshot, video, trace, repro script or log — so it outlives this turn and the developer can review it.",
 					"The file must be inside this run's own checkout or scratch directory: the server resolves it and refuses anything outside, so never attach a file you only read from elsewhere.",
 					"The content must match the kind, and the store refuses a file over its cap (video 100 MB, other 20 MB) or one that would exceed the workflow's total; nothing already stored is ever deleted to make room.",
+					"Set `report` on a markdown file to make it the run's report: the dashboard renders it beside the evidence it cites with `[^<evidence-id>]` markers.",
 				].join(" "),
 				parameters: EvidenceAttachParameters,
 				execute: async (args, api) => {
@@ -628,6 +635,7 @@ export function createEnvironmentExtension(
 										? { step: run.env.HERDR_STEP_ID }
 										: {}),
 									...(run.env.HERDR_ROLE ? { role: run.env.HERDR_ROLE } : {}),
+									...(args.report ? { report: true } : {}),
 								},
 							}),
 						);

@@ -86,6 +86,47 @@ export function agentSessionKeybindCatalog(): KeybindSection[] {
 }
 
 /**
+ * Evidence subview (`evidence-summary-subview`). The page replaces the panel grid
+ * the way the agent session does, so it publishes its own catalog instead of the
+ * detail one: what the sidebar selection is, the report scroll, the two file
+ * actions, and — only when the workflow recorded a stage flow — the action that
+ * opens its `stage-flow.html`. `Esc` is the only way back, so it is listed as an
+ * action rather than a hidden standard key.
+ */
+export function evidenceSubviewKeybindCatalog(options: {
+	/** Whether the open workflow has a stage flow journal, which is what makes the
+	 * open-flow action reachable. */
+	flow?: boolean;
+}): KeybindSection[] {
+	return [
+		{
+			title: "Evidence view",
+			keybinds: [
+				{ key: "Esc", action: "Back to the dashboard panels", short: "back" },
+				{ key: "Enter", action: "Open selected evidence", short: "open" },
+				{ key: "y", action: "Copy selected evidence path", short: "copy" },
+				{
+					key: "j/k or ↑/↓",
+					action: "Move in the evidence list",
+					standard: true,
+				},
+				{ key: "PgUp/PgDn", action: "Scroll the report", short: "scroll" },
+				{ key: "Ctrl+U/Ctrl+D", action: "Scroll the report", standard: true },
+				...(options.flow
+					? [
+							{
+								key: "f",
+								action: "Open stage flow page",
+								short: "flow",
+							},
+						]
+					: []),
+			],
+		},
+	];
+}
+
+/**
  * Workflow detail (`App`) catalog. Panel-specific actions carry a `context`
  * so the footer changes with the focused panel, while `?` still lists the
  * whole set.
@@ -95,9 +136,6 @@ export function dashboardDetailKeybindCatalog(options: {
 	/** The workflow's definition id, so the artifact panel's help section shares
 	 * the panel's own surface name ("Debug report" for the debug family). */
 	definitionId?: string;
-	/** Whether the open workflow has a stage flow journal, which is what makes
-	 * the Evidence panel's open-flow action reachable. */
-	evidenceFlow?: boolean;
 }): KeybindSection[] {
 	const sections: KeybindSection[] = [
 		{
@@ -188,28 +226,10 @@ export function dashboardDetailKeybindCatalog(options: {
 			keybinds: [
 				{
 					key: "Enter",
-					action: "Open evidence externally",
-					short: "open",
+					action: "Open the evidence view",
+					short: "evidence",
 					context: EVIDENCE_PANEL_CONTEXT,
 				},
-				{
-					key: "y",
-					action: "Copy evidence path",
-					short: "copy",
-					context: EVIDENCE_PANEL_CONTEXT,
-				},
-				// Only a workflow with a stage flow journal has a page to open, so the
-				// action is advertised only where it does something.
-				...(options.evidenceFlow
-					? [
-							{
-								key: "f",
-								action: "Open stage flow page",
-								short: "flow",
-								context: EVIDENCE_PANEL_CONTEXT,
-							},
-						]
-					: []),
 			],
 		},
 		{

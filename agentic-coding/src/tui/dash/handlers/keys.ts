@@ -54,18 +54,10 @@ export interface DashboardKeyContext {
 	readonly setSelectedArtifact: (index: number) => void;
 	readonly selectedDecision: () => number;
 	readonly setSelectedDecision: (index: number) => void;
-	readonly selectedEvidence: () => number;
-	readonly setSelectedEvidence: (index: number) => void;
-	/** The panel's rows, newest first and grouped — the one index space the
-	 * panel renders, the selection indexes and this handler acts on. */
-	readonly evidenceRows: () => readonly EvidenceListRow[];
-	/** Hand one evidence file to the platform's system opener. */
-	readonly openEvidence: (entry: EvidenceEntry) => void;
-	/** Copy one evidence file's local path to the clipboard. */
-	readonly copyEvidencePath: (entry: EvidenceEntry) => void;
-	/** Open the workflow's `stage-flow.html` with the system opener, when it has
-	 * a stage flow journal. */
-	readonly openEvidenceFlow: () => void;
+	/** Open the evidence subview page (`evidence-summary-subview`). The panel itself
+	 * only summarises the manifest, so `Enter` on it is this one action; every
+	 * per-row action moved into the subview's own key layer. */
+	readonly openEvidenceView: () => void;
 	readonly artifacts: () => string[];
 	readonly data: () => DashboardData;
 	readonly dimensions: () => { width: number; height: number };
@@ -239,9 +231,7 @@ export function createDashboardKeyHandler(
 			setSelectedArtifact,
 			selectedDecision,
 			setSelectedDecision,
-			selectedEvidence,
-			setSelectedEvidence,
-			evidenceRows,
+			openEvidenceView,
 			artifacts,
 			data,
 			notify,
@@ -436,30 +426,6 @@ export function createDashboardKeyHandler(
 			}
 			return;
 		}
-		if (name === "y" && activePanel() === EVIDENCE_PANEL) {
-			// A step row names no file of its own: it is part of the segment heading's
-			// narrative, so copying it would copy nothing — and saying so is better
-			// than a key that silently does nothing on the row it is pressed on.
-			const row = evidenceRows()[selectedEvidence()];
-			if (row?.entry) context.copyEvidencePath(row.entry);
-			else if (row?.step)
-				// Only what always holds: a step row can sit in a segment, in the
-				// trailing "unreferenced" group, or in a segment whose recording was
-				// discarded — naming "the segment's evidence rows" would be false in two
-				// of the three, and point at rows the panel is not showing.
-				notify(
-					"A stage flow step names no file — press f for the flow page, or pick an evidence row to copy a path",
-					"info",
-				);
-			return;
-		}
-		if (name === "f" && activePanel() === EVIDENCE_PANEL) {
-			// The flow page of a workflow that has a journal: one keybind away, like
-			// the evidence files themselves. A workflow without a journal offers no
-			// page, and the action is a no-op there.
-			context.openEvidenceFlow();
-			return;
-		}
 		if (name === "r") {
 			refresh();
 			return;
@@ -508,13 +474,6 @@ export function createDashboardKeyHandler(
 						selectedDecision() + 1,
 					),
 				);
-			else if (activePanel() === EVIDENCE_PANEL)
-				setSelectedEvidence(
-					Math.min(
-						Math.max(0, evidenceRows().length - 1),
-						selectedEvidence() + 1,
-					),
-				);
 			return;
 		}
 		if (name === "up" || name === "k") {
@@ -525,8 +484,6 @@ export function createDashboardKeyHandler(
 				setSelectedArtifact(Math.max(0, selectedArtifact() - 1));
 			else if (activePanel() === CLASSIFIER_PANEL)
 				setSelectedDecision(Math.max(0, selectedDecision() - 1));
-			else if (activePanel() === EVIDENCE_PANEL)
-				setSelectedEvidence(Math.max(0, selectedEvidence() - 1));
 			return;
 		}
 		if (name === "enter" || name === "return") {
@@ -592,13 +549,10 @@ export function createDashboardKeyHandler(
 				return;
 			}
 			if (activePanel() === EVIDENCE_PANEL) {
-				// Every kind opens the stored file externally — including a video,
-				// whose bytes are never rendered inline. A journal step row has no file
-				// of its own, so it opens the flow page the step is written into: the
-				// step's own record, in the order it happened.
-				const row = evidenceRows()[selectedEvidence()];
-				if (row?.entry) context.openEvidence(row.entry);
-				else if (row?.step !== undefined) context.openEvidenceFlow();
+				// The panel is a summary, so its only action is the reading surface: the
+				// subview opens every kind externally and renders the report beside the
+				// list, including a step row's flow page.
+				openEvidenceView();
 				return;
 			}
 			const approval = gate();
@@ -648,5 +602,136 @@ export function createDashboardKeyHandler(
 				setBusy(false);
 			}
 		}
+	};
+}
+
+/** The keys the evidence subview declares (`evidence-summary-subview`). The page
+ * binds only these, so a key it does not name still reaches the shell. */
+export const EVIDENCE_VIEW_KEYS: readonly string[] = Object.freeze([
+	"escape",
+	"j",
+	"k",
+	"up",
+	"down",
+	"enter",
+	"return",
+	"y",
+	"f",
+	"pageup",
+	"pagedown",
+	"ctrl+u",
+	"ctrl+d",
+]);
+
+/** What the evidence subview's key handler acts on. Everything here belongs to the
+ * page: the sidebar selection, the two file actions and the report's scroll box. */
+export interface EvidenceSubviewKeyContext {
+	/** The sidebar's rows in display order — the one index space the list renders,
+	 * the selection indexes and this handler acts on. */
+	readonly rows: () => readonly EvidenceListRow[];
+	readonly selectedIndex: () => number;
+	readonly setSelectedIndex: (index: number) => void;
+	/** The report pane's scroll box, published by the view. */
+	readonly reportScroll: () =>
+		| { scrollBy: (lines: number) => void }
+		| undefined;
+	readonly dimensions: () => { width: number; height: number };
+	/** Hand one evidence file to the platform's system opener. */
+	readonly openEvidence: (entry: EvidenceEntry) => void;
+	/** Copy one evidence file's local path to the clipboard. */
+	readonly copyEvidencePath: (entry: EvidenceEntry) => void;
+	/** Open the workflow's `stage-flow.html` with the system opener, when it has a
+	 * stage flow journal. */
+	readonly openEvidenceFlow: () => void;
+	readonly close: () => void;
+	readonly notify: (
+		message: string,
+		kind?: "info" | "success" | "warning" | "error",
+	) => void;
+}
+
+/** What the two row actions say when the sidebar has no row at all: the page is
+ * reachable from an empty manifest, and a silent key there is indistinguishable
+ * from a broken one. */
+const NO_EVIDENCE_SELECTED = "No evidence selected";
+
+/**
+ * The evidence subview's key surface: `Esc` back to the grid, the sidebar
+ * selection, `Enter`/`y` on the selected row, the report's page scroll, and the
+ * flow page.
+ *
+ * A journal step row is not an evidence entry — it names no file — so `Enter` on
+ * it opens the flow page the step is written into, and `y` says why there is
+ * nothing to copy rather than silently doing nothing. That is the behaviour the
+ * panel's own rows had before the listing moved here; the page is the reason the
+ * two actions sit on the selected row at all.
+ */
+export function createEvidenceSubviewKeyHandler(
+	context: EvidenceSubviewKeyContext,
+): (key: KeyEvent) => boolean {
+	return (key: KeyEvent) => {
+		const name = key.name.toLowerCase();
+		const page = Math.max(1, Math.floor(context.dimensions().height / 3));
+		if (name === "escape") {
+			context.close();
+			return true;
+		}
+		if (name === "j" || name === "down") {
+			context.setSelectedIndex(
+				Math.min(
+					Math.max(0, context.rows().length - 1),
+					context.selectedIndex() + 1,
+				),
+			);
+			return true;
+		}
+		if (name === "k" || name === "up") {
+			context.setSelectedIndex(Math.max(0, context.selectedIndex() - 1));
+			return true;
+		}
+		if (
+			name === "pageup" ||
+			name === "pagedown" ||
+			(name === "u" && key.ctrl) ||
+			(name === "d" && key.ctrl)
+		) {
+			const box = context.reportScroll();
+			// The pane owns the scroll: without it (the view has not painted its box
+			// yet) the key is claimed and does nothing rather than scrolling whatever
+			// else happens to be focused.
+			if (!box) return true;
+			const up = name === "pageup" || name === "u";
+			box.scrollBy(up ? -page : page);
+			return true;
+		}
+		if (name === "f") {
+			context.openEvidenceFlow();
+			return true;
+		}
+		const row = context.rows()[context.selectedIndex()];
+		if (name === "enter" || name === "return") {
+			// Every kind opens the stored file externally, including a video, whose
+			// bytes are never rendered inline.
+			if (row?.entry) context.openEvidence(row.entry);
+			else if (row?.step !== undefined) context.openEvidenceFlow();
+			// A page with no rows (a run that attached nothing) says so rather than
+			// claiming the key and looking broken beside `f`, which already answers.
+			else context.notify(NO_EVIDENCE_SELECTED, "info");
+			return true;
+		}
+		if (name === "y") {
+			if (row?.entry) context.copyEvidencePath(row.entry);
+			else if (row?.step !== undefined)
+				// Only what always holds: a step row can sit in a segment, in the trailing
+				// unreferenced group, or in a segment whose recording was discarded —
+				// naming "the segment's evidence rows" would be false in two of the three.
+				context.notify(
+					"A stage flow step names no file — press f for the flow page, or pick an evidence row to copy a path",
+					"info",
+				);
+			else context.notify(NO_EVIDENCE_SELECTED, "info");
+			return true;
+		}
+		return false;
 	};
 }

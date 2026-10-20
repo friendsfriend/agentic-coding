@@ -1,8 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-// The Evidence panel inside the dashboard route (`add-dashboard-evidence-panel`,
-// tasks 1.1/2.2): the manifest the route read reaches the panel, the preview
-// bytes are read only under kitty graphics, and a read that did not succeed is
-// never rendered as "no evidence attached".
+// The Evidence panel and its subview inside the dashboard route
+// (`evidence-summary-subview`, tasks 1.1/2.2/4.2).
+//
+// The grid's panel is one line of kind counts; `Enter` opens the evidence page,
+// which reads the run's report and the bytes of the screenshots it cites, lists
+// the whole manifest beside it, and answers `Esc`. Nothing about the manifest is
+// read from disk for the panel itself, a read that did not succeed is never
+// rendered as "no evidence attached", and a journal step row keeps its selection
+// across a refresh.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { setRendererCapabilities } from "@opentui/core/testing";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
@@ -24,13 +29,24 @@ import type {
 import type { DashboardData } from "../../src/contracts/workflow.ts";
 import { App } from "../../src/tui/dash/App.tsx";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
-import { EVIDENCE_PANEL_LINES } from "../../src/tui/dash/evidence-panel.ts";
+import {
+	EVIDENCE_EMPTY_LINES,
+	EVIDENCE_PANEL_LINES,
+	evidenceKindSummary,
+} from "../../src/tui/dash/evidence-panel.ts";
 import {
 	activeNotification,
 	resetNotifications,
 } from "../../src/tui/dash/notifications.ts";
-import { loadEvidenceFile } from "../../src/tui/data/evidence.ts";
-import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
+import {
+	evidenceFileKey,
+	loadEvidenceFile,
+} from "../../src/tui/data/evidence.ts";
+import {
+	clearGateway,
+	configureGateway,
+	invalidateKey,
+} from "../../src/tui/data/index.ts";
 
 type Test = Awaited<ReturnType<typeof testRender>>;
 
@@ -41,30 +57,52 @@ const PNG = Uint8Array.from(
 	(character) => character.charCodeAt(0),
 );
 
-function entry(id: string, caption: string): EvidenceEntry {
+function entry(
+	overrides: Partial<EvidenceEntry> & { id: string },
+): EvidenceEntry {
 	return {
-		id,
 		kind: "screenshot",
-		file: `${id}.png`,
-		caption,
+		file: `${overrides.id}.png`,
+		caption: "",
 		createdAt: "2026-01-01T12:04:05.000Z",
 		bytes: 1234,
+		...overrides,
 	};
 }
 
-/** Newest first in the panel: `LATER` paints above `EARLIER`. */
-const EARLIER = entry("01J000000000000000000000A", "first shot");
-const LATER = entry("01J000000000000000000000B", "second shot");
+/** Newest first in the sidebar: `LATER` paints above `EARLIER`. */
+const EARLIER = entry({
+	id: "01J000000000000000000000A",
+	caption: "first shot",
+});
+const LATER = entry({
+	id: "01J000000000000000000000B",
+	caption: "second shot",
+	bytes: 2048,
+});
+/** The run's report: the newest flagged entry, and a markdown file rather than a
+ * picture. */
+const REPORT = entry({
+	id: "01J000000000000000000000C",
+	kind: "other",
+	file: "01J000000000000000000000C.md",
+	caption: "run report",
+	report: true,
+	bytes: 300,
+});
 const MANIFEST: EvidenceManifest = {
 	workflowId: "demo",
-	entries: [EARLIER, LATER],
-	bytes: 2468,
+	entries: [EARLIER, LATER, REPORT],
+	bytes: 3582,
 	quotaBytes: 1024,
 };
+/** A report that cites one of the two screenshots and nothing else: only the
+ * cited one is ever read as image bytes. */
+const REPORT_TEXT = `# Run report\n\nThe cart was empty [^${EARLIER.id}].\n`;
 
 interface FakeGateway {
 	readonly gateway: DashboardGateway;
-	/** The ids the preview read asked for. */
+	/** The ids whose bytes the route asked for, in read order. */
 	readonly files: string[];
 	/** How many times the manifest was read. */
 	readonly observes: number[];
@@ -79,17 +117,25 @@ type EvidenceSource =
 	| Error
 	| (() => EvidenceManifest | Error);
 
-/** What the entry-bytes read answers. */
+/** What the entry-bytes read answers: a picture, a markdown report, or the
+ * gateway's two failure modes. */
 type FileAnswer = "png" | "absent" | "error";
 
 function fakeGateway(
 	evidence: EvidenceSource,
 	options: {
 		readonly file?: FileAnswer;
+		/** What the report entry's own read answers. */
+		readonly report?: FileAnswer | "text";
 		/** The dashboard the panels render, when a test needs its own rows. */
 		readonly dashboard?: DashboardData;
 		/** The stage step journal the route reads, when a test paints flow rows. */
 		readonly journal?: StageJournal;
+		/** A hold on the report read: the test decides when it completes, so a state
+		 * change can land while it is in flight. */
+		readonly reportGate?: () => Promise<void>;
+		/** The same hold for a cited screenshot's bytes. */
+		readonly fileGate?: () => Promise<void>;
 	} = {},
 ): FakeGateway {
 	const files: string[] = [];
@@ -122,7 +168,15 @@ function fakeGateway(
 		},
 		evidenceFile: async (_workflowId: string, id: string) => {
 			files.push(id);
-			if (options.file === "error") throw new Error("the preview read failed");
+			if (id === REPORT.id) {
+				if (options.reportGate) await options.reportGate();
+				const answer = options.report ?? "text";
+				if (answer === "error") throw new Error("the report read failed");
+				if (answer === "absent") return undefined;
+				return new TextEncoder().encode(REPORT_TEXT);
+			}
+			if (options.fileGate) await options.fileGate();
+			if (options.file === "error") throw new Error("the image read failed");
 			if (options.file === "absent") return undefined;
 			return PNG;
 		},
@@ -197,6 +251,11 @@ function TestDashboard() {
 		agentView(value, ctx) {
 			ctx.require("agent.view", String(value));
 		},
+		// The evidence page is a dashboard body page, so it takes the keyboard
+		// through its own field exactly like the agent session does.
+		evidenceView(value, ctx) {
+			ctx.require("evidence.view", String(value));
+		},
 	});
 	onCleanup(() => {
 		disposeKeymap();
@@ -220,7 +279,13 @@ async function waitFor(t: Test, predicate: () => boolean, ticks = 40) {
 	}
 }
 
-test("the workflow's evidence reaches the panel and its bytes are read only under kitty graphics", async () => {
+/** Focus the Evidence panel in the grid (Change → Shift+K). */
+async function focusEvidence(t: Test) {
+	t.mockInput.pressKey("k", { shift: true });
+	await t.renderOnce();
+}
+
+test("the panel is a summary, and Enter opens the report beside the manifest", async () => {
 	const fake = fakeGateway(MANIFEST);
 	configureGateway(fake.gateway);
 	const t = await testRender(() => <TestDashboard />, {
@@ -229,73 +294,277 @@ test("the workflow's evidence reaches the panel and its bytes are read only unde
 	});
 	await dashboardReady(t);
 
-	// The manifest the route read is what the panel paints.
-	const listed = await t.waitForFrame((frame) => frame.includes("first shot"));
-	expect(listed).toContain("second shot");
-
-	// Focus the Evidence row (Change → Shift+K) and let the route settle.
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
-	await waitFor(t, () => false, 4);
-	// Without kitty graphics the panel never asks for the bytes at all, not even
-	// when the selection moves.
-	t.mockInput.pressKey("j");
-	await t.renderOnce();
-	await waitFor(t, () => false, 4);
+	// The manifest the route read is what the panel counts — and nothing of it is
+	// listed: the row is the summary.
+	const summary = evidenceKindSummary(MANIFEST.entries);
+	const listed = await t.waitForFrame((frame) => frame.includes(summary));
+	expect(summary).toBe("2 screenshots · 1 other");
+	expect(listed).not.toContain("first shot");
+	expect(listed).not.toContain("second shot");
+	// The panel spends no file read: a refresh of the grid must not pull bytes.
 	expect(fake.files).toEqual([]);
 
-	// The renderer's probe then reports kitty graphics, and moving the selection
-	// re-runs the preview read for the newly selected entry.
-	setRendererCapabilities(t.renderer, { kitty_graphics: true });
-	t.mockInput.pressKey("k");
-	await t.renderOnce();
-	await waitFor(t, () => fake.files.length > 0);
-	// Row 0 is the newest entry, row 1 the older one: the read names the row the
-	// selection moved to.
-	expect(fake.files).toEqual([LATER.id]);
+	await focusEvidence(t);
+	expect(fake.files).toEqual([]);
 
-	t.mockInput.pressKey("j");
-	await t.renderOnce();
-	await waitFor(t, () => fake.files.length > 1);
-	expect(fake.files).toEqual([LATER.id, EARLIER.id]);
+	// Enter opens the page and its report read, which is the only read an open
+	// costs on a terminal that cannot draw images.
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.length > 0, 160);
+	expect(fake.files).toEqual([REPORT.id]);
+	const report = await t.waitForFrame((frame) =>
+		frame.includes("The cart was empty"),
+	);
+	// The sidebar lists every entry, report included, in the page's own order.
+	expect(report).toContain("second shot");
+	expect(report).toContain("first shot");
+	// No image is mounted without kitty graphics, so the cited screenshot stays a
+	// line of metadata rather than half blocks.
+	expect(report).not.toMatch(/[\u2580-\u259f]/);
 
-	// Back to the first row: the entry the selection left had its bytes dropped,
-	// so this is a read and not a cache hit — one preview is resident at a time.
-	t.mockInput.pressKey("k");
-	await t.renderOnce();
-	await waitFor(t, () => fake.files.length > 2);
-	expect(fake.files).toEqual([LATER.id, EARLIER.id, LATER.id]);
-
-	// A workflow event refreshes the dashboard, and the refresh must not re-read
-	// the immutable bytes of a selection that did not move.
-	const subscription = fake.subscriptions[0];
-	if (!subscription) throw new Error("the route did not subscribe");
-	subscription.onEvent({
-		instance: "test",
-		sequence: 1,
-		domain: "workflow",
-		kind: "workflow.updated",
-		resource: "/demo",
-		at: "2026-01-01T12:04:05.000Z",
-		payload: {},
-	});
-	await new Promise((resolve) => setTimeout(resolve, 300));
-	await t.renderOnce();
-	expect(fake.files).toEqual([LATER.id, EARLIER.id, LATER.id]);
-
-	// The dashboard body was disposed: its last preview's bytes are dropped with
-	// it, so reading the same entry goes back to the gateway instead of being
-	// answered from the process-wide cache.
+	// Esc returns to the grid, whose row is the summary again.
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => frame.includes(summary));
 	t.renderer.destroy();
-	await loadEvidenceFile("/demo", "demo", LATER.id);
-	expect(fake.files).toEqual([LATER.id, EARLIER.id, LATER.id, LATER.id]);
 }, 20000);
 
-test("a refresh keeps the selection on a stage flow step row", async () => {
-	// Two steps in two segments, and one manifest entry. The rows the panel paints
-	// are the two steps and that one entry: a clamp that counted the manifest's
-	// entries would bound the selection at 0, so a developer parked on the second
-	// step would be thrown back to the first on every refresh.
+test("with kitty graphics the report reads the screenshots it cites, and only those", async () => {
+	const fake = fakeGateway(MANIFEST);
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.includes(REPORT.id), 160);
+
+	// The report cites one of the two screenshots: the capability probe answers,
+	// and the next dashboard refresh is what re-runs the read for the cited set.
+	setRendererCapabilities(t.renderer, { kitty_graphics: true });
+	await publishEvent(t, fake);
+	await waitFor(t, () => fake.files.includes(EARLIER.id), 160);
+	expect(fake.files.filter((id) => id !== REPORT.id)).toEqual([EARLIER.id]);
+
+	// A refresh with the same citation is a cache hit, not a second read: the
+	// report's bytes are immutable once written.
+	await publishEvent(t, fake);
+	await waitFor(t, () => false, 4);
+	expect(fake.files.filter((id) => id !== REPORT.id)).toEqual([EARLIER.id]);
+
+	// The dashboard body was disposed with the page: its cited bytes are dropped
+	// with it, so reading the same entry goes back to the gateway instead of being
+	// answered from the process-wide cache.
+	t.renderer.destroy();
+	await loadEvidenceFile("/demo", "demo", EARLIER.id);
+	expect(fake.files.filter((id) => id !== REPORT.id)).toEqual([
+		EARLIER.id,
+		EARLIER.id,
+	]);
+}, 20000);
+
+test("a cited screenshot the cache dropped is read again, not painted as missing", async () => {
+	// The same race the report text recovers from: an event gap or a reconnect
+	// clears the cache while the bytes are in flight, so the answer is dropped
+	// before it was ever an answer. A picture that exists must not spend the rest
+	// of the open pretending it is absent.
+	let release = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = () => resolve();
+	});
+	let gated = false;
+	const fake = fakeGateway(MANIFEST, {
+		fileGate: () => {
+			if (gated) return Promise.resolve();
+			gated = true;
+			return held;
+		},
+	});
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.includes(REPORT.id), 160);
+	// The capability probe answers and the dashboard refreshes, which is when the
+	// cited set is read — the same handshake the kitty test waits for.
+	setRendererCapabilities(t.renderer, { kitty_graphics: true });
+	await publishEvent(t, fake);
+	await waitFor(t, () => fake.files.includes(EARLIER.id), 200);
+	expect(fake.files.filter((id) => id === EARLIER.id)).toHaveLength(1);
+
+	// The key moves on mid-read, and the dropped answer is not "the file is gone".
+	invalidateKey(evidenceFileKey("/demo", "demo", EARLIER.id));
+	release();
+	await waitFor(
+		t,
+		() => fake.files.filter((id) => id === EARLIER.id).length >= 2,
+		200,
+	);
+	// One retry, then the bytes are in hand: the citation stops being a caption.
+	expect(fake.files.filter((id) => id === EARLIER.id)).toHaveLength(2);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("The cart was empty"),
+	);
+	expect(frame).not.toContain("The report file is not on this machine.");
+	t.renderer.destroy();
+}, 20000);
+
+test("a report the gateway answers as gone says so, and re-opening retries it", async () => {
+	const fake = fakeGateway(MANIFEST, { report: "absent" });
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	const gone = await t.waitForFrame((frame) =>
+		frame.includes("The report file is not on this machine."),
+	);
+	expect(gone).not.toContain("Loading report…");
+	// The sidebar is unaffected: a report that is gone is not a manifest that is.
+	expect(gone).toContain("first shot");
+	expect(fake.files).toEqual([REPORT.id]);
+
+	// The absent answer is dropped, so re-opening reaches the gateway again rather
+	// than being served the cached `undefined`.
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => frame.includes("2 screenshots"));
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.length > 1, 160);
+	expect(fake.files).toEqual([REPORT.id, REPORT.id]);
+	t.renderer.destroy();
+}, 20000);
+
+test("a report read the cache dropped stays pending instead of reading as missing", async () => {
+	// The manifest refreshes about once a second while a run streams, and a
+	// dropped cache entry is not a file the gateway called gone: a read that
+	// finishes after its key moved on is an answer nobody asked for any more, so
+	// the pane stays pending and the next refresh reads again.
+	let release = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = () => resolve();
+	});
+	let gated = false;
+	const fake = fakeGateway(MANIFEST, {
+		reportGate: () => {
+			if (gated) return Promise.resolve();
+			gated = true;
+			return held;
+		},
+	});
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.includes(REPORT.id), 160);
+
+	// The key moves on while the read is in flight — the page closing is what
+	// normally does this — and the in-flight answer is then dropped by the cache.
+	invalidateKey(evidenceFileKey("/demo", "demo", REPORT.id));
+	release();
+	await waitFor(t, () => false, 6);
+	const pending = await t.waitForFrame((frame) =>
+		frame.includes("Loading report…"),
+	);
+	expect(pending).not.toContain("The report file is not on this machine.");
+	expect(pending).not.toContain("The report could not be read");
+
+	// A refresh re-runs the read, which now answers: the report paints.
+	await publishEvent(t, fake);
+	const painted = await t.waitForFrame((frame) =>
+		frame.includes("The cart was empty"),
+	);
+	expect(painted).toContain("The cart was empty");
+	expect(fake.files).toEqual([REPORT.id, REPORT.id]);
+	t.renderer.destroy();
+}, 20000);
+
+test("closing the page drops the report bytes it read", async () => {
+	// The bytes are only kept while the pane shows them: a closed page leaves
+	// nothing resident, so opening it again reads the immutable file again rather
+	// than growing the process-wide cache by one report per workflow.
+	const fake = fakeGateway(MANIFEST);
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("The cart was empty"));
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => frame.includes("2 screenshots"));
+	expect(fake.files).toEqual([REPORT.id]);
+
+	// Reading the same report now reaches the gateway instead of the cache.
+	await loadEvidenceFile("/demo", "demo", REPORT.id);
+	expect(fake.files).toEqual([REPORT.id, REPORT.id]);
+	t.renderer.destroy();
+}, 20000);
+
+test("a report read that fails is reported, and the next open retries it", async () => {
+	const fake = fakeGateway(MANIFEST, { report: "error" });
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	const failed = await t.waitForFrame((frame) =>
+		frame.includes("The report could not be read"),
+	);
+	expect(failed).toContain("the report read failed");
+	expect(failed).not.toContain("No report attached");
+
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => frame.includes("2 screenshots"));
+	t.mockInput.pressEnter();
+	await waitFor(t, () => fake.files.length > 1, 160);
+	expect(fake.files).toEqual([REPORT.id, REPORT.id]);
+	t.renderer.destroy();
+}, 20000);
+
+test("a run that attached no report says so and still lists every entry", async () => {
+	// No flagged entry at all: the report panel answers with a fact, and the
+	// sidebar is the whole manifest.
+	const fake = fakeGateway({ ...MANIFEST, entries: [EARLIER, LATER] });
+	configureGateway(fake.gateway);
+	const t = await testRender(() => <TestDashboard />, {
+		width: 140,
+		height: 40,
+	});
+	await dashboardReady(t);
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
+	const frame = await t.waitForFrame((value) =>
+		value.includes("No report attached"),
+	);
+	expect(frame).toContain("first shot");
+	expect(frame).toContain("second shot");
+	// Nothing to read: an absent report costs no file read.
+	expect(fake.files).toEqual([]);
+	t.renderer.destroy();
+}, 20000);
+
+test("a refresh keeps the subview's selection on a stage flow step row", async () => {
+	// Two steps in two segments, and one manifest entry. The rows the sidebar
+	// paints are the two steps and that one entry: a clamp that counted the
+	// manifest's entries would bound the selection at 0, so a developer parked on
+	// the second step would be thrown back to the first on every refresh.
 	const step = (
 		seq: number,
 		segment: number,
@@ -325,12 +594,15 @@ test("a refresh keeps the selection on a stage flow step row", async () => {
 		height: 40,
 	});
 	await dashboardReady(t);
+	// The panel only says that a flow exists; the steps are the page's.
+	const panel = await t.waitForFrame((frame) => frame.includes("flow"));
+	expect(panel).not.toContain("open the cart");
+	await focusEvidence(t);
+	t.mockInput.pressEnter();
 	await t.waitForFrame((frame) => frame.includes("open the cart"));
 
-	// Focus the Evidence panel and move one row down, onto the second step: its
-	// detail only paints while that row is the selected one.
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
+	// Move one row down, onto the second step: its detail only paints while that
+	// row is the selected one.
 	t.mockInput.pressKey("j");
 	await t.renderOnce();
 	expect(
@@ -338,8 +610,8 @@ test("a refresh keeps the selection on a stage flow step row", async () => {
 	).toBeTruthy();
 
 	// A workflow event refreshes the dashboard — the route throttles refreshes to
-	// one per second, so the refreshed listing is awaited rather than inspected on
-	// the next frame — and the selection stays where the developer left it.
+	// one per second, so the refreshed page is awaited rather than inspected on the
+	// next frame — and the selection stays where the developer left it.
 	await publishEvent(t, fake);
 	await waitFor(t, () => false, 60);
 	const after = await t.waitForFrame(() => true);
@@ -386,61 +658,6 @@ test("a failed manifest read is reported once per distinct failure, and not as a
 	t.renderer.destroy();
 }, 20000);
 
-test("a preview the gateway answers as gone says so, and the next refresh retries it", async () => {
-	const fake = fakeGateway(MANIFEST, { file: "absent" });
-	configureGateway(fake.gateway);
-	const t = await testRender(() => <TestDashboard />, {
-		width: 140,
-		height: 40,
-	});
-	await dashboardReady(t);
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
-	setRendererCapabilities(t.renderer, { kitty_graphics: true });
-	t.mockInput.pressKey("j");
-	await t.renderOnce();
-	await waitFor(t, () => fake.files.length > 0, 160);
-	expect(fake.files).toEqual([EARLIER.id]);
-
-	const frame = await t.waitForFrame((value) =>
-		value.includes("Preview unavailable"),
-	);
-	expect(frame).not.toContain("Loading preview…");
-
-	// The absent answer is droppable and dropped: the next refresh reaches the
-	// gateway again instead of being served the cached `undefined`.
-	await publishEvent(t, fake);
-	await waitFor(t, () => fake.files.length > 1, 160);
-	expect(fake.files).toEqual([EARLIER.id, EARLIER.id]);
-	t.renderer.destroy();
-}, 20000);
-
-test("a preview read that fails says so, and the next refresh retries it", async () => {
-	const fake = fakeGateway(MANIFEST, { file: "error" });
-	configureGateway(fake.gateway);
-	const t = await testRender(() => <TestDashboard />, {
-		width: 140,
-		height: 40,
-	});
-	await dashboardReady(t);
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
-	setRendererCapabilities(t.renderer, { kitty_graphics: true });
-	t.mockInput.pressKey("j");
-	await t.renderOnce();
-	await waitFor(t, () => fake.files.length > 0, 160);
-	expect(fake.files).toEqual([EARLIER.id]);
-
-	const frame = await t.waitForFrame((value) =>
-		value.includes("Preview could not be read"),
-	);
-	expect(frame).not.toContain("Loading preview…");
-	await publishEvent(t, fake);
-	await waitFor(t, () => fake.files.length > 1, 160);
-	expect(fake.files).toEqual([EARLIER.id, EARLIER.id]);
-	t.renderer.destroy();
-}, 20000);
-
 test("opening evidence that is not on this machine is reported, not silent", async () => {
 	// The fixture's worktree has no evidence directory, so the composed path is
 	// missing and the opener is refused before it runs.
@@ -451,10 +668,12 @@ test("opening evidence that is not on this machine is reported, not silent", asy
 		height: 40,
 	});
 	await dashboardReady(t);
-	await t.waitForFrame((frame) => frame.includes("first shot"));
+	await t.waitForFrame((frame) => frame.includes("1 screenshot"));
 
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
+	await focusEvidence(t);
+	// Enter opens the page, and Enter on the selected row opens its file.
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("No report attached"));
 	t.mockInput.pressEnter();
 	await waitFor(t, () =>
 		(activeNotification()?.message ?? "").includes("Could not open evidence"),
@@ -480,10 +699,19 @@ function manyAgents(): DashboardData {
  * is the agents list and not a mention somewhere else. */
 const LAST_AGENT = "agent-23";
 
-/** The three terminal sizes the detail grid has to survive, with the evidence
- * row each one earns: the compact height, and the 30% cap on the short one. */
+/** The summary the grid's evidence row paints for the fixture manifest. */
+const SUMMARY = evidenceKindSummary(MANIFEST.entries);
+
+/** The three terminal sizes the detail grid has to survive. The evidence row is
+ * a fixed two lines at every one of them: the summary does not grow with the
+ * manifest, so the grid above keeps its rows. */
 const LAYOUT_SIZES = [
-	{ name: "small", width: 100, height: 24, evidenceLines: 7 },
+	{
+		name: "small",
+		width: 100,
+		height: 24,
+		evidenceLines: EVIDENCE_PANEL_LINES,
+	},
 	{
 		name: "medium",
 		width: 120,
@@ -522,10 +750,10 @@ test("the compact evidence row leaves the agents panel the rest at every size", 
 			height: size.height,
 		});
 		await dashboardReady(t);
-		await t.waitForFrame((frame) => frame.includes("first shot"));
+		await t.waitForFrame((frame) => frame.includes(SUMMARY));
 		const rows = frameRows(t, size.height);
 		const evidenceTop = rows.findIndex((row) => row.includes("Evidence"));
-		// Compact and capped: the row is a fixed height, not the 28% of the
+		// Compact and capped: the row is a fixed height, not the share of the
 		// terminal it used to take, whatever the manifest holds.
 		expect(rows.length - evidenceTop, `${size.name} evidence row`).toBe(
 			size.evidenceLines,
@@ -569,7 +797,7 @@ test("the agents panel scrolls inside the body a host leaves it, not the termina
 		height: 40,
 	});
 	await dashboardReady(t);
-	await t.waitForFrame((frame) => frame.includes("first shot"));
+	await t.waitForFrame((frame) => frame.includes(SUMMARY));
 	const evidenceTop = t
 		.captureCharFrame()
 		.split("\n")
@@ -603,8 +831,9 @@ test("a run with no evidence spends one row instead of the grid's height", async
 		value.includes("No evidence attached yet"),
 	);
 	const rows = frame.split("\n").slice(0, 24);
-	// Collapsed: the title row carries the empty state, so the seven rows the
-	// panel would otherwise take stay with the grid above it.
+	// Collapsed: the title row carries the empty state, so the rows the panel would
+	// otherwise take stay with the grid above it.
+	expect(EVIDENCE_EMPTY_LINES).toBe(1);
 	expect(rows.at(-1)).toContain("Evidence");
 	expect(rows.at(-1)).toContain("No evidence attached yet");
 

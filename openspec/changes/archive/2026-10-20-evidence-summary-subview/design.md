@@ -88,6 +88,37 @@ Alternatives rejected:
   agent's `.md` log would silently become the run's report, and "which of two
   markdown files is the report" would be a guess.
 
+### Reconciled with `add-stage-flow-evidence` (merged before this change)
+
+`add-stage-flow-evidence` landed an Evidence *listing* with a flow grouping and
+an open-flow-page action on the panel. This change moves the listing into the
+subview, so that behavior moves with it rather than being dropped:
+
+- **The summary row keeps the journal's meaning.** The panel's kind counts are
+  the manifest's counts, and the row carries a `flow` accessory whenever the
+  workflow recorded a stage flow — the marker that says the subview's sidebar is
+  grouped by segment. A `report` accessory marks a flagged report entry. Neither
+  marker is a listing: the row still holds one line whatever the manifest holds.
+- **The requirement moves with it.** The merged `Flow grouping in the evidence panel`
+  requirement is RENAMED to `Flow grouping in the evidence subview sidebar` and
+  MODIFIED there, so the base spec states what the code does instead of keeping
+  the panel-level requirement the summary row replaced.
+- **The grouping itself moves unchanged.** `evidenceRows(entries, journal)` keeps
+  both groupings — segment groups in journal order with the journal step rows in
+  them, then a trailing group, or debug-request groups newest-first without a
+  journal — and the subview's sidebar is its only renderer. The panel no longer
+  renders rows at all, so the previous panel-level `j/k` selection is gone.
+- **Step rows keep their behavior.** A journal step row names no file: `Enter`
+  on it opens the workflow's `stage-flow.html`, and `y` says why there is nothing
+  to copy instead of silently doing nothing. The subview's key handler owns both
+  branches, so the coverage those tests had is kept, not dropped.
+- **The open-flow action moves into the subview.**
+  `evidenceSubviewKeybindCatalog({ flow })` advertises `f` only when the workflow
+  has a flow page, and `dashboardDetailKeybindCatalog` loses its `evidenceFlow`
+  option and the `f`/`y` entries — the grid advertises exactly one Evidence
+  action (`Enter`). The action stays unavailable (reported, not stale-opened)
+  without a flow page.
+
 ### The subview is a dashboard body page, not a dialog or a shell route
 
 Follow the agent-session precedent: `evidenceSubviewOpen` state in `App.tsx`,
@@ -111,11 +142,13 @@ a keymap field of its own.
   `Enter` move to the subview, so the panel section in
   `dashboardDetailKeybindCatalog` becomes one entry.
 - Subview keys: `j/k` and `↑/↓` move the sidebar selection, `Enter` opens the
-  focused entry, `y` copies its path, `PgUp/PgDn` and `Ctrl+U/Ctrl+D` scroll
-  the report, `Esc` returns. There is deliberately no report/sidebar focus
-  toggle: the sidebar owns the selection keys and the report has its own scroll
-  keys, which keeps one focus ring and keeps selection free of I/O (the
-  property the panel's `wheelMovesCursor={false}` protects today).
+  focused entry (or the flow page on a journal step row), `y` copies its path,
+  `f` opens `stage-flow.html` when the workflow has one, `PgUp/PgDn` and
+  `Ctrl+U/Ctrl+D` scroll the report, `Esc` returns. There is deliberately no
+  report/sidebar focus toggle: the sidebar owns the selection keys and the
+  report has its own scroll keys, which keeps one focus ring and keeps selection
+  free of I/O (the property the panel's `wheelMovesCursor={false}` protects
+today).
 
 ### View model split
 
@@ -169,13 +202,15 @@ muted/secondary colours the wiki's frontmatter/source rows use. The report text
 is rendered from our rewritten markers, never by relying on the markdown
 engine's footnote handling.
 
-Right pane: the existing `SelectableList` over `evidenceRows()` with the panel's
-row labels and debug-request headers, the focused entry's `evidenceDetailLines`
+Right pane: the existing `SelectableList` over `evidenceRows()` — which is the
+flow grouping when the workflow has a stage journal and the debug-request
+grouping otherwise — with the panel's row labels and group headers, the focused
+row's `evidenceDetailLines` (or `evidenceStepDetailLines` for a journal step)
 under it, and the same tap-to-select / tap-to-activate wiring the panel had.
 
 The panel body is the summary line only: `evidenceKindSummary(entries)`, with
-the existing accessory carrying the read state (empty/loading/error) and a short
-`report` marker when a report entry exists.
+the existing accessory carrying the read state (empty/loading/error) and the
+`report`/`flow` markers when a report entry or a stage flow exists.
 
 ## Risks / Trade-offs
 

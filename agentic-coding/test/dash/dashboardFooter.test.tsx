@@ -59,6 +59,11 @@ function TestDashboard(props: { testData?: DashboardData }) {
 		agentView(value, ctx) {
 			ctx.require("agent.view", String(value));
 		},
+		// The evidence page is a dashboard body page with its own keymap field, so
+		// the harness registers it exactly like the agent session's.
+		evidenceView(value, ctx) {
+			ctx.require("evidence.view", String(value));
+		},
 	});
 	onCleanup(() => {
 		disposeKeymap();
@@ -145,14 +150,34 @@ test("footer follows the focused detail panel and hides standard keys", async ()
 	expect(agents).not.toContain("Enter open");
 	expect(agents).not.toContain("Enter decision");
 
-	// Shift+H → Change, then Shift+K → the full-width Evidence row: its own
-	// actions replace the Change panel's.
+	// Shift+H → Change, then Shift+K → the full-width Evidence row: it advertises
+	// the one action that opens the evidence view in place of the Change panel's.
 	t.mockInput.pressKey("h", { shift: true });
 	await t.renderOnce();
 	t.mockInput.pressKey("k", { shift: true });
-	const evidence = await t.waitForFrame((frame) => frame.includes("y copy"));
-	expect(evidence).toContain("Enter open");
+	const evidence = await t.waitForFrame((frame) =>
+		frame.includes("Enter evidence"),
+	);
 	expect(evidence).not.toContain("Enter approve");
+	// The listing lives in the view, so the grid advertises none of its actions.
+	expect(evidence).not.toContain("y copy");
+	expect(evidence).not.toContain("f flow");
+
+	// Enter replaces the grid's footer with the view's own keys, and Esc brings
+	// the panel's back.
+	t.mockInput.pressEnter();
+	const view = await t.waitForFrame((frame) =>
+		frame.includes("No report attached"),
+	);
+	// The view advertises its own actions, and the panel's one action is no longer
+	// in the footer.
+	expect(view).toContain("Esc back");
+	expect(view).toContain("Enter open");
+	expect(view).toContain("y copy");
+	expect(view).not.toContain("Enter evidence");
+
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => frame.includes("Enter evidence"));
 
 	t.renderer.destroy();
 });
@@ -176,8 +201,7 @@ test("`?` help keeps the full descriptions the footer shortens", async () => {
 	expect(help).toContain("Move between panels");
 	expect(help).toContain("View selected verifier result");
 	expect(help).toContain("View selected classification");
-	expect(help).toContain("Open evidence externally");
-	expect(help).toContain("Copy evidence path");
+	expect(help).toContain("Open the evidence view");
 
 	t.renderer.destroy();
 });

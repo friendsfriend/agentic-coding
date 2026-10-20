@@ -212,6 +212,7 @@ export async function handleEvidenceRoute(
 				...(body.url === undefined ? {} : { url: body.url }),
 				...(body.poster === undefined ? {} : { poster: body.poster }),
 				...(body.pinned === undefined ? {} : { pinned: body.pinned }),
+				...(body.report === undefined ? {} : { report: body.report }),
 				...(deps.now === undefined ? {} : { now: deps.now }),
 			};
 			const entry = await attachEvidence(scope, {

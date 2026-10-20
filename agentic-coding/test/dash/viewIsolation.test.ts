@@ -182,8 +182,10 @@ describe("the dashboard route is a coordinator", () => {
 			...source.matchAll(/const \[([A-Za-z]+), set[A-Za-z]+\] = createSignal/g),
 		].map((m) => m[1]);
 		// the route's own loading/credential state, the dashboard observation, the
-		// evidence manifest with the preview bytes it renders, and the renderer's
-		// kitty capability read into a signal
+		// evidence manifest and the report page's own reads (`summary-subview`:
+		// the view field, the report text and its state, and the bytes of the
+		// screenshots it cites), and the renderer's kitty capability read into a
+		// signal
 		for (const name of inline)
 			expect([
 				"busy",
@@ -196,9 +198,15 @@ describe("the dashboard route is a coordinator", () => {
 				"credentialInput",
 				"userActionOpen",
 				"evidence",
-				"evidencePreview",
 				"evidenceState",
 				"evidenceError",
+				// The evidence subview: its page field, the report text, what the
+				// report read is doing, why it failed and the cited pictures.
+				"evidenceView",
+				"reportText",
+				"reportState",
+				"reportError",
+				"reportImages",
 				"debugRequests",
 				"debugRequestsState",
 				"debugRequestsError",

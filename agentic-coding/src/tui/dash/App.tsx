@@ -51,10 +51,15 @@ import {
 	evidenceFileKey,
 	loadEvidence,
 	loadEvidenceFile,
+	loadEvidenceText,
 	loadStageJournal,
 } from "../data/evidence.ts";
 import { loadArtifact, loadArtifacts } from "../data/git.ts";
-import { gatewayOrUndefined, invalidateKey } from "../data/index.ts";
+import {
+	gatewayOrUndefined,
+	invalidateKey,
+	SupersededRead,
+} from "../data/index.ts";
 import {
 	answerQuestion,
 	applyRepair,
@@ -91,13 +96,19 @@ import {
 import {
 	type EvidenceReadState,
 	evidencePanelLines,
-	evidencePreviewEntry,
+	evidenceReportEntry,
 	evidenceRows,
 } from "./evidence-panel.ts";
-import { createDashboardKeyHandler } from "./handlers/keys.ts";
+import { evidenceCitedImages, inlineImagePreview } from "./evidence-report.ts";
+import {
+	createDashboardKeyHandler,
+	createEvidenceSubviewKeyHandler,
+	EVIDENCE_VIEW_KEYS,
+} from "./handlers/keys.ts";
 import {
 	agentSessionKeybindCatalog,
 	dashboardDetailKeybindCatalog,
+	evidenceSubviewKeybindCatalog,
 	panelContext,
 } from "./keybinds.ts";
 import {
@@ -121,11 +132,7 @@ import { panelPointerHandlers } from "./panel-pointer.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
 import { ClassifierPanel } from "./panels/ClassifierPanel.tsx";
-import {
-	EvidencePanel,
-	type EvidencePreviewState,
-	inlineImagePreview,
-} from "./panels/EvidencePanel.tsx";
+import { EvidencePanel } from "./panels/EvidencePanel.tsx";
 import { OpenSpecPanel } from "./panels/OpenSpecPanel.tsx";
 import {
 	agentMetricLine,
@@ -152,6 +159,10 @@ import {
 	SESSION_PICKER_KEYS,
 } from "./ui/AgentSessionView.tsx";
 import { pendingCredentialRequest } from "./ui/CredentialsModal.tsx";
+import {
+	type EvidenceReportState,
+	EvidenceSubview,
+} from "./ui/EvidenceSubview.tsx";
 import type { FindingEvent } from "./ui/FindingsModal.tsx";
 import {
 	debounce,
@@ -381,58 +392,67 @@ export function App(props: {
 	let stageJournalGeneration = 0;
 	let stageJournalController: AbortController | undefined;
 	let lastStageJournalError: string | undefined;
-	const [evidencePreview, setEvidencePreview] = createSignal<
-		Uint8Array | undefined
-	>(undefined);
-	/** What the selected entry's preview is doing: `absent` is the gateway's own
-	 * answer that the recorded file is gone, so it must not read as loading. */
-	const [evidencePreviewState, setEvidencePreviewState] =
-		createSignal<EvidencePreviewState>("loading");
-	let evidencePreviewGeneration = 0;
-	let evidencePreviewController: AbortController | undefined;
-	/** Kitty graphics support is the renderer's own capability probe: the panel
+	/** The evidence subview page: a page of the dashboard body exactly like the
+	 * agent session, so it takes the keyboard through its own keymap field
+	 * (`evidence.view`) instead of a dialog (`evidence-summary-subview`). */
+	const [evidenceView, setEvidenceView] = createSignal<"none" | "open">("none");
+	const evidenceViewOpen = () => evidenceView() === "open";
+	let evidenceSubviewScrollbox: ScrollBoxRenderable | undefined;
+	/** The report the subview renders: the newest flagged entry, or none. Its text
+	 * and the bytes of the screenshots it cites are read only while the view is
+	 * open — the panel is a summary and spends no file read on a refresh. */
+	const [reportText, setReportText] = createSignal<string | undefined>(
+		undefined,
+	);
+	const [reportState, setReportState] =
+		createSignal<EvidenceReportState>("none");
+	const [reportError, setReportError] = createSignal<string | undefined>(
+		undefined,
+	);
+	const [reportImages, setReportImages] = createSignal<
+		Readonly<Record<string, Uint8Array>>
+	>({});
+	let reportGeneration = 0;
+	let reportController: AbortController | undefined;
+	let reportTextId: string | undefined;
+	let reportImageIds: string[] = [];
+	let reportImageGeneration = 0;
+	let reportImageController: AbortController | undefined;
+	/** Kitty graphics support is the renderer's own capability probe: the report
 	 * never sniffs `$TERM`, and an unanswered probe means no inline image. The
 	 * probe itself is not reactive, so it is read into a signal — and re-read when
-	 * the dashboard or the selection changes, which is what lets the panel's own
-	 * memos follow a capability that settled after the first paint. */
+	 * the dashboard changes, which is what lets the view follow a capability that
+	 * settled after the first paint. */
 	const [kittyGraphics, setKittyGraphics] = createSignal(
 		inlineImagePreview(renderer.capabilities),
 	);
 	createEffect(() => {
 		data();
-		selectedEvidence();
 		setKittyGraphics(inlineImagePreview(renderer.capabilities));
 	});
-	/** The height of the full-width Evidence row: compact and fixed, one line while
-	 * the run has attached nothing, and capped on a short terminal. Keeping it a
-	 * budget rather than a share of the terminal is what leaves the agents list
-	 * the rest of the grid — and it scrolls inside its own height, so a long
-	 * manifest costs the panels above it nothing. */
+	/** The subview's sidebar rows: the flow grouping when the workflow recorded a
+	 * stage flow, the debug-request grouping otherwise. */
 	const evidenceListRows = createMemo(() =>
 		evidenceRows(evidence().entries, stageJournal()),
 	);
+	/** The panel's height: one summary line, or the title row alone while the run
+	 * has attached nothing. */
 	const evidencePanelHeight = () =>
 		evidencePanelLines({
-			rows: evidenceListRows().length,
+			entries: evidence().entries.length,
 			state: evidenceState(),
-			terminalLines: dimensions().height,
 		});
-	const selectedEvidenceEntry = createMemo(
-		() => evidenceListRows()[selectedEvidence()]?.entry,
-	);
-	const selectedEvidencePath = createMemo(() => {
-		const entry = selectedEvidenceEntry();
-		if (!entry) return undefined;
+	/** One entry's local path, or `undefined` when it has none — the shared
+	 * lookup the sidebar's detail rows and the report's image fallback read. */
+	const evidencePathOf = (entry: EvidenceEntry): string | undefined => {
 		try {
 			return evidenceLocalPath(data().state, entry);
 		} catch {
-			// An unaddressable workflow id: the panel shows metadata without a path.
+			// An unaddressable workflow id: the row shows metadata without a path.
 			return undefined;
 		}
-	});
-	const previewEvidenceEntry = createMemo(() =>
-		evidencePreviewEntry(evidenceListRows(), selectedEvidence()),
-	);
+	};
+	const reportEntry = createMemo(() => evidenceReportEntry(evidence().entries));
 	// The manifest read follows every dashboard refresh: attaching evidence does
 	// not bump the workflow revision, and a workflow event drops the cached
 	// manifest, so a forced read is what keeps the panel from missing an entry
@@ -556,76 +576,206 @@ export function App(props: {
 				}
 			});
 	});
-	// The selected entry's bytes, read only when the renderer can show them: a
-	// screenshot, or the poster of a selected video. Stored bytes are immutable
-	// once written, so a selection that does not move is not re-read — and its
-	// image renderable is not remounted — on every dashboard refresh, and only
-	// the current selection's bytes stay cached.
-	let previewBytesId: string | undefined;
+	// The run's report, read when the subview opens and again when the manifest's
+	// newest flagged entry changes. A report's bytes are immutable once written, so
+	// re-opening the same report is a cache hit rather than a second read; the
+	// settled id is what keeps this effect from looping on its own signals.
+	let reportSettledId: string | undefined;
 	createEffect(() => {
-		const entry = previewEvidenceEntry();
-		const id = kittyGraphics() ? entry?.id : undefined;
-		if (id !== undefined && id === previewBytesId) return;
-		const previous = previewBytesId;
-		previewBytesId = id;
-		const generation = ++evidencePreviewGeneration;
-		setEvidencePreview(undefined);
-		setEvidencePreviewState("loading");
-		evidencePreviewController?.abort();
-		if (previous !== undefined && previous !== id)
-			invalidateKey(evidenceFileKey(props.repo, props.workflowId, previous));
+		const entry = evidenceViewOpen() ? reportEntry() : undefined;
+		const id = entry?.id;
+		if (id === reportSettledId) return;
+		reportSettledId = id;
+		const generation = ++reportGeneration;
+		reportController?.abort();
+		// The bytes of a report this page no longer shows are dropped with it: closing
+		// the view (or moving to another report) leaves nothing resident, and the
+		// immutable file is re-read if the page shows it again.
+		if (reportTextId !== undefined && reportTextId !== id) {
+			invalidateKey(
+				evidenceFileKey(props.repo, props.workflowId, reportTextId),
+			);
+			reportTextId = undefined;
+		}
+		reportTextId = id;
+		setReportText(undefined);
+		setReportError(undefined);
 		if (id === undefined) {
-			// Nothing to show: no image-bearing entry is selected, or the terminal
-			// cannot draw one.
-			setEvidencePreviewState("ready");
+			// No flagged entry is a fact, not a pending read: the subview says the run
+			// attached no report instead of loading forever.
+			setReportState("none");
 			return;
 		}
-		if (props.profile === "test" || !gatewayOrUndefined()) return;
-		evidencePreviewController = new AbortController();
-		void loadEvidenceFile(
+		setReportState("loading");
+		if (props.profile === "test" || !gatewayOrUndefined()) {
+			setReportState("absent");
+			return;
+		}
+		reportController = new AbortController();
+		void loadEvidenceText(
 			props.repo,
 			props.workflowId,
 			id,
-			evidencePreviewController.signal,
+			reportController.signal,
+			// A completion the cache dropped because the key moved on is not the
+			// gateway's "the file is gone": reject it so the two answers stay
+			// distinguishable instead of painting a failure for a readable report.
+			{ superseded: "reject" },
 		)
-			.then((bytes) => {
-				if (generation !== evidencePreviewGeneration) return;
-				// A file the gateway answers as gone is not still loading: the panel says
-				// so, and the next refresh retries it instead of pinning the selection to
-				// a preview that will never arrive.
-				if (bytes === undefined) {
-					previewBytesId = undefined;
-					// The absent answer is cached like any other, so the retry has to drop it
-					// too — otherwise the next read is served the same `undefined` without
-					// ever reaching the gateway.
+			.then((text) => {
+				if (generation !== reportGeneration) return;
+				// A file the gateway answers as gone is not still loading, and the answer
+				// is cached, so the retry has to drop both the settled id and the key.
+				if (text === undefined) {
+					reportSettledId = undefined;
 					invalidateKey(evidenceFileKey(props.repo, props.workflowId, id));
+					setReportState("absent");
+					return;
 				}
-				setEvidencePreview(bytes);
-				setEvidencePreviewState(bytes === undefined ? "absent" : "ready");
+				setReportText(text);
+				setReportState("ready");
 			})
 			.catch((error) => {
-				if (generation !== evidencePreviewGeneration) return;
+				if (generation !== reportGeneration) return;
 				if (error instanceof DOMException && error.name === "AbortError")
 					return;
-				// A preview that cannot be read leaves the metadata, and the next
-				// refresh retries it rather than pinning an empty preview forever.
-				if (previewBytesId === id) previewBytesId = undefined;
-				setEvidencePreviewState("error");
+				if (error instanceof SupersededRead) {
+					// The key moved on while the read was in flight, so the answer was
+					// dropped before it was ever an answer: stay pending and let the next run
+					// read it again rather than report a report that exists as missing.
+					reportSettledId = undefined;
+					return;
+				}
+				// A report that cannot be read stays retriable: the failure is reported
+				// once and the next open reads it again.
+				reportSettledId = undefined;
+				setReportError(error instanceof Error ? error.message : String(error));
+				setReportState("error");
 				traceTui(
-					"tui.dashboard.evidence.preview",
-					{ surface: "dashboard", action: "evidence-preview" },
+					"tui.dashboard.evidence.report",
+					{ surface: "dashboard", action: "evidence-report" },
 					"error",
 				);
 			});
 	});
-	// The dashboard body is one instance per workflow page, so its last preview's
-	// bytes are dropped with it: a browsing session leaves nothing resident, and
-	// the bytes are immutable and re-readable if the page is opened again.
+	/**
+	 * Read one cited screenshot, allowing one second attempt when the cache dropped
+	 * the first answer because the key moved on — an event gap, a reconnect or a
+	 * cleared cache is not the gateway's "the file is gone". Without it a present,
+	 * readable picture is painted as its caption for the rest of the open, which is
+	 * exactly the state the report text already recovers from. Bounded at one retry
+	 * per id per read, so a cache that keeps clearing cannot spin.
+	 */
+	const readCitedImage = async (
+		id: string,
+		signal: AbortSignal,
+	): Promise<Uint8Array | undefined> => {
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			try {
+				const bytes = await loadEvidenceFile(
+					props.repo,
+					props.workflowId,
+					id,
+					signal,
+					{ superseded: "reject" },
+				);
+				// The gateway's own `undefined` is an absent file: the cached answer is
+				// dropped so the next open asks again rather than being served it.
+				if (bytes === undefined)
+					invalidateKey(evidenceFileKey(props.repo, props.workflowId, id));
+				return bytes;
+			} catch (error) {
+				if (!(error instanceof SupersededRead)) throw error;
+			}
+		}
+		// Two dropped answers: the caption carries this open instead of a loop.
+		return undefined;
+	};
+	// The screenshots the open report cites, read only for a terminal the renderer
+	// says can draw them: a cited image is bytes the reader has to be able to see,
+	// and a fallback line costs no read. The set is diffed against the previous one
+	// so a report edit drops the bytes it no longer cites.
+	createEffect(() => {
+		const text = reportText();
+		const cited =
+			evidenceViewOpen() && kittyGraphics() && reportState() === "ready"
+				? text === undefined
+					? []
+					: evidenceCitedImages(text, evidence().entries).map(
+							(entry) => entry.id,
+						)
+				: [];
+		const nextIds = cited.join(",");
+		if (nextIds === reportImageIds.join(",")) return;
+		const previous = reportImageIds;
+		reportImageIds = cited;
+		const generation = ++reportImageGeneration;
+		reportImageController?.abort();
+		// Only what is still cited stays resident: a closed report leaves no picture
+		// bytes cached behind it.
+		const kept: Record<string, Uint8Array> = {};
+		for (const id of cited) {
+			const bytes = reportImages()[id];
+			if (bytes !== undefined) kept[id] = bytes;
+		}
+		setReportImages(kept);
+		for (const id of previous)
+			if (!cited.includes(id))
+				invalidateKey(evidenceFileKey(props.repo, props.workflowId, id));
+		const missing = cited.filter((id) => kept[id] === undefined);
+		if (missing.length === 0) return;
+		if (props.profile === "test" || !gatewayOrUndefined()) return;
+		reportImageController = new AbortController();
+		const signal = reportImageController.signal;
+		void Promise.all(
+			missing.map(
+				async (id) => [id, await readCitedImage(id, signal)] as const,
+			),
+		)
+			.then((loaded) => {
+				if (generation !== reportImageGeneration) return;
+				const next: Record<string, Uint8Array> = { ...kept };
+				for (const [id, bytes] of loaded)
+					if (bytes !== undefined) next[id] = bytes;
+				setReportImages(next);
+			})
+			.catch((error) => {
+				if (generation !== reportImageGeneration) return;
+				if (error instanceof DOMException && error.name === "AbortError")
+					return;
+				// An unreadable picture falls back to its caption and path; the next open
+				// retries it instead of pinning an empty frame.
+				reportImageIds = [];
+				traceTui(
+					"tui.dashboard.evidence.images",
+					{ surface: "dashboard", action: "evidence-images" },
+					"error",
+				);
+			});
+	});
+	/** Open the evidence subview. The panel keeps its selection so reopening lands
+	 * where the reader left it, and the keymap field is what hands the keyboard
+	 * over from the grid. */
+	const openEvidenceView = () => {
+		setEvidenceView("open");
+		props.keymap.setData("evidence.view", "open");
+	};
+	/** Leave the view for the dashboard grid: the manifest stays loaded and the
+	 * selection stays put, so returning is a repaint rather than a read. */
+	const backEvidenceView = () => {
+		setEvidenceView("none");
+		props.keymap.setData("evidence.view", "none");
+	};
+	// The dashboard body is one instance per workflow page, so the bytes it read
+	// are dropped with it: a browsing session leaves nothing resident, and they are
+	// immutable and re-readable if the page is opened again.
 	onCleanup(() => {
-		if (previewBytesId === undefined) return;
-		invalidateKey(
-			evidenceFileKey(props.repo, props.workflowId, previewBytesId),
-		);
+		if (reportTextId !== undefined)
+			invalidateKey(
+				evidenceFileKey(props.repo, props.workflowId, reportTextId),
+			);
+		for (const id of reportImageIds)
+			invalidateKey(evidenceFileKey(props.repo, props.workflowId, id));
 	});
 	const openEvidence = async (entry: EvidenceEntry) => {
 		try {
@@ -1901,22 +2051,30 @@ export function App(props: {
 	const keybindCatalog = createMemo(() =>
 		agentSessionOpen()
 			? agentSessionKeybindCatalog()
-			: dashboardDetailKeybindCatalog({
-					artifactsVisible: artifacts().length > 0,
-					definitionId: data().state.definition?.id,
-					evidenceFlow: stageJournal()?.flowPage !== undefined,
-				}),
+			: evidenceViewOpen()
+				? evidenceSubviewKeybindCatalog({
+						flow: stageJournal()?.flowPage !== undefined,
+					})
+				: dashboardDetailKeybindCatalog({
+						artifactsVisible: artifacts().length > 0,
+						definitionId: data().state.definition?.id,
+					}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store; the route publishes the panel-scoped catalog here, or the
-	// agent session's own keys while its view replaced the grid. A composition
+	// agent session's and the evidence view's own keys while a page replaced the
+	// grid. A composition
 	// root that parks the dashboard (the shell's sidebar panel) keeps its own
 	// catalog instead, so a parked dashboard never overwrites it.
 	createEffect(() => {
 		if (props.active && !props.active()) return;
 		setActiveKeybindCatalog(
 			keybindCatalog(),
-			agentSessionOpen() ? undefined : panelContext(activePanel()),
+			// A page owns every key while it is open, so the panel context (which scopes
+			// the footer to the focused panel) is suppressed on both of them.
+			agentSessionOpen() || evidenceViewOpen()
+				? undefined
+				: panelContext(activePanel()),
 		);
 	});
 	const helpMaxOffset = () =>
@@ -2165,12 +2323,7 @@ export function App(props: {
 		setSelectedArtifact,
 		selectedDecision,
 		setSelectedDecision,
-		selectedEvidence,
-		setSelectedEvidence,
-		evidenceRows: () => evidenceListRows(),
-		openEvidence: (entry) => void openEvidence(entry),
-		openEvidenceFlow: () => void openEvidenceFlow(),
-		copyEvidencePath,
+		openEvidenceView,
 		artifacts,
 		data,
 		setData,
@@ -2271,11 +2424,26 @@ export function App(props: {
 		setUserActionOpen,
 		setArtifacts,
 	});
+	const evidenceViewKeyHandler = createEvidenceSubviewKeyHandler({
+		rows: () => evidenceListRows(),
+		selectedIndex: selectedEvidence,
+		setSelectedIndex: setSelectedEvidence,
+		reportScroll: () => evidenceSubviewScrollbox,
+		dimensions,
+		openEvidence: (entry) => void openEvidence(entry),
+		copyEvidencePath,
+		openEvidenceFlow: () => void openEvidenceFlow(),
+		close: backEvidenceView,
+		notify,
+	});
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
 		// No agent session page is open until the Agents panel opens one; the
 		// grid's detail layer requires this field.
 		props.keymap.setData("agent.view", "none");
+		// Same for the evidence subview: only `Enter` on the Evidence panel opens
+		// it, and the grid's layer requires this field.
+		props.keymap.setData("evidence.view", "none");
 		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
 		const disposeTheme = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -3208,6 +3376,31 @@ export function App(props: {
 		// keyboard from the panel grid through the `agent.view` field (and only
 		// while no dialog is on top): scrolling its transcript, and leaving it for
 		// the grid on Escape. The prompt input stays focused and owns text keys.
+		// The evidence subview is the second page of the dashboard body, gated on its
+		// own field so it never opens with the agent session's key layer. It takes
+		// every key it declares — the sidebar selection, both file actions, the report
+		// scroll and Escape back to the grid — and nothing else, so an unbound key
+		// still reaches the shell.
+		const disposeEvidenceView = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "evidence-view",
+			priority: 1000,
+			evidenceView: "open",
+			activeModal: "none",
+			commands: [
+				{
+					name: "evidence-view.handle",
+					run: ({ event }) => {
+						if (!evidenceViewOpen()) return false;
+						return evidenceViewKeyHandler(event);
+					},
+				},
+			],
+			bindings: EVIDENCE_VIEW_KEYS.map((key) => ({
+				key,
+				cmd: "evidence-view.handle",
+			})),
+		});
 		const disposeAgentSession = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "agent-session",
@@ -3270,8 +3463,9 @@ export function App(props: {
 			priority: 100,
 			appView: "detail",
 			activeModal: "none",
-			// The grid keeps its keys only while the agent session page is closed.
+			// The grid keeps its keys only while neither page has replaced it.
 			agentView: "none",
+			evidenceView: "none",
 			commands: [
 				{
 					name: "detail.handle",
@@ -3330,10 +3524,12 @@ export function App(props: {
 			disposeVerdict();
 			disposeAgentSession();
 			disposeAgentSessionPicker();
+			disposeEvidenceView();
 			agentSessionStopWatch?.();
-			// The unmounted page must not leave its keymap field parking the grid
+			// The unmounted pages must not leave their keymap fields parking the grid
 			// layers of whatever surface mounts next.
 			props.keymap.setData("agent.view", "none");
+			props.keymap.setData("evidence.view", "none");
 			dispose();
 		});
 		// Failure diagnostics the engine attaches to a workflow are surfaced once
@@ -3386,10 +3582,18 @@ export function App(props: {
 		// view's own reset cannot swallow the dashboard keybinds. The field is
 		// separate from `modal.active`: this is a page, not a dialog.
 		const repairAgentView = () => {
-			if (agentSessionOpen()) return;
-			const view = props.keymap.getData?.("agent.view");
-			if (view === "session" || view === "picker")
-				props.keymap.setData("agent.view", "none");
+			if (!agentSessionOpen()) {
+				const view = props.keymap.getData?.("agent.view");
+				if (view === "session" || view === "picker")
+					props.keymap.setData("agent.view", "none");
+			}
+			// The evidence subview gets the same repair: a page that closed (or never
+			// opened) must not leave the grid without its keys.
+			if (
+				!evidenceViewOpen() &&
+				props.keymap.getData?.("evidence.view") === "open"
+			)
+				props.keymap.setData("evidence.view", "none");
 		};
 		createEffect(repairAgentView);
 		// The effect above only re-runs when the session state changes, so any
@@ -3515,7 +3719,9 @@ export function App(props: {
 							// The agent session page takes the body: the grid stays mounted
 							// (hidden, so its scroll positions survive the round trip) and
 							// hands the keyboard over through the `agent.view` keymap field.
-							visible={!agentSessionOpen()}
+							// The evidence subview is the other such page and follows
+							// `evidence.view`.
+							visible={!agentSessionOpen() && !evidenceViewOpen()}
 						>
 							<box
 								style={{
@@ -3580,22 +3786,16 @@ export function App(props: {
 								/>
 							</box>
 							{/* Read-only, and always rendered with its empty state: the
-							    evidence a run produced is never a panel that appears late. */}
+							    evidence a run produced is never a panel that appears late. The
+							    panel is the one-line summary; `Enter` opens the subview, which
+							    is where the entries are listed and the report is read. */}
 							<EvidencePanel
 								entries={evidence().entries}
 								journal={stageJournal()}
 								active={activePanel() === EVIDENCE_PANEL}
-								selectedIndex={selectedEvidence()}
-								kitty={kittyGraphics()}
-								preview={() => evidencePreview()}
-								previewState={evidencePreviewState()}
-								path={selectedEvidencePath()}
 								height={evidencePanelHeight()}
 								state={evidenceState()}
 								error={evidenceError()}
-								onSelectIndex={setSelectedEvidence}
-								onActivateRow={activatePanelRow(setSelectedEvidence)}
-								wheelMovesCursor={false}
 								onFocusRequest={() => focusPanelFromPointer(EVIDENCE_PANEL)}
 							/>
 						</box>
@@ -3663,6 +3863,39 @@ export function App(props: {
 									}}
 								/>
 							)}
+						</Show>
+						{/* The evidence subview, the grid's other page: the run's report beside
+						    every entry the manifest holds. It is a page rather than a dialog so
+						    the list keeps the panel's own tap and key behaviour, and it hands
+						    the keyboard over through the `evidence.view` keymap field. */}
+						<Show when={evidenceViewOpen()}>
+							<EvidenceSubview
+								entries={evidence().entries}
+								journal={stageJournal()}
+								// The grid's own grouping: the selection clamp, the key handler and
+								// this list share one row list per refresh.
+								rows={() => evidenceListRows()}
+								state={evidenceState()}
+								error={evidenceError()}
+								report={reportText}
+								reportState={reportState()}
+								reportError={reportError()}
+								kitty={kittyGraphics()}
+								images={reportImages}
+								selectedIndex={selectedEvidence()}
+								pathOf={evidencePathOf}
+								onScrollBoxReady={(box: ScrollBoxRenderable) => {
+									evidenceSubviewScrollbox = box;
+								}}
+								onSelectIndex={setSelectedEvidence}
+								onActivateRow={(index) => {
+									// A tap on an already selected row is the pointer's `Enter`: the
+									// same two actions, resolved in one place.
+									const row = evidenceListRows()[index];
+									if (row?.entry) void openEvidence(row.entry);
+									else if (row?.step !== undefined) void openEvidenceFlow();
+								}}
+							/>
 						</Show>
 					</box>
 				}

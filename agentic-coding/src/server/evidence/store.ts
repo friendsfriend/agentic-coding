@@ -117,6 +117,19 @@ export function evidenceId(
 	return `${time}${tail.slice(0, 16).padEnd(16, "0")}`;
 }
 
+/** The millisecond an id's 10-character time prefix encodes (`evidenceId`'s
+ * inverse), or 0 for an id that does not carry one. */
+export function evidenceIdTime(id: string | undefined): number {
+	if (id === undefined || id.length < 10) return 0;
+	let time = 0;
+	for (const character of id.slice(0, 10)) {
+		const value = CROCKFORD.indexOf(character.toUpperCase());
+		if (value < 0) return 0;
+		time = time * 32 + value;
+	}
+	return time;
+}
+
 // ---------------------------------------------------------------------------
 // Kind, extension and content
 // ---------------------------------------------------------------------------
@@ -278,6 +291,36 @@ export function evidenceExtension(source: string, kind: EvidenceKind): string {
 			`kind ${kind} accepts ${rule.extensions.join(", ")} files; received ${JSON.stringify(source)}`,
 		);
 	return rule.defaultExtension;
+}
+
+/** The extension a report may be stored under: markdown, nothing else. */
+const REPORT_EXTENSIONS = ["md", "markdown"] as const;
+
+/** Check a flagged attach (`evidence-summary-subview`): the report is an
+ * ordinary entry whose content is markdown text. `other` is the only kind that
+ * accepts an arbitrary extension, and the text rule is the one the `log` kind
+ * already applies — so no new kind and no new content machinery. */
+function checkReportContent(
+	input: EvidenceAttachRequest,
+	extension: string,
+	head: Buffer,
+): void {
+	if (!input.report) return;
+	if (input.kind !== "other")
+		throw new EvidenceError(
+			"evidence-kind",
+			`a report is kind other with markdown text; received kind ${input.kind}`,
+		);
+	if (!(REPORT_EXTENSIONS as readonly string[]).includes(extension))
+		throw new EvidenceError(
+			"evidence-kind",
+			`a report is stored as ${REPORT_EXTENSIONS.map((name) => `.${name}`).join(" or ")}; received ${JSON.stringify(`.${extension}`)}`,
+		);
+	if (!looksLikeText(head))
+		throw new EvidenceError(
+			"evidence-kind",
+			"a report stores markdown text; the content is not text",
+		);
 }
 
 /** Check a bounded content head against the declared kind, and answer the
@@ -530,6 +573,10 @@ export interface EvidenceAttachRequest {
 	readonly url?: string;
 	readonly poster?: string;
 	readonly pinned?: boolean;
+	/** This file is the workflow's markdown report (`evidence-summary-subview`):
+	 * kind `other`, a `.md`/`.markdown` text file. The flag is validated here, not
+	 * trusted, so it can never turn a picture or a binary blob into "the report". */
+	readonly report?: boolean;
 	/** The recording segment a kept video belongs to
 	 * (`add-stage-flow-evidence`): the journal steps of that segment link to it. */
 	readonly segment?: number;
@@ -623,12 +670,12 @@ function openSource(
 			);
 		const extension = evidenceExtension(resolved, input.kind);
 		const head = Buffer.alloc(Math.min(CONTENT_HEAD_BYTES, stat.size));
-		if (head.length > 0) {
-			const read = fs.readSync(fd, head, 0, head.length, 0);
-			checkContent(input.kind, extension, head.subarray(0, read));
-		} else {
-			checkContent(input.kind, extension, head);
-		}
+		const read = head.length > 0 ? fs.readSync(fd, head, 0, head.length, 0) : 0;
+		const content = head.subarray(0, read);
+		checkContent(input.kind, extension, content);
+		// A flagged attach must be the markdown text report it claims to be, so the
+		// flag can never turn a picture or a binary blob into "the report".
+		checkReportContent(input, extension, content);
 		return { fd, size: stat.size, extension };
 	} catch (error) {
 		fs.closeSync(fd);
@@ -747,7 +794,24 @@ export async function attachEvidence(
 						409,
 					);
 				const at = input.now?.() ?? new Date();
-				const id = evidenceId(at.getTime(), input.random?.());
+				// The manifest is served in id order and a report is "the newest flagged
+				// entry", so within one millisecond id order has to be commit order: two
+				// attaches that share a time prefix would otherwise be ordered by their
+				// random tails, and a revision could sort before the report it revises.
+				// Only a tie is nudged — a clock that legitimately moves backwards keeps
+				// its own ids, and its `createdAt` is the honest time either way.
+				const newest = manifest.entries.reduce<string | undefined>(
+					(greatest, entry) =>
+						greatest === undefined || entry.id.localeCompare(greatest) > 0
+							? entry.id
+							: greatest,
+					undefined,
+				);
+				const lastTime = evidenceIdTime(newest);
+				const id = evidenceId(
+					at.getTime() === lastTime ? lastTime + 1 : at.getTime(),
+					input.random?.(),
+				);
 				const name = `${id}.${source.extension}`;
 				const relative =
 					requestDirectory === undefined ? name : `${requestDirectory}/${name}`;
@@ -772,6 +836,10 @@ export async function attachEvidence(
 					...(input.segment === undefined ? {} : { segment: input.segment }),
 					bytes: source.size,
 					...(input.pinned ? { pinned: true } : {}),
+					// The report flag is copied exactly like `pinned`: the entry keeps its
+					// own id, kind and stored path, so a flagged manifest is a version-1
+					// manifest with one extra boolean.
+					...(input.report ? { report: true } : {}),
 				};
 				const entries = [...manifest.entries, entry].sort((left, right) =>
 					left.id.localeCompare(right.id),
