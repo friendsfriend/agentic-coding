@@ -1557,6 +1557,164 @@ environment tools are unavailable) and `debug` (its brief asks it to read a
 failure rather than guess). An orchestrator conversation is not an engine run
 and carries no run id, so it is never monitored at all.
 
+### The run-progress checkpoint (efficiency backlog item 19)
+
+Every supervisor the host had watched a run that was *broken* (a dead tool
+surface, a self-correcting failure) or *expensive* (the cost ceiling). Nothing
+watched one that was simply slow: on the pinned snapshot a single worker run took
+1,072 turns, and the runs that finished had a p90 of tens of turns to hundreds.
+The run-progress checkpoint is that supervisor. It is **advisory**: it evaluates a
+soft per-role-class threshold plus the objective stall signals at a turn boundary,
+records a decision over a fixed vocabulary, and applies it — with one exception,
+described under *Escalation*, nothing it decides can stop a run.
+
+The pure half is `src/agent-host/progress-checkpoint.ts` (the per-run accumulator,
+the content-free digest, the ordered `rules/v1` decider, the closed steer catalog
+and the escalation text); the host half is `src/agent-host/host.ts` beside the
+fail-fast monitor, reading its thresholds through `src/workflow/checkpoint.ts`
+(the `[agents.checkpoint]` section) and its worktree numbers through
+`src/agent-host/checkpoint-sample.ts`.
+
+**Who is watched.** A run with a run id in its environment and
+`[agents.checkpoint] enabled` (the default). An orchestrator conversation has no
+run id and is never watched, and neither is a run whose step declares no class: it
+uses the `other` row, which is the worker row.
+
+**Classes and thresholds.** The class comes from the step's registered behaviour
+(`CheckpointClass` in `src/contracts/workflow.ts`), passed to the run environment
+as `HERDR_CHECKPOINT_CLASS`: `worker`, `planner`, `verifier` or `mechanical`, with
+`other` for everything else. The defaults are measured, not guessed — the D3
+formula of the change's design applied to the snapshot's turn distribution (see
+[`efficiency/04b-run-progress-checkpoint.md`](./efficiency/04b-run-progress-checkpoint.md)):
+
+| Class | `softTurns` | `hardTurns` |
+| --- | --- | --- |
+| `worker` | 280 | 1400 |
+| `planner` | 60 | 300 |
+| `verifier` | 70 | 350 |
+| `mechanical` | 30 | 250 |
+| `other` | the worker row | the worker row |
+
+The context threshold is 200,000 tokens — above the shipped 150,000-token
+compaction ceiling, so the checkpoint's context trigger only fires when ceiling
+compaction did not hold the context. `hardTurns` is at least twice `softTurns` and
+`softTurns` at least 10; a hand-edited section that says otherwise is refused at
+load and clamped by the host's live reader.
+
+**When it evaluates.** The first checkpoint is due at `softTurns`, then every
+`max(10, floor(softTurns / 2))` turns. Two triggers jump that schedule: the hard
+limit (`turns >= hardTurns`, always due at a turn boundary) and a measured context
+at or above `contextTokens`. From turn 30 a stall signal is also due at most once
+per interval. Nothing else is time-based: a checkpoint is evaluated once a turn
+has been *measured*, at a turn boundary, so it never interrupts a tool call.
+
+**Signals** (all from `ProgressCheckpoint`, each with an exported threshold):
+
+- `failing-tool` — five consecutive failed calls of one registered tool, counted
+  only after the run's first success (a run that never succeeded is the fail-fast
+  monitor's, not the checkpoint's) and never for an exempt role;
+- `repeats` — at least ten calls in the last twenty with the same argument hash and
+  a share of at least 0.6 (the hash is the telemetry's `pi.tool.args_hash`, so the
+  checkpoint reads an identity the record already carries);
+- `no-progress` — 40 turns since the last progress event, where progress is a
+  mutating call (`edit`/`write`), a changed worktree diff, a new `HEAD` commit or a
+  newly ticked task — and, for a read-only run, a call it never made before;
+- `cost-rising` — no progress in the window and a mean cost per turn at least 1.5×
+  the run's first half. This is the finding the measurement is for: the second
+  half of a long run costs 1.87–2.9× the first, because every turn re-reads the
+  context.
+
+**The decider** is `rules/v1`, an ordered, pure rule set over the digest — the
+same digest always gives the same decision:
+
+| # | Rule id | Decision |
+| --- | --- | --- |
+| 1 | `hard-limit` | `escalate` |
+| 2 | `no-progress-twice` | `escalate` — a previous `continue` whose window and the current window both made no progress |
+| 3 | `steer-ignored` | `escalate` — a signal already steered earlier in the run came back |
+| 4 | `context` | `compact` when the ceiling's floor and loop guard admit one, else `continue` (`not-admissible`) |
+| 5 | `steer-disabled` | `continue` — with `steer = false` every steer rule decides this instead |
+| 6 | `failing-tool` | `steer` |
+| 7 | `repeats` | `steer` |
+| 8 | `no-progress` | `steer` |
+| 9 | `cost-rising` | `steer` |
+| 10 | `default` | `continue` |
+
+**The steer catalog** is closed and versioned (`CHECKPOINT_STEER_CATALOG_VERSION =
+1`): one fixed message per signal, rendered from the catalog and never composed
+from conversation text, so a steer cannot leak a path, an argument or an error.
+It is submitted through the host's existing `steer` submit mode, which interrupts
+the current turn and lands at the next turn boundary.
+
+**What each decision does.** `continue` records and continues. `steer` submits the
+catalog message and records that the signal was steered. `compact` goes through
+the cost ceiling's own admission (`admitCompaction`, kind `auto-checkpoint`), so
+it obeys the same floor and loop guard as `auto-ceiling` and reports the same
+`runtime.compaction_start` / `runtime.compaction` envelopes under that kind.
+`switch-model` is **vocabulary only** in this release: the decision is recorded
+with `applied: false` and nothing moves — a run's model is its profile's. `escalate`
+is the next paragraph.
+
+**Escalation is the only stop path, and it is a question, not a limit.** An
+`escalate` files an ordinary developer question (the same `workflow question` a
+`gate` uses) whose description and context are the templated, content-free
+summary, keeps the run going while the question waits its grace window, and then
+applies the answer:
+
+- `answered` — one fixed acknowledgement plus the developer's own words quoted as
+  data, and the baseline resets (`rearmAfterEscalation`), so the next checkpoint
+  measures from the answer;
+- `pending` (still unanswered when the window closed) — the run stops at the next
+  turn boundary with `outcome: "pending-parked"`;
+- `cancelled` — the run stops at the next turn boundary with `outcome:
+  "cancelled"`;
+- `filing-failed` — nothing stops: the run continues and the failure is reported.
+
+A stop is always an aborted conversation plus the run's own `blocked` handoff
+(`recordCheckpointRunHandoff`), which names the question id, so the developer sees
+a run waiting for them rather than a run that vanished. A raw turn count never
+stops anything: only a recorded decision does, and it always reaches the developer
+as a question first.
+
+**Fail-open, everywhere.** The whole evaluation is guarded. A sample that throws
+or times out (`CHECKPOINT_SAMPLE_TIMEOUT_MS = 2000`), a digest that cannot be
+built, a record write that fails, a question that cannot be filed — each leaves
+the run running and reports `status: "error"` with a bounded `error_class`
+(`sample`, `evaluate`, `record`, `question`) on the checkpoint's own envelope. A
+missing measurement is *unknown*, not zero: the digest carries `null`/`-1` for a
+failed worktree sample rather than a clean tree.
+
+**The record.** A decision is recorded through the authenticated
+`workflow checkpoint --record <json>` run command (`src/workflow/cli/commands/checkpoint.ts`,
+reducer `src/workflow/runtime/reducers/agent-checkpoint.ts`): one bounded record
+per checkpoint under the `progress-checkpoint` classifier integration, with a
+stable question id (`checkpoint:<runId>:<ordinal>`), the digest as its input, the
+five actions as options, the decision as its answer and the applied profile plus
+one bounded attention line as its result. It commits an event with no lifecycle
+transition, refuses a run that is not active, and is capped at the first 12
+checkpoints of a run (`recorded: false, reason: "record-cap"` beyond that). The
+store schema is unchanged (`STORE_SCHEMA_VERSION` stays 6).
+
+**Telemetry.** Each checkpoint emits `runtime.checkpoint` with
+`herdr.checkpoint.*` — ordinal, trigger, class, read-only flag, turns, cost units,
+context and peak context, the thresholds in force, the signals present, the
+counters behind them, the window, the sampled diff and ticked tasks, the decision
+with its rule, whether it was applied, the decider, the latency and the record
+status. An escalation emits `runtime.checkpoint_escalation` with its outcome
+(`answered`, `cancelled`, `pending-parked`, `filing-failed`) and question id.
+`runtime.settled` carries the run's `costUnits`, its per-kind compaction counts
+(including `auto-checkpoint`) and `checkpoints` / `checkpointEscalations`, so "no
+run above its soft threshold without a checkpoint" is answerable from the stream
+alone (`docs/agent-session-telemetry.md`).
+
+**Reading it back.** `scripts/efficiency`'s `run-progress`, `progress-checkpoints`
+and `checkpoint-gaps` queries answer, per class, how long runs take, what the
+checkpoints decided (and at what latency), and which runs passed their soft
+threshold with no checkpoint or only errored ones — the last is the guard that the
+evaluation is actually reached. `scripts/efficiency/replay-checkpoint.ts` feeds a
+dataset's recorded turns and calls through the same pure module, so a threshold or
+rule change can be compared against history before it ships.
+
 ### Self-correcting tool failures (efficiency backlog item 12)
 
 `edit` fails on roughly one call in eight — "oldText not found", "not unique",

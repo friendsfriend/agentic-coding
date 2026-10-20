@@ -7,7 +7,7 @@
 // a scripted faux provider), with `agentic-coding` replaced by a shim that logs
 // every invocation and answers the three run commands this feature uses, so
 // nothing here can reach a real workflow store.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,11 @@ import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import type { CheckpointThresholds } from "../src/agent-host/progress-checkpoint.ts";
 import type { ResolvedCheckpointConfig } from "../src/workflow/checkpoint.ts";
+
+// Every test drives a real durable host over a scripted provider and waits for a
+// turn boundary; the waits are bounded by the module's own interval, not by the
+// suite's five-second default.
+setDefaultTimeout(30_000);
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-checkpoint-"));

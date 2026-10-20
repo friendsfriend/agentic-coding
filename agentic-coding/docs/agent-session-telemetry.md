@@ -76,16 +76,33 @@ tag every envelope `runtime: "pi-durable"`. Alongside `runtime.turn_started`,
 
 | Event | Fields |
 | --- | --- |
-| `runtime.compaction_start` | `reason` (`manual`, `threshold` or `overflow`), `kind` (`auto-ceiling`, `auto-overflow` or `manual`), `blocking` (a generation waits for it), `attempt` |
+| `runtime.compaction_start` | `reason` (`manual`, `threshold` or `overflow`), `kind` (`auto-ceiling`, `auto-overflow`, `auto-checkpoint` or `manual`), `blocking` (a generation waits for it), `attempt` |
 | `runtime.compaction` | `reason`, `kind`, `blocking`, `attempts`, `durationMs`, `tokensBefore` / `tokensAfter` when measurable, `outcome` (`completed`, `failed` or `aborted`), and `pi.error.class` when it failed |
-| `runtime.compaction_ceiling` | the cost ceiling's own decisions: `status` (`compact`, `ignored` or `suspended`), `reason` (`above-overflow` or `loop-guard`), `ceilingTokens`, `contextTokens`, `overflowTokens`, `turnIndex`, `floorTurns`, `floorTokens`, `windowTurns`, `loopLimit`, `taskId` |
+| `runtime.compaction_ceiling` | the cost ceiling's own decisions: `status` (`compact`, `ignored` or `suspended`), `reason` (`above-overflow` or `loop-guard`), `ceilingTokens`, `contextTokens`, `overflowTokens`, `turnIndex`, `floorTurns`, `floorTokens`, `windowTurns`, `loopLimit`, `taskId`, and the `kind` that claimed the campaign (`auto-ceiling` or `auto-checkpoint`) |
 
 `kind` is what the analysis counts: pi-durable knows `manual` and the automatic
 threshold/overflow family, and the host claims its own proactive compactions as
-`auto-ceiling` (efficiency backlog item 6). `runtime.settled` additionally
-carries `peakContextTokens` (the largest prompt the conversation ever carried),
-`turns`, and `compactionsAutoCeiling` / `compactionsAutoOverflow` /
-`compactionsManual`.
+`auto-ceiling` (efficiency backlog item 6) or `auto-checkpoint` (a run-progress
+checkpoint that decided `compact`, efficiency backlog item 19). `runtime.settled`
+additionally carries `peakContextTokens` (the largest prompt the conversation ever
+carried), `turns`, `costUnits` (the run's cumulative provider cost, never a
+price), `compactionsAutoCeiling` / `compactionsAutoOverflow` /
+`compactionsAutoCheckpoint` / `compactionsManual`, and `checkpoints` /
+`checkpointEscalations` — how many run-progress checkpoints the run evaluated and
+how many of them escalated to a developer question. A run that evaluates none
+carries zero, so "no run above its soft threshold without a checkpoint" is
+answerable from the settled envelope alone.
+
+The run-progress checkpoint (efficiency backlog item 19) reports itself with two
+envelopes, both content-free: `runtime.checkpoint` carries `herdr.checkpoint.*` —
+ordinal, trigger, class, the read-only flag, turns, cost units, context and peak
+context, the thresholds in force, the signals present, the counters behind them,
+the window, the sampled diff and ticked tasks, the decision with its rule, whether
+it was applied, the decider, the latency, whether the record was written, and
+`status` / `error_class` when it failed open — and `runtime.checkpoint_escalation`
+carries the escalation's `outcome` (`answered`, `cancelled`, `pending-parked`,
+`filing-failed`) and the question id. See
+[`workflow-architecture.md`](./workflow-architecture.md#the-run-progress-checkpoint-efficiency-backlog-item-19).
 
 The session window (efficiency backlog item 20) records which run a durable
 conversation was bound to, because one conversation serves every later run of the
@@ -141,6 +158,7 @@ what was asked and `tool` states how it ended; both carry fixed-size fields only
 | `tool` | `pi.tool.duration_ms` | wall-clock time between the call's start and end |
 | `tool` | `pi.tool.result_bytes`, `pi.tool.result_lines`, `pi.tool.result_truncated` | the size of the text the model received and whether the harness retained only part of it |
 | `tool` | `pi.tool.failure_kind` | on failure only: `not-found`, `no-match`, `denied`, `host-error`, `timeout`, `aborted`, `invalid-args` or `other` |
+| `tool` | `pi.tool.mutated` | on a call that can change the worktree (`edit`, `write`): the run-progress checkpoint reads it as progress |
 
 Every envelope of a `pi-durable` run additionally carries `herdr.run.generation`
 when the run environment names one, so a re-launched run is identifiable.
