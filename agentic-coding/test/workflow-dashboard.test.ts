@@ -17,6 +17,7 @@ import {
 	listWorkflows,
 	listWorkflowsFromCatalog,
 	loadLocalChanges,
+	verificationSummaryForView,
 } from "../src/server/operations/observations.ts";
 import {
 	definitionVersionForPolicy,
@@ -325,6 +326,97 @@ test("committed verifier artifact and round survive later workflow steps", () =>
 		expect(dashboardTestHelpers.verificationHistory(state)).toEqual([
 			"round-2: EVIDENCE ERROR",
 		]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+test("verification overview counts the current round's findings and completed verifiers", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "verification-overview-"));
+	try {
+		const artifact = (
+			runId: string,
+			findings: Array<{
+				id: string;
+				severity: "critical" | "warning" | "info";
+				detail: string;
+			}>,
+		): { digest: string; path: string } => {
+			const outputPath = path.join(root, `${runId}.output.json`);
+			const envelope = JSON.stringify({
+				runId,
+				schemaId: "core.findings",
+				schemaVersion: 1,
+				payload: { findings },
+			});
+			fs.writeFileSync(outputPath, envelope);
+			return {
+				digest: createHash("sha256").update(envelope).digest("hex"),
+				path: outputPath,
+			};
+		};
+		const currentArtifact = artifact("audit-current", [
+			{ id: "W-1", severity: "warning", detail: "warning" },
+			{ id: "I-1", severity: "info", detail: "info one" },
+			{ id: "I-2", severity: "info", detail: "info two" },
+			{ id: "I-3", severity: "info", detail: "info three" },
+		]);
+		const previousArtifact = artifact("audit-previous", [
+			{ id: "C-1", severity: "critical", detail: "previous round" },
+		]);
+		const current = view("core.verification");
+		current.runs = [
+			{
+				id: "audit-current",
+				stepId: "core.verification",
+				attempt: 2,
+				role: "audit",
+				status: "completed",
+				runtime: "pi-durable",
+				profile: "oc2",
+				outputPath: currentArtifact.path,
+				outputDigest: currentArtifact.digest,
+			},
+			{
+				id: "test-verifier",
+				stepId: "core.verification",
+				attempt: 2,
+				role: "test-verifier",
+				status: "working",
+				runtime: "pi-durable",
+				profile: "oc2",
+			},
+			{
+				id: "security",
+				stepId: "core.verification",
+				attempt: 2,
+				role: "security",
+				status: "failed",
+				runtime: "pi-durable",
+				profile: "oc2",
+			},
+			{
+				id: "audit-previous",
+				stepId: "core.verification",
+				attempt: 1,
+				role: "audit",
+				status: "completed",
+				runtime: "pi-durable",
+				profile: "oc2",
+				outputPath: previousArtifact.path,
+				outputDigest: previousArtifact.digest,
+			},
+		];
+		expect(verificationSummaryForView(current)).toEqual({
+			findings: { critical: 0, warning: 1, info: 3 },
+			completedVerifiers: 1,
+			totalVerifiers: 3,
+			failed: true,
+		});
+		current.currentStep = {
+			...current.currentStep,
+			id: "core.developer-review",
+		};
+		expect(verificationSummaryForView(current)).toBeUndefined();
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

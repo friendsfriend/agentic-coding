@@ -63,6 +63,8 @@ function overview(
 		attention?: string[];
 		valid?: boolean;
 		startedBy?: WorkflowOverview["startedBy"];
+		verification?: WorkflowOverview["verification"];
+		tasks?: [number, number];
 	} = {},
 ): WorkflowOverview {
 	return {
@@ -72,7 +74,8 @@ function overview(
 			changeId: "",
 			phase: "apply",
 			...(overrides.stepId ? { stepId: overrides.stepId } : {}),
-			stepLabel: "Apply",
+			stepLabel:
+				overrides.stepId === "core.verification" ? "Verification" : "Apply",
 			revision: 1,
 			status,
 			health: {
@@ -110,8 +113,9 @@ function overview(
 					}
 				: {}),
 		},
-		tasks: [0, 0],
+		tasks: overrides.tasks ?? [0, 0],
 		...(overrides.startedBy ? { startedBy: overrides.startedBy } : {}),
+		...(overrides.verification ? { verification: overrides.verification } : {}),
 		agents: [],
 	};
 }
@@ -426,7 +430,8 @@ function compactStrip(frame: string): string {
 }
 
 /** The compact strip's non-empty rows, read past its selection marker and gap:
- * the pinned entry's mark, its rule, then one mark plus position per workflow. */
+ * the pinned entry's mark, its rule, then one mark plus position (or critical
+ * finding count) per workflow. */
 function compactRows(frame: string): string[] {
 	return sidebarBand(frame)
 		.map((line) => line.slice(0, SIDEBAR_COLLAPSED_WIDTH).slice(2).trimEnd())
@@ -452,7 +457,7 @@ test("the collapsed panel is the compact strip whatever the width is", () => {
 	).toEqual({ width: SIDEBAR_WIDTH, expanded: true });
 	// The compact width is exactly what a compact row needs and no more: the
 	// selection marker, its gap column, the status glyph, the gap after it and the
-	// two digits a position takes.
+	// two digits a position or a critical-finding count takes.
 	expect(SIDEBAR_COLLAPSED_WIDTH).toBe(1 + 1 + 1 + 1 + 2);
 });
 
@@ -484,6 +489,90 @@ test("the collapsed strip paints only the status glyph and the position", async 
 	}
 });
 
+test("a verifying workflow spends the collapsed detail on its critical findings", async () => {
+	stubGateway([
+		overview("wf-verify", "active", {
+			stepId: "core.verification",
+			repository: "/work/project-name",
+			verification: {
+				findings: { critical: 3, warning: 1, info: 3 },
+				completedVerifiers: 3,
+				totalVerifiers: 7,
+				failed: true,
+			},
+		}),
+		overview("wf-other", "active"),
+	]);
+	const t = await renderShell();
+	try {
+		const frame = t.captureCharFrame();
+		expect(compactRows(frame)).toEqual(["⌂", "──", "✓ 3", "… 2"]);
+		const rows = frame.split("\n");
+		const row = rows.findIndex((line) =>
+			/^..✓ 3$/.test(line.slice(0, SIDEBAR_COLLAPSED_WIDTH).trimEnd()),
+		);
+		expect(row).toBeGreaterThan(-1);
+		const detail = t
+			.captureSpans()
+			.lines[row]?.spans.find((span) => span.text.trim() === "3");
+		expect(detail?.fg.buffer.slice(0, 3).join(",")).toBe(
+			rgb(uiColors.error).join(","),
+		);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("a verifying workflow's expanded row carries findings, verifiers and project", async () => {
+	stubGateway([
+		overview("wf-verify", "active", {
+			stepId: "core.verification",
+			repository: "/work/project-name",
+			verification: {
+				findings: { critical: 0, warning: 1, info: 3 },
+				completedVerifiers: 3,
+				totalVerifiers: 7,
+				failed: true,
+			},
+		}),
+	]);
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		const lines = t.captureCharFrame().split("\n");
+		const nameRow = lines.findIndex((line) => line.includes("wf-verify"));
+		expect(nameRow).toBeGreaterThan(-1);
+		const row = (offset: number): string =>
+			lines[nameRow + offset]?.slice(0, SIDEBAR_WIDTH).trimEnd() ?? "";
+		expect(row(0)).toContain("✓ wf-verify");
+		expect(row(1)).toContain("Verification · 0 1 3 · 3/7✓");
+		// The project line is the last path segment, not the repository path.
+		expect(row(2)).toContain("project-name");
+		expect(row(2)).not.toContain("/work/project-name");
+		expect(row(3)).not.toContain("project-name");
+
+		const spans = t.captureSpans();
+		const nameSpan = spans.lines[nameRow]?.spans.find((span) =>
+			span.text.includes("wf-verify"),
+		);
+		expect((nameSpan?.attributes ?? 0) & TextAttributes.BOLD).not.toBe(0);
+		const metaSpans = spans.lines[nameRow + 1]?.spans ?? [];
+		const counts = metaSpans
+			.filter((span) => /^\d+$/.test(span.text))
+			.map((span) => span.fg.buffer.slice(0, 3).join(","));
+		expect(counts).toEqual([
+			rgb(uiColors.error).join(","),
+			rgb(uiColors.warning).join(","),
+			rgb(uiColors.info).join(","),
+			rgb(uiColors.error).join(","),
+		]);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
 test("Ctrl+S collapses to the compact strip at once and expands to the full rows", async () => {
 	stubGateway([
 		overview("wf-running-with-a-very-long-id", "active"),
@@ -503,8 +592,20 @@ test("Ctrl+S collapses to the compact strip at once and expands to the full rows
 		const expanded = t.captureCharFrame();
 		expect(expanded).toContain("Workspaces");
 		expect(expanded).toContain("wf-running-with-a-very-l");
-		expect(expanded).toContain("Apply · /demo");
 		expect(expanded).toContain("Attention");
+		// An expanded row is three lines: label, stage detail, project name. The
+		// project line carries the last path segment, not the whole repository.
+		const expandedRows = expanded.split("\n");
+		const row = expandedRows.findIndex((line) =>
+			line.includes("wf-running-with-a-very-l"),
+		);
+		const cell = (offset: number): string =>
+			expandedRows[row + offset]
+				?.slice(0, SIDEBAR_WIDTH)
+				.replace(/^│\s*/, "")
+				.trimEnd() ?? "";
+		expect(cell(1)).toBe("Apply");
+		expect(cell(2)).toBe("demo");
 
 		// Unfocus: the very next painted frame is the compact strip again, and the
 		// page body has the freed columns back — the collapse is a cut, so it never

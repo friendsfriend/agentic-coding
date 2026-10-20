@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import type { WorkflowOverview } from "../src/contracts/workflow.ts";
 import {
 	clip,
+	clipMetaSegments,
 	cycleCursor,
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
@@ -24,7 +25,9 @@ import {
 	sidebarStatusNeedsReader,
 	sidebarWorkflowIndex,
 	workflowMeta,
+	workflowProjectName,
 	workflowRowLabel,
+	workflowStageMeta,
 } from "../src/tui/otel/app/sidebar-model.ts";
 
 function overview(options: {
@@ -271,6 +274,140 @@ describe("workspace sidebar rows", () => {
 		).toBe("apply · /repo");
 	});
 
+	test("the stage line colour-codes verification findings and verifier progress", () => {
+		const row = overview({
+			workflowId: "wf",
+			status: "active",
+			phase: "Verification",
+			stepId: "core.verification",
+			verification: {
+				findings: { critical: 0, warning: 1, info: 3 },
+				completedVerifiers: 3,
+				totalVerifiers: 7,
+				failed: true,
+			},
+		});
+		expect(
+			workflowStageMeta(row).map(({ text, tone }) => [text, tone]),
+		).toEqual([
+			["Verification", "info"],
+			[" · ", "muted"],
+			["0", "error"],
+			[" ", "muted"],
+			["1", "warning"],
+			[" ", "muted"],
+			["3", "info"],
+			[" · ", "muted"],
+			["3", "error"],
+			["/7", "muted"],
+			["✓", "muted"],
+		]);
+	});
+
+	test("a completed verification marks its verifier progress successful", () => {
+		const row = overview({
+			workflowId: "wf",
+			status: "active",
+			phase: "Verification",
+			stepId: "core.verification",
+			verification: {
+				findings: { critical: 0, warning: 0, info: 0 },
+				completedVerifiers: 7,
+				totalVerifiers: 7,
+				failed: false,
+			},
+		});
+		expect(
+			workflowStageMeta(row)
+				.slice(-3)
+				.map(({ text, tone }) => [text, tone]),
+		).toEqual([
+			["7", "success"],
+			["/7", "muted"],
+			["✓", "success"],
+		]);
+	});
+
+	test("the stage line keeps task progress outside verification", () => {
+		expect(
+			workflowStageMeta(
+				overview({
+					workflowId: "wf",
+					status: "active",
+					phase: "Apply",
+					tasks: [3, 7],
+				}),
+			).map(({ text, tone }) => [text, tone]),
+		).toEqual([
+			["Apply", "info"],
+			[" · ", "muted"],
+			["3/7 tasks", "muted"],
+		]);
+		expect(
+			workflowStageMeta(
+				overview({
+					workflowId: "wf",
+					status: "active",
+					phase: "Apply",
+					tasks: [7, 7],
+				}),
+			).at(-1),
+		).toEqual({ text: "7/7 tasks", tone: "success" });
+	});
+
+	test("the project line keeps the last path segment", () => {
+		expect(
+			workflowProjectName(
+				overview({
+					workflowId: "wf",
+					status: "active",
+					repository: "/work/project-name",
+				}),
+			),
+		).toBe("project-name");
+		expect(
+			workflowProjectName(
+				overview({
+					workflowId: "wf",
+					status: "active",
+					repository: "/work/project-name",
+					projectIdent: "catalog-ident",
+				}),
+			),
+		).toBe("catalog-ident");
+	});
+
+	test("clipping a coloured stage line keeps every surviving segment's tone", () => {
+		const row = overview({
+			workflowId: "wf",
+			status: "active",
+			phase: "Verification",
+			stepId: "core.verification",
+			verification: {
+				findings: { critical: 0, warning: 1, info: 3 },
+				completedVerifiers: 3,
+				totalVerifiers: 7,
+				failed: true,
+			},
+		});
+		expect(
+			clipMetaSegments(workflowStageMeta(row), 24).map(({ text, tone }) => [
+				text,
+				tone,
+			]),
+		).toEqual([
+			["Verification", "info"],
+			[" · ", "muted"],
+			["0", "error"],
+			[" ", "muted"],
+			["1", "warning"],
+			[" ", "muted"],
+			["3", "info"],
+			[" · ", "muted"],
+			["3", "error"],
+		]);
+	});
+
 	test("row glyphs name the state that needs a reader", () => {
 		// Running is the ellipsis; idle is the hollow bullet.
 		expect(
@@ -473,6 +610,49 @@ describe("workspace sidebar rows", () => {
 				12,
 			),
 		).toBe("◊ a-very-lo…");
+	});
+
+	test("a verifying row spends its compact detail on critical findings", () => {
+		const row = sidebarCollapsedRow(
+			overview({
+				workflowId: "wf",
+				status: "active",
+				phase: "Verification",
+				stepId: "core.verification",
+				verification: {
+					findings: { critical: 3, warning: 1, info: 3 },
+					completedVerifiers: 3,
+					totalVerifiers: 7,
+					failed: true,
+				},
+			}),
+			4,
+			4,
+		);
+		expect(row).toMatchObject({
+			glyph: "✓",
+			tone: "info",
+			detail: "3",
+			detailTone: "error",
+		});
+		const clean = sidebarCollapsedRow(
+			overview({
+				workflowId: "wf",
+				status: "active",
+				phase: "Verification",
+				stepId: "core.verification",
+				verification: {
+					findings: { critical: 0, warning: 1, info: 3 },
+					completedVerifiers: 3,
+					totalVerifiers: 7,
+					failed: false,
+				},
+			}),
+			4,
+			4,
+		);
+		expect(clean.detail).toBe("0");
+		expect(clean.detailTone).toBe("muted");
 	});
 
 	test("the collapsed strip row carries the glyph, the tone and the position", () => {
