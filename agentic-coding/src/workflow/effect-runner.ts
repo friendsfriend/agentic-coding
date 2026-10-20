@@ -1271,7 +1271,9 @@ export function agentEffectHandlers(
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
-						snapshot.definition.id === "research"
+						isStageTestWorkflowTarget(repo) ||
+						snapshot.definition.id === "research" ||
+						snapshot.definition.id === "stage-test"
 					)
 						return snapshot.metadata.worktree
 							? { worktree: snapshot.metadata.worktree, branch: "" }
@@ -1328,7 +1330,9 @@ export function agentEffectHandlers(
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
-						snapshot.definition.id === "research"
+						isStageTestWorkflowTarget(repo) ||
+						snapshot.definition.id === "research" ||
+						snapshot.definition.id === "stage-test"
 					)
 						return {
 							worktree: snapshot.metadata.worktree,

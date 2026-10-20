@@ -768,6 +768,40 @@ describe("stage-test handoff and render wiring", () => {
 		}
 	});
 
+	test("workspace setup uses the engine data root: a stage test has no branch or repository checkout", async () => {
+		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "stage-setup-wt-"));
+		try {
+			const current = {
+				...snapshot({ worktree, stage: "grid-int", ticket: "GRID-42" }),
+				workflowId: "stage-setup",
+				status: "running",
+			} as unknown as WorkflowSnapshot;
+			const engine = {
+				getSnapshot: () => current,
+			} as unknown as import("../src/workflow/runtime.ts").WorkflowEngine;
+			const handler = agentEffectHandlers(stageTestWorkflowTarget(), engine, {
+				registry: registerBuiltins(),
+				adapters: new Map(),
+			})["workspace.setup"];
+			if (!handler) throw new Error("workspace.setup handler is missing");
+			const effect = {
+				id: "setup-effect",
+				workflowId: "stage-setup",
+				kind: "workspace.setup",
+				payload: { mode: "worktree" },
+				lease: "lease",
+			} as never;
+			await expect(Effect.runPromise(handler.execute(effect))).resolves.toEqual(
+				{ worktree, branch: "" },
+			);
+			await expect(Effect.runPromise(handler.observe(effect))).resolves.toEqual(
+				{ worktree, branch: "" },
+			);
+		} finally {
+			fs.rmSync(worktree, { recursive: true, force: true });
+		}
+	});
+
 	test("the render effect refuses a report carrying a configured secret", async () => {
 		const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "stage-render-"));
 		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "stage-render-wt-"));
