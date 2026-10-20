@@ -14,6 +14,7 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { telemetryWorkspaceRemoved } from "../workflow/observability.ts";
+import { CHECKPOINT_MUTATING_TOOLS } from "./progress-checkpoint.ts";
 import {
 	classifyToolFailure,
 	type ToolFailureKind,
@@ -132,10 +133,15 @@ export interface EntryTiming {
 }
 
 /** Why a compaction ran, as the analysis needs to count it (efficiency backlog
- * item 6). pi-durable knows `manual`, `threshold` and `overflow`; the cost
- * ceiling is the host's own proactive path, so it is named here and reported by
- * the host through {@link TelemetryHooks.compactionKind}. */
-export type CompactionKind = "auto-ceiling" | "auto-overflow" | "manual";
+ * item 6). pi-durable knows `manual`, `threshold` and `overflow`; the two paths
+ * the host admits itself — the cost ceiling and a run-progress checkpoint's
+ * `compact` decision — are named here and reported by the host through
+ * {@link TelemetryHooks.compactionKind}. */
+export type CompactionKind =
+	| "auto-ceiling"
+	| "auto-checkpoint"
+	| "auto-overflow"
+	| "manual";
 
 /** The measurement hooks a host may attach alongside the envelopes. All of them
  * are optional: telemetry is observational, and a host that passes none still
@@ -151,9 +157,19 @@ export interface TelemetryHooks {
 		info: {
 			readonly promptTokens: number;
 			readonly turnIndex: number;
+			/** What this committed turn cost in the provider's unit, so a
+			 * supervisor can sum the run's cost without re-reading usage. */
+			readonly costUnits: number;
 		},
 		identity: TelemetryIdentity,
 	) => void;
+	/** The run's own checkpoint counters for `runtime.settled`: how many
+	 * run-progress checkpoints it evaluated and how many escalations it filed.
+	 * Best-effort, like every hook: a throw reports nothing. */
+	readonly runCounters?: () => {
+		readonly checkpoints: number;
+		readonly checkpointEscalations: number;
+	};
 	/** The kind of a compaction, for one the host admitted itself (`auto-ceiling`).
 	 * Undefined means pi-durable started it, and its own reason decides. */
 	readonly compactionKind?: (taskId: string) => CompactionKind | undefined;
@@ -261,6 +277,13 @@ export interface ToolOutcomeObservation {
 	readonly turn?: number;
 	/** One redacted, bounded line of the failure's own text, when it had any. */
 	readonly errorLine?: string;
+	/** The argument hash the call started with, when it carried arguments: the
+	 * run-progress checkpoint joins exact repeats with it and never keeps the
+	 * arguments themselves. */
+	readonly argsHash?: string;
+	/** Whether this call is one that changes the worktree (`edit`, `write`), and
+	 * so a progress event for a run-progress checkpoint. */
+	readonly mutated?: boolean;
 }
 
 /** Attach agent-event telemetry for one conversation; returns a stop
@@ -309,7 +332,14 @@ export async function attachTelemetry(
 	// fields that make the call measurable (tool-call telemetry shape).
 	const toolCalls = new Map<
 		string,
-		{ startedAt: number; turnIndex: number | undefined }
+		{
+			startedAt: number;
+			turnIndex: number | undefined;
+			/** What the call was asked with, for the outcome's repeat and progress
+			 * measurement: the hash only, never the payload. */
+			argsHash: string;
+			mutated: boolean;
+		}
 	>();
 	// The run that started each in-flight tool call. A rebinding moves the
 	// conversation, not the call, so the outcome is charged to the run that began
@@ -322,9 +352,14 @@ export async function attachTelemetry(
 	 * prompt counters: the number the run-completion envelope reports so a
 	 * ceiling's effect is measurable after the fact. */
 	let peakContextTokens = 0;
+	/** The run's cumulative cost in the provider's unit, summed over every
+	 * committed usage the conversation reported: `runtime.settled` carries it so a
+	 * finished run's cost is readable without re-summing the usage envelopes. */
+	let totalCost = 0;
 	/** Compactions by kind, counted once each when they start. */
 	const compactionKinds: Record<CompactionKind, number> = {
 		"auto-ceiling": 0,
+		"auto-checkpoint": 0,
 		"auto-overflow": 0,
 		manual: 0,
 	};
@@ -492,11 +527,12 @@ export async function attachTelemetry(
 							// end of a committed turn, so a ceiling compaction is admitted at a
 							// turn boundary and never inside a tool call.
 							hooks.onMeasuredContext?.(
-								{ promptTokens: prompt, turnIndex },
+								{ promptTokens: prompt, turnIndex, costUnits: cost },
 								current,
 							);
 						}
-						if (tokens > 0 || cost > 0)
+						if (tokens > 0 || cost > 0) {
+							totalCost += cost;
 							emit(current, "runtime.usage", {
 								inputTokens: usage.input,
 								outputTokens: usage.output,
@@ -508,6 +544,7 @@ export async function attachTelemetry(
 									? { durationMs: generationMs }
 									: {}),
 							});
+						}
 					}
 					generationStart = undefined;
 					thinkingMs = 0;
@@ -522,6 +559,8 @@ export async function attachTelemetry(
 					toolCalls.set(event.toolCallId, {
 						startedAt: now,
 						turnIndex: turnIndex < 0 ? undefined : turnIndex,
+						argsHash: args.hash,
+						mutated: CHECKPOINT_MUTATING_TOOLS.includes(event.toolName),
 					});
 					callOwners.set(event.toolCallId, current);
 					emit(current, "runtime.tool_start", {
@@ -582,6 +621,7 @@ export async function attachTelemetry(
 							: {}),
 						...(failureKind ? { "pi.tool.failure_kind": failureKind } : {}),
 						...(turn !== undefined ? { "pi.turn.index": turn } : {}),
+						...(tracked?.mutated ? { "pi.tool.mutated": true } : {}),
 					});
 					if (hooks.onToolOutcome) {
 						// An observer is the run's supervisor, not its runtime: a throw here
@@ -594,6 +634,10 @@ export async function attachTelemetry(
 									...(failureKind ? { kind: failureKind } : {}),
 									...(turn !== undefined ? { turn } : {}),
 									...(errorLine ? { errorLine } : {}),
+									...(tracked !== undefined && tracked.argsHash.length > 0
+										? { argsHash: tracked.argsHash }
+										: {}),
+									...(tracked?.mutated ? { mutated: true } : {}),
 								},
 								owner,
 							);
@@ -603,17 +647,34 @@ export async function attachTelemetry(
 					}
 					break;
 				}
-				case "run_end":
+				case "run_end": {
 					// The run settled: the envelope carries what makes a ceiling's effect
-					// measurable per run — the peak context and the number of compactions
-					// by kind — so "automatic compactions > 0, peak context < 200k" can be
-					// answered from telemetry alone.
+					// measurable per run — the peak context, the cumulative cost, the number
+					// of compactions by kind and the run-progress checkpoints it evaluated —
+					// so "automatic compactions > 0, peak context < 200k" and "no run above
+					// its soft threshold without a checkpoint" are answerable from
+					// telemetry alone.
+					const counters = hooks.runCounters;
+					let checkpoints = 0;
+					let checkpointEscalations = 0;
+					if (counters)
+						try {
+							const measured = counters();
+							checkpoints = measured.checkpoints;
+							checkpointEscalations = measured.checkpointEscalations;
+						} catch {
+							/* a counter that cannot answer reports nothing */
+						}
 					emit(current, "runtime.settled", {
 						...(peakContextTokens > 0 ? { peakContextTokens } : {}),
 						...(turnIndex >= 0 ? { turns: turnIndex + 1 } : {}),
+						...(totalCost > 0 ? { costUnits: totalCost } : {}),
 						compactionsAutoCeiling: compactionKinds["auto-ceiling"],
+						compactionsAutoCheckpoint: compactionKinds["auto-checkpoint"],
 						compactionsAutoOverflow: compactionKinds["auto-overflow"],
 						compactionsManual: compactionKinds.manual,
+						checkpoints,
+						checkpointEscalations,
 					});
 					// The run settled: a compaction that never got a measured follow-up
 					// generation still reports what is known (its reason, duration and
@@ -624,6 +685,7 @@ export async function attachTelemetry(
 					// conversation never delivers the ends that would prune them).
 					callOwners.clear();
 					break;
+				}
 				case "entry_appended":
 					// A `pi.compaction` entry is the placed summary: the receipt that
 					// tells a successful compaction from one that was aborted before it

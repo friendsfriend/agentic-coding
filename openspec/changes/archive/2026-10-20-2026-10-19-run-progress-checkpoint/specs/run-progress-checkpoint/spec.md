@@ -23,7 +23,7 @@ p99)`, rounded up to 50; the context threshold is 200,000 tokens.
 
 #### Scenario: A run reaches its soft threshold
 
-- **WHEN** a worker run with the default configuration finishes its 250th turn
+- **WHEN** a worker run with the default configuration finishes its 280th turn
 - **THEN** the host SHALL evaluate one checkpoint for that run
 - **AND** the run SHALL keep running unless that checkpoint's decision changes it
 
@@ -31,6 +31,11 @@ p99)`, rounded up to 50; the context threshold is 200,000 tokens.
 
 - **WHEN** a durable session has no `HERDR_RUN_ID` (the orchestrator)
 - **THEN** no checkpoint SHALL be evaluated for it
+
+#### Scenario: A mechanical run reaches its class's threshold
+
+- **WHEN** a mechanical run with the default configuration finishes its 30th turn
+- **THEN** the host SHALL evaluate one checkpoint for it, because the shipped thresholds are the class's own (`mechanical` 30/150)
 
 #### Scenario: Hard limit reached
 
@@ -97,9 +102,13 @@ progress and this window has zero progress) → `escalate`; `steer-ignored` (a
 signal already answered with a steer in this run is present again) →
 `escalate`; `context` with an admissible compaction → `compact`;
 `failing-tool`, `repeats`, `no-progress`, `cost-rising` → `steer` with that
-signal's nudge; otherwise `default` → `continue`. The same digest SHALL always
-yield the same decision. With steering disabled, the steer rules SHALL yield
-`continue` and `steer-ignored` SHALL NOT apply.
+signal's nudge; otherwise `default` → `continue`. A `context` that is over the
+limit without an admissible compaction SHALL NOT decide on its own: the signal
+rules SHALL be evaluated on the same digest, and the blocked compaction SHALL be
+recorded as the decision's attention. The same digest SHALL always yield the
+same decision. With steering disabled, the steer rules SHALL yield `continue`
+under the signal's own rule id (no additional rule id SHALL exist) and
+`steer-ignored` SHALL NOT apply.
 
 #### Scenario: Nothing is wrong
 
@@ -142,7 +151,8 @@ once per run.
 A `compact` decision SHALL be admitted through the same serialized admission as
 the cost-aware compaction ceiling, with the same summarizer, floor and loop
 guard, and its compaction envelope SHALL carry the kind `auto-checkpoint`. A
-`compact` that is not admissible SHALL NOT be selected. A `switch-model`
+`compact` that is not admissible SHALL NOT be selected, and the decision SHALL
+then fall through to the signal rules rather than deciding on its own. A `switch-model`
 decision SHALL NOT change the run's model in this release: it SHALL be recorded
 with `applied: false` and the run SHALL continue.
 
@@ -160,8 +170,9 @@ with `applied: false` and the run SHALL continue.
 
 An `escalate` decision SHALL file one developer question as the run, through the
 existing `workflow question` contract and the run's capability, with a plain,
-templated summary built only from the digest (class, step, turns against soft
-and hard, cost units, context, signals, progress, the rule). It SHALL offer a
+templated summary built only from the digest and the run's own identity (class,
+step, role, turns against soft and hard, cost units, context, signals,
+progress, and the rule that fired). It SHALL offer a
 `continue` option, accept a custom-text direction, and state that cancelling the
 question stops the run. A run SHALL have at most one open checkpoint question.
 The host SHALL then: on an answer within the agent grace window, submit a fixed
@@ -200,9 +211,21 @@ escalation whose question was not recorded.
 
 The checkpoint SHALL fail open: an exception, a timeout, a missing measurement,
 a failed decision-record write, a failed steer or compaction, or a failed
-question SHALL leave the run running as if the decision were `continue`, and
-SHALL be recorded as a `runtime.checkpoint` envelope with `status: "error"` and a bounded error class.
-A failed record write SHALL NOT cancel an otherwise safe `steer` or `compact`.
+question SHALL leave the run running — the run is never stopped, steered,
+compacted or escalated by an action that did not happen — and SHALL be recorded
+with `status: "error"` and a bounded error class. Failing open describes the
+*run*, not the record: an envelope for a decision that was already made SHALL
+keep that decision and its rule with `applied: false`, and the next digest's
+`previous` SHALL state the decision that was taken, because a rule whose
+precondition is the previous decision (`no-progress-twice`) must read what was
+decided rather than what happened to it. One
+checkpoint SHALL export at most one `runtime.checkpoint` envelope, and a failure
+that happens before a decision was made SHALL use that envelope with no
+decision and no rule; a failure after the decision (an escalation whose question
+could not be filed) SHALL be recorded on the checkpoint's own
+`runtime.checkpoint_escalation` envelope instead, so one checkpoint never
+appears twice in the decision distribution. A failed record write SHALL NOT
+cancel an otherwise safe `steer` or `compact`.
 
 #### Scenario: Evaluation throws
 
@@ -235,6 +258,12 @@ remain 6.
 
 - **WHEN** a run evaluates its 13th checkpoint
 - **THEN** its `runtime.checkpoint` envelope SHALL say `recorded: false` and no decision record SHALL be appended
+
+#### Scenario: A repeated ordinal
+
+- **WHEN** a record arrives for a question id the run already used, and its digest or answer differs from the stored one
+- **THEN** the command SHALL answer `recorded: false, reason: "duplicate"` and the stored record SHALL be left as it was
+- **AND** a run id that is ensured again after a stop SHALL continue its checkpoint numbering instead of re-using an ordinal
 
 ### Requirement: Run-progress telemetry and the missing-decision alarm
 

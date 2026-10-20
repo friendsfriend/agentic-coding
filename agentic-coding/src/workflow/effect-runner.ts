@@ -4385,6 +4385,11 @@ function assignmentFor(
 					JSON.stringify(context),
 				]
 			: [];
+	const stepDefinition = registry.stepForDefinition(
+		snapshotDefinition(snapshot, registry),
+		run.stepId,
+	);
+	const checkpointClass = stepDefinition.behavior?.checkpointClass;
 	const hooked = registry
 		.stepForDefinition(snapshotDefinition(snapshot, registry), run.stepId)
 		.behavior?.assignmentInputs?.({
@@ -4458,6 +4463,9 @@ function assignmentFor(
 						? "research://standalone"
 						: snapshot.metadata.repository,
 			HERDR_RUNTIME: run.profile.runtime,
+			// The checkpoint class the step declares; absent for an undeclared step
+			// (the host then uses `other`, which shares the worker thresholds).
+			...(checkpointClass ? { HERDR_CHECKPOINT_CLASS: checkpointClass } : {}),
 			// Session content capture is the same explicit opt-in the engine uses for
 			// its own payloads; the runtime bridges read it from the run environment
 			// instead of re-reading the config (SEC-001).

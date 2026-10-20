@@ -1,4 +1,5 @@
 import type {
+	CheckpointClass,
 	EffectKind,
 	JsonValue,
 	WorkflowActionView,
@@ -171,10 +172,22 @@ export interface InstructionAssetForRoleContext {
 	traits?: WorkflowFamilyTraits;
 }
 
+/** The checkpoint class a step's runs belong to (efficiency backlog item 19).
+ * The vocabulary is the contract's (`CHECKPOINT_CLASSES` in
+ * `contracts/workflow.ts`, because the class travels as the run environment
+ * variable `HERDR_CHECKPOINT_CLASS`). Role knowledge stays in the registered
+ * behaviors: the runner passes this value to a run, and the host reads only that
+ * variable — never a role table of its own. `other` is every undeclared step and
+ * it uses the worker thresholds. */
+export type { CheckpointClass };
+
 export interface StepBehavior {
 	/** Classifier mode this step participates in; absent when the step is not
 	 * classifiable. Step-owned so the runner/reducer never keep a step table. */
 	classification?: "single" | "roster";
+	/** The class of this step's runs for the run-progress checkpoint. Absent
+	 * means `other`, which uses the worker thresholds. */
+	checkpointClass?: CheckpointClass;
 	roles?(ctx: StepRolesContext): string[];
 	candidateRoles?(ctx: CandidateRolesContext): string[];
 	/** Entry-guard predicate run before a step's `complete` outcome is

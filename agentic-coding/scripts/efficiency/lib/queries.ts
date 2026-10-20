@@ -6,6 +6,75 @@
 // one query that deliberately looks at all of them, to check that the sources
 // agree about a run.
 
+/** The five run-progress checkpoint classes (efficiency backlog item 19). The
+ * host reads the class a step declares; the queries derive the same class from
+ * the run's role, which is all a recorded dataset carries. */
+export const CHECKPOINT_CLASSES = [
+	"worker",
+	"planner",
+	"verifier",
+	"mechanical",
+	"other",
+] as const;
+
+export type CheckpointClass = (typeof CHECKPOINT_CLASSES)[number];
+
+/** The shipped per-class defaults, pinned by the D3 formula from the measured
+ * distribution (`docs/efficiency/04b-run-progress-checkpoint.md`). A test keeps
+ * these identical to `DEFAULT_CHECKPOINT_THRESHOLDS` in
+ * `src/agent-host/progress-checkpoint.ts`, so a query can never report a
+ * threshold the host does not use. */
+export const CHECKPOINT_THRESHOLDS: Readonly<
+	Record<CheckpointClass, { softTurns: number; hardTurns: number }>
+> = {
+	worker: { softTurns: 280, hardTurns: 1400 },
+	planner: { softTurns: 60, hardTurns: 300 },
+	verifier: { softTurns: 70, hardTurns: 350 },
+	mechanical: { softTurns: 30, hardTurns: 150 },
+	other: { softTurns: 280, hardTurns: 1400 },
+};
+
+/** The checkpoint class of a run, as SQL over a role column. `other` is the
+ * class of every role that is not one of the four declared ones, and it uses the
+ * worker values. */
+export function checkpointClassSql(column = "role"): string {
+	return `CASE
+		WHEN ${column} = 'worker' THEN 'worker'
+		WHEN ${column} LIKE 'planner%' OR ${column} = 'consolidator' THEN 'planner'
+		WHEN ${column} LIKE '%-verifier' THEN 'verifier'
+		WHEN ${column} IN ('triage', 'archive', 'wiki', 'git') THEN 'mechanical'
+		ELSE 'other'
+	END`;
+}
+
+/** The `thresholds` CTE every checkpoint query joins: one row per class. */
+function thresholdsCte(): string {
+	const values = CHECKPOINT_CLASSES.map(
+		(checkpointClass) =>
+			`('${checkpointClass}', ${CHECKPOINT_THRESHOLDS[checkpointClass].softTurns}, ${CHECKPOINT_THRESHOLDS[checkpointClass].hardTurns})`,
+	).join(",\n\t\t");
+	return `thresholds(checkpoint_class, soft_turns, hard_turns) AS (VALUES\n\t\t${values}\n\t)`;
+}
+
+/** Nearest-rank percentile indices (`ceil(p/100 * n)`, at least 1) per series,
+ * as the ranked CTE's computed columns. SQLite has no percentile function, so
+ * every distribution query ranks and picks. */
+const PERCENTILES = [50, 90, 95, 99] as const;
+
+function percentileIndexColumns(series: "all" | "success"): string {
+	return PERCENTILES.map(
+		(percentile) =>
+			`MAX(1, (n_${series} * ${percentile} + 99) / 100) AS i${percentile}_${series}`,
+	).join(",\n\t\t");
+}
+
+function percentileColumns(series: "all" | "success", prefix = ""): string {
+	return PERCENTILES.map(
+		(percentile) =>
+			`MAX(CASE WHEN rn_${series} = i${percentile}_${series} THEN turns END) AS ${prefix}p${percentile}`,
+	).join(",\n\t");
+}
+
 export interface AnalysisQuery {
 	/** Subcommand name of `analyze.ts`. */
 	name: string;
@@ -1842,6 +1911,310 @@ ORDER BY era, per_1000 DESC`,
 FROM v_runs r
 WHERE r.role = 'archive' OR r.step_id = 'core.archive'
 ORDER BY calls DESC, turns DESC`,
+	},
+	{
+		name: "turn-distribution",
+		summary: `Turn distribution per checkpoint class (efficiency backlog item 19): runs, p50/p90/p95/p99/max turns for every run with turns and for the successful ones (handoff outcome \`complete\` or run status \`complete\`/\`completed\`), and how many runs carry a known outcome. This is the measurement the checkpoint's shipped thresholds are pinned from.`,
+		example:
+			"bun run scripts/efficiency/analyze.ts turn-distribution --dataset ~/ev/dataset-2026",
+		columns: [
+			"checkpoint_class",
+			"runs",
+			"p50",
+			"p90",
+			"p95",
+			"p99",
+			"max_turns",
+			"successful_runs",
+			"successful_n",
+			"successful_p50",
+			"successful_p90",
+			"successful_p95",
+			"successful_p99",
+			"successful_max",
+			"known_outcome_runs",
+		],
+		// Nearest-rank percentiles over the preferred rows. A class has no
+		// percentile when it has no runs; the successful series has none for a class
+		// without a successful run.
+		sql: `WITH ${thresholdsCte()},
+classified AS (
+	SELECT
+		r.run_id AS run_id,
+		${checkpointClassSql("r.role")} AS checkpoint_class,
+		(SELECT COUNT(*) FROM v_turns t WHERE t.run_id = r.run_id) AS turns,
+		CASE WHEN r.handoff_outcome = 'complete' OR r.status IN ('complete', 'completed')
+			THEN 1 ELSE 0 END AS successful,
+		CASE WHEN r.handoff_outcome IS NOT NULL OR r.status IS NOT NULL
+			THEN 1 ELSE 0 END AS known_outcome
+	FROM v_runs r
+),
+ranked AS (
+	SELECT
+		checkpoint_class,
+		turns,
+		successful,
+		known_outcome,
+		ROW_NUMBER() OVER (PARTITION BY checkpoint_class ORDER BY turns) AS rn_all,
+		COUNT(*) OVER (PARTITION BY checkpoint_class) AS n_all,
+		ROW_NUMBER() OVER (PARTITION BY checkpoint_class, successful ORDER BY turns) AS rn_success,
+		COUNT(*) OVER (PARTITION BY checkpoint_class, successful) AS n_success
+	FROM classified
+	WHERE turns > 0
+),
+indexed AS (
+	SELECT
+		*,
+		${percentileIndexColumns("all")},
+		${percentileIndexColumns("success")}
+	FROM ranked
+)
+SELECT
+	checkpoint_class AS checkpoint_class,
+	MAX(n_all) AS runs,
+	${percentileColumns("all")},
+	MAX(turns) AS max_turns,
+	SUM(successful) AS successful_runs,
+	MAX(CASE WHEN successful = 1 THEN n_success END) AS successful_n,
+	${percentileColumns("success", "successful_")},
+	MAX(CASE WHEN successful = 1 THEN turns END) AS successful_max,
+	SUM(known_outcome) AS known_outcome_runs
+FROM indexed
+GROUP BY checkpoint_class
+ORDER BY runs DESC`,
+	},
+	{
+		name: "run-progress",
+		summary:
+			"Per run: checkpoint class, turns, cost, peak context, the second-half to first-half cost ratio, the outcome and whether the run passed its class's soft or hard threshold. The ratio is the within-run curve a checkpoint exists to interrupt.",
+		example:
+			"bun run scripts/efficiency/analyze.ts run-progress --dataset ~/ev/dataset-2026 --limit 30",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"checkpoint_class",
+			"role",
+			"turns",
+			"cost",
+			"peak_context_tokens",
+			"first_half_cost",
+			"second_half_cost",
+			"cost_ratio",
+			"outcome",
+			"above_soft",
+			"above_hard",
+		],
+		// The halves split at the run's own turn count (`rn <= n / 2`), so an odd
+		// turn count gives the extra turn to the second half. `peak_context_tokens`
+		// is the measured prompt (input plus cache read and cache write), the same
+		// number the checkpoint's context signal reads.
+		sql: `WITH ${thresholdsCte()},
+classified AS (
+	SELECT
+		r.run_id AS run_id,
+		r.workflow_id AS workflow_id,
+		r.step_id AS step_id,
+		r.role AS role,
+		r.status AS status,
+		r.handoff_outcome AS handoff_outcome,
+		${checkpointClassSql("r.role")} AS checkpoint_class
+	FROM v_runs r
+),
+turn_rank AS (
+	SELECT
+		t.run_id AS run_id,
+		t.cost AS cost,
+		t.input_tokens AS input_tokens,
+		t.cache_read_tokens AS cache_read_tokens,
+		t.cache_write_tokens AS cache_write_tokens,
+		ROW_NUMBER() OVER (PARTITION BY t.run_id ORDER BY t.turn_index) AS rn,
+		COUNT(*) OVER (PARTITION BY t.run_id) AS n
+	FROM v_turns t
+),
+run_split AS (
+	SELECT
+		run_id,
+		COUNT(*) AS turns,
+		SUM(CASE WHEN rn <= n / 2 THEN COALESCE(cost, 0) ELSE 0 END) AS first_half_cost,
+		SUM(CASE WHEN rn > n / 2 THEN COALESCE(cost, 0) ELSE 0 END) AS second_half_cost,
+		ROUND(SUM(COALESCE(cost, 0)), 4) AS cost,
+		MAX(COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0)) AS peak_context_tokens
+	FROM turn_rank
+	GROUP BY run_id
+)
+SELECT
+	c.run_id AS run_id,
+	c.workflow_id AS workflow_id,
+	c.checkpoint_class AS checkpoint_class,
+	COALESCE(c.role, '(unset)') AS role,
+	s.turns AS turns,
+	s.cost AS cost,
+	s.peak_context_tokens AS peak_context_tokens,
+	ROUND(s.first_half_cost, 4) AS first_half_cost,
+	ROUND(s.second_half_cost, 4) AS second_half_cost,
+	ROUND(s.second_half_cost / NULLIF(s.first_half_cost, 0), 2) AS cost_ratio,
+	COALESCE(c.handoff_outcome, c.status, '(unknown)') AS outcome,
+	CASE WHEN s.turns >= th.soft_turns THEN 1 ELSE 0 END AS above_soft,
+	CASE WHEN s.turns >= th.hard_turns THEN 1 ELSE 0 END AS above_hard
+FROM classified c
+JOIN run_split s ON s.run_id = c.run_id
+JOIN thresholds th ON th.checkpoint_class = c.checkpoint_class
+WHERE s.turns > 0
+ORDER BY s.turns DESC, s.cost DESC`,
+	},
+	{
+		name: "progress-checkpoints",
+		summary:
+			"Checkpoint decisions by class, decision and rule, with the runs evaluated, escalations per 100 evaluated runs and how many steers were followed by an edit or write whose outcome was not recorded as a failure. `errored` counts the decisions whose envelope carried an `error_class` — a rule that always fails open shows up there rather than as a healthy row — and `errored_runs` counts the runs of the class that took at least one failed checkpoint. The effect measure: a decision nobody records is invisible here, and a dataset built before the escalation branch was normalised reports zero escalations — rebuild it with build-dataset.ts before reading that column.",
+		example:
+			"bun run scripts/efficiency/analyze.ts progress-checkpoints --dataset ~/ev/dataset-2026",
+		columns: [
+			"checkpoint_class",
+			"decision",
+			"rule",
+			"checkpoints",
+			"runs",
+			"evaluated_runs",
+			"errored_runs",
+			"escalations",
+			"escalations_per_100_runs",
+			"filing_failures",
+			"errored",
+			"steers",
+			"steers_with_progress",
+		],
+		// The rule a checkpoint fired is a space-free code, so it lands in the
+		// event's bounded `detail` column (see `normalizeRecord`); the dataset keeps
+		// no separate checkpoint-rule column.
+		sql: `WITH classified AS (
+	SELECT
+		r.run_id AS run_id,
+		${checkpointClassSql("r.role")} AS checkpoint_class
+	FROM v_runs r
+),
+checkpoint AS (
+	SELECT
+		e.run_id AS run_id,
+		e.at AS at,
+		COALESCE(e.outcome, '(unset)') AS decision,
+		COALESCE(e.detail, '(none)') AS rule,
+		CASE WHEN e.error_class IS NULL THEN 1 ELSE 0 END AS ok,
+		CASE WHEN e.outcome = 'steer' AND EXISTS (
+			SELECT 1 FROM v_tool_calls c
+			WHERE c.run_id = e.run_id
+				-- An unrecorded outcome is *unknown*, not a failed steer: older
+				-- envelope generations write no pi.tool.ok, and the replay reads a
+				-- NULL the same way (a failure is an explicit 0).
+				AND c.ok IS NOT 0
+				AND c.tool IN ('edit', 'write')
+				AND c.started_at IS NOT NULL
+				AND e.at IS NOT NULL
+				AND c.started_at > e.at
+		) THEN 1 ELSE 0 END AS progressed_after
+	FROM v_events e
+	WHERE e.event = 'runtime.checkpoint'
+),
+run_scale AS (
+	SELECT
+		cl.checkpoint_class AS checkpoint_class,
+		COUNT(DISTINCT cp.run_id) AS evaluated_runs,
+		COUNT(DISTINCT CASE WHEN cp.ok = 0 THEN cp.run_id END) AS errored_runs
+	FROM classified cl
+	JOIN checkpoint cp ON cp.run_id = cl.run_id
+	GROUP BY cl.checkpoint_class
+),
+run_escalations AS (
+	SELECT
+		cl.checkpoint_class AS checkpoint_class,
+		SUM(CASE WHEN e.outcome IN ('answered', 'cancelled', 'pending-parked') THEN 1 ELSE 0 END) AS escalations,
+		SUM(CASE WHEN e.outcome = 'filing-failed' THEN 1 ELSE 0 END) AS filing_failures
+	FROM v_events e
+	JOIN classified cl ON cl.run_id = e.run_id
+	WHERE e.event = 'runtime.checkpoint_escalation'
+	GROUP BY cl.checkpoint_class
+)
+SELECT
+	cl.checkpoint_class AS checkpoint_class,
+	cp.decision AS decision,
+	cp.rule AS rule,
+	COUNT(*) AS checkpoints,
+	COUNT(DISTINCT cp.run_id) AS runs,
+	rs.evaluated_runs AS evaluated_runs,
+	COALESCE(rs.errored_runs, 0) AS errored_runs,
+	COALESCE(re.escalations, 0) AS escalations,
+	ROUND(100.0 * COALESCE(re.escalations, 0) / NULLIF(rs.evaluated_runs, 0), 2) AS escalations_per_100_runs,
+	COALESCE(re.filing_failures, 0) AS filing_failures,
+	SUM(CASE WHEN cp.ok = 0 THEN 1 ELSE 0 END) AS errored,
+	SUM(CASE WHEN cp.decision = 'steer' THEN 1 ELSE 0 END) AS steers,
+	SUM(CASE WHEN cp.decision = 'steer' AND cp.progressed_after = 1 THEN 1 ELSE 0 END) AS steers_with_progress
+FROM checkpoint cp
+JOIN classified cl ON cl.run_id = cp.run_id
+JOIN run_scale rs ON rs.checkpoint_class = cl.checkpoint_class
+LEFT JOIN run_escalations re ON re.checkpoint_class = cl.checkpoint_class
+GROUP BY cl.checkpoint_class, cp.decision, cp.rule
+ORDER BY cl.checkpoint_class, checkpoints DESC`,
+	},
+	{
+		name: "checkpoint-gaps",
+		summary:
+			"The missing-decision alarm (efficiency backlog item 19): runs whose turns passed their class's soft threshold while the dataset holds no successful `runtime.checkpoint` envelope for them. A run here was never checkpointed, or every checkpoint it took failed open.",
+		example:
+			"bun run scripts/efficiency/analyze.ts checkpoint-gaps --dataset ~/ev/dataset-2026 --limit 30",
+		limitable: true,
+		limit: 100,
+		columns: [
+			"run_id",
+			"workflow_id",
+			"checkpoint_class",
+			"role",
+			"step_id",
+			"turns",
+			"soft_turns",
+			"hard_turns",
+			"checkpoints",
+			"ok_checkpoints",
+			"above_hard",
+		],
+		sql: `WITH ${thresholdsCte()},
+classified AS (
+	SELECT
+		s.run_id AS run_id,
+		s.workflow_id AS workflow_id,
+		s.role AS role,
+		s.step_id AS step_id,
+		s.turns AS turns,
+		${checkpointClassSql("s.role")} AS checkpoint_class
+	FROM v_run_summary s
+),
+checkpoint AS (
+	SELECT
+		e.run_id AS run_id,
+		COUNT(*) AS checkpoints,
+		SUM(CASE WHEN e.error_class IS NULL THEN 1 ELSE 0 END) AS ok_checkpoints
+	FROM v_events e
+	WHERE e.event = 'runtime.checkpoint'
+	GROUP BY e.run_id
+)
+SELECT
+	g.run_id AS run_id,
+	g.workflow_id AS workflow_id,
+	g.checkpoint_class AS checkpoint_class,
+	COALESCE(g.role, '(unset)') AS role,
+	COALESCE(g.step_id, '(unset)') AS step_id,
+	g.turns AS turns,
+	th.soft_turns AS soft_turns,
+	th.hard_turns AS hard_turns,
+	COALESCE(c.checkpoints, 0) AS checkpoints,
+	COALESCE(c.ok_checkpoints, 0) AS ok_checkpoints,
+	CASE WHEN g.turns >= th.hard_turns THEN 1 ELSE 0 END AS above_hard
+FROM classified g
+JOIN thresholds th ON th.checkpoint_class = g.checkpoint_class
+LEFT JOIN checkpoint c ON c.run_id = g.run_id
+WHERE g.turns >= th.soft_turns
+	AND COALESCE(c.ok_checkpoints, 0) = 0
+ORDER BY g.turns DESC, g.run_id`,
 	},
 ];
 

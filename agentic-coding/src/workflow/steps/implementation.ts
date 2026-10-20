@@ -37,6 +37,7 @@ function carriesComments(output: unknown): boolean {
 
 export const implementationBehavior: StepBehavior = {
 	classification: "single",
+	checkpointClass: "worker",
 	roles: () => ["worker"],
 	candidateRoles: () => ["worker"],
 	validateEvidence: ({ snapshot, evidence, traits }) => {

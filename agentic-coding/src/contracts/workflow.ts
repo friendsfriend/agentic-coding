@@ -426,6 +426,89 @@ export interface DeveloperQuestionItem {
 export const CLASSIFIER_DECISION_MAX_RECORDS = 100;
 export const CLASSIFIER_DECISION_INPUT_MAX_BYTES = 16 * 1024;
 export const CLASSIFIER_DECISION_CONTENT_MAX_BYTES = 160 * 1024;
+/** The run-progress checkpoint classes (efficiency backlog item 19). A class
+ * is declared by the registered step behavior, never derived from a role table
+ * inside the host or the runner; `other` is every undeclared step. */
+export const CHECKPOINT_CLASSES = [
+	"worker",
+	"planner",
+	"verifier",
+	"mechanical",
+	"other",
+] as const;
+export type CheckpointClass = (typeof CHECKPOINT_CLASSES)[number];
+/** The checkpoint's fixed decision vocabulary, in the order a checkpoint offers
+ * it, and the closed rule-id set of the `rules/v1` decider. Both live in the
+ * contract because three layers enforce them: the decider produces them, the
+ * record boundary (`workflow checkpoint --record`) refuses anything else, and
+ * the dashboard renders only these. */
+export const CHECKPOINT_ACTIONS = [
+	"continue",
+	"steer",
+	"compact",
+	"switch-model",
+	"escalate",
+] as const;
+export type CheckpointAction = (typeof CHECKPOINT_ACTIONS)[number];
+export const CHECKPOINT_RULE_IDS = [
+	"hard-limit",
+	"no-progress-twice",
+	"steer-ignored",
+	"context",
+	"failing-tool",
+	"repeats",
+	"no-progress",
+	"cost-rising",
+	"default",
+] as const;
+export type CheckpointRuleId = (typeof CHECKPOINT_RULE_IDS)[number];
+/** The stall signals a checkpoint can measure, and the reasons it fired. Both
+ * are written into the digest, which the record boundary persists, so both are
+ * declared here for the same reason the rule ids are: the boundary refuses a
+ * value outside the set, and the host and the efficiency queries read one
+ * declaration. `context` is a trigger, never a signal — it is not answered with
+ * a nudge. */
+export const CHECKPOINT_SIGNALS = [
+	"failing-tool",
+	"repeats",
+	"no-progress",
+	"cost-rising",
+] as const;
+export type CheckpointSignal = (typeof CHECKPOINT_SIGNALS)[number];
+export const CHECKPOINT_TRIGGERS = [
+	"soft",
+	"interval",
+	"hard",
+	"context",
+	"stall",
+] as const;
+export type CheckpointTrigger = (typeof CHECKPOINT_TRIGGERS)[number];
+/** One line per checkpoint action: the question option's text and the decision
+ * record's `criteria`. It lives in the contract for the same reason the
+ * vocabulary does — the record boundary refuses an option whose criteria is not
+ * exactly this line, so a caller cannot smuggle prose into the bounded history
+ * through the option list. */
+export const CHECKPOINT_ACTION_SUMMARY: Readonly<
+	Record<CheckpointAction, string>
+> = {
+	continue: "Keep the run going as it is.",
+	steer: "Send one fixed nudge from the catalog at the next turn boundary.",
+	compact: "Compact the conversation through the cost ceiling's admission.",
+	"switch-model":
+		"Move the run to another model (vocabulary only in this release).",
+	escalate: "Ask the developer through a normal developer question.",
+};
+/** The id every checkpoint decision records as its decider, and the classifier
+ * integration it records under. Both are contract-level because the record
+ * boundary (`workflow checkpoint --record`) refuses any other value. */
+export const CHECKPOINT_DECIDER = "rules/v1";
+export const CHECKPOINT_INTEGRATION = "progress-checkpoint";
+/** How many run-progress checkpoint records one *run* keeps. The bound is per
+ * run rather than per workflow: a single long run records at most this many
+ * decisions (its 13th onwards are refused), and a later run of the same
+ * workflow starts with its own budget, so it can never evict every classifier
+ * record from the shared bounded history. */
+export const CHECKPOINT_RECORD_LIMIT = 12;
 
 /** One triage pass records one record per role question it asked, and every
  * one of them carries the same rendered state, so the per-record input budget
@@ -632,6 +715,14 @@ export interface ClassifierDecisionRecord {
 		attention?: string;
 	};
 }
+/** What a run hands the runtime when it records one run-progress checkpoint
+ * (`workflow checkpoint --record`, efficiency backlog item 19). The runtime
+ * stamps `id`, `at` and `inputTruncated` itself, so a caller can never pick the
+ * identity or the ordering of a record in the bounded history. */
+export type ClassifierDecisionInput = Omit<
+	ClassifierDecisionRecord,
+	"id" | "at" | "inputTruncated"
+>;
 /** What a developer-dialogue record is for. Absent for an ordinary developer
  * question; `login-handoff` is the `stage_login` hand-off, which is answered by
  * the developer in the dashboard but never routed to, or resumed by, a run. */
@@ -847,6 +938,10 @@ export interface Assignment {
 				 * planning, where the planner chooses the change id(s). */
 				HERDR_CHANGE_ID?: string;
 				HERDR_WORKFLOW_TARGET?: string;
+				/** The run-progress checkpoint class its step declares
+				 * (efficiency backlog item 19). Absent for a step that declares none;
+				 * the host then supervises the run as `other`. */
+				HERDR_CHECKPOINT_CLASS?: string;
 				/** Session content capture opt-in, forwarded from
 				 * `telemetry.capture_content`; absent when capture is off. */
 				HERDR_CAPTURE_CONTENT?: string;
@@ -1082,6 +1177,21 @@ export type WorkflowCommand =
 			role: string;
 			token: string;
 			handoff: unknown;
+	  }
+	| {
+			/** One run-progress checkpoint decision, recorded by the run that made
+			 * it (efficiency backlog item 19). Diagnostic history only: the reducer
+			 * appends to the bounded classifier-decision list and never transitions,
+			 * so a lost or refused record leaves the run exactly where it was. */
+			type: "agent.checkpoint";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+			/** The run generation the caller believes it is, when it knows it. */
+			generation?: number;
+			record: ClassifierDecisionInput;
 	  }
 	| {
 			type: "effect.result";
@@ -1332,6 +1442,45 @@ const agentResearchHandoffSchema = Schema.Struct({
 	token: text(1024),
 	handoff: Schema.Unknown,
 });
+const classifierDecisionInputSchema = Schema.Struct({
+	integration: text(4096),
+	phase: Schema.optionalWith(text(4096), { exact: true }),
+	questionId: text(4096),
+	model: text(4096),
+	input: boundedText(CLASSIFIER_DECISION_INPUT_MAX_BYTES),
+	options: Schema.Array(
+		Schema.Struct({
+			label: text(4096),
+			profile: text(4096),
+			criteria: Schema.optionalWith(Schema.Unknown, { exact: true }),
+		}),
+	),
+	answer: Schema.Struct({
+		type: Schema.Literal("choice", "noul"),
+		choice: Schema.optionalWith(text(4096), { exact: true }),
+		noul: Schema.optionalWith(Schema.Number, { exact: true }),
+		confidence: Schema.optionalWith(Schema.Number, { exact: true }),
+		probabilities: Schema.optionalWith(
+			Schema.Record({ key: Schema.String, value: Schema.Number }),
+			{ exact: true },
+		),
+	}),
+	result: Schema.Struct({
+		applied: Schema.Boolean,
+		profiles: Schema.Array(text(4096)),
+		attention: Schema.optionalWith(boundedText(4096), { exact: true }),
+	}),
+});
+const agentCheckpointSchema = Schema.Struct({
+	type: Schema.Literal("agent.checkpoint"),
+	workflowId: text(4096),
+	runId: text(4096),
+	stepId: text(4096),
+	role: text(4096),
+	token: text(1024),
+	generation: Schema.optional(integer()),
+	record: classifierDecisionInputSchema,
+});
 const effectResultSchema = Schema.Struct({
 	type: Schema.Literal("effect.result"),
 	effectId: text(4096),
@@ -1375,6 +1524,7 @@ export const WorkflowCommandSchema = Schema.Union(
 	agentHandoffSchema,
 	agentResumeSchema,
 	agentResearchHandoffSchema,
+	agentCheckpointSchema,
 	effectResultSchema,
 	operatorRepairSchema,
 	operatorRepinSchema,

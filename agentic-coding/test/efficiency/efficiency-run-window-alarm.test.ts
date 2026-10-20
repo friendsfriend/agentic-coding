@@ -440,6 +440,32 @@ describe("the run-window build alarm", () => {
 		});
 	});
 
+	test("--json keeps its stdout parseable and states the build's age on stderr", () => {
+		// The JSON output is what the parsers read, so the provenance line — the only
+		// signal that an older file's zeros may be "not recorded yet" — belongs on
+		// stderr instead of in front of the array.
+		const root = evidenceWith([ATTRIBUTED]);
+		const build = runBuild(root);
+		expect(build.exitCode).toBe(0);
+		const child = Bun.spawnSync(
+			[
+				process.execPath,
+				ANALYZE,
+				"run-window-drift",
+				"--dataset",
+				path.join(build.outDir, "dataset.sqlite"),
+				"--json",
+			],
+			{ cwd: build.outDir, stdout: "pipe", stderr: "pipe" },
+		);
+		expect(child.exitCode).toBe(0);
+		const rows: unknown = JSON.parse(child.stdout.toString());
+		expect(Array.isArray(rows)).toBe(true);
+		expect(child.stderr.toString()).toMatch(
+			/^dataset .* built .* \(schema 4\)$/m,
+		);
+	});
+
 	test("a dataset file an earlier build wrote is refused with the rebuild named", () => {
 		// The columns this analysis reads are append-only within schema 4, so a file
 		// written before them has no such column at all. Reading it must name the one
