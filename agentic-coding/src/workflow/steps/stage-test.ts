@@ -241,6 +241,9 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 		classification: "single",
 		roles: () => [STAGE_TEST_PLANNER_ROLE],
 		candidateRoles: () => [STAGE_TEST_PLANNER_ROLE],
+		// The stage tools authorise a call by the step's selected role; a stage
+		// step has no triage to choose one, so arriving selects its only role.
+		onArrive: () => ({ selectedRoles: [STAGE_TEST_PLANNER_ROLE] }),
 		instructionAssetForRole: () => "stage-test-plan.md",
 		acceptsCommentsContext: true,
 		onAgentComplete: ({ snapshot, outcome, output }) => {
@@ -288,6 +291,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 		classification: "single",
 		roles: () => [STAGE_TESTER_ROLE],
 		candidateRoles: () => [STAGE_TESTER_ROLE],
+		onArrive: () => ({ selectedRoles: [STAGE_TESTER_ROLE] }),
 		instructionAssetForRole: () => "stage-test-execute.md",
 		acceptsCommentsContext: true,
 		onAgentComplete: ({

@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import type { JsonValue, WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { listEvidence } from "../src/server/evidence/store.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
+import { managedWorkflowTarget } from "../src/workflow/cli/caller-environment.ts";
 import { WorkflowRuntimeError } from "../src/workflow/contracts.ts";
 import {
 	stageTestPlan,
@@ -799,6 +800,29 @@ describe("stage-test handoff and render wiring", () => {
 			);
 		} finally {
 			fs.rmSync(worktree, { recursive: true, force: true });
+		}
+	});
+
+	test("arriving at a stage step selects its role, which the stage tools authorise by", () => {
+		expect(
+			stageTestBehaviors["stage.plan"]?.onArrive?.({} as never)?.selectedRoles,
+		).toEqual(["stage-planner"]);
+		expect(
+			stageTestBehaviors["stage.execute"]?.onArrive?.({} as never)
+				?.selectedRoles,
+		).toEqual(["stage-tester"]);
+	});
+
+	test("a stage-test run's CLI resolves the engine target, not the working directory", () => {
+		const previous = process.env.HERDR_WORKFLOW_TARGET;
+		try {
+			process.env.HERDR_WORKFLOW_TARGET = stageTestWorkflowTarget();
+			expect(managedWorkflowTarget("/not/a/repository")).toBe(
+				stageTestWorkflowTarget(),
+			);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_TARGET;
+			else process.env.HERDR_WORKFLOW_TARGET = previous;
 		}
 	});
 

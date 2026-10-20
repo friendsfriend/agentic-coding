@@ -181,6 +181,7 @@ import {
 	isResearchWorkflowTarget,
 	isStageTestWorkflowTarget,
 	isWikiWorkflowTarget,
+	stageTestWorkflowTarget,
 	type WorkflowEngine,
 	wikiWorkflowDataRoot,
 } from "./runtime.ts";
@@ -4817,7 +4818,7 @@ function assignmentFor(
 					: snapshot.definition.id === "research"
 						? "research://standalone"
 						: snapshot.definition.id === "stage-test"
-							? `stage-test://${snapshot.metadata.stage ?? "unknown"}`
+							? stageTestWorkflowTarget()
 							: snapshot.metadata.repository,
 			HERDR_RUNTIME: run.profile.runtime,
 			// Session content capture is the same explicit opt-in the engine uses for

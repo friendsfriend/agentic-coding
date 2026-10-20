@@ -863,7 +863,9 @@ function ensureSnapshotParent(root: string, file: string): void {
 }
 function workflowSnapshotBase(): string {
 	return process.env.HERDR_WORKFLOW_TARGET === "wiki://centralized" ||
-		process.env.HERDR_WORKFLOW_TARGET === "research://standalone"
+		process.env.HERDR_WORKFLOW_TARGET === "research://standalone" ||
+		// `STAGE_TEST_WORKFLOW_TARGET` (runtime/targets.ts imports this module)
+		process.env.HERDR_WORKFLOW_TARGET === "stage-test://hosted"
 		? path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow")
 		: process.cwd();
 }

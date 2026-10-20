@@ -2,7 +2,11 @@
 // (question, handoff, research-handoff, wiki write/verify/log). Moved
 // verbatim out of cli.ts (split-workflow-god-modules).
 import fs from "node:fs";
-import { researchWorkflowTarget, wikiWorkflowTarget } from "../runtime.ts";
+import {
+	researchWorkflowTarget,
+	stageTestWorkflowTarget,
+	wikiWorkflowTarget,
+} from "../runtime.ts";
 
 export type CallerEnvironment = Record<string, string>;
 
@@ -163,5 +167,7 @@ export function managedWorkflowTarget(fallback = process.cwd()): string {
 		? wikiWorkflowTarget()
 		: process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget()
 			? researchWorkflowTarget()
-			: fallback;
+			: process.env.HERDR_WORKFLOW_TARGET === stageTestWorkflowTarget()
+				? stageTestWorkflowTarget()
+				: fallback;
 }
