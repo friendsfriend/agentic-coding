@@ -83,7 +83,12 @@ tag every envelope `runtime: "pi-durable"`. Alongside `runtime.turn_started`,
 `kind` is what the analysis counts: pi-durable knows `manual` and the automatic
 threshold/overflow family, and the host claims its own proactive compactions as
 `auto-ceiling` (efficiency backlog item 6) or `auto-checkpoint` (a run-progress
-checkpoint that decided `compact`, efficiency backlog item 19). `runtime.settled`
+checkpoint whose own admission started the summarizer, efficiency backlog item
+19). The kind names the supervisor that started the compaction, once: when the
+ceiling already admitted the same context, the checkpoint's `compact` reports
+`applied: false` and the compaction stays `auto-ceiling`, so
+`compactionsAutoCheckpoint` is never inflated by a decision that started
+nothing. `runtime.settled`
 additionally carries `peakContextTokens` (the largest prompt the conversation ever
 carried), `turns`, `costUnits` (the run's cumulative provider cost, never a
 price), `compactionsAutoCeiling` / `compactionsAutoOverflow` /

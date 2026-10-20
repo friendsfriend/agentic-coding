@@ -306,15 +306,28 @@ Bounds: the decision history is shared (100 records), so a run writes at most
 12 checkpoint records; later checkpoints are telemetry-only (`recorded: false`).
 The `runtime.checkpoint` envelope carries the same digest, options, answer and
 result for every checkpoint, so telemetry is the complete record and the
-history the bounded, reviewable one. The dashboard outcome line for the
-integration reads `decided <label> (rule <id>)`.
+history the bounded, reviewable one. The dashboard renders the row from the
+record itself, in the narrow panel: the label is the question's ordinal
+(`#<ordinal>`) and the one-line outcome states the three facts the panel must
+show — `<action> · <rule> · filed|not filed` (`checkpointOutcome` in
+`src/tui/dash/projections.ts`). The exact rendering belongs to the dashboard;
+what is pinned here is that the action, the rule and the question's fate are all
+visible in one row.
 
 ### D9. `compact` reuses the ceiling path; `switch-model` is vocabulary only
 
 `compact` is admitted through the same serialized admission as the cost ceiling
-(same summarizer, no instructions, same floor and loop guard); its compaction
+(same summarizer, no instructions, same floor and loop guard); when the
+checkpoint's admission is the one that starts the summarizer, its compaction
 envelope carries the additive kind `auto-checkpoint` and `runtime.settled`
-counts it. `switch-model`: a seam exists (`configureRun`, the dashboard
+counts it. Both supervisors read the same measured turn and the ceiling is
+scheduled first, so in practice a checkpoint's `compact` usually finds that
+summarizer already running: the decision is then recorded `applied: false` with
+the attention line `compaction not admitted`, the compaction keeps the kind of
+the supervisor that started it (`auto-ceiling`), and `applied` therefore never
+claims an action the run did not take. A context whose compaction is already
+claimed, or whose reduced context has not been measured yet, is not admissible,
+so the context rule falls through to the signal rules. `switch-model`: a seam exists (`configureRun`, the dashboard
 `/model` override), but no safe target policy does — the target's window must
 hold the current context, its provider must have credentials, and the step's
 pool semantics would be bypassed. No first-release rule selects it; if a future

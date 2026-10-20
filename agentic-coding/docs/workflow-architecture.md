@@ -1651,10 +1651,20 @@ It is submitted through the host's existing `steer` submit mode, which interrupt
 the current turn and lands at the next turn boundary.
 
 **What each decision does.** `continue` records and continues. `steer` submits the
-catalog message and records that the signal was steered. `compact` goes through
-the cost ceiling's own admission (`admitCompaction`, kind `auto-checkpoint`), so
-it obeys the same floor and loop guard as `auto-ceiling` and reports the same
-`runtime.compaction_start` / `runtime.compaction` envelopes under that kind.
+catalog message and records that the signal was steered — and only when the
+submission was delivered: a refused steer leaves the run as if the decision were
+`continue`, so the signal stays open for the next nudge instead of escalating as
+`steer-ignored`. `compact` goes through the cost ceiling's own admission
+(`admitCompaction`, kind `auto-checkpoint`), so it obeys the same floor and loop
+guard as `auto-ceiling`. The two supervisors read the same measured turn and the
+ceiling is scheduled first, so a checkpoint's `compact` normally finds that
+summarizer already in flight: the decision then reports `applied: false` with
+`attention: "compaction not admitted"` and the compaction keeps the kind of the
+supervisor that really started it (`auto-ceiling`), which is why
+`compactionsAutoCheckpoint` counts only what a checkpoint started itself. A
+context whose compaction is already claimed or whose reduced context is not yet
+measured is not admissible at all, and the context rule falls through to the
+signal rules.
 `switch-model` is **vocabulary only** in this release: the decision is recorded
 with `applied: false` and nothing moves — a run's model is its profile's. `escalate`
 is the next paragraph.
@@ -1688,11 +1698,15 @@ stops anything: only a recorded decision does, and it always reaches the develop
 as a question first.
 
 **Fail-open, everywhere.** The whole evaluation is guarded. A sample that throws
-or times out (`CHECKPOINT_SAMPLE_TIMEOUT_MS = 2000`), a digest that cannot be
-built, a failed steer or compaction, or a record write that fails — each leaves
-the run running and reports `status: "error"` with a bounded `error_class`
-(`sample`, `evaluate`, `steer`, `compact`, `record`) on the checkpoint's own
-envelope, which then carries no decision and no rule. A question that cannot be
+or times out (`CHECKPOINT_SAMPLE_TIMEOUT_MS = 2000`) or a digest that cannot be
+built fails *before* there is a decision: it leaves the run running and reports
+`status: "error"` with `error_class: "sample"` or `"evaluate"` on a
+`runtime.checkpoint` that carries no decision and no rule. A failed steer, a
+failed compaction or a failed record write happens *after* the decision, so its
+envelope keeps the decision, the rule and the applied result and only adds
+`status: "error"` with `error_class: "steer"`, `"compact"` or `"record"` — the
+failure belongs to the action, not to the decision, and the decision
+distribution still counts it once. A question that cannot be
 filed happens *after* the decision, and is reported on the escalation's envelope
 instead (`outcome: "filing-failed"`, `status: "error"`, `error_class: "question"`):
 one checkpoint exports at most one `runtime.checkpoint`, so a re-emitted decision
