@@ -1,14 +1,14 @@
 ## 1. Measurement first
 
-- [ ] 1.1 Add the `turn-distribution` query to `scripts/efficiency/lib/queries.ts` (per checkpoint class: runs, p50/p90/p95/p99/max turns for all runs and for successful runs — handoff outcome `complete` or run status `complete`/`completed` — and the outcome coverage), with a fixture test in the existing query test file
-- [ ] 1.2 Build the dataset from the latest snapshot into a temporary directory (`build-dataset.ts --evidence ~/agentic-coding-efficiency-evidence/latest --out "$(mktemp -d)/ds"`), run `turn-distribution`, and apply the design's D3 formula to pin `softTurns`/`hardTurns` per class; record the table, the formula, the outcome coverage and the repaired-denominator figures (441.9321 units, 34,711 turns, 26,847 calls, 1,259 runs) in a new addendum `docs/efficiency/04b-run-progress-checkpoint.md` without rewriting the older documents
-- [ ] 1.3 Add the `run-progress`, `progress-checkpoints` and `checkpoint-gaps` queries with fixture tests (a run past its soft threshold with no or only errored `runtime.checkpoint` envelopes appears in `checkpoint-gaps`; second-half/first-half ratio computed per run)
+- [x] 1.1 Add the `turn-distribution` query to `scripts/efficiency/lib/queries.ts` (per checkpoint class: runs, p50/p90/p95/p99/max turns for all runs and for successful runs — handoff outcome `complete` or run status `complete`/`completed` — and the outcome coverage), with a fixture test in the existing query test file
+- [x] 1.2 Build the dataset from the latest snapshot into a temporary directory (`build-dataset.ts --evidence ~/agentic-coding-efficiency-evidence/latest --out "$(mktemp -d)/ds"`), run `turn-distribution`, and apply the design's D3 formula to pin `softTurns`/`hardTurns` per class; record the table, the formula, the outcome coverage and the repaired-denominator figures (441.9321 units, 34,711 turns, 26,847 calls, 1,259 runs) in a new addendum `docs/efficiency/04b-run-progress-checkpoint.md` without rewriting the older documents
+- [x] 1.3 Add the `run-progress`, `progress-checkpoints` and `checkpoint-gaps` queries with fixture tests (a run past its soft threshold with no or only errored `runtime.checkpoint` envelopes appears in `checkpoint-gaps`; second-half/first-half ratio computed per run)
 
 ## 2. Pure checkpoint module
 
-- [ ] 2.1 Create `src/agent-host/progress-checkpoint.ts`: the per-run signal accumulator (turns, cost units, context/peak, failing-tool streak after a first success, exact-repeat share over the last 20 calls, turns since progress, cost-rising ratio), the content-free digest, and the per-class threshold resolution with the pinned defaults
-- [ ] 2.2 Implement the ordered `rules/v1` rule set (hard-limit, no-progress-twice, steer-ignored, context→compact when admissible, failing-tool, repeats, no-progress, cost-rising, default) as a pure function of the digest, plus the closed, versioned steer catalog and the templated escalation summary
-- [ ] 2.3 Unit tests for the module: each rule fires on its minimal digest and not otherwise; the same digest gives the same decision; `steer = false` turns steer rules into `continue`; a steered signal that returns escalates; the digest and the escalation text contain no path, argument, error text or message text (assert on a digest built from calls carrying such content); the failing-tool signal is absent for exempt roles and for zero-success runs
+- [x] 2.1 Create `src/agent-host/progress-checkpoint.ts`: the per-run signal accumulator (turns, cost units, context/peak, failing-tool streak after a first success, exact-repeat share over the last 20 calls, turns since progress, cost-rising ratio), the content-free digest, and the per-class threshold resolution with the pinned defaults
+- [x] 2.2 Implement the ordered `rules/v1` rule set (hard-limit, no-progress-twice, steer-ignored, context→compact when admissible, failing-tool, repeats, no-progress, cost-rising, default) as a pure function of the digest, plus the closed, versioned steer catalog and the templated escalation summary
+- [x] 2.3 Unit tests for the module: each rule fires on its minimal digest and not otherwise; the same digest gives the same decision; `steer = false` turns steer rules into `continue`; a steered signal that returns escalates; the digest and the escalation text contain no path, argument, error text or message text (assert on a digest built from calls carrying such content); the failing-tool signal is absent for exempt roles and for zero-success runs
 
 ## 3. Recording in the engine
 
@@ -26,7 +26,7 @@
 ## 5. Configuration and documentation
 
 - [ ] 5.1 Parse and validate `[agents.checkpoint]` (`enabled`, `steer`, `contextTokens`, per-class `softTurns`/`hardTurns` with `softTurns ≥ 10` and `hardTurns ≥ 2 × softTurns`) in `src/workflow/profiles.ts` and hand it to the host; validation tests for valid, invalid and absent tables
-- [ ] 5.2 Add `scripts/efficiency/replay-checkpoint.ts` that feeds recorded turns and calls from a dataset into the same pure module and prints per-run would-be decisions and argument-hash coverage; record in the 04b addendum what it decides for the 1,072-turn run and for the 704–1,010-turn successful runs
+- [x] 5.2 Add `scripts/efficiency/replay-checkpoint.ts` that feeds recorded turns and calls from a dataset into the same pure module and prints per-run would-be decisions and argument-hash coverage; record in the 04b addendum what it decides for the 1,072-turn run and for the 704–1,010-turn successful runs
 - [ ] 5.3 Document the checkpoint (classes, defaults, rules, steer catalog, escalation, fail-open, records, queries) in `docs/workflow-architecture.md` and the `[agents.checkpoint]` section in the configuration documentation
 
 ## 6. Focused verification

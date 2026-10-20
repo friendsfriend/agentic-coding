@@ -335,6 +335,24 @@ export function normalizeRecord(
 		compactionBlocking: bool(record.blocking),
 	};
 
+	// A progress checkpoint's own vocabulary (efficiency backlog item 19): its
+	// decision is the event's outcome, its rule a space-free reason code, and an
+	// errored evaluation is the only thing that carries an error class — which is
+	// exactly what `checkpoint-gaps` reads.
+	if (event === "runtime.checkpoint") {
+		normalized.outcome =
+			str(record["herdr.checkpoint.decision"]) ?? normalized.outcome;
+		const rule = str(record["herdr.checkpoint.rule"]);
+		normalized.reasonCode =
+			rule !== undefined && looksLikeCode(rule)
+				? rule
+				: normalized.reasonCode;
+		normalized.errorClass =
+			str(record["herdr.checkpoint.status"]) === "error"
+				? (str(record["herdr.checkpoint.error_class"]) ?? "checkpoint_error")
+				: undefined;
+	}
+
 	// A tool outcome that is neither "ok" nor absent stays as recorded; the
 	// dataset never rewrites an outcome it cannot interpret. The fallback error
 	// class is only derived for a tool event — an unrelated event's `status`

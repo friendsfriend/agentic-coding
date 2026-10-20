@@ -138,14 +138,34 @@ Formula, applied by task 1 to the latest snapshot:
   all-runs p99 where the successful sample is small;
 - checkpoint interval after the first checkpoint = max(10, soft / 2).
 
-Provisional values from the planning measurement:
+Values pinned by task 1 on the rebuilt dataset (nearest-rank percentiles over
+every run with turns; `docs/efficiency/04b-run-progress-checkpoint.md` has the
+distribution and the per-step arithmetic). The formula moved two values against
+the planning table: the worker soft threshold is 280 (measured p90 271, not
+242) and the mechanical hard limit is 250 (the all-runs p99 is 188, and
+1.2 × 188 rounds up to 250). `other` uses the worker row.
 
-| class | softTurns | hardTurns | interval | hard vs successful max |
-| --- | ---: | ---: | ---: | --- |
-| worker (and `other`) | 250 | 1,250 | 125 | 1,250 > 1,010 |
-| planner | 60 | 300 | 30 | 300 > 166 |
-| verifier | 70 | 350 | 35 | 350 > 228 |
-| mechanical | 30 | 150 | 15 | 150 > 114 |
+| class | runs | p90 | all-runs p99 | successful max | softTurns | hardTurns | interval | hard vs successful p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| worker (and `other`) | 117 | 271 | 1,010 | 1,010 | 280 | 1,400 | 140 | 1,400 > 1,010 |
+| planner | 212 | 56 | 95 | 166 | 60 | 300 | 30 | 300 > 166 |
+| verifier | 383 | 65 | 194 | 228 | 70 | 350 | 35 | 350 > 228 |
+| mechanical | 218 | 30 | 114 | 114 | 30 | 250 | 15 | 250 > 114 |
+
+Successful samples are small (worker n = 14, planner n = 3, verifier n = 42,
+mechanical n = 14), which is why `hardTurns` also takes 1.2 × the all-runs p99:
+every class's hard limit sits above both its successful p99 and above every
+successful run's observed maximum.
+
+Measurement recorded in `docs/efficiency/04b-run-progress-checkpoint.md`
+together with the replay of all 944 runs that carry turns (263 checkpoints, 104
+steers, 138 continues, 21 escalations — 4 of them on runs that still completed;
+the replay's escalation count is an upper bound because a replayed steer cannot
+change the run's behaviour). From that: `enabled` and `steer` ship **true**. The
+evaluation cannot stop a run by itself, an escalation costs one developer
+question, and 104 of 125 steer opportunities resolve without a question; a
+false alarm answered `continue` changes no lifecycle. `enabled = false` remains
+the whole rollback.
 
 `contextTokens` = 200,000 for every class: above the shipped 150,000 compaction
 ceiling, so it fires only when ceiling compaction did not hold the context.
