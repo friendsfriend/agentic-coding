@@ -94,7 +94,7 @@ const MANIFEST: EvidenceManifest = {
 
 test("entries read newest first and grouped by debug request", () => {
 	expect(
-		evidenceRows(ENTRIES).map((row) => [row.header ?? "", row.entry.id]),
+		evidenceRows(ENTRIES).map((row) => [row.header ?? "", row.entry?.id]),
 	).toEqual([
 		["Debug request dbg-2", POSTER.id],
 		["", VIDEO.id],
@@ -107,7 +107,7 @@ test("entries read newest first and grouped by debug request", () => {
 test("a row names the kind, caption, producer, time and size", () => {
 	const rows = evidenceRows(ENTRIES);
 	const label = (id: string) =>
-		rows.find((row) => row.entry.id === id)?.label ?? "";
+		rows.find((row) => row.entry?.id === id)?.label ?? "";
 	expect(label(AFTER.id)).toBe("▣ After the fix · worker · 12:04Z · 1.2 MB");
 	expect(label(RUN_LOG.id)).toBe("▤ run log · core.planning · 12:04Z · 2.0 KB");
 	// An entry without a caption is still listed, under its kind.
@@ -116,7 +116,7 @@ test("a row names the kind, caption, producer, time and size", () => {
 
 test("the preview renders a screenshot or a video's poster, never a video", () => {
 	const rows = evidenceRows(ENTRIES);
-	const index = (id: string) => rows.findIndex((row) => row.entry.id === id);
+	const index = (id: string) => rows.findIndex((row) => row.entry?.id === id);
 	expect(evidencePreviewEntry(rows, index(AFTER.id))?.id).toBe(AFTER.id);
 	// A video's own bytes are never decoded inline: its poster stands in.
 	expect(evidencePreviewEntry(rows, index(VIDEO.id))?.id).toBe(POSTER.id);
@@ -132,7 +132,7 @@ test("a poster that is not a screenshot leaves the preview at metadata", () => {
 			item.id === VIDEO.id ? { ...item, poster: RUN_LOG.id } : item,
 		),
 	);
-	const index = rows.findIndex((row) => row.entry.id === VIDEO.id);
+	const index = rows.findIndex((row) => row.entry?.id === VIDEO.id);
 	expect(evidencePreviewEntry(rows, index)).toBeUndefined();
 });
 

@@ -90,7 +90,7 @@ describe("the Evidence panel's keys", () => {
 		const rows = evidenceRows(MANIFEST);
 		// The panel paints newest first, so the top row is the manifest's last
 		// entry: reading the manifest by index would open a different file.
-		expect(rows.map((row) => row.entry.id)).toEqual([
+		expect(rows.map((row) => row.entry?.id)).toEqual([
 			NEWEST.id,
 			MIDDLE.id,
 			OLDEST.id,

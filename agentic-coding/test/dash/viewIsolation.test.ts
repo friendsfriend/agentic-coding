@@ -200,6 +200,9 @@ describe("the dashboard route is a coordinator", () => {
 				"debugRequests",
 				"debugRequestsState",
 				"debugRequestsError",
+				// The workflow's stage step journal: the Evidence panel groups by it
+				// and offers "open flow" only when it has one (`add-stage-flow-evidence`).
+				"stageJournal",
 				"kittyGraphics",
 			]).toContain(name);
 	});
