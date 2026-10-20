@@ -576,6 +576,40 @@ test("/model opens the picker and selecting applies the model override", async (
 	t.renderer.destroy();
 });
 
+test("the command autocomplete filters live as the command is typed", async () => {
+	const t = await testRender(
+		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		t.mockInput.pressKey("/");
+		await t.renderOnce();
+		const open = t.captureCharFrame();
+		expect(open).toContain("/model");
+		expect(open).toContain("/thinking");
+		expect(open).toContain("/compact");
+
+		for (const character of "mo") t.mockInput.pressKey(character);
+		await t.renderOnce();
+		const filtered = t.captureCharFrame();
+		expect(filtered).toContain("/model");
+		expect(filtered).not.toContain("/thinking");
+		expect(filtered).not.toContain("/compact");
+
+		// A query with no command closes the list, and deleting the character
+		// that stopped matching brings it back.
+		t.mockInput.pressKey("x");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("/model");
+		t.mockInput.pressBackspace();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("/model");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("/compact is offered, forwards its instructions and never sends a prompt", async () => {
 	const compacted: Array<string | undefined> = [];
 	const submitted: string[] = [];

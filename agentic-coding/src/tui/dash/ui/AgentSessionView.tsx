@@ -821,8 +821,19 @@ interface PickerState {
 export function AgentSessionView(props: AgentSessionViewProps) {
 	let inputRef: TextareaRenderable | undefined;
 	// The editor buffer is the source of truth while typing (native editing,
-	// undo and selection); the draft signal is kept in step with it.
-	const promptText = () => inputRef?.plainText ?? props.draft;
+	// undo and selection); the draft signal is kept in step with it. The prompt
+	// text is mirrored into a signal as it changes, so the autocomplete is live:
+	// the editor buffer itself is not reactive, and reading it alone left the
+	// command list frozen at the query it opened with.
+	const [promptMirror, setPromptMirror] = createSignal(
+		untrack(() => props.draft),
+	);
+	const promptText = () => {
+		// The editor buffer is the live value in key handlers; reading the
+		// mirror as well makes the render depend on content-change publication.
+		const mirrored = promptMirror();
+		return inputRef?.plainText ?? mirrored;
+	};
 	// One write path for every prompt change the view makes itself: the editor
 	// buffer first, then the draft the parent owns. The editor publishes its
 	// own content change asynchronously, so a clear that waited for the signal
@@ -833,6 +844,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			editor.setText(text);
 			editor.gotoBufferEnd();
 		}
+		setPromptMirror(text);
 		if (props.draft !== text) props.onDraftChange(text);
 	};
 	// A write the view did not make itself — the parent resetting the draft —
@@ -841,9 +853,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	createEffect(() => {
 		const editor = inputRef;
 		const draft = props.draft;
-		if (!editor || editor.plainText === draft) return;
+		if (!editor || editor.plainText === draft) {
+			setPromptMirror(draft);
+			return;
+		}
 		editor.setText(draft);
 		editor.gotoBufferEnd();
+		setPromptMirror(draft);
 	});
 	// Negative offsets from newest; zero is the empty prompt, not an entry.
 	let historyIndex = 0;
@@ -1066,11 +1082,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		return parts.join(" · ");
 	};
 
-	/** The command list shown while the draft is still a bare `/prefix`. */
-	/** The command list shown while the draft is still a bare `/prefix`. Read
-	 * from the editor buffer, not the draft signal: the editor publishes its
-	 * content asynchronously, so the signal can still be one render behind the
-	 * keystrokes that make up the very command being completed. */
+	/** The command list shown while the draft is still a bare `/prefix`. The
+	 * editor buffer keeps a key handler exact; `promptText`'s mirror read makes
+	 * the list re-evaluate when a keystroke is published. */
 	const autocompleteItems = () => {
 		const match = /^\/(\S*)$/.exec(promptText());
 		if (!match) return [];
@@ -1442,6 +1456,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 								placeholder="Ask anything…"
 								onContentChange={() => {
 									const value = promptText();
+									setPromptMirror(value);
 									if (value !== props.draft) props.onDraftChange(value);
 									setAutocompleteIndex(0);
 								}}
