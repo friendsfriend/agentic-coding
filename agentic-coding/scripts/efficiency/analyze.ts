@@ -23,6 +23,7 @@ import {
 	assertDatasetSchemaVersion,
 	DATASET_FILE,
 	DatasetSchemaError,
+	datasetMeta,
 } from "./lib/dataset.ts";
 import { QUERIES, queryByName } from "./lib/queries.ts";
 
@@ -85,6 +86,15 @@ function main(argv: readonly string[]): number {
 			process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
 			return 0;
 		}
+		// The build date is the only signal that an older file's zeros may be "not
+		// recorded yet" rather than measurements: the schema version changes only
+		// with the file's shape.
+		const meta = datasetMeta(db);
+		process.stdout.write(
+			`dataset ${path.basename(path.dirname(datasetPath))} built ${
+				meta.builtAt ?? "(unknown)"
+			} (schema ${meta.schemaVersion ?? "unknown"})\n`,
+		);
 		const columns = query.columns.filter(
 			(column) => rows.length === 0 || column in (rows[0] ?? {}),
 		);

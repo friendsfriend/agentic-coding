@@ -64,6 +64,37 @@ export function assertDatasetSchemaVersion(
 	);
 }
 
+/** When the dataset was built, and under which schema version. `analyze` prints
+ * it: the version only changes when the file's *shape* changes, so a change in
+ * what an existing column means (a normalizer that starts recording an outcome
+ * it used to drop) leaves an older file readable and its zeros indistinguishable
+ * from measurements. The build date is what tells a reader to rebuild. */
+export function datasetMeta(db: Database): {
+	builtAt?: string;
+	schemaVersion?: number;
+} {
+	const read = (key: string): string | undefined => {
+		try {
+			const row = db
+				.query<{ value: string }, [string]>(
+					"SELECT value FROM meta WHERE key = ?",
+				)
+				.get(key);
+			return row === null ? undefined : row.value;
+		} catch {
+			return undefined;
+		}
+	};
+	const builtAt = read("builtAt");
+	const schemaVersion = read("datasetSchemaVersion");
+	return {
+		...(builtAt === undefined ? {} : { builtAt }),
+		...(schemaVersion === undefined
+			? {}
+			: { schemaVersion: Number(schemaVersion) }),
+	};
+}
+
 const TABLES_DDL = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 

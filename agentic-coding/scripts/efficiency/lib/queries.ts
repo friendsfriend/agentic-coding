@@ -2067,7 +2067,7 @@ ORDER BY s.turns DESC, s.cost DESC`,
 	{
 		name: "progress-checkpoints",
 		summary:
-			"Checkpoint decisions by class, decision and rule, with the runs evaluated, escalations per 100 evaluated runs and how many steers were followed by a successful edit or write. The effect measure: a decision nobody records is invisible here.",
+			"Checkpoint decisions by class, decision and rule, with the runs evaluated, escalations per 100 evaluated runs and how many steers were followed by an edit or write whose outcome was not recorded as a failure. The effect measure: a decision nobody records is invisible here, and a dataset built before the escalation branch was normalised reports zero escalations — rebuild it with build-dataset.ts before reading that column.",
 		example:
 			"bun run scripts/efficiency/analyze.ts progress-checkpoints --dataset ~/ev/dataset-2026",
 		columns: [
@@ -2102,7 +2102,10 @@ checkpoint AS (
 		CASE WHEN e.outcome = 'steer' AND EXISTS (
 			SELECT 1 FROM v_tool_calls c
 			WHERE c.run_id = e.run_id
-				AND c.ok = 1
+				-- An unrecorded outcome is *unknown*, not a failed steer: older
+				-- envelope generations write no pi.tool.ok, and the replay reads a
+				-- NULL the same way (a failure is an explicit 0).
+				AND c.ok IS NOT 0
 				AND c.tool IN ('edit', 'write')
 				AND c.started_at IS NOT NULL
 				AND e.at IS NOT NULL

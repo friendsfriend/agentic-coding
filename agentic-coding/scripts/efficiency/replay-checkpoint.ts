@@ -73,6 +73,10 @@ interface ReplayRun {
 	calls: number;
 	calls_with_hash: number;
 	hash_coverage: number;
+	calls_with_ok: number;
+	/** The share of calls whose outcome was recorded at all. A missing outcome is
+	 * *unknown*, never a failure, so this is what makes the treatment auditable. */
+	ok_coverage: number;
 	outcome: string;
 	decisions: ReplayDecision[];
 }
@@ -208,6 +212,10 @@ function replayRun(
 	}
 
 	const callsWithHash = calls.filter((call) => Boolean(call.args_hash)).length;
+	// Older envelope generations record no `pi.tool.ok`, so a replayed call may
+	// have no outcome at all. It is counted as a success (see `feed`), and this
+	// share says how many of the replayed calls that assumption covers.
+	const callsWithOk = calls.filter((call) => call.ok !== null).length;
 	return {
 		run_id: run.run_id,
 		role: run.role,
@@ -217,6 +225,8 @@ function replayRun(
 		calls: calls.length,
 		calls_with_hash: callsWithHash,
 		hash_coverage: calls.length === 0 ? 0 : callsWithHash / calls.length,
+		calls_with_ok: callsWithOk,
+		ok_coverage: calls.length === 0 ? 0 : callsWithOk / calls.length,
 		outcome: run.handoff_outcome ?? run.status ?? "(unknown)",
 		decisions,
 	};
@@ -277,6 +287,7 @@ function main(): void {
 							action: decision.action,
 							rule: decision.rule,
 							hash_coverage: run.hash_coverage.toFixed(2),
+							ok_coverage: run.ok_coverage.toFixed(2),
 						})),
 					),
 					[
@@ -289,6 +300,7 @@ function main(): void {
 						"action",
 						"rule",
 						"hash_coverage",
+						"ok_coverage",
 					],
 				),
 			);
@@ -301,6 +313,7 @@ function main(): void {
 					turns: run.turns,
 					calls: run.calls,
 					hash_coverage: run.hash_coverage.toFixed(2),
+					ok_coverage: run.ok_coverage.toFixed(2),
 					outcome: run.outcome,
 					decisions: run.decisions
 						.map(
@@ -315,6 +328,7 @@ function main(): void {
 					"turns",
 					"calls",
 					"hash_coverage",
+					"ok_coverage",
 					"outcome",
 					"decisions",
 				],
@@ -331,6 +345,7 @@ function main(): void {
 		console.log(
 			`\n${runs.length} run(s) replayed; ${CHECKPOINT_ACTIONS.length} possible actions. ` +
 				"Tick-task, diff and HEAD progress are unknown offline; only edits, writes and, for a read-only run, new calls count. " +
+				"An unrecorded tool outcome counts as success, never as failure, so `ok_coverage` below 1.00 means part of the replay treats an unknown outcome as a productive call and as a successful one. " +
 				"The cost ceiling's admission is not recorded, so the context rule can only continue here — never compact.",
 		);
 	} finally {
