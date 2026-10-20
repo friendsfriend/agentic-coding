@@ -1011,8 +1011,13 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 							base64?: string;
 							evidence?: { id?: string; caption?: string };
 						};
+						// The caption comes back with the id: a `view: false` call answers
+						// without the image, so the caption is the one thing that tells the
+						// model which of its steps the stored screenshot belongs to (and it is
+						// what the developer reads in the Evidence panel).
+						const caption = value.evidence?.caption?.trim();
 						const note = value.evidence?.id
-							? `\nstored as evidence ${value.evidence.id}`
+							? `\nstored as evidence ${value.evidence.id}${caption === undefined || caption === "" ? "" : ` — ${caption}`}`
 							: "\nstored as evidence: no (pass evidence: true to keep it)";
 						const summary = `screenshot of ${value.url ?? "the page"}${note}`;
 						// `view: false` answers with the evidence id alone, so no image block

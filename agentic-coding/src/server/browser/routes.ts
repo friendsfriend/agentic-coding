@@ -33,7 +33,8 @@ import type { EnvironmentManager } from "../environment/manager.ts";
 import {
 	appendStageJournalEntry,
 	backfillStageJournalVideo,
-	hasStageJournal,
+	clearStageJournalSegment,
+	highestStageSegment,
 	type JournalRedactor,
 	journalSummary,
 	writeStageFlowPage,
@@ -2059,10 +2060,12 @@ async function screenshot(
 			"`view: false` stores the screenshot instead of returning it, so it needs `evidence: true`",
 			400,
 		);
-	// The screenshot bound is charged *before* the capture, so a refused one
-	// leaves no bytes behind and the count can never exceed the bound.
+	// The screenshot bound is checked *before* the capture, so a refused one leaves
+	// no bytes behind — and charged only once the capture became an evidence entry,
+	// so a failed selector or a refused attach costs nothing: the bound counts
+	// stored screenshots, which is what its refusal says it counts.
 	if (keeping && session.stage)
-		stageUsage(deps).countScreenshot({
+		stageUsage(deps).screenshotAllowance({
 			stage: session.stage.ident,
 			owner,
 			maxScreenshots: session.stage.limits.maxScreenshots,
@@ -2100,6 +2103,12 @@ async function screenshot(
 			extension: "jpg",
 			...(session.app ? { app: session.app } : {}),
 		});
+		if (session.stage)
+			stageUsage(deps).countScreenshot({
+				stage: session.stage.ident,
+				owner,
+				maxScreenshots: session.stage.limits.maxScreenshots,
+			});
 		value.evidence = entry;
 	}
 	if (body.view === false)
@@ -2127,9 +2136,10 @@ async function recordStart(
 	const dir = fs.mkdtempSync(path.join(parent, "recording-"));
 	try {
 		// The stage's kept minutes are a workflow-wide budget
-		// (`add-stage-flow-evidence`, spec "Recording segments"): what is left of it
-		// bounds this segment, so a flow test can never keep more video than the
-		// stage allows. A plain session (no stage) keeps the per-recording default.
+		// (`add-stage-flow-evidence`, spec "Flow segments carry offsets"): what is
+		// left of it bounds this segment, so a flow test can never keep more video
+		// than the stage allows. The grant is reserved until the stop settles it, so
+		// two sessions of one workflow cannot both be told the same remainder.
 		const allowance = session.stage
 			? stageUsage(deps).recordingAllowance({
 					stage: session.stage.ident,
@@ -2139,6 +2149,11 @@ async function recordStart(
 			: undefined;
 		const started = await deps.pool.startRecording(session, {
 			dir,
+			// A segment number is a reference the journal's steps carry, so it is only
+			// ever issued above the highest one this workflow's journal already names —
+			// a resumed run shares that directory, and a reused number would link a new
+			// recording into an old segment's steps.
+			minSegment: highestStageSegment(scope) + 1,
 			...(allowance === undefined
 				? {}
 				: { maxMs: Math.min(DEFAULT_RECORDING_MAX_MS, allowance) }),
@@ -2151,10 +2166,17 @@ async function recordStart(
 			segment: started.segment,
 		};
 	} catch (error) {
-		// A start that failed owns nothing: the directory it created is removed
-		// rather than left behind as an empty recording. Asynchronous, because a
-		// failed start (a session that was closed under it, a browser that went
-		// away) must not block the event loop on a recursive remove.
+		// A start that failed keeps nothing: its granted minutes are given back, and
+		// the directory it created is removed rather than left behind as an empty
+		// recording. Asynchronous, because a failed start (a session that was closed
+		// under it, a browser that went away) must not block the event loop on a
+		// recursive remove.
+		if (session.stage)
+			stageUsage(deps).settleRecording({
+				stage: session.stage.ident,
+				owner,
+				keptMs: 0,
+			});
 		await fs.promises
 			.rm(dir, { recursive: true, force: true })
 			.catch(() => undefined);
@@ -2220,14 +2242,29 @@ async function finishRecordingStop(
 		keep ? { posterPath, videoPath } : undefined,
 	);
 	if (!keep || !result.videoSaved) {
-		if (!keep)
+		if (!keep) {
+			// A discarded recording spends no minutes but gives its grant back, and its
+			// steps lose the segment they were filed under: the spec is explicit that a
+			// discarded recording leaves no segment reference behind, so neither the
+			// journal nor the panel can point at a video nobody has.
+			if (session.stage)
+				stageUsage(deps).settleRecording({
+					stage: session.stage.ident,
+					owner,
+					keptMs: 0,
+				});
+			await clearRecordingSegment(deps, owner, session, {
+				segment: result.segment,
+			});
 			return {
 				session: session.name,
-				keeper: false,
+				kept: false,
 				video: false,
+				segment: result.segment,
 				notice:
-					"the recording was discarded; no video and no evidence entry were kept",
+					"the recording was discarded; no video and no evidence entry were kept, and its steps no longer name a segment",
 			};
+		}
 		throw new BrowserPoolError(
 			"recording-empty",
 			"the recording produced no video file, so nothing was kept",
@@ -2258,14 +2295,14 @@ async function finishRecordingStop(
 		// were written while it ran.
 		segment: result.segment,
 	});
-	// A kept recording is charged against the stage's recording minutes, and the
-	// journal's own steps of this segment learn its evidence id so the flow page
-	// can seek each one into the video.
+	// A kept recording is charged against the stage's recording minutes — settling
+	// the grant the start reserved — and the journal's own steps of this segment
+	// learn its evidence id so the flow page can seek each one into the video.
 	if (session.stage)
-		stageUsage(deps).recordKept({
+		stageUsage(deps).settleRecording({
 			stage: session.stage.ident,
 			owner,
-			elapsedMs: result.elapsedMs,
+			keptMs: result.elapsedMs,
 		});
 	await backfillRecordingSegment(deps, owner, session, {
 		segment: result.segment,
@@ -2292,24 +2329,31 @@ async function finishRecordingStop(
 // ---------------------------------------------------------------------------
 
 /** The redactor the journal and the flow page are written through: the same
- * secret set every browser reply is scrubbed with, so a step's own text and the
- * URL it recorded are masked before the bytes land. */
+ * secret set every browser reply is scrubbed with, *and* the same URL sanitizer.
+ *
+ * Redaction alone masks only the values the configuration knows as secrets, so an
+ * application's own `?ticket=…` or `?sessionid=…` — or a fragment carrying a code
+ * — would survive in a step's free text. A journal entry outlives the call that
+ * wrote it, so a value it carries is scrubbed exactly like a reply.
+ */
 function journalRedactor(deps: BrowserRouteDeps): JournalRedactor {
 	const secrets = redactionSecrets(deps);
 	return (value: string) => {
 		const redacted = redact(value, secrets);
-		return typeof redacted === "string" ? redacted : value;
+		const sanitized = sanitizeUrlsIn(
+			typeof redacted === "string" ? redacted : value,
+		);
+		return typeof sanitized === "string" ? sanitized : value;
 	};
 }
 
-/** Regenerate the flow page when the workflow has a journal. A workflow that
- * never wrote a step has no page, which is what the dashboard's unchanged
- * rendering keys off. */
+/** Regenerate the flow page. A workflow that never wrote a step has no page, and
+ * the writer answers that itself — under the evidence root lock, so no listing
+ * here can disagree with the write it guards. */
 async function refreshFlowPage(
 	deps: BrowserRouteDeps,
 	scope: ReturnType<typeof workflowEvidenceScope>,
 ): Promise<void> {
-	if (!hasStageJournal(scope)) return;
 	await writeStageFlowPage(scope, journalRedactor(deps));
 }
 
@@ -2322,12 +2366,29 @@ async function backfillRecordingSegment(
 	input: { readonly segment: number; readonly video: string },
 ): Promise<void> {
 	const scope = evidenceScope(deps, owner);
-	if (!hasStageJournal(scope)) return;
-	await backfillStageJournalVideo(scope, {
+	const changed = await backfillStageJournalVideo(scope, {
 		segment: input.segment,
 		video: input.video,
 		session: session.name,
 	});
+	if (changed === 0) return;
+	await refreshFlowPage(deps, scope);
+}
+
+/** Drop one discarded segment's reference from its steps, then re-render the page
+ * so no section stands for a recording nobody kept. */
+async function clearRecordingSegment(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	input: { readonly segment: number },
+): Promise<void> {
+	const scope = evidenceScope(deps, owner);
+	const changed = await clearStageJournalSegment(scope, {
+		segment: input.segment,
+		session: session.name,
+	});
+	if (changed === 0) return;
 	await refreshFlowPage(deps, scope);
 }
 
@@ -2408,15 +2469,29 @@ async function stageJournalRead(
  * substring, which is what an operator writes for "somewhere on this route". */
 function urlMatchesPattern(url: string, pattern: string): boolean {
 	if (!pattern.includes("*")) return url.includes(pattern);
-	const source = pattern
-		.split("*")
-		.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-		.join(".*");
-	try {
-		return new RegExp(`^${source}$`).test(url);
-	} catch {
-		return url.includes(pattern);
+	const parts = pattern.split("*");
+	const first = parts[0] ?? "";
+	const last = parts[parts.length - 1] ?? "";
+	const anchoredStart = !pattern.startsWith("*");
+	const anchoredEnd = !pattern.endsWith("*");
+	if (anchoredStart && !url.startsWith(first)) return false;
+	// The tail is what the walk may not run past, so a pattern like `*a*b` cannot
+	// consume the `b` it has to end with.
+	const end = anchoredEnd ? url.length - last.length : url.length;
+	if (anchoredEnd && (end < 0 || !url.endsWith(last))) return false;
+	const middle = parts.slice(
+		anchoredStart ? 1 : 0,
+		anchoredEnd ? -1 : undefined,
+	);
+	let at = anchoredStart ? first.length : 0;
+	for (const part of middle) {
+		if (at > end) return false;
+		if (part === "") continue;
+		const found = url.indexOf(part, at);
+		if (found < 0 || found + part.length > end) return false;
+		at = found + part.length;
 	}
+	return at <= end;
 }
 
 /** The one shape a mail-catcher read answers with, as much of it as this module
@@ -2432,7 +2507,16 @@ async function mailCaught(
 			"a `mail` wait reads the stage's mail catcher, and this session is not bound to a stage",
 		);
 	const entry = stageByIdent(stageCatalog(deps), session.stage.ident);
-	const app = entry?.stage.apps[session.app ?? ""];
+	// A session's `app` is the stage app's key *or*, when the stage app links a
+	// configured ident, that ident (`resolveOpenTarget`): both name the same app, so
+	// the catcher is found by either rather than by the key alone.
+	const app =
+		entry === undefined
+			? undefined
+			: (Object.entries(entry.stage.apps).find(
+					([key, candidate]) =>
+						key === session.app || candidate.app === session.app,
+				) ?? [])[1];
 	if (!entry || !app || app.kind !== "mail-catcher" || app.api !== "mailpit")
 		throw new StageLimitError(
 			"stage-mail-unsupported",
@@ -2567,6 +2651,12 @@ export function stageWaitTiming(
  * default), so a wait can never outlast what the stage allows; `reload` re-opens
  * the session's current URL between polls, which is what a mail-driven flow needs
  * when the page must be re-read to show the message's effect.
+ *
+ * Every step is bounded and every step re-checks the session, because the wait is
+ * the one tool that holds a page for minutes: a page that never answers a
+ * `document.querySelector` would otherwise hold the call past its own bound, and a
+ * session the developer closed underneath it would be driven forever. The answer
+ * is still exactly one, and it names which of the two ended the wait.
  */
 async function stageWait(
 	deps: BrowserRouteDeps,
@@ -2580,42 +2670,83 @@ async function stageWait(
 		body,
 	);
 	const started = deps.now?.() ?? Date.now();
+	const now = () => deps.now?.() ?? Date.now();
 	let met = false;
+	/** Set when the session went away under the wait: the one end that is not the
+	 * bound and not the condition. */
+	let closed = false;
 	let url = session.url;
 	for (;;) {
-		const answer = await waitConditionMet(deps, session, body.until);
-		url = answer.url;
-		if (answer.met) {
-			met = true;
+		const remaining = timeoutMs - (now() - started);
+		const answer = await withPollTimeout(
+			waitConditionMet(deps, session, body.until),
+			Math.min(STAGE_WAIT_POLL_TIMEOUT_MS, Math.max(1, remaining)),
+		);
+		// A closed or swept session is not a condition that has not held yet: the
+		// next poll would drive a page nobody owns, so the wait ends here.
+		if (deps.pool.find(owner, session.name) !== session) {
+			closed = true;
 			break;
 		}
-		const elapsed = (deps.now?.() ?? Date.now()) - started;
+		if (answer !== "timeout") {
+			url = answer.url;
+			if (answer.met) {
+				met = true;
+				break;
+			}
+		}
+		const elapsed = now() - started;
 		if (elapsed >= timeoutMs) break;
 		await sleep(Math.min(intervalMs, timeoutMs - elapsed));
-		if (body.reload === true) {
-			// A reload of the page the session is on, bounded like any navigation, so a
-			// poll cannot hang on a page that never settles.
-			await session
-				.goto(session.url, STAGE_WAIT_POLL_TIMEOUT_MS)
-				.catch(() => null);
-		}
+		// A reload of the page the session is on, bounded like any navigation, and
+		// skipped once the bound has passed: the last poll must not open a page it
+		// then has to abandon.
+		if (body.reload === true && now() - started < timeoutMs)
+			await withPollTimeout(
+				session.goto(session.url, STAGE_WAIT_POLL_TIMEOUT_MS).catch(() => null),
+				STAGE_WAIT_POLL_TIMEOUT_MS,
+			);
 	}
-	const elapsedMs = Math.max(0, (deps.now?.() ?? Date.now()) - started);
+	const elapsedMs = Math.max(0, now() - started);
+	const notice = closed
+		? "the session was closed while waiting; open it again to continue the flow"
+		: met
+			? undefined
+			: `the condition did not hold within ${timeoutSeconds}s; the session is still usable`;
 	return {
 		session: session.name,
 		met,
 		// The bound is named explicitly, so a caller does not have to read `!met`
 		// as a failure of the session: it is the wait that ended, nothing else.
-		timeout: !met,
+		timeout: !met && !closed,
+		...(closed ? { closed: true } : {}),
 		elapsedMs,
 		condition: body.until,
 		url,
-		...(met
-			? {}
-			: {
-					notice: `the condition did not hold within ${timeoutSeconds}s; the session is still usable`,
-				}),
+		...(notice === undefined ? {} : { notice }),
 	};
+}
+
+/**
+ * Bound one poll step. The abandoned promise is not cancelled — a page that never
+ * answers is a page the session keeps working with, and the next poll re-checks —
+ * so a hung `evaluate` cannot hold `stage_wait` past its own bound.
+ */
+async function withPollTimeout<T>(
+	work: Promise<T>,
+	ms: number,
+): Promise<T | "timeout"> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<"timeout">((resolve) => {
+				timer = setTimeout(() => resolve("timeout"), Math.max(1, ms));
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 /** Sleep for a bounded stretch without blocking the event loop. */

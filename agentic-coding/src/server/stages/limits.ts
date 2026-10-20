@@ -83,6 +83,17 @@ export class StageUsageRegistry {
 	/** Milliseconds of kept recording per `stage\0owner`. Settled when a segment's
 	 * video is kept, so a discarded recording spends nothing. */
 	private readonly recordedMs = new Map<string, number>();
+	/** Milliseconds of recording granted to a start that has not stopped yet, per
+	 * `stage\0owner`. A grant is *reserved* the moment it is told out, because the
+	 * budget is settled minutes later: without it, two sessions of one workflow
+	 * would both be told the whole remainder and could each keep it. An entry also
+	 * expires on its own (a recording cannot outlive its own bound), so a stop that
+	 * never happens — a run that ended, an auto-stopped segment nobody reported —
+	 * cannot hold the budget forever. */
+	private readonly reservedMs = new Map<
+		string,
+		{ readonly ms: number; readonly expiresAt: number }[]
+	>();
 
 	constructor(options: StageUsageOptions) {
 		this.now = options.now ?? (() => Date.now());
@@ -164,11 +175,14 @@ export class StageUsageRegistry {
 	}
 
 	/**
-	 * Count one stored screenshot, or refuse it (`stage-screenshot-limit`). The
-	 * count happens *before* the file is written, so a refusal leaves no bytes
-	 * behind.
+	 * Count one stored screenshot, or refuse it (`stage-screenshot-limit`).
+	 *
+	 * Two calls, because a screenshot can fail between the bound and the file: the
+	 * `allowance` refuses *before* the capture so nothing is written, and `stored`
+	 * charges only the capture that became an evidence entry. A failed capture
+	 * therefore costs nothing, and the refusal's "already stored N" stays true.
 	 */
-	countScreenshot(input: {
+	screenshotAllowance(input: {
 		readonly stage: string;
 		readonly owner: string;
 		readonly maxScreenshots: number;
@@ -180,40 +194,93 @@ export class StageUsageRegistry {
 				"stage-screenshot-limit",
 				`stage ${input.stage} already stored ${used} of ${input.maxScreenshots} screenshots in this workflow; describe the page in a stage_step instead`,
 			);
-		this.screenshots.set(key, used + 1);
-		return used + 1;
+		return used;
 	}
 
-	/** How many more milliseconds of recording this workflow may keep on a stage.
+	/** Count one screenshot that is now an evidence entry. */
+	countScreenshot(input: {
+		readonly stage: string;
+		readonly owner: string;
+		readonly maxScreenshots: number;
+	}): number {
+		this.screenshotAllowance(input);
+		const key = windowKey(input.stage, input.owner);
+		const used = (this.screenshots.get(key) ?? 0) + 1;
+		this.screenshots.set(key, used);
+		return used;
+	}
+
+	/**
+	 * How many milliseconds of recording this workflow may keep on a stage, and the
+	 * reservation that comes with it.
+	 *
 	 * Refuses with `stage-recording-limit` once the budget is spent, and otherwise
-	 * answers the remainder so the recording is bounded by whichever is smaller:
-	 * the per-recording default and what is left of the stage's budget. */
+	 * answers the remainder — of which the kept minutes and the live grants are both
+	 * already spent, so two concurrent starts cannot be told the same remainder.
+	 * The route bounds the segment by what this returns, and `settleRecording` gives
+	 * the reservation back.
+	 */
 	recordingAllowance(input: {
 		readonly stage: string;
 		readonly owner: string;
 		readonly maxRecordingMinutes: number;
 	}): number {
 		const budget = Math.max(0, input.maxRecordingMinutes) * 60_000;
-		const used = this.recordedMs.get(windowKey(input.stage, input.owner)) ?? 0;
-		const remaining = budget - used;
+		const key = windowKey(input.stage, input.owner);
+		const used = this.recordedMs.get(key) ?? 0;
+		const reserved = this.liveReservations(key).reduce(
+			(total, each) => total + each.ms,
+			0,
+		);
+		const remaining = budget - used - reserved;
 		if (remaining < MIN_RECORDING_MS)
 			throw new StageLimitError(
 				"stage-recording-limit",
 				`stage ${input.stage} already kept ${Math.round(used / 60_000)} of ${input.maxRecordingMinutes} recording minutes in this workflow; describe the remaining steps in stage_step without a recording`,
 			);
+		this.reservedMs.set(key, [
+			...this.liveReservations(key),
+			// The grant replaces its own reservation at `settleRecording`, and expires
+			// with the recording's own bound if no stop ever reports it.
+			{ ms: remaining, expiresAt: this.now() + remaining + RATE_WINDOW_MS },
+		]);
 		return remaining;
 	}
 
-	/** Settle the milliseconds one kept recording actually used. A discarded
-	 * recording calls nothing, so it spends nothing. */
-	recordKept(input: {
+	/**
+	 * Settle one recording: give its reservation back and charge what was kept.
+	 * A discarded recording settles with `keptMs: 0`, so it spends nothing but
+	 * releases the grant it held while it ran.
+	 */
+	settleRecording(input: {
 		readonly stage: string;
 		readonly owner: string;
-		readonly elapsedMs: number;
+		readonly keptMs: number;
 	}): void {
-		if (!Number.isFinite(input.elapsedMs) || input.elapsedMs <= 0) return;
 		const key = windowKey(input.stage, input.owner);
-		this.recordedMs.set(key, (this.recordedMs.get(key) ?? 0) + input.elapsedMs);
+		const live = this.liveReservations(key);
+		// The oldest live grant is this recording's — a stop ends one segment per
+		// session, and a grant that already expired stopped counting.
+		const rest = live.slice(1);
+		if (live.length > 0) {
+			if (rest.length === 0) this.reservedMs.delete(key);
+			else this.reservedMs.set(key, rest);
+		}
+		if (!Number.isFinite(input.keptMs) || input.keptMs <= 0) return;
+		this.recordedMs.set(key, (this.recordedMs.get(key) ?? 0) + input.keptMs);
+	}
+
+	/** The grants of one key that still count, pruning the ones that expired. */
+	private liveReservations(
+		key: string,
+	): { readonly ms: number; readonly expiresAt: number }[] {
+		const now = this.now();
+		const live = (this.reservedMs.get(key) ?? []).filter(
+			(each) => each.expiresAt > now,
+		);
+		if (live.length === 0) this.reservedMs.delete(key);
+		else this.reservedMs.set(key, live);
+		return live;
 	}
 
 	/** The workflow currently holding an exclusive stage, if any. A lease whose
@@ -242,6 +309,8 @@ export class StageUsageRegistry {
 			if (key.endsWith(suffix)) this.screenshots.delete(key);
 		for (const key of [...this.recordedMs.keys()])
 			if (key.endsWith(suffix)) this.recordedMs.delete(key);
+		for (const key of [...this.reservedMs.keys()])
+			if (key.endsWith(suffix)) this.reservedMs.delete(key);
 	}
 
 	/** Whether one owner still holds a stage: a registered session, or an admitted
