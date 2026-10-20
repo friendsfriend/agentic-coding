@@ -2012,7 +2012,10 @@ async function screenshot(
 		{
 			type: "jpeg",
 			quality: SCREENSHOT_QUALITY,
-			fullPage: body.fullPage ?? false,
+			// The whole page unless the agent asks for the viewport: an investigation
+			// reads the page below the fold too (a viewport-height shot is the
+			// exception, not the default).
+			fullPage: body.fullPage ?? true,
 			...(body.ref === undefined ? {} : { ref: body.ref }),
 			...(body.selector === undefined ? {} : { selector: body.selector }),
 		},

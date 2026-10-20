@@ -445,6 +445,27 @@ describe("agent browser routes", () => {
 		await routeDeps.pool.closeAll();
 	});
 
+	test("a screenshot captures the whole page unless the viewport is asked for", async () => {
+		const worktree = fixture();
+		const driver = createFakeDriver();
+		const routeDeps = deps(worktree, driver);
+		await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+			url: "http://app.local/",
+		});
+		expect(
+			(await call(routeDeps, AGENT_BROWSER_SCREENSHOT_PATH, {})).status,
+		).toBe(200);
+		expect(
+			(
+				await call(routeDeps, AGENT_BROWSER_SCREENSHOT_PATH, {
+					fullPage: false,
+				})
+			).status,
+		).toBe(200);
+		expect(driver.lastPage()?.fullPageRequested).toEqual([true, false]);
+		await routeDeps.pool.closeAll();
+	});
+
 	test("a script cannot reach the browser object that serves every run", async () => {
 		const worktree = fixture();
 		const routeDeps = deps(worktree, createFakeDriver());

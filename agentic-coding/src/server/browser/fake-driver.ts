@@ -150,6 +150,8 @@ export interface FakePage extends DriverPage {
 	viewport: { width: number; height: number };
 	/** The viewport each capture ran at, so a bounded screenshot is assertable. */
 	readonly capturedAt: Array<{ width: number; height: number }>;
+	/** The `fullPage` flag each capture was given. */
+	readonly fullPageRequested: boolean[];
 	/** The mask each capture was given, so "masking options passed" is
 	 * assertable without a real image. */
 	readonly masked: Array<readonly DriverLocator[]>;
@@ -410,6 +412,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			// here rather than by the method being missing.
 			screenshot: async (options: DriverScreenshotOptions) => {
 				page.capturedAt.push({ ...page.viewport });
+				page.fullPageRequested.push(options.fullPage);
 				page.masked.push(options.mask ?? []);
 				return screenshotBytes;
 			},
@@ -422,6 +425,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			performed: performedHere,
 			viewport: { width: 1280, height: 800 },
 			capturedAt: [],
+			fullPageRequested: [],
 			masked: [],
 			get focusCalls() {
 				return focusCount;
@@ -577,6 +581,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 			textContent: async () => "fake text",
 			screenshot: async (_options: DriverScreenshotOptions) => {
 				page.capturedAt.push({ ...page.viewport });
+				page.fullPageRequested.push(_options.fullPage);
 				page.masked.push(_options.mask ?? []);
 				return screenshotBytes;
 			},

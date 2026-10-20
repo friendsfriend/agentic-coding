@@ -340,7 +340,10 @@ const BrowserScreenshotParameters = Type.Object({
 	...TargetParameters,
 	session: SessionParameter,
 	fullPage: Type.Optional(
-		Type.Boolean({ description: "Capture the whole page, not the viewport." }),
+		Type.Boolean({
+			description:
+				"Capture the whole scrollable page (default true). Pass false for the visible viewport only.",
+		}),
 	),
 	evidence: Type.Optional(
 		Type.Boolean({
