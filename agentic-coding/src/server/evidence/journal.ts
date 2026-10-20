@@ -256,7 +256,11 @@ export function highestStageSegment(scope: WorkflowEvidenceScope): number {
  * served from it — only an unchanged file can. */
 let journalCache:
 	| {
+			/** The workflow's own journal, not the directory its worktree shares with
+			 * every other workflow of the same repository: two journals of one
+			 * worktree are two different files. */
 			readonly path: string;
+			readonly workflowId: string;
 			readonly mtimeMs: number;
 			readonly size: number;
 			readonly entries: StageJournalEntry[];
@@ -279,6 +283,7 @@ export function stageJournalSnapshot(
 	if (
 		journalCache !== undefined &&
 		journalCache.path === stat.path &&
+		journalCache.workflowId === stat.workflowId &&
 		journalCache.mtimeMs === stat.mtimeMs &&
 		journalCache.size === stat.size
 	)
@@ -290,6 +295,7 @@ export function stageJournalSnapshot(
 	const journal = readJournalFile(scope);
 	journalCache = {
 		path: stat.path,
+		workflowId: stat.workflowId,
 		mtimeMs: stat.mtimeMs,
 		size: stat.size,
 		entries: journal.entries,
@@ -305,7 +311,9 @@ export function stageJournalSnapshot(
 /** The journal file's identity, or `undefined` when the workflow has none. */
 function journalStat(
 	scope: WorkflowEvidenceScope,
-): { path: string; mtimeMs: number; size: number } | undefined {
+):
+	| { path: string; workflowId: string; mtimeMs: number; size: number }
+	| undefined {
 	let directory: number | undefined;
 	try {
 		directory = openJournalDirectory(scope);
@@ -323,7 +331,11 @@ function journalStat(
 		const stat = fs.fstatSync(fd);
 		if (!stat.isFile()) return undefined;
 		return {
-			path: path.join(scope.dataRoot, STAGE_JOURNAL_FILE),
+			// The file this read just opened — `<dataRoot>/evidence/<workflowId>/…` —
+			// not `<dataRoot>/…`: every workflow of one worktree shares the data root,
+			// and a cache keyed by that would answer another workflow's steps.
+			path: path.join(scope.root, STAGE_JOURNAL_FILE),
+			workflowId: scope.workflowId,
 			mtimeMs: stat.mtimeMs,
 			size: stat.size,
 		};
@@ -465,6 +477,14 @@ export async function appendStageJournalEntry(
 	scope: WorkflowEvidenceScope,
 	input: StageJournalAppend,
 	redact: JournalRedactor = identityRedactor,
+	/** Called inside this append's own lock section, with the entries and the
+	 * manifest it just parsed. The flow page is rendered from exactly these, so one
+	 * step costs one journal read and one manifest read instead of two of each, and
+	 * a page can never be written from a snapshot older than the step it shows. */
+	afterWrite?: (snapshot: {
+		readonly entries: readonly StageJournalEntry[];
+		readonly manifest: EvidenceManifest;
+	}) => void | Promise<void>,
 ): Promise<StageJournalEntry> {
 	return await withEvidenceRootLock(scope.root, async () => {
 		const journal = readJournalFile(scope);
@@ -525,6 +545,7 @@ export async function appendStageJournalEntry(
 				409,
 			);
 		appendLine(scope, line);
+		await afterWrite?.({ entries: [...existing, entry], manifest });
 		return entry;
 	});
 }
@@ -581,6 +602,11 @@ export async function backfillStageJournalVideo(
 		readonly video: string;
 		readonly session?: string;
 	},
+	/** Called inside this rewrite's lock section with the entries it just wrote, so
+	 * the page is rendered from them rather than from a second read. */
+	afterWrite?: (snapshot: {
+		readonly entries: readonly StageJournalEntry[];
+	}) => void | Promise<void>,
 ): Promise<number> {
 	return await withEvidenceRootLock(scope.root, async () => {
 		const entries = readStageJournal(scope);
@@ -594,27 +620,38 @@ export async function backfillStageJournalVideo(
 			return { ...entry, video: input.video };
 		});
 		if (changed === 0) return 0;
-		writeJournal(scope, updated);
+		if (!writeJournal(scope, updated)) return 0;
+		await afterWrite?.({ entries: updated });
 		return changed;
 	});
 }
 
+/**
+ * Rewrite the whole journal, or refuse to.
+ *
+ * A rewrite is the one path that can push the file past the cap the reader
+ * enforces, and the state it would leave behind is unreadable for every caller —
+ * including the repair paths, which all read first. So it is refused here exactly
+ * where an append is refused; a caller that gains nothing from the field it was
+ * adding (a back-filled video id, which both the panel and the page take from the
+ * manifest) treats the refusal as "nothing changed".
+ *
+ * Answers whether the file was written.
+ */
 function writeJournal(
 	scope: WorkflowEvidenceScope,
 	entries: readonly StageJournalEntry[],
-): void {
+): boolean {
+	const text = entries.map(lineOf).join("");
+	if (Buffer.byteLength(text, "utf8") > EVIDENCE_FILE_MAX_BYTES) return false;
 	journalCache = undefined;
 	const directory = openJournalDirectoryToWrite(scope);
 	try {
-		writeAtomicPrivateFile(
-			directory,
-			STAGE_JOURNAL_FILE,
-			entries.map(lineOf).join(""),
-			0o600,
-		);
+		writeAtomicPrivateFile(directory, STAGE_JOURNAL_FILE, text, 0o600);
 	} finally {
 		closeSecureDirectory(directory);
 	}
+	return true;
 }
 
 /**
@@ -629,6 +666,9 @@ function writeJournal(
 export async function clearStageJournalSegment(
 	scope: WorkflowEvidenceScope,
 	input: { readonly segment: number; readonly session?: string },
+	afterWrite?: (snapshot: {
+		readonly entries: readonly StageJournalEntry[];
+	}) => void | Promise<void>,
 ): Promise<number> {
 	return await withEvidenceRootLock(scope.root, async () => {
 		const entries = readStageJournal(scope);
@@ -647,7 +687,8 @@ export async function clearStageJournalSegment(
 			) as StageJournalEntry;
 		});
 		if (changed === 0) return 0;
-		writeJournal(scope, updated);
+		if (!writeJournal(scope, updated)) return 0;
+		await afterWrite?.({ entries: updated });
 		return changed;
 	});
 }
@@ -850,20 +891,45 @@ export function renderStageFlowPage(
 export async function writeStageFlowPage(
 	scope: WorkflowEvidenceScope,
 	redact: JournalRedactor = identityRedactor,
+	/** What a caller already parsed, so a page is not rendered from a second read of
+	 * the same journal and the same manifest. */
+	preloaded: {
+		readonly entries?: readonly StageJournalEntry[];
+		readonly manifest?: EvidenceManifest;
+	} = {},
 ): Promise<string | undefined> {
-	return await withEvidenceRootLock(scope.root, async () => {
+	return await withEvidenceRootLock(scope.root, async () =>
+		writeStageFlowPageUnlocked(scope, redact, preloaded),
+	);
+}
+
+/**
+ * The page write itself, for a caller that already holds the evidence root lock —
+ * `appendStageJournalEntry`'s own section, which is the whole point of the
+ * `afterWrite` seam. Never acquires the lock: it is not re-entrant, so a nested
+ * call would deadlock rather than serialize.
+ */
+export async function writeStageFlowPageUnlocked(
+	scope: WorkflowEvidenceScope,
+	redact: JournalRedactor = identityRedactor,
+	preloaded: {
+		readonly entries?: readonly StageJournalEntry[];
+		readonly manifest?: EvidenceManifest;
+	} = {},
+): Promise<string | undefined> {
+	let entries = preloaded.entries;
+	if (entries === undefined) {
 		const journal = readJournalFile(scope);
 		if (!journal.present) return undefined;
-		const manifest = listEvidence(scope);
-		const html = redact(
-			renderStageFlowPage(scope.workflowId, journal.entries, manifest),
-		);
-		const directory = openJournalDirectoryToWrite(scope);
-		try {
-			writeAtomicPrivateFile(directory, STAGE_FLOW_FILE, html, 0o600);
-		} finally {
-			closeSecureDirectory(directory);
-		}
-		return STAGE_FLOW_FILE;
-	});
+		entries = journal.entries;
+	}
+	const manifest = preloaded.manifest ?? listEvidence(scope);
+	const html = redact(renderStageFlowPage(scope.workflowId, entries, manifest));
+	const directory = openJournalDirectoryToWrite(scope);
+	try {
+		writeAtomicPrivateFile(directory, STAGE_FLOW_FILE, html, 0o600);
+	} finally {
+		closeSecureDirectory(directory);
+	}
+	return STAGE_FLOW_FILE;
 }
