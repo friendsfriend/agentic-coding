@@ -5,6 +5,7 @@ import { ENVIRONMENT_URL_ENV } from "../agent-host/environment-capability.ts";
 import { ASSIGNMENT_TOOL_SURFACE } from "../agent-host/tool-surface.ts";
 import type { Assignment } from "../contracts/workflow.ts";
 import { AGENT_DEF_DIR } from "./paths.ts";
+import { selectProtocol } from "./prompt-sections.ts";
 import type { StepDefinition, WorkflowFamilyTraits } from "./registry.ts";
 
 export const MAX_ASSIGNMENT_BYTES = 96 * 1024;
@@ -17,9 +18,19 @@ export const MAX_ASSIGNMENT_BYTES = 96 * 1024;
 const NO_ENVIRONMENT_TOOLS = [
 	"## Environment tools: unavailable",
 	"",
-	"No agentic-coding server was reachable for this run's configuration, so the environment tools (`env_list`, `env_start`, `env_status`, `env_stop`, `env_build`, `env_test`, `env_logs`), the browser tools (`browser_*`) and the debug tools (`otel_query`, `db_query`, `http_request`) have no capability: every call to them fails.",
-	"Do not work around this by shelling out to `docker`/`kubectl` yourself or by reasoning about a run you did not make: say in your handoff that the environment tools were unavailable, and hand off `blocked` when the task cannot be done without them (an `env-setup` workflow cannot start, build or test the definitions it drafts).",
+	"No agentic-coding server was reachable for this run's configuration, so the environment tools (`env_*`), the browser tools (`browser_*`) and the debug tools (`otel_query`, `db_query`, `http_request`) fail on every call.",
+	"Do not work around it with `docker`/`kubectl` or by reasoning about a run you did not make: say in your handoff that they were unavailable, and hand off `blocked` when the task cannot be done without them (an `env-setup` workflow cannot start, build or test the definitions it drafts).",
 ].join("\n");
+
+/** What each interaction mode means for the run, one line beside
+ * `Interaction:`. */
+const INTERACTION_GUIDANCE: Readonly<
+	Record<Assignment["interaction"], string>
+> = {
+	"developer-dialogue":
+		"Visible discussion is allowed; prefer `developer_question` for an unclear decision over a later round trip.",
+	silent: "Report through the artifact and the handoff; no chat summary.",
+};
 
 // The tool surface (efficiency backlog item 14): the same split and the same
 // batching rule the tool descriptions carry, taken from the module that owns
@@ -97,12 +108,48 @@ function isFollowUp(assignment: Assignment): boolean {
 	return assignment.generation > 1;
 }
 
+/** The blocks a first assignment is assembled from, before they are joined:
+ * the protocol as rendered for the role, the role's instruction assets, and
+ * the dynamic envelope. The prompt inventory measures these parts. */
+export interface AssignmentParts {
+	protocol: string;
+	/** The protocol's digest input: the whole pinned file, whatever sections
+	 * the role receives. */
+	protocolHash: string;
+	assets: readonly string[];
+	dynamic: string;
+}
+
 export function renderAssignment(
 	step: Readonly<StepDefinition>,
 	assignment: Assignment,
 	assetRoot = path.join(AGENT_DEF_DIR, "instructions"),
 	traits?: WorkflowFamilyTraits,
 ): RenderedAssignment {
+	const parts = assignmentParts(step, assignment, assetRoot, traits);
+	const prompt = (
+		isFollowUp(assignment)
+			? [followUpPreamble(assetRoot), parts.dynamic]
+			: [parts.protocol, ...parts.assets, parts.dynamic]
+	).join("\n\n---\n\n");
+	const bytes = Buffer.byteLength(prompt);
+	if (bytes > MAX_ASSIGNMENT_BYTES)
+		throw new Error(`assignment exceeds ${MAX_ASSIGNMENT_BYTES} bytes`);
+	return {
+		prompt,
+		bytes,
+		digest: createHash("sha256")
+			.update(`${parts.protocolHash}\0${prompt}`)
+			.digest("hex"),
+	};
+}
+
+export function assignmentParts(
+	step: Readonly<StepDefinition>,
+	assignment: Assignment,
+	assetRoot = path.join(AGENT_DEF_DIR, "instructions"),
+	traits?: WorkflowFamilyTraits,
+): AssignmentParts {
 	if (
 		assignment.stepId !== step.id ||
 		!assignment.runId ||
@@ -114,12 +161,20 @@ export function renderAssignment(
 		"workflow-agent-protocol.md",
 	);
 	if (protocolIndex < 0) throw new Error("missing pinned workflow protocol");
-	const protocol = readPinnedAsset(
+	const pinnedProtocol = readPinnedAsset(
 		"workflow-agent-protocol.md",
 		step.instructionDigests[protocolIndex],
 		assetRoot,
 	);
-	const protocolHash = createHash("sha256").update(protocol).digest("hex");
+	const protocolHash = createHash("sha256")
+		.update(pinnedProtocol)
+		.digest("hex");
+	// The pinned file holds every section; the role receives the core and the
+	// sections its step declares for it.
+	const protocol = selectProtocol(
+		pinnedProtocol,
+		step.behavior?.protocolSections?.({ role: assignment.role, traits }),
+	);
 	const roleAsset = assignment.role.replace(/-verifier$/, "");
 	// Two role families select one variant asset out of several pinned for the
 	// step, instead of every asset unconditionally: verification roles pick
@@ -199,6 +254,7 @@ export function renderAssignment(
 		assignment.objective,
 		"",
 		`Interaction: ${assignment.interaction}`,
+		INTERACTION_GUIDANCE[assignment.interaction],
 		"",
 		// An env-setup run without its tools cannot do the job it was assigned;
 		// every other role reads it as the ordinary degraded case.
@@ -267,19 +323,5 @@ export function renderAssignment(
 		'agentic-coding workflow handoff --outcome failed --message "diagnostic"',
 		"```",
 	].join("\n");
-	const prompt = (
-		isFollowUp(assignment)
-			? [followUpPreamble(assetRoot), dynamic]
-			: [protocol, ...assets, dynamic]
-	).join("\n\n---\n\n");
-	const bytes = Buffer.byteLength(prompt);
-	if (bytes > MAX_ASSIGNMENT_BYTES)
-		throw new Error(`assignment exceeds ${MAX_ASSIGNMENT_BYTES} bytes`);
-	return {
-		prompt,
-		bytes,
-		digest: createHash("sha256")
-			.update(`${protocolHash}\0${prompt}`)
-			.digest("hex"),
-	};
+	return { protocol, protocolHash, assets, dynamic };
 }

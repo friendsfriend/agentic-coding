@@ -318,7 +318,9 @@ describe("a run without an environment capability is told so", () => {
 			assignment({ HERDR_WORKFLOW_ID: "wf-alpha" }),
 		).prompt;
 		expect(prompt).toContain("## Environment tools: unavailable");
-		expect(prompt).toContain("`env_start`");
+		expect(prompt).toContain("`env_*`");
+		expect(prompt).toContain("`browser_*`");
+		expect(prompt).toContain("`blocked`");
 		expect(prompt).toContain(
 			"No agentic-coding server was reachable for this run's configuration",
 		);

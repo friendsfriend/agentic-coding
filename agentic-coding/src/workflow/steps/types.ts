@@ -5,6 +5,7 @@ import type {
 	WorkflowRun,
 	WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
+import type { ProtocolSectionId } from "../prompt-sections.ts";
 import type { WorkflowEdge, WorkflowFamilyTraits } from "../registry.ts";
 
 // Every behavior hook receives the pinned definition's effective family traits
@@ -217,6 +218,11 @@ export interface InstructionAssetForRoleContext {
 	traits?: WorkflowFamilyTraits;
 }
 
+export interface ProtocolSectionsContext {
+	role: string;
+	traits?: WorkflowFamilyTraits;
+}
+
 export interface StepBehavior {
 	/** Classifier mode this step participates in; absent when the step is not
 	 * classifiable. Step-owned so the runner/reducer never keep a step table. */
@@ -243,6 +249,10 @@ export interface StepBehavior {
 	instructionAssetForRole?(
 		ctx: InstructionAssetForRoleContext,
 	): string | undefined;
+	/** The optional managed-protocol sections this step's role receives, on top
+	 * of the always-included core (`prompt-sections.ts`). A step that declares
+	 * none receives every section. */
+	protocolSections?(ctx: ProtocolSectionsContext): readonly ProtocolSectionId[];
 	/** Replaces the rendered assignment's generic "finish the run" handoff
 	 * guidance with step-specific instructions (see `assignment.ts`). */
 	handoffNote?: readonly string[];

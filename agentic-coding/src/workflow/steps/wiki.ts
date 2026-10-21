@@ -20,6 +20,9 @@ const WIKI_ROLE_ASSET: Readonly<Record<string, string>> = {
 
 export const wikiBehavior: StepBehavior = {
 	classification: "single",
+	// The stage wiki role is a stage-test role: it receives the core only.
+	protocolSections: ({ role }) =>
+		role === STAGE_TEST_WIKI_ROLE ? [] : ["jev"],
 	onAgentComplete: ({ definitionId, outcome }) =>
 		outcome === "blocked" &&
 		["wiki", "wiki-comments", "research", "stage-test"].includes(definitionId)

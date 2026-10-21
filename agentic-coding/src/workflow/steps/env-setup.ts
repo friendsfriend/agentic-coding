@@ -97,6 +97,7 @@ function guardPayload(
 export const envSetupBehaviors: Readonly<Record<string, StepBehavior>> = {
 	/** The author: the one agent of the family. It writes only drafts. */
 	"setup.author": {
+		protocolSections: () => ["environment", "browser", "debug-tools"],
 		roles: () => [ENV_SETUP_ROLE],
 		candidateRoles: () => [ENV_SETUP_ROLE],
 		instructionAssetForRole: () => "env-setup.md",

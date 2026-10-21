@@ -2,7 +2,7 @@
 // when the user's global pi settings enable it, it is an additional tool (the
 // run keeps its direct tools), and a script can reach only the tools the run
 // was offered — so a read-only run cannot reach `write` through a script.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,8 +14,14 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
+import { captureSystem } from "../scripts/prompt-inventory-system.ts";
+import {
+	CODEMODE_SECTION_DESCRIPTION_LIMIT,
+	firstSentence,
+} from "../src/agent-host/codemode.ts";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { CODEMODE_SECTION_BUDGET } from "../src/workflow/prompt-inventory.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -328,4 +334,97 @@ test("codemode is not offered when the global pi settings do not enable it", asy
 		"not available",
 	);
 	await host.shutdown();
+});
+
+// slim-agent-prompts: the system-prompt section lists each tool with only the
+// first sentence of its description; the full text stays in the tool definition.
+describe("compact codemode prompt section", () => {
+	test("firstSentence cuts at the first sentence and at the character bound", () => {
+		expect(firstSentence("Read a file. Output is truncated.")).toBe(
+			"Read a file.",
+		);
+		expect(firstSentence("No full stop here")).toBe("No full stop here");
+		expect(firstSentence("Line one\nstill one. Second.")).toBe(
+			"Line one still one.",
+		);
+		const long = `${"word ".repeat(80)}end. More.`;
+		const cut = firstSentence(long);
+		expect(cut.length).toBeLessThanOrEqual(
+			CODEMODE_SECTION_DESCRIPTION_LIMIT + 1,
+		);
+		expect(cut.endsWith("…")).toBe(true);
+	});
+
+	test("the full workflow tool set stays within the section budget, first sentences only", async () => {
+		const scratch = tempWorkflowDir();
+		const { sections, tools } = await captureSystem(scratch);
+		const section = String(sections.codemode ?? "");
+		expect(Buffer.byteLength(section)).toBeLessThanOrEqual(
+			CODEMODE_SECTION_BUDGET,
+		);
+		// The calling convention and the keep-direct rule survive, once.
+		expect(section).toContain(
+			"codemode runs JavaScript that calls this run's tools as `tools.<name>(args)`.",
+		);
+		expect(section).toContain(
+			"keep a single call, every edit, and the handoff direct",
+		);
+		for (const tool of tools) {
+			const name = String(tool.name);
+			if (name === "codemode") continue;
+			const line = section
+				.split("\n")
+				.find((entry) => entry.startsWith(`- tools.${name}:`));
+			expect(line).toBeDefined();
+			// Exactly the first sentence of the description, nothing after it.
+			expect(line).toBe(
+				`- tools.${name}: ${firstSentence(String(tool.description ?? name))}`,
+			);
+		}
+	});
+
+	test("a read-only run lists neither edit nor write", async () => {
+		const dir = tempWorkflowDir();
+		enableCodemode(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		try {
+			let system: { sections?: Record<string, unknown> } | undefined;
+			faux.setResponses([
+				(context: {
+					messages: Array<{ role: string; sections?: Record<string, unknown> }>;
+				}) => {
+					system = context.messages.find((m) => m.role === "system");
+					return fauxAssistantMessage([fauxText("ok")]);
+				},
+			]);
+			await host.ensureRun({
+				runId: "read-only",
+				name: "read-only",
+				cwd: dir,
+				runEnvPath: writeRunEnv(dir, { HERDR_RUN_ID: "read-only" }),
+				toolPolicy: "read-only",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+			await host.submit("read-only", "hello", "req-1");
+			for (let i = 0; i < 100; i++) {
+				if ((await host.status("read-only")).status === "idle") break;
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			const section = String(system?.sections?.codemode ?? "");
+			expect(section).toContain("- tools.read:");
+			expect(section).not.toContain("- tools.edit:");
+			expect(section).not.toContain("- tools.write:");
+		} finally {
+			await host.shutdown();
+		}
+	});
 });

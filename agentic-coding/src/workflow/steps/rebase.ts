@@ -7,6 +7,7 @@ import type { StepBehavior } from "./types.ts";
  * assignment renders them as fact rather than as something to discover. */
 export const rebaseBehavior: StepBehavior = {
 	classification: "single",
+	protocolSections: () => [],
 	roles: () => ["worker"],
 	candidateRoles: () => ["worker"],
 	assignmentInputs: ({ snapshot }) => ({

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import type { ProtocolSectionId } from "../prompt-sections.ts";
 import type { WorkflowFamilyTraits } from "../registry.ts";
 import { ENGINE_OWNED_VERIFIER_ROLE, planRecord } from "./reverification.ts";
 import type {
@@ -440,9 +441,27 @@ function arrivingRoles(
 	return roles ? { selectedRoles: roles } : {};
 }
 
+/** The optional protocol sections a verifier role receives: every verifier
+ * reads file signals and may ask the classifier or delegate a check; the roles
+ * that run or exercise the app also get the environment (and, for the usability
+ * verifier, the browser; for test and performance, the debug tools). */
+function verifierProtocolSections(role: string): readonly ProtocolSectionId[] {
+	const review: ProtocolSectionId[] = [
+		"delegated-debug",
+		"file-signals",
+		"jev",
+	];
+	if (role === "test-verifier" || role === "performance-verifier")
+		return ["environment", "debug-tools", ...review];
+	if (role === "usability-verifier")
+		return ["environment", "browser", ...review];
+	return review;
+}
+
 export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.triage": {
 		classification: "single",
+		protocolSections: () => ["file-signals", "jev"],
 		roles: () => ["triage"],
 		candidateRoles: () => ["triage"],
 		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
@@ -463,6 +482,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"core.verification": {
 		classification: "single",
+		protocolSections: ({ role }) => verifierProtocolSections(role),
 		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
 		onAgentComplete: verificationCompletion,
 		// Candidate roles configure routing before a run exists; active roles use

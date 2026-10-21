@@ -37,6 +37,12 @@ function carriesComments(output: unknown): boolean {
 
 export const implementationBehavior: StepBehavior = {
 	classification: "single",
+	protocolSections: () => [
+		"environment",
+		"browser",
+		"debug-tools",
+		"delegated-debug",
+	],
 	roles: () => ["worker"],
 	candidateRoles: () => ["worker"],
 	validateEvidence: ({ snapshot, evidence, traits }) => {

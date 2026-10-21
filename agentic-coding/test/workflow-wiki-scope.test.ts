@@ -82,26 +82,24 @@ test("wiki guidance updates existing concepts before creating", () => {
 			AGENT_DEFINITIONS[wikiPath.replace("agent-definitions/", "")];
 
 		expect(embedded).toBe(wiki);
-		expect(wiki).toMatch(
-			/1\.\s+Search the centralized bundle with multiple related terms/i,
-		);
+		expect(wiki).toMatch(/1\.\s+Search the bundle with several related terms/i);
 		expect(wiki).toMatch(
 			/2\.\s+Inspect every plausible candidate with `agentic-coding workflow wiki show <concept-id>`/i,
 		);
 		expect(wiki).toMatch(
-			/3\.\s+When a candidate covers the intended subject, select its canonical existing concept identifier and update that concept in place/i,
+			/3\.\s+When a candidate covers the subject, update an existing concept in place/i,
 		);
 		expect(wiki).toMatch(
-			/4\.\s+Create a new project-scoped concept only when no candidate is the intended subject or when the requested knowledge is materially distinct from every candidate/i,
+			/4\.\s+Create a new project-scoped concept only when no candidate is the subject or the knowledge is materially distinct/i,
 		);
 		expect(wiki).toMatch(
-			/run-bound evidence must name the searches and candidates considered and explain why updating an existing candidate would be incorrect/i,
+			/name the searches and candidates considered and why updating one would be wrong/i,
 		);
 		expect(wiki).toMatch(
-			/preserve the existing concept identifier, unrelated body content, unknown frontmatter fields, and applicable provenance and lifecycle metadata/i,
+			/preserving its identifier, unrelated body, unknown frontmatter and provenance/i,
 		);
 		expect(wiki).toMatch(
-			/For every new concept, also report the evidence-backed reason that no existing concept could be updated or that the knowledge is materially distinct/i,
+			/for each new concept, the evidence-backed reason that no existing concept could be updated or that the knowledge is materially distinct/i,
 		);
 	}
 });

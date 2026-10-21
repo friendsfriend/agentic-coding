@@ -343,6 +343,9 @@ const reportActions = ({
 export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"stage.plan": {
 		classification: "single",
+		// The stage briefs carry their own stage-bound tool rules; the generic
+		// environment and browser guidance contradicts them.
+		protocolSections: () => [],
 		roles: () => [STAGE_TEST_PLANNER_ROLE],
 		candidateRoles: () => [STAGE_TEST_PLANNER_ROLE],
 		// The stage tools authorise a call by the step's selected role; a stage
@@ -394,6 +397,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"stage.execute": {
 		classification: "single",
+		protocolSections: () => [],
 		roles: () => [STAGE_TESTER_ROLE],
 		candidateRoles: () => [STAGE_TESTER_ROLE],
 		onArrive: () => ({ selectedRoles: [STAGE_TESTER_ROLE] }),
@@ -460,6 +464,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"stage.replay": {
 		classification: "single",
+		protocolSections: () => [],
 		roles: () => [STAGE_TESTER_ROLE],
 		candidateRoles: () => [STAGE_TESTER_ROLE],
 		onArrive: () => ({ selectedRoles: [STAGE_TESTER_ROLE] }),

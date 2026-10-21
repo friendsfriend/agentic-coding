@@ -90,6 +90,7 @@ const DOMAIN_FILES = [
 	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
 	"workflow/notifications.ts", // pure developer-action notification projection + transition dedup
 	"workflow/run-projections.ts", // pure run projections shared by the dashboard, server operations and gateway
+	"workflow/prompt-sections.ts", // pure protocol-section parser/selector (closed section id set; no imports)
 ];
 const RUNTIME_FILES = [
 	"workflow/effects.ts",

@@ -1720,6 +1720,12 @@ query `explore-tools` reports the per-run exploratory mix by profile
 (`bash`/`read`/`grep` calls, bash share, exploratory result bytes and their
 median); it is additive and no existing query or CSV column changed.
 
+### Prompt assembly and budgets (slim-agent-prompts)
+
+An agent's first assignment is `assignmentParts` (`src/workflow/assignment.ts`): the pinned `workflow-agent-protocol.md` (hashed whole), the role instruction asset(s) and the envelope. The protocol file is one core block plus marked optional sections (`<!-- protocol-section: <id> -->`, ids owned by `src/workflow/prompt-sections.ts`); each step declares the sections its role needs with the optional `StepBehavior.protocolSections` hook, and a step without the hook gets every section. Guidance lives where it applies: interaction guidance under `Interaction:`, the never-re-ask rule in the prior-dialogue block, the peer-question rule in the peer message. Edits under `agent-definitions/` need `bun run scripts/generate-embedded.ts`.
+
+`bun run scripts/prompt-inventory.ts` prints bytes and tokens (bytes / 4) per protocol section, asset and envelope part for every agent step and role (`--json`, `--print <stepId:role>`, `--system` for the system prompt sections and tool definitions). `test/workflow-prompt-budget.test.ts` fails when a role exceeds its family budget in `PROMPT_BUDGETS` (`src/workflow/prompt-inventory.ts`) or a registered agent step and role has none; the `codemode` section has `CODEMODE_SECTION_BUDGET`, asserted in `test/agent-host-codemode.test.ts`. Growing a brief means raising a budget in the same change, on purpose.
+
 ### Developer-question lifecycle (asynchronous)
 
 The tool call is **not** the answer-delivery channel

@@ -1,8 +1,8 @@
 # Archive
 
-Your run environment is already set: `$HERDR_CHANGE_ID`, `$HERDR_OUTPUT`, and the other HERDR_* variables identify this run. Do not re-read run.env, workflow state, or list the repository to discover the change id.
+`$HERDR_CHANGE_ID`, `$HERDR_OUTPUT` and the other HERDR_* variables identify this run. Do not re-read run.env, workflow state or the repository to discover the change id.
 
-The engine bounds this step to **two `openspec validate`/`openspec archive` attempts per archive entry**, and the assignment states which attempt this run owns. There is no third attempt: the second failure hands the validator output to the developer and parks the workflow, so turns spent on a retry the engine will not grant are wasted.
+The engine bounds this step to **two `openspec validate`/`openspec archive` attempts per archive entry**, and the assignment states which attempt this run owns. There is no third attempt: the second failure hands the validator output to the developer and parks the workflow.
 
 ## Attempt 1 of 2
 
@@ -40,4 +40,4 @@ Hand off `blocked` with the exact validator output — the failing command's out
 
 ## Boundaries
 
-If archival fails because the change is already archived, report that exact state rather than repeating archival. Do not author documentation, alter knowledge metadata, perform human verification, or perform any review-comment revision. Do not commit, push, or clean up the workspace. Keep the archive step limited to OpenSpec lifecycle duties; documentation is handled and reviewed by its dedicated preceding step.
+If archival fails because the change is already archived, report that exact state rather than repeating archival. Do not author documentation, alter knowledge metadata, perform human verification, or perform any review-comment revision. Do not commit, push or clean up the workspace. Keep to the OpenSpec lifecycle; documentation belongs to its dedicated preceding step.

@@ -1272,6 +1272,8 @@ test("an answered question resumes the blocked asking run with the answer in its
 		expect(assignment).toContain("## Prior dialogue (untrusted context)");
 		expect(assignment).toContain("which approach?");
 		expect(assignment).toContain("→ a");
+		// The re-ask rule travels with the block, not with a protocol section.
+		expect(assignment).toContain("never re-ask an answered decision");
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

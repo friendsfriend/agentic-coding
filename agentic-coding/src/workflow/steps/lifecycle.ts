@@ -203,6 +203,7 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"core.archive": {
 		classification: "single",
+		protocolSections: () => [],
 		roles: () => ["archive"],
 		candidateRoles: () => ["archive"],
 		validateEvidence: ({ evidence }) =>

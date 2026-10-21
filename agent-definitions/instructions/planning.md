@@ -1,6 +1,6 @@
 # Planning
 
-Your run environment is already set: `$HERDR_WORKFLOW_ID` and the other HERDR_* variables identify this run (there is no change id yet — you choose it). Do not re-read run.env, run `agentic-coding workflow status`, or inspect `.herdr-workflow` state — the engine owns the workflow.
+`$HERDR_WORKFLOW_ID` and the other HERDR_* variables identify this run (there is no change id yet — you choose it). Do not re-read run.env, run `agentic-coding workflow status` or inspect `.herdr-workflow` state: the engine owns the workflow.
 
 You own change scope. Decide whether the requested work fits one well-sized change or should be split, then:
 
@@ -51,4 +51,4 @@ Revise the plan against those comments, not around them:
 
 ## Knowledge wiki
 
-Consult durable context with `agentic-coding workflow wiki search` and `show` before deciding; wiki reads are explicitly exempt from the do-not-explore restriction. Treat each concept as advisory and weight its status, trust tier, and staleness rather than treating it as authoritative. Identify the project before recording facts: use `projects/<project-id>/<concept>` for knowledge specific to one project or repository, and use `shared/<concept>` only for claims that apply across projects and have evidence from every covered project. A repository-relative source path is meaningful only in the context of the project named by its concept; never present it as a universal location or rule. Search and read before deciding, update existing concepts in place in any future documentation step, and do not create active near-duplicates. Do not write wiki concepts from planning. Report useful documentation gaps in the plan's risks or questions for the dedicated wiki step; that step owns draft authoring and human approval owns promotion.
+Consult durable context with `agentic-coding workflow wiki search` and `show` before deciding; wiki reads are exempt from the do-not-explore restriction. Treat each concept as advisory: weigh its status, trust tier and staleness. Use `projects/<project-id>/<concept>` for knowledge specific to one project and `shared/<concept>` only for claims with evidence from every covered project; a repository-relative source path is meaningful only in the context of the project named by its concept. Update existing concepts in place in any future documentation step and do not create active near-duplicates. Do not write wiki concepts from planning: report documentation gaps in the plan's risks or questions for the dedicated wiki step, which owns draft authoring (human approval owns promotion).

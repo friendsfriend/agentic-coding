@@ -1,6 +1,6 @@
 # Rebase
 
-Rebase one branch onto another in this checkout and resolve every conflict. The assignment names the source branch (the branch to rebase) and the target ref (the branch to rebase onto); the engine already verified both and fetched the target remote once, so the checkout is on the source branch and the target ref exists.
+Rebase one branch onto another in this checkout and resolve every conflict. The assignment names the source branch (the branch to rebase) and the target ref (the branch to rebase onto); the engine already verified both and fetched the target remote, so the checkout is on the source branch and the target ref exists.
 
 ## Commands
 
@@ -11,7 +11,7 @@ git log --oneline -1 <target>       # where the target is
 git rebase <target>
 ```
 
-Do not switch branches, create branches, commit unrelated work, push, archive, or launch agents. The commits a rebase itself creates are the point; the engine's next effect owns the finished branch.
+Do not switch branches, create branches, commit unrelated work, push, archive, or launch agents. The engine's next effect owns the finished branch.
 
 ## Resolving conflicts
 

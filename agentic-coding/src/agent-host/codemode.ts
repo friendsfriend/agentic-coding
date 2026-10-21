@@ -301,7 +301,7 @@ export function createDurableCodemode(): DurableCodemode {
 					"codemode runs JavaScript that calls this run's tools as `tools.<name>(args)`. Use it to batch independent calls or chain a search → read → filter pipeline in one call; keep a single call, every edit, and the handoff direct. Available:",
 					...callable.map(
 						(entry) =>
-							`- tools.${toCodemodeIdentifier(entry.name)}: ${entry.description ?? entry.name}`,
+							`- tools.${toCodemodeIdentifier(entry.name)}: ${firstSentence(entry.description ?? entry.name)}`,
 					),
 				].join("\n");
 			}),
@@ -309,4 +309,22 @@ export function createDurableCodemode(): DurableCodemode {
 	});
 
 	return { extension, tool };
+}
+
+/** Longest description the codemode prompt section lists per tool. */
+export const CODEMODE_SECTION_DESCRIPTION_LIMIT = 160;
+
+/** The first sentence of a tool description (cut at the first `. `), bounded to
+ * {@link CODEMODE_SECTION_DESCRIPTION_LIMIT} characters at a word boundary. The
+ * full description stays in the tool definition the model already receives, so
+ * the section only has to say what each `tools.<name>` is for. */
+export function firstSentence(description: string): string {
+	const text = description.trim();
+	const end = /\.(\s|$)/.exec(text);
+	const sentence = end ? text.slice(0, end.index + 1) : text;
+	if (sentence.length <= CODEMODE_SECTION_DESCRIPTION_LIMIT)
+		return sentence.replace(/\s+/g, " ");
+	const cut = sentence.slice(0, CODEMODE_SECTION_DESCRIPTION_LIMIT);
+	const space = cut.lastIndexOf(" ");
+	return `${(space > 0 ? cut.slice(0, space) : cut).replace(/\s+/g, " ")}…`;
 }

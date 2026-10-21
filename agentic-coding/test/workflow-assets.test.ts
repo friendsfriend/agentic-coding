@@ -40,13 +40,28 @@ test("every verifier role carries its own complete brief", () => {
 		expect(brief).toContain("omit it when fixed");
 		expect(brief).toContain("Write only the run-bound findings artifact");
 	}
-	// Every role but the suite owner inspects the assigned files and names a
-	// line in one of them.
+	// The scaffolding every scoped brief shares is one wording, not nine
+	// paraphrases (slim-agent-prompts); the roles differ only in remit,
+	// evidence standard and findings bar.
+	const common = [
+		"- Read the run outputs named under Inputs first. Treat prior findings as leads, not proof: recheck each one against the current code, omit it when fixed, and report only the ones that still reproduce. Every run inspects the current scoped files.",
+		"- Scope: the files listed in Step input and the direct dependencies you must read to judge them; never git history, unrelated subsystems, library internals or workflow configuration. The protocol and this brief are in your prompt — do not re-read them.",
+		"- Run only what Required checks names; never run the complete repository test suite (the engine-owned test-verifier runs it).",
+		"- Write only the run-bound findings artifact. Never edit repository files, coordinate siblings, launch other agents, choose a successor, or infer completion from runtime state.",
+	];
 	for (const role of scoped) {
 		const brief = AGENT_DEFINITIONS[`instructions/verification-${role}.md`];
-		expect(brief).toContain("Every run inspects the current scoped files");
-		expect(brief).toContain("repository-relative `path`");
+		for (const line of common) expect(brief).toContain(`${line}\n`);
+		// Every finding states what makes it a defect; the path and line are the
+		// findings payload's contract, not the brief's.
+		expect(brief).toContain("- Every finding ");
+		expect(brief).not.toContain("repository-relative `path`");
+		expect(brief).not.toContain("in-session judgment");
 	}
+	// The security verifier keeps its own rule about dialogue.
+	expect(AGENT_DEFINITIONS["instructions/verification-security.md"]).toContain(
+		"Security verifiers must review the actual repository and assigned artifacts even when dialogue recommends an approach.",
+	);
 	// The suite owner is the one role told to run everything, once.
 	const test = AGENT_DEFINITIONS["instructions/verification-test.md"];
 	expect(test).toContain("complete configured test suite");
@@ -129,9 +144,25 @@ test("both wiki briefs write early and keep their own update-first contract", ()
 			"instead of reading further before writing anything",
 		);
 		expect(brief).toContain(
-			"This budget bounds orientation only: the budget moves the write earlier, it does not shorten the sequence — that sequence, not the budget, still decides which path is written, and the authoring contract still applies to every concept you touch.",
+			"The budget moves the write earlier, not past the sequence: the sequence still decides which path is written, and the authoring contract applies to every concept you touch.",
 		);
 	}
+	// Everything from the source-repository boundary on is one shared contract
+	// (slim-agent-prompts): the two briefs differ only in how the run starts.
+	const tail = (brief: string | undefined) =>
+		(brief ?? "").slice(
+			(brief ?? "").indexOf("## Strict source-repository boundary"),
+		);
+	expect(tail(openspec)).toContain("## Review-comment revisions");
+	expect(tail(openspec)).toBe(tail(research));
+	for (const rule of [
+		"Never set `status: stable`",
+		"### Cite every line",
+		"`[^<source-id>]`",
+		"`no durable knowledge found`",
+		"Create a new project-scoped concept only when",
+	])
+		expect(tail(openspec)).toContain(rule);
 	// Each brief keeps its own vocabulary: the search-named target for the
 	// openspec wiki, the corroborated directive for the research wiki.
 	expect(openspec).toContain(

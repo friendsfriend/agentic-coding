@@ -24,6 +24,9 @@ const REVIEW_COMMENTS_INPUT = {
 export const debugBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"debug.investigate": {
 		classification: "single",
+		// A debug run cannot delegate another request, so it has no delegated-debug
+		// section.
+		protocolSections: () => ["environment", "browser", "debug-tools"],
 		roles: () => [DEBUG_ROLE],
 		candidateRoles: () => [DEBUG_ROLE],
 		instructionAssetForRole: () => "debug.md",

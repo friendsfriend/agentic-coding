@@ -15,6 +15,7 @@ import {
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
+import { parseProtocol } from "../src/workflow/prompt-sections.ts";
 import {
 	type StepDefinition,
 	WorkflowRegistry,
@@ -8966,9 +8967,11 @@ describe("workflow step behaviors", () => {
 			allowedOutcomes: ["complete", "blocked", "failed"],
 			environment: {} as Assignment["environment"],
 		});
-		const protocol = (
-			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? ""
-		).trim();
+		// The role receives the protocol core (the optional sections are selected
+		// per role: see `workflow-prompt-sections.test.ts`).
+		const protocol = parseProtocol(
+			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? "",
+		).core;
 		for (const [stepId, role] of single) {
 			const step = registry.step(stepId);
 			const briefs = step.instructionAssets.filter(
@@ -9061,9 +9064,11 @@ describe("workflow step behaviors", () => {
 			allowedOutcomes: ["complete", "blocked", "failed"],
 			environment: {} as Assignment["environment"],
 		});
-		const protocol = (
-			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? ""
-		).trim();
+		// The role receives the protocol core (the optional sections are selected
+		// per role: see `workflow-prompt-sections.test.ts`).
+		const protocol = parseProtocol(
+			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? "",
+		).core;
 		const roleAsset = (
 			AGENT_DEFINITIONS["instructions/verification-quality.md"] ?? ""
 		).trim();
