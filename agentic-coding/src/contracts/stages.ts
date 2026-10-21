@@ -246,6 +246,13 @@ export interface StageCredentialResponse {
  * multi-byte body cannot slip past the advertised limit (QA-005). */
 export const MAX_STAGE_API_REQUEST_BYTES = 64 * 1024;
 
+/** The most of a `stage_api_request` answer that is read at all: the rest is
+ * dropped at the source, so a misconfigured endpoint cannot stream a gigabyte
+ * into the server process. Also the bound a compiled flow's replay fixture
+ * applies to `ctx.api`'s own response reads, so the two paths agree without
+ * duplicating the number. */
+export const MAX_API_RESPONSE_BYTES = 256 * 1024;
+
 export const stageApiRequestSchema = Schema.Struct({
 	/** The stage ident. Optional only when exactly one allow-listed stage exists,
 	 * which then applies to every request. */
@@ -392,6 +399,26 @@ export const stageJournalEntrySchema = Schema.Struct({
 	role: Schema.optional(journalText(128)),
 	url: Schema.optional(journalText(2048)),
 	label: journalText(512),
+	/** The reviewed block layer (`add-stage-flow-blocks`). A plain step omits
+	 * these; a block sub-step carries its plan, route and executable identity. */
+	planId: Schema.optional(journalText(128)),
+	routeStepId: Schema.optional(journalText(64)),
+	block: Schema.optional(journalText(160)),
+	blockVersion: Schema.optional(journalText(32)),
+	subStep: Schema.optional(journalText(512)),
+	status: Schema.optional(Schema.Literal("passed", "failed", "skipped")),
+	/** Replay identity. Live exploratory entries omit these. */
+	flowId: Schema.optional(journalText(64)),
+	revision: Schema.optional(
+		Schema.Number.pipe(
+			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
+				message: () => "revision must be a non-negative integer",
+			}),
+		),
+	),
+	inputsHash: Schema.optional(journalText(80)),
+	replayRunId: Schema.optional(journalText(80)),
+	source: Schema.optional(Schema.Literal("replay")),
 	expected: Schema.optional(journalText(4096)),
 	observed: Schema.optional(journalText(4096)),
 	captures: Schema.optional(

@@ -14,6 +14,7 @@ export function stageTestManifests(version: number): WorkflowManifest[] {
 				"stage.plan",
 				"stage.plan-review",
 				"stage.execute",
+				"stage.replay",
 				"stage.review",
 				"core.wiki",
 				"core.wiki-approval",
@@ -22,8 +23,9 @@ export function stageTestManifests(version: number): WorkflowManifest[] {
 			],
 			allowedOutcomes: {
 				"stage.plan": ["needs-approval", "execute", "blocked", "failed"],
-				"stage.plan-review": ["approve", "comments"],
+				"stage.plan-review": ["approve", "approve-and-replay", "comments"],
 				"stage.execute": ["complete", "blocked", "failed"],
+				"stage.replay": ["complete", "failed", "fallback"],
 				"stage.review": ["approve", "approve-and-update-wiki", "comments"],
 				"core.wiki": ["complete", "blocked", "failed"],
 				"core.wiki-approval": ["approve", "comments"],
@@ -56,11 +58,19 @@ export function stageTestManifests(version: number): WorkflowManifest[] {
 				{ from: "stage.plan-review", outcome: "approve", to: "stage.execute" },
 				{
 					from: "stage.plan-review",
+					outcome: "approve-and-replay",
+					to: "stage.replay",
+				},
+				{
+					from: "stage.plan-review",
 					outcome: "comments",
 					to: "stage.plan",
 					loop: { maxAttempts: 3 },
 				},
 				{ from: "stage.execute", outcome: "complete", to: "stage.review" },
+				{ from: "stage.replay", outcome: "complete", to: "stage.review" },
+				{ from: "stage.replay", outcome: "failed", to: "stage.execute" },
+				{ from: "stage.replay", outcome: "fallback", to: "stage.execute" },
 				{
 					from: "stage.execute",
 					outcome: "blocked",

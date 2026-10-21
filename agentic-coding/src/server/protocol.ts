@@ -17,6 +17,7 @@ import {
 import {
 	browserActionRequestSchema,
 	browserEvalRequestSchema,
+	browserFindRequestSchema,
 	browserInstallRequestSchema,
 	browserLogRequestSchema,
 	browserOpenRequestSchema,
@@ -24,6 +25,7 @@ import {
 	browserScreenshotRequestSchema,
 	browserScriptRequestSchema,
 	browserSessionRequestSchema,
+	browserSnapshotRequestSchema,
 	browserStageJournalRequestSchema,
 	browserStageLoginRequestSchema,
 	browserStageLoginWaitRequestSchema,
@@ -48,6 +50,14 @@ import {
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
+import {
+	stageBlocksRequestSchema,
+	stageRunRequestSchema,
+} from "../contracts/stage-blocks.ts";
+import {
+	stageFlowsRequestSchema,
+	stageReplayRequestSchema,
+} from "../contracts/stage-replay.ts";
 import {
 	stageApiRequestSchema,
 	stageCredentialRequestSchema,
@@ -93,6 +103,7 @@ export const AGENT_EVIDENCE_LIST_PATH = `${AGENT_ENVIRONMENT_PREFIX}evidence`;
 export const AGENT_BROWSER_PREFIX = `${AGENT_ENVIRONMENT_PREFIX}browser/`;
 export const AGENT_BROWSER_OPEN_PATH = `${AGENT_BROWSER_PREFIX}open`;
 export const AGENT_BROWSER_SNAPSHOT_PATH = `${AGENT_BROWSER_PREFIX}snapshot`;
+export const AGENT_BROWSER_FIND_PATH = `${AGENT_BROWSER_PREFIX}find`;
 export const AGENT_BROWSER_ACTION_PATH = `${AGENT_BROWSER_PREFIX}action`;
 export const AGENT_BROWSER_WAIT_PATH = `${AGENT_BROWSER_PREFIX}wait`;
 export const AGENT_BROWSER_EVAL_PATH = `${AGENT_BROWSER_PREFIX}eval`;
@@ -113,6 +124,17 @@ export const AGENT_BROWSER_LOGIN_WAIT_PATH = `${AGENT_BROWSER_PREFIX}login-wait`
 export const AGENT_BROWSER_STAGE_STEP_PATH = `${AGENT_BROWSER_PREFIX}stage-step`;
 export const AGENT_BROWSER_STAGE_JOURNAL_PATH = `${AGENT_BROWSER_PREFIX}stage-journal`;
 export const AGENT_BROWSER_STAGE_WAIT_PATH = `${AGENT_BROWSER_PREFIX}stage-wait`;
+
+// `add-stage-flow-blocks`: the reviewed block catalog and the one-call plan
+// runner. The runner is a browser route because it drives one stage-bound
+// session; the catalog is read-only and still rides the same owner capability.
+export const AGENT_BROWSER_STAGE_BLOCKS_PATH = `${AGENT_BROWSER_PREFIX}stage-blocks`;
+export const AGENT_BROWSER_STAGE_RUN_PATH = `${AGENT_BROWSER_PREFIX}stage-run`;
+
+// `add-stage-flow-replay`: list saved flows and execute one compiled spec.
+// Neither route needs a live browser session: the replay process owns its page.
+export const AGENT_BROWSER_STAGE_FLOWS_PATH = `${AGENT_BROWSER_PREFIX}stage-flows`;
+export const AGENT_BROWSER_STAGE_REPLAY_PATH = `${AGENT_BROWSER_PREFIX}stage-replay`;
 
 /** The stage catalog of one run: the same read surface as the dashboard's, with
  * version probes resolved. It rides the owner capability because a run may only
@@ -686,7 +708,12 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 	{
 		path: AGENT_BROWSER_SNAPSHOT_PATH,
 		schemaId: "server.agent-env.browser.snapshot",
-		schema: browserSessionRequestSchema,
+		schema: browserSnapshotRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_FIND_PATH,
+		schemaId: "server.agent-env.browser.find",
+		schema: browserFindRequestSchema,
 	},
 	{
 		path: AGENT_BROWSER_ACTION_PATH,
@@ -757,6 +784,26 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: AGENT_BROWSER_STAGE_WAIT_PATH,
 		schemaId: "server.agent-env.browser.stage-wait",
 		schema: browserStageWaitRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_BLOCKS_PATH,
+		schemaId: "server.agent-env.browser.stage-blocks",
+		schema: stageBlocksRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_RUN_PATH,
+		schemaId: "server.agent-env.browser.stage-run",
+		schema: stageRunRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_FLOWS_PATH,
+		schemaId: "server.agent-env.browser.stage-flows",
+		schema: stageFlowsRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_REPLAY_PATH,
+		schemaId: "server.agent-env.browser.stage-replay",
+		schema: stageReplayRequestSchema,
 	},
 	{
 		path: AGENT_OTEL_QUERY_PATH,

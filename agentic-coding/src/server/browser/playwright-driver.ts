@@ -19,22 +19,31 @@ import type {
 	Request,
 } from "playwright-core";
 import { bannerRemovalScript } from "./banner.ts";
-import { SNAPSHOT_SCRIPT } from "./snapshot.ts";
-import type {
-	BrowserDriver,
-	DriverAuthorizationProvider,
-	DriverBrowser,
-	DriverConsoleEntry,
-	DriverContext,
-	DriverCookie,
-	DriverHttpCredentials,
-	DriverLaunchOptions,
-	DriverLocator,
-	DriverNetworkEvent,
-	DriverPage,
-	DriverPageCloseReason,
-	DriverRequestInfo,
-	DriverScreenshotOptions,
+import {
+	type AriaSnapshotResult,
+	captureLocatorSnapshot,
+	capturePageSnapshot,
+	parseSnapshotNodes,
+} from "./snapshot.ts";
+import {
+	type BrowserDriver,
+	type DriverActionTarget,
+	type DriverAuthorizationProvider,
+	type DriverBrowser,
+	type DriverConsoleEntry,
+	type DriverContext,
+	type DriverCookie,
+	type DriverHttpCredentials,
+	type DriverLaunchOptions,
+	type DriverLocator,
+	type DriverNetworkEvent,
+	type DriverPage,
+	type DriverPageCloseReason,
+	type DriverRequestInfo,
+	type DriverScreenshotOptions,
+	type DriverSnapshotOptions,
+	type DriverSnapshotResult,
+	DriverTargetError,
 } from "./types.ts";
 
 /** One page, adapted once: the page's listeners are registered a single time
@@ -177,6 +186,8 @@ async function routeThroughGuard(
 /** The one place a locator descriptor becomes a Playwright locator, so a login
  * recipe works across pages and a mask covers exactly what a recipe filled. */
 function locatorOf(page: Page, locator: DriverLocator): Locator {
+	if (locator.ref !== undefined && locator.ref !== "")
+		return page.getByRef(locator.ref).first();
 	if (locator.selector !== undefined && locator.selector !== "")
 		return page.locator(locator.selector);
 	if (locator.label !== undefined && locator.label !== "")
@@ -190,6 +201,35 @@ function locatorOf(page: Page, locator: DriverLocator): Locator {
 	throw new Error(
 		"a locator needs a selector, a label, or a role (with a name)",
 	);
+}
+
+/** Resolve one tool target to a Playwright locator. A ref is the public AI
+ * snapshot handle and may belong to an iframe (`f1e3`); a selector keeps the
+ * existing first-match policy. */
+function targetLocator(page: Page, target: DriverActionTarget): Locator {
+	if (target.ref !== undefined && target.ref !== "")
+		return page.getByRef(target.ref).first();
+	if (target.selector !== undefined && target.selector !== "")
+		return page.locator(target.selector).first();
+	throw new DriverTargetError(
+		"target-required",
+		"an action needs a ref (preferred) or a selector",
+	);
+}
+
+/** Refuse a stale ref before the action touches the page. Playwright's locator
+ * timeout would report a generic failure; the session needs to distinguish a
+ * disappeared ref from an element that exists but cannot be clicked. */
+async function assertResolvable(
+	locator: Locator,
+	target: DriverActionTarget,
+): Promise<void> {
+	if (target.ref === undefined || target.ref === "") return;
+	if ((await locator.count()) === 0)
+		throw new DriverTargetError(
+			"stale-ref",
+			`ref ${target.ref} no longer resolves on the page; take a new snapshot`,
+		);
 }
 
 function adaptContext(context: BrowserContext): DriverContext {
@@ -330,11 +370,22 @@ function adaptPage(page: Page): DriverPage {
 		// boundary as text, and Playwright evaluates a string as an expression.
 		evaluate: (expression) =>
 			page.evaluate(expression as unknown as () => unknown),
-		snapshot: async () => {
-			const value = await page.evaluate(
-				SNAPSHOT_SCRIPT as unknown as () => unknown,
-			);
-			return typeof value === "string" ? value : JSON.stringify(value);
+		snapshot: async (
+			options: DriverSnapshotOptions,
+		): Promise<DriverSnapshotResult> => {
+			let result: AriaSnapshotResult;
+			if (options.within !== undefined) {
+				const locator = targetLocator(page, options.within);
+				await assertResolvable(locator, options.within);
+				result = await captureLocatorSnapshot(locator, options);
+			} else {
+				result = await capturePageSnapshot(page, options);
+			}
+			return {
+				...result,
+				snapshotText: result.text,
+				snapshotNodes: parseSnapshotNodes(result.text),
+			};
 		},
 		setViewportSize: (size) => page.setViewportSize(size),
 		bringToFront: async () => {
@@ -347,23 +398,30 @@ function adaptPage(page: Page): DriverPage {
 				.evaluate(bannerRemovalScript() as unknown as () => unknown)
 				.catch(() => {});
 		},
-		click: async (selector, timeoutMs) => {
-			await page.locator(selector).first().click({ timeout: timeoutMs });
+		click: async (target, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.click({ timeout: timeoutMs });
 		},
-		fill: async (selector, value, timeoutMs) => {
-			await page.locator(selector).first().fill(value, { timeout: timeoutMs });
+		fill: async (target, value, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.fill(value, { timeout: timeoutMs });
 		},
-		press: async (selector, key, timeoutMs) => {
-			await page.locator(selector).first().press(key, { timeout: timeoutMs });
+		press: async (target, key, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.press(key, { timeout: timeoutMs });
 		},
-		selectOption: async (selector, values, timeoutMs) => {
-			await page
-				.locator(selector)
-				.first()
-				.selectOption([...values], { timeout: timeoutMs });
+		selectOption: async (target, values, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.selectOption([...values], { timeout: timeoutMs });
 		},
-		hover: async (selector, timeoutMs) => {
-			await page.locator(selector).first().hover({ timeout: timeoutMs });
+		hover: async (target, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.hover({ timeout: timeoutMs });
 		},
 		fillField: async (locator, value, timeoutMs) => {
 			await locatorOf(page, locator)
@@ -379,6 +437,11 @@ function adaptPage(page: Page): DriverPage {
 				.waitFor({ state: "visible", timeout: timeoutMs });
 		},
 		locatorCount: async (locator) => await locatorOf(page, locator).count(),
+		waitForTarget: async (target, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.waitFor({ state: "visible", timeout: timeoutMs });
+		},
 		waitForSelector: async (selector, timeoutMs) => {
 			await page
 				.locator(selector)
@@ -394,11 +457,10 @@ function adaptPage(page: Page): DriverPage {
 		waitForUrl: async (pattern, timeoutMs) => {
 			await page.waitForURL(pattern, { timeout: timeoutMs });
 		},
-		textContent: async (selector, timeoutMs) => {
-			const value = await page
-				.locator(selector)
-				.first()
-				.textContent({ timeout: timeoutMs });
+		textContent: async (target, timeoutMs) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			const value = await locator.textContent({ timeout: timeoutMs });
 			return value ?? "";
 		},
 		screenshot: async (options: DriverScreenshotOptions) => {
@@ -408,11 +470,20 @@ function adaptPage(page: Page): DriverPage {
 				locatorOf(page, locator),
 			);
 			const masked = mask.length === 0 ? {} : { mask };
-			if (options.selector !== undefined) {
-				const element = await page
-					.locator(options.selector)
-					.first()
-					.screenshot({ type: options.type, ...quality, ...masked });
+			const target: DriverActionTarget | undefined =
+				options.ref !== undefined
+					? { ref: options.ref }
+					: options.selector !== undefined
+						? { selector: options.selector }
+						: undefined;
+			if (target !== undefined) {
+				const locator = targetLocator(page, target);
+				await assertResolvable(locator, target);
+				const element = await locator.screenshot({
+					type: options.type,
+					...quality,
+					...masked,
+				});
 				return new Uint8Array(element);
 			}
 			const view = await page.screenshot({

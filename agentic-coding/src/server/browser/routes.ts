@@ -17,15 +17,71 @@
 //   whether or not it is stored; a video is stored with its poster only when the
 //   agent asked to keep it, and a discarded recording leaves neither file nor
 //   manifest entry.
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { BrowserStatusResponse } from "../../contracts/browser.ts";
+import type {
+	BrowserSnapshotDelta,
+	BrowserStatusResponse,
+	BrowserTiming,
+} from "../../contracts/browser.ts";
+import { decodeContract } from "../../contracts/decode.ts";
 import type {
 	EvidenceEntry,
 	EvidenceManifest,
 } from "../../contracts/environment.ts";
+import type {
+	ReplayEvent,
+	ReplayResult,
+} from "../../contracts/stage-replay.ts";
 import type { StageJournalEntry } from "../../contracts/stages.ts";
+import { STAGE_BLOCK_CATALOG } from "../../stage-blocks/catalog.generated.ts";
+import {
+	filterCompactCatalog,
+	filterFullCatalog,
+	type StageBlockCatalog,
+} from "../../stage-blocks/catalog.ts";
+import {
+	canonicalInputsHash,
+	STAGE_FLOW_DIRECTORY,
+} from "../../stage-blocks/flow.ts";
+import { generateFlow } from "../../stage-blocks/flow-generator.ts";
+import {
+	compactFlowEntry,
+	flowEligibility,
+	readFlowRegistry,
+} from "../../stage-blocks/flow-registry.ts";
+import {
+	FlowSourceError,
+	flowSourceFromStagePlan,
+} from "../../stage-blocks/flow-source.ts";
+import { buildHealPacket } from "../../stage-blocks/heal.ts";
+import {
+	blockPlanFromRoute,
+	deriveInputSchema,
+	type StageBlockPlan,
+	type StageBlockPolicy,
+	validateStageBlockPlan,
+} from "../../stage-blocks/plan.ts";
+import { stageBlockRegistry } from "../../stage-blocks/registry.ts";
+import { mapReplayToReport } from "../../stage-blocks/replay-report.ts";
+import {
+	runStageBlockPlan,
+	type StageBlockJournalEntry,
+} from "../../stage-blocks/runner.ts";
+import type { JsonValue } from "../../stage-blocks/schema.ts";
+import {
+	parseSuiteManifest,
+	runSuiteEntries,
+	STAGE_SUITE_EXTENSION,
+	type SuiteEntryResult,
+	type SuiteFlowEntry,
+} from "../../stage-blocks/suite.ts";
+import { StageTestPlanSchema } from "../../workflow/schema.ts";
+
+type StageTestPlan = typeof StageTestPlanSchema.Type;
+
 import {
 	BROWSER_MAX_IMAGE_WIDTH,
 	type ResolvedBrowserSettings,
@@ -48,12 +104,17 @@ import {
 	type LocatedEvidenceWorkflow,
 	locateEvidenceWorkflow,
 } from "../evidence/routes.ts";
-import { attachEvidence, EvidenceError } from "../evidence/store.ts";
+import {
+	attachEvidence,
+	EVIDENCE_FILE_MAX_BYTES,
+	EvidenceError,
+} from "../evidence/store.ts";
 import {
 	AGENT_BROWSER_ACTION_PATH,
 	AGENT_BROWSER_CLOSE_PATH,
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
+	AGENT_BROWSER_FIND_PATH,
 	AGENT_BROWSER_LOGIN_PATH,
 	AGENT_BROWSER_LOGIN_WAIT_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
@@ -62,7 +123,11 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_BLOCKS_PATH,
+	AGENT_BROWSER_STAGE_FLOWS_PATH,
 	AGENT_BROWSER_STAGE_JOURNAL_PATH,
+	AGENT_BROWSER_STAGE_REPLAY_PATH,
+	AGENT_BROWSER_STAGE_RUN_PATH,
 	AGENT_BROWSER_STAGE_STEP_PATH,
 	AGENT_BROWSER_STAGE_WAIT_PATH,
 	AGENT_BROWSER_WAIT_PATH,
@@ -117,9 +182,22 @@ import {
 	DEFAULT_WAIT_TIMEOUT_MS,
 	MAX_WAIT_TIMEOUT_MS,
 	type NetworkEntry,
+	type SessionSnapshotState,
 	type StageBearerScope,
 	type StageSessionBinding,
 } from "./session.ts";
+import {
+	diffSnapshotNodes,
+	formatSnapshotObservation,
+	type SnapshotDeltaEntry,
+	type SnapshotNode,
+} from "./snapshot.ts";
+import { SessionBlockPage, sessionExpect } from "./stage-block-page.ts";
+import {
+	decodeReplayResult,
+	replayEventsFromSteps,
+	runReplayProcess,
+} from "./stage-replay.ts";
 
 /** The session a call names when it names none. */
 export const DEFAULT_BROWSER_SESSION = "default";
@@ -175,6 +253,38 @@ export interface BrowserRouteDeps {
 	 * a test points it at a local token endpoint. */
 	readonly fetch?: typeof fetch;
 	readonly now?: () => number;
+	/** The existing server event sink (`browser.tool`). Value-free: a tool name,
+	 * timings and counts, never page text or a ref name. */
+	readonly telemetry?: (event: BrowserToolTelemetryEvent) => void;
+}
+
+/** One browser tool's value-free telemetry event. */
+export interface BrowserToolTelemetryEvent {
+	readonly domain: "browser";
+	readonly kind: "browser.tool";
+	readonly tool:
+		| "snapshot"
+		| "find"
+		| "click"
+		| "fill"
+		| "press"
+		| "select"
+		| "hover"
+		| "wait"
+		| "script";
+	/** The session name, never its page content or URL. */
+	readonly session?: string;
+	/** A stable refusal code when the call failed; never the message. */
+	readonly errorCode?: string;
+	readonly snapshotMs: number;
+	readonly actionMs: number;
+	readonly observeMs: number;
+	readonly totalMs: number;
+	readonly chars: number;
+	readonly refs: number;
+	readonly changed: boolean;
+	readonly truncated: boolean;
+	readonly snapshotRequired: boolean;
 }
 
 /** The registry of one `BrowserRouteDeps` object, created on first use and kept
@@ -281,6 +391,210 @@ export function sessionHeldRefusal(session: BrowserSession): BrowserPoolError {
 				}
 			: {},
 	);
+}
+
+/** Milliseconds since a `performance.now()` mark, rounded to 0.1 ms so a
+ * telemetry row stays readable. */
+function elapsedMs(startedAt: number): number {
+	return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function browserTiming(input: {
+	readonly snapshotMs?: number;
+	readonly actionMs?: number;
+	readonly observeMs?: number;
+	readonly chars: number;
+	readonly refs: number;
+	readonly changed: boolean;
+	readonly truncated: boolean;
+}): BrowserTiming {
+	const snapshotMs = input.snapshotMs ?? 0;
+	const actionMs = input.actionMs ?? 0;
+	const observeMs = input.observeMs ?? 0;
+	return {
+		snapshotMs,
+		actionMs,
+		observeMs,
+		totalMs: Math.round((snapshotMs + actionMs + observeMs) * 10) / 10,
+		chars: input.chars,
+		refs: input.refs,
+		changed: input.changed,
+		truncated: input.truncated,
+	};
+}
+
+/** Emit one value-free `browser.tool` event through the server's existing
+ * event sink. Telemetry must never turn a successful browser call into a
+ * failure. */
+function browserErrorCode(error: unknown): string | undefined {
+	if (error instanceof BrowserSessionError) return error.code;
+	if (error instanceof BrowserPoolError) return error.code;
+	return undefined;
+}
+
+function emitBrowserTelemetry(
+	deps: BrowserRouteDeps,
+	tool: BrowserToolTelemetryEvent["tool"],
+	timing: BrowserTiming,
+	snapshotRequired: boolean,
+	extra: { readonly session?: string; readonly errorCode?: string } = {},
+): void {
+	try {
+		deps.telemetry?.({
+			domain: "browser",
+			kind: "browser.tool",
+			tool,
+			...(extra.session === undefined ? {} : { session: extra.session }),
+			...(extra.errorCode === undefined ? {} : { errorCode: extra.errorCode }),
+			snapshotMs: timing.snapshotMs,
+			actionMs: timing.actionMs,
+			observeMs: timing.observeMs,
+			totalMs: timing.totalMs,
+			chars: timing.chars,
+			refs: timing.refs,
+			changed: timing.changed,
+			truncated: timing.truncated,
+			snapshotRequired,
+		});
+	} catch {
+		// A monitor that throws is not this call's failure.
+	}
+}
+
+function emitBrowserFailure(
+	deps: BrowserRouteDeps,
+	tool: BrowserToolTelemetryEvent["tool"],
+	session: BrowserSession,
+	startedAt: number,
+	error: unknown,
+): void {
+	const timing = browserTiming({
+		observeMs: elapsedMs(startedAt),
+		chars: session.snapshotState?.chars ?? 0,
+		refs: session.snapshotState?.refs.length ?? 0,
+		changed: false,
+		truncated: false,
+	});
+	emitBrowserTelemetry(deps, tool, timing, false, {
+		session: session.name,
+		...(browserErrorCode(error) === undefined
+			? {}
+			: { errorCode: browserErrorCode(error) }),
+	});
+}
+
+function deltaValue(
+	delta: import("./snapshot.ts").SnapshotDelta | undefined,
+): BrowserSnapshotDelta | undefined {
+	if (delta === undefined) return undefined;
+	return {
+		added: [...delta.added],
+		removed: [...delta.removed],
+		changed: [...delta.changed],
+	};
+}
+
+function nodeEntry(node: SnapshotNode): SnapshotDeltaEntry {
+	return {
+		...(node.ref === undefined ? {} : { ref: node.ref }),
+		role: node.role,
+		...(node.name === undefined ? {} : { name: node.name }),
+		...(node.text === undefined ? {} : { text: node.text }),
+		...(node.checked === undefined ? {} : { checked: node.checked }),
+		...(node.disabled === undefined ? {} : { disabled: node.disabled }),
+	};
+}
+
+interface ActionObservationResult {
+	readonly snapshotId?: string;
+	readonly observation: string;
+	readonly changed: boolean;
+	readonly snapshotRequired: boolean;
+	readonly delta?: BrowserSnapshotDelta;
+	readonly deltaTruncated: boolean;
+	readonly timing: BrowserTiming;
+}
+
+/** The post-action read: one snapshot, a compact delta against the state the
+ * action started from, and either the new id or a clear instruction to take a
+ * snapshot after a navigation/failed read. The full tree is never returned. */
+async function observeAfterAction(
+	session: BrowserSession,
+	before: SessionSnapshotState | undefined,
+	actionMs: number,
+): Promise<ActionObservationResult> {
+	const snapshotStart = performance.now();
+	let after: SessionSnapshotState;
+	try {
+		after = await session.snapshot();
+	} catch {
+		// The action itself may have succeeded. Its refs are still untrustworthy,
+		// so invalidate them and answer with a snapshot instruction rather than an
+		// error that would hide the action's outcome.
+		session.invalidateSnapshot();
+		const snapshotMs = elapsedMs(snapshotStart);
+		const observation = [
+			`url: ${session.url}`,
+			"action completed, but the post-action snapshot failed",
+			"take a browser_snapshot for the current refs",
+		].join("\n");
+		return {
+			observation,
+			changed: false,
+			snapshotRequired: true,
+			deltaTruncated: false,
+			timing: browserTiming({
+				snapshotMs,
+				actionMs,
+				chars: 0,
+				refs: 0,
+				changed: false,
+				truncated: false,
+			}),
+		};
+	}
+	const snapshotMs = elapsedMs(snapshotStart);
+	const observeStart = performance.now();
+	const title = await session.title().catch(() => "");
+	const navigation = before !== undefined && before.url !== after.url;
+	const delta =
+		before === undefined || navigation
+			? undefined
+			: diffSnapshotNodes(before.nodes, after.nodes);
+	const noBaseline = before === undefined;
+	const changed =
+		navigation ||
+		(delta?.totals.added ?? 0) +
+			(delta?.totals.removed ?? 0) +
+			(delta?.totals.changed ?? 0) >
+			0;
+	const snapshotRequired = navigation || noBaseline;
+	const observation = formatSnapshotObservation({
+		url: after.url,
+		...(title === "" ? {} : { title }),
+		...(delta === undefined ? {} : { delta }),
+		...(navigation ? { navigation: true } : {}),
+		...(noBaseline ? { noBaseline: true } : {}),
+		snapshotRequired,
+	});
+	const observeMs = elapsedMs(observeStart);
+	return {
+		snapshotId: after.id,
+		observation,
+		changed,
+		snapshotRequired,
+		...(delta === undefined ? {} : { delta: deltaValue(delta) }),
+		deltaTruncated: delta?.truncated ?? false,
+		timing: browserTiming({
+			snapshotMs,
+			actionMs,
+			observeMs,
+			chars: after.chars,
+			refs: after.refs.length,
+			changed,
+			truncated: after.truncated || (delta?.truncated ?? false),
+		}),
+	};
 }
 
 /**
@@ -729,15 +1043,32 @@ async function dispatch(
 	const workflow = workflowId
 		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
 		: undefined;
+	const replayTool =
+		path === AGENT_BROWSER_STAGE_REPLAY_PATH ||
+		path === AGENT_BROWSER_STAGE_FLOWS_PATH ||
+		path === AGENT_BROWSER_STAGE_JOURNAL_PATH;
+	// The planner may read the static block catalog (`stage_blocks`) and
+	// discover saved flows (`stage_flows`) — neither opens a browser, touches
+	// stage access or writes the journal — while choosing a block or a flowId
+	// and binding its inputs (`add-stage-flow-blocks` task 8.2,
+	// `add-stage-flow-replay` task 5.2). Every other stage tool stays
+	// restricted to the tester during execute/replay.
+	const plannerDiscoveryTool =
+		(path === AGENT_BROWSER_STAGE_FLOWS_PATH ||
+			path === AGENT_BROWSER_STAGE_BLOCKS_PATH) &&
+		workflow?.currentStep === "stage.plan" &&
+		workflow.selectedRoles?.includes("stage-planner") === true;
 	if (
 		workflow?.definitionId === "stage-test" &&
 		path !== AGENT_BROWSER_CLOSE_PATH &&
-		(workflow.currentStep !== "stage.execute" ||
+		!plannerDiscoveryTool &&
+		((workflow.currentStep !== "stage.execute" &&
+			!(replayTool && workflow.currentStep === "stage.replay")) ||
 			!workflow.selectedRoles?.includes("stage-tester"))
 	)
 		throw new BrowserPoolError(
 			"stage-test-tool-restricted",
-			"stage browser tools are available to stage-tester only during stage.execute",
+			"stage browser tools are available to stage-tester only during stage.execute or stage.replay",
 			403,
 		);
 	// Every call releases what the idle TTL has expired, so an abandoned run's
@@ -751,16 +1082,15 @@ async function dispatch(
 	}
 	if (method === "POST" && path === AGENT_BROWSER_SNAPSHOT_PATH) {
 		const body = decodeRouteRequest<
-			import("../../contracts/browser.ts").BrowserSessionRequest
+			import("../../contracts/browser.ts").BrowserSnapshotRequest
 		>(path, await readJsonBody(request));
-		const session = await sessionFor(deps, owner, body.session, used);
-		const snapshot = await session.snapshot();
-		return {
-			session: session.name,
-			url: session.url,
-			snapshot: snapshot.text,
-			refs: snapshot.refs.length,
-		};
+		return await snapshotRoute(deps, owner, used, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_FIND_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/browser.ts").BrowserFindRequest
+		>(path, await readJsonBody(request));
+		return await findRoute(deps, owner, used, body);
 	}
 	if (method === "POST" && path === AGENT_BROWSER_ACTION_PATH) {
 		const body = decodeRouteRequest<
@@ -786,6 +1116,41 @@ async function dispatch(
 		>(path, await readJsonBody(request));
 		return await stageWait(deps, owner, used, body);
 	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_BLOCKS_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/stage-blocks.ts").StageBlocksRequest
+		>(path, await readJsonBody(request));
+		return stageBlocks(body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_RUN_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/stage-blocks.ts").StageRunRequest
+		>(path, await readJsonBody(request));
+		return await stageRun(deps, owner, used, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_FLOWS_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/stage-replay.ts").StageFlowsRequest
+		>(path, await readJsonBody(request));
+		return stageFlows(deps, owner, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_REPLAY_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/stage-replay.ts").StageReplayRequest
+		>(path, await readJsonBody(request));
+		if (body.suiteId !== undefined)
+			return await stageReplaySuite(deps, owner, {
+				...body,
+				suiteId: body.suiteId,
+			});
+		if (body.flowId === undefined)
+			throw new BrowserPoolError(
+				"stage-replay-invalid",
+				"a replay request needs flowId or suiteId",
+				400,
+			);
+		return await stageReplay(deps, owner, { ...body, flowId: body.flowId });
+	}
 	if (method === "POST" && path === AGENT_BROWSER_WAIT_PATH) {
 		const body = decodeRouteRequest<
 			import("../../contracts/browser.ts").BrowserWaitRequest
@@ -803,13 +1168,55 @@ async function dispatch(
 						...(body.selector === undefined ? {} : { selector: body.selector }),
 					}
 				: undefined;
+		const before = session.snapshotState;
+		const actionStarted = performance.now();
 		await session.wait({
 			...(target ? { target } : {}),
 			...(body.text === undefined ? {} : { text: body.text }),
 			...(body.url === undefined ? {} : { url: body.url }),
 			timeoutMs,
 		});
-		return { session: session.name, url: session.url, waited: true };
+		const actionMs = elapsedMs(actionStarted);
+		if (body.observe === true) {
+			const observed = await observeAfterAction(session, before, actionMs);
+			emitBrowserTelemetry(
+				deps,
+				"wait",
+				observed.timing,
+				observed.snapshotRequired,
+				{ session: session.name },
+			);
+			return {
+				session: session.name,
+				url: session.url,
+				waited: true,
+				...(observed.snapshotId === undefined
+					? {}
+					: { snapshotId: observed.snapshotId }),
+				observation: observed.observation,
+				changed: observed.changed,
+				snapshotRequired: observed.snapshotRequired,
+				...(observed.delta === undefined ? {} : { delta: observed.delta }),
+				deltaTruncated: observed.deltaTruncated,
+				timing: observed.timing,
+			};
+		}
+		const timing = browserTiming({
+			actionMs,
+			chars: before?.chars ?? 0,
+			refs: before?.refs.length ?? 0,
+			changed: false,
+			truncated: false,
+		});
+		emitBrowserTelemetry(deps, "wait", timing, false, {
+			session: session.name,
+		});
+		return {
+			session: session.name,
+			url: session.url,
+			waited: true,
+			timing,
+		};
 	}
 	if (method === "POST" && path === AGENT_BROWSER_EVAL_PATH) {
 		const body = decodeRouteRequest<
@@ -2103,6 +2510,123 @@ function abortMessage(by: string): string {
 // Actions
 // ---------------------------------------------------------------------------
 
+async function snapshotRoute(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserSnapshotRequest,
+): Promise<unknown> {
+	const session = await sessionFor(deps, owner, body.session, used);
+	const wantsDiff = body.diff === true || body.since !== undefined;
+	if (wantsDiff && body.within !== undefined)
+		throw new BrowserPoolError(
+			"snapshot-options-conflict",
+			"a diff reads the stored state; it cannot be combined with within",
+			400,
+		);
+	if (wantsDiff) {
+		const startedAt = performance.now();
+		const diff = session.diffSnapshot(body.since);
+		const observation = formatSnapshotObservation({
+			url: diff.to.url,
+			delta: diff.delta,
+		});
+		const changed =
+			diff.delta.totals.added +
+				diff.delta.totals.removed +
+				diff.delta.totals.changed >
+			0;
+		const timing = browserTiming({
+			observeMs: elapsedMs(startedAt),
+			chars: observation.length,
+			refs: diff.to.refs.length,
+			changed,
+			truncated: diff.delta.truncated,
+		});
+		emitBrowserTelemetry(deps, "snapshot", timing, false, {
+			session: session.name,
+		});
+		return {
+			session: session.name,
+			url: diff.to.url,
+			snapshotId: diff.to.id,
+			since: diff.from.id,
+			observation,
+			changed,
+			delta: deltaValue(diff.delta),
+			deltaTruncated: diff.delta.truncated,
+			timing,
+		};
+	}
+	const startedAt = performance.now();
+	const state = await session.snapshot({
+		...(body.within === undefined ? {} : { within: body.within }),
+		...(body.depth === undefined ? {} : { depth: body.depth }),
+		...(body.maxChars === undefined ? {} : { maxChars: body.maxChars }),
+	});
+	const timing = browserTiming({
+		snapshotMs: elapsedMs(startedAt),
+		chars: state.chars,
+		refs: state.refs.length,
+		changed: false,
+		truncated: state.truncated,
+	});
+	emitBrowserTelemetry(deps, "snapshot", timing, false, {
+		session: session.name,
+	});
+	return {
+		session: session.name,
+		url: session.url,
+		snapshotId: state.id,
+		snapshot: state.text,
+		refs: state.refs.length,
+		timing,
+	};
+}
+
+async function findRoute(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/browser.ts").BrowserFindRequest,
+): Promise<unknown> {
+	const session = await sessionFor(deps, owner, body.session, used);
+	const query = body.query.trim();
+	if (query === "")
+		throw new BrowserPoolError(
+			"query-required",
+			"browser_find needs a non-empty query",
+			400,
+		);
+	const startedAt = performance.now();
+	const found = await session.findSnapshot({
+		query,
+		...(body.role === undefined ? {} : { role: body.role }),
+		...(body.name === undefined ? {} : { name: body.name }),
+		...(body.within === undefined ? {} : { within: body.within }),
+		limit: Math.min(20, body.limit ?? 20),
+	});
+	const matches = found.matches.map(nodeEntry);
+	const timing = browserTiming({
+		observeMs: elapsedMs(startedAt),
+		chars: JSON.stringify(matches).length,
+		refs: session.snapshotState?.refs.length ?? 0,
+		changed: false,
+		truncated: found.truncated,
+	});
+	emitBrowserTelemetry(deps, "find", timing, false, {
+		session: session.name,
+	});
+	return {
+		session: session.name,
+		snapshotId: found.snapshotId,
+		matches,
+		total: found.total,
+		truncated: found.truncated,
+		timing,
+	};
+}
+
 async function act(
 	deps: BrowserRouteDeps,
 	owner: string,
@@ -2115,72 +2639,107 @@ async function act(
 		...(body.selector === undefined ? {} : { selector: body.selector }),
 	};
 	const timeoutMs = bounded(body.timeoutMs, DEFAULT_ACTION_TIMEOUT_MS, 60_000);
-	switch (body.action) {
-		case "click":
-			await session.click(target, timeoutMs);
-			break;
-		case "fill": {
-			// A stage-bound session can be handed a credential *reference* instead of a
-			// value: the server resolves it, types it, and reports nothing of it.
-			const credential = body.credential;
-			if (credential) {
-				const binding = session.stage;
-				if (!binding)
-					throw new BrowserSessionError(
-						"stage-session-restricted",
-						"browser_fill with a credential needs a stage-bound session; pass a value instead",
-						409,
+	// Refuse a stale snapshot/ref before the page is touched. The session checks
+	// again inside every action, but doing it here makes the failure independent
+	// of which branch the action takes (a credential fill included).
+	try {
+		session.assertAction(body.snapshotId, target);
+	} catch (error) {
+		emitBrowserFailure(deps, body.action, session, performance.now(), error);
+		throw error;
+	}
+	const before = session.snapshotState;
+	const actionStarted = performance.now();
+	try {
+		switch (body.action) {
+			case "click":
+				await session.click(target, timeoutMs);
+				break;
+			case "fill": {
+				// A stage-bound session can be handed a credential *reference* instead of a
+				// value: the server resolves it, types it, and reports nothing of it.
+				const credential = body.credential;
+				if (credential) {
+					const binding = session.stage;
+					if (!binding)
+						throw new BrowserSessionError(
+							"stage-session-restricted",
+							"browser_fill with a credential needs a stage-bound session; pass a value instead",
+							409,
+						);
+					await withoutCredentialEcho(() =>
+						fillStageCredential({
+							session,
+							entry: stageEntryFor(deps, binding.ident),
+							appKey: credential.app,
+							role: credential.role,
+							field: credential.field,
+							target,
+							timeoutMs,
+							configDir: deps.configDir ?? "",
+						}),
 					);
-				await withoutCredentialEcho(() =>
-					fillStageCredential({
-						session,
-						entry: stageEntryFor(deps, binding.ident),
-						appKey: credential.app,
-						role: credential.role,
-						field: credential.field,
-						target,
-						timeoutMs,
-						configDir: deps.configDir ?? "",
-					}),
-				);
+					break;
+				}
+				if (body.value === undefined)
+					throw new BrowserPoolError(
+						"value-required",
+						"browser_fill needs a value, or a credential on a stage-bound session",
+						400,
+					);
+				await session.fill(target, body.value, timeoutMs);
 				break;
 			}
-			if (body.value === undefined)
-				throw new BrowserPoolError(
-					"value-required",
-					"browser_fill needs a value, or a credential on a stage-bound session",
-					400,
-				);
-			await session.fill(target, body.value, timeoutMs);
-			break;
+			case "press":
+				if (!body.key)
+					throw new BrowserPoolError(
+						"key-required",
+						"browser_press needs a key",
+						400,
+					);
+				await session.press(body.key, target, timeoutMs);
+				break;
+			case "select":
+				if (!body.values || body.values.length === 0)
+					throw new BrowserPoolError(
+						"value-required",
+						"browser_select needs at least one value",
+						400,
+					);
+				await session.select(target, body.values, timeoutMs);
+				break;
+			case "hover":
+				await session.hover(target, timeoutMs);
+				break;
 		}
-		case "press":
-			if (!body.key)
-				throw new BrowserPoolError(
-					"key-required",
-					"browser_press needs a key",
-					400,
-				);
-			await session.press(body.key, target, timeoutMs);
-			break;
-		case "select":
-			if (!body.values || body.values.length === 0)
-				throw new BrowserPoolError(
-					"value-required",
-					"browser_select needs at least one value",
-					400,
-				);
-			await session.select(target, body.values, timeoutMs);
-			break;
-		case "hover":
-			await session.hover(target, timeoutMs);
-			break;
+	} catch (error) {
+		emitBrowserFailure(deps, body.action, session, actionStarted, error);
+		throw error;
 	}
+	const actionMs = elapsedMs(actionStarted);
+	const observed = await observeAfterAction(session, before, actionMs);
+	emitBrowserTelemetry(
+		deps,
+		body.action,
+		observed.timing,
+		observed.snapshotRequired,
+		{ session: session.name },
+	);
 	return {
 		session: session.name,
 		action: body.action,
 		url: session.url,
 		title: await session.title().catch(() => ""),
+		observedAt: new Date(deps.now?.() ?? Date.now()).toISOString(),
+		...(observed.snapshotId === undefined
+			? {}
+			: { snapshotId: observed.snapshotId }),
+		observation: observed.observation,
+		changed: observed.changed,
+		snapshotRequired: observed.snapshotRequired,
+		...(observed.delta === undefined ? {} : { delta: observed.delta }),
+		deltaTruncated: observed.deltaTruncated,
+		timing: observed.timing,
 	};
 }
 
@@ -2516,6 +3075,26 @@ function journalRedactor(deps: BrowserRouteDeps): JournalRedactor {
 	};
 }
 
+/** Apply a string redactor to every string in a JSON-shaped value. The replay
+ * child can include a filled value in a Playwright error, so a report or heal
+ * packet must be scrubbed structurally, not only at the top level. */
+function redactDeep(
+	value: unknown,
+	redact: (value: string) => string,
+): unknown {
+	if (typeof value === "string") return redact(value);
+	if (Array.isArray(value))
+		return value.map((entry) => redactDeep(entry, redact));
+	if (value !== null && typeof value === "object")
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+				key,
+				redactDeep(entry, redact),
+			]),
+		);
+	return value;
+}
+
 /** Regenerate the flow page. A workflow that never wrote a step has no page, and
  * the writer answers that itself — under the evidence root lock, so no listing
  * here can disagree with the write it guards. */
@@ -2657,6 +3236,1337 @@ async function stageStep(
 		...(step.segment === undefined
 			? {}
 			: { segment: step.segment, offsetMs: step.offsetMs }),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Typed stage blocks (`add-stage-flow-blocks`)
+// ---------------------------------------------------------------------------
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** `stage_blocks`: the generated catalog, compact by default and full for one
+ * id. The generated artifact is the review surface; the registry only executes
+ * a block whose metadata is already in it. */
+function stageBlocks(
+	body: import("../../contracts/stage-blocks.ts").StageBlocksRequest,
+): import("../../contracts/stage-blocks.ts").StageBlocksResponse {
+	const catalog = STAGE_BLOCK_CATALOG as unknown as StageBlockCatalog;
+	const filter = {
+		...(body.query === undefined ? {} : { query: body.query }),
+		...(body.app === undefined ? {} : { app: body.app }),
+		...(body.effect === undefined ? {} : { effect: body.effect }),
+	};
+	if (body.id !== undefined) {
+		const blocks = filterFullCatalog(catalog, {
+			...filter,
+			id: body.id,
+			limit: 1,
+		});
+		if (blocks.length === 0)
+			throw new BrowserPoolError(
+				"block-unknown",
+				`block ${body.id} is not in the stage-block catalog`,
+				404,
+			);
+		return {
+			version: 1,
+			mode: "full",
+			blocks:
+				blocks as unknown as import("../../contracts/stage-blocks.ts").StageBlocksResponse["blocks"],
+			total: blocks.length,
+		};
+	}
+	const total = filterCompactCatalog(catalog, {
+		...filter,
+		limit: 100,
+	}).length;
+	const mode = body.full === true ? "full" : "compact";
+	const blocks =
+		body.full === true
+			? filterFullCatalog(catalog, { ...filter, limit: body.limit ?? 20 })
+			: filterCompactCatalog(catalog, { ...filter, limit: body.limit ?? 20 });
+	return {
+		version: 1,
+		mode,
+		blocks:
+			blocks as unknown as import("../../contracts/stage-blocks.ts").StageBlocksResponse["blocks"],
+		total,
+	};
+}
+
+/** Capture one bounded text artifact through the same evidence store as a
+ * screenshot. Used for failure snapshots and log tails, never for a success
+ * path where the model should read the live page instead. */
+async function storeTextEvidence(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	input: {
+		readonly text: string;
+		readonly caption: string;
+		readonly kind: "trace" | "log" | "other";
+	},
+): Promise<string> {
+	const redact = journalRedactor(deps);
+	const entry = await storeEvidence(deps, owner, {
+		text: redact(input.text),
+		kind: input.kind,
+		caption: redact(input.caption),
+		url: evidenceUrl(deps, session.url),
+		extension: "txt",
+		...(session.app ? { app: session.app } : {}),
+	});
+	return entry.id;
+}
+
+/** Failure evidence is deliberately small: one screenshot, one bounded
+ * snapshot, and the newest console/network lines. A failed block must leave
+ * enough to diagnose without turning the run result into a page dump. */
+async function captureBlockFailureEvidence(
+	deps: BrowserRouteDeps,
+	owner: string,
+	session: BrowserSession,
+	host: {
+		capture(
+			label: string,
+			options?: { readonly ref?: string; readonly view?: boolean },
+		): Promise<string>;
+	},
+): Promise<{ evidenceIds: string[] }> {
+	const evidenceIds: string[] = [];
+	try {
+		evidenceIds.push(await host.capture("Block failure screenshot"));
+	} catch {
+		// The page may already be gone; the remaining evidence is still useful.
+	}
+	try {
+		const state = await session.snapshot({ depth: 6, maxChars: 8_000 });
+		evidenceIds.push(
+			await storeTextEvidence(deps, owner, session, {
+				text: state.text,
+				caption: "Bounded page snapshot at block failure",
+				kind: "log",
+			}),
+		);
+	} catch {
+		// Snapshots can be unavailable after a crash.
+	}
+	try {
+		const consoleTail = session.consoleEntries({ limit: 20 });
+		if (consoleTail.length > 0)
+			evidenceIds.push(
+				await storeTextEvidence(deps, owner, session, {
+					text: consoleTail
+						.map((entry) => `${entry.at} ${entry.level}: ${entry.text}`)
+						.join("\n"),
+					caption: "Console tail at block failure",
+					kind: "log",
+				}),
+			);
+	} catch {
+		// Console history is best-effort failure evidence.
+	}
+	try {
+		const networkTail = session.networkEntries({ limit: 20 });
+		if (networkTail.length > 0)
+			evidenceIds.push(
+				await storeTextEvidence(deps, owner, session, {
+					text: networkTail
+						.map((entry) =>
+							`${entry.method} ${entry.status ?? ""} ${entry.url}`.trim(),
+						)
+						.join("\n"),
+					caption: "Network tail at block failure",
+					kind: "log",
+				}),
+			);
+	} catch {
+		// Network history is best-effort failure evidence.
+	}
+	return { evidenceIds };
+}
+
+/** `stage_run`: validate first, then execute the block plan against exactly one
+ * stage-bound session. The result is compact; the journal and evidence files
+ * hold the detail. */
+async function stageRun(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/stage-blocks.ts").StageRunRequest,
+): Promise<unknown> {
+	const raw = body.plan;
+	if (!isRecordValue(raw))
+		throw new BrowserPoolError(
+			"stage-plan-invalid",
+			"the plan must be an object",
+			400,
+		);
+	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
+	let stagePlan: StageTestPlan | undefined;
+	let missing: string[] = [];
+	let blockPlan: StageBlockPlan;
+	if (Array.isArray(raw.route)) {
+		stagePlan = decodeContract<StageTestPlan>(
+			"core.stage-test-plan",
+			StageTestPlanSchema,
+			raw,
+		);
+		const workflowId = ownerWorkflowId(owner);
+		const projected = blockPlanFromRoute(
+			stagePlan.route as unknown as Parameters<typeof blockPlanFromRoute>[0],
+			{
+				...(workflowId === undefined
+					? {}
+					: {
+							planId: `stage-${workflowId}-r${body.approvedRevision ?? 0}`,
+						}),
+				...(stagePlan.flowId === undefined ? {} : { flowId: stagePlan.flowId }),
+				...(body.approvedRevision === undefined
+					? {}
+					: { revision: body.approvedRevision }),
+				...(stagePlan.inputs === undefined
+					? {}
+					: {
+							inputs: stagePlan.inputs as Readonly<Record<string, JsonValue>>,
+						}),
+			},
+		);
+		blockPlan = projected.plan;
+		missing = [...projected.missing];
+		if (body.save === true && missing.length > 0)
+			throw new BrowserPoolError(
+				"flow-mixed-plan",
+				`a saved flow needs a block on every route step; ${missing.join(", ")} have none`,
+				400,
+			);
+	} else {
+		blockPlan = raw as unknown as StageBlockPlan;
+		if (body.save === true && blockPlan.flowId === undefined)
+			throw new BrowserPoolError(
+				"flow-identity-missing",
+				"saving a flow needs the approved stage plan with a flowId; a standalone block plan is run-only",
+				400,
+			);
+	}
+	if (body.save === true && stagePlan === undefined)
+		throw new BrowserPoolError(
+			"flow-identity-missing",
+			"saving a flow needs the approved stage plan, not a standalone block plan",
+			400,
+		);
+
+	if (body.dryRun === true) {
+		const validation = validateStageBlockPlan(blockPlan, {
+			registry: stageBlockRegistry,
+			secretValues,
+		});
+		const derived = deriveInputSchema(blockPlan, stageBlockRegistry);
+		const issues = [...validation.issues, ...derived.issues];
+		return {
+			planId: validation.plan?.planId ?? "plan-dry-run",
+			...(blockPlan.flowId === undefined ? {} : { flowId: blockPlan.flowId }),
+			...(body.approvedRevision === undefined
+				? {}
+				: { revision: body.approvedRevision }),
+			inputsHash: validation.plan?.inputsHash ?? "sha256:dry-run",
+			stage: body.stage ?? "unopened",
+			status: issues.length === 0 ? "passed" : "failed",
+			steps: [],
+			versions: validation.plan?.versions ?? {},
+			durationMs: 0,
+			dryRun: {
+				ok: issues.length === 0,
+				issues: issues.slice(0, 20),
+				versions: validation.plan?.versions ?? {},
+				inputSchema: derived.schema,
+			},
+		};
+	}
+
+	const session = await sessionFor(deps, owner, body.session, used);
+	const binding = session.stage;
+	if (binding === undefined)
+		throw new BrowserPoolError(
+			"stage-session-required",
+			"stage_run needs a stage-bound session; open one with browser_open({stage, stageApp}) first",
+			400,
+		);
+	const entry = stageEntryFor(deps, binding.ident);
+	if (
+		body.stageApp !== undefined &&
+		entry.stage.apps[body.stageApp] === undefined
+	)
+		throw new BrowserPoolError(
+			"stage-app-unknown",
+			`stage ${binding.ident} does not declare application ${body.stageApp}`,
+			404,
+		);
+	const catalog = stageCatalog(deps);
+	const resolvedRole = body.role ?? session.identity?.role;
+	const apps: Record<string, { roles: readonly string[] }> = {};
+	for (const [key, app] of Object.entries(entry.stage.apps))
+		apps[key] = { roles: Object.keys(app.roles ?? {}) };
+	const policy: StageBlockPolicy = {
+		stage: binding.ident,
+		access: binding.access,
+		writeAllowed: binding.writeAllowed === true,
+		...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+		apps,
+	};
+	const validation = validateStageBlockPlan(blockPlan, {
+		registry: stageBlockRegistry,
+		policy,
+		secretValues,
+	});
+	const derived = deriveInputSchema(blockPlan, stageBlockRegistry);
+	const issues = [...validation.issues, ...derived.issues];
+	if (!validation.ok || issues.length > 0)
+		throw new BrowserPoolError(
+			"stage-plan-invalid",
+			`the block plan is not valid: ${issues
+				.slice(0, 5)
+				.map((issue) => issue.message)
+				.join("; ")}`,
+			400,
+			undefined,
+			{
+				issues: issues.slice(0, 20),
+				versions: validation.plan?.versions ?? {},
+			},
+		);
+	const normalized = validation.plan;
+	if (normalized === undefined)
+		throw new BrowserPoolError(
+			"stage-plan-invalid",
+			"the plan is not executable",
+			400,
+		);
+
+	// The approved plan revision is the one the workflow currently holds. A
+	// caller that hands in an older revision gets a re-approval refusal rather
+	// than silently driving a different plan.
+	const workflowId = ownerWorkflowId(owner);
+	const located = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	if (
+		body.approvedRevision !== undefined &&
+		located?.revision !== undefined &&
+		body.approvedRevision !== located.revision
+	)
+		throw new BrowserPoolError(
+			"stage-plan-stale",
+			`the plan is approved at revision ${body.approvedRevision}, but the workflow is at revision ${located.revision}; request a fresh plan review`,
+			409,
+			undefined,
+			{ approvedRevision: body.approvedRevision, revision: located.revision },
+		);
+
+	const scope = evidenceScope(deps, owner);
+	const redact = journalRedactor(deps);
+	const credentials = stageCredentialVariables(catalog);
+	const env = new Map(
+		environmentSecrets(deps.configDir ?? "").map((secret) => [
+			secret.name,
+			secret.value,
+		]),
+	);
+	const journal = {
+		append: async (event: StageBlockJournalEntry) => {
+			const written = await appendStageJournalEntry(
+				scope,
+				{
+					session: session.name,
+					...(session.app ? { app: session.app } : {}),
+					...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+					url: evidenceUrl(deps, session.url),
+					label: event.subStep,
+					planId: event.planId,
+					routeStepId: event.routeStepId,
+					block: event.block,
+					blockVersion: event.version,
+					subStep: event.subStep,
+					status: event.status,
+					...(event.expected === undefined ? {} : { expected: event.expected }),
+					...(event.observed === undefined ? {} : { observed: event.observed }),
+					...(event.captures === undefined ? {} : { captures: event.captures }),
+					evidence: event.evidence,
+					...(event.knowledge === undefined
+						? {}
+						: { knowledge: event.knowledge }),
+					...(session.recording
+						? {
+								segment: session.recording.segment,
+								offsetMs: Math.max(
+									0,
+									(deps.now?.() ?? Date.now()) - session.recording.startedAt,
+								),
+							}
+						: {}),
+				},
+				redact,
+				async ({ entries, manifest }) => {
+					await refreshFlowPage(deps, scope, { entries, manifest });
+				},
+			);
+			return { seq: written.seq };
+		},
+	};
+
+	const result = await runStageBlockPlan({
+		plan: normalized,
+		stage: binding.ident,
+		contextFor: async (step) => {
+			const requestedApp =
+				step.definition.app === "*"
+					? (body.stageApp ??
+						Object.keys(entry.stage.apps)[0] ??
+						session.app ??
+						"")
+					: step.definition.app;
+			const app = entry.stage.apps[requestedApp];
+			if (app === undefined)
+				throw new BrowserPoolError(
+					"stage-app-unknown",
+					`stage ${binding.ident} does not declare application ${requestedApp}`,
+					404,
+				);
+			const page = new SessionBlockPage(session, {
+				assertUrl: (url) => assertAllowedOrigin(binding, url),
+			});
+			const capture = async (
+				label: string,
+				options?: { readonly ref?: string; readonly view?: boolean },
+			): Promise<string> => {
+				const reservation = stageUsage(deps).reserveScreenshot({
+					stage: binding.ident,
+					owner,
+					maxScreenshots: binding.limits.maxScreenshots,
+				});
+				try {
+					const bytes = await session.screenshot(
+						{
+							type: "jpeg",
+							quality: SCREENSHOT_QUALITY,
+							fullPage: true,
+							...(options?.ref === undefined ? {} : { ref: options.ref }),
+						},
+						BROWSER_MAX_IMAGE_WIDTH,
+					);
+					const url = evidenceUrl(deps, session.url);
+					const stored = await storeEvidence(deps, owner, {
+						bytes,
+						kind: "screenshot",
+						caption: redact(label) || `Block capture of ${url}`,
+						url,
+						extension: "jpg",
+						...(requestedApp === "" ? {} : { app: requestedApp }),
+					});
+					return stored.id;
+				} catch (error) {
+					stageUsage(deps).releaseScreenshot(reservation);
+					throw error;
+				}
+			};
+			return {
+				page,
+				expect: sessionExpect,
+				app: requestedApp,
+				...(resolvedRole === undefined ? {} : { role: resolvedRole }),
+				stage: binding.ident,
+				appUrl: app.url,
+				secret: (name: string) => {
+					if (credentials.get(name)?.stage !== binding.ident)
+						throw new Error(
+							`stage-secret-undeclared: ${name} is not a credential of stage ${binding.ident}`,
+						);
+					const value = env.get(name);
+					if (value === undefined)
+						throw new Error(
+							`stage-secret-missing: ${name} is declared by stage ${binding.ident} but is not set`,
+						);
+					return value;
+				},
+				capture,
+				close: () => undefined,
+			};
+		},
+		journal,
+		failureEvidence: async ({ context }) =>
+			await captureBlockFailureEvidence(deps, owner, session, context),
+	});
+	const resultIssues = [
+		...(result.issues ?? []),
+		...missing.map((routeStepId) => ({
+			code: "plan-route-gap",
+			message: `route step ${routeStepId} has no block; run it with the exploratory browser tools`,
+			routeStepId,
+		})),
+	];
+	let saved: import("../../contracts/stage-blocks.ts").StageRunResponse["saved"];
+	if (
+		body.save === true &&
+		result.status === "passed" &&
+		stagePlan !== undefined
+	) {
+		if (located?.worktree === undefined)
+			throw new BrowserPoolError(
+				"flow-workspace-missing",
+				"saving a flow needs the workflow's own checkout",
+				409,
+			);
+		try {
+			const source = flowSourceFromStagePlan({
+				stagePlan,
+				plan: normalized,
+				stage: binding.ident,
+				planId: normalized.planId,
+				...(body.approvedRevision === undefined
+					? {}
+					: { revision: body.approvedRevision }),
+			});
+			const generated = await generateFlow({
+				root: located.worktree,
+				source,
+				registry: stageBlockRegistry,
+				secretValues,
+			});
+			if (generated.manifest === undefined || generated.issues.length > 0)
+				throw new BrowserPoolError(
+					"flow-invalid",
+					`the flow could not be generated: ${generated.issues
+						.slice(0, 5)
+						.map((issue) => issue.message)
+						.join("; ")}`,
+					400,
+					undefined,
+					{ issues: generated.issues.slice(0, 20) },
+				);
+			saved = {
+				flowId: generated.manifest.flowId,
+				specPath: generated.specPath ?? "",
+				manifestPath: generated.manifestPath ?? "",
+				routeHash: generated.routeHash ?? generated.manifest.routeHash,
+				specHash: generated.specHash ?? generated.manifest.specHash,
+				inputsHash: generated.inputsHash ?? normalized.inputsHash,
+				...(generated.existing === true ? { existing: true } : {}),
+			};
+		} catch (error) {
+			if (error instanceof FlowSourceError)
+				throw new BrowserPoolError(error.code, error.message, 400);
+			throw error;
+		}
+	}
+	return {
+		...result,
+		...(resultIssues.length === 0 ? {} : { issues: resultIssues.slice(0, 20) }),
+		...(saved === undefined ? {} : { saved }),
+	};
+}
+
+/** `stage_flows`: list the checked-in compiled flows of this stage's checkout.
+ * It never opens a browser and never returns an input value. */
+function stageFlows(
+	deps: BrowserRouteDeps,
+	owner: string,
+	body: import("../../contracts/stage-replay.ts").StageFlowsRequest,
+): unknown {
+	const workflowId = ownerWorkflowId(owner);
+	const located = workflowId
+		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
+		: undefined;
+	if (located?.worktree === undefined)
+		return {
+			version: 1 as const,
+			flows: [],
+			total: 0,
+			issues: [
+				{
+					code: "flow-workspace-missing",
+					message: "the workflow has no checkout with stage-flows",
+				},
+			],
+		};
+	const registry = readFlowRegistry(located.worktree);
+	const stage = body.stage ?? located.stage;
+	const query = body.query?.trim().toLowerCase();
+	const flows = registry.entries
+		.filter(
+			(entry) =>
+				(stage === undefined ||
+					entry.manifest.stage === stage ||
+					entry.manifest.stages?.includes(stage) === true) &&
+				(query === undefined ||
+					query === "" ||
+					entry.manifest.flowId.includes(query) ||
+					entry.manifest.title.toLowerCase().includes(query) ||
+					entry.manifest.applications.some((app) => app.includes(query))),
+		)
+		.slice(0, Math.min(body.limit ?? 50, 100))
+		.map((entry) => compactFlowEntry(entry.manifest));
+	return {
+		version: 1 as const,
+		flows,
+		total: flows.length,
+		issues: registry.issues.slice(0, 50),
+	};
+}
+
+function replayApprovedInputs(
+	plan: StageTestPlan,
+): Readonly<Record<string, JsonValue>> {
+	return (plan.inputs ?? {}) as Readonly<Record<string, JsonValue>>;
+}
+
+function replayPlanId(
+	workflowId: string,
+	revision: number | undefined,
+): string {
+	return `stage-${workflowId}-r${revision ?? 0}`;
+}
+
+function replayEntryFor(
+	root: string,
+	flowId: string,
+): ReturnType<typeof readFlowRegistry>["entries"][number] | undefined {
+	return readFlowRegistry(root).entries.find(
+		(entry) => entry.manifest.flowId === flowId,
+	);
+}
+
+function replayApps(
+	entry: ReturnType<typeof stageEntryFor>,
+): Record<string, { roles: readonly string[] }> {
+	const apps: Record<string, { roles: readonly string[] }> = {};
+	for (const [key, app] of Object.entries(entry.stage.apps))
+		apps[key] = { roles: Object.keys(app.roles ?? {}) };
+	return apps;
+}
+
+function replayResponseSteps(
+	result: ReplayResult,
+	journalIds: ReadonlyMap<number, readonly number[]>,
+	evidenceIds: ReadonlyMap<number, readonly string[]>,
+	fileIds: ReadonlyMap<string, string>,
+): import("../../contracts/stage-replay.ts").StageReplayStepResponse[] {
+	return result.steps.map((step) => ({
+		index: step.index,
+		routeStepId: step.routeStepId,
+		block: step.block,
+		version: step.version,
+		status: step.status,
+		durationMs: step.durationMs,
+		...(step.outputs === undefined
+			? {}
+			: { outputs: step.outputs as Readonly<Record<string, unknown>> }),
+		journalIds: journalIds.get(step.index) ?? [],
+		evidenceIds: [
+			...new Set([
+				...(step.evidence ?? []).flatMap((name) => {
+					const id = fileIds.get(name);
+					return id === undefined ? [] : [id];
+				}),
+				...(evidenceIds.get(step.index) ?? []),
+			]),
+		],
+		...(step.error === undefined ? {} : { error: step.error }),
+	}));
+}
+
+/** `stage_replay`: validate the approved plan against the checked-in manifest,
+ * then run the generated spec in a separate Playwright process. No model and no
+ * per-step browser tool sits in this route. */
+async function stageReplay(
+	deps: BrowserRouteDeps,
+	owner: string,
+	body: import("../../contracts/stage-replay.ts").StageReplayRequest & {
+		flowId: string;
+	},
+): Promise<import("../../contracts/stage-replay.ts").StageReplayResponse> {
+	const workflowId = ownerWorkflowId(owner);
+	if (workflowId === undefined)
+		throw new BrowserPoolError(
+			"stage-plan-missing",
+			"stage replay belongs to a workflow run",
+			403,
+		);
+	const located = (deps.locate ?? locateEvidenceWorkflow)(workflowId);
+	if (located?.stageTestPlan === undefined)
+		throw new BrowserPoolError(
+			"stage-plan-missing",
+			"the workflow holds no approved stage-test plan",
+			409,
+		);
+	const stage = body.stage ?? located.stage;
+	if (stage === undefined)
+		throw new BrowserPoolError(
+			"stage-mismatch",
+			"the workflow has no pinned stage",
+			409,
+		);
+	if (located.stage !== undefined && stage !== located.stage)
+		throw new BrowserPoolError(
+			"stage-mismatch",
+			`the workflow is pinned to ${located.stage}, not ${stage}`,
+			409,
+		);
+	if (
+		body.approvedRevision !== undefined &&
+		located.revision !== undefined &&
+		body.approvedRevision !== located.revision
+	)
+		throw new BrowserPoolError(
+			"stage-plan-stale",
+			`the plan is approved at revision ${body.approvedRevision}, but the workflow is at revision ${located.revision}`,
+			409,
+		);
+	if (located.worktree === undefined)
+		throw new BrowserPoolError(
+			"flow-workspace-missing",
+			"stage replay needs the workflow's checkout with stage-flows",
+			409,
+		);
+	const revision = body.approvedRevision ?? located.revision;
+	const stagePlan = decodeContract<StageTestPlan>(
+		"core.stage-test-plan",
+		StageTestPlanSchema,
+		located.stageTestPlan,
+	);
+	if (stagePlan.flowId === undefined)
+		throw new BrowserPoolError(
+			"flow-identity-missing",
+			"the approved plan does not name a flowId",
+			409,
+		);
+	if (stagePlan.flowId !== body.flowId)
+		throw new BrowserPoolError(
+			"flow-id-mismatch",
+			`the approved plan names ${stagePlan.flowId}, not ${body.flowId}`,
+			409,
+		);
+	const entry = stageEntryFor(deps, stage);
+	const projected = blockPlanFromRoute(
+		stagePlan.route as unknown as Parameters<typeof blockPlanFromRoute>[0],
+		{
+			planId: replayPlanId(workflowId, revision),
+			flowId: stagePlan.flowId,
+			...(revision === undefined ? {} : { revision }),
+			...(stagePlan.inputs === undefined
+				? {}
+				: { inputs: stagePlan.inputs as Readonly<Record<string, JsonValue>> }),
+		},
+	);
+	if (projected.missing.length > 0)
+		throw new BrowserPoolError(
+			"flow-not-fully-blocked",
+			`the approved plan has no block on ${projected.missing.join(", ")}`,
+			409,
+		);
+	const role =
+		body.role ?? stagePlan.route.find((step) => step.role !== undefined)?.role;
+	const writeAllowed =
+		entry.stage.access === "writable" && stagePlan.createsData === true;
+	const policy: StageBlockPolicy = {
+		stage,
+		access: entry.stage.access,
+		writeAllowed,
+		...(role === undefined ? {} : { role }),
+		apps: replayApps(entry),
+	};
+	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
+	const validation = validateStageBlockPlan(projected.plan, {
+		registry: stageBlockRegistry,
+		policy,
+		secretValues,
+	});
+	if (!validation.ok || validation.plan === undefined)
+		throw new BrowserPoolError(
+			"flow-invalid-plan",
+			`the approved replay plan is not valid: ${validation.issues
+				.slice(0, 5)
+				.map((issue) => issue.message)
+				.join("; ")}`,
+			400,
+			undefined,
+			{ issues: validation.issues.slice(0, 20) },
+		);
+	const normalized = validation.plan;
+	let source: import("../../stage-blocks/flow.ts").FlowSource;
+	try {
+		source = flowSourceFromStagePlan({
+			stagePlan,
+			plan: normalized,
+			stage,
+			planId: normalized.planId,
+			...(revision === undefined ? {} : { revision }),
+		});
+	} catch (error) {
+		if (error instanceof FlowSourceError)
+			throw new BrowserPoolError(error.code, error.message, 409);
+		throw error;
+	}
+	const manifestEntry = replayEntryFor(located.worktree, body.flowId);
+	if (manifestEntry === undefined)
+		throw new BrowserPoolError(
+			"flow-not-found",
+			`flow ${body.flowId} is not saved under stage-flows`,
+			409,
+		);
+	const eligibility = flowEligibility({
+		flowId: body.flowId,
+		root: located.worktree,
+		stage,
+		source,
+		registry: stageBlockRegistry,
+		apps: replayApps(entry),
+		...(role === undefined ? {} : { role }),
+	});
+	const approvedInputs = replayApprovedInputs(stagePlan);
+	const proposedInputs = (body.inputs ?? approvedInputs) as Readonly<
+		Record<string, JsonValue>
+	>;
+	const approvedHash = canonicalInputsHash(approvedInputs);
+	const proposedHash = canonicalInputsHash(proposedInputs);
+	if (body.dryRun === true) {
+		const drySource = { ...source, inputs: proposedInputs };
+		const dryEligibility = flowEligibility({
+			flowId: body.flowId,
+			root: located.worktree,
+			stage,
+			source: drySource,
+			registry: stageBlockRegistry,
+			apps: replayApps(entry),
+			...(role === undefined ? {} : { role }),
+		});
+		const issues = [...dryEligibility.issues];
+		if (proposedHash !== approvedHash)
+			issues.push({
+				code: "flow-inputs-unapproved",
+				message:
+					"the proposed inputs differ from the approved plan; a new plan revision is required before execution",
+			});
+		return {
+			flowId: body.flowId,
+			...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
+			...(revision === undefined ? {} : { revision }),
+			inputsHash: proposedHash,
+			routeHash: manifestEntry.manifest.routeHash,
+			specHash: manifestEntry.manifest.specHash,
+			stage,
+			status: issues.length === 0 ? "passed" : "failed",
+			startedAt: new Date().toISOString(),
+			durationMs: 0,
+			steps: [],
+			dryRun: {
+				eligible: dryEligibility.eligible,
+				approved: proposedHash === approvedHash,
+				issues: issues.slice(0, 50),
+				inputSchema: manifestEntry.manifest.inputSchema as unknown as Readonly<
+					Record<string, unknown>
+				>,
+				proposedInputsHash: proposedHash,
+			},
+		};
+	}
+	if (body.inputs !== undefined && proposedHash !== approvedHash)
+		throw new BrowserPoolError(
+			"flow-inputs-unapproved",
+			"the supplied inputs differ from the approved plan revision; a new plan review is required",
+			409,
+		);
+	if (!eligibility.eligible)
+		throw new BrowserPoolError(
+			"flow-not-eligible",
+			`flow ${body.flowId} is not replay-eligible: ${eligibility.issues
+				.slice(0, 5)
+				.map((issue) => issue.message)
+				.join("; ")}`,
+			409,
+			undefined,
+			{ issues: eligibility.issues.slice(0, 50) },
+		);
+	const appUrls = Object.fromEntries(
+		Object.entries(entry.stage.apps).map(([key, app]) => [key, app.url]),
+	);
+	const catalog = stageCatalog(deps);
+	const stageVariables = [...stageCredentialVariables(catalog).entries()]
+		.filter((entry) => entry[1].stage === stage)
+		.map((entry) => entry[0]);
+	const configuredSecrets = environmentSecrets(deps.configDir ?? "");
+	const availableSecrets = new Map(
+		configuredSecrets.map((secret) => [secret.name, secret.value]),
+	);
+	const credentials = Object.fromEntries(
+		stageVariables
+			.filter((name) => availableSecrets.has(name))
+			.map((name) => [name, availableSecrets.get(name) as string]),
+	);
+	const redact = journalRedactor(deps);
+	const startedAt = new Date();
+	const started = Date.now();
+	const processResult = await runReplayProcess({
+		root: located.worktree,
+		specPath: manifestEntry.specPath,
+		flowId: body.flowId,
+		stage,
+		...(role === undefined ? {} : { role }),
+		apps: appUrls,
+		inputs: approvedInputs,
+		...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
+		...(revision === undefined ? {} : { revision }),
+		routeHash: manifestEntry.manifest.routeHash,
+		inputsHash: approvedHash,
+		writeAllowed,
+		dataRoot: evidenceScope(deps, owner).dataRoot,
+		...(deps.installer?.installedChromium() === undefined
+			? {}
+			: { executablePath: deps.installer.installedChromium() }),
+		credentials,
+		secretNames: stageVariables,
+		hiddenEnvNames: [
+			...configuredSecrets
+				.map((secret) => secret.name)
+				.filter((name) => !stageVariables.includes(name)),
+			"AGENTIC_ENV_TOKEN",
+			"HERDR_RUN_TOKEN",
+			"AGENTIC_WORKFLOW_TOKEN",
+		],
+	});
+	const durationMs = Date.now() - started;
+	if (processResult.timedOut)
+		return {
+			flowId: body.flowId,
+			...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
+			...(revision === undefined ? {} : { revision }),
+			inputsHash: approvedHash,
+			routeHash: manifestEntry.manifest.routeHash,
+			specHash: manifestEntry.manifest.specHash,
+			stage,
+			status: "failed",
+			startedAt: startedAt.toISOString(),
+			durationMs,
+			steps: [],
+			issues: [
+				{
+					code: "replay-timeout",
+					message: redact(
+						`the replay process exceeded its overall timeout; partial output: ${processResult.stderr.slice(0, 500) || processResult.stdout.slice(0, 500)}`,
+					),
+				},
+			],
+		};
+	const result = decodeReplayResult(
+		processResult.resultPath,
+		{
+			flowId: body.flowId,
+			routeHash: manifestEntry.manifest.routeHash,
+			inputsHash: approvedHash,
+		},
+		processResult.exitCode,
+		redact,
+		{ stdout: processResult.stdout, stderr: processResult.stderr },
+	);
+	const scope = evidenceScope(deps, owner);
+	const fileIds = new Map<string, string>();
+	const journalIds = new Map<number, number[]>();
+	const evidenceIds = new Map<number, string[]>();
+	const events: readonly ReplayEvent[] = replayEventsFromSteps(result);
+	for (const event of events) {
+		const route = manifestEntry.manifest.routeSteps.find(
+			(step) => step.routeStepId === event.routeStepId,
+		);
+		if (
+			route === undefined ||
+			route.block !== event.block ||
+			event.subStep.trim() === ""
+		)
+			throw new BrowserPoolError(
+				"replay-result-invalid",
+				`the replay event for ${event.routeStepId} does not match the manifest`,
+				502,
+			);
+		const eventEvidence: string[] = [];
+		for (const name of event.evidence ?? []) {
+			let id = fileIds.get(name);
+			if (id === undefined) {
+				const absolute = path.resolve(processResult.evidenceDir, name);
+				if (
+					!absolute.startsWith(
+						`${path.resolve(processResult.evidenceDir)}${path.sep}`,
+					) ||
+					!fs.existsSync(absolute) ||
+					!fs.statSync(absolute).isFile() ||
+					fs.statSync(absolute).size > EVIDENCE_FILE_MAX_BYTES
+				)
+					throw new BrowserPoolError(
+						"replay-result-invalid",
+						`replay evidence ${name} is missing, outside the run directory or too large`,
+						502,
+					);
+				stageUsage(deps).reserveScreenshot({
+					stage,
+					owner,
+					maxScreenshots: entry.limits.maxScreenshots,
+				});
+				const stored = await storeEvidence(deps, owner, {
+					file: absolute,
+					kind: "screenshot",
+					caption: redact(
+						`Replay ${body.flowId} ${event.routeStepId}: ${event.subStep}`,
+					),
+					url: evidenceUrl(deps, event.url ?? ""),
+					extension: path.extname(absolute).replace(".", "") || "jpg",
+					...(event.app === undefined ? {} : { app: event.app }),
+				});
+				id = stored.id;
+				fileIds.set(name, id);
+			}
+			eventEvidence.push(id);
+		}
+		const written = await appendStageJournalEntry(
+			scope,
+			{
+				session: "replay",
+				...(event.app === undefined ? {} : { app: event.app }),
+				...(event.role === undefined ? {} : { role: event.role }),
+				...(event.url === undefined
+					? {}
+					: { url: evidenceUrl(deps, event.url) }),
+				label: event.subStep,
+				planId: normalized.planId,
+				routeStepId: event.routeStepId,
+				block: event.block,
+				blockVersion: event.version,
+				subStep: event.subStep,
+				status: event.status,
+				...(event.expected === undefined ? {} : { expected: event.expected }),
+				...(event.observed === undefined ? {} : { observed: event.observed }),
+				...(event.captures === undefined ? {} : { captures: event.captures }),
+				evidence: eventEvidence,
+				flowId: body.flowId,
+				...(revision === undefined ? {} : { revision }),
+				inputsHash: approvedHash,
+				replayRunId: processResult.runId,
+				source: "replay",
+			},
+			redact,
+			async ({ entries, manifest }) => {
+				await refreshFlowPage(deps, scope, { entries, manifest });
+			},
+		);
+		const perJournal = journalIds.get(event.index) ?? [];
+		perJournal.push(written.seq);
+		journalIds.set(event.index, perJournal);
+		const perEvidence = evidenceIds.get(event.index) ?? [];
+		perEvidence.push(...eventEvidence);
+		evidenceIds.set(event.index, perEvidence);
+	}
+	const stepResponses = replayResponseSteps(
+		result,
+		journalIds,
+		evidenceIds,
+		fileIds,
+	);
+	const facts = result.steps.map((step) => ({
+		index: step.index,
+		journalIds: journalIds.get(step.index) ?? [],
+		evidenceIds: [
+			...new Set([
+				...(evidenceIds.get(step.index) ?? []),
+				...(step.evidence ?? []).flatMap((name) => {
+					const id = fileIds.get(name);
+					return id === undefined ? [] : [id];
+				}),
+			]),
+		],
+	}));
+	const failedStep = result.steps.find((step) => step.status === "failed");
+	const failedEvents = events.filter(
+		(event) =>
+			event.routeStepId === failedStep?.routeStepId &&
+			event.status === "failed",
+	);
+	const failedEvent = failedEvents.at(-1);
+	const heal =
+		failedStep === undefined
+			? undefined
+			: buildHealPacket({
+					manifest: manifestEntry.manifest,
+					result,
+					registry: stageBlockRegistry,
+					evidenceIds:
+						facts.find((fact) => fact.index === failedStep.index)
+							?.evidenceIds ?? [],
+					journalIds:
+						facts.find((fact) => fact.index === failedStep.index)?.journalIds ??
+						[],
+					...(processResult.tracePath === undefined
+						? {}
+						: { tracePath: processResult.tracePath }),
+					scopedRegion: {
+						routeStepId: failedStep.routeStepId,
+						block: failedStep.block,
+						...(failedEvent === undefined
+							? {}
+							: { subStep: failedEvent.subStep }),
+					},
+				});
+	let healWithEvidence: Readonly<Record<string, unknown>> | undefined;
+	if (heal !== undefined) {
+		const redactedHeal = redactDeep(heal, redact) as Readonly<
+			Record<string, unknown>
+		>;
+		const stored = await storeEvidence(deps, owner, {
+			text: `${JSON.stringify(redactedHeal, null, 2)}\n`,
+			kind: "log",
+			caption: `Stage heal packet for ${body.flowId}`,
+			url: "",
+			extension: "json",
+		});
+		healWithEvidence = { ...redactedHeal, evidenceId: stored.id };
+		try {
+			fs.writeFileSync(
+				path.join(processResult.runDir, "stage-heal.json"),
+				`${JSON.stringify(healWithEvidence, null, 2)}\n`,
+				{ mode: 0o600 },
+			);
+		} catch {
+			// The attached evidence is authoritative; the file is a convenience.
+		}
+	}
+	const mapped = mapReplayToReport(
+		manifestEntry.manifest,
+		result,
+		stagePlan,
+		facts,
+	);
+	const redactedReport = redactDeep(mapped.report, redact) as Readonly<
+		Record<string, unknown>
+	>;
+	let reportEvidenceId: string | undefined;
+	if (mapped.complete) {
+		const stored = await storeEvidence(deps, owner, {
+			text: `${JSON.stringify(redactedReport, null, 2)}\n`,
+			kind: "log",
+			caption: `Stage replay report for ${body.flowId}`,
+			url: "",
+			extension: "json",
+		});
+		reportEvidenceId = stored.id;
+	}
+	let resultEvidenceId: string | undefined;
+	try {
+		const stored = await storeEvidence(deps, owner, {
+			text: `${JSON.stringify(redactDeep(result, redact), null, 2)}\n`,
+			kind: "log",
+			caption: `Stage replay result for ${body.flowId}`,
+			url: "",
+			extension: "json",
+		});
+		resultEvidenceId = stored.id;
+	} catch {
+		// A result that cannot be attached is not a reason to discard the
+		// journal and screenshots the replay already produced.
+	}
+	const issues: Array<{ code: string; message: string; field?: string }> = [];
+	if (!mapped.complete)
+		issues.push({
+			code: "flow-expectation-uncovered",
+			message:
+				"the replay does not cover every planned expectation; route to the normal tester",
+		});
+	const redactedSteps = stepResponses.map((step) => ({
+		...step,
+		...(step.error === undefined ? {} : { error: redact(step.error) }),
+	}));
+	return {
+		flowId: body.flowId,
+		...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
+		...(revision === undefined ? {} : { revision }),
+		inputsHash: approvedHash,
+		routeHash: manifestEntry.manifest.routeHash,
+		specHash: manifestEntry.manifest.specHash,
+		stage,
+		status: result.status,
+		startedAt: startedAt.toISOString(),
+		durationMs,
+		steps: redactedSteps,
+		blockVersions: manifestEntry.manifest.blockVersions,
+		blockDigests: manifestEntry.manifest.blockDigests,
+		...(failedStep === undefined
+			? {}
+			: {
+					failure: {
+						index: failedStep.index,
+						routeStepId: failedStep.routeStepId,
+						block: failedStep.block,
+						version: failedStep.version,
+						message: redact(
+							failedEvent?.error ??
+								failedStep.error ??
+								result.error ??
+								"the replay failed",
+						),
+						retryable: heal?.retryable ?? false,
+					},
+				}),
+		...(healWithEvidence === undefined ? {} : { heal: healWithEvidence }),
+		...(mapped.complete ? { report: redactedReport } : {}),
+		...(reportEvidenceId === undefined ? {} : { reportEvidenceId }),
+		...(resultEvidenceId === undefined ? {} : { resultEvidenceId }),
+		...(issues.length === 0 ? {} : { issues }),
+	};
+}
+
+/** `stage_replay({ suiteId })`: an independent-flow-entries regression batch
+ * (`add-stage-flow-replay`, design D7). Every entry goes through exactly the
+ * same approval/eligibility/execution path a lone `flowId` call would (the
+ * single-flow `stageReplay` above, reused per entry), so the suite adds only
+ * manifest loading, bounded concurrency and aggregation — never a second
+ * approval rule and never a `core.stage-test-plan` report mapping. */
+async function stageReplaySuite(
+	deps: BrowserRouteDeps,
+	owner: string,
+	body: import("../../contracts/stage-replay.ts").StageReplayRequest & {
+		suiteId: string;
+	},
+): Promise<import("../../contracts/stage-replay.ts").StageSuiteResponse> {
+	const workflowId = ownerWorkflowId(owner);
+	if (workflowId === undefined)
+		throw new BrowserPoolError(
+			"stage-plan-missing",
+			"stage replay belongs to a workflow run",
+			403,
+		);
+	const located = (deps.locate ?? locateEvidenceWorkflow)(workflowId);
+	if (located?.worktree === undefined)
+		throw new BrowserPoolError(
+			"flow-workspace-missing",
+			"stage replay needs the workflow's checkout with stage-flows",
+			409,
+		);
+	const stage = body.stage ?? located.stage;
+	if (stage === undefined)
+		throw new BrowserPoolError(
+			"stage-mismatch",
+			"the workflow has no pinned stage",
+			409,
+		);
+	const manifestPath = path.join(
+		located.worktree,
+		STAGE_FLOW_DIRECTORY,
+		`${body.suiteId}${STAGE_SUITE_EXTENSION}`,
+	);
+	let raw: unknown;
+	try {
+		raw = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+	} catch (error) {
+		throw new BrowserPoolError(
+			"suite-not-found",
+			`suite ${body.suiteId} is not saved under stage-flows (${error instanceof Error ? error.message : String(error)})`,
+			409,
+		);
+	}
+	const { manifest, issues } = parseSuiteManifest(raw);
+	if (manifest === undefined)
+		throw new BrowserPoolError(
+			"suite-manifest-invalid",
+			`the suite manifest is not valid: ${issues
+				.slice(0, 5)
+				.map((issue) => issue.message)
+				.join("; ")}`,
+			409,
+			undefined,
+			{ issues: issues.slice(0, 50) },
+		);
+	if (manifest.suiteId !== body.suiteId)
+		throw new BrowserPoolError(
+			"suite-id-mismatch",
+			`the manifest names suite ${manifest.suiteId}, not ${body.suiteId}`,
+			409,
+		);
+	const startedAt = new Date();
+	const started = Date.now();
+	// Bounded by the pool's own session cap and a fixed suite ceiling, so a
+	// large suite cannot launch more concurrent browser processes than the
+	// stage's configured `browser.max_sessions` (task 9.3).
+	const maxWorkers = Math.max(1, Math.min(deps.settings().maxSessions, 4));
+	const run = async (entry: SuiteFlowEntry): Promise<SuiteEntryResult> => {
+		try {
+			const response = await stageReplay(deps, owner, {
+				flowId: entry.flowId,
+				...(entry.inputs === undefined ? {} : { inputs: entry.inputs }),
+				stage,
+				...(body.dryRun === undefined ? {} : { dryRun: body.dryRun }),
+				...(body.approvedRevision === undefined
+					? {}
+					: { approvedRevision: body.approvedRevision }),
+				...(body.role === undefined ? {} : { role: body.role }),
+			});
+			const evidenceIds = [
+				...new Set(response.steps.flatMap((step) => step.evidenceIds ?? [])),
+			];
+			return {
+				id: entry.id,
+				flowId: entry.flowId,
+				status: response.status === "passed" ? "passed" : "failed",
+				inputsHash: response.inputsHash,
+				routeHash: response.routeHash,
+				...(evidenceIds.length === 0 ? {} : { evidenceIds }),
+				...(response.reportEvidenceId === undefined
+					? {}
+					: { reportEvidenceId: response.reportEvidenceId }),
+				...(response.resultEvidenceId === undefined
+					? {}
+					: { resultEvidenceId: response.resultEvidenceId }),
+				...(response.failure === undefined
+					? {}
+					: { error: response.failure.message }),
+			};
+		} catch (error) {
+			if (error instanceof BrowserPoolError)
+				return {
+					id: entry.id,
+					flowId: entry.flowId,
+					status: "refused",
+					code: error.code,
+					error: error.message,
+				};
+			throw error;
+		}
+	};
+	const outcome = await runSuiteEntries(manifest, run, { maxWorkers });
+	const durationMs = Date.now() - started;
+	const redact = journalRedactor(deps);
+	const redacted = redactDeep(outcome, redact) as typeof outcome;
+	let resultEvidenceId: string | undefined;
+	try {
+		const stored = await storeEvidence(deps, owner, {
+			text: `${JSON.stringify(redacted, null, 2)}\n`,
+			kind: "log",
+			caption: `Stage suite result for ${body.suiteId}`,
+			url: "",
+			extension: "json",
+		});
+		resultEvidenceId = stored.id;
+	} catch {
+		// Aggregate evidence is a convenience; every entry already recorded its
+		// own result/report evidence through the reused single-flow path.
+	}
+	return {
+		suiteId: body.suiteId,
+		stage,
+		parallel: manifest.parallel,
+		stopOnFailure: manifest.stopOnFailure,
+		status: redacted.status,
+		startedAt: startedAt.toISOString(),
+		durationMs,
+		entries: redacted.entries,
+		...(resultEvidenceId === undefined ? {} : { resultEvidenceId }),
 	};
 }
 
@@ -2999,6 +4909,8 @@ async function runScript(
 		DEFAULT_SCRIPT_TIMEOUT_MS,
 		MAX_SCRIPT_TIMEOUT_MS,
 	);
+	const before = session.snapshotState;
+	const actionStarted = performance.now();
 	let script: AsyncScript;
 	try {
 		// The agent's own code. It is trusted — an agent already holds a shell and
@@ -3031,6 +4943,7 @@ async function runScript(
 		// Nothing to unwind: the script holds only the session's page, which
 		// survives a timeout by design.
 	}
+	const actionMs = elapsedMs(actionStarted);
 	const value: Record<string, unknown> = {
 		session: session.name,
 		url: session.url,
@@ -3064,6 +4977,39 @@ async function runScript(
 			...(session.app ? { app: session.app } : {}),
 		});
 		value.evidence = entry;
+	}
+	if (body.observe === true) {
+		const observed = await observeAfterAction(session, before, actionMs);
+		emitBrowserTelemetry(
+			deps,
+			"script",
+			observed.timing,
+			observed.snapshotRequired,
+			{
+				session: session.name,
+			},
+		);
+		value.url = session.url;
+		if (observed.snapshotId !== undefined)
+			value.snapshotId = observed.snapshotId;
+		value.observation = observed.observation;
+		value.changed = observed.changed;
+		value.snapshotRequired = observed.snapshotRequired;
+		if (observed.delta !== undefined) value.delta = observed.delta;
+		value.deltaTruncated = observed.deltaTruncated;
+		value.timing = observed.timing;
+	} else {
+		const timing = browserTiming({
+			actionMs,
+			chars: before?.chars ?? 0,
+			refs: before?.refs.length ?? 0,
+			changed: false,
+			truncated: false,
+		});
+		emitBrowserTelemetry(deps, "script", timing, false, {
+			session: session.name,
+		});
+		value.timing = timing;
 	}
 	return value;
 }
@@ -3607,7 +5553,13 @@ async function storeEvidence(
 		readonly bytes?: Uint8Array;
 		readonly file?: string;
 		readonly text?: string;
-		readonly kind: "screenshot" | "video" | "script";
+		readonly kind:
+			| "screenshot"
+			| "video"
+			| "script"
+			| "trace"
+			| "log"
+			| "other";
 		readonly caption: string;
 		readonly url: string;
 		readonly extension: string;

@@ -353,6 +353,23 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		installer: browser.installer,
 		pool: browser.pool,
 		settings: browser.settings,
+		telemetry: (event) =>
+			events.publish({
+				domain: event.domain,
+				kind: event.kind,
+				payload: {
+					tool: event.tool,
+					snapshotMs: event.snapshotMs,
+					actionMs: event.actionMs,
+					observeMs: event.observeMs,
+					totalMs: event.totalMs,
+					chars: event.chars,
+					refs: event.refs,
+					changed: event.changed,
+					truncated: event.truncated,
+					snapshotRequired: event.snapshotRequired,
+				},
+			}),
 		...(options.configDir ? { configDir: options.configDir } : {}),
 		// One registry for the process's life: a rolling minute has to survive
 		// between two requests, and the pool it reads is the same pool.

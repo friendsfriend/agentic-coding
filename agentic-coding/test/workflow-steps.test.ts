@@ -8836,6 +8836,7 @@ function expectedCandidateRoles(
 		];
 	if (stepId === "stage.plan") return ["stage-planner"];
 	if (stepId === "stage.execute") return ["stage-tester"];
+	if (stepId === "stage.replay") return ["stage-tester"];
 	if (stepId === "core.wiki")
 		return [
 			definitionId === "research"

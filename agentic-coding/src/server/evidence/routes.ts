@@ -64,6 +64,9 @@ export interface LocatedEvidenceWorkflow extends WorkflowEvidenceLocation {
 	/** Engine-owned stage-test authorization context, never request input. */
 	readonly currentStep?: string;
 	readonly selectedRoles?: readonly string[];
+	/** The workflow revision currently on disk; a reviewed plan revision is
+	 * compared against this rather than trusted from the request. */
+	readonly revision?: number;
 	readonly stageAccess?: "read-only" | "writable";
 	readonly stageTestPlan?: JsonValue;
 }
@@ -104,12 +107,14 @@ export function locateEvidenceWorkflow(
 				| "status"
 				| "currentStep"
 				| "step"
+				| "revision"
 			> = engine.getSnapshot(target, workflowId);
 			if (snapshot.workflowId !== workflowId) continue;
 			return {
 				workflowId,
 				worktree: snapshot.metadata.worktree,
 				definitionId: snapshot.definition.id,
+				revision: snapshot.revision,
 				...(snapshot.metadata.stage ? { stage: snapshot.metadata.stage } : {}),
 				...(snapshot.definition.id === "stage-test"
 					? {

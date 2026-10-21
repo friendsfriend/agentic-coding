@@ -15,6 +15,20 @@ import { $ } from "bun";
 const root = path.resolve(import.meta.dir, "..");
 process.chdir(root);
 
+// The block catalog is a checked-in review artifact. A stale manifest must fail
+// the build, not ship a planner surface that disagrees with the registry.
+const catalogCheck = Bun.spawnSync(
+	["bun", "run", "scripts/generate-stage-blocks.ts", "--check"],
+	{ cwd: root, stdout: "inherit", stderr: "inherit" },
+);
+if (catalogCheck.exitCode !== 0) process.exit(catalogCheck.exitCode ?? 1);
+const flowCheck = Bun.spawnSync(["bun", "run", "stage-flows:check"], {
+	cwd: root,
+	stdout: "inherit",
+	stderr: "inherit",
+});
+if (flowCheck.exitCode !== 0) process.exit(flowCheck.exitCode ?? 1);
+
 const flags = new Set(process.argv.slice(2));
 if (flags.has("--skip-go")) {
 	console.warn(

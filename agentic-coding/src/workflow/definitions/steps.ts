@@ -56,6 +56,7 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	"debug.investigate": ["workflow-agent-protocol.md", "debug.md"],
 	"stage.plan": ["workflow-agent-protocol.md", "stage-test-plan.md"],
 	"stage.execute": ["workflow-agent-protocol.md", "stage-test-execute.md"],
+	"stage.replay": ["workflow-agent-protocol.md", "stage-test-replay.md"],
 	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
@@ -523,6 +524,7 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 	),
 	step("stage.plan-review", "Stage test plan review", "developer", [
 		"approve",
+		"approve-and-replay",
 		"comments",
 	]),
 	step(
@@ -547,6 +549,17 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 				"agent.stop",
 				"stage.report.render",
 			],
+		},
+	),
+	step(
+		"stage.replay",
+		"Stage compiled flow replay",
+		"agent",
+		["complete", "failed", "fallback"],
+		{
+			retryLimit: 1,
+			requirements: ["prompt", "run-environment", "observe", "read-only"],
+			allowedEffects: ["stage.report.render"],
 		},
 	),
 	step("stage.review", "Stage test report review", "developer", [

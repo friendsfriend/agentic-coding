@@ -93,7 +93,7 @@ function snapshot(metadata: Record<string, unknown>): WorkflowSnapshot {
 }
 
 function completeAgentStep(
-	stepId: "stage.plan" | "stage.execute",
+	stepId: "stage.plan" | "stage.execute" | "stage.replay",
 	current: WorkflowSnapshot,
 	output: unknown,
 	stage: {
@@ -103,6 +103,23 @@ function completeAgentStep(
 		}[];
 		stageApps?: readonly string[];
 		stageEvidenceIds?: readonly string[];
+		stageReplayEvidence?: {
+			result?: {
+				status?: unknown;
+				flowId?: unknown;
+				planId?: unknown;
+				revision?: unknown;
+				inputsHash?: unknown;
+				routeHash?: unknown;
+				steps?: readonly { block?: unknown; version?: unknown }[];
+			};
+			report?: unknown;
+			heal?: unknown;
+			resultEvidenceId?: string;
+			reportEvidenceId?: string;
+			healEvidenceId?: string;
+			blockDigests?: Readonly<Record<string, string>>;
+		};
 	} = {},
 ) {
 	const complete = stageTestBehaviors[stepId]?.onAgentComplete;
@@ -113,7 +130,12 @@ function completeAgentStep(
 		hasStep: () => true,
 		run: {
 			id: "run",
-			role: stepId === "stage.plan" ? "stage-planner" : "stage-tester",
+			role:
+				stepId === "stage.plan"
+					? "stage-planner"
+					: stepId === "stage.replay"
+						? "stage-tester"
+						: "stage-tester",
 			stepId,
 		},
 		outcome: "complete",
@@ -600,17 +622,19 @@ describe("stage-test planning and report contracts", () => {
 		);
 	});
 	test("the stage-test tier pins its definition and step digests", () => {
-		const definition = registerBuiltins().definition("stage-test", 1020);
+		const definition = registerBuiltins().definition("stage-test", 1021);
 		expect(definition.digest).toBe(
-			"f10313bb6d2f189f8486b1b2873f6af8014c7443703ea55784ccfe9f106820a1",
+			"e59699b782a35caf02afcef2d1b02bd6719e296116156901f0e50e4edb6ad497",
 		);
 		expect(definition.stepDigests).toMatchObject({
 			"stage.plan":
 				"a4cf2de3c20404e6fa9290ebf4c91782d3599e60864b4109f6dc28d522d125eb",
 			"stage.plan-review":
-				"c461a811862104b5f1f60d67dabb72e1fea850106542a570ca9c857eb0dfb1eb",
+				"5df5d6f8cfcc6b5c36c6d63dec2ffef4b72b0cdbf410e99ae6de8bc3e6b3bbdb",
 			"stage.execute":
 				"26d70acc3466d27559a2b94d4a30e6f5aac1321d7f1f782f6f7092de7d3a60b0",
+			"stage.replay":
+				"83ee79a0e0036151d7f8a96ffa438004ce6edc2663b7220377e5039b35558af1",
 			"stage.review":
 				"8e56aae13d9d4250ba5dd97ac0043e3de0e9232885c525347c58c0a119774a64",
 		});
@@ -645,11 +669,12 @@ describe("stage-test handoff and render wiring", () => {
 	});
 
 	test("the plan gate owns both edges and its two developer actions", () => {
-		const manifest = stageTestManifests(1020)[0];
+		const manifest = stageTestManifests(1021)[0];
 		if (!manifest?.allowedOutcomes)
 			throw new Error("missing stage-test manifest");
 		expect(manifest.allowedOutcomes["stage.plan-review"]).toEqual([
 			"approve",
+			"approve-and-replay",
 			"comments",
 		]);
 		expect(
@@ -662,6 +687,11 @@ describe("stage-test handoff and render wiring", () => {
 				})),
 		).toEqual([
 			{ outcome: "approve", to: "stage.execute", maxAttempts: undefined },
+			{
+				outcome: "approve-and-replay",
+				to: "stage.replay",
+				maxAttempts: undefined,
+			},
 			{ outcome: "comments", to: "stage.plan", maxAttempts: 3 },
 		]);
 		expect(
@@ -916,5 +946,124 @@ describe("stage-test handoff and render wiring", () => {
 			fs.rmSync(configDir, { recursive: true, force: true });
 			fs.rmSync(worktree, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("stage.replay (add-stage-flow-replay)", () => {
+	test("the plan gate offers replay only when the engine supplied eligibility", () => {
+		const ineligible =
+			stageTestBehaviors["stage.plan-review"]?.developerActions?.({
+				snapshot: snapshot({ stageTestPlan: plan({ flowId: "flow-1" }) }),
+				stageReplayEligible: false,
+			}) ?? [];
+		expect(ineligible.map(({ id }) => id)).toEqual([
+			"approve-plan",
+			"review-comments",
+		]);
+		const eligible =
+			stageTestBehaviors["stage.plan-review"]?.developerActions?.({
+				snapshot: snapshot({ stageTestPlan: plan({ flowId: "flow-1" }) }),
+				stageReplayEligible: true,
+			}) ?? [];
+		expect(eligible.map(({ id }) => id)).toEqual([
+			"approve-and-replay",
+			"review-comments",
+		]);
+	});
+
+	test("a passing replay attaches the render effect and a replay summary", () => {
+		const current = snapshot({
+			stageTestPlan: plan({ flowId: "flow-1" }),
+		});
+		const result = completeAgentStep(
+			"stage.replay",
+			current,
+			{},
+			{
+				stageJournal: [{ seq: 1 }],
+				stageApps: ["web"],
+				stageEvidenceIds: ["ev-1"],
+				stageReplayEvidence: {
+					result: {
+						status: "passed",
+						planId: "stage-flow-r1",
+						revision: 1,
+						inputsHash: "sha256:in",
+						routeHash: "sha256:route",
+						steps: [{ block: "crm.open-customer", version: "1.0.0" }],
+					},
+					report: report(),
+					resultEvidenceId: "ev-result",
+					reportEvidenceId: "ev-report",
+					blockDigests: { "crm.open-customer": "sha256:digest" },
+				},
+			},
+		) as {
+			metadata?: { stageReplay?: Record<string, unknown> };
+			deferTransition?: boolean;
+			effects?: readonly { kind: string; payload: unknown }[];
+		};
+		expect(result.deferTransition).toBe(true);
+		expect(result.effects?.[0]?.kind).toBe("stage.report.render");
+		expect(
+			(result.effects?.[0]?.payload as { step?: string } | undefined)?.step,
+		).toBe("stage.replay");
+		expect(result.metadata?.stageReplay).toMatchObject({
+			status: "passed",
+			flowId: "flow-1",
+			planId: "stage-flow-r1",
+			revision: 1,
+			resultEvidenceId: "ev-result",
+			reportEvidenceId: "ev-report",
+			blockVersions: { "crm.open-customer": "1.0.0" },
+			blockDigests: { "crm.open-customer": "sha256:digest" },
+		});
+	});
+
+	test("a failed replay carries the heal packet and falls back to the normal tester", () => {
+		const current = snapshot({ stageTestPlan: plan({ flowId: "flow-1" }) });
+		const result = completeAgentStep(
+			"stage.replay",
+			current,
+			{},
+			{
+				stageReplayEvidence: {
+					result: { status: "failed" },
+					heal: { retryable: true, evidenceId: "ev-heal" },
+					healEvidenceId: "ev-heal",
+				},
+			},
+		) as {
+			metadata?: {
+				stageReplay?: Record<string, unknown>;
+				stageReplayHeal?: Record<string, unknown>;
+			};
+			transition?: { outcome: string };
+		};
+		expect(result.transition).toEqual({ outcome: "failed" });
+		expect(result.metadata?.stageReplay).toMatchObject({ status: "failed" });
+		expect(result.metadata?.stageReplayHeal).toMatchObject({
+			retryable: true,
+		});
+	});
+
+	test("no replay evidence falls back to the normal tester without a model-asserted status", () => {
+		const current = snapshot({ stageTestPlan: plan({ flowId: "flow-1" }) });
+		const result = completeAgentStep("stage.replay", current, {}, {}) as {
+			metadata?: { stageReplay?: Record<string, unknown> };
+			transition?: { outcome: string };
+		};
+		expect(result.transition).toEqual({ outcome: "fallback" });
+		expect(result.metadata?.stageReplay?.status).toBe("ineligible");
+	});
+
+	test("a plan with no flowId falls back immediately", () => {
+		const current = snapshot({ stageTestPlan: plan({}) });
+		const result = completeAgentStep("stage.replay", current, {}) as {
+			metadata?: { stageReplay?: Record<string, unknown> };
+			transition?: { outcome: string };
+		};
+		expect(result.transition).toEqual({ outcome: "fallback" });
+		expect(result.metadata?.stageReplay?.reason).toBe("the plan names no flow");
 	});
 });

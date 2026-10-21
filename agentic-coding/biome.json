@@ -42,7 +42,8 @@
 		{
 			"includes": [
 				"src/workflow/embedded.generated.ts",
-				"src/server/browser/bundled-playwright.generated.ts"
+				"src/server/browser/bundled-playwright.generated.ts",
+				"src/stage-blocks/catalog.generated.ts"
 			],
 			"linter": {
 				"enabled": false

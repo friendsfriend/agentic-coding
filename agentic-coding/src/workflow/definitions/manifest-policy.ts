@@ -73,7 +73,7 @@ export function definitionVersionForStagedRoot(rounds: number): number {
  * resolving at the staged-root tier; this independent family has no historical
  * definitions to migrate. */
 export function definitionVersionForStageTest(rounds: number): number {
-	return rounds + 1000;
+	return rounds + 1001;
 }
 
 /** The declared family traits, per repository code-change family

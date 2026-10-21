@@ -57,10 +57,20 @@ Only some of what you see is worth keeping, and the tools say which part that is
   An app endpoint resolves only while *this* workflow holds that app; otherwise
   the call fails with `app-not-held` naming the holder instead of testing another
   workflow's code.
-- **Snapshot before acting.** `browser_snapshot` returns the accessibility tree
-  with `[ref=eN]` handles; pass a ref to `browser_click`/`browser_fill`/
-  `browser_press`/`browser_select`/`browser_hover`. A ref from a snapshot you did
-  not just take is refused: take a fresh snapshot rather than reusing a stale ref.
+- **Snapshot once per page state.** `browser_snapshot` returns the bounded AI
+  accessibility tree with `[ref=eN]`/`[ref=f1e3]` handles and a `snapshotId`.
+  Pass the ref *and* that id to `browser_click`/`browser_fill`/`browser_press`/
+  `browser_select`/`browser_hover`. Each action answers with a compact
+  observation, a structured delta and the resulting `snapshotId`, so read the
+  observation instead of taking a full snapshot after every action. Take a fresh
+  snapshot after a navigation or when an answer says `snapshotRequired: true`;
+  an unknown or stale ref is refused rather than guessed.
+- **Read narrowly and batch.** Use `browser_find` when you know the role/name,
+  `browser_snapshot({ within })` for one region, and
+  `browser_snapshot({ diff: true, since })` for a summary against a state you
+  already have. Put a deterministic stretch of actions in one
+  `browser_run_script({ observe: true })` (or `browser_wait({ observe: true })`)
+  so the post-operation observation costs no separate turn.
 - Sessions are isolated browser contexts of one shared browser, capped by
   `browser.max_sessions` with FIFO queueing and closed when the run ends or idles
   past its TTL. A named `session` is a second page; `browser_close` releases one —

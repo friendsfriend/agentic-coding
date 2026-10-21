@@ -16,6 +16,7 @@ const BROWSER_TOOLS = [
 	"stage_login",
 	"stage_login_wait",
 	"browser_snapshot",
+	"browser_find",
 	"browser_click",
 	"browser_fill",
 	"browser_press",
@@ -25,6 +26,10 @@ const BROWSER_TOOLS = [
 	"stage_wait",
 	"stage_step",
 	"stage_journal",
+	"stage_blocks",
+	"stage_run",
+	"stage_flows",
+	"stage_replay",
 	"browser_eval",
 	"browser_console",
 	"browser_network",
@@ -569,5 +574,579 @@ describe("browser tool surface", () => {
 			caption: "repro",
 			timeoutMs: 5_000,
 		});
+	});
+
+	test("browser_run_script forwards observe without inventing it", async () => {
+		const observed: FakeServer = {
+			calls: [],
+			replies: [{ session: "default", url: "http://app.local/", result: 1 }],
+		};
+		await invoke(
+			"browser_run_script",
+			{ code: "return 1", observe: true },
+			observed,
+		);
+		expect(observed.calls[0]?.body).toEqual({
+			code: "return 1",
+			observe: true,
+		});
+		const plain: FakeServer = {
+			calls: [],
+			replies: [{ session: "default", url: "http://app.local/", result: 1 }],
+		};
+		await invoke("browser_run_script", { code: "return 1" }, plain);
+		expect(plain.calls[0]?.body).toEqual({ code: "return 1" });
+	});
+
+	test("snapshot options reach the server and the id/timing are in the text view", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					session: "default",
+					url: "http://app.local/",
+					snapshotId: "s2",
+					observation: "changed: none",
+					refs: 2,
+					mode: "ai",
+					timing: {
+						mode: "ai",
+						snapshotMs: 1,
+						actionMs: 0,
+						observeMs: 0,
+						totalMs: 1,
+						chars: 20,
+						refs: 2,
+						changed: false,
+						truncated: false,
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"browser_snapshot",
+			{ within: "e1", depth: 3, maxChars: 500 },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			within: "e1",
+			depth: 3,
+			maxChars: 500,
+		});
+		const output = textOf(result.content);
+		expect(output).toContain("snapshotId: s2");
+		expect(output).toContain("mode: ai");
+		expect(output).toContain("timing: mode=ai");
+		expect(output).toContain("changed: none");
+	});
+
+	test("an action answer is a compact observation, not the delta JSON", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					session: "default",
+					action: "click",
+					url: "http://app.local/cart",
+					snapshotId: "s2",
+					observation:
+						'changed: +1 -0 ~0\n+ [e4] button "Delete"\nurl: http://app.local/cart',
+					changed: true,
+					snapshotRequired: false,
+					delta: {
+						added: [{ ref: "e4", role: "button", name: "Delete" }],
+						removed: [],
+						changed: [],
+					},
+					deltaTruncated: false,
+					mode: "ai",
+					timing: {
+						mode: "ai",
+						snapshotMs: 0,
+						actionMs: 8,
+						observeMs: 4,
+						totalMs: 12,
+						chars: 20,
+						refs: 5,
+						changed: true,
+						truncated: false,
+						toolMs: 14,
+						resultChars: 500,
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"browser_click",
+			{ ref: "e1", snapshotId: "s2" },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			action: "click",
+			ref: "e1",
+			snapshotId: "s2",
+		});
+		const output = textOf(result.content);
+		expect(output).toContain("snapshotId: s2");
+		expect(output).toContain('+ [e4] button "Delete"');
+		expect(output).toContain("timing: mode=ai");
+		expect(output).toContain("actionMs=8");
+		expect(output).not.toContain('"delta"');
+		expect(output).not.toContain('"added"');
+	});
+
+	test("browser_find is one match per line and never the node map", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					session: "default",
+					snapshotId: "s1",
+					total: 2,
+					truncated: false,
+					matches: [
+						{ ref: "e1", role: "button", name: "Save" },
+						{ ref: "f1e2", role: "textbox", name: "Card" },
+					],
+					mode: "ai",
+					timing: {
+						mode: "ai",
+						snapshotMs: 0,
+						actionMs: 0,
+						observeMs: 1,
+						totalMs: 1,
+						chars: 40,
+						refs: 2,
+						changed: false,
+						truncated: false,
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"browser_find",
+			{ query: "card", role: "textbox", within: "e1", limit: 5 },
+			server,
+		);
+		expect(server.calls[0]?.body).toEqual({
+			query: "card",
+			role: "textbox",
+			within: "e1",
+			limit: 5,
+		});
+		const output = textOf(result.content);
+		expect(output).toContain("matches: 2 of 2");
+		expect(output).toContain('- [e1] button "Save"');
+		expect(output).toContain('- [f1e2] textbox "Card"');
+		expect(output).not.toContain('"matches"');
+	});
+});
+
+describe("stage_blocks and stage_run", () => {
+	test("stage_blocks asks for the compact catalog and prints one line per block", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					version: 1,
+					mode: "compact",
+					total: 1,
+					blocks: [
+						{
+							id: "crm.ui.open",
+							version: "1.0.0",
+							app: "crm",
+							title: "Open an application path",
+							description: "Navigates within the application.",
+							effects: ["read"],
+							idempotent: true,
+							requires: [],
+							provides: [],
+						},
+					],
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_blocks",
+			{ app: "crm", effect: "read" },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		const call = server.calls[0];
+		expect(call?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-blocks",
+		);
+		expect(call?.body).toEqual({ app: "crm", effect: "read" });
+		const text = textOf(result.content);
+		expect(text).toContain("mode: compact");
+		expect(text).toContain(
+			"crm.ui.open@1.0.0 crm [read] Open an application path",
+		);
+		expect(text).toContain("idempotent: yes");
+	});
+
+	test("stage_blocks with an id prints the schema the planner needs", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					version: 1,
+					mode: "full",
+					total: 1,
+					blocks: [
+						{
+							id: "crm.ui.open",
+							version: "1.0.0",
+							app: "crm",
+							title: "Open an application path",
+							description: "Navigates within the application.",
+							effects: ["read"],
+							idempotent: true,
+							requires: [],
+							provides: [],
+							params: { type: "object" },
+							returns: { type: "object" },
+							examples: [{ path: "/" }],
+							digest: "sha256:abc",
+						},
+					],
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_blocks",
+			{ id: "crm.ui.open" },
+			server,
+		);
+		const text = textOf(result.content);
+		expect(text).toContain("schema:");
+		expect(text).toContain('"path":"/"');
+	});
+
+	test("stage_run sends the plan and prints the compact ledger", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					planId: "plan-1",
+					flowId: "customer-address",
+					revision: 3,
+					inputsHash: "sha256:abc",
+					stage: "crm-int",
+					status: "passed",
+					durationMs: 42,
+					versions: { "crm.ui.open": "1.0.0" },
+					steps: [
+						{
+							index: 0,
+							routeStepId: "open",
+							block: "crm.ui.open",
+							version: "1.0.0",
+							app: "crm",
+							status: "passed",
+							durationMs: 30,
+							retries: 0,
+							journalIds: [1],
+							evidenceIds: [],
+						},
+					],
+				},
+			],
+		};
+		const plan = { steps: [{ block: "crm.ui.open", args: { path: "/" } }] };
+		const { result } = await invoke(
+			"stage_run",
+			{ plan, session: "default", approvedRevision: 3 },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		const call = server.calls[0];
+		expect(call?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-run",
+		);
+		expect(call?.body).toMatchObject({
+			plan,
+			session: "default",
+			approvedRevision: 3,
+		});
+		const text = textOf(result.content);
+		expect(text).toContain("planId: plan-1");
+		expect(text).toContain("status: passed");
+		expect(text).toContain("passed [0] open crm.ui.open@1.0.0 30ms journal=1");
+	});
+
+	test("stage_run dry run prints issue codes and derived inputs", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					planId: "plan-1",
+					inputsHash: "sha256:abc",
+					stage: "unopened",
+					status: "failed",
+					durationMs: 0,
+					versions: {},
+					steps: [],
+					dryRun: {
+						ok: false,
+						issues: [
+							{
+								code: "block-unknown",
+								message: "block crm.nope is not registered",
+							},
+						],
+						versions: {},
+						inputSchema: {
+							type: "object",
+							properties: { path: { type: "string" } },
+						},
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_run",
+			{ plan: { steps: [{ block: "crm.nope" }] }, dryRun: true },
+			server,
+		);
+		const text = textOf(result.content);
+		expect(text).toContain("dryRun: refused");
+		expect(text).toContain("issue: block-unknown");
+		expect(text).toContain("input path:");
+	});
+});
+
+describe("stage_flows and stage_replay", () => {
+	test("stage_flows sends filters and prints hashes and inputs without values", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					version: 1,
+					total: 1,
+					issues: [],
+					flows: [
+						{
+							flowId: "customer-address",
+							title: "Customer address",
+							stage: "crm-int",
+							applications: ["crm"],
+							roles: ["clerk"],
+							routeHash: "sha256:route",
+							specHash: "sha256:spec",
+							inputSchema: {
+								type: "object",
+								properties: { path: { type: "string" } },
+							},
+							blockVersions: { "crm.ui.open": "1.0.0" },
+						},
+					],
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_flows",
+			{ stage: "crm-int", query: "customer", limit: 10 },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-flows",
+		);
+		expect(server.calls[0]?.body).toEqual({
+			stage: "crm-int",
+			query: "customer",
+			limit: 10,
+		});
+		const text = textOf(result.content);
+		expect(text).toContain("customer-address [crm-int] crm roles=clerk");
+		expect(text).toContain("routeHash: sha256:route");
+		expect(text).toContain('input path: {"type":"string"}');
+	});
+
+	test("stage_replay without a flow id lists flows instead of starting one", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [{ version: 1, total: 0, flows: [], issues: [] }],
+		};
+		const { result } = await invoke(
+			"stage_replay",
+			{ stage: "crm-int" },
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-flows",
+		);
+		expect(textOf(result.content)).toContain("total: 0");
+	});
+
+	test("stage_replay dry run validates inputs without opening a browser", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					flowId: "customer-address",
+					planId: "plan-1",
+					revision: 3,
+					inputsHash: "sha256:inputs",
+					routeHash: "sha256:route",
+					specHash: "sha256:spec",
+					stage: "crm-int",
+					status: "failed",
+					durationMs: 0,
+					steps: [],
+					dryRun: {
+						eligible: true,
+						approved: false,
+						proposedInputsHash: "sha256:proposed",
+						inputSchema: {
+							type: "object",
+							properties: { path: { type: "string" } },
+						},
+						issues: [
+							{
+								code: "flow-inputs-unapproved",
+								message: "a new plan revision is required",
+							},
+						],
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_replay",
+			{
+				flowId: "customer-address",
+				dryRun: true,
+				inputs: { path: "/customers/C-2002" },
+			},
+			server,
+		);
+		expect(result.isError).toBeFalsy();
+		expect(server.calls[0]?.url).toBe(
+			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-replay",
+		);
+		expect(server.calls[0]?.body).toEqual({
+			flowId: "customer-address",
+			dryRun: true,
+			inputs: { path: "/customers/C-2002" },
+		});
+		const text = textOf(result.content);
+		expect(text).toContain("dryRun: eligible, inputs not approved");
+		expect(text).toContain("issue: flow-inputs-unapproved");
+		expect(text).toContain('input path: {"type":"string"}');
+	});
+
+	test("stage_replay prints the ledger, failure and heal packet", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					flowId: "customer-address",
+					planId: "plan-1",
+					revision: 3,
+					inputsHash: "sha256:inputs",
+					routeHash: "sha256:route",
+					specHash: "sha256:spec",
+					stage: "crm-int",
+					status: "failed",
+					durationMs: 120,
+					blockVersions: { "crm.ui.open": "1.0.0" },
+					steps: [
+						{
+							index: 0,
+							routeStepId: "open",
+							block: "crm.ui.open",
+							version: "1.0.0",
+							status: "failed",
+							durationMs: 100,
+							journalIds: [4],
+							evidenceIds: ["ev-1"],
+							error: "marker missing",
+						},
+					],
+					failure: {
+						index: 0,
+						routeStepId: "open",
+						block: "crm.ui.open",
+						version: "1.0.0",
+						message: "marker missing",
+						retryable: false,
+					},
+					heal: {
+						routeStepId: "open",
+						block: "crm.ui.open",
+						evidenceId: "ev-1",
+						retryable: false,
+					},
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_replay",
+			{ flowId: "customer-address", approvedRevision: 3 },
+			server,
+		);
+		const text = textOf(result.content);
+		expect(text).toContain(
+			"failed [0] open crm.ui.open@1.0.0 100ms journal=4 evidence=ev-1",
+		);
+		expect(text).toContain("failure: marker missing");
+		expect(text).toContain("heal: open crm.ui.open");
+	});
+
+	test("stage_replay with a suite id runs the suite and prints the aggregate ledger", async () => {
+		const server: FakeServer = {
+			calls: [],
+			replies: [
+				{
+					suiteId: "crm-regression",
+					stage: "crm-int",
+					parallel: true,
+					stopOnFailure: false,
+					status: "failed",
+					durationMs: 450,
+					resultEvidenceId: "ev-suite",
+					entries: [
+						{
+							id: "approved",
+							flowId: "customer-address",
+							status: "passed",
+							inputsHash: "sha256:approved",
+							evidenceIds: ["ev-1", "ev-2"],
+						},
+						{
+							id: "unapproved",
+							flowId: "customer-address",
+							status: "refused",
+							code: "flow-inputs-unapproved",
+							error:
+								"the supplied inputs differ from the approved plan revision",
+						},
+					],
+				},
+			],
+		};
+		const { result } = await invoke(
+			"stage_replay",
+			{ suiteId: "crm-regression" },
+			server,
+		);
+		expect(server.calls[0]?.body).toMatchObject({
+			suiteId: "crm-regression",
+		});
+		expect(server.calls[0]?.body).not.toHaveProperty("flowId");
+		const text = textOf(result.content);
+		expect(text).toContain("suiteId: crm-regression");
+		expect(text).toContain("status: failed");
+		expect(text).toContain("parallel: yes, stopOnFailure: no");
+		expect(text).toContain("resultEvidenceId: ev-suite");
+		expect(text).toContain(
+			"passed approved (customer-address) inputsHash=sha256:approved evidence=ev-1,ev-2",
+		);
+		expect(text).toContain("refused unapproved (customer-address)");
+		expect(text).toContain("code: flow-inputs-unapproved");
 	});
 });

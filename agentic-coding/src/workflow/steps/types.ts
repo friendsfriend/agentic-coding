@@ -56,6 +56,8 @@ export interface CompletionResult {
 		stageTestPlan?: JsonValue;
 		stageTestReport?: JsonValue;
 		stageTestReportMarkdown?: string;
+		stageReplay?: JsonValue;
+		stageReplayHeal?: JsonValue;
 	};
 	transition?: { outcome: string; output?: unknown };
 	deferTransition?: boolean;
@@ -102,6 +104,26 @@ export interface AgentCompletionContext {
 	 * validator can refuse a citation of evidence that does not exist before the
 	 * render effect sees it. */
 	stageEvidenceIds?: readonly string[];
+	/** The `stage.replay` run's already-decoded result/report/heal evidence
+	 * (`add-stage-flow-replay`): the handoff reads it at the impure boundary so
+	 * the pure step behavior never reaches the evidence store itself. */
+	stageReplayEvidence?: {
+		result?: {
+			status?: unknown;
+			flowId?: unknown;
+			planId?: unknown;
+			revision?: unknown;
+			inputsHash?: unknown;
+			routeHash?: unknown;
+			steps?: readonly { block?: unknown; version?: unknown }[];
+		};
+		report?: unknown;
+		heal?: unknown;
+		resultEvidenceId?: string;
+		reportEvidenceId?: string;
+		healEvidenceId?: string;
+		blockDigests?: Readonly<Record<string, string>>;
+	};
 }
 
 export interface EffectCompletionContext {
@@ -164,6 +186,12 @@ export interface EnterResult {
 export interface DeveloperActionsContext {
 	snapshot: WorkflowSnapshot;
 	traits?: WorkflowFamilyTraits;
+	/** Whether the approved plan names a flow eligible for replay
+	 * (`add-stage-flow-replay`); computed at the impure boundary
+	 * (`workflow/runtime/store.ts`'s `actions()`) so the pure `stage.plan-review`
+	 * behavior never reaches the stage-blocks registry itself. Absent for every
+	 * other step. */
+	stageReplayEligible?: boolean;
 }
 
 export interface AssignmentInputsContext {

@@ -1,9 +1,14 @@
-// The pinned-stage workflow's two agent steps. The browser server enforces the
+// The pinned-stage workflow's agent steps. The browser server enforces the
 // stage pin and stage access policy independently; these behaviors supply the
-// least-privilege roles and the structured plan/report contracts.
+// least-privilege roles and the structured plan/report contracts. Pure domain
+// module: it consumes only supplied validated evidence
+// (`stageReplayEligible`/`stageReplayEvidence`), never the evidence store or
+// the stage-blocks registry itself — those reads happen at the impure
+// boundary (`workflow/runtime/store.ts`, `workflow/runtime/reducers/agent-handoff.ts`).
 import type {
 	JsonValue,
 	WorkflowActionView,
+	WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import {
@@ -12,7 +17,7 @@ import {
 	stageTestPlan,
 	stageTestReport,
 } from "../definitions/contracts.ts";
-import type { StepBehavior } from "./types.ts";
+import type { AgentCompletionContext, StepBehavior } from "./types.ts";
 
 export const STAGE_TEST_PLANNER_ROLE = "stage-planner";
 export const STAGE_TESTER_ROLE = "stage-tester";
@@ -188,13 +193,29 @@ function validReport(
 		);
 }
 
-const planActions = (): WorkflowActionView[] => [
-	{
-		id: "approve-plan",
-		label: "Approve plan",
-		confirmation: "confirm",
-		requiresInput: true,
-	},
+const planActions = ({
+	stageReplayEligible,
+}: {
+	snapshot: WorkflowSnapshot;
+	stageReplayEligible?: boolean;
+}): WorkflowActionView[] => [
+	...(stageReplayEligible === true
+		? [
+				{
+					id: "approve-and-replay",
+					label: "Approve plan and run compiled flow",
+					confirmation: "confirm",
+					requiresInput: true,
+				} as const,
+			]
+		: [
+				{
+					id: "approve-plan",
+					label: "Approve plan",
+					confirmation: "confirm",
+					requiresInput: true,
+				} as const,
+			]),
 	{
 		id: "review-comments",
 		label: "Request plan changes",
@@ -203,6 +224,89 @@ const planActions = (): WorkflowActionView[] => [
 		requiresInput: true,
 	},
 ];
+
+type StageReplayEvidence = NonNullable<
+	AgentCompletionContext["stageReplayEvidence"]
+>;
+
+function replaySummary(
+	flowId: string,
+	evidence: StageReplayEvidence,
+	status: "passed" | "failed" | "ineligible",
+	reason?: string,
+): NonNullable<WorkflowSnapshot["metadata"]["stageReplay"]> {
+	const result = evidence.result;
+	const blockVersions: Record<string, string> = {};
+	for (const step of result?.steps ?? [])
+		if (typeof step.block === "string" && typeof step.version === "string")
+			blockVersions[step.block] = step.version;
+	return {
+		status,
+		flowId,
+		...(typeof result?.planId === "string" ? { planId: result.planId } : {}),
+		...(typeof result?.revision === "number"
+			? { revision: result.revision }
+			: {}),
+		...(typeof result?.inputsHash === "string"
+			? { inputsHash: result.inputsHash }
+			: {}),
+		...(typeof result?.routeHash === "string"
+			? { routeHash: result.routeHash }
+			: {}),
+		...(Object.keys(blockVersions).length === 0 ? {} : { blockVersions }),
+		...(evidence.blockDigests === undefined
+			? {}
+			: { blockDigests: evidence.blockDigests as Record<string, string> }),
+		...(evidence.resultEvidenceId === undefined
+			? {}
+			: { resultEvidenceId: evidence.resultEvidenceId }),
+		...(evidence.reportEvidenceId === undefined
+			? {}
+			: { reportEvidenceId: evidence.reportEvidenceId }),
+		...(evidence.healEvidenceId === undefined
+			? {}
+			: { healEvidenceId: evidence.healEvidenceId }),
+		...(reason === undefined ? {} : { reason }),
+		...(Array.isArray(result?.steps) ? { stepCount: result.steps.length } : {}),
+	};
+}
+
+/** Shared by `stage.execute` and a passing `stage.replay`: both hand a report
+ * to the one render effect. */
+function reportRenderCompletion(
+	snapshot: WorkflowSnapshot,
+	effect: { readonly kind: string; readonly data?: unknown },
+) {
+	if (effect.kind !== "stage.report.render") return undefined;
+	const data = effect.data as
+		| {
+				plan?: unknown;
+				report?: unknown;
+				markdown?: unknown;
+				reportPath?: unknown;
+		  }
+		| undefined;
+	const plan = stageTestPlan.parse(data?.plan);
+	const report = stageTestReport.parse(data?.report);
+	return {
+		metadata: {
+			stageTestPlan: plan as unknown as JsonValue,
+			stageTestReport: report as unknown as JsonValue,
+			...(typeof data?.markdown === "string"
+				? { stageTestReportMarkdown: data.markdown }
+				: {}),
+			...(snapshot.metadata.stageReplay === undefined
+				? {}
+				: {
+						stageReplay: snapshot.metadata.stageReplay as unknown as JsonValue,
+					}),
+		},
+		transition: {
+			outcome: "complete",
+			output: report as unknown as JsonValue,
+		},
+	};
+}
 
 const reportActions = ({
 	snapshot,
@@ -255,6 +359,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 					"a plan may create data only on a writable stage",
 				);
 			const requiresApproval =
+				plan.flowId !== undefined ||
 				snapshot.metadata.stagePlanApproval === "always" ||
 				(snapshot.metadata.stagePlanApproval === "when-writing" &&
 					snapshot.metadata.stageAccess === "writable" &&
@@ -327,37 +432,8 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 				],
 			};
 		},
-		onEffectComplete: ({ effect }) => {
-			if (effect.kind !== "stage.report.render") return undefined;
-			const data = effect.data as
-				| {
-						plan?: unknown;
-						report?: unknown;
-						markdown?: unknown;
-						reportPath?: unknown;
-				  }
-				| undefined;
-			const plan = stageTestPlan.parse(data?.plan);
-			const report = stageTestReport.parse(data?.report);
-			return {
-				metadata: {
-					stageTestPlan: plan as unknown as JsonValue,
-					stageTestReport: report as unknown as JsonValue,
-					// The bounded Markdown is persisted in snapshot metadata so the
-					// dashboard can show the report without an evidence round-trip. The
-					// render effect truncates it to 500k characters, well inside the
-					// snapshot's 2 MiB text bound; the duplicate bytes on disk and in
-					// the store are the accepted cost of that convenience (PERF-001).
-					...(typeof data?.markdown === "string"
-						? { stageTestReportMarkdown: data.markdown }
-						: {}),
-				},
-				transition: {
-					outcome: "complete",
-					output: report as unknown as JsonValue,
-				},
-			};
-		},
+		onEffectComplete: ({ snapshot, effect }) =>
+			reportRenderCompletion(snapshot, effect),
 		assignmentInputs: ({ snapshot }) => ({
 			objective: `Execute the approved plan against pinned stage ${snapshot.metadata.stage}.`,
 			introLines: [
@@ -379,6 +455,121 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 				"every planned expectation has a verdict",
 				"no unplanned state change occurs",
 				"all citations refer to existing evidence and journal steps",
+			],
+		}),
+	},
+	"stage.replay": {
+		classification: "single",
+		roles: () => [STAGE_TESTER_ROLE],
+		candidateRoles: () => [STAGE_TESTER_ROLE],
+		onArrive: () => ({ selectedRoles: [STAGE_TESTER_ROLE] }),
+		instructionAssetForRole: () => "stage-test-replay.md",
+		onAgentComplete: ({
+			snapshot,
+			stageJournal,
+			stageApps,
+			stageEvidenceIds,
+			stageReplayEvidence,
+		}) => {
+			const plan = planFor(snapshot.metadata.stageTestPlan);
+			const flowId = plan.flowId;
+			if (flowId === undefined)
+				return {
+					metadata: {
+						stageReplay: {
+							status: "ineligible",
+							reason: "the plan names no flow",
+						},
+					},
+					transition: { outcome: "fallback" },
+				};
+			const evidence = stageReplayEvidence ?? {};
+			const status = evidence.result?.status;
+			if (status === "passed") {
+				try {
+					const report = stageTestReport.parse(evidence.report);
+					validReport(
+						report,
+						plan,
+						snapshot.evidence,
+						stageJournal,
+						stageApps,
+						stageEvidenceIds,
+					);
+					return {
+						metadata: {
+							stageReplay: replaySummary(flowId, evidence, "passed"),
+						},
+						deferTransition: true,
+						effects: [
+							{
+								kind: "stage.report.render",
+								idempotencyKey: `stage-report:${snapshot.workflowId}:${snapshot.revision}`,
+								payload: {
+									plan: plan as unknown as JsonValue,
+									report: report as unknown as JsonValue,
+									step: "stage.replay",
+								},
+							},
+						],
+					};
+				} catch (error) {
+					return {
+						metadata: {
+							stageReplay: replaySummary(
+								flowId,
+								evidence,
+								"ineligible",
+								`the replay report is not usable: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						},
+						transition: { outcome: "fallback" },
+					};
+				}
+			}
+			if (status === "failed")
+				return {
+					metadata: {
+						stageReplay: replaySummary(flowId, evidence, "failed"),
+						...(evidence.heal === undefined
+							? {}
+							: {
+									stageReplayHeal: evidence.heal as JsonValue,
+								}),
+					},
+					transition: { outcome: "failed" },
+				};
+			return {
+				metadata: {
+					stageReplay: replaySummary(
+						flowId,
+						evidence,
+						"ineligible",
+						"the replay produced no result; the normal tester must run",
+					),
+				},
+				transition: { outcome: "fallback" },
+			};
+		},
+		onEffectComplete: ({ snapshot, effect }) =>
+			reportRenderCompletion(snapshot, effect),
+		assignmentInputs: ({ snapshot }) => ({
+			objective: `Replay the approved compiled flow against pinned stage ${snapshot.metadata.stage}.`,
+			introLines: [
+				`Pinned stage: ${snapshot.metadata.stage}; access: ${snapshot.metadata.stageAccess}.`,
+				`Approved plan: ${JSON.stringify(snapshot.metadata.stageTestPlan ?? {})}`,
+				"Call stage_replay({ flowId }) exactly once. Omit inputs: the approved plan revision is the authority for every value.",
+				"Do not take browser snapshots, click, fill, run scripts, edit blocks or regenerate a spec. The replay process runs the reviewed spec without a model per step.",
+				"If the tool reports an ineligible flow, dry-run issues or a refusal, return the fallback outcome with the reason. If it reports a failed replay, return failed; the heal packet is attached and the normal tester runs next.",
+				"Do not retry a failed replay, edit a block or spec, recompile, commit or push. Return complete after a passing replay; the engine attaches the deterministic report itself.",
+			],
+			permissions: [
+				"run only the approved flow on the pinned stage",
+				"read its result, report and heal evidence",
+			],
+			checks: [
+				"no model-driven browser action happens in this step",
+				"no repository file changes",
 			],
 		}),
 	},

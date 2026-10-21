@@ -1,0 +1,107 @@
+{
+	"version": 1,
+	"flowId": "customer-address",
+	"title": "Customer address",
+	"generatedFrom": {
+		"planId": "stage-test-flow-r2",
+		"revision": 2
+	},
+	"stage": "crm-stage",
+	"applications": ["crm"],
+	"roles": ["clerk"],
+	"inputSchema": {
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"path": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 2048,
+				"pattern": "^/(?!/)",
+				"description": "An application-relative path beginning with one slash."
+			},
+			"customerId": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 128,
+				"description": "The customer's stable stage-test identifier."
+			},
+			"street": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 256,
+				"description": "Street and house number."
+			},
+			"city": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 128,
+				"description": "City."
+			},
+			"postalCode": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 32,
+				"description": "Postal code."
+			}
+		},
+		"required": ["city", "customerId", "path", "postalCode", "street"]
+	},
+	"inputExamples": [
+		{
+			"path": "/customers/C-1001",
+			"customerId": "C-1001",
+			"street": "Teststr. 1",
+			"city": "Berlin",
+			"postalCode": "10115"
+		}
+	],
+	"routeHash": "sha256:edafa90ba5db5321d9bc4bd317297ef705bff5467130ad64fd5d148a12fef0bf",
+	"specHash": "sha256:763c381aee5f950f53fc0400836be53b52182f8814947e5a03ebd73261351e80",
+	"blockVersions": {
+		"crm.auth.loginAsRole": "1.0.0",
+		"crm.ui.open": "1.0.0",
+		"crm.customer.open": "1.0.0",
+		"crm.customer.fillAddress": "1.0.0"
+	},
+	"blockDigests": {
+		"crm.auth.loginAsRole": "sha256:4ede5b53281486d534b37006a631b3b387ab40e0d43a56c6bd931944efbf6e96",
+		"crm.ui.open": "sha256:47d8eb681189c85a06daf28956aa8f44c9cfab8d9a6ce9d9c42b93d331f57523",
+		"crm.customer.open": "sha256:acdc4fc85a6bfb50c4ff871d9293b6bb06128c08c734455fa60db7c8af8351b1",
+		"crm.customer.fillAddress": "sha256:08c40c5a6ea7119b0affbd787cc6de3aaac759fd492338af7138b1178b29059d"
+	},
+	"routeSteps": [
+		{
+			"routeStepId": "login",
+			"block": "crm.auth.loginAsRole",
+			"inputs": [],
+			"outputs": [],
+			"expectationIds": ["E1"],
+			"captures": []
+		},
+		{
+			"routeStepId": "open",
+			"block": "crm.ui.open",
+			"inputs": ["path"],
+			"outputs": [],
+			"expectationIds": ["E2"],
+			"captures": []
+		},
+		{
+			"routeStepId": "customer",
+			"block": "crm.customer.open",
+			"inputs": ["customerId"],
+			"outputs": [],
+			"expectationIds": ["E3"],
+			"captures": []
+		},
+		{
+			"routeStepId": "address",
+			"block": "crm.customer.fillAddress",
+			"inputs": ["city", "customerId", "postalCode", "street"],
+			"outputs": [],
+			"expectationIds": ["E4"],
+			"captures": []
+		}
+	]
+}

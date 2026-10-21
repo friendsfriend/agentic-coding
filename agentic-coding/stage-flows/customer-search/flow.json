@@ -1,0 +1,59 @@
+{
+	"version": 1,
+	"flowId": "customer-search",
+	"title": "Search for a customer by name",
+	"generatedFrom": {
+		"planId": "stage-test-flow-r1",
+		"revision": 1
+	},
+	"stage": "crm-stage",
+	"applications": ["crm"],
+	"roles": ["clerk"],
+	"inputSchema": {
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"path": {
+				"type": "string",
+				"minLength": 1,
+				"maxLength": 2048,
+				"pattern": "^/(?!/)",
+				"description": "An application-relative path beginning with one slash."
+			}
+		},
+		"required": ["path"]
+	},
+	"inputExamples": [
+		{
+			"path": "/search?q=acme"
+		}
+	],
+	"routeHash": "sha256:ef860e5632820d2f1969ce6cf2ce618ba460a0c779396728f1b1a2d41fcb8ced",
+	"specHash": "sha256:4964eac4b84b022fc68d5773594b82aa9e442728d948392074c9565e261d2e4e",
+	"blockVersions": {
+		"crm.auth.loginAsRole": "1.0.0",
+		"crm.ui.open": "1.0.0"
+	},
+	"blockDigests": {
+		"crm.auth.loginAsRole": "sha256:4ede5b53281486d534b37006a631b3b387ab40e0d43a56c6bd931944efbf6e96",
+		"crm.ui.open": "sha256:47d8eb681189c85a06daf28956aa8f44c9cfab8d9a6ce9d9c42b93d331f57523"
+	},
+	"routeSteps": [
+		{
+			"routeStepId": "login",
+			"block": "crm.auth.loginAsRole",
+			"inputs": [],
+			"outputs": [],
+			"expectationIds": ["E1"],
+			"captures": []
+		},
+		{
+			"routeStepId": "search",
+			"block": "crm.ui.open",
+			"inputs": ["path"],
+			"outputs": [],
+			"expectationIds": ["E2"],
+			"captures": []
+		}
+	]
+}

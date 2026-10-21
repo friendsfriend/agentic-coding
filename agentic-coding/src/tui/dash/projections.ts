@@ -396,9 +396,11 @@ export function requiredUserActionFor(
 	if (actions !== undefined && actions.length === 0) return undefined;
 	const hasAction = (id: string) =>
 		actions === undefined || actions.some((action) => action.id === id);
+	const hasPlanApproval = () =>
+		hasAction("approve-plan") || hasAction("approve-and-replay");
 
 	if (phase === "proposed" || phase === "core.plan-approval") {
-		if (!hasAction("approve-plan")) return undefined;
+		if (!hasPlanApproval()) return undefined;
 		const proposal =
 			definitionId === "openspec-propose" ||
 			definitionId === "openspec-fusion-propose";
@@ -498,7 +500,7 @@ export function requiredUserActionFor(
 	// pinned plan (expectations, knowledge and declared data creation) before a
 	// state-changing run on a live stage may start.
 	if (phase === "stage.plan-review") {
-		if (!hasAction("approve-plan")) return undefined;
+		if (!hasPlanApproval()) return undefined;
 		return {
 			key: "plan-review",
 			title: "Action required · Stage test plan",

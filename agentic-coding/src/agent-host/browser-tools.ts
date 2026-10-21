@@ -22,6 +22,7 @@ import {
 	AGENT_BROWSER_CLOSE_PATH,
 	AGENT_BROWSER_CONSOLE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
+	AGENT_BROWSER_FIND_PATH,
 	AGENT_BROWSER_LOGIN_PATH,
 	AGENT_BROWSER_LOGIN_WAIT_PATH,
 	AGENT_BROWSER_NETWORK_PATH,
@@ -30,7 +31,11 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_BLOCKS_PATH,
+	AGENT_BROWSER_STAGE_FLOWS_PATH,
 	AGENT_BROWSER_STAGE_JOURNAL_PATH,
+	AGENT_BROWSER_STAGE_REPLAY_PATH,
+	AGENT_BROWSER_STAGE_RUN_PATH,
 	AGENT_BROWSER_STAGE_STEP_PATH,
 	AGENT_BROWSER_STAGE_WAIT_PATH,
 	AGENT_BROWSER_WAIT_PATH,
@@ -61,6 +66,10 @@ const JOURNAL_TIMEOUT_MS = 60_000;
  * `maxWaitSeconds`, and the client bound sits just above the largest cap so the
  * server's own answer arrives first. */
 const STAGE_WAIT_TIMEOUT_MS = 660_000;
+/** One reviewed plan may chain up to 100 blocks; each block has its own bounded
+ * browser actions, so the call bound is larger than a single action. */
+const STAGE_RUN_TIMEOUT_MS = 900_000;
+const STAGE_REPLAY_TIMEOUT_MS = 960_000;
 
 type ContentBlock =
 	| { type: "text"; text: string }
@@ -87,6 +96,416 @@ function failure(message: string): Result {
 	return { content: [{ type: "text", text: message }], isError: true };
 }
 
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+/** One short line, so the model sees the cost and the state without a JSON
+ * envelope. It is deliberately value-free: counts, mode and durations only. */
+function timingLine(value: unknown): string | undefined {
+	const timing = recordOf(value);
+	if (!timing) return undefined;
+	const parts: string[] = [];
+	if (timing.mode === "ai" || timing.mode === "legacy")
+		parts.push(`mode=${timing.mode}`);
+	for (const key of [
+		"snapshotMs",
+		"actionMs",
+		"observeMs",
+		"totalMs",
+		"toolMs",
+	] as const) {
+		const number = timing[key];
+		if (typeof number === "number") parts.push(`${key}=${number}`);
+	}
+	for (const key of ["chars", "refs", "resultChars"] as const) {
+		const number = timing[key];
+		if (typeof number === "number") parts.push(`${key}=${number}`);
+	}
+	if (timing.changed === true) parts.push("changed=yes");
+	if (timing.truncated === true) parts.push("truncated=yes");
+	return parts.length === 0 ? undefined : `timing: ${parts.join(" ")}`;
+}
+
+/** The block catalog as one line per block, or the full schema when the caller
+ * asked for one id. The catalog is generated, so `digest` is the review token a
+ * plan generator can cite without seeing the function source. */
+function stageBlocksResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || !Array.isArray(record.blocks)) return text(value);
+	const lines: string[] = [];
+	if (record.mode === "compact" || record.mode === "full")
+		lines.push(`mode: ${record.mode}`);
+	if (typeof record.total === "number") lines.push(`total: ${record.total}`);
+	lines.push("");
+	for (const entry of record.blocks) {
+		const block = recordOf(entry);
+		if (!block) continue;
+		const effects = Array.isArray(block.effects)
+			? block.effects.filter((effect) => typeof effect === "string").join("+")
+			: "";
+		lines.push(
+			`${String(block.id)}@${String(block.version)} ${String(block.app)} [${effects}] ${
+				typeof block.title === "string" ? block.title : ""
+			}`.trimEnd(),
+		);
+		if (typeof block.description === "string" && block.description !== "")
+			lines.push(`  ${block.description}`);
+		if (Array.isArray(block.requires) && block.requires.length > 0)
+			lines.push(`  requires: ${block.requires.join(", ")}`);
+		if (Array.isArray(block.provides) && block.provides.length > 0)
+			lines.push(`  provides: ${block.provides.join(", ")}`);
+		if (block.idempotent === true) lines.push("  idempotent: yes");
+		if (block.internal === true) lines.push("  internal: yes");
+		if (recordOf(block.deprecated)) {
+			const deprecated = recordOf(block.deprecated);
+			lines.push(
+				`  deprecated${
+					typeof deprecated?.replacementId === "string"
+						? `; replacement ${deprecated.replacementId}`
+						: ""
+				}`,
+			);
+		}
+		if (block.params !== undefined || block.returns !== undefined)
+			lines.push(
+				`  schema: ${JSON.stringify({
+					params: block.params,
+					returns: block.returns,
+					examples: block.examples,
+				})}`,
+			);
+	}
+	return text(lines.join("\n"));
+}
+
+/** A flow list as one line per reviewed spec. It exposes hashes and input
+ * schemas, never input values. */
+function stageFlowsResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || !Array.isArray(record.flows)) return text(value);
+	const lines: string[] = [];
+	if (typeof record.total === "number") lines.push(`total: ${record.total}`);
+	lines.push("");
+	for (const entry of record.flows) {
+		const flow = recordOf(entry);
+		if (!flow) continue;
+		const apps = Array.isArray(flow.applications)
+			? flow.applications.join(",")
+			: "";
+		const roles = Array.isArray(flow.roles) ? flow.roles.join(",") : "";
+		lines.push(
+			`${String(flow.flowId)} [${String(flow.stage)}] ${apps}${roles === "" ? "" : ` roles=${roles}`} — ${String(flow.title)}`,
+		);
+		if (typeof flow.routeHash === "string")
+			lines.push(`  routeHash: ${flow.routeHash}`);
+		if (typeof flow.specHash === "string")
+			lines.push(`  specHash: ${flow.specHash}`);
+		const schema = recordOf(flow.inputSchema);
+		const properties = recordOf(schema?.properties);
+		if (properties)
+			for (const [name, property] of Object.entries(properties))
+				lines.push(`  input ${name}: ${JSON.stringify(property)}`);
+	}
+	if (Array.isArray(record.issues))
+		for (const entry of record.issues) {
+			const problem = recordOf(entry);
+			if (problem)
+				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
+		}
+	return text(lines.join("\n"));
+}
+
+/** A replay result as a bounded ledger. A dry run never starts a process; a
+ * real run names the journal and evidence ids and the heal packet instead of
+ * dumping the Playwright report. */
+function stageReplayResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || typeof record.flowId !== "string") return text(value);
+	const lines: string[] = [];
+	for (const key of ["flowId", "stage", "status"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	for (const key of ["planId", "revision"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" || typeof entry === "number")
+			lines.push(`${key}: ${String(entry)}`);
+	}
+	for (const key of ["inputsHash", "routeHash", "specHash"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	if (typeof record.durationMs === "number")
+		lines.push(`durationMs: ${record.durationMs}`);
+	const dryRun = recordOf(record.dryRun);
+	if (dryRun) {
+		lines.push(
+			"",
+			`dryRun: ${dryRun.eligible === true ? "eligible" : "not eligible"}${dryRun.approved === true ? ", inputs approved" : ", inputs not approved"}`,
+		);
+		const schema = recordOf(dryRun.inputSchema);
+		const properties = recordOf(schema?.properties);
+		if (properties)
+			for (const [name, property] of Object.entries(properties))
+				lines.push(`  input ${name}: ${JSON.stringify(property)}`);
+		if (Array.isArray(dryRun.issues))
+			for (const entry of dryRun.issues) {
+				const problem = recordOf(entry);
+				if (problem)
+					lines.push(
+						`issue: ${String(problem.code)} ${String(problem.message)}`,
+					);
+			}
+	}
+	if (Array.isArray(record.steps) && record.steps.length > 0) {
+		lines.push("");
+		for (const entry of record.steps) {
+			const step = recordOf(entry);
+			if (!step) continue;
+			const journal = Array.isArray(step.journalIds)
+				? step.journalIds.join(",")
+				: "";
+			const evidence = Array.isArray(step.evidenceIds)
+				? step.evidenceIds.join(",")
+				: "";
+			lines.push(
+				`${String(step.status)} [${String(step.index)}] ${String(step.routeStepId)} ${String(step.block)}@${String(step.version)} ${String(step.durationMs)}ms${journal === "" ? "" : ` journal=${journal}`}${evidence === "" ? "" : ` evidence=${evidence}`}`,
+			);
+			if (typeof step.error === "string" && step.error !== "")
+				lines.push(`  error: ${step.error}`);
+		}
+	}
+	const failure = recordOf(record.failure);
+	if (failure) {
+		lines.push("", `failure: ${String(failure.message)}`);
+		if (failure.retryable === true) lines.push("retryable: yes");
+	}
+	const heal = recordOf(record.heal);
+	if (heal) {
+		lines.push("", `heal: ${String(heal.routeStepId)} ${String(heal.block)}`);
+		if (typeof heal.evidenceId === "string")
+			lines.push(`  evidence: ${heal.evidenceId}`);
+		if (heal.retryable === true) lines.push("  retryable: yes");
+	}
+	const report = recordOf(record.report);
+	const expectations = Array.isArray(report?.expectations)
+		? report.expectations
+		: [];
+	if (expectations.length > 0) {
+		const counts: Record<string, number> = {};
+		for (const entry of expectations) {
+			const expectation = recordOf(entry);
+			const verdict = expectation?.verdict;
+			if (typeof verdict === "string")
+				counts[verdict] = (counts[verdict] ?? 0) + 1;
+		}
+		lines.push(
+			"",
+			`report: ${Object.entries(counts)
+				.map(([verdict, count]) => `${verdict}=${count}`)
+				.join(" ")}`,
+		);
+	}
+	if (Array.isArray(record.issues))
+		for (const entry of record.issues) {
+			const problem = recordOf(entry);
+			if (problem)
+				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
+		}
+	return text(lines.join("\n"));
+}
+
+function stageSuiteResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || typeof record.suiteId !== "string") return text(value);
+	const lines: string[] = [];
+	for (const key of ["suiteId", "stage", "status"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	lines.push(
+		`parallel: ${record.parallel === true ? "yes" : "no"}, stopOnFailure: ${record.stopOnFailure === true ? "yes" : "no"}`,
+	);
+	if (typeof record.durationMs === "number")
+		lines.push(`durationMs: ${record.durationMs}`);
+	if (typeof record.resultEvidenceId === "string")
+		lines.push(`resultEvidenceId: ${record.resultEvidenceId}`);
+	if (Array.isArray(record.entries) && record.entries.length > 0) {
+		lines.push("");
+		for (const raw of record.entries) {
+			const entry = recordOf(raw);
+			if (!entry) continue;
+			const evidence = Array.isArray(entry.evidenceIds)
+				? entry.evidenceIds.join(",")
+				: "";
+			lines.push(
+				`${String(entry.status)} ${String(entry.id)} (${String(entry.flowId)})${typeof entry.inputsHash === "string" ? ` inputsHash=${entry.inputsHash}` : ""}${evidence === "" ? "" : ` evidence=${evidence}`}`,
+			);
+			if (typeof entry.code === "string") lines.push(`  code: ${entry.code}`);
+			if (typeof entry.error === "string" && entry.error !== "")
+				lines.push(`  error: ${entry.error}`);
+		}
+	}
+	if (Array.isArray(record.issues))
+		for (const entry of record.issues) {
+			const problem = recordOf(entry);
+			if (problem)
+				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
+		}
+	return text(lines.join("\n"));
+}
+
+/** A plan result as a compact ledger. The journal and evidence hold the detail;
+ * the model only needs what passed, what failed and where to look next. */
+function stageRunResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || !Array.isArray(record.steps)) return text(value);
+	const lines: string[] = [];
+	for (const key of ["planId", "flowId", "stage", "status"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	if (typeof record.revision === "number")
+		lines.push(`revision: ${record.revision}`);
+	if (typeof record.inputsHash === "string")
+		lines.push(`inputsHash: ${record.inputsHash}`);
+	if (typeof record.durationMs === "number")
+		lines.push(`durationMs: ${record.durationMs}`);
+	lines.push("");
+	for (const entry of record.steps) {
+		const step = recordOf(entry);
+		if (!step) continue;
+		const journal = Array.isArray(step.journalIds)
+			? step.journalIds.join(",")
+			: "";
+		const evidence = Array.isArray(step.evidenceIds)
+			? step.evidenceIds.join(",")
+			: "";
+		lines.push(
+			`${String(step.status)} [${String(step.index)}] ${String(step.routeStepId)} ${String(
+				step.block,
+			)}@${String(step.version)} ${String(step.durationMs)}ms${
+				step.retries === 1 ? " retry=1" : ""
+			}${journal === "" ? "" : ` journal=${journal}`}${
+				evidence === "" ? "" : ` evidence=${evidence}`
+			}`,
+		);
+		if (typeof step.error === "string" && step.error !== "")
+			lines.push(`  error: ${step.error}`);
+	}
+	const failure = recordOf(record.failure);
+	if (failure) {
+		lines.push("", `failure: ${String(failure.message)}`);
+		if (failure.retryable === true) lines.push("retryable: yes");
+	}
+	const dryRun = recordOf(record.dryRun);
+	if (dryRun) {
+		lines.push("", `dryRun: ${dryRun.ok === true ? "ok" : "refused"}`);
+		const schema = recordOf(dryRun.inputSchema);
+		const properties = recordOf(schema?.properties);
+		if (properties)
+			for (const [name, property] of Object.entries(properties))
+				lines.push(`  input ${name}: ${JSON.stringify(property)}`);
+		if (Array.isArray(dryRun.issues))
+			for (const entry of dryRun.issues) {
+				const problem = recordOf(entry);
+				if (problem)
+					lines.push(
+						`issue: ${String(problem.code)}${
+							typeof problem.routeStepId === "string"
+								? ` (${problem.routeStepId})`
+								: ""
+						} ${String(problem.message)}`,
+					);
+			}
+	}
+	const saved = recordOf(record.saved);
+	if (saved) {
+		lines.push(
+			"",
+			`saved: ${String(saved.flowId)}${saved.existing === true ? " (unchanged)" : ""}`,
+		);
+		if (typeof saved.specPath === "string")
+			lines.push(`  spec: ${saved.specPath}`);
+		if (typeof saved.manifestPath === "string")
+			lines.push(`  manifest: ${saved.manifestPath}`);
+	}
+	if (Array.isArray(record.issues))
+		for (const entry of record.issues) {
+			const problem = recordOf(entry);
+			if (problem)
+				lines.push(
+					`issue: ${String(problem.code)}${typeof problem.routeStepId === "string" ? ` (${problem.routeStepId})` : ""} ${String(problem.message)}`,
+				);
+		}
+	return text(lines.join("\n"));
+}
+
+/** The default text view for an action/wait/script result. The observation is
+ * already compact; the structured delta stays out of the model output because
+ * the observation names the same changes in fewer tokens. */
+function observationResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || typeof record.observation !== "string") return text(value);
+	const lines: string[] = [];
+	for (const key of ["session", "action", "url", "title"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	if (typeof record.snapshotId === "string")
+		lines.push(`snapshotId: ${record.snapshotId}`);
+	if (record.mode === "ai" || record.mode === "legacy")
+		lines.push(`mode: ${record.mode}`);
+	if (record.snapshotRequired === true)
+		lines.push(
+			"snapshotRequired: true — call browser_snapshot before the next ref action",
+		);
+	lines.push("", record.observation);
+	const timing = timingLine(record.timing);
+	if (timing) lines.push("", timing);
+	return text(lines.join("\n"));
+}
+
+/** A find answer as one line per match, never as the parseable node map. */
+function findResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (!record || !Array.isArray(record.matches)) return text(value);
+	const lines: string[] = [];
+	for (const key of ["session", "snapshotId"] as const) {
+		const entry = record[key];
+		if (typeof entry === "string" && entry !== "")
+			lines.push(`${key}: ${entry}`);
+	}
+	if (record.mode === "ai" || record.mode === "legacy")
+		lines.push(`mode: ${record.mode}`);
+	if (typeof record.total === "number")
+		lines.push(`matches: ${record.matches.length} of ${record.total}`);
+	if (record.truncated === true) lines.push("truncated: true");
+	lines.push("");
+	if (record.matches.length === 0) lines.push("(no matches)");
+	for (const match of record.matches) {
+		const node = recordOf(match);
+		if (!node) continue;
+		const ref = typeof node.ref === "string" ? `[${node.ref}] ` : "";
+		const role = typeof node.role === "string" ? node.role : "node";
+		const name = typeof node.name === "string" ? ` "${node.name}"` : "";
+		const text =
+			typeof node.text === "string" && node.text !== "" ? `: ${node.text}` : "";
+		lines.push(`- ${ref}${role}${name}${text}`);
+	}
+	const timing = timingLine(record.timing);
+	if (timing) lines.push("", timing);
+	return text(lines.join("\n"));
+}
+
 /** One authenticated call to the server's owner-scoped browser surface.
  * Resolves to the envelope's `value`; rejects with the server's message, which
  * already carries the refusal code (`app-not-held`, `script-timeout`, …). */
@@ -96,6 +515,7 @@ async function call(
 	path: string,
 	init: { body?: unknown; timeoutMs: number },
 ): Promise<unknown> {
+	const startedAt = performance.now();
 	const binding = bindingOf(env);
 	if (!binding) throw new Error(NO_BINDING);
 	const response = await fetch(`${binding.url}${path}`, {
@@ -125,7 +545,23 @@ async function call(
 			`${parsed?.error?.message ?? `the browser server answered ${response.status}`}${code ? ` [${code}]` : ""}`,
 		);
 	}
-	return parsed.value;
+	const value = parsed.value;
+	// `toolMs` is measured at the client boundary, so it includes the transport
+	// and the JSON decode; `resultChars` is what the model actually receives.
+	// Both live under the existing timing object rather than changing a result
+	// shape per tool.
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		const record = value as Record<string, unknown>;
+		const timing = record.timing;
+		if (timing !== null && typeof timing === "object") {
+			record.timing = {
+				...(timing as Record<string, unknown>),
+				toolMs: Math.round((performance.now() - startedAt) * 10) / 10,
+				resultChars: JSON.stringify(value).length,
+			};
+		}
+	}
+	return value;
 }
 
 interface BrowserBinding {
@@ -225,6 +661,65 @@ const BrowserSessionParameters = Type.Object({
 	session: SessionParameter,
 });
 
+const BrowserSnapshotParameters = Type.Object({
+	session: SessionParameter,
+	within: Type.Optional(
+		Type.String({
+			description:
+				"Scope the snapshot to one ref from the current state or a Playwright selector, instead of reading the whole page.",
+		}),
+	),
+	depth: Type.Optional(
+		Type.Number({
+			description:
+				"Maximum snapshot depth (default 10, max 14). Lower is cheaper; the returned refs are the only ones actionable.",
+		}),
+	),
+	maxChars: Type.Optional(
+		Type.Number({
+			description:
+				"Character budget (default 20,000, max 40,000). The cut is at a line boundary; only returned refs are actionable.",
+		}),
+	),
+	diff: Type.Optional(
+		Type.Boolean({
+			description:
+				"Return a compact diff against the previous snapshot instead of the tree. Use after a navigation or a large re-render, or `since` for a retained earlier state.",
+		}),
+	),
+	since: Type.Optional(
+		Type.String({
+			description:
+				"A retained snapshotId to diff against (default: the previous snapshot).",
+		}),
+	),
+});
+
+const BrowserFindParameters = Type.Object({
+	session: SessionParameter,
+	query: Type.String({
+		description:
+			"Case-insensitive text matched against role, accessible name and node text. Use this instead of a full snapshot when you know what you are looking for.",
+	}),
+	role: Type.Optional(
+		Type.String({ description: "Keep only this ARIA role, e.g. button." }),
+	),
+	name: Type.Optional(
+		Type.String({
+			description: "Keep only nodes whose accessible name contains this text.",
+		}),
+	),
+	within: Type.Optional(
+		Type.String({
+			description:
+				"Search only inside a ref from the current state or a Playwright selector.",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({ description: "Maximum matches to return (max 20)." }),
+	),
+});
+
 /** The credential reference `browser_fill` accepts instead of a literal value. */
 const CredentialParameter = Type.Optional(
 	Type.Object(
@@ -266,6 +761,12 @@ function actionTool(
 		parameters: Type.Object({
 			...TargetParameters,
 			session: SessionParameter,
+			snapshotId: Type.Optional(
+				Type.String({
+					description:
+						"The snapshotId the ref came from. When supplied, a stale id is refused before the page is touched.",
+				}),
+			),
 			...specific,
 		}),
 		execute: async (args, api) => {
@@ -274,6 +775,9 @@ function actionTool(
 			const extra = args as Record<string, unknown>;
 			const body: Record<string, unknown> = {
 				action,
+				...(extra.snapshotId === undefined
+					? {}
+					: { snapshotId: extra.snapshotId }),
 				...(extra.ref === undefined ? {} : { ref: extra.ref }),
 				...(extra.selector === undefined ? {} : { selector: extra.selector }),
 				...(extra.session === undefined ? {} : { session: extra.session }),
@@ -288,7 +792,7 @@ function actionTool(
 					: { timeoutMs: extra.timeoutMs }),
 			};
 			try {
-				return text(
+				return observationResult(
 					await call(run.env, "POST", AGENT_BROWSER_ACTION_PATH, {
 						timeoutMs: ACTION_TIMEOUT_MS,
 						body,
@@ -309,6 +813,12 @@ const BrowserWaitParameters = Type.Object({
 	),
 	url: Type.Optional(
 		Type.String({ description: "Wait until the URL matches this pattern." }),
+	),
+	observe: Type.Optional(
+		Type.Boolean({
+			description:
+				"Return the compact post-wait observation and the resulting snapshotId, instead of spending a separate browser_snapshot turn.",
+		}),
 	),
 	timeoutMs: Type.Optional(
 		Type.Number({ description: "How long to wait, in ms." }),
@@ -518,10 +1028,157 @@ const BrowserScriptParameters = Type.Object({
 	caption: Type.Optional(
 		Type.String({ description: "What the saved spec reproduces." }),
 	),
+	observe: Type.Optional(
+		Type.Boolean({
+			description:
+				"Return the compact post-script observation and the resulting snapshotId instead of a separate snapshot turn.",
+		}),
+	),
 	timeoutMs: Type.Optional(
 		Type.Number({
 			description:
 				"How long the script may run, in ms (default 60s, max 10min).",
+		}),
+	),
+});
+
+const StageBlocksParameters = Type.Object({
+	id: Type.Optional(
+		Type.String({
+			description:
+				"One block id; returns the full parameter/return schema, examples and digest.",
+		}),
+	),
+	query: Type.Optional(
+		Type.String({
+			description: "Case-insensitive search over id, title and state.",
+		}),
+	),
+	app: Type.Optional(
+		Type.String({
+			description: "Only blocks scoped to this stage application.",
+		}),
+	),
+	effect: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("read"),
+				Type.Literal("write"),
+				Type.Literal("destructive"),
+			],
+			{ description: "Only blocks declaring this effect." },
+		),
+	),
+	full: Type.Optional(
+		Type.Boolean({
+			description:
+				"Return full schemas for the filtered list (default: compact).",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({
+			description: "Maximum entries to return (default 20, max 100).",
+		}),
+	),
+});
+
+const StageRunParameters = Type.Object({
+	plan: Type.Unknown({
+		description:
+			"A standalone { planId?, flowId?, revision?, inputs?, steps } document, or the approved core.stage-test-plan@1 (its route steps carry optional block entries).",
+	}),
+	session: SessionParameter,
+	stageApp: Type.Optional(
+		Type.String({
+			description: "The application whose URL a `*` block should use.",
+		}),
+	),
+	role: Type.Optional(
+		Type.String({
+			description:
+				"The stage role this plan runs as; checked against app and block scopes.",
+		}),
+	),
+	dryRun: Type.Optional(
+		Type.Boolean({
+			description:
+				"Validate the plan and input schema without opening a browser or executing a block.",
+		}),
+	),
+	save: Type.Optional(
+		Type.Boolean({
+			description:
+				"Save the fully blocked approved flow for replay; requires an approved stage plan with flowId.",
+		}),
+	),
+	approvedRevision: Type.Optional(
+		Type.Number({
+			description:
+				"The workflow revision the plan was approved at; a stale revision is refused.",
+		}),
+	),
+});
+
+const StageFlowsParameters = Type.Object({
+	stage: Type.Optional(
+		Type.String({
+			description: "Filter to flows saved for this stage ident.",
+		}),
+	),
+	query: Type.Optional(
+		Type.String({
+			description:
+				"Case-insensitive substring of flow id, title or application.",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({
+			description: "Maximum flows to return (default 50, max 100).",
+		}),
+	),
+});
+
+const StageReplayParameters = Type.Object({
+	flowId: Type.Optional(
+		Type.String({
+			description:
+				"A saved flow id. Omit both flowId and suiteId to list the eligible checked-in flows instead of replaying.",
+		}),
+	),
+	suiteId: Type.Optional(
+		Type.String({
+			description:
+				"A saved suite id: runs every entry's flow through the same single-flow approval and eligibility gate flowId would, bounded by parallel/stopOnFailure, and returns an aggregate pass/fail. Mutually exclusive with flowId.",
+		}),
+	),
+	stage: Type.Optional(
+		Type.String({
+			description:
+				"The stage ident; defaults to the workflow's pinned stage and is refused if it differs.",
+		}),
+	),
+	inputs: Type.Optional(
+		Type.Record(Type.String(), Type.Unknown(), {
+			description:
+				"Proposed replay inputs for a flowId call. An explicit set that differs from the approved plan revision is refused; dryRun may validate it without approval. Never put a secret here. Ignored for a suiteId call, where each entry carries its own inputs.",
+		}),
+	),
+	dryRun: Type.Optional(
+		Type.Boolean({
+			description:
+				"Validate the flow, route, spec and inputs without starting a browser.",
+		}),
+	),
+	approvedRevision: Type.Optional(
+		Type.Number({
+			description:
+				"The workflow revision the plan was approved at; a stale revision is refused.",
+		}),
+	),
+	role: Type.Optional(
+		Type.String({
+			description:
+				"The stage role to run as; defaults to the first role named by the approved route.",
 		}),
 	),
 });
@@ -662,8 +1319,8 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 			defineTool({
 				name: "browser_snapshot",
 				description:
-					"Return the accessibility tree of the session's page with `[ref=eN]` element refs. Take a snapshot before acting, and pass the refs it names to browser_click/fill/press/select/hover.",
-				parameters: BrowserSessionParameters,
+					"Return the bounded AI accessibility tree of the session's page with `[ref=eN]`/`[ref=f1e3]` element refs, plus a `snapshotId`. Pass a ref and that id to browser_click/fill/press/select/hover; each action answers with a compact delta and the resulting id, so do not snapshot again after every click. Use `within` for a scoped read, `diff` for a summary against the previous state, and browser_find when you know what you are looking for.",
+				parameters: BrowserSnapshotParameters,
 				execute: async (args, api) => {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("browser_snapshot: run context unavailable");
@@ -678,19 +1335,77 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.session === undefined
 										? {}
 										: { session: args.session }),
+									...(args.within === undefined ? {} : { within: args.within }),
+									...(args.depth === undefined ? {} : { depth: args.depth }),
+									...(args.maxChars === undefined
+										? {}
+										: { maxChars: args.maxChars }),
+									...(args.diff === undefined ? {} : { diff: args.diff }),
+									...(args.since === undefined ? {} : { since: args.since }),
 								},
 							},
-						)) as { url?: string; snapshot?: string; refs?: number };
+						)) as {
+							url?: string;
+							snapshot?: string;
+							refs?: number;
+							snapshotId?: string;
+							observation?: string;
+							since?: string;
+							mode?: string;
+							timing?: unknown;
+						};
+						const header = [
+							`url: ${value.url ?? ""}`,
+							...(value.snapshotId === undefined
+								? []
+								: [`snapshotId: ${value.snapshotId}`]),
+							...(value.since === undefined ? [] : [`since: ${value.since}`]),
+							`refs: ${value.refs ?? 0}`,
+							...(value.mode === undefined ? [] : [`mode: ${value.mode}`]),
+							...(timingLine(value.timing) === undefined
+								? []
+								: [timingLine(value.timing) as string]),
+						].join("\n");
+						const body = value.observation ?? value.snapshot ?? "";
 						return {
 							content: [
 								{
 									type: "text",
-									text: `url: ${value.url ?? ""}\nrefs: ${value.refs ?? 0}\n\n${(value.snapshot ?? "").slice(0, MAX_RESULT_CHARS)}`,
+									text: `${header}\n\n${body.slice(0, MAX_RESULT_CHARS)}`,
 								},
 							],
 						};
 					} catch (error) {
 						return failure(`browser_snapshot: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "browser_find",
+				description:
+					"Search the current snapshot state by role/name/text and return only matching refs, without returning the tree. Use this after a navigation or when a full snapshot would be mostly irrelevant.",
+				parameters: BrowserFindParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("browser_find: run context unavailable");
+					try {
+						return findResult(
+							await call(run.env, "POST", AGENT_BROWSER_FIND_PATH, {
+								timeoutMs: READ_TIMEOUT_MS,
+								body: {
+									query: args.query,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.role === undefined ? {} : { role: args.role }),
+									...(args.name === undefined ? {} : { name: args.name }),
+									...(args.within === undefined ? {} : { within: args.within }),
+									...(args.limit === undefined ? {} : { limit: args.limit }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`browser_find: ${message(error)}`);
 					}
 				},
 			}),
@@ -749,7 +1464,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("browser_wait: run context unavailable");
 					try {
-						return text(
+						return observationResult(
 							await call(run.env, "POST", AGENT_BROWSER_WAIT_PATH, {
 								timeoutMs: ACTION_TIMEOUT_MS,
 								body: {
@@ -762,6 +1477,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 										: { selector: args.selector }),
 									...(args.text === undefined ? {} : { text: args.text }),
 									...(args.url === undefined ? {} : { url: args.url }),
+									...(args.observe === undefined
+										? {}
+										: { observe: args.observe }),
 									...(args.timeoutMs === undefined
 										? {}
 										: { timeoutMs: args.timeoutMs }),
@@ -901,6 +1619,159 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						);
 					} catch (error) {
 						return failure(`stage_journal: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_blocks",
+				description: [
+					"List the reviewed, typed stage blocks this build can execute. The list is compact (id, version, app, effects, title); pass one `id` to get its full parameter/return schema, validated examples and source digest before planning it.",
+					"Use this instead of inventing browser steps from scratch: a plan step names exactly one block id and its JSON arguments. Filter by `app`, `effect` or `query` when the catalog is large.",
+				].join(" "),
+				parameters: StageBlocksParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_blocks: run context unavailable");
+					try {
+						return stageBlocksResult(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_BLOCKS_PATH, {
+								timeoutMs: READ_TIMEOUT_MS,
+								body: {
+									...(args.id === undefined ? {} : { id: args.id }),
+									...(args.query === undefined ? {} : { query: args.query }),
+									...(args.app === undefined ? {} : { app: args.app }),
+									...(args.effect === undefined ? {} : { effect: args.effect }),
+									...(args.full === undefined ? {} : { full: args.full }),
+									...(args.limit === undefined ? {} : { limit: args.limit }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_blocks: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_run",
+				description: [
+					"Validate and execute a linear stage-block plan in one call and return a compact ledger; the journal (one entry per block sub-step) and evidence store hold the detail.",
+					"Pass a standalone plan, or the approved stage-test plan whose route steps carry block entries. Call it with `dryRun: true` first: that resolves block versions and derives the typed input schema without opening a browser.",
+					"Execution needs a stage-bound session and the same stage/write policy as the exploratory tools. Writes require an approved plan and a writable stage; destructive blocks are always refused. Inputs and arguments must never contain a credential: use the block's secret-variable names instead.",
+					"`save: true` turns a fully blocked approved stage plan with a `flowId` into a replayable flow. A route step without a block is reported as a `plan-route-gap`; run those with the exploratory tools rather than pretending the replay covered them.",
+				].join(" "),
+				parameters: StageRunParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_run: run context unavailable");
+					try {
+						return stageRunResult(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_RUN_PATH, {
+								timeoutMs: STAGE_RUN_TIMEOUT_MS,
+								body: {
+									plan: args.plan,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+									...(args.stageApp === undefined
+										? {}
+										: { stageApp: args.stageApp }),
+									...(args.role === undefined ? {} : { role: args.role }),
+									...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+									...(args.save === undefined ? {} : { save: args.save }),
+									...(args.approvedRevision === undefined
+										? {}
+										: { approvedRevision: args.approvedRevision }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_run: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_flows",
+				description: [
+					"List the checked-in compiled flows for this stage, with their route/spec hashes, applications, roles and input schema. It never opens a browser and never returns input values.",
+					"Use it before `stage_replay` to choose a reviewed flow and see which inputs it accepts. A flow with an uncovered expectation or a drifted spec is refused by replay, not silently explored.",
+					"Also available while planning (stage-planner, before approval): check it for a flow that already covers the ticket before writing an exploratory route, then name the chosen flowId and bind each input in the plan as `{{ inputs.<name> }}`.",
+				].join(" "),
+				parameters: StageFlowsParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_flows: run context unavailable");
+					try {
+						return stageFlowsResult(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_FLOWS_PATH, {
+								timeoutMs: READ_TIMEOUT_MS,
+								body: {
+									...(args.stage === undefined ? {} : { stage: args.stage }),
+									...(args.query === undefined ? {} : { query: args.query }),
+									...(args.limit === undefined ? {} : { limit: args.limit }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_flows: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_replay",
+				description: [
+					"Run one checked-in `@playwright/test` flow in a separate process, run a saved suite of independent flow entries, or list flows when both flowId and suiteId are omitted. The approved plan's `flowId`, route, input schema, block versions and input hash must match the checked-in `flow.json`.",
+					"Call `dryRun: true` first to validate a proposed input set without approval or a browser; execution refuses an explicit input override that differs from the approved plan revision. The server ingests the result's sub-step events into the normal stage journal and evidence store and returns a compact ledger, a deterministic report when every expectation is covered, and a heal packet on failure.",
+					"A suiteId call runs every saved entry's own flow through that same gate and returns one aggregate ledger with a status per entry (passed, failed, refused or skipped); it never claims a workflow report, so still use flowId for the plan's own `core.stage-report@1`.",
+					"Never edit the block or spec from this tool. A failed replay returns to `stage.execute` with the heal packet; a flow that cannot cover the plan falls back visibly instead of claiming a pass.",
+				].join(" "),
+				parameters: StageReplayParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_replay: run context unavailable");
+					try {
+						if (args.suiteId !== undefined)
+							return stageSuiteResult(
+								await call(run.env, "POST", AGENT_BROWSER_STAGE_REPLAY_PATH, {
+									timeoutMs: STAGE_REPLAY_TIMEOUT_MS,
+									body: {
+										suiteId: args.suiteId,
+										...(args.stage === undefined ? {} : { stage: args.stage }),
+										...(args.dryRun === undefined
+											? {}
+											: { dryRun: args.dryRun }),
+										...(args.approvedRevision === undefined
+											? {}
+											: { approvedRevision: args.approvedRevision }),
+										...(args.role === undefined ? {} : { role: args.role }),
+									},
+								}),
+							);
+						if (args.flowId === undefined)
+							return stageFlowsResult(
+								await call(run.env, "POST", AGENT_BROWSER_STAGE_FLOWS_PATH, {
+									timeoutMs: READ_TIMEOUT_MS,
+									body: {
+										...(args.stage === undefined ? {} : { stage: args.stage }),
+									},
+								}),
+							);
+						return stageReplayResult(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_REPLAY_PATH, {
+								timeoutMs: STAGE_REPLAY_TIMEOUT_MS,
+								body: {
+									flowId: args.flowId,
+									...(args.stage === undefined ? {} : { stage: args.stage }),
+									...(args.inputs === undefined ? {} : { inputs: args.inputs }),
+									...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+									...(args.approvedRevision === undefined
+										? {}
+										: { approvedRevision: args.approvedRevision }),
+									...(args.role === undefined ? {} : { role: args.role }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_replay: ${message(error)}`);
 					}
 				},
 			}),
@@ -1107,6 +1978,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Run Playwright JavaScript against this session's page with `(page, context, expect)`, bounded by `timeoutMs` (default 60s, max 10min).",
 					"On timeout the tool fails with `script-timeout` and the session stays usable.",
 					"`save: true` stores the code as a rerunnable `@playwright/test` spec (with the page URL pinned) in this workflow's evidence.",
+					"`observe: true` returns the compact post-script delta and resulting snapshotId, so a deterministic batch does not need a separate snapshot call.",
 					// The facade is an allow-list: naming it here is what keeps an agent from
 					// discovering the surface by failing (`fix-env-tool-defects-from-e2e`).
 					"`page` supports: goto, reload, goBack, goForward, url, title, content (truncated), setViewportSize, viewportSize, waitForLoadState, waitForURL, waitForSelector, waitForFunction, waitForTimeout, click, fill, press, selectOption, hover, textContent, innerText, inputValue, isVisible, isEnabled, screenshot, evaluate, locator, getByRole, getByText, getByLabel, getByPlaceholder, getByTestId, getByTitle, getByAltText, context(), keyboard, mouse.",
@@ -1119,8 +1991,11 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					if (!run)
 						return failure("browser_run_script: run context unavailable");
 					try {
-						return text(
-							await call(run.env, "POST", AGENT_BROWSER_SCRIPT_PATH, {
+						const value = await call(
+							run.env,
+							"POST",
+							AGENT_BROWSER_SCRIPT_PATH,
+							{
 								timeoutMs: RECORDING_TIMEOUT_MS,
 								body: {
 									code: args.code,
@@ -1128,6 +2003,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 										? {}
 										: { session: args.session }),
 									...(args.save === undefined ? {} : { save: args.save }),
+									...(args.observe === undefined
+										? {}
+										: { observe: args.observe }),
 									...(args.caption === undefined
 										? {}
 										: { caption: args.caption }),
@@ -1135,8 +2013,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 										? {}
 										: { timeoutMs: args.timeoutMs }),
 								},
-							}),
+							},
 						);
+						return text(value);
 					} catch (error) {
 						return failure(`browser_run_script: ${message(error)}`);
 					}

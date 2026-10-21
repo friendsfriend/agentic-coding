@@ -24,11 +24,13 @@ import {
 	AGENT_BROWSER_ACTION_PATH,
 	AGENT_BROWSER_CLOSE_PATH,
 	AGENT_BROWSER_EVAL_PATH,
+	AGENT_BROWSER_FIND_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_WAIT_PATH,
 } from "../src/server/protocol.ts";
 import type { EnvironmentInstanceController } from "../src/server/runtime/instances.ts";
 import {
@@ -161,7 +163,7 @@ describe("agent browser routes", () => {
 			ref: "e0",
 		});
 		expect(clicked.status).toBe(200);
-		expect(driver.performed).toEqual(['click:[data-ac-ref="e0"]']);
+		expect(driver.performed).toEqual(["click:ref=e0"]);
 		// A ref no snapshot produced is refused, not silently resolved.
 		const stale = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
 			action: "click",
@@ -607,6 +609,413 @@ describe("agent browser routes", () => {
 		const snapshot = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
 		expect(snapshot.status).toBe(409);
 		await routeDeps.pool.closeAll();
+	});
+
+	describe("snapshot observation loop", () => {
+		const IFRAME_SNAPSHOT = [
+			'- iframe "Payment" [ref=f1e1]:',
+			'  - textbox "Card" [ref=f1e2]',
+		].join("\n");
+
+		test("snapshot options are bounded and scoped reads keep their target", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver({
+				withinSnapshots: { "selector=.card": '- button "Save" [ref=e9]' },
+			});
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			const full = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				depth: 2,
+				maxChars: 1000,
+			});
+			expect(full.status).toBe(200);
+			expect(full.value.snapshotId).toBeString();
+			expect(driver.snapshotRequests[0]).toMatchObject({
+				depth: 2,
+				maxChars: 1000,
+			});
+			expect(full.value.timing).toMatchObject({
+				changed: false,
+				truncated: false,
+			});
+			const scoped = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				within: "e1",
+			});
+			expect(scoped.value.snapshot).toContain('button "Save"');
+			expect(scoped.value.snapshot).not.toContain("textbox");
+			expect(driver.snapshotRequests[1]?.within).toEqual({ ref: "e1" });
+			const selector = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				within: ".card",
+			});
+			expect(selector.value.snapshot).toContain('button "Save" [ref=e9]');
+			expect(driver.snapshotRequests[2]?.within).toEqual({
+				selector: ".card",
+			});
+			const capped = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				maxChars: 10,
+			});
+			expect(String(capped.value.snapshot).length).toBeLessThanOrEqual(10);
+			expect(capped.value.timing).toMatchObject({ truncated: true });
+			await routeDeps.pool.closeAll();
+		});
+
+		test("diff uses bounded history and refuses an evicted or unknown since", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver({
+				snapshots: [
+					'- heading "One" [ref=e1]',
+					'- heading "Two" [ref=e1]',
+					'- heading "Three" [ref=e1]',
+					'- heading "Four" [ref=e1]',
+					'- heading "Five" [ref=e1]',
+				],
+			});
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			const first = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const firstId = String(first.value.snapshotId);
+			await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const diff = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				diff: true,
+				since: firstId,
+			});
+			expect(diff.status).toBe(200);
+			expect(diff.value).toMatchObject({
+				since: firstId,
+				changed: true,
+			});
+			expect(diff.value.delta).toMatchObject({
+				changed: [{ ref: "e1", role: "heading", name: "Two" }],
+			});
+			// Fill the four-state history so the first snapshot is evicted.
+			for (let index = 0; index < 3; index++)
+				await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const evicted = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				diff: true,
+				since: firstId,
+			});
+			expect(evicted.status).toBe(409);
+			expect(evicted.value.code).toBe("snapshot-history-missing");
+			const unknown = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				diff: true,
+				since: "s999",
+			});
+			expect(unknown.status).toBe(409);
+			expect(unknown.value.code).toBe("snapshot-history-missing");
+			const conflict = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH, {
+				diff: true,
+				within: "e1",
+			});
+			expect(conflict.status).toBe(400);
+			expect(conflict.value.code).toBe("snapshot-options-conflict");
+			await routeDeps.pool.closeAll();
+		});
+
+		test("find returns matches without changing the current id or tree", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			const snapshot = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const snapshotId = String(snapshot.value.snapshotId);
+			const found = await call(routeDeps, AGENT_BROWSER_FIND_PATH, {
+				query: "save",
+				role: "button",
+			});
+			expect(found.status).toBe(200);
+			expect(found.value).toMatchObject({
+				snapshotId,
+				total: 1,
+				truncated: false,
+			});
+			expect(found.value.matches).toEqual([
+				{ ref: "e1", role: "button", name: "Save" },
+			]);
+			expect(found.value.snapshot).toBeUndefined();
+			const scoped = await call(routeDeps, AGENT_BROWSER_FIND_PATH, {
+				query: "save",
+				within: "e1",
+			});
+			expect(scoped.value).toMatchObject({ snapshotId, total: 1 });
+			const missing = await call(routeDeps, AGENT_BROWSER_FIND_PATH, {
+				query: "does-not-exist",
+			});
+			expect(missing.value).toMatchObject({ total: 0, matches: [] });
+			// A find is a read: the id still names the exact state an action uses.
+			driver.queueSnapshot('- button "Save" [ref=e1]');
+			const clicked = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+				snapshotId,
+			});
+			expect(clicked.status).toBe(200);
+			// A frame-prefixed ref is findable in the state its snapshot named.
+			driver.setSnapshot(IFRAME_SNAPSHOT);
+			const withFrame = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			expect(withFrame.status).toBe(200);
+			const frameFind = await call(routeDeps, AGENT_BROWSER_FIND_PATH, {
+				query: "card",
+				role: "textbox",
+			});
+			expect(frameFind.value.matches).toEqual([
+				{ ref: "f1e2", role: "textbox", name: "Card" },
+			]);
+			await routeDeps.pool.closeAll();
+		});
+
+		test("an action answers with a compact delta and a new snapshot id", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			const before = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			driver.queueSnapshot(
+				[
+					'- heading "Fake" [level=1] [ref=e0]',
+					'- button "Save" [ref=e1]',
+					'- textbox "Name" [ref=e2]',
+					'- link "Home" [ref=e3]',
+					'- button "Delete" [ref=e4]',
+				].join("\n"),
+			);
+			const clicked = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+				snapshotId: before.value.snapshotId,
+			});
+			expect(clicked.status).toBe(200);
+			expect(clicked.value.snapshotId).not.toBe(before.value.snapshotId);
+			expect(clicked.value.snapshot).toBeUndefined();
+			expect(clicked.value.observation).toContain("changed: +1 -0 ~0");
+			expect(clicked.value.delta).toMatchObject({
+				added: [{ ref: "e4", role: "button", name: "Delete" }],
+				removed: [],
+				changed: [],
+			});
+			expect(clicked.value.deltaTruncated).toBe(false);
+			expect(clicked.value.snapshotRequired).toBe(false);
+			expect(clicked.value.timing).toMatchObject({
+				changed: true,
+				truncated: false,
+			});
+			driver.queueSnapshot(
+				[
+					'- heading "Fake" [level=1] [ref=e0]',
+					'- button "Save" [ref=e1]',
+					'- textbox "Name" [ref=e2]',
+					'- link "Home" [ref=e3]',
+					'- button "Delete" [ref=e4]',
+				].join("\n"),
+			);
+			const unchanged = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+			});
+			expect(unchanged.value.changed).toBe(false);
+			expect(unchanged.value.observation).toContain("changed: none");
+			await routeDeps.pool.closeAll();
+		});
+
+		test("a stale snapshot id and a stale ref are refused before the page is touched", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			const first = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			driver.queueSnapshot(
+				[
+					'- heading "Fake" [level=1] [ref=e0]',
+					'- button "Save" [ref=e1]',
+					'- textbox "Name" [ref=e2]',
+					'- link "Home" [ref=e3]',
+				].join("\n"),
+			);
+			const clicked = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+			});
+			expect(clicked.status).toBe(200);
+			const performed = driver.performed.length;
+			const staleId = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+				snapshotId: first.value.snapshotId,
+			});
+			expect(staleId.status).toBe(409);
+			expect(staleId.value.code).toBe("stale-snapshot");
+			expect(driver.performed).toHaveLength(performed);
+			driver.setSnapshot('- heading "No controls" [ref=e1]');
+			const refreshed = await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const staleRef = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e0",
+				snapshotId: refreshed.value.snapshotId,
+			});
+			expect(staleRef.status).toBe(400);
+			expect(staleRef.value.code).toBe("unknown-ref");
+			expect(driver.performed).toHaveLength(performed);
+			await routeDeps.pool.closeAll();
+		});
+
+		test("a failed post-action observation preserves the action and requires a snapshot", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			driver.failNextSnapshot();
+			const clicked = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+			});
+			expect(clicked.status).toBe(200);
+			expect(driver.performed).toEqual(["click:ref=e1"]);
+			expect(clicked.value.snapshotId).toBeUndefined();
+			expect(clicked.value.snapshotRequired).toBe(true);
+			expect(clicked.value.observation).toContain(
+				"post-action snapshot failed",
+			);
+			expect(clicked.value.changed).toBe(false);
+			const refused = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+			});
+			expect(refused.status).toBe(409);
+			expect(refused.value.code).toBe("snapshot-required");
+			expect(driver.performed).toEqual(["click:ref=e1"]);
+			await routeDeps.pool.closeAll();
+		});
+
+		test("wait and script can observe in one call; a script without observe does not snapshot", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			driver.queueSnapshot(
+				[
+					'- heading "Fake" [level=1] [ref=e0]',
+					'- button "Save" [ref=e1]',
+					'- textbox "Name" [ref=e2]',
+					'- link "Home" [ref=e3]',
+					'- text "Ready" [ref=e4]',
+				].join("\n"),
+			);
+			const waited = await call(routeDeps, AGENT_BROWSER_WAIT_PATH, {
+				observe: true,
+			});
+			expect(waited.status).toBe(200);
+			expect(waited.value.observation).toContain("changed: +1 -0 ~0");
+			expect(waited.value.snapshotId).toBeString();
+			expect(waited.value.timing).toMatchObject({ changed: true });
+			driver.queueSnapshot(
+				[
+					'- heading "Fake" [level=1] [ref=e0]',
+					'- button "Save" [ref=e1]',
+					'- textbox "Name" [ref=e2]',
+					'- link "Home" [ref=e3]',
+					'- text "Ready" [ref=e4]',
+					'- text "Still ready" [ref=e5]',
+				].join("\n"),
+			);
+			const scripted = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+				code: "return 1;",
+				observe: true,
+			});
+			expect(scripted.status).toBe(200);
+			expect(scripted.value.observation).toContain("changed: +1 -0 ~0");
+			expect(scripted.value.snapshotId).toBeString();
+			const requests = driver.snapshotRequests.length;
+			const noObserve = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+				code: "return 2;",
+			});
+			expect(noObserve.value.observation).toBeUndefined();
+			expect(driver.snapshotRequests).toHaveLength(requests);
+			expect(noObserve.value.timing).toMatchObject({ changed: false });
+			await routeDeps.pool.closeAll();
+		});
+
+		test("a navigation short-circuits the delta and asks for a new snapshot", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const routeDeps = deps(worktree, driver);
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/",
+			});
+			await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			const scripted = await call(routeDeps, AGENT_BROWSER_SCRIPT_PATH, {
+				code: "await page.goto('http://app.local/next');\nreturn 1;",
+				observe: true,
+			});
+			expect(scripted.status).toBe(200);
+			expect(scripted.value.observation).toContain(
+				"navigated to a new document",
+			);
+			expect(scripted.value.snapshotRequired).toBe(true);
+			expect(scripted.value.delta).toBeUndefined();
+			expect(scripted.value.snapshotId).toBeString();
+			await routeDeps.pool.closeAll();
+		});
+
+		test("telemetry is value-free and records a refusal code", async () => {
+			const worktree = fixture();
+			const driver = createFakeDriver();
+			const events: Array<Record<string, unknown>> = [];
+			const routeDeps = {
+				...deps(worktree, driver),
+				telemetry: (event: unknown) =>
+					events.push(event as Record<string, unknown>),
+			};
+			await call(routeDeps, AGENT_BROWSER_OPEN_PATH, {
+				url: "http://app.local/?token=secret",
+			});
+			await call(routeDeps, AGENT_BROWSER_SNAPSHOT_PATH);
+			await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+			});
+			const old = await call(routeDeps, AGENT_BROWSER_ACTION_PATH, {
+				action: "click",
+				ref: "e1",
+				snapshotId: "s-old",
+			});
+			expect(old.status).toBe(409);
+			expect(events.map((event) => event.tool)).toContain("snapshot");
+			expect(events.map((event) => event.tool)).toContain("click");
+			const success = events.find(
+				(event) => event.tool === "click" && event.errorCode === undefined,
+			);
+			expect(success).toMatchObject({
+				domain: "browser",
+				kind: "browser.tool",
+				snapshotRequired: false,
+			});
+			expect(typeof success?.session).toBe("string");
+			const failure = events.find(
+				(event) => event.errorCode === "stale-snapshot",
+			);
+			expect(failure).toMatchObject({ tool: "click" });
+			// No page text, URL, query value, credential or observation is in any event.
+			const wire = JSON.stringify(events);
+			expect(wire).not.toContain("Fake");
+			expect(wire).not.toContain("http://");
+			expect(wire).not.toContain("token=secret");
+			await routeDeps.pool.closeAll();
+		});
 	});
 });
 

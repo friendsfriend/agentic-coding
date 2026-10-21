@@ -4,8 +4,8 @@
 // by the durable run that opened it. It carries the four things a run needs
 // between tool calls:
 //
-// * **The page and its refs.** `snapshot()` re-walks the page and re-injects
-//   `data-ac-ref` attributes; the refs the text names are the only refs the
+// * **The page and its refs.** `snapshot()` reads the page's public AI
+//   snapshot; the refs the text names are the only refs the
 //   action tools accept, so a ref from an older snapshot is refused rather than
 //   silently resolving to a different element.
 // * **Bounded console and network history**, per session, so `browser_console`
@@ -26,17 +26,30 @@
 
 import type { EffectiveIdentityCache } from "../stages/catalog.ts";
 import type { StageRefusal, StageSessionPolicy } from "../stages/guard.ts";
-import { refSelector, snapshotRefs } from "./snapshot.ts";
-import type {
-	DriverConsoleEntry,
-	DriverContext,
-	DriverHttpCredentials,
-	DriverLocator,
-	DriverNetworkEvent,
-	DriverPage,
-	DriverScreenshotOptions,
+import {
+	boundedSnapshotChars,
+	boundedSnapshotDepth,
+	diffSnapshotNodes,
+	findSnapshotNodes,
+	isRef,
+	SNAPSHOT_HISTORY_CAPACITY,
+	type SnapshotDelta,
+	type SnapshotNode,
+	snapshotRefs,
+} from "./snapshot.ts";
+import {
+	type DriverActionTarget,
+	type DriverConsoleEntry,
+	type DriverContext,
+	type DriverHttpCredentials,
+	type DriverLocator,
+	type DriverNetworkEvent,
+	type DriverPage,
+	type DriverScreenshotOptions,
+	type DriverSnapshotResult,
+	DriverTargetError,
+	driverLocatorKey,
 } from "./types.ts";
-import { driverLocatorKey } from "./types.ts";
 
 /** Console and network history are ring buffers: the newest entries are what a
  * debugger reads, and a long-lived page must not grow the server's memory. */
@@ -183,6 +196,47 @@ export interface ActionTarget {
 	readonly selector?: string;
 }
 
+/** The bounds one scoped snapshot read may pass. `within` is a ref from the
+ * current state or a Playwright selector; `diff`/`since` are handled by the
+ * route against the stored history, never by a page read. */
+export interface SessionSnapshotOptions {
+	readonly within?: string;
+	readonly depth?: number;
+	readonly maxChars?: number;
+	readonly timeoutMs?: number;
+}
+
+/** One parsed state. Only `text` is canonical; `nodes`, `refs` and `chars` are
+ * derived from the bounded text, so a ref cut by truncation is never
+ * actionable. */
+export interface SessionSnapshotState {
+	readonly id: string;
+	readonly text: string;
+	readonly nodes: readonly SnapshotNode[];
+	readonly refs: readonly string[];
+	readonly url: string;
+	readonly depth: number;
+	readonly chars: number;
+	readonly maxChars: number;
+	readonly truncated: boolean;
+	readonly at: number;
+}
+
+/** A diff against a state still in the bounded history. */
+export interface SessionSnapshotDiff {
+	readonly from: SessionSnapshotState;
+	readonly to: SessionSnapshotState;
+	readonly delta: SnapshotDelta;
+}
+
+/** One find answer: only the matching nodes, never the tree. */
+export interface SessionSnapshotFind {
+	readonly snapshotId: string;
+	readonly matches: readonly SnapshotNode[];
+	readonly total: number;
+	readonly truncated: boolean;
+}
+
 /** One in-flight recording: the context created for it, the maximum length it
  * may last, and where its bytes go. */
 export interface SessionRecording {
@@ -312,6 +366,14 @@ export class BrowserSession {
 
 	private readonly clock: () => number;
 	private refs = new Set<string>();
+	/** The newest parsed state, and the bounded states `diff` may target. The
+	 * current state is also the newest history entry. */
+	private currentSnapshot: SessionSnapshotState | undefined;
+	private snapshotHistory: SessionSnapshotState[] = [];
+	private snapshotSeq = 0;
+	/** Set after a post-action observation failed: refs from before the action
+	 * must not be used, and the next action needs a fresh snapshot. */
+	private snapshotInvalidated = false;
 	/** In-flight requests only. A response removes its key, so the index is
 	 * bounded by the page's concurrency, never by its total request count. */
 	private readonly inFlight = new Map<string, NetworkEntry>();
@@ -370,6 +432,9 @@ export class BrowserSession {
 		this.swapping = false;
 		this.crashed = false;
 		this.windowClosed = false;
+		// The new context has a new document and its own ref registry. A ref from
+		// the page this session just left is exactly the stale handle to refuse.
+		this.clearSnapshotStates();
 		this.wire(page);
 	}
 
@@ -422,7 +487,46 @@ export class BrowserSession {
 		this.console.clear();
 		this.network.clear();
 		this.inFlight.clear();
+		this.clearSnapshotStates();
+	}
+
+	/** Drop the current state and its history. The sequence stays monotonic, so
+	 * an id returned before a context swap can never name a later state. */
+	private clearSnapshotStates(): void {
 		this.refs = new Set<string>();
+		this.currentSnapshot = undefined;
+		this.snapshotHistory = [];
+		this.snapshotInvalidated = false;
+	}
+
+	/** The newest state, when one exists. */
+	get snapshotState(): SessionSnapshotState | undefined {
+		return this.currentSnapshot;
+	}
+
+	/** Whether an action has to take a snapshot before it can name a ref. */
+	get snapshotRequired(): boolean {
+		return this.snapshotInvalidated || this.currentSnapshot === undefined;
+	}
+
+	/** True when a post-action observation failed and the ref registry can no
+	 * longer be trusted. */
+	get snapshotInvalid(): boolean {
+		return this.snapshotInvalidated;
+	}
+
+	/** The bounded history, oldest first, current last. */
+	snapshotStates(): readonly SessionSnapshotState[] {
+		return [...this.snapshotHistory];
+	}
+
+	/** A failed post-action read: the action itself may have succeeded, but its
+	 * refs are no longer a contract. */
+	invalidateSnapshot(): void {
+		this.refs = new Set<string>();
+		this.currentSnapshot = undefined;
+		this.snapshotHistory = [];
+		this.snapshotInvalidated = true;
 	}
 
 	/** How many requests are in flight on this session. */
@@ -492,36 +596,271 @@ export class BrowserSession {
 	}
 
 	/**
-	 * Re-walk the page and re-inject the refs. The ref set is replaced, never
-	 * merged: a ref from an earlier snapshot is exactly the stale handle the
-	 * refusal below exists for.
+	 * Read one bounded snapshot and make its refs the current state. The ref set
+	 * is replaced, never merged: a ref from an earlier state is exactly the stale
+	 * handle the refusal below exists for.
 	 */
-	async snapshot(): Promise<{ text: string; refs: string[] }> {
-		const text = await this.page.snapshot();
-		const refs = snapshotRefs(text);
-		this.refs = new Set(refs);
-		return { text, refs };
+	async snapshot(
+		options: SessionSnapshotOptions = {},
+	): Promise<SessionSnapshotState> {
+		this.touch();
+		const within =
+			options.within === undefined
+				? undefined
+				: this.withinTarget(options.within);
+		const maxChars = boundedSnapshotChars(options.maxChars);
+		let result: DriverSnapshotResult;
+		try {
+			result = await this.page.snapshot({
+				depth: boundedSnapshotDepth(options.depth),
+				maxChars,
+				...(options.timeoutMs === undefined
+					? {}
+					: { timeoutMs: options.timeoutMs }),
+				...(within === undefined
+					? {}
+					: { within: this.driverTargetFor(within) }),
+			});
+		} catch (error) {
+			throw this.targetError(error);
+		}
+		return this.recordSnapshot(result);
 	}
 
-	/** Resolve a tool's target to the selector the driver acts on, refusing a ref
-	 * this session never produced. */
-	selectorFor(target: ActionTarget): string {
+	/** Keep one parsed state and make its refs current. */
+	private recordSnapshot(result: DriverSnapshotResult): SessionSnapshotState {
+		this.snapshotSeq += 1;
+		const refs = snapshotRefs(result.snapshotText);
+		const state: SessionSnapshotState = {
+			id: `s${this.snapshotSeq}`,
+			text: result.snapshotText,
+			nodes: result.snapshotNodes,
+			refs,
+			url: this.url,
+			depth: result.depth,
+			chars: result.chars,
+			maxChars: result.maxChars,
+			truncated: result.truncated,
+			at: this.clock(),
+		};
+		this.currentSnapshot = state;
+		this.snapshotHistory.push(state);
+		while (this.snapshotHistory.length > SNAPSHOT_HISTORY_CAPACITY)
+			this.snapshotHistory.shift();
+		this.refs = new Set(refs);
+		this.snapshotInvalidated = false;
+		return state;
+	}
+
+	/** Require a current state for a read that has nothing to do after a failed
+	 * observation or before the first snapshot. */
+	private requireSnapshot(): SessionSnapshotState {
+		if (this.currentSnapshot === undefined || this.snapshotInvalidated)
+			throw new BrowserSessionError(
+				"snapshot-required",
+				"no current snapshot state; take browser_snapshot before using refs or reading a delta",
+				409,
+			);
+		return this.currentSnapshot;
+	}
+
+	/**
+	 * Refuse a ref from an older state before touching the page. A supplied
+	 * snapshot id is an explicit assertion by the caller; a ref is checked
+	 * against the newest state either way.
+	 */
+	assertAction(snapshotId: string | undefined, target: ActionTarget): void {
+		if (snapshotId !== undefined) {
+			if (this.currentSnapshot?.id !== snapshotId)
+				throw new BrowserSessionError(
+					"stale-snapshot",
+					`${snapshotId} is not the current snapshot${this.currentSnapshot ? ` (${this.currentSnapshot.id})` : ""}; take a new snapshot and use its refs`,
+					409,
+					undefined,
+					this.currentSnapshot
+						? { snapshotId: this.currentSnapshot.id }
+						: undefined,
+				);
+		}
+		this.validateTarget(target);
+	}
+
+	/** Resolve a tool's target, refusing a ref this session never produced. */
+	validateTarget(target: ActionTarget): ActionTarget {
 		const ref = target.ref?.trim();
 		const selector = target.selector?.trim();
 		if (ref) {
-			if (!this.refs.has(ref))
+			if (!this.refs.has(ref)) {
+				if (this.currentSnapshot === undefined || this.snapshotInvalidated)
+					throw new BrowserSessionError(
+						"snapshot-required",
+						"no current snapshot state; take browser_snapshot before using a ref",
+						409,
+					);
 				throw new BrowserSessionError(
 					"unknown-ref",
 					`${ref} is not a ref from the current snapshot; take a new snapshot and use a ref it names`,
 					400,
 				);
-			return refSelector(ref);
+			}
+			return { ref };
 		}
-		if (selector) return selector;
+		if (selector) return { selector };
 		throw new BrowserSessionError(
 			"target-required",
 			"an action needs a ref (preferred) or a selector",
 			400,
+		);
+	}
+
+	/** A `within` value is a ref when it has the AI ref grammar, otherwise a
+	 * Playwright selector. A ref must belong to the current state. */
+	private withinTarget(value: string): ActionTarget {
+		const trimmed = value.trim();
+		if (trimmed === "")
+			throw new BrowserSessionError(
+				"target-required",
+				"within needs a ref or a selector",
+				400,
+			);
+		if (!isRef(trimmed)) return { selector: trimmed };
+		this.requireSnapshot();
+		if (!this.refs.has(trimmed))
+			throw new BrowserSessionError(
+				"unknown-ref",
+				`${trimmed} is not a ref from the current snapshot; take a new snapshot and use a ref it names`,
+				400,
+			);
+		return { ref: trimmed };
+	}
+
+	/** Translate a validated target into the driver contract. */
+	private driverTargetFor(target: ActionTarget): DriverActionTarget {
+		if (target.ref !== undefined) return { ref: target.ref };
+		if (target.selector !== undefined) return { selector: target.selector };
+		throw new BrowserSessionError(
+			"target-required",
+			"an action needs a ref (preferred) or a selector",
+			400,
+		);
+	}
+
+	/** The locator descriptor a credential fill and its mask use. */
+	driverLocatorFor(target: ActionTarget): DriverLocator {
+		const resolved = this.validateTarget(target);
+		if (resolved.ref !== undefined) return { ref: resolved.ref };
+		if (resolved.selector !== undefined) return { selector: resolved.selector };
+		throw new BrowserSessionError(
+			"target-required",
+			"an action needs a ref (preferred) or a selector",
+			400,
+		);
+	}
+
+	/** Take a snapshot and return the bounded view the action observation needs. */
+	async captureAfterAction(): Promise<SessionSnapshotState> {
+		return await this.snapshot();
+	}
+
+	/** Diff the current state against the previous one, or an id still held in
+	 * the bounded history. */
+	diffSnapshot(since?: string): SessionSnapshotDiff {
+		const to = this.requireSnapshot();
+		const from =
+			since !== undefined
+				? this.snapshotHistory.find((state) => state.id === since)
+				: this.snapshotHistory[this.snapshotHistory.length - 2];
+		if (from === undefined)
+			throw new BrowserSessionError(
+				"snapshot-history-missing",
+				since === undefined
+					? "no previous snapshot is retained; take another browser_snapshot before asking for a delta"
+					: `${since} is not retained in this session's snapshot history; take a new snapshot`,
+				409,
+				undefined,
+				{ retained: this.snapshotHistory.map((state) => state.id) },
+			);
+		return { from, to, delta: diffSnapshotNodes(from.nodes, to.nodes) };
+	}
+
+	/** Search the current state without returning the tree. A ref `within`
+	 * filters the stored nodes; a selector `within` takes a scoped read but does
+	 * not replace the current id. */
+	async findSnapshot(filter: {
+		readonly query: string;
+		readonly role?: string;
+		readonly name?: string;
+		readonly within?: string;
+		readonly limit: number;
+	}): Promise<SessionSnapshotFind> {
+		const current = this.requireSnapshot();
+		let nodes: readonly SnapshotNode[] = current.nodes;
+		if (filter.within !== undefined) {
+			const target = this.withinTarget(filter.within);
+			if (target.ref !== undefined) {
+				nodes = this.nodesWithin(current.nodes, target.ref);
+			} else {
+				const result = await this.page.snapshot({
+					within: this.driverTargetFor(target),
+				});
+				nodes = result.snapshotNodes;
+			}
+		}
+		const found = findSnapshotNodes(nodes, {
+			query: filter.query,
+			...(filter.role === undefined ? {} : { role: filter.role }),
+			...(filter.name === undefined ? {} : { name: filter.name }),
+			limit: filter.limit,
+		});
+		return {
+			snapshotId: current.id,
+			matches: found.matches,
+			total: found.total,
+			truncated: found.truncated,
+		};
+	}
+
+	/** The stored subtree rooted at a ref, with depths rebased to zero. */
+	private nodesWithin(
+		nodes: readonly SnapshotNode[],
+		ref: string,
+	): readonly SnapshotNode[] {
+		const index = nodes.findIndex((node) => node.ref === ref);
+		if (index < 0)
+			throw new BrowserSessionError(
+				"unknown-ref",
+				`${ref} is not a ref from the current snapshot; take a new snapshot and use a ref it names`,
+				400,
+			);
+		const rootDepth = nodes[index]?.depth ?? 0;
+		const subtree: SnapshotNode[] = [];
+		for (let cursor = index; cursor < nodes.length; cursor += 1) {
+			const node = nodes[cursor];
+			if (node === undefined) break;
+			if (cursor > index && node.depth <= rootDepth) break;
+			subtree.push({ ...node, depth: Math.max(0, node.depth - rootDepth) });
+		}
+		return subtree;
+	}
+
+	/** Turn the driver's missing-ref error into the session's stale-ref refusal,
+	 * with the current id so the caller knows which state is still current. */
+	targetError(error: unknown): unknown {
+		if (!(error instanceof DriverTargetError)) return error;
+		if (error.code === "target-required")
+			return new BrowserSessionError(
+				"target-required",
+				"an action needs a ref (preferred) or a selector",
+				400,
+			);
+		return new BrowserSessionError(
+			"stale-ref",
+			error.message,
+			409,
+			undefined,
+			this.currentSnapshot
+				? { snapshotId: this.currentSnapshot.id }
+				: undefined,
 		);
 	}
 
@@ -790,9 +1129,25 @@ export class BrowserSession {
 		return await this.page.title();
 	}
 
+	/** Resolve once and translate a vanished ref into the session's refusal. */
+	private async actOn<T>(
+		target: ActionTarget,
+		operation: (target: DriverActionTarget) => Promise<T>,
+	): Promise<T> {
+		const resolved = this.validateTarget(target);
+		const driverTarget = this.driverTargetFor(resolved);
+		try {
+			return await operation(driverTarget);
+		} catch (error) {
+			throw this.targetError(error);
+		}
+	}
+
 	async click(target: ActionTarget, timeoutMs = DEFAULT_ACTION_TIMEOUT_MS) {
 		this.touch();
-		await this.page.click(this.selectorFor(target), timeoutMs);
+		await this.actOn(target, (resolved) =>
+			this.page.click(resolved, timeoutMs),
+		);
 	}
 
 	async fill(
@@ -801,7 +1156,9 @@ export class BrowserSession {
 		timeoutMs = DEFAULT_ACTION_TIMEOUT_MS,
 	) {
 		this.touch();
-		await this.page.fill(this.selectorFor(target), value, timeoutMs);
+		await this.actOn(target, (resolved) =>
+			this.page.fill(resolved, value, timeoutMs),
+		);
 	}
 
 	async press(
@@ -810,7 +1167,9 @@ export class BrowserSession {
 		timeoutMs = DEFAULT_ACTION_TIMEOUT_MS,
 	) {
 		this.touch();
-		await this.page.press(this.selectorFor(target), key, timeoutMs);
+		await this.actOn(target, (resolved) =>
+			this.page.press(resolved, key, timeoutMs),
+		);
 	}
 
 	async select(
@@ -819,12 +1178,16 @@ export class BrowserSession {
 		timeoutMs = DEFAULT_ACTION_TIMEOUT_MS,
 	) {
 		this.touch();
-		await this.page.selectOption(this.selectorFor(target), values, timeoutMs);
+		await this.actOn(target, (resolved) =>
+			this.page.selectOption(resolved, values, timeoutMs),
+		);
 	}
 
 	async hover(target: ActionTarget, timeoutMs = DEFAULT_ACTION_TIMEOUT_MS) {
 		this.touch();
-		await this.page.hover(this.selectorFor(target), timeoutMs);
+		await this.actOn(target, (resolved) =>
+			this.page.hover(resolved, timeoutMs),
+		);
 	}
 
 	async wait(input: {
@@ -835,9 +1198,8 @@ export class BrowserSession {
 	}): Promise<void> {
 		this.touch();
 		if (input.target) {
-			await this.page.waitForSelector(
-				this.selectorFor(input.target),
-				input.timeoutMs,
+			await this.actOn(input.target, (resolved) =>
+				this.page.waitForTarget(resolved, input.timeoutMs),
 			);
 			return;
 		}
@@ -861,7 +1223,9 @@ export class BrowserSession {
 
 	async textContent(target: ActionTarget, timeoutMs: number): Promise<string> {
 		this.touch();
-		return await this.page.textContent(this.selectorFor(target), timeoutMs);
+		return await this.actOn(target, (resolved) =>
+			this.page.textContent(resolved, timeoutMs),
+		);
 	}
 
 	/**
@@ -878,11 +1242,17 @@ export class BrowserSession {
 		maxWidth: number,
 	): Promise<Uint8Array> {
 		this.touch();
-		const selector =
+		const requested: ActionTarget | undefined =
 			options.ref !== undefined
-				? this.selectorFor({ ref: options.ref })
-				: options.selector;
-		const narrowed = selector === undefined && this.viewport.width > maxWidth;
+				? { ref: options.ref }
+				: options.selector !== undefined
+					? { selector: options.selector }
+					: undefined;
+		const target =
+			requested === undefined
+				? undefined
+				: this.driverTargetFor(this.validateTarget(requested));
+		const narrowed = target === undefined && this.viewport.width > maxWidth;
 		const previous = this.viewport;
 		if (narrowed)
 			await this.page.setViewportSize({
@@ -894,11 +1264,16 @@ export class BrowserSession {
 				type: options.type,
 				...(options.quality === undefined ? {} : { quality: options.quality }),
 				fullPage: options.fullPage,
-				...(selector === undefined ? {} : { selector }),
+				...(target?.ref === undefined ? {} : { ref: target.ref }),
+				...(target?.selector === undefined
+					? {}
+					: { selector: target.selector }),
 				// A stage screenshot covers every password field and every element a
 				// credential was typed into; another session has nothing to mask.
 				...(this.stage ? { mask: this.maskLocators() } : {}),
 			});
+		} catch (error) {
+			throw this.targetError(error);
 		} finally {
 			if (narrowed) await this.page.setViewportSize(previous);
 		}

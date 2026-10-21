@@ -331,13 +331,16 @@ export function applyCompletionResult(
 		snapshot.metadata.stageTestReportMarkdown =
 			result.metadata.stageTestReportMarkdown;
 	}
-	for (const key of ["stageTestPlan", "stageTestReport"] as const) {
+	for (const key of [
+		"stageTestPlan",
+		"stageTestReport",
+		"stageReplay",
+		"stageReplayHeal",
+	] as const) {
 		const value = result.metadata?.[key];
 		if (value !== undefined) {
 			try {
-				snapshot.metadata[key] = JSON.parse(
-					JSON.stringify(value),
-				) as JsonValueType;
+				snapshot.metadata[key] = JSON.parse(JSON.stringify(value)) as never;
 			} catch {
 				throw new WorkflowRuntimeError("reducer-contract", `invalid ${key}`);
 			}

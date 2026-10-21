@@ -28,8 +28,10 @@ import {
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
 	AGENT_BROWSER_SCREENSHOT_PATH,
+	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
 } from "../src/server/protocol.ts";
+import { stagePaths } from "../src/server/stages/catalog.ts";
 import { workflowEvidenceScope } from "../src/workflow/runtime/evidence-store.ts";
 
 const ENABLED = process.env.DEVENV_SMOKE_BROWSER === "1";
@@ -166,6 +168,105 @@ describe.skipIf(!ENABLED)("browser smoke (real Chromium)", () => {
 			).toBeGreaterThan(0);
 		} finally {
 			server.stop(true);
+			await pool.closeAll();
+			fs.rmSync(base, { recursive: true, force: true });
+		}
+	}, 120_000);
+
+	test("a blocked stage iframe contributes no content and a snapshot mutates no DOM", async () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "browser-smoke-frame-"));
+		const configDir = path.join(base, "config");
+		const defsDir = stagePaths(configDir).defsDir;
+		fs.mkdirSync(defsDir, { recursive: true });
+		let blockedHits = 0;
+		const blocked = Bun.serve({
+			port: 0,
+			fetch: () => {
+				blockedHits += 1;
+				return new Response(
+					"<html><body><p>blocked-iframe-secret</p></body></html>",
+					{ headers: { "content-type": "text/html" } },
+				);
+			},
+		});
+		const app = Bun.serve({
+			port: 0,
+			fetch: () =>
+				new Response(
+					`<html><head><title>Frame guard</title><meta http-equiv="Content-Security-Policy" content="frame-src 'none'"></head><body><h1>Allowed content</h1><iframe src="http://127.0.0.1:${blocked.port}/secret"></iframe></body></html>`,
+					{ headers: { "content-type": "text/html" } },
+				),
+		});
+		fs.writeFileSync(
+			path.join(defsDir, "smoke.json"),
+			`${JSON.stringify(
+				{
+					ident: "smoke",
+					displayName: "Smoke",
+					environment: "integration",
+					system: "smoke",
+					access: "read-only",
+					apps: {
+						web: {
+							label: "Smoke web",
+							url: `http://127.0.0.1:${app.port}/`,
+							kind: "ui",
+						},
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		const browsersPath =
+			process.env.PLAYWRIGHT_BROWSERS_PATH ??
+			path.join(os.homedir(), ".config", "agentic-coding", "browsers");
+		const installer = new BrowserInstaller({
+			configDir: path.dirname(browsersPath),
+		});
+		if (!installer.status().available)
+			throw new Error(`no browser is available under ${browsersPath}`);
+		const pool = new BrowserPool({
+			driver: createPlaywrightDriver(),
+			launch: () => installer.resolveLaunch(),
+			maxSessions: () => 2,
+			idleTtlMs: () => 900_000,
+		});
+		const deps: BrowserRouteDeps = {
+			installer,
+			pool,
+			configDir,
+			settings: () => ({
+				maxSessions: 2,
+				idleTtlMs: 900_000,
+				viewport: { width: 1024, height: 768 },
+			}),
+		};
+		try {
+			const opened = await call(deps, AGENT_BROWSER_OPEN_PATH, {
+				stage: "smoke",
+				stageApp: "web",
+			});
+			expect(opened.status).toBe(200);
+			// The browser's frame policy refuses the iframe before its document exists:
+			// nothing of that document can reach the snapshot.
+			await call(deps, AGENT_BROWSER_SCRIPT_PATH, {
+				code: "await page.waitForTimeout(300);\nreturn 1;",
+			});
+			const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {});
+			expect(snapshot.status).toBe(200);
+			const text = String(snapshot.value.snapshot);
+			expect(text).toContain("Allowed content");
+			expect(text).not.toContain("blocked-iframe-secret");
+			expect(blockedHits).toBe(0);
+			const mutation = await call(deps, AGENT_BROWSER_SCRIPT_PATH, {
+				code: "return await page.evaluate(() => document.querySelectorAll('[data-ac-ref]').length);",
+			});
+			expect(mutation.status).toBe(200);
+			expect(mutation.value.result).toBe(0);
+		} finally {
+			app.stop(true);
+			blocked.stop(true);
 			await pool.closeAll();
 			fs.rmSync(base, { recursive: true, force: true });
 		}

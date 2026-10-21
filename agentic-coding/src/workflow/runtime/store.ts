@@ -28,6 +28,7 @@ import type {
 } from "../registry.ts";
 import { DEBUG_ROLE } from "../steps/debug.ts";
 import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
+import { stageReplayEligible } from "./stage-replay-eligibility.ts";
 import {
 	canonicalStorePath,
 	guardStoreFile,
@@ -1200,6 +1201,10 @@ export function actions(
 			.behavior?.developerActions?.({
 				snapshot,
 				traits: effectiveFamilyTraits(definition),
+				...(definition.id === "stage-test" &&
+				snapshot.currentStep === "stage.plan-review"
+					? { stageReplayEligible: stageReplayEligible(snapshot) }
+					: {}),
 			}) ?? []
 	);
 }

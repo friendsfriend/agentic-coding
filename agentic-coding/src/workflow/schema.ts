@@ -432,6 +432,12 @@ const researchHandoffDirectiveSchema = Schema.Struct({
 
 export const StageTestPlanSchema = Schema.Struct({
 	ticketSummary: boundedText(8192),
+	/** Optional replay identity (`add-stage-flow-replay`). Additive: an existing
+	 * plan without these fields remains a valid exploratory plan. */
+	flowId: Schema.optional(boundedText(64)),
+	inputs: Schema.optional(
+		Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
+	),
 	knowledgeStatus: Schema.Literal("found", "none"),
 	expectations: Schema.Array(
 		Schema.Struct({
@@ -456,6 +462,20 @@ export const StageTestPlanSchema = Schema.Struct({
 			action: boundedText(2048),
 			expected: boundedText(4096),
 			capture: Schema.Array(boundedText(256)).pipe(Schema.maxItems(30)),
+			/** The reviewed block chosen for this route step. A step without one is
+			 * an exploratory gap, not a replay candidate. */
+			block: Schema.optional(
+				Schema.Struct({
+					id: boundedText(160),
+					version: Schema.optional(boundedText(32)),
+					args: Schema.optional(
+						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
+					),
+				}),
+			),
+			expectationIds: Schema.optional(
+				Schema.Array(boundedText(64)).pipe(Schema.maxItems(50)),
+			),
 		}),
 	).pipe(Schema.minItems(1), Schema.maxItems(100)),
 	asyncWaits: Schema.Array(
@@ -768,6 +788,39 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		stageTestReportMarkdown: Schema.optionalWith(text(2 * 1024 * 1024), {
 			exact: true,
 		}),
+		/** The replay identity and evidence links for the optional stage.replay
+		 * step. It is a summary only; the result/report/heal JSON stays in the
+		 * evidence store. */
+		stageReplay: Schema.optionalWith(
+			Schema.Struct({
+				status: Schema.Literal("passed", "failed", "ineligible"),
+				flowId: Schema.optionalWith(boundedText(64), { exact: true }),
+				planId: Schema.optionalWith(boundedText(128), { exact: true }),
+				revision: Schema.optionalWith(integer(0), { exact: true }),
+				inputsHash: Schema.optionalWith(boundedText(80), { exact: true }),
+				routeHash: Schema.optionalWith(boundedText(80), { exact: true }),
+				specHash: Schema.optionalWith(boundedText(80), { exact: true }),
+				blockVersions: Schema.optionalWith(
+					Schema.Record({ key: boundedText(160), value: boundedText(32) }),
+					{ exact: true },
+				),
+				blockDigests: Schema.optionalWith(
+					Schema.Record({ key: boundedText(160), value: boundedText(80) }),
+					{ exact: true },
+				),
+				resultEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
+				reportEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
+				healEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
+				reason: Schema.optionalWith(boundedText(2048), { exact: true }),
+				stepCount: Schema.optionalWith(integer(0), { exact: true }),
+				durationMs: Schema.optionalWith(integer(0), { exact: true }),
+			}),
+			{ exact: true },
+		),
+		stageReplayHeal: Schema.optionalWith(
+			Schema.Record({ key: boundedText(256), value: Schema.Unknown }),
+			{ exact: true },
+		),
 		createdAt: text(4096),
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),

@@ -15,6 +15,10 @@
 	"scripts": {
 		"test": "bun run scripts/test.ts",
 		"test:devenv": "bun test packages/devenv",
+		"stage-blocks:generate": "bun run scripts/generate-stage-blocks.ts",
+		"stage-blocks:check": "bun run scripts/generate-stage-blocks.ts --check",
+		"stage-flows:check": "bun run scripts/check-stage-flows.ts",
+		"stage-flows:run": "bun run scripts/stage-flow-run.ts",
 		"verify": "bun run lint && bun run type-check && bun run test && bun run test:devenv && bun run build",
 		"type-check": "tsc --noEmit",
 		"lint": "biome check . && bun run lint:boundaries",
@@ -45,6 +49,7 @@
 		"@babel/parser": "^7.29.9",
 		"@babel/types": "^7.29.8",
 		"@biomejs/biome": "^2.5.14",
+		"@playwright/test": "1.64.1",
 		"@types/bun": "^1.4.2",
 		"typescript": "^7.0.2"
 	}

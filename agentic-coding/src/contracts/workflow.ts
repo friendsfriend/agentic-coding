@@ -303,6 +303,27 @@ export interface WorkflowMetadata {
 	stageTestReport?: JsonValue;
 	/** Engine-rendered, secret-scrubbed stage report shown in dashboard review. */
 	stageTestReportMarkdown?: string;
+	/** Summary of the optional compiled-flow replay; the result, report and heal
+	 * JSON stay in the evidence store and this only links to them. */
+	stageReplay?: {
+		status: "passed" | "failed" | "ineligible";
+		flowId?: string;
+		planId?: string;
+		revision?: number;
+		inputsHash?: string;
+		routeHash?: string;
+		specHash?: string;
+		blockVersions?: Record<string, string>;
+		blockDigests?: Record<string, string>;
+		resultEvidenceId?: string;
+		reportEvidenceId?: string;
+		healEvidenceId?: string;
+		reason?: string;
+		stepCount?: number;
+		durationMs?: number;
+	};
+	/** The redacted replay heal packet, retained for the fallback tester. */
+	stageReplayHeal?: Record<string, unknown>;
 	createdAt: string;
 	updatedAt: string;
 	stepEnteredAt: string;

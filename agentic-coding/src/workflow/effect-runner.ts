@@ -1779,7 +1779,11 @@ export function agentEffectHandlers(
 								path: sourcePath,
 								kind: "other",
 								caption,
-								step: "stage.execute",
+								step:
+									typeof (effect.payload as { step?: unknown }).step ===
+									"string"
+										? ((effect.payload as { step?: string }).step as string)
+										: "stage.execute",
 								// The dashboard's evidence subview opens this entry as the run's
 								// report (`evidence-summary-subview`).
 								report: true,

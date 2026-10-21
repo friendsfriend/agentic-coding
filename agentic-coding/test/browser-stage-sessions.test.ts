@@ -1721,8 +1721,8 @@ describe("stage-bound sessions", () => {
 			action: "click",
 			ref: "e0",
 		});
-		expect(stale.status).toBe(400);
-		expect(stale.value.code).toBe("unknown-ref");
+		expect(stale.status).toBe(409);
+		expect(stale.value.code).toBe("snapshot-required");
 		// Neither the snapshot nor the click raised the window: the one focus call
 		// belongs to the hand-off, and nothing an agent does makes another.
 		expect(

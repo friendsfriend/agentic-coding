@@ -49,10 +49,18 @@ export const browserViewportSchema = Schema.Struct({
 const sessionField = Schema.optional(browserName(64));
 const refField = Schema.optional(browserName(32));
 const selectorField = Schema.optional(browserField(1024));
+const snapshotIdField = Schema.optional(browserName(64));
 const timeoutField = Schema.optional(
 	Schema.Number.pipe(
 		Schema.filter((value) => Number.isFinite(value) && value > 0, {
 			message: () => "timeoutMs must be a positive number",
+		}),
+	),
+);
+const positiveIntegerField = Schema.optional(
+	Schema.Number.pipe(
+		Schema.filter((value) => Number.isInteger(value) && value > 0, {
+			message: () => "expected a positive integer",
 		}),
 	),
 );
@@ -93,12 +101,38 @@ export const browserSessionRequestSchema = Schema.Struct({
 });
 export type BrowserSessionRequest = typeof browserSessionRequestSchema.Type;
 
+/** `browser_snapshot`: a full read, a scoped read (`within`), or a diff against
+ * a state still in the bounded history (`diff`/`since`). `diff` and `within`
+ * are mutually exclusive; the route refuses a body that asks for both. */
+export const browserSnapshotRequestSchema = Schema.Struct({
+	session: sessionField,
+	within: Schema.optional(browserField(1024)),
+	depth: positiveIntegerField,
+	maxChars: positiveIntegerField,
+	diff: Schema.optional(Schema.Boolean),
+	since: Schema.optional(browserName(64)),
+});
+export type BrowserSnapshotRequest = typeof browserSnapshotRequestSchema.Type;
+
+/** `browser_find`: search the current snapshot state instead of returning the
+ * tree. `within` scopes to a ref or selector, `limit` is capped by the route. */
+export const browserFindRequestSchema = Schema.Struct({
+	session: sessionField,
+	query: browserField(256),
+	role: Schema.optional(browserName(64)),
+	name: Schema.optional(browserField(256)),
+	within: Schema.optional(browserField(1024)),
+	limit: positiveIntegerField,
+});
+export type BrowserFindRequest = typeof browserFindRequestSchema.Type;
+
 /** `browser_click`, `browser_fill`, `browser_press`, `browser_select` and
  * `browser_hover`: one body, because they take the same target and exactly one
  * action-specific value. */
 export const browserActionRequestSchema = Schema.Struct({
 	session: sessionField,
 	action: Schema.Literal("click", "fill", "press", "select", "hover"),
+	snapshotId: snapshotIdField,
 	ref: refField,
 	selector: selectorField,
 	value: Schema.optional(browserFreeText(8192)),
@@ -113,6 +147,80 @@ export const browserActionRequestSchema = Schema.Struct({
 });
 export type BrowserActionRequest = typeof browserActionRequestSchema.Type;
 
+/** One changed node in an action observation or a diff. */
+export const browserDeltaEntrySchema = Schema.Struct({
+	ref: Schema.optional(Schema.String),
+	role: Schema.String,
+	name: Schema.optional(Schema.String),
+	text: Schema.optional(Schema.String),
+	checked: Schema.optional(Schema.Boolean),
+	disabled: Schema.optional(Schema.Boolean),
+});
+export type BrowserDeltaEntry = typeof browserDeltaEntrySchema.Type;
+
+/** The structured delta: at most 50 entries per category, with full counts. */
+export const browserSnapshotDeltaSchema = Schema.Struct({
+	added: Schema.Array(browserDeltaEntrySchema),
+	removed: Schema.Array(browserDeltaEntrySchema),
+	changed: Schema.Array(browserDeltaEntrySchema),
+});
+export type BrowserSnapshotDelta = typeof browserSnapshotDeltaSchema.Type;
+
+/** Timing and size telemetry every browser result carries. */
+export const browserTimingSchema = Schema.Struct({
+	snapshotMs: Schema.Number,
+	actionMs: Schema.Number,
+	observeMs: Schema.Number,
+	totalMs: Schema.Number,
+	chars: Schema.Number,
+	refs: Schema.Number,
+	changed: Schema.Boolean,
+	truncated: Schema.Boolean,
+	toolMs: Schema.optional(Schema.Number),
+	resultChars: Schema.optional(Schema.Number),
+});
+export type BrowserTiming = typeof browserTimingSchema.Type;
+
+/** A full snapshot result: bounded text plus the refs that belong to its id. */
+export const browserSnapshotResultSchema = Schema.Struct({
+	session: Schema.String,
+	url: Schema.String,
+	snapshotId: Schema.optional(Schema.String),
+	snapshot: Schema.String,
+	refs: Schema.Number,
+	timing: browserTimingSchema,
+});
+export type BrowserSnapshotResult = typeof browserSnapshotResultSchema.Type;
+
+/** An action result: a compact observation and delta, never the tree. */
+export const browserActionObservationSchema = Schema.Struct({
+	session: Schema.String,
+	action: Schema.String,
+	url: Schema.String,
+	title: Schema.optional(Schema.String),
+	observedAt: Schema.optional(Schema.String),
+	snapshotId: Schema.optional(Schema.String),
+	observation: Schema.optional(Schema.String),
+	changed: Schema.optional(Schema.Boolean),
+	snapshotRequired: Schema.optional(Schema.Boolean),
+	delta: Schema.optional(browserSnapshotDeltaSchema),
+	deltaTruncated: Schema.optional(Schema.Boolean),
+	timing: browserTimingSchema,
+});
+export type BrowserActionObservation =
+	typeof browserActionObservationSchema.Type;
+
+/** A find result: matching nodes only, never the tree. */
+export const browserFindResultSchema = Schema.Struct({
+	session: Schema.String,
+	snapshotId: Schema.String,
+	matches: Schema.Array(browserDeltaEntrySchema),
+	total: Schema.Number,
+	truncated: Schema.Boolean,
+	timing: browserTimingSchema,
+});
+export type BrowserFindResult = typeof browserFindResultSchema.Type;
+
 /** `browser_wait`: one of target/text/url, bounded by a timeout. */
 export const browserWaitRequestSchema = Schema.Struct({
 	session: sessionField,
@@ -120,6 +228,7 @@ export const browserWaitRequestSchema = Schema.Struct({
 	selector: selectorField,
 	text: Schema.optional(browserField(2048)),
 	url: Schema.optional(browserField(2048)),
+	observe: Schema.optional(Schema.Boolean),
 	timeoutMs: timeoutField,
 });
 export type BrowserWaitRequest = typeof browserWaitRequestSchema.Type;
@@ -186,6 +295,7 @@ export const browserScriptRequestSchema = Schema.Struct({
 	session: sessionField,
 	code: browserFreeText(200_000).pipe(Schema.minLength(1)),
 	save: Schema.optional(Schema.Boolean),
+	observe: Schema.optional(Schema.Boolean),
 	caption: Schema.optional(browserField(512)),
 	timeoutMs: timeoutField,
 });

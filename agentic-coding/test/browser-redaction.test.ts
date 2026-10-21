@@ -29,10 +29,13 @@ import { listEvidence } from "../src/server/evidence/store.ts";
 import {
 	AGENT_BROWSER_ACTION_PATH,
 	AGENT_BROWSER_CONSOLE_PATH,
+	AGENT_BROWSER_FIND_PATH,
 	AGENT_BROWSER_OPEN_PATH,
 	AGENT_BROWSER_RECORD_PATH,
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
+	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_WAIT_PATH,
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
@@ -221,6 +224,42 @@ describe("stage reply redaction", () => {
 		expect(script.text).toContain(
 			"q=«redacted:GRID_INT_CLERK_PASSWORD:url-encoded»",
 		);
+		await deps.pool.closeAll();
+	});
+
+	test("snapshot, find and action observations pass through the redactor", async () => {
+		const configDir = configRoot();
+		const driver = createFakeDriver();
+		const deps = build(configDir, driver);
+		await call(deps, AGENT_BROWSER_OPEN_PATH, {
+			stage: "grid-int",
+			stageApp: "web",
+		});
+		await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {});
+		driver.queueSnapshot(
+			[
+				'- heading "Fake" [level=1] [ref=e0]',
+				'- button "Save" [ref=e1]',
+				`- text "connection failed for ${PASSWORD}" [ref=e2]`,
+			].join("\n"),
+		);
+		const observed = await call(deps, AGENT_BROWSER_WAIT_PATH, {
+			observe: true,
+		});
+		expect(observed.status).toBe(200);
+		expect(observed.text).not.toContain(PASSWORD);
+		expect(observed.text).toContain("«redacted:GRID_INT_CLERK_PASSWORD»");
+		const found = await call(deps, AGENT_BROWSER_FIND_PATH, {
+			query: "connection",
+		});
+		expect(found.status).toBe(200);
+		expect(found.text).not.toContain(PASSWORD);
+		expect(found.text).toContain("«redacted:GRID_INT_CLERK_PASSWORD»");
+		driver.setSnapshot(`- text "connection failed for ${PASSWORD}" [ref=e2]`);
+		const snapshot = await call(deps, AGENT_BROWSER_SNAPSHOT_PATH, {});
+		expect(snapshot.status).toBe(200);
+		expect(snapshot.text).not.toContain(PASSWORD);
+		expect(snapshot.text).toContain("«redacted:GRID_INT_CLERK_PASSWORD»");
 		await deps.pool.closeAll();
 	});
 

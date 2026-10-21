@@ -7,8 +7,14 @@
 // here is a Playwright emulation: it is a browser that answers the calls the
 // server makes, and records them.
 
+import {
+	boundSnapshotText,
+	parseSnapshotNodes,
+	type SnapshotNode,
+} from "./snapshot.ts";
 import type {
 	BrowserDriver,
+	DriverActionTarget,
 	DriverAuthorizationProvider,
 	DriverBrowser,
 	DriverConsoleEntry,
@@ -24,8 +30,10 @@ import type {
 	DriverRequestGuard,
 	DriverRequestInfo,
 	DriverScreenshotOptions,
+	DriverSnapshotOptions,
+	DriverSnapshotResult,
 } from "./types.ts";
-import { driverLocatorKey } from "./types.ts";
+import { DriverTargetError, driverLocatorKey } from "./types.ts";
 
 /** A stand-in for Playwright's `Response`: a class instance, not plain data, so
  * the script facade's deny-by-default refusal applies to it exactly as it does to
@@ -45,9 +53,15 @@ class FakeNavigationResponse {
 export interface FakeDriverOptions {
 	/** Fail every launch with this error (an unavailable browser). */
 	readonly launchError?: Error;
-	/** The snapshot text `snapshot()` returns. Its `[ref=eN]` markers are the
-	 * refs the fake accepts, exactly like a real page's injected attributes. */
+	/** The AI-shaped snapshot text `snapshot()` returns. Its `[ref=eN]` and
+	 * `[ref=f1e3]` markers are the refs the fake accepts. */
 	readonly snapshot?: string;
+	/** Successive snapshot texts, consumed one per read and repeated last. A test
+	 * uses this to model the state after an action without a real browser. */
+	readonly snapshots?: readonly string[];
+	/** Scoped snapshot answers, keyed by `ref=<ref>` or `selector=<selector>`.
+	 * A key with no entry falls back to filtering the full snapshot text. */
+	readonly withinSnapshots?: Readonly<Record<string, string>>;
 	/** The bytes every screenshot resolves to. */
 	readonly screenshot?: Uint8Array;
 	/** The bytes a kept recording writes. */
@@ -182,8 +196,17 @@ export interface FakeDriver extends BrowserDriver {
 	launches: number;
 	contexts: number;
 	readonly pages: FakePage[];
-	/** Every selector the driver was asked to act on, across pages. */
+	/** Every action target the driver was asked to act on, across pages. */
 	readonly performed: string[];
+	/** Every snapshot read, so depth/within/mode bounds are assertable. */
+	readonly snapshotRequests: DriverSnapshotOptions[];
+	/** Append a snapshot text for the next read. */
+	queueSnapshot(text: string): void;
+	/** Replace the text every later read returns. */
+	setSnapshot(text: string): void;
+	/** Make the next snapshot read fail, like a page that navigated away while
+	 * the post-action observation was being taken. */
+	failNextSnapshot(): void;
 	/** Every request the fake asked a guard about, across contexts. */
 	readonly guarded: DriverRequestInfo[];
 	/** Every request the fake's routing layer authenticated, with the origin it
@@ -260,12 +283,59 @@ export interface FakeDriver extends BrowserDriver {
 }
 
 const DEFAULT_SNAPSHOT = [
-	"- url: about:blank",
-	"- title: Fake",
-	'button "Save" [ref=e0]',
-	'textbox "Name" [ref=e1]',
-	'link "Home" [ref=e2]',
+	'- heading "Fake" [level=1] [ref=e0]',
+	'- button "Save" [ref=e1]',
+	'- textbox "Name" [ref=e2]',
+	'- link "Home" [ref=e3]',
 ].join("\n");
+
+function targetKey(target: DriverActionTarget): string {
+	if (target.ref !== undefined && target.ref !== "") return `ref=${target.ref}`;
+	if (target.selector !== undefined && target.selector !== "")
+		return `selector=${target.selector}`;
+	return "target=missing";
+}
+
+function performedTarget(target: DriverActionTarget): string {
+	if (target.ref !== undefined && target.ref !== "") return `ref=${target.ref}`;
+	if (target.selector !== undefined && target.selector !== "")
+		return `selector=${target.selector}`;
+	return "missing";
+}
+
+function lineDepth(line: string): number {
+	const indent = /^\s*/.exec(line)?.[0].length ?? 0;
+	return Math.floor(indent / 2);
+}
+
+/** Return the subtree rooted at the node a `within` target names. The fake has
+ * no DOM, so its snapshot text is the tree; a line and the more-indented lines
+ * after it are the subtree Playwright's locator form would return. */
+function scopedSnapshot(
+	text: string,
+	target: DriverActionTarget,
+	overrides: Readonly<Record<string, string>>,
+): string {
+	const override = overrides[targetKey(target)];
+	if (override !== undefined) return override;
+	const lines = text.split("\n");
+	const at = lines.findIndex((line) =>
+		target.ref !== undefined
+			? line.includes(`[ref=${target.ref}]`)
+			: target.selector !== undefined && line.includes(target.selector),
+	);
+	if (at < 0) return "";
+	const rootDepth = lineDepth(lines[at] as string);
+	const end = lines.findIndex(
+		(line, index) =>
+			index > at && line.trim() !== "" && lineDepth(line) <= rootDepth,
+	);
+	const prefix = "  ".repeat(rootDepth);
+	return lines
+		.slice(at, end < 0 ? lines.length : end)
+		.map((line) => (line.startsWith(prefix) ? line.slice(prefix.length) : line))
+		.join("\n");
+}
 
 export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	const pages: FakePage[] = [];
@@ -288,7 +358,11 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	 * and beacons of the page the navigation is loading, which reach the guard
 	 * before the navigation itself returns. */
 	let duringGoto: DuringGotoRequest[] = [];
-	const snapshotText = options.snapshot ?? DEFAULT_SNAPSHOT;
+	let snapshotText = options.snapshot ?? DEFAULT_SNAPSHOT;
+	const pendingSnapshots = [...(options.snapshots ?? [])];
+	const withinSnapshots = options.withinSnapshots ?? {};
+	const snapshotRequests: DriverSnapshotOptions[] = [];
+	let failSnapshot = false;
 	const screenshotBytes =
 		options.screenshot ??
 		new Uint8Array([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00]);
@@ -337,6 +411,35 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 		// a credential fill or by the script itself — is what reading that field
 		// back out returns, exactly like a real page.
 		const filledInputs = new Map<string, string>();
+		const readSnapshot = (
+			request: DriverSnapshotOptions,
+		): DriverSnapshotResult => {
+			snapshotRequests.push(request);
+			if (failSnapshot) {
+				failSnapshot = false;
+				throw new Error("the page navigated away during the snapshot read");
+			}
+			const next = pendingSnapshots.shift();
+			if (next !== undefined) snapshotText = next;
+			let text =
+				request.within === undefined
+					? snapshotText
+					: scopedSnapshot(snapshotText, request.within, withinSnapshots);
+			const depth = request.depth ?? 10;
+			text = text
+				.split("\n")
+				.filter((line) => lineDepth(line) <= depth)
+				.join("\n");
+			const bounded = boundSnapshotText(text, request.maxChars);
+			return {
+				snapshotText: bounded.text,
+				snapshotNodes: parseSnapshotNodes(bounded.text) as SnapshotNode[],
+				depth,
+				chars: bounded.chars,
+				truncated: bounded.truncated,
+				maxChars: bounded.maxChars,
+			};
+		};
 		// A deliberately leaky stand-in for a real page: it carries the same
 		// references a real Playwright page does (`locator` results and the input
 		// devices point back at the page), so a facade that fails to mask them is
@@ -508,7 +611,7 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 					? context.url
 					: `evaluated:${expression}`;
 			},
-			snapshot: async () => snapshotText,
+			snapshot: async (request) => readSnapshot(request),
 			setViewportSize: async (size) => {
 				page.viewport = { ...size };
 			},
@@ -523,36 +626,43 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 				performedHere.push("removeBanner");
 				performed.push("removeBanner");
 			},
-			click: async (selector) => {
-				performedHere.push(`click:${selector}`);
-				performed.push(`click:${selector}`);
-				assertKnownRef(selector, snapshotText);
+			click: async (target) => {
+				const key = performedTarget(target);
+				performedHere.push(`click:${key}`);
+				performed.push(`click:${key}`);
+				assertKnownTarget(target, snapshotText);
 			},
-			fill: async (selector, value) => {
-				filledInputs.set(selector, value);
-				performedHere.push(`fill:${selector}=${value}`);
-				performed.push(`fill:${selector}=${value}`);
-				assertKnownRef(selector, snapshotText);
+			fill: async (target, value) => {
+				filledInputs.set(targetKey(target), value);
+				const key = performedTarget(target);
+				performedHere.push(`fill:${key}=${value}`);
+				performed.push(`fill:${key}=${value}`);
+				assertKnownTarget(target, snapshotText);
 			},
-			press: async (selector, key) => {
-				performedHere.push(`press:${selector}=${key}`);
-				performed.push(`press:${selector}=${key}`);
-				assertKnownRef(selector, snapshotText);
+			press: async (target, key) => {
+				const name = performedTarget(target);
+				performedHere.push(`press:${name}=${key}`);
+				performed.push(`press:${name}=${key}`);
+				assertKnownTarget(target, snapshotText);
 			},
-			selectOption: async (selector, values) => {
-				performedHere.push(`select:${selector}=${values.join(",")}`);
-				performed.push(`select:${selector}=${values.join(",")}`);
-				assertKnownRef(selector, snapshotText);
+			selectOption: async (target, values) => {
+				const name = performedTarget(target);
+				performedHere.push(`select:${name}=${values.join(",")}`);
+				performed.push(`select:${name}=${values.join(",")}`);
+				assertKnownTarget(target, snapshotText);
 			},
-			hover: async (selector) => {
-				performedHere.push(`hover:${selector}`);
-				performed.push(`hover:${selector}`);
-				assertKnownRef(selector, snapshotText);
+			hover: async (target) => {
+				const name = performedTarget(target);
+				performedHere.push(`hover:${name}`);
+				performed.push(`hover:${name}`);
+				assertKnownTarget(target, snapshotText);
 			},
 			fillField: async (locator, value) => {
 				const key = driverLocatorKey(locator);
 				// The field now holds what was typed into it, whatever named it.
-				if (locator.selector !== undefined)
+				if (locator.ref !== undefined)
+					filledInputs.set(`ref=${locator.ref}`, value);
+				else if (locator.selector !== undefined)
 					filledInputs.set(locator.selector, value);
 				performedHere.push(`fillField:${key}=${value}`);
 				performed.push(`fillField:${key}=${value}`);
@@ -573,9 +683,10 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 					throw new Error(`no element matches ${driverLocatorKey(locator)}`);
 			},
 			locatorCount: async (locator) => controlCount(locator),
-			waitForSelector: async (selector) => {
-				assertKnownRef(selector, snapshotText);
+			waitForTarget: async (target) => {
+				assertKnownTarget(target, snapshotText);
 			},
+			waitForSelector: async () => {},
 			waitForText: async () => {},
 			waitForUrl: async () => {},
 			textContent: async () => "fake text",
@@ -745,6 +856,16 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	return {
 		pages,
 		performed,
+		snapshotRequests,
+		queueSnapshot(text: string) {
+			pendingSnapshots.push(text);
+		},
+		setSnapshot(text: string) {
+			snapshotText = text;
+		},
+		failNextSnapshot() {
+			failSnapshot = true;
+		},
 		get guarded() {
 			return guarded;
 		},
@@ -888,12 +1009,16 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 	};
 }
 
-/** The fake's ref contract: a `data-ac-ref` selector must name a ref the
- * snapshot produced, exactly like a real page that injected the attributes. */
-function assertKnownRef(selector: string, snapshot: string): void {
-	const match = selector.match(/^\[data-ac-ref="(e\d+)"\]$/);
-	if (!match) return;
-	const ref = match[1];
-	if (ref === undefined || !snapshot.includes(`[ref=${ref}]`))
-		throw new Error(`unknown ref ${ref}`);
+/** The fake's ref contract: an action target must name a ref the snapshot
+ * produced. A disappeared ref is the driver's `stale-ref`, not a same-named
+ * fallback. */
+function assertKnownTarget(target: DriverActionTarget, snapshot: string): void {
+	if (target.selector !== undefined) return;
+	const ref = target.ref;
+	if (ref === undefined) return;
+	if (!snapshot.includes(`[ref=${ref}]`))
+		throw new DriverTargetError(
+			"stale-ref",
+			`ref ${ref} no longer resolves on the page; take a new snapshot`,
+		);
 }

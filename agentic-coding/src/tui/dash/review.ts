@@ -1277,6 +1277,9 @@ export function createReviewFeature(
 		const actionKey = requiredUserAction()?.key;
 		const setupReview = actionKey === "setup-review";
 		const wikiReview = actionKey === "wiki-review";
+		const replayApproval = (data().state.availableActions ?? []).some(
+			(action) => action.id === "approve-and-replay",
+		);
 		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
 		setBusy(true);
 		setReviewFinishing(true);
@@ -1302,7 +1305,9 @@ export function createReviewFeature(
 							? "approve-setup"
 							: wikiReview
 								? "approve-wiki"
-								: "approve-plan",
+								: replayApproval
+									? "approve-and-replay"
+									: "approve-plan",
 					repo,
 					workflowId,
 					data().state.revision,

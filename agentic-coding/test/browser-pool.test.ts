@@ -498,8 +498,8 @@ describe("session refs, buffers and recording", () => {
 		const snapshot = await session.snapshot();
 		const ref = snapshotRefs(snapshot.text)[0] as string;
 		await session.click({ ref });
-		expect(driver.performed).toEqual([`click:[data-ac-ref="${ref}"]`]);
-		expect(() => session.selectorFor({ ref: "e99" })).toThrow(
+		expect(driver.performed).toEqual([`click:ref=${ref}`]);
+		expect(() => session.driverLocatorFor({ ref: "e99" })).toThrow(
 			/not a ref from the current snapshot/,
 		);
 		await pool.closeAll();
@@ -510,7 +510,69 @@ describe("session refs, buffers and recording", () => {
 		const pool = poolWith(driver);
 		const session = await open(pool, "workflow:a");
 		await session.fill({ selector: "#name" }, "ada");
-		expect(driver.performed).toEqual(["fill:#name=ada"]);
+		expect(driver.performed).toEqual(["fill:selector=#name=ada"]);
+		await pool.closeAll();
+	});
+
+	test("an iframe ref resolves and a scoped read passes its target, depth and cap", async () => {
+		const driver = createFakeDriver({
+			snapshot: [
+				'- iframe "Payment" [ref=f1e1]:',
+				'  - textbox "Card" [ref=f1e2]',
+			].join("\n"),
+		});
+		const pool = poolWith(driver);
+		const session = await open(pool, "workflow:a");
+		await session.snapshot();
+		const snapshot = await session.snapshot({
+			within: "f1e1",
+			depth: 3,
+			maxChars: 500,
+		});
+		expect(snapshot.refs).toContain("f1e2");
+		expect(driver.snapshotRequests.at(-1)).toMatchObject({
+			depth: 3,
+			maxChars: 500,
+			within: { ref: "f1e1" },
+		});
+		await session.click({ ref: "f1e2" });
+		expect(driver.performed).toEqual(["click:ref=f1e2"]);
+		const currentId = session.snapshotState?.id;
+		// The page dropped the frame after the snapshot: the ref must not turn into
+		// a selector or a same-named element.
+		driver.setSnapshot('- heading "Only" [ref=e1]');
+		let stale: unknown;
+		try {
+			await session.click({ ref: "f1e2" });
+		} catch (error) {
+			stale = error;
+		}
+		expect(stale).toBeInstanceOf(Error);
+		expect((stale as Error).message).toContain("no longer resolves");
+		expect(stale).toMatchObject({
+			code: "stale-ref",
+			details: { snapshotId: currentId },
+		});
+		await pool.closeAll();
+	});
+
+	test("a selector scope reaches the driver and returns only its subtree", async () => {
+		const driver = createFakeDriver({
+			withinSnapshots: {
+				"selector=.card": '- button "Save" [ref=e9]',
+			},
+		});
+		const pool = poolWith(driver);
+		const session = await open(pool, "workflow:a");
+		const snapshot = await session.snapshot({ within: ".card" });
+		expect(snapshot.text).toContain('button "Save"');
+		expect(snapshot.refs).toEqual(["e9"]);
+		expect(driver.snapshotRequests.at(-1)?.within).toEqual({
+			selector: ".card",
+		});
+		driver.setSnapshot('- button "Save" [ref=e9]');
+		await session.click({ ref: "e9" });
+		expect(driver.performed).toEqual(["click:ref=e9"]);
 		await pool.closeAll();
 	});
 

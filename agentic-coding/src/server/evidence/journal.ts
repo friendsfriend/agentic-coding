@@ -95,6 +95,17 @@ export interface StageJournalAppend {
 	readonly role?: string;
 	readonly url?: string;
 	readonly label: string;
+	readonly planId?: string;
+	readonly routeStepId?: string;
+	readonly block?: string;
+	readonly blockVersion?: string;
+	readonly subStep?: string;
+	readonly status?: "passed" | "failed" | "skipped";
+	readonly flowId?: string;
+	readonly revision?: number;
+	readonly inputsHash?: string;
+	readonly replayRunId?: string;
+	readonly source?: "replay";
 	readonly expected?: string;
 	readonly observed?: string;
 	readonly captures?: Readonly<Record<string, string>>;
@@ -512,6 +523,55 @@ export async function appendStageJournalEntry(
 				: { role: cleanText(redact, input.role) }),
 			...textField("url", cleanUrl(redact, input.url)),
 			label: cleanText(redact, input.label),
+			...textField(
+				"planId",
+				input.planId === undefined
+					? undefined
+					: cleanText(redact, input.planId),
+			),
+			...textField(
+				"routeStepId",
+				input.routeStepId === undefined
+					? undefined
+					: cleanText(redact, input.routeStepId),
+			),
+			...textField(
+				"block",
+				input.block === undefined ? undefined : cleanText(redact, input.block),
+			),
+			...textField(
+				"blockVersion",
+				input.blockVersion === undefined
+					? undefined
+					: cleanText(redact, input.blockVersion),
+			),
+			...textField(
+				"subStep",
+				input.subStep === undefined
+					? undefined
+					: cleanText(redact, input.subStep),
+			),
+			...(input.status === undefined ? {} : { status: input.status }),
+			...textField(
+				"flowId",
+				input.flowId === undefined
+					? undefined
+					: cleanText(redact, input.flowId),
+			),
+			...(input.revision === undefined ? {} : { revision: input.revision }),
+			...textField(
+				"inputsHash",
+				input.inputsHash === undefined
+					? undefined
+					: cleanText(redact, input.inputsHash),
+			),
+			...textField(
+				"replayRunId",
+				input.replayRunId === undefined
+					? undefined
+					: cleanText(redact, input.replayRunId),
+			),
+			...(input.source === undefined ? {} : { source: input.source }),
 			...textField("expected", redactText(redact, input.expected)),
 			...textField("observed", redactText(redact, input.observed)),
 			...(captures === undefined ? {} : { captures }),

@@ -1867,6 +1867,19 @@ intended ownership rather than exemptions:
   to `runtime/step-evidence.ts`; `steps/validation.ts` now holds only the
   `PreparedStepEvidence` type and pure validation predicates, and behavior
   hooks consume the evidence the runtime prepares and passes in.
+- The `stage.replay` step behavior (`add-stage-flow-replay`) first read the
+  stage-blocks flow registry, the evidence store, and the filesystem directly
+  to decide replay eligibility and to load a finished replay's result/report/
+  heal JSON. Both reads moved to the runtime layer:
+  `runtime/stage-replay-eligibility.ts` (called from `runtime/store.ts`'s
+  `actions()`, which already builds the developer-action view) and
+  `runtime/stage-replay-evidence.ts` (called from
+  `runtime/reducers/agent-handoff.ts`, which already builds the stage
+  journal/evidence-id facts `stage.execute`'s own handoff validation needs).
+  `steps/stage-test.ts` now only consumes the already-decoded
+  `stageReplayEligible` boolean and `stageReplayEvidence` object those callers
+  pass through `DeveloperActionsContext`/`AgentCompletionContext` — the same
+  shape the pre-existing `stageJournal`/`stageEvidenceIds` facts already used.
 
 Run the checks with:
 

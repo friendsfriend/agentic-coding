@@ -71,6 +71,7 @@ import {
 export function outcomeForActionId(actionId: string): string {
 	switch (actionId) {
 		case "approve-plan":
+		case "approve-and-replay":
 		case "approve-review":
 		case "approve-wiki":
 		// The env-setup approval gate's own action id: the developer approves with

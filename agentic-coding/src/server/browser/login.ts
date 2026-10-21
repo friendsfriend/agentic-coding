@@ -174,7 +174,7 @@ export async function fillStageCredential(
 	const secret = credential(input, input.field);
 	const value = input.field === "totp" ? totpCode(secret) : secret;
 	await session.fillCredential(
-		{ selector: session.selectorFor(input.target) },
+		session.driverLocatorFor(input.target),
 		value,
 		input.timeoutMs,
 	);

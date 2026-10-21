@@ -9,9 +9,11 @@
 //   whose operations are exactly the operations the tools offer. A fake driver
 //   then exercises the whole pool, session, recording and tool pipeline with no
 //   Chromium at all (`fake-driver.ts`).
-// * **Refs are the tool contract, selectors are the driver contract.** The
-//   driver never sees a `ref`; the session resolves `[ref=eN]` to the injected
-//   `[data-ac-ref="eN"]` selector before any action reaches the driver.
+// * **Refs are the tool contract, selectors are the driver contract.** An AI
+//   snapshot ref (`eN`, `f1e3`) is resolved through Playwright's public
+//   `getByRef`; a selector is resolved through `page.locator`.
+
+import type { SnapshotNode } from "./snapshot.ts";
 
 /** One console message a page produced. */
 export interface DriverConsoleEntry {
@@ -44,12 +46,53 @@ export type DriverNetworkEvent =
 	  }
 	| { readonly kind: "failed"; readonly id: string; readonly error: string };
 
+/** One element a driver acts on: an AI snapshot ref, or a Playwright selector.
+ * A ref is always resolved through the public `getByRef` contract. */
+export interface DriverActionTarget {
+	readonly ref?: string;
+	readonly selector?: string;
+}
+
+/** A ref that no longer resolves at action time. The session turns this into
+ * `stale-ref` with the current snapshot id; it never falls back to a selector
+ * or a same-named element. */
+export class DriverTargetError extends Error {
+	constructor(
+		readonly code: "stale-ref" | "target-required",
+		message: string,
+	) {
+		super(message);
+		this.name = "DriverTargetError";
+	}
+}
+
+export interface DriverSnapshotOptions {
+	readonly depth?: number;
+	readonly maxChars?: number;
+	readonly timeoutMs?: number;
+	/** Restrict the read to one subtree, through the locator form of the public
+	 * AI snapshot. */
+	readonly within?: DriverActionTarget;
+}
+
+/** The driver's bounded snapshot read. `snapshotNodes` is the parsed view of
+ * the returned (possibly truncated) text, so only returned refs are present. */
+export interface DriverSnapshotResult {
+	readonly snapshotText: string;
+	readonly snapshotNodes: readonly SnapshotNode[];
+	readonly depth: number;
+	readonly chars: number;
+	readonly truncated: boolean;
+	readonly maxChars: number;
+}
+
 export interface DriverScreenshotOptions {
 	readonly type: "png" | "jpeg";
 	readonly quality?: number;
 	readonly fullPage: boolean;
-	/** Restrict the capture to one element, by CSS selector. */
+	/** Restrict the capture to one element, by CSS selector or AI ref. */
 	readonly selector?: string;
+	readonly ref?: string;
 	/** Elements whose pixels are covered before the shot
 	 * (`add-stage-testing-foundation`): a password field, or a field a credential
 	 * was typed into, is never part of a returned or stored image. */
@@ -65,12 +108,17 @@ export interface DriverLocator {
 	readonly role?: string;
 	readonly name?: string;
 	readonly selector?: string;
+	/** An AI snapshot ref. A credential fill names its field with the same ref
+	 * the tool used, so the password mask covers exactly that element. */
+	readonly ref?: string;
 }
 
 /** The stable key of one locator descriptor, resolved in the order the drivers
  * use (selector, then label, then role+name), so a test can name the control a
  * fake driver should treat as absent. */
 export function driverLocatorKey(locator: DriverLocator): string {
+	if (locator.ref !== undefined && locator.ref !== "")
+		return `ref=${locator.ref}`;
 	if (locator.selector !== undefined && locator.selector !== "")
 		return `selector=${locator.selector}`;
 	if (locator.label !== undefined && locator.label !== "")
@@ -171,22 +219,29 @@ export interface DriverPage {
 	title(): Promise<string>;
 	content(): Promise<string>;
 	evaluate(expression: string): Promise<unknown>;
-	/** The accessibility-shaped tree with `[ref=eN]` markers, and the injected
-	 * `data-ac-ref` attributes that make those refs actionable. */
-	snapshot(): Promise<string>;
+	/** One bounded public AI snapshot read. */
+	snapshot(options: DriverSnapshotOptions): Promise<DriverSnapshotResult>;
 	setViewportSize(size: {
 		readonly width: number;
 		readonly height: number;
 	}): Promise<void>;
-	click(selector: string, timeoutMs: number): Promise<void>;
-	fill(selector: string, value: string, timeoutMs: number): Promise<void>;
-	press(selector: string, key: string, timeoutMs: number): Promise<void>;
+	click(target: DriverActionTarget, timeoutMs: number): Promise<void>;
+	fill(
+		target: DriverActionTarget,
+		value: string,
+		timeoutMs: number,
+	): Promise<void>;
+	press(
+		target: DriverActionTarget,
+		key: string,
+		timeoutMs: number,
+	): Promise<void>;
 	selectOption(
-		selector: string,
+		target: DriverActionTarget,
 		values: readonly string[],
 		timeoutMs: number,
 	): Promise<void>;
-	hover(selector: string, timeoutMs: number): Promise<void>;
+	hover(target: DriverActionTarget, timeoutMs: number): Promise<void>;
 	/** Fill one element named by a locator descriptor (a login field). */
 	fillField(
 		locator: DriverLocator,
@@ -201,10 +256,11 @@ export interface DriverPage {
 	/** How many elements one locator matches, for the "is an MFA prompt shown"
 	 * probe. */
 	locatorCount(locator: DriverLocator): Promise<number>;
+	waitForTarget(target: DriverActionTarget, timeoutMs: number): Promise<void>;
 	waitForSelector(selector: string, timeoutMs: number): Promise<void>;
 	waitForText(text: string, timeoutMs: number): Promise<void>;
 	waitForUrl(pattern: string, timeoutMs: number): Promise<void>;
-	textContent(selector: string, timeoutMs: number): Promise<string>;
+	textContent(target: DriverActionTarget, timeoutMs: number): Promise<string>;
 	screenshot(options: DriverScreenshotOptions): Promise<Uint8Array>;
 	/** Raise this page's window above the others (`stage_login` hand-off). */
 	bringToFront(): Promise<void>;

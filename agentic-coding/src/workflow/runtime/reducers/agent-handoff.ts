@@ -32,6 +32,7 @@ import {
 	expireSiblingRuns,
 	transition,
 } from "../kernel.ts";
+import { readStageReplayEvidence } from "../stage-replay-evidence.ts";
 import { prepareStepEvidence } from "../step-evidence.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";
 import { wikiWorkflowDataRoot } from "../targets.ts";
@@ -178,6 +179,11 @@ export function agentHandoff(
 						const stageEntry = readStageCatalog(
 							resolveConfigRoot(),
 						).entries.find((entry) => entry.ident === snapshot.metadata.stage);
+						const flowId = (
+							snapshot.metadata.stageTestPlan as
+								| { flowId?: unknown }
+								| undefined
+						)?.flowId;
 						return {
 							stageJournal: journal,
 							stageEvidenceIds: listEvidence(scope).entries.map(
@@ -185,6 +191,18 @@ export function agentHandoff(
 							),
 							...(stageEntry
 								? { stageApps: Object.keys(stageEntry.stage.apps) }
+								: {}),
+							...(run.stepId === "stage.replay" && typeof flowId === "string"
+								? {
+										stageReplayEvidence: readStageReplayEvidence(
+											{
+												workflowId: snapshot.workflowId,
+												worktree: snapshot.metadata.worktree,
+												definitionId: definition.id,
+											},
+											flowId,
+										),
+									}
 								: {}),
 						};
 					} catch {

@@ -17,6 +17,7 @@
 
 import { decodeContract } from "../../contracts/decode.ts";
 import {
+	MAX_API_RESPONSE_BYTES,
 	MAX_STAGE_API_REQUEST_BYTES,
 	type StageApiRequest,
 	type StageApiRequestResponse,
@@ -46,10 +47,6 @@ import {
 	type StageTokenStore,
 	stageTokenStore,
 } from "./oauth2.ts";
-
-/** The most of an answer that is read at all: the rest is dropped at the source,
- * so a misconfigured endpoint cannot stream a gigabyte into this process. */
-export const MAX_API_RESPONSE_BYTES = 256 * 1024;
 
 /** How long one call may take. Above it the call is refused with a timeout code
  * rather than left to a hung connection. */
