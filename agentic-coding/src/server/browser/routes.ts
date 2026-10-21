@@ -1808,7 +1808,11 @@ async function stageLogin(
 		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
 		: undefined;
 	if (workflow?.definitionId === "stage-test") {
-		if (body.app !== session.app)
+		// `session.app` is the application the stage key maps to (`apps.<key>.app`,
+		// or the key itself): the plan and the tool speak the stage key, so compare
+		// through the same mapping `resolveStageOpen` used when it set the field.
+		const declared = entry.stage.apps[body.app];
+		if (declared === undefined || (declared.app ?? body.app) !== session.app)
 			throw new BrowserPoolError(
 				"stage-app-unknown",
 				"stage login application must match the stage-bound session",

@@ -417,6 +417,70 @@ describe("stage-bound sessions", () => {
 		}
 	});
 
+	test("stage_login in a stage-test run takes the stage application key even when the application declares another repository app", async () => {
+		const configDir = configRoot();
+		const definitionPath = path.join(
+			stagePaths(configDir).defsDir,
+			"grid-int.json",
+		);
+		const definition = JSON.parse(fs.readFileSync(definitionPath, "utf8"));
+		definition.apps.web.app = "grid-web-fe";
+		fs.writeFileSync(definitionPath, JSON.stringify(definition));
+		const appsDir = path.join(configDir, "apps", "definitions");
+		fs.mkdirSync(appsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(appsDir, "grid-web-fe.json"),
+			JSON.stringify({
+				ident: "grid-web-fe",
+				displayName: "grid-web-fe",
+				appType: "APP",
+			}),
+		);
+		const deps = build(configDir, createFakeDriver());
+		const stageDeps: BrowserRouteDeps = {
+			...deps,
+			locate: () => ({
+				workflowId: "wf-stage",
+				worktree: deps.worktree,
+				definitionId: "stage-test",
+				stage: "grid-int",
+				stageAccess: "read-only",
+				currentStep: "stage.execute",
+				selectedRoles: ["stage-tester"],
+				stageTestPlan: {
+					route: [{ application: "web", role: "none" }],
+					createsData: false,
+				},
+			}),
+		};
+		const opened = await openStage(stageDeps, {
+			session: "keyed",
+			stageRole: "none",
+		});
+		expect(opened.text).toContain('"ok":true');
+		const ok = await call(stageDeps, AGENT_BROWSER_LOGIN_PATH, {
+			session: "keyed",
+			app: "web",
+			role: "none",
+		});
+		expect(ok.status).toBe(200);
+		// The repository app name is not a stage key: the plan routes `web`.
+		const byRepoName = await call(stageDeps, AGENT_BROWSER_LOGIN_PATH, {
+			session: "keyed",
+			app: "grid-web-fe",
+			role: "none",
+		});
+		expect(byRepoName.status).toBeGreaterThanOrEqual(400);
+		// Another stage application is still refused on this session.
+		const other = await call(stageDeps, AGENT_BROWSER_LOGIN_PATH, {
+			session: "keyed",
+			app: "plain",
+			role: "none",
+		});
+		expect(other.status).toBe(403);
+		expect(other.value.code).toBe("stage-app-unknown");
+	});
+
 	test("a stage-test plan can narrow a writable stage to read-only", () => {
 		const origin = new URL(APP_URL).origin;
 		const refusals: Array<{ code: string; method: string; url: string }> = [];
