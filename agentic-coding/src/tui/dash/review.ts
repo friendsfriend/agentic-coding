@@ -649,6 +649,10 @@ export function createReviewFeature(
 			) ?? ["None reported."]),
 		].join("\n");
 	};
+	/** The engine's projection of what each planned block is: title, effect set
+	 * and role scope, read from the composed registry when the plan was accepted
+	 * (`OSV-014`). */
+	const planBlockFacts = () => data().state.stagePlanBlocks ?? [];
 	const stagePlanContent = () => {
 		const state = data().state;
 		const plan = state.stageTestPlan as
@@ -667,9 +671,31 @@ export function createReviewFeature(
 						statement: string;
 						priority: string;
 					}[];
-					routes?: readonly {
-						app: string;
-						step: string;
+					route?: readonly {
+						id: string;
+						application?: string;
+						role?: string;
+						action?: string;
+						expected?: string;
+						block?: {
+							id: string;
+							version?: string;
+							args?: Readonly<Record<string, unknown>>;
+						};
+						blockToCreate?: {
+							id: string;
+							version?: string;
+							args?: Readonly<Record<string, unknown>>;
+							intent?: string;
+						};
+						blockToAdjust?: {
+							id: string;
+							version?: string;
+							args?: Readonly<Record<string, unknown>>;
+							reason?: string;
+						};
+						noBlockReason?: string;
+						expectationIds?: readonly string[];
 					}[];
 			  }
 			| undefined;
@@ -707,9 +733,50 @@ export function createReviewFeature(
 			"",
 			"## Planned routes",
 			"",
-			...(plan.routes?.map((route) => `- ${route.app}: ${route.step}`) ?? [
-				"No routes were recorded.",
-			]),
+			// Every route step states its block decision, because that is what review
+			// is approving: run an approved block, author a new one, adjust one, or
+			// accept an exploratory step with a reason (`OSV-004`).
+			...(plan.route?.map((route) => {
+				// Only what the plan actually pins is printed: a route step that omits
+				// `version` does not choose one, and inventing "latest" or "1.0.0"
+				// would read as an approved version nobody selected (`USAB-105`).
+				const pin = (value: { version?: string }) =>
+					value.version === undefined ? "" : ` (version ${value.version})`;
+				// The block's title and effect set come from the engine's projection of
+				// the composed registry, so approval covers what the block *does*
+				// (`OSV-014`); `args` are the plan's own values.
+				const facts = (id: string | undefined) =>
+					id === undefined
+						? ""
+						: (() => {
+								const fact = planBlockFacts().find(
+									(entry) => entry.routeStepId === route.id,
+								);
+								if (fact === undefined || fact.title === undefined) return "";
+								// The resolved version is printed with the fact line, so the
+								// number the report gate accepts is the number the developer
+								// saw here (`USAB-121`).
+								return `\n  - block: ${fact.title}${fact.app === undefined ? "" : ` on ${fact.app}`}${fact.effects === undefined || fact.effects.length === 0 ? "" : ` (${fact.effects.join(", ")})`}${fact.version === undefined ? "" : `, version ${fact.version}`}${fact.roles === undefined || fact.roles.length === 0 ? ", any role" : `, roles: ${fact.roles.join(", ")}`}`;
+							})();
+				const args = (value: { args?: Readonly<Record<string, unknown>> }) =>
+					value.args === undefined || Object.keys(value.args).length === 0
+						? ""
+						: `\n  - args: ${JSON.stringify(value.args)}`;
+				const block =
+					route.block !== undefined
+						? `block \`${route.block.id}\`${pin(route.block)}${args(route.block)}${facts(route.block.id)}`
+						: route.blockToCreate !== undefined
+							? `author new block \`${route.blockToCreate.id}\`${pin(route.blockToCreate)}${args(route.blockToCreate)}${route.blockToCreate.intent === undefined ? "" : ` — ${route.blockToCreate.intent}`}`
+							: route.blockToAdjust !== undefined
+								? `adjust block \`${route.blockToAdjust.id}\`${pin(route.blockToAdjust)}${args(route.blockToAdjust)}${route.blockToAdjust.reason === undefined ? "" : ` — ${route.blockToAdjust.reason}`}${facts(route.blockToAdjust.id)}`
+								: `no block — ${route.noBlockReason ?? "the plan states no reason"}`;
+				const expectations =
+					route.expectationIds === undefined ||
+					route.expectationIds.length === 0
+						? ""
+						: ` (covers ${route.expectationIds.join(", ")})`;
+				return `- **${route.id}** ${route.application ?? "?"}${route.role === undefined ? "" : ` as ${route.role}`}: ${route.action ?? ""}${route.expected === undefined ? "" : ` — expected: ${route.expected}`}${expectations}\n  - ${block}`;
+			}) ?? ["No routes were recorded."]),
 		].join("\n");
 	};
 	const stageWikiUpdateAvailable = () =>

@@ -473,6 +473,32 @@ export const StageTestPlanSchema = Schema.Struct({
 					),
 				}),
 			),
+			/** A block the tester is to author for this step
+			 * (`author-stage-blocks-as-data`). */
+			blockToCreate: Schema.optional(
+				Schema.Struct({
+					id: boundedText(160),
+					version: Schema.optional(boundedText(32)),
+					args: Schema.optional(
+						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
+					),
+					intent: boundedText(2048),
+				}),
+			),
+			/** An existing approved data block that is close but wrong. */
+			blockToAdjust: Schema.optional(
+				Schema.Struct({
+					id: boundedText(160),
+					version: Schema.optional(boundedText(32)),
+					args: Schema.optional(
+						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
+					),
+					reason: boundedText(2048),
+				}),
+			),
+			/** Why this step cannot be a block at all: an edge case the planner
+			 * has to state. */
+			noBlockReason: Schema.optional(boundedText(2048)),
 			expectationIds: Schema.optional(
 				Schema.Array(boundedText(64)).pipe(Schema.maxItems(50)),
 			),
@@ -545,6 +571,54 @@ export const StageTestReportSchema = Schema.Struct({
 			),
 		}),
 	).pipe(Schema.maxItems(100)),
+	/** The block execution the report rests on (`author-stage-blocks-as-data`):
+	 * what ran, what was authored, and which route steps ended without a block. */
+	blocksUsed: Schema.optionalWith(
+		Schema.Array(
+			Schema.Struct({
+				routeStepId: boundedText(64),
+				block: boundedText(160),
+				version: boundedText(32),
+			}),
+		).pipe(Schema.maxItems(100)),
+		{ exact: true, default: () => [] },
+	),
+	// A created/adjusted claim names the *document*, not just the id and version:
+	// the digest `stage_block_save` returned is what the approval publishes, what
+	// the promotion refuses to publish over when the draft changed, and what its
+	// recovery compares, because a same-version re-save replaces the body
+	// (`SEC-005`, `CONC-105`, `CONC-107`, `CONC-108`).
+	blocksCreated: Schema.optionalWith(
+		Schema.Array(
+			Schema.Struct({
+				block: boundedText(160),
+				version: boundedText(32),
+				digest: boundedText(128),
+				routeStepId: Schema.optional(boundedText(64)),
+			}),
+		).pipe(Schema.maxItems(30)),
+		{ exact: true, default: () => [] },
+	),
+	blocksAdjusted: Schema.optionalWith(
+		Schema.Array(
+			Schema.Struct({
+				block: boundedText(160),
+				version: boundedText(32),
+				digest: boundedText(128),
+				routeStepId: Schema.optional(boundedText(64)),
+			}),
+		).pipe(Schema.maxItems(30)),
+		{ exact: true, default: () => [] },
+	),
+	unblockedSteps: Schema.optionalWith(
+		Schema.Array(
+			Schema.Struct({
+				routeStepId: boundedText(64),
+				reason: boundedText(2048),
+			}),
+		).pipe(Schema.maxItems(100)),
+		{ exact: true, default: () => [] },
+	),
 	notTested: Schema.Array(
 		Schema.Struct({
 			expectationId: Schema.optional(boundedText(64)),
@@ -788,6 +862,27 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		stageTestReportMarkdown: Schema.optionalWith(text(2 * 1024 * 1024), {
 			exact: true,
 		}),
+		/** What the pinned plan's blocks are, projected from the composed
+		 * registry when the plan is accepted: the review shows the title, effect
+		 * set and role scope of each block a route step names. Bounded to the
+		 * plan's own route size. */
+		stagePlanBlocks: Schema.optionalWith(
+			Schema.Array(
+				Schema.Struct({
+					routeStepId: boundedText(64),
+					id: boundedText(160),
+					title: Schema.optionalWith(boundedText(512), { exact: true }),
+					app: Schema.optionalWith(boundedText(64), { exact: true }),
+					effects: Schema.optionalWith(Schema.Array(boundedText(32)), {
+						exact: true,
+					}),
+					roles: Schema.optionalWith(Schema.Array(boundedText(64)), {
+						exact: true,
+					}),
+				}),
+			),
+			{ exact: true },
+		),
 		/** The replay identity and evidence links for the optional stage.replay
 		 * step. It is a summary only; the result/report/heal JSON stays in the
 		 * evidence store. */

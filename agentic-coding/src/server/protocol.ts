@@ -51,6 +51,7 @@ import {
 	observeRequestSchema,
 } from "../contracts/environment.ts";
 import {
+	stageBlockSaveRequestSchema,
 	stageBlocksRequestSchema,
 	stageRunRequestSchema,
 } from "../contracts/stage-blocks.ts";
@@ -130,6 +131,9 @@ export const AGENT_BROWSER_STAGE_WAIT_PATH = `${AGENT_BROWSER_PREFIX}stage-wait`
 // session; the catalog is read-only and still rides the same owner capability.
 export const AGENT_BROWSER_STAGE_BLOCKS_PATH = `${AGENT_BROWSER_PREFIX}stage-blocks`;
 export const AGENT_BROWSER_STAGE_RUN_PATH = `${AGENT_BROWSER_PREFIX}stage-run`;
+// `author-stage-blocks-as-data`: save a draft block document. A draft is
+// executable by its own workflow and promoted only when the report is approved.
+export const AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH = `${AGENT_BROWSER_PREFIX}stage-block-save`;
 
 // `add-stage-flow-replay`: list saved flows and execute one compiled spec.
 // Neither route needs a live browser session: the replay process owns its page.
@@ -794,6 +798,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: AGENT_BROWSER_STAGE_RUN_PATH,
 		schemaId: "server.agent-env.browser.stage-run",
 		schema: stageRunRequestSchema,
+	},
+	{
+		path: AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
+		schemaId: "server.agent-env.browser.stage-block-save",
+		schema: stageBlockSaveRequestSchema,
 	},
 	{
 		path: AGENT_BROWSER_STAGE_FLOWS_PATH,

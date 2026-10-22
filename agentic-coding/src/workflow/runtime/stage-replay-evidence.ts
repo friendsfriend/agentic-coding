@@ -6,7 +6,7 @@
 // returns (`workflow/runtime/reducers/agent-handoff.ts`).
 import fs from "node:fs";
 import { listEvidence, openEvidenceFile } from "../../server/evidence/store.ts";
-import { readFlowRegistry } from "../../stage-blocks/flow-registry.ts";
+import { readFlowEntry } from "../../stage-blocks/flow-registry.ts";
 import { workflowEvidenceScope } from "./evidence-store.ts";
 
 export interface StageReplayEvidence {
@@ -94,9 +94,11 @@ export function readStageReplayEvidence(
 	);
 	let blockDigests: Record<string, string> | undefined;
 	try {
-		blockDigests = readFlowRegistry(scope.worktree).entries.find(
-			(entry) => entry.manifest.flowId === flowId,
-		)?.manifest.blockDigests as Record<string, string> | undefined;
+		// One flow, read directly: this runs on the polled workflow read path, so
+		// scanning (and hashing) every saved flow to find one of them is work that
+		// grows with history rather than with the run (`PERF-102`).
+		blockDigests = readFlowEntry(scope.worktree, flowId).entry?.manifest
+			.blockDigests as Record<string, string> | undefined;
 	} catch {
 		/* the summary stays useful without the saved manifest */
 	}

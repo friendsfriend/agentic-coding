@@ -1161,6 +1161,22 @@ export class BrowserSession {
 		);
 	}
 
+	/** Type into one target key by key. A data block uses this for a field that
+	 * reacts to every keystroke (a search box, a combobox). */
+	async pressSequentially(
+		target: ActionTarget,
+		text: string,
+		options: { readonly delayMs?: number; readonly timeoutMs?: number } = {},
+	) {
+		this.touch();
+		await this.actOn(target, (resolved) =>
+			this.page.pressSequentially(resolved, text, {
+				delayMs: options.delayMs ?? 0,
+				timeoutMs: options.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS,
+			}),
+		);
+	}
+
 	async press(
 		key: string,
 		target: ActionTarget,

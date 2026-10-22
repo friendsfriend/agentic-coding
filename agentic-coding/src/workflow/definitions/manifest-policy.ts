@@ -76,6 +76,16 @@ export function definitionVersionForStageTest(rounds: number): number {
 	return rounds + 1001;
 }
 
+/** The authored-data-blocks tier (`author-stage-blocks-as-data`): the same
+ * pinned-stage family plus the review-approval promotion of the run's authored
+ * block drafts. A new tier for the same digest reason as every tier above: a
+ * workflow pinned to the 1001 manifests keeps the graph it started on and
+ * completes without promoting anything. It starts a hundred above the previous
+ * tier so the two never collide across the twenty verification-round versions. */
+export function definitionVersionForStageBlocks(rounds: number): number {
+	return rounds + 1100;
+}
+
 /** The declared family traits, per repository code-change family
  * (add-definition-family-traits). This table is both the source of the traits
  * tier's manifests and the fallback `effectiveFamilyTraits` reads for a

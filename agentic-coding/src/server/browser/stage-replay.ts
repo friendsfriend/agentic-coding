@@ -81,6 +81,10 @@ function configSource(
 		["line"],
 	],
 	use: {
+		// One action may not hang for the whole test budget: a locator that never
+		// resolves has to fail the step it belongs to, with that step's error,
+		// instead of a bare 300s test timeout.
+		actionTimeout: 15_000,
 		trace: "retain-on-failure",
 		// Video needs Playwright's ffmpeg binary, which a minimal CI image or a
 		// developer cache may not have. Trace still records every action; opt in
@@ -260,12 +264,34 @@ export function decodeReplayResult(
 			"stage-run.json identity does not match the approved flow, route or inputs",
 			502,
 		);
-	if (exitCode !== 0 && result.status === "passed")
-		throw new BrowserPoolError(
-			"replay-result-invalid",
-			`the replay process exited ${exitCode} but reported a pass`,
-			502,
+	if (exitCode !== 0 && result.status === "passed") {
+		// The fixture's own result can only report the steps it reached, so a
+		// non-zero exit after a "passed" document means the run ended after that
+		// document was written (an action timeout in a later hook, a crash in a
+		// teardown). That is a failure of the step it happened on, not a malformed
+		// result: map it to a failed replay that names the step.
+		const steps = [...result.steps];
+		const pending = steps.findIndex((step) => step.status !== "passed");
+		const failing = pending >= 0 ? pending : steps.length - 1;
+		const step = failing >= 0 ? steps[failing] : undefined;
+		const detail = redact(
+			(processOutput.stderr || processOutput.stdout).trim().slice(0, 500),
 		);
+		const message = `the replay process exited ${exitCode} after reporting a pass; ${
+			step === undefined
+				? "no block step completed"
+				: `step ${step.routeStepId} (${step.block}@${step.version}) did not complete`
+		}${detail === "" ? "" : `: ${detail}`}`;
+		if (step !== undefined && failing >= 0)
+			steps[failing] = { ...step, status: "failed", error: message };
+		return {
+			...result,
+			status: "failed",
+			steps,
+			events: undefined,
+			error: message,
+		};
+	}
 	return result;
 }
 

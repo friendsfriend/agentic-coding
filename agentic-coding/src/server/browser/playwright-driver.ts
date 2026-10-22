@@ -408,6 +408,14 @@ function adaptPage(page: Page): DriverPage {
 			await assertResolvable(locator, target);
 			await locator.fill(value, { timeout: timeoutMs });
 		},
+		pressSequentially: async (target, text, options) => {
+			const locator = targetLocator(page, target);
+			await assertResolvable(locator, target);
+			await locator.pressSequentially(text, {
+				delay: options.delayMs,
+				timeout: options.timeoutMs,
+			});
+		},
 		press: async (target, key, timeoutMs) => {
 			const locator = targetLocator(page, target);
 			await assertResolvable(locator, target);

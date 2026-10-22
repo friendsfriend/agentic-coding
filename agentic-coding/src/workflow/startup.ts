@@ -36,8 +36,8 @@ import {
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
+	definitionVersionForStageBlocks,
 	definitionVersionForStagedRoot,
-	definitionVersionForStageTest,
 	effectiveFamilyTraits,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";
@@ -814,7 +814,7 @@ function prepareFromContext(
 	// tier.
 	const definitionVersion =
 		request.definitionId === "stage-test"
-			? definitionVersionForStageTest(config.workflow.max_verification_rounds)
+			? definitionVersionForStageBlocks(config.workflow.max_verification_rounds)
 			: definitionVersionForStagedRoot(config.workflow.max_verification_rounds);
 	const registry = registerBuiltins(
 		undefined,

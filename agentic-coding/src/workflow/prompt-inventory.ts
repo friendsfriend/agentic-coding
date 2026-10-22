@@ -90,8 +90,10 @@ export const PROMPT_BUDGETS: Readonly<Record<PromptFamily, number>> = {
 	"stage-wiki": 5 * 1024,
 	debug: 9.5 * 1024,
 	"env-setup": 10.5 * 1024,
-	"stage-planner": 8.5 * 1024,
-	"stage-tester": 10 * 1024,
+	// Blocks-as-data: the planner states one block decision per route step.
+	"stage-planner": 9.5 * 1024,
+	// Blocks-as-data: the tester authors a data block, not only executes one.
+	"stage-tester": 12.5 * 1024,
 };
 
 /** Budget of the `codemode` system-prompt section for the full workflow tool

@@ -6,6 +6,7 @@
 // an Effect service, and the same function runs under `stage_run` and under the
 // generated Playwright fixture.
 
+import type { StageDataBlockDocument } from "./data-block.ts";
 import type { JsonSchema, JsonValue } from "./schema.ts";
 import {
 	canonicalHash,
@@ -43,6 +44,13 @@ export interface BlockStepEvent extends BlockStepDetails {
 export interface BlockLocator {
 	click(): Promise<void>;
 	fill(value: string): Promise<void>;
+	/** Types into an already-focused field key by key; `delayMs` is bounded. */
+	type(
+		value: string,
+		options?: {
+			readonly delayMs?: number;
+		},
+	): Promise<void>;
 	press(key: string): Promise<void>;
 	selectOption(values: string | readonly string[]): Promise<void>;
 	textContent(): Promise<string | null>;
@@ -153,8 +161,13 @@ export interface BlockDefinition<
 	readonly requires?: readonly string[];
 	readonly provides?: readonly string[];
 	readonly examples: readonly Args[];
-	/** The repository test that proves this block against its application. */
-	readonly contractTest: string;
+	/** The repository test that proves a checked-in block against its
+	 * application. A data block proves itself with validated examples and the
+	 * recorded live proof on its draft instead, so it has none. */
+	readonly contractTest?: string;
+	/** Present only for a block authored as reviewed JSON; `run` then interprets
+	 * this document. It is the executable body the digest covers. */
+	readonly data?: StageDataBlockDocument;
 	readonly internal?: boolean;
 	readonly deprecated?: BlockDeprecation;
 	readonly run: (ctx: StageContext, args: Args) => Promise<Outputs>;
@@ -176,7 +189,15 @@ export interface BlockMetadata {
 	readonly requires: readonly string[];
 	readonly provides: readonly string[];
 	readonly examples: readonly Record<string, JsonValue>[];
-	readonly contractTest: string;
+	readonly contractTest?: string;
+	/** `checked-in` is a TypeScript module; `data` is a reviewed JSON document. */
+	readonly kind: "checked-in" | "data";
+	/** The state a live run proves; data blocks have no contract test. */
+	readonly postcondition?: string;
+	/** Present only for a data block: the reviewed document it executes. */
+	readonly data?: StageDataBlockDocument;
+	/** A draft is visible to its own workflow only and is promoted on review. */
+	readonly status?: "draft";
 	readonly internal: boolean;
 	readonly deprecated?: BlockDeprecation;
 	readonly digest: string;
@@ -298,10 +319,26 @@ function validateMetadata(
 					.join("; ")}`,
 			);
 	});
-	if (value.contractTest.trim() === "" || !value.contractTest.endsWith(".ts"))
+	if (value.contractTest !== undefined && value.contractTest.trim() === "")
 		fail(
 			"block-contract-test",
-			`block ${value.id} needs a contract test path ending in .ts`,
+			`block ${value.id} contract test path is empty`,
+		);
+	if (value.data === undefined) {
+		if (value.contractTest === undefined)
+			fail(
+				"block-contract-test",
+				`block ${value.id} needs a contract test path ending in .ts`,
+			);
+		else if (!value.contractTest.endsWith(".ts"))
+			fail(
+				"block-contract-test",
+				`block ${value.id} needs a contract test path ending in .ts`,
+			);
+	} else if (value.exportName !== undefined)
+		fail(
+			"block-export-name",
+			`data block ${value.id} is interpreted, so it has no barrel export`,
 		);
 	if (value.deprecated?.replacementId !== undefined) {
 		if (!ID_PATTERN.test(value.deprecated.replacementId))
@@ -364,15 +401,29 @@ export function blockDigest(definition: BlockDefinition): string {
 		idempotent: definition.idempotent,
 		requires: definition.requires ?? [],
 		provides: definition.provides ?? [],
-		contractTest: definition.contractTest,
+		contractTest: definition.contractTest ?? null,
 		deprecated: definition.deprecated ?? null,
-		source: definition.run.toString(),
+		// A data block has no function source; the reviewed document is its body,
+		// so the digest pins exactly what a run executes.
+		source:
+			definition.data === undefined
+				? definition.run.toString()
+				: canonicalHash(definition.data),
 	});
 }
 
 /** The manifest/catalog projection of one block. It carries no function source
- * and no secret: `digest` is the only executable identity a planner sees. */
-export function blockMetadata(definition: BlockDefinition): BlockMetadata {
+ * and no secret: `digest` is the only executable identity a planner sees.
+ *
+ * `digest` is a parameter because hashing a data block means canonicalising its
+ * whole reviewed document: a caller that needs both the projection and the
+ * digest (the registry does) computes it once and passes it in, instead of
+ * serialising and hashing the same 64 KiB twice per registry build
+ * (`PERF-201`). */
+export function blockMetadata(
+	definition: BlockDefinition,
+	digest = blockDigest(definition),
+): BlockMetadata {
 	return Object.freeze({
 		id: definition.id,
 		version: definition.version,
@@ -392,12 +443,21 @@ export function blockMetadata(definition: BlockDefinition): BlockMetadata {
 		examples: Object.freeze(
 			definition.examples.map((example) => Object.freeze({ ...example })),
 		),
-		contractTest: definition.contractTest,
+		...(definition.contractTest === undefined
+			? {}
+			: { contractTest: definition.contractTest }),
+		kind: definition.data === undefined ? "checked-in" : "data",
+		...(definition.data === undefined
+			? {}
+			: {
+					data: definition.data,
+					postcondition: definition.data.postcondition,
+				}),
 		internal: definition.internal === true,
 		...(definition.deprecated === undefined
 			? {}
 			: { deprecated: Object.freeze({ ...definition.deprecated }) }),
-		digest: blockDigest(definition),
+		digest,
 	});
 }
 

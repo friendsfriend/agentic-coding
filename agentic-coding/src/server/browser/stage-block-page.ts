@@ -3,6 +3,10 @@
 // session validation (ref lifetime, stage origin guard, stage-action limits) as
 // the browser tools.
 
+import {
+	DATA_BLOCK_MAX_DELAY_MS,
+	DATA_BLOCK_MAX_TEXT,
+} from "../../stage-blocks/data-block.ts";
 import type {
 	BlockAssertion,
 	BlockLocator,
@@ -135,6 +139,27 @@ export class SessionBlockPage implements BlockPage {
 					value,
 					this.timeoutMs,
 				);
+				this.session.invalidateSnapshot();
+			},
+			type: async (value, options) => {
+				// The same bounds a data block's `type` action validates against, so a
+				// checked-in block cannot hang the run by typing an unbounded string
+				// or pausing between every keystroke.
+				if (value.length > DATA_BLOCK_MAX_TEXT)
+					throw new Error(
+						`type value is ${value.length} characters; the bound is ${DATA_BLOCK_MAX_TEXT}`,
+					);
+				const delayMs = options?.delayMs ?? 0;
+				if (delayMs < 0 || delayMs > DATA_BLOCK_MAX_DELAY_MS)
+					throw new Error(
+						`type delay ${delayMs} ms is outside 0-${DATA_BLOCK_MAX_DELAY_MS}`,
+					);
+				await this.session.pressSequentially(await this.targetOf(spec), value, {
+					...(options?.delayMs === undefined
+						? {}
+						: { delayMs: options.delayMs }),
+					timeoutMs: this.timeoutMs,
+				});
 				this.session.invalidateSnapshot();
 			},
 			press: async (key) => {

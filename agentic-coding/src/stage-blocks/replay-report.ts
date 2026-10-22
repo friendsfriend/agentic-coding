@@ -20,6 +20,9 @@ export interface ReplayReportPlan {
 	readonly route: readonly {
 		readonly id: string;
 		readonly expectationIds?: readonly string[];
+		/** Set when the plan states why a step has no block: the replay report
+		 * repeats it so the step is accounted for. */
+		readonly noBlockReason?: string;
 	}[];
 }
 
@@ -30,6 +33,21 @@ export interface ReplayStepFacts {
 }
 
 export interface ReplayReport {
+	/** The blocks the replay executed, one entry per route step. A replay report
+	 * has to account for every planned route step exactly like a tester's report,
+	 * or the report gate refuses it (`USAB-001`). */
+	readonly blocksUsed: ReadonlyArray<{
+		readonly routeStepId: string;
+		readonly block: string;
+		readonly version: string;
+	}>;
+	/** A planned route step the compiled flow does not execute. */
+	readonly unblockedSteps: ReadonlyArray<{
+		readonly routeStepId: string;
+		readonly reason: string;
+	}>;
+	readonly blocksCreated: readonly [];
+	readonly blocksAdjusted: readonly [];
 	readonly expectations: ReadonlyArray<{
 		readonly id: string;
 		readonly verdict: "pass" | "fail" | "blocked" | "inconclusive";
@@ -167,8 +185,29 @@ export function mapReplayToReport(
 				expectationId: expectation.id,
 				reason: expectation.observed,
 			});
+	const blocksUsed = result.steps.map((step) => ({
+		routeStepId: step.routeStepId,
+		block: step.block,
+		version: step.version,
+	}));
+	const executed = new Set(blocksUsed.map((block) => block.routeStepId));
+	const unblockedSteps = plan.route
+		.filter((step) => !executed.has(step.id))
+		.map((step) => ({
+			routeStepId: step.id,
+			reason:
+				step.noBlockReason === undefined || step.noBlockReason.trim() === ""
+					? "the compiled flow has no step for this route step"
+					: step.noBlockReason,
+		}));
 	return {
 		report: {
+			blocksUsed,
+			unblockedSteps,
+			// A replay neither authors nor adjusts a block; it runs what review
+			// already approved.
+			blocksCreated: [],
+			blocksAdjusted: [],
 			expectations: report,
 			applicationVersions: manifest.applications.map((application) => ({
 				application,

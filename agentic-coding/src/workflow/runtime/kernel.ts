@@ -334,6 +334,7 @@ export function applyCompletionResult(
 	for (const key of [
 		"stageTestPlan",
 		"stageTestReport",
+		"stagePlanBlocks",
 		"stageReplay",
 		"stageReplayHeal",
 	] as const) {

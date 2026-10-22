@@ -27,6 +27,7 @@ import {
 	definitionVersionForFamilyTraits,
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
+	definitionVersionForStageBlocks,
 	definitionVersionForStagedRoot,
 	definitionVersionForStageGates,
 	definitionVersionForStageTest,
@@ -62,6 +63,7 @@ const EFFECTS: EffectKind[] = [
 	"environment.setup-rollback",
 	"environment.setup-cleanup",
 	"stage.report.render",
+	"stage.blocks.promote",
 	// The delegated debug request lifecycle (add-debug-subagent-requests). Both
 	// are emitted outside a step's own contract: by the request command, and by
 	// the delegated run's handoff.
@@ -350,24 +352,29 @@ export function registerBuiltins(
 			registry.registerWorkflow(pinned);
 		}
 	}
-	// The stage-test family is new and therefore needs no legacy definition
-	// tiers. Register only the current pinned-stage contract, while preserving
-	// all published versions of every existing workflow family.
+	// The stage-test family has no legacy definition tiers before its pinned-stage
+	// contract; it does keep the tier that already existed when
+	// `author-stage-blocks-as-data` added review-approval block promotion, so a
+	// workflow pinned to it still resolves its own digest and completes without
+	// promoting anything.
 	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
-		const version = definitionVersionForStageTest(rounds);
-		for (const definition of stageTestManifests(version)) {
-			// The family's two agent steps declare `classification: "single"`, so
-			// they are entered through their own route steps like every other
-			// classifiable step; without the routing pass the declaration would be
-			// inert and the preset pools it advertises would never be consulted.
-			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
-			const pinned: WorkflowManifest = {
-				...pinnedBase,
-				stepRefs: exactStepReferences(pinnedBase.steps),
-			};
-			assertStepBehaviorCoverage(pinned.steps);
-			registry.registerWorkflow(pinned);
-		}
+		for (const [version, authoredBlocks] of [
+			[definitionVersionForStageTest(rounds), false],
+			[definitionVersionForStageBlocks(rounds), true],
+		] as const)
+			for (const definition of stageTestManifests(version, authoredBlocks)) {
+				// The family's two agent steps declare `classification: "single"`, so
+				// they are entered through their own route steps like every other
+				// classifiable step; without the routing pass the declaration would be
+				// inert and the preset pools it advertises would never be consulted.
+				const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
+				const pinned: WorkflowManifest = {
+					...pinnedBase,
+					stepRefs: exactStepReferences(pinnedBase.steps),
+				};
+				assertStepBehaviorCoverage(pinned.steps);
+				registry.registerWorkflow(pinned);
+			}
 	}
 	return registry;
 }

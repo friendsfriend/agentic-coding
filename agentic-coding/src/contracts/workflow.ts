@@ -195,6 +195,9 @@ export type EffectKind =
 	| "environment.setup-cleanup"
 	/** Validates and renders a stage-test report from its structured output. */
 	| "stage.report.render"
+	/** Promotes the run's authored block drafts into the shared store on review
+	 * approval (author-stage-blocks-as-data). */
+	| "stage.blocks.promote"
 	/** Starts one delegated debug request's run: captures the baseline and
 	 * enqueues the run's own launch (add-debug-subagent-requests). */
 	| "debug.request.run"
@@ -303,6 +306,20 @@ export interface WorkflowMetadata {
 	stageTestReport?: JsonValue;
 	/** Engine-rendered, secret-scrubbed stage report shown in dashboard review. */
 	stageTestReportMarkdown?: string;
+	/** What each block the pinned plan names is, projected from the composed
+	 * registry at plan acceptance: the review shows the title, effect set and
+	 * role scope of the block being approved, not only its id. */
+	stagePlanBlocks?: Array<{
+		routeStepId: string;
+		id: string;
+		/** The version the plan resolved for this block, so the report's executed
+		 * version is checked against the document the developer approved. */
+		version?: string;
+		title?: string;
+		app?: string;
+		effects?: string[];
+		roles?: string[];
+	}>;
 	/** Summary of the optional compiled-flow replay; the result, report and heal
 	 * JSON stay in the evidence store and this only links to them. */
 	stageReplay?: {
@@ -942,6 +959,17 @@ export interface WorkflowView {
 	stageTestPlan?: JsonValue;
 	stageTestReport?: JsonValue;
 	stageTestReportMarkdown?: string;
+	stagePlanBlocks?: Array<{
+		routeStepId: string;
+		id: string;
+		/** The version the plan resolved for this block, so the report's executed
+		 * version is checked against the document the developer approved. */
+		version?: string;
+		title?: string;
+		app?: string;
+		effects?: string[];
+		roles?: string[];
+	}>;
 	createdAt: string;
 	updatedAt: string;
 	/** The selected agent preset, or absent when using configuration defaults. */
@@ -1616,6 +1644,17 @@ export interface WorkflowState {
 	stageTestPlan?: JsonValue;
 	stageTestReport?: JsonValue;
 	stageTestReportMarkdown?: string;
+	stagePlanBlocks?: Array<{
+		routeStepId: string;
+		id: string;
+		/** The version the plan resolved for this block, so the report's executed
+		 * version is checked against the document the developer approved. */
+		version?: string;
+		title?: string;
+		app?: string;
+		effects?: string[];
+		roles?: string[];
+	}>;
 	verificationRound: number;
 	baseCommit?: string;
 	createdAt?: string;
@@ -2050,6 +2089,19 @@ export const workflowViewSchema = Schema.Struct({
 	stageTestPlan: Schema.optional(Schema.Unknown),
 	stageTestReport: Schema.optional(Schema.Unknown),
 	stageTestReportMarkdown: Schema.optional(boundedString(2 * 1024 * 1024)),
+	stagePlanBlocks: Schema.optional(
+		Schema.Array(
+			Schema.Struct({
+				routeStepId: Schema.String,
+				id: Schema.String,
+				version: Schema.optional(Schema.String),
+				title: Schema.optional(Schema.String),
+				app: Schema.optional(Schema.String),
+				effects: Schema.optional(Schema.Array(Schema.String)),
+				roles: Schema.optional(Schema.Array(Schema.String)),
+			}),
+		),
+	),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
 	selectedPreset: Schema.optional(Schema.String),

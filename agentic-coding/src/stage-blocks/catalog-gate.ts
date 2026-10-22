@@ -59,16 +59,19 @@ function checkEntry(entry: BlockMetadata, root: string): CatalogGateIssue[] {
 			),
 		);
 	});
-	if (entry.contractTest.trim() === "")
+	if (entry.contractTest !== undefined) {
+		if (entry.contractTest.trim() === "")
+			issues.push(issue(entry.id, "contractTest", "contract test is missing"));
+		else if (!fs.existsSync(path.join(root, entry.contractTest)))
+			issues.push(
+				issue(
+					entry.id,
+					"contractTest",
+					`contract test ${entry.contractTest} does not exist`,
+				),
+			);
+	} else if (entry.kind !== "data")
 		issues.push(issue(entry.id, "contractTest", "contract test is missing"));
-	else if (!fs.existsSync(path.join(root, entry.contractTest)))
-		issues.push(
-			issue(
-				entry.id,
-				"contractTest",
-				`contract test ${entry.contractTest} does not exist`,
-			),
-		);
 	if (entry.digest.trim() === "")
 		issues.push(issue(entry.id, "digest", "digest is missing"));
 	if (

@@ -55,6 +55,138 @@ API-first block), and three journal/evidence primitives:
   credential variable name; it never accepts a literal secret, and an
   unconfigured/unknown name is refused rather than silently returning nothing.
 
+## Blocks as data (`data-block.ts`, `data-store.ts`, `scope.ts`)
+
+A block is either a checked-in TypeScript module (`defineBlock`) or a
+reviewed `format: 1` JSON document that the stage-tester authored while
+executing the test. Both compile to the same frozen `BlockDefinition`, so the
+plan, runner, catalog, flow generator and replay fixture never branch on the
+kind — the only difference is that a data block carries `data` (its document),
+a `postcondition` instead of a `contractTest`, and no `exportName`.
+
+A document is `{format, id, version, app, roles, title, description, effects,
+idempotent, requires, provides, params, returns, examples, postcondition,
+operations}`. `operations` is two levels deep — `step`/`optional` groups of
+actions — and an action is one of `goto`, `click`, `fill`, `type`
+(`pressSequentially`, the only action that may take a delay), `press`,
+`select`, `waitFor`, `wait`, `expectVisible`, `expectText`, `capture` and
+`read`. A value is a bounded string, `{{ args.<name> }}` interpolation of a
+declared parameter, or `{secret: "NAME"}` — never a literal credential, a raw
+URL, a script or an expression. `validateDataBlock` enforces the bounds
+(64 KiB document, 64 operations, 2000-character text, 1000 ms delay, 10 s wait)
+and reports one issue per problem with its JSON path.
+
+`interpretDataBlock(block)(ctx, args)` runs one `ctx.step` per group and checks
+the outputs against the documented `returns` schema; an `optional` group
+records its own journal entry and swallows its failure so a page's matching
+behaviour can be recorded without failing the whole block.
+
+### Drafts, the approved store and promotion
+
+| path | what it holds |
+| --- | --- |
+| `<configDir>/stages/blocks/<systemSlug>/<id>.json` | the approved document, shared by every workflow of that system |
+| `<dataRoot>/stage-block-drafts/<workflowId>/<id>.json` | this run's draft (`{draft, document}`), executable by `stage_run`/replay-free execution in that run only |
+
+A workflow id is reusable, so the id alone cannot say whose draft a file is. The
+draft record carries the authoring run's immutable identity (`runId`, the
+workflow's `createdAt`) and every read that knows its own run filters on it: a
+draft a deleted predecessor left under the same id is not listed, not
+executable, not promotable and not a diagnostic of the current run.
+
+`loadStageBlockRegistry` composes the registry per call — checked-in modules,
+then approved documents, then this workflow's drafts, a draft superseding an
+approved document of the same id — so a draft saved a moment ago is already
+executable and nothing is cached across runs. Only a checked-in collision or a
+duplicate inside one store is a `block-duplicate`; a draft over an approved
+version is a normal, reported replacement.
+
+`stage_block_save` is the only write path for a draft. It is available to the
+stage-tester only during `stage.execute` and only with a stage-bound session.
+The draft's `planId` and `revision` are the workflow's pinned plan and revision,
+derived by the engine, so an authoring call cannot claim to be part of a plan it
+is not running. It refuses (`block-document-invalid`, `stage-app-unknown`,
+`block-role-undeclared`, `block-destructive-refused`, `block-checked-in`,
+`stage-read-only` for a `write` document, `block-secret-literal`,
+`block-contract-breaking`). A draft never widens stage policy: writes still
+need an approved plan that `createsData`, and `destructive` stays refused.
+
+Promotion is the `stage.blocks.promote` edge effect on `stage.review → approve`
+(and `approve-and-update-wiki`): it reads the drafts this run saved that the
+report claims (`blocksCreated`/`blocksAdjusted`), validates the claim against
+`stageReportBlockIssues` (a claimed draft must carry a passed proof from this
+run), writes every approved document atomically and removes the drafts only
+after all writes landed. A claimed draft that is missing, unpromoted or
+unproven blocks approval, and there is no no-op promotion of a checked-in id.
+The run's drafts are removed after a successful promotion, so "keep the drafts"
+is the promise of the *decision* (a follow-up comment re-enters `stage.execute`
+with the drafts intact), not of the approval.
+
+The promotion is scoped by what the report *claims*, never by what happens to be
+on disk:
+
+- Only a claimed id is written. Any other draft in this run's draft directory is
+  scratch and is dropped with the directory once the claimed set lands, so a
+  leftover draft from an earlier run can never be published by a later approval
+  that does not name it (`CONC-005`). A claimed draft is publishable only with a
+  passed proof recorded by *this* run, and a proof is only appended after the
+  block actually executed green — so the leftover can only travel if it really
+  ran and passed here.
+- A claim names the *document*: `{ block, version, digest }` for a created or
+  adjusted block, where the digest is the one `stage_block_save` returned. The
+  report gate refuses a claim whose digest is not the draft's current body, so a
+  same-version re-save cannot be approved on a claim about the earlier body.
+- A claim whose draft is gone (a `workspace.cleanup` raced the approval, or a
+  re-run dropped it) is a permanent failure naming the loss, never a silent
+  "nothing to promote" — unless the run holds no claimed draft *and* the
+  approved store holds every claim **at its claimed version and digest**, which
+  means this attempt is the second half of a promotion that landed, since the
+  drafts were removed by it. Then the effect reports the recovery
+  (`recovered: true`) instead of failing the workflow on its own success. A
+  version match alone is not a recovery: an adjustment may keep the version and
+  change the body, and reporting that as promoted would drop the reviewed
+  document.
+- A proof is a proof of one *document*, not of a block id. Every proof records
+  the `version` and the digest of the document that ran, both gates compare the
+  claim against the draft's own version and digest (`proofProvesBlock`), and a
+  save that changes the body drops the proofs it can no longer claim. A proof of
+  a different body is refused at append time rather than silently attached, so
+  "saved, executed, edited, approved" can never publish the edited document on
+  the executed run's proof.
+- A proof append never rewrites a document: it reads the one draft file, appends
+  the proof to the document that is already there, keeps the newest
+  `MAX_STORED_PROOFS` (5) proofs and refuses when the stored wrapper is a
+  different draft format version.
+- Everything is all-or-nothing: a document is written by compare-and-write
+  against the bytes read at promotion time (`block-concurrently-changed` if
+  another writer won; `block-file-unreadable` if the file exists but this build
+  cannot interpret it — a newer format, a backup or a hand edit is refused, not
+  overwritten), and a failed batch restores the exact bytes it replaced
+  — or removes only the files it created — through the same atomic writer and
+  mode, so a restored file is byte- and mode-identical to the one it replaced.
+  Drafts are removed last, so the failure window cannot destroy the only copy of
+  a document that was never published.
+
+The store has one writer: the workflow engine's own process, one promotion at a
+time per stage system. `MAX_STORED_BLOCKS` (200) bounds a new id in both the
+draft and the approved store (`block-store-full`), one malformed file is a
+`block-file-unreadable`/`block-document-invalid` diagnostic instead of a fatal
+read, and the same id in two system directories is reported as
+`block-duplicate` rather than resolved by directory order.
+
+Promotion re-applies the authoring scope rules (`stage-blocks/scope.ts`) to the
+stage as it is configured *now*: a stage that has become read-only, an app or a
+role it no longer declares, or a `destructive` document refuses the whole
+promotion, so publishing can never be the path around `stage_block_save`.
+
+A value rule that is easy to get wrong (both are `data-block-value`/
+`data-block-postcondition` issues, not silent rewrites): `exact` is only
+meaningful for the `role` and `text` target strategies, and `waitFor` accepts
+only `visible` and `attached` — a `hidden` wait is a removed-control check that
+belongs in `expectVisible`/`expectText` semantics, not a wait. `type` uses a
+`delayMs` of 50 when the document omits one (a real keystroke sequence, so a
+masked or autocompleted field is not filled instantly).
+
 ## Catalog
 
 `scripts/generate-stage-blocks.ts` writes the machine-readable, sorted,
@@ -150,7 +282,7 @@ parameterized inputs and replay itself. A standalone block plan (no approved
 workflow plan behind it) is refused with `flow-identity-missing` if `save` is
 requested, since there is no plan revision to attribute the saved flow to.
 
-## Writing a new block
+## Writing a checked-in block
 
 1. Add the block to `src/stage-blocks/blocks/<app>/` with `defineBlock`,
    including a contract test that proves it against the real application and
@@ -167,3 +299,19 @@ requested, since there is no plan revision to attribute the saved flow to.
 5. A later breaking change (schema, scope, effects, `requires`/`provides`)
    needs a major version bump; the registry refuses to load an unbumped
    breaking change.
+
+## Authoring a data block
+
+The stage-tester authors a data block; no builder step or role is involved.
+
+1. `stage_blocks` for a block that already matches the step. A plan route step
+   declares exactly one of `block`, `blockToCreate`, `blockToAdjust` or
+   `noBlockReason`, so the plan states which of the four it expects.
+2. Explore the step with the normal snapshot/action loop until it works.
+3. `stage_block_save({document})` with one `step` per intent, at least one
+   `expectVisible`/`expectText` per step, a declared `params` entry for every
+   `{{ args.<name> }}` and `{secret: "NAME"}` for a credential.
+4. Run it once with `stage_run` so the draft carries a passed proof.
+5. Report `blocksCreated`/`blocksAdjusted` with the `digest` the save returned;
+   approving the report promotes the draft into the approved store, where the
+   next run's planner sees it.

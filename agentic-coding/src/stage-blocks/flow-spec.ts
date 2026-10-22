@@ -165,6 +165,9 @@ function renderWithSchema(
 	>();
 	const usedLocals = new Set<string>();
 	for (const step of source.steps) {
+		// A data block is interpreted from the flow's own sidecar document and has
+		// no barrel export, so it contributes no import line.
+		if (step.definition.data !== undefined) continue;
 		const app = step.definition.app;
 		if (app === "*")
 			throw new Error(
@@ -200,15 +203,12 @@ function renderWithSchema(
 		'import { test } from "../../src/stage-blocks/fixture.ts";',
 		"",
 		`test.describe(${JSON.stringify(source.title ?? source.flowId)}, () => {`,
+		// A replay must fail on one unavailable control instead of sitting out the
+		// whole 15-minute process bound.
+		"\ttest.use({ actionTimeout: 15_000 });",
 		`\ttest(${JSON.stringify(source.flowId)}, async ({ stage }) => {`,
 	];
 	for (const step of source.steps) {
-		const app = step.definition.app;
-		const imported = blocksByApp
-			.get(app)
-			?.find((entry) => entry.blockId === step.definition.id);
-		if (imported === undefined)
-			throw new Error(`block ${step.definition.id} has no import`);
 		const meta = routes.get(step.id);
 		if (meta === undefined)
 			throw new Error(`route step ${step.id} has no metadata`);
@@ -216,8 +216,21 @@ function renderWithSchema(
 			`\t\t// route: ${step.id} (${step.definition.id}@${step.definition.version})`,
 		);
 		const args = renderValue(step.args as JsonValue, inputSchema, names, 2);
-		const call = `await stage.run(${JSON.stringify(step.id)}, ${imported.localName}, ${args})`;
 		const variable = names.get(step.id);
+		if (step.definition.data !== undefined) {
+			const call = `await stage.runData(${JSON.stringify(step.id)}, ${args})`;
+			lines.push(
+				`\t\t${variable === undefined ? call : `const ${variable} = ${call}`};`,
+			);
+			continue;
+		}
+		const app = step.definition.app;
+		const imported = blocksByApp
+			.get(app)
+			?.find((entry) => entry.blockId === step.definition.id);
+		if (imported === undefined)
+			throw new Error(`block ${step.definition.id} has no import`);
+		const call = `await stage.run(${JSON.stringify(step.id)}, ${imported.localName}, ${args})`;
 		lines.push(
 			`\t\t${variable === undefined ? call : `const ${variable} = ${call}`};`,
 		);

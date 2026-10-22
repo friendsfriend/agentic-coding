@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { SessionBlockPage } from "../src/server/browser/stage-block-page.ts";
 import { buildStageBlockCatalog } from "../src/stage-blocks/catalog.ts";
 import {
 	catalogArtifact,
@@ -643,6 +644,9 @@ function fakeCrmPage(): {
 			fill: async (value: string) => {
 				onFill?.(value);
 			},
+			type: async (value: string) => {
+				onFill?.(value);
+			},
 			press: async () => undefined,
 			selectOption: async () => undefined,
 			textContent: async () => text(),
@@ -874,5 +878,41 @@ describe("stage block pilot consumer smoke test (add-stage-flow-blocks)", () => 
 			"crm.customer.fillAddress",
 			"crm.customer.fillAddress",
 		]);
+	});
+});
+
+describe("the stage block page's type action", () => {
+	function page(calls: string[]) {
+		const session = {
+			pressSequentially: async (
+				_target: unknown,
+				value: string,
+				options: { delayMs?: number },
+			) => {
+				calls.push(`type:${value}@${options.delayMs ?? 0}`);
+			},
+			invalidateSnapshot: () => undefined,
+			press: async () => undefined,
+			fill: async () => undefined,
+			snapshot: async () => ({ text: "", mode: "ai" as const }),
+			findSnapshot: async () => ({
+				matches: [{ ref: "e1", role: "textbox", name: "Password" }],
+			}),
+		};
+		return new SessionBlockPage(
+			session as unknown as ConstructorParameters<typeof SessionBlockPage>[0],
+		);
+	}
+
+	test("bounded text and delay reach the driver, an unbounded one does not", async () => {
+		const calls: string[] = [];
+		const field = page(calls).getByLabel("Password");
+		await field.type("abc", { delayMs: 5 });
+		expect(calls).toEqual(["type:abc@5"]);
+		await expect(field.type("x".repeat(2001))).rejects.toThrow(/bound is 2000/);
+		await expect(field.type("abc", { delayMs: 1001 })).rejects.toThrow(
+			/outside 0-1000/,
+		);
+		expect(calls).toEqual(["type:abc@5"]);
 	});
 });

@@ -645,6 +645,17 @@ export function createFakeDriver(options: FakeDriverOptions = {}): FakeDriver {
 				performed.push(`press:${name}=${key}`);
 				assertKnownTarget(target, snapshotText);
 			},
+			pressSequentially: async (target, text) => {
+				filledInputs.set(targetKey(target), text);
+				const name = performedTarget(target);
+				performedHere.push(`type:${name}=${text}`);
+				performed.push(`type:${name}=${text}`);
+				assertKnownTarget(target, snapshotText);
+				if (failFill)
+					throw new Error(
+						`locator.pressSequentially: Timeout 30000ms exceeded. Call log:\n  - pressSequentially("${text}")\n  - element is not visible`,
+					);
+			},
 			selectOption: async (target, values) => {
 				const name = performedTarget(target);
 				performedHere.push(`select:${name}=${values.join(",")}`);

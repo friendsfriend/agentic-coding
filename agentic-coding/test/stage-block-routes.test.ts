@@ -13,6 +13,7 @@ import {
 } from "../src/server/browser/routes.ts";
 import {
 	AGENT_BROWSER_OPEN_PATH,
+	AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
 	AGENT_BROWSER_STAGE_BLOCKS_PATH,
 	AGENT_BROWSER_STAGE_FLOWS_PATH,
 	AGENT_BROWSER_STAGE_JOURNAL_PATH,
@@ -21,6 +22,14 @@ import {
 } from "../src/server/protocol.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { StageUsageRegistry } from "../src/server/stages/limits.ts";
+import {
+	type StageDataBlockDocument,
+	validateDataBlock,
+} from "../src/stage-blocks/data-block.ts";
+import {
+	readStageBlockDrafts,
+	saveStageBlockDraft,
+} from "../src/stage-blocks/data-store.ts";
 import {
 	buildFlowManifest,
 	STAGE_FLOW_DIRECTORY,
@@ -34,10 +43,17 @@ import {
 import { stageBlockRegistry } from "../src/stage-blocks/registry.ts";
 import { canonicalHash } from "../src/stage-blocks/schema.ts";
 import { DEFAULT_BROWSER_VIEWPORT } from "../src/workflow/effects.ts";
-import { workflowEvidenceRoot } from "../src/workflow/runtime/evidence-store.ts";
+import {
+	workflowEvidenceRoot,
+	workflowEvidenceScope,
+} from "../src/workflow/runtime/evidence-store.ts";
 import { installedChromium } from "./support/browser.ts";
 
 const OWNER = "workflow:wf-stage";
+// The run's own identity, kept separate from the reusable workflow id on
+// purpose: drafts and proofs are scoped to the run, not to the id (`CONC-103`,
+// `MIG-011`).
+const RUN_ID = "2026-04-01T00:00:00.000Z";
 const PACKAGE_ROOT = path.join(import.meta.dir, "..");
 const APP_URL = "https://crm-stage.example.test/";
 
@@ -81,6 +97,9 @@ function build(
 	options: {
 		readonly selectedRoles?: readonly string[];
 		readonly stageTestPlan?: unknown;
+		/** The located run identity; a test that authors blocks names it so the
+		 * draft/proof scope is the run's (`TQV-202`). */
+		readonly runId?: string;
 	} = {},
 ): Harness {
 	const configDir = configRoot(appUrl);
@@ -136,6 +155,7 @@ function build(
 							currentStep,
 							selectedRoles: options.selectedRoles ?? ["stage-tester"],
 							revision: 3,
+							runId: options.runId === undefined ? undefined : options.runId,
 							stageTestPlan: ("stageTestPlan" in options
 								? options.stageTestPlan
 								: stagePlan()) as
@@ -536,6 +556,7 @@ describe("stage_run route", () => {
 						expected: "the detail page still shows the customer",
 						capture: [],
 						expectationIds: ["E1"],
+						noBlockReason: "no data block covers the confirmation step yet",
 					},
 				],
 			}),
@@ -999,4 +1020,455 @@ describe("stage_replay suite route", () => {
 			server.stop(true);
 		}
 	}, 120_000);
+});
+
+describe("stage_block_save (author-stage-blocks-as-data)", () => {
+	const authoredBlock = (
+		overrides: Partial<StageDataBlockDocument> = {},
+	): StageDataBlockDocument =>
+		({
+			format: 1,
+			id: "crm.customer.readAddress",
+			version: "1.0.0",
+			app: "crm",
+			roles: ["clerk"],
+			title: "Read one customer's address",
+			description: "Opens one customer and reads the stored address.",
+			effects: ["read"],
+			idempotent: true,
+			params: {
+				type: "object",
+				additionalProperties: false,
+				properties: { customerId: { type: "string", minLength: 1 } },
+				required: ["customerId"],
+			},
+			returns: {
+				type: "object",
+				additionalProperties: false,
+				properties: {},
+			},
+			examples: [{ customerId: "C-1001" }],
+			postcondition: "the detail page shows the customer",
+			operations: [
+				{
+					op: "step",
+					label: "open the customer",
+					operations: [
+						{ op: "goto", path: "/customers/{{ args.customerId }}" },
+						{
+							op: "expectVisible",
+							target: { testId: "customer-detail" },
+						},
+					],
+				},
+			],
+			...overrides,
+		}) as StageDataBlockDocument;
+
+	// The workflow data root of a `stage-test` run is not repository-backed and is
+	// shared by every harness in this file, so each save test starts with no
+	// draft of its own id left behind by an earlier test.
+	const cleanDrafts = (worktree: string): void => {
+		const scope = workflowEvidenceScope({
+			workflowId: "wf-stage",
+			worktree,
+			definitionId: "stage-test",
+		} as Parameters<typeof workflowEvidenceScope>[0]);
+		fs.rmSync(path.join(scope.dataRoot, "stage-block-drafts", "wf-stage"), {
+			recursive: true,
+			force: true,
+		});
+	};
+
+	test("the tester saves a draft that this run can already execute", async () => {
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const saved = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock(),
+			session: "default",
+		});
+		expect(saved.status).toBe(200);
+		expect(saved.value).toMatchObject({
+			status: "draft",
+			stage: "crm-int",
+			id: "crm.customer.readAddress",
+			version: "1.0.0",
+			app: "crm",
+			effects: ["read"],
+			proofs: [],
+		});
+		// A fresh id replaces nothing; only a second save names what it replaced.
+		expect(saved.value.replaced).toBeUndefined();
+		expect(String(saved.value.digest)).toStartWith("sha256:");
+		// The draft is composed into the very next catalog read: no restart.
+		const catalog = await call(deps, AGENT_BROWSER_STAGE_BLOCKS_PATH, {
+			full: true,
+		});
+		expect(catalog.status).toBe(200);
+		const entries = catalog.value.blocks as Record<string, unknown>[];
+		const entry = entries.find(
+			(block) => block.id === "crm.customer.readAddress",
+		);
+		expect(entry).toMatchObject({
+			version: "1.0.0",
+			kind: "data",
+			status: "draft",
+			postcondition: "the detail page shows the customer",
+		});
+		expect(entry?.document).toMatchObject({ format: 1 });
+		// A second save of the same id replaces it instead of duplicating it.
+		const again = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({ version: "1.0.1" }),
+			session: "default",
+		});
+		expect(again.value).toMatchObject({
+			replaced: { version: "1.0.0" },
+			version: "1.0.1",
+		});
+	});
+
+	test("save is refused outside stage.execute and outside the tester role", async () => {
+		const review = build("stage.review");
+		// The route refuses before it even looks for a session, so no browser and
+		// no stage-bound session is needed to prove the boundary.
+		const refused = await call(
+			review.deps,
+			AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
+			{
+				document: authoredBlock(),
+				session: "default",
+			},
+		);
+		expect(refused.status).toBe(403);
+		expect(refused.value.code).toBe("stage-test-tool-restricted");
+		// A role that is not the stage-tester cannot author blocks even during
+		// stage.execute: the route is the role boundary.
+		const otherRole = build("stage.execute", APP_URL, {
+			selectedRoles: ["researcher"],
+		});
+		const refusedRole = await call(
+			otherRole.deps,
+			AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
+			{ document: authoredBlock() },
+		);
+		expect(refusedRole.status).toBe(403);
+		expect(refusedRole.value.code).toBe("stage-test-tool-restricted");
+	});
+
+	test("a saved draft executes through the plan and records the proof promotion needs", async () => {
+		const authoredPlan = stagePlan({
+			route: [
+				{
+					id: "read",
+					application: "crm",
+					role: "clerk",
+					action: "read the customer detail",
+					expected: "the detail page shows the customer",
+					capture: [],
+					expectationIds: ["E1"],
+					blockToCreate: {
+						id: "crm.customer.readAddress",
+						args: { customerId: "C-1001" },
+						intent: "read the customer detail of one customer",
+					},
+				},
+			],
+		});
+		const { deps, worktree } = build("stage.execute", APP_URL, {
+			stageTestPlan: authoredPlan,
+			runId: RUN_ID,
+		});
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const saved = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock(),
+			session: "default",
+		});
+		expect(saved.status).toBe(200);
+		// The authored step is no longer a gap: the plan names it through
+		// `blockToCreate`, the draft is registered, so `stage_run` executes it.
+		const run = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			plan: authoredPlan,
+			session: "default",
+			approvedRevision: 3,
+			role: "clerk",
+		});
+		expect(run.status).toBe(200);
+		expect(run.value).toMatchObject({ status: "passed" });
+		const steps = run.value.steps as Record<string, unknown>[];
+		expect(steps).toHaveLength(1);
+		expect(steps[0]).toMatchObject({
+			status: "passed",
+			block: "crm.customer.readAddress",
+		});
+		expect(steps[0]?.journalIds).not.toEqual([]);
+		expect(run.value.issues ?? []).toEqual([]);
+		// Executing the draft is what makes it publishable: the proof is written to
+		// the draft the approval later promotes.
+		const scope = workflowEvidenceScope({
+			workflowId: "wf-stage",
+			worktree,
+			definitionId: "stage-test",
+		} as Parameters<typeof workflowEvidenceScope>[0]);
+		const proofed = readStageBlockDrafts(scope.dataRoot, "wf-stage").drafts[0];
+		expect(proofed?.document.id).toBe("crm.customer.readAddress");
+		// The proof names the run that recorded it and the revision it ran under,
+		// not the reusable workflow id and not the request's own claim
+		// (`MIG-011`, `OSV-021`).
+		expect(proofed?.draft.proofs[0]).toMatchObject({
+			stage: "crm-int",
+			runId: RUN_ID,
+			revision: 3,
+			status: "passed",
+		});
+		expect(proofed?.draft.runId).toBe(RUN_ID);
+	});
+
+	test("a draft of another run is neither executed nor read through the route", async () => {
+		// The draft scope is asserted at the store elsewhere; this drives it
+		// through the route's own locate seam, where a reused workflow id is the
+		// normal case: a predecessor's draft must not become this run's executable
+		// block (`TQV-202`, `CONC-103`).
+		const plan = stagePlan({
+			route: [
+				{
+					id: "read",
+					application: "crm",
+					role: "clerk",
+					action: "read the customer detail",
+					expected: "the detail page shows the customer",
+					capture: [],
+					expectationIds: ["E1"],
+					blockToCreate: {
+						id: "crm.customer.readAddress",
+						args: { customerId: "C-1001" },
+						intent: "read the customer detail of one customer",
+					},
+				},
+			],
+		});
+		const { deps, worktree } = build("stage.execute", APP_URL, {
+			stageTestPlan: plan,
+			runId: RUN_ID,
+		});
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const predecessor = "2026-03-01T00:00:00.000Z";
+		const predecessorScope = workflowEvidenceScope({
+			workflowId: "wf-stage",
+			worktree,
+			definitionId: "stage-test",
+			runId: predecessor,
+		} as Parameters<typeof workflowEvidenceScope>[0]);
+		saveStageBlockDraft({
+			dataRoot: predecessorScope.dataRoot,
+			workflowId: "wf-stage",
+			runId: predecessor,
+			stage: "crm-int",
+			document: authoredBlock(),
+		});
+		const refused = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			plan,
+			session: "default",
+			approvedRevision: 3,
+			role: "clerk",
+		});
+		// The authored route step stays a gap for this run, so the compiled plan has
+		// no executable step at all and the run is refused rather than executed
+		// against another run's document.
+		expect(refused.status).toBe(400);
+		expect(refused.value.code).toBe("stage-plan-invalid");
+		expect(refused.value.message).toContain("at least one step");
+		// The predecessor's draft is still there — the refusal is scoping, not a
+		// missing file — and this run's own draft list is empty.
+		expect(
+			readStageBlockDrafts(predecessorScope.dataRoot, "wf-stage", RUN_ID)
+				.drafts,
+		).toEqual([]);
+	});
+
+	test("a standalone plan may not reach into this run's drafts", async () => {
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const saved = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock(),
+			session: "default",
+		});
+		expect(saved.status).toBe(200);
+		const refused = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			plan: {
+				planId: "plan-draft",
+				steps: [
+					{
+						id: "read",
+						block: "crm.customer.readAddress",
+						args: { customerId: "C-1001" },
+					},
+				],
+			},
+			session: "default",
+		});
+		expect(refused.status).toBe(400);
+		expect(refused.value.code).toBe("block-draft-undeclared");
+	});
+
+	test("refuses an invalid document with its own issues", async () => {
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const invalid = {
+			...authoredBlock(),
+			operations: [
+				{
+					op: "step",
+					label: "open",
+					operations: [{ op: "goto", path: "/customers" }],
+				},
+			],
+		};
+		const refused = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: invalid,
+			session: "default",
+		});
+		expect(refused.status).toBe(400);
+		expect(refused.value.code).toBe("block-document-invalid");
+		expect(validateDataBlock(invalid).ok).toBe(false);
+	});
+
+	test("refuses a document outside the pinned stage's applications and roles", async () => {
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const foreignApp = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({ app: "crm-shadow" }),
+			session: "default",
+		});
+		expect(foreignApp.status).toBe(404);
+		expect(foreignApp.value.code).toBe("stage-app-unknown");
+
+		const foreignRole = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({ roles: ["auditor"] }),
+			session: "default",
+		});
+		expect(foreignRole.status).toBe(400);
+		expect(foreignRole.value.code).toBe("block-role-undeclared");
+		expect(foreignRole.value.message).toContain("auditor");
+	});
+
+	test("refuses a checked-in id, a destructive effect and a literal secret", async () => {
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const checkedIn = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({ id: "crm.ui.open" }),
+			session: "default",
+		});
+		expect(checkedIn.status).toBe(409);
+		expect(checkedIn.value.code).toBe("block-checked-in");
+
+		const destructive = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({ effects: ["read", "destructive"] }),
+			session: "default",
+		});
+		expect(destructive.status).toBe(400);
+		expect(destructive.value.code).toBe("block-document-invalid");
+
+		const secret = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({
+				operations: [
+					{
+						op: "step",
+						label: "type the password",
+						operations: [
+							{
+								op: "fill",
+								target: { label: "Password" },
+								value: "stage-pw-sentinel",
+							},
+							{
+								op: "expectVisible",
+								target: { testId: "customer-detail" },
+							},
+						],
+					},
+				],
+			}),
+			session: "default",
+		});
+		expect(secret.status).toBe(400);
+		expect(secret.value.code).toBe("block-secret-literal");
+		expect(secret.text).not.toContain("stage-pw-sentinel");
+	});
+
+	test("a write block needs a writable stage, and a breaking draft needs a major bump", async () => {
+		const readOnly = build();
+		await openStage(readOnly.deps);
+		const write = await call(
+			readOnly.deps,
+			AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
+			{
+				document: authoredBlock({ effects: ["read", "write"] }),
+				session: "default",
+			},
+		);
+		expect(write.status).toBe(403);
+		expect(write.value.code).toBe("stage-read-only");
+
+		const { deps, worktree } = build();
+		cleanDrafts(worktree);
+		await openStage(deps);
+		// An approved 1.0.0 for this id, then a draft that changes its parameters
+		// without a major version bump.
+		const configDir = deps.configDir;
+		if (configDir === undefined) throw new Error("no config dir");
+		const approvedFile = path.join(
+			configDir,
+			"stages",
+			"blocks",
+			"crm",
+			"crm.customer.readAddress.json",
+		);
+		expect(worktree).toBeString();
+		fs.mkdirSync(path.dirname(approvedFile), { recursive: true });
+		fs.writeFileSync(approvedFile, JSON.stringify(authoredBlock()));
+		const breaking = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({
+				params: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						customerId: { type: "string" },
+						locale: { type: "string" },
+					},
+					required: ["customerId", "locale"],
+				},
+				examples: [{ customerId: "C-1", locale: "de" }],
+			}),
+			session: "default",
+		});
+		expect(breaking.status).toBe(409);
+		expect(breaking.value.code).toBe("block-contract-breaking");
+		const bumped = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock({
+				version: "2.0.0",
+				params: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						customerId: { type: "string" },
+						locale: { type: "string" },
+					},
+					required: ["customerId", "locale"],
+				},
+				examples: [{ customerId: "C-1", locale: "de" }],
+			}),
+			session: "default",
+		});
+		expect(bumped.status).toBe(200);
+		expect(bumped.value).toMatchObject({ version: "2.0.0" });
+		expect(bumped.value.replaced).toBeUndefined();
+		expect(bumped.value.warnings).toBeArray();
+	});
 });

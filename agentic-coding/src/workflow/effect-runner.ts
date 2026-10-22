@@ -61,6 +61,21 @@ import {
 import { readStageJournal } from "../server/evidence/journal.ts";
 import { attachEvidence, listEvidence } from "../server/evidence/store.ts";
 import { readStageCatalog } from "../server/stages/catalog.ts";
+import {
+	describeDataBlockAction,
+	describeDataBlockOperations,
+	type StageDataBlockDocument,
+	type StageDataBlockOperation,
+} from "../stage-blocks/data-block.ts";
+import {
+	promoteStageBlockDrafts,
+	readApprovedBlocks,
+	readStageBlockDrafts,
+	removeStageBlockDrafts,
+	StageBlockStoreError,
+	storedDigest,
+} from "../stage-blocks/data-store.ts";
+import { stageBlockScopeIssues } from "../stage-blocks/scope.ts";
 import { realpathOrSelf } from "../worktree/cli.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
@@ -188,6 +203,268 @@ import {
 
 export { PermanentFailure, TransientFailure };
 
+/** One data block as the report shows it: the postcondition, the operation
+ * list and — for an adjustment — what differs from the approved version. Bounded
+ * to 60 lines per block so a maximal document cannot flood the review. */
+function stageBlockDocumentLines(
+	document: StageDataBlockDocument,
+	previous: StageDataBlockDocument | undefined,
+): string[] {
+	const lines: string[] = [
+		`- \`${document.id}@${document.version}\` (${document.app}${document.effects.length ? `, ${document.effects.join("+")}` : ""}) — ${document.postcondition}`,
+	];
+	const changes: string[] = [];
+	if (previous !== undefined) {
+		for (const field of [
+			"app",
+			"postcondition",
+			"effects",
+			"requires",
+			"provides",
+		] as const) {
+			const before = JSON.stringify(previous[field] ?? null);
+			const after = JSON.stringify(document[field] ?? null);
+			if (before !== after) changes.push(`${field}: ${before} → ${after}`);
+		}
+		if (
+			JSON.stringify(previous.params) !== JSON.stringify(document.params) ||
+			JSON.stringify(previous.returns) !== JSON.stringify(document.returns)
+		)
+			changes.push("parameter or return schema changed");
+	}
+	// An adjustment that only reorders or retypes an operation changes nothing in
+	// the metadata fields above, so the operation list itself is diffed: review
+	// has to see what the stage will now do differently (`OSV-010`).
+	const flat = (operations: readonly StageDataBlockOperation[]): string[] =>
+		describeDataBlockOperations(operations);
+	if (previous !== undefined) {
+		const before = flat(previous.operations);
+		const after = flat(document.operations);
+		if (before.join("\n") !== after.join("\n")) {
+			const removed = before
+				.filter((line) => !after.includes(line))
+				.slice(0, 5);
+			const added = after.filter((line) => !before.includes(line)).slice(0, 5);
+			lines.push("  operations changed:");
+			for (const line of removed) lines.push(`    - ${line}`);
+			for (const line of added) lines.push(`    + ${line}`);
+		}
+	}
+	if (changes.length > 0)
+		lines.push(
+			`  changed from ${previous?.version ?? "the store"}: ${changes.join("; ")}`,
+		);
+	lines.push("  operations:");
+	for (const operation of document.operations) {
+		if (lines.length >= 60) {
+			lines.push("  … (truncated)");
+			break;
+		}
+		if (operation.op === "optional") {
+			lines.push(
+				`    - optional (${operation.reason}): ${operation.operations.length} operation(s)`,
+			);
+			continue;
+		}
+		lines.push(
+			`    - step: ${operation.label}${operation.expected ? `; expected: ${operation.expected}` : ""}`,
+		);
+		for (const action of operation.operations.slice(0, 10)) {
+			if (lines.length >= 60) break;
+			lines.push(`      - ${describeDataBlockAction(action)}`);
+		}
+	}
+	return lines;
+}
+
+/** What the review shows of one recorded execution: the verdict and the run's
+ * own citations. One declaration, used by the report renderer and by the blocks
+ * section it delegates to, so a caller cannot hand over a proof the section then
+ * silently renders without its citations (`QUALITY-002`). */
+export type ReportProof = {
+	readonly status: "passed" | "failed";
+	readonly journalIds: readonly number[];
+	readonly evidenceIds: readonly string[];
+};
+
+/** The report's blocks section: what ran, what was authored with its proof, the
+ * authored documents themselves, and every route step that ended without a
+ * block (`author-stage-blocks-as-data`). */
+function stageBlockReportLines(input: {
+	report: StageTestReport;
+	drafts: readonly {
+		readonly document: StageDataBlockDocument;
+		readonly proofs: readonly ReportProof[];
+	}[];
+	approved: readonly StageDataBlockDocument[];
+}): string[] {
+	const { report } = input;
+	const drafts = new Map(
+		input.drafts.map((draft) => [draft.document.id, draft]),
+	);
+	const approved = new Map(
+		input.approved.map((document) => [document.id, document]),
+	);
+	const lines: string[] = [];
+	if (report.blocksUsed.length > 0) {
+		lines.push("### Blocks used", "");
+		for (const claim of report.blocksUsed)
+			lines.push(`- ${claim.routeStepId}: \`${claim.block}@${claim.version}\``);
+		lines.push("");
+	}
+	for (const [heading, claims, adjusted] of [
+		["### Blocks created", report.blocksCreated, false],
+		["### Blocks adjusted", report.blocksAdjusted, true],
+	] as const) {
+		if (claims.length === 0) continue;
+		lines.push(heading, "");
+		// Every claim is rendered, because every claim is promoted: the reviewed
+		// set and the published set have to be the same set (`SEC-003`). The
+		// per-document body is what is bounded, not the list.
+		for (const claim of claims) {
+			const draft = drafts.get(claim.block);
+			if (draft === undefined) {
+				lines.push(
+					`- \`${claim.block}@${claim.version}\` — the draft is no longer in this run`,
+				);
+				continue;
+			}
+			// Promotion rests on a passed proof, so show that one even when the newest
+			// attempt failed.
+			const proof =
+				draft.proofs.filter((entry) => entry.status === "passed").at(-1) ??
+				draft.proofs.at(-1);
+			// The proof is the one thing the gate rests on, so name what proved it:
+			// a reviewer has to be able to open the journal step and the evidence
+			// instead of trusting the claim (`USAB-007`).
+			const cited = [
+				...(proof === undefined || proof.journalIds.length === 0
+					? []
+					: [`journal ${proof.journalIds.slice(0, 5).join(", ")}`]),
+				...(proof === undefined || proof.evidenceIds.length === 0
+					? []
+					: [`evidence ${proof.evidenceIds.slice(0, 5).join(", ")}`]),
+			];
+			lines.push(
+				`- proof: ${proof?.status ?? "none recorded"}${claim.routeStepId === undefined ? "" : ` (route step ${claim.routeStepId})`}${cited.length === 0 ? "" : ` — ${cited.join("; ")}`}`,
+			);
+			lines.push(
+				...stageBlockDocumentLines(
+					draft.document,
+					adjusted ? approved.get(claim.block) : undefined,
+				),
+			);
+		}
+		lines.push("");
+	}
+	if (report.unblockedSteps.length > 0) {
+		lines.push("### Route steps without a block", "");
+		for (const step of report.unblockedSteps)
+			lines.push(`- ${step.routeStepId}: ${step.reason}`);
+		lines.push("");
+	}
+	return lines;
+}
+
+/** The documents the approved report claims: the publish set and the set the
+ * review rendered are the same list (`SEC-003`). A claim names the document —
+ * id, version *and* digest — because a same-version re-save replaces the body
+ * (`SEC-005`, `CONC-105`). */
+interface PromotionClaim {
+	readonly id: string;
+	readonly version: string;
+	readonly digest: string;
+}
+
+/** The claims of the report that is being approved, or the reason the stored
+ * report cannot be read. `undefined` means the run claims nothing; a parse
+ * failure is *not* "nothing to promote" — collapsing the two would complete an
+ * approval with nothing published and then let `workspace.cleanup` delete the
+ * only copies of the blocks (`CONC-109`). */
+export function promotionClaims(
+	report: unknown,
+): { readonly claims: readonly PromotionClaim[] } | { readonly issue: string } {
+	if (report === undefined) return { claims: [] };
+	try {
+		const parsed = stageTestReport.parse(report);
+		return {
+			claims: [...parsed.blocksCreated, ...parsed.blocksAdjusted].map(
+				(claim) => ({
+					id: claim.block,
+					version: claim.version,
+					digest: claim.digest,
+				}),
+			),
+		};
+	} catch (error) {
+		return {
+			issue: `the approved report stored on this workflow cannot be read (${error instanceof Error ? error.message : String(error)}), so the blocks it claims cannot be published; re-run the stage test to author them again`,
+		};
+	}
+}
+
+/** Whether this approval's second half already landed: the claimed documents —
+ * same version *and* same digest — are in the approved store. The caller has
+ * already established that the run holds no claimed draft, so "drafts gone and
+ * the store holds exactly these bodies" is the one state that means the batch
+ * ran (`CONC-101`). A version match alone is not enough: an adjustment may keep
+ * the version and change the body, and reporting that as promoted would discard
+ * the reviewed document (`SEC-005`, `CONC-105`, `QUALITY-002`). */
+function promotionRecovery(claims: readonly PromotionClaim[]):
+	| {
+			readonly promoted: readonly string[];
+			readonly removed: number;
+			readonly recovered: true;
+	  }
+	| undefined {
+	if (claims.length === 0) return undefined;
+	const approved = new Map(
+		readApprovedBlocks(resolveConfigRoot()).blocks.map((stored) => [
+			stored.document.id,
+			{
+				version: stored.document.version,
+				digest: storedDigest(stored.document),
+			},
+		]),
+	);
+	if (
+		claims.some((claim) => {
+			const stored = approved.get(claim.id);
+			return (
+				stored === undefined ||
+				stored.version !== claim.version ||
+				stored.digest !== claim.digest
+			);
+		})
+	)
+		return undefined;
+	return {
+		promoted: claims.map((claim) => `${claim.id}@${claim.version}`),
+		removed: 0,
+		recovered: true,
+	};
+}
+
+/** The replay line: a passing replay says so; a fallback says why the compiled
+ * flow did not run, because the developer paid for that decision. */
+function replayLines(
+	replay:
+		| {
+				readonly status: string;
+				readonly flowId?: string;
+				readonly reason?: string;
+		  }
+		| undefined,
+): string[] {
+	if (replay === undefined) return [];
+	const flow = replay.flowId === undefined ? "" : ` ${replay.flowId}`;
+	if (replay.status === "passed") return [`- **Replay:** passed${flow}`];
+	if (replay.status === "failed") return [`- **Replay:** failed${flow}`];
+	return [
+		`- **Replay:** not run${flow} — ${replay.reason ?? "the compiled flow was not eligible"}`,
+	];
+}
+
 function stageReportMarkdown(
 	stage: string,
 	ticket: string | undefined,
@@ -197,6 +474,21 @@ function stageReportMarkdown(
 	journal: ReturnType<typeof readStageJournal>,
 	evidence: ReturnType<typeof listEvidence>["entries"],
 	createdAt: string,
+	blocks?: {
+		readonly drafts: readonly {
+			readonly document: StageDataBlockDocument;
+			readonly proofs: readonly ReportProof[];
+		}[];
+		readonly approved: readonly StageDataBlockDocument[];
+	},
+	/** Why a compiled-flow replay did not run, when the run fell back to the
+	 * model-driven tester: the developer picked the replay, so the report says
+	 * what happened to it (`USAB-103`). */
+	replay?: {
+		readonly status: string;
+		readonly flowId?: string;
+		readonly reason?: string;
+	},
 ): string {
 	const verdicts = report.expectations.map(({ verdict }) => verdict);
 	const evidenceById = new Map(evidence.map((entry) => [entry.id, entry]));
@@ -217,6 +509,7 @@ function stageReportMarkdown(
 		`- **System:** ${stageInfo.system}`,
 		`- **Access:** ${stageInfo.access}`,
 		`- **Generated:** ${createdAt}`,
+		...replayLines(replay),
 		"",
 		"## Summary",
 		"",
@@ -297,6 +590,13 @@ function stageReportMarkdown(
 				)
 			: ["No reusable process knowledge was observed."]),
 		"",
+		...(blocks === undefined
+			? []
+			: [
+					"## Stage blocks",
+					"",
+					...stageBlockReportLines({ report, ...blocks }),
+				]),
 		"## Created data",
 		"",
 		...(report.createdData.length
@@ -1618,6 +1918,164 @@ export function agentEffectHandlers(
 					};
 				}),
 		},
+		"stage.blocks.promote": {
+			// The approval is one commit with two halves — the approved files and
+			// the draft removal — and the effect is recorded only afterwards. A
+			// crash or a re-claimed lease between the two re-runs the body, so ask
+			// the store whether the batch already landed before writing again
+			// (`CONC-101`).
+			//
+			// Only the *complete* state counts as landed: while this run still holds
+			// a claimed draft, the removal half has not run, so the publish half must
+			// not be assumed — that is the ordinary "adjust an approved block at the
+			// same version" path, which would otherwise be reported as promoted and
+			// silently dropped (`SEC-005`, `CONC-105`, `QUALITY-002`).
+			observe: (effect) => {
+				const snapshot = engine.getSnapshot(repo, effect.workflowId);
+				// An unreadable report is not "nothing to promote": `execute` refuses
+				// it, so `observe` must not report the batch as already landed
+				// (`CONC-109`).
+				const stored =
+					snapshot.definition.id === "stage-test"
+						? promotionClaims(snapshot.metadata.stageTestReport)
+						: { claims: [] };
+				if ("issue" in stored) return Effect.succeed(undefined);
+				const claims = stored.claims;
+				if (claims.length === 0) return Effect.succeed(undefined);
+				const scope = workflowEvidenceScope({
+					workflowId: snapshot.workflowId,
+					worktree: snapshot.metadata.worktree,
+					definitionId: snapshot.definition.id,
+				});
+				const claimed = new Set(claims.map((claim) => claim.id));
+				const held = readStageBlockDrafts(
+					scope.dataRoot,
+					snapshot.workflowId,
+					snapshot.metadata.createdAt,
+				).drafts.filter((draft) => claimed.has(draft.document.id));
+				return Effect.succeed(
+					held.length > 0
+						? undefined
+						: (promotionRecovery(claims) ?? undefined),
+				);
+			},
+			execute: (effect) =>
+				Effect.gen(function* () {
+					const snapshot = engine.getSnapshot(repo, effect.workflowId);
+					if (snapshot.definition.id !== "stage-test")
+						throw new PermanentFailure(
+							"block promotion is not attached to a stage-test workflow",
+						);
+					const stage = snapshot.metadata.stage;
+					if (stage === undefined)
+						throw new PermanentFailure(
+							"block promotion needs the workflow's pinned stage",
+						);
+					const scope = workflowEvidenceScope({
+						workflowId: snapshot.workflowId,
+						worktree: snapshot.metadata.worktree,
+						definitionId: snapshot.definition.id,
+					});
+					// The run's own drafts only: a reused workflow id must not adopt a
+					// deleted predecessor's documents or proofs (`CONC-103`).
+					const runId = snapshot.metadata.createdAt;
+					const drafts = readStageBlockDrafts(
+						scope.dataRoot,
+						snapshot.workflowId,
+						runId,
+					).drafts;
+					const stored = promotionClaims(snapshot.metadata.stageTestReport);
+					// "I cannot read the approval" is not "there is nothing to promote":
+					// completing with nothing published would lose the reviewed blocks
+					// when the drafts are cleaned up (`CONC-109`).
+					if ("issue" in stored) throw new PermanentFailure(stored.issue);
+					const claims = stored.claims;
+					// A report that claims no authored block promotes nothing: the run
+					// is a plain verification and completing it stays exactly as before.
+					if (claims.length === 0)
+						return {
+							promoted: [],
+							removed: 0,
+							reason: "the report claims no authored block",
+						};
+					const claimedIds = new Set(claims.map((claim) => claim.id));
+					const claimedDrafts = drafts.filter((draft) =>
+						claimedIds.has(draft.document.id),
+					);
+					// The drafts are scratch state: `workspace.cleanup` may have removed
+					// them (a close that raced this effect) or a re-run may have dropped
+					// one. When no claimed draft is left and the store holds exactly the
+					// claimed documents, this attempt is the second half of a promotion
+					// that did land — the drafts were removed by *it* — so report the
+					// recovery instead of a permanent failure (`CONC-101`). Anything
+					// else is a real loss worth stopping for: a claimed draft that is
+					// gone while the store holds a *different* body at that version means
+					// the reviewed document was never published (`SEC-005`, `CONC-105`).
+					if (claimedDrafts.length === 0) {
+						const recovered = promotionRecovery(claims);
+						if (recovered !== undefined) return recovered;
+						throw new PermanentFailure(
+							"the run's block drafts are gone and the approved store does not hold the documents this report claims, so this approval promoted nothing; re-run the stage test to author the blocks again",
+						);
+					}
+					const configDir = resolveConfigRoot();
+					// Publishing re-applies the authoring scope rules against the stage as
+					// it is configured *now*: a stage that became read-only, or an app or
+					// role that was removed, must not receive a draft saved earlier
+					// (`SEC-002`).
+					const stageEntry = readStageCatalog(configDir).entries.find(
+						(entry) => entry.ident === stage,
+					);
+					if (stageEntry === undefined)
+						throw new PermanentFailure(
+							"the pinned stage is no longer configured; block promotion refused",
+						);
+					// Only the documents about to be published are re-checked. An
+					// unclaimed draft is this run's scratch — the developer never saw it
+					// — so it can neither veto the approval nor be published with it
+					// (`CONC-106`).
+					for (const draft of claimedDrafts) {
+						const issue = stageBlockScopeIssues(draft.document, {
+							stage,
+							access: stageEntry.stage.access,
+							apps: stageEntry.stage.apps,
+						})[0];
+						if (issue !== undefined)
+							throw new PermanentFailure(
+								`block ${draft.document.id} may not be published: ${issue.message}`,
+							);
+					}
+					const system =
+						typeof snapshot.metadata.stageSystem === "string" &&
+						snapshot.metadata.stageSystem.trim() !== ""
+							? snapshot.metadata.stageSystem
+							: stage;
+					try {
+						const outcome = promoteStageBlockDrafts({
+							configDir,
+							dataRoot: scope.dataRoot,
+							workflowId: snapshot.workflowId,
+							runId,
+							system,
+							// Exactly what the review showed, document by document: an
+							// unclaimed draft is never published, and a draft whose body or
+							// version changed after the report was written is refused
+							// instead of being published under the approved claim
+							// (`CONC-107`, `CONC-108`).
+							claims,
+						});
+						return { ...outcome, claims };
+					} catch (error) {
+						// The store rolled back every file it wrote and kept the drafts, so a
+						// fixed block can be approved again on the same workflow.
+						throw new PermanentFailure(
+							error instanceof StageBlockStoreError
+								? error.message
+								: `block promotion failed: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				}),
+		},
 		"stage.report.render": {
 			observe: () => Effect.succeed(undefined),
 			execute: (effect, signal) =>
@@ -1654,6 +2112,11 @@ export function agentEffectHandlers(
 					const secretValues = [
 						...loadEnvFile(path.join(resolveConfigRoot(), ".env")).values(),
 					].filter(Boolean);
+					const drafts = readStageBlockDrafts(
+						scope.dataRoot,
+						snapshot.workflowId,
+						snapshot.metadata.createdAt,
+					).drafts;
 					const issues = stageReportIssues({
 						plan,
 						report,
@@ -1661,6 +2124,20 @@ export function agentEffectHandlers(
 						evidenceIds: evidence.map((entry) => entry.id),
 						declaredApps,
 						secrets: secretValues,
+						...(drafts.length === 0
+							? {}
+							: {
+									stageBlockDrafts: drafts.map((draft) => ({
+										id: draft.document.id,
+										version: draft.document.version,
+										digest: storedDigest(draft.document),
+										proofs: draft.draft.proofs.map((proof) => ({
+											status: proof.status,
+											version: proof.version,
+											digest: proof.digest,
+										})),
+									})),
+								}),
 					});
 					if (issues[0]) throw new PermanentFailure(issues[0]);
 					const secrets = environmentSecrets(resolveConfigRoot());
@@ -1679,6 +2156,33 @@ export function agentEffectHandlers(
 						journal,
 						evidence,
 						new Date().toISOString(),
+						{
+							drafts: drafts.map((draft) => ({
+								document: redact(
+									draft.document,
+									secrets,
+								) as StageDataBlockDocument,
+								proofs: draft.draft.proofs.map((proof) => ({
+									status: proof.status,
+									journalIds: proof.journalIds,
+									evidenceIds: proof.evidenceIds,
+								})),
+							})),
+							approved: readApprovedBlocks(resolveConfigRoot()).blocks.map(
+								(stored) => stored.document,
+							),
+						},
+						snapshot.metadata.stageReplay === undefined
+							? undefined
+							: {
+									status: snapshot.metadata.stageReplay.status,
+									...(snapshot.metadata.stageReplay.flowId === undefined
+										? {}
+										: { flowId: snapshot.metadata.stageReplay.flowId }),
+									...(snapshot.metadata.stageReplay.reason === undefined
+										? {}
+										: { reason: snapshot.metadata.stageReplay.reason }),
+								},
 					);
 					if (secretValues.some((secret) => rendered.includes(secret)))
 						throw new PermanentFailure(
@@ -2651,6 +3155,21 @@ export function agentEffectHandlers(
 					yield* Effect.promise(() =>
 						removeWorkflowEvidence(evidenceLocation(snapshot)),
 					);
+					// The run's block drafts live in the shared workflow data root, not
+					// under the evidence root, so cleanup removes them explicitly: a
+					// promoted draft is already in the approved store, and an unpromoted
+					// one must not outlive the run it was authored in. Best-effort for the
+					// same reason the evidence deletion is.
+					yield* Effect.sync(() => {
+						try {
+							removeStageBlockDrafts(
+								workflowEvidenceScope(evidenceLocation(snapshot)).dataRoot,
+								snapshot.workflowId,
+							);
+						} catch {
+							// A data root that cannot be read has no drafts to remove.
+						}
+					});
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||

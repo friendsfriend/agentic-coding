@@ -336,10 +336,16 @@ export function validateSchemaValue(
 	value: unknown,
 	path = "value",
 ): SchemaIssue[] {
+	// Every caller passes a schema it just read out of a document, a sidecar or
+	// the store. `"anyOf" in 7` throws, so a caller that forgot its own guard
+	// must get a refusal from here, never a crash in the replay path
+	// (`QUALITY-001`).
+	if (!isRecord(schema))
+		return [issue(path, "schema-type", "schema is not an object")];
 	if ("anyOf" in schema) {
-		const failures = schema.anyOf.map((entry) =>
-			validateSchemaValue(entry, value, path),
-		);
+		const failures = (
+			schema as { readonly anyOf: readonly JsonSchema[] }
+		).anyOf.map((entry) => validateSchemaValue(entry, value, path));
 		if (failures.some((entry) => entry.length === 0)) return [];
 		return [
 			issue(

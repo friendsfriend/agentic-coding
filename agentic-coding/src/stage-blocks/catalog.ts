@@ -28,6 +28,10 @@ export interface CompactBlockEntry {
 	readonly roles: readonly string[];
 	readonly title: string;
 	readonly description: string;
+	/** `checked-in` is a TypeScript module, `data` a reviewed JSON document. */
+	readonly kind: "checked-in" | "data";
+	/** `draft` marks a block visible to its authoring workflow only. */
+	readonly status?: "draft";
 	readonly effects: readonly string[];
 	readonly idempotent: boolean;
 	readonly requires: readonly string[];
@@ -39,20 +43,32 @@ export interface FullBlockEntry extends CompactBlockEntry {
 	readonly params: BlockMetadata["params"];
 	readonly returns: BlockMetadata["returns"];
 	readonly examples: BlockMetadata["examples"];
-	readonly contractTest: string;
+	/** Absent for a data block: its proof is a recorded live run, not a test. */
+	readonly contractTest?: string;
+	readonly postcondition?: string;
+	/** The reviewed document a data block executes. */
+	readonly document?: BlockMetadata["data"];
 	readonly digest: string;
 }
 
 export const MAX_CATALOG_ENTRIES = 100;
 
+/** `draftIds` are the blocks visible only inside their authoring workflow; the
+ * catalog marks them so a planner never mistakes a draft for a reviewed one. */
 export function buildStageBlockCatalog(
 	registry: StageBlockRegistry,
+	draftIds: ReadonlySet<string> = new Set(),
 ): StageBlockCatalog {
 	return Object.freeze({
 		version: STAGE_BLOCK_CATALOG_VERSION,
 		blocks: Object.freeze(
 			registry.entries
 				.filter((entry) => !entry.internal)
+				.map((entry) =>
+					entry.kind === "data" && draftIds.has(entry.id)
+						? ({ ...entry, status: "draft" } as BlockMetadata)
+						: entry,
+				)
 				.sort((left, right) => left.id.localeCompare(right.id)),
 		),
 	});
@@ -66,6 +82,8 @@ export function compactEntry(entry: BlockMetadata): CompactBlockEntry {
 		roles: entry.roles,
 		title: entry.title,
 		description: entry.description,
+		kind: entry.kind,
+		...(entry.status === undefined ? {} : { status: entry.status }),
 		effects: entry.effects,
 		idempotent: entry.idempotent,
 		requires: entry.requires,
@@ -80,7 +98,13 @@ export function fullEntry(entry: BlockMetadata): FullBlockEntry {
 		params: entry.params,
 		returns: entry.returns,
 		examples: entry.examples,
-		contractTest: entry.contractTest,
+		...(entry.contractTest === undefined
+			? {}
+			: { contractTest: entry.contractTest }),
+		...(entry.postcondition === undefined
+			? {}
+			: { postcondition: entry.postcondition }),
+		...(entry.data === undefined ? {} : { document: entry.data }),
 		digest: entry.digest,
 	};
 }
