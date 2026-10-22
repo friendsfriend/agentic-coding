@@ -37,7 +37,6 @@ import {
 } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import {
-	getMarkdownSyntaxStyle,
 	ListViewModal,
 	type MarkdownBlockPart,
 	MarkdownViewer,
@@ -46,6 +45,7 @@ import {
 	streamingMarkdownBlockParts,
 	streamingTailSource,
 	uiColors,
+	useMarkdownSyntaxStyle,
 	useModalBackdrop,
 	useRowMouse,
 	useTap,
@@ -296,6 +296,19 @@ type MarkdownPartsFor = (
 ) => readonly MarkdownBlockPart[];
 
 /**
+ * Hold back the last line of a live markdown part. OpenTUI 0.6's streaming
+ * parser can relayout the block above an unfinished line (a list item, table
+ * row or blockquote), so the line is committed only when the next line starts.
+ */
+function holdBackTrailingLine(source: string): string {
+	const lastBreak = source.lastIndexOf("\n");
+	if (lastBreak <= 0) return source;
+	const previousBreak = source.lastIndexOf("\n", lastBreak - 1);
+	if (previousBreak < 0) return source;
+	return source.slice(0, previousBreak).replace(/\s+$/, "");
+}
+
+/**
  * One assistant message as its markdown pieces. A single `<markdown>` for the
  * whole message would stay blank wherever the asynchronous syntax pass has not
  * landed yet — every paragraph, or (with the streaming preview on) every code
@@ -303,9 +316,9 @@ type MarkdownPartsFor = (
  * neither waits to become visible.
  *
  * Only the last part is still growing. It is drawn from its text with the
- * unfinished trailing line held back (see `streamingTailSource`), so a message
- * arriving character by character never grows a row and takes it back on the
- * next character.
+ * unfinished trailing line held back (see `streamingTailSource`), and while the
+ * message is live the previous line is held back as well, so the streaming
+ * parser cannot move a settled line back down by reflowing the trailing block.
  */
 function AssistantMarkdown(props: {
 	transcript: MarkdownPartsFor;
@@ -324,11 +337,13 @@ function AssistantMarkdown(props: {
 			<For each={parts()}>
 				{(part, index) => (
 					<MarkdownViewer
-						content={
-							index() === parts().length - 1
-								? streamingTailSource(part)
-								: part.source
-						}
+						content={(() => {
+							const last = index() === parts().length - 1;
+							const source = last ? streamingTailSource(part) : part.source;
+							return last && props.live === true
+								? holdBackTrailingLine(source)
+								: source;
+						})()}
 						fg={uiColors.textPrimary}
 						// Prose always takes the streaming preview: it draws the text
 						// concealed, so it never re-flashes its own markers. A fenced
@@ -429,6 +444,7 @@ function ToolRow(props: {
 	const key = () => `${props.block.id}:${props.row.id ?? props.row.text}`;
 	const open = () => props.openRows().has(key());
 	const detail = () => props.row.detail ?? [];
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	// A row of source — a codemode script — is drawn as the code it is, one
 	// highlighted block rather than a fold. `drawUnstyledText` keeps it visible
 	// while the tree-sitter pass is still in flight.
@@ -438,7 +454,7 @@ function ToolRow(props: {
 				<code
 					filetype={props.row.syntax}
 					content={props.row.text}
-					syntaxStyle={getMarkdownSyntaxStyle()}
+					syntaxStyle={syntaxStyle}
 					drawUnstyledText
 					fg={markerColor(props.row.tone)}
 				/>

@@ -48,12 +48,18 @@ async function settle(
 	timeoutMs = 5000,
 ) {
 	const start = Date.now();
+	// The auto-scroll retries on later frames until the re-created rows are
+	// measured, so keep pumping for a few frames before trusting a stable
+	// reading.
+	const minimumPasses = 6;
+	let passes = 0;
 	let last = scrollBox()?.scrollTop ?? 0;
 	while (Date.now() - start < timeoutMs) {
 		await view.renderOnce();
 		await new Promise((resolve) => setTimeout(resolve, 10));
+		passes += 1;
 		const current = scrollBox()?.scrollTop ?? 0;
-		if (current === last) return current;
+		if (current === last && passes >= minimumPasses) return current;
 		last = current;
 	}
 	return last;

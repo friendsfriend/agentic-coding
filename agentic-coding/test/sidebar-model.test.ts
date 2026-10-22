@@ -16,6 +16,8 @@ import {
 	isReviewStep,
 	isRunningStatus,
 	SIDEBAR_FILTERS,
+	SIDEBAR_HOME_PINS,
+	SIDEBAR_OPENCODE_PIN,
 	SIDEBAR_ORCHESTRATOR_PIN,
 	sidebarCollapsedRow,
 	sidebarCursorCount,
@@ -189,32 +191,46 @@ describe("workspace sidebar filters", () => {
 	});
 });
 
-describe("workspace sidebar pinned entry", () => {
-	test("names the Orchestrator and carries the Home mark", () => {
+describe("workspace sidebar pinned entries", () => {
+	test("names the Orchestrator and OpenCode and carries their marks", () => {
 		expect(SIDEBAR_ORCHESTRATOR_PIN.label).toBe("Orchestrator");
 		// The same mark an orchestrator-started workflow row carries.
 		expect(SIDEBAR_ORCHESTRATOR_PIN.glyph).toBe("⌂");
+		expect(SIDEBAR_ORCHESTRATOR_PIN.page).toBe("orchestrator");
+		expect(SIDEBAR_OPENCODE_PIN.label).toBe("OpenCode");
+		expect(SIDEBAR_OPENCODE_PIN.glyph).toBe("󱚞");
+		expect(SIDEBAR_OPENCODE_PIN.page).toBe("opencode");
+		expect(SIDEBAR_HOME_PINS).toEqual([
+			SIDEBAR_ORCHESTRATOR_PIN,
+			SIDEBAR_OPENCODE_PIN,
+		]);
 	});
 
-	test("leads the cursor space, shifting every workflow row by one", () => {
+	test("leads the cursor space, shifting every workflow row by the pin count", () => {
 		// No pin: the cursor space is exactly the workflow rows.
-		expect(sidebarCursorCount(3, false)).toBe(3);
-		expect(sidebarWorkflowIndex(0, false)).toBe(0);
-		expect(sidebarCursorForWorkflow(2, false)).toBe(2);
+		expect(sidebarCursorCount(3, 0)).toBe(3);
+		expect(sidebarWorkflowIndex(0, 0)).toBe(0);
+		expect(sidebarCursorForWorkflow(2, 0)).toBe(2);
 
-		// Pinned: the entry wins the first slot, so workflow 0 sits at cursor 1
-		// and the pin itself names no workflow (-1).
-		expect(sidebarCursorCount(0, true)).toBe(1);
-		expect(sidebarCursorCount(3, true)).toBe(4);
-		expect(sidebarWorkflowIndex(0, true)).toBe(-1);
-		expect(sidebarWorkflowIndex(1, true)).toBe(0);
-		expect(sidebarWorkflowIndex(2, true)).toBe(1);
-		expect(sidebarCursorForWorkflow(0, true)).toBe(1);
-		expect(sidebarCursorForWorkflow(2, true)).toBe(3);
-		// The reveal mapping round-trips, so the pin never steals a row's slot.
-		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, true), true)).toBe(
-			2,
-		);
+		// One pin: it wins the first slot, so workflow 0 sits at cursor 1 and
+		// the pin itself names no workflow (-1).
+		expect(sidebarCursorCount(0, 1)).toBe(1);
+		expect(sidebarCursorCount(3, 1)).toBe(4);
+		expect(sidebarWorkflowIndex(0, 1)).toBe(-1);
+		expect(sidebarWorkflowIndex(1, 1)).toBe(0);
+		expect(sidebarWorkflowIndex(2, 1)).toBe(1);
+		expect(sidebarCursorForWorkflow(0, 1)).toBe(1);
+		expect(sidebarCursorForWorkflow(2, 1)).toBe(3);
+		// The reveal mapping round-trips, so a pin never steals a row's slot.
+		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, 1), 1)).toBe(2);
+
+		// Two Home pins shift every workflow row by two.
+		expect(sidebarCursorCount(3, 2)).toBe(5);
+		expect(sidebarWorkflowIndex(0, 2)).toBe(-2);
+		expect(sidebarWorkflowIndex(1, 2)).toBe(-1);
+		expect(sidebarWorkflowIndex(2, 2)).toBe(0);
+		expect(sidebarCursorForWorkflow(0, 2)).toBe(2);
+		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, 2), 2)).toBe(2);
 	});
 });
 
@@ -235,10 +251,12 @@ describe("workspace sidebar cycle", () => {
 		expect(cycleCursor(0, 3, 3)).toBe(0);
 	});
 
-	test("the pinned Orchestrator alone keeps the cycle on itself", () => {
-		// No workflows under the filter: the pin is the whole cursor space.
-		expect(cycleCursor(0, 1, 1)).toBe(0);
-		expect(cycleCursor(0, 1, -1)).toBe(0);
+	test("the pinned pages keep the cycle in their cursor space with no workflows", () => {
+		// No workflows under the filter: the two pins are the whole cursor space.
+		expect(cycleCursor(0, 2, 1)).toBe(1);
+		expect(cycleCursor(1, 2, 1)).toBe(0);
+		expect(cycleCursor(0, 2, -1)).toBe(1);
+		expect(cycleCursor(1, 2, -1)).toBe(0);
 	});
 
 	test("an empty cursor space has nowhere to go", () => {

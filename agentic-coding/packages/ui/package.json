@@ -5,9 +5,9 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"dependencies": {
-		"@opentui/core": "0.5.14",
-		"@opentui/keymap": "0.5.14",
-		"@opentui/solid": "0.5.14",
+		"@opentui/core": "0.6.6",
+		"@opentui/keymap": "0.6.6",
+		"@opentui/solid": "0.6.6",
 		"solid-js": "^1.9.15"
 	}
 }

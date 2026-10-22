@@ -58,6 +58,8 @@ export interface OrchestratorViewProps {
 	readonly onBack: () => void;
 	/** Open the shell's `?` keybind help. */
 	readonly onHelp: () => void;
+	/** The shell's primary repository, shared with the OpenCode page. */
+	readonly opencodeCwd?: string;
 }
 
 /** Footer and `?` catalog of the Orchestrator page: the session view's keys,
@@ -156,7 +158,11 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 				import("../dash/agent-session.ts"),
 				configuredModel(),
 			]);
-			const opened = await openOrchestratorSession({ fresh, model });
+			const opened = await openOrchestratorSession({
+				fresh,
+				model,
+				...(props.opencodeCwd ? { opencodeCwd: props.opencodeCwd } : {}),
+			});
 			if (disposed) return;
 			setSession(opened);
 			const { HostClient, watchStream } = await import(

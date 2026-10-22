@@ -29,10 +29,10 @@ import {
 // (replace-nested-tabs-with-page-navigation, task 2.1).
 //
 // Home offers Environments, Observability, Wiki, Orchestrator (home mode) and
-// Settings, plus the
-// "New workflow" action (working directory or a path the user enters): workflow
-// creation is contextual and there is no Workflows destination, list, history
-// or reopen entry (launch-workflows-from-project-and-wiki-pages, task 2.4).
+// Settings; OpenCode is a sidebar-only page, not a Home destination. The
+// "New workflow" action (working directory or a path the user enters) is
+// contextual, and there is no Workflows destination, list, history or reopen
+// entry (launch-workflows-from-project-and-wiki-pages, task 2.4).
 
 const FULL_SURFACE = {
 	environments: true,
@@ -316,6 +316,7 @@ describe("every routed page has a definition and a label", () => {
 			"wiki",
 			"wiki.note",
 			"orchestrator",
+			"opencode",
 			"workflows.detail",
 		];
 		for (const page of ids) {

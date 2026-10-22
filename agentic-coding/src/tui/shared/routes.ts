@@ -56,6 +56,7 @@ export type PageId =
 	| "wiki"
 	| "wiki.note"
 	| "orchestrator"
+	| "opencode"
 	| "workflows.detail";
 
 /** A location: page identity + required resource identity + typed params. */
@@ -355,6 +356,13 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 		feature: "orchestrator",
 		parent: () => ({ page: "home" }),
 		picker: true,
+	},
+	// The embedded OpenCode TUI: a Home surface like the Orchestrator, but not a
+	// destination of its own. The sidebar pin is the only way in, so the
+	// location picker never offers it and Home has no duplicate row.
+	opencode: {
+		label: "OpenCode",
+		parent: () => ({ page: "home" }),
 	},
 	// The per-workflow dashboard page (workspace sidebar navigation). Not a
 	// destination: no workflow list, history or reopen route reaches it, and the

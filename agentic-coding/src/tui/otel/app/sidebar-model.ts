@@ -7,6 +7,7 @@
 // unit test can pin them without a terminal.
 import { basename } from "node:path";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
+import type { PageId } from "../../shared/routes.ts";
 
 /** Which workflows the sidebar lists. `active` is the default filter. */
 export type SidebarFilter = "active" | "attention" | "all";
@@ -70,44 +71,63 @@ export function filterOverviews(
 	);
 }
 
-/** The pinned entry the sidebar keeps above every workflow row. It is not a
- * workflow: it has no overview, no status and no filter, so the poll, the
- * cursor reveal and the delete/spawn actions never see it. The shell pins it
- * while it renders the Orchestrator surface (home mode), whatever the workflow
- * list and its filter happen to hold. */
+/** The pinned entries the sidebar keeps above every workflow row. A pin is not
+ * a workflow: it has no overview, no status and no filter, so the poll, the
+ * cursor reveal and the delete/spawn actions never see it. The shell pins them
+ * while it renders the Home surfaces (home mode), whatever the workflow list
+ * and its filter happen to hold. */
 export interface SidebarPin {
-	/** Row mark; the same Home glyph an orchestrator-started workflow carries. */
+	/** Row mark; for the Orchestrator, the same Home glyph an
+	 * orchestrator-started workflow carries. */
 	readonly glyph: string;
 	readonly label: string;
 	/** Second line, in the slot a workflow row uses for its phase and project. */
 	readonly meta: string;
+	/** The page the pin opens. */
+	readonly page: PageId;
 }
 
 export const SIDEBAR_ORCHESTRATOR_PIN: SidebarPin = {
 	glyph: "⌂",
 	label: "Orchestrator",
 	meta: "chat · launch · manage",
+	page: "orchestrator",
 };
 
-/** Cursor positions the sidebar offers: the pinned entry first (when it is
- * pinned), then the filter's workflow rows. */
-export function sidebarCursorCount(rowCount: number, pinned: boolean): number {
-	return Math.max(0, rowCount) + (pinned ? 1 : 0);
+/** The embedded OpenCode TUI: one long-lived coding session next to the
+ * orchestrator, sharing its default background service. */
+export const SIDEBAR_OPENCODE_PIN: SidebarPin = {
+	glyph: "󱚞",
+	label: "OpenCode",
+	meta: "sessions · prompts · code",
+	page: "opencode",
+};
+
+export const SIDEBAR_HOME_PINS: readonly SidebarPin[] = [
+	SIDEBAR_ORCHESTRATOR_PIN,
+	SIDEBAR_OPENCODE_PIN,
+];
+
+/** Cursor positions the sidebar offers: the pinned entries first, then the
+ * filter's workflow rows. */
+export function sidebarCursorCount(rowCount: number, pinCount: number): number {
+	return Math.max(0, rowCount) + Math.max(0, pinCount);
 }
 
-/** The workflow row a cursor position names, or -1 while the cursor sits on the
- * pinned leading entry. The inverse of `sidebarCursorForWorkflow`. */
-export function sidebarWorkflowIndex(cursor: number, pinned: boolean): number {
-	return pinned ? cursor - 1 : cursor;
+/** The workflow row a cursor position names, or a negative index while the
+ * cursor sits on one of the pinned leading entries. The inverse of
+ * `sidebarCursorForWorkflow`. */
+export function sidebarWorkflowIndex(cursor: number, pinCount: number): number {
+	return cursor - Math.max(0, pinCount);
 }
 
 /** The cursor position that selects a workflow row, so revealing the open
- * workflow keeps the pinned entry's leading slot. */
+ * workflow keeps the pinned entries' leading slots. */
 export function sidebarCursorForWorkflow(
 	index: number,
-	pinned: boolean,
+	pinCount: number,
 ): number {
-	return pinned ? index + 1 : index;
+	return index + Math.max(0, pinCount);
 }
 
 /** Next filter in catalog order, wrapping at the end. */

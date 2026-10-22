@@ -69,7 +69,7 @@ export interface RowDownSample {
 export interface RowMouseHandlers {
 	onMouseDown: (event: MouseEvent) => void;
 	onMouseUp: (event: MouseEvent) => void;
-	onMouseOut: () => void;
+	onMouseOut: (event: MouseEvent) => void;
 }
 
 export function useRowMouse(options: RowMouseOptions): RowMouseHandlers {
@@ -127,8 +127,23 @@ export function useRowMouse(options: RowMouseOptions): RowMouseHandlers {
 			if (options.stopPropagation) event.stopPropagation?.();
 			runAction(resolved.action, index, options);
 		},
-		/** The pointer left the row: the press it started here is over. */
-		onMouseOut() {
+		/** The pointer left the row: only the press that started here is over. */
+		onMouseOut(event) {
+			const start = state.down;
+			if (!start) return;
+			// A hover transition can fire after the press as the hit target moves
+			// from a parent to a child. The pointer is still over the row then, so
+			// the press is still live.
+			if (pointerInside(event)) return;
+			// Rows of one list share the gesture holder. A hover transition after
+			// the press (the pointer leaves the previously hovered row) must not
+			// cancel a press that started on another row.
+			if (
+				start.instance !== undefined &&
+				event.currentTarget !== undefined &&
+				start.instance !== event.currentTarget
+			)
+				return;
 			state.down = undefined;
 		},
 	};
@@ -141,4 +156,16 @@ function runAction(
 ): void {
 	if (action === "select") options.onSelect?.(index);
 	else if (action === "activate") options.onActivate?.(index);
+}
+
+/** True while the event cell lies inside the renderable that received it. */
+function pointerInside(event: MouseEvent): boolean {
+	const target = event.currentTarget;
+	if (!target) return false;
+	return (
+		event.x >= target.screenX &&
+		event.x < target.screenX + target.width &&
+		event.y >= target.screenY &&
+		event.y < target.screenY + target.height
+	);
 }

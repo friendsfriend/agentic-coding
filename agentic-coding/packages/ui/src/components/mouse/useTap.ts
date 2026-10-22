@@ -20,7 +20,7 @@ export function useTap(
 ): {
 	onMouseDown: (event: MouseEvent) => void;
 	onMouseUp: (event: MouseEvent) => void;
-	onMouseOut: () => void;
+	onMouseOut: (event: MouseEvent) => void;
 } {
 	return useRowMouse({
 		// A control that renders one line has no cursor: `selectedIndex` never

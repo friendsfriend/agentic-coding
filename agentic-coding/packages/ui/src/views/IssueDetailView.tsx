@@ -6,7 +6,7 @@ import { For, Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
 import { ContentFrame } from "../components/ContentStack";
 import { highlightForIndex } from "../components/Highlight";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { RunningText } from "../components/RunningText";
 import { ScrollableContent } from "../components/ScrollableContent";
 import {
@@ -63,6 +63,7 @@ export function IssueDetailView(props: IssueDetailViewProps) {
 	};
 
 	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	const issue = () => props.issue;
 	const lineWidth = () => Math.max(1, dimensions().width - 4);
 	const referenceTitleWidth = () => Math.max(1, lineWidth() - 8);
@@ -133,7 +134,7 @@ export function IssueDetailView(props: IssueDetailViewProps) {
 								? gitlabHtmlToMarkdown(description)
 								: description
 						}
-						syntaxStyle={getMarkdownSyntaxStyle()}
+						syntaxStyle={syntaxStyle}
 						drawUnstyledText={true}
 						fg={uiColors.textSecondary}
 					/>

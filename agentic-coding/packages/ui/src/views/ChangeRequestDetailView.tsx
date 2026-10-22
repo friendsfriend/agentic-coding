@@ -4,7 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import { ContentFrame } from "../components/ContentStack";
 import { HighlightedText } from "../components/Highlight";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { RunningText } from "../components/RunningText";
 import { ScrollableContent } from "../components/ScrollableContent";
 import {
@@ -173,6 +173,7 @@ export function ChangeRequestDetailView(props: ChangeRequestDetailViewProps) {
 	};
 
 	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	const cr = () => props.changeRequest;
 	const lineWidth = () => Math.max(1, Math.floor(dimensions().width * 0.6) - 4);
 	const linkedIssueTitleWidth = () =>
@@ -341,7 +342,7 @@ export function ChangeRequestDetailView(props: ChangeRequestDetailViewProps) {
 								? gitlabHtmlToMarkdown(description)
 								: description
 						}
-						syntaxStyle={getMarkdownSyntaxStyle()}
+						syntaxStyle={syntaxStyle}
 						drawUnstyledText={true}
 						fg={uiColors.textSecondary}
 					/>

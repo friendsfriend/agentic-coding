@@ -18,6 +18,10 @@ import {
 import { TASK_CHAR_BOUND } from "../contracts/actions.ts";
 import { PUBLIC_WORKFLOW_CATALOG } from "../workflow/definitions/catalog.ts";
 import {
+	createOpenCodeSession,
+	promptOpenCodeSession,
+} from "./opencode-sessions.ts";
+import {
 	cachedBranchRefs,
 	compactWorkflowStatus,
 	compactWorkflowStatusView,
@@ -29,6 +33,7 @@ import {
 	type WorkflowListStatus,
 } from "./orchestrator-compact.ts";
 import {
+	OPENCODE_CWD_ENV,
 	ORCHESTRATOR_TOKEN_ENV,
 	ORCHESTRATOR_URL_ENV,
 } from "./orchestrator-env.ts";
@@ -438,6 +443,7 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - workflow_status answers a compact row by default; poll it with \`sinceRevision\` set to the revision of the last answer, so a poll of an unchanged workflow costs a few bytes. The task text, the full run history and the gate decisions are not in that row: ask for the task with \`includeTask: true\` and for everything with \`detail: "full"\`, only when you actually need it.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
 - Workflow events: the monitor delivers subscribed events to you as notes whose first line is "[workflow-monitor] subs=<labels>" followed by one line per (workflow, step, change), "- <workflowId> → <stepId> (<what changed>)" — the same change repeated inside one note is one line with its count ("… ×12") instead of twelve lines. The subs= list names the subscriptions that asked for the note; if you have no subscription of your own it reads subs=default, the monitor's own default, which list_subscriptions shows. That default digests info progress on a short interval, but a blocked or failed run, an attention request, a waiting review, a pending question and a workflow completion still reach you promptly, so you need not subscribe just to hear about them. The notifications the developer needs (a review waiting, a pending developer question) always reach the shell whatever you subscribe to. Use subscribe_events to choose what wakes you (mode wake for immediate coalesced notes, digest for one note per interval, silent to record without delivering), list_subscriptions to see them, unsubscribe_events to remove one, and read_events to pull recorded events since a cursor when you would rather poll than be woken. A note that carries only info progress your subscription did not name is absorbed: it stays readable with read_events and does not wake you. Every subscription expires, so give it a label, a reason and an expiry or an until-condition. Completion and progress events (workflow.completed, step.*, run.completed) are severity info, so minSeverity "warning" excludes them: to be told when a workflow finishes, name the terminal events in eventIds (workflow.completed, workflow.failed, workflow.closed) or pass minSeverity "info".
+- OpenCode: use \`opencode_session\` to start a coding session in the shell's OpenCode page (always with an initial prompt) or to admit a follow-up prompt to an existing \`sessionId\`. It shares the default OpenCode background service and project with the page, returns the session id and the admitted user message, and does not wait for OpenCode's answer: the developer reads and drives that session in the OpenCode page, so tell them the id when one is created.
 - Report what you did and the resulting workflow status. Be concise.`;
 
 /** The orchestrator extension: workflow tools plus the orchestrator prompt. */
@@ -604,6 +610,70 @@ export function createOrchestratorExtension(
 				}),
 				execute: run(async (args: { since?: string }, env) =>
 					observe(env, { kind: "sessions-report", since: args.since }),
+				),
+			}),
+			defineTool({
+				name: "opencode_session",
+				description:
+					"Use to start or continue a coding session in the shell's OpenCode page. `action: \"create\"` creates a session in the shell's project and admits an initial `prompt`; `action: \"prompt\"` admits a follow-up to an existing `sessionId`. The session shares OpenCode's default background service and project with the embedded page. Returns the session id and the admitted user message immediately; it does not wait for OpenCode's answer, so the developer reads and drives the result in the OpenCode page.",
+				parameters: Type.Object({
+					action: Type.Union([Type.Literal("create"), Type.Literal("prompt")], {
+						description:
+							"`create` makes a new session; `prompt` continues one.",
+					}),
+					prompt: Type.String({
+						minLength: 1,
+						maxLength: TASK_CHAR_BOUND,
+						description:
+							"The initial prompt for `create` or the follow-up for `prompt`.",
+					}),
+					sessionId: Type.Optional(
+						Type.String({
+							description: "Session id to continue (required for `prompt`).",
+						}),
+					),
+					title: Type.Optional(
+						Type.String({
+							maxLength: 200,
+							description: "Optional session title for `create`.",
+						}),
+					),
+				}),
+				execute: run(
+					async (
+						args: {
+							action: "create" | "prompt";
+							prompt: string;
+							sessionId?: string;
+							title?: string;
+						},
+						env,
+					) => {
+						const cwd = env[OPENCODE_CWD_ENV]?.trim();
+						if (!cwd)
+							throw new Error(
+								"the shell did not provide its OpenCode project directory",
+							);
+						if (!args.prompt.trim())
+							throw new Error("the prompt must not be empty");
+						if (args.action === "create") {
+							if (args.sessionId)
+								throw new Error("create makes a new session; omit sessionId");
+							return createOpenCodeSession({
+								cwd,
+								prompt: args.prompt,
+								...(args.title?.trim() ? { title: args.title.trim() } : {}),
+							});
+						}
+						const sessionId = args.sessionId?.trim();
+						if (!sessionId)
+							throw new Error("prompt needs the sessionId to continue");
+						return promptOpenCodeSession({
+							cwd,
+							sessionId,
+							prompt: args.prompt,
+						});
+					},
 				),
 			}),
 			defineTool({

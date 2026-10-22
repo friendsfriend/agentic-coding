@@ -193,6 +193,7 @@ import {
 import { openViewWindow } from "../../shared/side-app.ts";
 import { DeleteWorkflowModal } from "../components/DeleteWorkflowModal.tsx";
 import { NotificationOverlay } from "../components/Notification.tsx";
+import { OpenCodeView } from "../components/OpenCodeView.tsx";
 import {
 	FilterModal,
 	SortModal,
@@ -221,11 +222,13 @@ import {
 import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
+	opencodeKeybindCatalog,
 	workspaceSidebarKeybindCatalog,
 	workspaceSidebarPanelSection,
 } from "./keybinds.ts";
 import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
 import { activeNotification, notify } from "./notifications.ts";
+import type { OpenCodeLauncher } from "./opencode-process.ts";
 import {
 	buildSettingsContext,
 	retrySettingsSection,
@@ -236,7 +239,7 @@ import {
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
-	SIDEBAR_ORCHESTRATOR_PIN,
+	SIDEBAR_HOME_PINS,
 	type SidebarFilter,
 	type SidebarMode,
 	sidebarCursorCount,
@@ -265,6 +268,7 @@ type Tab =
 	| "workflow"
 	| "wiki"
 	| "orchestrator"
+	| "opencode"
 	| "traces"
 	| "metrics"
 	| "logs"
@@ -401,6 +405,8 @@ export function App(props: {
 	/** Initial page for a spawned view window (`--route`); absent opens the
 	 * route's default. */
 	initialRoute?: Route;
+	/** OpenCode PTY launcher override for shell tests; normal shells use Bun PTY. */
+	openCodeLauncher?: OpenCodeLauncher;
 }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
@@ -424,6 +430,12 @@ export function App(props: {
 				: { page: "observability.traces" });
 	const pages = createPageNavigation(createRouterState(initialRoute));
 	const currentPage = () => pages.current().page;
+	/** The OpenCode PTY is lazy: it starts on the first visit and then stays
+	 * mounted (hidden) so its session and scrollback survive navigation. */
+	const [opencodeStarted, setOpencodeStarted] = createSignal(false);
+	createEffect(() => {
+		if (currentPage() === "opencode") setOpencodeStarted(true);
+	});
 	const activeFeature = (): FeatureId | undefined => pages.feature();
 	/** Which body owns the terminal for a page: overlays belong to one body. */
 	const bodyOwner = (page: string): string => {
@@ -431,6 +443,7 @@ export function App(props: {
 		if (page.startsWith("workflows")) return "workflows";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
+		if (page === "opencode") return "opencode";
 		if (page.startsWith("observability")) return "observability";
 		return "home";
 	};
@@ -480,22 +493,31 @@ export function App(props: {
 	/** Workflow dashboard target of the current route, when it is one. */
 	const workflow = () => workflowTarget(pages.current());
 	const sidebarAvailable = () => Boolean(props.dashboard);
-	/** The Orchestrator is a Home surface: only the shell that renders its page
-	 * pins the sidebar entry (the same condition `surface().orchestrator`
-	 * reports). */
-	const orchestratorPinned = (): boolean => props.dashboard?.mode === "home";
-	/** Cursor positions the sidebar offers: the pinned Orchestrator first, then
-	 * the filter's workflow rows. */
+	/** The OpenCode project is the shell's primary repository; the embedded TUI
+	 * and the orchestrator's session tools share it through the session's run
+	 * environment. */
+	// `/demo` is the shell's synthetic default repository, not a filesystem
+	// directory. Both the embedded client and orchestrator tools need a real cwd.
+	const opencodeProject = (): string => {
+		const repo = props.repos[0];
+		return repo && repo !== "/demo" ? repo : process.cwd();
+	};
+	/** Home pins the Orchestrator and OpenCode above every workflow row. The
+	 * attached shell has no Home surface, so it pins neither. */
+	const sidebarPins = () =>
+		props.dashboard?.mode === "home" ? SIDEBAR_HOME_PINS : [];
+	/** Cursor positions the sidebar offers: the pinned entries first, then the
+	 * filter's workflow rows. */
 	const sidebarEntryCount = (): number =>
-		sidebarCursorCount(sidebarRows().length, orchestratorPinned());
+		sidebarCursorCount(sidebarRows().length, sidebarPins().length);
 	/** The workflow one sidebar cursor position names, or undefined while the
-	 * position holds the pinned Orchestrator entry. */
+	 * position holds one of the pinned entries. */
 	const sidebarWorkflowAt = (cursor: number): WorkflowOverview | undefined => {
-		const index = sidebarWorkflowIndex(cursor, orchestratorPinned());
+		const index = sidebarWorkflowIndex(cursor, sidebarPins().length);
 		return index >= 0 ? sidebarRows()[index] : undefined;
 	};
-	/** The workflow the sidebar cursor names, or undefined while it sits on the
-	 * pinned Orchestrator entry. */
+	/** The workflow the sidebar cursor names, or undefined while it sits on a
+	 * pinned page. */
 	const selectedSidebarWorkflow = (): WorkflowOverview | undefined =>
 		sidebarWorkflowAt(sidebarIndex());
 	/** Open one workflow's dashboard in the page body and focus it. */
@@ -507,9 +529,10 @@ export function App(props: {
 		);
 		setFocusPanel("content");
 	};
-	/** Open the Orchestrator page (the sidebar's pinned entry) and focus it. */
-	const openOrchestrator = (): void => {
-		pages.navigate({ page: "orchestrator" });
+	/** Open a pinned page (the sidebar's Orchestrator/OpenCode entries) and
+	 * focus it. */
+	const openPinnedPage = (page: PageId): void => {
+		pages.navigate({ page });
 		setFocusPanel("content");
 	};
 	/** Open a workflow dashboard by id (the Slots section's open-workflow
@@ -527,16 +550,18 @@ export function App(props: {
 		pages.navigate(workflowRoute(props.repos[0] ?? "", workflowId));
 		setFocusPanel("content");
 	};
-	/** Cursor position of the workspace the page body is showing: the pinned
-	 * Orchestrator page lands on the leading slot and a workflow dashboard on its
-	 * row. `undefined` while the page is neither (another page, or a dashboard
-	 * opened for a filtered-out or not-yet-polled workflow), so a reader is never
-	 * moved onto a wrong row. */
+	/** Cursor position of the workspace the page body is showing: a pinned page
+	 * lands on its pin and a workflow dashboard on its row. `undefined` while the
+	 * page is neither (another page, or a dashboard opened for a filtered-out or
+	 * not-yet-polled workflow), so a reader is never moved onto a wrong row. */
 	const openWorkspaceCursor = (): number | undefined => {
-		if (orchestratorPinned() && currentPage() === "orchestrator") return 0;
+		const pin = sidebarPins().findIndex(
+			(entry) => entry.page === currentPage(),
+		);
+		if (pin >= 0) return pin;
 		const index = sidebarIndexFor(sidebarRows(), workflow());
 		if (index < 0) return undefined;
-		return sidebarCursorForWorkflow(index, orchestratorPinned());
+		return sidebarCursorForWorkflow(index, sidebarPins().length);
 	};
 	/** Move the sidebar cursor onto the entry the page body is showing, so
 	 * focusing the panel from a dashboard lands on that row instead of wherever
@@ -545,22 +570,24 @@ export function App(props: {
 		const cursor = openWorkspaceCursor();
 		if (cursor !== undefined) setSidebarIndex(cursor);
 	};
-	/** Open the workspace one sidebar cursor position names: the pinned
-	 * Orchestrator opens its page, every workflow row its dashboard. */
+	/** Open the workspace one sidebar cursor position names: a pinned page opens
+	 * that page, every workflow row its dashboard. */
 	const openWorkspaceAt = (cursor: number): void => {
-		if (orchestratorPinned() && cursor === 0) {
-			openOrchestrator();
+		const pin = sidebarPins()[cursor];
+		if (pin) {
+			openPinnedPage(pin.page);
 			return;
 		}
 		const entry = sidebarWorkflowAt(cursor);
 		if (entry) openWorkflow(entry);
 	};
 	/** Ctrl+H/Ctrl+L: open the previous/next workspace, walking the sidebar's
-	 * entries in order and wrapping at both ends. The pinned Orchestrator is one
-	 * of those entries whenever it is navigable, so the cycle includes it. The
-	 * walk starts from the workspace on screen rather than from a cursor the
-	 * reader cannot see, and falls back to the panel's own cursor (a filtered-out
-	 * dashboard, or a page that is not a workspace at all). */
+	 * entries in order and wrapping at both ends. The pinned Orchestrator and
+	 * OpenCode pages are entries whenever they are navigable, so the cycle
+	 * includes them. The walk starts from the workspace on screen rather than
+	 * from a cursor the reader cannot see, and falls back to the panel's own
+	 * cursor (a filtered-out dashboard, or a page that is not a workspace at
+	 * all). */
 	const cycleWorkspace = (delta: number): void => {
 		const count = sidebarEntryCount();
 		if (count === 0) return;
@@ -673,10 +700,9 @@ export function App(props: {
 			return;
 		}
 		if (key === "enter" || key === "return") {
-			// The pinned entry leads the cursor space, so the first Enter opens the
-			// Orchestrator exactly like every other row opens its page.
-			if (orchestratorPinned() && sidebarIndex() === 0) {
-				openOrchestrator();
+			const pin = sidebarPins()[sidebarIndex()];
+			if (pin) {
+				openPinnedPage(pin.page);
 				return;
 			}
 			const entry = selectedSidebarWorkflow();
@@ -768,7 +794,9 @@ export function App(props: {
 	createEffect(() => {
 		if (props.dashboard?.mode !== "home") return;
 		if (!gatewayReady()) return;
-		const monitor = startWorkflowMonitor();
+		const monitor = startWorkflowMonitor({
+			opencodeCwd: opencodeProject(),
+		});
 		onCleanup(() => monitor.stop());
 	});
 	// App slots: the server publishes who waits for which app and who got it, so
@@ -909,6 +937,7 @@ export function App(props: {
 		if (page.startsWith("workflows")) return "workflow";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
+		if (page === "opencode") return "opencode";
 		if (page.includes("metrics")) return "metrics";
 		if (page.includes("logs")) return "logs";
 		if (page.includes("topology")) return "topology";
@@ -983,7 +1012,7 @@ export function App(props: {
 		environments: Boolean(props.environments),
 		tracesOnly: Boolean(props.tracesOnly),
 		wiki: props.dashboard?.mode === "home",
-		orchestrator: orchestratorPinned(),
+		orchestrator: props.dashboard?.mode === "home",
 		// Settings owns the shared keymap the profile/preset editor needs, so the
 		// surface that renders it is the one that has a dashboard-mounted shell.
 		settings: Boolean(props.dashboard),
@@ -2338,6 +2367,29 @@ export function App(props: {
 				dismissErrorModal();
 			return;
 		}
+		// The embedded OpenCode terminal owns every key while its page body has
+		// focus, except the three panel host keys. This shell keymap layer sees a
+		// key before the renderable does; returning without `preventDefault` lets
+		// the terminal's own focus handler receive it, while the host keys are
+		// consumed here. Quit confirmation and the lifecycle overlay still take
+		// precedence if they appear while OpenCode is focused.
+		if (
+			currentPage() === "opencode" &&
+			focusPanel() === "content" &&
+			nav.modal() === "none"
+		) {
+			if (quitConfirmation()) {
+				if (key === "y" || key === "Enter") resolveQuitConfirmation(true);
+				else if (key === "n" || key === "Escape")
+					resolveQuitConfirmation(false);
+				return;
+			}
+			if (phase() === "starting" || phase() === "stopping") return;
+			const shellOwned =
+				event.ctrl && (key === "s" || key === "h" || key === "l");
+			if (!shellOwned) return;
+			event.preventDefault();
+		}
 		// Support tool: report the fields every feature layer gates on, so "nothing
 		// responds on this surface" can be told apart from "the keyboard is dead"
 		// without rebuilding. Stays until dismissed like any other modal.
@@ -2388,7 +2440,9 @@ export function App(props: {
 		// spawned shell attaches to this process's server instead of owning a
 		// second one.
 		if (event.ctrl && key === "t") {
-			spawnCurrentView();
+			// The OpenCode page already hosts the one embedded client; spawning the
+			// route in a tmux window would start a second TUI for the same project.
+			if (currentPage() !== "opencode") spawnCurrentView();
 			return;
 		}
 
@@ -2759,12 +2813,13 @@ export function App(props: {
 			return;
 		}
 
-		// Dashboard, wiki and orchestrator bodies own their keys through their own
-		// keymap layers.
+		// Dashboard, wiki, orchestrator and OpenCode bodies own their keys through
+		// their own keymap layers or the focused terminal.
 		if (
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
-			activeTab() === "orchestrator"
+			activeTab() === "orchestrator" ||
+			(activeTab() === "opencode" && focusPanel() === "content")
 		)
 			return;
 
@@ -2824,6 +2879,11 @@ export function App(props: {
 		// Help (shell tabs): the `?` modal reads the active catalog. Ignore it
 		// while one of this tab's own modals (filter/sort/theme) owns the keys.
 		if (key === "?" && nav.modal() === "none") {
+			// The embedded OpenCode renderable may still be unwinding a focus
+			// transition; don't let its native handler receive the same `?` that the
+			// sidebar uses for shell help.
+			if (currentPage() === "opencode" && focusPanel() === "sidebar")
+				event.preventDefault();
 			setHelpOffset(0);
 			nav.pushModal("help", activeFeatureId());
 			return;
@@ -3156,7 +3216,8 @@ export function App(props: {
 		if (
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
-			activeTab() === "orchestrator"
+			activeTab() === "orchestrator" ||
+			activeTab() === "opencode"
 		)
 			return ["content"];
 		return ["breadcrumb", "content"];
@@ -3243,6 +3304,7 @@ export function App(props: {
 
 	const tabKeybindCatalog = (): KeybindSection[] => {
 		const tab = activeTab();
+		if (tab === "opencode") return opencodeKeybindCatalog();
 		const base = observabilityKeybindCatalog({
 			tab: tab === "home" || tab === "orchestrator" ? "traces" : tab,
 			view: traceView(),
@@ -3260,7 +3322,11 @@ export function App(props: {
 		// The sidebar panel owns the footer while it holds focus: its keys are the
 		// ones the next press will act on.
 		if (focusPanel() === "sidebar") {
-			setActiveKeybindCatalog(workspaceSidebarKeybindCatalog());
+			setActiveKeybindCatalog(
+				workspaceSidebarKeybindCatalog({
+					opencodePage: currentPage() === "opencode",
+				}),
+			);
 			return;
 		}
 		// The contextual creation form currently owns input, so the footer and `?`
@@ -3278,6 +3344,12 @@ export function App(props: {
 					? [...destinationPageKeybindCatalog(), workspaceSidebarPanelSection()]
 					: destinationPageKeybindCatalog(),
 			);
+			return;
+		}
+		// The OpenCode page has no shell keys of its own beyond the panel host
+		// keys; the terminal owns the rest.
+		if (currentPage() === "opencode") {
+			setActiveKeybindCatalog(opencodeKeybindCatalog());
 			return;
 		}
 		// Settings sections publish their own catalog: the destination catalog
@@ -3369,12 +3441,12 @@ export function App(props: {
 							side={sidebarSide()}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
-							pin={orchestratorPinned() ? SIDEBAR_ORCHESTRATOR_PIN : undefined}
+							pins={sidebarPins()}
 							filter={sidebarFilter()}
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
-							onOpenPin={openOrchestrator}
+							onOpenPin={(pin) => openPinnedPage(pin.page)}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}
@@ -3557,6 +3629,7 @@ export function App(props: {
 												keymap={keymap}
 												active={() => focusPanel() === "content"}
 												overlay={() => nav.modal() !== "none"}
+												opencodeCwd={opencodeProject()}
 												onBack={() => pages.goToParent()}
 												onHelp={() => {
 													setHelpOffset(0);
@@ -3566,6 +3639,32 @@ export function App(props: {
 										</box>
 									);
 								})()}
+							{/* Home → OpenCode: mounted on first visit and kept mounted,
+							    hidden, so its PTY and scrollback survive navigation. */}
+							{props.dashboard?.mode === "home" && opencodeStarted() && (
+								<box
+									visible={currentPage() === "opencode"}
+									style={{ flexGrow: 1, minHeight: 0 }}
+								>
+									<OpenCodeView
+										cwd={opencodeProject()}
+										active={() =>
+											currentPage() === "opencode" &&
+											focusPanel() === "content" &&
+											nav.modal() === "none" &&
+											!activeErrorModal() &&
+											!quitConfirmation() &&
+											phase() !== "starting" &&
+											phase() !== "stopping"
+										}
+										launcher={props.openCodeLauncher}
+										onFocus={() => {
+											if (currentPage() === "opencode")
+												setFocusPanel("content");
+										}}
+									/>
+								</box>
+							)}
 							{!showsDestinationList() && activeTab() === "traces" && (
 								<>
 									{traceView() === "selection" && (
@@ -3752,12 +3851,12 @@ export function App(props: {
 							side={sidebarSide()}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
-							pin={orchestratorPinned() ? SIDEBAR_ORCHESTRATOR_PIN : undefined}
+							pins={sidebarPins()}
 							filter={sidebarFilter()}
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
-							onOpenPin={openOrchestrator}
+							onOpenPin={(pin) => openPinnedPage(pin.page)}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}

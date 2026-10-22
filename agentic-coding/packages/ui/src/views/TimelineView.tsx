@@ -11,7 +11,7 @@ import {
 	highlightColor,
 } from "../components/Highlight";
 import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { LAYOUT_CHROME_LINES } from "../components/ScrollableList";
 import { SearchHeader } from "../components/SearchHeader";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
@@ -170,6 +170,7 @@ export function toTimelineItems(
  */
 export function TimelineView(props: TimelineViewProps) {
 	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
 
 	const isSystemItem = (item: TimelineItem): boolean => {
 		return item.notes.length > 0 && item.notes[0].system;
@@ -963,7 +964,7 @@ export function TimelineView(props: TimelineViewProps) {
 																				? systemNoteToMarkdown(note.body)
 																				: note.body
 																		}
-																		syntaxStyle={getMarkdownSyntaxStyle()}
+																		syntaxStyle={syntaxStyle}
 																		drawUnstyledText={true}
 																		fg={highlightColor("secondary")}
 																	/>

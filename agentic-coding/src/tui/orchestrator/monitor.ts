@@ -75,6 +75,8 @@ export interface WorkflowMonitorOptions {
 	readonly timings?: Partial<MonitorTimings>;
 	/** Clock, so a test needs no sleep to reach a cadence boundary. */
 	readonly now?: () => number;
+	/** The shell's primary repository, shared with the embedded OpenCode TUI. */
+	readonly opencodeCwd?: string;
 }
 
 export interface WorkflowMonitor {
@@ -98,12 +100,17 @@ export function configuredMonitorMode(): OrchestratorMonitorMode {
  * follow-up note to the active session. Loaded lazily: the monitor is wired
  * into the shell's module graph, and the host client is only needed once a
  * note actually has to be delivered. */
-async function deliverToOrchestratorSession(note: string): Promise<void> {
+async function deliverToOrchestratorSession(
+	note: string,
+	opencodeCwd?: string,
+): Promise<void> {
 	const [{ openOrchestratorSession }, { HostClient }] = await Promise.all([
 		import("./session.ts"),
 		import("../../agent-host/client.ts"),
 	]);
-	const session = await openOrchestratorSession();
+	const session = await openOrchestratorSession(
+		opencodeCwd ? { opencodeCwd } : {},
+	);
 	const client = new HostClient(session.hostSocket);
 	await client.submit(session.runId, note, crypto.randomUUID(), "followUp");
 }
@@ -140,7 +147,9 @@ export function startWorkflowMonitor(
 	const now = options.now ?? (() => Date.now());
 	const notify =
 		options.notify ?? ((message: string) => shellNotify(message, "warning"));
-	const deliver = options.deliver ?? deliverToOrchestratorSession;
+	const deliver =
+		options.deliver ??
+		((note: string) => deliverToOrchestratorSession(note, options.opencodeCwd));
 	const planner = new DeliveryPlanner({
 		...DELIVERY_TIMINGS,
 		coalesceMs: timings.coalesceMs,

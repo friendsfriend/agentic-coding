@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
 import {
 	observabilityKeybindCatalog,
+	opencodeKeybindCatalog,
 	workspaceSidebarKeybindCatalog,
 	workspaceSidebarPanelSection,
 } from "../../src/tui/otel/app/keybinds.ts";
@@ -126,5 +127,36 @@ describe("workspace sidebar keybind catalog", () => {
 		expect(
 			catalogKeybinds([workspaceSidebarPanelSection()]).map((kb) => kb.key),
 		).toEqual(["Ctrl+S", "Ctrl+H", "Ctrl+L"]);
+	});
+
+	it("does not advertise Ctrl+T while the OpenCode page is selected", () => {
+		const catalog = workspaceSidebarKeybindCatalog({ opencodePage: true });
+		const all = catalogKeybinds(catalog);
+		expect(all.map((keybind) => keybind.key)).not.toContain("Ctrl+T");
+		expect(all.map((keybind) => keybind.key)).toContain("Ctrl+S");
+	});
+});
+
+describe("OpenCode page keybind catalog", () => {
+	it("keeps only the shell's panel keys while the terminal has focus", () => {
+		const catalog = opencodeKeybindCatalog();
+		const all = catalogKeybinds(catalog);
+		const footer = footerKeybinds(catalog);
+		expect(all.map((keybind) => keybind.key)).toEqual([
+			"Ctrl+S",
+			"Ctrl+H",
+			"Ctrl+L",
+			"?",
+		]);
+		expect(all.find((keybind) => keybind.key === "Ctrl+H")?.standard).toBe(
+			true,
+		);
+		expect(all.find((keybind) => keybind.key === "Ctrl+L")?.standard).toBe(
+			true,
+		);
+		expect(all.find((keybind) => keybind.key === "?")?.action).toBe(
+			"OpenCode help",
+		);
+		expect(footer.map((keybind) => keybind.key)).toEqual(["Ctrl+S", "?"]);
 	});
 });

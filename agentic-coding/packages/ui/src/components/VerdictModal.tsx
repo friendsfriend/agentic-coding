@@ -7,7 +7,7 @@ import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
 import { MarkdownBlockView } from "./MarkdownViewer.tsx";
 import { parseMarkdownBlocks } from "./markdownBlocks.ts";
-import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "./markdownSyntax.ts";
 import { useModalBackdrop } from "./mouse/useModalBackdrop.ts";
 import { ScrollableContent } from "./ScrollableContent.tsx";
 
@@ -25,6 +25,7 @@ export function VerdictModal(props: {
 }) {
 	const backdrop = useModalBackdrop({ kind: "markdown-viewer" });
 	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	const contentWidth = () =>
 		Math.max(40, Math.floor(dimensions().width * 0.7) - 8);
 	const blocks = createMemo(() =>
@@ -54,7 +55,7 @@ export function VerdictModal(props: {
 						<code
 							filetype="markdown"
 							content={props.content}
-							syntaxStyle={getMarkdownSyntaxStyle()}
+							syntaxStyle={syntaxStyle}
 							fg={uiColors.textSecondary}
 							width={contentWidth()}
 						/>

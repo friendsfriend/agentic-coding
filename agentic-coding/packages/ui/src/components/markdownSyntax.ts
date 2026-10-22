@@ -11,151 +11,178 @@
  * the active theme.
  */
 
-import { SyntaxStyle } from "@opentui/core";
+import { type NativeResourceOwner, SyntaxStyle } from "@opentui/core";
+import { useRenderer } from "@opentui/solid";
 import { uiColors } from "../theme/colors";
 import { getActiveThemeName } from "../theme/theme";
 
-const markdownSyntaxStyleCache = new Map<string, SyntaxStyle>();
+// Syntax styles are native resources owned by the renderer's context. Cache
+// per renderer context and theme: sharing one style across renderers would
+// bind it to the wrong context after the first renderer is destroyed.
+const markdownSyntaxStyleCache = new WeakMap<
+	NativeResourceOwner["resourceContext"],
+	Map<string, SyntaxStyle>
+>();
 
 /**
  * Returns a SyntaxStyle suitable for <code filetype="markdown">.
- * Cached per active theme so theme switching updates markdown colors.
+ * Cached per renderer context and active theme so theme switching updates
+ * markdown colors without reallocating native style resources on every render.
  */
-export function getMarkdownSyntaxStyle(): SyntaxStyle {
+export function getMarkdownSyntaxStyle(
+	owner: NativeResourceOwner,
+): SyntaxStyle {
 	const themeName = getActiveThemeName();
-	const cached = markdownSyntaxStyleCache.get(themeName);
+	const ownerCache = markdownSyntaxStyleCache.get(owner.resourceContext);
+	const cached = ownerCache?.get(themeName);
 	if (cached) return cached;
 
-	const style = SyntaxStyle.fromTheme([
-		// Default text
-		{
-			scope: ["default"],
-			style: { foreground: uiColors.textPrimary },
-		},
+	const style = SyntaxStyle.fromTheme(
+		[
+			// Default text
+			{
+				scope: ["default"],
+				style: { foreground: uiColors.textPrimary },
+			},
 
-		// Headings — primary, bold
-		{
-			scope: [
-				"markup.heading",
-				"markup.heading.1",
-				"markup.heading.2",
-				"markup.heading.3",
-				"markup.heading.4",
-				"markup.heading.5",
-				"markup.heading.6",
-			],
-			style: { foreground: uiColors.primary, bold: true },
-		},
+			// Headings — primary, bold
+			{
+				scope: [
+					"markup.heading",
+					"markup.heading.1",
+					"markup.heading.2",
+					"markup.heading.3",
+					"markup.heading.4",
+					"markup.heading.5",
+					"markup.heading.6",
+				],
+				style: { foreground: uiColors.primary, bold: true },
+			},
 
-		// Bold / strong — accent, bold
-		{
-			scope: ["markup.bold", "markup.strong"],
-			style: { foreground: uiColors.accent, bold: true },
-		},
+			// Bold / strong — accent, bold
+			{
+				scope: ["markup.bold", "markup.strong"],
+				style: { foreground: uiColors.accent, bold: true },
+			},
 
-		// Italic / emphasis — highlight, italic
-		{
-			scope: ["markup.italic", "markup.emph"],
-			style: { foreground: uiColors.highlight, italic: true },
-		},
+			// Italic / emphasis — highlight, italic
+			{
+				scope: ["markup.italic", "markup.emph"],
+				style: { foreground: uiColors.highlight, italic: true },
+			},
 
-		// Lists — secondary text
-		{
-			scope: ["markup.list"],
-			style: { foreground: uiColors.textSecondary },
-		},
+			// Lists — secondary text
+			{
+				scope: ["markup.list"],
+				style: { foreground: uiColors.textSecondary },
+			},
 
-		// Block quotes — info, italic
-		{
-			scope: ["markup.quote"],
-			style: { foreground: uiColors.info, italic: true },
-		},
+			// Block quotes — info, italic
+			{
+				scope: ["markup.quote"],
+				style: { foreground: uiColors.info, italic: true },
+			},
 
-		// Inline code — success
-		{
-			scope: ["markup.raw", "markup.raw.inline"],
-			style: { foreground: uiColors.success },
-		},
+			// Inline code — success
+			{
+				scope: ["markup.raw", "markup.raw.inline"],
+				style: { foreground: uiColors.success },
+			},
 
-		// Code blocks — success
-		{
-			scope: ["markup.raw.block"],
-			style: { foreground: uiColors.success },
-		},
+			// Code blocks — success
+			{
+				scope: ["markup.raw.block"],
+				style: { foreground: uiColors.success },
+			},
 
-		// Links — primary dim, underline
-		{
-			scope: ["markup.link", "markup.link.url"],
-			style: { foreground: uiColors.primaryDim, underline: true },
-		},
+			// Links — primary dim, underline
+			{
+				scope: ["markup.link", "markup.link.url"],
+				style: { foreground: uiColors.primaryDim, underline: true },
+			},
 
-		// Link text labels — accent, underline
-		{
-			scope: ["markup.link.label"],
-			style: { foreground: uiColors.accent, underline: true },
-		},
+			// Link text labels — accent, underline
+			{
+				scope: ["markup.link.label"],
+				style: { foreground: uiColors.accent, underline: true },
+			},
 
-		// Horizontal rule — muted text
-		{
-			scope: ["markup.thematic_break"],
-			style: { foreground: uiColors.textMuted },
-		},
+			// Horizontal rule — muted text
+			{
+				scope: ["markup.thematic_break"],
+				style: { foreground: uiColors.textMuted },
+			},
 
-		// Source in a fenced block or a code element — the scopes the bundled
-		// javascript/typescript grammars emit. A subtoken (`function.method`)
-		// resolves to its base name, so one entry covers the family.
-		{
-			scope: ["keyword"],
-			style: { foreground: uiColors.primary, bold: true },
-		},
-		{
-			scope: ["string"],
-			style: { foreground: uiColors.success },
-		},
-		{
-			scope: ["comment"],
-			style: { foreground: uiColors.textMuted, italic: true },
-		},
-		{
-			scope: ["number"],
-			style: { foreground: uiColors.highlight },
-		},
-		{
-			scope: ["constant"],
-			style: { foreground: uiColors.highlight },
-		},
-		{
-			scope: ["constructor"],
-			style: { foreground: uiColors.primaryDim },
-		},
-		{
-			scope: ["function"],
-			style: { foreground: uiColors.accent },
-		},
-		{
-			scope: ["variable"],
-			style: { foreground: uiColors.textPrimary },
-		},
-		{
-			scope: ["property"],
-			style: { foreground: uiColors.info },
-		},
-		{
-			scope: ["operator"],
-			style: { foreground: uiColors.textSecondary },
-		},
-		{
-			scope: ["punctuation"],
-			style: { foreground: uiColors.textSecondary },
-		},
+			// Source in a fenced block or a code element — the scopes the bundled
+			// javascript/typescript grammars emit. A subtoken (`function.method`)
+			// resolves to its base name, so one entry covers the family.
+			{
+				scope: ["keyword"],
+				style: { foreground: uiColors.primary, bold: true },
+			},
+			{
+				scope: ["string"],
+				style: { foreground: uiColors.success },
+			},
+			{
+				scope: ["comment"],
+				style: { foreground: uiColors.textMuted, italic: true },
+			},
+			{
+				scope: ["number"],
+				style: { foreground: uiColors.highlight },
+			},
+			{
+				scope: ["constant"],
+				style: { foreground: uiColors.highlight },
+			},
+			{
+				scope: ["constructor"],
+				style: { foreground: uiColors.primaryDim },
+			},
+			{
+				scope: ["function"],
+				style: { foreground: uiColors.accent },
+			},
+			{
+				scope: ["variable"],
+				style: { foreground: uiColors.textPrimary },
+			},
+			{
+				scope: ["property"],
+				style: { foreground: uiColors.info },
+			},
+			{
+				scope: ["operator"],
+				style: { foreground: uiColors.textSecondary },
+			},
+			{
+				scope: ["punctuation"],
+				style: { foreground: uiColors.textSecondary },
+			},
 
-		// Comments / muted
-		{
-			scope: ["conceal"],
-			style: { foreground: uiColors.textMuted },
-		},
-	]);
+			// Comments / muted
+			{
+				scope: ["conceal"],
+				style: { foreground: uiColors.textMuted },
+			},
+		],
+		owner,
+	);
 
-	markdownSyntaxStyleCache.set(themeName, style);
+	const cache = ownerCache ?? new Map<string, SyntaxStyle>();
+	cache.set(themeName, style);
+	if (!ownerCache) {
+		markdownSyntaxStyleCache.set(owner.resourceContext, cache);
+	}
 	return style;
+}
+
+/**
+ * Component-bound variant: resolves the active renderer and returns its
+ * theme-cached markdown syntax style.
+ */
+export function useMarkdownSyntaxStyle(): SyntaxStyle {
+	const renderer = useRenderer();
+	return getMarkdownSyntaxStyle(renderer.nativeScene);
 }

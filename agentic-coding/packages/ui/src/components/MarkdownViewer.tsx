@@ -5,7 +5,7 @@
 // document through `MarkdownViewer`. Both use the theme-cached syntax style,
 // so a live theme change restyles markdown everywhere.
 import { uiColors } from "../theme/colors";
-import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "./markdownSyntax.ts";
 
 export interface MarkdownViewerProps {
 	/** Whole-document markdown source. */
@@ -40,11 +40,12 @@ export interface MarkdownViewerProps {
 
 /** Render a whole markdown document. */
 export function MarkdownViewer(props: MarkdownViewerProps) {
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	return (
 		<markdown
 			content={props.content}
 			streaming={props.streaming ?? false}
-			syntaxStyle={getMarkdownSyntaxStyle()}
+			syntaxStyle={syntaxStyle}
 			fg={props.fg ?? uiColors.textSecondary}
 			{...(props.width === undefined
 				? { flexGrow: 1 }
@@ -66,10 +67,11 @@ export interface MarkdownBlockViewProps {
 
 /** Render one parsed markdown block (used by the review modals). */
 export function MarkdownBlockView(props: MarkdownBlockViewProps) {
+	const syntaxStyle = useMarkdownSyntaxStyle();
 	return (
 		<markdown
 			content={props.source}
-			syntaxStyle={getMarkdownSyntaxStyle()}
+			syntaxStyle={syntaxStyle}
 			fg={props.fg}
 			width={props.width}
 			flexGrow={props.flexGrow}

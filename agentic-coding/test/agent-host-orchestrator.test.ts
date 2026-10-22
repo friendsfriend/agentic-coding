@@ -111,6 +111,7 @@ describe("orchestrator host mode", () => {
 			"workflow_action",
 			"drain_workflow",
 			"sessions_report",
+			"opencode_session",
 		]) {
 			const description = descriptions.get(name)?.toLowerCase() ?? "";
 			expect(description).toContain("use");

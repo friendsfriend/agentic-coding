@@ -20,58 +20,99 @@ export function workspaceSidebarPanelSection(): KeybindSection {
 }
 
 /**
+ * Footer/help catalog for the embedded OpenCode page. OpenCode owns every key
+ * except the three panel host keys the shell keeps while the terminal has
+ * focus: Ctrl+S leaves for the sidebar, Ctrl+H/Ctrl+L cycle workspaces. The
+ * `?` chip is labeled for OpenCode's own help; the shell does not claim it,
+ * `q`, Escape or Ctrl+T on the content page.
+ */
+export function opencodeKeybindCatalog(): KeybindSection[] {
+	return [
+		{
+			title: "OpenCode",
+			keybinds: [
+				{
+					key: "Ctrl+S",
+					action: "toggle focus to the workspace sidebar",
+					short: "sidebar",
+				},
+				{
+					key: "Ctrl+H",
+					action: "previous workspace",
+					short: "prev",
+					standard: true,
+				},
+				{
+					key: "Ctrl+L",
+					action: "next workspace",
+					short: "next",
+					standard: true,
+				},
+				{
+					key: "?",
+					action: "OpenCode help",
+					short: "help",
+				},
+			],
+		},
+	];
+}
+
+/**
  * Workspace sidebar keys (integrated-multiplexer sidebar), published while the
  * sidebar panel holds focus: the rows, the panel actions, the workspace cycle
  * (host keys, so they also work from the page body) and the dedicated Ctrl+S
  * toggle back to the page body.
  */
-export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
+export function workspaceSidebarKeybindCatalog(
+	options: { opencodePage?: boolean } = {},
+): KeybindSection[] {
+	const keybinds = [
+		{
+			key: "j/k or ↑/↓",
+			action: "select the Orchestrator, OpenCode, or a workflow",
+			standard: true,
+		},
+		{ key: "Enter", action: "open the selected entry", short: "open" },
+		{
+			key: "f",
+			action: "cycle filter (active/attention/all)",
+			short: "filter",
+		},
+		{
+			key: "n",
+			action: "open this workflow's dashboard in a new tmux window",
+			short: "tmux",
+		},
+		{
+			key: "d",
+			action: "delete workflow (store rows and worktree, keeping the branch)",
+			short: "delete",
+		},
+		{
+			key: "e",
+			action: "toggle sidebar (expanding/permanent)",
+			short: "expand",
+		},
+		{ key: "+", action: "start a new workflow", short: "new" },
+		hostKeybind("ctrl+h"),
+		hostKeybind("ctrl+l"),
+		hostKeybind("ctrl+s"),
+		hostKeybind("ctrl+p"),
+		hostKeybind("?"),
+		hostDiagnosticsKeybind(),
+		hostKeybind("q"),
+		...(!options.opencodePage ? [hostKeybind("ctrl+t")] : []),
+		{
+			key: "Esc",
+			action: "focus the main content",
+			standard: true,
+		},
+	];
 	return [
 		{
 			title: "Workspaces",
-			keybinds: [
-				{
-					key: "j/k or ↑/↓",
-					action: "select the Orchestrator or a workflow",
-					standard: true,
-				},
-				{ key: "Enter", action: "open the selected entry", short: "open" },
-				{
-					key: "f",
-					action: "cycle filter (active/attention/all)",
-					short: "filter",
-				},
-				{
-					key: "n",
-					action: "open this workflow's dashboard in a new tmux window",
-					short: "tmux",
-				},
-				{
-					key: "d",
-					action:
-						"delete workflow (store rows and worktree, keeping the branch)",
-					short: "delete",
-				},
-				{
-					key: "e",
-					action: "toggle sidebar (expanding/permanent)",
-					short: "expand",
-				},
-				{
-					key: "+",
-					action: "start a new workflow",
-					short: "new",
-				},
-				hostKeybind("ctrl+h"),
-				hostKeybind("ctrl+l"),
-				hostKeybind("ctrl+s"),
-				hostKeybind("ctrl+t"),
-				{
-					key: "Esc",
-					action: "focus the main content",
-					standard: true,
-				},
-			],
+			keybinds,
 		},
 	];
 }

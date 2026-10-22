@@ -106,10 +106,15 @@ const SIDEBAR_ANIMATION_STEP_MS = 16;
  * row for the scroll indicator. */
 const SIDEBAR_CHROME_LINES = 9;
 
-/** Lines the pinned entry adds above the list: its two rows (one in the
- * collapsed strip) and the rule that separates it from the workflows. */
-const SIDEBAR_PIN_LINES = 3;
-const SIDEBAR_PIN_COLLAPSED_LINES = 2;
+/** Lines the pins add above the list: two per pin (one in the collapsed strip)
+ * plus the shared rule separating them from workflows. */
+function pinLines(pinCount: number): number {
+	return pinCount > 0 ? pinCount * 2 + 1 : 0;
+}
+
+function collapsedPinLines(pinCount: number): number {
+	return pinCount > 0 ? pinCount + 1 : 0;
+}
 
 function toneColor(tone: StatusTone): string {
 	switch (tone) {
@@ -188,18 +193,18 @@ export interface WorkspaceSidebarProps {
 	 * strip's glyph both call it). */
 	onToggleMode: () => void;
 	overviews: WorkflowOverview[];
-	/** The pinned entry above the workflow rows, present whenever the shell
-	 * renders the Orchestrator surface. Absent leaves the panel as it was. */
-	pin?: SidebarPin;
+	/** The pinned entries above the workflow rows, present whenever the shell
+	 * renders a Home surface. Absent leaves the panel as it was. */
+	pins?: readonly SidebarPin[];
 	filter: SidebarFilter;
-	/** Cursor in the sidebar's own space: the pinned entry first (when pinned),
-	 * then the filter's workflow rows. */
+	/** Cursor in the sidebar's own space: the pinned entries first, then the
+	 * filter's workflow rows. */
 	selectedIndex: number;
 	/** True until the first observation lands. */
 	loading: boolean;
 	onSelectIndex: (index: number) => void;
-	/** Enter/click on the pinned entry: open the Orchestrator page. */
-	onOpenPin: () => void;
+	/** Enter/click on a pinned entry: open its page. */
+	onOpenPin: (pin: SidebarPin) => void;
 	/** Enter/click: open the workflow dashboard for the row. */
 	onOpen: (overview: WorkflowOverview) => void;
 	onFilterChange: (filter: SidebarFilter) => void;
@@ -209,21 +214,20 @@ export interface WorkspaceSidebarProps {
 
 export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	const dimensions = useTerminalDimensions();
-	/** Leading cursor slots the pinned entry takes, so the workflow list keeps
-	 * its own 0-based index while the panel cursor counts the pin first. */
-	const pinOffset = () => (props.pin ? 1 : 0);
+	/** Leading cursor slots the pinned entries take, so the workflow list keeps
+	 * its own 0-based index while the panel cursor counts the pins first. */
+	const pinCount = () => props.pins?.length ?? 0;
+	const pinOffset = () => pinCount();
 	const listLines = () =>
 		Math.max(
 			1,
-			dimensions().height -
-				SIDEBAR_CHROME_LINES -
-				(props.pin ? SIDEBAR_PIN_LINES : 0),
+			dimensions().height - SIDEBAR_CHROME_LINES - pinLines(pinCount()),
 		);
-	/** Click/Enter on the pinned entry: select it, then open the Orchestrator. */
-	const activatePin = (): void => {
+	/** Click/Enter on a pinned entry: select it, then open its page. */
+	const activatePin = (index: number, pin: SidebarPin): void => {
 		props.onFocus();
-		props.onSelectIndex(0);
-		props.onOpenPin();
+		props.onSelectIndex(index);
+		props.onOpenPin(pin);
 	};
 	const expandedByMode = () => props.mode === "permanent" || props.active;
 	const [width, setWidth] = createSignal(
@@ -300,7 +304,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 			<Show
 				when={panel().expanded}
 				fallback={
-					// Collapsed: a toggle glyph, the pinned entry as its mark, then one
+					// Collapsed: a toggle glyph, the pinned entries as their marks, then one
 					// three-line row per workflow — its bold jump-list position, its status
 					// glyph, and one phase-specific character — so the strip matches the
 					// expanded row's height while staying nameless.
@@ -316,24 +320,24 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 						>
 							<text fg={uiColors.textMuted}>{openGlyph()}</text>
 						</box>
-						{/* The pinned entry is chrome above the list, so it keeps its slot
-						    in the strip too: always drawn, and the index list below it
-						    stays empty when there is nothing to index — the strip is a jump
-						    list, so a filler line ("No items") would be the only thing it
-						    ever says with no workflows. The expanded panel explains an empty
-						    list in words instead. */}
-						<Show when={props.pin}>
-							{(pin) => (
-								<>
-									<PinRow
-										pin={pin()}
-										selected={props.selectedIndex === 0}
-										height={1}
-										onActivate={activatePin}
-									/>
-									<PinDivider width={panel().width} />
-								</>
+						{/* Pinned entries are chrome above the list, so they keep their
+						    slots in the strip too: always drawn, and the index list below
+						    them stays empty when there is nothing to index — the strip is a
+						    jump list, so a filler line ("No items") would be the only thing
+						    it ever says with no workflows. The expanded panel explains an
+						    empty list in words instead. */}
+						<For each={props.pins ?? []}>
+							{(pin, index) => (
+								<PinRow
+									pin={pin}
+									selected={props.selectedIndex === index()}
+									height={1}
+									onActivate={() => activatePin(index(), pin)}
+								/>
 							)}
+						</For>
+						<Show when={pinCount() > 0}>
+							<PinDivider width={panel().width} />
 						</Show>
 						<Show when={props.overviews.length > 0}>
 							<SelectableList
@@ -342,9 +346,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 								itemHeight={3}
 								availableLines={Math.max(
 									3,
-									dimensions().height -
-										4 -
-										(props.pin ? SIDEBAR_PIN_COLLAPSED_LINES : 0),
+									dimensions().height - 4 - collapsedPinLines(pinCount()),
 								)}
 								onSelect={(index) => {
 									props.onFocus();
@@ -439,21 +441,21 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 							)}
 						</For>
 					</box>
-					{/* The pinned entry sits above the windowed list, so it stays put
-					    while the workflows scroll under it, and it is drawn whatever the
-					    filter leaves. */}
-					<Show when={props.pin}>
-						{(pin) => (
-							<>
-								<PinRow
-									pin={pin()}
-									selected={props.selectedIndex === 0}
-									height={2}
-									onActivate={activatePin}
-								/>
-								<PinDivider width={width()} />
-							</>
+					{/* Pinned entries sit above the windowed list, so they stay put
+					    while the workflows scroll under them, and they are drawn whatever
+					    the filter leaves. */}
+					<For each={props.pins ?? []}>
+						{(pin, index) => (
+							<PinRow
+								pin={pin}
+								selected={props.selectedIndex === index()}
+								height={2}
+								onActivate={() => activatePin(index(), pin)}
+							/>
 						)}
+					</For>
+					<Show when={pinCount() > 0}>
+						<PinDivider width={width()} />
 					</Show>
 					<Show
 						when={props.overviews.length > 0}

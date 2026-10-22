@@ -171,8 +171,10 @@ test("a citation the manifest does not hold is visibly broken, not fatal", async
 		width: 140,
 		height: 30,
 	});
-	const frame = await t.waitForFrame((value) =>
-		value.includes("unknown evidence"),
+	const frame = await frameWith(
+		t,
+		(value) => value.includes("unknown evidence"),
+		"the broken citation",
 	);
 	// The body renders, the unknown id says what it is, and the sources list
 	// carries it as a row the reader can act on.

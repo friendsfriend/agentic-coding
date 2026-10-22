@@ -32,6 +32,9 @@ import { uiColors } from "../theme/colors";
 import { DiscussionThread } from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
 
+/** Frames the auto-scroll waits for the re-created rows to be measured. */
+const MAX_SCROLL_RETRY_FRAMES = 4;
+
 /** True for a whole-file add or delete (the diff has no old/new side). */
 export function isDiffFileAddedOrDeleted(diff: string): boolean {
 	for (const line of diff.split("\n")) {
@@ -139,7 +142,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 	let scrollBox: ScrollBoxRenderable;
 	/** Pending post-layout auto-scroll, replaced on every selection change. */
-	let scrollRetry: ReturnType<typeof setTimeout> | undefined;
+	let scrollFrame: number | undefined;
 
 	const dimensions = () => ({
 		width: renderer.width,
@@ -585,20 +588,35 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 		}
 
 		const idPrefix = markdownMode ? "block-" : "line-";
-		scrollSelectionIntoView(next, idPrefix);
+		if (scrollFrame !== undefined) {
+			renderer.cancelAnimationFrame(scrollFrame);
+			scrollFrame = undefined;
+		}
 		// The rows are re-created whenever the file or the diff behind them
-		// changes, and re-created rows carry no geometry until the next frame
-		// lays them out. Re-apply the scroll once they are measured, or the
-		// viewport stays at the top of the file with the selected line far below
-		// it. A selection that is already visible makes this a no-op.
-		clearTimeout(scrollRetry);
-		scrollRetry = setTimeout(() => {
-			scrollSelectionIntoView(
-				props.selectedLine,
-				markdownMode ? "block-" : "line-",
-			);
-		}, 0);
-		onCleanup(() => clearTimeout(scrollRetry));
+		// changes, and re-created rows carry no geometry until the layout pass
+		// runs — in particular the scroll box reports a zero `scrollHeight`
+		// before it. Re-apply the scroll on later frames, once the rows are
+		// measured, or the viewport stays at the top of the file with the
+		// selected line far below it. A selection that is already visible makes
+		// this a no-op.
+		const retryScroll = (attempt: number) => {
+			if (scrollFrame !== undefined) renderer.cancelAnimationFrame(scrollFrame);
+			scrollFrame = renderer.requestAnimationFrame(() => {
+				scrollFrame = undefined;
+				const applied = scrollSelectionIntoView(
+					props.selectedLine,
+					markdownMode ? "block-" : "line-",
+				);
+				if (!applied && attempt < MAX_SCROLL_RETRY_FRAMES) {
+					retryScroll(attempt + 1);
+				}
+			});
+		};
+		const applied = scrollSelectionIntoView(next, idPrefix);
+		if (!applied) retryScroll(0);
+		onCleanup(() => {
+			if (scrollFrame !== undefined) renderer.cancelAnimationFrame(scrollFrame);
+		});
 	});
 
 	/**
@@ -607,18 +625,22 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	 * A no-op when the selection is already visible, so it is safe to re-apply
 	 * after the rows have been re-laid out.
 	 */
-	function scrollSelectionIntoView(next: number, idPrefix: string) {
-		if (!scrollBox) return;
+	function scrollSelectionIntoView(next: number, idPrefix: string): boolean {
+		if (!scrollBox) return false;
 
 		// Find the target line by searching through the wrapper box's children
 		const wrapperBox = scrollBox.getChildren()[0];
-		if (!wrapperBox) return;
+		if (!wrapperBox) return false;
 
 		const target = wrapperBox.getChildren().find((child) => {
 			return child.id === `${idPrefix}${next}`;
 		});
 
-		if (!target) return;
+		if (!target) return false;
+		// Before the first layout pass the scroll box reports a zero scroll
+		// height and the re-created rows have no geometry; scrolling then is a
+		// no-op. The caller retries on the next frame.
+		if (scrollBox.scrollHeight <= 0 || target.height <= 0) return false;
 
 		// Bring following line into view first. Inline discussions render between
 		// selected line and following line, so this keeps comment content visible.
@@ -629,7 +651,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 			scrollBox.scrollChildIntoView(following.id);
 			// Keep selection visible without moving it during scrolling.
 			scrollBox.scrollChildIntoView(target.id);
-			return;
+			return true;
 		}
 
 		// The last selectable line has no following line to anchor the scroll, so
@@ -638,6 +660,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 		// content bottom so the thread stays visible.
 		scrollBox.scrollChildIntoView(target.id);
 		scrollBox.scrollTop = scrollBox.scrollHeight;
+		return true;
 	}
 
 	// Extract file extension for syntax highlighting

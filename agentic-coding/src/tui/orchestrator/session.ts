@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { ensureHostRunning, HostClient } from "../../agent-host/client.ts";
 import { hostLayout } from "../../agent-host/layout.ts";
 import {
+	OPENCODE_CWD_ENV,
 	ORCHESTRATOR_TOKEN_ENV,
 	ORCHESTRATOR_URL_ENV,
 } from "../../agent-host/orchestrator-env.ts";
@@ -66,6 +67,8 @@ export async function openOrchestratorSession(
 		model?: OrchestratorModel;
 		serverUrl?: string;
 		serverToken?: string;
+		/** The shell's primary repository, shared with embedded OpenCode. */
+		opencodeCwd?: string;
 	} = {},
 ): Promise<OrchestratorSession> {
 	const serverUrl = options.serverUrl ?? process.env.AGENTIC_WORKFLOW_URL;
@@ -103,6 +106,8 @@ export async function openOrchestratorSession(
 		environment: {
 			[ORCHESTRATOR_URL_ENV]: serverUrl,
 			[ORCHESTRATOR_TOKEN_ENV]: orchestratorTokenFor(serverToken),
+			[OPENCODE_CWD_ENV]:
+				options.opencodeCwd ?? process.env[OPENCODE_CWD_ENV] ?? process.cwd(),
 		},
 	});
 	const client = new HostClient(layout.socketPath);

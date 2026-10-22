@@ -3,7 +3,7 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { useMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { ScrollableContent } from "../components/ScrollableContent";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { colors, uiColors } from "../theme/colors";
@@ -22,6 +22,7 @@ export interface LogAiOverlayProps {
 
 export function LogAiOverlay(props: LogAiOverlayProps) {
 	const dimensions = useTerminalDimensions();
+	const syntaxStyle = useMarkdownSyntaxStyle();
 
 	const overlayWidth = () => Math.floor(dimensions().width * 0.88);
 
@@ -150,7 +151,7 @@ export function LogAiOverlay(props: LogAiOverlayProps) {
 					<code
 						filetype="markdown"
 						content={props.summary ?? ""}
-						syntaxStyle={getMarkdownSyntaxStyle()}
+						syntaxStyle={syntaxStyle}
 						drawUnstyledText={false}
 						streaming={props.loading || props.streaming}
 						fg={uiColors.textSecondary}
