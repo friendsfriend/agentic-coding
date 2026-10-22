@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { compileValidatedDataBlock, validateDataBlock } from "./data-block.ts";
 import { blockDigest } from "./define-block.ts";
 import {
 	type FlowGenerationIssue,
@@ -42,6 +43,8 @@ export type FlowEligibilityCode =
 	| "flow-block-unknown"
 	| "flow-block-version"
 	| "flow-block-digest"
+	| "flow-block-draft"
+	| "flow-block-document-missing"
 	| "flow-app-missing"
 	| "flow-role-missing"
 	| "flow-expectation-uncovered";
@@ -49,6 +52,10 @@ export type FlowEligibilityCode =
 export interface FlowRegistryEntry {
 	readonly manifest: FlowManifest;
 	readonly spec: string;
+	/** The digest of `spec`, computed where the file was read. Eligibility
+	 * compares this against the manifest's `specHash` instead of hashing the
+	 * spec again on the polled read path (`PERF-202`). */
+	readonly specDigest: string;
 	readonly directory: string;
 	readonly specPath: string;
 }
@@ -68,6 +75,102 @@ function issue(
 
 export function flowDirectory(root: string, flowId: string): string {
 	return path.join(root, STAGE_FLOW_DIRECTORY, flowId);
+}
+
+/** Read one saved flow, without scanning its siblings.
+ *
+ * The eligibility path wants exactly one entry, and it sits behind the polled
+ * workflow read model, so reading the whole `stage-flows` directory (and
+ * hashing every spec in it) to find it is work that grows with accumulated
+ * history rather than with the input (`PERF-101`). `readFlowRegistry` stays for
+ * the listing surfaces, which want every entry once. */
+export function readFlowEntry(
+	root: string,
+	flowId: string,
+): {
+	readonly entry?: FlowRegistryEntry;
+	readonly issues: readonly FlowGenerationIssue[];
+} {
+	const entry = readFlowEntryAt(path.join(root, STAGE_FLOW_DIRECTORY, flowId));
+	if (entry.entry === undefined) return entry;
+	return { entry: entry.entry, issues: entry.issues };
+}
+
+function readFlowEntryAt(flowDir: string): {
+	readonly entry?: FlowRegistryEntry;
+	readonly issues: readonly FlowGenerationIssue[];
+} {
+	const name = path.basename(flowDir);
+	const issues: FlowGenerationIssue[] = [];
+	if (!fs.existsSync(flowDir)) return { issues };
+	const manifestPath = path.join(flowDir, "flow.json");
+	if (!fs.existsSync(manifestPath))
+		return {
+			issues: [
+				issue(
+					"flow-manifest-invalid",
+					`stage-flows/${name} has no flow.json`,
+					`stage-flows/${name}`,
+				),
+			],
+		};
+	let parsed: ReturnType<typeof parseFlowManifest>;
+	try {
+		parsed = parseFlowManifest(
+			JSON.parse(fs.readFileSync(manifestPath, "utf8")),
+		);
+	} catch (error) {
+		return {
+			issues: [
+				issue(
+					"flow-manifest-invalid",
+					`stage-flows/${name}/flow.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+					`stage-flows/${name}/flow.json`,
+				),
+			],
+		};
+	}
+	if (parsed.manifest === undefined) return { issues: parsed.issues };
+	if (parsed.manifest.flowId !== name)
+		issues.push(
+			issue(
+				"flow-id-mismatch",
+				`stage-flows/${name}/flow.json declares ${parsed.manifest.flowId}`,
+				"flowId",
+			),
+		);
+	const specPath = path.join(flowDir, "flow.spec.ts");
+	if (!fs.existsSync(specPath))
+		return {
+			issues: [
+				...issues,
+				issue(
+					"flow-spec-missing",
+					`stage-flows/${name} has no flow.spec.ts`,
+					`stage-flows/${name}/flow.spec.ts`,
+				),
+			],
+		};
+	const spec = fs.readFileSync(specPath, "utf8");
+	const specDigest = canonicalHash(spec);
+	if (specDigest !== parsed.manifest.specHash)
+		issues.push(
+			issue(
+				"flow-spec-drift",
+				`stage-flows/${name}/flow.spec.ts does not match its specHash`,
+				`stage-flows/${name}/flow.spec.ts`,
+			),
+		);
+	return {
+		entry: {
+			manifest: parsed.manifest,
+			spec,
+			specDigest,
+			directory: flowDir,
+			specPath,
+		},
+		issues,
+	};
 }
 
 export function readFlowRegistry(root: string): {
@@ -131,7 +234,8 @@ export function readFlowRegistry(root: string): {
 			continue;
 		}
 		const spec = fs.readFileSync(specPath, "utf8");
-		if (canonicalHash(spec) !== parsed.manifest.specHash)
+		const specDigest = canonicalHash(spec);
+		if (specDigest !== parsed.manifest.specHash)
 			issues.push(
 				issue(
 					"flow-spec-drift",
@@ -142,6 +246,7 @@ export function readFlowRegistry(root: string): {
 		entries.push({
 			manifest: parsed.manifest,
 			spec,
+			specDigest,
 			directory: flowDir,
 			specPath,
 		});
@@ -174,7 +279,13 @@ export function flowManifestIssues(
 					step.routeStepId,
 				),
 			);
-		if (manifest.blockDigests[step.block] !== blockDigest(block))
+		// The registry hashed this block once; asking it again would re-serialise a
+		// data-block document (up to 64 KiB) per route step, on a path that runs
+		// from the polled read model (`PERF-102`).
+		if (
+			manifest.blockDigests[step.block] !==
+			(registry.digest(step.block) ?? blockDigest(block))
+		)
 			issues.push(
 				issue(
 					"flow-block-digest",
@@ -200,22 +311,145 @@ export function flowManifestIssues(
 	return issues;
 }
 
+/** What one pinned sidecar document is, as far as eligibility needs to know.
+ * Reading it costs a read, a parse, a validation, a compile and a hash, so the
+ * verdict is cached by the file's own stamp: the eligibility answer is polled. */
+type PinnedDocument =
+	| { readonly kind: "missing" }
+	| { readonly kind: "invalid"; readonly message: string }
+	| { readonly kind: "document"; readonly digest: string };
+
+/** Bounded, stamp-keyed memo of pinned-document verdicts. A changed file has a
+ * new stamp (`mtimeMs`/`size`), so an edited sidecar is re-read; an unchanged
+ * one costs a `stat` instead of the whole pipeline (`PERF-202`). */
+const PINNED_DOCUMENT_CACHE_MAX = 64;
+const pinnedDocuments = new Map<
+	string,
+	{ readonly stamp: string; readonly verdict: PinnedDocument }
+>();
+
+function pinnedDocument(file: string): PinnedDocument {
+	let stamp: string;
+	try {
+		const stat = fs.statSync(file);
+		if (!stat.isFile()) return { kind: "missing" };
+		stamp = `${stat.mtimeMs}:${stat.size}`;
+	} catch {
+		return { kind: "missing" };
+	}
+	const cached = pinnedDocuments.get(file);
+	if (cached !== undefined && cached.stamp === stamp) return cached.verdict;
+	let verdict: PinnedDocument;
+	try {
+		const stored: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+		const validation = validateDataBlock(stored);
+		verdict =
+			validation.ok && validation.document !== undefined
+				? {
+						kind: "document",
+						// Validated here, so the compile skips a second validation pass: a
+						// data-block step costs one validation and one document hash
+						// (`PERF-102`).
+						digest: blockDigest(compileValidatedDataBlock(validation.document)),
+					}
+				: {
+						kind: "invalid",
+						message: validation.issues[0]?.message ?? "unknown issue",
+					};
+	} catch {
+		verdict = { kind: "missing" };
+	}
+	if (pinnedDocuments.size >= PINNED_DOCUMENT_CACHE_MAX) {
+		const oldest = pinnedDocuments.keys().next().value;
+		if (oldest !== undefined) pinnedDocuments.delete(oldest);
+	}
+	pinnedDocuments.set(file, { stamp, verdict });
+	return verdict;
+}
+
+/** Every data block a flow executes runs from the flow's own sidecar document,
+ * not from whatever the live store holds, so the pinned document must be present
+ * and hash to the digest the manifest recorded at save time. A checked-in block
+ * needs no sidecar. Shared by replay eligibility and the checked-in flow gate. */
+export function flowDocumentIssues(options: {
+	readonly manifest: FlowManifest;
+	readonly directory: string;
+	readonly root: string;
+	readonly registry: StageBlockRegistry;
+}): FlowGenerationIssue[] {
+	const { manifest, directory, root, registry } = options;
+	const issues: FlowGenerationIssue[] = [];
+	for (const step of manifest.routeSteps) {
+		const block = registry.get(step.block);
+		if (block?.data === undefined) continue;
+		const recorded = manifest.blockFiles?.[step.block];
+		// The manifest names the sidecar it pins. A document that is not in the
+		// map was never written, so the flow cannot run from it.
+		if (recorded === undefined) {
+			issues.push(
+				issue(
+					"flow-block-document-missing",
+					`flow ${manifest.flowId} records no reviewed document for ${step.block}`,
+					step.routeStepId,
+				),
+			);
+			continue;
+		}
+		const file = path.join(directory, recorded);
+		const pinned = pinnedDocument(file);
+		if (pinned.kind === "missing") {
+			issues.push(
+				issue(
+					"flow-block-document-missing",
+					`flow ${manifest.flowId} has no reviewed document for ${step.block} at ${path.relative(root, file)}`,
+					step.routeStepId,
+				),
+			);
+			continue;
+		}
+		if (pinned.kind === "invalid") {
+			issues.push(
+				issue(
+					"flow-block-digest",
+					`flow ${manifest.flowId} stores an invalid document for ${step.block}: ${pinned.message}`,
+					step.routeStepId,
+				),
+			);
+			continue;
+		}
+		if (pinned.digest !== manifest.blockDigests[step.block])
+			issues.push(
+				issue(
+					"flow-block-digest",
+					`flow ${manifest.flowId} stores a different source digest for ${step.block}@${manifest.blockVersions[step.block]}`,
+					step.routeStepId,
+				),
+			);
+	}
+	return issues;
+}
+
 export function flowEligibility(options: {
 	readonly flowId: string;
 	readonly root: string;
 	readonly stage: string;
 	readonly source: FlowSource;
 	readonly registry: StageBlockRegistry;
+	/** Blocks that exist only as this workflow's drafts. A flow never replays a
+	 * draft: the reviewed document must be approved first. */
+	readonly draftIds?: ReadonlySet<string>;
 	readonly stages?: readonly string[];
 	readonly apps?: Readonly<
 		Record<string, { readonly roles?: readonly string[] }>
 	>;
 	readonly role?: string;
+	/** The entry the caller already read, so a replay of one flow does not scan
+	 * the whole registry a second time (`PERF-101`, `QUALITY-005`). */
+	readonly entry?: FlowRegistryEntry;
 }): FlowEligibility {
 	const issues: FlowGenerationIssue[] = [];
-	const entry = readFlowRegistry(options.root).entries.find(
-		(candidate) => candidate.manifest.flowId === options.flowId,
-	);
+	const entry =
+		options.entry ?? readFlowEntry(options.root, options.flowId).entry;
 	if (entry === undefined)
 		return {
 			eligible: false,
@@ -228,7 +462,7 @@ export function flowEligibility(options: {
 			],
 		};
 	const manifest = entry.manifest;
-	if (canonicalHash(entry.spec) !== manifest.specHash)
+	if (entry.specDigest !== manifest.specHash)
 		issues.push(
 			issue(
 				"flow-spec-drift",
@@ -237,6 +471,24 @@ export function flowEligibility(options: {
 			),
 		);
 	issues.push(...flowManifestIssues(manifest, options.registry));
+	// A flow never replays a draft: the reviewed document must be approved first.
+	for (const step of manifest.routeSteps)
+		if (options.draftIds?.has(step.block))
+			issues.push(
+				issue(
+					"flow-block-draft",
+					`flow ${manifest.flowId} uses ${step.block}, which is only a draft of the authoring workflow`,
+					step.routeStepId,
+				),
+			);
+	issues.push(
+		...flowDocumentIssues({
+			manifest,
+			directory: entry.directory,
+			root: options.root,
+			registry: options.registry,
+		}),
+	);
 	if (manifest.flowId !== options.source.flowId)
 		issues.push(
 			issue(

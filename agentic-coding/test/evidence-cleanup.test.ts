@@ -9,6 +9,10 @@ import path from "node:path";
 import { Effect } from "effect";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { attachEvidence } from "../src/server/evidence/store.ts";
+import {
+	draftBlockRoot,
+	removeStageBlockDrafts,
+} from "../src/stage-blocks/data-store.ts";
 import { registry } from "../src/workflow/cli/registry.ts";
 import { agentEffectHandlers } from "../src/workflow/effect-runner.ts";
 import type { WorkflowEngine } from "../src/workflow/runtime/engine.ts";
@@ -80,6 +84,36 @@ describe("workspace.cleanup deletes the workflow's evidence", () => {
 			expect(await Effect.runPromise(handler.observe(handler.effect))).toBe(
 				true,
 			);
+		} finally {
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("cleanup also removes the run's unsaved block drafts", async () => {
+		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-cleanup-"));
+		try {
+			const evidenceRoot = await attachOne(repo);
+			const scope = workflowEvidenceScope({
+				workflowId: WORKFLOW_ID,
+				worktree: repo,
+			});
+			const drafts = draftBlockRoot(scope.dataRoot, WORKFLOW_ID);
+			fs.mkdirSync(drafts, { recursive: true });
+			fs.writeFileSync(
+				path.join(drafts, "crm.customer.readAddress.json"),
+				"{}",
+			);
+			const handler = cleanupHandlerFor(repo, repo);
+			expect(await Effect.runPromise(handler.execute(handler.effect))).toEqual({
+				cleaned: true,
+			});
+			expect(fs.existsSync(evidenceRoot)).toBe(false);
+			// A draft is never promoted by cleanup: an approved document is already
+			// in the shared store, and an unpromoted draft must not outlive the run.
+			expect(fs.existsSync(drafts)).toBe(false);
+			expect(() =>
+				removeStageBlockDrafts(scope.dataRoot, WORKFLOW_ID),
+			).not.toThrow();
 		} finally {
 			fs.rmSync(repo, { recursive: true, force: true });
 		}

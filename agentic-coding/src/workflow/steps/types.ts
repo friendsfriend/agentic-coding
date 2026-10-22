@@ -57,6 +57,10 @@ export interface CompletionResult {
 		stageTestPlan?: JsonValue;
 		stageTestReport?: JsonValue;
 		stageTestReportMarkdown?: string;
+		/** The composed registry's view of every block the pinned plan names, so
+		 * the developer review shows the effect set and title of what is being
+		 * approved rather than an id (`OSV-014`). */
+		stagePlanBlocks?: JsonValue;
 		stageReplay?: JsonValue;
 		stageReplayHeal?: JsonValue;
 	};
@@ -105,6 +109,32 @@ export interface AgentCompletionContext {
 	 * validator can refuse a citation of evidence that does not exist before the
 	 * render effect sees it. */
 	stageEvidenceIds?: readonly string[];
+	/** The run's block drafts and their recorded proofs
+	 * (`author-stage-blocks-as-data`), read at the impure boundary so the report
+	 * validator can refuse a claim the run did not prove. Each proof names the
+	 * version and digest it was recorded for, so a claim is only accepted for
+	 * the document that actually ran (`SEC-004`). */
+	stageBlockDrafts?: readonly {
+		readonly id: string;
+		readonly version: string;
+		readonly digest: string;
+		readonly proofs: readonly {
+			readonly status: "passed" | "failed";
+			readonly version: string;
+			readonly digest: string;
+		}[];
+	}[];
+	/** The composed block registry's blocks, read at the same boundary so the
+	 * plan validator can apply the stage's block policy to the block a route
+	 * step names (`OSV-013`). */
+	stageBlockFacts?: readonly {
+		readonly id: string;
+		readonly version: string;
+		readonly app: string;
+		readonly roles: readonly string[];
+		readonly effects: readonly string[];
+		readonly title: string;
+	}[];
 	/** The `stage.replay` run's already-decoded result/report/heal evidence
 	 * (`add-stage-flow-replay`): the handoff reads it at the impure boundary so
 	 * the pure step behavior never reaches the evidence store itself. */

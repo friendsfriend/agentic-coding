@@ -12,6 +12,10 @@ import type {
 import { readStageJournal } from "../../../server/evidence/journal.ts";
 import { listEvidence } from "../../../server/evidence/store.ts";
 import { readStageCatalog } from "../../../server/stages/catalog.ts";
+import {
+	loadStageBlockRegistry,
+	storedDigest,
+} from "../../../stage-blocks/data-store.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
 import { redactTelemetryText } from "../../observability.ts";
@@ -184,11 +188,36 @@ export function agentHandoff(
 								| { flowId?: unknown }
 								| undefined
 						)?.flowId;
+						const loaded = loadStageBlockRegistry({
+							configDir: resolveConfigRoot(),
+							dataRoot: scope.dataRoot,
+							workflowId: snapshot.workflowId,
+							runId: snapshot.metadata.createdAt,
+						});
+						const drafts = loaded.drafts.map((draft) => ({
+							id: draft.document.id,
+							version: draft.document.version,
+							digest: storedDigest(draft.document),
+							proofs: draft.draft.proofs.map((proof) => ({
+								status: proof.status,
+								version: proof.version,
+								digest: proof.digest,
+							})),
+						}));
 						return {
 							stageJournal: journal,
 							stageEvidenceIds: listEvidence(scope).entries.map(
 								(entry) => entry.id,
 							),
+							...(drafts.length === 0 ? {} : { stageBlockDrafts: drafts }),
+							stageBlockFacts: loaded.registry.all.map((block) => ({
+								id: block.id,
+								version: block.version,
+								app: block.app,
+								roles: block.roles,
+								effects: block.effects,
+								title: block.title,
+							})),
 							...(stageEntry
 								? { stageApps: Object.keys(stageEntry.stage.apps) }
 								: {}),
@@ -205,8 +234,20 @@ export function agentHandoff(
 									}
 								: {}),
 						};
-					} catch {
-						/* validation context is best-effort; the render effect still checks */
+					} catch (error) {
+						// The plan gate is the one place this context is not best-effort:
+						// `stagePlanBlockIssues` reads the registry facts to enforce the
+						// blocks-first policy at plan completion, and a plan accepted
+						// without them is refused later by `stage_run` — after the
+						// developer approved it. So a plan handoff fails closed instead of
+						// accepting a plan the run cannot execute (`OSV-022`). Every other
+						// step keeps the best-effort fallback; the render effect re-checks
+						// what it can.
+						if (run.stepId === "stage.plan" && command.outcome === "complete")
+							throw new WorkflowRuntimeError(
+								"entry-guard",
+								`the block registry could not be read, so the plan cannot be checked against the blocks this run executes (${error instanceof Error ? error.message : String(error)}); retry the handoff`,
+							);
 						return {};
 					}
 				})()

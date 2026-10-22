@@ -28,6 +28,7 @@ const BROWSER_TOOLS = [
 	"stage_journal",
 	"stage_blocks",
 	"stage_run",
+	"stage_block_save",
 	"stage_flows",
 	"stage_replay",
 	"browser_eval",

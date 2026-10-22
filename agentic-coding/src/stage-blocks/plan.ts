@@ -753,39 +753,67 @@ export function planReferences(plan: StageBlockPlan): {
 
 /** Project a stage plan route with block metadata to the same linear block plan
  * the runner uses. The caller supplies the route subset; mixed plans are
- * represented by the gaps between block steps. */
+ * represented by the gaps between block steps.
+ *
+ * A route step names exactly one of `block`, `blockToCreate` or
+ * `blockToAdjust` (`noBlockReason` is the fourth, and produces a gap). A
+ * create/adjust intent resolves to the block it names as soon as that block
+ * exists — the tester saves the draft and the same route step becomes
+ * executable — and stays a gap until then, so an authored-but-unsaved block is
+ * reported as unblocked instead of as an unknown block. */
+export interface RouteBlockReference {
+	readonly id: string;
+	readonly version?: string;
+	readonly args?: Readonly<Record<string, JsonValue>>;
+}
+
 export function blockPlanFromRoute(
 	route: readonly {
 		readonly id: string;
 		readonly application: string;
 		readonly role?: string;
-		readonly block?: {
-			readonly id: string;
-			readonly version?: string;
-			readonly args?: Readonly<Record<string, JsonValue>>;
-		};
+		readonly block?: RouteBlockReference;
+		readonly blockToCreate?: RouteBlockReference;
+		readonly blockToAdjust?: RouteBlockReference;
+		readonly noBlockReason?: string;
 	}[],
 	top: {
 		planId?: string;
 		flowId?: string;
 		revision?: number;
 		inputs?: Readonly<Record<string, JsonValue>>;
+		/** The composed registry, when the caller has one. Without it every
+		 * create/adjust intent counts as resolvable; with it, one whose block is
+		 * not registered yet is a gap (the draft has not been saved). */
+		registry?: Pick<StageBlockRegistry, "get" | "getVersion">;
 	},
 ): { readonly plan: StageBlockPlan; readonly missing: readonly string[] } {
 	const steps: StageBlockStep[] = [];
 	const missing: string[] = [];
 	for (const entry of route) {
-		if (entry.block === undefined) {
+		const authored = entry.blockToCreate ?? entry.blockToAdjust;
+		if (authored !== undefined && top.registry !== undefined) {
+			const known =
+				authored.version === undefined
+					? top.registry.get(authored.id)
+					: top.registry.getVersion(authored.id, authored.version);
+			if (known === undefined) {
+				missing.push(entry.id);
+				continue;
+			}
+		}
+		const reference = entry.block ?? authored;
+		if (reference === undefined) {
 			missing.push(entry.id);
 			continue;
 		}
 		steps.push({
 			id: entry.id,
-			block: entry.block.id,
-			...(entry.block.version === undefined
+			block: reference.id,
+			...(reference.version === undefined
 				? {}
-				: { version: entry.block.version }),
-			args: entry.block.args ?? {},
+				: { version: reference.version }),
+			args: reference.args ?? {},
 		});
 	}
 	return {

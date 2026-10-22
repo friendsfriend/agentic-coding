@@ -78,6 +78,11 @@ export interface FlowManifest {
 	readonly specHash: string;
 	readonly blockVersions: Readonly<Record<string, string>>;
 	readonly blockDigests: Readonly<Record<string, string>>;
+	/** The reviewed document each data block of this flow is read from, relative
+	 * to the flow directory. Replay resolves the sidecar through this map instead
+	 * of assuming `blocks/<id>.json`, so a document cannot be silently swapped
+	 * for a same-named file elsewhere (`OSV-009`). */
+	readonly blockFiles?: Readonly<Record<string, string>>;
 	readonly routeSteps: readonly FlowRouteStep[];
 	readonly severityOverrides?: Readonly<
 		Record<string, "critical" | "major" | "minor" | "info">
@@ -211,14 +216,20 @@ export function flowInputContract(
 export function flowBlockIdentity(source: FlowSource): {
 	readonly versions: Record<string, string>;
 	readonly digests: Record<string, string>;
+	readonly files: Record<string, string>;
 } {
 	const versions: Record<string, string> = {};
 	const digests: Record<string, string> = {};
+	const files: Record<string, string> = {};
 	for (const step of source.steps) {
 		versions[step.definition.id] = step.definition.version;
 		digests[step.definition.id] = blockDigest(step.definition);
+		// A data block executes from its own sidecar document; a checked-in block
+		// keeps importing its barrel and has no file entry.
+		if (step.definition.data !== undefined)
+			files[step.definition.id] = `blocks/${step.definition.id}.json`;
 	}
-	return { versions, digests };
+	return { versions, digests, files };
 }
 
 export function buildFlowManifest(
@@ -306,6 +317,9 @@ export function buildFlowManifest(
 			specHash,
 			blockVersions: identity.versions,
 			blockDigests: identity.digests,
+			...(Object.keys(identity.files).length === 0
+				? {}
+				: { blockFiles: identity.files }),
 			routeSteps,
 		},
 		issues,

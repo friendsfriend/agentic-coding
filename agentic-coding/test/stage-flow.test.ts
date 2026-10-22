@@ -22,6 +22,7 @@ import {
 import { stageBlockRegistry } from "../src/stage-blocks/registry.ts";
 import { mapReplayToReport } from "../src/stage-blocks/replay-report.ts";
 import { canonicalHash } from "../src/stage-blocks/schema.ts";
+import { stageReportBlockIssues } from "../src/workflow/steps/stage-test.ts";
 
 const ROOT = path.join(import.meta.dir, "..");
 const FLOW_ID = "test-customer-address";
@@ -576,6 +577,26 @@ describe("replay report and heal packet", () => {
 		expect(verdicts).toEqual({ E1: "pass", E2: "fail" });
 		expect(mapped.report.expectations[1]?.severity).toBe("major");
 		expect(mapped.report.expectations[1]?.evidenceIds).toEqual(["ev-2"]);
+		// The replay accounts for the blocks it ran, so the workflow's report gate
+		// accepts a mapped report exactly like a tester's own (`USAB-001`).
+		expect(mapped.report.blocksUsed.map((block) => block.routeStepId)).toEqual([
+			"login",
+			"open",
+			"customer",
+			"address",
+		]);
+		expect(mapped.report.unblockedSteps).toEqual([]);
+		expect(
+			stageReportBlockIssues({
+				plan: stagePlan as unknown as Parameters<
+					typeof stageReportBlockIssues
+				>[0]["plan"],
+				report: {
+					...mapped.report,
+					notTested: mapped.report.notTested.map((entry) => ({ ...entry })),
+				} as unknown as Parameters<typeof stageReportBlockIssues>[0]["report"],
+			}),
+		).toEqual([]);
 		const uncovered = mapReplayToReport(
 			manifest,
 			result,
@@ -598,6 +619,267 @@ describe("replay report and heal packet", () => {
 		expect(
 			uncovered.report.expectations.find((entry) => entry.id === "E3")?.verdict,
 		).toBe("inconclusive");
+	});
+
+	test("the block accounting names every gap in a report", () => {
+		const plan = {
+			route: [
+				{
+					id: "open",
+					block: { id: "crm.ui.open", version: "1.0.0", args: {} },
+				},
+				{ id: "address", blockToCreate: { id: "crm.customer.readAddress" } },
+				{ id: "manual", noBlockReason: "the confirmation is one-off" },
+			],
+		} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"];
+		const report = (overrides: Record<string, unknown>) =>
+			({
+				blocksUsed: [],
+				blocksCreated: [],
+				blocksAdjusted: [],
+				unblockedSteps: [],
+				...overrides,
+			}) as unknown as Parameters<typeof stageReportBlockIssues>[0]["report"];
+		// A step named in neither list, a blank reason and a block the plan does
+		// not plan for it are three separate refusals.
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+						{ routeStepId: "address", block: "crm.ui.other", version: "1.0.0" },
+					],
+					unblockedSteps: [{ routeStepId: "manual", reason: "   " }],
+				}),
+			}),
+		).toEqual([
+			"stage report claims block crm.ui.other on route step address, but the plan names crm.customer.readAddress",
+			"stage report lists route step manual as unblocked without a reason; say why this step runs without a block",
+		]);
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+					],
+				}),
+			}),
+		).toEqual([
+			"stage report does not account for route step address; name it in blocksUsed or in unblockedSteps with a reason",
+			"stage report does not account for route step manual; name it in blocksUsed or in unblockedSteps with a reason",
+		]);
+		// A claim the run cannot back is its own refusal.
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+					],
+					blocksCreated: [
+						{
+							routeStepId: "address",
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-1",
+						},
+					],
+					unblockedSteps: [{ routeStepId: "manual", reason: "one-off" }],
+				}),
+				stageBlockDrafts: [
+					{
+						id: "crm.customer.readAddress",
+						version: "1.0.0",
+						digest: "digest-1",
+						proofs: [
+							{ status: "failed", version: "1.0.0", digest: "digest-1" },
+						],
+					},
+				],
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress as created without a passed proof of the document this run holds (1.0.0, digest digest-1); recorded proofs: failed@1.0.0/digest-1 — run the current document once with stage_run and cite the version and digest stage_block_save returned",
+			// A created draft is not an executed step: the route step still has to
+			// appear in blocksUsed once it ran.
+			"stage report does not account for route step address; name it in blocksUsed or in unblockedSteps with a reason",
+		]);
+		// The remaining refusals, one per branch of the loop, so an inverted guard
+		// in any of them is visible (`TQV-104`). Each message names the route step
+		// and the block, so the string doubles as the rule.
+		const draft = (id: string, version = "1.0.0") => ({
+			id,
+			version,
+			digest: `digest-${id}`,
+			proofs: [{ status: "passed" as const, version, digest: `digest-${id}` }],
+		});
+		const quiet = [{ routeStepId: "manual", reason: "one-off" }];
+		// blocksUsed naming a route step the plan does not contain.
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+						{ routeStepId: "ghost", block: "crm.ui.open", version: "1.0.0" },
+					],
+					unblockedSteps: [
+						...quiet,
+						{ routeStepId: "address", reason: "authored later" },
+					],
+				}),
+			}),
+		).toEqual([
+			"stage report names block crm.ui.open for route step ghost, which the plan does not contain",
+		]);
+		// blocksUsed on a step the plan plans as exploratory.
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+						{ routeStepId: "manual", block: "crm.ui.open", version: "1.0.0" },
+					],
+					unblockedSteps: [
+						{ routeStepId: "address", reason: "authored later" },
+					],
+				}),
+			}),
+		).toEqual([
+			"stage report claims block crm.ui.open on route step manual, which the plan plans as an exploratory step",
+		]);
+		// unblockedSteps naming a route step the plan does not contain.
+		expect(
+			stageReportBlockIssues({
+				plan,
+				report: report({
+					blocksUsed: [
+						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+					],
+					unblockedSteps: [
+						...quiet,
+						{ routeStepId: "address", reason: "authored later" },
+						{ routeStepId: "ghost", reason: "no such step" },
+					],
+				}),
+			}),
+		).toEqual([
+			"stage report lists route step ghost as unblocked, which the plan does not contain",
+		]);
+		// blocksAdjusted: no draft, a version that differs from the draft, and a
+		// route step that names a different block.
+		const adjusted = (overrides: Record<string, unknown> = {}) =>
+			report({
+				blocksUsed: [
+					{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
+					{
+						routeStepId: "address",
+						block: "crm.customer.readAddress",
+						version: "1.0.0",
+					},
+				],
+				blocksAdjusted: [
+					{
+						routeStepId: "address",
+						block: "crm.customer.readAddress",
+						version: "1.0.0",
+						digest: "digest-crm.customer.readAddress",
+						...overrides,
+					},
+				],
+				unblockedSteps: quiet,
+			});
+		const adjustedPlan = {
+			route: [
+				{
+					id: "open",
+					block: { id: "crm.ui.open", version: "1.0.0", args: {} },
+				},
+				{
+					id: "address",
+					blockToAdjust: {
+						id: "crm.customer.readAddress",
+						version: "1.0.0",
+						intent: "read the address",
+					},
+				},
+				{ id: "manual", noBlockReason: "the confirmation is one-off" },
+			],
+		} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"];
+		expect(
+			stageReportBlockIssues({ plan: adjustedPlan, report: adjusted() }),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress as adjusted, but this run holds no draft of it",
+		]);
+		expect(
+			stageReportBlockIssues({
+				plan: adjustedPlan,
+				report: adjusted(),
+				stageBlockDrafts: [draft("crm.customer.readAddress", "2.0.0")],
+			}),
+		).toEqual([
+			// The draft's own proof is a proof of 2.0.0, so the claim's version is
+			// wrong, and the route step's used entry (1.0.0) is asked to cite the
+			// draft that ran — the two checks are independent.
+			"stage report claims block crm.customer.readAddress@1.0.0 on route step address, but this run's draft of it is crm.customer.readAddress@2.0.0; cite the version that ran",
+			"stage report claims block crm.customer.readAddress@1.0.0 as adjusted, but the draft is 2.0.0",
+		]);
+		expect(
+			stageReportBlockIssues({
+				plan: adjustedPlan,
+				report: adjusted({ block: "crm.ui.other" }),
+				stageBlockDrafts: [draft("crm.customer.readAddress")],
+			}),
+		).toEqual([
+			"stage report claims block crm.ui.other as adjusted, but this run holds no draft of it",
+		]);
+		// The adjusted claim's own route step must name it: the created branch and
+		// the adjusted branch read different plan fields, so one cannot stand in
+		// for the other.
+		expect(
+			stageReportBlockIssues({
+				plan: {
+					route: [
+						{
+							id: "address",
+							blockToCreate: { id: "crm.customer.readAddress" },
+						},
+					],
+				} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"],
+				report: report({
+					blocksUsed: [
+						{
+							routeStepId: "address",
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+						},
+					],
+					blocksAdjusted: [
+						{
+							routeStepId: "address",
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-crm.customer.readAddress",
+						},
+					],
+				}),
+				stageBlockDrafts: [draft("crm.customer.readAddress")],
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress as adjusted on route step address, but the plan names no such block",
+		]);
+		// And a claim for a route step the plan does not contain.
+		expect(
+			stageReportBlockIssues({
+				plan: adjustedPlan,
+				report: adjusted({ routeStepId: "ghost" }),
+				stageBlockDrafts: [draft("crm.customer.readAddress")],
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress for route step ghost, which the plan does not contain",
+		]);
 	});
 
 	test("builds a redaction-ready heal packet for a failed write", () => {

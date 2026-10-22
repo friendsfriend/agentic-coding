@@ -41,6 +41,43 @@ type-checked (`bunx tsc --ignoreConfig --noEmit --target es2022 --types node`)
 before it is written; a failure there is a generation failure, not a silently
 broken checked-in file.
 
+### Data blocks carry their document
+
+A data block (`docs/stage-blocks.md`, "Blocks as data") has no module to
+import, so a flow that executes one writes the reviewed document beside its
+manifest as `stage-flows/<flowId>/blocks/<id>.json` and the generated spec
+calls `stage.runData("<routeStepId>", args)` instead of importing a barrel
+symbol. The fixture reads the document from the flow's own directory, so a
+replay runs exactly the reviewed document the manifest pinned — never whatever
+the live store holds at replay time. The manifest pins each sidecar in its
+optional `blockFiles` map (`{ "<blockId>": "blocks/<blockId>.json" }`), so the
+reader resolves the file the manifest names instead of guessing a filename from
+the id. `flowDocumentIssues` therefore refuses a flow whose `blockFiles` has no
+entry for a data block, whose sidecar is missing or unreadable
+(`flow-block-document-missing`), or whose sidecar parses into a document that
+fails validation or hashes to a different digest (`flow-block-digest`, with the
+validation issue as the message) — the difference matters, because "the file is
+gone" and "the document changed" are two different repairs — and a flow that
+names a block which exists only as an authoring workflow's draft is refused with
+`flow-block-draft`: a draft is executable by its own run, never by a replay.
+Generation also refuses while the run still holds a draft of the same id — the
+flow would otherwise be written from, and hash, a document no checked-in flow
+can ever replay.
+`bun run stage-flows:check` applies the same rule to the checked-in flows by
+compiling each sidecar document, so the gate stays hermetic. The replay side is
+A document is validated once and then compiled through the non-revalidating
+entry point (`compileValidatedDataBlock`), and a pinned digest is compared
+against the digest the block registry already computed (`registry.digest(id)`)
+rather than a fresh hash of the function source or the document: eligibility is
+checked on a polled read path, so it may not redo what building the registry
+already did.
+
+`pinnedDataBlock({ manifest, directory, routeStepId })` in
+`src/stage-blocks/fixture.ts`: one exported seam that does the `blockFiles`
+lookup, the read, `validateDataBlock`, the digest comparison and the compile,
+and that `runData` then executes — so the refusal a replay would hit can be
+tested without a browser.
+
 ## Eligibility
 
 A flow is eligible for replay only when every one of these still agrees with
@@ -93,6 +130,15 @@ drops every other configured secret plus the host/run/workflow tokens before
 the process starts. Plan inputs are test data, not credentials — never put a
 secret value in a plan input or a flow argument.
 
+### Timeouts and a non-zero exit
+
+The fixture sets `actionTimeout: 15_000`, and `stage-replay.ts` allows the
+process a matching bounded budget. A replay process that exits non-zero after
+reporting a pass is not a pass: the decoder marks the first non-passed step
+(else the last) as `failed` with the stderr tail and returns a failed result
+naming `routeStepId` and `block@version`, so the run gets the step that did not
+complete instead of `replay-result-invalid`.
+
 ### Heal packet and the repair boundary
 
 A failed replay returns to `stage.execute` carrying a bounded, redacted
@@ -138,6 +184,14 @@ rather than trusting anything the model reports:
 - an **ineligible** result (no flow named, no result attached, an unusable
   report) falls back to `stage.execute` with a visible reason — it never
   silently claims a pass.
+
+The mapped report (`replay-report.ts`) matches what `stage_report` accepts, so a
+replayed run reaches the same `stage.review` with the same shape: `blocksUsed`
+holds one `{routeStepId, block, version}` per executed step, and every planned
+route step the compiled flow has no step for is listed in `unblockedSteps` with
+its `noBlockReason` (or a stated "the compiled flow has no step for this route
+step"), so the block accounting never reports a step as neither used nor
+unblocked.
 
 The workflow snapshot's `stageReplay` metadata summarizes the attempt (status,
 flow id, plan id/revision, `inputsHash`/`routeHash`, block versions/digests,

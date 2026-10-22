@@ -60,6 +60,7 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"environment.setup-rollback",
 	"environment.setup-cleanup",
 	"stage.report.render",
+	"stage.blocks.promote",
 	"debug.request.run",
 	"debug.request.deliver",
 ]);

@@ -650,7 +650,9 @@ describe("workflow registry", () => {
 					(definition.version < 801 || definition.version > 820) &&
 					(definition.version < 901 || definition.version > 920) &&
 					// The pinned-stage family's own tier declares a policy too.
-					(definition.version < 1001 || definition.version > 1021),
+					(definition.version < 1001 || definition.version > 1021) &&
+					// The authored-data-blocks stage-test tier declares one too.
+					(definition.version < 1101 || definition.version > 1121),
 			))
 				expect(definition.policy).toBeUndefined();
 		});

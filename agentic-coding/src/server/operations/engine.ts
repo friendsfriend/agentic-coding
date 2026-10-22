@@ -464,6 +464,9 @@ export function viewToDashboardState(view: WorkflowView) {
 		...(view.stageTestReportMarkdown !== undefined
 			? { stageTestReportMarkdown: view.stageTestReportMarkdown }
 			: {}),
+		...(view.stagePlanBlocks !== undefined
+			? { stagePlanBlocks: view.stagePlanBlocks }
+			: {}),
 		createdAt: view.createdAt,
 		phaseStartedAt: view.currentStep.enteredAt,
 		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),

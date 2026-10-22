@@ -83,6 +83,7 @@ export const STAGE_BLOCK_CATALOG = {
 				}
 			],
 			"contractTest": "test/stage-blocks.test.ts",
+			"kind": "checked-in",
 			"internal": false,
 			"digest": "sha256:4ede5b53281486d534b37006a631b3b387ab40e0d43a56c6bd931944efbf6e96"
 		},
@@ -190,6 +191,7 @@ export const STAGE_BLOCK_CATALOG = {
 				}
 			],
 			"contractTest": "test/stage-blocks.test.ts",
+			"kind": "checked-in",
 			"internal": false,
 			"digest": "sha256:08c40c5a6ea7119b0affbd787cc6de3aaac759fd492338af7138b1178b29059d"
 		},
@@ -251,6 +253,7 @@ export const STAGE_BLOCK_CATALOG = {
 				}
 			],
 			"contractTest": "test/stage-blocks.test.ts",
+			"kind": "checked-in",
 			"internal": false,
 			"digest": "sha256:acdc4fc85a6bfb50c4ff871d9293b6bb06128c08c734455fa60db7c8af8351b1"
 		},
@@ -312,6 +315,7 @@ export const STAGE_BLOCK_CATALOG = {
 				}
 			],
 			"contractTest": "test/stage-blocks.test.ts",
+			"kind": "checked-in",
 			"internal": false,
 			"digest": "sha256:47d8eb681189c85a06daf28956aa8f44c9cfab8d9a6ce9d9c42b93d331f57523"
 		}

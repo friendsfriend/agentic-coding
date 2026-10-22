@@ -123,11 +123,22 @@ describe("decodeReplayResult (add-stage-flow-replay)", () => {
 		);
 	});
 
-	test("refuses a non-zero process exit that reports a pass", () => {
+	test("turns a non-zero process exit that reports a pass into a failed replay naming the step", () => {
+		// The fixture can only report the steps it reached, so a pass document and
+		// a failing process mean the run ended after that document was written: an
+		// action timeout in the last block's own step, or a crash on teardown.
 		const file = tempResultFile(JSON.stringify(validResult()));
-		expect(() => decodeReplayResult(file, IDENTITY, 1)).toThrow(
-			/exited 1 but reported a pass/,
-		);
+		const result = decodeReplayResult(file, IDENTITY, 1);
+		expect(result.status).toBe("failed");
+		const step = result.steps.at(-1);
+		expect(step?.status).toBe("failed");
+		expect(step?.error).toMatch(/exited 1 after reporting a pass/);
+		expect(step?.error).toContain(step?.routeStepId);
+		expect(result.error).toContain("did not complete");
+		// The derived events follow the failed step, so ingestion cannot read a pass.
+		expect(
+			replayEventsFromSteps(result).every((event) => event.status === "failed"),
+		).toBe(true);
 	});
 
 	test("accepts a non-zero exit that honestly reports a failure", () => {

@@ -2,7 +2,23 @@
 // review. Wiki authoring is reachable only through the explicit report-review action.
 import type { WorkflowManifest } from "../../registry.ts";
 
-export function stageTestManifests(version: number): WorkflowManifest[] {
+/** `authoredBlocks` adds the review-approval promotion of the run's authored
+ * block drafts (`author-stage-blocks-as-data`). It is a parameter rather than an
+ * edit because a registered version's digest covers the whole manifest: a new
+ * tier has to be registered beside the old one. */
+export function stageTestManifests(
+	version: number,
+	authoredBlocks = false,
+): WorkflowManifest[] {
+	const promote = authoredBlocks
+		? [
+				{
+					kind: "stage.blocks.promote" as const,
+					idempotencyKey: "stage-blocks-promote",
+					payload: {},
+				},
+			]
+		: undefined;
 	return [
 		{
 			id: "stage-test",
@@ -83,11 +99,17 @@ export function stageTestManifests(version: number): WorkflowManifest[] {
 					to: "stage.execute",
 					loop: { maxAttempts: 3 },
 				},
-				{ from: "stage.review", outcome: "approve", to: "core.completed" },
+				{
+					from: "stage.review",
+					outcome: "approve",
+					to: "core.completed",
+					...(promote === undefined ? {} : { effects: promote }),
+				},
 				{
 					from: "stage.review",
 					outcome: "approve-and-update-wiki",
 					to: "core.wiki",
+					...(promote === undefined ? {} : { effects: promote }),
 				},
 				{
 					from: "stage.review",

@@ -67,6 +67,10 @@ export interface LocatedEvidenceWorkflow extends WorkflowEvidenceLocation {
 	/** The workflow revision currently on disk; a reviewed plan revision is
 	 * compared against this rather than trusted from the request. */
 	readonly revision?: number;
+	/** The run's immutable identity (`metadata.createdAt`): a workflow id is
+	 * reusable, so this is what distinguishes this run's own drafts from a
+	 * deleted predecessor's (`CONC-103`). */
+	readonly runId?: string;
 	readonly stageAccess?: "read-only" | "writable";
 	readonly stageTestPlan?: JsonValue;
 }
@@ -115,6 +119,9 @@ export function locateEvidenceWorkflow(
 				worktree: snapshot.metadata.worktree,
 				definitionId: snapshot.definition.id,
 				revision: snapshot.revision,
+				...(typeof snapshot.metadata.createdAt === "string"
+					? { runId: snapshot.metadata.createdAt }
+					: {}),
 				...(snapshot.metadata.stage ? { stage: snapshot.metadata.stage } : {}),
 				...(snapshot.definition.id === "stage-test"
 					? {

@@ -6,6 +6,14 @@ import { Effect } from "effect";
 import type { JsonValue, WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { listEvidence } from "../src/server/evidence/store.ts";
 import { stagePaths } from "../src/server/stages/catalog.ts";
+import type { StageDataBlockDocument } from "../src/stage-blocks/data-block.ts";
+import {
+	appendStageBlockProof,
+	approvedBlockPath,
+	readStageBlockDrafts,
+	saveStageBlockDraft,
+	storedDigest,
+} from "../src/stage-blocks/data-store.ts";
 import { managedWorkflowTarget } from "../src/workflow/cli/caller-environment.ts";
 import { WorkflowRuntimeError } from "../src/workflow/contracts.ts";
 import {
@@ -13,6 +21,10 @@ import {
 	stageTestReport,
 } from "../src/workflow/definitions/contracts.ts";
 import { stageTestManifests } from "../src/workflow/definitions/graphs/stage-test.ts";
+import {
+	definitionVersionForStageBlocks,
+	definitionVersionForStageTest,
+} from "../src/workflow/definitions/manifest-policy.ts";
 import { WORKFLOW_STEPS } from "../src/workflow/definitions/steps.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
@@ -25,6 +37,7 @@ import {
 } from "../src/workflow/runtime/evidence-store.ts";
 import { stageTestWorkflowTarget } from "../src/workflow/runtime.ts";
 import {
+	stagePlanDecisionIssues,
 	stageReportIssues,
 	stageTestBehaviors,
 } from "../src/workflow/steps/stage-test.ts";
@@ -48,6 +61,7 @@ const plan = (overrides: Record<string, unknown> = {}) => ({
 			action: "open the request",
 			expected: "Request details are visible",
 			capture: [],
+			noBlockReason: "no data block covers the request page yet",
 		},
 	],
 	asyncWaits: [],
@@ -74,6 +88,13 @@ const report = (overrides: Record<string, unknown> = {}) => ({
 	createdData: [],
 	knowledgeObservations: [],
 	notTested: [],
+	blocksUsed: [],
+	unblockedSteps: [
+		{
+			routeStepId: "R1",
+			reason: "no data block covers the request page yet",
+		},
+	],
 	...overrides,
 });
 
@@ -103,6 +124,16 @@ function completeAgentStep(
 		}[];
 		stageApps?: readonly string[];
 		stageEvidenceIds?: readonly string[];
+		stageBlockDrafts?: readonly {
+			id: string;
+			version: string;
+			digest: string;
+			proofs: readonly {
+				status: "passed" | "failed";
+				version: string;
+				digest: string;
+			}[];
+		}[];
 		stageReplayEvidence?: {
 			result?: {
 				status?: unknown;
@@ -183,6 +214,79 @@ describe("stage-test planning and report contracts", () => {
 		expect(result?.transition?.outcome).toBe("needs-approval");
 	});
 
+	test("a plan step must name exactly one block decision", () => {
+		const exploratory = plan({
+			route: [
+				{
+					id: "R1",
+					application: "web",
+					action: "open the request",
+					expected: "Request details are visible",
+					capture: [],
+				},
+			],
+		});
+		expect(() =>
+			completeAgentStep(
+				"stage.plan",
+				snapshot({ stageTestPlan: undefined }),
+				exploratory,
+			),
+		).toThrow(/names no block/);
+		expect(() =>
+			completeAgentStep(
+				"stage.plan",
+				snapshot({ stageTestPlan: undefined }),
+				plan({
+					route: [
+						{
+							...((exploratory.route as Record<string, unknown>[])[0] ?? {}),
+							block: { id: "crm.customer.readAddress" },
+							noBlockReason: "and also no block",
+						},
+					],
+				}),
+			),
+		).toThrow(/exactly one of block/);
+		expect(
+			completeAgentStep(
+				"stage.plan",
+				snapshot({ stageTestPlan: undefined }),
+				plan(),
+			)?.transition?.outcome,
+		).toBe("execute");
+	});
+
+	test("a plan persisted before the block decision existed still decodes", () => {
+		// `MIG-001`: a `metadata.stageTestPlan` snapshot written before
+		// `author-stage-blocks-as-data` has exploratory route steps with none of
+		// block/blockToCreate/blockToAdjust/noBlockReason. The decoder must accept
+		// it so the run can finish as it was approved; only a *new* plan is held to
+		// the decision rule.
+		const legacy = plan({
+			route: [
+				{
+					id: "R1",
+					application: "web",
+					action: "open the request",
+					expected: "Request details are visible",
+					capture: ["status"],
+				},
+			],
+		});
+		const decoded = stageTestPlan.parse(legacy as JsonValue);
+		expect(decoded.route).toHaveLength(1);
+		expect(stagePlanDecisionIssues(decoded)).toHaveLength(1);
+		// The run itself still executes: the plan is what it always was.
+		expect(
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: legacy as JsonValue }),
+				report(),
+			),
+		).toBeDefined();
+	});
+
 	test("a read-only plan continues directly and cannot claim data creation", () => {
 		const direct = completeAgentStep(
 			"stage.plan",
@@ -256,6 +360,356 @@ describe("stage-test planning and report contracts", () => {
 		expect(rendered).toContain("GRID-42");
 		expect(rendered).toContain("Step 1 (web / clerk): open the request");
 		expect(rendered).toContain("ev-1: Request details");
+	});
+
+	test("the report renderer shows the authored block and its adjustment", () => {
+		const document = (overrides: Record<string, unknown> = {}) => ({
+			format: 1,
+			id: "grid.request.open",
+			version: "1.0.0",
+			app: "web",
+			roles: ["clerk"],
+			title: "Open one request",
+			description: "Opens one request by reference.",
+			effects: ["read"],
+			idempotent: true,
+			params: {
+				type: "object",
+				additionalProperties: false,
+				properties: { reference: { type: "string" } },
+				required: ["reference"],
+			},
+			returns: { type: "object", additionalProperties: false, properties: {} },
+			examples: [{ reference: "REQ-1" }],
+			postcondition: "the request details are visible",
+			operations: [
+				{
+					op: "step",
+					label: "open the request",
+					operations: [
+						{ op: "goto", path: "/requests/{{ args.reference }}" },
+						{ op: "expectVisible", target: { testId: "request-detail" } },
+					],
+				},
+			],
+			...overrides,
+		});
+		const rendered = effectRunnerTest.renderStageReport(
+			"grid-int",
+			"GRID-42",
+			{
+				environment: "integration",
+				system: "grid-allocation",
+				access: "read-only",
+			},
+			stageTestPlan.parse(plan()),
+			stageTestReport.parse(
+				report({
+					blocksUsed: [
+						{
+							routeStepId: "R1",
+							block: "grid.request.open",
+							version: "1.0.0",
+						},
+					],
+					blocksCreated: [
+						{
+							routeStepId: "R1",
+							block: "grid.request.open",
+							version: "1.0.0",
+							digest: "digest-1",
+						},
+					],
+					blocksAdjusted: [
+						{
+							routeStepId: "R1",
+							block: "grid.request.open",
+							version: "1.1.0",
+							digest: "digest-2",
+						},
+					],
+					unblockedSteps: [],
+				}),
+			),
+			[
+				{
+					seq: 1,
+					at: "2026-04-01T12:00:00Z",
+					app: "web",
+					role: "clerk",
+					label: "open the request",
+					expected: "Request details are visible",
+					observed: "Request details are visible",
+				},
+			],
+			[
+				{
+					id: "ev-1",
+					kind: "screenshot",
+					file: "ev-1.png",
+					caption: "Request details",
+					createdAt: "2026-04-01T12:00:00Z",
+				},
+			],
+			"2026-04-01T12:01:00Z",
+			{
+				drafts: [
+					{
+						document: document() as never,
+						proofs: [
+							{
+								status: "passed",
+								journalIds: [12, 14],
+								evidenceIds: ["ev-3"],
+							},
+						],
+					},
+					{
+						document: document({
+							version: "1.1.0",
+							postcondition:
+								"the request details and the audit entry are visible",
+						}) as never,
+						proofs: [
+							{
+								status: "passed",
+								journalIds: [12, 14],
+								evidenceIds: ["ev-3"],
+							},
+						],
+					},
+				],
+				approved: [document() as never],
+			},
+		);
+		expect(rendered).toContain("## Stage blocks");
+		expect(rendered).toContain("grid.request.open@1.0.0");
+		expect(rendered).toContain("grid.request.open@1.1.0");
+		expect(rendered).toContain("created");
+		expect(rendered).toContain("adjusted");
+		expect(rendered).toContain("the request details are visible");
+		// The proof line names what proved the block, so a reviewer can open it
+		// instead of trusting the claim (`USAB-007`).
+		expect(rendered).toContain(
+			"- proof: passed (route step R1) — journal 12, 14; evidence ev-3",
+		);
+		// The section comes before the created data, and a report that claims no
+		// block renders no section at all.
+		expect(rendered.indexOf("## Stage blocks")).toBeLessThan(
+			rendered.indexOf("## Created data"),
+		);
+		const plain = effectRunnerTest.renderStageReport(
+			"grid-int",
+			"GRID-42",
+			{
+				environment: "integration",
+				system: "grid-allocation",
+				access: "read-only",
+			},
+			stageTestPlan.parse(plan()),
+			stageTestReport.parse(report()),
+			[],
+			[],
+			"2026-04-01T12:01:00Z",
+		);
+		expect(plain).not.toContain("## Stage blocks");
+	});
+
+	test("the report gate itself refuses the block accounting it delegates", () => {
+		// The delegation from `validReport` to `stageReportBlockIssues` is what
+		// makes the blocks-first contract true for the workflow, not just for the
+		// helper: these cases drive the refusals through `onAgentComplete`
+		// (`TQV-103`).
+		const blockedPlan = plan({
+			route: [
+				{
+					id: "R1",
+					application: "web",
+					action: "open the request",
+					expected: "Request details are visible",
+					capture: [],
+					blockToCreate: {
+						id: "web.request.open",
+						intent: "open one request by its id",
+					},
+				},
+			],
+		});
+		const stage = {
+			stageJournal: [{ seq: 1 }],
+			stageApps: ["web"],
+			stageEvidenceIds: ["ev-1"],
+		};
+		// A blank reason does not account for the step.
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: plan() }),
+				report({ unblockedSteps: [{ routeStepId: "R1", reason: "   " }] }),
+				stage,
+			),
+		).toThrow(/unblocked without a reason/);
+		// A created block with no passed proof of it in this run.
+		expect(
+			() =>
+				completeAgentStep(
+					"stage.execute",
+					snapshot({ stageTestPlan: blockedPlan }),
+					report({
+						blocksUsed: [
+							{
+								routeStepId: "R1",
+								block: "web.request.open",
+								version: "1.0.0",
+							},
+						],
+						blocksCreated: [
+							{
+								block: "web.request.open",
+								version: "1.0.0",
+								digest: "digest-1",
+								routeStepId: "R1",
+							},
+						],
+						unblockedSteps: [],
+					}),
+					{
+						...stage,
+						stageBlockDrafts: [
+							{
+								id: "web.request.open",
+								version: "1.0.0",
+								digest: "digest-1",
+								proofs: [
+									{ status: "failed", version: "1.0.0", digest: "digest-1" },
+								],
+							},
+						],
+					},
+				),
+			// The refusal names the document the run holds, the proofs it does hold
+			// and the remedy (`USAB-122`).
+		).toThrow(
+			/without a passed proof of the document this run holds \(1\.0\.0, digest digest-1\); recorded proofs: failed@1\.0\.0\/digest-1 — run the current document once with stage_run/,
+		);
+		// A route step named in neither list is a gap.
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: blockedPlan }),
+				report({ unblockedSteps: [] }),
+				stage,
+			),
+		).toThrow(/does not account for route step R1/);
+		// And the same report with a passed proof passes the gate: the guard is a
+		// rule about the run, not a refusal of authored blocks.
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: blockedPlan }),
+				report({
+					blocksUsed: [
+						{ routeStepId: "R1", block: "web.request.open", version: "1.0.0" },
+					],
+					blocksCreated: [
+						{
+							block: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-1",
+							routeStepId: "R1",
+						},
+					],
+					unblockedSteps: [],
+				}),
+				{
+					...stage,
+					stageBlockDrafts: [
+						{
+							id: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-1",
+							proofs: [
+								{ status: "passed", version: "1.0.0", digest: "digest-1" },
+							],
+						},
+					],
+				},
+			),
+		).not.toThrow();
+		// A proof of a different body is not a proof of this one, so the claim is
+		// refused even though a passing proof exists for the same version.
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: blockedPlan }),
+				report({
+					blocksUsed: [
+						{ routeStepId: "R1", block: "web.request.open", version: "1.0.0" },
+					],
+					blocksCreated: [
+						{
+							block: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-2",
+							routeStepId: "R1",
+						},
+					],
+					unblockedSteps: [],
+				}),
+				{
+					...stage,
+					stageBlockDrafts: [
+						{
+							id: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-2",
+							proofs: [
+								{ status: "passed", version: "1.0.0", digest: "digest-1" },
+							],
+						},
+					],
+				},
+			),
+		).toThrow(
+			/without a passed proof of the document this run holds \(1\.0\.0, digest digest-2\); recorded proofs: passed@1\.0\.0\/digest-1/,
+		);
+		// The claim itself names the document: a same-version re-save is a
+		// different block, and a claim citing the digest the tester saw before the
+		// re-save is refused even when a passed proof of the live body exists
+		// (`SEC-005`, `CONC-105`).
+		expect(() =>
+			completeAgentStep(
+				"stage.execute",
+				snapshot({ stageTestPlan: blockedPlan }),
+				report({
+					blocksUsed: [
+						{ routeStepId: "R1", block: "web.request.open", version: "1.0.0" },
+					],
+					blocksCreated: [
+						{
+							block: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-1",
+							routeStepId: "R1",
+						},
+					],
+					unblockedSteps: [],
+				}),
+				{
+					...stage,
+					stageBlockDrafts: [
+						{
+							id: "web.request.open",
+							version: "1.0.0",
+							digest: "digest-2",
+							proofs: [
+								{ status: "passed", version: "1.0.0", digest: "digest-2" },
+							],
+						},
+					],
+				},
+			),
+		).toThrow(/with digest digest-1, but the draft the run holds is digest-2/);
 	});
 
 	test("a pass without evidence is refused before report rendering", () => {
@@ -668,6 +1122,35 @@ describe("stage-test handoff and render wiring", () => {
 		).toThrow(/evidence that is not attached/);
 	});
 
+	test("approving the report promotes the run's authored block drafts", () => {
+		const withBlocks = stageTestManifests(1101, true)[0];
+		if (!withBlocks) throw new Error("missing stage-test manifest");
+		const reviewEdges = withBlocks.edges.filter(
+			({ from }) => from === "stage.review",
+		);
+		for (const outcome of ["approve", "approve-and-update-wiki"] as const) {
+			const edge = reviewEdges.find((entry) => entry.outcome === outcome);
+			expect(edge?.effects?.map((effect) => effect.kind)).toEqual([
+				"stage.blocks.promote",
+			]);
+			expect(edge?.effects?.[0]?.idempotencyKey).toBe("stage-blocks-promote");
+		}
+		// The pre-blocks tier keeps its exact graph: a pinned workflow never grows
+		// an effect it did not approve.
+		const plain = stageTestManifests(1001)[0];
+		expect(
+			plain?.edges.flatMap((edge) => edge.effects ?? []).map((e) => e.kind),
+		).toEqual(["wiki.verify"]);
+	});
+
+	test("an authored-blocks definition version never collides with a plan-only one", () => {
+		for (let round = 1; round <= 40; round += 1)
+			expect(definitionVersionForStageBlocks(round)).not.toBe(
+				definitionVersionForStageTest(round + 1),
+			);
+		expect(definitionVersionForStageBlocks(1)).toBe(1101);
+	});
+
 	test("the plan gate owns both edges and its two developer actions", () => {
 		const manifest = stageTestManifests(1021)[0];
 		if (!manifest?.allowedOutcomes)
@@ -796,6 +1279,451 @@ describe("stage-test handoff and render wiring", () => {
 			else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
 			fs.rmSync(configDir, { recursive: true, force: true });
 			fs.rmSync(worktree, { recursive: true, force: true });
+		}
+	});
+
+	function promoteStageFixture(options: {
+		readonly access?: "read-only" | "writable";
+	}) {
+		const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "stage-promote-"));
+		const worktree = fs.mkdtempSync(
+			path.join(os.tmpdir(), "stage-promote-wt-"),
+		);
+		fs.mkdirSync(stagePaths(configDir).defsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(stagePaths(configDir).defsDir, "grid-int.json"),
+			JSON.stringify({
+				ident: "grid-int",
+				displayName: "Grid integration",
+				environment: "integration",
+				system: "grid-allocation",
+				access: options.access ?? "read-only",
+				apps: {
+					web: {
+						label: "Grid web",
+						url: "https://grid.example.test/",
+						kind: "ui",
+						roles: { clerk: {} },
+					},
+				},
+			}),
+		);
+		const workflowId = "stage-promote";
+		const scope = workflowEvidenceScope({
+			workflowId,
+			worktree,
+			definitionId: "stage-test",
+		});
+		return { configDir, worktree, workflowId, scope };
+	}
+
+	const stageBlockDocument = (
+		overrides: Partial<StageDataBlockDocument> = {},
+	): StageDataBlockDocument => ({
+		format: 1,
+		id: "grid.request.open",
+		version: "1.0.0",
+		app: "web",
+		roles: ["clerk"],
+		title: "Open one request",
+		description: "Opens one request and reads its status.",
+		effects: ["read"],
+		idempotent: true,
+		params: {
+			type: "object",
+			additionalProperties: false,
+			properties: { requestId: { type: "string", minLength: 1 } },
+			required: ["requestId"],
+		},
+		returns: {
+			type: "object",
+			additionalProperties: false,
+			properties: { status: { type: "string" } },
+			required: ["status"],
+		},
+		examples: [{ requestId: "R-1001" }],
+		postcondition: "the request page shows its status",
+		operations: [
+			{
+				op: "step",
+				label: "open the request",
+				expected: "the request page is visible",
+				operations: [
+					{ op: "goto", path: "/requests/{{ args.requestId }}" },
+					{ op: "expectVisible", target: { role: "heading" } },
+				],
+			},
+		],
+		...overrides,
+	});
+
+	function promoteHandler(
+		worktree: string,
+		metadata: Record<string, unknown>,
+		workflowId: string,
+	) {
+		const current = {
+			...snapshot({ worktree, stage: "grid-int", ...metadata }),
+			workflowId,
+			status: "running",
+			currentStep: "stage.review",
+			step: { attempt: 1, activeRunIds: [] },
+		} as unknown as WorkflowSnapshot;
+		const engine = {
+			getSnapshot: () => current,
+			effectIsLive: () => true,
+		} as unknown as import("../src/workflow/runtime.ts").WorkflowEngine;
+		const handler = agentEffectHandlers(stageTestWorkflowTarget(), engine, {
+			registry: registerBuiltins(),
+			adapters: new Map(),
+		})["stage.blocks.promote"];
+		if (!handler) throw new Error("stage.blocks.promote handler is missing");
+		return handler;
+	}
+
+	function promoteEffect(workflowId: string) {
+		return {
+			id: "promote-effect",
+			workflowId,
+			kind: "stage.blocks.promote",
+			payload: {},
+			lease: "lease",
+		} as never;
+	}
+
+	test("the promote effect publishes only the claimed draft and drops the scratch one", async () => {
+		const fixture = promoteStageFixture({});
+		const previous = process.env.AGENTIC_CODING_CONFIG_DIR;
+		try {
+			process.env.AGENTIC_CODING_CONFIG_DIR = fixture.configDir;
+			const claimed = stageBlockDocument();
+			const scratch = stageBlockDocument({ id: "grid.request.list" });
+			for (const document of [claimed, scratch])
+				saveStageBlockDraft({
+					dataRoot: fixture.scope.dataRoot,
+					workflowId: fixture.workflowId,
+					stage: "grid-int",
+					document,
+				});
+			appendStageBlockProof({
+				dataRoot: fixture.scope.dataRoot,
+				workflowId: fixture.workflowId,
+				document: claimed,
+				proof: {
+					stage: "grid-int",
+					runId: "run",
+					status: "passed",
+					at: new Date().toISOString(),
+					journalIds: [1],
+					evidenceIds: ["ev-1"],
+				},
+			});
+			const handler = promoteHandler(
+				fixture.worktree,
+				{
+					stageSystem: "grid-allocation",
+					stageTestReport: report({
+						blocksUsed: [
+							{ routeStepId: "R1", block: claimed.id, version: "1.0.0" },
+						],
+						blocksCreated: [
+							{
+								block: claimed.id,
+								version: "1.0.0",
+								digest: storedDigest(claimed),
+								routeStepId: "R1",
+							},
+						],
+						unblockedSteps: [],
+					}),
+				},
+				fixture.workflowId,
+			);
+			await expect(
+				Effect.runPromise(handler.execute(promoteEffect(fixture.workflowId))),
+			).resolves.toMatchObject({
+				promoted: [`${claimed.id}@1.0.0`],
+				claims: [
+					{
+						id: claimed.id,
+						version: "1.0.0",
+						digest: storedDigest(claimed),
+					},
+				],
+			});
+			// Published under the stage's system, with the document the run saved.
+			expect(
+				fs.existsSync(
+					approvedBlockPath(fixture.configDir, "grid-allocation", claimed.id),
+				),
+			).toBe(true);
+			// The unclaimed draft is scratch: it is neither published nor kept.
+			expect(
+				fs.existsSync(
+					approvedBlockPath(fixture.configDir, "grid-allocation", scratch.id),
+				),
+			).toBe(false);
+			expect(
+				readStageBlockDrafts(fixture.scope.dataRoot, fixture.workflowId).drafts,
+			).toEqual([]);
+			// The approval's second half is the draft removal, and the effect is
+			// recorded only after both. A re-run therefore finds the drafts gone and
+			// the blocks published: it must report the recovery, not fail the
+			// workflow on its own success (`CONC-101`).
+			await expect(
+				Effect.runPromise(handler.execute(promoteEffect(fixture.workflowId))),
+			).resolves.toMatchObject({
+				promoted: [`${claimed.id}@1.0.0`],
+				recovered: true,
+			});
+			if (!handler.observe) throw new Error("promotion has no observe");
+			await expect(
+				Effect.runPromise(handler.observe(promoteEffect(fixture.workflowId))),
+			).resolves.toMatchObject({ recovered: true });
+		} finally {
+			if (previous === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
+			fs.rmSync(fixture.configDir, { recursive: true, force: true });
+			fs.rmSync(fixture.worktree, { recursive: true, force: true });
+		}
+	});
+
+	test("the promote effect re-applies the stage scope to a draft saved earlier", async () => {
+		const fixture = promoteStageFixture({ access: "read-only" });
+		const previous = process.env.AGENTIC_CODING_CONFIG_DIR;
+		try {
+			process.env.AGENTIC_CODING_CONFIG_DIR = fixture.configDir;
+			const document = stageBlockDocument({ effects: ["write"] });
+			saveStageBlockDraft({
+				dataRoot: fixture.scope.dataRoot,
+				workflowId: fixture.workflowId,
+				stage: "grid-int",
+				document,
+			});
+			appendStageBlockProof({
+				dataRoot: fixture.scope.dataRoot,
+				workflowId: fixture.workflowId,
+				document,
+				proof: {
+					stage: "grid-int",
+					runId: "run",
+					status: "passed",
+					at: new Date().toISOString(),
+					journalIds: [1],
+					evidenceIds: ["ev-1"],
+				},
+			});
+			const handler = promoteHandler(
+				fixture.worktree,
+				{
+					stageTestReport: report({
+						blocksUsed: [
+							{ routeStepId: "R1", block: document.id, version: "1.0.0" },
+						],
+						blocksCreated: [
+							{
+								block: document.id,
+								version: "1.0.0",
+								digest: storedDigest(document),
+								routeStepId: "R1",
+							},
+						],
+						unblockedSteps: [],
+					}),
+				},
+				fixture.workflowId,
+			);
+			await expect(
+				Effect.runPromise(handler.execute(promoteEffect(fixture.workflowId))),
+			).rejects.toThrow(/may not be published: stage grid-int is read-only/);
+			expect(
+				readStageBlockDrafts(fixture.scope.dataRoot, fixture.workflowId).drafts,
+			).toHaveLength(1);
+		} finally {
+			if (previous === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
+			fs.rmSync(fixture.configDir, { recursive: true, force: true });
+			fs.rmSync(fixture.worktree, { recursive: true, force: true });
+		}
+	});
+
+	test("an unclaimed draft cannot veto or join the approval", async () => {
+		// The run may have saved a block the developer never saw — an abandoned
+		// experiment, or one on an application the stage lost since. Publishing the
+		// claimed documents must not re-decide that draft's scope in either
+		// direction (`CONC-106`).
+		const fixture = promoteStageFixture({ access: "read-only" });
+		const previous = process.env.AGENTIC_CODING_CONFIG_DIR;
+		try {
+			process.env.AGENTIC_CODING_CONFIG_DIR = fixture.configDir;
+			const claimed = stageBlockDocument();
+			const abandoned = stageBlockDocument({
+				id: "grid.request.cancel",
+				effects: ["write"],
+			});
+			for (const document of [claimed, abandoned])
+				saveStageBlockDraft({
+					dataRoot: fixture.scope.dataRoot,
+					workflowId: fixture.workflowId,
+					stage: "grid-int",
+					document,
+				});
+			appendStageBlockProof({
+				dataRoot: fixture.scope.dataRoot,
+				workflowId: fixture.workflowId,
+				document: claimed,
+				proof: {
+					stage: "grid-int",
+					runId: "run",
+					status: "passed",
+					at: new Date().toISOString(),
+					journalIds: [1],
+					evidenceIds: ["ev-1"],
+				},
+			});
+			const handler = promoteHandler(
+				fixture.worktree,
+				{
+					stageSystem: "grid-allocation",
+					stageTestReport: report({
+						blocksUsed: [
+							{ routeStepId: "R1", block: claimed.id, version: "1.0.0" },
+						],
+						blocksCreated: [
+							{
+								block: claimed.id,
+								version: "1.0.0",
+								digest: storedDigest(claimed),
+								routeStepId: "R1",
+							},
+						],
+						unblockedSteps: [],
+					}),
+				},
+				fixture.workflowId,
+			);
+			await expect(
+				Effect.runPromise(handler.execute(promoteEffect(fixture.workflowId))),
+			).resolves.toMatchObject({ promoted: [`${claimed.id}@1.0.0`] });
+			expect(
+				fs.existsSync(
+					approvedBlockPath(fixture.configDir, "grid-allocation", abandoned.id),
+				),
+			).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
+			fs.rmSync(fixture.configDir, { recursive: true, force: true });
+			fs.rmSync(fixture.worktree, { recursive: true, force: true });
+		}
+	});
+
+	test("an adjustment at the same version is published, not reported as already promoted", async () => {
+		// The recovery path answers "did this approval already land?" from the
+		// store. Matching the version alone answers yes for an adjustment that kept
+		// the version and changed the body — the reviewed document would then be
+		// dropped while the workflow reported it promoted (`SEC-005`, `CONC-105`,
+		// `QUALITY-002`).
+		const fixture = promoteStageFixture({});
+		const previous = process.env.AGENTIC_CODING_CONFIG_DIR;
+		try {
+			process.env.AGENTIC_CODING_CONFIG_DIR = fixture.configDir;
+			const original = stageBlockDocument();
+			const adjusted = stageBlockDocument({
+				title: "open one request and read its status",
+			});
+			const handlerFor = (document: StageDataBlockDocument) =>
+				promoteHandler(
+					fixture.worktree,
+					{
+						stageSystem: "grid-allocation",
+						stageTestReport: report({
+							blocksCreated: [
+								{
+									block: document.id,
+									version: document.version,
+									digest: storedDigest(document),
+									routeStepId: "R1",
+								},
+							],
+							unblockedSteps: [],
+						}),
+					},
+					fixture.workflowId,
+				);
+			const save = (document: StageDataBlockDocument) => {
+				saveStageBlockDraft({
+					dataRoot: fixture.scope.dataRoot,
+					workflowId: fixture.workflowId,
+					stage: "grid-int",
+					document,
+				});
+				appendStageBlockProof({
+					dataRoot: fixture.scope.dataRoot,
+					workflowId: fixture.workflowId,
+					document,
+					proof: {
+						stage: "grid-int",
+						runId: "run",
+						status: "passed",
+						at: new Date().toISOString(),
+						journalIds: [1],
+						evidenceIds: ["ev-1"],
+					},
+				});
+			};
+			// First run: the original document is published and the drafts removed.
+			save(original);
+			await expect(
+				Effect.runPromise(
+					handlerFor(original).execute(promoteEffect(fixture.workflowId)),
+				),
+			).resolves.toMatchObject({ promoted: [`${original.id}@1.0.0`] });
+			// A later run adjusts the body without bumping the version. With its
+			// draft still on disk the approval has not landed, so the effect must
+			// execute rather than report a recovery.
+			save(adjusted);
+			const handler = handlerFor(adjusted);
+			if (!handler.observe) throw new Error("promotion has no observe");
+			await expect(
+				Effect.runPromise(handler.observe(promoteEffect(fixture.workflowId))),
+			).resolves.toBeUndefined();
+			await expect(
+				Effect.runPromise(handler.execute(promoteEffect(fixture.workflowId))),
+			).resolves.toMatchObject({ promoted: [`${adjusted.id}@1.0.0`] });
+			expect(
+				JSON.parse(
+					fs.readFileSync(
+						approvedBlockPath(
+							fixture.configDir,
+							"grid-allocation",
+							adjusted.id,
+						),
+						"utf8",
+					),
+				),
+			).toMatchObject({ title: adjusted.title });
+			// And once the drafts are gone, a stale claim of the *old* body is not a
+			// recovery: the store holds a different document at that version.
+			save(original);
+			fs.rmSync(
+				path.dirname(
+					readStageBlockDrafts(fixture.scope.dataRoot, fixture.workflowId)
+						.drafts[0]?.file ?? "",
+				),
+				{ recursive: true, force: true },
+			);
+			await expect(
+				Effect.runPromise(
+					handlerFor(original).observe?.(promoteEffect(fixture.workflowId)) ??
+						Effect.succeed("missing"),
+				),
+			).resolves.toBeUndefined();
+		} finally {
+			if (previous === undefined) delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previous;
+			fs.rmSync(fixture.configDir, { recursive: true, force: true });
+			fs.rmSync(fixture.worktree, { recursive: true, force: true });
 		}
 	});
 

@@ -31,6 +31,7 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
 	AGENT_BROWSER_STAGE_BLOCKS_PATH,
 	AGENT_BROWSER_STAGE_FLOWS_PATH,
 	AGENT_BROWSER_STAGE_JOURNAL_PATH,
@@ -40,6 +41,7 @@ import {
 	AGENT_BROWSER_STAGE_WAIT_PATH,
 	AGENT_BROWSER_WAIT_PATH,
 } from "../server/protocol.ts";
+import { describeDataBlockOperations } from "../stage-blocks/data-block.ts";
 import {
 	ENVIRONMENT_OWNER_HEADER,
 	ENVIRONMENT_TOKEN_ENV,
@@ -139,6 +141,16 @@ function stageBlocksResult(value: unknown): Result {
 	if (record.mode === "compact" || record.mode === "full")
 		lines.push(`mode: ${record.mode}`);
 	if (typeof record.total === "number") lines.push(`total: ${record.total}`);
+	// A refused document is not a silent omission: the caller has to know that the
+	// catalog it just read is not the whole store (`USAB-003`).
+	if (Array.isArray(record.diagnostics))
+		for (const entry of record.diagnostics) {
+			const diagnostic = recordOf(entry);
+			if (diagnostic === undefined) continue;
+			lines.push(
+				`diagnostic: ${String(diagnostic.code)}${typeof diagnostic.id === "string" ? ` (${diagnostic.id})` : ""} ${String(diagnostic.message)}`,
+			);
+		}
 	lines.push("");
 	for (const entry of record.blocks) {
 		const block = recordOf(entry);
@@ -157,8 +169,33 @@ function stageBlocksResult(value: unknown): Result {
 			lines.push(`  requires: ${block.requires.join(", ")}`);
 		if (Array.isArray(block.provides) && block.provides.length > 0)
 			lines.push(`  provides: ${block.provides.join(", ")}`);
+		// Role is part of the matching rule the planner follows, and a data block
+		// authored for one role is refused for another (`USAB-102`). An empty list
+		// means any role, which is what the checked-in blocks declare.
+		if (Array.isArray(block.roles))
+			lines.push(
+				`  roles: ${block.roles.length === 0 ? "any" : block.roles.join(", ")}`,
+			);
 		if (block.idempotent === true) lines.push("  idempotent: yes");
 		if (block.internal === true) lines.push("  internal: yes");
+		// What the block promises, for both kinds: the postcondition belongs to a
+		// checked-in block too (`USAB-104`).
+		if (typeof block.postcondition === "string")
+			lines.push(`  postcondition: ${block.postcondition}`);
+		if (block.kind === "data") {
+			lines.push(
+				`  kind: data${block.status === "draft" ? " (draft: this run only)" : ""}`,
+			);
+			const document = recordOf(block.document);
+			if (Array.isArray(document?.operations)) {
+				const described = describeDataBlockOperations(
+					document.operations as never,
+					"    ",
+				);
+				lines.push("  operations:", ...described.slice(0, 24));
+				if (described.length > 24) lines.push("    … (truncated)");
+			}
+		}
 		if (recordOf(block.deprecated)) {
 			const deprecated = recordOf(block.deprecated);
 			lines.push(
@@ -445,6 +482,40 @@ function stageRunResult(value: unknown): Result {
 					`issue: ${String(problem.code)}${typeof problem.routeStepId === "string" ? ` (${problem.routeStepId})` : ""} ${String(problem.message)}`,
 				);
 		}
+	return text(lines.join("\n"));
+}
+
+/** A saved draft's one-paragraph receipt: what the block is, the digest a plan
+ * pins, and that review still has to promote it. */
+function stageBlockSaveResult(value: unknown): Result {
+	const record = recordOf(value);
+	if (record?.status !== "draft") return text(value);
+	const lines = [
+		`draft: ${String(record.id)}@${String(record.version)} ${String(record.app)} [${Array.isArray(record.effects) ? record.effects.join("+") : ""}]`,
+		`stage: ${String(record.stage)}`,
+		`digest: ${String(record.digest)}`,
+	];
+	if (recordOf(record.replaced) !== undefined)
+		lines.push(`replaced: ${String(recordOf(record.replaced)?.version)}`);
+	if (Array.isArray(record.proofs) && record.proofs.length > 0)
+		lines.push(
+			`proofs: ${record.proofs
+				.map((proof) => {
+					const entry = recordOf(proof);
+					return entry === undefined
+						? ""
+						: `${String(entry.status)}@${String(entry.at)}`;
+				})
+				.filter((line) => line !== "")
+				.join(", ")}`,
+		);
+	if (Array.isArray(record.warnings))
+		for (const warning of record.warnings)
+			if (typeof warning === "string") lines.push(`warning: ${warning}`);
+	lines.push(
+		"",
+		"Run it with stage_run (the draft is executable in this run only); review approval promotes it into the shared store.",
+	);
 	return text(lines.join("\n"));
 }
 
@@ -1119,6 +1190,17 @@ const StageRunParameters = Type.Object({
 	),
 });
 
+const StageBlockSaveParameters = Type.Object({
+	document: Type.Unknown({
+		description:
+			'The block as a `format: 1` JSON document: id, version, title, description, app, roles, effects, idempotent, requires, provides, params, returns, examples, postcondition and operations. Operations are `step`/`optional` groups of goto, click, fill, type, press, select, waitFor, wait, expectVisible, expectText, capture and read; a value is a bounded string, `{{ args.<name> }}` interpolation or `{ secret: "<name>" }`.',
+	}),
+	// The draft's plan id and revision are the engine's: `stage_block_save` reads
+	// them from the workflow's own pinned plan, so there is no parameter for them
+	// (`OSV-020`).
+	session: SessionParameter,
+});
+
 const StageFlowsParameters = Type.Object({
 	stage: Type.Optional(
 		Type.String({
@@ -1625,7 +1707,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 			defineTool({
 				name: "stage_blocks",
 				description: [
-					"List the reviewed, typed stage blocks this build can execute. The list is compact (id, version, app, effects, title); pass one `id` to get its full parameter/return schema, validated examples and source digest before planning it.",
+					"List the reviewed, typed stage blocks this build can execute. The default list is compact (id, version, app, effects, title, roles, requires, provides); `roles: any` means the block is usable for every role. Pass one `id`, or `full: true`, for the postcondition, the parameter/return schema, validated examples, the source digest and — for a `kind: data` block — its operations, which is what you need to decide whether a block matches a route step, to run it or to adjust it.",
 					"Use this instead of inventing browser steps from scratch: a plan step names exactly one block id and its JSON arguments. Filter by `app`, `effect` or `query` when the catalog is large.",
 				].join(" "),
 				parameters: StageBlocksParameters,
@@ -1686,6 +1768,34 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						);
 					} catch (error) {
 						return failure(`stage_run: ${message(error)}`);
+					}
+				},
+			}),
+			defineTool({
+				name: "stage_block_save",
+				description: [
+					"Save a stage block you found while exploring as a reviewed `format: 1` JSON document — a draft of this run. No builder step or code load is involved: a draft is executable by `stage_run` here and becomes shared when the developer approves the review report that lists it.",
+					'Author from what the stage did: one `step` per intent, at least one `expectVisible`/`expectText`, `{{ args.<name> }}` for a declared parameter and `{ secret: "NAME" }` for a declared credential — never a literal credential, a raw URL, a script or an expression.',
+					"The call is refused outside stage.execute, without a stage-bound session, for an application or role the stage does not declare, for a checked-in id, for a `destructive` effect, and for a `write` document on a read-only stage. A breaking change to an approved block needs a major version bump.",
+				].join(" "),
+				parameters: StageBlockSaveParameters,
+				execute: async (args, api) => {
+					const run = lookup(api.conversationId);
+					if (!run) return failure("stage_block_save: run context unavailable");
+					try {
+						return stageBlockSaveResult(
+							await call(run.env, "POST", AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+								timeoutMs: READ_TIMEOUT_MS,
+								body: {
+									document: args.document,
+									...(args.session === undefined
+										? {}
+										: { session: args.session }),
+								},
+							}),
+						);
+					} catch (error) {
+						return failure(`stage_block_save: ${message(error)}`);
 					}
 				},
 			}),

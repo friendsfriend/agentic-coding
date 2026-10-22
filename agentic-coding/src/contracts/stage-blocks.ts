@@ -77,6 +77,39 @@ export const stageRunRequestSchema = Schema.Struct({
 });
 export type StageRunRequest = typeof stageRunRequestSchema.Type;
 
+export const stageBlockSaveRequestSchema = Schema.Struct({
+	/** The reviewed JSON document (`StageDataBlockDocument`). Its shape is owned
+	 * by the pure validator, which reports bounded issues instead of failing a
+	 * transport decode. */
+	document: Schema.Unknown,
+	session: Schema.optional(text(64)),
+	// The draft's plan id and revision are not request fields: the engine derives
+	// them from the workflow's pinned plan and its own revision, so a tester can
+	// never label a draft with a plan the run did not have (`OSV-017`,
+	// `OSV-020`).
+});
+export type StageBlockSaveRequest = typeof stageBlockSaveRequestSchema.Type;
+
+export interface StageBlockSaveResponse {
+	readonly status: "draft";
+	readonly stage: string;
+	readonly id: string;
+	readonly version: string;
+	readonly app: string;
+	readonly effects: readonly string[];
+	readonly digest: string;
+	/** The approved version this draft replaces, when it replaces one. */
+	readonly replaced?: { readonly version: string };
+	/** The execution proofs this run already holds for the draft. */
+	readonly proofs: readonly {
+		readonly stage: string;
+		readonly runId: string;
+		readonly status: "passed" | "failed";
+		readonly at: string;
+	}[];
+	readonly warnings?: readonly string[];
+}
+
 export interface StageBlockCatalogEntry {
 	readonly id: string;
 	readonly version: string;
@@ -97,6 +130,12 @@ export interface StageBlockCatalogEntry {
 	readonly returns?: Readonly<Record<string, unknown>>;
 	readonly examples?: readonly Readonly<Record<string, unknown>>[];
 	readonly contractTest?: string;
+	/** `data` is a reviewed JSON document; a draft lives in its authoring
+	 * workflow's store until review promotes it. */
+	readonly kind?: "checked-in" | "data";
+	readonly status?: "draft";
+	readonly postcondition?: string;
+	readonly document?: Readonly<Record<string, unknown>>;
 	readonly digest?: string;
 }
 
@@ -105,6 +144,13 @@ export interface StageBlocksResponse {
 	readonly mode: "compact" | "full";
 	readonly blocks: readonly StageBlockCatalogEntry[];
 	readonly total: number;
+	/** Store diagnostics: an approved or draft document that was refused. The
+	 * catalog is what could be loaded, never a silent partial success. */
+	readonly diagnostics?: readonly {
+		readonly code: string;
+		readonly message: string;
+		readonly id?: string;
+	}[];
 }
 
 export interface StageBlockPlanIssueResponse {

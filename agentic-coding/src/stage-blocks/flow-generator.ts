@@ -24,6 +24,10 @@ export interface GenerateFlowOptions {
 	readonly source: FlowSource;
 	readonly registry: StageBlockRegistry;
 	readonly secretValues?: readonly string[];
+	/** Blocks that exist only as this workflow's drafts. A flow never pins one:
+	 * replay reads the approved store, so a draft would make the flow
+	 * unexecutable the moment the run closes (`OSV-003`). */
+	readonly draftIds?: ReadonlySet<string>;
 	/** `false` is only for a unit test of rendering; a real save type-checks. */
 	readonly typeCheck?: boolean;
 	readonly format?: boolean;
@@ -47,6 +51,27 @@ function issue(
 	field?: string,
 ): FlowGenerationIssue {
 	return { code, message, ...(field === undefined ? {} : { field }) };
+}
+
+/** Write one sidecar document per data block this flow executes, so a replay
+ * reads exactly the reviewed document its manifest pins instead of whatever the
+ * live store holds at run time. */
+function writeFlowBlockDocuments(directory: string, source: FlowSource): void {
+	const dataBlocks = source.steps
+		.map((step) => step.definition)
+		.filter((definition) => definition.data !== undefined);
+	if (dataBlocks.length === 0) return;
+	const blocksDirectory = path.join(directory, "blocks");
+	fs.mkdirSync(blocksDirectory, { recursive: true });
+	for (const definition of dataBlocks) {
+		const document = definition.data;
+		if (document === undefined) continue;
+		fs.writeFileSync(
+			path.join(blocksDirectory, `${definition.id}.json`),
+			`${JSON.stringify(document, null, "\t")}\n`,
+			{ mode: 0o644 },
+		);
+	}
 }
 
 function containsSecret(value: JsonValue, secrets: readonly string[]): boolean {
@@ -110,34 +135,46 @@ export async function generateFlow(
 		);
 	for (const step of source.steps) {
 		const app = step.definition.app;
-		if (app === "*")
+		if (options.draftIds?.has(step.definition.id))
 			issues.push(
 				issue(
-					"flow-cross-app-block",
-					`block ${step.definition.id} is cross-application and has no application barrel`,
+					"flow-block-draft",
+					`block ${step.definition.id} is only a draft of this run; approve the report so review promotes it, then save the flow`,
 					step.id,
 				),
 			);
-		else if (
-			!fs.existsSync(
-				path.join(root, "src/stage-blocks/blocks", app, "index.ts"),
+		// A data block is interpreted from this flow's own sidecar document; it
+		// needs neither an application barrel nor a barrel export.
+		if (step.definition.data === undefined) {
+			if (app === "*")
+				issues.push(
+					issue(
+						"flow-cross-app-block",
+						`block ${step.definition.id} is cross-application and has no application barrel`,
+						step.id,
+					),
+				);
+			else if (
+				!fs.existsSync(
+					path.join(root, "src/stage-blocks/blocks", app, "index.ts"),
+				)
 			)
-		)
-			issues.push(
-				issue(
-					"flow-block-barrel",
-					`block ${step.definition.id} has no barrel at src/stage-blocks/blocks/${app}/index.ts`,
-					step.id,
-				),
-			);
-		if (step.definition.exportName === undefined)
-			issues.push(
-				issue(
-					"flow-export-name",
-					`block ${step.definition.id} has no exportName for the generated import`,
-					step.id,
-				),
-			);
+				issues.push(
+					issue(
+						"flow-block-barrel",
+						`block ${step.definition.id} has no barrel at src/stage-blocks/blocks/${app}/index.ts`,
+						step.id,
+					),
+				);
+			if (step.definition.exportName === undefined)
+				issues.push(
+					issue(
+						"flow-export-name",
+						`block ${step.definition.id} has no exportName for the generated import`,
+						step.id,
+					),
+				);
+		}
 		if (containsSecret(step.args, options.secretValues ?? []))
 			issues.push(
 				issue(
@@ -244,8 +281,38 @@ export async function generateFlow(
 		existingManifest.manifest.specHash === specHash
 	) {
 		fs.rmSync(tempPath, { force: true });
+		writeFlowBlockDocuments(directory, source);
+		// The spec is unchanged, but a pinned document may have changed (an
+		// in-place edit at the same version). Refresh the manifest anyway: an
+		// eligibility check compares the recorded digest against the store, and a
+		// stale one would keep a re-saved flow permanently ineligible
+		// (`QUALITY-004`).
+		const refreshed = buildFlowManifest(source, registry, specHash);
+		if (
+			refreshed.manifest !== undefined &&
+			JSON.stringify(refreshed.manifest) !==
+				JSON.stringify(existingManifest.manifest)
+		) {
+			fs.writeFileSync(
+				manifestPath,
+				`${JSON.stringify(refreshed.manifest, null, "\t")}\n`,
+				{ mode: 0o644 },
+			);
+			if (options.format !== false)
+				run(
+					[
+						"bunx",
+						"biome",
+						"check",
+						"--write",
+						"--linter-enabled=false",
+						manifestPath,
+					],
+					root,
+				);
+		}
 		return {
-			manifest: existingManifest.manifest,
+			manifest: refreshed.manifest ?? existingManifest.manifest,
 			spec: fs.existsSync(specPath) ? fs.readFileSync(specPath, "utf8") : spec,
 			specPath: specRelative,
 			manifestPath: manifestRelative,
@@ -336,6 +403,7 @@ export async function generateFlow(
 		}
 	}
 	const manifestSource = fs.readFileSync(tempManifestPath, "utf8");
+	writeFlowBlockDocuments(directory, source);
 	fs.writeFileSync(specPath, spec, { mode: 0o644 });
 	fs.writeFileSync(manifestPath, manifestSource, { mode: 0o644 });
 	fs.rmSync(tempPath, { force: true });

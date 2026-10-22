@@ -324,6 +324,9 @@ export function viewFromRows(
 			...(snapshot.metadata.stageTestReportMarkdown !== undefined
 				? { stageTestReportMarkdown: snapshot.metadata.stageTestReportMarkdown }
 				: {}),
+			...(snapshot.metadata.stagePlanBlocks !== undefined
+				? { stagePlanBlocks: snapshot.metadata.stagePlanBlocks }
+				: {}),
 			createdAt: snapshot.metadata.createdAt,
 			updatedAt: snapshot.metadata.updatedAt,
 			...(snapshot.metadata.selectedPreset

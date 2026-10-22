@@ -2511,9 +2511,15 @@ export class WorkflowEngine {
 		// not launch the replacement while the old canonical pane can still live.
 		// The optional `kind` scope narrows the same ready set to one effect kind
 		// (the delete path's owner-bound teardown) instead of a second query.
+		// `workspace.cleanup` is likewise barred behind a live `stage.blocks.promote`
+		// row: cleanup removes the run's block drafts, and publishing them is that
+		// row's only input, so a claim pass that skipped it (a busy repository, a
+		// `--no-drain` approval) must not lose the reviewed documents. A row that
+		// is already `failed`/`expired` is terminal — the promotion reported its
+		// refusal — so it does not hold the worktree forever (`CONC-107`).
 		const rows = db
 			.query(
-				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?))${kind ? " AND ready.kind=?" : ""} AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid`,
+				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?))${kind ? " AND ready.kind=?" : ""} AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='workspace.cleanup' AND EXISTS (SELECT 1 FROM workflow_outbox AS blocks WHERE blocks.workflow_id=ready.workflow_id AND blocks.kind='stage.blocks.promote' AND blocks.status NOT IN ('completed','failed','expired'))) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid`,
 			)
 			.all(
 				...((kind

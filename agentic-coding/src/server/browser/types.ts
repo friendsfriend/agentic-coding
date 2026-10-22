@@ -231,6 +231,12 @@ export interface DriverPage {
 		value: string,
 		timeoutMs: number,
 	): Promise<void>;
+	/** Type key by key into an already-focusable element, with a bounded delay. */
+	pressSequentially(
+		target: DriverActionTarget,
+		text: string,
+		options: { readonly delayMs: number; readonly timeoutMs: number },
+	): Promise<void>;
 	press(
 		target: DriverActionTarget,
 		key: string,

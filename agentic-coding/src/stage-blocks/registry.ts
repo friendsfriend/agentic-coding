@@ -7,6 +7,7 @@ import { pilotBlocks } from "./blocks/pilot.ts";
 import {
 	type BlockDefinition,
 	type BlockMetadata,
+	blockDigest,
 	blockMetadata,
 } from "./define-block.ts";
 
@@ -27,6 +28,12 @@ export interface StageBlockRegistry {
 	readonly entries: readonly BlockMetadata[];
 	get(id: string): BlockDefinition | undefined;
 	getVersion(id: string, version: string): BlockDefinition | undefined;
+	/** The digest `blockMetadata` publishes for a block id. The registry hashes
+	 * each block once, so a caller that only needs the identity — the flow
+	 * manifest gate compares a pinned digest, it never executes the block — does
+	 * not re-hash a function source or a whole data-block document on every
+	 * check (`PERF-102`). */
+	digest(id: string): string | undefined;
 }
 
 function compareVersions(left: string, right: string): number {
@@ -42,6 +49,9 @@ function compareVersions(left: string, right: string): number {
 function buildRegistry(blocks: readonly BlockDefinition[]): StageBlockRegistry {
 	const byId = new Map<string, BlockDefinition>();
 	const byVersion = new Map<string, BlockDefinition>();
+	// One hash per block, computed once: `blockMetadata` publishes this digest and
+	// every gate that compares a pinned digest reads it back from here.
+	const digests = new Map<string, string>();
 	for (const block of blocks) {
 		if (byId.has(block.id))
 			throw new StageBlockRegistryError(
@@ -50,6 +60,7 @@ function buildRegistry(blocks: readonly BlockDefinition[]): StageBlockRegistry {
 			);
 		byId.set(block.id, block);
 		byVersion.set(`${block.id}@${block.version}`, block);
+		digests.set(block.id, blockDigest(block));
 	}
 	for (const block of blocks) {
 		const replacement = block.deprecated?.replacementId;
@@ -66,8 +77,15 @@ function buildRegistry(blocks: readonly BlockDefinition[]): StageBlockRegistry {
 		all: Object.freeze(sorted),
 		public: Object.freeze(sorted.filter((block) => block.internal !== true)),
 		internal: Object.freeze(sorted.filter((block) => block.internal === true)),
-		entries: Object.freeze(sorted.map((block) => blockMetadata(block))),
+		// One hash per block, shared by the digest accessor and the published
+		// projection (`PERF-201`).
+		entries: Object.freeze(
+			sorted.map((block) =>
+				blockMetadata(block, digests.get(block.id) ?? blockDigest(block)),
+			),
+		),
 		get: (id: string) => byId.get(id),
+		digest: (id: string) => digests.get(id),
 		getVersion: (id: string, version: string) => {
 			const exact = byVersion.get(`${id}@${version}`);
 			if (exact !== undefined) return exact;

@@ -20,6 +20,7 @@ import {
 	MAX_API_RESPONSE_BYTES,
 	MAX_STAGE_API_REQUEST_BYTES,
 } from "../contracts/stages.ts";
+import { compileDataBlock, validateDataBlock } from "./data-block.ts";
 import type {
 	BlockAssertion,
 	BlockDefinition,
@@ -29,6 +30,7 @@ import type {
 	StageApiResponse,
 	StageContext,
 } from "./define-block.ts";
+import { blockDigest } from "./define-block.ts";
 import type { FlowManifest } from "./flow.ts";
 import { canonicalInputsHash, parseFlowManifest } from "./flow.ts";
 import type { JsonValue } from "./schema.ts";
@@ -88,6 +90,12 @@ export interface StageRehearsal {
 		block: BlockDefinition<Args, Outputs>,
 		args: Args,
 	): Promise<Outputs>;
+	/** Run one route step whose block is a reviewed data document: the fixture
+	 * loads the flow's own sidecar copy, so no barrel import exists. */
+	runData(
+		routeStepId: string,
+		args: Readonly<Record<string, JsonValue>>,
+	): Promise<Record<string, JsonValue>>;
 }
 
 const PLAYWRIGHT_LOCATOR = Symbol("stage.playwright-locator");
@@ -99,6 +107,11 @@ function locatorAdapter(locator: Locator): AdaptedLocator {
 		[PLAYWRIGHT_LOCATOR]: locator,
 		click: () => locator.click(),
 		fill: (value) => locator.fill(value),
+		type: (value, options) =>
+			locator.pressSequentially(
+				value,
+				options?.delayMs === undefined ? {} : { delay: options.delayMs },
+			),
 		press: (key) => locator.press(key),
 		selectOption: async (values) => {
 			await locator.selectOption(values);
@@ -110,7 +123,141 @@ function locatorAdapter(locator: Locator): AdaptedLocator {
 	};
 }
 
-function pageAdapter(page: Page): BlockPage {
+/** The route step that was running when the test ended, if any. */
+export interface OpenRoute {
+	readonly index: number;
+	readonly routeStepId: string;
+	readonly block: string;
+	readonly version: string;
+	readonly subStep?: string;
+}
+
+/** The event a replay writes when the test ended without a recorded failure.
+ * A Playwright timeout *between* sub-steps — the fixture is disposed before any
+ * `ctx.step` catch runs — would otherwise be reported as a pass. */
+export function unrecordedFailure(
+	status: string | undefined,
+	open: OpenRoute | undefined,
+	durationMs: number,
+): RehearsalEvent | undefined {
+	// No verdict yet (a fixture that never reached `use`) or a pass: nothing to
+	// synthesise. A non-zero exit with a reported pass is caught again by the
+	// replay process, so an unknown status never silently claims success there.
+	if (status === undefined || status === "passed") return undefined;
+	const where =
+		open === undefined
+			? "before any route step started"
+			: `${open.routeStepId} (${open.block}@${open.version})${open.subStep === undefined ? "" : ` at ${open.subStep}`}`;
+	const reason = `the replay ${status === "timedOut" ? "timed out" : `ended as ${status}`} without a recorded failure at ${where}`;
+	return {
+		index: open?.index ?? 0,
+		routeStepId: open?.routeStepId ?? "(none)",
+		block: open?.block ?? "(none)",
+		version: open?.version ?? "0.0.0",
+		subStep: open?.subStep ?? "(none)",
+		status: "failed",
+		durationMs,
+		error: reason,
+		evidence: [],
+	};
+}
+
+/** The result document a replay writes, assembled from what the fixture recorded.
+ * Pure and exported as a test seam: the failure synthesis below is exactly the
+ * half that decides whether a broken replay claims a pass (`TQV-006`). */
+export function rehearsalOutcome(input: {
+	readonly manifest: FlowManifest;
+	readonly inputsHash: string;
+	readonly startedAt: string;
+	readonly durationMs: number;
+	/** Playwright's own verdict for the run (`testInfo.status`). */
+	readonly status: string | undefined;
+	readonly events: readonly RehearsalEvent[];
+	readonly steps: readonly RehearsalStepResult[];
+	readonly openRoute?: OpenRoute;
+}): RehearsalResult {
+	const events = [...input.events];
+	const stepResults = [...input.steps];
+	// A block is the unit of failure, not a sub-step event: a data block may
+	// swallow a failed event inside an `optional` group and still pass, and the
+	// events of that group must not fail the replay (`QUALITY-001`).
+	let failedStep = stepResults.find((step) => step.status === "failed");
+	// A test that ended without a failed block — a Playwright timeout between
+	// sub-steps is the common case — must not be reported as a pass. Name the
+	// step it stopped in and write it as the failure.
+	if (failedStep === undefined) {
+		const synthesised = unrecordedFailure(
+			input.status,
+			input.openRoute,
+			input.durationMs,
+		);
+		if (synthesised !== undefined) {
+			const reason =
+				synthesised.error ?? "the replay ended without a recorded failure";
+			events.push(synthesised);
+			const openRoute = input.openRoute;
+			if (
+				openRoute !== undefined &&
+				!stepResults.some((step) => step.routeStepId === openRoute.routeStepId)
+			) {
+				const added: RehearsalStepResult = {
+					index: openRoute.index,
+					routeStepId: openRoute.routeStepId,
+					block: openRoute.block,
+					version: openRoute.version,
+					app: "(none)",
+					status: "failed",
+					durationMs: input.durationMs,
+					evidence: [],
+					error: reason,
+				};
+				stepResults.push(added);
+				failedStep = added;
+			}
+		}
+	}
+	const failed =
+		failedStep === undefined
+			? undefined
+			: (events
+					.filter(
+						(event) =>
+							event.routeStepId === failedStep?.routeStepId &&
+							event.status === "failed",
+					)
+					.at(-1) ??
+				(failedStep.error === undefined
+					? undefined
+					: {
+							index: failedStep.index,
+							routeStepId: failedStep.routeStepId,
+							status: "failed" as const,
+							error: failedStep.error,
+						}));
+	const failedReason = failedStep?.error ?? failed?.error;
+	return {
+		version: 1,
+		flowId: input.manifest.flowId,
+		planId: input.manifest.generatedFrom.planId,
+		...(input.manifest.generatedFrom.revision === undefined
+			? {}
+			: { revision: input.manifest.generatedFrom.revision }),
+		stage: input.manifest.stage,
+		routeHash: input.manifest.routeHash,
+		inputsHash: input.inputsHash,
+		status: failedStep === undefined ? "passed" : "failed",
+		startedAt: input.startedAt,
+		durationMs: input.durationMs,
+		steps: stepResults,
+		events,
+		...(failedReason === undefined ? {} : { error: failedReason }),
+	};
+}
+
+/** The allow-listed page facade over a Playwright page. Exported as a test seam:
+ * `type` has to reach `pressSequentially` (a real key-by-key typing) rather than
+ * `fill`, which is what a `type` operation means. */
+export function pageAdapter(page: Page): BlockPage {
 	return {
 		goto: async (url) => {
 			await page.goto(url);
@@ -154,12 +301,15 @@ function readJsonFile<T>(file: string): T {
 	return JSON.parse(fs.readFileSync(file, "utf8")) as T;
 }
 
-function manifestFor(testInfo: TestInfo): FlowManifest {
+function manifestFilePath(testInfo: TestInfo): string {
 	const configured = process.env.STAGE_FLOW_MANIFEST;
-	const file =
-		configured === undefined || configured === ""
-			? path.join(path.dirname(testInfo.file), "flow.json")
-			: path.resolve(configured);
+	return configured === undefined || configured === ""
+		? path.join(path.dirname(testInfo.file), "flow.json")
+		: path.resolve(configured);
+}
+
+function manifestFor(testInfo: TestInfo): FlowManifest {
+	const file = manifestFilePath(testInfo);
 	const parsed = parseFlowManifest(readJsonFile<unknown>(file));
 	if (parsed.manifest === undefined || parsed.issues.length > 0)
 		throw new Error(
@@ -356,6 +506,10 @@ export const test = base.extend<{ stage: StageRehearsal }>({
 		let captureCount = 0;
 		const startedAt = new Date();
 		const start = Date.now();
+		// The route step that is currently running, so a test that ends without a
+		// recorded failure (a Playwright timeout between sub-steps) can still name
+		// the step it died on instead of claiming a pass.
+		let openRoute: OpenRoute | undefined;
 		let openStep:
 			| {
 					routeStepId: string;
@@ -366,188 +520,276 @@ export const test = base.extend<{ stage: StageRehearsal }>({
 					evidence: string[];
 			  }
 			| undefined;
+		const execute = async <
+			Args extends Record<string, JsonValue>,
+			Outputs extends Record<string, JsonValue>,
+		>(
+			routeStepId: string,
+			block: BlockDefinition<Args, Outputs>,
+			args: Args,
+		): Promise<Outputs> => {
+			const routeIndex = manifest.routeSteps.findIndex(
+				(step) => step.routeStepId === routeStepId,
+			);
+			const route = manifest.routeSteps[routeIndex];
+			if (route === undefined)
+				throw new Error(`route step ${routeStepId} is not in the manifest`);
+			if (block.id !== route.block)
+				throw new Error(
+					`route step ${routeStepId} is ${route.block}, not ${block.id}`,
+				);
+			if (block.version !== manifest.blockVersions[block.id])
+				throw new Error(
+					`block ${block.id}@${block.version} drifted from ${manifest.blockVersions[block.id]}`,
+				);
+			const appUrl = urlFor(
+				block.app === "*" ? (manifest.applications[0] ?? "*") : block.app,
+			);
+			const stepEvidence: string[] = [];
+			const stepStarted = Date.now();
+			openRoute = {
+				index: routeIndex,
+				routeStepId,
+				block: block.id,
+				version: block.version,
+			};
+			const context: StageContext = {
+				page: pageAdapter(page),
+				expect: assert,
+				app: block.app === "*" ? (manifest.applications[0] ?? "") : block.app,
+				...(role === "" ? {} : { role }),
+				stage: manifest.stage,
+				appUrl,
+				run: {
+					planId: manifest.generatedFrom.planId,
+					...(manifest.generatedFrom.revision === undefined
+						? {}
+						: { revision: manifest.generatedFrom.revision }),
+					flowId: manifest.flowId,
+					routeStepId,
+					blockId: block.id,
+					blockVersion: block.version,
+					index: routeIndex,
+				},
+				api: apiClient(request, role, manifest),
+				step: async (label, fn, details) => {
+					openStep = {
+						routeStepId,
+						block: block.id,
+						version: block.version,
+						subStep: label,
+						started: Date.now(),
+						evidence: [],
+					};
+					openRoute = {
+						index: routeIndex,
+						routeStepId,
+						block: block.id,
+						version: block.version,
+						subStep: label,
+					};
+					const stepStart = Date.now();
+					try {
+						return await test.step(label, async () => {
+							try {
+								const value = await fn();
+								const detail =
+									typeof details === "function" ? details() : details;
+								events.push({
+									index: routeIndex,
+									routeStepId,
+									block: block.id,
+									version: block.version,
+									url: page.url(),
+									subStep: label,
+									status: "passed",
+									durationMs: Date.now() - stepStart,
+									evidence: [...(openStep?.evidence ?? [])],
+									...(detail?.captures === undefined
+										? {}
+										: { captures: detail.captures }),
+									...(detail?.knowledge === undefined
+										? {}
+										: { knowledge: detail.knowledge }),
+								});
+								return value;
+							} catch (error) {
+								events.push({
+									index: routeIndex,
+									routeStepId,
+									block: block.id,
+									version: block.version,
+									subStep: label,
+									status: "failed",
+									durationMs: Date.now() - stepStart,
+									error: error instanceof Error ? error.message : String(error),
+									evidence: [...(openStep?.evidence ?? [])],
+								});
+								throw error;
+							}
+						});
+					} finally {
+						openStep = undefined;
+					}
+				},
+				capture: async (label) => {
+					if (openStep === undefined)
+						throw new Error(
+							`capture "${label}" must happen inside a ctx.step sub-step`,
+						);
+					const dir = evidenceDir(testInfo);
+					fs.mkdirSync(dir, { recursive: true });
+					captureCount += 1;
+					const file = path.join(
+						dir,
+						`${String(captureCount).padStart(3, "0")}-${label.replace(/[^A-Za-z0-9]+/g, "-").slice(0, 60)}.jpg`,
+					);
+					await page.screenshot({ path: file, type: "jpeg" });
+					const id = path.basename(file);
+					openStep.evidence.push(id);
+					stepEvidence.push(id);
+					return id;
+				},
+				secret: (name) => {
+					if (!/^[A-Z][A-Z0-9_]*$/.test(name))
+						throw new Error(`secret name ${name} is not an environment name`);
+					if (!secretNames.has(name))
+						throw new Error(
+							`secret ${name} is not a declared stage credential of this replay`,
+						);
+					const value = process.env[name];
+					if (value === undefined || value === "")
+						throw new Error(`secret ${name} is not configured`);
+					return value;
+				},
+			};
+			try {
+				const outputs = await block.run(context, args);
+				stepResults.push({
+					index: routeIndex,
+					routeStepId,
+					block: block.id,
+					version: block.version,
+					app: block.app,
+					status: "passed",
+					durationMs: Date.now() - stepStarted,
+					outputs,
+					evidence: [...stepEvidence],
+				});
+				return outputs;
+			} catch (error) {
+				if (testInfo.status === "passed") testInfo.status = "failed";
+				stepResults.push({
+					index: routeIndex,
+					routeStepId,
+					block: block.id,
+					version: block.version,
+					app: block.app,
+					status: "failed",
+					durationMs: Date.now() - stepStarted,
+					evidence: [...stepEvidence],
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}
+		};
 		const stage: StageRehearsal = {
 			input<T = JsonValue>(name: string): T {
 				if (!Object.hasOwn(inputs, name))
 					throw new Error(`flow input ${name} is not declared`);
 				return inputs[name] as T;
 			},
-			async run(routeStepId, block, args) {
-				const routeIndex = manifest.routeSteps.findIndex(
-					(step) => step.routeStepId === routeStepId,
-				);
-				const route = manifest.routeSteps[routeIndex];
-				if (route === undefined)
-					throw new Error(`route step ${routeStepId} is not in the manifest`);
-				if (block.id !== route.block)
-					throw new Error(
-						`route step ${routeStepId} is ${route.block}, not ${block.id}`,
-					);
-				if (block.version !== manifest.blockVersions[block.id])
-					throw new Error(
-						`block ${block.id}@${block.version} drifted from ${manifest.blockVersions[block.id]}`,
-					);
-				const appUrl = urlFor(
-					block.app === "*" ? (manifest.applications[0] ?? "*") : block.app,
-				);
-				const stepEvidence: string[] = [];
-				const stepStarted = Date.now();
-				const context: StageContext = {
-					page: pageAdapter(page),
-					expect: assert,
-					app: block.app === "*" ? (manifest.applications[0] ?? "") : block.app,
-					...(role === "" ? {} : { role }),
-					stage: manifest.stage,
-					appUrl,
-					run: {
-						planId: manifest.generatedFrom.planId,
-						...(manifest.generatedFrom.revision === undefined
-							? {}
-							: { revision: manifest.generatedFrom.revision }),
-						flowId: manifest.flowId,
-						routeStepId,
-						blockId: block.id,
-						blockVersion: block.version,
-						index: routeIndex,
-					},
-					api: apiClient(request, role, manifest),
-					step: async (label, fn, details) => {
-						openStep = {
-							routeStepId,
-							block: block.id,
-							version: block.version,
-							subStep: label,
-							started: Date.now(),
-							evidence: [],
-						};
-						const stepStart = Date.now();
-						try {
-							return await test.step(label, async () => {
-								try {
-									const value = await fn();
-									const detail =
-										typeof details === "function" ? details() : details;
-									events.push({
-										index: routeIndex,
-										routeStepId,
-										block: block.id,
-										version: block.version,
-										url: page.url(),
-										subStep: label,
-										status: "passed",
-										durationMs: Date.now() - stepStart,
-										evidence: [...(openStep?.evidence ?? [])],
-										...(detail?.captures === undefined
-											? {}
-											: { captures: detail.captures }),
-										...(detail?.knowledge === undefined
-											? {}
-											: { knowledge: detail.knowledge }),
-									});
-									return value;
-								} catch (error) {
-									events.push({
-										index: routeIndex,
-										routeStepId,
-										block: block.id,
-										version: block.version,
-										subStep: label,
-										status: "failed",
-										durationMs: Date.now() - stepStart,
-										error:
-											error instanceof Error ? error.message : String(error),
-										evidence: [...(openStep?.evidence ?? [])],
-									});
-									throw error;
-								}
-							});
-						} finally {
-							openStep = undefined;
-						}
-					},
-					capture: async (label) => {
-						if (openStep === undefined)
-							throw new Error(
-								`capture "${label}" must happen inside a ctx.step sub-step`,
-							);
-						const dir = evidenceDir(testInfo);
-						fs.mkdirSync(dir, { recursive: true });
-						captureCount += 1;
-						const file = path.join(
-							dir,
-							`${String(captureCount).padStart(3, "0")}-${label.replace(/[^A-Za-z0-9]+/g, "-").slice(0, 60)}.jpg`,
-						);
-						await page.screenshot({ path: file, type: "jpeg" });
-						const id = path.basename(file);
-						openStep.evidence.push(id);
-						stepEvidence.push(id);
-						return id;
-					},
-					secret: (name) => {
-						if (!/^[A-Z][A-Z0-9_]*$/.test(name))
-							throw new Error(`secret name ${name} is not an environment name`);
-						if (!secretNames.has(name))
-							throw new Error(
-								`secret ${name} is not a declared stage credential of this replay`,
-							);
-						const value = process.env[name];
-						if (value === undefined || value === "")
-							throw new Error(`secret ${name} is not configured`);
-						return value;
-					},
-				};
-				try {
-					const outputs = await block.run(context, args);
-					stepResults.push({
-						index: routeIndex,
-						routeStepId,
-						block: block.id,
-						version: block.version,
-						app: block.app,
-						status: "passed",
-						durationMs: Date.now() - stepStarted,
-						outputs,
-						evidence: [...stepEvidence],
-					});
-					return outputs;
-				} catch (error) {
-					if (testInfo.status === "passed") testInfo.status = "failed";
-					stepResults.push({
-						index: routeIndex,
-						routeStepId,
-						block: block.id,
-						version: block.version,
-						app: block.app,
-						status: "failed",
-						durationMs: Date.now() - stepStarted,
-						evidence: [...stepEvidence],
-						error: error instanceof Error ? error.message : String(error),
-					});
-					throw error;
-				}
+			async run<
+				Args extends Record<string, JsonValue>,
+				Outputs extends Record<string, JsonValue>,
+			>(
+				routeStepId: string,
+				block: BlockDefinition<Args, Outputs>,
+				args: Args,
+			) {
+				return (await execute(routeStepId, block, args)) as Outputs;
+			},
+			async runData(routeStepId, args) {
+				const pinned = pinnedDataBlock({
+					manifest,
+					directory: path.dirname(manifestFilePath(testInfo)),
+					routeStepId,
+				});
+				return await execute(routeStepId, pinned, args);
 			},
 		};
 		await use(stage);
-		const durationMs = Date.now() - start;
-		const failed = events.find((event) => event.status === "failed");
-		writeResult(testInfo, {
-			version: 1,
-			flowId: manifest.flowId,
-			planId: manifest.generatedFrom.planId,
-			...(manifest.generatedFrom.revision === undefined
-				? {}
-				: { revision: manifest.generatedFrom.revision }),
-			stage: manifest.stage,
-			routeHash: manifest.routeHash,
-			inputsHash,
-			status: failed === undefined ? "passed" : "failed",
-			startedAt: startedAt.toISOString(),
-			durationMs,
-			steps: stepResults,
-			events,
-			...(failed?.error === undefined ? {} : { error: failed.error }),
-		});
+		writeResult(
+			testInfo,
+			rehearsalOutcome({
+				manifest,
+				inputsHash,
+				startedAt: startedAt.toISOString(),
+				durationMs: Date.now() - start,
+				status: testInfo.status,
+				events,
+				steps: stepResults,
+				...(openRoute === undefined ? {} : { openRoute }),
+			}),
+		);
 	},
 });
+
+/** The document a compiled flow pinned for one route step.
+ *
+ * A data block has no TypeScript export and no barrel entry, so the replay has
+ * to carry the reviewed JSON beside the spec: the manifest names the sidecar
+ * (`blockFiles`) and pins its digest (`blockDigests`). This is the whole
+ * substitution rule in one place, exported as a test seam because it is the
+ * step a replay dies on — a wrong path, a different document or a skipped
+ * execution must fail *here*, naming the route step, instead of surfacing as an
+ * unexplained replay failure against a hosted stage (`TQV-101`). */
+export function pinnedDataBlock(input: {
+	readonly manifest: FlowManifest;
+	readonly directory: string;
+	readonly routeStepId: string;
+}): BlockDefinition<Record<string, JsonValue>, Record<string, JsonValue>> {
+	const { manifest, routeStepId } = input;
+	const route = manifest.routeSteps.find(
+		(step) => step.routeStepId === routeStepId,
+	);
+	if (route === undefined)
+		throw new Error(`route step ${routeStepId} is not in the manifest`);
+	const recorded = manifest.blockFiles?.[route.block];
+	if (recorded === undefined)
+		throw new Error(
+			`flow ${manifest.flowId} records no reviewed document for ${route.block}; re-save the flow`,
+		);
+	const file = path.join(input.directory, recorded);
+	let value: unknown;
+	try {
+		value = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+	} catch (error) {
+		throw new Error(
+			`data block ${route.block} has no sidecar at ${file}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const validation = validateDataBlock(value);
+	if (!validation.ok || validation.document === undefined)
+		throw new Error(
+			`data block ${route.block} is invalid: ${validation.issues
+				.map((issue) => `${issue.path} ${issue.message}`)
+				.join("; ")}`,
+		);
+	const compiled = compileDataBlock(validation.document);
+	// The replay executes exactly the document the manifest pinned: a sidecar
+	// edited after the flow was saved is a different block, not a silent
+	// substitution (`OSV-009`).
+	const expectedDigest = manifest.blockDigests[route.block];
+	const actualDigest = blockDigest(compiled);
+	if (expectedDigest !== undefined && expectedDigest !== actualDigest)
+		throw new Error(
+			`data block ${route.block}@${compiled.version} no longer matches the digest flow ${manifest.flowId} pinned at ${routeStepId}`,
+		);
+	return compiled as BlockDefinition<
+		Record<string, JsonValue>,
+		Record<string, JsonValue>
+	>;
+}
 
 export { expect } from "@playwright/test";

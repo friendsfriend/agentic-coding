@@ -1887,6 +1887,19 @@ intended ownership rather than exemptions:
   pass through `DeveloperActionsContext`/`AgentCompletionContext` — the same
   shape the pre-existing `stageJournal`/`stageEvidenceIds` facts already used.
 
+### Stage-test definition tiers
+
+`stage-test` is registered twice from one graph module: the plan-only tier
+(`definitionVersionForStageTest`, `rounds + 1001`) and the authored-blocks tier
+(`definitionVersionForStageBlocks`, `rounds + 1100`). The second differs only
+by the `stage.blocks.promote` edge effect on `stage.review → approve` and
+`→ approve-and-update-wiki`. A new tier rather than an edit, because a
+registered version's digest covers the whole manifest and a pinned workflow has
+to keep resolving the graph it was started under; new starts resolve the
+authored-blocks tier. The handler (`effect-runner.ts`) revalidates the run's
+drafts against the report's claims, writes the approved documents atomically,
+rolls back on failure and removes the drafts only after every write landed.
+
 Run the checks with:
 
 ```bash

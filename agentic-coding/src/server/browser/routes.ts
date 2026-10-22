@@ -36,12 +36,26 @@ import type {
 	ReplayResult,
 } from "../../contracts/stage-replay.ts";
 import type { StageJournalEntry } from "../../contracts/stages.ts";
-import { STAGE_BLOCK_CATALOG } from "../../stage-blocks/catalog.generated.ts";
 import {
+	buildStageBlockCatalog,
 	filterCompactCatalog,
 	filterFullCatalog,
 	type StageBlockCatalog,
 } from "../../stage-blocks/catalog.ts";
+import {
+	compileDataBlock,
+	validateDataBlock,
+} from "../../stage-blocks/data-block.ts";
+import {
+	appendStageBlockProof,
+	loadStageBlockRegistry,
+	saveStageBlockDraft,
+	storedDigest,
+} from "../../stage-blocks/data-store.ts";
+import {
+	breakingContractChanges,
+	hasMajorBump,
+} from "../../stage-blocks/define-block.ts";
 import {
 	canonicalInputsHash,
 	STAGE_FLOW_DIRECTORY,
@@ -50,6 +64,7 @@ import { generateFlow } from "../../stage-blocks/flow-generator.ts";
 import {
 	compactFlowEntry,
 	flowEligibility,
+	readFlowEntry,
 	readFlowRegistry,
 } from "../../stage-blocks/flow-registry.ts";
 import {
@@ -71,6 +86,7 @@ import {
 	type StageBlockJournalEntry,
 } from "../../stage-blocks/runner.ts";
 import type { JsonValue } from "../../stage-blocks/schema.ts";
+import { stageBlockScopeIssues } from "../../stage-blocks/scope.ts";
 import {
 	parseSuiteManifest,
 	runSuiteEntries,
@@ -123,6 +139,7 @@ import {
 	AGENT_BROWSER_SCREENSHOT_PATH,
 	AGENT_BROWSER_SCRIPT_PATH,
 	AGENT_BROWSER_SNAPSHOT_PATH,
+	AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH,
 	AGENT_BROWSER_STAGE_BLOCKS_PATH,
 	AGENT_BROWSER_STAGE_FLOWS_PATH,
 	AGENT_BROWSER_STAGE_JOURNAL_PATH,
@@ -1120,7 +1137,13 @@ async function dispatch(
 		const body = decodeRouteRequest<
 			import("../../contracts/stage-blocks.ts").StageBlocksRequest
 		>(path, await readJsonBody(request));
-		return stageBlocks(body);
+		return stageBlocks(deps, owner, body);
+	}
+	if (method === "POST" && path === AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH) {
+		const body = decodeRouteRequest<
+			import("../../contracts/stage-blocks.ts").StageBlockSaveRequest
+		>(path, await readJsonBody(request));
+		return await stageBlockSave(deps, owner, used, body);
 	}
 	if (method === "POST" && path === AGENT_BROWSER_STAGE_RUN_PATH) {
 		const body = decodeRouteRequest<
@@ -3251,13 +3274,73 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** `stage_blocks`: the generated catalog, compact by default and full for one
- * id. The generated artifact is the review surface; the registry only executes
- * a block whose metadata is already in it. */
+/** The workflow's own data root, where its block drafts and evidence live. */
+function workflowDataRootFor(
+	deps: BrowserRouteDeps,
+	owner: string,
+): {
+	readonly workflowId?: string;
+	readonly dataRoot?: string;
+	readonly runId?: string;
+} {
+	const workflowId = ownerWorkflowId(owner);
+	if (workflowId === undefined) return {};
+	const located = (deps.locate ?? locateEvidenceWorkflow)(workflowId);
+	if (located === undefined) return { workflowId };
+	try {
+		return {
+			workflowId,
+			// A reused workflow id must not inherit a deleted predecessor's drafts:
+			// the run identity the locate seam already carries is what tells them
+			// apart (`CONC-103`).
+			...(located.runId === undefined ? {} : { runId: located.runId }),
+			dataRoot: workflowEvidenceScope({ ...located, workflowId }).dataRoot,
+		};
+	} catch {
+		return { workflowId };
+	}
+}
+
+/** Compose the registry this one call executes against: the checked-in modules,
+ * the approved data-block store and this workflow's drafts. Nothing is cached,
+ * so a draft saved a moment ago is already executable. */
+function stageBlockRegistryFor(
+	deps: BrowserRouteDeps,
+	owner: string,
+): ReturnType<typeof loadStageBlockRegistry> {
+	const context = workflowDataRootFor(deps, owner);
+	return loadStageBlockRegistry({
+		...(deps.configDir === undefined ? {} : { configDir: deps.configDir }),
+		...(context.dataRoot === undefined ? {} : { dataRoot: context.dataRoot }),
+		...(context.workflowId === undefined
+			? {}
+			: { workflowId: context.workflowId }),
+		...(context.runId === undefined ? {} : { runId: context.runId }),
+	});
+}
+
+/** `stage_blocks`: the catalog of the registry this call would execute —
+ * checked-in modules, approved data blocks and this workflow's drafts. */
 function stageBlocks(
+	deps: BrowserRouteDeps,
+	owner: string,
 	body: import("../../contracts/stage-blocks.ts").StageBlocksRequest,
 ): import("../../contracts/stage-blocks.ts").StageBlocksResponse {
-	const catalog = STAGE_BLOCK_CATALOG as unknown as StageBlockCatalog;
+	const loaded = stageBlockRegistryFor(deps, owner);
+	const catalog: StageBlockCatalog = buildStageBlockCatalog(
+		loaded.registry,
+		new Set(loaded.drafts.map((draft) => draft.document.id)),
+	);
+	const diagnostics =
+		loaded.diagnostics.length === 0
+			? {}
+			: {
+					diagnostics: loaded.diagnostics.slice(0, 20).map((entry) => ({
+						code: entry.code,
+						message: entry.message,
+						...(entry.id === undefined ? {} : { id: entry.id }),
+					})),
+				};
 	const filter = {
 		...(body.query === undefined ? {} : { query: body.query }),
 		...(body.app === undefined ? {} : { app: body.app }),
@@ -3281,6 +3364,7 @@ function stageBlocks(
 			blocks:
 				blocks as unknown as import("../../contracts/stage-blocks.ts").StageBlocksResponse["blocks"],
 			total: blocks.length,
+			...diagnostics,
 		};
 	}
 	const total = filterCompactCatalog(catalog, {
@@ -3298,6 +3382,158 @@ function stageBlocks(
 		blocks:
 			blocks as unknown as import("../../contracts/stage-blocks.ts").StageBlocksResponse["blocks"],
 		total,
+		...diagnostics,
+	};
+}
+
+/** `stage_block_save`: the stage-tester authors one block as a draft of its own
+ * run. The route is the role enforcement (the tool is not exposed to the
+ * planner or the reviewer); every refusal here is value-free. */
+async function stageBlockSave(
+	deps: BrowserRouteDeps,
+	owner: string,
+	used: SessionUse[],
+	body: import("../../contracts/stage-blocks.ts").StageBlockSaveRequest,
+): Promise<import("../../contracts/stage-blocks.ts").StageBlockSaveResponse> {
+	const workflowId = ownerWorkflowId(owner);
+	if (workflowId === undefined)
+		throw new BrowserPoolError(
+			"stage-tool-restricted",
+			"stage_block_save belongs to a workflow run",
+			403,
+		);
+	const located = (deps.locate ?? locateEvidenceWorkflow)(workflowId);
+	if (
+		located === undefined ||
+		located.currentStep !== "stage.execute" ||
+		located.selectedRoles?.includes("stage-tester") !== true
+	)
+		throw new BrowserPoolError(
+			"stage-tool-restricted",
+			"stage_block_save is available to stage-tester only during stage.execute",
+			403,
+		);
+	const validation = validateDataBlock(body.document);
+	if (!validation.ok || validation.document === undefined)
+		throw new BrowserPoolError(
+			"block-document-invalid",
+			`the block document is not valid: ${validation.issues
+				.slice(0, 5)
+				.map((issue) => `${issue.path || "document"} ${issue.message}`)
+				.join("; ")}`,
+			400,
+			undefined,
+			{ issues: validation.issues.slice(0, 20) },
+		);
+	const document = validation.document;
+	const session = await sessionFor(deps, owner, body.session, used, {
+		countAction: false,
+	});
+	const binding = session.stage;
+	if (binding === undefined)
+		throw new BrowserPoolError(
+			"stage-session-required",
+			"stage_block_save needs a stage-bound session; open one with browser_open({stage, stageApp}) first",
+			400,
+		);
+	if (located.stage !== undefined && located.stage !== binding.ident)
+		throw new BrowserPoolError(
+			"stage-mismatch",
+			`the workflow is pinned to ${located.stage}, not ${binding.ident}`,
+			409,
+		);
+	const entry = stageEntryFor(deps, binding.ident);
+	// The same rules promotion applies (`stage-blocks/scope.ts`): saving is the
+	// authoring boundary, publishing is not a second chance to widen them.
+	const scopeIssue = stageBlockScopeIssues(document, {
+		stage: binding.ident,
+		access: binding.access === "writable" ? "writable" : "read-only",
+		apps: entry.stage.apps,
+	})[0];
+	if (scopeIssue !== undefined)
+		throw new BrowserPoolError(
+			scopeIssue.code,
+			scopeIssue.message,
+			scopeIssue.code === "stage-read-only"
+				? 403
+				: scopeIssue.code === "stage-app-unknown"
+					? 404
+					: 400,
+		);
+	const checkedIn = stageBlockRegistry.get(document.id);
+	if (checkedIn !== undefined && checkedIn.data === undefined)
+		throw new BrowserPoolError(
+			"block-checked-in",
+			`block ${document.id} is checked in and read-only; a data block needs a new intent id`,
+			409,
+		);
+	const serialized = JSON.stringify(document);
+	for (const secret of redactionSecrets(deps))
+		if (secret.value.length >= 4 && serialized.includes(secret.value))
+			throw new BrowserPoolError(
+				"block-secret-literal",
+				`the document contains the value of the configured secret ${secret.name}; reference it as {"secret": ${JSON.stringify(secret.name)}} instead`,
+				400,
+			);
+	const context = workflowDataRootFor(deps, owner);
+	if (context.dataRoot === undefined)
+		throw new BrowserPoolError(
+			"flow-workspace-missing",
+			"stage_block_save needs the workflow's own data directory",
+			409,
+		);
+	const loaded = stageBlockRegistryFor(deps, owner);
+	const approved = loaded.approved.find(
+		(stored) => stored.document.id === document.id,
+	)?.document;
+	if (approved !== undefined) {
+		const next = compileDataBlock(document);
+		const previous = compileDataBlock(approved);
+		const breaking = breakingContractChanges(previous, next);
+		if (breaking.length > 0 && !hasMajorBump(previous.version, next.version))
+			throw new BrowserPoolError(
+				"block-contract-breaking",
+				`block ${document.id} changes ${breaking.join(", ")} and needs a major version bump from ${approved.version}`,
+				409,
+			);
+	}
+	// A draft records the plan it is authored for. The engine owns that identity,
+	// so it is derived from the workflow's own pinned plan and revision — there is
+	// no request field for either, so a draft can never be labelled with a plan
+	// the run did not have (`OSV-017`, `OSV-020`).
+	const saved = saveStageBlockDraft({
+		dataRoot: context.dataRoot,
+		workflowId,
+		...(context.runId === undefined ? {} : { runId: context.runId }),
+		stage: binding.ident,
+		document,
+		planId: replayPlanId(workflowId ?? "", located?.revision),
+		...(located?.revision === undefined ? {} : { revision: located.revision }),
+	});
+	return {
+		status: "draft",
+		stage: binding.ident,
+		id: document.id,
+		version: document.version,
+		app: document.app,
+		effects: [...document.effects],
+		digest: storedDigest(document),
+		...(saved.replacedVersion === undefined
+			? {}
+			: { replaced: { version: saved.replacedVersion } }),
+		proofs: saved.draft.proofs.map((proof) => ({
+			stage: proof.stage,
+			runId: proof.runId,
+			status: proof.status,
+			at: proof.at,
+		})),
+		...(approved === undefined
+			? {}
+			: {
+					warnings: [
+						`block ${document.id} is approved at ${approved.version}; review promotes this draft over it`,
+					],
+				}),
 	};
 }
 
@@ -3402,6 +3638,8 @@ async function stageRun(
 	used: SessionUse[],
 	body: import("../../contracts/stage-blocks.ts").StageRunRequest,
 ): Promise<unknown> {
+	const loaded = stageBlockRegistryFor(deps, owner);
+	const registry = loaded.registry;
 	const raw = body.plan;
 	if (!isRecordValue(raw))
 		throw new BrowserPoolError(
@@ -3437,6 +3675,7 @@ async function stageRun(
 					: {
 							inputs: stagePlan.inputs as Readonly<Record<string, JsonValue>>,
 						}),
+				registry,
 			},
 		);
 		blockPlan = projected.plan;
@@ -3449,6 +3688,18 @@ async function stageRun(
 			);
 	} else {
 		blockPlan = raw as unknown as StageBlockPlan;
+		// A draft is executable only by the approved route step that authored it.
+		// A standalone plan must not reach into this run's drafts.
+		const draftIds = new Set(loaded.drafts.map((draft) => draft.document.id));
+		const undeclared = blockPlan.steps.find(
+			(step) => step !== undefined && draftIds.has(step.block),
+		);
+		if (undeclared !== undefined)
+			throw new BrowserPoolError(
+				"block-draft-undeclared",
+				`${undeclared.block} is this run's draft; only the approved route step that authored it may execute it`,
+				400,
+			);
 		if (body.save === true && blockPlan.flowId === undefined)
 			throw new BrowserPoolError(
 				"flow-identity-missing",
@@ -3465,10 +3716,10 @@ async function stageRun(
 
 	if (body.dryRun === true) {
 		const validation = validateStageBlockPlan(blockPlan, {
-			registry: stageBlockRegistry,
+			registry: registry,
 			secretValues,
 		});
-		const derived = deriveInputSchema(blockPlan, stageBlockRegistry);
+		const derived = deriveInputSchema(blockPlan, registry);
 		const issues = [...validation.issues, ...derived.issues];
 		return {
 			planId: validation.plan?.planId ?? "plan-dry-run",
@@ -3522,11 +3773,11 @@ async function stageRun(
 		apps,
 	};
 	const validation = validateStageBlockPlan(blockPlan, {
-		registry: stageBlockRegistry,
+		registry: registry,
 		policy,
 		secretValues,
 	});
-	const derived = deriveInputSchema(blockPlan, stageBlockRegistry);
+	const derived = deriveInputSchema(blockPlan, registry);
 	const issues = [...validation.issues, ...derived.issues];
 	if (!validation.ok || issues.length > 0)
 		throw new BrowserPoolError(
@@ -3703,8 +3954,49 @@ async function stageRun(
 		failureEvidence: async ({ context }) =>
 			await captureBlockFailureEvidence(deps, owner, session, context),
 	});
+	// A draft block records its execution proofs when the plan that uses it runs:
+	// the review decision then rests on what the stage actually did.
+	const proofIssues: Array<{ code: string; message: string }> = [];
+	const context = workflowDataRootFor(deps, owner);
+	const dataRoot = context.dataRoot;
+	if (dataRoot !== undefined) {
+		const at = new Date().toISOString();
+		// A proof names the run that recorded it, by the same identity the draft
+		// record uses: the workflow id is reusable, so it cannot stand in for it
+		// (`OSV-021`, `MIG-011`). The revision is the run's own, with the request
+		// value only ever a staleness check (above).
+		const revision = located?.revision ?? body.approvedRevision;
+		for (const draft of loaded.drafts) {
+			const step = result.steps.find(
+				(candidate) => candidate.block === draft.document.id,
+			);
+			if (step === undefined) continue;
+			const appended = appendStageBlockProof({
+				dataRoot,
+				workflowId: workflowId ?? "",
+				...(context.runId === undefined ? {} : { runId: context.runId }),
+				document: draft.document,
+				proof: {
+					stage: binding.ident,
+					runId: context.runId ?? "",
+					planId: normalized.planId,
+					...(revision === undefined ? {} : { revision }),
+					status: step.status === "passed" ? "passed" : "failed",
+					at,
+					journalIds: step.journalIds,
+					evidenceIds: step.evidenceIds,
+				},
+			});
+			if (appended.issue !== undefined)
+				proofIssues.push({
+					code: "block-proof-not-recorded",
+					message: appended.issue,
+				});
+		}
+	}
 	const resultIssues = [
 		...(result.issues ?? []),
+		...proofIssues,
 		...missing.map((routeStepId) => ({
 			code: "plan-route-gap",
 			message: `route step ${routeStepId} has no block; run it with the exploratory browser tools`,
@@ -3736,8 +4028,12 @@ async function stageRun(
 			const generated = await generateFlow({
 				root: located.worktree,
 				source,
-				registry: stageBlockRegistry,
+				registry: registry,
 				secretValues,
+				// A flow is replayed long after this run's drafts are gone, so a route
+				// step that still names a draft is refused here rather than saved into
+				// an unexecutable flow.
+				draftIds: new Set(loaded.drafts.map((draft) => draft.document.id)),
 			});
 			if (generated.manifest === undefined || generated.issues.length > 0)
 				throw new BrowserPoolError(
@@ -3837,9 +4133,9 @@ function replayEntryFor(
 	root: string,
 	flowId: string,
 ): ReturnType<typeof readFlowRegistry>["entries"][number] | undefined {
-	return readFlowRegistry(root).entries.find(
-		(entry) => entry.manifest.flowId === flowId,
-	);
+	// One flow, not the whole directory: this runs on every `stage_replay` and
+	// every dry run of one (`PERF-101`).
+	return readFlowEntry(root, flowId).entry;
 }
 
 function replayApps(
@@ -3891,6 +4187,9 @@ async function stageReplay(
 		flowId: string;
 	},
 ): Promise<import("../../contracts/stage-replay.ts").StageReplayResponse> {
+	const loaded = stageBlockRegistryFor(deps, owner);
+	const registry = loaded.registry;
+	const draftIds = new Set(loaded.drafts.map((draft) => draft.document.id));
 	const workflowId = ownerWorkflowId(owner);
 	if (workflowId === undefined)
 		throw new BrowserPoolError(
@@ -3983,7 +4282,7 @@ async function stageReplay(
 	};
 	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
 	const validation = validateStageBlockPlan(projected.plan, {
-		registry: stageBlockRegistry,
+		registry: registry,
 		policy,
 		secretValues,
 	});
@@ -4025,8 +4324,10 @@ async function stageReplay(
 		root: located.worktree,
 		stage,
 		source,
-		registry: stageBlockRegistry,
+		registry: registry,
+		draftIds,
 		apps: replayApps(entry),
+		entry: manifestEntry,
 		...(role === undefined ? {} : { role }),
 	});
 	const approvedInputs = replayApprovedInputs(stagePlan);
@@ -4042,8 +4343,10 @@ async function stageReplay(
 			root: located.worktree,
 			stage,
 			source: drySource,
-			registry: stageBlockRegistry,
+			registry: registry,
+			draftIds,
 			apps: replayApps(entry),
+			entry: manifestEntry,
 			...(role === undefined ? {} : { role }),
 		});
 		const issues = [...dryEligibility.issues];
@@ -4301,7 +4604,7 @@ async function stageReplay(
 			: buildHealPacket({
 					manifest: manifestEntry.manifest,
 					result,
-					registry: stageBlockRegistry,
+					registry: registry,
 					evidenceIds:
 						facts.find((fact) => fact.index === failedStep.index)
 							?.evidenceIds ?? [],

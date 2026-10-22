@@ -12,7 +12,10 @@ import type {
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
-import { definitionVersionForStagedRoot } from "../src/workflow/definitions/manifest-policy.ts";
+import {
+	definitionVersionForStageBlocks,
+	definitionVersionForStagedRoot,
+} from "../src/workflow/definitions/manifest-policy.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,
@@ -179,6 +182,10 @@ async function completeStagePlanThroughEngine(input: {
 							action: "open the request",
 							expected: "Request details are visible",
 							capture: [],
+							// A new plan has to name one block decision per route step
+							// (`author-stage-blocks-as-data`); this gate test is about the
+							// approval routing, so the step is a declared exploratory one.
+							noBlockReason: "no data block covers the request page yet",
 						},
 					],
 					asyncWaits: [],
@@ -372,6 +379,19 @@ describe("stage-test startup", () => {
 			expect(prepared.input.metadata.stageWikiProcesses).toEqual([
 				"grid-connection-request",
 			]);
+			// A stage test starts on the authored-blocks tier, not the staged-root
+			// one: that is what gives the run its promotion edge, and a tier the
+			// registry does not carry would only surface much later, at the first
+			// effect (`TQV-201`).
+			expect(prepared.input.definitionVersion).toBe(
+				definitionVersionForStageBlocks(6),
+			);
+			expect(
+				registerBuiltins()
+					.definition("stage-test", definitionVersionForStageBlocks(6))
+					.edges.flatMap((edge) => edge.effects ?? [])
+					.map((effect) => effect.kind),
+			).toContain("stage.blocks.promote");
 			let refusal: unknown;
 			try {
 				prepareWorkflowStart({

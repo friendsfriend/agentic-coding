@@ -6,7 +6,7 @@
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import {
 	flowEligibility,
-	readFlowRegistry,
+	readFlowEntry,
 } from "../../stage-blocks/flow-registry.ts";
 import { flowSourceFromStagePlan } from "../../stage-blocks/flow-source.ts";
 import {
@@ -67,10 +67,11 @@ export function stageReplayEligible(snapshot: WorkflowSnapshot): boolean {
 				planId: `stage-${snapshot.workflowId}`,
 			}),
 			registry: stageBlockRegistry,
+			// The entry is read once here instead of being rediscovered inside
+			// `flowEligibility` (`PERF-101`).
+			entry: readFlowEntry(snapshot.metadata.worktree, plan.flowId).entry,
 		}).eligible;
 	} catch {
 		return false;
 	}
 }
-
-export { readFlowRegistry };

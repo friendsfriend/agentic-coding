@@ -4,7 +4,14 @@
 // test the policy without a real server or a real Playwright browser.
 import { describe, expect, test } from "bun:test";
 import type { APIRequestContext } from "@playwright/test";
-import { apiClient } from "../src/stage-blocks/fixture.ts";
+import {
+	apiClient,
+	pageAdapter,
+	type RehearsalEvent,
+	type RehearsalStepResult,
+	rehearsalOutcome,
+	unrecordedFailure,
+} from "../src/stage-blocks/fixture.ts";
 import type { FlowManifest } from "../src/stage-blocks/flow.ts";
 import { STAGE_FLOW_MANIFEST_VERSION } from "../src/stage-blocks/flow.ts";
 
@@ -286,5 +293,202 @@ describe("replay ctx.api (add-stage-flow-replay design D6)", () => {
 		} finally {
 			restore();
 		}
+	});
+});
+
+describe("the replay fixture's locator", () => {
+	function fakePage(calls: string[]) {
+		const locator = {
+			click: async () => {
+				calls.push("click");
+			},
+			fill: async (value: string) => {
+				calls.push(`fill:${value}`);
+			},
+			pressSequentially: async (value: string, options: { delay?: number }) => {
+				calls.push(`type:${value}@${options.delay ?? 0}`);
+			},
+			press: async (key: string) => {
+				calls.push(`press:${key}`);
+			},
+			selectOption: async () => {
+				calls.push("select");
+			},
+			textContent: async () => "text",
+			innerText: async () => "text",
+			isVisible: async () => true,
+			waitFor: async () => undefined,
+		};
+		return {
+			url: () => "https://crm.test/",
+			title: async () => "CRM",
+			goto: async (url: string) => {
+				calls.push(`goto:${url}`);
+			},
+			getByLabel: () => locator,
+			getByTestId: () => locator,
+			getByText: () => locator,
+			getByRole: () => locator,
+			locator: () => locator,
+			reload: async () => undefined,
+			waitForTimeout: async () => undefined,
+		};
+	}
+
+	test("type presses keys one by one while fill replaces the value", async () => {
+		const calls: string[] = [];
+		const page = pageAdapter(
+			fakePage(calls) as unknown as Parameters<typeof pageAdapter>[0],
+		);
+		const field = page.getByLabel("Password");
+		await field.fill("secret-1");
+		await field.type("secret-1");
+		await field.type("slow", { delayMs: 25 });
+		expect(calls).toEqual(["fill:secret-1", "type:secret-1@0", "type:slow@25"]);
+	});
+});
+
+describe("a replay's assembled result", () => {
+	const outcome = (input: {
+		readonly status: string | undefined;
+		readonly events?: readonly RehearsalEvent[];
+		readonly steps?: readonly RehearsalStepResult[];
+		readonly openRoute?: {
+			readonly index: number;
+			readonly routeStepId: string;
+			readonly block: string;
+			readonly version: string;
+			readonly subStep?: string;
+		};
+	}) =>
+		rehearsalOutcome({
+			manifest: MANIFEST,
+			inputsHash: "sha256:inputs",
+			startedAt: "2026-01-01T00:00:00.000Z",
+			durationMs: 15_000,
+			events: [],
+			steps: [],
+			...input,
+		});
+
+	const failedStep: RehearsalStepResult = {
+		index: 1,
+		routeStepId: "R2",
+		block: "crm.customer.open",
+		version: "1.0.0",
+		status: "failed",
+		durationMs: 900,
+		error: "the detail page never appeared",
+	};
+
+	test("a timeout with no failed block is a failed result naming the step", () => {
+		const timedOut = outcome({
+			status: "timedOut",
+			openRoute: {
+				index: 2,
+				routeStepId: "R3",
+				block: "crm.customer.open",
+				version: "1.0.0",
+				subStep: "open the customer",
+			},
+		});
+		expect(timedOut.status).toBe("failed");
+		expect(timedOut.steps).toEqual([
+			expect.objectContaining({
+				index: 2,
+				routeStepId: "R3",
+				block: "crm.customer.open",
+				version: "1.0.0",
+				status: "failed",
+			}),
+		]);
+		expect(timedOut.events).toHaveLength(1);
+		expect(timedOut.error).toContain("timed out");
+	});
+
+	test("a pass stays a pass even when an optional group recorded a failure", () => {
+		const passed = outcome({
+			status: "passed",
+			events: [
+				{
+					index: 1,
+					routeStepId: "R2",
+					block: "crm.customer.open",
+					version: "1.0.0",
+					subStep: "dismiss the cookie banner",
+					status: "failed",
+					durationMs: 10,
+					evidence: [],
+					error: "no banner",
+				},
+			],
+			steps: [
+				{
+					index: 1,
+					routeStepId: "R2",
+					block: "crm.customer.open",
+					version: "1.0.0",
+					status: "passed",
+					durationMs: 900,
+				},
+			],
+		});
+		expect(passed.status).toBe("passed");
+		// The event is kept as evidence; the block-level result decides the verdict.
+		expect(passed.events).toHaveLength(1);
+		expect(passed.steps).toHaveLength(1);
+		expect(passed.error).toBeUndefined();
+	});
+
+	test("a recorded failed block is not counted twice", () => {
+		const recorded = outcome({
+			status: "timedOut",
+			steps: [failedStep],
+			openRoute: {
+				index: 1,
+				routeStepId: "R2",
+				block: "crm.customer.open",
+				version: "1.0.0",
+			},
+		});
+		expect(recorded.status).toBe("failed");
+		expect(recorded.steps).toEqual([failedStep]);
+		expect(recorded.events).toEqual([]);
+		expect(recorded.error).toBe("the detail page never appeared");
+	});
+});
+
+describe("a replay that ends without a recorded failure", () => {
+	test("names the step it stopped in instead of claiming a pass", () => {
+		expect(unrecordedFailure("passed", undefined, 10)).toBeUndefined();
+		expect(unrecordedFailure(undefined, undefined, 10)).toBeUndefined();
+
+		const timedOut = unrecordedFailure(
+			"timedOut",
+			{
+				index: 2,
+				routeStepId: "R3",
+				block: "crm.customer.open",
+				version: "1.0.0",
+				subStep: "open the customer",
+			},
+			15_000,
+		);
+		expect(timedOut).toMatchObject({
+			index: 2,
+			routeStepId: "R3",
+			block: "crm.customer.open",
+			version: "1.0.0",
+			subStep: "open the customer",
+			status: "failed",
+			durationMs: 15_000,
+		});
+		expect(timedOut?.error).toContain("timed out");
+		expect(timedOut?.error).toContain("R3");
+		expect(timedOut?.error).toContain("open the customer");
+
+		const early = unrecordedFailure("failed", undefined, 3);
+		expect(early?.error).toContain("before any route step started");
+		expect(early?.routeStepId).toBe("(none)");
 	});
 });
