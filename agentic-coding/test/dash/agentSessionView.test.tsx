@@ -1564,9 +1564,9 @@ test("tool rows get a view from their call and result, and a generic default", a
 		await t.renderOnce();
 		const collapsed = t.captureCharFrame();
 		// Each view names its own subject: the file, the range, the command.
-		expect(collapsed).toContain("▸ → src/a.ts");
+		expect(collapsed).toContain("▸ → Read src/a.ts");
 		expect(collapsed).toContain("40-120 of 512");
-		expect(collapsed).toContain("▸ ← src/a.ts");
+		expect(collapsed).toContain("▸ ← Edit src/a.ts");
 		expect(collapsed).toContain("1 edit · +1 −1");
 		// The judgment view names the verdict; a tool without a view keeps the
 		// generic row.
@@ -1598,6 +1598,74 @@ test("tool rows get a view from their call and result, and a generic default", a
 		};
 		expect(rgb(foreground("+const b = 2;"))).toBe(theme(uiColors.success));
 		expect(rgb(foreground("-const a = 1;"))).toBe(theme(uiColors.error));
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("tool rows use opencode's inline and block surfaces", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "r1",
+			kind: "tool",
+			text: "read path=src/a.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/a.ts" },
+				result: { lines: ["a"], isError: false, notes: [] },
+			},
+		},
+		{
+			id: "b1",
+			kind: "tool",
+			text: "bash command=bun test",
+			tone: "success",
+			icon: "$",
+			tool: "bash",
+			toolCall: {
+				name: "bash",
+				args: { command: "bun test" },
+				result: { lines: ["ok"], isError: false, notes: [] },
+			},
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		const row = (needle: string) =>
+			frame.split("\n").find((line) => line.includes(needle)) ?? "";
+		// A read is an inline row: it starts with the fold, not a border.
+		expect(row("Read src/a.ts")).toContain("▸ → Read src/a.ts");
+		expect(row("Read src/a.ts").trimStart().startsWith("▸")).toBe(true);
+		// A shell call keeps opencode's raised block: the heavy left rule is the
+		// first cell of the row.
+		expect(row("bun test")).toContain("▸ $ bun test");
+		expect(row("bun test").trimStart().startsWith("┃")).toBe(true);
 	} finally {
 		t.renderer.destroy();
 	}
@@ -1752,11 +1820,12 @@ test("a running tool shows an in-progress row that its result replaces in place"
 		await t.renderOnce();
 		await t.renderOnce();
 		const pending = t.captureCharFrame();
-		// The call's subject appears as soon as it starts, with the running marker.
-		expect(pending).toContain("$ npm test");
-		expect(pending).toContain("running…");
-		// The running marker carries opencode's animated braille glyph.
-		expect(pending).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+running…/);
+		// The call's subject appears as soon as it starts, with opencode's
+		// animated spinner in the icon gutter.
+		expect(pending).toContain("npm test");
+		expect(pending).not.toContain("running…");
+		expect(pending).not.toContain("$ npm test");
+		expect(pending).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] npm test/);
 		// No result section yet: the answer is not on screen while the call runs.
 		expect(pending).not.toContain("all good");
 		expect(pending.match(/npm test/g)).toHaveLength(1);
@@ -1829,9 +1898,11 @@ test("a streaming write stays one compact line instead of its content", async ()
 		await t.renderOnce();
 		await t.renderOnce();
 		const frame = t.captureCharFrame();
-		expect(frame).toContain("← src/a.ts");
+		// The icon gutter carries the spinner while the content streams; the
+		// path names the file and the hint measures what has arrived.
+		expect(frame).not.toContain("writing…");
+		expect(frame).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Writing src\/a\.ts/);
 		expect(frame).toContain("400 lines");
-		expect(frame).toContain("writing…");
 		// The content itself is measured, never laid out: only its size is shown.
 		expect(frame).not.toContain("line 399");
 	} finally {
@@ -1910,13 +1981,14 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		// screen, wrapped over further rows (a hyphen is a break point).
 		expect(frame).toContain("very-last-word");
 		expect(frame).toContain("reporter verbose");
-		expect(frame).toContain("under-edit.ts");
+		expect(frame).toContain("module-under-edit.");
+		expect(frame).toMatch(/module-under-edit\.\s*\n\s*ts/);
 		// A tool without a specialized view wraps its own summary too.
 		expect(frame).toContain("reachesTheLastWord");
-		// The only ellipses left are the in-progress markers on the hint.
-		expect(frame.split("\u2026").length - 1).toBe(
-			(frame.match(/running\u2026|reading\u2026/g) ?? []).length + 1,
-		);
+		// The spinner in the icon gutter is the running marker; the row's own
+		// text adds no ellipsis.
+		expect(frame).not.toContain("running…");
+		expect(frame).not.toContain("reading…");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -2168,7 +2240,7 @@ test("a tool call aborted before it ran is marked aborted", async () => {
 		await t.renderOnce();
 		await t.renderOnce();
 		const frame = t.captureCharFrame();
-		expect(frame).toContain("→ src/a.ts");
+		expect(frame).toContain("→ Read src/a.ts");
 		expect(frame).toContain("aborted");
 	} finally {
 		t.renderer.destroy();

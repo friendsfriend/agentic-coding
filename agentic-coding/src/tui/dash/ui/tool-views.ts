@@ -43,14 +43,21 @@ export interface ToolViewSection {
 	readonly collapsed?: boolean;
 }
 
-/** A tool call's transcript view: the summary (wrapped to the row's width),
+/** A tool call's transcript view: the row label (wrapped to the row's width),
  * the hint beside it, the rows under it (only visible once the row is
  * expanded), and the sections a long view splits into so its parts can be read
  * one at a time. */
 export interface ToolView {
 	readonly icon: string;
+	/** The row's label. opencode names the verb (`Read src/a.ts`); a view
+	 * without one shows only its subject. Child rows keep `summary`. */
+	readonly label?: string;
 	readonly summary: string;
 	readonly hint?: string;
+	/** The surface the row is drawn on. opencode keeps ordinary calls as an
+	 * inline row and gives a content-heavy call (shell, edit, write) a raised
+	 * block with a heavy left rule. */
+	readonly variant?: "inline" | "block";
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
 }
@@ -138,6 +145,7 @@ function readView(call: AgentSessionToolCall): ToolView {
 	const offset = numberArg(call.args, "offset");
 	return {
 		icon: "→",
+		label: `Read ${path}`,
 		summary: path,
 		hint:
 			range ??
@@ -173,7 +181,9 @@ function editView(call: AgentSessionToolCall): ToolView {
 	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "←",
+		label: `Edit ${path}`,
 		summary: path,
+		variant: "block",
 		...(hint.length > 0 ? { hint: hint.join(" · ") } : {}),
 		...(rows.length > 0 ? { rows } : {}),
 	};
@@ -186,7 +196,9 @@ function writeView(call: AgentSessionToolCall): ToolView {
 	const lines = content?.split("\n") ?? [];
 	return {
 		icon: "←",
+		label: `Write ${path}`,
 		summary: path,
+		variant: "block",
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
 		rows: lines.map((text) => ({ text, tone: "muted" as const })),
 	};
@@ -202,6 +214,7 @@ function bashView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
 		summary: command,
+		variant: "block",
 		hint: exit
 			? `exit ${exit[1]}`
 			: failed
@@ -982,18 +995,16 @@ export function toolView(call: AgentSessionToolCall): ToolView | undefined {
 // than rendering the content itself, so a `write` of a large file stays one
 // line on every watch frame instead of re-laying out the whole file.
 
-/** The trailing marker every in-progress view carries, so a running call is
- * never read as a finished one. */
-const RUNNING = "running…";
-
-/** The call's own facts plus the marker that says its answer has not landed. */
+/** The call's own facts, for the right edge of a running row. The animated
+ * spinner in the row's icon gutter is the running marker, so the hint carries
+ * only facts (`40-120 of 512`, `3 edits`) and stays empty when there are none. */
 function progressHint(
-	marker: string,
 	parts: readonly (string | undefined)[] = [],
-): string {
-	return [...parts, marker]
+): string | undefined {
+	const text = parts
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
+	return text.length > 0 ? text : undefined;
 }
 
 /** `340 chars`, `1.4K chars`: a size in the compact form a streaming argument's
@@ -1021,8 +1032,9 @@ function readPendingView(call: AgentSessionToolCall): ToolView {
 	const offset = numberArg(call.args, "offset");
 	return {
 		icon: "→",
+		label: `Reading ${path}`,
 		summary: path,
-		hint: progressHint("reading…", [
+		hint: progressHint([
 			offset !== undefined ? `from ${offset}` : undefined,
 			limit !== undefined ? `${limit} lines` : undefined,
 		]),
@@ -1036,9 +1048,10 @@ function writePendingView(call: AgentSessionToolCall): ToolView {
 	const content = stringArg(call.args, "content");
 	return {
 		icon: "←",
+		label: `Writing ${path}`,
 		summary: path,
+		variant: "block",
 		hint: progressHint(
-			"writing…",
 			content === undefined || content.length === 0
 				? []
 				: [`${countLines(content)} lines`, formatChars(content.length)],
@@ -1052,8 +1065,10 @@ function editPendingView(call: AgentSessionToolCall): ToolView {
 	const count = Array.isArray(call.args.edits) ? call.args.edits.length : 0;
 	return {
 		icon: "←",
+		label: `Editing ${path}`,
 		summary: path,
-		hint: progressHint("editing…", [
+		variant: "block",
+		hint: progressHint([
 			count > 0 ? `${count} edit${count === 1 ? "" : "s"}` : undefined,
 		]),
 	};
@@ -1064,19 +1079,19 @@ function bashPendingView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
 		summary: stringArg(call.args, "command") ?? call.name,
-		hint: progressHint("running…"),
+		variant: "block",
 	};
 }
 
 /** `codemode` in progress: the script's first meaningful line and its size. */
 function codemodePendingView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code");
+	const headline = code ? oneLine(codemodeHeadline(code), 160) : call.name;
 	return {
 		icon: "λ",
-		summary: code ? oneLine(codemodeHeadline(code), 160) : call.name,
-		hint: progressHint("running…", [
-			code ? `${countLines(code)} lines` : undefined,
-		]),
+		label: `Executing ${headline}`,
+		summary: headline,
+		hint: progressHint([code ? `${countLines(code)} lines` : undefined]),
 	};
 }
 
@@ -1084,13 +1099,15 @@ function codemodePendingView(call: AgentSessionToolCall): ToolView {
 function jevPendingView(call: AgentSessionToolCall): ToolView {
 	const questions = jevQuestions(call.args.questions);
 	const sources = jevSources(call.args);
+	const summary =
+		questions.length > 0
+			? questions.map((question) => question.id).join(", ")
+			: call.name;
 	return {
 		icon: "◆",
-		summary:
-			questions.length > 0
-				? questions.map((question) => question.id).join(", ")
-				: call.name,
-		hint: progressHint("judging…", [sources]),
+		label: `Judging ${summary}`,
+		summary,
+		hint: progressHint([sources]),
 	};
 }
 
@@ -1103,10 +1120,9 @@ function searchPendingView(call: AgentSessionToolCall): ToolView {
 	const where = stringArg(call.args, "path") ?? stringArg(call.args, "glob");
 	return {
 		icon: toolIcon(call.name),
+		label: `Searching ${pattern}`,
 		summary: pattern,
-		hint: progressHint("searching…", [
-			where === undefined ? undefined : `in ${where}`,
-		]),
+		hint: progressHint([where === undefined ? undefined : `in ${where}`]),
 	};
 }
 
@@ -1116,19 +1132,23 @@ function webPendingView(call: AgentSessionToolCall): ToolView {
 		stringArg(call.args, "url") ?? stringArg(call.args, "query") ?? call.name;
 	return {
 		icon: toolIcon(call.name),
+		label:
+			stringArg(call.args, "url") === undefined
+				? `Searching web for ${subject}`
+				: `Fetching ${subject}`,
 		summary: subject,
-		hint: progressHint("fetching…"),
 	};
 }
 
 /** The fallback for a tool without a view of its own: its glyph, its name or
- * first argument, and the running marker. */
+ * first argument, and the spinner in its icon gutter. */
 function genericPendingView(call: AgentSessionToolCall): ToolView {
 	const primary = primaryArg(call.args);
+	const summary = primary === undefined ? call.name : oneLine(primary, 160);
 	return {
 		icon: toolIcon(call.name),
-		summary: primary === undefined ? call.name : oneLine(primary, 160),
-		hint: progressHint(RUNNING),
+		label: summary,
+		summary,
 	};
 }
 
@@ -1148,11 +1168,11 @@ function withRunningOutput(
 
 /** The in-progress view of a tool call: rendered from the call's arguments the
  * moment the tool's name is known (a streamed tool call or a running tool
- * slot), with a running marker and no answer yet — its rows, when it has any,
- * are the output the call has produced so far. Every tool gets one — the
- * specialized ones name their own subject, the rest keep the generic row — so
- * a call in flight is never invisible. The finished view (`toolView`) replaces
- * it in place when the result lands. */
+ * slot), with the transcript's icon gutter showing the spinner — its rows, when
+ * it has any, are the output the call has produced so far. Every tool gets one
+ * — the specialized ones name their own subject, the rest keep the generic row
+ * — so a call in flight is never invisible. The finished view (`toolView`)
+ * replaces it in place when the result lands. */
 export function toolPendingView(
 	call: AgentSessionToolCall,
 	output: readonly string[] = [],

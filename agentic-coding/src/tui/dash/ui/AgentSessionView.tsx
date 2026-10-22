@@ -8,11 +8,13 @@
 // `/model` and `/thinking` pickers.
 //
 // Assistant output renders as markdown with no box; thinking collapses to a
-// single `Thinking…` line; every other entry is a status box with a solid
-// status-tinted background and the same left highlight the prompt uses. The
-// prompt below mirrors opencode v2: a left-bordered raised block with the
-// input and a metadata row (`Role · model · thinking` plus a live working
-// indicator).
+// single `Thinking…` line; tool calls follow opencode's two shapes — an inline
+// row for ordinary calls, a raised left-ruled block for shell/edit/write — with
+// a spinner in the icon gutter while a call runs. Every other entry is a status
+// box with a solid status-tinted background and the same left highlight the
+// prompt uses. The prompt below mirrors opencode v2: a left-bordered raised
+// block with the input and a metadata row (`Role · model · thinking` plus a
+// live working indicator).
 //
 // The view replaces the detail grid, so its own keys (scroll, back) and the
 // picker's keys are route keymap layers gated on the `agent.view` field. The
@@ -53,6 +55,7 @@ import {
 	createMemo,
 	createSignal,
 	For,
+	type JSX,
 	onCleanup,
 	onMount,
 	Show,
@@ -499,9 +502,91 @@ function sectionLineCount(section: ToolViewSection): number {
 	);
 }
 
+/** The surface a tool call is drawn on: opencode keeps an ordinary call (read,
+ * search, fetch) as an inline row and gives a content-heavy call (shell, edit,
+ * write) a raised block with a heavy left rule. */
+function ToolFrame(props: {
+	variant: "inline" | "block";
+	children: JSX.Element;
+}) {
+	if (props.variant === "block")
+		return (
+			<box
+				border={["left"]}
+				borderStyle="heavy"
+				borderColor={uiColors.border}
+				backgroundColor={uiColors.bgMantle}
+				paddingLeft={2}
+				paddingRight={1}
+				flexShrink={0}
+			>
+				{props.children}
+			</box>
+		);
+	return (
+		<box paddingLeft={3} paddingRight={1} flexShrink={0}>
+			{props.children}
+		</box>
+	);
+}
+
+/** A tool call's header row: fold, icon, label, facts and timing. The icon slot
+ * carries the spinner while the call runs, the way opencode draws a running
+ * tool. An ordinary call is muted; only a failed one takes the error color. */
+function ToolCallHeader(props: {
+	block: AgentSessionBlock;
+	icon: string;
+	label: string;
+	hint?: string;
+	expandable: boolean;
+	expanded: boolean;
+	onToggle: () => void;
+}) {
+	const fg = () =>
+		props.block.tone === "error" ? uiColors.error : uiColors.textMuted;
+	return (
+		<box flexDirection="row" {...useTap(props.onToggle)}>
+			{/* The fold glyph leads the row, so a list of tool rows reads as a list
+			    of folds rather than a ragged right edge. */}
+			<text width={2} flexShrink={0} fg={uiColors.textMuted}>
+				{props.expandable ? (props.expanded ? "▾" : "▸") : ""}
+			</text>
+			<box width={2} flexShrink={0}>
+				<Show
+					when={props.block.pending === true}
+					fallback={<text fg={fg()}>{props.icon}</text>}
+				>
+					<Spinner color={fg()} />
+				</Show>
+			</box>
+			{/* The label is the call's own text — a path, a command — and a reader
+			    folds the row to see the call, not to see a clipped one: it wraps
+			    onto further lines instead of being cut with an ellipsis. The fold
+			    glyph, icon and facts stay on the first line. */}
+			<text fg={fg()} flexGrow={1} minWidth={0} wrapMode="word">
+				{props.label}
+			</text>
+			<Show when={props.hint}>
+				{(hint) => (
+					<text fg={uiColors.textMuted} flexShrink={0}>
+						{` ${hint()}`}
+					</text>
+				)}
+			</Show>
+			<Show when={props.block.aborted}>
+				<text fg={uiColors.error} flexShrink={0}>
+					{" aborted"}
+				</text>
+			</Show>
+			<Stamp block={props.block} duration />
+		</box>
+	);
+}
+
 /** One transcript entry. Assistant output is markdown with no status box;
- * thinking is collapsible; everything else is a status box with the same left
- * highlight the prompt uses. */
+ * thinking is collapsible; a tool call is opencode's inline row or bordered
+ * block; every other entry is a status box with the same left highlight the
+ * prompt uses. */
 function Block(props: {
 	block: AgentSessionBlock;
 	role: string;
@@ -668,56 +753,17 @@ function Block(props: {
 		const expandable = () =>
 			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
 		return (
-			<box
-				border={["left"]}
-				borderColor={markerColor(props.block.tone)}
-				backgroundColor={boxBackground(props.block.tone)}
-				paddingLeft={2}
-				paddingRight={1}
-				flexShrink={0}
-			>
+			<ToolFrame variant={tool.variant ?? "inline"}>
 				<box flexDirection="column">
-					<box
-						flexDirection="row"
-						{...useTap(() => props.onToggle(props.block.id))}
-					>
-						{/* The fold glyph leads the row, so a list of tool rows reads as
-						    a list of folds rather than a ragged right edge. */}
-						<text width={2} flexShrink={0} fg={uiColors.textMuted}>
-							{expandable() ? (props.expanded ? "▾" : "▸") : ""}
-						</text>
-						<text width={2} flexShrink={0} fg={color()}>
-							{tool.icon}
-						</text>
-						{/* The summary is the call's own text — a path, a command — and a
-						    reader folds the row to see the call, not to see a clipped one:
-						    it wraps onto further lines instead of being cut with an
-						    ellipsis. The fold glyph, the icon and the hint stay on the
-						    first line. */}
-						<text fg={color()} flexGrow={1} minWidth={0} wrapMode="word">
-							{tool.summary}
-							{/* The in-progress view carries its own running marker as the hint; a
-							    pending row without one (the generic fallback) still gets the
-							    ellipsis. */}
-							{props.block.pending && tool.hint === undefined ? " …" : ""}
-						</text>
-						<Show when={tool.hint}>
-							{(hint) => (
-								<box flexDirection="row" flexShrink={0}>
-									<Show when={props.block.pending}>
-										<Spinner color={uiColors.textMuted} />
-									</Show>
-									<text fg={uiColors.textMuted}>{` ${hint()}`}</text>
-								</box>
-							)}
-						</Show>
-						<Show when={props.block.aborted}>
-							<text fg={uiColors.error} flexShrink={0}>
-								{" aborted"}
-							</text>
-						</Show>
-						<Stamp block={props.block} duration />
-					</box>
+					<ToolCallHeader
+						block={props.block}
+						icon={tool.icon}
+						label={tool.label ?? tool.summary}
+						hint={tool.hint}
+						expandable={expandable()}
+						expanded={props.expanded}
+						onToggle={() => props.onToggle(props.block.id)}
+					/>
 					<Show when={props.expanded}>
 						<box paddingLeft={2} flexDirection="column">
 							<For each={tool.rows ?? []}>
@@ -775,42 +821,28 @@ function Block(props: {
 						</box>
 					</Show>
 				</box>
-			</box>
+			</ToolFrame>
 		);
 	}
 
 	const content = () => {
 		switch (props.block.kind) {
-			case "tool":
-				// One line per tool call: the result's answer replaces the request, and
-				// the full output (plus the request) only shows when expanded.
+			case "tool": {
+				// A tool without a specialized view keeps opencode's inline row: its
+				// own one-line call, with the full request and output under the fold.
+				const expandable =
+					(props.block.detail?.length ?? 0) > 0 ||
+					props.block.request !== undefined;
 				return (
 					<box flexDirection="column">
-						<box
-							flexDirection="row"
-							{...useTap(() => props.onToggle(props.block.id))}
-						>
-							<text width={2} flexShrink={0} fg={color()}>
-								{props.block.icon ?? "•"}
-							</text>
-							<Show when={props.block.pending}>
-								<Spinner color={color()} />
-								<text fg={color()}> </text>
-							</Show>
-							{/* A tool without a specialized view still names its whole
-							    call: the summary wraps instead of being cut in the middle
-							    when the tool's own text is wider than the row. */}
-							<text fg={color()} flexGrow={1} minWidth={0} wrapMode="word">
-								{props.block.text}
-								{props.block.pending ? " …" : ""}
-							</text>
-							<Show when={(props.block.detail?.length ?? 0) > 0}>
-								<text fg={uiColors.textMuted} flexShrink={0}>
-									{props.expanded ? " ▾" : " ▸"}
-								</text>
-							</Show>
-							<Stamp block={props.block} duration />
-						</box>
+						<ToolCallHeader
+							block={props.block}
+							icon={props.block.icon ?? "•"}
+							label={props.block.text}
+							expandable={expandable}
+							expanded={props.expanded}
+							onToggle={() => props.onToggle(props.block.id)}
+						/>
 						<Show when={props.expanded}>
 							<box paddingLeft={2} flexDirection="column">
 								<Show when={props.block.request}>
@@ -827,6 +859,7 @@ function Block(props: {
 						</Show>
 					</box>
 				);
+			}
 			case "result":
 				return (
 					<box flexDirection="column">
@@ -857,6 +890,12 @@ function Block(props: {
 				return <text fg={uiColors.textMuted}>— {props.block.text} —</text>;
 		}
 	};
+	if (props.block.kind === "tool")
+		return (
+			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
+				{content()}
+			</box>
+		);
 	return (
 		// The status hint is the same left highlight the prompt uses: a
 		// one-column border in the status color over the tinted background.

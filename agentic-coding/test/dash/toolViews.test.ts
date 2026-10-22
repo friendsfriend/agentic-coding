@@ -34,6 +34,7 @@ describe("toolView", () => {
 		// A call without a result yet: the file, nothing more.
 		expect(toolView(call("read", { path: "src/a.ts" }))).toEqual({
 			icon: "→",
+			label: "Read src/a.ts",
 			summary: "src/a.ts",
 			rows: [],
 		});
@@ -61,6 +62,8 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.summary).toBe("src/a.ts");
+		expect(view?.label).toBe("Edit src/a.ts");
+		expect(view?.variant).toBe("block");
 		expect(view?.hint).toBe("2 edits · +1 −1");
 		expect(view?.rows).toEqual([
 			{ text: "@@ -1,3 +1,3 @@", tone: "info" },
@@ -75,6 +78,8 @@ describe("toolView", () => {
 			call("write", { path: "src/b.ts", content: "one\ntwo\nthree" }),
 		);
 		expect(view?.summary).toBe("src/b.ts");
+		expect(view?.label).toBe("Write src/b.ts");
+		expect(view?.variant).toBe("block");
 		expect(view?.hint).toBe("3 lines");
 		expect(view?.rows?.map((row) => row.text)).toEqual(["one", "two", "three"]);
 	});
@@ -92,6 +97,7 @@ describe("toolView", () => {
 			),
 		);
 		expect(failed?.summary).toBe("npm test");
+		expect(failed?.variant).toBe("block");
 		expect(failed?.hint).toBe("exit 1");
 		expect(failed?.rows?.every((row) => row.tone === "error")).toBe(true);
 
@@ -742,8 +748,9 @@ describe("toolPendingView", () => {
 			),
 		).toEqual({
 			icon: "→",
+			label: "Reading src/a.ts",
 			summary: "src/a.ts",
-			hint: "from 40 · 80 lines · reading…",
+			hint: "from 40 · 80 lines",
 		});
 	});
 
@@ -753,28 +760,36 @@ describe("toolPendingView", () => {
 		);
 		expect(view).toEqual({
 			icon: "←",
+			label: "Writing src/a.ts",
 			summary: "src/a.ts",
-			hint: "3 lines · 5 chars · writing…",
+			variant: "block",
+			hint: "3 lines · 5 chars",
 		});
 		// A write whose content has not arrived yet still names the file.
 		expect(toolPendingView(call("write", { path: "src/a.ts" }))).toEqual({
 			icon: "←",
+			label: "Writing src/a.ts",
 			summary: "src/a.ts",
-			hint: "writing…",
+			variant: "block",
+			hint: undefined,
 		});
 	});
 
 	test("edit counts the edits it is applying", () => {
 		expect(
-			toolPendingView(call("edit", { path: "src/a.ts", edits: [{}, {}] })).hint,
-		).toBe("2 edits · editing…");
+			toolPendingView(call("edit", { path: "src/a.ts", edits: [{}, {}] })),
+		).toMatchObject({
+			label: "Editing src/a.ts",
+			variant: "block",
+			hint: "2 edits",
+		});
 	});
 
 	test("bash names the command it is running", () => {
 		expect(toolPendingView(call("bash", { command: "npm test" }))).toEqual({
 			icon: "$",
 			summary: "npm test",
-			hint: "running…",
+			variant: "block",
 		});
 	});
 
@@ -785,8 +800,9 @@ describe("toolPendingView", () => {
 			),
 		).toEqual({
 			icon: "λ",
+			label: "Executing const x = 1;",
 			summary: "const x = 1;",
-			hint: "2 lines · running…",
+			hint: "2 lines",
 		});
 	});
 
@@ -797,8 +813,9 @@ describe("toolPendingView", () => {
 				paths: ["src/a.ts"],
 			}),
 		);
+		expect(view.label).toBe("Judging leak");
 		expect(view.summary).toBe("leak");
-		expect(view.hint).toBe("files (1) · judging…");
+		expect(view.hint).toBe("files (1)");
 	});
 
 	test("a dialogue question keeps the question it is asking", () => {
@@ -813,30 +830,35 @@ describe("toolPendingView", () => {
 		// A dialogue call with no question keeps the generic pending row.
 		expect(
 			toolPendingView(call("agent_ask", { role: "planner" })),
-		).toMatchObject({ summary: "planner", hint: "running…" });
+		).toMatchObject({ summary: "planner", label: "planner" });
 	});
 
 	test("search and fetch name their pattern and address", () => {
 		expect(
 			toolPendingView(call("grep", { pattern: "foo", path: "src" })),
-		).toEqual({ icon: "✱", summary: "foo", hint: "in src · searching…" });
+		).toEqual({
+			icon: "✱",
+			label: "Searching foo",
+			summary: "foo",
+			hint: "in src",
+		});
 		expect(toolPendingView(call("webfetch", { url: "https://x" }))).toEqual({
 			icon: "%",
+			label: "Fetching https://x",
 			summary: "https://x",
-			hint: "fetching…",
 		});
 	});
 
-	test("an unknown tool keeps its glyph, name, and running marker", () => {
+	test("an unknown tool keeps its glyph, name, and label", () => {
 		expect(toolPendingView(call("frobnicate"))).toEqual({
 			icon: "•",
+			label: "frobnicate",
 			summary: "frobnicate",
-			hint: "running…",
 		});
 		expect(toolPendingView(call("frobnicate", { target: "thing" }))).toEqual({
 			icon: "•",
+			label: "thing",
 			summary: "thing",
-			hint: "running…",
 		});
 	});
 
@@ -869,7 +891,9 @@ describe("toolPendingView", () => {
 			"agent_ask",
 			"frobnicate",
 		]) {
-			expect(toolPendingView(call(name)).hint).toContain("…");
+			const view = toolPendingView(call(name));
+			expect(view.label ?? view.summary).toBeTruthy();
+			expect(view.summary).toBeTruthy();
 		}
 	});
 });
