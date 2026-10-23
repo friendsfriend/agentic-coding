@@ -15,12 +15,14 @@
 // `dockerBuildSteps` (`resources.ResolveConfigDir`, `os.TempDir`), which is why
 // the fixture can pin them and compare byte for byte.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type {
 	ActionDefinition,
 	ActionStepDefinition,
 	ActionValuePort,
 } from "@devenv/types";
+import { BUILD_CONTEXT_COMMAND } from "./build-context.ts";
 import { resourceActionId, stableId, stepId } from "./identity.ts";
 import {
 	type ActionTarget,
@@ -1138,12 +1140,6 @@ export function resolveBuildSourcePath(sourcePath: string): string {
 	}
 }
 
-/** A path as a single-quoted shell word, so a configuration or temporary
- * directory with a space in it cannot change what a build-context step runs. */
-function shellPath(value: string): string {
-	return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 /** Whether a directory exists, used to decide whether a build context uses the
  * configuration's `templates/` overlay at all. */
 function dirExists(dir: string): boolean {
@@ -1192,17 +1188,12 @@ function dockerBuildSteps(
 
 	const templatesDir = path.join(options.configDir, "templates");
 	const templateMarker = path.join(
-		options.tempDir,
+		options.tempDir || os.tmpdir(),
 		`devenv-templates-${appIdent}-${id}`,
 	);
-	// The build context overlay (`fix-default-target-after-promotion`): a
-	// configuration may keep `templates/` (typically a `.dockerignore`) that the
-	// app's Dockerfile COPYs, and the overlay copies those entries into the
-	// checkout *for the build only*. It exists only when the configuration really
-	// has that directory — a build context that uses no templates gets no step at
-	// all — it records exactly the entries it copied so the cleanup removes
-	// exactly those, and it fails with a message instead of swallowing an error
-	// (`2>/dev/null; true` used to turn a failed copy into a silent success).
+	// Native preparation dereferences links and renders variables without shell
+	// evaluation or exposing credentials in argv. Always-run cleanup owns only
+	// generated entries; existing checkout files are never overwritten.
 	const usesTemplates = dirExists(templatesDir);
 	const prepare = step(
 		"prepare-build-context",
@@ -1211,18 +1202,8 @@ function dockerBuildSteps(
 	);
 	if (usesTemplates)
 		prepare.configuration = {
-			command: "sh",
-			args: [
-				"-c",
-				[
-					"set -e",
-					`marker=${shellPath(templateMarker)}`,
-					`templates=${shellPath(templatesDir)}`,
-					'mkdir -p "$(dirname "$marker")"',
-					'ls -1A "$templates/" > "$marker"',
-					'cp -R "$templates/." .',
-				].join("\n"),
-			],
+			command: BUILD_CONTEXT_COMMAND,
+			args: ["prepare", options.configDir, dir, templateMarker],
 			dir,
 		};
 	const build = step("build-image", "Build image", KIND.command);
@@ -1249,19 +1230,8 @@ function dockerBuildSteps(
 	cleanupTemplates.failurePolicy = FAILURE_ALWAYS_RUN;
 	if (usesTemplates)
 		cleanupTemplates.configuration = {
-			command: "sh",
-			args: [
-				"-c",
-				[
-					`marker=${shellPath(templateMarker)}`,
-					'if [ -f "$marker" ]; then',
-					"  while IFS= read -r entry; do",
-					'    if [ -n "$entry" ]; then rm -rf -- "$entry"; fi',
-					'  done < "$marker"',
-					'  rm -f "$marker"',
-					"fi",
-				].join("\n"),
-			],
+			command: BUILD_CONTEXT_COMMAND,
+			args: ["cleanup", options.configDir, dir, templateMarker],
 			dir,
 		};
 	// Prune superseded images and unused volumes after every successful build.

@@ -8,6 +8,7 @@
 // for work that did not run, never merges two commands into one step, and never
 // decides the run's fate: it reports, the engine applies the failure policy.
 import type { ActionStepDefinition } from "@devenv/types";
+import { BUILD_CONTEXT_COMMAND, buildContext } from "./build-context.ts";
 import { killProcessTree } from "./process-group.ts";
 import type { HandlerContext, StepResult } from "./step-result.ts";
 import { OUTCOME } from "./step-result.ts";
@@ -85,7 +86,10 @@ export class OSCommandRunner implements CommandRunner {
 		output?: (stream: "stdout" | "stderr", chunk: string) => void,
 		signal?: AbortSignal,
 	): Promise<CommandResult> {
-		if (signal?.aborted) {
+		if (
+			signal?.aborted &&
+			!(spec.name === BUILD_CONTEXT_COMMAND && spec.args[0] === "cleanup")
+		) {
 			return {
 				stdout: "",
 				stderr: "",
@@ -97,6 +101,22 @@ export class OSCommandRunner implements CommandRunner {
 			spec.env && spec.env.length > 0
 				? { ...process.env, ...parseEnv(spec.env) }
 				: undefined;
+		if (spec.name === BUILD_CONTEXT_COMMAND) {
+			try {
+				buildContext(spec.args, spec.runId, env ?? process.env);
+				return { stdout: "", stderr: "", exitCode: 0 };
+			} catch (error) {
+				return {
+					stdout: "",
+					stderr: "",
+					exitCode: 1,
+					error:
+						error instanceof Error
+							? error
+							: new Error("Build-context preparation failed"),
+				};
+			}
+		}
 		const proc = Bun.spawn([spec.name, ...spec.args], {
 			...(spec.dir ? { cwd: spec.dir } : {}),
 			...(env ? { env } : {}),

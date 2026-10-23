@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { OSCommandRunner } from "../src/server/actions/command.ts";
 import { discoverActionTargets } from "../src/server/actions/discovery.ts";
 import {
 	compileContainerTargetsWithTools,
@@ -707,7 +708,7 @@ describe("a symlinked Dockerfile builds", () => {
 		expect(fs.readdirSync(checkout)).toEqual([]);
 	});
 
-	test("the templates overlay copies them into the build context and cleans exactly them up", () => {
+	test("the templates overlay copies them into the build context and cleans exactly them up", async () => {
 		const { configDir } = liveConfig("env-setup-templates-");
 		writeFile(
 			path.join(configDir, "templates", ".dockerignore"),
@@ -747,12 +748,13 @@ describe("a symlinked Dockerfile builds", () => {
 		expect(prepareConfiguration.args?.join("\n")).not.toContain("2>/dev/null");
 		expect(prepareConfiguration.args?.join("\n")).not.toContain("; true");
 		const run = (configuration: { command?: string; args?: string[] }) =>
-			Bun.spawnSync(
-				[configuration.command ?? "sh", ...(configuration.args ?? [])],
-				{ cwd: checkout, stdout: "pipe", stderr: "pipe" },
-			);
-		const prepared = run(prepareConfiguration);
-		expect(prepared.stderr.toString()).toBe("");
+			new OSCommandRunner().run({
+				name: configuration.command ?? "sh",
+				args: configuration.args ?? [],
+				dir: checkout,
+			});
+		const prepared = await run(prepareConfiguration);
+		expect(prepared.error).toBeUndefined();
 		expect(prepared.exitCode).toBe(0);
 		// The Dockerfile's own COPY can now see them.
 		expect(fs.readFileSync(path.join(checkout, ".dockerignore"), "utf8")).toBe(
@@ -761,7 +763,7 @@ describe("a symlinked Dockerfile builds", () => {
 		expect(
 			fs.readFileSync(path.join(checkout, "sub", "keep.txt"), "utf8"),
 		).toBe("keep\n");
-		const cleaned = run(cleanupConfiguration);
+		const cleaned = await run(cleanupConfiguration);
 		expect(cleaned.exitCode).toBe(0);
 		expect(fs.existsSync(path.join(checkout, ".dockerignore"))).toBe(false);
 		expect(fs.existsSync(path.join(checkout, "sub"))).toBe(false);
@@ -770,7 +772,7 @@ describe("a symlinked Dockerfile builds", () => {
 		);
 	});
 
-	test("a templates copy that cannot run fails instead of reporting success", () => {
+	test("a templates copy that cannot run fails instead of reporting success", async () => {
 		const { configDir } = liveConfig("env-setup-templates-");
 		writeFile(path.join(configDir, "templates", ".dockerignore"), "x\n");
 		const checkout = tempDir("env-setup-templates-checkout-");
@@ -797,12 +799,13 @@ describe("a symlinked Dockerfile builds", () => {
 			recursive: true,
 			force: true,
 		});
-		const failed = Bun.spawnSync(
-			[configuration.command ?? "sh", ...(configuration.args ?? [])],
-			{ cwd: checkout, stdout: "pipe", stderr: "pipe" },
-		);
+		const failed = await new OSCommandRunner().run({
+			name: configuration.command ?? "sh",
+			args: configuration.args ?? [],
+			dir: checkout,
+		});
 		expect(failed.exitCode).not.toBe(0);
-		expect(failed.stderr.toString()).not.toBe("");
+		expect(failed.error).toBeDefined();
 	});
 
 	test("an unresolvable link falls back to its lexical path so the tool names it", async () => {
