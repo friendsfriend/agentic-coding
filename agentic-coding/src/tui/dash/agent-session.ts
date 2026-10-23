@@ -221,6 +221,14 @@ export function toolIcon(name: string): string {
 	return TOOL_ICONS[name] ?? "•";
 }
 
+/** The family glyph carried by every `browser_*` tool, in front of its action
+ * icon. Stage tools are their own family; the browser views are scoped to the
+ * browser actions first. */
+export const BROWSER_TOOL_GLYPH = "\uf488";
+export function isBrowserTool(name: string | undefined): boolean {
+	return name?.startsWith("browser_") === true;
+}
+
 /** The harness diagnostics a tool result entry carries, one message each. */
 function diagnosticsOf(entry: unknown): string[] {
 	if (!isRecord(entry) || !isRecord(entry.data)) return [];

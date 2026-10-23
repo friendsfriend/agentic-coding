@@ -10,7 +10,10 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { uiColors } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
-import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
+import {
+	type AgentSessionBlock,
+	BROWSER_TOOL_GLYPH,
+} from "../../src/tui/dash/agent-session.ts";
 import {
 	AgentSessionView,
 	SESSION_PICKER_KEYS,
@@ -1640,7 +1643,7 @@ test("tool rows get a view from their call and result, and a generic default", a
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 18 },
+		{ width: 80, height: 22 },
 	);
 	/** The painted foreground of the first cell holding `text`. */
 	const foreground = (text: string) => {
@@ -1757,22 +1760,214 @@ test("every tool row uses the raised block surface", async () => {
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 14 },
+		{ width: 80, height: 20 },
 	);
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
 		const frame = t.captureCharFrame();
+		const lines = frame.split("\n");
 		const row = (needle: string) =>
-			frame.split("\n").find((line) => line.includes(needle)) ?? "";
+			lines.find((line) => line.includes(needle)) ?? "";
 		// A specialized view and the generic fallback share the same raised block:
 		// the heavy left rule is the first cell of every tool row.
 		expect(row("Read src/a.ts")).toContain("▸ → Read src/a.ts");
 		expect(row("Read src/a.ts").trimStart().startsWith("┃")).toBe(true);
+		// The block keeps one blank line of its raised surface above and below the
+		// call, rather than letting the header touch the block's edge.
+		const readLine = lines.findIndex((line) => line.includes("Read src/a.ts"));
+		expect(readLine).toBeGreaterThan(0);
+		expect(lines[readLine - 1]).toMatch(/^┃\s*$/);
+		expect(lines[readLine + 1]).toMatch(/^┃\s*$/);
 		expect(row("search query=needle")).toContain("▸ • search query=needle");
 		expect(row("search query=needle").trimStart().startsWith("┃")).toBe(true);
 		expect(row("bun test")).toContain("▸ $ bun test");
 		expect(row("bun test").trimStart().startsWith("┃")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("browser tools carry the browser glyph before their action icon", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "browser",
+			kind: "tool",
+			text: "browser_snapshot stage=checkout",
+			tone: "success",
+			icon: "•",
+			tool: "browser_snapshot",
+		},
+		{
+			id: "pending",
+			kind: "tool",
+			text: "browser_click ref=e3",
+			tone: "warning",
+			icon: "•",
+			tool: "browser_click",
+			pending: true,
+			live: true,
+			toolCall: { name: "browser_click", args: { ref: "e3" }, callId: "c1" },
+		},
+		{
+			id: "stage",
+			kind: "tool",
+			text: "stage_step",
+			tone: "success",
+			icon: "•",
+			tool: "stage_step",
+		},
+		{
+			id: "read",
+			kind: "tool",
+			text: "read path=src/a.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 22 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const lines = t.captureCharFrame().split("\n");
+		const row = (needle: string) =>
+			lines.find((line) => line.includes(needle)) ?? "";
+		// The browser family glyph sits immediately before the action icon, with
+		// the usual gap before the label.
+		expect(row("browser_snapshot stage=checkout")).toContain(
+			`${BROWSER_TOOL_GLYPH}• browser_snapshot stage=checkout`,
+		);
+		// A running browser call keeps the glyph in front of its spinner.
+		expect(row("e3")).toContain(BROWSER_TOOL_GLYPH);
+		// Stage tools are a separate family, and other tools are unaffected.
+		expect(row("stage_step")).toContain("• stage_step");
+		expect(row("stage_step")).not.toContain(BROWSER_TOOL_GLYPH);
+		expect(row("read path=src/a.ts")).toContain("→ read path=src/a.ts");
+		expect(row("read path=src/a.ts")).not.toContain(BROWSER_TOOL_GLYPH);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a tool block's left rule carries its running, success or failure state", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "running",
+			kind: "tool",
+			text: "read path=src/running.ts",
+			tone: "warning",
+			icon: "→",
+			tool: "read",
+			pending: true,
+			live: true,
+			toolCall: {
+				name: "read",
+				args: { path: "src/running.ts" },
+				callId: "run",
+			},
+		},
+		{
+			id: "success",
+			kind: "tool",
+			text: "read path=src/ok.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/ok.ts" },
+				callId: "ok",
+				result: { lines: ["ok"], isError: false, notes: [] },
+			},
+		},
+		{
+			id: "failure",
+			kind: "tool",
+			text: "bash command=bun failing-test",
+			tone: "error",
+			icon: "$",
+			tool: "bash",
+			toolCall: {
+				name: "bash",
+				args: { command: "bun failing-test" },
+				callId: "bad",
+				result: { lines: ["failed"], isError: true, notes: [] },
+			},
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 24 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const spans = t.captureSpans();
+		const rule = (needle: string) => {
+			const line = spans.lines.find((line) =>
+				line.spans.some((span) => span.text.includes(needle)),
+			);
+			return line?.spans.find((span) => span.text.includes("┃"))?.fg;
+		};
+		const rgb = (color: unknown) => {
+			const buffer = (color as { buffer?: Record<number, number> } | undefined)
+				?.buffer;
+			if (!buffer) return undefined;
+			return [buffer[0] ?? -1, buffer[1] ?? -1, buffer[2] ?? -1]
+				.map(Math.round)
+				.join(",");
+		};
+		const theme = (hex: string) => {
+			const parsed = parseColor(hex) as unknown as {
+				r: number;
+				g: number;
+				b: number;
+			};
+			return [parsed.r, parsed.g, parsed.b]
+				.map((part) => Math.round(part * 255))
+				.join(",");
+		};
+		expect(rgb(rule("Reading src/running.ts"))).toBe(theme(uiColors.textMuted));
+		expect(rgb(rule("Read src/ok.ts"))).toBe(theme(uiColors.success));
+		expect(rgb(rule("bun failing-test"))).toBe(theme(uiColors.error));
 	} finally {
 		t.renderer.destroy();
 	}
@@ -2082,7 +2277,7 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 50, height: 20 },
+		{ width: 50, height: 30 },
 	);
 	try {
 		await t.renderOnce();

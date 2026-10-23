@@ -57,11 +57,13 @@ import {
 import {
 	type AgentSessionBlock,
 	type AgentSessionTone,
+	BROWSER_TOOL_GLYPH,
 	formatCallDuration,
 	formatClock,
 	formatCost,
 	formatDuration,
 	formatTokenCount,
+	isBrowserTool,
 	reuseAgentSessionBlocks,
 	SLOW_CALL_MS,
 } from "../agent-session.ts";
@@ -230,6 +232,18 @@ function markerColor(tone: AgentSessionTone): string {
 		default:
 			return uiColors.primary;
 	}
+}
+
+/** A tool block's left rule carries the call's state: light grey while it runs,
+ * green once it succeeds, red when it fails. An aborted call never ran to a
+ * result, so it stays neutral rather than reading as a failure. */
+function toolBorderColor(block: AgentSessionBlock): string {
+	if (block.pending === true) return uiColors.textMuted;
+	if (block.tone === "error" || block.toolCall?.result?.isError === true)
+		return uiColors.error;
+	if (block.tone === "success" || block.toolCall?.result !== undefined)
+		return uiColors.success;
+	return uiColors.textMuted;
 }
 
 function toneColor(tone: AgentSessionTone): string {
@@ -478,16 +492,20 @@ function sectionLineCount(section: ToolViewSection): number {
 }
 
 /** The surface every tool call is drawn on: opencode's raised block with a heavy
- * left rule. opencode itself keeps ordinary calls inline, but this transcript
+ * left rule and one line of the raised surface above and below the call. The
+ * rule takes the call's state color (grey while running, green on success, red
+ * on failure). opencode itself keeps ordinary calls inline, but this transcript
  * uses the block for every tool so a run reads as one consistent stack of call
  * surfaces rather than switching shapes by tool. */
-function ToolFrame(props: { children: JSX.Element }) {
+function ToolFrame(props: { color: string; children: JSX.Element }) {
 	return (
 		<box
 			border={["left"]}
 			borderStyle="heavy"
-			borderColor={uiColors.border}
+			borderColor={props.color}
 			backgroundColor={uiColors.bgMantle}
+			paddingTop={1}
+			paddingBottom={1}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
@@ -497,9 +515,12 @@ function ToolFrame(props: { children: JSX.Element }) {
 	);
 }
 
-/** A tool call's header row: fold, icon, label, facts and timing. The icon slot
- * carries the spinner while the call runs, the way opencode draws a running
- * tool. An ordinary call is muted; only a failed one takes the error color. */
+/** A tool call's header row: fold, family glyph, action icon, label, facts and
+ * timing. Browser tools carry their web glyph before the action icon, so the
+ * family reads at a glance while the action icon keeps the call's state. The
+ * icon slot carries the spinner while the call runs, the way opencode draws a
+ * running tool. An ordinary call is muted; only a failed one takes the error
+ * color. */
 function ToolCallHeader(props: {
 	block: AgentSessionBlock;
 	icon: string;
@@ -511,6 +532,8 @@ function ToolCallHeader(props: {
 }) {
 	const fg = () =>
 		props.block.tone === "error" ? uiColors.error : uiColors.textMuted;
+	const browser = () =>
+		isBrowserTool(props.block.toolCall?.name ?? props.block.tool);
 	return (
 		<box flexDirection="row" {...useTap(props.onToggle)}>
 			{/* The fold glyph leads the row, so a list of tool rows reads as a list
@@ -518,7 +541,14 @@ function ToolCallHeader(props: {
 			<text width={2} flexShrink={0} fg={uiColors.textMuted}>
 				{props.expandable ? (props.expanded ? "▾" : "▸") : ""}
 			</text>
-			<box width={2} flexShrink={0}>
+			{/* Browser tools need one more cell: family glyph + action glyph + the
+			    gap before the label. Other tools keep the existing two-cell gutter. */}
+			<box width={browser() ? 3 : 2} flexShrink={0} flexDirection="row">
+				<Show when={browser()}>
+					<text fg={uiColors.textMuted} flexShrink={0}>
+						{BROWSER_TOOL_GLYPH}
+					</text>
+				</Show>
 				<Show
 					when={props.block.pending === true}
 					fallback={<text fg={fg()}>{props.icon}</text>}
@@ -719,7 +749,7 @@ function Block(props: {
 		const expandable = () =>
 			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
 		return (
-			<ToolFrame>
+			<ToolFrame color={toolBorderColor(props.block)}>
 				<box flexDirection="column">
 					<ToolCallHeader
 						block={props.block}
@@ -856,7 +886,10 @@ function Block(props: {
 				return <text fg={uiColors.textMuted}>— {props.block.text} —</text>;
 		}
 	};
-	if (props.block.kind === "tool") return <ToolFrame>{content()}</ToolFrame>;
+	if (props.block.kind === "tool")
+		return (
+			<ToolFrame color={toolBorderColor(props.block)}>{content()}</ToolFrame>
+		);
 	return (
 		// The status hint is the same left highlight the prompt uses, but the row
 		// itself stays on the page background: the raised surface is for prompts,
@@ -1585,7 +1618,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 												>
 													<NewContentDivider />
 												</Show>
-												<ToolFrame>
+												<ToolFrame
+													color={
+														latest
+															? toolBorderColor(latest)
+															: uiColors.textMuted
+													}
+												>
 													<box
 														flexDirection="row"
 														{...useTap(() => toggleReadGroup(row.id))}
