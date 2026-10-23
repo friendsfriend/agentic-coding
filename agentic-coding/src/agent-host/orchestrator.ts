@@ -447,6 +447,12 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - Report what you did and the resulting workflow status. Be concise.`;
 
 /** The orchestrator extension: workflow tools plus the orchestrator prompt. */
+/** Strict-schema clients require every property. Null is the explicit absent
+ * value; unlike invented placeholder objects, it cannot select both branches. */
+function nullableOptional(schema: Parameters<typeof Type.Optional>[0]) {
+	return Type.Optional(Type.Union([schema, Type.Null()]));
+}
+
 export function createOrchestratorExtension(
 	lookup: RunContextLookup,
 ): Extension {
@@ -787,7 +793,7 @@ export function createOrchestratorExtension(
 			}),
 			defineTool({
 				name: "start_workflow",
-				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase, a configured app for env-setup and the allow-listed stage for stage-test; returns the start result with human reviews retained. Pass the task as \`task\` text or as \`taskRef\` — {change:"<id>"} for an OpenSpec change of the target repository (list_changes lists them) or {previousMessage:true} for your own last developer message — and the answer names the resolved change and task length.`,
+				description: `Use only after establishing with the developer, in order: ${START_WORKFLOW_CHECKLIST}; list_agent_config shows preset/model-profile choices; honor an existing developer default and ask only if none is set or the request implies another. Read project lists, branches, workflow state and presets yourself—do not ask for facts you can read; validate blueprints first, provide both sourceBranch and targetBranch for rebase, a configured app for env-setup and the allow-listed stage for stage-test; returns the start result with human reviews retained. For strict schemas, send null for unused optional fields (especially blueprint/taskRef/app); never invent placeholder values. Pass the task as \`task\` text or as \`taskRef\` — {change:"<id>"} for an OpenSpec change of the target repository (list_changes lists them) or {previousMessage:true} for your own last developer message — and the answer names the resolved change and task length.`,
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: Type.String({
@@ -795,14 +801,14 @@ export function createOrchestratorExtension(
 						maxLength: 64,
 						description: "New workflow id: lowercase kebab-case",
 					}),
-					workflowType: Type.Optional(
+					workflowType: nullableOptional(
 						Type.String({
 							description:
 								"A built-in workflow type id from list_workflow_types; mutually exclusive with blueprint. Rebase requires sourceBranch and targetBranch.",
 						}),
 					),
-					blueprint: Type.Optional(BlueprintParameter),
-					task: Type.Optional(
+					blueprint: nullableOptional(BlueprintParameter),
+					task: nullableOptional(
 						Type.String({
 							minLength: 1,
 							maxLength: TASK_CHAR_BOUND,
@@ -810,7 +816,7 @@ export function createOrchestratorExtension(
 								"Task agreed with the developer: goal, constraints and acceptance criteria. Exactly one of task/taskRef.",
 						}),
 					),
-					taskRef: Type.Optional(
+					taskRef: nullableOptional(
 						Type.Union(
 							[
 								Type.Object({
@@ -834,19 +840,19 @@ export function createOrchestratorExtension(
 							},
 						),
 					),
-					mode: Type.Optional(
+					mode: nullableOptional(
 						Type.Union([Type.Literal("worktree"), Type.Literal("checkout")], {
 							description:
 								"Choose `worktree` (default) for isolation or `checkout` to use the repository checkout.",
 						}),
 					),
-					preset: Type.Optional(
+					preset: nullableOptional(
 						Type.String({
 							description:
 								"Agent preset name; list_agent_config shows presets and the model profiles they use. Omit to use configured workflow defaults.",
 						}),
 					),
-					app: Type.Optional(
+					app: nullableOptional(
 						Type.String({
 							minLength: 1,
 							maxLength: 128,
@@ -854,7 +860,7 @@ export function createOrchestratorExtension(
 								"The configured application an `env-setup` workflow drafts definitions for, by the ident list_projects reports (`kind` `app`). Required for workflowType `env-setup`; refused for every other type.",
 						}),
 					),
-					stage: Type.Optional(
+					stage: nullableOptional(
 						Type.String({
 							minLength: 1,
 							maxLength: 128,
@@ -862,20 +868,20 @@ export function createOrchestratorExtension(
 								"The allow-listed hosted stage a `stage-test` workflow runs on, by the ident the stage catalog reports. Required for workflowType `stage-test`; the server refuses an ident that is not in the allow-list with `stage-not-configured`. `stage` means nothing to any other workflow type, so never send it with one.",
 						}),
 					),
-					ticket: Type.Optional(
+					ticket: nullableOptional(
 						Type.String({
 							maxLength: 128,
 							description:
 								"Optional ticket or issue reference for the workflow.",
 						}),
 					),
-					sourceBranch: Type.Optional(
+					sourceBranch: nullableOptional(
 						Type.String({
 							description:
 								"For rebase, the source branch being rebased (required with targetBranch); for debug, the branch to investigate.",
 						}),
 					),
-					targetBranch: Type.Optional(
+					targetBranch: nullableOptional(
 						Type.String({
 							description:
 								"For rebase, the target ref to rebase onto (required with sourceBranch).",
@@ -902,6 +908,25 @@ export function createOrchestratorExtension(
 						env,
 						context,
 					) => {
+						// Some providers make optional schema properties required. Normalize
+						// their explicit nulls before exclusivity checks and wire encoding.
+						args = { ...args };
+						for (const key of [
+							"workflowType",
+							"blueprint",
+							"task",
+							"taskRef",
+							"mode",
+							"preset",
+							"app",
+							"stage",
+							"ticket",
+							"sourceBranch",
+							"targetBranch",
+						] as const) {
+							if (args[key] === null) delete args[key];
+						}
+
 						if (args.blueprint !== undefined && args.workflowType !== undefined)
 							throw new Error(
 								"start_workflow takes a workflowType or a blueprint, not both",

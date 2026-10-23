@@ -33,6 +33,9 @@ interface ToolResult {
 interface Tool {
 	readonly name: string;
 	readonly description: string;
+	readonly parameters: {
+		properties: Record<string, { anyOf?: { type?: string }[] }>;
+	};
 	execute(
 		args: Record<string, unknown>,
 		api: { conversationId: string },
@@ -451,6 +454,101 @@ describe("cheap wake-up tools", () => {
 			// An empty candidate list still has a next step, and the description
 			// names it: the tool that lists the ids that do exist.
 			expect(status.description).toContain("call list_workflows");
+		});
+	});
+
+	test("strict clients can start a stage test with nulls for all unused optional fields", async () => {
+		await withServer(async (tools, started) => {
+			const start = tools.get("start_workflow");
+			if (!start) throw new Error("missing start_workflow");
+			const unused = {
+				blueprint: null,
+				taskRef: null,
+				app: null,
+				ticket: null,
+				sourceBranch: null,
+				targetBranch: null,
+			};
+			for (const key of [
+				...Object.keys(unused),
+				"workflowType",
+				"task",
+				"mode",
+				"preset",
+				"stage",
+			]) {
+				expect(start.parameters.properties[key]?.anyOf).toContainEqual({
+					type: "null",
+				});
+			}
+			const input = {
+				repo: "/repo",
+				workflowId: "stage-run",
+				workflowType: "stage-test",
+				task: "Test the customer process using blocks",
+				stage: "qa-ava",
+				preset: "copilot-sol",
+				mode: "worktree",
+				...unused,
+			};
+			const result = await call(start, input);
+			expect(result.isError).not.toBe(true);
+			expect(started).toHaveLength(1);
+			expect(started[0]).toMatchObject({
+				repo: "/repo",
+				workflowId: "stage-run",
+				workflowType: "stage-test",
+				task: input.task,
+				stage: "qa-ava",
+				preset: "copilot-sol",
+				mode: "worktree",
+			});
+			for (const key of Object.keys(unused))
+				expect(started[0]).not.toHaveProperty(key);
+			expect(input).toHaveProperty("blueprint", null); // no mutation of caller data
+		});
+	});
+
+	test("null selection is absent, but genuine conflicting workflow and task selections still fail", async () => {
+		await withServer(async (tools, started) => {
+			const start = tools.get("start_workflow");
+			if (!start) throw new Error("missing start_workflow");
+			const base = { repo: "/repo", workflowId: "wf-1", task: "test" };
+			for (const selection of [
+				{ workflowType: null, blueprint: null },
+				{ workflowType: "solo", blueprint: { label: "not a placeholder" } },
+				{
+					workflowType: "solo",
+					blueprint: null,
+					taskRef: { change: "real-change" },
+				},
+			]) {
+				expect((await call(start, { ...base, ...selection })).isError).toBe(
+					true,
+				);
+			}
+			expect(started).toHaveLength(0);
+			const result = await call(start, {
+				repo: "/repo",
+				workflowId: "wf-1",
+				workflowType: "solo",
+				blueprint: null,
+				task: null,
+				taskRef: { change: "real-change" },
+				mode: null,
+				preset: null,
+				app: null,
+				stage: null,
+				ticket: null,
+				sourceBranch: null,
+				targetBranch: null,
+			});
+			expect(result.isError).not.toBe(true);
+			expect(started[0]).toMatchObject({
+				taskRef: { change: "real-change" },
+				mode: "worktree",
+			});
+			expect(started[0]).not.toHaveProperty("task");
 		});
 	});
 
