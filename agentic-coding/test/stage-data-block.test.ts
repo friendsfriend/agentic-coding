@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { STAGE_BLOCK_EXAMPLE } from "../src/agent-host/browser-tools.ts";
 import {
 	compileDataBlock,
 	DATA_BLOCK_MAX_BYTES,
@@ -205,6 +206,13 @@ function context(options: { readonly failText?: string } = {}) {
 }
 
 describe("stage data blocks: the document contract", () => {
+	test("the example the stage_block_save tool shows the tester is a valid document", () => {
+		const result = validateDataBlock(
+			JSON.parse(JSON.stringify(STAGE_BLOCK_EXAMPLE)),
+		);
+		expect(result.ok ? [] : result.issues).toEqual([]);
+	});
+
 	test("a reviewed document compiles to the same frozen definition a checked-in block has", () => {
 		const compiled = compileDataBlock(document());
 		expect(compiled.id).toBe("crm.customer.readAddress");

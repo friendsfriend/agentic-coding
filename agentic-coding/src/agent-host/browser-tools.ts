@@ -1190,10 +1190,49 @@ const StageRunParameters = Type.Object({
 	),
 });
 
+/** A complete, valid `format: 1` block: the shape `stage_block_save` documents to
+ * the tester, validated by a test so the description cannot drift. */
+export const STAGE_BLOCK_EXAMPLE = {
+	format: 1,
+	id: "web.page.openAndRead",
+	version: "1.0.0",
+	app: "web",
+	roles: ["user"],
+	title: "Open a page and read its heading",
+	description: "Opens /pages/<slug> and reads the h1.",
+	effects: ["read"],
+	idempotent: true,
+	params: {
+		type: "object",
+		additionalProperties: false,
+		properties: { slug: { type: "string", minLength: 1 } },
+		required: ["slug"],
+	},
+	returns: {
+		type: "object",
+		additionalProperties: false,
+		properties: { heading: { type: "string" } },
+		required: ["heading"],
+	},
+	examples: [{ slug: "start" }],
+	postcondition: "the page heading is shown",
+	operations: [
+		{
+			op: "step",
+			label: "open",
+			expected: "heading visible",
+			operations: [
+				{ op: "goto", path: "/pages/{{ args.slug }}" },
+				{ op: "expectVisible", target: { role: "heading" } },
+				{ op: "read", target: { role: "heading" }, into: "heading" },
+			],
+		},
+	],
+} as const;
+
 const StageBlockSaveParameters = Type.Object({
 	document: Type.Unknown({
-		description:
-			'The block as a `format: 1` JSON document: id, version, title, description, app, roles, effects, idempotent, requires, provides, params, returns, examples, postcondition and operations. Operations are `step`/`optional` groups of goto, click, fill, type, press, select, waitFor, wait, expectVisible, expectText, capture and read; a value is a bounded string, `{{ args.<name> }}` interpolation or `{ secret: "<name>" }`.',
+		description: `The block as a \`format: 1\` JSON document: id, version, title, description, app, roles, effects, idempotent, requires, provides, params, returns, examples, postcondition and operations. Operations are \`step\`/\`optional\` groups of goto, click, fill, type, press, select, waitFor, wait, expectVisible, expectText, capture and read; a value is a bounded string, \`{{ args.<name> }}\` interpolation or \`{ secret: "<name>" }\`. Top-level operations are ONLY \`{op:"step",label,expected?,operations:[actions]}\` or \`{op:"optional",reason,operations:[actions]}\`; actions go inside them and take a \`target\` of \`{role,name?}\`, \`{label}\`, \`{testId}\`, \`{text}\` or \`{selector}\`. \`params\`/\`returns\` are JSON schemas with \`additionalProperties:false\`; \`examples\` is a list of plain argument objects (no \`args\` wrapper); omit \`requires\`/\`provides\` unless non-empty. Minimal example: ${JSON.stringify(STAGE_BLOCK_EXAMPLE)}.`,
 	}),
 	// The draft's plan id and revision are the engine's: `stage_block_save` reads
 	// them from the workflow's own pinned plan, so there is no parameter for them
