@@ -34,6 +34,20 @@ export interface EmbeddedAgentViewProps {
 	readonly launcher: TerminalAgentLauncher;
 }
 
+const encoder = new TextEncoder();
+
+/**
+ * Set the PTY emulator's default foreground and background to the shell theme.
+ * Agent TUIs that leave their default background unpainted (Pi's `system`
+ * theme does) otherwise render on the emulator's black default. The sequences
+ * also become the answers to the child's OSC 10/11 colour queries, so an agent
+ * that derives its palette from the terminal sees the right surface colour.
+ */
+const terminalThemeSequences = (): Uint8Array =>
+	encoder.encode(
+		`\u001b]10;${uiColors.textPrimary}\u0007\u001b]11;${uiColors.bgBase}\u0007`,
+	);
+
 export function EmbeddedAgentView(props: EmbeddedAgentViewProps) {
 	const dimensions = useTerminalDimensions();
 	// Only the very first frame uses this: OpenTUI reports the real layout size
@@ -100,9 +114,20 @@ export function EmbeddedAgentView(props: EmbeddedAgentViewProps) {
 		}
 	});
 
+	// Theme switches must reach the already-running agent too: the terminal
+	// stores default-colour cells by intent, so the new defaults repaint them.
+	createEffect(() => {
+		const view = terminal();
+		const sequences = terminalThemeSequences();
+		if (view) view.write(sequences);
+	});
+
 	onMount(() => {
 		const view = terminal();
 		if (!view) return;
+		// Apply the theme before the child starts so its startup colour queries
+		// (OSC 10/11) already see the shell surfaces.
+		view.write(terminalThemeSequences());
 		const focusListener = (): void => {
 			if (!syncingShellFocus) props.onFocus();
 		};
@@ -143,6 +168,7 @@ export function EmbeddedAgentView(props: EmbeddedAgentViewProps) {
 
 	return (
 		<box
+			backgroundColor={uiColors.bgBase}
 			style={{
 				flexGrow: 1,
 				width: "100%",

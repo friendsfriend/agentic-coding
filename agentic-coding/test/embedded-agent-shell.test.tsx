@@ -6,9 +6,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { RGBA } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { dismissErrorModal } from "@ui";
+import { dismissErrorModal, uiColors } from "@ui";
 import { onCleanup } from "solid-js";
 import { TraceDb } from "../src/server/telemetry-db";
 import { setupKeymap } from "../src/tui/dash/keymap-setup.ts";
@@ -196,6 +197,16 @@ test("embedded agents own content keys, stay mounted, and stop on shutdown", asy
 		// Pi has no `?` help key, so the footer does not claim one.
 		expect(piFrame).not.toContain("? help");
 		expect(piFrame).not.toContain("Ctrl+T");
+
+		// The agent TUI paints no default background of its own, so its cells
+		// must use the shell theme rather than the terminal emulator's black.
+		const piTerminalBackground = t
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes("Pi-test-terminal"))?.bg;
+		expect(piTerminalBackground?.equals(RGBA.fromHex(uiColors.bgBase))).toBe(
+			true,
+		);
 
 		// Pi owns content keys just like OpenCode: Ctrl+T and ordinary text go
 		// to the PTY, and `?` does not open shell help while content has focus.

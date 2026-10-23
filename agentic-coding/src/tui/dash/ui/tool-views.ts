@@ -54,10 +54,6 @@ export interface ToolView {
 	readonly label?: string;
 	readonly summary: string;
 	readonly hint?: string;
-	/** The surface the row is drawn on. opencode keeps ordinary calls as an
-	 * inline row and gives a content-heavy call (shell, edit, write) a raised
-	 * block with a heavy left rule. */
-	readonly variant?: "inline" | "block";
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
 }
@@ -183,7 +179,6 @@ function editView(call: AgentSessionToolCall): ToolView {
 		icon: "←",
 		label: `Edit ${path}`,
 		summary: path,
-		variant: "block",
 		...(hint.length > 0 ? { hint: hint.join(" · ") } : {}),
 		...(rows.length > 0 ? { rows } : {}),
 	};
@@ -198,7 +193,6 @@ function writeView(call: AgentSessionToolCall): ToolView {
 		icon: "←",
 		label: `Write ${path}`,
 		summary: path,
-		variant: "block",
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
 		rows: lines.map((text) => ({ text, tone: "muted" as const })),
 	};
@@ -214,7 +208,6 @@ function bashView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
 		summary: command,
-		variant: "block",
 		hint: exit
 			? `exit ${exit[1]}`
 			: failed
@@ -1050,7 +1043,6 @@ function writePendingView(call: AgentSessionToolCall): ToolView {
 		icon: "←",
 		label: `Writing ${path}`,
 		summary: path,
-		variant: "block",
 		hint: progressHint(
 			content === undefined || content.length === 0
 				? []
@@ -1067,7 +1059,6 @@ function editPendingView(call: AgentSessionToolCall): ToolView {
 		icon: "←",
 		label: `Editing ${path}`,
 		summary: path,
-		variant: "block",
 		hint: progressHint([
 			count > 0 ? `${count} edit${count === 1 ? "" : "s"}` : undefined,
 		]),
@@ -1079,7 +1070,6 @@ function bashPendingView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
 		summary: stringArg(call.args, "command") ?? call.name,
-		variant: "block",
 	};
 }
 

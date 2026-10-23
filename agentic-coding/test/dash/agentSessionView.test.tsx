@@ -314,7 +314,7 @@ test("status rows stay on the page background instead of tinted boxes", async ()
 		const expected = [base.r, base.g, base.b].map((part) =>
 			Math.round(part * 255),
 		);
-		// Opencode reserves a raised fill for prompts and content-heavy tools;
+		// The raised fill is reserved for prompts, user messages and tool calls;
 		// notices, results and errors are drawn on the page background, with the
 		// status color living in the marker and text.
 		expect(background("Queued follow-up")).toEqual(expected);
@@ -1695,7 +1695,7 @@ test("tool rows get a view from their call and result, and a generic default", a
 	}
 });
 
-test("tool rows use opencode's inline and block surfaces", async () => {
+test("every tool row uses the raised block surface", async () => {
 	const blocks: AgentSessionBlock[] = [
 		{
 			id: "r1",
@@ -1709,6 +1709,20 @@ test("tool rows use opencode's inline and block surfaces", async () => {
 				args: { path: "src/a.ts" },
 				result: { lines: ["a"], isError: false, notes: [] },
 			},
+		},
+		{
+			id: "s1",
+			kind: "tool",
+			text: "search query=needle",
+			tone: "success",
+			icon: "•",
+			tool: "search",
+			toolCall: {
+				name: "search",
+				args: { query: "needle" },
+				result: { lines: ["src/a.ts"], isError: false, notes: [] },
+			},
+			detail: ["src/a.ts"],
 		},
 		{
 			id: "b1",
@@ -1743,7 +1757,7 @@ test("tool rows use opencode's inline and block surfaces", async () => {
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 12 },
+		{ width: 80, height: 14 },
 	);
 	try {
 		await t.renderOnce();
@@ -1751,11 +1765,12 @@ test("tool rows use opencode's inline and block surfaces", async () => {
 		const frame = t.captureCharFrame();
 		const row = (needle: string) =>
 			frame.split("\n").find((line) => line.includes(needle)) ?? "";
-		// A read is an inline row: it starts with the fold, not a border.
+		// A specialized view and the generic fallback share the same raised block:
+		// the heavy left rule is the first cell of every tool row.
 		expect(row("Read src/a.ts")).toContain("▸ → Read src/a.ts");
-		expect(row("Read src/a.ts").trimStart().startsWith("▸")).toBe(true);
-		// A shell call keeps opencode's raised block: the heavy left rule is the
-		// first cell of the row.
+		expect(row("Read src/a.ts").trimStart().startsWith("┃")).toBe(true);
+		expect(row("search query=needle")).toContain("▸ • search query=needle");
+		expect(row("search query=needle").trimStart().startsWith("┃")).toBe(true);
 		expect(row("bun test")).toContain("▸ $ bun test");
 		expect(row("bun test").trimStart().startsWith("┃")).toBe(true);
 	} finally {
@@ -1842,6 +1857,10 @@ test("consecutive successful reads group without adding or replacing tools", asy
 		const groupLine = collapsed
 			.split("\n")
 			.findIndex((line) => line.includes("2 reads"));
+		// A grouped read summary is still a tool row and keeps the raised block.
+		expect(collapsed.split("\n")[groupLine]?.trimStart().startsWith("┃")).toBe(
+			true,
+		);
 		await t.mockMouse.click(8, groupLine);
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
@@ -2074,7 +2093,8 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		expect(frame).toContain("very-last-word");
 		expect(frame).toContain("reporter verbose");
 		expect(frame).toContain("module-under-edit.");
-		expect(frame).toMatch(/module-under-edit\.\s*\n\s*ts/);
+		// The raised block's left rule is repeated on every wrapped row.
+		expect(frame).toMatch(/module-under-edit\. *\n┃ +ts/);
 		// A tool without a specialized view wraps its own summary too.
 		expect(frame).toContain("reachesTheLastWord");
 		// The spinner in the icon gutter is the running marker; the row's own

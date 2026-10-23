@@ -63,7 +63,6 @@ describe("toolView", () => {
 		);
 		expect(view?.summary).toBe("src/a.ts");
 		expect(view?.label).toBe("Edit src/a.ts");
-		expect(view?.variant).toBe("block");
 		expect(view?.hint).toBe("2 edits · +1 −1");
 		expect(view?.rows).toEqual([
 			{ text: "@@ -1,3 +1,3 @@", tone: "info" },
@@ -79,7 +78,6 @@ describe("toolView", () => {
 		);
 		expect(view?.summary).toBe("src/b.ts");
 		expect(view?.label).toBe("Write src/b.ts");
-		expect(view?.variant).toBe("block");
 		expect(view?.hint).toBe("3 lines");
 		expect(view?.rows?.map((row) => row.text)).toEqual(["one", "two", "three"]);
 	});
@@ -97,7 +95,6 @@ describe("toolView", () => {
 			),
 		);
 		expect(failed?.summary).toBe("npm test");
-		expect(failed?.variant).toBe("block");
 		expect(failed?.hint).toBe("exit 1");
 		expect(failed?.rows?.every((row) => row.tone === "error")).toBe(true);
 
@@ -762,7 +759,6 @@ describe("toolPendingView", () => {
 			icon: "←",
 			label: "Writing src/a.ts",
 			summary: "src/a.ts",
-			variant: "block",
 			hint: "3 lines · 5 chars",
 		});
 		// A write whose content has not arrived yet still names the file.
@@ -770,7 +766,6 @@ describe("toolPendingView", () => {
 			icon: "←",
 			label: "Writing src/a.ts",
 			summary: "src/a.ts",
-			variant: "block",
 			hint: undefined,
 		});
 	});
@@ -780,7 +775,6 @@ describe("toolPendingView", () => {
 			toolPendingView(call("edit", { path: "src/a.ts", edits: [{}, {}] })),
 		).toMatchObject({
 			label: "Editing src/a.ts",
-			variant: "block",
 			hint: "2 edits",
 		});
 	});
@@ -789,7 +783,6 @@ describe("toolPendingView", () => {
 		expect(toolPendingView(call("bash", { command: "npm test" }))).toEqual({
 			icon: "$",
 			summary: "npm test",
-			variant: "block",
 		});
 	});
 

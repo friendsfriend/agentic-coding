@@ -8,14 +8,12 @@
 // `/model` and `/thinking` pickers.
 //
 // Assistant output renders as markdown with no box; thinking collapses to a
-// single `Thinking…` line; tool calls follow opencode's two shapes — an inline
-// row for ordinary calls, a raised left-ruled block for shell/edit/write — with
-// a spinner in the icon gutter while a call runs. Every other entry keeps the
-// same left highlight the prompt uses, but stays on the page background: only
-// the prompt, user messages and content-heavy tool calls are raised surfaces.
-// The prompt below mirrors opencode v2: a left-bordered raised block with the
-// input and a metadata row (`Role · model · thinking` plus a live working
-// indicator).
+// single `Thinking…` line; every tool call is a raised left-ruled block with a
+// spinner in the icon gutter while it runs. Every other entry keeps the same
+// left highlight the prompt uses, but stays on the page background: only the
+// prompt, user messages and tool calls are raised surfaces. The prompt below
+// mirrors opencode v2: a left-bordered raised block with the input and a
+// metadata row (`Role · model · thinking` plus a live working indicator).
 //
 // The view replaces the detail grid, so its own keys (scroll, back) and the
 // picker's keys are route keymap layers gated on the `agent.view` field. The
@@ -479,29 +477,21 @@ function sectionLineCount(section: ToolViewSection): number {
 	);
 }
 
-/** The surface a tool call is drawn on: opencode keeps an ordinary call (read,
- * search, fetch) as an inline row and gives a content-heavy call (shell, edit,
- * write) a raised block with a heavy left rule. */
-function ToolFrame(props: {
-	variant: "inline" | "block";
-	children: JSX.Element;
-}) {
-	if (props.variant === "block")
-		return (
-			<box
-				border={["left"]}
-				borderStyle="heavy"
-				borderColor={uiColors.border}
-				backgroundColor={uiColors.bgMantle}
-				paddingLeft={2}
-				paddingRight={1}
-				flexShrink={0}
-			>
-				{props.children}
-			</box>
-		);
+/** The surface every tool call is drawn on: opencode's raised block with a heavy
+ * left rule. opencode itself keeps ordinary calls inline, but this transcript
+ * uses the block for every tool so a run reads as one consistent stack of call
+ * surfaces rather than switching shapes by tool. */
+function ToolFrame(props: { children: JSX.Element }) {
 	return (
-		<box paddingLeft={3} paddingRight={1} flexShrink={0}>
+		<box
+			border={["left"]}
+			borderStyle="heavy"
+			borderColor={uiColors.border}
+			backgroundColor={uiColors.bgMantle}
+			paddingLeft={2}
+			paddingRight={1}
+			flexShrink={0}
+		>
 			{props.children}
 		</box>
 	);
@@ -561,9 +551,8 @@ function ToolCallHeader(props: {
 }
 
 /** One transcript entry. Assistant output is markdown with no status box;
- * thinking is collapsible; a tool call is opencode's inline row or bordered
- * block; every other entry is a status box with the same left highlight the
- * prompt uses. */
+ * thinking is collapsible; a tool call is a raised bordered block; every other
+ * entry is a status box with the same left highlight the prompt uses. */
 function Block(props: {
 	block: AgentSessionBlock;
 	role: string;
@@ -730,7 +719,7 @@ function Block(props: {
 		const expandable = () =>
 			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
 		return (
-			<ToolFrame variant={tool.variant ?? "inline"}>
+			<ToolFrame>
 				<box flexDirection="column">
 					<ToolCallHeader
 						block={props.block}
@@ -805,8 +794,8 @@ function Block(props: {
 	const content = () => {
 		switch (props.block.kind) {
 			case "tool": {
-				// A tool without a specialized view keeps opencode's inline row: its
-				// own one-line call, with the full request and output under the fold.
+				// A tool without a specialized view is still a raised block: its own
+				// one-line call, with the full request and output under the fold.
 				const expandable =
 					(props.block.detail?.length ?? 0) > 0 ||
 					props.block.request !== undefined;
@@ -867,16 +856,11 @@ function Block(props: {
 				return <text fg={uiColors.textMuted}>— {props.block.text} —</text>;
 		}
 	};
-	if (props.block.kind === "tool")
-		return (
-			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
-				{content()}
-			</box>
-		);
+	if (props.block.kind === "tool") return <ToolFrame>{content()}</ToolFrame>;
 	return (
 		// The status hint is the same left highlight the prompt uses, but the row
-		// itself stays on the page background: opencode reserves a raised surface
-		// for prompts and content-heavy tool calls, not for every status line.
+		// itself stays on the page background: the raised surface is for prompts,
+		// user messages and tool calls, not for every status line.
 		<box
 			border={["left"]}
 			borderColor={markerColor(props.block.tone)}
@@ -1601,25 +1585,26 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 												>
 													<NewContentDivider />
 												</Show>
-												<box
-													paddingLeft={3}
-													flexDirection="row"
-													{...useTap(() => toggleReadGroup(row.id))}
-												>
-													<text
-														width={2}
-														flexShrink={0}
-														fg={uiColors.textMuted}
+												<ToolFrame>
+													<box
+														flexDirection="row"
+														{...useTap(() => toggleReadGroup(row.id))}
 													>
-														{expanded() ? "▾" : "▸"}
-													</text>
-													<text fg={uiColors.textMuted} flexGrow={1}>
-														→ {readGroupLabel(row.blocks)}
-													</text>
-													<Show when={latest}>
-														{(block) => <Stamp block={block()} />}
-													</Show>
-												</box>
+														<text
+															width={2}
+															flexShrink={0}
+															fg={uiColors.textMuted}
+														>
+															{expanded() ? "▾" : "▸"}
+														</text>
+														<text fg={uiColors.textMuted} flexGrow={1}>
+															→ {readGroupLabel(row.blocks)}
+														</text>
+														<Show when={latest}>
+															{(block) => <Stamp block={block()} />}
+														</Show>
+													</box>
+												</ToolFrame>
 												<Show when={expanded()}>
 													<box flexDirection="column" gap={1}>
 														<For each={row.blocks}>
