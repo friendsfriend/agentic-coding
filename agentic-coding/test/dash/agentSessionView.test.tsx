@@ -262,6 +262,69 @@ test("renders a provider error block", async () => {
 	t.renderer.destroy();
 });
 
+test("status rows stay on the page background instead of tinted boxes", async () => {
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
+				blocks={[
+					{
+						id: "notice",
+						kind: "notice",
+						text: "Queued follow-up",
+						tone: "warning",
+					},
+					{ id: "result", kind: "result", text: "done", tone: "success" },
+					{ id: "error", kind: "error", text: "failed", tone: "error" },
+				]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 100, height: 24 },
+	);
+	try {
+		await t.flush();
+		const spans = t.captureSpans().lines.flatMap((line) => line.spans);
+		const background = (text: string) => {
+			const span = spans.find((item) => item.text.includes(text));
+			const buffer = (
+				span?.bg as { buffer?: Record<number, number> } | undefined
+			)?.buffer;
+			if (!buffer) return undefined;
+			return [buffer[0] ?? -1, buffer[1] ?? -1, buffer[2] ?? -1].map(
+				Math.round,
+			);
+		};
+		const base = parseColor(uiColors.bgBase) as unknown as {
+			r: number;
+			g: number;
+			b: number;
+		};
+		const expected = [base.r, base.g, base.b].map((part) =>
+			Math.round(part * 255),
+		);
+		// Opencode reserves a raised fill for prompts and content-heavy tools;
+		// notices, results and errors are drawn on the page background, with the
+		// status color living in the marker and text.
+		expect(background("Queued follow-up")).toEqual(expected);
+		expect(background("done")).toEqual(expected);
+		expect(background("failed")).toEqual(expected);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("renders a blocked Orchestrator message with a red model-selection error", async () => {
 	let blocks: readonly AgentSessionBlock[] = [];
 	guardOrchestratorSubmit(
@@ -657,9 +720,14 @@ test("the autocomplete's highlighted command runs on Enter", async () => {
 	t.renderer.destroy();
 });
 
-test("/model opens the picker and selecting applies the model override", async () => {
+test("/model opens the picker and the prompt follows the selected model", async () => {
 	let configured: { model?: string; thinking?: string } | undefined;
 	let handler: ((event: { name: string }) => boolean) | undefined;
+	// The host's watch carries the new model back as metadata; the prompt reads
+	// it through a reactive prop, so the footer must not stay on the old one.
+	const [model, setModel] = createSignal<string | undefined>(
+		"opencode-go/deepseek-v4.1-flash",
+	);
 	const t = await testRender(
 		() => (
 			<AgentSessionView
@@ -667,6 +735,7 @@ test("/model opens the picker and selecting applies the model override", async (
 				blocks={[]}
 				working={false}
 				history={[]}
+				model={model()}
 				onHistoryAppend={() => {}}
 				models={[
 					"opencode-go/deepseek-v4.1-flash",
@@ -680,6 +749,7 @@ test("/model opens the picker and selecting applies the model override", async (
 				onBack={() => {}}
 				onConfigure={(change) => {
 					configured = change;
+					if (change.model) setModel(change.model);
 				}}
 				onCompact={() => {}}
 				onPickerKeyReady={(value) => {
@@ -689,15 +759,37 @@ test("/model opens the picker and selecting applies the model override", async (
 		),
 		{ width: 100, height: 30 },
 	);
-	await t.flush();
-	for (const character of "/model") t.mockInput.pressKey(character);
-	t.mockInput.pressEnter();
-	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Select model");
-	handler?.({ name: "j" });
-	handler?.({ name: "enter" });
-	expect(configured).toEqual({ model: "openai-codex/gpt-5.6-luna" });
-	t.renderer.destroy();
+	try {
+		await t.flush();
+		expect(t.captureCharFrame()).toContain(
+			"Worker · opencode-go/deepseek-v4.1-flash",
+		);
+		for (const character of "/model") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Select model");
+		handler?.({ name: "j" });
+		handler?.({ name: "enter" });
+		expect(configured).toEqual({ model: "openai-codex/gpt-5.6-luna" });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain(
+			"Worker · openai-codex/gpt-5.6-luna",
+		);
+		// opencode spells the command `/models`, and reopening the picker starts
+		// on the model the prompt now shows: Enter accepts it instead of silently
+		// selecting the first catalog entry again.
+		configured = undefined;
+		for (const character of "/models") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Select model");
+		handler?.({ name: "enter" });
+		expect(configured as { model?: string } | undefined).toEqual({
+			model: "openai-codex/gpt-5.6-luna",
+		});
+	} finally {
+		t.renderer.destroy();
+	}
 });
 
 test("the command autocomplete filters live as the command is typed", async () => {

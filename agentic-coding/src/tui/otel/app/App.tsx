@@ -192,8 +192,8 @@ import {
 } from "../../shared/routes.ts";
 import { openViewWindow } from "../../shared/side-app.ts";
 import { DeleteWorkflowModal } from "../components/DeleteWorkflowModal.tsx";
+import { EmbeddedAgentView } from "../components/EmbeddedAgentView.tsx";
 import { NotificationOverlay } from "../components/Notification.tsx";
-import { OpenCodeView } from "../components/OpenCodeView.tsx";
 import {
 	FilterModal,
 	SortModal,
@@ -223,12 +223,12 @@ import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
 	opencodeKeybindCatalog,
+	piKeybindCatalog,
 	workspaceSidebarKeybindCatalog,
 	workspaceSidebarPanelSection,
 } from "./keybinds.ts";
 import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
 import { activeNotification, notify } from "./notifications.ts";
-import type { OpenCodeLauncher } from "./opencode-process.ts";
 import {
 	buildSettingsContext,
 	retrySettingsSection,
@@ -250,6 +250,11 @@ import {
 	workflowDisplayName,
 } from "./sidebar-model.ts";
 import { startSlotToasts } from "./slot-toasts.ts";
+import {
+	startOpenCode,
+	startPi,
+	type TerminalAgentLauncher,
+} from "./terminal-agent-process.ts";
 
 /** Bounded poll for the sidebar's workflow observation. The workflow event
  * stream drops the cached catalog when a workflow changes (see
@@ -269,6 +274,7 @@ type Tab =
 	| "wiki"
 	| "orchestrator"
 	| "opencode"
+	| "pi"
 	| "traces"
 	| "metrics"
 	| "logs"
@@ -405,8 +411,10 @@ export function App(props: {
 	/** Initial page for a spawned view window (`--route`); absent opens the
 	 * route's default. */
 	initialRoute?: Route;
-	/** OpenCode PTY launcher override for shell tests; normal shells use Bun PTY. */
-	openCodeLauncher?: OpenCodeLauncher;
+	/** Embedded agent PTY launcher overrides for shell tests; normal shells use
+	 * the Bun PTY launchers. */
+	openCodeLauncher?: TerminalAgentLauncher;
+	piLauncher?: TerminalAgentLauncher;
 }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
@@ -430,12 +438,31 @@ export function App(props: {
 				: { page: "observability.traces" });
 	const pages = createPageNavigation(createRouterState(initialRoute));
 	const currentPage = () => pages.current().page;
-	/** The OpenCode PTY is lazy: it starts on the first visit and then stays
-	 * mounted (hidden) so its session and scrollback survive navigation. */
-	const [opencodeStarted, setOpencodeStarted] = createSignal(false);
+	/** Embedded agent PTYs are lazy: each starts on its first visit and then
+	 * stays mounted (hidden) so its session and scrollback survive navigation. */
+	type EmbeddedAgentPage = "opencode" | "pi";
+	const [startedAgents, setStartedAgents] = createSignal<
+		ReadonlySet<EmbeddedAgentPage>
+	>(new Set());
 	createEffect(() => {
-		if (currentPage() === "opencode") setOpencodeStarted(true);
+		const page = currentPage();
+		if (page !== "opencode" && page !== "pi") return;
+		setStartedAgents((started) =>
+			started.has(page) ? started : new Set(started).add(page),
+		);
 	});
+	const embeddedAgentPage = (): EmbeddedAgentPage | undefined => {
+		const page = currentPage();
+		return page === "opencode" || page === "pi" ? page : undefined;
+	};
+	const agentCanFocus = (agent: EmbeddedAgentPage): boolean =>
+		currentPage() === agent &&
+		focusPanel() === "content" &&
+		nav.modal() === "none" &&
+		!activeErrorModal() &&
+		!quitConfirmation() &&
+		phase() !== "starting" &&
+		phase() !== "stopping";
 	const activeFeature = (): FeatureId | undefined => pages.feature();
 	/** Which body owns the terminal for a page: overlays belong to one body. */
 	const bodyOwner = (page: string): string => {
@@ -443,7 +470,7 @@ export function App(props: {
 		if (page.startsWith("workflows")) return "workflows";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
-		if (page === "opencode") return "opencode";
+		if (page === "opencode" || page === "pi") return page;
 		if (page.startsWith("observability")) return "observability";
 		return "home";
 	};
@@ -493,17 +520,15 @@ export function App(props: {
 	/** Workflow dashboard target of the current route, when it is one. */
 	const workflow = () => workflowTarget(pages.current());
 	const sidebarAvailable = () => Boolean(props.dashboard);
-	/** The OpenCode project is the shell's primary repository; the embedded TUI
-	 * and the orchestrator's session tools share it through the session's run
-	 * environment. */
-	// `/demo` is the shell's synthetic default repository, not a filesystem
-	// directory. Both the embedded client and orchestrator tools need a real cwd.
-	const opencodeProject = (): string => {
+	/** The project directory embedded agents and the orchestrator's OpenCode
+	 * session tools share. `/demo` is the shell's synthetic default repository,
+	 * not a filesystem directory, so it falls back to the shell's cwd. */
+	const agentProject = (): string => {
 		const repo = props.repos[0];
 		return repo && repo !== "/demo" ? repo : process.cwd();
 	};
-	/** Home pins the Orchestrator and OpenCode above every workflow row. The
-	 * attached shell has no Home surface, so it pins neither. */
+	/** Home pins the Orchestrator, OpenCode and Pi above every workflow row. The
+	 * attached shell has no Home surface, so it pins none. */
 	const sidebarPins = () =>
 		props.dashboard?.mode === "home" ? SIDEBAR_HOME_PINS : [];
 	/** Cursor positions the sidebar offers: the pinned entries first, then the
@@ -529,7 +554,7 @@ export function App(props: {
 		);
 		setFocusPanel("content");
 	};
-	/** Open a pinned page (the sidebar's Orchestrator/OpenCode entries) and
+	/** Open a pinned page (the sidebar's Orchestrator/OpenCode/Pi entries) and
 	 * focus it. */
 	const openPinnedPage = (page: PageId): void => {
 		pages.navigate({ page });
@@ -583,9 +608,9 @@ export function App(props: {
 	};
 	/** Ctrl+H/Ctrl+L: open the previous/next workspace, walking the sidebar's
 	 * entries in order and wrapping at both ends. The pinned Orchestrator and
-	 * OpenCode pages are entries whenever they are navigable, so the cycle
-	 * includes them. The walk starts from the workspace on screen rather than
-	 * from a cursor the reader cannot see, and falls back to the panel's own
+	 * embedded agent pages are entries whenever they are navigable, so the
+	 * cycle includes them. The walk starts from the workspace on screen rather
+	 * than from a cursor the reader cannot see, and falls back to the panel's own
 	 * cursor (a filtered-out dashboard, or a page that is not a workspace at
 	 * all). */
 	const cycleWorkspace = (delta: number): void => {
@@ -640,6 +665,31 @@ export function App(props: {
 		const target = workflowTarget(route);
 		spawnView(route, target ? { repository: target.repo } : {});
 	};
+	/** One embedded agent page: mounted after its first visit and kept mounted
+	 * (hidden) so the PTY, scrollback and running turn survive navigation. */
+	const renderEmbeddedAgent = (agent: EmbeddedAgentPage) => (
+		<Show when={props.dashboard?.mode === "home" && startedAgents().has(agent)}>
+			<box
+				visible={currentPage() === agent}
+				style={{ flexGrow: 1, minHeight: 0 }}
+			>
+				<EmbeddedAgentView
+					label={agent === "opencode" ? "OpenCode" : "Pi"}
+					cwd={agentProject()}
+					active={() => agentCanFocus(agent)}
+					launcher={
+						(agent === "opencode"
+							? props.openCodeLauncher
+							: props.piLauncher) ??
+						(agent === "opencode" ? startOpenCode : startPi)
+					}
+					onFocus={() => {
+						if (currentPage() === agent) setFocusPanel("content");
+					}}
+				/>
+			</box>
+		</Show>
+	);
 	/** Sidebar `n`: the selected workflow's dashboard in a new tmux window. */
 	const spawnWorkspaceWindow = (overview: WorkflowOverview): void => {
 		spawnView(workflowRoute(overview.target, overview.state.workflowId), {
@@ -795,7 +845,7 @@ export function App(props: {
 		if (props.dashboard?.mode !== "home") return;
 		if (!gatewayReady()) return;
 		const monitor = startWorkflowMonitor({
-			opencodeCwd: opencodeProject(),
+			opencodeCwd: agentProject(),
 		});
 		onCleanup(() => monitor.stop());
 	});
@@ -938,6 +988,7 @@ export function App(props: {
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
 		if (page === "opencode") return "opencode";
+		if (page === "pi") return "pi";
 		if (page.includes("metrics")) return "metrics";
 		if (page.includes("logs")) return "logs";
 		if (page.includes("topology")) return "topology";
@@ -2367,14 +2418,14 @@ export function App(props: {
 				dismissErrorModal();
 			return;
 		}
-		// The embedded OpenCode terminal owns every key while its page body has
-		// focus, except the three panel host keys. This shell keymap layer sees a
-		// key before the renderable does; returning without `preventDefault` lets
-		// the terminal's own focus handler receive it, while the host keys are
+		// An embedded agent terminal owns every key while its page body has focus,
+		// except the three panel host keys. This shell keymap layer sees a key
+		// before the renderable does; returning without `preventDefault` lets the
+		// terminal's own focus handler receive it, while the host keys are
 		// consumed here. Quit confirmation and the lifecycle overlay still take
-		// precedence if they appear while OpenCode is focused.
+		// precedence if they appear while the agent is focused.
 		if (
-			currentPage() === "opencode" &&
+			embeddedAgentPage() !== undefined &&
 			focusPanel() === "content" &&
 			nav.modal() === "none"
 		) {
@@ -2440,9 +2491,9 @@ export function App(props: {
 		// spawned shell attaches to this process's server instead of owning a
 		// second one.
 		if (event.ctrl && key === "t") {
-			// The OpenCode page already hosts the one embedded client; spawning the
-			// route in a tmux window would start a second TUI for the same project.
-			if (currentPage() !== "opencode") spawnCurrentView();
+			// An embedded agent page already hosts its client; spawning the route in
+			// a tmux window would start a second TUI for the same project.
+			if (embeddedAgentPage() === undefined) spawnCurrentView();
 			return;
 		}
 
@@ -2813,13 +2864,14 @@ export function App(props: {
 			return;
 		}
 
-		// Dashboard, wiki, orchestrator and OpenCode bodies own their keys through
-		// their own keymap layers or the focused terminal.
+		// Dashboard, wiki, orchestrator and embedded agent bodies own their keys
+		// through their own keymap layers or the focused terminal.
 		if (
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
-			(activeTab() === "opencode" && focusPanel() === "content")
+			((activeTab() === "opencode" || activeTab() === "pi") &&
+				focusPanel() === "content")
 		)
 			return;
 
@@ -2879,10 +2931,10 @@ export function App(props: {
 		// Help (shell tabs): the `?` modal reads the active catalog. Ignore it
 		// while one of this tab's own modals (filter/sort/theme) owns the keys.
 		if (key === "?" && nav.modal() === "none") {
-			// The embedded OpenCode renderable may still be unwinding a focus
+			// An embedded agent renderable may still be unwinding a focus
 			// transition; don't let its native handler receive the same `?` that the
 			// sidebar uses for shell help.
-			if (currentPage() === "opencode" && focusPanel() === "sidebar")
+			if (embeddedAgentPage() !== undefined && focusPanel() === "sidebar")
 				event.preventDefault();
 			setHelpOffset(0);
 			nav.pushModal("help", activeFeatureId());
@@ -3217,7 +3269,8 @@ export function App(props: {
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
-			activeTab() === "opencode"
+			activeTab() === "opencode" ||
+			activeTab() === "pi"
 		)
 			return ["content"];
 		return ["breadcrumb", "content"];
@@ -3305,6 +3358,7 @@ export function App(props: {
 	const tabKeybindCatalog = (): KeybindSection[] => {
 		const tab = activeTab();
 		if (tab === "opencode") return opencodeKeybindCatalog();
+		if (tab === "pi") return piKeybindCatalog();
 		const base = observabilityKeybindCatalog({
 			tab: tab === "home" || tab === "orchestrator" ? "traces" : tab,
 			view: traceView(),
@@ -3324,7 +3378,7 @@ export function App(props: {
 		if (focusPanel() === "sidebar") {
 			setActiveKeybindCatalog(
 				workspaceSidebarKeybindCatalog({
-					opencodePage: currentPage() === "opencode",
+					embeddedPage: embeddedAgentPage() !== undefined,
 				}),
 			);
 			return;
@@ -3346,10 +3400,14 @@ export function App(props: {
 			);
 			return;
 		}
-		// The OpenCode page has no shell keys of its own beyond the panel host
-		// keys; the terminal owns the rest.
+		// An embedded agent page has no shell keys of its own beyond the panel
+		// host keys; the terminal owns the rest.
 		if (currentPage() === "opencode") {
 			setActiveKeybindCatalog(opencodeKeybindCatalog());
+			return;
+		}
+		if (currentPage() === "pi") {
+			setActiveKeybindCatalog(piKeybindCatalog());
 			return;
 		}
 		// Settings sections publish their own catalog: the destination catalog
@@ -3629,7 +3687,7 @@ export function App(props: {
 												keymap={keymap}
 												active={() => focusPanel() === "content"}
 												overlay={() => nav.modal() !== "none"}
-												opencodeCwd={opencodeProject()}
+												opencodeCwd={agentProject()}
 												onBack={() => pages.goToParent()}
 												onHelp={() => {
 													setHelpOffset(0);
@@ -3639,32 +3697,10 @@ export function App(props: {
 										</box>
 									);
 								})()}
-							{/* Home → OpenCode: mounted on first visit and kept mounted,
-							    hidden, so its PTY and scrollback survive navigation. */}
-							{props.dashboard?.mode === "home" && opencodeStarted() && (
-								<box
-									visible={currentPage() === "opencode"}
-									style={{ flexGrow: 1, minHeight: 0 }}
-								>
-									<OpenCodeView
-										cwd={opencodeProject()}
-										active={() =>
-											currentPage() === "opencode" &&
-											focusPanel() === "content" &&
-											nav.modal() === "none" &&
-											!activeErrorModal() &&
-											!quitConfirmation() &&
-											phase() !== "starting" &&
-											phase() !== "stopping"
-										}
-										launcher={props.openCodeLauncher}
-										onFocus={() => {
-											if (currentPage() === "opencode")
-												setFocusPanel("content");
-										}}
-									/>
-								</box>
-							)}
+							{/* Home → OpenCode and Pi: each mounted on first visit and kept
+							    mounted, hidden, so its PTY and scrollback survive navigation. */}
+							{renderEmbeddedAgent("opencode")}
+							{renderEmbeddedAgent("pi")}
 							{!showsDestinationList() && activeTab() === "traces" && (
 								<>
 									{traceView() === "selection" && (
@@ -3866,8 +3902,13 @@ export function App(props: {
 
 				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent.
 				    The trailing cell is the diagnostics summary: the worst recent
-				    main-thread lag this process observed, when there was one. */}
-				<StatusBar status={diagnosticsStatusText()} />
+				    main-thread lag this process observed, when there was one. Pi's
+				    focused content owns `?`, so the shell help chip is not advertised
+				    there; Ctrl+S reaches shell help through the sidebar instead. */}
+				<StatusBar
+					status={diagnosticsStatusText()}
+					showHelp={!(currentPage() === "pi" && focusPanel() === "content")}
+				/>
 			</box>
 			<NotificationOverlay active={activeNotification} />
 			<ErrorModalOverlay keymap={props.dashboard?.keymap} />

@@ -103,9 +103,19 @@ export const SIDEBAR_OPENCODE_PIN: SidebarPin = {
 	page: "opencode",
 };
 
+/** The embedded Pi TUI: the standard user configuration, one client and one
+ * session at a time because Pi has no shell-managed multi-session mode. */
+export const SIDEBAR_PI_PIN: SidebarPin = {
+	glyph: "π",
+	label: "Pi",
+	meta: "standard · prompt · code",
+	page: "pi",
+};
+
 export const SIDEBAR_HOME_PINS: readonly SidebarPin[] = [
 	SIDEBAR_ORCHESTRATOR_PIN,
 	SIDEBAR_OPENCODE_PIN,
+	SIDEBAR_PI_PIN,
 ];
 
 /** Cursor positions the sidebar offers: the pinned entries first, then the

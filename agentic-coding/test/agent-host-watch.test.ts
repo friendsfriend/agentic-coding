@@ -38,6 +38,15 @@ function entryCount(value: unknown): number {
 	if (!isRecord(value) || !Array.isArray(value.entries)) return 0;
 	return value.entries.length;
 }
+function modelRef(value: unknown): string | undefined {
+	if (!isRecord(value)) return undefined;
+	const docs = isRecord(value.docs) ? value.docs : {};
+	const agent = isRecord(docs["pi.agent"]) ? docs["pi.agent"] : undefined;
+	const model = isRecord(agent?.model) ? agent.model : undefined;
+	if (typeof model?.provider !== "string" || typeof model.modelId !== "string")
+		return undefined;
+	return `${model.provider}/${model.modelId}`;
+}
 
 describe("watch streams the conversation view over the control socket", () => {
 	test("a watcher sees an initial frame, a busy frame, and a settled frame with the transcript", async () => {
@@ -167,6 +176,59 @@ describe("watch streams the conversation view over the control socket", () => {
 						block.text.includes("patched"),
 					),
 				).toBe(true);
+			} finally {
+				stop();
+			}
+		} finally {
+			await host.shutdown();
+		}
+	});
+
+	test("a patch watcher sees a live model override", async () => {
+		// The dashboard's `/model` picker relies on this: the host commits the
+		// choice to `pi.agent`, and the prompt's metadata row reads the same view.
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		await host.listen();
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='model-run'\n");
+			await host.ensureRun({
+				runId: "model-run",
+				name: "model-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+
+			const client = new HostClient(layout.socketPath, 10_000);
+			const frames: unknown[] = [];
+			const stop = await client.watch(
+				"model-run",
+				(value) => frames.push(value),
+				{ patches: true },
+			);
+			try {
+				const next = `${faux.getModel().provider}/other-model`;
+				await client.configureRun("model-run", { model: next });
+				for (
+					let i = 0;
+					i < 50 && modelRef(frames[frames.length - 1]) !== next;
+					i++
+				)
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				expect(modelRef(frames[frames.length - 1])).toBe(next);
 			} finally {
 				stop();
 			}

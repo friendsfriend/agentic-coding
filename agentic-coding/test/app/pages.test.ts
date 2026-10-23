@@ -317,6 +317,7 @@ describe("every routed page has a definition and a label", () => {
 			"wiki.note",
 			"orchestrator",
 			"opencode",
+			"pi",
 			"workflows.detail",
 		];
 		for (const page of ids) {

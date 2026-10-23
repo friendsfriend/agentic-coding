@@ -20,16 +20,19 @@ export function workspaceSidebarPanelSection(): KeybindSection {
 }
 
 /**
- * Footer/help catalog for the embedded OpenCode page. OpenCode owns every key
- * except the three panel host keys the shell keeps while the terminal has
- * focus: Ctrl+S leaves for the sidebar, Ctrl+H/Ctrl+L cycle workspaces. The
- * `?` chip is labeled for OpenCode's own help; the shell does not claim it,
- * `q`, Escape or Ctrl+T on the content page.
+ * Footer/help catalog for an embedded terminal agent page. The agent owns
+ * every key except the three panel host keys the shell keeps while the
+ * terminal has focus: Ctrl+S leaves for the sidebar, Ctrl+H/Ctrl+L cycle
+ * workspaces. A `helpKey` is advertised only when the agent itself handles that
+ * key; the shell does not claim `?`, `q`, Escape or Ctrl+T on the content page.
  */
-export function opencodeKeybindCatalog(): KeybindSection[] {
+export function terminalAgentKeybindCatalog(
+	name: string,
+	helpKey?: string,
+): KeybindSection[] {
 	return [
 		{
-			title: "OpenCode",
+			title: name,
 			keybinds: [
 				{
 					key: "Ctrl+S",
@@ -48,14 +51,29 @@ export function opencodeKeybindCatalog(): KeybindSection[] {
 					short: "next",
 					standard: true,
 				},
-				{
-					key: "?",
-					action: "OpenCode help",
-					short: "help",
-				},
+				...(helpKey
+					? [
+							{
+								key: helpKey,
+								action: `${name} help`,
+								short: "help",
+							},
+						]
+					: []),
 			],
 		},
 	];
+}
+
+/** Footer/help catalog for the embedded OpenCode page. */
+export function opencodeKeybindCatalog(): KeybindSection[] {
+	return terminalAgentKeybindCatalog("OpenCode", "?");
+}
+
+/** Footer/help catalog for the embedded Pi page. Pi has no `?` help key; its
+ * hotkeys are the `/hotkeys` command inside the client. */
+export function piKeybindCatalog(): KeybindSection[] {
+	return terminalAgentKeybindCatalog("Pi");
 }
 
 /**
@@ -65,12 +83,12 @@ export function opencodeKeybindCatalog(): KeybindSection[] {
  * toggle back to the page body.
  */
 export function workspaceSidebarKeybindCatalog(
-	options: { opencodePage?: boolean } = {},
+	options: { embeddedPage?: boolean } = {},
 ): KeybindSection[] {
 	const keybinds = [
 		{
 			key: "j/k or ↑/↓",
-			action: "select the Orchestrator, OpenCode, or a workflow",
+			action: "select the Orchestrator, OpenCode, Pi, or a workflow",
 			standard: true,
 		},
 		{ key: "Enter", action: "open the selected entry", short: "open" },
@@ -102,7 +120,7 @@ export function workspaceSidebarKeybindCatalog(
 		hostKeybind("?"),
 		hostDiagnosticsKeybind(),
 		hostKeybind("q"),
-		...(!options.opencodePage ? [hostKeybind("ctrl+t")] : []),
+		...(!options.embeddedPage ? [hostKeybind("ctrl+t")] : []),
 		{
 			key: "Esc",
 			action: "focus the main content",

@@ -22,6 +22,7 @@ import { TraceDb } from "../../src/server/telemetry-db";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 import { App } from "../../src/tui/otel/app/App.tsx";
+import { SIDEBAR_HOME_PINS } from "../../src/tui/otel/app/sidebar-model.ts";
 import {
 	SIDEBAR_COLLAPSED_WIDTH,
 	SIDEBAR_WIDTH,
@@ -237,6 +238,14 @@ async function focusSidebar(t: Test): Promise<void> {
 async function unfocusSidebar(t: Test): Promise<void> {
 	t.mockInput.pressKey("s", { ctrl: true });
 	await advance(t, 4, 60);
+}
+
+/** Move the sidebar cursor past the Home pins onto the first workflow row. */
+async function selectFirstWorkflow(t: Test): Promise<void> {
+	for (let index = 0; index < SIDEBAR_HOME_PINS.length; index += 1) {
+		t.mockInput.pressKey("j");
+		await advance(t);
+	}
 }
 
 /** The breadcrumb row of a frame: the line carrying the separator, or "" on a
@@ -469,7 +478,10 @@ function compactRows(frame: string): string[] {
  * rule when present. */
 function compactWorkflowRows(frame: string): string[][] {
 	const cells = compactRows(frame);
-	const start = cells[0] === "⌂" ? (cells[1] === "{}" ? 3 : 2) : 0;
+	// The pinned marks and their rule have no numeric position; the first
+	// workflow row does.
+	const first = cells.findIndex((cell) => /^\d+$/.test(cell));
+	const start = first >= 0 ? first : 0;
 	const rows: string[][] = [];
 	for (let index = start; index + 2 < cells.length; index += 3) {
 		rows.push(cells.slice(index, index + 3));
@@ -511,7 +523,7 @@ test("the collapsed strip paints only the position, status glyph and phase signa
 			const frame = t.captureCharFrame();
 			// Long ids, and the phase meta under them, never reach the strip.
 			expect(compactStrip(frame)).toMatch(COMPACT_STRIP);
-			// One three-line row per workflow, under both pinned entries.
+			// One three-line row per workflow, under the pinned entries.
 			expect(compactWorkflowRows(frame)).toEqual(
 				Array.from({ length: count }, (_, index) => [`${index + 1}`, "…", "·"]),
 			);
@@ -718,12 +730,8 @@ test("Enter opens the selected workflow's dashboard page", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		// Orchestrator and OpenCode lead the cursor space, then the first workflow
-		// row follows both pins.
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		// The Home pins lead the cursor space, then the first workflow row.
+		await selectFirstWorkflow(t);
 		t.mockInput.pressEnter();
 		await advance(t, 3, 60);
 		// The workflow-dashboard route names the workflow in the breadcrumb. The
@@ -769,18 +777,21 @@ test("rows show the state that needs a reader as a glyph", async () => {
 	}
 });
 
-test("the pinned Orchestrator and OpenCode entries are always visible", async () => {
+test("the pinned Orchestrator, OpenCode and Pi entries are always visible", async () => {
 	stubGateway();
 	const t = await renderShell();
 	try {
-		// Unfocused, the collapsed strip keeps both pinned slots as marks.
+		// Unfocused, the collapsed strip keeps every pinned slot as a mark.
 		expect(t.captureCharFrame()).toContain("⌂");
-		expect(t.captureCharFrame()).toContain("{}");
+		expect(t.captureCharFrame()).toContain("󱚞");
+		expect(t.captureCharFrame()).toContain("π");
 		await focusSidebar(t);
 		expect(await renderUntil(t, "Orchestrator")).toBe(true);
 		expect(t.captureCharFrame()).toContain("chat · launch · manage");
 		expect(t.captureCharFrame()).toContain("OpenCode");
 		expect(t.captureCharFrame()).toContain("sessions · prompts · code");
+		expect(t.captureCharFrame()).toContain("Pi");
+		expect(t.captureCharFrame()).toContain("standard · prompt · code");
 
 		// The filter only changes the workflow rows underneath: the pinned entry is
 		// chrome above them and never disappears with them.
@@ -796,7 +807,7 @@ test("the pinned Orchestrator and OpenCode entries are always visible", async ()
 	}
 });
 
-test("both pinned entries show even with no workflows at all", async () => {
+test("the pinned entries show even with no workflows at all", async () => {
 	stubGateway([]);
 	const t = await renderShell();
 	try {
@@ -805,6 +816,7 @@ test("both pinned entries show even with no workflows at all", async () => {
 		expect(await renderUntil(t, "No active workflows")).toBe(true);
 		expect(t.captureCharFrame()).toContain("Orchestrator");
 		expect(t.captureCharFrame()).toContain("OpenCode");
+		expect(t.captureCharFrame()).toContain("Pi");
 	} finally {
 		t.renderer.destroy();
 		clearGateway();
@@ -993,12 +1005,9 @@ test("d confirms before deleting the selected workflow", async () => {
 	const t = await renderShell();
 	try {
 		await focusSidebar(t);
-		// The attention workflow is the first filtered row after both pins.
+		// The attention workflow is the first filtered row after the Home pins.
 		expect(await renderUntil(t, "wf-attention")).toBe(true);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 
 		// The key opens the question; nothing is deleted while it is open.
 		t.mockInput.pressKey("d");
@@ -1046,10 +1055,7 @@ test("d deletes a repository-independent workflow through its target store", asy
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "research-1")).toBe(true);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 
 		t.mockInput.pressKey("d");
 		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
@@ -1099,10 +1105,7 @@ test("n reports an error when no tmux client is available", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 		t.mockInput.pressKey("n");
 		expect(
 			await renderUntil(t, (frame) => frame.includes("tmux is not available")),
@@ -1125,10 +1128,7 @@ test("n reports when no server is running to attach the window to", async () => 
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 		t.mockInput.pressKey("n");
 		expect(
 			await renderUntil(t, (frame) =>
@@ -1149,12 +1149,9 @@ test("a kitty-protocol terminal cycles back with Ctrl+H itself", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		// Enter the first workflow after both Home pins, then exercise the cycle
+		// Enter the first workflow after the Home pins, then exercise the cycle
 		// from the page body. Kitty protocol keeps Ctrl+H distinct from Backspace.
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 		t.mockInput.pressEnter();
 		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
 		t.mockInput.pressKey("l", { ctrl: true });
@@ -1178,10 +1175,7 @@ test("Ctrl+L and Ctrl+H open the next and previous workspace, wrapping", async (
 		// between them and the Orchestrator pin.
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		await selectFirstWorkflow(t);
 		t.mockInput.pressEnter();
 		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
 
@@ -1213,12 +1207,9 @@ test("Ctrl+L keeps cycling while the page body holds the keys", async () => {
 	try {
 		await focusSidebar(t);
 		expect(await renderUntil(t, "wf-active")).toBe(true);
-		// Open the first workflow after both pins. Ctrl+L remains a shell cycle
-		// key while the dashboard body holds focus.
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		// Open the first workflow after the Home pins. Ctrl+L remains a shell
+		// cycle key while the dashboard body holds focus.
+		await selectFirstWorkflow(t);
 		t.mockInput.pressEnter();
 		expect(await renderWorkspace(t, "wf-attention")).toBe(true);
 		t.mockInput.pressKey("l", { ctrl: true });
@@ -1243,6 +1234,8 @@ test("the Backspace byte cycles back only while the sidebar holds focus", async 
 		// A terminal without the kitty keyboard protocol reports Ctrl+H as the
 		// Backspace byte. The sidebar is the one surface where that byte edits no
 		// text, so it moves from the second workflow to the first.
+		t.mockInput.pressKey("j");
+		await advance(t);
 		t.mockInput.pressKey("j");
 		await advance(t);
 		t.mockInput.pressKey("j");

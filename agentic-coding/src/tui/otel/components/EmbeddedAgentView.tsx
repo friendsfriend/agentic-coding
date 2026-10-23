@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/solid */
-// The embedded OpenCode TUI page.
+// An embedded terminal coding agent page.
 //
-// One long-lived `opencode` client runs on a real PTY and is rendered by
+// One long-lived agent client runs on a real PTY and is rendered by
 // OpenTUI's `EmbeddedTerminalRenderable`. The shell keeps this view mounted
 // while the reader visits other pages (the wrapper in App hides it), so the
-// OpenCode session, its scrollback and any running turn survive navigation.
+// agent session, its scrollback and any running turn survive navigation.
 // Keys and mouse input are handled by the renderable itself while it has
 // focus; the shell only keeps Ctrl+S/Ctrl+H/Ctrl+L (see App).
 import {
@@ -15,24 +15,26 @@ import { useTerminalDimensions } from "@opentui/solid";
 import { uiColors } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import "./embedded-terminal.ts";
-import {
-	type OpenCodeLauncher,
-	type OpenCodeProcess,
-	startOpenCode,
-} from "../app/opencode-process.ts";
+import type {
+	TerminalAgentLauncher,
+	TerminalAgentProcess,
+} from "../app/terminal-agent-process.ts";
 
-export interface OpenCodeViewProps {
-	/** Project directory OpenCode (and the orchestrator's session tools) use. */
+export interface EmbeddedAgentViewProps {
+	/** Human name used in startup and exit notices ("OpenCode", "Pi"). */
+	readonly label: string;
+	/** Project directory the agent runs in. */
 	readonly cwd: string;
 	/** The page body holds focus and no shell overlay is on top. */
 	readonly active: () => boolean;
 	/** The terminal itself took focus (for example, a mouse click). */
 	readonly onFocus: () => void;
-	/** Optional launcher seam for tests; production uses the real PTY process. */
-	readonly launcher?: OpenCodeLauncher;
+	/** The agent process launcher. Tests inject a fake; the shell passes the
+	 * real PTY launcher for this page. */
+	readonly launcher: TerminalAgentLauncher;
 }
 
-export function OpenCodeView(props: OpenCodeViewProps) {
+export function EmbeddedAgentView(props: EmbeddedAgentViewProps) {
 	const dimensions = useTerminalDimensions();
 	// Only the very first frame uses this: OpenTUI reports the real layout size
 	// through `onTerminalResize` before the PTY has to draw anything.
@@ -44,7 +46,7 @@ export function OpenCodeView(props: OpenCodeViewProps) {
 	const [started, setStarted] = createSignal(false);
 	const [error, setError] = createSignal<string>();
 	const [exitCode, setExitCode] = createSignal<number>();
-	let process: OpenCodeProcess | undefined;
+	let process: TerminalAgentProcess | undefined;
 	let running = false;
 	let live = true;
 	/** Ignore `focused` emitted by our own sync; only native/mouse focus should
@@ -107,7 +109,7 @@ export function OpenCodeView(props: OpenCodeViewProps) {
 		view.on(RenderableEvents.FOCUSED, focusListener);
 		onCleanup(() => view.off(RenderableEvents.FOCUSED, focusListener));
 		try {
-			process = (props.launcher ?? startOpenCode)({
+			process = props.launcher({
 				cwd: props.cwd,
 				cols: view.width || size.cols,
 				rows: view.height || size.rows,
@@ -153,7 +155,7 @@ export function OpenCodeView(props: OpenCodeViewProps) {
 				{(message) => (
 					<box style={{ flexGrow: 1, minHeight: 0, paddingTop: 1 }}>
 						<text fg={uiColors.error}>
-							{`OpenCode could not start: ${message()}`}
+							{`${props.label} could not start: ${message()}`}
 						</text>
 					</box>
 				)}
@@ -172,8 +174,8 @@ export function OpenCodeView(props: OpenCodeViewProps) {
 			<Show when={exitCode() !== undefined}>
 				<text fg={uiColors.textMuted}>
 					{exitCode() === 0
-						? "OpenCode exited."
-						: `OpenCode exited with code ${exitCode()}.`}
+						? `${props.label} exited.`
+						: `${props.label} exited with code ${exitCode()}.`}
 				</text>
 			</Show>
 		</box>

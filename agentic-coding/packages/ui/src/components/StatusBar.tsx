@@ -3,6 +3,7 @@
 //
 // The shell keeps it one row high: special keybinds fill a clipping left column
 // and `?` help is pinned right so it stays visible however many keys precede it.
+// A surface whose focused content claims `?` itself can suppress that chip.
 // A surface that spreads keybinds over several rows (the env surface reserves
 // three footer lines) asks for more lines and the entries wrap into them.
 import { TextAttributes } from "@opentui/core";
@@ -39,6 +40,10 @@ export interface StatusBarProps {
 	status?: string;
 	/** Rows the footer may use. Default 1 (the shell footer). */
 	lines?: number;
+	/** Show the right-anchored `?` help chip. Default true. A surface whose
+	 * focused content consumes `?` itself sets false, because the shell help
+	 * modal is not reachable from there. */
+	showHelp?: boolean;
 	runningTextEnabled?: boolean;
 	runningTextOffset?: number;
 	/** Chip activation: run the key a footer chip advertises (design D6). */
@@ -207,9 +212,11 @@ export function StatusBar(props: StatusBarProps) {
 					</text>
 				</box>
 			</Show>
-			<box style={{ flexShrink: 0, marginLeft: 1 }}>
-				<HelpText entries={[help()]} {...chips()} />
-			</box>
+			<Show when={props.showHelp !== false}>
+				<box style={{ flexShrink: 0, marginLeft: 1 }}>
+					<HelpText entries={[help()]} {...chips()} />
+				</box>
+			</Show>
 		</box>
 	);
 }

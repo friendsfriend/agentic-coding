@@ -97,6 +97,9 @@ describe("page routes: structural hierarchy", () => {
 		expect(PAGES.opencode.label).toBe("OpenCode");
 		expect(parentRoute({ page: "opencode" })).toEqual({ page: "home" });
 		expect(picker.some((entry) => entry.page === "opencode")).toBe(false);
+		expect(PAGES.pi.label).toBe("Pi");
+		expect(parentRoute({ page: "pi" })).toEqual({ page: "home" });
+		expect(picker.some((entry) => entry.page === "pi")).toBe(false);
 		// Resource destinations need an identity, so they are not picker rows.
 		expect(picker.some((entry) => entry.page === "environments.resource")).toBe(
 			false,

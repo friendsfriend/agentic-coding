@@ -3,6 +3,7 @@ import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
 import {
 	observabilityKeybindCatalog,
 	opencodeKeybindCatalog,
+	piKeybindCatalog,
 	workspaceSidebarKeybindCatalog,
 	workspaceSidebarPanelSection,
 } from "../../src/tui/otel/app/keybinds.ts";
@@ -130,7 +131,7 @@ describe("workspace sidebar keybind catalog", () => {
 	});
 
 	it("does not advertise Ctrl+T while the OpenCode page is selected", () => {
-		const catalog = workspaceSidebarKeybindCatalog({ opencodePage: true });
+		const catalog = workspaceSidebarKeybindCatalog({ embeddedPage: true });
 		const all = catalogKeybinds(catalog);
 		expect(all.map((keybind) => keybind.key)).not.toContain("Ctrl+T");
 		expect(all.map((keybind) => keybind.key)).toContain("Ctrl+S");
@@ -158,5 +159,16 @@ describe("OpenCode page keybind catalog", () => {
 			"OpenCode help",
 		);
 		expect(footer.map((keybind) => keybind.key)).toEqual(["Ctrl+S", "?"]);
+	});
+
+	it("gives Pi the same shell keys under its own name", () => {
+		const all = catalogKeybinds(piKeybindCatalog());
+		expect(all.map((keybind) => keybind.key)).toEqual([
+			"Ctrl+S",
+			"Ctrl+H",
+			"Ctrl+L",
+		]);
+		// Pi has no `?` help key; only the shell's panel keys are advertised.
+		expect(all.some((keybind) => keybind.action === "Pi help")).toBe(false);
 	});
 });

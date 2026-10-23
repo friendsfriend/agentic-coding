@@ -1161,6 +1161,14 @@ export function App(props: {
 				const { HostClient } = await import("../../agent-host/client.ts");
 				const client = new HostClient(session.hostSocket);
 				await client.configureRun(session.runId, change);
+				// Show the accepted override immediately; the next watch frame carries
+				// the same value in `pi.agent` and reconciles any concurrent update.
+				if (agentSession()?.runId === session.runId)
+					setAgentSessionMetadata((metadata) => ({
+						...metadata,
+						...(change.model ? { model: change.model } : {}),
+						...(change.thinking ? { thinking: change.thinking } : {}),
+					}));
 				notify(
 					change.model
 						? `Model set to ${change.model}`

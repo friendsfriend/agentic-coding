@@ -10,11 +10,12 @@
 // Assistant output renders as markdown with no box; thinking collapses to a
 // single `Thinking…` line; tool calls follow opencode's two shapes — an inline
 // row for ordinary calls, a raised left-ruled block for shell/edit/write — with
-// a spinner in the icon gutter while a call runs. Every other entry is a status
-// box with a solid status-tinted background and the same left highlight the
-// prompt uses. The prompt below mirrors opencode v2: a left-bordered raised
-// block with the input and a metadata row (`Role · model · thinking` plus a
-// live working indicator).
+// a spinner in the icon gutter while a call runs. Every other entry keeps the
+// same left highlight the prompt uses, but stays on the page background: only
+// the prompt, user messages and content-heavy tool calls are raised surfaces.
+// The prompt below mirrors opencode v2: a left-bordered raised block with the
+// input and a metadata row (`Role · model · thinking` plus a live working
+// indicator).
 //
 // The view replaces the detail grid, so its own keys (scroll, back) and the
 // picker's keys are route keymap layers gated on the `agent.view` field. The
@@ -28,13 +29,7 @@ import type {
 	ScrollBoxRenderable,
 	TextareaRenderable,
 } from "@opentui/core";
-import {
-	CliRenderEvents,
-	parseColor,
-	RGBA,
-	rgbToHex,
-	TextAttributes,
-} from "@opentui/core";
+import { CliRenderEvents, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import {
 	ListViewModal,
@@ -150,6 +145,9 @@ export interface SessionRouteCommand {
 export const ABORT_COMMAND = "/abort";
 export const CLOSE_COMMAND = "/hide";
 export const MODEL_COMMAND = "/model";
+/** opencode calls the picker `/models`; accept that spelling as an alias while
+ * `/model` stays the command the autocomplete lists. */
+export const MODELS_COMMAND = "/models";
 export const THINKING_COMMAND = "/thinking";
 export const TIMELINE_COMMAND = "/timeline";
 export const LATEST_COMMAND = "/latest";
@@ -189,23 +187,6 @@ const DEFAULT_THINKING_LEVELS = [
 	"xhigh",
 	"max",
 ] as const;
-
-/** Blend a status color into the dialog background, so every box has a solid
- * background that still reads as "the theme, tinted by status". Named theme
- * colors resolve through OpenTUI's own parser. */
-function tint(color: string, amount: number): string {
-	const base = parseColor(uiColors.bgBase);
-	const tone = parseColor(color);
-	const mix = (from: number, to: number) => from + (to - from) * amount;
-	return rgbToHex(
-		RGBA.fromValues(
-			mix(base.r, tone.r),
-			mix(base.g, tone.g),
-			mix(base.b, tone.b),
-			1,
-		),
-	);
-}
 
 /** Rows rendered on open, and how many more each load at the top adds. The
  * projection keeps a longer transcript, so the window is a rendering budget,
@@ -250,26 +231,6 @@ function markerColor(tone: AgentSessionTone): string {
 			return uiColors.textMuted;
 		default:
 			return uiColors.primary;
-	}
-}
-
-/** The solid background of one status box. */
-function boxBackground(tone: AgentSessionTone): string {
-	switch (tone) {
-		case "error":
-			return tint(uiColors.error, 0.16);
-		case "warning":
-			return tint(uiColors.warning, 0.16);
-		case "success":
-			return tint(uiColors.success, 0.14);
-		case "info":
-			return tint(uiColors.info, 0.14);
-		case "accent":
-			return tint(uiColors.accent, 0.14);
-		case "muted":
-			return uiColors.bgSurface1;
-		default:
-			return uiColors.bgSurface0;
 	}
 }
 
@@ -913,12 +874,12 @@ function Block(props: {
 			</box>
 		);
 	return (
-		// The status hint is the same left highlight the prompt uses: a
-		// one-column border in the status color over the tinted background.
+		// The status hint is the same left highlight the prompt uses, but the row
+		// itself stays on the page background: opencode reserves a raised surface
+		// for prompts and content-heavy tool calls, not for every status line.
 		<box
 			border={["left"]}
 			borderColor={markerColor(props.block.tone)}
-			backgroundColor={boxBackground(props.block.tone)}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
@@ -1384,7 +1345,28 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		props.onPickerActiveChange?.(false);
 	};
 	const openPicker = (kind: PickerKind) => {
-		setPicker({ kind, selected: 0, filter: "", filtering: false });
+		// Start on the current value, like opencode's `/models`: reopening the
+		// picker after a change must show that change as the selected row, not
+		// silently jump back to the first entry.
+		const current =
+			kind === "model"
+				? props.model
+				: kind === "thinking"
+					? props.thinking
+					: undefined;
+		const choices =
+			kind === "model"
+				? props.models
+				: kind === "thinking"
+					? thinkingLevels()
+					: [];
+		const index = current ? choices.indexOf(current) : -1;
+		setPicker({
+			kind,
+			selected: index >= 0 ? index : 0,
+			filter: "",
+			filtering: false,
+		});
 		props.onPickerActiveChange?.(true);
 	};
 	const selectPicker = (selectedIndex?: number) => {
@@ -1447,7 +1429,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const runCommand = (name: string) => {
 		props.onHistoryAppend(name);
 		historyIndex = 0;
-		if (name === MODEL_COMMAND) openPicker("model");
+		if (name === MODEL_COMMAND || name === MODELS_COMMAND) openPicker("model");
 		else if (name === THINKING_COMMAND) openPicker("thinking");
 		else if (name === TIMELINE_COMMAND) openPicker("timeline");
 		else if (name === LATEST_COMMAND) jumpToLatest();

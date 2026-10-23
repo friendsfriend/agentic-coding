@@ -95,3 +95,18 @@ test("status bar advertises `?` help even when the catalog omits it", async () =
 	expect(frame.trimEnd().endsWith("? help")).toBe(true);
 	t.renderer.destroy();
 });
+
+test("a surface may suppress `?` help when its content owns the key", async () => {
+	setActiveKeybindCatalog([
+		{ title: "Panels", keybinds: [{ key: "Ctrl+S", action: "sidebar" }] },
+	]);
+	const t = await testRender(() => <StatusBar showHelp={false} />, {
+		width: 40,
+		height: 3,
+	});
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Ctrl+S sidebar");
+	expect(frame).not.toContain("? help");
+	t.renderer.destroy();
+});

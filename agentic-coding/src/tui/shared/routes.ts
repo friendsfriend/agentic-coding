@@ -57,6 +57,7 @@ export type PageId =
 	| "wiki.note"
 	| "orchestrator"
 	| "opencode"
+	| "pi"
 	| "workflows.detail";
 
 /** A location: page identity + required resource identity + typed params. */
@@ -362,6 +363,12 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	// location picker never offers it and Home has no duplicate row.
 	opencode: {
 		label: "OpenCode",
+		parent: () => ({ page: "home" }),
+	},
+	// The embedded Pi TUI, reached from its sidebar pin like OpenCode. Pi has
+	// no shell-managed multi-session surface, so this page hosts one client.
+	pi: {
+		label: "Pi",
 		parent: () => ({ page: "home" }),
 	},
 	// The per-workflow dashboard page (workspace sidebar navigation). Not a

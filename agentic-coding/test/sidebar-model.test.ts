@@ -19,6 +19,7 @@ import {
 	SIDEBAR_HOME_PINS,
 	SIDEBAR_OPENCODE_PIN,
 	SIDEBAR_ORCHESTRATOR_PIN,
+	SIDEBAR_PI_PIN,
 	sidebarCollapsedRow,
 	sidebarCursorCount,
 	sidebarCursorForWorkflow,
@@ -192,7 +193,7 @@ describe("workspace sidebar filters", () => {
 });
 
 describe("workspace sidebar pinned entries", () => {
-	test("names the Orchestrator and OpenCode and carries their marks", () => {
+	test("names the Orchestrator, OpenCode and Pi and carries their marks", () => {
 		expect(SIDEBAR_ORCHESTRATOR_PIN.label).toBe("Orchestrator");
 		// The same mark an orchestrator-started workflow row carries.
 		expect(SIDEBAR_ORCHESTRATOR_PIN.glyph).toBe("⌂");
@@ -200,9 +201,13 @@ describe("workspace sidebar pinned entries", () => {
 		expect(SIDEBAR_OPENCODE_PIN.label).toBe("OpenCode");
 		expect(SIDEBAR_OPENCODE_PIN.glyph).toBe("󱚞");
 		expect(SIDEBAR_OPENCODE_PIN.page).toBe("opencode");
+		expect(SIDEBAR_PI_PIN.label).toBe("Pi");
+		expect(SIDEBAR_PI_PIN.glyph).toBe("π");
+		expect(SIDEBAR_PI_PIN.page).toBe("pi");
 		expect(SIDEBAR_HOME_PINS).toEqual([
 			SIDEBAR_ORCHESTRATOR_PIN,
 			SIDEBAR_OPENCODE_PIN,
+			SIDEBAR_PI_PIN,
 		]);
 	});
 
@@ -224,13 +229,13 @@ describe("workspace sidebar pinned entries", () => {
 		// The reveal mapping round-trips, so a pin never steals a row's slot.
 		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, 1), 1)).toBe(2);
 
-		// Two Home pins shift every workflow row by two.
-		expect(sidebarCursorCount(3, 2)).toBe(5);
-		expect(sidebarWorkflowIndex(0, 2)).toBe(-2);
-		expect(sidebarWorkflowIndex(1, 2)).toBe(-1);
-		expect(sidebarWorkflowIndex(2, 2)).toBe(0);
-		expect(sidebarCursorForWorkflow(0, 2)).toBe(2);
-		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, 2), 2)).toBe(2);
+		// Three Home pins shift every workflow row by three.
+		expect(sidebarCursorCount(3, 3)).toBe(6);
+		expect(sidebarWorkflowIndex(0, 3)).toBe(-3);
+		expect(sidebarWorkflowIndex(2, 3)).toBe(-1);
+		expect(sidebarWorkflowIndex(3, 3)).toBe(0);
+		expect(sidebarCursorForWorkflow(0, 3)).toBe(3);
+		expect(sidebarWorkflowIndex(sidebarCursorForWorkflow(2, 3), 3)).toBe(2);
 	});
 });
 
@@ -252,11 +257,13 @@ describe("workspace sidebar cycle", () => {
 	});
 
 	test("the pinned pages keep the cycle in their cursor space with no workflows", () => {
-		// No workflows under the filter: the two pins are the whole cursor space.
-		expect(cycleCursor(0, 2, 1)).toBe(1);
-		expect(cycleCursor(1, 2, 1)).toBe(0);
-		expect(cycleCursor(0, 2, -1)).toBe(1);
-		expect(cycleCursor(1, 2, -1)).toBe(0);
+		// No workflows under the filter: the three pins are the whole cursor
+		// space.
+		expect(cycleCursor(0, 3, 1)).toBe(1);
+		expect(cycleCursor(1, 3, 1)).toBe(2);
+		expect(cycleCursor(2, 3, 1)).toBe(0);
+		expect(cycleCursor(0, 3, -1)).toBe(2);
+		expect(cycleCursor(2, 3, -1)).toBe(1);
 	});
 
 	test("an empty cursor space has nowhere to go", () => {

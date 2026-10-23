@@ -1,24 +1,24 @@
-// The embedded OpenCode TUI's PTY process.
+// An embedded terminal coding agent's PTY process.
 //
-// OpenCode is a real terminal application, so the shell gives it a real PTY
-// (`Bun.Terminal`) and renders the bytes in an `EmbeddedTerminalRenderable`.
-// One process lives for the shell's lifetime: navigating away hides the view
-// but never stops the process, and only shell shutdown kills it. No flags are
-// passed, so the TUI uses its normal configuration, agent, model and the
-// default background service shared by every `opencode` client in the project.
+// Coding agents are real terminal applications, so the shell gives each one a
+// real PTY (`Bun.Terminal`) and renders the bytes in an
+// `EmbeddedTerminalRenderable`. One process lives for the shell's lifetime:
+// navigating away hides the view but never stops the process, and only shell
+// shutdown kills it. No flags are passed, so each agent uses its normal user
+// configuration, model, agent and theme.
 import { statSync } from "node:fs";
 
-/** The terminal description OpenCode's TUI expects. */
-export const OPENCODE_TERMINAL_NAME = "xterm-256color";
+/** The terminal description the embedded TUIs expect. */
+export const TERMINAL_AGENT_TERM = "xterm-256color";
 
-export interface OpenCodeProcess {
+export interface TerminalAgentProcess {
 	readonly pid: number | undefined;
 	write(data: Uint8Array): void;
 	resize(cols: number, rows: number): void;
 	stop(): void;
 }
 
-export interface StartOpenCodeOptions {
+export interface StartTerminalAgentOptions {
 	/** The project the TUI runs in: the shell's primary repository. */
 	readonly cwd: string;
 	readonly cols: number;
@@ -31,10 +31,10 @@ export interface StartOpenCodeOptions {
 }
 
 /** Launcher boundary for the view; kept injectable so the shell can test focus
- * and routing without starting the developer's real OpenCode client. */
-export type OpenCodeLauncher = (
-	options: StartOpenCodeOptions,
-) => OpenCodeProcess;
+ * and routing without starting the developer's real agent client. */
+export type TerminalAgentLauncher = (
+	options: StartTerminalAgentOptions,
+) => TerminalAgentProcess;
 
 /** A terminal column/row count that a PTY accepts. */
 function terminalSize(value: number, fallback: number): number {
@@ -42,29 +42,29 @@ function terminalSize(value: number, fallback: number): number {
 	return Math.max(2, Math.min(65535, Math.floor(value)));
 }
 
-/**
- * Start `opencode` on a fresh PTY. Throws when the executable cannot be
- * spawned; a failure after startup is reported through `onError`.
- */
-export function startOpenCode(options: StartOpenCodeOptions): OpenCodeProcess {
+function startTerminalAgent(
+	label: string,
+	command: string,
+	options: StartTerminalAgentOptions,
+): TerminalAgentProcess {
 	let directoryExists = false;
 	try {
 		directoryExists = statSync(options.cwd).isDirectory();
 	} catch {}
 	if (!directoryExists)
 		throw new Error(
-			`OpenCode project directory does not exist or is not accessible: ${JSON.stringify(options.cwd)}`,
+			`${label} project directory does not exist or is not accessible: ${JSON.stringify(options.cwd)}`,
 		);
-	const executable = Bun.which("opencode");
+	const executable = Bun.which(command);
 	if (!executable)
 		throw new Error(
-			"OpenCode executable was not found on PATH. Ensure opencode is installed and available in the environment that starts the shell.",
+			`${label} executable was not found on PATH. Ensure ${command} is installed and available in the environment that starts the shell.`,
 		);
 	let stopped = false;
 	const terminal = new Bun.Terminal({
 		cols: terminalSize(options.cols, 80),
 		rows: terminalSize(options.rows, 24),
-		name: OPENCODE_TERMINAL_NAME,
+		name: TERMINAL_AGENT_TERM,
 		data: (_terminal, data) => {
 			if (!stopped) options.onData(data);
 		},
@@ -75,7 +75,7 @@ export function startOpenCode(options: StartOpenCodeOptions): OpenCodeProcess {
 			cwd: options.cwd,
 			env: {
 				...process.env,
-				TERM: OPENCODE_TERMINAL_NAME,
+				TERM: TERMINAL_AGENT_TERM,
 				COLORTERM: "truecolor",
 			},
 			terminal,
@@ -110,7 +110,9 @@ export function startOpenCode(options: StartOpenCodeOptions): OpenCodeProcess {
 			terminal.resize(terminalSize(cols, 80), terminalSize(rows, 24));
 			// Bun updates the PTY size without reliably notifying the child. TUIs
 			// need SIGWINCH to read the new dimensions and repaint the added space.
-			proc.kill("SIGWINCH");
+			try {
+				proc.kill("SIGWINCH");
+			} catch {}
 		},
 		stop() {
 			if (stopped) return;
@@ -123,4 +125,25 @@ export function startOpenCode(options: StartOpenCodeOptions): OpenCodeProcess {
 			} catch {}
 		},
 	};
+}
+
+/**
+ * Start `opencode` on a fresh PTY. Throws when the executable cannot be
+ * spawned; a failure after startup is reported through `onError`.
+ */
+export function startOpenCode(
+	options: StartTerminalAgentOptions,
+): TerminalAgentProcess {
+	return startTerminalAgent("OpenCode", "opencode", options);
+}
+
+/**
+ * Start `pi` on a fresh PTY with its standard user configuration. Throws when
+ * the executable cannot be spawned; a failure after startup is reported
+ * through `onError`.
+ */
+export function startPi(
+	options: StartTerminalAgentOptions,
+): TerminalAgentProcess {
+	return startTerminalAgent("Pi", "pi", options);
 }

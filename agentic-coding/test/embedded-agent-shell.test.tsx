@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-// The OpenCode shell page is exercised separately from the large render shard:
-// its embedded terminal owns native OpenTUI state, and the launcher is faked so
-// this test never starts the developer's real OpenCode client.
+// The embedded agent pages are exercised separately from the large render
+// shard: their terminals own native OpenTUI state, and the launchers are faked
+// so this test never starts the developer's real OpenCode or Pi clients.
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,21 +14,21 @@ import { TraceDb } from "../src/server/telemetry-db";
 import { setupKeymap } from "../src/tui/dash/keymap-setup.ts";
 import { clearGateway } from "../src/tui/data/index.ts";
 import { App } from "../src/tui/otel/app/App.tsx";
-import type { OpenCodeLauncher } from "../src/tui/otel/app/opencode-process.ts";
+import type { TerminalAgentLauncher } from "../src/tui/otel/app/terminal-agent-process.ts";
 import { LogStore } from "../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../src/tui/otel/model/traceStore.ts";
 import { advance, renderUntil } from "./app/support/terminal.ts";
 
-test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops on shutdown", async () => {
+test("embedded agents own content keys, stay mounted, and stop on shutdown", async () => {
 	const directory = mkdtempSync(join(tmpdir(), "opencode-shell-"));
 	const db = new TraceDb(directory);
 	let launches = 0;
 	const writes: string[] = [];
 	const terminalSizes: { cols: number; rows: number }[] = [];
 	let stops = 0;
-	const launcher: OpenCodeLauncher = ({ cwd, cols, rows, onData }) => {
+	const launcher: TerminalAgentLauncher = ({ cwd, cols, rows, onData }) => {
 		expect(cwd).toBe(process.cwd());
 		terminalSizes.push({ cols, rows });
 		launches += 1;
@@ -43,6 +43,28 @@ test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops
 			},
 			stop: () => {
 				stops += 1;
+			},
+		};
+	};
+	let piLaunches = 0;
+	const piWrites: string[] = [];
+	const piSizes: { cols: number; rows: number }[] = [];
+	let piStops = 0;
+	const piLauncher: TerminalAgentLauncher = ({ cwd, cols, rows, onData }) => {
+		expect(cwd).toBe(process.cwd());
+		piSizes.push({ cols, rows });
+		piLaunches += 1;
+		onData(new TextEncoder().encode("Pi-test-terminal\r\n"));
+		return {
+			pid: undefined,
+			write: (data) => {
+				piWrites.push(new TextDecoder().decode(data));
+			},
+			resize: (cols, rows) => {
+				piSizes.push({ cols, rows });
+			},
+			stop: () => {
+				piStops += 1;
 			},
 		};
 	};
@@ -68,6 +90,7 @@ test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops
 					topologyStore={new TopologyStore()}
 					dashboard={{ mode: "home", keymap }}
 					openCodeLauncher={launcher}
+					piLauncher={piLauncher}
 				/>
 			);
 		},
@@ -141,7 +164,7 @@ test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops
 		expect(await renderUntil(t, "Keybindings")).toBe(true);
 		const helpFrame = t.captureCharFrame();
 		expect(helpFrame).toContain(
-			"select the Orchestrator, OpenCode, or a workflow",
+			"select the Orchestrator, OpenCode, Pi, or a workflow",
 		);
 		expect(helpFrame).toContain("Ctrl+H");
 		expect(helpFrame).toContain("Ctrl+L");
@@ -151,6 +174,54 @@ test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops
 		t.mockInput.pressKey("s", { ctrl: true });
 		await advance(t, 4, 60);
 		expect(terminalSizes.at(-1)?.cols).toBe(terminalSize?.cols);
+		expect(piLaunches).toBe(0);
+
+		// Sidebar from OpenCode reveals its pin, so one step down selects Pi.
+		// Pi starts lazily on its first visit and keeps its own client.
+		t.mockInput.pressKey("s", { ctrl: true });
+		await advance(t, 4, 60);
+		t.mockInput.pressKey("j");
+		await advance(t);
+		t.mockInput.pressEnter();
+		expect(await renderUntil(t, "Pi-test-terminal")).toBe(true);
+		expect(piLaunches).toBe(1);
+		await advance(t, 4, 60);
+		const piSize = piSizes.at(-1);
+		expect(piSize?.cols).toBeGreaterThan(100);
+		expect(piSize?.rows).toBeGreaterThanOrEqual(35);
+
+		const piFrame = t.captureCharFrame();
+		expect(piFrame).toContain("Pi");
+		expect(piFrame).toContain("Ctrl+S");
+		// Pi has no `?` help key, so the footer does not claim one.
+		expect(piFrame).not.toContain("? help");
+		expect(piFrame).not.toContain("Ctrl+T");
+
+		// Pi owns content keys just like OpenCode: Ctrl+T and ordinary text go
+		// to the PTY, and `?` does not open shell help while content has focus.
+		piWrites.length = 0;
+		t.mockInput.pressKey("t", { ctrl: true });
+		t.mockInput.pressKey("?");
+		t.mockInput.pressKey("x");
+		await advance(t, 2, 20);
+		expect(piWrites.join("")).toContain("\u0014");
+		expect(piWrites.join("")).toContain("?x");
+		expect(t.captureCharFrame()).not.toContain("Keybindings");
+		expect(piLaunches).toBe(1);
+
+		// Returning to OpenCode does not start a second client, and the first
+		// client stayed alive while Pi held the page.
+		t.mockInput.pressKey("s", { ctrl: true });
+		await advance(t, 4, 60);
+		expect(piStops).toBe(0);
+		expect(stops).toBe(0);
+		expect(piSizes.at(-1)?.cols).toBeLessThan(piSize?.cols ?? 0);
+		t.mockInput.pressKey("k");
+		await advance(t);
+		t.mockInput.pressEnter();
+		expect(await renderUntil(t, "OpenCode-test-terminal")).toBe(true);
+		expect(launches).toBe(1);
+		expect(piLaunches).toBe(1);
 	} finally {
 		if (previousTmux !== undefined) process.env.TMUX = previousTmux;
 		if (previousUrl !== undefined)
@@ -158,6 +229,7 @@ test("OpenCode owns content keys, shell help stays in the sidebar, and PTY stops
 		else delete process.env.AGENTIC_WORKFLOW_URL;
 		t.renderer.destroy();
 		expect(stops).toBe(1);
+		expect(piStops).toBe(1);
 		clearGateway();
 		dismissErrorModal();
 		db.close();
