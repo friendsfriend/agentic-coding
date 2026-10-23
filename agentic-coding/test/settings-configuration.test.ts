@@ -446,7 +446,6 @@ describe("section items surface every inventoried setting", () => {
 						environment: "integration",
 						system: "grid",
 						access: "read-only",
-						planApproval: "always",
 						exclusive: false,
 						apps: [
 							{

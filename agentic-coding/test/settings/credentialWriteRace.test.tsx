@@ -118,7 +118,6 @@ function stageStatus(): StagesStatusResponse {
 				environment: "integration",
 				system: "grid",
 				access: "read-only",
-				planApproval: "always",
 				exclusive: false,
 				apps: [
 					{

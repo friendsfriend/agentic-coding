@@ -525,6 +525,12 @@ export const StageTestReportSchema = Schema.Struct({
 	expectations: Schema.Array(
 		Schema.Struct({
 			id: boundedText(64),
+			/** The tester's own statement of what it checked
+			 * (`remove-stage-test-planner`). Optional in the decoder so a report
+			 * persisted by an earlier tier — one verdict per *planned*
+			 * expectation — still decodes and its run still resumes; the handoff
+			 * guard requires it for every verdict written now. */
+			statement: Schema.optional(boundedText(4096)),
 			verdict: Schema.Literal("pass", "fail", "blocked", "inconclusive"),
 			severity: Schema.optional(
 				Schema.Literal("critical", "major", "minor", "info"),
@@ -572,11 +578,11 @@ export const StageTestReportSchema = Schema.Struct({
 		}),
 	).pipe(Schema.maxItems(100)),
 	/** The block execution the report rests on (`author-stage-blocks-as-data`):
-	 * what ran, what was authored, and which route steps ended without a block. */
+	 * what ran and what the tester authored. The tester chose the route, so the
+	 * claim names the block and the document version rather than a plan step. */
 	blocksUsed: Schema.optionalWith(
 		Schema.Array(
 			Schema.Struct({
-				routeStepId: boundedText(64),
 				block: boundedText(160),
 				version: boundedText(32),
 			}),
@@ -594,7 +600,6 @@ export const StageTestReportSchema = Schema.Struct({
 				block: boundedText(160),
 				version: boundedText(32),
 				digest: boundedText(128),
-				routeStepId: Schema.optional(boundedText(64)),
 			}),
 		).pipe(Schema.maxItems(30)),
 		{ exact: true, default: () => [] },
@@ -605,26 +610,23 @@ export const StageTestReportSchema = Schema.Struct({
 				block: boundedText(160),
 				version: boundedText(32),
 				digest: boundedText(128),
-				routeStepId: Schema.optional(boundedText(64)),
 			}),
 		).pipe(Schema.maxItems(30)),
 		{ exact: true, default: () => [] },
 	),
-	unblockedSteps: Schema.optionalWith(
+	/** What the tester deliberately did not test, in its own words: the report
+	 * no longer reconciles a plan's route steps, so a gap is stated rather than
+	 * accounted for (`remove-stage-test-planner`). */
+	notTested: Schema.optionalWith(
 		Schema.Array(
 			Schema.Struct({
-				routeStepId: boundedText(64),
+				expectationId: Schema.optional(boundedText(64)),
 				reason: boundedText(2048),
 			}),
-		).pipe(Schema.maxItems(100)),
+		).pipe(Schema.maxItems(50)),
 		{ exact: true, default: () => [] },
 	),
-	notTested: Schema.Array(
-		Schema.Struct({
-			expectationId: Schema.optional(boundedText(64)),
-			reason: boundedText(2048),
-		}),
-	).pipe(Schema.maxItems(50)),
+	notes: Schema.optionalWith(boundedText(8192), { exact: true }),
 });
 
 export const ResearchHandoffSchema = Schema.Struct({

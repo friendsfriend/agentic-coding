@@ -1,30 +1,11 @@
-// Bridge the approved stage plan to the flow source (`add-stage-flow-replay`).
-// The block plan owns normalized steps and resolved versions; the stage plan
-// owns the route order, expectation mapping and captures.
+// Bridge a standalone block plan to the flow source
+// (`remove-stage-test-planner`). The tester chooses its own route, so the flow
+// source is derived from the plan's own steps: each step's route identity, the
+// block's declared application and — when the block declares exactly one — its
+// role. There is no plan projection to align with any more.
 
-import type { FlowExpectation, FlowRouteMeta, FlowSource } from "./flow.ts";
+import type { FlowRouteMeta, FlowSource } from "./flow.ts";
 import type { NormalizedStageBlockPlan } from "./plan.ts";
-
-export interface StagePlanLike {
-	readonly flowId?: string;
-	readonly ticketSummary?: string;
-	readonly expectations?: readonly {
-		readonly id: string;
-		readonly statement?: string;
-		readonly priority?: string;
-	}[];
-	readonly route: readonly {
-		readonly id: string;
-		readonly application: string;
-		readonly role?: string;
-		readonly capture?: readonly string[];
-		readonly expectationIds?: readonly string[];
-		readonly block?: {
-			readonly id: string;
-			readonly version?: string;
-		};
-	}[];
-}
 
 export class FlowSourceError extends Error {
 	constructor(
@@ -36,85 +17,40 @@ export class FlowSourceError extends Error {
 	}
 }
 
-const PRIORITIES = new Set(["critical", "high", "medium", "low"]);
-
-export function flowSourceFromStagePlan(options: {
-	readonly stagePlan: StagePlanLike;
+export function flowSourceFromPlan(options: {
 	readonly plan: NormalizedStageBlockPlan;
 	readonly stage: string;
-	readonly planId: string;
+	readonly planId?: string;
+	readonly title?: string;
 	readonly revision?: number;
 }): FlowSource {
-	const flowId = options.stagePlan.flowId;
+	const flowId = options.plan.flowId;
 	if (flowId === undefined || flowId.trim() === "")
 		throw new FlowSourceError(
 			"flow-identity-missing",
-			"the approved stage plan has no flowId; add one before saving a replay flow",
+			"saving a flow needs a flowId on the block plan; add one before saving",
 		);
-	if (options.stagePlan.route.length !== options.plan.steps.length)
-		throw new FlowSourceError(
-			"flow-mixed-plan",
-			"a replay flow needs exactly one block on every route step",
-		);
-	const routeMeta: FlowRouteMeta[] = options.stagePlan.route.map((entry) => {
-		if (entry.block === undefined)
-			throw new FlowSourceError(
-				"flow-mixed-plan",
-				`route step ${entry.id} has no block`,
-			);
+	const routeMeta: FlowRouteMeta[] = options.plan.steps.map((step) => {
+		const roles = step.definition.roles ?? [];
 		return {
-			id: entry.id,
-			application: entry.application,
-			...(entry.role === undefined ? {} : { role: entry.role }),
-			expectationIds: [...(entry.expectationIds ?? [])],
-			captures: [...(entry.capture ?? [])],
-		};
-	});
-	for (const [index, step] of options.plan.steps.entries()) {
-		const route = options.stagePlan.route[index];
-		if (route === undefined || route.id !== step.id)
-			throw new FlowSourceError(
-				"flow-route-step-mismatch",
-				`block step ${step.id} does not align with the approved route`,
-			);
-		const requested = route.block;
-		if (requested === undefined || requested.id !== step.definition.id)
-			throw new FlowSourceError(
-				"flow-route-step-mismatch",
-				`route step ${step.id} blocks with ${requested?.id ?? "nothing"}, but the plan normalized ${step.definition.id}`,
-			);
-		if (
-			requested.version !== undefined &&
-			requested.version !== step.definition.version
-		)
-			throw new FlowSourceError(
-				"flow-block-version",
-				`route step ${step.id} pins ${step.definition.id}@${requested.version}, but the registry resolved ${step.definition.version}`,
-			);
-	}
-	const expectations: FlowExpectation[] = (
-		options.stagePlan.expectations ?? []
-	).map((expectation) => {
-		const priority = PRIORITIES.has(expectation.priority ?? "")
-			? (expectation.priority as FlowExpectation["priority"])
-			: "medium";
-		return {
-			id: expectation.id,
-			statement: expectation.statement ?? expectation.id,
-			priority,
+			id: step.id,
+			application: step.definition.app,
+			...(roles.length === 1 ? { role: roles[0] as string } : {}),
+			expectationIds: [],
+			captures: [],
 		};
 	});
 	return {
 		flowId,
-		...(options.stagePlan.ticketSummary === undefined
-			? {}
-			: { title: options.stagePlan.ticketSummary }),
+		...(options.title === undefined ? {} : { title: options.title }),
 		stage: options.stage,
-		planId: options.planId,
+		planId: options.planId ?? options.plan.planId,
 		...(options.revision === undefined ? {} : { revision: options.revision }),
 		inputs: options.plan.inputs,
 		steps: options.plan.steps,
 		routeMeta,
-		expectations,
+		// A saved flow carries its route, not a ticket expectation mapping: the
+		// tester's report states what it checked (`remove-stage-test-planner`).
+		expectations: [],
 	};
 }

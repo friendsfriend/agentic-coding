@@ -28,7 +28,6 @@ export const stageReplayRequestSchema = Schema.Struct({
 		Schema.Record({ key: Schema.String, value: Schema.Unknown }),
 	),
 	dryRun: Schema.optional(Schema.Boolean),
-	approvedRevision: Schema.optional(nonNegative),
 	role: Schema.optional(text(128)),
 }).pipe(
 	Schema.filter(
@@ -129,6 +128,9 @@ export interface StageReplayResponse {
 	readonly planId?: string;
 	readonly revision?: number;
 	readonly inputsHash: string;
+	/** The input values this replay used: the caller's, or the flow's own
+	 * recorded example when the request named none. Values, never secrets. */
+	readonly inputs: Readonly<Record<string, unknown>>;
 	readonly routeHash: string;
 	readonly specHash: string;
 	readonly stage: string;
@@ -145,21 +147,18 @@ export interface StageReplayResponse {
 		readonly retryable: boolean;
 	};
 	readonly heal?: Readonly<Record<string, unknown>>;
-	readonly report?: Readonly<Record<string, unknown>>;
-	readonly reportEvidenceId?: string;
 	readonly resultEvidenceId?: string;
 	readonly blockVersions?: Readonly<Record<string, string>>;
 	readonly blockDigests?: Readonly<Record<string, string>>;
 	readonly dryRun?: {
 		readonly eligible: boolean;
-		readonly approved: boolean;
 		readonly issues: readonly {
 			readonly code: string;
 			readonly message: string;
 			readonly field?: string;
 		}[];
 		readonly inputSchema?: Readonly<Record<string, unknown>>;
-		readonly proposedInputsHash?: string;
+		readonly inputs: Readonly<Record<string, unknown>>;
 	};
 	readonly issues?: readonly {
 		readonly code: string;

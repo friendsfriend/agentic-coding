@@ -509,7 +509,6 @@ export function stageStatus(entry: StageEntry, configDir: string): StageStatus {
 		environment: view.environment,
 		system: view.system,
 		access: view.access,
-		planApproval: view.planApproval,
 		exclusive: view.exclusive,
 		apps: view.apps.map((app) => ({
 			key: app.key,
@@ -625,6 +624,7 @@ function assertStageTestToolStep(
 }
 
 function assertStageTestTarget(
+	deps: StageRouteDeps,
 	workflow: LocatedEvidenceWorkflow | undefined,
 	input: { stage?: string; app?: string; role?: string; method?: string },
 ): void {
@@ -638,42 +638,42 @@ function assertStageTestTarget(
 			"stage request must target the stage pinned by this workflow",
 			403,
 		);
-	const plan = workflow.stageTestPlan as
-		| {
-				createsData?: boolean;
-				route?: readonly { application?: string; role?: string }[];
-		  }
-		| undefined;
-	const plannedRoutes =
-		plan?.route?.filter(
-			(route) => (route.role ?? undefined) === (input.role ?? undefined),
-		) ?? [];
-	const planned =
-		input.app === undefined
-			? plannedRoutes.length === 1
-			: plannedRoutes.some((route) => route.application === input.app);
-	if (!planned)
+	const entry = stageCatalog(deps).entries.find(
+		(candidate) => candidate.ident === workflow.stage,
+	);
+	if (entry && input.app !== undefined && !entry.stage.apps[input.app])
 		throw new StageRouteError(
-			"stage-route-not-approved",
-			"stage application and role must match the approved test plan",
-			403,
+			"stage-app-unknown",
+			"the pinned stage does not declare the requested application",
+			404,
 		);
+	if (entry && input.role !== undefined) {
+		const apps =
+			input.app === undefined
+				? Object.values(entry.stage.apps)
+				: [entry.stage.apps[input.app]];
+		if (!apps.some((app) => app?.roles?.[input.role ?? ""] !== undefined))
+			throw new StageRouteError(
+				"stage-role-unknown",
+				"the pinned stage application does not declare the requested role",
+				404,
+			);
+	}
 	const method = input.method?.toUpperCase();
 	if (method && !["GET", "HEAD", "POST"].includes(method))
 		throw new StageRouteError(
-			"stage-plan-write-not-approved",
-			"stage-test API requests may create planned data with POST, but may not replace or delete existing records",
+			"stage-write-not-allowed",
+			"stage-test API requests may create test data with POST, but may not replace or delete existing records",
 			403,
 		);
 	if (
 		method &&
 		!["GET", "HEAD"].includes(method) &&
-		workflow.stageAccess === "writable" &&
-		plan?.createsData !== true
+		workflow.stageAccess !== "writable"
 	)
 		throw new StageRouteError(
-			"stage-plan-write-not-approved",
-			"state-changing stage requests require a writable stage and an approved plan that declares data creation",
+			"stage-write-not-allowed",
+			"state-changing stage requests require a writable stage",
 			403,
 		);
 }
@@ -792,7 +792,10 @@ async function handleAuthRoute(
 			);
 			const workflow = stageWorkflowForOwner(deps, owner);
 			assertStageTestToolStep(workflow, "stage.execute", "stage-tester");
-			assertStageTestTarget(workflow, { ...decoded, method: decoded.method });
+			assertStageTestTarget(deps, workflow, {
+				...decoded,
+				method: decoded.method,
+			});
 			const pinnedStage =
 				workflow?.definitionId === "stage-test"
 					? workflow.stage
@@ -815,7 +818,7 @@ async function handleAuthRoute(
 		);
 		const workflow = stageWorkflowForOwner(deps, owner);
 		assertStageTestToolStep(workflow, "stage.execute", "stage-tester");
-		assertStageTestTarget(workflow, decoded);
+		assertStageTestTarget(deps, workflow, decoded);
 		const pinnedStage =
 			workflow?.definitionId === "stage-test" ? workflow.stage : decoded.stage;
 		const requestValue = {

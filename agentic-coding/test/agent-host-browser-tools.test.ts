@@ -858,7 +858,7 @@ describe("stage_blocks and stage_run", () => {
 		const plan = { steps: [{ block: "crm.ui.open", args: { path: "/" } }] };
 		const { result } = await invoke(
 			"stage_run",
-			{ plan, session: "default", approvedRevision: 3 },
+			{ plan, session: "default" },
 			server,
 		);
 		expect(result.isError).toBeFalsy();
@@ -866,11 +866,7 @@ describe("stage_blocks and stage_run", () => {
 		expect(call?.url).toBe(
 			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-run",
 		);
-		expect(call?.body).toMatchObject({
-			plan,
-			session: "default",
-			approvedRevision: 3,
-		});
+		expect(call?.body).toMatchObject({ plan, session: "default" });
 		const text = textOf(result.content);
 		expect(text).toContain("planId: plan-1");
 		expect(text).toContain("status: passed");
@@ -999,17 +995,16 @@ describe("stage_flows and stage_replay", () => {
 					durationMs: 0,
 					steps: [],
 					dryRun: {
-						eligible: true,
-						approved: false,
-						proposedInputsHash: "sha256:proposed",
+						eligible: false,
+						inputs: { path: 42 },
 						inputSchema: {
 							type: "object",
 							properties: { path: { type: "string" } },
 						},
 						issues: [
 							{
-								code: "flow-inputs-unapproved",
-								message: "a new plan revision is required",
+								code: "flow-inputs-invalid",
+								message: "path must be a string",
 							},
 						],
 					},
@@ -1035,8 +1030,10 @@ describe("stage_flows and stage_replay", () => {
 			inputs: { path: "/customers/C-2002" },
 		});
 		const text = textOf(result.content);
-		expect(text).toContain("dryRun: eligible, inputs not approved");
-		expect(text).toContain("issue: flow-inputs-unapproved");
+		expect(text).toContain("dryRun: not eligible");
+		expect(text).toContain("issue: flow-inputs-invalid");
+		expect(text).not.toContain("approved");
+		expect(text).toContain('inputs: {"path":42}');
 		expect(text).toContain('input path: {"type":"string"}');
 	});
 
@@ -1087,7 +1084,7 @@ describe("stage_flows and stage_replay", () => {
 		};
 		const { result } = await invoke(
 			"stage_replay",
-			{ flowId: "customer-address", approvedRevision: 3 },
+			{ flowId: "customer-address" },
 			server,
 		);
 		const text = textOf(result.content);
@@ -1122,9 +1119,8 @@ describe("stage_flows and stage_replay", () => {
 							id: "unapproved",
 							flowId: "customer-address",
 							status: "refused",
-							code: "flow-inputs-unapproved",
-							error:
-								"the supplied inputs differ from the approved plan revision",
+							code: "flow-not-eligible",
+							error: "the supplied inputs do not match the manifest schema",
 						},
 					],
 				},
@@ -1148,6 +1144,6 @@ describe("stage_flows and stage_replay", () => {
 			"passed approved (customer-address) inputsHash=sha256:approved evidence=ev-1,ev-2",
 		);
 		expect(text).toContain("refused unapproved (customer-address)");
-		expect(text).toContain("code: flow-inputs-unapproved");
+		expect(text).toContain("code: flow-not-eligible");
 	});
 });

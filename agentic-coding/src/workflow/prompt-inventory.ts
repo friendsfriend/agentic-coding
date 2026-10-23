@@ -26,7 +26,6 @@ export const PROMPT_FAMILIES = [
 	"stage-wiki",
 	"debug",
 	"env-setup",
-	"stage-planner",
 	"stage-tester",
 ] as const;
 export type PromptFamily = (typeof PROMPT_FAMILIES)[number];
@@ -39,9 +38,9 @@ export interface PromptRole {
 	readonly family: PromptFamily;
 }
 
-/** Every agent step and role of the built-in registry that receives the
- * managed workflow protocol. A test pins that no registered agent step with an
- * instruction asset is missing here. */
+/** Every current agent step and role that receives the managed workflow
+ * protocol. Historical stage.plan/stage.replay contracts remain registered for
+ * pinned runs, but are not roles in the current prompt inventory. */
 export const PROMPT_ROLES: readonly PromptRole[] = [
 	{ stepId: "core.plan", role: "planner", family: "planner" },
 	{ stepId: "fusion.plan", role: "planner-1", family: "fusion-planner" },
@@ -67,9 +66,7 @@ export const PROMPT_ROLES: readonly PromptRole[] = [
 	{ stepId: "core.wiki", role: "stage-wiki", family: "stage-wiki" },
 	{ stepId: "debug.investigate", role: "debug", family: "debug" },
 	{ stepId: "setup.author", role: "env-setup", family: "env-setup" },
-	{ stepId: "stage.plan", role: "stage-planner", family: "stage-planner" },
 	{ stepId: "stage.execute", role: "stage-tester", family: "stage-tester" },
-	{ stepId: "stage.replay", role: "stage-tester", family: "stage-tester" },
 ];
 
 /** Byte budget of a role family's static first assignment (protocol, role
@@ -90,10 +87,8 @@ export const PROMPT_BUDGETS: Readonly<Record<PromptFamily, number>> = {
 	"stage-wiki": 5 * 1024,
 	debug: 9.5 * 1024,
 	"env-setup": 10.5 * 1024,
-	// Blocks-as-data: the planner states one block decision per route step.
-	"stage-planner": 9.5 * 1024,
-	// Blocks-as-data: the tester authors a data block, not only executes one.
-	"stage-tester": 12.5 * 1024,
+	// One tester explores, runs blocks and authors the evidence-backed report.
+	"stage-tester": 10 * 1024,
 };
 
 /** Budget of the `codemode` system-prompt section for the full workflow tool

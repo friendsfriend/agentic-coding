@@ -36,8 +36,8 @@ import {
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
-	definitionVersionForStageBlocks,
 	definitionVersionForStagedRoot,
+	definitionVersionForStageExploration,
 	effectiveFamilyTraits,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";
@@ -707,7 +707,6 @@ interface PreparedStartContext {
 		ident: string;
 		system: string;
 		access: "read-only" | "writable";
-		planApproval: "always" | "when-writing" | "never";
 		wikiProcesses: string[];
 	};
 }
@@ -764,7 +763,6 @@ function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 			ident: entry.ident,
 			system: entry.stage.system,
 			access: entry.stage.access,
-			planApproval: entry.stage.planApproval ?? "when-writing",
 			wikiProcesses: [...(entry.stage.wiki?.processes ?? [])],
 		};
 	}
@@ -814,7 +812,9 @@ function prepareFromContext(
 	// tier.
 	const definitionVersion =
 		request.definitionId === "stage-test"
-			? definitionVersionForStageBlocks(config.workflow.max_verification_rounds)
+			? definitionVersionForStageExploration(
+					config.workflow.max_verification_rounds,
+				)
 			: definitionVersionForStagedRoot(config.workflow.max_verification_rounds);
 	const registry = registerBuiltins(
 		undefined,
@@ -1083,7 +1083,6 @@ function prepareFromContext(
 							stageSystem: ctx.stage.system,
 							stageWikiProcesses: ctx.stage.wikiProcesses,
 							stageAccess: ctx.stage.access,
-							stagePlanApproval: ctx.stage.planApproval,
 						}
 					: {}),
 				baseBranch:

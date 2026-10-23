@@ -176,7 +176,8 @@ describe("settings: Stages", () => {
 			expect(byId("stages.root")?.value).toBe("1 allowed · 1 refused");
 			const stage = byId("stages.stage.grid-int");
 			expect(stage?.value).toBe("writable · integration/grid · 1 app");
-			expect(stage?.detail).toContain("plan approval always");
+			expect(stage?.detail).not.toContain("plan approval");
+			expect(snapshot?.stages[0]).not.toHaveProperty("planApproval");
 			expect(stage?.detail).toContain(
 				"navigations stay on https://grid-int.example.test, https://login.example.test",
 			);

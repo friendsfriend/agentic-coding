@@ -4,44 +4,79 @@
 TBD - created by archiving change add-stage-test-workflow. Update Purpose after archive.
 ## Requirements
 ### Requirement: Stage-test workflow family
-The system SHALL register a built-in `stage-test` workflow family on the application-owned non-repository target with steps `stage.plan`, `stage.plan-review`, `stage.replay`, `stage.execute`, `stage.review`, `core.wiki`, `core.wiki-approval`, `core.completed` and `core.closed`. A start SHALL require a task (the ticket text) and a `stage` that is in the stage allow-list; it MAY carry a ticket reference and a read-only repository context. A start naming an unknown or excluded stage SHALL be refused with `stage-not-configured` before any workflow record is written. The stage SHALL be stored in the workflow metadata and SHALL NOT change for the workflow's life. The family SHALL require no branch and no worktree and SHALL never deliver code. `stage.replay` SHALL be an optional route between plan approval and execution; it SHALL be entered only when the approved plan names a replay-eligible flow, and it SHALL fall through to `stage.execute` when no replay flow is selected or the flow is not eligible.
+The system SHALL register a built-in `stage-test` workflow family on the application-owned
+non-repository target with steps `core.route-stage-execute`, `stage.execute`, `stage.review`,
+`core.wiki`, `core.wiki-approval`, `core.completed` and `core.closed`. A start SHALL require a task
+(the ticket text) and a `stage` that is in the stage allow-list; it MAY carry a ticket reference and
+a read-only repository context. A start naming an unknown or excluded stage SHALL be refused with
+`stage-not-configured` before any workflow record is written. The stage SHALL be stored in the
+workflow metadata and SHALL NOT change for the workflow's life. The family SHALL require no branch
+and no worktree and SHALL never deliver code. The family SHALL have exactly one agent role,
+`stage-tester`, and no plan step, no plan-review step and no plan-approval gate. The graph change
+SHALL be registered as a new definition version tier, and definitions registered before it SHALL
+keep their own graph, digest and step list so a workflow pinned to them still runs and completes.
 
 #### Scenario: Start from the CLI
 - **WHEN** the developer runs `workflow start --workflow stage-test --stage grid-int --task "<ticket text>"`
-- **THEN** a `stage-test` workflow SHALL start at `stage.plan` with metadata `stage: grid-int` and no branch or worktree
+- **THEN** a `stage-test` workflow SHALL start at `core.route-stage-execute` with metadata
+  `stage: grid-int` and no branch or worktree
 
 #### Scenario: Unknown stage
 - **WHEN** the developer starts a stage test with `--stage nope`
 - **THEN** the start SHALL be refused with `stage-not-configured` and no workflow SHALL exist
 
-#### Scenario: Replay route
-- **WHEN** an approved plan names a replay-eligible flow and no approval is pending
-- **THEN** the workflow SHALL enter `stage.replay` before `stage.execute`
-
-### Requirement: The test plan and its engine-owned gate
-`stage.plan` SHALL run the `stage-planner` role, which SHALL output a `core.stage-test-plan@1` document: ticket summary, expectations (id, statement, source `ticket` or `wiki`, priority), the knowledge concepts used with trust tier and staleness, the route (ordered steps with application, role, action, expected result and values to capture), asynchronous waits, whether it creates data and which, what will not be tested and why. When the stage's `planApproval` is `always`, or `when-writing` and the plan creates data on a `writable` stage, the engine SHALL route the completed plan to `stage.plan-review`; otherwise directly to `stage.execute`. `stage.plan-review` SHALL offer approve (→ `stage.execute`) and comments (→ `stage.plan`, at most 3 rounds).
-
-#### Scenario: Writing plan stops for approval
-- **WHEN** the stage's `planApproval` is `when-writing`, the stage is writable and the plan declares data creation
-- **THEN** the workflow SHALL wait at `stage.plan-review`
-
-#### Scenario: Read-only plan runs directly
-- **WHEN** the plan declares no data creation and `planApproval` is `when-writing`
-- **THEN** the workflow SHALL continue to `stage.execute` without a developer gate
+#### Scenario: Pinned older graph still runs
+- **WHEN** a workflow was started on an earlier `stage-test` definition version
+- **THEN** it SHALL resolve its own graph, including its plan steps, and SHALL complete without a
+  resolution error
 
 ### Requirement: Execution stays on the pinned stage
-`stage.execute` SHALL run the `stage-tester` role with the approved plan and the stage description in its assignment. In a `stage-test` workflow the browser routes SHALL refuse a raw `url` and an app endpoint open with `stage-test-browsing-restricted` and SHALL refuse opening any stage other than the pinned one with `stage-mismatch`. The tester SHALL record steps through the step journal and SHALL complete with a `core.stage-report@1` output: per expectation a verdict of `pass`, `fail`, `blocked` or `inconclusive`, a severity for `fail`, expected and observed text, step ids and evidence ids; created data with cleanup hints; knowledge observations; what was not tested and why. An unreachable stage or a failed login SHALL yield `blocked` verdicts with the reason, not a failed run.
+`stage.execute` SHALL run the `stage-tester` role with the ticket and the stage description in its
+assignment. In a `stage-test` workflow the browser routes SHALL refuse a raw `url` and an app
+endpoint open with `stage-test-browsing-restricted`, SHALL refuse opening any stage other than the
+pinned one with `stage-mismatch`, and SHALL refuse an application or role the pinned stage does not
+declare. The stage's `access` SHALL be the only write boundary: a `read-only` stage refuses every
+state-changing request and a `writable` stage allows the tester to create and change test data it
+needs. The tester SHALL record steps through the step journal and SHALL complete with a
+`core.stage-report@1` output listing the expectations it chose to verify, each with a verdict of
+`pass`, `fail`, `blocked` or `inconclusive`, a statement, a severity for `fail`, expected and
+observed text, step ids and evidence ids; plus created data with cleanup hints, knowledge
+observations, and what was not tested and why. An unreachable stage or a failed login SHALL yield
+`blocked` verdicts with the reason, not a failed run.
 
 #### Scenario: Raw URL refused
 - **WHEN** the tester calls `browser_open({ url: "https://example.org" })`
 - **THEN** the call SHALL be refused with `stage-test-browsing-restricted`
 
+#### Scenario: Undeclared role refused
+- **WHEN** the tester opens a stage application with a `stageRole` the pinned stage does not declare
+  for that application
+- **THEN** the call SHALL be refused with `stage-role-unknown`
+
+#### Scenario: Tester defines the expectations
+- **WHEN** the tester decides the ticket is verified by three checks
+- **THEN** the report SHALL carry exactly those three expectations, each with its own statement and
+  verdict, and the engine SHALL NOT require an expectation from any other source
+
 #### Scenario: Login blocked by MFA
 - **WHEN** `stage_login` answers `login-mfa-required` for the installer role
-- **THEN** the expectations that need the installer SHALL be reported `blocked` with that reason and the run SHALL complete
+- **THEN** the expectations that need the installer SHALL be reported `blocked` with that reason and
+  the run SHALL complete
 
 ### Requirement: Engine-rendered, validated report
-The engine SHALL refuse a `core.stage-report@1` output in which an expectation of the plan has no verdict, a `pass` or `fail` cites no evidence id, a `fail` has no severity, or a cited evidence or step id does not exist. For an accepted output it SHALL render `stage-report.md` in the workflow's evidence directory with: ticket summary and reference; stage, environment, access and per-application versions; the plan's expectations and knowledge concepts; findings per expectation with verdict, severity, expected and observed, evidence captions and video offsets; the step timeline as reproduction steps; a blocks section with every used, created and adjusted block and the unblocked step reasons; created data; proposed wiki updates; not tested. The blocks section SHALL show, per created or adjusted block, its id, version, the postcondition, the operation list and — for an adjustment — the difference against the version currently in the shared store, and it SHALL be read from the run's drafts at render time and be bounded (at most 8 blocks and 60 lines each). Every rendered value SHALL pass through the shared redactor.
+The engine SHALL refuse a `core.stage-report@1` output in which a `pass` or `fail` cites no evidence
+id, a `fail` has no severity, a cited evidence or step id does not exist, a declared application has
+no version status, a knowledge observation is not backed by a stage journal step, or a claimed block
+does not resolve in the registry this run executes. For an accepted output it SHALL render
+`stage-report.md` in the workflow's evidence directory with: the ticket reference; stage,
+environment, access and per-application versions; the tester's expectations with their statements;
+findings per expectation with verdict, severity, expected and observed, evidence captions and video
+offsets; the step timeline as reproduction steps; a blocks section with every used, created and
+adjusted block; created data; proposed wiki updates; not tested. The blocks section SHALL show, per
+created or adjusted block, its id, version, the postcondition, the operation list and — for an
+adjustment — the difference against the version currently in the shared store, and it SHALL be read
+from the run's drafts at render time and be bounded (at most 8 blocks and 60 lines each). Every
+rendered value SHALL pass through the shared redactor.
 
 #### Scenario: Pass without evidence refused
 - **WHEN** the tester outputs `pass` for E2 with no evidence id
@@ -49,11 +84,17 @@ The engine SHALL refuse a `core.stage-report@1` output in which an expectation o
 
 #### Scenario: Report rendered
 - **WHEN** the tester's output is accepted
-- **THEN** `stage-report.md` SHALL exist with one findings entry per plan expectation and the journal as numbered reproduction steps
+- **THEN** `stage-report.md` SHALL exist with one findings entry per expectation the tester listed and
+  the journal as numbered reproduction steps
+
+#### Scenario: Missing application version refused
+- **WHEN** the pinned stage declares two applications and the report carries one version status
+- **THEN** the engine SHALL refuse the output naming the missing application
 
 #### Scenario: Report shows the authored block diff
 - **WHEN** the report lists one created and one adjusted block
-- **THEN** `stage-report.md` SHALL show both blocks with their postcondition and operations, and the adjusted one with its difference from the approved version
+- **THEN** `stage-report.md` SHALL show both blocks with their postcondition and operations, and the
+  adjusted one with its difference from the approved version
 
 ### Requirement: Report review, follow-ups and close
 `stage.review` SHALL present the report for developer review with line comments and SHALL offer approve (→ `core.completed`, promoting the drafts the report claims), approve-and-update-wiki (→ `core.wiki`, promoting them as well, offered only when the report has knowledge observations other than `confirmed`) and a follow-up comment (→ `stage.execute` with the comment, at most 3 rounds, keeping the drafts). A draft the report does not claim SHALL never be published. The review SHALL make each created or adjusted block and its recorded proof visible in the rendered report, and the approval label SHALL name how many blocks it promotes. Closing the workflow SHALL stop its browser sessions, release its stage lease and remove its drafts.
@@ -70,180 +111,71 @@ The engine SHALL refuse a `core.stage-report@1` output in which an expectation o
 - **WHEN** the report lists one created block
 - **THEN** the review SHALL show that block's postcondition, operations and proof and the approval SHALL be labelled with the number of blocks it promotes
 
-### Requirement: Stage plans may name blocks per route step
-A `core.stage-test-plan@1` route step SHALL name exactly one of: an optional `block` object containing a catalogued block id and typed arguments; a `blockToCreate` object (`id`, optional `version`, optional `args`, `intent`) describing the block the tester is to author for the step; a `blockToAdjust` object (`id`, optional `version`, optional `args`, `reason`) describing the existing approved data block to change; or a `noBlockReason` string. The planner SHALL author the plan blocks-first: it SHALL use a block when the catalog contains one that matches the step's application, role and intent, SHALL name a block to create when no block fits and the approach is already a block, SHALL name a block to adjust when an existing data block is close but wrong, and SHALL take `noBlockReason` only for an extreme edge case it states. The human-readable `action`, `expected` result and `capture` values SHALL remain present for every step. A route step that names none of the four SHALL be refused by the plan contract when the plan is submitted, so a plan persisted before this rule still decodes and resumes.
-
-#### Scenario: Planner selects a block
-- **WHEN** the planner needs to fill a customer address and the catalog contains `crm.customer.fillAddress`
-- **THEN** the route step SHALL retain its action and expected text and SHALL carry `block: { id: "crm.customer.fillAddress", args: { ... } }`
-
-#### Scenario: Planner names a block to create
-- **WHEN** no catalogued block covers searching the postal code on the address page
-- **THEN** the route step SHALL carry `blockToCreate: { id: "qa-ava.address.searchPostalCode", intent: "type the postal code and accept the suggestion" }` beside its action and expected text
-
-#### Scenario: Planner names a block to adjust
-- **WHEN** an approved data block fills the address but polls a selector that no longer exists
-- **THEN** the route step SHALL carry `blockToAdjust: { id, version, reason }` instead of an exploratory step
-
-#### Scenario: No block is available
-- **WHEN** a step can only be verified with a tool the block surface does not offer
-- **THEN** the route step SHALL carry a `noBlockReason` and the plan SHALL remain valid
-
-#### Scenario: A route step with no block selection is refused
-- **WHEN** a route step names no block, no block to create, no block to adjust and no `noBlockReason`
-- **THEN** the plan contract SHALL refuse the plan and name the route step
-
-### Requirement: Plan review shows block effects
-The plan review SHALL show, for each route step that names a block, the block id, version, title, effect set and the arguments that affect data creation. For a route step that names a block to create or to adjust, the review SHALL show the intended id, version family, arguments and the stated intent or reason. A write or destructive block SHALL count toward the plan's data-creation declaration for the existing approval gate. The review SHALL refuse a plan whose block effect set is broader than the plan's declared data creation, or whose block application is outside the pinned stage, and the engine SHALL enforce both at plan completion from the registry the run executes against, not only in the rendered review.
-
-#### Scenario: Plan names a write block without declaring data creation
-- **WHEN** a plan names a `write` block and does not declare `createsData`
-- **THEN** `stage.plan` completion SHALL refuse the plan and name the route step and the effect
-
-#### Scenario: Plan names a destructive block
-- **WHEN** a route step names a `destructive` block
-- **THEN** `stage.plan` completion SHALL refuse the plan, because a destructive effect is never executable from a plan
-
-#### Scenario: Write block requires approval
-- **WHEN** a plan names a `write` block and the stage's `planApproval` is `when-writing`
-- **THEN** the plan SHALL stop at `stage.plan-review` and the review SHALL show the write effect
-
-#### Scenario: Block outside the stage
-- **WHEN** a route step names a block scoped to an application the pinned stage does not declare
-- **THEN** the review SHALL refuse the plan with the application mismatch
-
-#### Scenario: Review shows the authoring intent
-- **WHEN** the plan names a block to create for a read-only step
-- **THEN** the review SHALL show the intended block id and its intent beside the route step and SHALL not require a block version
-
-### Requirement: Stage execution runs contiguous block steps through the plan runner
-`stage.execute` SHALL execute a contiguous sequence of route steps that have block references through one `stage_run` call, where a route step that names a block to create or to adjust SHALL count as block-backed once the corresponding draft exists. A route step without a block SHALL remain an exploratory step executed with the existing browser tools, and a route step whose block was never authored SHALL be reported as unblocked with its reason. A transition between block and exploratory steps SHALL be a visible plan deviation in the execution result. The tester SHALL NOT replace a block step with free-form actions unless the block fails or the plan is revised and re-approved.
-
-#### Scenario: All steps have blocks
-- **WHEN** every route step in the approved plan names a block
-- **THEN** `stage.execute` SHALL run them through one `stage_run` call and SHALL not require a `browser_snapshot` between steps
-
-#### Scenario: Mixed route
-- **WHEN** the first two route steps name blocks and the third does not
-- **THEN** `stage.execute` SHALL run the first two through `stage_run` and the third through the exploratory browser tools, and the result SHALL record the switch
-
-#### Scenario: Authored step joins the block run
-- **WHEN** the tester saves the draft a route step named in `blockToCreate`
-- **THEN** the plan SHALL run that step through `stage_run` with the other block-backed steps and SHALL record its proof
-
-#### Scenario: Unauthored step is reported unblocked
-- **WHEN** a route step named a block to create and the tester completes without authoring it
-- **THEN** the run SHALL record that step as unblocked with the tester's reason and the report SHALL NOT claim a block for it
-
 ### Requirement: Stage reports consume block execution results
-The `core.stage-report@1` path SHALL accept the block runner's step and journal ids as plan step ids and evidence ids. The report SHALL include the block id and resolved version for each block-backed step, the failing sub-step for a failure, and every block-to-exploratory deviation. The report SHALL additionally carry `blocksUsed`, `blocksCreated` and `blocksAdjusted` as *claims* — the block and its version, plus the route step — which the engine verifies against the run's own recorded proofs; the proof itself is never part of the report, because a tester-written proof would be an assertion rather than a record. It SHALL also carry `unblockedSteps` naming every plan route step that ended without a block and the reason. The engine SHALL refuse a report that omits an unblocked step's reason, that names an unblocked step the plan does not contain, that claims a created or adjusted block whose draft holds no passed proof of that version and digest in this run, or that names a used block that is not the plan's block for that route step. A report that cites a step id or evidence id not produced by the runner or the exploratory tools SHALL be refused by the existing engine validation.
+The `core.stage-report@1` path SHALL accept the block runner's step and journal ids as step ids and
+evidence ids. The report SHALL carry `blocksUsed`, `blocksCreated` and `blocksAdjusted` as *claims*:
+the block, its version and — for a created or adjusted block — the digest `stage_block_save`
+returned. The engine SHALL verify a created or adjusted claim against the run's own recorded proofs;
+the proof itself is never part of the report, because a tester-written proof would be an assertion
+rather than a record. The engine SHALL refuse a report that claims a created or adjusted block whose
+draft holds no passed proof of that version and digest in this run, that cites a digest other than
+the draft's current document, or that names a used block the run's registry cannot resolve at that
+version. A report that cites a step id or evidence id not produced by the runner, the replay or the
+exploratory tools SHALL be refused by the existing engine validation.
 
 #### Scenario: Report includes block versions
 - **WHEN** a block-backed step passes and the report cites its journal entry
 - **THEN** the report SHALL name the block id and version beside the reproduction step
 
-#### Scenario: Report names a deviation
-- **WHEN** a plan switches from a block step to an exploratory step
-- **THEN** the report SHALL list the switch under what was not tested as planned and why
-
-#### Scenario: Unexplained unblocked step is refused
-- **WHEN** a plan route step with no block is absent from `unblockedSteps`
-- **THEN** the engine SHALL refuse the report naming the route step
-
 #### Scenario: Unproven created block is refused
 - **WHEN** the report claims a created block whose draft has no passed proof in this run
 - **THEN** the engine SHALL refuse the report naming the block
 
-### Requirement: Block failures return to the plan owner before the report
-When a block fails, `stage.execute` SHALL return to the stage workflow with a structured block failure rather than silently continuing. The tester SHALL either record the failure against the expectation, adjust the failing draft and run it again inside the same run, request a plan revision, or complete the report with a `fail` or `blocked` verdict. The workflow SHALL NOT auto-promote a block fix or auto-approve a revised plan.
+#### Scenario: Unknown used block is refused
+- **WHEN** the report claims a used block whose id the run's registry does not resolve
+- **THEN** the engine SHALL refuse the report naming the block
+
+### Requirement: Stage execution runs the tester's own block plan
+`stage.execute` SHALL run the `stage-tester` role without an approved route. The tester SHALL
+compose one standalone block plan `{ planId?, flowId?, inputs?, steps }` itself and execute it with
+`stage_run`, and it SHALL be free to explore with the browser tools before, between and after such
+calls. A step's `args` SHALL be the tester's own values; there SHALL be no second argument source and
+no notion of a step the tester is "not allowed" to run. The engine SHALL keep refusing a plan that
+names an unknown block, an argument that does not match the block's parameter schema, a block scoped
+to an application the pinned stage does not declare, a destructive block, a write block on a
+read-only stage, and an argument that contains a configured secret value. A stage that the browser
+routes refuse, a failed login or a failing block SHALL be reported as a blocked or failed verdict,
+never as a failed run.
+
+#### Scenario: One plan for the blocks the tester chose
+- **WHEN** the tester has checked the catalog and decides to run `openCustomer` then
+  `fillCustomerAddress`
+- **THEN** it SHALL call `stage_run` once with those two steps and their own arguments and SHALL
+  receive the per-step journal and evidence ids
+
+#### Scenario: Exploration and blocks in one run
+- **WHEN** the tester needs a page it has not driven before
+- **THEN** it SHALL explore with the browser tools and MAY return to `stage_run` with a plan built
+  from what it learned, without any approval in between
+
+#### Scenario: Read-only stage refuses a write block
+- **WHEN** the tester's plan names a `write` block on a `read-only` stage
+- **THEN** `stage_run` SHALL refuse the plan before opening a browser and name the read-only stage
+
+### Requirement: Block failures stay inside the tester's run
+When a block fails, the tester SHALL keep working inside `stage.execute`: it SHALL either record the
+failure against the expectation it belongs to, save a corrected draft and run it again, or explore
+the step with the browser tools. The workflow SHALL NOT auto-promote a block, auto-repair a spec, or
+invent a verdict. A draft that fails and is corrected SHALL be claimed only in its newest proven
+form.
 
 #### Scenario: Block failure is reported
 - **WHEN** `fillCustomerAddress` fails its postcondition
-- **THEN** the tester SHALL record the failure against the mapped expectation with the block id, version and evidence ids
+- **THEN** the tester SHALL record the failure against the expectation with the block id, version
+  and evidence ids and continue with the independent expectations
 
-#### Scenario: Revised plan needs re-approval
-- **WHEN** the plan owner changes a block argument in response to a failure
-- **THEN** the revised plan SHALL pass through plan review again before execution
-
-#### Scenario: Draft is fixed and re-run inside the run
+#### Scenario: Corrected draft inside the same run
 - **WHEN** an authored draft fails its own postcondition
-- **THEN** the tester SHALL be able to save a corrected version of that draft and run it again without a plan revision, and only the newest proof SHALL be claimed in the report
-
-### Requirement: Replay route preserves approval and pinned-stage rules
-`stage.replay` SHALL run only after the approved plan and stage pin are recorded, SHALL not start when a plan approval is pending, and SHALL apply the same pinned-stage, application and role restrictions as `stage.execute`. A replay SHALL NOT be used to test another stage, a raw URL or an application outside the plan. A replay failure SHALL return to `stage.execute` with the heal packet; it SHALL not bypass the tester or the report validation.
-
-#### Scenario: Approval still required
-- **WHEN** a plan creates data on a writable stage and the stage's plan approval policy requires review
-- **THEN** `stage.replay` SHALL not start until the plan is approved
-
-#### Scenario: Different stage refused
-- **WHEN** the workflow's pinned stage is `grid-int` and the flow manifest only allows `grid-uat`
-- **THEN** `stage.replay` SHALL refuse the flow and the workflow SHALL use `stage.execute`
-
-### Requirement: Replay coverage and inputs are declared in the existing plan
-The `core.stage-test-plan@1` contract SHALL gain optional top-level `flowId` and `inputs` fields and an optional `expectationIds` array on each route step. These additions SHALL be backward-compatible and SHALL NOT introduce a new plan contract version; a plan without them SHALL remain valid for exploratory execution. The planner SHALL set `flowId` and bind route arguments to plan inputs with `{{ inputs.<name> }}` when it selects a saved flow. The planner SHALL map every route step to the expectations it verifies; a plan intended for replay SHALL cover every expectation with at least one block-backed route step. The plan review SHALL show the flow id, the approved input values, the derived input schema and the coverage. A plan with an expectation that no route step covers SHALL remain executable exploratorily but SHALL NOT be replay-eligible.
-
-#### Scenario: Covered plan
-- **WHEN** every expectation appears in at least one route step's `expectationIds` and every route step binds a block
-- **THEN** the plan SHALL be eligible for deterministic replay report mapping
-
-#### Scenario: Uncovered expectation
-- **WHEN** an expectation has no route step mapping
-- **THEN** the plan SHALL still be valid for `stage.execute` but SHALL be marked not replay-eligible
-
-#### Scenario: Existing plan remains valid
-- **WHEN** a stage plan has no `flowId`, `inputs` or `expectationIds`
-- **THEN** the existing `core.stage-test-plan@1` decoder SHALL accept it unchanged and replay SHALL not be selected
-
-### Requirement: Replay inputs belong to an approved plan revision
-A replay SHALL execute with the input values recorded in the approved plan revision. Changing only those values SHALL require a new plan revision and approval, but SHALL NOT change the route hash, regenerate the spec or require a new flow manifest. `stage_replay` SHALL refuse an input set that does not match the approved revision with `flow-inputs-unapproved`; it SHALL NOT silently substitute environment values or defaults. A dry run MAY validate proposed values against the flow input schema and SHALL report that they are not approved.
-
-#### Scenario: Same flow, new values
-- **WHEN** the same flow is approved again with a different customer id
-- **THEN** the workflow SHALL use the same spec and route hash, a new plan revision and a new `inputsHash`
-
-#### Scenario: Unapproved override
-- **WHEN** `stage_replay` receives inputs that differ from the approved plan revision
-- **THEN** the tool SHALL refuse with `flow-inputs-unapproved` and SHALL not start the replay
-
-#### Scenario: Dry-run validation
-- **WHEN** a planner dry-runs a proposed input set against the flow input schema
-- **THEN** the workflow SHALL return schema issues without starting a browser and SHALL mark the values as unapproved
-
-### Requirement: Replay success produces the normal validated report
-When `stage.replay` succeeds and covers every expectation, the engine SHALL map the replay result to a `core.stage-report@1` and pass it through the existing report validation, citation checks, redaction and render effect. A replay result that is incomplete, cites unknown evidence, or leaves an expectation without a verdict SHALL be refused exactly as a tester-authored report would be. The workflow SHALL record that the report came from replay, the flow id, the plan revision, the `inputsHash` and the block versions.
-
-#### Scenario: Replay report accepted
-- **WHEN** a replay covers all expectations and carries valid journal and evidence ids
-- **THEN** the engine SHALL render `stage-report.md` and move to `stage.review`
-
-#### Scenario: Invalid replay report refused
-- **WHEN** a replay report cites an evidence id that is not attached to the workflow
-- **THEN** the engine SHALL refuse the output and route to the tester or a defined failure state rather than rendering it
-
-### Requirement: Replay failure returns to the tester with bounded evidence
-A failed `stage.replay` SHALL transition to `stage.execute` with the heal packet, the failing flow id, route step, block id/version and the evidence ids. The tester SHALL use the packet to diagnose or report the failure and SHALL NOT be asked to re-derive the whole page from scratch. The stage run SHALL preserve the failed replay result and the eventual tester report as separate evidence.
-
-#### Scenario: Failure routes to tester
-- **WHEN** a replay step fails
-- **THEN** `stage.execute` SHALL receive the heal packet and the failed replay result before it starts
-
-#### Scenario: Tester reports failure
-- **WHEN** the tester cannot resolve the failure within the approved route
-- **THEN** it SHALL record a `fail` or `blocked` verdict with the replay evidence ids and complete the report
-
-### Requirement: A replay flow is never silently substituted for the approved route
-The planner and executor SHALL show whether a step is executed by replay, by a block plan, or exploratorily. A replay that covers only part of the plan, or whose block sequence differs from the approved route, SHALL be refused rather than treated as an equivalent route. Any route change SHALL go through plan review again before replay or execution. An input-only change SHALL also go through plan review as a new revision but SHALL NOT require spec regeneration.
-
-#### Scenario: Partial flow refused
-- **WHEN** a plan has three route steps and the proposed flow covers two
-- **THEN** `stage.replay` SHALL refuse the flow and the workflow SHALL not claim the third step ran
-
-#### Scenario: Route change re-approval
-- **WHEN** the developer changes a route step, a block argument placeholder or an expectation mapping
-- **THEN** the route hash SHALL change and replay SHALL require a regenerated flow and a new approval
-
-#### Scenario: Input-only change reuses the flow
-- **WHEN** the developer changes only the plan's input values
-- **THEN** the flow id, route hash and spec SHALL remain unchanged and the new values SHALL require a new plan approval before replay
+- **THEN** the tester SHALL be able to save a corrected version and run it again in the same run, and
+  only the newest proof SHALL be claimable in the report
 

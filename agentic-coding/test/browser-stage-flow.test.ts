@@ -287,10 +287,6 @@ describe("stage-test browser restrictions", () => {
 							currentStep: "stage.execute",
 							selectedRoles: ["stage-tester"],
 							stageAccess: "read-only",
-							stageTestPlan: {
-								createsData: false,
-								route: [{ application: "other-app" }],
-							},
 						}
 					: undefined,
 		};
@@ -317,15 +313,23 @@ describe("stage-test browser restrictions", () => {
 			});
 			expect(mismatch.status).toBe(403);
 			expect(mismatch.value.code).toBe("stage-mismatch");
-			const unapprovedRoute = await call(deps, AGENT_BROWSER_OPEN_PATH, {
-				stage: "grid-flow",
-				stageApp: "web",
-			});
-			expect(unapprovedRoute.status).toBe(403);
-			expect(unapprovedRoute.value.code).toBe("stage-route-not-approved");
-			expect(String(unapprovedRoute.value.message)).toContain(
-				'the plan routes "web" as nothing',
+			// There is no route approval to check any more (`remove-stage-test-
+			// planner`): the tester opens any application the stage declares.
+			const declared = await call(
+				deps,
+				AGENT_BROWSER_OPEN_PATH,
+				{ stage: "grid-flow", stageApp: "web" },
+				"workflow:wf-flow",
 			);
+			expect(declared.status).toBe(200);
+			const undeclared = await call(
+				deps,
+				AGENT_BROWSER_OPEN_PATH,
+				{ stage: "grid-flow", stageApp: "not-declared" },
+				"workflow:wf-flow",
+			);
+			expect(undeclared.status).toBe(404);
+			expect(undeclared.value.code).toBe("stage-app-unknown");
 		} finally {
 			await fixture.pool.closeAll();
 		}

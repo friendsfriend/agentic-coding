@@ -86,6 +86,15 @@ export function definitionVersionForStageBlocks(rounds: number): number {
 	return rounds + 1100;
 }
 
+/** The one-agent stage-test tier (`remove-stage-test-planner`): the same
+ * pinned-stage family with the plan gate removed, so the tester explores and
+ * tests in one step. A new tier for the same digest reason as every tier above:
+ * a workflow pinned to the 1001 or 1100 manifests keeps the graph — and the
+ * plan steps — it started on, and completes under it. */
+export function definitionVersionForStageExploration(rounds: number): number {
+	return rounds + 1200;
+}
+
 /** The declared family traits, per repository code-change family
  * (add-definition-family-traits). This table is both the source of the traits
  * tier's manifests and the fallback `effectiveFamilyTraits` reads for a

@@ -472,7 +472,7 @@ The system SHALL provide a dedicated agent step and role for documentation in ar
 - **THEN** it is a valid UTF-8 Markdown concept with OKF v0.2-compatible frontmatter and meaningful body-level claims tied to source resources
 
 ### Requirement: Wiki authoring is isolated to the dedicated role
-Managed workflow invocations SHALL permit wiki draft writes for the `wiki` role (openspec/implementation and wiki-only workflows, discovery-based drafting), the dedicated `research-wiki` role (the research workflow's wiki drafting stage, directive-first drafting) and the dedicated `stage-wiki` role (the stage-test workflow's wiki drafting stage, directive-first drafting from approved knowledge observations) only when executing an authenticated `core.wiki` run. The system SHALL reject wiki draft writes from researcher, planner, consolidator, fusion-planner, worker, triage, verifier, archive, stage-planner and stage-tester roles. No wiki-writing role SHALL be able to set a stable status or supply a machine or human verification event. A managed wiki draft write whose content or frontmatter contains a non-empty value of the configuration root `.env` SHALL be refused without changing the bundle. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
+Managed workflow invocations SHALL permit wiki draft writes for the `wiki` role (openspec/implementation and wiki-only workflows, discovery-based drafting), the dedicated `research-wiki` role (the research workflow's wiki drafting stage, directive-first drafting) and the dedicated `stage-wiki` role (the stage-test workflow's wiki drafting stage, directive-first drafting from approved knowledge observations) only when executing an authenticated `core.wiki` run. The system SHALL reject wiki draft writes from researcher, planner, consolidator, fusion-planner, worker, triage, verifier, archive and stage-tester roles. No wiki-writing role SHALL be able to set a stable status or supply a machine or human verification event. A managed wiki draft write whose content or frontmatter contains a non-empty value of the configuration root `.env` SHALL be refused without changing the bundle. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
 
 #### Scenario: Dedicated wiki role is permitted to write
 - **WHEN** `wiki write` runs with the managed `wiki` role, the managed `research-wiki` role or the managed `stage-wiki` role
@@ -497,7 +497,7 @@ Managed workflow invocations SHALL permit wiki draft writes for the `wiki` role 
 - **THEN** the operation exits non-zero and the bundle remains unchanged
 
 #### Scenario: Other implementation roles cannot write
-- **WHEN** `wiki write` runs with a managed worker, triage, verifier, fusion-planner, stage-planner or stage-tester role
+- **WHEN** `wiki write` runs with a managed worker, triage, verifier, fusion-planner or stage-tester role
 - **THEN** the operation exits non-zero and the bundle remains unchanged
 
 #### Scenario: Secret value refused

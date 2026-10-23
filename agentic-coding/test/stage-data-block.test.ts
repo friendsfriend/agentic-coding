@@ -39,12 +39,12 @@ import { pinnedDataBlock } from "../src/stage-blocks/fixture.ts";
 import { parseFlowManifest } from "../src/stage-blocks/flow.ts";
 import { generateFlow } from "../src/stage-blocks/flow-generator.ts";
 import { flowEligibility } from "../src/stage-blocks/flow-registry.ts";
-import { flowSourceFromStagePlan } from "../src/stage-blocks/flow-source.ts";
 import {
 	blockPlanFromRoute,
 	validateStageBlockPlan,
 } from "../src/stage-blocks/plan.ts";
 import { createStageBlockRegistry } from "../src/stage-blocks/registry.ts";
+import { flowSourceFromRoute } from "./support/flow-source-fixture.ts";
 
 function document(
 	overrides: Partial<StageDataBlockDocument> = {},
@@ -1402,8 +1402,8 @@ describe("stage data blocks: the saved flow", () => {
 	// than the default five seconds on a loaded machine.
 	test("writes a sidecar document and a spec that interprets it by runData", async () => {
 		const { registry, root, plan } = harness();
-		const source = flowSourceFromStagePlan({
-			stagePlan,
+		const source = flowSourceFromRoute({
+			routePlan: stagePlan,
 			plan,
 			stage: "crm-int",
 			planId: "plan-data",
@@ -1454,7 +1454,13 @@ describe("stage data blocks: the saved flow", () => {
 			blockDigest(approved),
 		);
 		expect(
-			flowEligibility({ flowId, root, stage: "crm-int", source, registry }),
+			flowEligibility({
+				flowId,
+				root,
+				stage: "crm-int",
+				inputs: source.inputs,
+				registry,
+			}),
 		).toEqual({
 			eligible: true,
 			issues: [],
@@ -1463,8 +1469,8 @@ describe("stage data blocks: the saved flow", () => {
 
 	test("refuses to replay a draft, and a flow whose document is gone", async () => {
 		const { registry, root, plan } = harness();
-		const source = flowSourceFromStagePlan({
-			stagePlan,
+		const source = flowSourceFromRoute({
+			routePlan: stagePlan,
 			plan,
 			stage: "crm-int",
 			planId: "plan-data",
@@ -1481,7 +1487,7 @@ describe("stage data blocks: the saved flow", () => {
 			flowId,
 			root,
 			stage: "crm-int",
-			source,
+			inputs: source.inputs,
 			registry,
 			draftIds: new Set(["crm.customer.readAddress"]),
 		});
@@ -1504,7 +1510,7 @@ describe("stage data blocks: the saved flow", () => {
 			flowId,
 			root,
 			stage: "crm-int",
-			source,
+			inputs: source.inputs,
 			registry,
 		});
 		expect(missing.issues.map((issue) => issue.code)).toContain(
@@ -1522,7 +1528,7 @@ describe("stage data blocks: the saved flow", () => {
 			flowId,
 			root,
 			stage: "crm-int",
-			source,
+			inputs: source.inputs,
 			registry,
 		});
 		expect(unpinned.issues.map((issue) => issue.code)).toContain(
@@ -1532,8 +1538,8 @@ describe("stage data blocks: the saved flow", () => {
 
 	test("a sidecar edited after the flow was saved makes it ineligible", async () => {
 		const { registry, root, plan } = harness();
-		const source = flowSourceFromStagePlan({
-			stagePlan,
+		const source = flowSourceFromRoute({
+			routePlan: stagePlan,
 			plan,
 			stage: "crm-int",
 			planId: "plan-data",
@@ -1565,7 +1571,7 @@ describe("stage data blocks: the saved flow", () => {
 				flowId,
 				root,
 				stage: "crm-int",
-				source,
+				inputs: source.inputs,
 				registry,
 			}).eligible,
 		).toBe(true);
@@ -1575,7 +1581,7 @@ describe("stage data blocks: the saved flow", () => {
 			flowId,
 			root,
 			stage: "crm-int",
-			source,
+			inputs: source.inputs,
 			registry,
 		});
 		expect(drifted.eligible).toBe(false);
@@ -1595,7 +1601,7 @@ describe("stage data blocks: the saved flow", () => {
 			flowId,
 			root,
 			stage: "crm-int",
-			source,
+			inputs: source.inputs,
 			registry,
 		});
 		const invalidIssue = invalid.issues.find(
@@ -1612,7 +1618,7 @@ describe("stage data blocks: the saved flow", () => {
 				flowId,
 				root,
 				stage: "crm-int",
-				source,
+				inputs: source.inputs,
 				registry,
 			}).issues.map((issue) => issue.code),
 		).toContain("flow-block-document-missing");
@@ -1620,8 +1626,8 @@ describe("stage data blocks: the saved flow", () => {
 
 	test("the replay's own sidecar seam resolves exactly the pinned document", async () => {
 		const { registry, root, plan } = harness();
-		const source = flowSourceFromStagePlan({
-			stagePlan,
+		const source = flowSourceFromRoute({
+			routePlan: stagePlan,
 			plan,
 			stage: "crm-int",
 			planId: "plan-data",

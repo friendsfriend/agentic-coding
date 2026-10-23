@@ -23,6 +23,7 @@ import {
 import { stageTestManifests } from "../src/workflow/definitions/graphs/stage-test.ts";
 import {
 	definitionVersionForStageBlocks,
+	definitionVersionForStageExploration,
 	definitionVersionForStageTest,
 } from "../src/workflow/definitions/manifest-policy.ts";
 import { WORKFLOW_STEPS } from "../src/workflow/definitions/steps.ts";
@@ -76,6 +77,7 @@ const report = (overrides: Record<string, unknown> = {}) => ({
 	expectations: [
 		{
 			id: "E1",
+			statement: "The request is visible",
 			verdict: "pass",
 			expected: "The request is visible",
 			observed: "The request is visible",
@@ -90,12 +92,6 @@ const report = (overrides: Record<string, unknown> = {}) => ({
 	knowledgeObservations: [],
 	notTested: [],
 	blocksUsed: [],
-	unblockedSteps: [
-		{
-			routeStepId: "R1",
-			reason: "no data block covers the request page yet",
-		},
-	],
 	...overrides,
 });
 
@@ -125,6 +121,14 @@ function completeAgentStep(
 		}[];
 		stageApps?: readonly string[];
 		stageEvidenceIds?: readonly string[];
+		stageBlockFacts?: readonly {
+			id: string;
+			version: string;
+			app: string;
+			roles: readonly string[];
+			effects: readonly string[];
+			title: string;
+		}[];
 		stageBlockDrafts?: readonly {
 			id: string;
 			version: string;
@@ -215,7 +219,7 @@ describe("stage-test planning and report contracts", () => {
 		);
 		expect(tester).toContain("try a materially different approach");
 		expect(tester).toContain("Repair artifact/schema/guard errors");
-		expect(tester).toContain("Do not bypass product validation");
+		expect(tester).toContain("do not bypass product validation");
 		expect(tester).not.toContain("Retry a failed read or navigation once");
 	});
 
@@ -227,6 +231,7 @@ describe("stage-test planning and report contracts", () => {
 				expectations: [
 					{
 						id: "E1",
+						statement: "Checked E1",
 						verdict: "blocked",
 						expected: "The request is visible",
 						observed: "Service outage persists after bounded investigation",
@@ -395,7 +400,6 @@ describe("stage-test planning and report contracts", () => {
 				system: "grid-allocation",
 				access: "read-only",
 			},
-			stageTestPlan.parse(plan()),
 			stageTestReport.parse(report()),
 			[
 				{
@@ -466,19 +470,11 @@ describe("stage-test planning and report contracts", () => {
 				system: "grid-allocation",
 				access: "read-only",
 			},
-			stageTestPlan.parse(plan()),
 			stageTestReport.parse(
 				report({
-					blocksUsed: [
-						{
-							routeStepId: "R1",
-							block: "grid.request.open",
-							version: "1.0.0",
-						},
-					],
+					blocksUsed: [{ block: "grid.request.open", version: "1.0.0" }],
 					blocksCreated: [
 						{
-							routeStepId: "R1",
 							block: "grid.request.open",
 							version: "1.0.0",
 							digest: "digest-1",
@@ -486,13 +482,11 @@ describe("stage-test planning and report contracts", () => {
 					],
 					blocksAdjusted: [
 						{
-							routeStepId: "R1",
 							block: "grid.request.open",
 							version: "1.1.0",
 							digest: "digest-2",
 						},
 					],
-					unblockedSteps: [],
 				}),
 			),
 			[
@@ -555,7 +549,7 @@ describe("stage-test planning and report contracts", () => {
 		// The proof line names what proved the block, so a reviewer can open it
 		// instead of trusting the claim (`USAB-007`).
 		expect(rendered).toContain(
-			"- proof: passed (route step R1) — journal 12, 14; evidence ev-3",
+			"- proof: passed — journal 12, 14; evidence ev-3",
 		);
 		// The section comes before the created data, and a report that claims no
 		// block renders no section at all.
@@ -570,7 +564,6 @@ describe("stage-test planning and report contracts", () => {
 				system: "grid-allocation",
 				access: "read-only",
 			},
-			stageTestPlan.parse(plan()),
 			stageTestReport.parse(report()),
 			[],
 			[],
@@ -604,15 +597,6 @@ describe("stage-test planning and report contracts", () => {
 			stageApps: ["web"],
 			stageEvidenceIds: ["ev-1"],
 		};
-		// A blank reason does not account for the step.
-		expect(() =>
-			completeAgentStep(
-				"stage.execute",
-				snapshot({ stageTestPlan: plan() }),
-				report({ unblockedSteps: [{ routeStepId: "R1", reason: "   " }] }),
-				stage,
-			),
-		).toThrow(/unblocked without a reason/);
 		// A created block with no passed proof of it in this run.
 		expect(
 			() =>
@@ -656,15 +640,6 @@ describe("stage-test planning and report contracts", () => {
 		).toThrow(
 			/without a passed proof of the document this run holds \(1\.0\.0, digest digest-1\); recorded proofs: failed@1\.0\.0\/digest-1 — run the current document once with stage_run/,
 		);
-		// A route step named in neither list is a gap.
-		expect(() =>
-			completeAgentStep(
-				"stage.execute",
-				snapshot({ stageTestPlan: blockedPlan }),
-				report({ unblockedSteps: [] }),
-				stage,
-			),
-		).toThrow(/does not account for route step R1/);
 		// And the same report with a passed proof passes the gate: the guard is a
 		// rule about the run, not a refusal of authored blocks.
 		expect(() =>
@@ -785,6 +760,7 @@ describe("stage-test planning and report contracts", () => {
 					expectations: [
 						{
 							id: "E1",
+							statement: "Checked E1",
 							verdict: "pass",
 							expected: "The request is visible",
 							observed: "The request is visible",
@@ -861,29 +837,15 @@ describe("stage-test planning and report contracts", () => {
 		).toBeTruthy();
 	});
 
-	test("the report guard refuses a mismatched verdict set and an invalid citation", () => {
+	test("the report guard refuses a failure without severity and an invalid citation", () => {
 		const current = snapshot({ stageTestPlan: plan() });
 		const cases: [Record<string, unknown>, RegExp][] = [
 			[
 				{
 					expectations: [
 						{
-							id: "E2",
-							verdict: "pass",
-							expected: "x",
-							observed: "y",
-							stepIds: ["1"],
-							evidenceIds: ["ev-1"],
-						},
-					],
-				},
-				/exactly one verdict/,
-			],
-			[
-				{
-					expectations: [
-						{
 							id: "E1",
+							statement: "Checked E1",
 							verdict: "fail",
 							expected: "x",
 							observed: "y",
@@ -899,6 +861,7 @@ describe("stage-test planning and report contracts", () => {
 					expectations: [
 						{
 							id: "E1",
+							statement: "Checked E1",
 							verdict: "pass",
 							expected: "x",
 							observed: "y",
@@ -935,6 +898,7 @@ describe("stage-test planning and report contracts", () => {
 		});
 		const verdict = {
 			id: "E1",
+			statement: "Checked E1",
 			verdict: "pass",
 			expected: "The request is visible",
 			observed: "The request is visible",
@@ -967,7 +931,6 @@ describe("stage-test planning and report contracts", () => {
 			input: Record<string, unknown> = {},
 		) =>
 			stageReportIssues({
-				plan: stageTestPlan.parse(plan()),
 				report: stageTestReport.parse(report(overrides)),
 				journal,
 				evidenceIds: ["ev-1"],
@@ -982,6 +945,7 @@ describe("stage-test planning and report contracts", () => {
 				expectations: [
 					{
 						id: "E1",
+						statement: "Checked E1",
 						verdict: "pass",
 						expected: "x",
 						observed: "y",
@@ -998,6 +962,7 @@ describe("stage-test planning and report contracts", () => {
 				expectations: [
 					{
 						id: "E1",
+						statement: "Checked E1",
 						verdict: "pass",
 						expected: "x",
 						observed: "y",
@@ -1024,28 +989,6 @@ describe("stage-test planning and report contracts", () => {
 	});
 
 	test("the report renderer aggregates mixed verdicts and prints every section", () => {
-		const mixedPlan = plan({
-			expectations: [
-				{
-					id: "E1",
-					statement: "The request is visible",
-					source: "ticket",
-					priority: "high",
-				},
-				{
-					id: "E2",
-					statement: "The request can be approved",
-					source: "ticket",
-					priority: "medium",
-				},
-				{
-					id: "E3",
-					statement: "The audit entry is written",
-					source: "wiki",
-					priority: "low",
-				},
-			],
-		});
 		const rendered = effectRunnerTest.renderStageReport(
 			"grid-int",
 			"GRID-42",
@@ -1054,12 +997,12 @@ describe("stage-test planning and report contracts", () => {
 				system: "grid-allocation",
 				access: "writable",
 			},
-			stageTestPlan.parse(mixedPlan),
 			stageTestReport.parse(
 				report({
 					expectations: [
 						{
 							id: "E1",
+							statement: "Checked E1",
 							verdict: "fail",
 							severity: "major",
 							expected: "The request is visible",
@@ -1069,6 +1012,7 @@ describe("stage-test planning and report contracts", () => {
 						},
 						{
 							id: "E2",
+							statement: "Checked E2",
 							verdict: "blocked",
 							expected: "The request can be approved",
 							observed: "The approver role was missing",
@@ -1077,6 +1021,7 @@ describe("stage-test planning and report contracts", () => {
 						},
 						{
 							id: "E3",
+							statement: "Checked E3",
 							verdict: "inconclusive",
 							expected: "The audit entry is written",
 							observed: "The audit view was not reachable",
@@ -1127,7 +1072,7 @@ describe("stage-test planning and report contracts", () => {
 		);
 		expect(rendered).toContain("**Overall:** FAIL");
 		expect(rendered).toContain(
-			"- **FAIL / major — E1:** expected The request is visible; observed The page was empty. Steps: 1. Evidence: ev-1: Empty request page.",
+			"- **FAIL / major — E1:** Checked E1; expected The request is visible; observed The page was empty. Steps: 1. Evidence: ev-1: Empty request page.",
 		);
 		expect(rendered).toContain(
 			"- one grid connection request; cleanup: request GRID-9001",
@@ -1139,6 +1084,58 @@ describe("stage-test planning and report contracts", () => {
 			"- E3: the audit view is unavailable in this stage",
 		);
 	});
+	test("new starts use the routed one-tester graph beside the pinned older tiers", () => {
+		const registry = registerBuiltins();
+		for (const rounds of [1, 6, 20]) {
+			for (const version of [
+				definitionVersionForStageTest(rounds),
+				definitionVersionForStageBlocks(rounds),
+			]) {
+				const older = registry.definition("stage-test", version);
+				expect(older.steps).toContain("stage.plan");
+				expect(older.steps).toContain("stage.plan-review");
+				expect(older.steps).toContain("stage.replay");
+			}
+			const current = registry.definition(
+				"stage-test",
+				definitionVersionForStageExploration(rounds),
+			);
+			expect(current.initial).toBe("core.route-stage-execute");
+			expect(current.steps).toContain("stage.execute");
+			for (const removed of [
+				"stage.plan",
+				"stage.plan-review",
+				"stage.replay",
+				"core.route-stage-plan",
+			])
+				expect(current.steps).not.toContain(removed);
+			expect(
+				current.edges.find(
+					(edge) =>
+						edge.from === "stage.execute" && edge.outcome === "complete",
+				)?.to,
+			).toBe("stage.review");
+			for (const outcome of ["blocked", "failed"])
+				expect(
+					current.edges.find(
+						(edge) => edge.from === "stage.execute" && edge.outcome === outcome,
+					),
+				).toMatchObject({
+					to: "core.route-stage-execute",
+					loop: { maxAttempts: 3 },
+				});
+			for (const outcome of ["approve", "approve-and-update-wiki"])
+				expect(
+					current.edges
+						.find(
+							(edge) =>
+								edge.from === "stage.review" && edge.outcome === outcome,
+						)
+						?.effects?.map((effect) => effect.kind),
+				).toContain("stage.blocks.promote");
+		}
+	});
+
 	test("the stage-test tier pins its definition and step digests", () => {
 		const definition = registerBuiltins().definition("stage-test", 1021);
 		expect(definition.digest).toBe(
@@ -1160,6 +1157,53 @@ describe("stage-test planning and report contracts", () => {
 });
 
 describe("stage-test handoff and render wiring", () => {
+	test("used block claims resolve against the run's registry, never an approved plan", () => {
+		const current = snapshot({});
+		const output = report({
+			blocksUsed: [{ block: "crm.ui.open", version: "1.0.0" }],
+		});
+		const facts = {
+			stageJournal: [{ seq: 1 }],
+			stageApps: ["web"],
+			stageEvidenceIds: ["ev-1"],
+		};
+		expect(() =>
+			completeAgentStep("stage.execute", current, output, {
+				...facts,
+				stageBlockFacts: [],
+			}),
+		).toThrow(/not in the run's block catalog/);
+		expect(() =>
+			completeAgentStep("stage.execute", current, output, {
+				...facts,
+				stageBlockFacts: [
+					{
+						id: "crm.ui.open",
+						version: "2.0.0",
+						app: "web",
+						roles: [],
+						effects: ["read"],
+						title: "Open",
+					},
+				],
+			}),
+		).toThrow(/registry holds 2.0.0/);
+		expect(
+			completeAgentStep("stage.execute", current, output, {
+				...facts,
+				stageBlockFacts: [
+					{
+						id: "crm.ui.open",
+						version: "1.0.0",
+						app: "web",
+						roles: [],
+						effects: ["read"],
+						title: "Open",
+					},
+				],
+			})?.deferTransition,
+		).toBe(true);
+	});
 	test("the handoff refuses a report citing evidence that is not attached", () => {
 		expect(() =>
 			completeAgentStep(
@@ -1169,6 +1213,7 @@ describe("stage-test handoff and render wiring", () => {
 					expectations: [
 						{
 							id: "E1",
+							statement: "Checked E1",
 							verdict: "blocked",
 							expected: "The request is visible",
 							observed: "The request could not be reached",
@@ -1315,6 +1360,7 @@ describe("stage-test handoff and render wiring", () => {
 							expectations: [
 								{
 									id: "E1",
+									statement: "Checked E1",
 									verdict: "blocked",
 									expected: "The request is visible",
 									observed: "The page did not load",
@@ -1898,6 +1944,7 @@ describe("stage-test handoff and render wiring", () => {
 				expectations: [
 					{
 						id: "E1",
+						statement: "Checked E1",
 						verdict: "blocked",
 						expected: "The request is visible",
 						observed: `Login failed with ${secret}`,
