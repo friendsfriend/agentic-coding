@@ -23,6 +23,7 @@ import type {
 	ActionValuePort,
 } from "@devenv/types";
 import { BUILD_CONTEXT_COMMAND } from "./build-context.ts";
+import { composeFileArgs } from "./compose-env.ts";
 import { resourceActionId, stableId, stepId } from "./identity.ts";
 import {
 	type ActionTarget,
@@ -47,7 +48,7 @@ interface TargetCompileOptions {
 	checkoutDir?: string;
 	/** Container runtime selection; defaults to Go's initial docker selection. */
 	runtime?: RuntimeCommands;
-	/** Configuration directory the build-context templates are copied from. */
+	/** Central configuration directory: Compose .env and build-context templates. */
 	configDir?: string;
 	/** Temp directory the build-context marker file lives in. */
 	tempDir?: string;
@@ -260,7 +261,14 @@ export function compileContainerTargets(
 		const results: ActionDefinition[] = [];
 		if (!tools || tools.tmux) {
 			results.push(
-				compileTmuxAction(appIdent, target, resolver, checkoutDir, runtime),
+				compileTmuxAction(
+					appIdent,
+					target,
+					resolver,
+					checkoutDir,
+					runtime,
+					options.configDir ?? "",
+				),
 			);
 		}
 		const scriptRuntime = `command-${target.runtime}`;
@@ -461,7 +469,7 @@ function compileTargetWithRuntime(
 	}
 	if (target.runtime === "docker" && target.action === "run") {
 		leaf.kind = KIND.command;
-		const args = ["-f", target.sourcePath, "up", "-d"];
+		const args = [...composeFileArgs(target.sourcePath, configDir), "up", "-d"];
 		if (
 			target.profile &&
 			!composeCommand.startsWith("podman-compose") &&
@@ -490,6 +498,7 @@ function compileTargetWithRuntime(
 				composeCommand,
 				runtimeCommand,
 				checkoutDir,
+				configDir,
 			),
 		);
 	}
@@ -504,7 +513,7 @@ function compileTargetWithRuntime(
 				configuration: {
 					probe: "compose",
 					command: composeCommand,
-					args: ["-f", target.sourcePath],
+					args: composeFileArgs(target.sourcePath, configDir),
 					stabilizationMs: 3000,
 				},
 			}),
@@ -582,6 +591,7 @@ function compileTmuxAction(
 	resolver: DependencyResolver | undefined,
 	checkoutDir: string,
 	runtime: RuntimeCommands = DEFAULT_CONTAINER_RUNTIME,
+	configDir = "",
 ): ActionDefinition {
 	const profile = target.profile ? target.profile : "default";
 	const id = resourceActionId("app", appIdent, target.action, "tmux", profile);
@@ -625,6 +635,7 @@ function compileTmuxAction(
 				runtime.composeCommand,
 				runtime.runtimeCommand,
 				checkoutDir,
+				configDir,
 			),
 		);
 	}
@@ -680,6 +691,7 @@ function compileDependencySteps(
 	composeCommand: string,
 	runtimeCommand: string,
 	checkoutDir: string,
+	configDir: string,
 ): ActionStepDefinition[] {
 	return refs.map((ref, index) => {
 		const identity = dependencyIdentity(ref);
@@ -708,6 +720,7 @@ function compileDependencySteps(
 						composeCommand,
 						runtimeCommand,
 						checkoutDir,
+						configDir,
 					),
 					...dependencyExecutionSteps(
 						semanticId,
@@ -717,6 +730,7 @@ function compileDependencySteps(
 						runtimeCommand,
 						checkoutDir,
 						ref.provider,
+						configDir,
 					),
 				);
 			}
@@ -761,6 +775,7 @@ function dependencyExecutionSteps(
 	runtimeCommand: string,
 	checkoutDir: string,
 	provider: DependencyRef["provider"],
+	configDir: string,
 ): ActionStepDefinition[] {
 	const id = parentStepId;
 	const label = `Start application: ${appIdent}`;
@@ -779,7 +794,7 @@ function dependencyExecutionSteps(
 			selectedCompose = composeCommandForRuntime("docker");
 			selectedRuntime = runtimeCommandForRuntime("docker");
 		}
-		const args = ["-f", target.sourcePath];
+		const args = composeFileArgs(target.sourcePath, configDir);
 		if (
 			target.profile &&
 			!selectedCompose.startsWith("podman-compose") &&

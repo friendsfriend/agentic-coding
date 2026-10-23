@@ -41,6 +41,7 @@ import {
 	compileKubernetesClusterActions,
 	compileKubernetesLifecycleActions,
 } from "./compile.ts";
+import { composeFileArgs } from "./compose-env.ts";
 import { Coordinator } from "./coordinator.ts";
 import {
 	resolveDefaultTarget,
@@ -392,7 +393,13 @@ export async function rebuildDefinitions(
 										},
 									),
 								);
-								push(compileDockerLifecycleActions(app.ident, target));
+								push(
+									compileDockerLifecycleActions(
+										app.ident,
+										target,
+										services.configDir,
+									),
+								);
 								push(compileKubernetesLifecycleActions(app.ident, target));
 							}
 							push(compileGitActions(app.ident, app.localDirectoryPath));
@@ -1506,7 +1513,7 @@ function prepareInfrastructureDockerAction(
 			handler: "docker",
 			configuration: {
 				command: "docker-compose",
-				args: ["-f", sourcePath, ...args],
+				args: [...composeFileArgs(sourcePath, services.configDir), ...args],
 			},
 		};
 	});

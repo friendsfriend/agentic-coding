@@ -155,6 +155,40 @@ async function waitForRun(
 }
 
 describe("definition providers", () => {
+	test("Application-view definitions load central Compose env for start, readiness, stop and restart", async () => {
+		const f = fixture();
+		try {
+			const envFile = path.join(f.configDir, ".env");
+			fs.writeFileSync(
+				envFile,
+				"ICON_APPLICATION_MASTERPASSWORD=fixture-only-secret\n",
+			);
+			const snapshot = await rebuildDefinitions(f.services, f.context.registry);
+			const definitions = snapshot.definitions.filter(
+				(d) =>
+					d.owner.kind === "app" &&
+					d.owner.id === "shop" &&
+					["docker", "podman"].includes(d.runtime),
+			);
+			expect(definitions).toHaveLength(6);
+			for (const definition of definitions) {
+				const walk = (step: ActionDefinition["root"]): void => {
+					if (String(step.configuration?.command ?? "").includes("compose")) {
+						expect(
+							((step.configuration?.args ?? []) as string[]).slice(0, 2),
+						).toEqual(["--env-file", envFile]);
+					}
+					for (const child of step.children ?? []) walk(child);
+				};
+				walk(definition.root);
+				expect(JSON.stringify(definition)).not.toContain("fixture-only-secret");
+			}
+		} finally {
+			f.store.close();
+			fs.rmSync(f.root, { recursive: true, force: true });
+		}
+	});
+
 	test("a configured environment compiles the expected definitions", async () => {
 		const f = fixture();
 		const snapshot = await rebuildDefinitions(f.services, f.context.registry);

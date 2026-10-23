@@ -5,7 +5,8 @@
 // kubernetes,kubernetes_lifecycle,kubernetes_validation}.go`.
 //
 // Each compiler turns configured resources into immutable definitions; nothing
-// here touches the filesystem, the network or the process table, so the output
+// here touches the network or the process table. Compose lifecycle compilation
+// checks whether the explicitly supplied config directory has a .env file; other output
 // is a function of its inputs and is pinned by the golden fixture in
 // `test/fixtures/actions/definitions.json`. Target discovery and the
 // target-driven compiler (`CompileTargetGraph`) are a separate, I/O-owning step.
@@ -24,6 +25,7 @@ import type {
 	ActionStepKind,
 	ActionValuePort,
 } from "@devenv/types";
+import { composeFileArgs } from "./compose-env.ts";
 import { resourceActionId, stepId } from "./identity.ts";
 import {
 	type ActionTarget,
@@ -353,6 +355,7 @@ export function compileGitActions(
 export function compileDockerLifecycleActions(
 	appIdent: string,
 	target: ActionTarget,
+	configDir = "",
 ): ActionDefinition[] {
 	if (target.runtime !== "docker" || target.action !== "run") return [];
 	const out: ActionDefinition[] = [];
@@ -363,6 +366,7 @@ export function compileDockerLifecycleActions(
 				target,
 				provider,
 				target.profile ?? "default",
+				configDir,
 			),
 		);
 	}
@@ -374,6 +378,7 @@ function compileLifecycleForRuntime(
 	target: ActionTarget,
 	provider: ContainerProvider,
 	profile: string,
+	configDir: string,
 ): ActionDefinition[] {
 	const composeCommand = composeCommandForRuntime(provider);
 	const dir = path.dirname(target.sourcePath);
@@ -398,7 +403,7 @@ function compileLifecycleForRuntime(
 				handler: provider,
 				configuration: {
 					command: composeCommand,
-					args: composeLifecycleArgs(target, args),
+					args: composeLifecycleArgs(target, args, configDir),
 					dir,
 				},
 			}),
@@ -420,8 +425,12 @@ function compileLifecycleForRuntime(
 	});
 }
 
-function composeLifecycleArgs(target: ActionTarget, args: string[]): string[] {
-	const out = ["-f", target.sourcePath];
+function composeLifecycleArgs(
+	target: ActionTarget,
+	args: string[],
+	configDir: string,
+): string[] {
+	const out = composeFileArgs(target.sourcePath, configDir);
 	if (target.profile) out.push("--profile", target.profile);
 	return [...out, ...args];
 }
