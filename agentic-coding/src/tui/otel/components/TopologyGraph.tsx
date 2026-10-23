@@ -94,10 +94,10 @@ export function TopologyGraph(props: {
 													height={cardHeight}
 													position="absolute"
 													backgroundColor={
-														selected()
-															? uiColors.accent
-															: hover.hovered()
-																? uiColors.borderFocus
+														hover.hovered()
+															? uiColors.borderFocus
+															: selected()
+																? uiColors.accent
 																: uiColors.border
 													}
 												/>

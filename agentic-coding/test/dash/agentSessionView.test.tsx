@@ -1961,7 +1961,7 @@ test("every tool row uses the raised block surface", async () => {
 	}
 });
 
-test("raised transcript blocks lift on hover and settle when the pointer leaves", async () => {
+test("transcript rows lift on hover and settle when the pointer leaves", async () => {
 	const blocks: AgentSessionBlock[] = [
 		{ id: "u1", kind: "user", text: "hover this prompt", tone: "accent" },
 		{
@@ -1978,6 +1978,7 @@ test("raised transcript blocks lift on hover and settle when the pointer leaves"
 			},
 		},
 		{ id: "r1", kind: "result", text: "read complete", tone: "success" },
+		{ id: "think", kind: "reasoning", text: "weighing options", tone: "muted" },
 	];
 	const t = await testRender(
 		() => (
@@ -1998,7 +1999,7 @@ test("raised transcript blocks lift on hover and settle when the pointer leaves"
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 24 },
+		{ width: 80, height: 29 },
 	);
 	const background = (text: string) => {
 		for (const line of t.captureSpans().lines) {
@@ -2034,6 +2035,7 @@ test("raised transcript blocks lift on hover and settle when the pointer leaves"
 		await t.renderOnce();
 		expect(background("hover this prompt")).toBe(resting);
 		expect(background("Read src/a.ts")).toBe(resting);
+		const thinkingResting = background("Thinking");
 
 		// A prompt is a raised block too: the pointer lifts only the block under
 		// it, not the rest of the transcript.
@@ -2059,6 +2061,18 @@ test("raised transcript blocks lift on hover and settle when the pointer leaves"
 		await t.mockMouse.moveTo(10, resultRow);
 		await t.renderOnce();
 		expect(background("Read src/a.ts")).toBe(resting);
+
+		// Thinking is a flat, click-to-fold row rather than a raised block, but
+		// it still answers the pointer with the same hover surface.
+		const thinkingRow = rowOf("Thinking");
+		expect(thinkingRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(10, thinkingRow);
+		await t.renderOnce();
+		expect(background("Thinking")).toBe(lifted);
+
+		await t.mockMouse.moveTo(10, resultRow);
+		await t.renderOnce();
+		expect(background("Thinking")).toBe(thinkingResting);
 	} finally {
 		t.renderer.destroy();
 	}

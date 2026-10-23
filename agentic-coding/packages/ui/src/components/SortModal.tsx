@@ -118,10 +118,10 @@ export function SortModal(props: SortModalProps) {
 								{...pointer.mouse}
 								{...pointer.hover}
 								backgroundColor={
-									selected()
-										? uiColors.bgSurface2
-										: interactive() && pointer.hover.hovered()
-											? uiColors.bgHover
+									interactive() && pointer.hover.hovered()
+										? uiColors.bgHover
+										: selected()
+											? uiColors.bgSurface2
 											: undefined
 								}
 								style={{

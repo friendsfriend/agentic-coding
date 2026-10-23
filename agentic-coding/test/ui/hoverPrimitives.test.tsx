@@ -8,6 +8,7 @@ import { testRender } from "@opentui/solid";
 import {
 	HelpText,
 	ModalTabs,
+	Panel,
 	ScrollableList,
 	SelectableList,
 	uiColors,
@@ -51,7 +52,7 @@ function rowOf(
 		.findIndex((line) => line.includes(text));
 }
 
-test("SelectableList lifts an unselected row under the pointer and leaves the selection row alone", async () => {
+test("SelectableList lifts every row under the pointer, including the selected row", async () => {
 	const t = await testRender(
 		() => (
 			<box flexDirection="column" width="100%" height="100%">
@@ -81,18 +82,25 @@ test("SelectableList lifts an unselected row under the pointer and leaves the se
 		await t.mockMouse.moveTo(5, betaRow);
 		await t.renderOnce();
 		expect(backgroundOf(t, "beta row")).toBe(lifted);
-		// Selection stays the stronger surface even while the pointer crosses it.
 		expect(backgroundOf(t, "alpha row")).toBe(selected);
+
+		const alphaRow = rowOf(t, "alpha row");
+		expect(alphaRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(5, alphaRow);
+		await t.renderOnce();
+		// The selected row keeps its marker but gains the pointer surface.
+		expect(backgroundOf(t, "alpha row")).toBe(lifted);
 
 		await t.mockMouse.moveTo(45, 7);
 		await t.renderOnce();
+		expect(backgroundOf(t, "alpha row")).toBe(selected);
 		expect(backgroundOf(t, "beta row")).toBe(resting);
 	} finally {
 		t.renderer.destroy();
 	}
 });
 
-test("WorkItemCard lifts on hover and keeps the selected card on its selection surface", async () => {
+test("WorkItemCard lifts both unselected and selected cards on hover", async () => {
 	const t = await testRender(
 		() => (
 			<box flexDirection="column" width="100%" height="100%">
@@ -139,14 +147,17 @@ test("WorkItemCard lifts on hover and keeps the selected card on its selection s
 		await t.mockMouse.moveTo(5, webRow);
 		await t.renderOnce();
 		expect(backgroundOf(t, "api")).toBe(resting);
-		// Hover never overrides the selection surface.
+		expect(backgroundOf(t, "web")).toBe(lifted);
+
+		await t.mockMouse.moveTo(50, 7);
+		await t.renderOnce();
 		expect(backgroundOf(t, "web")).toBe(selected);
 	} finally {
 		t.renderer.destroy();
 	}
 });
 
-test("a raw ScrollableList row takes the hover surface unless it is the selected row", async () => {
+test("a raw ScrollableList row takes the hover surface including the selected row", async () => {
 	const t = await testRender(
 		() => (
 			<box flexDirection="column" width="100%" height="100%">
@@ -178,20 +189,19 @@ test("a raw ScrollableList row takes the hover surface unless it is the selected
 		expect(firstRow).toBeGreaterThanOrEqual(0);
 		await t.mockMouse.moveTo(5, firstRow);
 		await t.renderOnce();
-		// A selected row never takes the wrapper's hover fill; a renderer that
-		// paints its own selection surface keeps ownership of that row.
-		expect(backgroundOf(t, "first row")).not.toBe(lifted);
+		expect(backgroundOf(t, "first row")).toBe(lifted);
 		expect(backgroundOf(t, "second row")).toBe(resting);
 
 		await t.mockMouse.moveTo(45, 7);
 		await t.renderOnce();
+		expect(backgroundOf(t, "first row")).not.toBe(lifted);
 		expect(backgroundOf(t, "second row")).toBe(resting);
 	} finally {
 		t.renderer.destroy();
 	}
 });
 
-test("an inactive dialog tab takes the hover surface without touching the active tab", async () => {
+test("dialog tabs take the hover surface, including the active tab", async () => {
 	const t = await testRender(
 		() => (
 			<box width="100%" height="100%" flexDirection="column">
@@ -221,12 +231,75 @@ test("an inactive dialog tab takes the hover surface without touching the active
 		await t.mockMouse.moveTo(column + 1, 0);
 		await t.renderOnce();
 		expect(backgroundOf(t, "Details")).toBe(lifted);
-		// The active tab keeps its own accent, not the pointer surface.
 		expect(backgroundOf(t, "Overview")).toBe(activeResting);
+
+		const activeColumn = (t.captureCharFrame().split("\n")[0] ?? "").indexOf(
+			"Overview",
+		);
+		expect(activeColumn).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(activeColumn + 1, 0);
+		await t.renderOnce();
+		expect(backgroundOf(t, "Overview")).toBe(lifted);
+		expect(backgroundOf(t, "Details")).toBe(resting);
 
 		await t.mockMouse.moveTo(50, 5);
 		await t.renderOnce();
 		expect(backgroundOf(t, "Details")).toBe(resting);
+		expect(backgroundOf(t, "Overview")).toBe(activeResting);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("panels lift on hover, including the active panel", async () => {
+	const t = await testRender(
+		() => (
+			<box flexDirection="column" width="100%" height="100%">
+				<Panel
+					title="Idle panel"
+					onFocusRequest={() => {}}
+					style={{ height: 4, flexShrink: 0 }}
+				>
+					<text>idle body</text>
+				</Panel>
+				<Panel
+					title="Active panel"
+					active
+					onFocusRequest={() => {}}
+					style={{ height: 4, flexShrink: 0 }}
+				>
+					<text>active body</text>
+				</Panel>
+			</box>
+		),
+		{ width: 50, height: 10 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const resting = rgb(uiColors.bgMantle);
+		const lifted = rgb(uiColors.bgHover);
+		expect(backgroundOf(t, "Idle panel")).toBe(resting);
+		expect(backgroundOf(t, "Active panel")).toBe(resting);
+
+		const idleRow = rowOf(t, "Idle panel");
+		expect(idleRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(5, idleRow);
+		await t.renderOnce();
+		expect(backgroundOf(t, "Idle panel")).toBe(lifted);
+		expect(backgroundOf(t, "Active panel")).toBe(resting);
+
+		const activeRow = rowOf(t, "Active panel");
+		expect(activeRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(5, activeRow);
+		await t.renderOnce();
+		expect(backgroundOf(t, "Idle panel")).toBe(resting);
+		expect(backgroundOf(t, "Active panel")).toBe(lifted);
+
+		await t.mockMouse.moveTo(45, 9);
+		await t.renderOnce();
+		expect(backgroundOf(t, "Idle panel")).toBe(resting);
+		expect(backgroundOf(t, "Active panel")).toBe(resting);
 	} finally {
 		t.renderer.destroy();
 	}

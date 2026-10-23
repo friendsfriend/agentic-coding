@@ -146,10 +146,10 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 										{...mouse}
 										{...hover}
 										backgroundColor={
-											selected()
-												? selectionBg("parameter")
-												: interactive() && hover.hovered()
-													? uiColors.bgHover
+											interactive() && hover.hovered()
+												? uiColors.bgHover
+												: selected()
+													? selectionBg("parameter")
 													: undefined
 										}
 										style={{
@@ -227,10 +227,10 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 										{...valueMouse}
 										{...hover}
 										backgroundColor={
-											selected()
-												? selectionBg("value")
-												: interactive() && hover.hovered()
-													? uiColors.bgHover
+											interactive() && hover.hovered()
+												? uiColors.bgHover
+												: selected()
+													? selectionBg("value")
 													: undefined
 										}
 										style={{ height: 1, paddingLeft: 1, flexDirection: "row" }}

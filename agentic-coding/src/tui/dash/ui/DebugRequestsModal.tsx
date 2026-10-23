@@ -190,9 +190,7 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 											height={1}
 											overflow="hidden"
 											backgroundColor={
-												!selected() && hover.hovered()
-													? uiColors.bgHover
-													: undefined
+												hover.hovered() ? uiColors.bgHover : undefined
 											}
 										>
 											<text

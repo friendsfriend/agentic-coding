@@ -34,9 +34,7 @@ export function ModalTabs(props: ModalTabsProps): JSX.Element {
 							{...tap}
 							{...hover}
 							backgroundColor={
-								interactive() && !active() && hover.hovered()
-									? uiColors.bgHover
-									: undefined
+								interactive() && hover.hovered() ? uiColors.bgHover : undefined
 							}
 							style={{ flexDirection: "row", marginRight: 2 }}
 						>

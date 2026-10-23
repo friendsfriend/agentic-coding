@@ -48,7 +48,7 @@ function ThemeRow(props: {
 	index: number;
 	selectedIndex: () => number;
 	onSelect?: (index: number) => void;
-	children: JSX.Element;
+	children: (highlighted: () => boolean) => JSX.Element;
 }) {
 	const dispatch = useKeyDispatch();
 	const mouse = useRowMouse({
@@ -63,16 +63,15 @@ function ThemeRow(props: {
 	});
 	const hover = useHover(mouse.onMouseOut);
 	const interactive = () => props.onSelect !== undefined;
+	const highlighted = () => interactive() && hover.hovered();
 	return (
 		<box
 			{...mouse}
 			{...hover}
-			backgroundColor={
-				interactive() && hover.hovered() ? uiColors.bgHover : undefined
-			}
+			backgroundColor={highlighted() ? uiColors.bgHover : undefined}
 			style={{ flexDirection: "row", width: "100%" }}
 		>
-			{props.children}
+			{props.children(highlighted)}
 		</box>
 	);
 }
@@ -176,30 +175,38 @@ export function ThemePicker(props: ThemePickerProps) {
 								selectedIndex={selectedIndex}
 								{...(props.onSelect ? { onSelect: props.onSelect } : {})}
 							>
-								<box
-									style={{
-										flexDirection: "row",
-										width: "100%",
-										height: 1,
-										backgroundColor: selected()
-											? uiColors.selectionBgActive
-											: undefined,
-									}}
-								>
-									<text
-										fg={
-											selected() ? uiColors.selectionText : uiColors.textPrimary
-										}
+								{(highlighted) => (
+									<box
+										style={{
+											flexDirection: "row",
+											width: "100%",
+											height: 1,
+											backgroundColor: selected()
+												? highlighted()
+													? uiColors.bgHover
+													: uiColors.selectionBgActive
+												: undefined,
+										}}
 									>
-										{nameColumn(item.name, active())}
-									</text>
-									<text fg={color("primary", uiColors.primary)}> ▬▬▬</text>
-									<text fg={color("secondary", uiColors.primaryDim)}>▬▬▬</text>
-									<text fg={color("accent", uiColors.accent)}>▬▬▬</text>
-									<text fg={color("success", uiColors.success)}>▬▬▬</text>
-									<text fg={color("warning", uiColors.warning)}>▬▬▬</text>
-									<text fg={color("error", uiColors.error)}>▬▬▬</text>
-								</box>
+										<text
+											fg={
+												selected()
+													? uiColors.selectionText
+													: uiColors.textPrimary
+											}
+										>
+											{nameColumn(item.name, active())}
+										</text>
+										<text fg={color("primary", uiColors.primary)}> ▬▬▬</text>
+										<text fg={color("secondary", uiColors.primaryDim)}>
+											▬▬▬
+										</text>
+										<text fg={color("accent", uiColors.accent)}>▬▬▬</text>
+										<text fg={color("success", uiColors.success)}>▬▬▬</text>
+										<text fg={color("warning", uiColors.warning)}>▬▬▬</text>
+										<text fg={color("error", uiColors.error)}>▬▬▬</text>
+									</box>
+								)}
 							</ThemeRow>
 						);
 					}}

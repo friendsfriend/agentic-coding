@@ -551,9 +551,7 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 											{...mouse}
 											{...hover}
 											backgroundColor={
-												!isSelected() && hover.hovered()
-													? hoverBackground()
-													: undefined
+												hover.hovered() ? hoverBackground() : undefined
 											}
 											style={{
 												width: "100%",

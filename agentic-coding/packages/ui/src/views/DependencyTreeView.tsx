@@ -205,8 +205,8 @@ export function DependencyTreeView(props: DependencyTreeViewProps) {
 						const hover = useHover(mouse.onMouseOut);
 						const interactive = () => props.onNodeClick !== undefined;
 						const rowBg = createMemo(() => {
-							if (isSelected() && props.focused) return uiColors.bgSurface0;
 							if (interactive() && hover.hovered()) return uiColors.bgHover;
+							if (isSelected() && props.focused) return uiColors.bgSurface0;
 							return undefined;
 						});
 

@@ -712,18 +712,22 @@ function Block(props: {
 				/>
 			</box>
 		);
-	if (props.block.kind === "reasoning")
+	if (props.block.kind === "reasoning") {
 		// A reasoning block that is still streaming is the same fold, dimmed:
 		// the text grows with each watch frame while the model thinks, so it
 		// reads as provisional until the committed entry replaces it at full
 		// strength.
+		const tap = useTap(() => props.onToggle(props.block.id));
+		const hover = useHover(tap.onMouseOut);
 		return (
 			<box
 				paddingLeft={3}
 				paddingRight={1}
 				flexDirection="column"
 				flexShrink={0}
-				{...useTap(() => props.onToggle(props.block.id))}
+				backgroundColor={hover.hovered() ? uiColors.bgHover : undefined}
+				{...tap}
+				{...hover}
 			>
 				<box flexDirection="row">
 					<box flexGrow={1} minWidth={0} flexDirection="row">
@@ -788,6 +792,7 @@ function Block(props: {
 				</Show>
 			</box>
 		);
+	}
 	// The tools a run leans on get a view built from their call and result; a
 	// tool without one keeps the generic row below (icon, name, argument). A call
 	// still in flight takes the in-progress view instead, so its row appears the

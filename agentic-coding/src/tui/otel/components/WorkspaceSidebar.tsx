@@ -458,7 +458,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 											}
 											bg={
 												active()
-													? uiColors.primary
+													? hover.hovered()
+														? uiColors.primaryDim
+														: uiColors.primary
 													: hover.hovered()
 														? uiColors.bgHover
 														: uiColors.bgMantle

@@ -59,12 +59,15 @@ export function Selectable(props: {
 		props.hoverBackground === false
 			? undefined
 			: (props.hoverBackground ?? uiColors.bgHover);
-	const background = () =>
-		props.selected
+	const background = () => {
+		// Hover is its own feedback layer: a selected row reacts too, while its
+		// selection marker and text keep saying that it is the current row.
+		const hoverFill = hover.hovered() ? hoverBackground() : undefined;
+		if (hoverFill !== undefined) return hoverFill;
+		return props.selected
 			? uiColors.bgSurface0
-			: hover.hovered()
-				? (hoverBackground() ?? props.backgroundColor ?? uiColors.bgMantle)
-				: (props.backgroundColor ?? uiColors.bgMantle);
+			: (props.backgroundColor ?? uiColors.bgMantle);
+	};
 	return (
 		<box
 			{...mouse}

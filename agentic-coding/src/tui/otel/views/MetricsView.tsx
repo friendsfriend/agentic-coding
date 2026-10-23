@@ -71,10 +71,10 @@ export function MetricsView(props: {
 										height={3}
 										flexShrink={0}
 										backgroundColor={
-											selected()
-												? uiColors.accent
-												: hover.hovered()
-													? uiColors.border
+											hover.hovered()
+												? uiColors.borderFocus
+												: selected()
+													? uiColors.accent
 													: uiColors.bgMantle
 										}
 									/>

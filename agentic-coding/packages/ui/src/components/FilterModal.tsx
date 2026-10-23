@@ -88,8 +88,9 @@ function FilterRow(props: {
 			{...mouse}
 			{...hover}
 			backgroundColor={
-				props.backgroundColor ??
-				(interactive() && hover.hovered() ? uiColors.bgHover : undefined)
+				interactive() && hover.hovered()
+					? uiColors.bgHover
+					: props.backgroundColor
 			}
 			style={props.style}
 		>

@@ -162,10 +162,10 @@ export function WorkItemCard(props: WorkItemCardProps) {
 	});
 	const hover = useHover(mouse.onMouseOut);
 	const bgColor = () =>
-		props.selected
-			? uiColors.bgSurface0
-			: hover.hovered()
-				? uiColors.bgHover
+		hover.hovered()
+			? uiColors.bgHover
+			: props.selected
+				? uiColors.bgSurface0
 				: uiColors.bgMantle;
 	const statusAnimation = () =>
 		props.statusAnimationIntent
@@ -341,9 +341,7 @@ export function WorkItemCard(props: WorkItemCardProps) {
 								text={props.metadata as string}
 								width={metadataWidth()}
 								fg={
-									!props.selected && hover.hovered()
-										? uiColors.textSecondary
-										: uiColors.textMuted
+									hover.hovered() ? uiColors.textSecondary : uiColors.textMuted
 								}
 								enabled={props.runningTextEnabled}
 								active={props.selected}

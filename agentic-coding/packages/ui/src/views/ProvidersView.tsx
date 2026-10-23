@@ -119,10 +119,10 @@ export function ProvidersView(props: ProvidersViewProps) {
 										flexShrink: 0,
 									}}
 									backgroundColor={
-										isSelected()
-											? uiColors.bgSurface2
-											: interactive() && hover.hovered()
-												? uiColors.bgHover
+										interactive() && hover.hovered()
+											? uiColors.bgHover
+											: isSelected()
+												? uiColors.bgSurface2
 												: undefined
 									}
 								>

@@ -22,6 +22,7 @@ import { GenericModal } from "./GenericModal.tsx";
 import { formatHelpTextLines, wrapHelpEntries } from "./HelpText.tsx";
 import type { Keybind, KeybindSection } from "./keybinds.ts";
 import type { DialogDismissKind } from "./mouse/dismissPolicy.ts";
+import { useHover } from "./mouse/useHover.ts";
 import { ScrollableList } from "./ScrollableList.tsx";
 
 export type ListViewModalSizing = "content" | "cap";
@@ -199,17 +200,29 @@ export function ListViewModal<T>(props: ListViewModalProps<T>): JSX.Element {
 				{...(props.onSelect ? { onSelect: props.onSelect } : {})}
 				{...(props.onActivate ? { onActivate: props.onActivate } : {})}
 				{...(props.activatable ? { activatable: props.activatable } : {})}
-				renderItem={(item, isSelected, absoluteIndex) => (
-					<box
-						backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}
-						style={{ width: "100%", flexDirection: "row", flexShrink: 0 }}
-					>
-						<SelectionMarker selected={isSelected()} />
-						<box style={{ flexGrow: 1, minWidth: 0, overflow: "hidden" }}>
-							{props.renderItem(item, isSelected, absoluteIndex)}
+				// The row surface owns the fill so a selected row can lift too.
+				hoverBackground={false}
+				renderItem={(item, isSelected, absoluteIndex) => {
+					const hover = useHover();
+					return (
+						<box
+							{...hover}
+							backgroundColor={
+								hover.hovered()
+									? uiColors.bgHover
+									: isSelected()
+										? uiColors.bgSurface0
+										: undefined
+							}
+							style={{ width: "100%", flexDirection: "row", flexShrink: 0 }}
+						>
+							<SelectionMarker selected={isSelected()} />
+							<box style={{ flexGrow: 1, minWidth: 0, overflow: "hidden" }}>
+								{props.renderItem(item, isSelected, absoluteIndex)}
+							</box>
 						</box>
-					</box>
-				)}
+					);
+				}}
 				availableLines={availableLines()}
 				estimatedItemHeight={itemHeight()}
 				showScrollIndicator={listOverflows()}

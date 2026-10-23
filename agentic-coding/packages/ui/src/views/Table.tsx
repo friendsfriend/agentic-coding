@@ -348,10 +348,10 @@ function WorkItemTable<T = string>(
 							return (
 								<box
 									backgroundColor={
-										isActive()
-											? uiColors.bgSurface0
-											: interactive() && hover.hovered()
-												? uiColors.bgHover
+										interactive() && hover.hovered()
+											? uiColors.bgHover
+											: isActive()
+												? uiColors.bgSurface0
 												: uiColors.bgMantle
 									}
 									{...tap}

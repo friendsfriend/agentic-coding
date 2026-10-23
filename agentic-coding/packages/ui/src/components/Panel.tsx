@@ -42,7 +42,9 @@ export function Panel(props: PanelProps) {
 		<box
 			{...(props.onFocusRequest ? mouse : {})}
 			{...(props.onFocusRequest ? hover : {})}
-			backgroundColor={uiColors.bgMantle}
+			backgroundColor={
+				interactive() && hover.hovered() ? uiColors.bgHover : uiColors.bgMantle
+			}
 			style={{ flexDirection: "column", overflow: "hidden", ...props.style }}
 		>
 			<box
