@@ -203,6 +203,18 @@ import {
 
 export { PermanentFailure, TransientFailure };
 
+/** Render untrusted report values as one escaped Markdown text run. */
+function markdownText(value: unknown): string {
+	const text = Array.from(String(value ?? ""), (character) => {
+		const code = character.codePointAt(0) ?? 0;
+		return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : character;
+	})
+		.join("")
+		.replace(/\s+/g, " ")
+		.trim();
+	return text.replace(/[\\`*_{}[\]()#+!|<>~]/g, "\\$&");
+}
+
 /** One data block as the report shows it: the postcondition, the operation
  * list and — for an adjustment — what differs from the approved version. Bounded
  * to 60 lines per block so a maximal document cannot flood the review. */
@@ -211,7 +223,7 @@ function stageBlockDocumentLines(
 	previous: StageDataBlockDocument | undefined,
 ): string[] {
 	const lines: string[] = [
-		`- \`${document.id}@${document.version}\` (${document.app}${document.effects.length ? `, ${document.effects.join("+")}` : ""}) — ${document.postcondition}`,
+		`- ${markdownText(document.id)}@${markdownText(document.version)} (${markdownText(document.app)}${document.effects.length ? `, ${document.effects.map(markdownText).join("+")}` : ""}) — ${markdownText(document.postcondition)}`,
 	];
 	const changes: string[] = [];
 	if (previous !== undefined) {
@@ -222,8 +234,8 @@ function stageBlockDocumentLines(
 			"requires",
 			"provides",
 		] as const) {
-			const before = JSON.stringify(previous[field] ?? null);
-			const after = JSON.stringify(document[field] ?? null);
+			const before = markdownText(JSON.stringify(previous[field] ?? null));
+			const after = markdownText(JSON.stringify(document[field] ?? null));
 			if (before !== after) changes.push(`${field}: ${before} → ${after}`);
 		}
 		if (
@@ -246,13 +258,13 @@ function stageBlockDocumentLines(
 				.slice(0, 5);
 			const added = after.filter((line) => !before.includes(line)).slice(0, 5);
 			lines.push("  operations changed:");
-			for (const line of removed) lines.push(`    - ${line}`);
-			for (const line of added) lines.push(`    + ${line}`);
+			for (const line of removed) lines.push(`    - ${markdownText(line)}`);
+			for (const line of added) lines.push(`    + ${markdownText(line)}`);
 		}
 	}
 	if (changes.length > 0)
 		lines.push(
-			`  changed from ${previous?.version ?? "the store"}: ${changes.join("; ")}`,
+			`  changed from ${markdownText(previous?.version ?? "the store")}: ${changes.join("; ")}`,
 		);
 	lines.push("  operations:");
 	for (const operation of document.operations) {
@@ -262,16 +274,16 @@ function stageBlockDocumentLines(
 		}
 		if (operation.op === "optional") {
 			lines.push(
-				`    - optional (${operation.reason}): ${operation.operations.length} operation(s)`,
+				`    - optional (${markdownText(operation.reason)}): ${operation.operations.length} operation(s)`,
 			);
 			continue;
 		}
 		lines.push(
-			`    - step: ${operation.label}${operation.expected ? `; expected: ${operation.expected}` : ""}`,
+			`    - step: ${markdownText(operation.label)}${operation.expected ? `; expected: ${markdownText(operation.expected)}` : ""}`,
 		);
 		for (const action of operation.operations.slice(0, 10)) {
 			if (lines.length >= 60) break;
-			lines.push(`      - ${describeDataBlockAction(action)}`);
+			lines.push(`      - ${markdownText(describeDataBlockAction(action))}`);
 		}
 	}
 	return lines;
@@ -309,7 +321,9 @@ function stageBlockReportLines(input: {
 	if (report.blocksUsed.length > 0) {
 		lines.push("### Blocks used", "");
 		for (const claim of report.blocksUsed)
-			lines.push(`- \`${claim.block}@${claim.version}\``);
+			lines.push(
+				`- ${markdownText(claim.block)}@${markdownText(claim.version)}`,
+			);
 		lines.push("");
 	}
 	for (const [heading, claims, adjusted] of [
@@ -325,7 +339,7 @@ function stageBlockReportLines(input: {
 			const draft = drafts.get(claim.block);
 			if (draft === undefined) {
 				lines.push(
-					`- \`${claim.block}@${claim.version}\` — the draft is no longer in this run`,
+					`- ${markdownText(claim.block)}@${markdownText(claim.version)} — the draft is no longer in this run`,
 				);
 				continue;
 			}
@@ -340,13 +354,17 @@ function stageBlockReportLines(input: {
 			const cited = [
 				...(proof === undefined || proof.journalIds.length === 0
 					? []
-					: [`journal ${proof.journalIds.slice(0, 5).join(", ")}`]),
+					: [
+							`journal ${proof.journalIds.slice(0, 5).map(markdownText).join(", ")}`,
+						]),
 				...(proof === undefined || proof.evidenceIds.length === 0
 					? []
-					: [`evidence ${proof.evidenceIds.slice(0, 5).join(", ")}`]),
+					: [
+							`evidence ${proof.evidenceIds.slice(0, 5).map(markdownText).join(", ")}`,
+						]),
 			];
 			lines.push(
-				`- proof: ${proof?.status ?? "none recorded"}${cited.length === 0 ? "" : ` — ${cited.join("; ")}`}`,
+				`- proof: ${markdownText(proof?.status ?? "none recorded")}${cited.length === 0 ? "" : ` — ${cited.join("; ")}`}`,
 			);
 			lines.push(
 				...stageBlockDocumentLines(
@@ -451,15 +469,16 @@ function replayLines(
 		| undefined,
 ): string[] {
 	if (replay === undefined) return [];
-	const flow = replay.flowId === undefined ? "" : ` ${replay.flowId}`;
+	const flow =
+		replay.flowId === undefined ? "" : ` ${markdownText(replay.flowId)}`;
 	if (replay.status === "passed") return [`- **Replay:** passed${flow}`];
 	if (replay.status === "failed") return [`- **Replay:** failed${flow}`];
 	return [
-		`- **Replay:** not run${flow} — ${replay.reason ?? "the compiled flow was not eligible"}`,
+		`- **Replay:** not run${flow} — ${markdownText(replay.reason ?? "the compiled flow was not eligible")}`,
 	];
 }
 
-function stageReportMarkdown(
+export function stageReportMarkdown(
 	stage: string,
 	ticket: string | undefined,
 	stageInfo: { environment: string; system: string; access: string },
@@ -496,12 +515,12 @@ function stageReportMarkdown(
 		"# Stage test report",
 		"",
 		`- **Overall:** ${overall}`,
-		`- **Stage:** ${stage}`,
-		`- **Ticket reference:** ${ticket ?? "not supplied"}`,
-		`- **Environment:** ${stageInfo.environment}`,
-		`- **System:** ${stageInfo.system}`,
-		`- **Access:** ${stageInfo.access}`,
-		`- **Generated:** ${createdAt}`,
+		`- **Stage:** ${markdownText(stage)}`,
+		`- **Ticket reference:** ${markdownText(ticket ?? "not supplied")}`,
+		`- **Environment:** ${markdownText(stageInfo.environment)}`,
+		`- **System:** ${markdownText(stageInfo.system)}`,
+		`- **Access:** ${markdownText(stageInfo.access)}`,
+		`- **Generated:** ${markdownText(createdAt)}`,
 		...replayLines(replay),
 		"",
 		"## Summary",
@@ -515,7 +534,7 @@ function stageReportMarkdown(
 		...(report.applicationVersions.length
 			? report.applicationVersions.map(
 					(item) =>
-						`- ${item.application}: ${item.status === "available" ? (item.version ?? "version not reported") : `unavailable — ${item.reason ?? "reason not reported"}`}`,
+						`- ${markdownText(item.application)}: ${item.status === "available" ? markdownText(item.version ?? "version not reported") : `unavailable — ${markdownText(item.reason ?? "reason not reported")}`}`,
 				)
 			: ["No application versions were resolved."]),
 		"",
@@ -523,7 +542,7 @@ function stageReportMarkdown(
 		"",
 		...report.expectations.map(
 			(item) =>
-				`- **${item.id} (${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""}):** ${item.statement ?? item.expected}`,
+				`- **${markdownText(item.id)} (${markdownText(item.verdict.toUpperCase())}${item.severity ? ` / ${markdownText(item.severity)}` : ""}):** ${markdownText(item.statement ?? item.expected)}`,
 		),
 		"",
 		"## Execution",
@@ -531,7 +550,7 @@ function stageReportMarkdown(
 		...(journal.length
 			? journal.map(
 					(entry) =>
-						`- Step ${entry.seq} (${entry.app ?? "stage"}${entry.role ? ` / ${entry.role}` : ""}): ${entry.label}${entry.expected ? `; expected: ${entry.expected}` : ""}${entry.observed ? `; observed: ${entry.observed}` : ""}${entry.segment && entry.offsetMs !== undefined ? `; video ${entry.video ?? "segment"} at ${entry.offsetMs}ms` : ""}`,
+						`- Step ${markdownText(entry.seq)} (${markdownText(entry.app ?? "stage")}${entry.role ? ` / ${markdownText(entry.role)}` : ""}): ${markdownText(entry.label)}${entry.expected ? `; expected: ${markdownText(entry.expected)}` : ""}${entry.observed ? `; observed: ${markdownText(entry.observed)}` : ""}${entry.segment && entry.offsetMs !== undefined ? `; video ${markdownText(entry.video ?? "segment")} at ${markdownText(entry.offsetMs)}ms` : ""}`,
 				)
 			: ["No stage journal steps were recorded."]),
 		"",
@@ -540,9 +559,11 @@ function stageReportMarkdown(
 		...report.expectations.map((item) => {
 			const captions = item.evidenceIds.map((id) => {
 				const entry = evidenceById.get(id);
-				return entry ? `${id}: ${entry.caption || entry.file}` : id;
+				return entry
+					? `${markdownText(id)}: ${markdownText(entry.caption || entry.file)}`
+					: markdownText(id);
 			});
-			return `- **${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""} — ${item.id}:** ${item.statement ?? "(no statement)"}; expected ${item.expected}; observed ${item.observed}. Steps: ${item.stepIds.join(", ") || "none"}. Evidence: ${captions.join("; ") || "none"}.`;
+			return `- **${markdownText(item.verdict.toUpperCase())}${item.severity ? ` / ${markdownText(item.severity)}` : ""} — ${markdownText(item.id)}:** ${markdownText(item.statement ?? "(no statement)")}; expected ${markdownText(item.expected)}; observed ${markdownText(item.observed)}. Steps: ${item.stepIds.map(markdownText).join(", ") || "none"}. Evidence: ${captions.join("; ") || "none"}.`;
 		}),
 		"",
 		"## Evidence",
@@ -550,7 +571,7 @@ function stageReportMarkdown(
 		...(evidence.length
 			? evidence.map(
 					(entry) =>
-						`- ${entry.id} (${entry.kind}): ${entry.caption || entry.file}`,
+						`- ${markdownText(entry.id)} (${markdownText(entry.kind)}): ${markdownText(entry.caption || entry.file)}`,
 				)
 			: ["No evidence was attached."]),
 		"",
@@ -559,7 +580,7 @@ function stageReportMarkdown(
 		...(report.knowledgeObservations.length
 			? report.knowledgeObservations.map(
 					(item) =>
-						`- **${item.kind}: ${item.concept}**${item.statement ? ` — ${item.statement}` : ""}${item.observed ? ` Observed: ${item.observed}` : ""}${item.suspectedCause ? ` Cause: ${item.suspectedCause}` : ""}`,
+						`- **${markdownText(item.kind)}: ${markdownText(item.concept)}**${item.statement ? ` — ${markdownText(item.statement)}` : ""}${item.observed ? ` Observed: ${markdownText(item.observed)}` : ""}${item.suspectedCause ? ` Cause: ${markdownText(item.suspectedCause)}` : ""}`,
 				)
 			: ["No reusable process knowledge was observed."]),
 		"",
@@ -575,7 +596,7 @@ function stageReportMarkdown(
 		...(report.createdData.length
 			? report.createdData.map(
 					(item) =>
-						`- ${item.description}${item.cleanupHint ? `; cleanup: ${item.cleanupHint}` : ""}`,
+						`- ${markdownText(item.description)}${item.cleanupHint ? `; cleanup: ${markdownText(item.cleanupHint)}` : ""}`,
 				)
 			: ["No data creation was reported."]),
 		"",
@@ -584,7 +605,7 @@ function stageReportMarkdown(
 		...(report.notTested.length
 			? report.notTested.map(
 					(item) =>
-						`- ${item.expectationId ? `${item.expectationId}: ` : ""}${item.reason}`,
+						`- ${item.expectationId ? `${markdownText(item.expectationId)}: ` : ""}${markdownText(item.reason)}`,
 				)
 			: ["None reported."]),
 		"",
@@ -2747,6 +2768,7 @@ export function agentEffectHandlers(
 						concepts?: Array<{ id?: unknown; digest?: unknown }>;
 					};
 					const approvedContent = new Map<string, string>();
+					const approvedDigests = new Map<string, string>();
 					let concepts = snapshotList(
 						snapshot.metadata.changeId || snapshot.workflowId,
 						snapshot.definition.id === "wiki-comments" ||
@@ -2825,6 +2847,7 @@ export function agentEffectHandlers(
 									`wiki changed after developer approval: ${item.id}`,
 								);
 							approvedContent.set(item.id, content);
+							approvedDigests.set(item.id, item.digest);
 						}
 						concepts = approved.concepts.map((item) => String(item.id));
 					}
@@ -2840,16 +2863,26 @@ export function agentEffectHandlers(
 					const actor = reviewer?.startsWith("human:")
 						? reviewer
 						: `human:${reviewer || "developer"}`;
-					for (const concept of concepts)
-						yield* Effect.sync(() =>
-							verifyConcept(
+					for (const concept of concepts) {
+						if (!approvedDigests.has(concept)) {
+							const content = fs.readFileSync(
+								conceptPath(concept, pinnedRoot),
+								"utf8",
+							);
+							approvedContent.set(concept, content);
+							approvedDigests.set(
 								concept,
-								actor,
-								approvedContent.get(concept),
-								true,
-								pinnedRoot,
-							),
+								createHash("sha256").update(content).digest("hex"),
+							);
+						}
+						const content = approvedContent.get(concept);
+						const digest = approvedDigests.get(concept);
+						if (content === undefined || digest === undefined)
+							throw new PermanentFailure("approved wiki snapshot is missing");
+						yield* Effect.sync(() =>
+							verifyConcept(concept, actor, content, true, pinnedRoot, digest),
 						);
+					}
 					const delivery = yield* commitAndPushWiki(
 						pinnedRoot,
 						`Update wiki ${snapshot.metadata.changeId || snapshot.workflowId}`,

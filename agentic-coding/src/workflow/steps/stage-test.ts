@@ -534,9 +534,7 @@ const reportActions = ({
 	const report = snapshot.metadata.stageTestReport as
 		| Partial<StageTestReport>
 		| undefined;
-	const hasKnowledge =
-		report?.knowledgeObservations?.some(({ kind }) => kind !== "confirmed") ??
-		false;
+	const hasKnowledge = (report?.knowledgeObservations?.length ?? 0) > 0;
 	// The label names how many *documents* the approval writes, so it counts the
 	// ids the promotion collapses the claims to rather than the claims: one block
 	// claimed by two route steps is one file (`USAB-112`).
@@ -549,6 +547,14 @@ const reportActions = ({
 		authored === 0
 			? ""
 			: ` (promotes ${authored} block${authored === 1 ? "" : "s"})`;
+	const confirmedOnly =
+		hasKnowledge &&
+		report?.knowledgeObservations?.every(
+			(observation) => observation.kind === "confirmed",
+		);
+	const wikiLabel = confirmedOnly
+		? "Approve and review wiki (no changes expected)"
+		: "Approve and update wiki";
 	return [
 		{
 			id: "approve-review",
@@ -559,7 +565,7 @@ const reportActions = ({
 			? [
 					{
 						id: "approve-and-update-wiki",
-						label: `Approve and update wiki${promote}`,
+						label: `${wikiLabel}${promote}`,
 						confirmation: "confirm",
 					} as const,
 				]

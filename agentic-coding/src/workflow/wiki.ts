@@ -677,9 +677,13 @@ export function isStale(
 	);
 }
 
-function readPath(file: string, root = wikiRoot()): WikiConcept | undefined {
+function readPath(
+	file: string,
+	root = wikiRoot(),
+	content?: string,
+): WikiConcept | undefined {
 	try {
-		const document = parseDocument(fs.readFileSync(file, "utf8"));
+		const document = parseDocument(content ?? fs.readFileSync(file, "utf8"));
 		if (!checkConformance(document)) return undefined;
 		const id = path
 			.relative(ensureBundle(root), file)
@@ -722,10 +726,17 @@ function conceptFiles(root: string): string[] {
 }
 
 export function listConcepts(
-	filters: { tag?: string; type?: string } = {},
+	filters: { tag?: string; type?: string; idPrefix?: string } = {},
 	root = wikiRoot(),
 ): WikiConcept[] {
-	const concepts = conceptFiles(ensureBundle(root)).flatMap((file) => {
+	const bundleRoot = ensureBundle(root);
+	const idPrefix = filters.idPrefix?.replace(/\/+$/, "");
+	if (filters.idPrefix !== undefined && !idPrefix)
+		throw new Error("wiki concept prefix is required");
+	const scanRoot = idPrefix
+		? path.dirname(conceptPath(`${idPrefix}/.concept-scope`, root))
+		: bundleRoot;
+	const concepts = conceptFiles(scanRoot).flatMap((file) => {
 		const concept = readPath(file, root);
 		return concept ? [concept] : [];
 	});
@@ -735,6 +746,7 @@ export function listConcepts(
 				? concept.frontmatter.tags.map(String)
 				: [];
 			return (
+				(!idPrefix || concept.id.startsWith(`${idPrefix}/`)) &&
 				(!filters.tag || tags.includes(filters.tag)) &&
 				(!filters.type || concept.frontmatter.type === filters.type)
 			);
@@ -746,6 +758,21 @@ export function readConcept(id: string, root = wikiRoot()): WikiConcept {
 	const concept = readPath(file, root);
 	if (!concept) throw new Error(`invalid or missing concept: ${id}`);
 	return concept;
+}
+
+/** Return page content and its CAS token from one byte snapshot. */
+export function readConceptWithDigest(
+	id: string,
+	root = wikiRoot(),
+): WikiConcept & { contentDigest: string } {
+	const file = conceptPath(id, root);
+	const bytes = fs.readFileSync(file);
+	const concept = readPath(file, root, bytes.toString("utf8"));
+	if (!concept) throw new Error(`invalid or missing concept: ${id}`);
+	return {
+		...concept,
+		contentDigest: createHash("sha256").update(bytes).digest("hex"),
+	};
 }
 
 function snippet(text: string, terms: string[]): string {
@@ -937,73 +964,62 @@ export function snapshotRead(
 	return fs.readFileSync(file, "utf8");
 }
 
+const WIKI_WRITE_LOCK_TIMEOUT_MS = 60_000;
+const wikiLockWaitCell = new Int32Array(new SharedArrayBuffer(4));
+
+function withWikiWriteLock<T>(file: string, write: () => T): T {
+	const lockPath = `${file}.write-lock`;
+	const deadline = Date.now() + WIKI_WRITE_LOCK_TIMEOUT_MS;
+	while (true) {
+		try {
+			fs.mkdirSync(lockPath);
+			fs.writeFileSync(
+				path.join(lockPath, "owner.json"),
+				JSON.stringify({ pid: process.pid }),
+				{ mode: 0o600 },
+			);
+			break;
+		} catch (error) {
+			const code =
+				error && typeof error === "object" && "code" in error
+					? error.code
+					: undefined;
+			if (code !== "EEXIST") throw error;
+			// Fail closed: deleting an apparently abandoned lock by pathname could
+			// remove a live replacement generation acquired by another writer.
+			if (Date.now() >= deadline)
+				throw new Error(
+					"timed out waiting for the wiki concept write lock; abandoned locks require operator cleanup after confirming no writer is active",
+				);
+			Atomics.wait(wikiLockWaitCell, 0, 0, 10);
+		}
+	}
+	try {
+		return write();
+	} finally {
+		fs.rmSync(lockPath, { recursive: true, force: true });
+	}
+}
+
+export function wikiContentDigest(concept: string, root = wikiRoot()): string {
+	const file = conceptPath(concept, root);
+	return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
 export function writeConcept(
 	concept: string,
 	input: WikiWriteInput,
 	root = wikiRoot(),
+	expectedDigest?: string,
 ): WikiConcept {
 	validateProducerFields(input);
-	const file = conceptPath(concept, root);
-	const existing = fs.existsSync(file)
-		? parseDocument(fs.readFileSync(file, "utf8"))
-		: undefined;
-	const frontmatter: WikiFrontmatter = {
-		...(existing?.frontmatter ?? {}),
-		...input,
-	};
-	delete frontmatter.body;
-	delete frontmatter.changeId;
-	delete frontmatter.generatedBy;
-	const body = input.body ?? existing?.body ?? "";
-	const changeId = changeFor(input);
-	const now = new Date();
-	const at = now.toISOString();
-	if (changeId) {
-		const sources = Array.isArray(frontmatter.sources)
-			? [...frontmatter.sources]
-			: [];
-		if (
-			!sources.some(
-				(source) =>
-					source &&
-					typeof source === "object" &&
-					(source as Record<string, unknown>).id === changeId,
-			)
-		)
-			sources.push({
-				id: changeId,
-				resource: `openspec://changes/${changeId}`,
-			});
-		frontmatter.sources = sources;
-	}
-	// URL evidence is timestamped on write, matching the concept's update time.
-	frontmatter.sources = stampSourceAccess(frontmatter.sources, at);
-	frontmatter.stale_after =
-		typeof input.stale_after === "string"
-			? input.stale_after
-			: defaultStaleAfter(now);
 	if (
-		existing?.frontmatter.verified !== undefined ||
-		["wiki", "research-wiki", "stage-wiki", "planner", "consolidator"].includes(
-			process.env.HERDR_ROLE ?? "",
-		)
-	) {
-		frontmatter.status = "draft";
-		delete frontmatter.verified;
-	}
-	frontmatter.generated = {
-		...(existing?.frontmatter.generated as Record<string, unknown> | undefined),
-		by:
-			input.generatedBy ??
-			(existing?.frontmatter.generated as Record<string, unknown> | undefined)
-				?.by ??
-			"process:herdr",
-		at,
-	};
-	validateProducerFields(frontmatter as WikiWriteInput);
-	assertCitations(frontmatter, body);
-	if (changeId)
-		snapshotOnFirstTouch(changeId, concept, workflowSnapshotBase(), root);
+		expectedDigest !== undefined &&
+		expectedDigest !== "absent" &&
+		!/^[a-f0-9]{64}$/.test(expectedDigest)
+	)
+		throw new Error("wiki write expected digest is invalid");
+	const file = conceptPath(concept, root);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const realRoot = fs.realpathSync(ensureBundle(root));
 	const realParent = fs.realpathSync(path.dirname(file));
@@ -1013,19 +1029,105 @@ export function writeConcept(
 	)
 		throw new Error("wiki path resolves outside the bundle");
 	conceptPath(concept, root);
-	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		fs.writeFileSync(temporary, renderDocument(frontmatter, body), {
-			mode: 0o600,
-		});
-		fs.renameSync(temporary, file);
-	} catch (error) {
+	return withWikiWriteLock(file, () => {
+		const existingText = fs.existsSync(file)
+			? fs.readFileSync(file, "utf8")
+			: undefined;
+		const actualDigest =
+			existingText === undefined
+				? "absent"
+				: createHash("sha256").update(existingText).digest("hex");
+		if (expectedDigest !== undefined && expectedDigest !== actualDigest)
+			throw new Error(
+				"wiki concept changed since it was read; re-read the current page, merge the update, and retry",
+			);
+		const existing =
+			existingText === undefined ? undefined : parseDocument(existingText);
+		const frontmatter: WikiFrontmatter = {
+			...(existing?.frontmatter ?? {}),
+			...input,
+		};
+		delete frontmatter.body;
+		delete frontmatter.changeId;
+		delete frontmatter.generatedBy;
+		const body = input.body ?? existing?.body ?? "";
+		const changeId = changeFor(input);
+		const now = new Date();
+		const at = now.toISOString();
+		if (changeId) {
+			const sources = Array.isArray(frontmatter.sources)
+				? [...frontmatter.sources]
+				: [];
+			if (
+				!sources.some(
+					(source) =>
+						source &&
+						typeof source === "object" &&
+						(source as Record<string, unknown>).id === changeId,
+				)
+			)
+				sources.push({
+					id: changeId,
+					resource: `openspec://changes/${changeId}`,
+				});
+			frontmatter.sources = sources;
+		}
+		// URL evidence is timestamped on write, matching the concept's update time.
+		frontmatter.sources = stampSourceAccess(frontmatter.sources, at);
+		frontmatter.stale_after =
+			typeof input.stale_after === "string"
+				? input.stale_after
+				: defaultStaleAfter(now);
+		if (
+			existing?.frontmatter.verified !== undefined ||
+			[
+				"wiki",
+				"research-wiki",
+				"stage-wiki",
+				"planner",
+				"consolidator",
+			].includes(process.env.HERDR_ROLE ?? "")
+		) {
+			frontmatter.status = "draft";
+			delete frontmatter.verified;
+		}
+		frontmatter.generated = {
+			...(existing?.frontmatter.generated as
+				| Record<string, unknown>
+				| undefined),
+			by:
+				input.generatedBy ??
+				(existing?.frontmatter.generated as Record<string, unknown> | undefined)
+					?.by ??
+				"process:herdr",
+			at,
+		};
+		validateProducerFields(frontmatter as WikiWriteInput);
+		assertCitations(frontmatter, body);
+		if (changeId)
+			snapshotOnFirstTouch(changeId, concept, workflowSnapshotBase(), root);
+		const checkedRoot = fs.realpathSync(ensureBundle(root));
+		const checkedParent = fs.realpathSync(path.dirname(file));
+		if (
+			checkedParent !== checkedRoot &&
+			!checkedParent.startsWith(`${checkedRoot}${path.sep}`)
+		)
+			throw new Error("wiki path resolves outside the bundle");
+		conceptPath(concept, root);
+		const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
 		try {
-			fs.rmSync(temporary, { force: true });
-		} catch {}
-		throw error;
-	}
-	return readConcept(concept, root);
+			fs.writeFileSync(temporary, renderDocument(frontmatter, body), {
+				mode: 0o600,
+			});
+			fs.renameSync(temporary, file);
+		} catch (error) {
+			try {
+				fs.rmSync(temporary, { force: true });
+			} catch {}
+			throw error;
+		}
+		return readConcept(concept, root);
+	});
 }
 
 export function verifyConcept(
@@ -1034,57 +1136,80 @@ export function verifyConcept(
 	validatedContent?: string,
 	promote = true,
 	root = wikiRoot(),
+	expectedDigest?: string,
 ): WikiConcept {
 	actor(verifyingActor, "actor");
+	if (expectedDigest !== undefined && !/^[a-f0-9]{64}$/.test(expectedDigest))
+		throw new Error("wiki verification expected digest is invalid");
 	const file = conceptPath(concept, root);
-	const content = validatedContent ?? fs.readFileSync(file, "utf8");
-	const current = parseDocument(content);
-	const now = new Date();
-	const verified = Array.isArray(current.frontmatter.verified)
-		? [...current.frontmatter.verified]
-		: current.frontmatter.verified
-			? [current.frontmatter.verified]
-			: [];
-	if (
-		!verified.some(
-			(item) =>
-				item &&
-				typeof item === "object" &&
-				(item as Record<string, unknown>).by === verifyingActor,
+	const approvedDigest =
+		expectedDigest ??
+		(validatedContent === undefined
+			? undefined
+			: createHash("sha256").update(validatedContent).digest("hex"));
+	return withWikiWriteLock(file, () => {
+		const currentText = fs.readFileSync(file, "utf8");
+		const actualDigest = createHash("sha256").update(currentText).digest("hex");
+		if (approvedDigest !== undefined && actualDigest !== approvedDigest)
+			throw new Error(
+				"wiki concept changed after developer approval; re-review before verification",
+			);
+		const content = validatedContent ?? currentText;
+		if (
+			expectedDigest !== undefined &&
+			createHash("sha256").update(content).digest("hex") !== expectedDigest
 		)
-	)
-		verified.push({ by: verifyingActor, at: now.toISOString() });
-	const generated =
-		current.frontmatter.generated &&
-		typeof current.frontmatter.generated === "object"
-			? (current.frontmatter.generated as Record<string, unknown>)
-			: {};
-	const frontmatter = {
-		...current.frontmatter,
-		verified,
-		status: promote ? "stable" : "draft",
-		stale_after: defaultStaleAfter(now),
-		generated: { ...generated, at: now.toISOString() },
-	};
-	validateProducerFields(frontmatter);
-	// Promotion is also a write: a fact may only be promoted once its sources
-	// are identifiable and every prose line cites one, closing the bypass where
-	// previously stored uncited content could be marked stable.
-	assertCitations(frontmatter, current.body);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		fs.writeFileSync(temporary, renderDocument(frontmatter, current.body), {
-			mode: 0o600,
-		});
-		fs.renameSync(temporary, file);
-	} catch (error) {
+			throw new Error(
+				"approved wiki content does not match the approval digest",
+			);
+		const current = parseDocument(content);
+		const now = new Date();
+		const verified = Array.isArray(current.frontmatter.verified)
+			? [...current.frontmatter.verified]
+			: current.frontmatter.verified
+				? [current.frontmatter.verified]
+				: [];
+		if (
+			!verified.some(
+				(item) =>
+					item &&
+					typeof item === "object" &&
+					(item as Record<string, unknown>).by === verifyingActor,
+			)
+		)
+			verified.push({ by: verifyingActor, at: now.toISOString() });
+		const generated =
+			current.frontmatter.generated &&
+			typeof current.frontmatter.generated === "object"
+				? (current.frontmatter.generated as Record<string, unknown>)
+				: {};
+		const frontmatter = {
+			...current.frontmatter,
+			verified,
+			status: promote ? "stable" : "draft",
+			stale_after: defaultStaleAfter(now),
+			generated: { ...generated, at: now.toISOString() },
+		};
+		validateProducerFields(frontmatter);
+		// Promotion is also a write: a fact may only be promoted once its sources
+		// are identifiable and every prose line cites one, closing the bypass where
+		// previously stored uncited content could be marked stable.
+		assertCitations(frontmatter, current.body);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
 		try {
-			fs.rmSync(temporary, { force: true });
-		} catch {}
-		throw error;
-	}
-	return readConcept(concept, root);
+			fs.writeFileSync(temporary, renderDocument(frontmatter, current.body), {
+				mode: 0o600,
+			});
+			fs.renameSync(temporary, file);
+		} catch (error) {
+			try {
+				fs.rmSync(temporary, { force: true });
+			} catch {}
+			throw error;
+		}
+		return readConcept(concept, root);
+	});
 }
 
 export function appendLog(dir: string, entry: string): string {

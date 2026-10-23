@@ -282,4 +282,47 @@ describe("stage briefs keep their semantics", () => {
 		expect(tester).toContain("`browser_open({stage:");
 		expect(tester).toContain("`core.stage-report@1`");
 	});
+
+	test("the tester reports concise business knowledge without adding a test goal", () => {
+		expect(tester).toContain(
+			"Your only goal is testing with reviewed blocks or creating useful ones.",
+		);
+		expect(tester).toContain("wiki.processes` hints");
+		expect(tester).toContain("Read its process page before testing");
+		expect(tester).toContain("Report concise deltas");
+		expect(tester).toContain(
+			"as `new`, `confirmed`, `contradicted` or `missing`",
+		);
+		expect(tester).toContain("do not repeat confirmed facts at length");
+		expect(tester).toContain(
+			"include its trust tier and `stale_after` value in the corresponding report observation's `statement` or `observed`",
+		);
+		expect(tester).toContain(
+			"when stale, flag stale reliance in the journal and observation",
+		);
+		expect(tester).toContain(
+			"at least one `new` observation for each business step learned",
+		);
+		expect(tester).toContain("what submit does");
+		expect(tester).toContain(
+			"UI/layout, selector and timing trouble are findings, not knowledge",
+		);
+		expect(tester).toContain("include that exact block ID");
+	});
+
+	test("the stage wiki brief writes linked business process knowledge, not UI quirks", () => {
+		const wiki = prompt("core.wiki", "stage-wiki");
+		for (const phrase of [
+			"projects/<system>/processes/<process>",
+			"sections Purpose, Actors, Steps, Decisions & rules, Inputs, Outputs and Open questions",
+			"exact implementing block ID",
+			"missing` details and unresolved `contradicted` claims",
+			"Never document UI, selector or timing quirks",
+			"dated **Disputed** callout",
+			"`confirmed` alone causes no write",
+			"contentDigest` as `--expected-digest",
+			"re-read it, merge this run's approved observations",
+		])
+			expect(wiki).toContain(phrase);
+	});
 });
