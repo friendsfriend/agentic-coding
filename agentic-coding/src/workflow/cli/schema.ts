@@ -159,6 +159,7 @@ const FLAG_SCHEMA: Record<
 			"description",
 			"limit",
 			"path",
+			"expected-digest",
 			"body-file",
 			"tags",
 			"resource",

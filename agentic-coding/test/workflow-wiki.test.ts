@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,7 @@ import {
 	listConcepts,
 	parseDocument,
 	readConcept,
+	readConceptWithDigest,
 	renderDocument,
 	STALE_AFTER_DAYS,
 	searchConcepts,
@@ -36,6 +38,7 @@ import {
 	snapshotRead,
 	trustTier,
 	verifyConcept,
+	wikiContentDigest,
 	writeConcept,
 } from "../src/workflow/wiki.ts";
 import {
@@ -438,14 +441,13 @@ describe("OKF wiki bundle", () => {
 				run.id,
 			);
 			const body = [
-				"## Covers",
-				"## Actors & apps",
+				"## Purpose",
+				"## Actors",
 				"## Steps",
-				"## Hand-overs",
-				"## Asynchronous steps",
-				"## Test data",
-				"## Assertions that matter",
-				"## Gotchas",
+				"## Decisions & rules",
+				"## Inputs",
+				"## Outputs",
+				"## Open questions",
 			]
 				.map((heading) => `${heading}\n\nObserved.[^stage]`)
 				.join("\n\n");
@@ -455,7 +457,11 @@ describe("OKF wiki bundle", () => {
 			fs.mkdirSync(path.dirname(bodyFile), { recursive: true });
 			fs.writeFileSync(bodyFile, body);
 			const citation = `stage://grid-int/${workflowId}`;
-			const argsFor = (path: string, sources: string) => [
+			const argsFor = (
+				path: string,
+				sources: string,
+				expectedDigest = "absent",
+			) => [
 				"wiki",
 				"write",
 				"--path",
@@ -468,17 +474,35 @@ describe("OKF wiki bundle", () => {
 				"Observed process",
 				"--sources",
 				sources,
+				"--expected-digest",
+				expectedDigest,
 				"--body-file",
 				bodyFile,
 			];
+			const conceptId =
+				"projects/grid-allocation/processes/grid-connection-request";
 			const args = argsFor(
-				"projects/grid-allocation/processes/grid-connection-request",
+				conceptId,
 				JSON.stringify([{ id: "stage", resource: citation }]),
 			);
-			await runWorkflow(args);
-			const concept = readConceptForTest(
-				"projects/grid-allocation/processes/grid-connection-request",
+			const withoutExpectedDigest = args.filter(
+				(value, index) =>
+					value !== "--expected-digest" &&
+					args[index - 1] !== "--expected-digest",
 			);
+			await expect(runWorkflow(withoutExpectedDigest)).rejects.toThrow(
+				/stage wiki writes require --expected-digest/,
+			);
+			await runWorkflow(args);
+			const concept = readConceptForTest(conceptId);
+			const showOutput = spyOn(console, "log").mockImplementation(() => {});
+			const showValue = await runWorkflow(["wiki", "show", conceptId])
+				.then(() => showOutput.mock.calls.at(-1)?.[0])
+				.finally(() => showOutput.mockRestore());
+			const shown = JSON.parse(String(showValue)) as {
+				contentDigest?: unknown;
+			};
+			expect(shown.contentDigest).toBe(wikiContentDigest(conceptId));
 			expect(concept.frontmatter.status).toBe("draft");
 			expect(JSON.stringify(concept.frontmatter.sources)).toContain(citation);
 
@@ -544,6 +568,272 @@ describe("OKF wiki bundle", () => {
 		const log = fs.readFileSync(path.join(root, "log.md"), "utf8");
 		expect(log.match(/^## \d{4}-\d{2}-\d{2}$/gm)).toHaveLength(1);
 		expect(log).toContain("- second");
+	});
+	test("wiki show returns content and digest from the same byte snapshot during replacement", async () => {
+		const id = "projects/grid/processes/request";
+		const input = {
+			type: "process",
+			title: "Request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid/run" }],
+			body: "Original business knowledge.[^stage]",
+		};
+		writeConcept(id, input, root);
+		const file = conceptPath(id, root);
+		const originalBytes = fs.readFileSync(file);
+		const document = parseDocument(originalBytes.toString("utf8"));
+		const replacement = renderDocument(
+			document.frontmatter,
+			"Newer business knowledge.[^stage]",
+		);
+		const originalRead = fs.readFileSync;
+		let targetReads = 0;
+		const read = spyOn(fs, "readFileSync").mockImplementation(((
+			...args: Parameters<typeof fs.readFileSync>
+		) => {
+			const bytes = originalRead(...args);
+			if (String(args[0]) === file) {
+				targetReads++;
+				if (targetReads === 1) {
+					const temporary = `${file}.replacement`;
+					fs.writeFileSync(temporary, replacement);
+					fs.renameSync(temporary, file);
+				}
+			}
+			return bytes;
+		}) as typeof fs.readFileSync);
+		const output = spyOn(console, "log").mockImplementation(() => {});
+		let shown: ReturnType<typeof readConceptWithDigest>;
+		try {
+			await runWorkflow(["wiki", "show", id]);
+			shown = JSON.parse(String(output.mock.calls.at(-1)?.[0]));
+			expect(targetReads).toBe(1);
+		} finally {
+			read.mockRestore();
+			output.mockRestore();
+		}
+		expect(shown.body).toContain("Original business knowledge");
+		expect(shown.contentDigest).toBe(
+			createHash("sha256").update(originalBytes).digest("hex"),
+		);
+		expect(readConceptWithDigest(id, root).body).toContain(
+			"Newer business knowledge",
+		);
+		expect(() =>
+			writeConcept(
+				id,
+				{ ...input, body: "Stale rewrite.[^stage]" },
+				root,
+				shown.contentDigest,
+			),
+		).toThrow(/changed since it was read/);
+		expect(readConcept(id, root).body).toContain("Newer business knowledge");
+	});
+	test("abandoned wiki locks fail closed for every waiter without removing a lock generation", () => {
+		const id = "projects/grid/processes/request";
+		const input = {
+			type: "process",
+			title: "Request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid/run" }],
+			body: "Original.[^stage]",
+		};
+		writeConcept(id, input, root);
+		const digest = wikiContentDigest(id, root);
+		const lock = `${conceptPath(id, root)}.write-lock`;
+		fs.mkdirSync(lock);
+		fs.writeFileSync(
+			path.join(lock, "owner.json"),
+			JSON.stringify({ pid: 2147483647 }),
+		);
+		const old = new Date(Date.now() - 120000);
+		fs.utimesSync(lock, old, old);
+		const inode = fs.statSync(lock).ino;
+		let time = Date.now();
+		const clock = spyOn(Date, "now").mockImplementation(() => {
+			time += 60001;
+			return time;
+		});
+		try {
+			for (const body of ["First.[^stage]", "Second.[^stage]"])
+				expect(() =>
+					writeConcept(id, { ...input, body }, root, digest),
+				).toThrow(/abandoned locks require operator cleanup/);
+			expect(() =>
+				verifyConcept(id, "human:reviewer", undefined, true, root, digest),
+			).toThrow(/abandoned locks require operator cleanup/);
+			expect(fs.statSync(lock).ino).toBe(inode);
+			expect(wikiContentDigest(id, root)).toBe(digest);
+		} finally {
+			clock.mockRestore();
+			fs.rmSync(lock, { recursive: true, force: true });
+		}
+	});
+	test("stale wiki writes cannot overwrite a newer process-page revision", () => {
+		const concept =
+			"projects/grid-allocation/processes/grid-connection-request";
+		const input = {
+			type: "process",
+			title: "Grid connection request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid-int/run-1" }],
+			body: "The request is submitted.[^stage]",
+		};
+		writeConcept(concept, input, root);
+		const readDigest = wikiContentDigest(concept, root);
+		writeConcept(
+			concept,
+			{
+				...input,
+				body: "The request is submitted and the operator reviews it.[^stage]",
+			},
+			root,
+			readDigest,
+		);
+		expect(() =>
+			writeConcept(
+				concept,
+				{ ...input, body: "A stale update.[^stage]" },
+				root,
+				readDigest,
+			),
+		).toThrow(/changed since it was read/);
+		expect(readConcept(concept, root).body).toContain(
+			"the operator reviews it.",
+		);
+		expect(readConcept(concept, root).body).not.toContain("A stale update.");
+	});
+	test("verification refuses an approved snapshot superseded by a writer", () => {
+		const id = "projects/grid/processes/request";
+		const input = {
+			type: "process",
+			title: "Request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid/run" }],
+			body: "Original.[^stage]",
+		};
+		writeConcept(id, input, root);
+		const approved = fs.readFileSync(conceptPath(id, root), "utf8");
+		const digest = wikiContentDigest(id, root);
+		writeConcept(
+			id,
+			{ ...input, body: "New business knowledge.[^stage]" },
+			root,
+			digest,
+		);
+		expect(() =>
+			verifyConcept(id, "human:reviewer", approved, true, root, digest),
+		).toThrow(/changed after developer approval/);
+		expect(readConcept(id, root).body).toContain("New business knowledge");
+		expect(readConcept(id, root).frontmatter.verified).toBeUndefined();
+	});
+	test("concurrent stale-base writers serialize their digest checks", async () => {
+		const id = "projects/grid/processes/request";
+		const input = {
+			type: "process",
+			title: "Request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid/run" }],
+			body: "Original.[^stage]",
+		};
+		writeConcept(id, input, root);
+		const digest = wikiContentDigest(id, root);
+		const lock = `${conceptPath(id, root)}.write-lock`;
+		fs.mkdirSync(lock);
+		fs.writeFileSync(
+			path.join(lock, "owner.json"),
+			JSON.stringify({ pid: process.pid }),
+		);
+		const moduleUrl = new URL("../src/workflow/wiki.ts", import.meta.url).href;
+		const script = `
+			import { writeConcept } from ${JSON.stringify(moduleUrl)};
+			console.log("ready");
+			await Bun.stdin.text();
+			try {
+				writeConcept(${JSON.stringify(id)}, {...${JSON.stringify(input)}, body: process.env.RACE_BODY}, ${JSON.stringify(root)}, ${JSON.stringify(digest)});
+				console.log("won");
+			} catch (error) {
+				if (!error.message.includes("changed since it was read")) throw error;
+				console.log("stale");
+			}
+		`;
+		const children = ["First", "Second"].map((name) =>
+			Bun.spawn([process.execPath, "-e", script], {
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+				env: { ...process.env, RACE_BODY: `${name} knowledge.[^stage]` },
+			}),
+		);
+		try {
+			await Promise.all(
+				children.map(async (child) => {
+					const reader = child.stdout.getReader();
+					const ready = await reader.read();
+					expect(new TextDecoder().decode(ready.value)).toContain("ready");
+					reader.releaseLock();
+					child.stdin.end();
+				}),
+			);
+			await Bun.sleep(100);
+			expect(wikiContentDigest(id, root)).toBe(digest);
+			fs.rmSync(lock, { recursive: true });
+			const outcomes = await Promise.all(
+				children.map(async (child) => {
+					const [stdout, stderr, exit] = await Promise.all([
+						(async () => {
+							const reader = child.stdout.getReader();
+							const decoder = new TextDecoder();
+							let text = "";
+							while (true) {
+								const chunk = await reader.read();
+								if (chunk.done) break;
+								text += decoder.decode(chunk.value, { stream: true });
+							}
+							return text + decoder.decode();
+						})(),
+						new Response(child.stderr).text(),
+						child.exited,
+					]);
+					expect(stderr).toBe("");
+					expect(exit).toBe(0);
+					return stdout.trim();
+				}),
+			);
+			expect([...outcomes].sort()).toEqual(["stale", "won"]);
+			const winner = outcomes.indexOf("won");
+			expect(readConcept(id, root).body).toContain(
+				`${winner === 0 ? "First" : "Second"} knowledge`,
+			);
+		} finally {
+			fs.rmSync(lock, { recursive: true, force: true });
+			for (const child of children) child.kill();
+		}
+	}, 15000);
+	test("scoped process listing never enumerates unrelated project trees", () => {
+		const input = {
+			type: "process",
+			title: "Request",
+			description: "Business process",
+			sources: [{ id: "stage", resource: "stage://grid/run" }],
+			body: "Request.[^stage]",
+		};
+		writeConcept("projects/grid/processes/request", input, root);
+		writeConcept("projects/other/processes/request", input, root);
+		const scan = spyOn(fs, "readdirSync");
+		try {
+			expect(
+				listConcepts(
+					{ type: "process", idPrefix: "projects/grid/processes" },
+					root,
+				).map(({ id }) => id),
+			).toEqual(["projects/grid/processes/request"]);
+			expect(scan.mock.calls.map(([dir]) => String(dir))).toEqual([
+				path.join(root, "projects/grid/processes"),
+			]);
+		} finally {
+			scan.mockRestore();
+		}
 	});
 	test("write requires a source and a citation on every prose line", () => {
 		expect(() =>

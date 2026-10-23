@@ -25,7 +25,7 @@ import {
 	containsConfiguredSecret,
 	ensureBundle,
 	listConcepts,
-	readConcept,
+	readConceptWithDigest,
 	searchConcepts,
 	verifyConcept,
 	wikiRoot,
@@ -292,7 +292,7 @@ export async function runWiki(
 			throw new Error(
 				"stage-test wiki reads are limited to the pinned system namespace",
 			);
-		wikiOutput(rest, readConcept(terms[0]));
+		wikiOutput(rest, readConceptWithDigest(terms[0]));
 		return;
 	}
 	if (operation === "write") {
@@ -316,11 +316,27 @@ export async function runWiki(
 				: undefined;
 		const concept = flag(rest, "path");
 		const type = flag(rest, "type");
+		const expectedDigest = flag(rest, "expected-digest");
 		const title = flag(rest, "title");
 		const description = flag(rest, "description");
 		if (!concept || !type || !title || !description)
 			throw new Error(
-				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D [--sources JSON]",
+				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D [--sources JSON] [--expected-digest HASH|absent]",
+			);
+		if (
+			authorizedSnapshot?.definition.id === "stage-test" &&
+			expectedDigest === undefined
+		)
+			throw new Error(
+				"stage wiki writes require --expected-digest from wiki show, or absent for a new concept",
+			);
+		if (
+			expectedDigest !== undefined &&
+			expectedDigest !== "absent" &&
+			!/^[a-f0-9]{64}$/.test(expectedDigest)
+		)
+			throw new Error(
+				"wiki write --expected-digest must be a SHA-256 digest or absent",
 			);
 		if (authorizedSnapshot?.definition.id === "wiki-comments") {
 			const context = authorizedSnapshot.step.context;
@@ -457,7 +473,7 @@ export async function runWiki(
 				throw new Error(`stage wiki write must cite ${stageCitation}`);
 			if (type === "process" && !safeBodyFile)
 				throw new Error(
-					"stage process concepts require a body file with the standard process sections",
+					"stage process concepts require a body file with business process documentation",
 				);
 			if (type === "process-index" && !safeBodyFile)
 				throw new Error(
@@ -466,14 +482,13 @@ export async function runWiki(
 			const body = bodyText;
 			if (type === "process") {
 				const headings = [
-					"Covers",
-					"Actors & apps",
+					"Purpose",
+					"Actors",
 					"Steps",
-					"Hand-overs",
-					"Asynchronous steps",
-					"Test data",
-					"Assertions that matter",
-					"Gotchas",
+					"Decisions & rules",
+					"Inputs",
+					"Outputs",
+					"Open questions",
 				];
 				const escapeRegex = (value: string) =>
 					value.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
@@ -490,7 +505,10 @@ export async function runWiki(
 					);
 			}
 			if (type === "process-index") {
-				const processIds = listConcepts({ type: "process" })
+				const processIds = listConcepts({
+					type: "process",
+					idPrefix: `${base}/processes`,
+				})
 					.map(({ id }) => id)
 					.filter(
 						(id) =>
@@ -507,7 +525,10 @@ export async function runWiki(
 					);
 			}
 		}
-		wikiOutput(rest, writeConcept(concept, writeInput));
+		wikiOutput(
+			rest,
+			writeConcept(concept, writeInput, undefined, expectedDigest),
+		);
 		return;
 	}
 	if (operation === "verify") {

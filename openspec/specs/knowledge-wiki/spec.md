@@ -110,7 +110,7 @@ The system SHALL accept only bundle-relative concept paths whose resolved locati
 - **THEN** the operation fails with an error naming the reserved filename
 
 ### Requirement: Bundle read operations
-The system SHALL provide `list`, `search`, and `show` operations. `list` SHALL synthesize a directory listing of the bundle at read time rather than reading or maintaining a stored index, and SHALL support filtering by tag and by type. `search` SHALL rank matching concepts across title, tags, headings, and body, honour a result limit, and include each hit's concept identifier, title, tags, `status`, trust tier, and staleness. `show` SHALL return the full concept for an identifier. All read operations SHALL be available without any role restriction.
+The system SHALL provide `list`, `search`, and `show` operations. `list` SHALL synthesize a directory listing of the bundle at read time rather than reading or maintaining a stored index, and SHALL support filtering by tag and by type. `search` SHALL rank matching concepts across title, tags, headings, and body, honour a result limit, and include each hit's concept identifier, title, tags, `status`, trust tier, and staleness. `show` SHALL return the full concept for an identifier and its SHA-256 `contentDigest`, computed from the exact current document bytes. All read operations SHALL be available without any role restriction.
 
 #### Scenario: List synthesizes without a stored index
 - **WHEN** `list` runs against a bundle containing no `index.md` below the root
@@ -175,7 +175,7 @@ The system SHALL support `status` values `draft`, `stable`, and `deprecated`, SH
 - **THEN** the write fails with an error naming the invalid value
 
 ### Requirement: Atomic concept writes
-The system SHALL validate producer requirements before writing a concept and SHALL install it by writing a temporary file in the target directory and renaming it into place, so a rejected or interrupted write never leaves a partial or non-conformant document in the bundle. Writing an existing concept path SHALL replace that document in place rather than creating a duplicate.
+The system SHALL validate producer requirements before writing a concept and SHALL install it by writing a temporary file in the target directory and renaming it into place, so a rejected or interrupted write never leaves a partial or non-conformant document in the bundle. Writes SHALL be serialized across processes by normalized concept path. When a write supplies an expected content digest, it SHALL compare that digest under the write lock and refuse a mismatch before replacing the document. Writing an existing concept path SHALL replace that document in place rather than creating a duplicate.
 
 #### Scenario: Rejected write leaves the bundle untouched
 - **WHEN** a write is attempted without a required producer field
@@ -188,6 +188,19 @@ The system SHALL validate producer requirements before writing a concept and SHA
 #### Scenario: Provenance is recorded
 - **WHEN** a concept is written with an originating change identifier
 - **THEN** a `sources` entry naming that change is present, and every `sources` entry carries a `resource`
+
+#### Scenario: Content and digest describe one revision
+- **WHEN** a concurrent writer replaces a concept while `show` reads it
+- **THEN** the returned content and digest SHALL both derive from the same byte snapshot, so a stale-content rewrite cannot be accepted using a newer revision's digest
+
+#### Scenario: Abandoned locks fail closed
+- **WHEN** a concept lock remains after its writer exits
+- **THEN** waiting writes and verification SHALL time out without automatically deleting or replacing that lock
+- **AND** an operator SHALL confirm no writer is active before removing the abandoned lock manually
+
+#### Scenario: A stale expected digest is refused
+- **WHEN** a writer supplies a digest that no longer matches the concept while holding its write lock
+- **THEN** the write fails without replacing the current document, allowing the caller to re-read and reconcile it
 
 ### Requirement: Archive promotes and records history
 The system SHALL provide `verify` and `log` operations restricted to the archive role or an unset `HERDR_ROLE`. `verify` SHALL append a verification event with a `process:herdr-archive` actor and the current timestamp, and SHALL set `status` to `stable`. `log` SHALL append an entry to a `log.md` file under an ISO `YYYY-MM-DD` date heading, newest first.

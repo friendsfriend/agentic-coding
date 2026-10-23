@@ -202,7 +202,11 @@ describe("stage-test planning and report contracts", () => {
 	});
 
 	test("embedded planner and tester recovery instructions match their sources", () => {
-		for (const asset of ["stage-test-plan.md", "stage-test-execute.md"]) {
+		for (const asset of [
+			"stage-test-plan.md",
+			"stage-test-execute.md",
+			"wiki-stage-test.md",
+		]) {
 			const source = fs.readFileSync(
 				new URL(
 					`../../agent-definitions/instructions/${asset}`,
@@ -789,24 +793,58 @@ describe("stage-test planning and report contracts", () => {
 		});
 	});
 
-	test("wiki write-back is offered only for non-confirmed observations", () => {
+	test("wiki write-back is offered for any observation and labels both approval paths", () => {
 		const actions = stageTestBehaviors["stage.review"]?.developerActions;
 		if (!actions) throw new Error("missing stage.review actions");
-		const base = snapshot({ stageTestReport: report() });
-		const confirmed = actions({ snapshot: base });
-		expect(confirmed.map(({ id }) => id)).not.toContain(
-			"approve-and-update-wiki",
-		);
-		const update = actions({
-			snapshot: snapshot({
-				stageTestReport: report({
-					knowledgeObservations: [
-						{ concept: "grid-connection-request", kind: "missing" },
-					],
+		const actionList = (knowledgeObservations: unknown[], overrides = {}) =>
+			actions({
+				snapshot: snapshot({
+					stageTestReport: report({ knowledgeObservations, ...overrides }),
 				}),
-			}),
-		});
-		expect(update.map(({ id }) => id)).toContain("approve-and-update-wiki");
+			});
+		const empty = actionList([]);
+		expect(empty.map(({ id }) => id)).toContain("approve-review");
+		expect(empty.map(({ id }) => id)).not.toContain("approve-and-update-wiki");
+		for (const kind of ["confirmed", "new", "missing", "contradicted"]) {
+			const available = actionList([
+				{ concept: "grid-connection-request", kind },
+			]);
+			expect(available.map(({ id }) => id)).toContain("approve-review");
+			expect(available.map(({ id }) => id)).toContain(
+				"approve-and-update-wiki",
+			);
+			expect(
+				available.find(({ id }) => id === "approve-and-update-wiki")?.label,
+			).toBe(
+				kind === "confirmed"
+					? "Approve and review wiki (no changes expected)"
+					: "Approve and update wiki",
+			);
+		}
+		const confirmed = actionList([
+			{ concept: "grid-connection-request", kind: "confirmed" },
+		]);
+		expect(
+			confirmed.find(({ id }) => id === "approve-and-update-wiki")?.label,
+		).toBe("Approve and review wiki (no changes expected)");
+		const labeled = actionList(
+			[{ concept: "grid-connection-request", kind: "confirmed" }],
+			{
+				blocksCreated: [
+					{ block: "web.request.submit", version: "1.0.0", digest: "a" },
+				],
+				blocksAdjusted: [
+					{ block: "web.request.submit", version: "1.0.1", digest: "b" },
+					{ block: "web.request.review", version: "1.0.0", digest: "c" },
+				],
+			},
+		);
+		expect(labeled.find(({ id }) => id === "approve-review")?.label).toBe(
+			"Approve report (promotes 2 blocks)",
+		);
+		expect(
+			labeled.find(({ id }) => id === "approve-and-update-wiki")?.label,
+		).toBe("Approve and review wiki (no changes expected) (promotes 2 blocks)");
 	});
 	test("the plan contract enforces its cross-field rules", () => {
 		const parse = (overrides: Record<string, unknown>) =>
