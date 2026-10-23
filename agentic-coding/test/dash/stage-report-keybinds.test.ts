@@ -8,17 +8,25 @@ import {
 } from "../../src/tui/dash/keybinds.ts";
 
 describe("stage report review keybinds", () => {
-	test("exposes only the explicit wiki action and hides standard navigation in the footer", () => {
+	test("makes wiki approval the default with explicit skip and hides standard navigation in the footer", () => {
 		const withWiki = stageReportReviewKeybindCatalog(true);
 		const withoutWiki = stageReportReviewKeybindCatalog(false);
 		const all = catalogKeybinds(withWiki).map((keybind) => keybind.key);
 		const footer = footerKeybinds(withWiki).map((keybind) => keybind.key);
 
-		expect(all).toContain("w");
+		expect(all).toContain("Shift+F");
 		expect(
 			catalogKeybinds(withoutWiki).map((keybind) => keybind.key),
-		).not.toContain("w");
+		).not.toContain("Shift+F");
 		expect(footer).toContain("f");
+		expect(stageReportReviewKeybinds(true)).toContainEqual({
+			key: "f",
+			action: "Approve and update wiki",
+		});
+		expect(stageReportReviewKeybinds(false)).toContainEqual({
+			key: "f",
+			action: "Approve report",
+		});
 		expect(footer).toContain("c");
 		expect(footer).not.toContain("j/k");
 		expect(

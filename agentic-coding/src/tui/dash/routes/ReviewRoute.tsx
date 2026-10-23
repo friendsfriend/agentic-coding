@@ -115,13 +115,22 @@ export function ReviewRoute(props: ReviewRouteProps) {
 									reviewKind() === "wiki" ||
 									reviewKind() === "setup" ||
 									developerReviewPhase()
-										? [{ key: "f", action: "Finish review" }]
+										? [
+												{
+													key: "f",
+													action:
+														reviewKind() === "stage" &&
+														stageWikiUpdateAvailable()
+															? "Approve and update wiki"
+															: "Finish review",
+												},
+											]
 										: []),
 									...(reviewKind() === "plan"
 										? [{ key: "r", action: "Reject plan" }]
 										: []),
 									...(reviewKind() === "stage" && stageWikiUpdateAvailable()
-										? [{ key: "w", action: "Approve and update wiki" }]
+										? [{ key: "Shift+F", action: "Approve report (skip wiki)" }]
 										: []),
 									...(reviewKind() === "developer" &&
 									reviewVisibleChanges().length === 0

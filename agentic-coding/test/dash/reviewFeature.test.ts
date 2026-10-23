@@ -415,12 +415,12 @@ test("the affects-all-apps flag is derived for the setup review only", () => {
 });
 
 /** One press event, the same shape the keymap delivers. */
-function press(name: string): KeyEvent {
+function press(name: string, shift = false): KeyEvent {
 	return new KeyEvent({
 		name,
 		ctrl: false,
 		meta: false,
-		shift: false,
+		shift,
 		option: false,
 		sequence: name,
 		number: false,
@@ -460,7 +460,12 @@ test("a dashboard refresh keeps the synthetic stage plan and report documents", 
 		const base = testDashboard();
 		const stageState = {
 			...base.state,
-			definition: { ...base.state.definition, id: "stage-test" },
+			definition: {
+				id: "stage-test",
+				version: 1,
+				digest: "test",
+				label: "Stage test",
+			},
 			revision: 7,
 			stage: "grid-int",
 			stageSystem: "grid-allocation",
@@ -516,4 +521,79 @@ test("a dashboard refresh keeps the synthetic stage plan and report documents", 
 		expect(feature.reviewDiff()).toContain("Rendered report body.");
 		dispose();
 	});
+});
+
+test("stage report f includes wiki by default and Shift+F explicitly skips it", async () => {
+	const actions: string[] = [];
+	configureGateway({
+		action: async (request: { actionId: string }) => {
+			actions.push(request.actionId);
+			return {};
+		},
+	} as unknown as DashboardGateway);
+	try {
+		for (const [name, shifted, wiki, expected] of [
+			["f", false, true, "approve-and-update-wiki"],
+			["f", true, true, "approve-review"],
+			["F", true, true, "approve-review"],
+			["f", false, false, "approve-review"],
+		] as const) {
+			await createRoot(async (dispose) => {
+				let finished!: () => void;
+				const completion = new Promise<void>((resolve) => {
+					finished = resolve;
+				});
+				const base = testDashboard();
+				const feature = createReviewFeature(
+					context({
+						profile: undefined,
+						data: () => ({
+							...base,
+							state: {
+								...base.state,
+								definition: {
+									id: "stage-test",
+									version: 1,
+									digest: "test",
+									label: "Stage test",
+								},
+								availableActions: [
+									{
+										id: "approve-review",
+										label: "Approve report",
+										confirmation: "confirm",
+									},
+									...(wiki
+										? [
+												{
+													id: "approve-and-update-wiki",
+													label: "Approve and update wiki",
+													confirmation: "confirm",
+												},
+											]
+										: []),
+								],
+							},
+						}),
+						requiredUserAction: () =>
+							({ key: "developer-review" }) as ReturnType<
+								ReviewFeatureContext["requiredUserAction"]
+							>,
+						setReviewFinishing: (value) => {
+							if (!value) finished();
+						},
+					}),
+				);
+				feature.setReviewKind("stage");
+				feature.setReviewView("diff");
+				feature.handleReviewKey(press(name, shifted));
+				await completion;
+				expect(actions.at(-1)).toBe(expected);
+				dispose();
+			});
+		}
+		expect(actions).toHaveLength(4);
+	} finally {
+		clearGateway();
+	}
 });

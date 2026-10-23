@@ -30,9 +30,14 @@ export function stageReportReviewKeybinds(
 		{ key: "n/N", action: "Next/previous comment", standard: true },
 		{ key: "v", action: "Select report lines", standard: true },
 		{ key: "c", action: "Add follow-up comment" },
-		{ key: "f", action: "Finish review" },
+		{
+			key: "f",
+			action: wikiUpdateAvailable
+				? "Approve and update wiki"
+				: "Approve report",
+		},
 		...(wikiUpdateAvailable
-			? [{ key: "w", action: "Approve and update wiki" }]
+			? [{ key: "Shift+F", action: "Approve report (skip wiki)" }]
 			: []),
 		{ key: "Esc", action: "Back or close report", short: "back" },
 	];

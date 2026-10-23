@@ -935,7 +935,11 @@ export function createReviewFeature(
 	};
 	const developerReviewPhase = () =>
 		requiredUserAction()?.key === "developer-review";
-	const finishDeveloperReview = async (approvalAction = "approve-review") => {
+	const finishDeveloperReview = async (
+		approvalAction = reviewKind() === "stage" && stageWikiUpdateAvailable()
+			? "approve-and-update-wiki"
+			: "approve-review",
+	) => {
 		if (busy()) return;
 		// Finishing dispatches the workflow gate, so it is only meaningful while
 		// the workflow actually waits in the developer review phase.
@@ -1501,6 +1505,11 @@ export function createReviewFeature(
 			stageWikiUpdateAvailable()
 		) {
 			void finishDeveloperReview("approve-and-update-wiki");
+		} else if (
+			((key === "f" && event.shift) || key === "F") &&
+			reviewKind() === "stage"
+		) {
+			void finishDeveloperReview("approve-review");
 		} else if (key === "f" && !event.shift) {
 			if (
 				reviewKind() === "plan" ||
