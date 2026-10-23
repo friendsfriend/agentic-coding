@@ -201,7 +201,6 @@ export function compileContainerTargets(
 	const runtime = options.runtime ?? DEFAULT_CONTAINER_RUNTIME;
 
 	if (target.runtime === "docker") {
-		if (tools && !tools.docker && !tools.podman) return [];
 		const dockerTarget: ActionTarget = { ...target, provider: "docker" };
 		const results: ActionDefinition[] = [
 			{
@@ -232,7 +231,22 @@ export function compileContainerTargets(
 				results.push(podmanAction);
 			}
 		}
-		if (tools && (!tools.docker || !tools.dockerCompose)) results.shift();
+		// A docker variant whose tool is missing stays listed as unavailable with
+		// the reason, rather than vanishing: a daemon that did not answer once
+		// would otherwise look like a build/run definition that was never
+		// configured.
+		if (tools && (!tools.docker || !tools.dockerCompose)) {
+			const first = results[0] as ActionDefinition;
+			results[0] = {
+				...first,
+				availability: {
+					available: false,
+					reason: !tools.docker
+						? "docker is not installed or its daemon did not answer `docker info`"
+						: "docker compose is not available",
+				},
+			};
+		}
 		return results;
 	}
 

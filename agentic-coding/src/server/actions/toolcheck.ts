@@ -13,9 +13,13 @@ import type { ToolSet } from "./targets.ts";
 export interface ToolProbe {
 	/** Resolves a binary on PATH, as `exec.LookPath` does. */
 	lookPath(name: string): string | undefined;
-	/** Whether a container runtime's daemon answers `info` within two seconds. */
+	/** Whether a container runtime's daemon answers `info` within `DAEMON_PROBE_TIMEOUT_MS`. */
 	daemonReachable(name: string): boolean | Promise<boolean>;
 }
+
+/** A Docker Desktop that is still starting can take several seconds to answer;
+ * a daemon that is down refuses at once, so a generous bound costs nothing then. */
+export const DAEMON_PROBE_TIMEOUT_MS = 6000;
 
 export function defaultToolProbe(): ToolProbe {
 	return {
@@ -28,7 +32,7 @@ export function defaultToolProbe(): ToolProbe {
 				execFile(
 					name,
 					["info"],
-					{ timeout: 2000, killSignal: "SIGKILL" },
+					{ timeout: DAEMON_PROBE_TIMEOUT_MS, killSignal: "SIGKILL" },
 					(error) => resolve(error === null),
 				);
 			}),

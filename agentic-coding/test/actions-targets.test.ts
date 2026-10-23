@@ -216,7 +216,14 @@ describe("tool availability decides which variants exist", () => {
 			{ podman: true, podmanCompose: true },
 			PATHS,
 		);
-		expect(withoutDocker.map((a) => a.runtime)).toEqual(["podman"]);
+		// The docker variant stays listed, unavailable with the reason, so a daemon
+		// that did not answer is not mistaken for a definition never configured.
+		expect(withoutDocker.map((a) => a.runtime)).toEqual(["docker", "podman"]);
+		expect(withoutDocker.map((a) => a.availability.available)).toEqual([
+			false,
+			true,
+		]);
+		expect(withoutDocker[0]?.availability.reason).toContain("docker info");
 
 		// Neither provider: nothing to run the compose file with.
 		const withoutAnyProvider = compileContainerTargetsWithTools(
@@ -226,7 +233,8 @@ describe("tool availability decides which variants exist", () => {
 			{ tmux: true },
 			PATHS,
 		);
-		expect(withoutAnyProvider).toEqual([]);
+		expect(withoutAnyProvider.map((a) => a.runtime)).toEqual(["docker"]);
+		expect(withoutAnyProvider[0]?.availability.available).toBe(false);
 
 		const withoutTmux = compileContainerTargetsWithTools(
 			"api",

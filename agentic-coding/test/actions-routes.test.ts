@@ -1045,3 +1045,68 @@ describe("output burst handling", () => {
 		expect(f.context.stream.subscriberCount).toBe(0);
 	});
 });
+
+describe("tools that appear after the definitions were built", () => {
+	const toolSet = (docker: boolean) => ({
+		docker,
+		podman: false,
+		dockerCompose: docker,
+		podmanCompose: false,
+		tmux: true,
+		kind: false,
+		kubectl: false,
+		helm: false,
+	});
+
+	const dockerRun = async (context: ActionRouteContext) => {
+		const response = await call(context, "GET", "/api/apps/shop/actions");
+		const body = (await response.json()) as {
+			version: number;
+			actions: ActionDefinition[];
+		};
+		return {
+			version: body.version,
+			run: body.actions.find(
+				(action) => action.type === "run" && action.runtime === "docker",
+			),
+		};
+	};
+
+	test("a daemon that did not answer at startup keeps the docker target listed as unavailable, then recovers", async () => {
+		const f = fixture();
+		let docker = false;
+		let probes = 0;
+		let clock = Date.UTC(2026, 0, 1);
+		const services: ActionRouteServices = {
+			...f.services,
+			now: () => new Date(clock),
+			tools: () => {
+				probes += 1;
+				return toolSet(docker);
+			},
+		};
+		const context = createActionRouteContext(services);
+		await rebuildDefinitions(services, context.registry);
+		const built = await dockerRun(context);
+		expect(built.run?.availability.available).toBe(false);
+		expect(built.run?.availability.reason).toContain("docker info");
+
+		// Inside the window nothing is probed again, even though docker is back.
+		docker = true;
+		const probesAfterBuild = probes;
+		clock += 5_000;
+		expect((await dockerRun(context)).run?.availability.available).toBe(false);
+		expect(probes).toBe(probesAfterBuild);
+
+		// After the window the read re-probes, sees the change and recompiles.
+		clock += 15_000;
+		const recovered = await dockerRun(context);
+		expect(recovered.run?.availability.available).toBe(true);
+		expect(recovered.version).toBe(built.version + 1);
+
+		// A stable tool set costs one probe per window and no rebuild.
+		clock += 20_000;
+		const stable = await dockerRun(context);
+		expect(stable.version).toBe(recovered.version);
+	});
+});

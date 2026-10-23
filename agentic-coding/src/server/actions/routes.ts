@@ -337,6 +337,10 @@ export async function rebuildDefinitions(
 	const tools = services.tools
 		? await services.tools()
 		: await checkToolAvailability();
+	toolsAtBuild.set(registry, {
+		tools,
+		at: (services.now?.() ?? new Date()).getTime(),
+	});
 	const apps = services.apps.getApps();
 	const resolver = targetResolver(
 		apps,
@@ -439,6 +443,57 @@ export function registryBuildError(): string | undefined {
 	return lastRegistryError;
 }
 
+/** The tool set (and probe time) each registry was last compiled with. */
+const toolsAtBuild = new WeakMap<
+	ActionRegistry,
+	{ tools: ToolSet; at: number }
+>();
+
+/** How long a tool probe is trusted before a definitions read re-probes. */
+export const TOOL_REPROBE_MS = 15_000;
+
+/** Registries with a re-probe in flight, so concurrent reads share one. */
+const reprobing = new WeakMap<ActionRegistry, Promise<void>>();
+
+/**
+ * The definition snapshot is compiled from the tools present when it was built
+ * (`docker info` answering decides whether any docker variant exists). A probe
+ * that failed once — a Docker Desktop still starting, a daemon slower than the
+ * probe — would otherwise hide every docker target until the next restart. A
+ * read of the definitions re-probes after `TOOL_REPROBE_MS` and recompiles only
+ * when the tool set actually changed, so a stable machine pays one cheap probe
+ * per window and no rebuild.
+ */
+export async function refreshDefinitionsIfToolsChanged(
+	services: ActionRouteServices,
+	registry: ActionRegistry,
+): Promise<void> {
+	const built = toolsAtBuild.get(registry);
+	if (built === undefined) return;
+	const now = (services.now?.() ?? new Date()).getTime();
+	if (now - built.at < TOOL_REPROBE_MS) return;
+	const running = reprobing.get(registry);
+	if (running !== undefined) return running;
+	const work = (async () => {
+		try {
+			const probed = services.tools
+				? await services.tools()
+				: await checkToolAvailability();
+			if (JSON.stringify(probed) === JSON.stringify(built.tools)) {
+				toolsAtBuild.set(registry, { tools: built.tools, at: now });
+				return;
+			}
+			await rebuildDefinitions(services, registry);
+		} catch {
+			// A failed probe or rebuild keeps the published snapshot; the next
+			// window tries again.
+			toolsAtBuild.set(registry, { tools: built.tools, at: now });
+		}
+	})().finally(() => reprobing.delete(registry));
+	reprobing.set(registry, work);
+	return work;
+}
+
 // --- dispatch --------------------------------------------------------------
 
 const APP_ACTIONS_PATTERN = /^\/api\/apps\/([^/]+)\/actions$/;
@@ -455,6 +510,7 @@ export async function handleActionRoute(
 
 	const appActions = APP_ACTIONS_PATTERN.exec(url.pathname);
 	if (appActions && method === "GET") {
+		await refreshDefinitionsIfToolsChanged(context.services, context.registry);
 		return actionsForApp(context, appActions[1] ?? "", url);
 	}
 

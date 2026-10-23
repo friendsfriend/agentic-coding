@@ -560,6 +560,20 @@ export function createDockerActions(
 				return;
 			}
 			if (targets.length === 0) {
+				// Targets that exist but cannot run now (a docker daemon that did not
+				// answer) are a different problem from "nothing configured": say why.
+				if (definitions.length > 0) {
+					showError(
+						`No ${action} target can run`,
+						`${app.displayName} has ${action} targets, but none is available:\n${definitions
+							.map(
+								(definition) =>
+									`- ${definition.id}: ${definition.availability.reason ?? "unavailable"}`,
+							)
+							.join("\n")}`,
+					);
+					return;
+				}
 				showNoTargets(action, app);
 				return;
 			}
