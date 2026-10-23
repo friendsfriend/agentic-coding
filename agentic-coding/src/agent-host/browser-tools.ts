@@ -1182,6 +1182,12 @@ const StageRunParameters = Type.Object({
 				"Save the fully blocked approved flow for replay; requires an approved stage plan with flowId.",
 		}),
 	),
+	draftArgs: Type.Optional(
+		Type.Record(Type.String(), Type.Unknown(), {
+			description:
+				'Arguments for route steps whose block you authored (blockToCreate/blockToAdjust), keyed by route step id: { address: { postalCode: "38350", ... } }. The approved plan cannot know a new block\'s parameters, so pass them here when proving a draft. Ignored by an approved `block` step; the plan itself stays unchanged.',
+		}),
+	),
 	approvedRevision: Type.Optional(
 		Type.Number({
 			description:
@@ -1778,6 +1784,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 					"Validate and execute a linear stage-block plan in one call and return a compact ledger; the journal (one entry per block sub-step) and evidence store hold the detail.",
 					"Pass a standalone plan, or the approved stage-test plan whose route steps carry block entries. Call it with `dryRun: true` first: that resolves block versions and derives the typed input schema without opening a browser.",
 					"Execution needs a stage-bound session and the same stage/write policy as the exploratory tools. Writes require an approved plan and a writable stage; destructive blocks are always refused. Inputs and arguments must never contain a credential: use the block's secret-variable names instead.",
+					"A route step whose block you authored (blockToCreate/blockToAdjust) takes its arguments from `draftArgs`, keyed by route step id, because the plan cannot know a new block's parameters in advance.",
 					"`save: true` turns a fully blocked approved stage plan with a `flowId` into a replayable flow. A route step without a block is reported as a `plan-route-gap`; run those with the exploratory tools rather than pretending the replay covered them.",
 				].join(" "),
 				parameters: StageRunParameters,
@@ -1799,6 +1806,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.role === undefined ? {} : { role: args.role }),
 									...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
 									...(args.save === undefined ? {} : { save: args.save }),
+									...(args.draftArgs === undefined
+										? {}
+										: { draftArgs: args.draftArgs }),
 									...(args.approvedRevision === undefined
 										? {}
 										: { approvedRevision: args.approvedRevision }),

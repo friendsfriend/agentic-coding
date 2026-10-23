@@ -1225,6 +1225,60 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 		expect(proofed?.draft.runId).toBe(RUN_ID);
 	});
 
+	test("a draft takes its arguments from draftArgs because the plan cannot know them", async () => {
+		const authoredPlan = stagePlan({
+			route: [
+				{
+					id: "read",
+					application: "crm",
+					role: "clerk",
+					action: "read the customer detail",
+					expected: "the detail page shows the customer",
+					capture: [],
+					expectationIds: ["E1"],
+					blockToCreate: {
+						id: "crm.customer.readAddress",
+						intent: "read the customer detail of one customer",
+					},
+				},
+			],
+		});
+		const { deps, worktree } = build("stage.execute", APP_URL, {
+			stageTestPlan: authoredPlan,
+			runId: RUN_ID,
+		});
+		cleanDrafts(worktree);
+		await openStage(deps);
+		const saved = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
+			document: authoredBlock(),
+			session: "default",
+		});
+		expect(saved.status).toBe(200);
+		const request = {
+			plan: authoredPlan,
+			session: "default",
+			approvedRevision: 3,
+			role: "clerk",
+		};
+		const unbound = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, request);
+		expect(unbound.status).toBe(400);
+		expect(unbound.value.code).toBe("stage-plan-invalid");
+		const bound = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			...request,
+			draftArgs: { read: { customerId: "C-1001" } },
+		});
+		expect(bound.status).toBe(200);
+		expect(bound.value).toMatchObject({ status: "passed" });
+		const stranger = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			...request,
+			draftArgs: { elsewhere: { customerId: "C-1001" } },
+		});
+		expect(stranger.status).toBe(400);
+		expect(String(stranger.value.message)).toContain(
+			"draftArgs names elsewhere",
+		);
+	});
+
 	test("a draft of another run is neither executed nor read through the route", async () => {
 		// The draft scope is asserted at the store elsewhere; this drives it
 		// through the route's own locate seam, where a reused workflow id is the

@@ -66,6 +66,14 @@ export const stageRunRequestSchema = Schema.Struct({
 	role: Schema.optional(text(128)),
 	dryRun: Schema.optional(Schema.Boolean),
 	save: Schema.optional(Schema.Boolean),
+	/** Arguments for the route steps whose block this run authored
+	 * (`blockToCreate`/`blockToAdjust`), keyed by route step id. The plan cannot
+	 * know a block's parameters before the tester has written it, so these are
+	 * merged over the step's plan args; a step naming an approved `block` never
+	 * takes them. */
+	draftArgs: Schema.optional(
+		Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+	),
 	/** The workflow revision the plan was approved at. */
 	approvedRevision: Schema.optional(
 		Schema.Number.pipe(

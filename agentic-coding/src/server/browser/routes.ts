@@ -3674,6 +3674,47 @@ async function stageRun(
 		);
 		blockPlan = projected.plan;
 		missing = [...projected.missing];
+		if (body.draftArgs !== undefined) {
+			if (body.save === true)
+				throw new BrowserPoolError(
+					"flow-mixed-plan",
+					"a saved flow takes its arguments from the approved plan, not from draftArgs",
+					400,
+				);
+			const authored = new Set(
+				stagePlan.route
+					.filter(
+						(entry) =>
+							entry.block === undefined &&
+							(entry.blockToCreate !== undefined ||
+								entry.blockToAdjust !== undefined),
+					)
+					.map((entry) => entry.id),
+			);
+			for (const id of Object.keys(body.draftArgs))
+				if (!authored.has(id))
+					throw new BrowserPoolError(
+						"stage-plan-invalid",
+						`draftArgs names ${id}, which is not a route step whose block you author (blockToCreate/blockToAdjust)`,
+						400,
+					);
+			blockPlan = {
+				...blockPlan,
+				steps: blockPlan.steps.map((step) => {
+					const extra =
+						step.id === undefined ? undefined : body.draftArgs?.[step.id];
+					return isRecordValue(extra)
+						? {
+								...step,
+								args: {
+									...(step.args ?? {}),
+									...(extra as Record<string, JsonValue>),
+								},
+							}
+						: step;
+				}),
+			};
+		}
 		if (body.save === true && missing.length > 0)
 			throw new BrowserPoolError(
 				"flow-mixed-plan",
