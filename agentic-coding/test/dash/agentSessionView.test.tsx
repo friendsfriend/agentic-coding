@@ -1961,6 +1961,109 @@ test("every tool row uses the raised block surface", async () => {
 	}
 });
 
+test("raised transcript blocks lift on hover and settle when the pointer leaves", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{ id: "u1", kind: "user", text: "hover this prompt", tone: "accent" },
+		{
+			id: "t1",
+			kind: "tool",
+			text: "read path=src/a.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/a.ts" },
+				result: { lines: ["const a = 1;"], isError: false, notes: [] },
+			},
+		},
+		{ id: "r1", kind: "result", text: "read complete", tone: "success" },
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 24 },
+	);
+	const background = (text: string) => {
+		for (const line of t.captureSpans().lines) {
+			for (const span of line.spans) {
+				if (!span.text.includes(text)) continue;
+				const buffer = span.bg.buffer;
+				return [buffer[0] ?? -1, buffer[1] ?? -1, buffer[2] ?? -1]
+					.map(Math.round)
+					.join(",");
+			}
+		}
+		return undefined;
+	};
+	const rowOf = (text: string) =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes(text));
+	const theme = (hex: string) => {
+		const parsed = parseColor(hex) as unknown as {
+			r: number;
+			g: number;
+			b: number;
+		};
+		return [parsed.r, parsed.g, parsed.b]
+			.map((part) => Math.round(part * 255))
+			.join(",");
+	};
+	const resting = theme(uiColors.bgMantle);
+	const lifted = theme(uiColors.bgHover);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(background("hover this prompt")).toBe(resting);
+		expect(background("Read src/a.ts")).toBe(resting);
+
+		// A prompt is a raised block too: the pointer lifts only the block under
+		// it, not the rest of the transcript.
+		const promptRow = rowOf("hover this prompt");
+		expect(promptRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(10, promptRow);
+		await t.renderOnce();
+		expect(background("hover this prompt")).toBe(lifted);
+		expect(background("Read src/a.ts")).toBe(resting);
+
+		// Moving from the block's padding onto its label is still one hover.
+		const toolRow = rowOf("Read src/a.ts");
+		expect(toolRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(10, toolRow);
+		await t.renderOnce();
+		expect(background("hover this prompt")).toBe(resting);
+		expect(background("Read src/a.ts")).toBe(lifted);
+
+		// Status rows are not raised surfaces, so leaving for one settles the
+		// block it left.
+		const resultRow = rowOf("read complete");
+		expect(resultRow).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(10, resultRow);
+		await t.renderOnce();
+		expect(background("Read src/a.ts")).toBe(resting);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("browser tools carry the browser glyph before their action icon", async () => {
 	const blocks: AgentSessionBlock[] = [
 		{
@@ -3399,6 +3502,110 @@ test("the prompt grows with the message and scrolls once it is eight lines tall"
 		const visible = numbered.filter((line) => capped.includes(line));
 		expect(visible.length).toBeGreaterThan(0);
 		expect(visible.length).toBeLessThanOrEqual(8);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("assistant markdown leaves one blank row between top-level blocks", async () => {
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[
+					{
+						id: "tight",
+						kind: "assistant",
+						tone: "base",
+						text: [
+							"# Tight",
+							"Tight paragraph",
+							"- tight item",
+							"```ts",
+							"const tight = 1;",
+							"```",
+							"Tight tail",
+						].join("\n"),
+					},
+					{
+						id: "spaced",
+						kind: "assistant",
+						tone: "base",
+						text: [
+							"# Spaced",
+							"",
+							"Spaced paragraph",
+							"",
+							"- spaced item",
+							"",
+							"```ts",
+							"const spaced = 1;",
+							"```",
+							"",
+							"Spaced tail",
+						].join("\n"),
+					},
+				]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 100, height: 40 },
+	);
+	try {
+		await t.flush();
+		const frame = await t.waitForFrame(
+			(value) =>
+				value.includes("Tight tail") &&
+				value.includes("Spaced tail") &&
+				value.includes("const tight = 1;") &&
+				value.includes("const spaced = 1;"),
+		);
+		const lines = frame
+			.trimEnd()
+			.split("\n")
+			.map((line) => line.trimEnd());
+		const at = (needle: string) => {
+			const index = lines.findIndex((line) => line.includes(needle));
+			expect(index).toBeGreaterThanOrEqual(0);
+			return index;
+		};
+		const oneBlankApart = (labels: readonly string[]) => {
+			const indices = labels.map(at);
+			for (let index = 1; index < indices.length; index += 1) {
+				const previous = indices[index - 1] ?? 0;
+				const current = indices[index] ?? 0;
+				expect(current).toBe(previous + 2);
+				expect(lines[previous + 1]?.trim()).toBe("");
+			}
+		};
+		// The first message has no blank source lines between blocks; the
+		// renderer must add the separation itself. The second already carries
+		// them; it must not get a second blank row from the inter-part margin.
+		oneBlankApart([
+			"# Tight",
+			"Tight paragraph",
+			"- tight item",
+			"const tight = 1;",
+			"Tight tail",
+		]);
+		oneBlankApart([
+			"# Spaced",
+			"Spaced paragraph",
+			"- spaced item",
+			"const spaced = 1;",
+			"Spaced tail",
+		]);
 	} finally {
 		t.renderer.destroy();
 	}

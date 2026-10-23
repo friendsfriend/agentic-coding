@@ -6,6 +6,7 @@ import { uiColors } from "../theme/colors";
 import { AnimatedStatusText } from "./AnimatedStatusText.tsx";
 import { useModalContentLines } from "./GenericModal.tsx";
 import { moveRowIndex } from "./mouse/clickSemantics.ts";
+import { useHover } from "./mouse/useHover.ts";
 import { type RowGestureState, useRowMouse } from "./mouse/useRowMouse.ts";
 import { useWheelScroll } from "./mouse/useWheelScroll.ts";
 import { focusSoon } from "./utils/focusSoon.ts";
@@ -194,6 +195,13 @@ export interface ScrollableListProps<T> {
 	 * a read per wheel event (`tui-input-responsiveness`).
 	 */
 	wheelMovesCursor?: boolean;
+	/**
+	 * Surface under an interactive row while the pointer is over it. Only used
+	 * when the list carries a row gesture; defaults to the shared hover lift.
+	 * `false` keeps the rows static, and a list that paints its own row surface
+	 * can opt out because that surface owns the fill.
+	 */
+	hoverBackground?: string | false;
 }
 
 /**
@@ -533,9 +541,20 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 										onSelect: (index) => props.onSelect?.(index),
 										onActivate: (index) => props.onActivate?.(index),
 									});
+									const hover = useHover(mouse.onMouseOut);
+									const hoverBackground = () =>
+										props.hoverBackground === false
+											? undefined
+											: (props.hoverBackground ?? uiColors.bgHover);
 									return (
 										<box
 											{...mouse}
+											{...hover}
+											backgroundColor={
+												!isSelected() && hover.hovered()
+													? hoverBackground()
+													: undefined
+											}
 											style={{
 												width: "100%",
 												flexShrink: 0,

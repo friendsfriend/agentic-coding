@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { type Keybind, keybindFooterLabel } from "./keybinds.ts";
+import { useHover } from "./mouse/useHover.ts";
 import { useTap } from "./mouse/useTap.ts";
 
 /** A help entry is a keybind; kept as an alias for existing imports. */
@@ -23,11 +24,22 @@ export interface HelpTextProps {
 
 /** One footer chip: a tap runs the key it advertises, through the shared rule
  * (a drag or a non-primary button does nothing). */
-function Chip(props: { onActivate: () => void; children: JSX.Element }) {
-	const tap = useTap(() => props.onActivate());
+function Chip(props: {
+	onActivate: () => void;
+	enabled: () => boolean;
+	render: (highlighted: () => boolean) => JSX.Element;
+}) {
+	const tap = useTap(() => props.onActivate(), { enabled: props.enabled });
+	const hover = useHover(tap.onMouseOut);
+	const highlighted = () => props.enabled() && hover.hovered();
 	return (
-		<box {...tap} style={{ flexDirection: "row", flexShrink: 0 }}>
-			{props.children}
+		<box
+			{...tap}
+			{...hover}
+			backgroundColor={highlighted() ? uiColors.bgHover : undefined}
+			style={{ flexDirection: "row", flexShrink: 0 }}
+		>
+			{props.render(highlighted)}
 		</box>
 	);
 }
@@ -58,23 +70,29 @@ export function HelpText(props: HelpTextProps): JSX.Element {
 				<For each={props.entries}>
 					{(entry, index) => (
 						<Chip
-							onActivate={() => {
-								if (activatable(entry)) props.onActivate?.(entry);
-							}}
-						>
-							<text style={{ fg: uiColors.textMuted }}>
-								<span
+							enabled={() => activatable(entry)}
+							onActivate={() => props.onActivate?.(entry)}
+							render={(highlighted) => (
+								<text
 									style={{
-										fg: uiColors.primary,
-										attributes: TextAttributes.BOLD,
+										fg: highlighted()
+											? uiColors.textPrimary
+											: uiColors.textMuted,
 									}}
 								>
-									{entry.key}
-								</span>{" "}
-								{keybindFooterLabel(entry)}
-								{index() < props.entries.length - 1 ? " • " : ""}
-							</text>
-						</Chip>
+									<span
+										style={{
+											fg: uiColors.primary,
+											attributes: TextAttributes.BOLD,
+										}}
+									>
+										{entry.key}
+									</span>{" "}
+									{keybindFooterLabel(entry)}
+									{index() < props.entries.length - 1 ? " • " : ""}
+								</text>
+							)}
+						/>
 					)}
 				</For>
 			</box>

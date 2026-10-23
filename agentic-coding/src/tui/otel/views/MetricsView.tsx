@@ -4,6 +4,7 @@ import {
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
+	useHover,
 	useRowMouse,
 } from "@ui";
 import { createMemo, For } from "solid-js";
@@ -52,6 +53,7 @@ export function MetricsView(props: {
 									props.onOpen(stream.name, stream.serviceName);
 								},
 							});
+							const hover = useHover(mouse.onMouseOut);
 							return (
 								<box
 									height={3}
@@ -62,13 +64,18 @@ export function MetricsView(props: {
 										selected() ? uiColors.bgSurface1 : uiColors.bgMantle
 									}
 									{...mouse}
+									{...hover}
 								>
 									<box
 										width={1}
 										height={3}
 										flexShrink={0}
 										backgroundColor={
-											selected() ? uiColors.accent : uiColors.bgMantle
+											selected()
+												? uiColors.accent
+												: hover.hovered()
+													? uiColors.border
+													: uiColors.bgMantle
 										}
 									/>
 									<box

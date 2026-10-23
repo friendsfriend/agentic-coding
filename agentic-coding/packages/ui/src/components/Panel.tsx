@@ -5,6 +5,7 @@
 import { TextAttributes } from "@opentui/core";
 import type { JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
+import { useHover } from "./mouse/useHover.ts";
 import { useRowMouse } from "./mouse/useRowMouse.ts";
 
 export interface PanelProps {
@@ -35,9 +36,12 @@ export function Panel(props: PanelProps) {
 			if (focusable()) props.onFocusRequest?.();
 		},
 	});
+	const hover = useHover(mouse.onMouseOut);
+	const interactive = () => props.onFocusRequest !== undefined && focusable();
 	return (
 		<box
 			{...(props.onFocusRequest ? mouse : {})}
+			{...(props.onFocusRequest ? hover : {})}
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", overflow: "hidden", ...props.style }}
 		>
@@ -69,7 +73,11 @@ export function Panel(props: PanelProps) {
 				<box
 					border={["left"]}
 					borderColor={
-						props.active ? (props.accent ?? uiColors.primary) : "transparent"
+						props.active
+							? (props.accent ?? uiColors.primary)
+							: interactive() && hover.hovered()
+								? uiColors.border
+								: "transparent"
 					}
 					style={{ width: 1, height: "100%", flexShrink: 0 }}
 				/>

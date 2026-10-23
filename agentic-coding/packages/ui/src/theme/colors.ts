@@ -139,6 +139,18 @@ export const uiColors = {
 	get bgSurface2() {
 		return theme("borderSubtle");
 	},
+	/**
+	 * Surface under the pointer: one step above the resting panel. A few themes
+	 * collapse the panel and element steps, so fall back to the subtle border
+	 * tone rather than making the hover disappear.
+	 */
+	get bgHover() {
+		const resting = theme("backgroundPanel");
+		const lifted = theme("backgroundElement", "backgroundPanel");
+		return lifted.toLowerCase() === resting.toLowerCase()
+			? theme("borderSubtle", "border")
+			: lifted;
+	},
 
 	get border() {
 		return theme("border");

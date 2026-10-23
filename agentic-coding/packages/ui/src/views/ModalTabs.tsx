@@ -2,6 +2,7 @@
 
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useTap } from "../components/mouse/useTap.ts";
 import { uiColors } from "../theme/colors";
 
@@ -23,15 +24,30 @@ export function ModalTabs(props: ModalTabsProps): JSX.Element {
 			<For each={props.tabs}>
 				{(tab) => {
 					const active = () => tab.id === props.activeId;
+					const interactive = () => props.onChange !== undefined;
+					const tap = useTap(() => props.onChange?.(tab.id));
+					const hover = useHover(tap.onMouseOut);
 					const label = () =>
 						`${active() ? "●" : "○"} ${tab.label}${tab.badge !== undefined ? ` (${tab.badge})` : ""}`;
 					return (
 						<box
+							{...tap}
+							{...hover}
+							backgroundColor={
+								interactive() && !active() && hover.hovered()
+									? uiColors.bgHover
+									: undefined
+							}
 							style={{ flexDirection: "row", marginRight: 2 }}
-							{...useTap(() => props.onChange?.(tab.id))}
 						>
 							<text
-								fg={active() ? uiColors.primary : uiColors.textMuted}
+								fg={
+									active()
+										? uiColors.primary
+										: interactive() && hover.hovered()
+											? uiColors.textPrimary
+											: uiColors.textMuted
+								}
 								attributes={active() ? TextAttributes.BOLD : undefined}
 							>
 								{label()}

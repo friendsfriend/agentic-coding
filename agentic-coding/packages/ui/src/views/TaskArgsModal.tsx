@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useKeyDispatch } from "../components/mouse/useKeybindChips.ts";
 import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
@@ -138,11 +139,18 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 										dispatch("Enter");
 									},
 								});
+								const hover = useHover(mouse.onMouseOut);
+								const interactive = () => props.onSelectParameter !== undefined;
 								return (
 									<box
 										{...mouse}
+										{...hover}
 										backgroundColor={
-											selected() ? selectionBg("parameter") : undefined
+											selected()
+												? selectionBg("parameter")
+												: interactive() && hover.hovered()
+													? uiColors.bgHover
+													: undefined
 										}
 										style={{
 											height: 2,
@@ -153,7 +161,9 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 									>
 										<text
 											fg={
-												selected() ? uiColors.primary : uiColors.textSecondary
+												selected() || (interactive() && hover.hovered())
+													? uiColors.primary
+													: uiColors.textSecondary
 											}
 										>
 											{param.name}
@@ -196,6 +206,8 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 										dispatch("Enter");
 									},
 								});
+								const hover = useHover(valueMouse.onMouseOut);
+								const interactive = () => props.onSelectValue !== undefined;
 								const param = () => selectedParameter();
 								const selected = () => index() === props.selectedValueIndex;
 								const active = () => {
@@ -213,8 +225,13 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 								return (
 									<box
 										{...valueMouse}
+										{...hover}
 										backgroundColor={
-											selected() ? selectionBg("value") : undefined
+											selected()
+												? selectionBg("value")
+												: interactive() && hover.hovered()
+													? uiColors.bgHover
+													: undefined
 										}
 										style={{ height: 1, paddingLeft: 1, flexDirection: "row" }}
 									>
@@ -223,7 +240,7 @@ export function TaskArgsModal(props: TaskArgsModalProps) {
 										</text>
 										<text
 											fg={
-												selected()
+												selected() || (interactive() && hover.hovered())
 													? uiColors.textPrimary
 													: uiColors.textSecondary
 											}

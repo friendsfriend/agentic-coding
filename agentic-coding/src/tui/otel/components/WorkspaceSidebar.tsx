@@ -20,6 +20,7 @@ import {
 	Selectable,
 	SelectableList,
 	uiColors,
+	useHover,
 	useTap,
 	useTerminalDimensions,
 } from "@ui";
@@ -144,6 +145,7 @@ function PinRow(props: {
 		<Selectable
 			height={props.height}
 			selected={props.selected}
+			hoverBackground={uiColors.bgHover}
 			onMouseUp={props.onActivate}
 		>
 			{props.height > 1 ? (
@@ -292,7 +294,8 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	// The glyphs are click-only controls nested in the strip: the shared tap rule
 	// drops drags and non-primary buttons, and the tap stops here so the strip's
 	// own focus handler does not run twice.
-	const toggleModeTap = () => useTap(toggleMode, { stopPropagation: true });
+	const toggleModeTap = useTap(toggleMode, { stopPropagation: true });
+	const toggleModeHover = useHover(toggleModeTap.onMouseOut);
 	return (
 		<box
 			width={panel().width}
@@ -316,9 +319,21 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 								paddingLeft: 1,
 								flexDirection: "row",
 							}}
-							{...toggleModeTap()}
+							backgroundColor={
+								toggleModeHover.hovered() ? uiColors.bgHover : undefined
+							}
+							{...toggleModeTap}
+							{...toggleModeHover}
 						>
-							<text fg={uiColors.textMuted}>{openGlyph()}</text>
+							<text
+								fg={
+									toggleModeHover.hovered()
+										? uiColors.textPrimary
+										: uiColors.textMuted
+								}
+							>
+								{openGlyph()}
+							</text>
 						</box>
 						{/* Pinned entries are chrome above the list, so they keep their
 						    slots in the strip too: always drawn, and the index list below
@@ -344,6 +359,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 								items={props.overviews}
 								selectedIndex={props.selectedIndex - pinOffset()}
 								itemHeight={3}
+								hoverBackground={uiColors.bgHover}
 								availableLines={Math.max(
 									3,
 									dimensions().height - 4 - collapsedPinLines(pinCount()),
@@ -406,8 +422,16 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 					style={{ flexGrow: 1, minHeight: 0 }}
 					accessory={
 						<text
-							fg={props.active ? uiColors.primary : uiColors.textMuted}
-							{...toggleModeTap()}
+							fg={
+								props.active
+									? uiColors.primary
+									: toggleModeHover.hovered()
+										? uiColors.textPrimary
+										: uiColors.textMuted
+							}
+							bg={toggleModeHover.hovered() ? uiColors.bgHover : undefined}
+							{...toggleModeTap}
+							{...toggleModeHover}
 						>
 							{toggleGlyph()}
 						</text>
@@ -415,30 +439,36 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 				>
 					<box style={{ height: 1, flexShrink: 0, flexDirection: "row" }}>
 						<For each={SIDEBAR_FILTERS}>
-							{(entry) => (
-								<box
-									style={{ marginRight: 1 }}
-									{...useTap(() => {
-										props.onFocus();
-										props.onFilterChange(entry.id);
-									})}
-								>
-									<text
-										fg={
-											props.filter === entry.id
-												? uiColors.bgBase
-												: uiColors.textMuted
-										}
-										bg={
-											props.filter === entry.id
-												? uiColors.primary
-												: uiColors.bgMantle
-										}
-									>
-										{` ${entry.label} `}
-									</text>
-								</box>
-							)}
+							{(entry) => {
+								const active = () => props.filter === entry.id;
+								const tap = useTap(() => {
+									props.onFocus();
+									props.onFilterChange(entry.id);
+								});
+								const hover = useHover(tap.onMouseOut);
+								return (
+									<box style={{ marginRight: 1 }} {...tap} {...hover}>
+										<text
+											fg={
+												active()
+													? uiColors.bgBase
+													: hover.hovered()
+														? uiColors.textPrimary
+														: uiColors.textMuted
+											}
+											bg={
+												active()
+													? uiColors.primary
+													: hover.hovered()
+														? uiColors.bgHover
+														: uiColors.bgMantle
+											}
+										>
+											{` ${entry.label} `}
+										</text>
+									</box>
+								);
+							}}
 						</For>
 					</box>
 					{/* Pinned entries sit above the windowed list, so they stay put
@@ -473,6 +503,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 							items={props.overviews}
 							selectedIndex={props.selectedIndex - pinOffset()}
 							itemHeight={3}
+							hoverBackground={uiColors.bgHover}
 							availableLines={listLines()}
 							onSelect={(index) => {
 								props.onFocus();

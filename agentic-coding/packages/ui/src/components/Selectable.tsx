@@ -5,6 +5,7 @@ import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { useModalContentLines } from "./GenericModal.tsx";
 import { hostBodyLines } from "./hostChrome.ts";
+import { useHover } from "./mouse/useHover.ts";
 import { type RowGestureState, useRowMouse } from "./mouse/useRowMouse.ts";
 import { ScrollableList } from "./ScrollableList.tsx";
 
@@ -25,6 +26,10 @@ export function Selectable(props: {
 	selected: boolean;
 	children?: JSX.Element;
 	backgroundColor?: string;
+	/** Surface for an unselected row under the pointer. Defaults to one lift
+	 * above the resting row; `false` keeps a deliberately static row. Selected
+	 * rows keep the selection surface, as opencode's tabs do. */
+	hoverBackground?: string | false;
 	indicatorColor?: string;
 	height?: number;
 	/** A tap on the row (`select`): the legacy "row was clicked" handler. */
@@ -38,10 +43,6 @@ export function Selectable(props: {
 	/** The list's gesture holder, so a recreated row still completes its tap. */
 	gesture?: RowGestureState;
 }) {
-	const background = () =>
-		props.selected
-			? uiColors.bgSurface0
-			: (props.backgroundColor ?? uiColors.bgMantle);
 	// One tap rule for every row in the TUI (`tui-mouse-interaction`): select on a
 	// tap, activate a tap on the selected row, ignore drags and other buttons.
 	const mouse = useRowMouse({
@@ -51,9 +52,23 @@ export function Selectable(props: {
 		onSelect: () => props.onMouseUp?.(),
 		onActivate: () => (props.onActivate ?? props.onMouseUp)?.(),
 	});
+	// The same surface owns the gesture and the hover: its out event settles the
+	// pointer and cancels a press that started on the row.
+	const hover = useHover(mouse.onMouseOut);
+	const hoverBackground = () =>
+		props.hoverBackground === false
+			? undefined
+			: (props.hoverBackground ?? uiColors.bgHover);
+	const background = () =>
+		props.selected
+			? uiColors.bgSurface0
+			: hover.hovered()
+				? (hoverBackground() ?? props.backgroundColor ?? uiColors.bgMantle)
+				: (props.backgroundColor ?? uiColors.bgMantle);
 	return (
 		<box
 			{...mouse}
+			{...hover}
 			width="100%"
 			flexDirection="row"
 			flexShrink={0}
@@ -90,6 +105,9 @@ export interface SelectableListProps<T> {
 	renderItem: (item: T, selected: boolean, index: number) => JSX.Element;
 	onSelect?: (index: number) => void;
 	backgroundColor?: (item: T, index: number) => string | undefined;
+	/** Hover surface for every row; forwarded to the row's `Selectable`.
+	 * Defaults to the shared lift; `false` keeps the list static. */
+	hoverBackground?: string | false;
 	/** Rows the list may paint. Defaults to the dialog's content area, then the
 	 * host body. Pass it when the list has chrome of its own above it. */
 	availableLines?: number;
@@ -138,6 +156,9 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 			}
 			estimatedItemHeight={props.estimatedItemHeight ?? itemHeight()}
 			{...(props.itemHeights ? { itemHeights: props.itemHeights } : {})}
+			// The row inside owns the fill (and the selection surface), so the
+			// window wrapper must not paint a second hover layer behind it.
+			hoverBackground={false}
 			showScrollIndicator={false}
 			{...(props.onSelect ? { onSelect: props.onSelect } : {})}
 			{...(props.onActivate ? { onActivate: props.onActivate } : {})}
@@ -150,6 +171,7 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 					height={props.itemHeight}
 					selected={isSelected()}
 					backgroundColor={props.backgroundColor?.(item, index)}
+					hoverBackground={props.hoverBackground}
 				>
 					{props.renderItem(item, isSelected(), index)}
 				</Selectable>

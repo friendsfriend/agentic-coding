@@ -9,6 +9,7 @@ import {
 import { Badge } from "../components/Badge";
 import type { Highlight } from "../components/Highlight";
 import { MatchedText } from "../components/MatchedText";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { RunningText } from "../components/RunningText";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
@@ -151,8 +152,6 @@ export function WorkItemCard(props: WorkItemCardProps) {
 	const metadataWidth = () =>
 		Math.max(1, rowWidth() - metadataRightWidth() - 1);
 
-	const bgColor = () =>
-		props.selected ? uiColors.bgSurface0 : uiColors.bgMantle;
 	// The shared tap rule: select on a tap, activate a tap on the selected row
 	// (or a double tap), never a drag or a non-primary button.
 	const mouse = useRowMouse({
@@ -161,6 +160,13 @@ export function WorkItemCard(props: WorkItemCardProps) {
 		onSelect: () => props.onMouseUp?.(),
 		onActivate: () => (props.onActivate ?? props.onMouseUp)?.(),
 	});
+	const hover = useHover(mouse.onMouseOut);
+	const bgColor = () =>
+		props.selected
+			? uiColors.bgSurface0
+			: hover.hovered()
+				? uiColors.bgHover
+				: uiColors.bgMantle;
 	const statusAnimation = () =>
 		props.statusAnimationIntent
 			? statusAnimationModel(props.statusAnimationIntent)
@@ -175,6 +181,7 @@ export function WorkItemCard(props: WorkItemCardProps) {
 		<box
 			backgroundColor={bgColor()}
 			{...mouse}
+			{...hover}
 			style={{
 				width: "100%",
 				flexDirection: "row",
@@ -333,7 +340,11 @@ export function WorkItemCard(props: WorkItemCardProps) {
 							<RunningText
 								text={props.metadata as string}
 								width={metadataWidth()}
-								fg={uiColors.textMuted}
+								fg={
+									!props.selected && hover.hovered()
+										? uiColors.textSecondary
+										: uiColors.textMuted
+								}
 								enabled={props.runningTextEnabled}
 								active={props.selected}
 								offset={props.runningTextOffset}

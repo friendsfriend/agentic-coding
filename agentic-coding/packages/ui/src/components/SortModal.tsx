@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
+import { useHover } from "./mouse/useHover.ts";
 import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
 import { useRowMouse } from "./mouse/useRowMouse.ts";
 
@@ -36,7 +37,7 @@ function sortRowMouse(
 	selectedIndex: () => number,
 ) {
 	const dispatch = useKeyDispatch();
-	return useRowMouse({
+	const mouse = useRowMouse({
 		// The row can move under a stable instance: resolve it per event.
 		index,
 		selectedIndex,
@@ -47,6 +48,7 @@ function sortRowMouse(
 			dispatch(props.activateKey ?? "Enter");
 		},
 	});
+	return { mouse, hover: useHover(mouse.onMouseOut) };
 }
 
 export function SortModal(props: SortModalProps) {
@@ -105,10 +107,23 @@ export function SortModal(props: SortModalProps) {
 				<For each={props.parameters}>
 					{(parameter, index) => {
 						const selected = () => index() === props.selectedIndex;
+						const interactive = () => props.onSelectRow !== undefined;
+						const pointer = sortRowMouse(
+							props,
+							index,
+							() => props.selectedIndex,
+						);
 						return (
 							<box
-								{...sortRowMouse(props, index, () => props.selectedIndex)}
-								backgroundColor={selected() ? uiColors.bgSurface2 : undefined}
+								{...pointer.mouse}
+								{...pointer.hover}
+								backgroundColor={
+									selected()
+										? uiColors.bgSurface2
+										: interactive() && pointer.hover.hovered()
+											? uiColors.bgHover
+											: undefined
+								}
 								style={{
 									height: 1,
 									flexDirection: "row",
@@ -117,12 +132,22 @@ export function SortModal(props: SortModalProps) {
 								}}
 							>
 								<box style={{ width: 5 }}>
-									<text fg={uiColors.textMuted}>{index() + 1}</text>
+									<text
+										fg={
+											interactive() && pointer.hover.hovered()
+												? uiColors.textSecondary
+												: uiColors.textMuted
+										}
+									>
+										{index() + 1}
+									</text>
 								</box>
 								<box style={{ width: "60%" }}>
 									<text
 										fg={
-											selected() ? uiColors.textPrimary : uiColors.textSecondary
+											selected() || (interactive() && pointer.hover.hovered())
+												? uiColors.textPrimary
+												: uiColors.textSecondary
 										}
 									>
 										{parameter.label}

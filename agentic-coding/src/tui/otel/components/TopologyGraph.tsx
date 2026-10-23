@@ -4,6 +4,7 @@ import {
 	HighlightedText,
 	ScrollableContent,
 	uiColors,
+	useHover,
 	useKeyDispatch,
 	useTap,
 } from "@ui";
@@ -72,6 +73,10 @@ export function TopologyGraph(props: {
 								<For each={nodes}>
 									{(ln) => {
 										const selected = () => props.selected() === ln.id;
+										const tap = useTap(() =>
+											selected() ? dispatch("Enter") : props.onSelect(ln.id),
+										);
+										const hover = useHover(tap.onMouseOut);
 										return (
 											<box
 												height={cardHeight}
@@ -81,18 +86,19 @@ export function TopologyGraph(props: {
 												backgroundColor={
 													selected() ? uiColors.bgSurface1 : uiColors.bgMantle
 												}
-												{...useTap(() =>
-													selected()
-														? dispatch("Enter")
-														: props.onSelect(ln.id),
-												)}
+												{...tap}
+												{...hover}
 											>
 												<box
 													width={1}
 													height={cardHeight}
 													position="absolute"
 													backgroundColor={
-														selected() ? uiColors.accent : uiColors.border
+														selected()
+															? uiColors.accent
+															: hover.hovered()
+																? uiColors.borderFocus
+																: uiColors.border
 													}
 												/>
 												<box paddingLeft={2} paddingRight={1} overflow="hidden">

@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { For, Show } from "solid-js";
 import { CenteredState } from "../components/CenteredState";
 import { GenericModal } from "../components/GenericModal";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useKeyDispatch } from "../components/mouse/useKeybindChips.ts";
 import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
@@ -105,9 +106,12 @@ export function ProvidersView(props: ProvidersViewProps) {
 									dispatch("e");
 								},
 							});
+							const hover = useHover(mouse.onMouseOut);
+							const interactive = () => props.onSelectIndex !== undefined;
 							return (
 								<box
 									{...mouse}
+									{...hover}
 									style={{
 										width: "100%",
 										flexDirection: "row",
@@ -115,7 +119,11 @@ export function ProvidersView(props: ProvidersViewProps) {
 										flexShrink: 0,
 									}}
 									backgroundColor={
-										isSelected() ? uiColors.bgSurface2 : undefined
+										isSelected()
+											? uiColors.bgSurface2
+											: interactive() && hover.hovered()
+												? uiColors.bgHover
+												: undefined
 									}
 								>
 									<text

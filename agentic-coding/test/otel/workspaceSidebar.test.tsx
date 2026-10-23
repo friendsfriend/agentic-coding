@@ -1262,3 +1262,44 @@ test("the Backspace byte cycles back only while the sidebar holds focus", async 
 		clearGateway();
 	}
 });
+
+test("workflow rows lift under the pointer and settle when it leaves", async () => {
+	stubGateway();
+	const t = await renderShell();
+	const background = (text: string) => {
+		for (const line of t.captureSpans().lines) {
+			for (const span of line.spans) {
+				if (!span.text.includes(text)) continue;
+				return span.bg.buffer.slice(0, 3).join(",");
+			}
+		}
+		return undefined;
+	};
+	const rowOf = (text: string) =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes(text));
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+		const resting = rgb(uiColors.bgMantle).join(",");
+		const lifted = rgb(uiColors.bgHover).join(",");
+		expect(background("wf-active")).toBe(resting);
+
+		const row = rowOf("wf-active");
+		expect(row).toBeGreaterThanOrEqual(0);
+		await t.mockMouse.moveTo(5, row);
+		await advance(t);
+		expect(background("wf-active")).toBe(lifted);
+
+		// The page body is not a hover surface, so leaving the sidebar settles the
+		// row it left.
+		await t.mockMouse.moveTo(100, row);
+		await advance(t);
+		expect(background("wf-active")).toBe(resting);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});

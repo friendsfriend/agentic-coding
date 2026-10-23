@@ -38,6 +38,7 @@ import {
 	streamingMarkdownBlockParts,
 	streamingTailSource,
 	uiColors,
+	useHover,
 	useMarkdownSyntaxStyle,
 	useModalBackdrop,
 	useRowMouse,
@@ -330,8 +331,16 @@ function AssistantMarkdown(props: {
 					<MarkdownViewer
 						content={(() => {
 							const last = index() === parts().length - 1;
-							const source = last ? streamingTailSource(part) : part.source;
-							return last && props.live === true
+							if (!last) {
+								// A part's source runs to the next block's start, so it
+								// carries the blank line between them. Trim it and let the
+								// inter-part margin own the separation: the markdown
+								// renderable normalizes a trailing blank away, which is why
+								// blocks used to touch when the source had no blank line.
+								return part.source.replace(/\s+$/, "");
+							}
+							const source = streamingTailSource(part);
+							return props.live === true
 								? holdBackTrailingLine(source)
 								: source;
 						})()}
@@ -343,11 +352,10 @@ function AssistantMarkdown(props: {
 						// keeps the text it already laid out instead, so the transcript
 						// holds its height and the reader is not jolted line by line.
 						streaming={part.code ? props.live === true : true}
-						// A code block's trailing blank line is not part of its text,
-						// so the following block would touch it.
-						{...(part.code && index() < parts().length - 1
-							? { marginBottom: 1 }
-							: {})}
+						// One blank row between every pair of top-level blocks, matching
+						// opencode's top-level markdown block flow. The first part keeps
+						// the page's own top inset.
+						{...(index() > 0 ? { marginTop: 1 } : {})}
 					/>
 				)}
 			</For>
@@ -515,19 +523,23 @@ function sectionLineCount(section: ToolViewSection): number {
  * rule takes the call's state color (grey while running, green on success, red
  * on failure). opencode itself keeps ordinary calls inline, but this transcript
  * uses the block for every tool so a run reads as one consistent stack of call
- * surfaces rather than switching shapes by tool. */
+ * surfaces rather than switching shapes by tool. The pointer lifts the fill one
+ * surface step; the state rule keeps its own color. */
 function ToolFrame(props: { color: string; children: JSX.Element }) {
+	const hover = useHover();
 	return (
 		<box
 			border={["left"]}
 			borderStyle="heavy"
 			borderColor={props.color}
-			backgroundColor={uiColors.bgMantle}
+			backgroundColor={hover.hovered() ? uiColors.bgHover : uiColors.bgMantle}
 			paddingTop={1}
 			paddingBottom={1}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
+			onMouseOver={hover.onMouseOver}
+			onMouseOut={hover.onMouseOut}
 		>
 			{props.children}
 		</box>
@@ -602,6 +614,48 @@ function ToolCallHeader(props: {
 	);
 }
 
+/** opencode's user prompt: the prompt box's own raised block, with a blank line
+ * above and below the text so a message reads as a paragraph of its own instead
+ * of a dense row. Long prompts fold to a short preview. The pointer lifts the
+ * fill one surface step, like opencode's prompt and tool blocks. */
+function UserPrompt(props: {
+	block: AgentSessionBlock;
+	expanded: boolean;
+	onToggle: (id: string) => void;
+}) {
+	const tap = useTap(() => props.onToggle(props.block.id));
+	const hover = useHover(tap.onMouseOut);
+	return (
+		<box
+			border={["left"]}
+			borderColor={uiColors.accent}
+			backgroundColor={hover.hovered() ? uiColors.bgHover : uiColors.bgMantle}
+			paddingBottom={1}
+			paddingLeft={2}
+			paddingRight={1}
+			flexShrink={0}
+			{...tap}
+			{...hover}
+		>
+			{/* The blank line above the prompt carries its disclosure and time. */}
+			<box flexDirection="row" justifyContent="flex-end" height={1}>
+				<text fg={uiColors.textMuted}>{props.expanded ? "▾ " : "▸ "}</text>
+				<Stamp block={props.block} />
+			</box>
+			<box
+				maxHeight={
+					props.expanded
+						? props.block.text.length + 1
+						: USER_PROMPT_PREVIEW_LINES
+				}
+				overflow="hidden"
+			>
+				<text fg={uiColors.textPrimary}>{props.block.text}</text>
+			</box>
+		</box>
+	);
+}
+
 /** One transcript entry. Assistant output is markdown with no status box;
  * thinking is collapsible; a tool call is a raised bordered block; every other
  * entry is a status box with the same left highlight the prompt uses. */
@@ -640,36 +694,12 @@ function Block(props: {
 			</box>
 		);
 	if (props.block.kind === "user")
-		// opencode's user prompt: the prompt box's own raised block, with a blank
-		// line above and below the text so a message reads as a paragraph of its
-		// own instead of a dense row. Long prompts fold to a short preview.
 		return (
-			<box
-				border={["left"]}
-				borderColor={uiColors.accent}
-				backgroundColor={uiColors.bgMantle}
-				paddingBottom={1}
-				paddingLeft={2}
-				paddingRight={1}
-				flexShrink={0}
-				{...useTap(() => props.onToggle(props.block.id))}
-			>
-				{/* The blank line above the prompt carries its disclosure and time. */}
-				<box flexDirection="row" justifyContent="flex-end" height={1}>
-					<text fg={uiColors.textMuted}>{props.expanded ? "▾ " : "▸ "}</text>
-					<Stamp block={props.block} />
-				</box>
-				<box
-					maxHeight={
-						props.expanded
-							? props.block.text.length + 1
-							: USER_PROMPT_PREVIEW_LINES
-					}
-					overflow="hidden"
-				>
-					<text fg={uiColors.textPrimary}>{props.block.text}</text>
-				</box>
-			</box>
+			<UserPrompt
+				block={props.block}
+				expanded={props.expanded}
+				onToggle={props.onToggle}
+			/>
 		);
 	if (props.block.kind === "assistant")
 		return (

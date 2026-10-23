@@ -6,6 +6,7 @@ import {
 	resolveRowInteraction,
 	type TapRecord,
 } from "./clickSemantics.ts";
+import { pointerInside } from "./pointer.ts";
 
 /**
  * The Solid binding of {@link resolveRowInteraction}: spread the returned
@@ -156,16 +157,4 @@ function runAction(
 ): void {
 	if (action === "select") options.onSelect?.(index);
 	else if (action === "activate") options.onActivate?.(index);
-}
-
-/** True while the event cell lies inside the renderable that received it. */
-function pointerInside(event: MouseEvent): boolean {
-	const target = event.currentTarget;
-	if (!target) return false;
-	return (
-		event.x >= target.screenX &&
-		event.x < target.screenX + target.width &&
-		event.y >= target.screenY &&
-		event.y < target.screenY + target.height
-	);
 }

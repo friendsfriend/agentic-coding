@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
+import { useHover } from "./mouse/useHover.ts";
 import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
 import { useRowMouse } from "./mouse/useRowMouse.ts";
 
@@ -80,8 +81,18 @@ function FilterRow(props: {
 			dispatch(props.activateKey);
 		},
 	});
+	const hover = useHover(mouse.onMouseOut);
+	const interactive = () => props.onSelect !== undefined;
 	return (
-		<box {...mouse} backgroundColor={props.backgroundColor} style={props.style}>
+		<box
+			{...mouse}
+			{...hover}
+			backgroundColor={
+				props.backgroundColor ??
+				(interactive() && hover.hovered() ? uiColors.bgHover : undefined)
+			}
+			style={props.style}
+		>
 			{props.children}
 		</box>
 	);

@@ -85,9 +85,10 @@ function lastContentLine(raw: string, startLine: number): number {
 
 /** One rendered piece of a document split at its top-level block boundaries:
  * a fenced code block draws as its own text immediately, prose goes through the
- * markdown syntax pass. Each part keeps the blank lines up to the next part,
- * because a rendered part only draws the spacing that is part of its own
- * text. */
+ * markdown syntax pass. Each part's source runs to the next block's start, so it
+ * still carries the blank lines up to that block; the transcript trims them and
+ * draws one inter-part margin instead, because a markdown renderable normalizes
+ * trailing blank lines away. */
 export interface MarkdownBlockPart {
 	/** The part's source text, including the blank lines up to the next part. */
 	readonly source: string;
@@ -154,8 +155,8 @@ export function markdownBlockParts(content: string): MarkdownBlockPart[] {
  * back on the frame the next character arrives, and only whitespace or a fence
  * marker that the renderer conceals anyway is withheld in the meantime.
  *
- * The settled parts are left alone: their trailing blank line is the spacing
- * between blocks, and the plain part source is what draws it.
+ * The settled parts are left alone: the transcript renders the space between
+ * blocks itself, so only the growing tail can add or remove a row.
  */
 export function streamingTailSource(part: MarkdownBlockPart): string {
 	const finished = part.source.replace(/\s+$/, "");

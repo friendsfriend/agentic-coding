@@ -18,6 +18,7 @@ import {
 	GenericModal,
 	type RowGestureState,
 	uiColors,
+	useHover,
 	useKeyDispatch,
 	useModalBackdrop,
 	useModalContentLines,
@@ -171,6 +172,7 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 							<For each={listRows()}>
 								{(request) => {
 									const index = () => props.requests.indexOf(request);
+									const selected = () => index() === props.selectedIndex;
 									const mouse = useRowMouse({
 										gesture,
 										index: index(),
@@ -179,19 +181,27 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 										onSelect: (row: number) => props.onSelectIndex?.(row),
 										onActivate: () => dispatch("Enter"),
 									});
+									const hover = useHover(mouse.onMouseOut);
 									return (
-										<box {...mouse} width="100%" height={1} overflow="hidden">
+										<box
+											{...mouse}
+											{...hover}
+											width="100%"
+											height={1}
+											overflow="hidden"
+											backgroundColor={
+												!selected() && hover.hovered()
+													? uiColors.bgHover
+													: undefined
+											}
+										>
 											<text
 												fg={
-													index() === props.selectedIndex
+													selected() || hover.hovered()
 														? uiColors.primary
 														: uiColors.textSecondary
 												}
-												attributes={
-													index() === props.selectedIndex
-														? TextAttributes.BOLD
-														: 0
-												}
+												attributes={selected() ? TextAttributes.BOLD : 0}
 												wrapMode="none"
 												truncate
 											>

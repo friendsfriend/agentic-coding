@@ -10,6 +10,7 @@ import { CenteredState } from "../components/CenteredState";
 import { FilterStatusBar } from "../components/FilterStatusBar";
 import { HighlightedText } from "../components/Highlight";
 import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useTap } from "../components/mouse/useTap.ts";
 import {
 	LAYOUT_CHROME_LINES,
@@ -341,12 +342,20 @@ function WorkItemTable<T = string>(
 					<For each={props.tabs}>
 						{(tab) => {
 							const isActive = () => props.activeTab === tab.id;
+							const interactive = () => props.onTabChange !== undefined;
+							const tap = useTap(() => props.onTabChange?.(tab.id));
+							const hover = useHover(tap.onMouseOut);
 							return (
 								<box
 									backgroundColor={
-										isActive() ? uiColors.bgSurface0 : uiColors.bgMantle
+										isActive()
+											? uiColors.bgSurface0
+											: interactive() && hover.hovered()
+												? uiColors.bgHover
+												: uiColors.bgMantle
 									}
-									{...useTap(() => props.onTabChange?.(tab.id))}
+									{...tap}
+									{...hover}
 									style={{
 										paddingLeft: 2,
 										paddingRight: 2,
@@ -356,7 +365,13 @@ function WorkItemTable<T = string>(
 									}}
 								>
 									<text
-										fg={isActive() ? uiColors.primary : uiColors.textMuted}
+										fg={
+											isActive()
+												? uiColors.primary
+												: interactive() && hover.hovered()
+													? uiColors.textPrimary
+													: uiColors.textMuted
+										}
 										attributes={isActive() ? TextAttributes.BOLD : undefined}
 									>
 										{tab.label}

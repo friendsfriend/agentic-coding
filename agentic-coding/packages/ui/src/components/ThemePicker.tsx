@@ -7,6 +7,7 @@ import { themeColorForTheme, themeNames } from "../theme/theme";
 import { GenericModal } from "./GenericModal.tsx";
 import { formatHelpText } from "./HelpText.tsx";
 import { highlightColor } from "./Highlight.tsx";
+import { useHover } from "./mouse/useHover.ts";
 import { useKeyDispatch } from "./mouse/useKeybindChips.ts";
 import { useRowMouse } from "./mouse/useRowMouse.ts";
 
@@ -60,8 +61,17 @@ function ThemeRow(props: {
 			dispatch("Enter");
 		},
 	});
+	const hover = useHover(mouse.onMouseOut);
+	const interactive = () => props.onSelect !== undefined;
 	return (
-		<box {...mouse} style={{ flexDirection: "row", width: "100%" }}>
+		<box
+			{...mouse}
+			{...hover}
+			backgroundColor={
+				interactive() && hover.hovered() ? uiColors.bgHover : undefined
+			}
+			style={{ flexDirection: "row", width: "100%" }}
+		>
 			{props.children}
 		</box>
 	);

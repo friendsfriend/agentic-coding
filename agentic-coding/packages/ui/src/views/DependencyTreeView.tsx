@@ -4,6 +4,7 @@ import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
 import { type Highlight, highlightColor } from "../components/Highlight";
+import { useHover } from "../components/mouse/useHover.ts";
 import { useRowMouse } from "../components/mouse/useRowMouse.ts";
 import { uiColors } from "../theme/colors";
 import type { ActionTarget, DependencyRef } from "../types";
@@ -194,21 +195,26 @@ export function DependencyTreeView(props: DependencyTreeViewProps) {
 							return undefined;
 						});
 
+						const mouse = useRowMouse({
+							index: idx(),
+							selectedIndex: () => props.selectedIndex ?? -1,
+							activatable: () => props.onNodeClick !== undefined,
+							onSelect: () => props.onNodeClick?.(row.node, idx()),
+							onActivate: () => props.onNodeClick?.(row.node, idx()),
+						});
+						const hover = useHover(mouse.onMouseOut);
+						const interactive = () => props.onNodeClick !== undefined;
 						const rowBg = createMemo(() => {
 							if (isSelected() && props.focused) return uiColors.bgSurface0;
+							if (interactive() && hover.hovered()) return uiColors.bgHover;
 							return undefined;
 						});
 
 						return (
 							<box
 								backgroundColor={rowBg()}
-								{...useRowMouse({
-									index: idx(),
-									selectedIndex: () => props.selectedIndex ?? -1,
-									activatable: () => props.onNodeClick !== undefined,
-									onSelect: () => props.onNodeClick?.(row.node, idx()),
-									onActivate: () => props.onNodeClick?.(row.node, idx()),
-								})}
+								{...mouse}
+								{...hover}
 								style={{
 									width: "100%",
 									height: 1,

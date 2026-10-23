@@ -2,6 +2,7 @@
 import { TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import { uiColors } from "../theme/colors";
+import { useHover } from "./mouse/useHover.ts";
 import { useTap } from "./mouse/useTap.ts";
 
 export type SharedNotification = {
@@ -25,11 +26,13 @@ export function NotificationOverlay(props: {
 }) {
 	// A tap dismisses: the shared rule drops drags and non-primary buttons, so a
 	// text selection over the toast never dismisses it.
-	const tap = useTap(() => props.onDismiss?.());
+	const interactive = () => props.onDismiss !== undefined;
+	const tap = useTap(() => props.onDismiss?.(), { enabled: interactive });
 	return (
 		<Show when={props.active()} keyed>
 			{(item) => {
 				const n = item;
+				const hover = useHover(tap.onMouseOut);
 				const bg =
 					n.type === "success"
 						? uiColors.success
@@ -55,8 +58,16 @@ export function NotificationOverlay(props: {
 						paddingRight={2}
 						backgroundColor={bg}
 						{...tap}
+						{...hover}
 					>
-						<text fg={uiColors.bgBase} attributes={TextAttributes.BOLD}>
+						<text
+							fg={uiColors.bgBase}
+							attributes={
+								interactive() && hover.hovered()
+									? TextAttributes.BOLD | TextAttributes.UNDERLINE
+									: TextAttributes.BOLD
+							}
+						>
 							{icon}
 							{n.message}
 						</text>

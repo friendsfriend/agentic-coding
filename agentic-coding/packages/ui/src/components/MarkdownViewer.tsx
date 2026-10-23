@@ -36,6 +36,10 @@ export interface MarkdownViewerProps {
 	streaming?: boolean;
 	/** Blank rows under the document, as the block flow gives a code block. */
 	marginBottom?: number;
+	/** Blank rows above the document. The transcript uses this to separate its
+	 * top-level markdown parts once, instead of relying on each part's trailing
+	 * blank source line (which the renderer normalizes away). */
+	marginTop?: number;
 }
 
 /** Render a whole markdown document. */
@@ -53,6 +57,7 @@ export function MarkdownViewer(props: MarkdownViewerProps) {
 			{...(props.marginBottom === undefined
 				? {}
 				: { marginBottom: props.marginBottom })}
+			{...(props.marginTop === undefined ? {} : { marginTop: props.marginTop })}
 		/>
 	);
 }

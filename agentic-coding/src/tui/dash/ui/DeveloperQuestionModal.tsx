@@ -9,6 +9,7 @@ import {
 	ScrollableContent,
 	SelectableList,
 	uiColors,
+	useHover,
 	useKeyDispatch,
 	useTap,
 	useTerminalDimensions,
@@ -194,20 +195,28 @@ export function DeveloperQuestionModal(props: {
 							</text>
 						</Show>
 						<For each={tabEntries()}>
-							{(entry, position) => (
-								<box
-									flexDirection="row"
-									flexShrink={0}
-									{...useTap(() => props.onSelectTab?.(entry.index))}
-								>
-									<text
-										fg={uiColors.textPrimary}
-										attributes={TextAttributes.BOLD}
+							{(entry, position) => {
+								const tap = useTap(() => props.onSelectTab?.(entry.index));
+								const hover = useHover(tap.onMouseOut);
+								return (
+									<box
+										flexDirection="row"
+										flexShrink={0}
+										{...tap}
+										{...hover}
+										backgroundColor={
+											hover.hovered() ? uiColors.bgHover : undefined
+										}
 									>
-										{`${position() > 0 ? " " : ""}${tabLabel(entry.index, entry.text)}`}
-									</text>
-								</box>
-							)}
+										<text
+											fg={uiColors.textPrimary}
+											attributes={TextAttributes.BOLD}
+										>
+											{`${position() > 0 ? " " : ""}${tabLabel(entry.index, entry.text)}`}
+										</text>
+									</box>
+								);
+							}}
 						</For>
 						<Show
 							when={

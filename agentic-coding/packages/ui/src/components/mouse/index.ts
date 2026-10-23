@@ -8,6 +8,7 @@
  * - `useRowMouse.ts` — the Solid binding for list rows; a list owns one
  *   gesture holder (`RowGestureState`) and passes it to the rows it renders.
  * - `useWheelScroll.ts` — the wheel binding for a pane's own scroll owner.
+ * - `useHover.ts` — enter/leave feedback for a raised surface.
  * - `dismissPolicy.ts` — the data table of which dialogs a backdrop tap may
  *   dismiss.
  * - `useKeybindChips.ts` — key chips as pointer targets, dispatching the key
@@ -17,6 +18,7 @@
  */
 export * from "./clickSemantics.ts";
 export * from "./dismissPolicy.ts";
+export * from "./useHover.ts";
 export * from "./useKeybindChips.ts";
 export * from "./useModalBackdrop.ts";
 export * from "./useRowMouse.ts";
