@@ -834,7 +834,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 				`Pinned stage: ${snapshot.metadata.stage}; access: ${snapshot.metadata.stageAccess}.`,
 				`Approved plan: ${JSON.stringify(snapshot.metadata.stageTestPlan ?? {})}`,
 				"Stay within the approved actions and effects, but improvise interaction techniques and equivalent paths when they fail; suggested recipes are not binding click scripts. Preserve explicit developer constraints. For a UI app open browser_open({stage: <exact pinned ident>, stageApp: <declared app>}); for an API app use stage_api_request with the pinned stage and declared role. Raw URLs and app endpoints are forbidden.",
-				"Never issue an unplanned state-changing action. A planned create is allowed only on a writable stage and after any approval required by the pinned plan policy; never delete or mutate data outside the approved route.",
+				"This is a test stage: on a writable stage you may create and change test data needed to explore and reach the plan's goal, even if the plan did not list the action; never delete or edit pre-existing or foreign records, and list everything you created.",
 				"Record meaningful actions with stage_step, cite attached evidence ids, and use stage_wait for bounded asynchronous waits.",
 				"A blocked scenario is still a complete report: return blocked verdicts for inaccessible stage/login cases rather than a blocked run outcome.",
 				"Report exactly one version entry per declared app: status available with version, or unavailable with a concise reason.",
@@ -842,12 +842,12 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 			],
 			permissions: [
 				"access only the pinned stage and declared apps/roles",
-				"perform only the approved route",
+				"stay within the declared apps, roles and the stage's write access",
 				"record sanitized observations and evidence",
 			],
 			checks: [
 				"every planned expectation has a verdict",
-				"no unplanned state change occurs",
+				"no pre-existing or foreign record is deleted or edited",
 				"all citations refer to existing evidence and journal steps",
 			],
 		}),

@@ -259,23 +259,21 @@ describe("stage briefs keep their semantics", () => {
 	});
 
 	test("the tester fills plain test input, ticks required confirmations and tries other options", () => {
-		expect(tester).toContain("smallest plausible, consistent value");
-		expect(tester).toContain("record it as a plan gap");
+		expect(tester).toContain("choose small, consistent counts");
+		expect(tester).toContain("Record chosen defaults and plan gaps");
+		expect(tester).toContain("tick only those needed to proceed");
+		expect(tester).toContain("note them as findings");
+		expect(tester).toContain("Try offered alternatives");
 		expect(tester).toContain(
-			"tick it when the form will not proceed otherwise",
-		);
-		expect(tester).toContain("record it as a finding");
-		expect(tester).toContain("try the other options the form offers");
-		expect(tester).toContain(
-			"a `blocked` verdict must name every path you tried",
+			"A blocked verdict must explain the attempted paths",
 		);
 		expect(tester).toContain(
-			"Stop only for real credentials, personal data of real people, records that are not yours, and grid-planning values",
+			"Never invent real credentials, real people's personal data",
 		);
 	});
 
 	test("the tester keeps the state-change, prefix, secrecy and stage-binding rules", () => {
-		expect(tester).toContain("Never issue an unplanned state-changing action");
+		expect(tester).toContain("This is a test stage");
 		expect(tester).toContain("apply its configured prefix");
 		expect(tester).toContain("Do not expose credentials");
 		expect(tester).toContain("`stage-route-not-approved`");

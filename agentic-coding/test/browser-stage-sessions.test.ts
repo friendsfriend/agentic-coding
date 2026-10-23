@@ -380,10 +380,10 @@ describe("stage-bound sessions", () => {
 		]);
 	});
 
-	test("the route derives a stage-test session's write policy from the pinned plan", async () => {
+	test("the route derives a stage-test session's write policy from the stage access, not the plan", async () => {
 		const cases = [
 			{ access: "read-only", createsData: true, writeAllowed: false },
-			{ access: "writable", createsData: false, writeAllowed: false },
+			{ access: "writable", createsData: false, writeAllowed: true },
 			{ access: "writable", createsData: true, writeAllowed: true },
 		] as const;
 		for (const [index, item] of cases.entries()) {

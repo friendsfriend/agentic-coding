@@ -193,7 +193,7 @@ describe("stage-test planning and report contracts", () => {
 			"improvise interaction techniques and equivalent paths",
 		);
 		expect(text).toContain("Preserve explicit developer constraints");
-		expect(text).toContain("Never issue an unplanned state-changing action");
+		expect(text).toContain("This is a test stage");
 		expect(text).toContain("rather than a blocked run outcome");
 	});
 

@@ -1647,16 +1647,11 @@ function resolveStageOpen(
 		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
 		: undefined;
 	assertStageTestRoute(workflow, appKey, identityRole);
-	const plan = workflow?.stageTestPlan as { createsData?: boolean } | undefined;
 	const stageTestPlan = workflow?.definitionId === "stage-test";
-	const writeAllowed =
-		!stageTestPlan ||
-		(workflow?.stageAccess === "writable" && plan?.createsData === true);
-	// A writable stage whose plan approved no creation is narrowed to read-only
-	// as its own policy, not merely a false `writeAllowed`: the refusal must not
-	// fall through to the stage's read-only exceptions (SEC-002).
-	const planNarrowed =
-		stageTestPlan && workflow?.stageAccess === "writable" && !writeAllowed;
+	// A stage-test session may write whenever the stage itself is writable: the
+	// stage's access setting is the boundary, not whether the plan listed the
+	// action (test stages only; the tester explores and creates test data).
+	const writeAllowed = !stageTestPlan || workflow?.stageAccess === "writable";
 	const bearer = bearerScopes(entry);
 	const binding: StageSessionBinding = {
 		ident: entry.ident,
@@ -1667,7 +1662,6 @@ function resolveStageOpen(
 		...(stageTestPlan
 			? {
 					writeAllowed,
-					planNarrowed,
 					writeMethods: ["POST"],
 				}
 			: {}),
