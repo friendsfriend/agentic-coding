@@ -250,6 +250,22 @@ function toneColor(tone: AgentSessionTone): string {
 	return tone === "base" ? uiColors.textPrimary : markerColor(tone);
 }
 
+/** Tool-view text hierarchy: muted context, regular primary content, or a
+ * status-colored highlight for an outcome worth noticing. */
+function toolTextColor(row: ToolViewRow): string {
+	if (row.emphasis === "muted") return uiColors.textMuted;
+	if (row.emphasis === "highlight") return markerColor(row.tone ?? "accent");
+	return uiColors.textPrimary;
+}
+
+/** A tool block's expanded detail: primary output, or the error color when the
+ * call failed. */
+function toolDetailColor(block: AgentSessionBlock): string {
+	return block.tone === "error" || block.toolCall?.result?.isError === true
+		? uiColors.error
+		: uiColors.textPrimary;
+}
+
 function titlecase(value: string): string {
 	return value.length === 0 ? value : value[0]?.toUpperCase() + value.slice(1);
 }
@@ -300,6 +316,8 @@ function AssistantMarkdown(props: {
 	partKey: string;
 	text: string;
 	live?: boolean;
+	/** Base prose color; tool-view context can make its markdown recede. */
+	fg?: string;
 }) {
 	// Lexing the message is the expensive part of a render, so it happens once
 	// per text (every streaming frame), not once per part — and a frame that only
@@ -317,7 +335,7 @@ function AssistantMarkdown(props: {
 								? holdBackTrailingLine(source)
 								: source;
 						})()}
-						fg={uiColors.textPrimary}
+						fg={props.fg ?? uiColors.textPrimary}
 						// Prose always takes the streaming preview: it draws the text
 						// concealed, so it never re-flashes its own markers. A fenced
 						// block draws its raw text instead, which re-adds the fence
@@ -429,7 +447,7 @@ function ToolRow(props: {
 					content={props.row.text}
 					syntaxStyle={syntaxStyle}
 					drawUnstyledText
-					fg={markerColor(props.row.tone)}
+					fg={toolTextColor(props.row)}
 				/>
 			</box>
 		);
@@ -449,7 +467,7 @@ function ToolRow(props: {
 					fallback={
 						// A row is read in place: a long output line wraps onto the
 						// next rows instead of losing its middle to an ellipsis.
-						<text fg={markerColor(props.row.tone)} wrapMode="word">
+						<text fg={toolTextColor(props.row)} wrapMode="word">
 							{props.row.text}
 						</text>
 					}
@@ -458,6 +476,7 @@ function ToolRow(props: {
 						transcript={props.transcript}
 						partKey={key()}
 						text={props.row.text}
+						fg={toolTextColor(props.row)}
 					/>
 				</Show>
 			</box>
@@ -519,8 +538,8 @@ function ToolFrame(props: { color: string; children: JSX.Element }) {
  * timing. Browser tools carry their web glyph before the action icon, so the
  * family reads at a glance while the action icon keeps the call's state. The
  * icon slot carries the spinner while the call runs, the way opencode draws a
- * running tool. An ordinary call is muted; only a failed one takes the error
- * color. */
+ * running tool. The label is the call's primary content, so it stays regular;
+ * only a failed call takes the error color, and the hint stays muted. */
 function ToolCallHeader(props: {
 	block: AgentSessionBlock;
 	icon: string;
@@ -530,8 +549,11 @@ function ToolCallHeader(props: {
 	expanded: boolean;
 	onToggle: () => void;
 }) {
-	const fg = () =>
-		props.block.tone === "error" ? uiColors.error : uiColors.textMuted;
+	const failed = () =>
+		props.block.tone === "error" ||
+		props.block.toolCall?.result?.isError === true;
+	const iconFg = () => (failed() ? uiColors.error : uiColors.textMuted);
+	const labelFg = () => (failed() ? uiColors.error : uiColors.textPrimary);
 	const browser = () =>
 		isBrowserTool(props.block.toolCall?.name ?? props.block.tool);
 	return (
@@ -551,16 +573,16 @@ function ToolCallHeader(props: {
 				</Show>
 				<Show
 					when={props.block.pending === true}
-					fallback={<text fg={fg()}>{props.icon}</text>}
+					fallback={<text fg={iconFg()}>{props.icon}</text>}
 				>
-					<Spinner color={fg()} />
+					<Spinner color={iconFg()} />
 				</Show>
 			</box>
 			{/* The label is the call's own text — a path, a command — and a reader
 			    folds the row to see the call, not to see a clipped one: it wraps
 			    onto further lines instead of being cut with an ellipsis. The fold
 			    glyph, icon and facts stay on the first line. */}
-			<text fg={fg()} flexGrow={1} minWidth={0} wrapMode="word">
+			<text fg={labelFg()} flexGrow={1} minWidth={0} wrapMode="word">
 				{props.label}
 			</text>
 			<Show when={props.hint}>
@@ -849,7 +871,9 @@ function Block(props: {
 									)}
 								</Show>
 								<For each={props.block.detail ?? []}>
-									{(line) => <text fg={uiColors.textMuted}>{line}</text>}
+									{(line) => (
+										<text fg={toolDetailColor(props.block)}>{line}</text>
+									)}
 								</For>
 							</box>
 						</Show>
@@ -871,7 +895,9 @@ function Block(props: {
 							{(detail) => (
 								<box paddingLeft={2} flexDirection="column">
 									<For each={detail()}>
-										{(line) => <text fg={uiColors.textMuted}>{line}</text>}
+										{(line) => (
+											<text fg={toolDetailColor(props.block)}>{line}</text>
+										)}
 									</For>
 								</box>
 							)}
@@ -1636,8 +1662,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 														>
 															{expanded() ? "▾" : "▸"}
 														</text>
-														<text fg={uiColors.textMuted} flexGrow={1}>
-															→ {readGroupLabel(row.blocks)}
+														<text
+															width={2}
+															flexShrink={0}
+															fg={uiColors.textMuted}
+														>
+															→
+														</text>
+														<text fg={uiColors.textPrimary} flexGrow={1}>
+															{readGroupLabel(row.blocks)}
 														</text>
 														<Show when={latest}>
 															{(block) => <Stamp block={block()} />}

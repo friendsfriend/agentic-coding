@@ -15,14 +15,32 @@ import {
 	toolIcon,
 } from "../agent-session.ts";
 
-/** One row of an expanded tool view, with the tone it is drawn in. A row may
+/** How a tool-view line is weighted: secondary context, the view's primary
+ * content, or a status detail worth noticing. */
+export type ToolViewEmphasis = "muted" | "regular" | "highlight";
+
+/** The status colors a highlighted line can take. */
+export type ToolViewHighlight =
+	| "error"
+	| "warning"
+	| "success"
+	| "info"
+	| "accent";
+
+/** One row of an expanded tool view, with the weight it is drawn in. A row may
  * carry a detail of its own — a codemode call is a whole tool call, so its row
  * folds open into that call's own view. */
 export interface ToolViewRow {
 	/** Stable identity for a row that folds, unique within its block. */
 	readonly id?: string;
 	readonly text: string;
-	readonly tone: "base" | "muted" | "error" | "warning" | "success" | "info";
+	/** The line's weight; regular by default. Muted rows recede (questions,
+	 * metadata, context), regular rows are the content a reader came for, and
+	 * highlighted rows take `tone` to mark a success or failure worth noticing. */
+	readonly emphasis?: ToolViewEmphasis;
+	/** The status color of a highlighted row. Ignored unless `emphasis` is
+	 * "highlight"; defaults to the accent color when omitted. */
+	readonly tone?: ToolViewHighlight;
 	/** The text is markdown, drawn rendered instead of as a plain line. It is
 	 * the body of a fold — a question's context — not a header. */
 	readonly markdown?: boolean;
@@ -103,14 +121,15 @@ function diffRowCounts(rows: readonly ToolViewRow[]): string | undefined {
 	return `+${added} −${removed}`;
 }
 
-/** A diff body as rows: additions and removals in their own tone, hunk headers
- * dim, context plain. */
+/** A diff body as rows: additions and removals highlighted in their status
+ * color, hunk headers and context muted so the changes stand out. */
 function diffRows(diff: string): ToolViewRow[] {
 	return diff.split("\n").map((line): ToolViewRow => {
-		if (line.startsWith("+")) return { text: line, tone: "success" };
-		if (line.startsWith("-")) return { text: line, tone: "error" };
-		if (line.startsWith("@@")) return { text: line, tone: "info" };
-		return { text: line, tone: "muted" };
+		if (line.startsWith("+"))
+			return { text: line, emphasis: "highlight", tone: "success" };
+		if (line.startsWith("-"))
+			return { text: line, emphasis: "highlight", tone: "error" };
+		return { text: line, emphasis: "muted" };
 	});
 }
 
@@ -124,9 +143,11 @@ function editArgRows(args: Readonly<Record<string, unknown>>): ToolViewRow[] {
 		const oldText = typeof entry.oldText === "string" ? entry.oldText : "";
 		const newText = typeof entry.newText === "string" ? entry.newText : "";
 		for (const text of oldText.split("\n"))
-			if (text.length > 0) rows.push({ text: `-${text}`, tone: "error" });
+			if (text.length > 0)
+				rows.push({ text: `-${text}`, emphasis: "highlight", tone: "error" });
 		for (const text of newText.split("\n"))
-			if (text.length > 0) rows.push({ text: `+${text}`, tone: "success" });
+			if (text.length > 0)
+				rows.push({ text: `+${text}`, emphasis: "highlight", tone: "success" });
 	}
 	return rows;
 }
@@ -152,7 +173,7 @@ function readView(call: AgentSessionToolCall): ToolView {
 					: offset !== undefined
 						? `from ${offset}`
 						: undefined),
-		rows: lines.map((text) => ({ text, tone: "muted" as const })),
+		rows: lines.map((text) => ({ text, emphasis: "regular" as const })),
 	};
 }
 
@@ -194,7 +215,7 @@ function writeView(call: AgentSessionToolCall): ToolView {
 		label: `Write ${path}`,
 		summary: path,
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
-		rows: lines.map((text) => ({ text, tone: "muted" as const })),
+		rows: lines.map((text) => ({ text, emphasis: "regular" as const })),
 	};
 }
 
@@ -215,10 +236,11 @@ function bashView(call: AgentSessionToolCall): ToolView {
 				: lines.length > 0
 					? `${lines.length} lines`
 					: undefined,
-		rows: lines.map((text) => ({
-			text,
-			tone: failed ? ("error" as const) : ("muted" as const),
-		})),
+		rows: lines.map((text) =>
+			failed
+				? { text, emphasis: "highlight" as const, tone: "error" as const }
+				: { text, emphasis: "regular" as const },
+		),
 	};
 }
 
@@ -363,31 +385,31 @@ function jevQuestionRows(
 	const id = answer.id;
 	const type = question?.type ? ` (${question.type})` : "";
 	const rows: ToolViewRow[] = [];
-	if (question?.text) rows.push({ text: question.text, tone: "muted" });
+	if (question?.text) rows.push({ text: question.text, emphasis: "muted" });
 	rows.push({
 		text: `${id}${type} · ${answer.value}${
 			answer.confidence === undefined
 				? ""
 				: ` · confidence ${answer.confidence.toFixed(2)}`
 		}`,
-		tone: "base",
+		emphasis: "regular",
 	});
 	if (answer.probabilities)
 		rows.push({
 			text: answer.probabilities
 				.map(([label, value]) => `${label} ${value.toFixed(2)}`)
 				.join(" · "),
-			tone: "muted",
+			emphasis: "muted",
 		});
 	if (answer.legend)
 		rows.push({
 			text: answer.legend
 				.map(([index, label]) => `${index} ${label}`)
 				.join(" · "),
-			tone: "muted",
+			emphasis: "muted",
 		});
 	for (const criterion of question?.criteria ?? [])
-		rows.push({ text: criterion, tone: "muted" });
+		rows.push({ text: criterion, emphasis: "muted" });
 	return rows;
 }
 
@@ -395,10 +417,11 @@ function jevQuestionRows(
  * low-confidence cautions keep the warning tone. */
 function jevRows(lines: readonly string[]): ToolViewRow[] {
 	const body = lines[0]?.startsWith("## Jev") ? lines.slice(2) : lines;
-	return body.map((text) => ({
-		text,
-		tone: text.startsWith("- ") ? ("warning" as const) : ("muted" as const),
-	}));
+	return body.map((text) =>
+		text.startsWith("- ")
+			? { text, emphasis: "highlight" as const, tone: "warning" as const }
+			: { text, emphasis: "regular" as const },
+	);
 }
 
 /** `ask_jev`: the verdict it came back with and the state it judged. */
@@ -634,15 +657,13 @@ function answerSummary(question: DialogueQuestion): string | undefined {
 	return `→ ${oneLine(selected?.label ?? answer.value ?? "selected", 80)}`;
 }
 
-function questionTone(question: DialogueQuestion): "base" | "warning" {
-	if (
+function questionWarning(question: DialogueQuestion): boolean {
+	return (
 		question.answer?.kind === "cancel" ||
 		question.status === "pending" ||
 		question.status === "expired" ||
 		question.status === "cancelled"
-	)
-		return "warning";
-	return "base";
+	);
 }
 
 /** One question's fold: the context it came with, rendered as the markdown it
@@ -653,19 +674,28 @@ function questionDetail(
 ): ToolViewRow[] {
 	const rows: ToolViewRow[] = [];
 	if (question.context?.trim())
-		rows.push({ text: question.context, tone: "muted", markdown: true });
+		rows.push({
+			text: question.context,
+			emphasis: "muted",
+			markdown: true,
+		});
 	question.options.forEach((option, position) => {
 		const selected = optionSelected(question, option);
 		rows.push({
 			id: `question:${index}:option:${position}`,
 			text: `${selected ? "●" : "○"}${option.recommended ? " ★" : "  "} ${option.label}`,
-			tone: selected ? "success" : option.recommended ? "info" : "muted",
+			emphasis: selected || option.recommended ? "highlight" : "muted",
+			...(selected
+				? { tone: "success" as const }
+				: option.recommended
+					? { tone: "info" as const }
+					: {}),
 			...(option.description
 				? {
 						detail: [
 							{
 								text: option.description,
-								tone: "muted" as const,
+								emphasis: "muted" as const,
 								markdown: true,
 							},
 						],
@@ -678,7 +708,10 @@ function questionDetail(
 			? question.answer.value?.trim()
 			: undefined;
 	if (custom)
-		rows.push({ text: `custom: ${oneLine(custom, 400)}`, tone: "base" });
+		rows.push({
+			text: `custom: ${oneLine(custom, 400)}`,
+			emphasis: "regular",
+		});
 	return rows;
 }
 
@@ -691,24 +724,26 @@ function dialogueRows(
 		rows.push({
 			id: "context",
 			text: "context",
-			tone: "muted",
-			detail: [{ text: context, tone: "muted", markdown: true }],
+			emphasis: "muted",
+			detail: [{ text: context, emphasis: "muted", markdown: true }],
 		});
 	questions.forEach((question, index) => {
 		// One blank line between the question groups, so a questionnaire reads as
 		// groups rather than as one list.
-		if (rows.length > 0) rows.push({ text: "", tone: "muted" });
+		if (rows.length > 0) rows.push({ text: "", emphasis: "muted" });
 		const detail = questionDetail(question, index);
 		const summary = answerSummary(question);
 		const prefix =
 			question.ident ?? (questions.length > 1 ? String(index + 1) : undefined);
+		const warning = questionWarning(question);
 		rows.push({
 			id: `question:${index}`,
 			text: `${prefix === undefined ? "" : `[${prefix}] `}${oneLine(
 				question.text ?? "question",
 				200,
 			)}${summary === undefined ? "" : `   ${summary}`}`,
-			tone: questionTone(question),
+			emphasis: warning ? "highlight" : "regular",
+			...(warning ? { tone: "warning" as const } : {}),
 			...(detail.length > 0 ? { detail } : {}),
 		});
 	});
@@ -751,13 +786,11 @@ function dialogueView(call: AgentSessionToolCall): ToolView | undefined {
 	// host without the dialogue — keeps its own words under the question.
 	if (record === undefined && lines.length > 0)
 		rows.push(
-			...lines.map((text) => ({
-				text,
-				tone:
-					call.result?.isError === true
-						? ("error" as const)
-						: ("muted" as const),
-			})),
+			...lines.map((text) =>
+				call.result?.isError === true
+					? { text, emphasis: "highlight" as const, tone: "error" as const }
+					: { text, emphasis: "regular" as const },
+			),
 		);
 	return {
 		icon: "?",
@@ -858,19 +891,27 @@ function codemodeHeadline(code: string): string {
 function codemodeScriptRows(code: string): ToolViewRow[] {
 	return code.length === 0
 		? []
-		: [{ text: code, tone: "base" as const, syntax: "javascript" }];
+		: [
+				{
+					text: code,
+					emphasis: "regular" as const,
+					syntax: "javascript",
+				},
+			];
 }
 
-/** One line per call a script made: its name and how it ended, failures in the
- * error tone. This is the collapsed view's whole content — the shape of the
- * work — and stays visible once expanded. */
+/** One line per call a script made: its name and how it ended, failures
+ * highlighted in the error color. This is the collapsed view's whole content —
+ * the shape of the work — and stays visible once expanded. */
 function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
 	return calls.map((entry, index) => {
 		const detail = codemodeCallDetail(entry);
+		const ok = entry.status === "ok";
 		return {
 			id: `call:${index}`,
 			text: codemodeCallText(entry),
-			tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
+			emphasis: ok ? ("regular" as const) : ("highlight" as const),
+			...(ok ? {} : { tone: "error" as const }),
 			...(detail.length > 0 ? { detail } : {}),
 		};
 	});
@@ -910,7 +951,11 @@ function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
 		.split("\n")
 		.map((line) => line.replace(/\s+$/g, ""))
 		.filter((line) => line.length > 0)
-		.map((text) => ({ text, tone: "muted" as const }));
+		.map((text) =>
+			call.isError === true
+				? { text, emphasis: "highlight" as const, tone: "error" as const }
+				: { text, emphasis: "regular" as const },
+		);
 }
 
 /** `codemode`: collapsed, the one-line script summary (`λ 11 calls · 0.5s`).
@@ -924,10 +969,11 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 	const failed = call.result?.isError === true;
 	const errors = calls.filter((entry) => entry.status !== "ok").length;
 	const script = codemodeScriptRows(code);
-	const output: ToolViewRow[] = lines.map((text) => ({
-		text,
-		tone: failed ? ("error" as const) : ("muted" as const),
-	}));
+	const output: ToolViewRow[] = lines.map((text) =>
+		failed
+			? { text, emphasis: "highlight" as const, tone: "error" as const }
+			: { text, emphasis: "regular" as const },
+	);
 	// The row is the call's own metadata — how much it ran, what failed, how long
 	// it spent in tools — and every call gets its own line below it.
 	const spent = calls.reduce(
@@ -1152,7 +1198,7 @@ function withRunningOutput(
 	if (output.length === 0) return view;
 	return {
 		...view,
-		rows: output.map((text) => ({ text, tone: "muted" as const })),
+		rows: output.map((text) => ({ text, emphasis: "regular" as const })),
 	};
 }
 

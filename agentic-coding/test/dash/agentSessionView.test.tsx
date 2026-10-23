@@ -1691,8 +1691,181 @@ test("tool rows get a view from their call and result, and a generic default", a
 				.map((part) => Math.round(part * 255))
 				.join(",");
 		};
+		// The read's content is primary text; a change worth noticing takes its
+		// status color.
+		expect(rgb(foreground("const a = 1;"))).toBe(theme(uiColors.textPrimary));
 		expect(rgb(foreground("+const b = 2;"))).toBe(theme(uiColors.success));
 		expect(rgb(foreground("-const a = 1;"))).toBe(theme(uiColors.error));
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("tool-view headers keep their label regular and their hint muted", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "read",
+			kind: "tool",
+			text: "read path=src/a.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/a.ts", offset: 40, limit: 80 },
+				result: {
+					lines: ["const a = 1;"],
+					isError: false,
+					notes: ["Showing lines 40-120 of 512. Use offset=121 to continue."],
+				},
+			},
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const spans = t.captureSpans();
+		const foreground = (text: string) => {
+			for (const line of spans.lines) {
+				for (const span of line.spans) {
+					if (span.text.includes(text)) return span.fg;
+				}
+			}
+			return undefined;
+		};
+		const rgb = (color: unknown) => {
+			const buffer = (color as { buffer: Record<string, number> }).buffer;
+			return [buffer[0], buffer[1], buffer[2]].map(Math.round).join(",");
+		};
+		const theme = (hex: string) => {
+			const parsed = parseColor(hex) as unknown as {
+				r: number;
+				g: number;
+				b: number;
+			};
+			return [parsed.r, parsed.g, parsed.b]
+				.map((part) => Math.round(part * 255))
+				.join(",");
+		};
+		// The call's subject is the primary content; the range is supporting
+		// context, and the action glyph sits between the two weights.
+		expect(rgb(foreground("Read src/a.ts"))).toBe(theme(uiColors.textPrimary));
+		expect(rgb(foreground("40-120 of 512"))).toBe(theme(uiColors.textMuted));
+		expect(rgb(foreground("→"))).toBe(theme(uiColors.textMuted));
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("generic tool output and result detail use primary text", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "search",
+			kind: "tool",
+			text: "search pattern=needle",
+			tone: "success",
+			icon: "✱",
+			tool: "search",
+			request: "pattern: needle",
+			detail: ["src/a.ts:1: const needle = 1;"],
+		},
+		{
+			id: "missing",
+			kind: "tool",
+			text: "grep pattern=missing",
+			tone: "error",
+			icon: "✱",
+			tool: "grep",
+			request: "pattern: missing",
+			detail: ["no matches"],
+		},
+		{
+			id: "result",
+			kind: "result",
+			text: "Command finished",
+			tone: "success",
+			detail: ["line one"],
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 80, height: 20 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		await t.renderOnce();
+		const spans = t.captureSpans();
+		const foreground = (text: string) => {
+			for (const line of spans.lines) {
+				for (const span of line.spans) {
+					if (span.text.includes(text)) return span.fg;
+				}
+			}
+			return undefined;
+		};
+		const rgb = (color: unknown) => {
+			const buffer = (color as { buffer: Record<string, number> }).buffer;
+			return [buffer[0], buffer[1], buffer[2]].map(Math.round).join(",");
+		};
+		const theme = (hex: string) => {
+			const parsed = parseColor(hex) as unknown as {
+				r: number;
+				g: number;
+				b: number;
+			};
+			return [parsed.r, parsed.g, parsed.b]
+				.map((part) => Math.round(part * 255))
+				.join(",");
+		};
+		// A request is supporting context; successful output and result detail
+		// are what the reader came for. A failed call's output stays red.
+		expect(rgb(foreground("pattern: needle"))).toBe(theme(uiColors.textMuted));
+		expect(rgb(foreground("const needle = 1;"))).toBe(
+			theme(uiColors.textPrimary),
+		);
+		expect(rgb(foreground("no matches"))).toBe(theme(uiColors.error));
+		expect(rgb(foreground("line one"))).toBe(theme(uiColors.textPrimary));
 	} finally {
 		t.renderer.destroy();
 	}

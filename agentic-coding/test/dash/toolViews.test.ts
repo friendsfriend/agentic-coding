@@ -65,10 +65,10 @@ describe("toolView", () => {
 		expect(view?.label).toBe("Edit src/a.ts");
 		expect(view?.hint).toBe("2 edits · +1 −1");
 		expect(view?.rows).toEqual([
-			{ text: "@@ -1,3 +1,3 @@", tone: "info" },
-			{ text: " context", tone: "muted" },
-			{ text: "-const a = 1;", tone: "error" },
-			{ text: "+const b = 2;", tone: "success" },
+			{ text: "@@ -1,3 +1,3 @@", emphasis: "muted" },
+			{ text: " context", emphasis: "muted" },
+			{ text: "-const a = 1;", emphasis: "highlight", tone: "error" },
+			{ text: "+const b = 2;", emphasis: "highlight", tone: "success" },
 		]);
 	});
 
@@ -96,7 +96,11 @@ describe("toolView", () => {
 		);
 		expect(failed?.summary).toBe("npm test");
 		expect(failed?.hint).toBe("exit 1");
-		expect(failed?.rows?.every((row) => row.tone === "error")).toBe(true);
+		expect(
+			failed?.rows?.every(
+				(row) => row.emphasis === "highlight" && row.tone === "error",
+			),
+		).toBe(true);
 
 		const ok = toolView(
 			call(
@@ -106,7 +110,7 @@ describe("toolView", () => {
 			),
 		);
 		expect(ok?.hint).toBe("2 lines");
-		expect(ok?.rows?.every((row) => row.tone === "muted")).toBe(true);
+		expect(ok?.rows?.every((row) => row.emphasis === "regular")).toBe(true);
 	});
 
 	test("ask_jev shows the verdict and what it judged", () => {
@@ -143,10 +147,11 @@ describe("toolView", () => {
 		// Expanded: the question the agent asked, its verdict with the confidence,
 		// the distribution behind it, and the caution it earned.
 		expect(view?.rows).toEqual([
-			{ text: "does it leak?", tone: "muted" },
-			{ text: "leak (noul) · 0.12 · confidence 0.40", tone: "base" },
+			{ text: "does it leak?", emphasis: "muted" },
+			{ text: "leak (noul) · 0.12 · confidence 0.40", emphasis: "regular" },
 			{
 				text: '- "leak" came back 0.12 at confidence 0.40, which is a coin flip.',
+				emphasis: "highlight",
 				tone: "warning",
 			},
 		]);
@@ -192,13 +197,23 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.rows).toEqual([
-			{ text: "which core owns the file?", tone: "muted" },
-			{ text: "leak (choice) · auth · confidence 0.71", tone: "base" },
-			{ text: "auth 0.71 · environment 0.21 · other 0.08", tone: "muted" },
-			{ text: "true: the file is about authentication", tone: "muted" },
-			{ text: "false: the file is about something else", tone: "muted" },
+			{ text: "which core owns the file?", emphasis: "muted" },
+			{ text: "leak (choice) · auth · confidence 0.71", emphasis: "regular" },
+			{
+				text: "auth 0.71 · environment 0.21 · other 0.08",
+				emphasis: "muted",
+			},
+			{
+				text: "true: the file is about authentication",
+				emphasis: "muted",
+			},
+			{
+				text: "false: the file is about something else",
+				emphasis: "muted",
+			},
 			{
 				text: '- "leak" picked auth at confidence 0.71: the pick is plausible.',
+				emphasis: "highlight",
 				tone: "warning",
 			},
 		]);
@@ -231,10 +246,13 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.rows).toEqual([
-			{ text: "how core is it?", tone: "muted" },
-			{ text: "core (score) · 0.78 · confidence 0.90", tone: "base" },
-			{ text: "other 0.70 · environment 0.20 · auth 0.10", tone: "muted" },
-			{ text: "0 auth · 1 environment · 2 other", tone: "muted" },
+			{ text: "how core is it?", emphasis: "muted" },
+			{ text: "core (score) · 0.78 · confidence 0.90", emphasis: "regular" },
+			{
+				text: "other 0.70 · environment 0.20 · auth 0.10",
+				emphasis: "muted",
+			},
+			{ text: "0 auth · 1 environment · 2 other", emphasis: "muted" },
 		]);
 	});
 
@@ -311,30 +329,33 @@ describe("toolView", () => {
 		expect(view?.rows?.[0]).toEqual({
 			id: "context",
 			text: "context",
-			tone: "muted",
+			emphasis: "muted",
 			detail: [
 				{
 					text: "The migration script must pick one.",
-					tone: "muted",
+					emphasis: "muted",
 					markdown: true,
 				},
 			],
 		});
 		// A blank line, then the question with its answer in the header.
-		expect(view?.rows?.[1]).toEqual({ text: "", tone: "muted" });
+		expect(view?.rows?.[1]).toEqual({ text: "", emphasis: "muted" });
 		const question = view?.rows?.[2];
 		expect(question?.text).toBe(
 			"Which backend should the wiki use?   → SQLite in-process",
 		);
-		expect(question?.tone).toBe("base");
+		expect(question?.emphasis).toBe("regular");
+		expect(question?.tone).toBeUndefined();
 		expect(question?.detail?.map((row) => row.text)).toEqual([
 			"● ★ SQLite in-process",
 			"○   Postgres via compose",
 		]);
+		expect(question?.detail?.[0]?.emphasis).toBe("highlight");
 		expect(question?.detail?.[0]?.tone).toBe("success");
-		expect(question?.detail?.[1]?.tone).toBe("muted");
+		expect(question?.detail?.[1]?.emphasis).toBe("muted");
+		expect(question?.detail?.[1]?.tone).toBeUndefined();
 		expect(question?.detail?.[0]?.detail).toEqual([
-			{ text: "No service to run.", tone: "muted", markdown: true },
+			{ text: "No service to run.", emphasis: "muted", markdown: true },
 		]);
 	});
 
@@ -395,9 +416,10 @@ describe("toolView", () => {
 		]);
 		expect(view?.rows?.[0]?.detail?.[0]).toEqual({
 			text: "The planner needs a store.",
-			tone: "muted",
+			emphasis: "muted",
 			markdown: true,
 		});
+		expect(view?.rows?.[2]?.emphasis).toBe("highlight");
 		expect(view?.rows?.[2]?.tone).toBe("warning");
 	});
 
@@ -450,6 +472,7 @@ describe("toolView", () => {
 			"Which backend?",
 			"developer_question: run context unavailable",
 		]);
+		expect(view?.rows?.[1]?.emphasis).toBe("highlight");
 		expect(view?.rows?.[1]?.tone).toBe("error");
 	});
 
@@ -500,10 +523,11 @@ describe("toolView", () => {
 		// line per call below it, each with its tool's type glyph.
 		expect(view?.summary).toBe("2 calls · 1 failed · 3.0s");
 		expect(view?.rows).toEqual([
-			{ id: "call:0", text: "→ read src/a.ts (ok)", tone: "muted" },
+			{ id: "call:0", text: "→ read src/a.ts (ok)", emphasis: "regular" },
 			{
 				id: "call:1",
 				text: "← edit src/b.ts · 1 edit (error)",
+				emphasis: "highlight",
 				tone: "error",
 			},
 		]);
@@ -521,12 +545,12 @@ describe("toolView", () => {
 		// The script stays whole in one highlighted row: the tree-sitter pass
 		// needs the source as a single block.
 		expect(view?.sections?.[0]?.rows).toEqual([
-			{ text: code, tone: "base", syntax: "javascript" },
+			{ text: code, emphasis: "regular", syntax: "javascript" },
 		]);
 		expect(view?.sections?.[1]?.rows).toEqual([
-			{ text: "Script completed", tone: "muted" },
-			{ text: 'return: ["a.ts","b.ts"]', tone: "muted" },
-			{ text: "calls: glob (ok), read (error)", tone: "muted" },
+			{ text: "Script completed", emphasis: "regular" },
+			{ text: 'return: ["a.ts","b.ts"]', emphasis: "regular" },
+			{ text: "calls: glob (ok), read (error)", emphasis: "regular" },
 		]);
 	});
 
@@ -593,9 +617,9 @@ describe("toolView", () => {
 		// the change, so a successful call is expandable either way.
 		expect(view?.hint).toBe("1 edit · +2 −1");
 		expect(view?.rows).toEqual([
-			{ text: "-const a = 1;", tone: "error" },
-			{ text: "+const b = 2;", tone: "success" },
-			{ text: "+const c = 3;", tone: "success" },
+			{ text: "-const a = 1;", emphasis: "highlight", tone: "error" },
+			{ text: "+const b = 2;", emphasis: "highlight", tone: "success" },
+			{ text: "+const c = 3;", emphasis: "highlight", tone: "success" },
 		]);
 	});
 
@@ -643,8 +667,13 @@ describe("toolView", () => {
 		);
 		expect(view?.summary).toBe("2 calls · 1 failed");
 		expect(view?.rows).toEqual([
-			{ id: "call:0", text: "✱ glob (ok)", tone: "muted" },
-			{ id: "call:1", text: "→ read (error)", tone: "error" },
+			{ id: "call:0", text: "✱ glob (ok)", emphasis: "regular" },
+			{
+				id: "call:1",
+				text: "→ read (error)",
+				emphasis: "highlight",
+				tone: "error",
+			},
 		]);
 	});
 
@@ -678,7 +707,9 @@ describe("toolView", () => {
 		expect(failed?.summary).toBe("script failed");
 		expect(failed?.hint).toBeUndefined();
 		expect(
-			failed?.sections?.[1]?.rows.every((row) => row.tone === "error"),
+			failed?.sections?.[1]?.rows.every(
+				(row) => row.emphasis === "highlight" && row.tone === "error",
+			),
 		).toBe(true);
 	});
 
@@ -862,8 +893,8 @@ describe("toolPendingView", () => {
 				"2 files",
 			]).rows,
 		).toEqual([
-			{ text: "compiling…", tone: "muted" },
-			{ text: "2 files", tone: "muted" },
+			{ text: "compiling…", emphasis: "regular" },
+			{ text: "2 files", emphasis: "regular" },
 		]);
 	});
 
