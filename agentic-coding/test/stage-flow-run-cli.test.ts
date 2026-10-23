@@ -8,13 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import { stagePaths } from "../src/server/stages/catalog.ts";
 import { generateFlow } from "../src/stage-blocks/flow-generator.ts";
-import { flowSourceFromStagePlan } from "../src/stage-blocks/flow-source.ts";
 import {
 	blockPlanFromRoute,
 	validateStageBlockPlan,
 } from "../src/stage-blocks/plan.ts";
 import { stageBlockRegistry } from "../src/stage-blocks/registry.ts";
 import { installedChromium } from "./support/browser.ts";
+import { flowSourceFromRoute } from "./support/flow-source-fixture.ts";
 
 const PACKAGE_ROOT = path.join(import.meta.dir, "..");
 const FLOW_ID = "ci-smoke-open";
@@ -92,8 +92,8 @@ async function seedCiFlow(worktree: string): Promise<void> {
 	const generated = await generateFlow({
 		root: worktree,
 		registry: stageBlockRegistry,
-		source: flowSourceFromStagePlan({
-			stagePlan,
+		source: flowSourceFromRoute({
+			routePlan: stagePlan,
 			plan: validated.plan,
 			stage: "ci-stage",
 			planId: "ci-smoke-r1",

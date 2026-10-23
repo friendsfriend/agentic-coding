@@ -627,7 +627,10 @@ describe("workflow registry", () => {
 					(definition.version >= 801 && definition.version <= 820) ||
 					// The staged-configuration-root tier
 					// (`staged-env-setup-config-root`).
-					(definition.version >= 901 && definition.version <= 920),
+					(definition.version >= 901 && definition.version <= 920) ||
+					// The plan-free stage-exploration tier
+					// (`remove-stage-test-planner`).
+					(definition.version >= 1201 && definition.version <= 1220),
 			);
 			expect(policyBearing.length).toBeGreaterThan(0);
 			for (const definition of policyBearing)
@@ -652,7 +655,10 @@ describe("workflow registry", () => {
 					// The pinned-stage family's own tier declares a policy too.
 					(definition.version < 1001 || definition.version > 1021) &&
 					// The authored-data-blocks stage-test tier declares one too.
-					(definition.version < 1101 || definition.version > 1121),
+					(definition.version < 1101 || definition.version > 1121) &&
+					// So does the plan-free stage-exploration tier
+					// (`remove-stage-test-planner`).
+					(definition.version < 1201 || definition.version > 1220),
 			))
 				expect(definition.policy).toBeUndefined();
 		});

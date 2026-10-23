@@ -757,7 +757,7 @@ function stageItems(context: SettingsContext): SettingsItem[] {
 			label: stage.displayName,
 			value: `${stage.access} · ${where} · ${stage.apps.length} app${stage.apps.length === 1 ? "" : "s"}`,
 			detail: [
-				`plan approval ${stage.planApproval}${stage.exclusive ? " · exclusive" : ""}`,
+				stage.exclusive ? "exclusive" : "",
 				stage.origins.length
 					? `navigations stay on ${stage.origins.join(", ")}`
 					: "no origin declared: the guard would refuse every navigation",

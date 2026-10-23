@@ -260,7 +260,7 @@ describe("stage briefs keep their semantics", () => {
 
 	test("the tester fills plain test input, ticks required confirmations and tries other options", () => {
 		expect(tester).toContain("choose small, consistent counts");
-		expect(tester).toContain("Record chosen defaults and plan gaps");
+		expect(tester).toContain("Record chosen defaults");
 		expect(tester).toContain("tick only those needed to proceed");
 		expect(tester).toContain("note them as findings");
 		expect(tester).toContain("Try offered alternatives");
@@ -276,7 +276,9 @@ describe("stage briefs keep their semantics", () => {
 		expect(tester).toContain("This is a test stage");
 		expect(tester).toContain("apply its configured prefix");
 		expect(tester).toContain("Do not expose credentials");
-		expect(tester).toContain("`stage-route-not-approved`");
+		expect(tester).toContain(
+			"Raw URLs, other origins and apps the stage does not declare are refused",
+		);
 		expect(tester).toContain("`browser_open({stage:");
 		expect(tester).toContain("`core.stage-report@1`");
 	});

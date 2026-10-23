@@ -26,7 +26,6 @@ import type {
 	BrowserStatusResponse,
 	BrowserTiming,
 } from "../../contracts/browser.ts";
-import { decodeContract } from "../../contracts/decode.ts";
 import type {
 	EvidenceEntry,
 	EvidenceManifest,
@@ -69,18 +68,16 @@ import {
 } from "../../stage-blocks/flow-registry.ts";
 import {
 	FlowSourceError,
-	flowSourceFromStagePlan,
+	flowSourceFromPlan,
 } from "../../stage-blocks/flow-source.ts";
 import { buildHealPacket } from "../../stage-blocks/heal.ts";
 import {
-	blockPlanFromRoute,
 	deriveInputSchema,
 	type StageBlockPlan,
 	type StageBlockPolicy,
 	validateStageBlockPlan,
 } from "../../stage-blocks/plan.ts";
 import { stageBlockRegistry } from "../../stage-blocks/registry.ts";
-import { mapReplayToReport } from "../../stage-blocks/replay-report.ts";
 import {
 	runStageBlockPlan,
 	type StageBlockJournalEntry,
@@ -94,9 +91,6 @@ import {
 	type SuiteEntryResult,
 	type SuiteFlowEntry,
 } from "../../stage-blocks/suite.ts";
-import { StageTestPlanSchema } from "../../workflow/schema.ts";
-
-type StageTestPlan = typeof StageTestPlanSchema.Type;
 
 import {
 	BROWSER_MAX_IMAGE_WIDTH,
@@ -1064,12 +1058,14 @@ async function dispatch(
 		path === AGENT_BROWSER_STAGE_REPLAY_PATH ||
 		path === AGENT_BROWSER_STAGE_FLOWS_PATH ||
 		path === AGENT_BROWSER_STAGE_JOURNAL_PATH;
-	// The planner may read the static block catalog (`stage_blocks`) and
+	// A plan step may read the static block catalog (`stage_blocks`) and
 	// discover saved flows (`stage_flows`) — neither opens a browser, touches
 	// stage access or writes the journal — while choosing a block or a flowId
 	// and binding its inputs (`add-stage-flow-blocks` task 8.2,
-	// `add-stage-flow-replay` task 5.2). Every other stage tool stays
-	// restricted to the tester during execute/replay.
+	// `add-stage-flow-replay` task 5.2). That applies to the definition tiers
+	// that still declare a plan step; every other stage tool stays restricted to
+	// the tester during execute/replay, and the one-agent tier has no plan step
+	// to reach (`remove-stage-test-planner`).
 	const plannerDiscoveryTool =
 		(path === AGENT_BROWSER_STAGE_FLOWS_PATH ||
 			path === AGENT_BROWSER_STAGE_BLOCKS_PATH) &&
@@ -1551,44 +1547,6 @@ async function resolveOpenTarget(
 	return resolved;
 }
 
-function assertStageTestRoute(
-	workflow: LocatedEvidenceWorkflow | undefined,
-	app: string,
-	role: string | undefined,
-): void {
-	if (workflow?.definitionId !== "stage-test") return;
-	const plan = workflow.stageTestPlan as
-		| {
-				route?: readonly { application?: string; role?: string }[];
-		  }
-		| undefined;
-	if (
-		!plan?.route?.some(
-			(route) =>
-				route.application === app && (route.role ?? undefined) === role,
-		)
-	)
-		throw new BrowserPoolError(
-			"stage-route-not-approved",
-			`stage application and role must match the approved test plan; the plan routes ${JSON.stringify(app)} as ${
-				[
-					...new Set(
-						(plan?.route ?? [])
-							.filter((route) => route.application === app)
-							.map((route) => route.role ?? "(no role)"),
-					),
-				]
-					.map((planned) =>
-						planned === "(no role)"
-							? "no role (omit stageRole)"
-							: `stageRole ${JSON.stringify(planned)}`,
-					)
-					.join(" or ") || "nothing (the application is not in the plan)"
-			}`,
-			403,
-		);
-}
-
 function resolveStageOpen(
 	deps: BrowserRouteDeps,
 	owner: string,
@@ -1646,7 +1604,6 @@ function resolveStageOpen(
 	const workflow = workflowId
 		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
 		: undefined;
-	assertStageTestRoute(workflow, appKey, identityRole);
 	const stageTestPlan = workflow?.definitionId === "stage-test";
 	// A stage-test session may write whenever the stage itself is writable: the
 	// stage's access setting is the boundary, not whether the plan listed the
@@ -1826,8 +1783,8 @@ async function stageLogin(
 		: undefined;
 	if (workflow?.definitionId === "stage-test") {
 		// `session.app` is the application the stage key maps to (`apps.<key>.app`,
-		// or the key itself): the plan and the tool speak the stage key, so compare
-		// through the same mapping `resolveStageOpen` used when it set the field.
+		// or the key itself): the tool speaks the stage key, so compare through
+		// the same mapping `resolveStageOpen` used when it set the field.
 		const declared = entry.stage.apps[body.app];
 		if (declared === undefined || (declared.app ?? body.app) !== session.app)
 			throw new BrowserPoolError(
@@ -1835,7 +1792,6 @@ async function stageLogin(
 				"stage login application must match the stage-bound session",
 				403,
 			);
-		assertStageTestRoute(workflow, body.app, body.role);
 	}
 	// The role is remembered on the session from here on, so a successful login of
 	// any path — the cached one, the silent SSO check, the recipe, the hand-off —
@@ -3491,17 +3447,17 @@ async function stageBlockSave(
 				409,
 			);
 	}
-	// A draft records the plan it is authored for. The engine owns that identity,
-	// so it is derived from the workflow's own pinned plan and revision — there is
-	// no request field for either, so a draft can never be labelled with a plan
-	// the run did not have (`OSV-017`, `OSV-020`).
+	// A draft records the run state it was authored at. The engine owns that
+	// identity, so it is derived from the workflow's own id and revision — there
+	// is no request field for either, so a draft can never be labelled with a run
+	// state the workflow did not have (`OSV-017`, `OSV-020`).
 	const saved = saveStageBlockDraft({
 		dataRoot: context.dataRoot,
 		workflowId,
 		...(context.runId === undefined ? {} : { runId: context.runId }),
 		stage: binding.ident,
 		document,
-		planId: replayPlanId(workflowId ?? "", located?.revision),
+		planId: runStateLabel(workflowId ?? "", located?.revision),
 		...(located?.revision === undefined ? {} : { revision: located.revision }),
 	});
 	return {
@@ -3641,113 +3597,14 @@ async function stageRun(
 			"the plan must be an object",
 			400,
 		);
-	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
-	let stagePlan: StageTestPlan | undefined;
-	let missing: string[] = [];
-	let blockPlan: StageBlockPlan;
-	if (Array.isArray(raw.route)) {
-		stagePlan = decodeContract<StageTestPlan>(
-			"core.stage-test-plan",
-			StageTestPlanSchema,
-			raw,
-		);
-		const workflowId = ownerWorkflowId(owner);
-		const projected = blockPlanFromRoute(
-			stagePlan.route as unknown as Parameters<typeof blockPlanFromRoute>[0],
-			{
-				...(workflowId === undefined
-					? {}
-					: {
-							planId: `stage-${workflowId}-r${body.approvedRevision ?? 0}`,
-						}),
-				...(stagePlan.flowId === undefined ? {} : { flowId: stagePlan.flowId }),
-				...(body.approvedRevision === undefined
-					? {}
-					: { revision: body.approvedRevision }),
-				...(stagePlan.inputs === undefined
-					? {}
-					: {
-							inputs: stagePlan.inputs as Readonly<Record<string, JsonValue>>,
-						}),
-				registry,
-			},
-		);
-		blockPlan = projected.plan;
-		missing = [...projected.missing];
-		if (body.draftArgs !== undefined) {
-			if (body.save === true)
-				throw new BrowserPoolError(
-					"flow-mixed-plan",
-					"a saved flow takes its arguments from the approved plan, not from draftArgs",
-					400,
-				);
-			const authored = new Set(
-				stagePlan.route
-					.filter(
-						(entry) =>
-							entry.block === undefined &&
-							(entry.blockToCreate !== undefined ||
-								entry.blockToAdjust !== undefined),
-					)
-					.map((entry) => entry.id),
-			);
-			for (const id of Object.keys(body.draftArgs))
-				if (!authored.has(id))
-					throw new BrowserPoolError(
-						"stage-plan-invalid",
-						`draftArgs names ${id}, which is not a route step whose block you author (blockToCreate/blockToAdjust)`,
-						400,
-					);
-			blockPlan = {
-				...blockPlan,
-				steps: blockPlan.steps.map((step) => {
-					const extra =
-						step.id === undefined ? undefined : body.draftArgs?.[step.id];
-					return isRecordValue(extra)
-						? {
-								...step,
-								args: {
-									...(step.args ?? {}),
-									...(extra as Record<string, JsonValue>),
-								},
-							}
-						: step;
-				}),
-			};
-		}
-		if (body.save === true && missing.length > 0)
-			throw new BrowserPoolError(
-				"flow-mixed-plan",
-				`a saved flow needs a block on every route step; ${missing.join(", ")} have none`,
-				400,
-			);
-	} else {
-		blockPlan = raw as unknown as StageBlockPlan;
-		// A draft is executable only by the approved route step that authored it.
-		// A standalone plan must not reach into this run's drafts.
-		const draftIds = new Set(loaded.drafts.map((draft) => draft.document.id));
-		const undeclared = blockPlan.steps.find(
-			(step) => step !== undefined && draftIds.has(step.block),
-		);
-		if (undeclared !== undefined)
-			throw new BrowserPoolError(
-				"block-draft-undeclared",
-				`${undeclared.block} is this run's draft; only the approved route step that authored it may execute it`,
-				400,
-			);
-		if (body.save === true && blockPlan.flowId === undefined)
-			throw new BrowserPoolError(
-				"flow-identity-missing",
-				"saving a flow needs the approved stage plan with a flowId; a standalone block plan is run-only",
-				400,
-			);
-	}
-	if (body.save === true && stagePlan === undefined)
+	if (Array.isArray(raw.route))
 		throw new BrowserPoolError(
-			"flow-identity-missing",
-			"saving a flow needs the approved stage plan, not a standalone block plan",
+			"stage-plan-invalid",
+			"stage_run takes a standalone block plan — { flowId?, inputs?, steps } with per-step args — not an approved stage plan; the tester chooses its own steps",
 			400,
 		);
+	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
+	const blockPlan = raw as unknown as StageBlockPlan;
 
 	if (body.dryRun === true) {
 		const validation = validateStageBlockPlan(blockPlan, {
@@ -3759,9 +3616,9 @@ async function stageRun(
 		return {
 			planId: validation.plan?.planId ?? "plan-dry-run",
 			...(blockPlan.flowId === undefined ? {} : { flowId: blockPlan.flowId }),
-			...(body.approvedRevision === undefined
+			...(blockPlan.revision === undefined
 				? {}
-				: { revision: body.approvedRevision }),
+				: { revision: blockPlan.revision }),
 			inputsHash: validation.plan?.inputsHash ?? "sha256:dry-run",
 			stage: body.stage ?? "unopened",
 			status: issues.length === 0 ? "passed" : "failed",
@@ -3836,25 +3693,12 @@ async function stageRun(
 			400,
 		);
 
-	// The approved plan revision is the one the workflow currently holds. A
-	// caller that hands in an older revision gets a re-approval refusal rather
-	// than silently driving a different plan.
+	// The workflow's own revision labels the proofs this run records; it is read
+	// here, once, so a proof names the run state it was recorded at.
 	const workflowId = ownerWorkflowId(owner);
 	const located = workflowId
 		? (deps.locate ?? locateEvidenceWorkflow)(workflowId)
 		: undefined;
-	if (
-		body.approvedRevision !== undefined &&
-		located?.revision !== undefined &&
-		body.approvedRevision !== located.revision
-	)
-		throw new BrowserPoolError(
-			"stage-plan-stale",
-			`the plan is approved at revision ${body.approvedRevision}, but the workflow is at revision ${located.revision}; request a fresh plan review`,
-			409,
-			undefined,
-			{ approvedRevision: body.approvedRevision, revision: located.revision },
-		);
 
 	const scope = evidenceScope(deps, owner);
 	const redact = journalRedactor(deps);
@@ -3998,9 +3842,8 @@ async function stageRun(
 		const at = new Date().toISOString();
 		// A proof names the run that recorded it, by the same identity the draft
 		// record uses: the workflow id is reusable, so it cannot stand in for it
-		// (`OSV-021`, `MIG-011`). The revision is the run's own, with the request
-		// value only ever a staleness check (above).
-		const revision = located?.revision ?? body.approvedRevision;
+		// (`OSV-021`, `MIG-011`). The revision is the run's own.
+		const revision = located?.revision;
 		for (const draft of loaded.drafts) {
 			const step = result.steps.find(
 				(candidate) => candidate.block === draft.document.id,
@@ -4029,21 +3872,9 @@ async function stageRun(
 				});
 		}
 	}
-	const resultIssues = [
-		...(result.issues ?? []),
-		...proofIssues,
-		...missing.map((routeStepId) => ({
-			code: "plan-route-gap",
-			message: `route step ${routeStepId} has no block; run it with the exploratory browser tools`,
-			routeStepId,
-		})),
-	];
+	const resultIssues = [...(result.issues ?? []), ...proofIssues];
 	let saved: import("../../contracts/stage-blocks.ts").StageRunResponse["saved"];
-	if (
-		body.save === true &&
-		result.status === "passed" &&
-		stagePlan !== undefined
-	) {
+	if (body.save === true && result.status === "passed") {
 		if (located?.worktree === undefined)
 			throw new BrowserPoolError(
 				"flow-workspace-missing",
@@ -4051,14 +3882,12 @@ async function stageRun(
 				409,
 			);
 		try {
-			const source = flowSourceFromStagePlan({
-				stagePlan,
+			const source = flowSourceFromPlan({
 				plan: normalized,
 				stage: binding.ident,
-				planId: normalized.planId,
-				...(body.approvedRevision === undefined
+				...(located?.revision === undefined
 					? {}
-					: { revision: body.approvedRevision }),
+					: { revision: located.revision }),
 			});
 			const generated = await generateFlow({
 				root: located.worktree,
@@ -4151,13 +3980,8 @@ function stageFlows(
 	};
 }
 
-function replayApprovedInputs(
-	plan: StageTestPlan,
-): Readonly<Record<string, JsonValue>> {
-	return (plan.inputs ?? {}) as Readonly<Record<string, JsonValue>>;
-}
-
-function replayPlanId(
+/** The label a draft records for the run state it was authored at. */
+function runStateLabel(
 	workflowId: string,
 	revision: number | undefined,
 ): string {
@@ -4228,125 +4052,36 @@ async function stageReplay(
 	const workflowId = ownerWorkflowId(owner);
 	if (workflowId === undefined)
 		throw new BrowserPoolError(
-			"stage-plan-missing",
+			"stage-workflow-missing",
 			"stage replay belongs to a workflow run",
 			403,
 		);
 	const located = (deps.locate ?? locateEvidenceWorkflow)(workflowId);
-	if (located?.stageTestPlan === undefined)
-		throw new BrowserPoolError(
-			"stage-plan-missing",
-			"the workflow holds no approved stage-test plan",
-			409,
-		);
-	const stage = body.stage ?? located.stage;
+	const stage = body.stage ?? located?.stage;
 	if (stage === undefined)
 		throw new BrowserPoolError(
 			"stage-mismatch",
 			"the workflow has no pinned stage",
 			409,
 		);
-	if (located.stage !== undefined && stage !== located.stage)
+	if (located?.stage !== undefined && stage !== located.stage)
 		throw new BrowserPoolError(
 			"stage-mismatch",
 			`the workflow is pinned to ${located.stage}, not ${stage}`,
 			409,
 		);
-	if (
-		body.approvedRevision !== undefined &&
-		located.revision !== undefined &&
-		body.approvedRevision !== located.revision
-	)
-		throw new BrowserPoolError(
-			"stage-plan-stale",
-			`the plan is approved at revision ${body.approvedRevision}, but the workflow is at revision ${located.revision}`,
-			409,
-		);
-	if (located.worktree === undefined)
+	if (located?.worktree === undefined)
 		throw new BrowserPoolError(
 			"flow-workspace-missing",
 			"stage replay needs the workflow's checkout with stage-flows",
 			409,
 		);
-	const revision = body.approvedRevision ?? located.revision;
-	const stagePlan = decodeContract<StageTestPlan>(
-		"core.stage-test-plan",
-		StageTestPlanSchema,
-		located.stageTestPlan,
-	);
-	if (stagePlan.flowId === undefined)
-		throw new BrowserPoolError(
-			"flow-identity-missing",
-			"the approved plan does not name a flowId",
-			409,
-		);
-	if (stagePlan.flowId !== body.flowId)
-		throw new BrowserPoolError(
-			"flow-id-mismatch",
-			`the approved plan names ${stagePlan.flowId}, not ${body.flowId}`,
-			409,
-		);
+	const revision = located.revision;
 	const entry = stageEntryFor(deps, stage);
-	const projected = blockPlanFromRoute(
-		stagePlan.route as unknown as Parameters<typeof blockPlanFromRoute>[0],
-		{
-			planId: replayPlanId(workflowId, revision),
-			flowId: stagePlan.flowId,
-			...(revision === undefined ? {} : { revision }),
-			...(stagePlan.inputs === undefined
-				? {}
-				: { inputs: stagePlan.inputs as Readonly<Record<string, JsonValue>> }),
-		},
-	);
-	if (projected.missing.length > 0)
-		throw new BrowserPoolError(
-			"flow-not-fully-blocked",
-			`the approved plan has no block on ${projected.missing.join(", ")}`,
-			409,
-		);
-	const role =
-		body.role ?? stagePlan.route.find((step) => step.role !== undefined)?.role;
-	const writeAllowed =
-		entry.stage.access === "writable" && stagePlan.createsData === true;
-	const policy: StageBlockPolicy = {
-		stage,
-		access: entry.stage.access,
-		writeAllowed,
-		...(role === undefined ? {} : { role }),
-		apps: replayApps(entry),
-	};
-	const secretValues = redactionSecrets(deps).map((secret) => secret.value);
-	const validation = validateStageBlockPlan(projected.plan, {
-		registry: registry,
-		policy,
-		secretValues,
-	});
-	if (!validation.ok || validation.plan === undefined)
-		throw new BrowserPoolError(
-			"flow-invalid-plan",
-			`the approved replay plan is not valid: ${validation.issues
-				.slice(0, 5)
-				.map((issue) => issue.message)
-				.join("; ")}`,
-			400,
-			undefined,
-			{ issues: validation.issues.slice(0, 20) },
-		);
-	const normalized = validation.plan;
-	let source: import("../../stage-blocks/flow.ts").FlowSource;
-	try {
-		source = flowSourceFromStagePlan({
-			stagePlan,
-			plan: normalized,
-			stage,
-			planId: normalized.planId,
-			...(revision === undefined ? {} : { revision }),
-		});
-	} catch (error) {
-		if (error instanceof FlowSourceError)
-			throw new BrowserPoolError(error.code, error.message, 409);
-		throw error;
-	}
+	const role = body.role;
+	// The stage's own access setting is the write boundary: a replay of a
+	// writable stage may create test data, exactly like the tester does.
+	const writeAllowed = entry.stage.access === "writable";
 	const manifestEntry = replayEntryFor(located.worktree, body.flowId);
 	if (manifestEntry === undefined)
 		throw new BrowserPoolError(
@@ -4354,72 +4089,46 @@ async function stageReplay(
 			`flow ${body.flowId} is not saved under stage-flows`,
 			409,
 		);
+	// The replay is decoupled from any plan approval (`remove-stage-test-
+	// planner`): the caller supplies the inputs, and without them the flow runs
+	// with its own recorded example, which the answer states back.
+	const inputs = (body.inputs ??
+		manifestEntry.manifest.inputExamples[0] ??
+		{}) as Readonly<Record<string, JsonValue>>;
+	const inputsHash = canonicalInputsHash(inputs);
 	const eligibility = flowEligibility({
 		flowId: body.flowId,
 		root: located.worktree,
 		stage,
-		source,
 		registry: registry,
 		draftIds,
 		apps: replayApps(entry),
 		entry: manifestEntry,
+		inputs,
 		...(role === undefined ? {} : { role }),
 	});
-	const approvedInputs = replayApprovedInputs(stagePlan);
-	const proposedInputs = (body.inputs ?? approvedInputs) as Readonly<
-		Record<string, JsonValue>
-	>;
-	const approvedHash = canonicalInputsHash(approvedInputs);
-	const proposedHash = canonicalInputsHash(proposedInputs);
-	if (body.dryRun === true) {
-		const drySource = { ...source, inputs: proposedInputs };
-		const dryEligibility = flowEligibility({
-			flowId: body.flowId,
-			root: located.worktree,
-			stage,
-			source: drySource,
-			registry: registry,
-			draftIds,
-			apps: replayApps(entry),
-			entry: manifestEntry,
-			...(role === undefined ? {} : { role }),
-		});
-		const issues = [...dryEligibility.issues];
-		if (proposedHash !== approvedHash)
-			issues.push({
-				code: "flow-inputs-unapproved",
-				message:
-					"the proposed inputs differ from the approved plan; a new plan revision is required before execution",
-			});
+	if (body.dryRun === true)
 		return {
 			flowId: body.flowId,
-			...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
 			...(revision === undefined ? {} : { revision }),
-			inputsHash: proposedHash,
+			inputsHash,
+			inputs,
 			routeHash: manifestEntry.manifest.routeHash,
 			specHash: manifestEntry.manifest.specHash,
 			stage,
-			status: issues.length === 0 ? "passed" : "failed",
+			status: eligibility.issues.length === 0 ? "passed" : "failed",
 			startedAt: new Date().toISOString(),
 			durationMs: 0,
 			steps: [],
 			dryRun: {
-				eligible: dryEligibility.eligible,
-				approved: proposedHash === approvedHash,
-				issues: issues.slice(0, 50),
+				eligible: eligibility.eligible,
+				issues: eligibility.issues.slice(0, 50),
 				inputSchema: manifestEntry.manifest.inputSchema as unknown as Readonly<
 					Record<string, unknown>
 				>,
-				proposedInputsHash: proposedHash,
+				inputs,
 			},
 		};
-	}
-	if (body.inputs !== undefined && proposedHash !== approvedHash)
-		throw new BrowserPoolError(
-			"flow-inputs-unapproved",
-			"the supplied inputs differ from the approved plan revision; a new plan review is required",
-			409,
-		);
 	if (!eligibility.eligible)
 		throw new BrowserPoolError(
 			"flow-not-eligible",
@@ -4457,11 +4166,10 @@ async function stageReplay(
 		stage,
 		...(role === undefined ? {} : { role }),
 		apps: appUrls,
-		inputs: approvedInputs,
-		...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
+		inputs,
 		...(revision === undefined ? {} : { revision }),
 		routeHash: manifestEntry.manifest.routeHash,
-		inputsHash: approvedHash,
+		inputsHash,
 		writeAllowed,
 		dataRoot: evidenceScope(deps, owner).dataRoot,
 		...(deps.installer?.installedChromium() === undefined
@@ -4482,9 +4190,9 @@ async function stageReplay(
 	if (processResult.timedOut)
 		return {
 			flowId: body.flowId,
-			...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
 			...(revision === undefined ? {} : { revision }),
-			inputsHash: approvedHash,
+			inputsHash,
+			inputs,
 			routeHash: manifestEntry.manifest.routeHash,
 			specHash: manifestEntry.manifest.specHash,
 			stage,
@@ -4506,7 +4214,7 @@ async function stageReplay(
 		{
 			flowId: body.flowId,
 			routeHash: manifestEntry.manifest.routeHash,
-			inputsHash: approvedHash,
+			inputsHash,
 		},
 		processResult.exitCode,
 		redact,
@@ -4579,7 +4287,6 @@ async function stageReplay(
 					? {}
 					: { url: evidenceUrl(deps, event.url) }),
 				label: event.subStep,
-				planId: normalized.planId,
 				routeStepId: event.routeStepId,
 				block: event.block,
 				blockVersion: event.version,
@@ -4591,7 +4298,7 @@ async function stageReplay(
 				evidence: eventEvidence,
 				flowId: body.flowId,
 				...(revision === undefined ? {} : { revision }),
-				inputsHash: approvedHash,
+				inputsHash,
 				replayRunId: processResult.runId,
 				source: "replay",
 			},
@@ -4680,26 +4387,6 @@ async function stageReplay(
 			// The attached evidence is authoritative; the file is a convenience.
 		}
 	}
-	const mapped = mapReplayToReport(
-		manifestEntry.manifest,
-		result,
-		stagePlan,
-		facts,
-	);
-	const redactedReport = redactDeep(mapped.report, redact) as Readonly<
-		Record<string, unknown>
-	>;
-	let reportEvidenceId: string | undefined;
-	if (mapped.complete) {
-		const stored = await storeEvidence(deps, owner, {
-			text: `${JSON.stringify(redactedReport, null, 2)}\n`,
-			kind: "log",
-			caption: `Stage replay report for ${body.flowId}`,
-			url: "",
-			extension: "json",
-		});
-		reportEvidenceId = stored.id;
-	}
 	let resultEvidenceId: string | undefined;
 	try {
 		const stored = await storeEvidence(deps, owner, {
@@ -4715,21 +4402,15 @@ async function stageReplay(
 		// journal and screenshots the replay already produced.
 	}
 	const issues: Array<{ code: string; message: string; field?: string }> = [];
-	if (!mapped.complete)
-		issues.push({
-			code: "flow-expectation-uncovered",
-			message:
-				"the replay does not cover every planned expectation; route to the normal tester",
-		});
 	const redactedSteps = stepResponses.map((step) => ({
 		...step,
 		...(step.error === undefined ? {} : { error: redact(step.error) }),
 	}));
 	return {
 		flowId: body.flowId,
-		...(normalized.planId === undefined ? {} : { planId: normalized.planId }),
 		...(revision === undefined ? {} : { revision }),
-		inputsHash: approvedHash,
+		inputsHash,
+		inputs,
 		routeHash: manifestEntry.manifest.routeHash,
 		specHash: manifestEntry.manifest.specHash,
 		stage,
@@ -4757,8 +4438,6 @@ async function stageReplay(
 					},
 				}),
 		...(healWithEvidence === undefined ? {} : { heal: healWithEvidence }),
-		...(mapped.complete ? { report: redactedReport } : {}),
-		...(reportEvidenceId === undefined ? {} : { reportEvidenceId }),
 		...(resultEvidenceId === undefined ? {} : { resultEvidenceId }),
 		...(issues.length === 0 ? {} : { issues }),
 	};
@@ -4844,9 +4523,6 @@ async function stageReplaySuite(
 				...(entry.inputs === undefined ? {} : { inputs: entry.inputs }),
 				stage,
 				...(body.dryRun === undefined ? {} : { dryRun: body.dryRun }),
-				...(body.approvedRevision === undefined
-					? {}
-					: { approvedRevision: body.approvedRevision }),
 				...(body.role === undefined ? {} : { role: body.role }),
 			});
 			const evidenceIds = [
@@ -4859,9 +4535,6 @@ async function stageReplaySuite(
 				inputsHash: response.inputsHash,
 				routeHash: response.routeHash,
 				...(evidenceIds.length === 0 ? {} : { evidenceIds }),
-				...(response.reportEvidenceId === undefined
-					? {}
-					: { reportEvidenceId: response.reportEvidenceId }),
 				...(response.resultEvidenceId === undefined
 					? {}
 					: { resultEvidenceId: response.resultEvidenceId }),

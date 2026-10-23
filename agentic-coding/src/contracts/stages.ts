@@ -101,7 +101,6 @@ export interface StageStatus {
 	readonly environment: string;
 	readonly system: string;
 	readonly access: "read-only" | "writable";
-	readonly planApproval: "always" | "when-writing" | "never";
 	readonly exclusive: boolean;
 	readonly apps: readonly StageAppStatus[];
 	readonly origins: readonly string[];

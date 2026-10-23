@@ -9,13 +9,13 @@ import path from "node:path";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { STAGE_FLOW_DIRECTORY } from "../src/stage-blocks/flow.ts";
 import { generateFlow } from "../src/stage-blocks/flow-generator.ts";
-import { flowSourceFromStagePlan } from "../src/stage-blocks/flow-source.ts";
 import {
 	blockPlanFromRoute,
 	validateStageBlockPlan,
 } from "../src/stage-blocks/plan.ts";
 import { stageBlockRegistry } from "../src/stage-blocks/registry.ts";
 import { stageReplayEligible } from "../src/workflow/runtime/stage-replay-eligibility.ts";
+import { flowSourceFromRoute } from "./support/flow-source-fixture.ts";
 
 const ROOT = path.join(import.meta.dir, "..");
 const FLOW_ID = "test-eligibility-customer-address";
@@ -155,8 +155,8 @@ async function saveFlow(): Promise<void> {
 	const generated = await generateFlow({
 		root: ROOT,
 		registry: stageBlockRegistry,
-		source: flowSourceFromStagePlan({
-			stagePlan: PLAN,
+		source: flowSourceFromRoute({
+			routePlan: PLAN,
 			plan: validated.plan,
 			stage: "crm-int",
 			planId: "stage-eligibility-r1",
@@ -191,7 +191,10 @@ describe("stage replay eligibility (add-stage-flow-replay)", () => {
 		).toBe(false);
 	});
 
-	test("a plan whose route drifted from the saved spec is ineligible", async () => {
+	test("a saved flow no longer needs the plan's route to match", async () => {
+		// A flow is data (`remove-stage-test-planner`): what it runs is its own
+		// manifest, so an edited plan route cannot make it ineligible. Only the
+		// plan's flowId and inputs still matter here, and they are unchanged.
 		await saveFlow();
 		expect(
 			stageReplayEligible(
@@ -199,7 +202,7 @@ describe("stage replay eligibility (add-stage-flow-replay)", () => {
 					stageTestPlan: { ...PLAN, route: PLAN.route.slice(0, 2) },
 				}),
 			),
-		).toBe(false);
+		).toBe(true);
 	});
 
 	test("no worktree is ineligible", async () => {

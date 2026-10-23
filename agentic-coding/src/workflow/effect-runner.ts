@@ -287,9 +287,9 @@ export type ReportProof = {
 	readonly evidenceIds: readonly string[];
 };
 
-/** The report's blocks section: what ran, what was authored with its proof, the
- * authored documents themselves, and every route step that ended without a
- * block (`author-stage-blocks-as-data`). */
+/** The report's blocks section: what ran and what was authored with its proof,
+ * the authored documents themselves (`author-stage-blocks-as-data`). The tester
+ * chose the route, so a claim names the block, not a plan step. */
 function stageBlockReportLines(input: {
 	report: StageTestReport;
 	drafts: readonly {
@@ -309,7 +309,7 @@ function stageBlockReportLines(input: {
 	if (report.blocksUsed.length > 0) {
 		lines.push("### Blocks used", "");
 		for (const claim of report.blocksUsed)
-			lines.push(`- ${claim.routeStepId}: \`${claim.block}@${claim.version}\``);
+			lines.push(`- \`${claim.block}@${claim.version}\``);
 		lines.push("");
 	}
 	for (const [heading, claims, adjusted] of [
@@ -346,7 +346,7 @@ function stageBlockReportLines(input: {
 					: [`evidence ${proof.evidenceIds.slice(0, 5).join(", ")}`]),
 			];
 			lines.push(
-				`- proof: ${proof?.status ?? "none recorded"}${claim.routeStepId === undefined ? "" : ` (route step ${claim.routeStepId})`}${cited.length === 0 ? "" : ` — ${cited.join("; ")}`}`,
+				`- proof: ${proof?.status ?? "none recorded"}${cited.length === 0 ? "" : ` — ${cited.join("; ")}`}`,
 			);
 			lines.push(
 				...stageBlockDocumentLines(
@@ -355,12 +355,6 @@ function stageBlockReportLines(input: {
 				),
 			);
 		}
-		lines.push("");
-	}
-	if (report.unblockedSteps.length > 0) {
-		lines.push("### Route steps without a block", "");
-		for (const step of report.unblockedSteps)
-			lines.push(`- ${step.routeStepId}: ${step.reason}`);
 		lines.push("");
 	}
 	return lines;
@@ -469,7 +463,6 @@ function stageReportMarkdown(
 	stage: string,
 	ticket: string | undefined,
 	stageInfo: { environment: string; system: string; access: string },
-	plan: StageTestPlan,
 	report: StageTestReport,
 	journal: ReturnType<typeof readStageJournal>,
 	evidence: ReturnType<typeof listEvidence>["entries"],
@@ -517,29 +510,7 @@ function stageReportMarkdown(
 		`- Journal steps: ${journal.length}`,
 		`- Evidence items: ${evidence.length}`,
 		"",
-		"## Plan",
-		"",
-		plan.ticketSummary,
-		"",
-		"### Expectations",
-		"",
-		...plan.expectations.map(
-			(item) =>
-				`- **${item.id} (${item.priority}, ${item.source}):** ${item.statement}`,
-		),
-		"",
-		"### Knowledge used",
-		"",
-		...(plan.knowledgeUsed.length
-			? plan.knowledgeUsed.map(
-					(item) =>
-						`- ${item.concept} (trust: ${item.trustTier}; stale: ${item.stale ? "yes" : "no"})`,
-				)
-			: [
-					"No process knowledge was found; the route was derived from the ticket.",
-				]),
-		"",
-		"### Application versions",
+		"## Application versions",
 		"",
 		...(report.applicationVersions.length
 			? report.applicationVersions.map(
@@ -548,10 +519,12 @@ function stageReportMarkdown(
 				)
 			: ["No application versions were resolved."]),
 		"",
-		`- Creates data: ${plan.createsData ? "yes" : "no"}`,
-		...(plan.dataCreated.length
-			? plan.dataCreated.map((value) => `- Planned data: ${value}`)
-			: []),
+		"## Expectations",
+		"",
+		...report.expectations.map(
+			(item) =>
+				`- **${item.id} (${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""}):** ${item.statement ?? item.expected}`,
+		),
 		"",
 		"## Execution",
 		"",
@@ -569,7 +542,7 @@ function stageReportMarkdown(
 				const entry = evidenceById.get(id);
 				return entry ? `${id}: ${entry.caption || entry.file}` : id;
 			});
-			return `- **${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""} — ${item.id}:** expected ${item.expected}; observed ${item.observed}. Steps: ${item.stepIds.join(", ") || "none"}. Evidence: ${captions.join("; ") || "none"}.`;
+			return `- **${item.verdict.toUpperCase()}${item.severity ? ` / ${item.severity}` : ""} — ${item.id}:** ${item.statement ?? "(no statement)"}; expected ${item.expected}; observed ${item.observed}. Steps: ${item.stepIds.join(", ") || "none"}. Evidence: ${captions.join("; ") || "none"}.`;
 		}),
 		"",
 		"## Evidence",
@@ -620,9 +593,7 @@ function stageReportMarkdown(
 }
 
 import {
-	type StageTestPlan,
 	type StageTestReport,
-	stageTestPlan,
 	stageTestReport,
 } from "./definitions/contracts.ts";
 import { hashToken } from "./runtime/capability.ts";
@@ -2088,11 +2059,7 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"stage report effect is not attached to a pinned stage-test workflow",
 						);
-					const payload = effect.payload as {
-						plan?: unknown;
-						report?: unknown;
-					};
-					const plan = stageTestPlan.parse(payload.plan);
+					const payload = effect.payload as { report?: unknown };
 					const report = stageTestReport.parse(payload.report);
 					const scope = workflowEvidenceScope({
 						workflowId: snapshot.workflowId,
@@ -2118,7 +2085,6 @@ export function agentEffectHandlers(
 						snapshot.metadata.createdAt,
 					).drafts;
 					const issues = stageReportIssues({
-						plan,
 						report,
 						journal,
 						evidenceIds: evidence.map((entry) => entry.id),
@@ -2141,7 +2107,6 @@ export function agentEffectHandlers(
 					});
 					if (issues[0]) throw new PermanentFailure(issues[0]);
 					const secrets = environmentSecrets(resolveConfigRoot());
-					const safePlan = redact(plan, secrets) as typeof plan;
 					const safeReport = redact(report, secrets) as typeof report;
 					const rendered = stageReportMarkdown(
 						snapshot.metadata.stage,
@@ -2151,7 +2116,6 @@ export function agentEffectHandlers(
 							system: stageEntry.stage.system,
 							access: stageEntry.stage.access,
 						},
-						safePlan,
 						safeReport,
 						journal,
 						evidence,
@@ -2250,12 +2214,7 @@ export function agentEffectHandlers(
 						(entry) => entry.caption === caption,
 					);
 					if (alreadyStored)
-						return {
-							plan: safePlan,
-							report: safeReport,
-							markdown,
-							reportPath,
-						};
+						return { report: safeReport, markdown, reportPath };
 					if (
 						signal?.aborted ||
 						!engine.effectIsLive(repo, effect.id, effect.lease ?? "")
@@ -2316,12 +2275,7 @@ export function agentEffectHandlers(
 									: "stage report evidence could not be stored",
 							),
 					});
-					return {
-						plan: safePlan,
-						report: safeReport,
-						markdown,
-						reportPath,
-					};
+					return { report: safeReport, markdown, reportPath };
 				}),
 		},
 		"agent.launch": {

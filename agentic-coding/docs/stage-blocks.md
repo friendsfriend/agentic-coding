@@ -1,9 +1,10 @@
 # Stage blocks
 
-A stage block is one reviewed, typed unit of browser work between a stage
-plan and the browser: the plan owns the chain, inputs and approval; the block
-owns the mechanics of one user intention (sign in, open a record, fill and
-save a form); the runner owns the browser session, journal and evidence. A
+A stage block is one reviewed, typed unit of browser work. The tester owns
+exploration, checks and a standalone block plan's chain and inputs; the block
+owns one user intention (sign in, open a record, fill and save a form); the
+runner owns the browser session, journal and evidence. No approved route or
+separate planner constrains the tester. A
 block is an ordinary async TypeScript function, not an Effect service or a
 generated artifact — the same function executes under `stage_run` (the plan
 runner, backed by the existing browser session) and under a generated
@@ -103,13 +104,14 @@ version is a normal, reported replacement.
 
 `stage_block_save` is the only write path for a draft. It is available to the
 stage-tester only during `stage.execute` and only with a stage-bound session.
-The draft's `planId` and `revision` are the workflow's pinned plan and revision,
-derived by the engine, so an authoring call cannot claim to be part of a plan it
-is not running. It refuses (`block-document-invalid`, `stage-app-unknown`,
+The draft's `planId` is a run-state label (`stage-<workflowId>-r<revision>`),
+and its revision comes from the workflow record, not a request field or an
+approved plan. It refuses (`block-document-invalid`, `stage-app-unknown`,
 `block-role-undeclared`, `block-destructive-refused`, `block-checked-in`,
 `stage-read-only` for a `write` document, `block-secret-literal`,
-`block-contract-breaking`). A draft never widens stage policy: writes still
-need an approved plan that `createsData`, and `destructive` stays refused.
+`block-contract-breaking`). A draft never widens stage policy: writes require a writable stage, and
+`destructive` stays refused. Any standalone plan in this run may execute its
+own drafts; drafts from another run remain invisible.
 
 Promotion is the `stage.blocks.promote` edge effect on `stage.review → approve`
 (and `approve-and-update-wiki`): it reads the drafts this run saved that the
@@ -230,17 +232,18 @@ exactly these issues and the resolved block versions, with no browser opened.
 
 The policy also enforces effects against the stage itself: a `destructive`
 block is always refused (`stage-action-destructive`); a `write` block is
-refused on a read-only stage (`stage-read-only`) or when the approved plan
-does not permit data creation (`stage-action-not-approved`).
+refused on a read-only stage (`stage-read-only`). Stage access is the write
+boundary, not plan approval.
 
 The runner (`runStageBlockPlan`) executes a validated plan's steps in order,
 resolving every input/output reference, and records per step: index, route
 step id, block id, resolved version, status, duration, outputs, journal ids
 and evidence ids. It stops on the first failure, retries an idempotent read
 at most once, and never retries a non-idempotent write or a destructive
-block. The result envelope carries the plan id, `inputsHash`, the approved
-plan revision, the stage, overall status, per-step results and failure
-details — never raw inputs and never a full page snapshot.
+block. The result envelope carries the standalone plan id, `inputsHash`, its
+revision when supplied, the stage, overall status, per-step results and failure
+details; draft execution proofs always take their revision from the workflow
+record — never raw inputs and never a full page snapshot.
 
 ## Journal and evidence
 
@@ -259,28 +262,25 @@ return schema, application scope, effects, `requires` or `provides` — any of
 these without a major version bump (`hasMajorBump`) is a build-time
 registry failure. A block due for retirement carries `deprecated: {
 replacementId?, removalDate? }`, surfaced in both the compact and full
-catalog so a planner sees it before choosing it.
+catalog so a tester sees it before choosing it.
 
 ## The `stage_run` tool
 
 `stage_run({ plan, session?, dryRun?, save? })` validates and executes a
 linear block plan in one call and returns a compact ledger (the journal and
-evidence store hold the detail). It accepts either a standalone block plan or
-the approved stage-test plan whose route steps carry `block` entries — a
-route step with no `block` is reported back as a `plan-route-gap` rather than
-attempted, so a plan may be partly blocked and partly exploratory: the tester
-runs the blocked steps through one `stage_run` call and the rest with the
-normal snapshot/action tools, in the planned route order. Execution needs a
+evidence store hold the detail). It accepts only a standalone block plan with per-step `args`. The tester
+chooses those steps while exploring and can use the normal snapshot/action
+tools before, between or after block calls. There is no approved-route
+projection, `draftArgs` side channel, `approvedRevision` gate or
+`plan-route-gap`. Execution needs a
 stage-bound session and the same stage/write policy as the exploratory tools;
 inputs and arguments must never contain a credential — use a block's
 secret-variable argument instead.
 
-`save: true` turns a fully blocked, approved stage plan that also names a
-`flowId` into a saved, replayable flow (`stage-flows/<flowId>/`) — see
-[`docs/stage-flow-replay.md`](stage-flow-replay.md) for generation,
-parameterized inputs and replay itself. A standalone block plan (no approved
-workflow plan behind it) is refused with `flow-identity-missing` if `save` is
-requested, since there is no plan revision to attribute the saved flow to.
+`save: true` turns a successful standalone plan with a `flowId` into a saved,
+replayable flow (`stage-flows/<flowId>/`). Missing flow identity and unapproved
+drafts are refused. See [`docs/stage-flow-replay.md`](stage-flow-replay.md) for
+generation, parameterized inputs and plan-free replay.
 
 ## Writing a checked-in block
 
@@ -304,9 +304,8 @@ requested, since there is no plan revision to attribute the saved flow to.
 
 The stage-tester authors a data block; no builder step or role is involved.
 
-1. `stage_blocks` for a block that already matches the step. A plan route step
-   declares exactly one of `block`, `blockToCreate`, `blockToAdjust` or
-   `noBlockReason`, so the plan states which of the four it expects.
+1. Check `stage_blocks` for a block that matches what the ticket needs. You
+   decide what to test and whether blocks or exploratory tools fit best.
 2. Explore the step with the normal snapshot/action loop until it works.
 3. `stage_block_save({document})` with one `step` per intent, at least one
    `expectVisible`/`expectText` per step, a declared `params` entry for every
@@ -314,4 +313,4 @@ The stage-tester authors a data block; no builder step or role is involved.
 4. Run it once with `stage_run` so the draft carries a passed proof.
 5. Report `blocksCreated`/`blocksAdjusted` with the `digest` the save returned;
    approving the report promotes the draft into the approved store, where the
-   next run's planner sees it.
+   next run's tester sees it.

@@ -23,7 +23,6 @@ function stage(
 		environment: "acceptance",
 		system: "portal",
 		access,
-		planApproval: "when-writing",
 		exclusive: false,
 		apps,
 		origins: [],

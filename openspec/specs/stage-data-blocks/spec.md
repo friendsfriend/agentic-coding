@@ -61,7 +61,7 @@ The system SHALL store an approved data block as
 document, and SHALL compose the registry per call from the checked-in blocks,
 the approved store and the calling workflow's drafts. A block saved or promoted
 in one run SHALL therefore be available to `stage_blocks`, `stage_run`, flow
-eligibility and the next run's planner without a rebuild or a restart. A
+eligibility and the next run's tester without a rebuild or a restart. A
 document SHALL be excluded with a value-free diagnostic and SHALL NOT be loaded
 when it is invalid, unreadable, larger than the bound, more than 200 documents
 exist, its id collides with a checked-in block or another data file, or an
@@ -88,14 +88,14 @@ catalog build artifact SHALL continue to describe only the checked-in blocks.
 ### Requirement: A draft is scoped to the authoring run
 The stage-tester SHALL author a block as a draft stored under the run's own
 workflow directory, and a draft SHALL be visible only to the run that created it:
-the run's `stage_blocks` and `stage_run` see it, another run's catalog, the
-planner and flow eligibility do not, and a flow SHALL never pin it. A draft
-SHALL record the stage, plan id, revision and the newest five execution proofs
-(`status`, time, journal ids, evidence ids, and the version and digest of the
-document that ran), all of them derived by the engine from the pinned plan and
-the run's own state rather than supplied by the tester. Running the plan that
-uses the draft SHALL append a proof of the document it ran; editing the document
-SHALL NOT carry a proof over to the new body or version. Drafts SHALL be removed when the workflow's workspace is
+the run's `stage_blocks` and `stage_run` see it, another run's catalog and flow
+eligibility do not, and a flow SHALL never pin it. A draft SHALL record the
+stage, plan id, revision and the newest five execution proofs (`status`, time,
+journal ids, evidence ids, and the version and digest of the document that ran),
+all of them derived by the engine from the run's own state rather than supplied
+by the tester. Running a plan that uses the draft SHALL append a proof of the
+document it ran; editing the document SHALL NOT carry a proof over to the new
+body or version. Drafts SHALL be removed when the workflow's workspace is
 closed, and a follow-up round SHALL keep them so the tester can continue.
 
 #### Scenario: Draft runs in its own run
@@ -104,7 +104,7 @@ closed, and a follow-up round SHALL keep them so the tester can continue.
 
 #### Scenario: Draft is invisible elsewhere
 - **WHEN** another stage test lists the catalog or generates a flow in the same server process
-- **THEN** the draft SHALL NOT appear and generation SHALL refuse a route step that names it with `flow-block-draft`
+- **THEN** the draft SHALL NOT appear and generation SHALL refuse a step that names it with `flow-block-draft`
 
 #### Scenario: Follow-up keeps the draft
 - **WHEN** the developer requests a follow-up instead of approving
@@ -112,18 +112,19 @@ closed, and a follow-up round SHALL keep them so the tester can continue.
 
 ### Requirement: The stage-tester saves a block through stage_block_save
 The system SHALL expose a `stage_block_save` tool to the stage-tester only. It
-SHALL refuse a call unless the calling workflow is at `stage.execute` with an
-approved plan, the session is bound to the pinned stage, the document's
-application and roles are declared by that stage, the document contains no
-`destructive` effect, a `write` document is on a writable stage, the document
-contains no configured secret value, and the document is valid under the data
-block schema and the store's collision and versioning rules. It SHALL refuse to
-edit a checked-in block. It SHALL write or replace the run's draft atomically
-with mode `0600` and answer with the draft's status, id, version, digest, the
-version it replaced and the recorded proofs, never the credential values.
+SHALL refuse a call unless the calling workflow is at `stage.execute`, the session
+is bound to the pinned stage, the document's application and roles are declared by
+that stage, the document contains no `destructive` effect, a `write` document is on
+a writable stage, the document contains no configured secret value, and the
+document is valid under the data block schema and the store's collision and
+versioning rules. No plan approval SHALL be consulted: the stage's `access` is the
+write boundary. It SHALL refuse to edit a checked-in block. It SHALL write or
+replace the run's draft atomically with mode `0600` and answer with the draft's
+status, id, version, digest, the version it replaced and the recorded proofs, never
+the credential values.
 
 #### Scenario: Save outside the execute step is refused
-- **WHEN** the planner or the reviewer calls `stage_block_save`
+- **WHEN** the reviewer calls `stage_block_save`
 - **THEN** the call SHALL be refused because the workflow is not at `stage.execute`
 
 #### Scenario: Save without a stage-bound session is refused
@@ -142,17 +143,17 @@ version it replaced and the recorded proofs, never the credential values.
 Interpreting a data block SHALL use only the existing stage context and page
 facade, so the stage's origin allow-list, session rules, read-only rule, write
 approval, journal redaction and sanitised URLs apply unchanged. A data block
-with a `write` effect SHALL execute only when the approved plan declares the
-matching data creation; a `destructive` document SHALL be refused at save time
-and at composition time; a data block SHALL NOT reach a credential value except
-through `ctx.secret`, and a captured or read value SHALL be journalled only as
-the existing redactor allows. An `optional` operation whose operations fail SHALL
-record the failure in that sub-step's observed text and SHALL let the block
-continue.
+with a `write` effect SHALL execute only on a `writable` stage; the stage's
+`access` is the only write boundary and no plan declares data creation. A
+`destructive` document SHALL be refused at save time and at composition time; a
+data block SHALL NOT reach a credential value except through `ctx.secret`, and a
+captured or read value SHALL be journalled only as the existing redactor allows. An
+`optional` operation whose operations fail SHALL record the failure in that
+sub-step's observed text and SHALL let the block continue.
 
-#### Scenario: Write block still needs approval
-- **WHEN** a plan on a writable stage runs a data block with effect `write` while the approved plan declares no data creation
-- **THEN** the run SHALL refuse that step instead of executing it
+#### Scenario: Write block on a writable stage runs
+- **WHEN** a plan on a writable stage runs a data block with effect `write`
+- **THEN** the run SHALL execute that step
 
 #### Scenario: Read-only stage refuses a data block write
 - **WHEN** a data block with effect `write` is saved or executed on a read-only stage

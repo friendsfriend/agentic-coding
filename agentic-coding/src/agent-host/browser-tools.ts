@@ -279,12 +279,16 @@ function stageReplayResult(value: unknown): Result {
 	}
 	if (typeof record.durationMs === "number")
 		lines.push(`durationMs: ${record.durationMs}`);
+	if (record.inputs !== undefined)
+		lines.push(`inputs: ${JSON.stringify(record.inputs)}`);
 	const dryRun = recordOf(record.dryRun);
 	if (dryRun) {
 		lines.push(
 			"",
-			`dryRun: ${dryRun.eligible === true ? "eligible" : "not eligible"}${dryRun.approved === true ? ", inputs approved" : ", inputs not approved"}`,
+			`dryRun: ${dryRun.eligible === true ? "eligible" : "not eligible"}`,
 		);
+		if (dryRun.inputs !== undefined)
+			lines.push(`inputs: ${JSON.stringify(dryRun.inputs)}`);
 		const schema = recordOf(dryRun.inputSchema);
 		const properties = recordOf(schema?.properties);
 		if (properties)
@@ -1156,7 +1160,7 @@ const StageBlocksParameters = Type.Object({
 const StageRunParameters = Type.Object({
 	plan: Type.Unknown({
 		description:
-			"A standalone { planId?, flowId?, revision?, inputs?, steps } document, or the approved core.stage-test-plan@1 (its route steps carry optional block entries).",
+			"A standalone { planId?, flowId?, revision?, inputs?, steps } document: one step per reviewed block, each with its own `args`. The tester chooses the route, so no plan approval is involved.",
 	}),
 	session: SessionParameter,
 	stageApp: Type.Optional(
@@ -1179,19 +1183,7 @@ const StageRunParameters = Type.Object({
 	save: Type.Optional(
 		Type.Boolean({
 			description:
-				"Save the fully blocked approved flow for replay; requires an approved stage plan with flowId.",
-		}),
-	),
-	draftArgs: Type.Optional(
-		Type.Record(Type.String(), Type.Unknown(), {
-			description:
-				'Arguments for route steps whose block you authored (blockToCreate/blockToAdjust), keyed by route step id: { address: { postalCode: "38350", ... } }. The approved plan cannot know a new block\'s parameters, so pass them here when proving a draft. Ignored by an approved `block` step; the plan itself stays unchanged.',
-		}),
-	),
-	approvedRevision: Type.Optional(
-		Type.Number({
-			description:
-				"The workflow revision the plan was approved at; a stale revision is refused.",
+				"Save the plan as a replayable flow; the plan must carry a `flowId`.",
 		}),
 	),
 });
@@ -1275,7 +1267,7 @@ const StageReplayParameters = Type.Object({
 	suiteId: Type.Optional(
 		Type.String({
 			description:
-				"A saved suite id: runs every entry's flow through the same single-flow approval and eligibility gate flowId would, bounded by parallel/stopOnFailure, and returns an aggregate pass/fail. Mutually exclusive with flowId.",
+				"A saved suite id: runs every entry's flow through the same single-flow eligibility gate flowId would, bounded by parallel/stopOnFailure, and returns an aggregate pass/fail. Mutually exclusive with flowId.",
 		}),
 	),
 	stage: Type.Optional(
@@ -1287,25 +1279,18 @@ const StageReplayParameters = Type.Object({
 	inputs: Type.Optional(
 		Type.Record(Type.String(), Type.Unknown(), {
 			description:
-				"Proposed replay inputs for a flowId call. An explicit set that differs from the approved plan revision is refused; dryRun may validate it without approval. Never put a secret here. Ignored for a suiteId call, where each entry carries its own inputs.",
+				"Replay inputs for a flowId call, validated against the flow's own input schema; omit them to run the flow's recorded example. Never put a secret here. Ignored for a suiteId call, where each entry carries its own inputs.",
 		}),
 	),
 	dryRun: Type.Optional(
 		Type.Boolean({
 			description:
-				"Validate the flow, route, spec and inputs without starting a browser.",
-		}),
-	),
-	approvedRevision: Type.Optional(
-		Type.Number({
-			description:
-				"The workflow revision the plan was approved at; a stale revision is refused.",
+				"Validate the flow, its spec, the block registry and the inputs without starting a browser.",
 		}),
 	),
 	role: Type.Optional(
 		Type.String({
-			description:
-				"The stage role to run as; defaults to the first role named by the approved route.",
+			description: "The stage role to run as.",
 		}),
 	),
 });
@@ -1782,10 +1767,10 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				name: "stage_run",
 				description: [
 					"Validate and execute a linear stage-block plan in one call and return a compact ledger; the journal (one entry per block sub-step) and evidence store hold the detail.",
-					"Pass a standalone plan, or the approved stage-test plan whose route steps carry block entries. Call it with `dryRun: true` first: that resolves block versions and derives the typed input schema without opening a browser.",
-					"Execution needs a stage-bound session and the same stage/write policy as the exploratory tools. Writes require an approved plan and a writable stage; destructive blocks are always refused. Inputs and arguments must never contain a credential: use the block's secret-variable names instead.",
-					"A route step whose block you authored (blockToCreate/blockToAdjust) takes its arguments from `draftArgs`, keyed by route step id, because the plan cannot know a new block's parameters in advance.",
-					"`save: true` turns a fully blocked approved stage plan with a `flowId` into a replayable flow. A route step without a block is reported as a `plan-route-gap`; run those with the exploratory tools rather than pretending the replay covered them.",
+					"Pass a standalone `{ planId?, flowId?, inputs?, steps }` plan; every step names a block and carries its own `args`. Call it with `dryRun: true` first: that resolves block versions and derives the typed input schema without opening a browser.",
+					"Execution needs a stage-bound session and the same stage/write policy as the exploratory tools. Writes need a writable stage; destructive blocks are always refused. Inputs and arguments must never contain a credential: use the block's secret-variable names instead.",
+					"A block you authored in this run is executable here once you have saved it, so you can prove the draft before your report claims it.",
+					"`save: true` turns a plan with a `flowId` into a replayable flow. Anything you did not turn into a block stays in the journal and the report instead.",
 				].join(" "),
 				parameters: StageRunParameters,
 				execute: async (args, api) => {
@@ -1806,12 +1791,6 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.role === undefined ? {} : { role: args.role }),
 									...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
 									...(args.save === undefined ? {} : { save: args.save }),
-									...(args.draftArgs === undefined
-										? {}
-										: { draftArgs: args.draftArgs }),
-									...(args.approvedRevision === undefined
-										? {}
-										: { approvedRevision: args.approvedRevision }),
 								},
 							}),
 						);
@@ -1852,8 +1831,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 				name: "stage_flows",
 				description: [
 					"List the checked-in compiled flows for this stage, with their route/spec hashes, applications, roles and input schema. It never opens a browser and never returns input values.",
-					"Use it before `stage_replay` to choose a reviewed flow and see which inputs it accepts. A flow with an uncovered expectation or a drifted spec is refused by replay, not silently explored.",
-					"Also available while planning (stage-planner, before approval): check it for a flow that already covers the ticket before writing an exploratory route, then name the chosen flowId and bind each input in the plan as `{{ inputs.<name> }}`.",
+					"Use it before `stage_replay` to choose a reviewed flow and see which inputs it accepts. A flow with a drifted spec or a block the registry disagrees with is refused by replay, not silently explored.",
 				].join(" "),
 				parameters: StageFlowsParameters,
 				execute: async (args, api) => {
@@ -1878,10 +1856,11 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 			defineTool({
 				name: "stage_replay",
 				description: [
-					"Run one checked-in `@playwright/test` flow in a separate process, run a saved suite of independent flow entries, or list flows when both flowId and suiteId are omitted. The approved plan's `flowId`, route, input schema, block versions and input hash must match the checked-in `flow.json`.",
-					"Call `dryRun: true` first to validate a proposed input set without approval or a browser; execution refuses an explicit input override that differs from the approved plan revision. The server ingests the result's sub-step events into the normal stage journal and evidence store and returns a compact ledger, a deterministic report when every expectation is covered, and a heal packet on failure.",
-					"A suiteId call runs every saved entry's own flow through that same gate and returns one aggregate ledger with a status per entry (passed, failed, refused or skipped); it never claims a workflow report, so still use flowId for the plan's own `core.stage-report@1`.",
-					"Never edit the block or spec from this tool. A failed replay returns to `stage.execute` with the heal packet; a flow that cannot cover the plan falls back visibly instead of claiming a pass.",
+					"Run one checked-in `@playwright/test` flow in a separate process, run a saved suite of independent flow entries, or list flows when both flowId and suiteId are omitted. The checked-in `flow.json` and the current block registry must still agree with each other; no plan approval is involved.",
+					"Call `dryRun: true` first to validate the flow and a proposed input set without a browser. Without `inputs` the flow runs with its own recorded input example, and the answer states which values it used. Never put a secret in `inputs`.",
+					"The server ingests the result's sub-step events into the normal stage journal and evidence store and returns a compact ledger and a heal packet on failure.",
+					"A suiteId call runs every saved entry's own flow through that same gate and returns one aggregate ledger with a status per entry (passed, failed, refused or skipped).",
+					"Never edit the block or spec from this tool. A failed replay returns the heal packet: fix it, or test that part with the exploratory tools and report what you found.",
 				].join(" "),
 				parameters: StageReplayParameters,
 				execute: async (args, api) => {
@@ -1898,9 +1877,6 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 										...(args.dryRun === undefined
 											? {}
 											: { dryRun: args.dryRun }),
-										...(args.approvedRevision === undefined
-											? {}
-											: { approvedRevision: args.approvedRevision }),
 										...(args.role === undefined ? {} : { role: args.role }),
 									},
 								}),
@@ -1922,9 +1898,6 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 									...(args.stage === undefined ? {} : { stage: args.stage }),
 									...(args.inputs === undefined ? {} : { inputs: args.inputs }),
 									...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-									...(args.approvedRevision === undefined
-										? {}
-										: { approvedRevision: args.approvedRevision }),
 									...(args.role === undefined ? {} : { role: args.role }),
 								},
 							}),

@@ -12,7 +12,6 @@ import {
 	flowEligibility,
 	readFlowRegistry,
 } from "../src/stage-blocks/flow-registry.ts";
-import { flowSourceFromStagePlan } from "../src/stage-blocks/flow-source.ts";
 import { buildHealPacket } from "../src/stage-blocks/heal.ts";
 import {
 	blockPlanFromRoute,
@@ -20,9 +19,9 @@ import {
 	validateStageBlockPlan,
 } from "../src/stage-blocks/plan.ts";
 import { stageBlockRegistry } from "../src/stage-blocks/registry.ts";
-import { mapReplayToReport } from "../src/stage-blocks/replay-report.ts";
 import { canonicalHash } from "../src/stage-blocks/schema.ts";
 import { stageReportBlockIssues } from "../src/workflow/steps/stage-test.ts";
+import { flowSourceFromRoute } from "./support/flow-source-fixture.ts";
 
 const ROOT = path.join(import.meta.dir, "..");
 const FLOW_ID = "test-customer-address";
@@ -156,8 +155,8 @@ function normalized(): NormalizedStageBlockPlan {
 }
 
 function source(plan = normalized()) {
-	return flowSourceFromStagePlan({
-		stagePlan,
+	return flowSourceFromRoute({
+		routePlan: stagePlan,
 		plan,
 		stage: "crm-int",
 		planId: "stage-test-r3",
@@ -225,8 +224,8 @@ describe("flow generation", () => {
 		});
 		const second = await generateFlow({
 			root: ROOT,
-			source: flowSourceFromStagePlan({
-				stagePlan,
+			source: flowSourceFromRoute({
+				routePlan: stagePlan,
 				plan: (() => {
 					const projected = blockPlanFromRoute(
 						stagePlan.route as unknown as Parameters<
@@ -293,7 +292,7 @@ describe("flow generation", () => {
 		);
 	});
 
-	test("refuses a secret literal and a mixed plan", async () => {
+	test("refuses a secret literal and a plan without a flow identity", async () => {
 		const secret = await generateFlow({
 			root: ROOT,
 			source: {
@@ -308,19 +307,16 @@ describe("flow generation", () => {
 		expect(secret.issues.map((issue) => issue.code)).toContain(
 			"flow-secret-literal",
 		);
+		// A flow is saved from the plan's own steps, so a plan without a flowId is
+		// the one thing the bridge refuses (`remove-stage-test-planner`).
 		expect(() =>
-			flowSourceFromStagePlan({
-				stagePlan: {
-					...stagePlan,
-					route: stagePlan.route.map((entry, index) =>
-						index === 1 ? { ...entry, block: undefined } : entry,
-					),
-				},
-				plan: normalized(),
+			flowSourceFromRoute({
+				routePlan: stagePlan,
+				plan: { ...normalized(), flowId: undefined },
 				stage: "crm-int",
 				planId: "stage-test-r3",
 			}),
-		).toThrow("has no block");
+		).toThrow("needs a flowId");
 	});
 
 	test("derives one input schema across differently worded blocks", () => {
@@ -390,8 +386,8 @@ describe("flow generation", () => {
 			throw new Error(JSON.stringify(validated.issues));
 		const generated = await generateFlow({
 			root: ROOT,
-			source: flowSourceFromStagePlan({
-				stagePlan: typeMismatchStagePlan,
+			source: flowSourceFromRoute({
+				routePlan: typeMismatchStagePlan,
 				plan: validated.plan,
 				stage: "crm-int",
 				planId: "stage-typecheck-r1",
@@ -424,11 +420,12 @@ describe("flow eligibility", () => {
 			flowId: FLOW_ID,
 			root: ROOT,
 			stage: "crm-int",
-			source: source(),
+			inputs: source().inputs,
 			registry: stageBlockRegistry,
 			apps: { crm: { roles: ["clerk"] } },
 			role: "clerk",
 		});
+		expect(eligible.issues).toEqual([]);
 		expect(eligible.issues).toEqual([]);
 		expect(eligible.eligible).toBe(true);
 
@@ -437,7 +434,7 @@ describe("flow eligibility", () => {
 			flowId: FLOW_ID,
 			root: ROOT,
 			stage: "crm-int",
-			source: source(),
+			inputs: source().inputs,
 			registry: stageBlockRegistry,
 			apps: { crm: { roles: ["clerk"] } },
 			role: "clerk",
@@ -461,7 +458,7 @@ describe("flow eligibility", () => {
 			flowId: FLOW_ID,
 			root: ROOT,
 			stage: "crm-int",
-			source: source(),
+			inputs: source().inputs,
 			registry: stageBlockRegistry,
 			apps: { crm: { roles: ["clerk"] } },
 			role: "clerk",
@@ -482,7 +479,7 @@ describe("flow eligibility", () => {
 			flowId: FLOW_ID,
 			root: ROOT,
 			stage: "other-stage",
-			source: source(),
+			inputs: source().inputs,
 			registry: stageBlockRegistry,
 			apps: { crm: { roles: ["clerk"] } },
 			role: "clerk",
@@ -494,7 +491,7 @@ describe("flow eligibility", () => {
 			flowId: FLOW_ID,
 			root: ROOT,
 			stage: "crm-int",
-			source: source(),
+			inputs: source().inputs,
 			registry: stageBlockRegistry,
 			apps: { crm: { roles: ["clerk"] } },
 			role: "admin",
@@ -510,355 +507,28 @@ describe("flow eligibility", () => {
 });
 
 describe("replay report and heal packet", () => {
-	test("maps pass, fail, blocked and uncovered expectations", () => {
-		const manifest = buildFlowManifest(
-			source(),
-			stageBlockRegistry,
-			canonicalHash("spec"),
-		).manifest;
-		if (manifest === undefined) throw new Error("no manifest");
-		const result = {
-			version: 1 as const,
-			flowId: FLOW_ID,
-			routeHash: manifest.routeHash,
-			inputsHash: canonicalInputsHash(INPUTS),
-			status: "failed" as const,
-			startedAt: new Date(0).toISOString(),
-			durationMs: 10,
-			steps: [
-				{
-					index: 0,
-					routeStepId: "login",
-					block: "crm.auth.loginAsRole",
-					version: "1.0.0",
-					status: "passed" as const,
-					durationMs: 4,
-				},
-				{
-					index: 1,
-					routeStepId: "open",
-					block: "crm.ui.open",
-					version: "1.0.0",
-					status: "failed" as const,
-					durationMs: 3,
-					error: "selector not found",
-				},
-				{
-					index: 2,
-					routeStepId: "customer",
-					block: "crm.customer.open",
-					version: "1.0.0",
-					status: "skipped" as const,
-					durationMs: 0,
-				},
-				{
-					index: 3,
-					routeStepId: "address",
-					block: "crm.customer.fillAddress",
-					version: "1.0.0",
-					status: "skipped" as const,
-					durationMs: 0,
-				},
-			],
-		};
-		const mapped = mapReplayToReport(manifest, result, stagePlan, [
-			{ index: 0, journalIds: [1], evidenceIds: ["ev-1"] },
-			{ index: 1, journalIds: [2], evidenceIds: ["ev-2"] },
-			{ index: 2, journalIds: [], evidenceIds: [] },
-			{ index: 3, journalIds: [], evidenceIds: [] },
-		]);
-		expect(mapped.complete).toBe(true);
-		const verdicts = Object.fromEntries(
-			mapped.report.expectations.map((expectation) => [
-				expectation.id,
-				expectation.verdict,
-			]),
-		);
-		expect(verdicts).toEqual({ E1: "pass", E2: "fail" });
-		expect(mapped.report.expectations[1]?.severity).toBe("major");
-		expect(mapped.report.expectations[1]?.evidenceIds).toEqual(["ev-2"]);
-		// The replay accounts for the blocks it ran, so the workflow's report gate
-		// accepts a mapped report exactly like a tester's own (`USAB-001`).
-		expect(mapped.report.blocksUsed.map((block) => block.routeStepId)).toEqual([
-			"login",
-			"open",
-			"customer",
-			"address",
-		]);
-		expect(mapped.report.unblockedSteps).toEqual([]);
-		expect(
-			stageReportBlockIssues({
-				plan: stagePlan as unknown as Parameters<
-					typeof stageReportBlockIssues
-				>[0]["plan"],
-				report: {
-					...mapped.report,
-					notTested: mapped.report.notTested.map((entry) => ({ ...entry })),
-				} as unknown as Parameters<typeof stageReportBlockIssues>[0]["report"],
-			}),
-		).toEqual([]);
-		const uncovered = mapReplayToReport(
-			manifest,
-			result,
-			{
-				...stagePlan,
-				expectations: [
-					...stagePlan.expectations.map(
-						({ source: _source, ...entry }) => entry,
-					),
-					{
-						id: "E3",
-						statement: "Unmapped",
-						priority: "low" as const,
-					},
-				],
-			},
-			[],
-		);
-		expect(uncovered.complete).toBe(false);
-		expect(
-			uncovered.report.expectations.find((entry) => entry.id === "E3")?.verdict,
-		).toBe("inconclusive");
-	});
-
 	test("the block accounting names every gap in a report", () => {
-		const plan = {
-			route: [
-				{
-					id: "open",
-					block: { id: "crm.ui.open", version: "1.0.0", args: {} },
-				},
-				{ id: "address", blockToCreate: { id: "crm.customer.readAddress" } },
-				{ id: "manual", noBlockReason: "the confirmation is one-off" },
-			],
-		} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"];
+		// No plan: the tester chose the route, so the accounting is about the
+		// documents this run authored (`remove-stage-test-planner`).
 		const report = (overrides: Record<string, unknown>) =>
 			({
 				blocksUsed: [],
 				blocksCreated: [],
 				blocksAdjusted: [],
-				unblockedSteps: [],
 				...overrides,
 			}) as unknown as Parameters<typeof stageReportBlockIssues>[0]["report"];
-		// A step named in neither list, a blank reason and a block the plan does
-		// not plan for it are three separate refusals.
-		expect(
-			stageReportBlockIssues({
-				plan,
-				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-						{ routeStepId: "address", block: "crm.ui.other", version: "1.0.0" },
-					],
-					unblockedSteps: [{ routeStepId: "manual", reason: "   " }],
-				}),
-			}),
-		).toEqual([
-			"stage report claims block crm.ui.other on route step address, but the plan names crm.customer.readAddress",
-			"stage report lists route step manual as unblocked without a reason; say why this step runs without a block",
-		]);
-		expect(
-			stageReportBlockIssues({
-				plan,
-				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-					],
-				}),
-			}),
-		).toEqual([
-			"stage report does not account for route step address; name it in blocksUsed or in unblockedSteps with a reason",
-			"stage report does not account for route step manual; name it in blocksUsed or in unblockedSteps with a reason",
-		]);
-		// A claim the run cannot back is its own refusal.
-		expect(
-			stageReportBlockIssues({
-				plan,
-				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-					],
-					blocksCreated: [
-						{
-							routeStepId: "address",
-							block: "crm.customer.readAddress",
-							version: "1.0.0",
-							digest: "digest-1",
-						},
-					],
-					unblockedSteps: [{ routeStepId: "manual", reason: "one-off" }],
-				}),
-				stageBlockDrafts: [
-					{
-						id: "crm.customer.readAddress",
-						version: "1.0.0",
-						digest: "digest-1",
-						proofs: [
-							{ status: "failed", version: "1.0.0", digest: "digest-1" },
-						],
-					},
-				],
-			}),
-		).toEqual([
-			"stage report claims block crm.customer.readAddress as created without a passed proof of the document this run holds (1.0.0, digest digest-1); recorded proofs: failed@1.0.0/digest-1 — run the current document once with stage_run and cite the version and digest stage_block_save returned",
-			// A created draft is not an executed step: the route step still has to
-			// appear in blocksUsed once it ran.
-			"stage report does not account for route step address; name it in blocksUsed or in unblockedSteps with a reason",
-		]);
-		// The remaining refusals, one per branch of the loop, so an inverted guard
-		// in any of them is visible (`TQV-104`). Each message names the route step
-		// and the block, so the string doubles as the rule.
-		const draft = (id: string, version = "1.0.0") => ({
+		const draft = (id: string, version = "1.0.0", digest = `digest-${id}`) => ({
 			id,
 			version,
-			digest: `digest-${id}`,
-			proofs: [{ status: "passed" as const, version, digest: `digest-${id}` }],
+			digest,
+			proofs: [{ status: "passed" as const, version, digest }],
 		});
-		const quiet = [{ routeStepId: "manual", reason: "one-off" }];
-		// blocksUsed naming a route step the plan does not contain.
+		// A claim the run cannot back is refused; a claim it can back is quiet.
 		expect(
 			stageReportBlockIssues({
-				plan,
 				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-						{ routeStepId: "ghost", block: "crm.ui.open", version: "1.0.0" },
-					],
-					unblockedSteps: [
-						...quiet,
-						{ routeStepId: "address", reason: "authored later" },
-					],
-				}),
-			}),
-		).toEqual([
-			"stage report names block crm.ui.open for route step ghost, which the plan does not contain",
-		]);
-		// blocksUsed on a step the plan plans as exploratory.
-		expect(
-			stageReportBlockIssues({
-				plan,
-				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-						{ routeStepId: "manual", block: "crm.ui.open", version: "1.0.0" },
-					],
-					unblockedSteps: [
-						{ routeStepId: "address", reason: "authored later" },
-					],
-				}),
-			}),
-		).toEqual([
-			"stage report claims block crm.ui.open on route step manual, which the plan plans as an exploratory step",
-		]);
-		// unblockedSteps naming a route step the plan does not contain.
-		expect(
-			stageReportBlockIssues({
-				plan,
-				report: report({
-					blocksUsed: [
-						{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-					],
-					unblockedSteps: [
-						...quiet,
-						{ routeStepId: "address", reason: "authored later" },
-						{ routeStepId: "ghost", reason: "no such step" },
-					],
-				}),
-			}),
-		).toEqual([
-			"stage report lists route step ghost as unblocked, which the plan does not contain",
-		]);
-		// blocksAdjusted: no draft, a version that differs from the draft, and a
-		// route step that names a different block.
-		const adjusted = (overrides: Record<string, unknown> = {}) =>
-			report({
-				blocksUsed: [
-					{ routeStepId: "open", block: "crm.ui.open", version: "1.0.0" },
-					{
-						routeStepId: "address",
-						block: "crm.customer.readAddress",
-						version: "1.0.0",
-					},
-				],
-				blocksAdjusted: [
-					{
-						routeStepId: "address",
-						block: "crm.customer.readAddress",
-						version: "1.0.0",
-						digest: "digest-crm.customer.readAddress",
-						...overrides,
-					},
-				],
-				unblockedSteps: quiet,
-			});
-		const adjustedPlan = {
-			route: [
-				{
-					id: "open",
-					block: { id: "crm.ui.open", version: "1.0.0", args: {} },
-				},
-				{
-					id: "address",
-					blockToAdjust: {
-						id: "crm.customer.readAddress",
-						version: "1.0.0",
-						intent: "read the address",
-					},
-				},
-				{ id: "manual", noBlockReason: "the confirmation is one-off" },
-			],
-		} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"];
-		expect(
-			stageReportBlockIssues({ plan: adjustedPlan, report: adjusted() }),
-		).toEqual([
-			"stage report claims block crm.customer.readAddress as adjusted, but this run holds no draft of it",
-		]);
-		expect(
-			stageReportBlockIssues({
-				plan: adjustedPlan,
-				report: adjusted(),
-				stageBlockDrafts: [draft("crm.customer.readAddress", "2.0.0")],
-			}),
-		).toEqual([
-			// The draft's own proof is a proof of 2.0.0, so the claim's version is
-			// wrong, and the route step's used entry (1.0.0) is asked to cite the
-			// draft that ran — the two checks are independent.
-			"stage report claims block crm.customer.readAddress@1.0.0 on route step address, but this run's draft of it is crm.customer.readAddress@2.0.0; cite the version that ran",
-			"stage report claims block crm.customer.readAddress@1.0.0 as adjusted, but the draft is 2.0.0",
-		]);
-		expect(
-			stageReportBlockIssues({
-				plan: adjustedPlan,
-				report: adjusted({ block: "crm.ui.other" }),
-				stageBlockDrafts: [draft("crm.customer.readAddress")],
-			}),
-		).toEqual([
-			"stage report claims block crm.ui.other as adjusted, but this run holds no draft of it",
-		]);
-		// The adjusted claim's own route step must name it: the created branch and
-		// the adjusted branch read different plan fields, so one cannot stand in
-		// for the other.
-		expect(
-			stageReportBlockIssues({
-				plan: {
-					route: [
+					blocksCreated: [
 						{
-							id: "address",
-							blockToCreate: { id: "crm.customer.readAddress" },
-						},
-					],
-				} as unknown as Parameters<typeof stageReportBlockIssues>[0]["plan"],
-				report: report({
-					blocksUsed: [
-						{
-							routeStepId: "address",
-							block: "crm.customer.readAddress",
-							version: "1.0.0",
-						},
-					],
-					blocksAdjusted: [
-						{
-							routeStepId: "address",
 							block: "crm.customer.readAddress",
 							version: "1.0.0",
 							digest: "digest-crm.customer.readAddress",
@@ -867,18 +537,83 @@ describe("replay report and heal packet", () => {
 				}),
 				stageBlockDrafts: [draft("crm.customer.readAddress")],
 			}),
-		).toEqual([
-			"stage report claims block crm.customer.readAddress as adjusted on route step address, but the plan names no such block",
-		]);
-		// And a claim for a route step the plan does not contain.
+		).toEqual([]);
 		expect(
 			stageReportBlockIssues({
-				plan: adjustedPlan,
-				report: adjusted({ routeStepId: "ghost" }),
+				report: report({
+					blocksCreated: [
+						{
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-crm.customer.readAddress",
+						},
+					],
+				}),
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress as created, but this run holds no draft of it",
+		]);
+		// A draft whose only proof is of an older document proves nothing.
+		expect(
+			stageReportBlockIssues({
+				report: report({
+					blocksCreated: [
+						{
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-crm.customer.readAddress",
+						},
+					],
+				}),
+				stageBlockDrafts: [
+					{
+						...draft("crm.customer.readAddress"),
+						proofs: [
+							{
+								status: "failed" as const,
+								version: "1.0.0",
+								digest: "digest-crm.customer.readAddress",
+							},
+						],
+					},
+				],
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress as created without a passed proof of the document this run holds (1.0.0, digest digest-crm.customer.readAddress); recorded proofs: failed@1.0.0/digest-c — run the current document once with stage_run and cite the version and digest stage_block_save returned",
+		]);
+		// A version that differs from the draft's, and a same-version re-save the
+		// claim no longer names, are two separate refusals.
+		expect(
+			stageReportBlockIssues({
+				report: report({
+					blocksAdjusted: [
+						{
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-crm.customer.readAddress",
+						},
+					],
+				}),
+				stageBlockDrafts: [draft("crm.customer.readAddress", "2.0.0")],
+			}),
+		).toEqual([
+			"stage report claims block crm.customer.readAddress@1.0.0 as adjusted, but the draft is 2.0.0",
+		]);
+		expect(
+			stageReportBlockIssues({
+				report: report({
+					blocksAdjusted: [
+						{
+							block: "crm.customer.readAddress",
+							version: "1.0.0",
+							digest: "digest-old",
+						},
+					],
+				}),
 				stageBlockDrafts: [draft("crm.customer.readAddress")],
 			}),
 		).toEqual([
-			"stage report claims block crm.customer.readAddress for route step ghost, which the plan does not contain",
+			"stage report claims block crm.customer.readAddress@1.0.0 as adjusted with digest digest-old, but the draft the run holds is digest-crm.customer.readAddress; cite the digest stage_block_save returned",
 		]);
 	});
 

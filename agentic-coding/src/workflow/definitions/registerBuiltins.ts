@@ -29,6 +29,7 @@ import {
 	definitionVersionForResearchTools,
 	definitionVersionForStageBlocks,
 	definitionVersionForStagedRoot,
+	definitionVersionForStageExploration,
 	definitionVersionForStageGates,
 	definitionVersionForStageTest,
 	definitionVersionForStepRouting,
@@ -356,13 +357,21 @@ export function registerBuiltins(
 	// contract; it does keep the tier that already existed when
 	// `author-stage-blocks-as-data` added review-approval block promotion, so a
 	// workflow pinned to it still resolves its own digest and completes without
-	// promoting anything.
+	// promoting anything. The exploration tier
+	// (`remove-stage-test-planner`) is registered beside them: one agent and no
+	// plan gate, and the two earlier tiers keep their own graph, digest and step
+	// list so an in-flight workflow finishes under the plan it was pinned to.
 	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
-		for (const [version, authoredBlocks] of [
-			[definitionVersionForStageTest(rounds), false],
-			[definitionVersionForStageBlocks(rounds), true],
+		for (const [version, authoredBlocks, exploration] of [
+			[definitionVersionForStageTest(rounds), false, false],
+			[definitionVersionForStageBlocks(rounds), true, false],
+			[definitionVersionForStageExploration(rounds), true, true],
 		] as const)
-			for (const definition of stageTestManifests(version, authoredBlocks)) {
+			for (const definition of stageTestManifests(
+				version,
+				authoredBlocks,
+				exploration,
+			)) {
 				// The family's two agent steps declare `classification: "single"`, so
 				// they are entered through their own route steps like every other
 				// classifiable step; without the routing pass the declaration would be

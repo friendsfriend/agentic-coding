@@ -33,14 +33,6 @@ export const STAGE_IDENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
  * state-changing request, `writable` allows them. */
 export const stageAccessSchema = Schema.Literal("read-only", "writable");
 
-/** When a derived test plan must wait for the developer (phase 3 reads it; the
- * field is configuration from phase 1 on). */
-export const stagePlanApprovalSchema = Schema.Literal(
-	"always",
-	"when-writing",
-	"never",
-);
-
 /** What a staged application is: a UI to drive, an API to read, a mail catcher
  * to wait on, or a probe for version discovery. */
 export const stageAppKindSchema = Schema.Literal(
@@ -297,7 +289,6 @@ export const stageDefinitionSchema = Schema.Struct({
 	environment: Schema.String,
 	system: boundedText(STAGE_SYSTEM_MAX_BYTES),
 	access: stageAccessSchema,
-	planApproval: Schema.optional(stagePlanApprovalSchema),
 	exclusive: Schema.optional(Schema.Boolean),
 	/** Allow `http` for a host that is not loopback. Deliberate and staged: a
 	 * plaintext stage carries credentials in the clear. */
@@ -427,7 +418,15 @@ export interface StageIssue {
 export function decodeStageDefinition(
 	value: unknown,
 ): DecodeResult<StageDefinition> {
-	return decodeStageDocument("stage", stageDefinitionSchema, value);
+	// The retired plan gate has no configuration or runtime meaning. Discard its
+	// old key without admitting other unknown allow-list fields.
+	const document =
+		typeof value === "object" && value !== null && !Array.isArray(value)
+			? Object.fromEntries(
+					Object.entries(value).filter(([key]) => key !== "planApproval"),
+				)
+			: value;
+	return decodeStageDocument("stage", stageDefinitionSchema, document);
 }
 
 /** Decode the global policy document. */

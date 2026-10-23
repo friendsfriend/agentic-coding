@@ -1,7 +1,7 @@
 // The on-disk flow registry and the eligibility decision
 // (`add-stage-flow-replay`, task 2). A flow is eligible only when its reviewed
-// spec, its sidecar manifest and the current block registry agree with the
-// approved plan that is about to be replayed.
+// spec, its sidecar manifest, the current block registry and the inputs it is
+// about to run with agree with each other; the replay needs no approved plan.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -12,9 +12,7 @@ import {
 	type FlowManifest,
 	type FlowRouteStep,
 	type FlowSource,
-	flowInputContract,
 	parseFlowManifest,
-	routeHashFor,
 	routeStepProjection,
 	STAGE_FLOW_DIRECTORY,
 } from "./flow.ts";
@@ -433,7 +431,9 @@ export function flowEligibility(options: {
 	readonly flowId: string;
 	readonly root: string;
 	readonly stage: string;
-	readonly source: FlowSource;
+	/** The input values this replay will use. Validated against the flow's own
+	 * schema; the values themselves are never stored by the decision. */
+	readonly inputs?: Readonly<Record<string, JsonValue>>;
 	readonly registry: StageBlockRegistry;
 	/** Blocks that exist only as this workflow's drafts. A flow never replays a
 	 * draft: the reviewed document must be approved first. */
@@ -470,9 +470,13 @@ export function flowEligibility(options: {
 				`stage-flows/${manifest.flowId}/flow.spec.ts`,
 			),
 		);
+	// A saved flow is data: it is checked against the current block registry and
+	// the stage catalog, never against a plan of the run that replays it
+	// (`remove-stage-test-planner`). Every check below answers "does this saved
+	// flow still describe blocks and inputs that exist?".
 	issues.push(...flowManifestIssues(manifest, options.registry));
 	// A flow never replays a draft: the reviewed document must be approved first.
-	for (const step of manifest.routeSteps)
+	for (const step of manifest.routeSteps) {
 		if (options.draftIds?.has(step.block))
 			issues.push(
 				issue(
@@ -481,6 +485,7 @@ export function flowEligibility(options: {
 					step.routeStepId,
 				),
 			);
+	}
 	issues.push(
 		...flowDocumentIssues({
 			manifest,
@@ -489,14 +494,6 @@ export function flowEligibility(options: {
 			registry: options.registry,
 		}),
 	);
-	if (manifest.flowId !== options.source.flowId)
-		issues.push(
-			issue(
-				"flow-id-mismatch",
-				`approved flow id ${options.source.flowId} does not match ${manifest.flowId}`,
-				"flowId",
-			),
-		);
 	if (
 		manifest.stage !== options.stage &&
 		(manifest.stages === undefined || !manifest.stages.includes(options.stage))
@@ -508,26 +505,10 @@ export function flowEligibility(options: {
 				"stage",
 			),
 		);
-	if (manifest.routeHash !== routeHashFor(options.source))
-		issues.push(
-			issue(
-				"flow-route-drift",
-				`the approved plan route differs from the saved ${manifest.flowId} route`,
-			),
-		);
-	const contract = flowInputContract(options.source, options.registry);
-	issues.push(...contract.issues);
-	if (canonicalHash(contract.schema) !== canonicalHash(manifest.inputSchema))
-		issues.push(
-			issue(
-				"flow-input-schema-mismatch",
-				`the approved plan input schema differs from flow ${manifest.flowId}`,
-				"inputs",
-			),
-		);
+	const inputs = options.inputs ?? {};
 	const inputProblems = validateSchemaValue(
 		manifest.inputSchema,
-		options.source.inputs,
+		inputs,
 		"inputs",
 	);
 	for (const problem of inputProblems) {
@@ -544,7 +525,7 @@ export function flowEligibility(options: {
 		"type" in manifest.inputSchema && manifest.inputSchema.type === "object"
 			? manifest.inputSchema.properties
 			: {};
-	for (const name of Object.keys(options.source.inputs))
+	for (const name of Object.keys(inputs))
 		if (!Object.hasOwn(declared, name))
 			issues.push(
 				issue(
@@ -553,72 +534,74 @@ export function flowEligibility(options: {
 					name,
 				),
 			);
-	const expectedSteps = options.source.steps.map((step) =>
-		routeStepProjection(
-			step,
-			options.source.routeMeta.find((meta) => meta.id === step.id),
-		),
-	);
-	if (
-		expectedSteps.length !== manifest.routeSteps.length ||
-		expectedSteps.some(
-			(step, index) =>
-				canonicalHash(step) !== canonicalHash(manifest.routeSteps[index]),
-		)
-	)
-		issues.push(
-			issue(
-				"flow-route-step-mismatch",
-				`the approved plan route steps differ from flow ${manifest.flowId}`,
-			),
-		);
-	const covered = new Set(
-		manifest.routeSteps.flatMap((step) => step.expectationIds),
-	);
-	for (const expectation of options.source.expectations)
-		if (!covered.has(expectation.id))
-			issues.push(
-				issue(
-					"flow-expectation-uncovered",
-					`expectation ${expectation.id} is not mapped to a replayable route step`,
-					expectation.id,
-				),
-			);
-	for (const step of options.source.steps) {
-		const app = step.definition.app;
+	for (const app of manifest.applications) {
 		if (app === "*") continue;
-		const policyApp = options.apps?.[app];
-		if (options.apps !== undefined && policyApp === undefined)
+		if (options.apps !== undefined && options.apps[app] === undefined)
 			issues.push(
 				issue(
 					"flow-app-missing",
 					`stage ${options.stage} does not declare application ${app}`,
-					step.id,
+					app,
 				),
 			);
+	}
+	// Check only applications the flow uses; an unrelated stage application's
+	// role table cannot restrict this flow. Recorded roles are checked even
+	// when the caller does not supply an override.
+	if (
+		options.role !== undefined &&
+		manifest.roles.length > 0 &&
+		!manifest.roles.includes(options.role)
+	)
+		issues.push(
+			issue(
+				"flow-role-missing",
+				`flow ${manifest.flowId} was recorded as ${manifest.roles.join(", ")}, not ${options.role}`,
+				"role",
+			),
+		);
+	const roles = options.role === undefined ? manifest.roles : [options.role];
+	for (const role of roles) {
 		if (
-			options.role !== undefined &&
-			(step.definition.roles ?? []).length > 0 &&
-			!(step.definition.roles ?? []).includes(options.role)
+			options.apps !== undefined &&
+			!manifest.applications.some((app) =>
+				options.apps?.[app]?.roles?.includes(role),
+			)
 		)
 			issues.push(
 				issue(
 					"flow-role-missing",
-					`block ${step.definition.id} is not approved for role ${options.role}`,
-					step.id,
+					`stage ${options.stage} does not declare role ${role} on a flow application`,
+					"role",
 				),
 			);
+	}
+	for (const step of manifest.routeSteps) {
+		const block = options.registry.get(step.block);
+		if (!block) continue;
 		if (
-			options.role !== undefined &&
-			policyApp?.roles !== undefined &&
-			policyApp.roles.length > 0 &&
-			!policyApp.roles.includes(options.role)
+			roles.length > 0 &&
+			(block.roles ?? []).length > 0 &&
+			!roles.some((role) => block.roles?.includes(role))
 		)
 			issues.push(
 				issue(
 					"flow-role-missing",
-					`stage application ${app} does not declare role ${options.role}`,
-					step.id,
+					`block ${step.block} is not approved for roles ${roles.join(", ")}`,
+					step.routeStepId,
+				),
+			);
+		if (
+			options.role !== undefined &&
+			options.apps !== undefined &&
+			block.app !== "*" &&
+			!options.apps[block.app]?.roles?.includes(options.role)
+		)
+			issues.push(
+				issue(
+					"flow-role-missing",
+					`stage application ${block.app} does not declare role ${options.role}`,
+					step.routeStepId,
 				),
 			);
 	}

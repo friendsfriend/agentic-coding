@@ -109,6 +109,6 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			id: "stage-test",
 			label: "Stage test",
 			description:
-				"Plan and verify a hosted application on one pinned stage, review the report, and write confirmed process knowledge to the centralized wiki.",
+				"Explore and test a hosted application in one tester step on a pinned stage, review the evidence-backed report, and optionally write confirmed process knowledge to the centralized wiki.",
 		}),
 	] as const);

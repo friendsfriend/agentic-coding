@@ -276,15 +276,11 @@ const stageTestWorkflow = (overrides: Record<string, unknown> = {}) => ({
 	currentStep: "stage.execute",
 	selectedRoles: ["stage-tester"],
 	stageAccess: "writable" as const,
-	stageTestPlan: {
-		createsData: false,
-		route: [{ application: "api", role: "service" }],
-	},
 	...overrides,
 });
 
 describe("stage-test stage API authorization", () => {
-	test("requests stay on the pinned stage and approved plan role in the executor step", async () => {
+	test("requests stay on the pinned stage and declared role in the tester step", async () => {
 		await withFixture({ access: "writable" }, async (fixture) => {
 			const deps: StageRouteDeps = {
 				...fixture.deps,
@@ -306,8 +302,8 @@ describe("stage-test stage API authorization", () => {
 				method: "GET",
 				path: "/orders",
 			});
-			expect(otherRole.status).toBe(403);
-			expect(otherRole.code).toBe("stage-route-not-approved");
+			expect(otherRole.status).toBe(404);
+			expect(otherRole.code).toBe("stage-role-unknown");
 			const outsideExecutor = await apiRequest(
 				{
 					...deps,
@@ -328,7 +324,7 @@ describe("stage-test stage API authorization", () => {
 		});
 	});
 
-	test("a writable stage still refuses state changes unless the plan declares data creation", async () => {
+	test("a writable stage permits test data creation without a plan", async () => {
 		await withFixture({ access: "writable" }, async (fixture) => {
 			const deps: StageRouteDeps = {
 				...fixture.deps,
@@ -342,24 +338,16 @@ describe("stage-test stage API authorization", () => {
 				path: "/orders",
 				body: "{}",
 			});
-			expect(answer.status).toBe(403);
-			expect(answer.code).toBe("stage-plan-write-not-approved");
-			expect(fixture.api.calls).toHaveLength(0);
+			expect(answer.status).toBe(200);
+			expect(fixture.api.calls).toHaveLength(1);
 		});
 	});
 
-	test("a data-creating plan may POST but cannot replace or delete records", async () => {
+	test("a tester may POST but cannot replace or delete records", async () => {
 		await withFixture({ access: "writable" }, async (fixture) => {
 			const deps: StageRouteDeps = {
 				...fixture.deps,
-				locateWorkflow: () =>
-					stageTestWorkflow({
-						stageTestPlan: {
-							createsData: true,
-							dataCreated: ["prefixed test request"],
-							route: [{ application: "api", role: "service" }],
-						},
-					}),
+				locateWorkflow: () => stageTestWorkflow(),
 			};
 			for (const method of ["PUT", "PATCH", "DELETE"] as const) {
 				const refused = await apiRequest(deps, {
@@ -371,7 +359,7 @@ describe("stage-test stage API authorization", () => {
 					body: "{}",
 				});
 				expect(refused.status).toBe(403);
-				expect(refused.code).toBe("stage-plan-write-not-approved");
+				expect(refused.code).toBe("stage-write-not-allowed");
 			}
 			expect(fixture.api.calls).toHaveLength(0);
 			const created = await apiRequest(deps, {

@@ -1401,7 +1401,6 @@ export interface StageView {
 	readonly environment: string;
 	readonly system: string;
 	readonly access: StageDefinition["access"];
-	readonly planApproval: NonNullable<StageDefinition["planApproval"]>;
 	readonly exclusive: boolean;
 	readonly apps: readonly StageAppView[];
 	readonly allowedOrigins: readonly string[];
@@ -1499,7 +1498,6 @@ export function stageView(entry: StageEntry, configDir: string): StageView {
 		environment: entry.stage.environment,
 		system: entry.stage.system,
 		access: entry.stage.access,
-		planApproval: entry.stage.planApproval ?? "when-writing",
 		exclusive: entry.stage.exclusive === true,
 		apps,
 		allowedOrigins: entry.stage.allowedOrigins ?? [],

@@ -12,7 +12,6 @@ import {
 	tokensForBytes,
 } from "../src/workflow/prompt-inventory.ts";
 import {
-	STAGE_TEST_PLANNER_ROLE,
 	STAGE_TEST_WIKI_ROLE,
 	STAGE_TESTER_ROLE,
 } from "../src/workflow/steps/stage-test.ts";
@@ -27,6 +26,9 @@ describe("prompt inventory", () => {
 		const uncovered = WORKFLOW_STEPS.filter(
 			(step) =>
 				step.actor === "agent" &&
+				// These contracts exist only for definitions pinned before exploration.
+				step.id !== "stage.plan" &&
+				step.id !== "stage.replay" &&
 				step.instructionAssets.includes("workflow-agent-protocol.md"),
 		)
 			.map((step) => step.id)
@@ -40,7 +42,9 @@ describe("prompt inventory", () => {
 			expect(roles).toContain(`core.verification:${role}`);
 		for (const role of ["wiki", "research-wiki", STAGE_TEST_WIKI_ROLE])
 			expect(roles).toContain(`core.wiki:${role}`);
-		expect(roles).toContain(`stage.plan:${STAGE_TEST_PLANNER_ROLE}`);
+		expect(PROMPT_FAMILIES).not.toContain("stage-planner");
+		expect(roles.some((role) => role.startsWith("stage.plan:"))).toBe(false);
+		expect(PROMPT_BUDGETS["stage-tester"]).toBeLessThanOrEqual(10 * 1024);
 		expect(roles).toContain(`stage.execute:${STAGE_TESTER_ROLE}`);
 	});
 

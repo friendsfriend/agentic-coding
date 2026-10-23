@@ -44,6 +44,13 @@ unavailable or unauthorized server is a section error with a retry.
 | Hosted stages | Stages | `src/server/stages/catalog.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/stages/definitions/*.json` and `stages/policy.json`, read from the canonical configuration root only (a repository overlay is ignored). The policy's `interactiveLogin` (`"local"`, the default, or `"never"`) decides whether a login the server cannot automate opens a headed window — a stage may narrow `local` to `never` with a diagnostic and can never widen `never` — and `limits.maxLoginHandoffSeconds` (default 900 s, hard ceiling 1800 s, only clamped down further by `ceilings.maxLoginHandoffSeconds`) bounds one hand-off, queue time included. Under the default, a role whose credential variables are unset now opens a window instead of answering `credential-missing` | no | immediate (every read re-reads the files; a durable run sees the same catalog through `stage_info`) | no (structure is read-only: a stage file is edited on disk) |
 | Stage credentials | Stages | `src/server/stages/routes.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/.env` — only the variables the stage catalog references | yes | immediate (the next login reads the new value; a running session keeps the credentials it installed) | yes (masked entry; only a referenced variable can be written) |
 
+Hosted stage tests have no plan-approval setting: `planApproval` in an old
+stage definition is ignored and is not displayed. The agent-preset gate with
+the same name remains unchanged for repository workflow families. New stage
+tests use one `stage-tester` exploration/execution step and review its report;
+running tests retain their pinned historical definition. Rebuild embedded
+assets and restart the application to use the new definition for new starts.
+
 ## Source and restart policy
 
 - **Appearance** is client-local. Saving writes `tui.json` through

@@ -121,6 +121,29 @@ function stageFile(overrides: Record<string, unknown> = {}): unknown {
 }
 
 describe("stage catalog", () => {
+	test("the retired planApproval field loads but has no effect", () => {
+		const root = configRoot();
+		try {
+			writeStage(root, "grid-int", stageFile());
+			const baseline = stageView(onlyEntry(readStageCatalog(root)), root);
+			for (const planApproval of [
+				"always",
+				"when-writing",
+				"never",
+				"ignored-value",
+			]) {
+				writeStage(root, "grid-int", stageFile({ planApproval }));
+				const catalog = readStageCatalog(root);
+				expect(catalog.excluded).toEqual([]);
+				expect(stageView(onlyEntry(catalog), root)).toEqual(baseline);
+				expect(onlyEntry(catalog).stage).not.toHaveProperty("planApproval");
+			}
+			writeStage(root, "grid-int", stageFile({ unexpectedTypo: true }));
+			expect(readStageCatalog(root).entries).toHaveLength(0);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 	test("a valid stage is allow-listed with its origins, defaults and credential status", () => {
 		const configDir = configRoot();
 		writeStage(configDir, "grid-int", stageFile());

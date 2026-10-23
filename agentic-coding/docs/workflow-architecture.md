@@ -1873,7 +1873,8 @@ intended ownership rather than exemptions:
   to `runtime/step-evidence.ts`; `steps/validation.ts` now holds only the
   `PreparedStepEvidence` type and pure validation predicates, and behavior
   hooks consume the evidence the runtime prepares and passes in.
-- The `stage.replay` step behavior (`add-stage-flow-replay`) first read the
+- The historical `stage.replay` step behavior (`add-stage-flow-replay`, kept
+  only for pinned older workflows) first read the
   stage-blocks flow registry, the evidence store, and the filesystem directly
   to decide replay eligibility and to load a finished replay's result/report/
   heal JSON. Both reads moved to the runtime layer:
@@ -1889,16 +1890,35 @@ intended ownership rather than exemptions:
 
 ### Stage-test definition tiers
 
-`stage-test` is registered twice from one graph module: the plan-only tier
-(`definitionVersionForStageTest`, `rounds + 1001`) and the authored-blocks tier
-(`definitionVersionForStageBlocks`, `rounds + 1100`). The second differs only
-by the `stage.blocks.promote` edge effect on `stage.review → approve` and
-`→ approve-and-update-wiki`. A new tier rather than an edit, because a
-registered version's digest covers the whole manifest and a pinned workflow has
-to keep resolving the graph it was started under; new starts resolve the
-authored-blocks tier. The handler (`effect-runner.ts`) revalidates the run's
-drafts against the report's claims, writes the approved documents atomically,
-rolls back on failure and removes the drafts only after every write landed.
+`stage-test` has three definition tiers from one graph module:
+
+| Helper | Version | Shape |
+| --- | --- | --- |
+| `definitionVersionForStageTest` | `rounds + 1001` | Historical plan gate and optional replay step |
+| `definitionVersionForStageBlocks` | `rounds + 1100` | Historical graph plus review-approval block promotion |
+| `definitionVersionForStageExploration` | `rounds + 1200` | New starts: one tester explores and tests, no plan gate or replay step |
+
+New starts enter `core.route-stage-execute → stage.execute → stage.review`,
+then either complete or optionally enter `core.wiki → core.wiki-approval`,
+then `core.completed → core.closed`. The sole test agent is `stage-tester`;
+`stage-wiki` runs only after explicit report-review approval. Execute's
+blocked/failed outcomes retry that step with the existing three-attempt bound.
+The tester chooses its expectations and its own standalone block plans and
+may call `stage_replay` during execution. Replay validates manifests, registry
+facts, stage scopes and supplied inputs; it never needs an approved plan and
+never generates a workflow report.
+
+Both review approvals carry `stage.blocks.promote`. The handler revalidates
+claimed drafts and their version/digest proofs, writes approved documents
+atomically, rolls back on failure and removes drafts only after every write
+landed. Report rendering consumes the report itself, not an approved plan.
+
+A registered definition digest covers its whole manifest. Both historical
+graphs, their step contracts/behaviors, instruction assets, optional metadata
+readers and dashboard actions remain available for pinned workflows. No
+workflow is re-pinned, no migration is added and `STORE_SCHEMA_VERSION` is
+unchanged. After deployment, regenerate embedded assets and perform the normal
+build/restart; running stage-test workflows keep their pinned definition.
 
 Run the checks with:
 

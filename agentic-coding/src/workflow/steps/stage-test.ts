@@ -1,10 +1,16 @@
-// The pinned-stage workflow's agent steps. The browser server enforces the
+// The pinned-stage workflow's step behaviors. The browser server enforces the
 // stage pin and stage access policy independently; these behaviors supply the
-// least-privilege roles and the structured plan/report contracts. Pure domain
-// module: it consumes only supplied validated evidence
-// (`stageReplayEligible`/`stageReplayEvidence`), never the evidence store or
-// the stage-blocks registry itself — those reads happen at the impure
-// boundary (`workflow/runtime/store.ts`, `workflow/runtime/reducers/agent-handoff.ts`).
+// least-privilege roles and the structured report contract. Pure domain module:
+// it consumes only supplied validated evidence
+// (`stageReplayEvidence`), never the evidence store or the stage-blocks
+// registry itself — those reads happen at the impure boundary
+// (`workflow/runtime/store.ts`, `workflow/runtime/reducers/agent-handoff.ts`).
+//
+// The tester is the workflow's only agent (`remove-stage-test-planner`): it
+// explores the pinned stage and decides its own expectations, so `stage.execute`
+// has no plan to consume and the report carries no plan accounting. The plan and
+// replay behaviors stay registered for the definition tiers that still declare
+// those steps — a workflow pinned to one of them keeps resolving and finishing.
 
 import {
 	proofProvesBlock,
@@ -31,9 +37,9 @@ export const STAGE_TEST_WIKI_ROLE = "stage-wiki";
 const planFor = (value: JsonValue | undefined): StageTestPlan =>
 	stageTestPlan.parse(value);
 
-/** The block decision of one route step: exactly one of a block, a block the
- * tester is to author, a block to adjust, or a stated reason why the step cannot
- * be a block at all.
+/** The block decision of one route step, for the definition tiers that still
+ * declare a plan step: exactly one of a block, a block the tester is to author,
+ * a block to adjust, or a stated reason why the step cannot be a block at all.
  *
  * This is checked when a plan is *authored* and never by the persisted schema
  * decoder: `metadata.stageTestPlan` snapshots written before the
@@ -62,7 +68,7 @@ export function stagePlanDecisionIssues(plan: StageTestPlan): string[] {
 	return issues;
 }
 
-/** One approved or drafted block, as the plan gate needs it. The registry is
+/** One approved or drafted block, as the plan gate needed it. The registry is
  * read at the impure boundary and passed in, so this stays pure. */
 export interface StagePlanBlockFacts {
 	readonly id: string;
@@ -76,13 +82,14 @@ export interface StagePlanBlockFacts {
 /** The block-effect and application rules a *plan* has to satisfy before the
  * developer is asked to approve it (`plan-blocks` requirement, `OSV-013`).
  *
- * The plan states which block each route step will run, so the stage policy has
- * to be enforced here and not only when the block is finally executed:
+ * Only the tiers that still declare a plan step call this. The plan states which
+ * block each route step will run, so the stage policy has to be enforced there
+ * and not only when the block is finally executed:
  *
  * - a step that names an approved block must name one the stage can run — an
  *   unknown id is a plan that cannot execute;
  * - the block's declared application must be one the pinned stage declares,
- *   exactly as a route step's own `application` must be;
+ *   exactly as a route step's own `application` must;
  * - a destructive block is never runnable, whatever the plan says;
  * - a write or destructive block counts as data creation, so the plan has to
  *   declare `createsData`, which is what routes a writable stage through the
@@ -153,6 +160,13 @@ export interface StageBlockDraftFacts {
 	readonly proofs: readonly StageBlockProofFacts[];
 }
 
+/** One block of the composed registry, as the report gate needs it. The registry
+ * is read at the impure boundary and passed in, so this stays pure. */
+export interface StageBlockFact {
+	readonly id: string;
+	readonly version: string;
+}
+
 /** The cross-record checks the engine-rendered report must satisfy before a
  * byte of it is written: every declared application has one version status,
  * every cited evidence id and journal step exists, every knowledge observation
@@ -160,7 +174,6 @@ export interface StageBlockDraftFacts {
  * render effect throws the first issue as a permanent failure; the pure list
  * keeps them testable without a stage, a browser, or an evidence root. */
 export function stageReportIssues(input: {
-	plan: StageTestPlan;
 	report: StageTestReport;
 	journal: readonly {
 		seq: number;
@@ -170,12 +183,6 @@ export function stageReportIssues(input: {
 	declaredApps: readonly string[];
 	secrets?: readonly string[];
 	stageBlockDrafts?: readonly StageBlockDraftFacts[];
-	/** The blocks the plan resolved when it was accepted, with the version of each
-	 * (`USAB-121`): the report's `blocksUsed` version is checked against it. */
-	stagePlanBlocks?: readonly {
-		readonly routeStepId: string;
-		readonly version?: string;
-	}[];
 }): string[] {
 	const issues: string[] = [];
 	if (
@@ -212,24 +219,17 @@ export function stageReportIssues(input: {
 			issues.push(
 				`stage report knowledge observation ${observation.concept} is not supported by the stage journal`,
 			);
-	const structured = JSON.stringify({
-		plan: input.plan,
-		report: input.report,
-	});
+	const structured = JSON.stringify(input.report);
 	if (input.secrets?.some((secret) => structured.includes(secret)))
 		issues.push(
 			"stage report contains a configured secret; remove it and retry without including credential values",
 		);
 	issues.push(
 		...stageReportBlockIssues({
-			plan: input.plan,
 			report: input.report,
 			...(input.stageBlockDrafts === undefined
 				? {}
 				: { stageBlockDrafts: input.stageBlockDrafts }),
-			...(input.stagePlanBlocks === undefined
-				? {}
-				: { planBlocks: input.stagePlanBlocks }),
 		}),
 	);
 	return issues;
@@ -237,7 +237,6 @@ export function stageReportIssues(input: {
 
 function validReport(
 	report: StageTestReport,
-	plan: StageTestPlan,
 	stage: {
 		readonly journal?: readonly {
 			seq: number;
@@ -246,32 +245,24 @@ function validReport(
 		readonly apps?: readonly string[];
 		readonly evidenceIds?: readonly string[];
 		readonly blockDrafts?: readonly StageBlockDraftFacts[];
-		/** The blocks the plan resolved when it was accepted, with the version the
-		 * developer approved (`USAB-121`). */
-		readonly planBlocks?: readonly {
-			readonly routeStepId: string;
-			readonly version?: string;
-		}[];
+		/** The composed registry's blocks, so a `blocksUsed` claim is checked
+		 * against a block the pinned stage can actually run. */
+		readonly blocks?: readonly StageBlockFact[];
 	} = {},
 ): void {
-	const expectedIds = new Set(plan.expectations.map(({ id }) => id));
-	// The count and the membership, not distinct ids: the report schema owns
-	// uniqueness (`stageTestReport.parse` refuses a repeated id before this guard
-	// runs), so a duplicate id can only reach here from a report that was never
-	// parsed, and the count covers the missing verdict that matters.
-	if (
-		report.expectations.length !== expectedIds.size ||
-		report.expectations.some(({ id }) => !expectedIds.has(id))
-	)
-		throw new WorkflowRuntimeError(
-			"entry-guard",
-			"stage report must contain exactly one verdict for every planned expectation",
-		);
 	// Step-specific rules stay here; the cross-record rules (attached evidence,
 	// journal steps, knowledge observations, application versions) are the same
 	// ones the render effect applies, so one helper owns them instead of two
 	// validators drifting apart (QUAL-005).
 	for (const item of report.expectations) {
+		// The tester writes its own expectations, so the report has to say what
+		// each one checked: a verdict whose statement is blank is a verdict the
+		// developer cannot read (`remove-stage-test-planner`).
+		if (!item.statement?.trim())
+			throw new WorkflowRuntimeError(
+				"entry-guard",
+				`expectation ${item.id} has no statement; state what you checked`,
+			);
 		if (
 			(item.verdict === "pass" || item.verdict === "fail") &&
 			item.evidenceIds.length === 0
@@ -291,13 +282,25 @@ function validReport(
 				`expectation ${item.id} contains an invalid stage step id`,
 			);
 	}
+	for (const claim of report.blocksUsed) {
+		const known = stage.blocks?.find((block) => block.id === claim.block);
+		if (stage.blocks !== undefined && known === undefined)
+			throw new WorkflowRuntimeError(
+				"entry-guard",
+				`stage report cites block ${claim.block}, which is not in the run's block catalog; run the block with stage_run and cite what ran`,
+			);
+		if (known !== undefined && known.version !== claim.version)
+			throw new WorkflowRuntimeError(
+				"entry-guard",
+				`stage report cites block ${claim.block}@${claim.version}, but the registry holds ${known.version}; cite the version that ran`,
+			);
+	}
 	if (
 		stage.journal !== undefined &&
 		stage.apps !== undefined &&
 		stage.evidenceIds !== undefined
 	) {
 		const issue = stageReportIssues({
-			plan,
 			report,
 			journal: stage.journal,
 			evidenceIds: stage.evidenceIds,
@@ -305,9 +308,6 @@ function validReport(
 			...(stage.blockDrafts === undefined
 				? {}
 				: { stageBlockDrafts: stage.blockDrafts }),
-			...(stage.planBlocks === undefined
-				? {}
-				: { stagePlanBlocks: stage.planBlocks }),
 		})[0];
 		if (issue) throw new WorkflowRuntimeError("entry-guard", issue);
 		return;
@@ -354,93 +354,19 @@ function validReport(
 		);
 }
 
-/** The block claims a report makes, checked against the approved plan and the
- * run's own drafts (`author-stage-blocks-as-data`). A report may only claim a
- * block the plan named for that route step, a created or adjusted block needs a
- * passed proof in this run, and a route step that ended without a block has to
- * say so. Pure: the drafts and their proofs are supplied, never read here. */
+/** The block claims a report makes, checked against the run's own drafts
+ * (`author-stage-blocks-as-data`). A created or adjusted block needs a passed
+ * proof of the document this run holds; a claim about a block without a draft is
+ * a run the engine has no proof for. Pure: the drafts and their proofs are
+ * supplied, never read here. */
 export function stageReportBlockIssues(input: {
-	plan: StageTestPlan;
 	report: StageTestReport;
 	stageBlockDrafts?: readonly StageBlockDraftFacts[];
-	/** The blocks the plan resolved when it was accepted, keyed by route step,
-	 * carrying the version the developer approved (`USAB-121`). */
-	planBlocks?: readonly {
-		readonly routeStepId: string;
-		readonly version?: string;
-	}[];
 }): string[] {
 	const issues: string[] = [];
-	const route = new Map(input.plan.route.map((step) => [step.id, step]));
-	const used = new Set<string>();
 	const drafts = new Map(
 		(input.stageBlockDrafts ?? []).map((draft) => [draft.id, draft]),
 	);
-	for (const claim of input.report.blocksUsed) {
-		const step = route.get(claim.routeStepId);
-		if (step === undefined) {
-			issues.push(
-				`stage report names block ${claim.block} for route step ${claim.routeStepId}, which the plan does not contain`,
-			);
-			continue;
-		}
-		used.add(claim.routeStepId);
-		const named =
-			step.block?.id ?? step.blockToCreate?.id ?? step.blockToAdjust?.id;
-		if (named === undefined)
-			issues.push(
-				`stage report claims block ${claim.block} on route step ${claim.routeStepId}, which the plan plans as an exploratory step`,
-			);
-		else if (named !== claim.block)
-			issues.push(
-				`stage report claims block ${claim.block} on route step ${claim.routeStepId}, but the plan names ${named}`,
-			);
-		// The claim names the *document* that ran, not only its id: the review
-		// prints this version to the developer as the document the run executed, so
-		// a transcription that matches neither the block the plan resolved nor this
-		// run's draft of it is refused (`USAB-121`).
-		else {
-			const draft = drafts.get(claim.block);
-			const planVersion = input.planBlocks?.find(
-				(block) => block.routeStepId === claim.routeStepId,
-			)?.version;
-			const acceptable = new Set(
-				[draft?.version, planVersion].filter(
-					(version): version is string => version !== undefined,
-				),
-			);
-			if (acceptable.size > 0 && !acceptable.has(claim.version)) {
-				const resolved: string[] = [];
-				if (planVersion !== undefined)
-					resolved.push(`the plan resolved ${claim.block}@${planVersion}`);
-				if (draft !== undefined)
-					resolved.push(
-						`this run's draft of it is ${claim.block}@${draft.version}`,
-					);
-				issues.push(
-					`stage report claims block ${claim.block}@${claim.version} on route step ${claim.routeStepId}, but ${resolved.join(" and ")}; cite the version that ran`,
-				);
-			}
-		}
-	}
-	const unblocked = new Map(
-		input.report.unblockedSteps.map((step) => [
-			step.routeStepId,
-			step.reason.trim(),
-		]),
-	);
-	// A blank reason says nothing, so the step is still unaccounted for
-	// (`OSV-008`).
-	for (const [routeStepId, reason] of unblocked)
-		if (reason === "")
-			issues.push(
-				`stage report lists route step ${routeStepId} as unblocked without a reason; say why this step runs without a block`,
-			);
-	for (const routeStepId of unblocked.keys())
-		if (!route.has(routeStepId))
-			issues.push(
-				`stage report lists route step ${routeStepId} as unblocked, which the plan does not contain`,
-			);
 	for (const [kind, claims] of [
 		["created", input.report.blocksCreated],
 		["adjusted", input.report.blocksAdjusted],
@@ -485,28 +411,7 @@ export function stageReportBlockIssues(input: {
 					`stage report claims block ${claim.block} as ${kind} without a passed proof of the document this run holds (${draft.version}, digest ${draft.digest}); recorded proofs: ${recorded} — run the current document once with stage_run and cite the version and digest stage_block_save returned`,
 				);
 			}
-			const routeStepId = claim.routeStepId;
-			if (routeStepId === undefined) continue;
-			const step = route.get(routeStepId);
-			const named =
-				kind === "created" ? step?.blockToCreate?.id : step?.blockToAdjust?.id;
-			if (step === undefined)
-				issues.push(
-					`stage report claims block ${claim.block} for route step ${routeStepId}, which the plan does not contain`,
-				);
-			else if (named !== claim.block)
-				issues.push(
-					`stage report claims block ${claim.block} as ${kind} on route step ${routeStepId}, but the plan names ${named ?? "no such block"}`,
-				);
 		}
-	for (const step of input.plan.route) {
-		if (used.has(step.id) || unblocked.has(step.id)) continue;
-		// A step that names a block and is absent from both lists is a gap the
-		// report has to explain, exactly like a planned exploratory step.
-		issues.push(
-			`stage report does not account for route step ${step.id}; name it in blocksUsed or in unblockedSteps with a reason`,
-		);
-	}
 	return issues;
 }
 
@@ -588,26 +493,20 @@ function replaySummary(
 	};
 }
 
-/** Shared by `stage.execute` and a passing `stage.replay`: both hand a report
- * to the one render effect. */
+/** The one render effect `stage.execute` completes through (and the replay step
+ * of an earlier tier): the engine owns the markdown, the step owns the
+ * transition. */
 function reportRenderCompletion(
 	snapshot: WorkflowSnapshot,
 	effect: { readonly kind: string; readonly data?: unknown },
 ) {
 	if (effect.kind !== "stage.report.render") return undefined;
 	const data = effect.data as
-		| {
-				plan?: unknown;
-				report?: unknown;
-				markdown?: unknown;
-				reportPath?: unknown;
-		  }
+		| { report?: unknown; markdown?: unknown; reportPath?: unknown }
 		| undefined;
-	const plan = stageTestPlan.parse(data?.plan);
 	const report = stageTestReport.parse(data?.report);
 	return {
 		metadata: {
-			stageTestPlan: plan as unknown as JsonValue,
 			stageTestReport: report as unknown as JsonValue,
 			...(typeof data?.markdown === "string"
 				? { stageTestReportMarkdown: data.markdown }
@@ -676,6 +575,9 @@ const reportActions = ({
 };
 
 export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
+	// The plan and replay steps belong to the definition tiers registered before
+	// `remove-stage-test-planner`; they stay here so a workflow pinned to one of
+	// them still resolves every step and finishes (see `graphs/stage-test.ts`).
 	"stage.plan": {
 		classification: "single",
 		// The stage briefs carry their own stage-bound tool rules; the generic
@@ -795,11 +697,11 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 			stageApps,
 			stageEvidenceIds,
 			stageBlockDrafts,
+			stageBlockFacts,
 		}) => {
 			if (outcome !== "complete") return undefined;
-			const plan = planFor(snapshot.metadata.stageTestPlan);
 			const report = stageTestReport.parse(output);
-			validReport(report, plan, {
+			validReport(report, {
 				...(stageJournal === undefined ? {} : { journal: stageJournal }),
 				...(stageApps === undefined ? {} : { apps: stageApps }),
 				...(stageEvidenceIds === undefined
@@ -808,9 +710,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 				...(stageBlockDrafts === undefined
 					? {}
 					: { blockDrafts: stageBlockDrafts }),
-				...(snapshot.metadata.stagePlanBlocks === undefined
-					? {}
-					: { planBlocks: snapshot.metadata.stagePlanBlocks }),
+				...(stageBlockFacts === undefined ? {} : { blocks: stageBlockFacts }),
 			});
 			return {
 				deferTransition: true,
@@ -819,7 +719,6 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 						kind: "stage.report.render",
 						idempotencyKey: `stage-report:${snapshot.workflowId}:${snapshot.revision}`,
 						payload: {
-							plan: plan as unknown as JsonValue,
 							report: report as unknown as JsonValue,
 						},
 					},
@@ -829,26 +728,28 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 		onEffectComplete: ({ snapshot, effect }) =>
 			reportRenderCompletion(snapshot, effect),
 		assignmentInputs: ({ snapshot }) => ({
-			objective: `Execute the approved plan against pinned stage ${snapshot.metadata.stage}.`,
+			objective: `Test pinned stage ${snapshot.metadata.stage} against: ${snapshot.metadata.task ?? snapshot.metadata.ticket ?? "the requested workflow"}.`,
 			introLines: [
-				`Pinned stage: ${snapshot.metadata.stage}; access: ${snapshot.metadata.stageAccess}.`,
-				`Approved plan: ${JSON.stringify(snapshot.metadata.stageTestPlan ?? {})}`,
-				"Stay within the approved actions and effects, but improvise interaction techniques and equivalent paths when they fail; suggested recipes are not binding click scripts. Preserve explicit developer constraints. For a UI app open browser_open({stage: <exact pinned ident>, stageApp: <declared app>}); for an API app use stage_api_request with the pinned stage and declared role. Raw URLs and app endpoints are forbidden.",
-				"This is a test stage: on a writable stage you may create and change test data needed to explore and reach the plan's goal, even if the plan did not list the action; never delete or edit pre-existing or foreign records, and list everything you created.",
+				`Pinned stage: ${snapshot.metadata.stage}; system: ${snapshot.metadata.stageSystem}; access: ${snapshot.metadata.stageAccess}.`,
+				"You own the whole test: read the process knowledge for the pinned system, decide what to check, then explore the stage and test against it. There is no plan to approve and no separate planning step.",
+				"For a UI application open browser_open({stage: <exact pinned ident>, stageApp: <declared app>}); for an API application use stage_api_request with the pinned stage and a declared role. Raw URLs, other origins and apps the stage does not declare are refused.",
+				"Use the reviewed blocks when one fits, and author or adjust a block with stage_block_save when a flow is worth keeping; run blocks with stage_run. A saved flow can be replayed with stage_replay. Nothing is required to be a block: explore freely when that is the faster way to the truth.",
+				"When a step fails, inspect the feedback and try a materially different approach — improvise interaction techniques and equivalent paths, another locator or an offered catalog choice — before deciding it is blocked. Preserve explicit developer constraints, the declared apps and roles, and the stage's access; do not bypass product validation or edit evidence to satisfy a guard.",
+				"This is a test stage: on a writable stage you may create and change test data as you need, including data you did not anticipate; never delete or edit pre-existing or foreign records, and list everything you created.",
 				"Record meaningful actions with stage_step, cite attached evidence ids, and use stage_wait for bounded asynchronous waits.",
 				"A blocked scenario is still a complete report: return blocked verdicts for inaccessible stage/login cases rather than a blocked run outcome.",
 				"Report exactly one version entry per declared app: status available with version, or unavailable with a concise reason.",
-				"Return one verdict per planned expectation. Pass/fail verdicts cite attached evidence; failures include severity. Do not write markdown: the engine renders the report.",
+				"Return one expectation per thing you checked: a statement of what you checked, expected and observed, a verdict, and the journal steps and evidence ids it rests on. Pass and fail verdicts cite evidence; failures include severity; a fail must be reproducible from what you write. Say in notTested what you deliberately did not test. Do not write markdown: the engine renders the report.",
 			],
 			permissions: [
 				"access only the pinned stage and declared apps/roles",
-				"stay within the declared apps, roles and the stage's write access",
+				"create and change test data on a writable stage",
 				"record sanitized observations and evidence",
 			],
 			checks: [
-				"every planned expectation has a verdict",
+				"every verdict cites existing evidence and journal steps",
 				"no pre-existing or foreign record is deleted or edited",
-				"all citations refer to existing evidence and journal steps",
+				"the report says what was not tested",
 			],
 		}),
 	},
@@ -884,7 +785,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 			if (status === "passed") {
 				try {
 					const report = stageTestReport.parse(evidence.report);
-					validReport(report, plan, {
+					validReport(report, {
 						...(stageJournal === undefined ? {} : { journal: stageJournal }),
 						...(stageApps === undefined ? {} : { apps: stageApps }),
 						...(stageEvidenceIds === undefined
@@ -904,7 +805,6 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 								kind: "stage.report.render",
 								idempotencyKey: `stage-report:${snapshot.workflowId}:${snapshot.revision}`,
 								payload: {
-									plan: plan as unknown as JsonValue,
 									report: report as unknown as JsonValue,
 									step: "stage.replay",
 								},

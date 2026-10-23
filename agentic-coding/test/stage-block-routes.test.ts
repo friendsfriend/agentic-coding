@@ -35,7 +35,6 @@ import {
 	STAGE_FLOW_DIRECTORY,
 } from "../src/stage-blocks/flow.ts";
 import { generateFlow } from "../src/stage-blocks/flow-generator.ts";
-import { flowSourceFromStagePlan } from "../src/stage-blocks/flow-source.ts";
 import {
 	blockPlanFromRoute,
 	validateStageBlockPlan,
@@ -48,6 +47,7 @@ import {
 	workflowEvidenceScope,
 } from "../src/workflow/runtime/evidence-store.ts";
 import { installedChromium } from "./support/browser.ts";
+import { flowSourceFromRoute } from "./support/flow-source-fixture.ts";
 
 const OWNER = "workflow:wf-stage";
 // The run's own identity, kept separate from the reusable workflow id on
@@ -309,8 +309,8 @@ async function seedRealFlow(worktree: string): Promise<void> {
 	});
 	if (validated.plan === undefined)
 		throw new Error(JSON.stringify(validated.issues));
-	const source = flowSourceFromStagePlan({
-		stagePlan: plan,
+	const source = flowSourceFromRoute({
+		routePlan: plan,
 		plan: validated.plan,
 		stage: "crm-int",
 		planId: "stage-wf-stage-r3",
@@ -356,8 +356,8 @@ function seedFlow(worktree: string): void {
 	});
 	if (validated.plan === undefined)
 		throw new Error(JSON.stringify(validated.issues));
-	const source = flowSourceFromStagePlan({
-		stagePlan: plan,
+	const source = flowSourceFromRoute({
+		routePlan: plan,
 		plan: validated.plan,
 		stage: "crm-int",
 		planId: "stage-wf-stage-r3",
@@ -518,63 +518,27 @@ describe("stage_run route", () => {
 		});
 	});
 
-	test("projects a stage-test plan and refuses a stale approved revision", async () => {
+	test("refuses an approved stage plan and runs the tester's own steps", async () => {
 		const { deps } = build();
 		await openStage(deps);
-		const fresh = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+		// There is no plan gate any more (`remove-stage-test-planner`): a
+		// route-shaped plan is refused by name, and the standalone form runs.
+		const route = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
 			plan: stagePlan(),
 			session: "default",
-			approvedRevision: 3,
 			role: "clerk",
 		});
-		expect(fresh.status).toBe(200);
-		expect(fresh.value.status).toBe("passed");
-		expect(fresh.value.flowId).toBe("customer-address");
-		expect(fresh.value.revision).toBe(3);
-		const stale = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			plan: stagePlan(),
+		expect(route.status).toBe(400);
+		expect(route.value.code).toBe("stage-plan-invalid");
+		expect(String(route.value.message)).toContain("standalone block plan");
+		const own = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+			plan: standaloneOpenPlan(),
 			session: "default",
-			approvedRevision: 2,
 			role: "clerk",
 		});
-		expect(stale.status).toBe(409);
-		expect(stale.value.code).toBe("stage-plan-stale");
-	});
-
-	test("executes a mixed plan's blocked step and reports the unblocked one as a plan-route-gap", async () => {
-		const { deps } = build();
-		await openStage(deps);
-		const result = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			plan: stagePlan({
-				route: [
-					...stagePlan().route,
-					{
-						id: "confirm",
-						application: "crm",
-						role: "clerk",
-						action: "confirm the customer detail manually",
-						expected: "the detail page still shows the customer",
-						capture: [],
-						expectationIds: ["E1"],
-						noBlockReason: "no data block covers the confirmation step yet",
-					},
-				],
-			}),
-			session: "default",
-			approvedRevision: 3,
-			role: "clerk",
-		});
-		expect(result.status).toBe(200);
-		const steps = result.value.steps as Record<string, unknown>[];
-		expect(steps).toHaveLength(1);
-		expect(steps[0]).toMatchObject({ status: "passed", block: "crm.ui.open" });
-		const issues = result.value.issues as Record<string, unknown>[];
-		expect(issues).toEqual([
-			expect.objectContaining({
-				code: "plan-route-gap",
-				routeStepId: "confirm",
-			}),
-		]);
+		expect(own.status).toBe(200);
+		expect(own.value.status).toBe("passed");
+		expect(own.value.flowId).toBe("customer-address");
 	});
 
 	test("saves a green parameterized flow into the workflow checkout", async () => {
@@ -582,10 +546,9 @@ describe("stage_run route", () => {
 		linkPackage(worktree);
 		await openStage(deps);
 		const result = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			plan: stagePlan(),
+			plan: standaloneOpenPlan(),
 			session: "default",
 			save: true,
-			approvedRevision: 3,
 			role: "clerk",
 		});
 		expect(result.status).toBe(200);
@@ -601,7 +564,7 @@ describe("stage_run route", () => {
 		const spec = fs.readFileSync(specPath, "utf8");
 		expect(spec).toContain('stage.run("open", openUiPath');
 		expect(spec).toContain('stage.input<string>("path")');
-		expect(spec).not.toContain("/customers/C-2002");
+		expect(spec).not.toContain("/customers/C-1001");
 		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
 			routeHash: string;
 			specHash: string;
@@ -609,7 +572,7 @@ describe("stage_run route", () => {
 		};
 		expect(manifest.routeHash).toBe(saved.routeHash as string);
 		expect(manifest.specHash).toBe(saved.specHash as string);
-		expect(manifest.inputExamples[0]).toEqual({ path: "/customers/C-2002" });
+		expect(manifest.inputExamples[0]).toEqual({ path: "/customers/C-1001" });
 	});
 
 	test("needs a stage-bound session for execution", async () => {
@@ -709,7 +672,7 @@ describe("stage_flows planner discovery (add-stage-flow-replay)", () => {
 });
 
 describe("stage_replay route", () => {
-	test("lists seeded flows and dry-runs an eligible approved input set", async () => {
+	test("lists seeded flows and dry-runs the manifest's input example", async () => {
 		const { deps, worktree } = build("stage.replay");
 		seedFlow(worktree);
 		const list = await call(deps, AGENT_BROWSER_STAGE_FLOWS_PATH, {
@@ -732,13 +695,15 @@ describe("stage_replay route", () => {
 		expect(dry.value.status).toBe("passed");
 		const dryRun = dry.value.dryRun as Record<string, unknown>;
 		expect(dryRun.eligible).toBe(true);
-		expect(dryRun.approved).toBe(true);
 		expect((dryRun.issues as unknown[]).length).toBe(0);
+		// Without explicit inputs the flow runs with its own recorded example, and
+		// the answer says which values that was.
+		expect(dryRun.inputs).toEqual({ path: "/customers/C-2002" });
 		const schema = dryRun.inputSchema as Record<string, unknown>;
 		expect(schema.required).toEqual(["path"]);
 	});
 
-	test("validates an unapproved input set without starting a browser", async () => {
+	test("validates the caller's input set without starting a browser", async () => {
 		const { deps, worktree } = build("stage.replay");
 		seedFlow(worktree);
 		const dry = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
@@ -747,47 +712,43 @@ describe("stage_replay route", () => {
 			inputs: { path: "/customers/C-9999" },
 		});
 		expect(dry.status).toBe(200);
-		expect(dry.value.status).toBe("failed");
+		expect(dry.value.status).toBe("passed");
 		const dryRun = dry.value.dryRun as Record<string, unknown>;
 		expect(dryRun.eligible).toBe(true);
-		expect(dryRun.approved).toBe(false);
+		expect(dryRun.inputs).toEqual({ path: "/customers/C-9999" });
+		// An input the flow does not declare is a schema refusal, not an approval
+		// question, and execution refuses it the same way the dry run does.
+		const extra = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
+			flowId: "customer-address",
+			dryRun: true,
+			inputs: { path: "/customers/C-9999", ghost: "x" },
+		});
+		expect(extra.status).toBe(200);
 		expect(
-			(dryRun.issues as Record<string, unknown>[]).some(
-				(issue) => issue.code === "flow-inputs-unapproved",
-			),
+			(
+				(extra.value.dryRun as Record<string, unknown>).issues as Record<
+					string,
+					unknown
+				>[]
+			).some((issue) => issue.code === "flow-inputs-extra"),
 		).toBe(true);
 		const execute = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
 			flowId: "customer-address",
-			inputs: { path: "/customers/C-9999" },
+			inputs: { path: "/customers/C-9999", ghost: "x" },
 		});
 		expect(execute.status).toBe(409);
-		expect(execute.value.code).toBe("flow-inputs-unapproved");
+		expect(execute.value.code).toBe("flow-not-eligible");
 	});
 
-	test("refuses an unknown flow, a stale revision and a different stage", async () => {
+	test("refuses an unknown flow and a different stage", async () => {
 		const { deps, worktree } = build("stage.replay");
 		seedFlow(worktree);
-		const mismatched = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
+		const missing = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
 			flowId: "not-saved",
 			dryRun: true,
 		});
-		expect(mismatched.status).toBe(409);
-		expect(mismatched.value.code).toBe("flow-id-mismatch");
-		const missingHarness = build("stage.replay");
-		const missing = await call(
-			missingHarness.deps,
-			AGENT_BROWSER_STAGE_REPLAY_PATH,
-			{ flowId: "customer-address", dryRun: true },
-		);
 		expect(missing.status).toBe(409);
 		expect(missing.value.code).toBe("flow-not-found");
-		const stale = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
-			flowId: "customer-address",
-			dryRun: true,
-			approvedRevision: 2,
-		});
-		expect(stale.status).toBe(409);
-		expect(stale.value.code).toBe("stage-plan-stale");
 		const wrongStage = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
 			flowId: "customer-address",
 			stage: "other-stage",
@@ -797,7 +758,7 @@ describe("stage_replay route", () => {
 		expect(wrongStage.value.code).toBe("stage-mismatch");
 	});
 
-	test("refuses a hand-edited spec and a route drift", async () => {
+	test("refuses a hand-edited spec", async () => {
 		const { deps, worktree } = build("stage.replay");
 		seedFlow(worktree);
 		fs.writeFileSync(
@@ -822,7 +783,7 @@ describe("stage_replay route", () => {
 		).toBe(true);
 	});
 
-	test("executes a saved flow and ingests its journal, report and result", async () => {
+	test("the tester replays supplied inputs without an approved plan and ingests journal and result", async () => {
 		let ready = true;
 		const server = Bun.serve({
 			port: 0,
@@ -837,8 +798,9 @@ describe("stage_replay route", () => {
 		});
 		try {
 			const { deps, worktree } = build(
-				"stage.replay",
+				"stage.execute",
 				`http://127.0.0.1:${server.port}/`,
+				{ stageTestPlan: undefined },
 			);
 			linkPackage(worktree);
 			await seedRealFlow(worktree);
@@ -849,13 +811,14 @@ describe("stage_replay route", () => {
 				});
 			const result = await call(deps, AGENT_BROWSER_STAGE_REPLAY_PATH, {
 				flowId: "customer-address",
+				inputs: { path: "/customers/C-2002" },
 			});
 			expect(result.status).toBe(200);
 			expect(result.value.status).toBe("passed");
 			expect(result.value.flowId).toBe("customer-address");
-			expect(result.value.report).toBeDefined();
-			expect(typeof result.value.reportEvidenceId).toBe("string");
+			expect(result.value.report).toBeUndefined();
 			expect(typeof result.value.resultEvidenceId).toBe("string");
+			expect(result.value.inputs).toEqual({ path: "/customers/C-2002" });
 			const steps = result.value.steps as Record<string, unknown>[];
 			expect(steps[0]?.routeStepId).toBe("open");
 			const journalIds = steps[0]?.journalIds;
@@ -982,14 +945,14 @@ describe("stage_replay suite route", () => {
 					stopOnFailure: false,
 					flows: [
 						{
-							id: "approved",
+							id: "first",
 							flowId: "customer-address",
 							inputs: { path: "/customers/C-2002" },
 						},
 						{
-							id: "unapproved",
+							id: "second",
 							flowId: "customer-address",
-							inputs: { path: "/customers/C-1001" },
+							inputs: { path: "/customers/C-2002" },
 						},
 					],
 				}),
@@ -1000,22 +963,19 @@ describe("stage_replay suite route", () => {
 			expect(result.status).toBe(200);
 			expect(result.value.suiteId).toBe("crm-regression");
 			expect(result.value.parallel).toBe(true);
-			expect(result.value.status).toBe("failed");
+			expect(result.value.status).toBe("passed");
 			expect(typeof result.value.resultEvidenceId).toBe("string");
 			const entries = result.value.entries as Record<string, unknown>[];
 			expect(entries).toHaveLength(2);
-			const approved = entries.find((entry) => entry.id === "approved");
-			const unapproved = entries.find((entry) => entry.id === "unapproved");
-			expect(approved).toMatchObject({
-				flowId: "customer-address",
-				status: "passed",
-			});
-			expect(typeof approved?.resultEvidenceId).toBe("string");
-			expect(unapproved).toMatchObject({
-				flowId: "customer-address",
-				status: "refused",
-				code: "flow-inputs-unapproved",
-			});
+			// Each entry carries its own inputs and nothing gates them on an
+			// approval, so both run (`remove-stage-test-planner`).
+			for (const id of ["first", "second"])
+				expect(entries.find((entry) => entry.id === id)).toMatchObject({
+					flowId: "customer-address",
+					status: "passed",
+				});
+			const first = entries.find((entry) => entry.id === "first");
+			expect(typeof first?.resultEvidenceId).toBe("string");
 		} finally {
 			server.stop(true);
 		}
@@ -1156,27 +1116,8 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 		expect(refusedRole.value.code).toBe("stage-test-tool-restricted");
 	});
 
-	test("a saved draft executes through the plan and records the proof promotion needs", async () => {
-		const authoredPlan = stagePlan({
-			route: [
-				{
-					id: "read",
-					application: "crm",
-					role: "clerk",
-					action: "read the customer detail",
-					expected: "the detail page shows the customer",
-					capture: [],
-					expectationIds: ["E1"],
-					blockToCreate: {
-						id: "crm.customer.readAddress",
-						args: { customerId: "C-1001" },
-						intent: "read the customer detail of one customer",
-					},
-				},
-			],
-		});
+	test("a saved draft executes through a standalone plan and records the proof promotion needs", async () => {
 		const { deps, worktree } = build("stage.execute", APP_URL, {
-			stageTestPlan: authoredPlan,
 			runId: RUN_ID,
 		});
 		cleanDrafts(worktree);
@@ -1186,12 +1127,20 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 			session: "default",
 		});
 		expect(saved.status).toBe(200);
-		// The authored step is no longer a gap: the plan names it through
-		// `blockToCreate`, the draft is registered, so `stage_run` executes it.
+		// The tester's own plan names the block it just authored: the draft is this
+		// run's, so `stage_run` executes it and records the proof.
 		const run = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			plan: authoredPlan,
+			plan: {
+				planId: "plan-author",
+				steps: [
+					{
+						id: "read",
+						block: "crm.customer.readAddress",
+						args: { customerId: "C-1001" },
+					},
+				],
+			},
 			session: "default",
-			approvedRevision: 3,
 			role: "clerk",
 		});
 		expect(run.status).toBe(200);
@@ -1225,85 +1174,12 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 		expect(proofed?.draft.runId).toBe(RUN_ID);
 	});
 
-	test("a draft takes its arguments from draftArgs because the plan cannot know them", async () => {
-		const authoredPlan = stagePlan({
-			route: [
-				{
-					id: "read",
-					application: "crm",
-					role: "clerk",
-					action: "read the customer detail",
-					expected: "the detail page shows the customer",
-					capture: [],
-					expectationIds: ["E1"],
-					blockToCreate: {
-						id: "crm.customer.readAddress",
-						intent: "read the customer detail of one customer",
-					},
-				},
-			],
-		});
-		const { deps, worktree } = build("stage.execute", APP_URL, {
-			stageTestPlan: authoredPlan,
-			runId: RUN_ID,
-		});
-		cleanDrafts(worktree);
-		await openStage(deps);
-		const saved = await call(deps, AGENT_BROWSER_STAGE_BLOCK_SAVE_PATH, {
-			document: authoredBlock(),
-			session: "default",
-		});
-		expect(saved.status).toBe(200);
-		const request = {
-			plan: authoredPlan,
-			session: "default",
-			approvedRevision: 3,
-			role: "clerk",
-		};
-		const unbound = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, request);
-		expect(unbound.status).toBe(400);
-		expect(unbound.value.code).toBe("stage-plan-invalid");
-		const bound = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			...request,
-			draftArgs: { read: { customerId: "C-1001" } },
-		});
-		expect(bound.status).toBe(200);
-		expect(bound.value).toMatchObject({ status: "passed" });
-		const stranger = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			...request,
-			draftArgs: { elsewhere: { customerId: "C-1001" } },
-		});
-		expect(stranger.status).toBe(400);
-		expect(String(stranger.value.message)).toContain(
-			"draftArgs names elsewhere",
-		);
-	});
-
 	test("a draft of another run is neither executed nor read through the route", async () => {
 		// The draft scope is asserted at the store elsewhere; this drives it
 		// through the route's own locate seam, where a reused workflow id is the
 		// normal case: a predecessor's draft must not become this run's executable
 		// block (`TQV-202`, `CONC-103`).
-		const plan = stagePlan({
-			route: [
-				{
-					id: "read",
-					application: "crm",
-					role: "clerk",
-					action: "read the customer detail",
-					expected: "the detail page shows the customer",
-					capture: [],
-					expectationIds: ["E1"],
-					blockToCreate: {
-						id: "crm.customer.readAddress",
-						args: { customerId: "C-1001" },
-						intent: "read the customer detail of one customer",
-					},
-				},
-			],
-		});
 		const { deps, worktree } = build("stage.execute", APP_URL, {
-			stageTestPlan: plan,
 			runId: RUN_ID,
 		});
 		cleanDrafts(worktree);
@@ -1323,17 +1199,23 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 			document: authoredBlock(),
 		});
 		const refused = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
-			plan,
+			plan: {
+				planId: "plan-predecessor",
+				steps: [
+					{
+						id: "read",
+						block: "crm.customer.readAddress",
+						args: { customerId: "C-1001" },
+					},
+				],
+			},
 			session: "default",
-			approvedRevision: 3,
 			role: "clerk",
 		});
-		// The authored route step stays a gap for this run, so the compiled plan has
-		// no executable step at all and the run is refused rather than executed
-		// against another run's document.
+		// The block is not part of this run's catalog, so the plan cannot name it.
 		expect(refused.status).toBe(400);
 		expect(refused.value.code).toBe("stage-plan-invalid");
-		expect(refused.value.message).toContain("at least one step");
+		expect(JSON.stringify(refused.value.issues)).toContain("block-unknown");
 		// The predecessor's draft is still there — the refusal is scoping, not a
 		// missing file — and this run's own draft list is empty.
 		expect(
@@ -1342,7 +1224,7 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 		).toEqual([]);
 	});
 
-	test("a standalone plan may not reach into this run's drafts", async () => {
+	test("a standalone plan executes this run's own draft", async () => {
 		const { deps, worktree } = build();
 		cleanDrafts(worktree);
 		await openStage(deps);
@@ -1351,7 +1233,7 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 			session: "default",
 		});
 		expect(saved.status).toBe(200);
-		const refused = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
+		const executed = await call(deps, AGENT_BROWSER_STAGE_RUN_PATH, {
 			plan: {
 				planId: "plan-draft",
 				steps: [
@@ -1364,8 +1246,8 @@ describe("stage_block_save (author-stage-blocks-as-data)", () => {
 			},
 			session: "default",
 		});
-		expect(refused.status).toBe(400);
-		expect(refused.value.code).toBe("block-draft-undeclared");
+		expect(executed.status).toBe(200);
+		expect(executed.value).toMatchObject({ status: "passed" });
 	});
 
 	test("refuses an invalid document with its own issues", async () => {
