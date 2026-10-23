@@ -833,7 +833,7 @@ export const stageTestBehaviors: Readonly<Record<string, StepBehavior>> = {
 			introLines: [
 				`Pinned stage: ${snapshot.metadata.stage}; access: ${snapshot.metadata.stageAccess}.`,
 				`Approved plan: ${JSON.stringify(snapshot.metadata.stageTestPlan ?? {})}`,
-				"Use only the approved route: for a UI app open browser_open({stage: <exact pinned ident>, stageApp: <declared app>}); for an API app use stage_api_request with the pinned stage and declared role. Raw URLs and app endpoints are forbidden.",
+				"Stay within the approved actions and effects, but improvise interaction techniques and equivalent paths when they fail; suggested recipes are not binding click scripts. Preserve explicit developer constraints. For a UI app open browser_open({stage: <exact pinned ident>, stageApp: <declared app>}); for an API app use stage_api_request with the pinned stage and declared role. Raw URLs and app endpoints are forbidden.",
 				"Never issue an unplanned state-changing action. A planned create is allowed only on a writable stage and after any approval required by the pinned plan policy; never delete or mutate data outside the approved route.",
 				"Record meaningful actions with stage_step, cite attached evidence ids, and use stage_wait for bounded asynchronous waits.",
 				"A blocked scenario is still a complete report: return blocked verdicts for inaccessible stage/login cases rather than a blocked run outcome.",

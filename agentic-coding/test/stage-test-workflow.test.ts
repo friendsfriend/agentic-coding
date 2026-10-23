@@ -31,6 +31,7 @@ import {
 	agentEffectHandlers,
 	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
+import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import {
 	workflowEvidenceRoot,
 	workflowEvidenceScope,
@@ -178,6 +179,69 @@ function completeAgentStep(
 }
 
 describe("stage-test planning and report contracts", () => {
+	test("recovery guidance allows different techniques, never broader effects", () => {
+		const inputs = stageTestBehaviors["stage.execute"]?.assignmentInputs?.({
+			snapshot: snapshot({ stageTestPlan: plan() }),
+			run: {
+				stepId: "stage.execute",
+				role: "stage-tester",
+				profile: { readOnly: false },
+			},
+		});
+		const text = inputs?.introLines?.join("\n") ?? "";
+		expect(text).toContain(
+			"improvise interaction techniques and equivalent paths",
+		);
+		expect(text).toContain("Preserve explicit developer constraints");
+		expect(text).toContain("Never issue an unplanned state-changing action");
+		expect(text).toContain("rather than a blocked run outcome");
+	});
+
+	test("embedded planner and tester recovery instructions match their sources", () => {
+		for (const asset of ["stage-test-plan.md", "stage-test-execute.md"]) {
+			const source = fs.readFileSync(
+				new URL(
+					`../../agent-definitions/instructions/${asset}`,
+					import.meta.url,
+				),
+				"utf8",
+			);
+			expect(AGENT_DEFINITIONS[`instructions/${asset}`]).toBe(source);
+		}
+		const planner = AGENT_DEFINITIONS["instructions/stage-test-plan.md"];
+		const tester = AGENT_DEFINITIONS["instructions/stage-test-execute.md"];
+		expect(planner).toContain(
+			"Do not add abort-on-validation or stop-on-first-error rules",
+		);
+		expect(tester).toContain("try a materially different approach");
+		expect(tester).toContain("Repair artifact/schema/guard errors");
+		expect(tester).toContain("Do not bypass product validation");
+		expect(tester).not.toContain("Retry a failed read or navigation once");
+	});
+
+	test("an inaccessible scenario still completes into a rendered report", () => {
+		const result = completeAgentStep(
+			"stage.execute",
+			snapshot({ stageTestPlan: plan() }),
+			report({
+				expectations: [
+					{
+						id: "E1",
+						verdict: "blocked",
+						expected: "The request is visible",
+						observed: "Service outage persists after bounded investigation",
+						stepIds: [],
+						evidenceIds: [],
+					},
+				],
+			}),
+		);
+		expect(result?.deferTransition).toBe(true);
+		expect(result?.effects?.map(({ kind }) => kind)).toEqual([
+			"stage.report.render",
+		]);
+	});
+
 	test("the tester role is single-classified and requires vision", () => {
 		const execute = WORKFLOW_STEPS.find(({ id }) => id === "stage.execute");
 		expect(execute?.behavior?.classification).toBe("single");
