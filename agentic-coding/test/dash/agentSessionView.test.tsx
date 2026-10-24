@@ -11,6 +11,7 @@ import {
 	type KeyEvent,
 	parseColor,
 	type Renderable,
+	type ScrollBoxRenderable,
 } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
@@ -29,6 +30,90 @@ import { guardOrchestratorSubmit } from "../../src/tui/orchestrator/submission.t
 
 function renderTree(node: Renderable): Renderable[] {
 	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+for (const width of [80, 160]) {
+	test(`hovered diffs own wheel scrolling in both directions at width ${width}`, async () => {
+		let transcript: ScrollBoxRenderable | undefined;
+		const content = `@@ -1,30 +1,30 @@\n${Array.from({ length: 30 }, (_, i) => `-old ${i}`).join("\n")}\n${Array.from({ length: 30 }, (_, i) => `+new ${i}`).join("\n")}\n`;
+		const t = await testRender(
+			() => (
+				<scrollbox
+					ref={(box) => {
+						transcript = box;
+					}}
+					height={24}
+				>
+					<text height={8} flexShrink={0}>
+						before diff
+					</text>
+					<box maxHeight={8} overflow="hidden" flexShrink={0}>
+						<TranscriptFile file={{ kind: "diff", path: "a.txt", content }} />
+					</box>
+					<text height={40} flexShrink={0}>
+						after diff
+					</text>
+				</scrollbox>
+			),
+			{ width, height: 24 },
+		);
+		try {
+			await t.renderOnce();
+			await t.renderOnce();
+			if (!transcript) throw new Error("Missing transcript scroll box");
+			transcript.scrollTop = 4;
+			await t.renderOnce();
+			const codes = renderTree(transcript).filter(
+				(node) => node instanceof CodeRenderable,
+			);
+			const code = codes[0];
+			if (!code) throw new Error("Missing diff code renderer");
+			const x = code.x + 8;
+			const y = 6;
+			const initial = transcript.scrollTop;
+			await t.mockMouse.scroll(x, y, "down");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+			expect(code.scrollY).toBeGreaterThan(0);
+			const down = code.scrollY;
+			await t.mockMouse.scroll(x, y, "up");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+			expect(code.scrollY).toBeLessThan(down);
+			// Line-number gutters belong to the diff as well, not the transcript.
+			await t.mockMouse.scroll(1, y, "down");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+			expect(code.scrollY).toBeGreaterThan(0);
+			if (width > 120) {
+				const right = codes[1];
+				if (!right) throw new Error("Missing right diff side");
+				expect(right.scrollY).toBe(code.scrollY);
+				await t.mockMouse.scroll(right.x + 8, y, "down");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBe(initial);
+				expect(right.scrollY).toBe(code.scrollY);
+			}
+			// Even at the diff's top, the wheel must not leak to the transcript.
+			code.scrollY = 0;
+			await t.mockMouse.scroll(x, y, "up");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+			for (const side of codes) side.scrollY = 10000;
+			await t.mockMouse.scroll(x, y, "down");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+			// Moving outside the diff changes the scroll owner, not keyboard focus.
+			await t.mockMouse.scroll(x, 1, "down");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBeGreaterThan(initial);
+			await t.mockMouse.scroll(x, 1, "up");
+			await t.renderOnce();
+			expect(transcript.scrollTop).toBe(initial);
+		} finally {
+			t.renderer.destroy();
+		}
+	});
 }
 
 test("file code configures native syntax highlighting and numbered source", async () => {
