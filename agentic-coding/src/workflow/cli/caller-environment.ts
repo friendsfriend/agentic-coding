@@ -108,10 +108,33 @@ export function callerEnvironment(): CallerEnvironment {
 			throw new Error("managed caller ancestry is unavailable");
 		return {};
 	}
+	return linuxCallerEnvironment(local, process.pid, {
+		environment: processEnvironment,
+		parent: parentProcessId,
+		command: processCommand,
+	});
+}
+
+/** The durable host is shared by runs: only its children carry a run's launch
+ * credentials. Establish the managed boundary from host ancestry, then let the
+ * handoff/question capability validators authenticate those credentials. Never
+ * treat a credential-stripped child of that host as an interactive operator.
+ * The process reader is explicit so the boundary can be tested without forging
+ * real process ancestry. */
+export function linuxCallerEnvironment(
+	local: CallerEnvironment,
+	callerPid: number,
+	reader: {
+		readonly environment: (pid: number) => CallerEnvironment;
+		readonly parent: (pid: number) => number | undefined;
+		readonly command: (pid: number) => string;
+	},
+): CallerEnvironment {
 	let managed: CallerEnvironment = {};
 	let managedPid: number | undefined;
+	let durableHost = false;
 	const seen = new Set<number>();
-	let pid = process.pid;
+	let pid = callerPid;
 	let rootReached = false;
 	while (!seen.has(pid)) {
 		seen.add(pid);
@@ -119,23 +142,27 @@ export function callerEnvironment(): CallerEnvironment {
 		// is not needed to establish the managed ancestor and may be unreadable.
 		let environment: CallerEnvironment;
 		try {
+			if (pid !== callerPid && pid !== 1)
+				durableHost ||= /(?:^|\s)agent\s+host(?:\s|$)/i.test(
+					reader.command(pid),
+				);
 			environment =
-				pid === process.pid ? local : pid === 1 ? {} : processEnvironment(pid);
+				pid === callerPid ? local : pid === 1 ? {} : reader.environment(pid);
 		} catch {
-			if (managedPid !== undefined) {
+			if (managedPid !== undefined || durableHost) {
 				rootReached = true;
 				break;
 			}
 			throw new Error("managed caller ancestry is unavailable");
 		}
 		if (
-			pid !== process.pid &&
+			pid !== callerPid &&
 			(environment.HERDR_RUN_TOKEN || environment.HERDR_WORKFLOW_ID)
 		) {
 			managed = environment;
 			managedPid = pid;
 		}
-		const parent = parentProcessId(pid);
+		const parent = reader.parent(pid);
 		if (parent === undefined) {
 			rootReached = true;
 			break;
@@ -143,11 +170,12 @@ export function callerEnvironment(): CallerEnvironment {
 		pid = parent;
 	}
 	if (!rootReached) throw new Error("managed caller ancestry is cyclic");
-	if (local.HERDR_RUN_TOKEN || local.HERDR_WORKFLOW_ID) {
-		if (managedPid === undefined)
-			throw new Error("managed caller ancestry is unavailable");
-	}
-	return managed;
+	if (managedPid !== undefined) return managed;
+	if (durableHost && (local.HERDR_RUN_TOKEN || local.HERDR_WORKFLOW_ID))
+		return local;
+	if (durableHost || local.HERDR_RUN_TOKEN || local.HERDR_WORKFLOW_ID)
+		throw new Error("managed caller ancestry is unavailable");
+	return {};
 }
 export function managedAgent(): boolean {
 	try {

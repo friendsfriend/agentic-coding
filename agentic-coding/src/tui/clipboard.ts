@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 
 /** Write text to the terminal via an OSC 52 clipboard-set escape sequence, so
  * the copy can still work in terminals that honor OSC 52 (including over SSH
@@ -29,14 +29,19 @@ export function copyToClipboard(text: string): boolean {
 						["xsel", "--clipboard", "--input"],
 					];
 	for (const [command, ...args] of commands) {
+		// Do not invoke unavailable helpers (or a shell's command-not-found
+		// handler). A fallback failure must never print into the live renderer.
+		const executable = Bun.which(command);
+		if (!executable) continue;
 		try {
-			execFileSync(command, args, {
+			const result = spawnSync(executable, args, {
 				input: text,
 				stdio: ["pipe", "ignore", "ignore"],
+				timeout: 1000,
 			});
-			return true;
+			if (!result.error && result.status === 0) return true;
 		} catch {
-			// Try next platform fallback.
+			// Try the next helper, silently, even if spawning itself fails.
 		}
 	}
 	if (process.platform !== "darwin" && process.platform !== "win32") {
