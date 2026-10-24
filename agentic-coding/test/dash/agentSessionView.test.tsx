@@ -5,7 +5,13 @@
 // binding while the view owns the keyboard (see the module comment in
 // AgentSessionView.tsx for why).
 import { expect, test } from "bun:test";
-import { type KeyEvent, parseColor } from "@opentui/core";
+import {
+	CodeRenderable,
+	DiffRenderable,
+	type KeyEvent,
+	parseColor,
+	type Renderable,
+} from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { uiColors } from "@ui";
@@ -18,7 +24,81 @@ import {
 	AgentSessionView,
 	SESSION_PICKER_KEYS,
 } from "../../src/tui/dash/ui/AgentSessionView.tsx";
+import { TranscriptFile } from "../../src/tui/dash/ui/TranscriptFile.tsx";
 import { guardOrchestratorSubmit } from "../../src/tui/orchestrator/submission.ts";
+
+function renderTree(node: Renderable): Renderable[] {
+	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+test("file code configures native syntax highlighting and numbered source", async () => {
+	const t = await testRender(
+		() => (
+			<TranscriptFile
+				file={{
+					kind: "code",
+					path: "a.ts",
+					content: "const answer = 42;\n\nrun(answer);",
+					startLine: 40,
+				}}
+			/>
+		),
+		{ width: 80, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const code = renderTree(t.renderer.root).find(
+			(node) => node instanceof CodeRenderable,
+		);
+		expect(code).toBeInstanceOf(CodeRenderable);
+		if (!(code instanceof CodeRenderable))
+			throw new Error("Missing source renderer");
+		expect(code.filetype).toBe("typescript");
+		expect(code.syntaxStyle).toBeDefined();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("40 const answer = 42;");
+		expect(frame).toContain("42 run(answer);");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("native diffs switch between split and unified as available width changes", async () => {
+	const t = await testRender(
+		() => (
+			<TranscriptFile
+				file={{
+					kind: "diff",
+					path: "a.ts",
+					content:
+						"--- a/a.ts\n+++ b/a.ts\n@@ -40,1 +40,1 @@\n-const old = 1;\n+const updated = 2;\n",
+				}}
+			/>
+		),
+		{ width: 160, height: 12 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const diff = renderTree(t.renderer.root).find(
+			(node) => node instanceof DiffRenderable,
+		);
+		if (!(diff instanceof DiffRenderable))
+			throw new Error("Missing diff renderer");
+		expect(diff.view).toBe("split");
+		expect(diff.filetype).toBe("typescript");
+		expect(t.captureCharFrame()).toContain("const updated = 2;");
+		t.resize(80, 12);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(diff.view).toBe("unified");
+		expect(t.captureCharFrame()).toContain("40 - const old = 1;");
+		expect(t.captureCharFrame()).toContain("40 + const updated = 2;");
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 	{ id: "b1", kind: "user", text: "fix the parser", tone: "accent" },
@@ -1705,15 +1785,16 @@ test("tool rows get a view from their call and result, and a generic default", a
 		),
 		{ width: 80, height: 22 },
 	);
-	/** The painted foreground of the first cell holding `text`. */
-	const foreground = (text: string) => {
-		for (const line of t.captureSpans().lines) {
-			for (const span of line.spans) {
-				if (span.text.includes(text)) return span.fg;
-			}
-		}
-		return undefined;
-	};
+	const diffSign = (source: string, sign: string) =>
+		t
+			.captureSpans()
+			.lines.find((line) =>
+				line.spans
+					.map((span) => span.text)
+					.join("")
+					.includes(source),
+			)
+			?.spans.find((span) => span.text.includes(sign));
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
@@ -1732,8 +1813,8 @@ test("tool rows get a view from their call and result, and a generic default", a
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
-		expect(expanded).toContain("-const a = 1;");
-		expect(expanded).toContain("+const b = 2;");
+		expect(expanded).toContain("- const a = 1;");
+		expect(expanded).toContain("+ const b = 2;");
 		expect(expanded).toContain("const a = 1;");
 		// Additions and removals carry their own tone.
 		const rgb = (color: unknown) => {
@@ -1751,11 +1832,19 @@ test("tool rows get a view from their call and result, and a generic default", a
 				.map((part) => Math.round(part * 255))
 				.join(",");
 		};
-		// The read's content is primary text; a change worth noticing takes its
-		// status color.
-		expect(rgb(foreground("const a = 1;"))).toBe(theme(uiColors.textPrimary));
-		expect(rgb(foreground("+const b = 2;"))).toBe(theme(uiColors.success));
-		expect(rgb(foreground("-const a = 1;"))).toBe(theme(uiColors.error));
+		// Source uses syntax colors; the dedicated diff signs keep change colors.
+		expect(rgb(diffSign("const b = 2;", "+")?.fg)).toBe(
+			theme(uiColors.diffAdded),
+		);
+		expect(rgb(diffSign("- const a = 1;", "-")?.fg)).toBe(
+			theme(uiColors.diffRemoved),
+		);
+		expect(rgb(diffSign("const b = 2;", "+")?.bg)).toBe(
+			theme(uiColors.diffAddedBg),
+		);
+		expect(rgb(diffSign("- const a = 1;", "-")?.bg)).toBe(
+			theme(uiColors.diffRemovedBg),
+		);
 	} finally {
 		t.renderer.destroy();
 	}
@@ -2011,7 +2100,7 @@ test("every tool row uses the raised block surface", async () => {
 		const readLine = lines.findIndex((line) => line.includes("Read src/a.ts"));
 		expect(readLine).toBeGreaterThan(0);
 		expect(lines[readLine - 1]).toMatch(/^┃\s*$/);
-		expect(lines[readLine + 1]).toMatch(/^┃\s+a\s*$/);
+		expect(lines[readLine + 1]).toMatch(/^┃\s+1 a\s*$/);
 		expect(lines[readLine + 2]).toMatch(/^┃\s*$/);
 		expect(row("search query=needle")).toContain("▸ • search query=needle");
 		expect(row("search query=needle").trimStart().startsWith("┃")).toBe(true);

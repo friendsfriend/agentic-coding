@@ -18,6 +18,31 @@ const blocksOf = (value: unknown) =>
 	);
 
 describe("buildAgentSessionView", () => {
+	test("read results preserve source whitespace for syntax and line numbering", () => {
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.tool-result",
+					model: [
+						{
+							toolName: "read",
+							isError: false,
+							content: [
+								{ type: "text", text: "\nconst a = 1;  \n\n  run();\n" },
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(blocks[0]?.toolCall?.result?.lines).toEqual([
+			"",
+			"const a = 1;  ",
+			"",
+			"  run();",
+			"",
+		]);
+	});
 	test("an empty conversation has no blocks", () => {
 		expect(blocksOf({ entries: [] })).toEqual([]);
 	});

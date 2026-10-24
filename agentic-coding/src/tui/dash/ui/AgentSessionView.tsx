@@ -70,6 +70,7 @@ import {
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 import { Spinner } from "./Spinner.tsx";
+import { TranscriptFile } from "./TranscriptFile.tsx";
 import {
 	type ToolViewRow,
 	type ToolViewSection,
@@ -826,23 +827,30 @@ function Block(props: {
 								overflow="hidden"
 								flexDirection="column"
 							>
-								<For
-									each={
-										props.expanded
-											? (tool.rows ?? [])
-											: (tool.rows ?? []).slice(0, FILE_TOOL_PREVIEW_LINES)
+								<Show
+									when={tool.file}
+									fallback={
+										<For
+											each={
+												props.expanded
+													? (tool.rows ?? [])
+													: (tool.rows ?? []).slice(0, FILE_TOOL_PREVIEW_LINES)
+											}
+										>
+											{(row) => (
+												<ToolRow
+													block={props.block}
+													row={row}
+													openRows={props.openRows}
+													onToggleRow={props.onToggleRow}
+													transcript={props.transcript}
+												/>
+											)}
+										</For>
 									}
 								>
-									{(row) => (
-										<ToolRow
-											block={props.block}
-											row={row}
-											openRows={props.openRows}
-											onToggleRow={props.onToggleRow}
-											transcript={props.transcript}
-										/>
-									)}
-								</For>
+									{(file) => <TranscriptFile file={file()} />}
+								</Show>
 							</box>
 							<Show
 								when={

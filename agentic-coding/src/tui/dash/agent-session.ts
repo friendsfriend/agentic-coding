@@ -140,13 +140,23 @@ function stripHarness(value: string): string {
  * host that keeps more than the harness does. */
 const MAX_OUTPUT_LINES = 2000;
 
-function outputLines(value: unknown): string[] {
+function outputLines(value: unknown, preserveWhitespace = false): string[] {
 	if (typeof value !== "string") return [];
-	const lines = stripHarness(stripAnsi(value))
+	const clean = stripAnsi(value);
+	const lines = (
+		preserveWhitespace
+			? clean.replace(/<\/?harness>\s*/g, "")
+			: stripHarness(clean)
+	)
 		.replace(/\r\n?/g, "\n")
 		.split("\n")
-		.map((line) => line.replace(/\s+$/g, ""))
-		.filter((line) => line.length > 0);
+		.flatMap((line) =>
+			preserveWhitespace
+				? [line]
+				: line.trimEnd().length > 0
+					? [line.trimEnd()]
+					: [],
+		);
 	return lines.length > MAX_OUTPUT_LINES
 		? lines.slice(lines.length - MAX_OUTPUT_LINES)
 		: lines;
@@ -497,6 +507,7 @@ function entryBlocks(
 									.map((part) => (isRecord(part) ? part.text : ""))
 									.join("\n")
 							: "",
+					name === "read" && !failed,
 				);
 				const [first] = lines;
 				return [

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionToolCall } from "../../src/tui/dash/agent-session.ts";
-import { toolPendingView, toolView } from "../../src/tui/dash/ui/tool-views.ts";
+import {
+	toolPendingView,
+	toolView,
+	transcriptFiletype,
+	transcriptUnifiedDiff,
+} from "../../src/tui/dash/ui/tool-views.ts";
 
 const call = (
 	name: string,
@@ -13,6 +18,86 @@ const call = (
 });
 
 describe("toolView", () => {
+	test("file renderers use tree-sitter names rather than filename extensions", () => {
+		expect(transcriptFiletype("src/index.ts")).toBe("typescript");
+		expect(transcriptFiletype("src/view.tsx")).toBe("tsx");
+		expect(transcriptFiletype("main.py")).toBe("python");
+		expect(transcriptFiletype("script.js")).toBe("javascript");
+	});
+
+	test("edits prefer the host's real patch over its numbered display diff", () => {
+		const patch = "--- a/a.ts\n+++ b/a.ts\n@@ -40,1 +40,1 @@\n-old\n+new\n";
+		const view = toolView(
+			call(
+				"edit",
+				{ path: "a.ts" },
+				{
+					lines: [],
+					notes: [],
+					isError: false,
+					details: { diff: "-40 old\n+40 new", patch },
+				},
+			),
+		);
+		expect(view?.file).toEqual({ kind: "diff", path: "a.ts", content: patch });
+		expect(view?.hint).toBe("+1 −1");
+	});
+
+	test("legacy display diffs become separate hunks without numbered source", () => {
+		const rows = [
+			"  ...",
+			" 40 context",
+			"-41 old",
+			"+41 new",
+			"+42 extra",
+			"  ...",
+			" 90 tail",
+			"-91 gone",
+			"  ...",
+		].map((text) => ({ text }));
+		expect(transcriptUnifiedDiff(rows)).toBe(
+			"@@ -40,2 +40,3 @@\n context\n-old\n+new\n+extra\n@@ -90,2 +91,1 @@\n tail\n-gone\n",
+		);
+	});
+
+	test("argument-only diffs retain blank lines and pure insertions", () => {
+		const view = toolView(
+			call(
+				"edit",
+				{ path: "a.ts", edits: [{ oldText: "", newText: "one\n\ntwo" }] },
+				{ lines: [], notes: [], isError: false },
+			),
+		);
+		expect(view?.file?.content).toBe("@@ -0,0 +1,3 @@\n+one\n+\n+two\n");
+	});
+
+	test("read source keeps its starting line and internal whitespace", () => {
+		const view = toolView(
+			call(
+				"read",
+				{ path: "a.py", offset: 40 },
+				{ lines: ["def run():", "", "    pass"], notes: [], isError: false },
+			),
+		);
+		expect(view?.file).toEqual({
+			kind: "code",
+			path: "a.py",
+			startLine: 40,
+			content: "def run():\n\n    pass",
+		});
+	});
+
+	test("failed reads do not syntax-highlight errors as file content", () => {
+		const view = toolView(
+			call(
+				"read",
+				{ path: "a.ts" },
+				{ lines: ["permission denied"], notes: [], isError: true },
+			),
+		);
+		expect(view?.file).toBeUndefined();
+		expect(view?.preview).toBe(false);
+	});
 	test("read shows the file, the range it covered, and the text", () => {
 		const view = toolView(
 			call(

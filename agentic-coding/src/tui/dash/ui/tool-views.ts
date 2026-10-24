@@ -76,6 +76,12 @@ export interface ToolView {
 	readonly sections?: readonly ToolViewSection[];
 	/** File tools keep a bounded preview visible before their fold is opened. */
 	readonly preview?: boolean;
+	readonly file?: {
+		readonly kind: "code" | "diff";
+		readonly path: string;
+		readonly content: string;
+		readonly startLine?: number;
+	};
 }
 
 // Expanded views show everything the tool kept. The harness bounds a result
@@ -116,8 +122,8 @@ function diffRowCounts(rows: readonly ToolViewRow[]): string | undefined {
 	let added = 0;
 	let removed = 0;
 	for (const row of rows) {
-		if (row.text.startsWith("+")) added++;
-		else if (row.text.startsWith("-")) removed++;
+		if (row.text.startsWith("+") && !row.text.startsWith("+++")) added++;
+		else if (row.text.startsWith("-") && !row.text.startsWith("---")) removed++;
 	}
 	if (added === 0 && removed === 0) return undefined;
 	return `+${added} −${removed}`;
@@ -127,6 +133,8 @@ function diffRowCounts(rows: readonly ToolViewRow[]): string | undefined {
  * color, hunk headers and context muted so the changes stand out. */
 function diffRows(diff: string): ToolViewRow[] {
 	return diff.split("\n").map((line): ToolViewRow => {
+		if (line.startsWith("+++") || line.startsWith("---"))
+			return { text: line, emphasis: "muted" };
 		if (line.startsWith("+"))
 			return { text: line, emphasis: "highlight", tone: "success" };
 		if (line.startsWith("-"))
@@ -144,11 +152,11 @@ function editArgRows(args: Readonly<Record<string, unknown>>): ToolViewRow[] {
 		if (!isRecord(entry)) continue;
 		const oldText = typeof entry.oldText === "string" ? entry.oldText : "";
 		const newText = typeof entry.newText === "string" ? entry.newText : "";
-		for (const text of oldText.split("\n"))
-			if (text.length > 0)
+		if (oldText.length > 0)
+			for (const text of oldText.split("\n"))
 				rows.push({ text: `-${text}`, emphasis: "highlight", tone: "error" });
-		for (const text of newText.split("\n"))
-			if (text.length > 0)
+		if (newText.length > 0)
+			for (const text of newText.split("\n"))
 				rows.push({ text: `+${text}`, emphasis: "highlight", tone: "success" });
 	}
 	return rows;
@@ -177,6 +185,16 @@ function readView(call: AgentSessionToolCall): ToolView {
 						? `from ${offset}`
 						: undefined),
 		rows: lines.map((text) => ({ text, emphasis: "regular" as const })),
+		...(lines.length > 0 && call.result?.isError !== true
+			? {
+					file: {
+						kind: "code" as const,
+						path,
+						content: lines.join("\n"),
+						startLine: offset ?? 1,
+					},
+				}
+			: {}),
 	};
 }
 
@@ -188,8 +206,10 @@ function editView(call: AgentSessionToolCall): ToolView {
 	// still describes its own change through its arguments; a failed one has
 	// nothing to show there, and its call row opens into the error instead.
 	const diff = call.result?.details?.diff;
+	const patch = call.result?.details?.patch;
 	let rows: ToolViewRow[] = [];
 	if (typeof diff === "string") rows = diffRows(diff);
+	else if (typeof patch === "string") rows = diffRows(patch);
 	else if (call.result !== undefined && call.result.isError !== true)
 		rows = editArgRows(call.args);
 	const counts = diffRowCounts(rows);
@@ -206,6 +226,16 @@ function editView(call: AgentSessionToolCall): ToolView {
 		summary: path,
 		...(hint.length > 0 ? { hint: hint.join(" · ") } : {}),
 		...(rows.length > 0 ? { rows } : {}),
+		...(rows.length > 0 && call.result?.isError !== true
+			? {
+					file: {
+						kind: "diff" as const,
+						path,
+						content:
+							typeof patch === "string" ? patch : transcriptUnifiedDiff(rows),
+					},
+				}
+			: {}),
 	};
 }
 
@@ -221,7 +251,80 @@ function writeView(call: AgentSessionToolCall): ToolView {
 		summary: path,
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
 		rows: lines.map((text) => ({ text, emphasis: "regular" as const })),
+		...(lines.length > 0 && call.result?.isError !== true
+			? { file: { kind: "code" as const, path, content: lines.join("\n") } }
+			: {}),
 	};
+}
+
+/** Preserve real hunk positions; argument-only changes have no known position,
+ * so use a synthetic first hunk rather than inventing surrounding context. */
+export function transcriptUnifiedDiff(rows: readonly ToolViewRow[]): string {
+	const content = rows.map((row) => row.text).join("\n");
+	if (rows.some((row) => row.text.startsWith("@@ "))) return `${content}\n`;
+	// Older pi results contain a display diff (`+42 source`, with ` ...`
+	// between hunks), not a patch. Never feed its printed numbers into source.
+	const numbered = rows.filter((row) => !/^\s*\.\.\.$/.test(row.text));
+	if (
+		numbered.length > 0 &&
+		numbered.every((row) => /^[ +-]\s*\d+ /.test(row.text))
+	) {
+		let delta = 0;
+		return content
+			.split(/^\s*\.\.\.$/m)
+			.filter((part) => part.trim().length > 0)
+			.map((part) => {
+				const parsed = part.split("\n").flatMap((line) => {
+					const match = /^([ +-])\s*(\d+) (.*)$/.exec(line);
+					return match
+						? [
+								{
+									sign: match[1] ?? " ",
+									number: Number(match[2]),
+									text: match[3] ?? "",
+								},
+							]
+						: [];
+				});
+				const first = parsed[0];
+				if (!first) return "";
+				const oldStart =
+					first.sign === "+" ? first.number - delta : first.number;
+				const newStart = oldStart + delta;
+				const oldCount = parsed.filter((line) => line.sign !== "+").length;
+				const newCount = parsed.filter((line) => line.sign !== "-").length;
+				delta += newCount - oldCount;
+				return `@@ -${oldCount ? oldStart : oldStart - 1},${oldCount} +${newCount ? newStart : newStart - 1},${newCount} @@\n${parsed.map((line) => line.sign + line.text).join("\n")}\n`;
+			})
+			.join("");
+	}
+	const body = rows.filter((row) => /^[ +-]/.test(row.text));
+	const oldCount = body.filter((row) => !row.text.startsWith("+")).length;
+	const newCount = body.filter((row) => !row.text.startsWith("-")).length;
+	return `@@ -${oldCount ? 1 : 0},${oldCount} +${newCount ? 1 : 0},${newCount} @@\n${body.map((row) => row.text).join("\n")}\n`;
+}
+
+/** Tree-sitter names differ from common file extensions. Unknown extensions
+ * remain plain, readable code while the renderer looks for a grammar. */
+export function transcriptFiletype(path: string): string | undefined {
+	const extension = path.split("/").at(-1)?.split(".").at(-1)?.toLowerCase();
+	const aliases: Record<string, string> = {
+		ts: "typescript",
+		tsx: "tsx",
+		js: "javascript",
+		jsx: "javascript",
+		mjs: "javascript",
+		cjs: "javascript",
+		mts: "typescript",
+		cts: "typescript",
+		py: "python",
+		rs: "rust",
+		sh: "bash",
+		zsh: "bash",
+		yml: "yaml",
+		md: "markdown",
+	};
+	return extension ? (aliases[extension] ?? extension) : undefined;
 }
 
 /** `bash`: the command and what it printed. A failed command keeps its output
