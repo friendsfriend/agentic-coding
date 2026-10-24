@@ -38,6 +38,7 @@ import {
 } from "../shared/preferences.ts";
 import { configuredMonitorMode } from "./monitor.ts";
 import type { OrchestratorModel, OrchestratorSession } from "./session.ts";
+import { orchestratorSessionCommands } from "./session-commands.ts";
 import {
 	guardOrchestratorSubmit,
 	refreshOrchestratorGateBlocks,
@@ -460,6 +461,8 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		})();
 	};
 	const startNewSession = () => {
+		setDraft("");
+		setPickerOpen(false);
 		setSession(undefined);
 		setNotices([]);
 		setBlocks([
@@ -580,11 +583,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			onHelp={props.onHelp}
 			inputActive={() => props.active() && !props.overlay() && sessionReady()}
 			extraCommands={[
-				{
-					name: "/new",
-					description: "Start a new orchestrator session",
-					run: startNewSession,
-				},
+				...orchestratorSessionCommands(startNewSession),
 				...orchestratorSubscriptionCommands({
 					subscriptions: subscriptions(),
 					onList: listSubscriptions,
