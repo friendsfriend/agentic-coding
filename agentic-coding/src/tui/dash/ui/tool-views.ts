@@ -74,6 +74,8 @@ export interface ToolView {
 	readonly hint?: string;
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
+	/** File tools keep a bounded preview visible before their fold is opened. */
+	readonly preview?: boolean;
 }
 
 // Expanded views show everything the tool kept. The harness bounds a result
@@ -163,6 +165,7 @@ function readView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "→",
 		label: `Read ${path}`,
+		preview: call.result?.isError !== true,
 		summary: path,
 		hint:
 			range ??
@@ -199,6 +202,7 @@ function editView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "←",
 		label: `Edit ${path}`,
+		preview: call.result?.isError !== true,
 		summary: path,
 		...(hint.length > 0 ? { hint: hint.join(" · ") } : {}),
 		...(rows.length > 0 ? { rows } : {}),
@@ -213,6 +217,7 @@ function writeView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "←",
 		label: `Write ${path}`,
+		preview: call.result?.isError !== true,
 		summary: path,
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
 		rows: lines.map((text) => ({ text, emphasis: "regular" as const })),

@@ -33,6 +33,7 @@ describe("toolView", () => {
 		]);
 		// A call without a result yet: the file, nothing more.
 		expect(toolView(call("read", { path: "src/a.ts" }))).toEqual({
+			preview: true,
 			icon: "→",
 			label: "Read src/a.ts",
 			summary: "src/a.ts",

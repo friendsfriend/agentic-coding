@@ -27,6 +27,66 @@ const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 	{ id: "b4", kind: "result", text: "read: file contents", tone: "success" },
 ];
 
+for (const name of ["read", "write", "edit"] as const) {
+	test(`${name} previews eight rows and opens the complete file content on click`, async () => {
+		const lines = Array.from({ length: 12 }, (_, i) => `${name} source ${i}`);
+		const t = await testRender(
+			() => (
+				<PickerRoute
+					onSubmit={() => {}}
+					onConfigure={() => {}}
+					blocks={[
+						{
+							id: "file",
+							kind: "tool",
+							text: name,
+							tone: "success",
+							toolCall: {
+								name,
+								args: { path: "src/file.ts", content: lines.join("\n") },
+								result: {
+									lines,
+									notes: [],
+									isError: false,
+									...(name === "edit"
+										? {
+												details: {
+													diff: lines.map((line) => `+${line}`).join("\n"),
+												},
+											}
+										: {}),
+								},
+							},
+						},
+					]}
+				/>
+			),
+			{ width: 100, height: 32 },
+		);
+		try {
+			await t.renderOnce();
+			await t.renderOnce();
+			const compact = t.captureCharFrame();
+			expect(compact).toContain(`${name} source 0`);
+			expect(compact).toContain(`${name} source 7`);
+			expect(compact).not.toContain(`${name} source 8`);
+			expect(compact).toContain("… 4 more lines");
+			const row = compact
+				.split("\n")
+				.findIndex((line) => line.includes("src/file.ts"));
+			await t.mockMouse.click(4, row);
+			await t.renderOnce();
+			expect(t.captureCharFrame()).toContain(`${name} source 11`);
+			expect(t.captureCharFrame()).not.toContain("more lines");
+			await t.mockMouse.click(4, row);
+			await t.renderOnce();
+			expect(t.captureCharFrame()).not.toContain(`${name} source 8`);
+		} finally {
+			t.renderer.destroy();
+		}
+	});
+}
+
 function Harness(props: {
 	onSubmit: (text: string) => void;
 	onAbort: () => void;
@@ -1951,7 +2011,8 @@ test("every tool row uses the raised block surface", async () => {
 		const readLine = lines.findIndex((line) => line.includes("Read src/a.ts"));
 		expect(readLine).toBeGreaterThan(0);
 		expect(lines[readLine - 1]).toMatch(/^┃\s*$/);
-		expect(lines[readLine + 1]).toMatch(/^┃\s*$/);
+		expect(lines[readLine + 1]).toMatch(/^┃\s+a\s*$/);
+		expect(lines[readLine + 2]).toMatch(/^┃\s*$/);
 		expect(row("search query=needle")).toContain("▸ • search query=needle");
 		expect(row("search query=needle").trimStart().startsWith("┃")).toBe(true);
 		expect(row("bun test")).toContain("▸ $ bun test");

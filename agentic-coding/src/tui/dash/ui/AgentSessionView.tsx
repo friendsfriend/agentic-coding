@@ -196,6 +196,8 @@ const TRANSCRIPT_WINDOW = 60;
 const TRANSCRIPT_PAGE = 40;
 /** Compact user prompts while preserving the full text for click-to-expand. */
 const USER_PROMPT_PREVIEW_LINES = 5;
+/** A visual-row budget, so long wrapped source lines cannot flood the page. */
+const FILE_TOOL_PREVIEW_LINES = 8;
 
 /** The separator between the transcript and its newest output: a rule in the
  * theme's accent with `new` and a down arrow centered on it, so the boundary is
@@ -817,19 +819,41 @@ function Block(props: {
 						expanded={props.expanded}
 						onToggle={() => props.onToggle(props.block.id)}
 					/>
-					<Show when={props.expanded}>
+					<Show when={props.expanded || tool.preview}>
 						<box paddingLeft={2} flexDirection="column">
-							<For each={tool.rows ?? []}>
-								{(row) => (
-									<ToolRow
-										block={props.block}
-										row={row}
-										openRows={props.openRows}
-										onToggleRow={props.onToggleRow}
-										transcript={props.transcript}
-									/>
-								)}
-							</For>
+							<box
+								maxHeight={props.expanded ? undefined : FILE_TOOL_PREVIEW_LINES}
+								overflow="hidden"
+								flexDirection="column"
+							>
+								<For
+									each={
+										props.expanded
+											? (tool.rows ?? [])
+											: (tool.rows ?? []).slice(0, FILE_TOOL_PREVIEW_LINES)
+									}
+								>
+									{(row) => (
+										<ToolRow
+											block={props.block}
+											row={row}
+											openRows={props.openRows}
+											onToggleRow={props.onToggleRow}
+											transcript={props.transcript}
+										/>
+									)}
+								</For>
+							</box>
+							<Show
+								when={
+									!props.expanded &&
+									(tool.rows?.length ?? 0) > FILE_TOOL_PREVIEW_LINES
+								}
+							>
+								<text fg={uiColors.textMuted}>
+									{`… ${(tool.rows?.length ?? 0) - FILE_TOOL_PREVIEW_LINES} more lines`}
+								</text>
+							</Show>
 							{/* A long view splits into parts: the header stays, so
 							    folding one away keeps the overview. */}
 							<For each={tool.sections ?? []}>
