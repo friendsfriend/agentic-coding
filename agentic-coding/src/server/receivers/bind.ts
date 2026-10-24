@@ -76,10 +76,9 @@ export async function planReceiverBinds(
 		if (platform === "linux") {
 			const gateway = await input.gateway?.().catch(() => undefined);
 			extra = gateway === undefined ? undefined : usableBind(gateway);
-			if (extra === undefined)
-				input.warn?.(
-					"[receivers] no container bridge gateway is known; the receivers stay loopback-only",
-				);
+			// `auto` is best effort: no installed/running engine is a normal
+			// loopback-only setup, so do not emit startup noise. Explicit invalid
+			// addresses still warn below.
 		}
 	} else if (isWildcardHost(requested)) {
 		// A wildcard is refused, not clamped: silently binding something else

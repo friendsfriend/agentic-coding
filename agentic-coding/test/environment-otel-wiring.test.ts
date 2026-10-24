@@ -171,7 +171,7 @@ describe("receiver bind plan", () => {
 			warn: (message) => warnings.push(message),
 		});
 		expect(unknown).toEqual({ hosts: ["127.0.0.1"] });
-		expect(warnings).toHaveLength(1);
+		expect(warnings).toHaveLength(0);
 		expect(
 			await planReceiverBinds({ containerBind: "10.0.0.5", platform: "linux" }),
 		).toEqual({ hosts: ["127.0.0.1", "10.0.0.5"], containerHost: "10.0.0.5" });
