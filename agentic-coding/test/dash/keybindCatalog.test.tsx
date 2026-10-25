@@ -95,6 +95,7 @@ describe("keybind catalog contract", () => {
 		const view = evidenceSubviewKeybindCatalog({ flow: true });
 		expect(view.map((section) => section.title)).toEqual(["Evidence view"]);
 		expect(footerKeybinds(view).map((keybind) => keybind.short)).toEqual([
+			"agents",
 			"back",
 			"open",
 			"copy",
@@ -113,6 +114,7 @@ describe("keybind catalog contract", () => {
 		// The footer keeps the special keys and hides pure navigation, while
 		// `?` help still documents the prompt's standard keys.
 		expect(footerKeybinds(catalog).map((keybind) => keybind.short)).toEqual([
+			"agents",
 			"back",
 			"send",
 			"scroll",
@@ -131,6 +133,22 @@ describe("keybind catalog contract", () => {
 					keybind.action === "Move between panels",
 			),
 		).toBe(false);
+	});
+
+	it("publishes global agent focus in both the footer and help on subpages", () => {
+		for (const catalog of [
+			evidenceSubviewKeybindCatalog({ flow: true }),
+			agentSessionKeybindCatalog(),
+		]) {
+			const globalKey = catalogKeybinds(catalog).find(
+				(keybind) => keybind.key === "Ctrl+A",
+			);
+			if (!globalKey) throw new Error("global Ctrl+A key missing from catalog");
+			expect(globalKey.short).toBe("agents");
+			expect(globalKey.action).toContain("agent");
+			expect(footerKeybinds(catalog)).toContainEqual(globalKey);
+			expect(JSON.stringify(helpModalRows(catalog))).toContain("Ctrl+A");
+		}
 	});
 
 	it("maps every detail grid panel to a footer context", () => {

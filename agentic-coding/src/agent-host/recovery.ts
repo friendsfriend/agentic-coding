@@ -28,6 +28,7 @@ import {
 import { ensureHostRunning, HostClient } from "./client.ts";
 import { hostLayout } from "./layout.ts";
 import type { EnsureRunRequest } from "./protocol.ts";
+import { verifyWorkflowSessions } from "./workflow-session-lookup.ts";
 
 export interface RecoveredSession {
 	readonly runId: string;
@@ -177,7 +178,16 @@ export async function recoverWorkflowSession(
 		],
 		cwd: snapshot.metadata.worktree,
 	});
-	const client = new HostClient(layout.socketPath);
+	const client = new HostClient(async () => {
+		const endpoint = verifyWorkflowSessions(repo, workflowId, [
+			{ runId, recordedSocket: layout.socketPath, authenticated: true },
+		])[0];
+		if (!endpoint || "error" in endpoint || !endpoint.fingerprint)
+			throw new Error(
+				"run recovery authenticated host identity is unavailable",
+			);
+		return { socket: endpoint.socket, fingerprint: endpoint.fingerprint };
+	});
 	if (request && (await client.status(run.id)).status === "unknown") {
 		// Starting a host yields to other workflow operations. Do not register a
 		// run that handed off or lost ownership while the process was starting.

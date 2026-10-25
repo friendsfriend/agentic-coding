@@ -14,6 +14,7 @@
 // dashboard unmounts.
 
 import { createSignal } from "solid-js";
+import type { AuthenticatedHostEndpoint } from "../../agent-host/host-identity.ts";
 
 /** The activity a durable run is in the middle of. `active` is true only while
  * something is actually in flight, so the panel can animate it (like the
@@ -62,6 +63,7 @@ export type AgentActivityWatch = (
 	 * frame reports `closed`, so the panel stops showing the gathering indicator
 	 * and falls back to the workflow status instead of waiting forever. */
 	onState?: (state: AgentActivityWatchState) => void,
+	connection?: () => Promise<AuthenticatedHostEndpoint>,
 ) => Promise<() => void>;
 
 export interface AgentActivitySource {
@@ -200,19 +202,21 @@ export function agentActivityFromValue(
  * the resilient stream reconnects, and clears the badge (fall back to the
  * workflow status) while it is down so a disconnected run never reads as still
  * running its last tool. */
-const hostWatch: AgentActivityWatch = async (target, onValue, onState) => {
+export const watchAgentActivity: AgentActivityWatch = async (
+	target,
+	onValue,
+	onState,
+	connection,
+) => {
 	const { HostClient, watchStream } = await import(
 		"../../agent-host/client.ts"
 	);
-	const client = new HostClient(target.hostSocket);
+	const client = new HostClient(connection ?? target.hostSocket);
 	return watchStream(client, target.runId, {
 		...(target.conversationId ? { conversationId: target.conversationId } : {}),
 		view: target.view,
 		onFrame: onValue,
-		onState: (state) => {
-			if (state !== "open") onValue(undefined);
-			onState?.(state);
-		},
+		onState,
 	});
 };
 
@@ -225,7 +229,7 @@ const hostWatch: AgentActivityWatch = async (target, onValue, onState) => {
 export function createAgentActivitySource(
 	options: { readonly watch?: AgentActivityWatch } = {},
 ): AgentActivitySource {
-	const watch = options.watch ?? hostWatch;
+	const watch = options.watch ?? watchAgentActivity;
 	const [activities, setActivities] = createSignal<
 		ReadonlyMap<string, AgentActivity>
 	>(new Map());
@@ -300,8 +304,10 @@ export function createAgentActivitySource(
 					(state) => {
 						if (disposed) return;
 						if (watches.get(agent.role) !== entry) return;
-						// A watch that never connects must fall back to the workflow
-						// status instead of leaving the row gathering forever.
+						// Disconnect/reconnect must clear a previously observed tool,
+						// independent of the transport adapter's frame behavior.
+						if (state !== "open") setActivity(agent.role, undefined);
+						// A watch that never connects falls back to workflow status.
 						if (state === "closed") setPending(agent.role, false);
 					},
 				);

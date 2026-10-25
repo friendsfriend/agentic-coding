@@ -191,6 +191,8 @@ export interface WorkspaceSidebarProps {
 	mode: SidebarMode;
 	/** Which side the panel is mounted on; the toggle glyph points outward. */
 	side: "left" | "right";
+	/** Responsive width allocation shared with the persistent agent panel. */
+	maxWidth?: number;
 	/** Toggle `expanding`/`permanent` (the title-row glyph and the collapsed
 	 * strip's glyph both call it). */
 	onToggleMode: () => void;
@@ -232,8 +234,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 		props.onOpenPin(pin);
 	};
 	const expandedByMode = () => props.mode === "permanent" || props.active;
+	const targetWidth = () =>
+		Math.min(SIDEBAR_WIDTH, Math.max(0, props.maxWidth ?? SIDEBAR_WIDTH));
+	const compactWidth = () => Math.min(SIDEBAR_COLLAPSED_WIDTH, targetWidth());
 	const [width, setWidth] = createSignal(
-		expandedByMode() ? SIDEBAR_WIDTH : SIDEBAR_COLLAPSED_WIDTH,
+		expandedByMode() ? targetWidth() : compactWidth(),
 	);
 	// The tween runs on a plain interval: the renderer repaints on the signal
 	// change, so no animation framework is needed for a width slide.
@@ -266,10 +271,10 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 			// once instead of holding the expanded width — and the full expanded
 			// rows — until a tween gets around to finishing.
 			stopAnimation();
-			setWidth(SIDEBAR_COLLAPSED_WIDTH);
+			setWidth(compactWidth());
 			return;
 		}
-		animateTo(SIDEBAR_WIDTH);
+		animateTo(targetWidth());
 	});
 	onCleanup(stopAnimation);
 	/** The panel's width and whether it paints its full rows. The sidebar's own
@@ -278,7 +283,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	const panel = () =>
 		sidebarPanelView({
 			expandedByState: expandedByMode(),
-			animatedWidth: width(),
+			animatedWidth: Math.min(width(), targetWidth()),
 		});
 	// The glyph points toward the body: on the left side `»` pushes the panel
 	// open (permanent) and `«` returns it to auto-collapse; on the right side
@@ -298,7 +303,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	const toggleModeHover = useHover(toggleModeTap.onMouseOut);
 	return (
 		<box
-			width={panel().width}
+			width={Math.min(panel().width, targetWidth())}
 			flexShrink={0}
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", minHeight: 0, overflow: "hidden" }}

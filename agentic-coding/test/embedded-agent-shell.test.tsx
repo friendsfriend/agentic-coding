@@ -119,6 +119,16 @@ test("embedded agents own content keys, stay mounted, and stop on shutdown", asy
 		expect(contentFrame).toContain("? help");
 		expect(contentFrame).not.toContain("Ctrl+H");
 		expect(contentFrame).not.toContain("Ctrl+T");
+		expect(contentFrame).not.toContain("Ctrl+A");
+
+		// The PTY's editable input owns Ctrl+A; the host must neither focus the
+		// agent sidebar nor lose the next typed character.
+		writes.length = 0;
+		t.mockInput.pressKey("a", { ctrl: true });
+		t.mockInput.pressKey("x");
+		await advance(t, 2, 20);
+		expect(writes.join("")).toContain("\u0001x");
+		expect(t.captureCharFrame()).not.toContain("e mode");
 
 		// Ctrl+T reaches the embedded terminal, but never spawns another shell.
 		// Install the attach URL only for this keypress so the Home monitor does
@@ -197,6 +207,7 @@ test("embedded agents own content keys, stay mounted, and stop on shutdown", asy
 		// Pi has no `?` help key, so the footer does not claim one.
 		expect(piFrame).not.toContain("? help");
 		expect(piFrame).not.toContain("Ctrl+T");
+		expect(piFrame).not.toContain("Ctrl+A");
 
 		// The agent TUI paints no default background of its own, so its cells
 		// must use the shell theme rather than the terminal emulator's black.
@@ -218,6 +229,13 @@ test("embedded agents own content keys, stay mounted, and stop on shutdown", asy
 		expect(piWrites.join("")).toContain("\u0014");
 		expect(piWrites.join("")).toContain("?x");
 		expect(t.captureCharFrame()).not.toContain("Keybindings");
+		expect(piLaunches).toBe(1);
+
+		piWrites.length = 0;
+		t.mockInput.pressKey("a", { ctrl: true });
+		t.mockInput.pressKey("x");
+		await advance(t, 2, 20);
+		expect(piWrites.join("")).toContain("\u0001x");
 		expect(piLaunches).toBe(1);
 
 		// Returning to OpenCode does not start a second client, and the first

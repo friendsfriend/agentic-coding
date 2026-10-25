@@ -301,28 +301,81 @@ function entryPromptTokens(entry: unknown): number | undefined {
 	return total > 0 ? total : undefined;
 }
 
-/** Full labels of every `pi.compaction` entry of one transcript, keyed by the
- * entry's block key. */
-function compactionEntryLabels(
-	entries: readonly unknown[],
-): ReadonlyMap<string, string> {
-	const labels = new Map<string, string>();
-	entries.forEach((entry, index) => {
-		if (!isRecord(entry) || entry.kind !== "pi.compaction") return;
+interface PromptTokenRange {
+	readonly start: number;
+	readonly end: number;
+	readonly tokens: number | undefined;
+}
+
+/** Look up only compactions that enter the projection. Adjacent compactions
+ * share the token-free ranges searched on either side, rather than each
+ * walking the same long gap. No eager history index delays the first paint. */
+class CompactionLabels {
+	private readonly labels = new Map<number, string>();
+	private before: PromptTokenRange | undefined;
+	private after: PromptTokenRange | undefined;
+
+	constructor(private readonly entries: readonly unknown[]) {}
+
+	at(index: number): string | undefined {
+		const entry = this.entries[index];
+		if (!isRecord(entry) || entry.kind !== "pi.compaction") return undefined;
+		const cached = this.labels.get(index);
+		if (cached !== undefined) return cached;
 		const data = isRecord(entry.data) ? entry.data : undefined;
 		const reason = typeof data?.reason === "string" ? data.reason : undefined;
-		let before: number | undefined;
-		for (let cursor = index - 1; cursor >= 0; cursor--) {
-			before = entryPromptTokens(entries[cursor]);
-			if (before !== undefined) break;
+		const label = compactionLabel(
+			reason,
+			this.nearest(index - 1, -1),
+			this.nearest(index + 1, 1),
+		);
+		this.labels.set(index, label);
+		return label;
+	}
+
+	private nearest(from: number, direction: -1 | 1): number | undefined {
+		if (from < 0 || from >= this.entries.length) return undefined;
+		const cached = direction === -1 ? this.before : this.after;
+		let boundary = from;
+		let tokens: number | undefined;
+		for (
+			let cursor = from;
+			cursor >= 0 && cursor < this.entries.length;
+			cursor += direction
+		) {
+			if (cached && cursor >= cached.start && cursor <= cached.end) {
+				tokens = cached.tokens;
+				boundary = direction === -1 ? cached.start : cached.end;
+				break;
+			}
+			boundary = cursor;
+			tokens = entryPromptTokens(this.entries[cursor]);
+			if (tokens !== undefined) break;
 		}
-		let after: number | undefined;
-		for (let cursor = index + 1; cursor < entries.length; cursor++) {
-			after = entryPromptTokens(entries[cursor]);
-			if (after !== undefined) break;
-		}
-		labels.set(entryId(entry, index), compactionLabel(reason, before, after));
-	});
+		const range = {
+			start: Math.min(from, boundary),
+			end: Math.max(from, boundary),
+			tokens,
+		};
+		if (direction === -1) this.before = range;
+		else this.after = range;
+		return tokens;
+	}
+}
+
+// Watch patches structurally share immutable sources (agent-host/view-ops.ts).
+// Weak keys reuse work on token-rate live frames without retaining old sessions
+// or snapshots; a replaced/edited entries array always gets fresh labels.
+const compactionLabelsCache = new WeakMap<
+	readonly unknown[],
+	CompactionLabels
+>();
+function compactionLabelsFor(entries: readonly unknown[]): CompactionLabels {
+	let labels = compactionLabelsCache.get(entries);
+	if (!labels) {
+		labels = new CompactionLabels(entries);
+		compactionLabelsCache.set(entries, labels);
+	}
 	return labels;
 }
 
@@ -376,9 +429,8 @@ function entryBlocks(
 	entry: unknown,
 	timings: Readonly<Record<string, EntryTiming>>,
 	entryKey: string,
-	/** Full labels of this frame's compaction entries, keyed by block key: the
-	 * measurement needs the whole entry list, which a single entry does not have. */
-	compactionLabels: ReadonlyMap<string, string> = new Map(),
+	/** Measured label, computed lazily only when this entry is projected. */
+	measuredCompactionLabel?: string,
 ): AgentSessionBlock[] {
 	if (!isRecord(entry)) return [];
 	const model = Array.isArray(entry.model) ? entry.model : [];
@@ -553,7 +605,7 @@ function entryBlocks(
 				{
 					id: `${entryKey}:compaction`,
 					kind: "compaction",
-					text: compactionLabels.get(entryKey) ?? compactionLabel(reason),
+					text: measuredCompactionLabel ?? compactionLabel(reason),
 					tone: "muted",
 				},
 			];
@@ -715,7 +767,7 @@ function liveBlocks(
 /** Most recent blocks. The view renders a window of these and loads older ones
  * as the reader scrolls up, so this is the projection's memory bound, not a
  * screenful. */
-const MAX_BLOCKS = 240;
+export const AGENT_SESSION_BLOCK_LIMIT = 240;
 
 /** The committed entry's own id when it has one, and its position otherwise:
  * the key every block of that entry is identified by. */
@@ -1033,17 +1085,7 @@ export class AgentSessionProjectionCache {
 			blocks: AgentSessionBlock[];
 		}
 	>();
-	private readonly labels = new WeakMap<
-		readonly unknown[],
-		{ length: number; value: ReadonlyMap<string, string> }
-	>();
-	compactions(entries: readonly unknown[]): ReadonlyMap<string, string> {
-		const before = this.labels.get(entries);
-		if (before?.length === entries.length) return before.value;
-		const value = compactionEntryLabels(entries);
-		this.labels.set(entries, { length: entries.length, value });
-		return value;
-	}
+
 	project(
 		entry: unknown,
 		key: string,
@@ -1097,9 +1139,8 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private readonly live: Readonly<Record<string, unknown>> | undefined;
 	private readonly inboxItems: readonly unknown[];
 	private readonly notices: readonly AgentSessionBlock[];
-	/** Full labels of this frame's compaction entries (reason plus the measured
-	 * token movement), keyed by block key. */
-	private readonly compactionLabels: ReadonlyMap<string, string>;
+	/** Lazy labels shared by frames with the same immutable entry history. */
+	private readonly compactionLabels: CompactionLabels;
 	/** Index of the oldest projected entry; entries `[start, length)` are in
 	 * `pending`, newest last. */
 	private start: number;
@@ -1120,9 +1161,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 		this.notices = options.notices ?? [];
 		const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
 		this.inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
-		this.compactionLabels =
-			this.cache?.compactions(this.entries) ??
-			compactionEntryLabels(this.entries);
+		this.compactionLabels = compactionLabelsFor(this.entries);
 		this.start = this.entries.length;
 		this.project(FIRST_PAINT_BLOCKS);
 	}
@@ -1161,7 +1200,10 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 		const chunks: AgentSessionBlock[][] = [];
 		let projected = 0;
 		let blockCount = this.pending.length;
-		const stopAt = Math.max(MAX_BLOCKS * 2, blockCount + PROJECTION_CHUNK);
+		const stopAt = Math.max(
+			AGENT_SESSION_BLOCK_LIMIT * 2,
+			blockCount + PROJECTION_CHUNK,
+		);
 		while (
 			this.start > 0 &&
 			(!mayStopEarly || blockCount < stopAt) &&
@@ -1189,7 +1231,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 				entry,
 				this.timings,
 				key,
-				this.compactionLabels,
+				this.compactionLabels.at(index),
 			);
 			const summary = assistantSummaryBlock(entry, this.timings, key);
 			if (summary) blocks.push(summary);
@@ -1202,7 +1244,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 				isRecord(entry) && typeof entry.id === "string"
 					? this.timings[entry.id]
 					: undefined,
-				this.compactionLabels.get(key),
+				this.compactionLabels.at(index),
 				build,
 			) ?? build()
 		);
@@ -1210,7 +1252,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 
 	/** Merge what is projected and remember the window. `mayStopEarly` is the
 	 * incremental path: once the merged window is as long as the projection can
-	 * ever render (`MAX_BLOCKS`), older entries could only produce rows the trim
+	 * ever render (`AGENT_SESSION_BLOCK_LIMIT`), older entries could only produce rows the trim
 	 * would drop, so the projection is complete. `finish` never stops early, so
 	 * its result is the reference build for any input. */
 	private publish(mayStopEarly: boolean): void {
@@ -1234,11 +1276,12 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 		}
 		const merged = mergeToolLifecycle(blocks);
 		this.published =
-			merged.length > MAX_BLOCKS
-				? merged.slice(merged.length - MAX_BLOCKS)
+			merged.length > AGENT_SESSION_BLOCK_LIMIT
+				? merged.slice(merged.length - AGENT_SESSION_BLOCK_LIMIT)
 				: merged;
 		this.done =
-			this.start === 0 || (mayStopEarly && merged.length >= MAX_BLOCKS);
+			this.start === 0 ||
+			(mayStopEarly && merged.length >= AGENT_SESSION_BLOCK_LIMIT);
 	}
 }
 
@@ -1307,20 +1350,28 @@ export function buildAgentSessionView(
 /** The newest assistant generation's provider error, if that generation failed
  * and no later successful assistant entry cleared it. */
 function lastAssistantError(entries: readonly unknown[]): string | undefined {
-	let error: string | undefined;
-	for (const entry of entries) {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
 		if (!isRecord(entry) || entry.kind !== "pi.assistant") continue;
 		const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
 		if (!isRecord(message)) continue;
-		error =
-			message.stopReason === "error" && typeof message.errorMessage === "string"
-				? message.errorMessage
-				: undefined;
+		return message.stopReason === "error" &&
+			typeof message.errorMessage === "string"
+			? message.errorMessage
+			: undefined;
 	}
-	return error;
+	return undefined;
 }
 
+/** Local watch state, not a host metric. Only a received frame establishes a
+ * connection; before that there is no last-known transcript to call stale. */
+export type AgentSessionConnection =
+	| "connecting"
+	| "connected"
+	| "disconnected";
+
 export interface AgentSessionMetadata {
+	readonly connection?: AgentSessionConnection;
 	readonly model?: string;
 	readonly thinking?: string;
 	/** The run is busy: a generation is in flight, a tool is running, or input
@@ -1458,16 +1509,44 @@ function usageTokens(
 	return input > 0 || output > 0 ? { input, output } : undefined;
 }
 
-/** Total measured generation time across the conversation's committed assistant
- * entries (the host's `timings` map), for the output-token rate. */
+interface EntryMetadata {
+	readonly error: string | undefined;
+	readonly contextTokens: number | undefined;
+}
+
+// These summaries depend only on immutable watch source identity, never on
+// pi.live. Recompute on append, edit, replacement or reconnect, not every token.
+const entryMetadataCache = new WeakMap<readonly unknown[], EntryMetadata>();
+function entryMetadata(entries: readonly unknown[]): EntryMetadata {
+	let summary = entryMetadataCache.get(entries);
+	if (!summary) {
+		summary = {
+			error: lastAssistantError(entries),
+			contextTokens: lastPromptTokens(entries),
+		};
+		entryMetadataCache.set(entries, summary);
+	}
+	return summary;
+}
+
+const generationMsCache = new WeakMap<
+	Record<string, unknown>,
+	number | undefined
+>();
+/** Total measured generation time across committed assistant entries. Timing
+ * maps change at commit, not on live-only patches; cache zero/absent totals too. */
 function timingGenerationMs(value: unknown): number | undefined {
 	if (!isRecord(value) || !isRecord(value.timings)) return undefined;
+	const timings = value.timings;
+	if (generationMsCache.has(timings)) return generationMsCache.get(timings);
 	let total = 0;
-	for (const timing of Object.values(value.timings)) {
+	for (const timing of Object.values(timings)) {
 		if (!isRecord(timing)) continue;
 		total += finiteNumber(timing.generationMs) ?? 0;
 	}
-	return total > 0 ? total : undefined;
+	const result = total > 0 ? total : undefined;
+	generationMsCache.set(timings, result);
+	return result;
 }
 
 export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
@@ -1496,8 +1575,7 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 		runningTool ||
 		queued ||
 		live?.generation !== undefined;
-	const error = lastAssistantError(entries);
-	const contextTokens = lastPromptTokens(entries);
+	const { error, contextTokens } = entryMetadata(entries);
 	const usage = isRecord(docs["pi.usage"]) ? docs["pi.usage"] : undefined;
 	const cost = usageCost(usage);
 	const tokens = usageTokens(usage);

@@ -136,6 +136,7 @@ export function agentSessionKeybindCatalog(): KeybindSection[] {
 		{
 			title: "Agent session",
 			keybinds: [
+				hostKeybind("ctrl+a"),
 				{ key: "Esc", action: "Back to the dashboard panels", short: "back" },
 				{
 					key: "Enter",
@@ -182,6 +183,7 @@ export function evidenceSubviewKeybindCatalog(options: {
 		{
 			title: "Evidence view",
 			keybinds: [
+				hostKeybind("ctrl+a"),
 				{ key: "Esc", action: "Back to the dashboard panels", short: "back" },
 				{ key: "Enter", action: "Open selected evidence", short: "open" },
 				{ key: "y", action: "Copy selected evidence path", short: "copy" },
@@ -227,6 +229,7 @@ export function dashboardDetailKeybindCatalog(options: {
 					short: "panels",
 				},
 				hostKeybind("ctrl+s"),
+				hostKeybind("ctrl+a"),
 				{
 					key: "j/k or ↑/↓",
 					action: "Scroll focused panel",

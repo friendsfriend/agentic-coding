@@ -5,6 +5,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import tls from "node:tls";
+import {
+	type AuthenticatedHostEndpoint,
+	certificateFingerprint,
+} from "./host-identity.ts";
 import type { HostLayout } from "./layout.ts";
 import {
 	type CatalogResponse,
@@ -35,14 +40,64 @@ export interface HostSpawn {
 	readonly env?: NodeJS.ProcessEnv;
 }
 
-function sendRequest(
-	socketPath: string,
+export type HostEndpoint = string | (() => Promise<AuthenticatedHostEndpoint>);
+
+/** The provider revalidates authority on EVERY connection, including watch
+ * retries. TLS authenticates and encrypts that very connection: a path swap or
+ * forwarding listener cannot read command text or forge response/watch frames. */
+async function connectHost(
+	endpoint: HostEndpoint,
+	timeoutMs: number,
+): Promise<net.Socket> {
+	const verified = typeof endpoint === "string" ? undefined : await endpoint();
+	return new Promise((resolve, reject) => {
+		const socket = verified
+			? tls.connect({
+					path: verified.socket,
+					rejectUnauthorized: false,
+					minVersion: "TLSv1.3",
+				})
+			: net.createConnection(endpoint as string);
+		const timer = setTimeout(
+			() => fail(new HostUnavailableError("agent host connection timed out")),
+			timeoutMs,
+		);
+		const fail = (error: Error) => {
+			clearTimeout(timer);
+			socket.destroy();
+			reject(error);
+		};
+		socket.once("error", fail);
+		socket.once("close", () =>
+			fail(new HostUnavailableError("agent host closed before authentication")),
+		);
+		socket.once(verified ? "secureConnect" : "connect", () => {
+			if (verified) {
+				const raw = (socket as tls.TLSSocket).getPeerCertificate().raw;
+				if (!raw || certificateFingerprint(raw) !== verified.fingerprint) {
+					fail(
+						new HostUnavailableError(
+							"agent host instance authentication failed",
+						),
+					);
+					return;
+				}
+			}
+			clearTimeout(timer);
+			socket.removeListener("error", fail);
+			resolve(socket);
+		});
+	});
+}
+
+async function sendRequest(
+	socketPath: HostEndpoint,
 	request: Record<string, unknown> & { type: string },
 	timeoutMs: number,
 	onFrame?: (value: HostResponse) => void,
 ): Promise<HostResponse> {
+	const socket = await connectHost(socketPath, timeoutMs);
 	return new Promise((resolve, reject) => {
-		const socket = net.createConnection(socketPath);
 		const reader = new FrameReader();
 		let settled = false;
 		const timer = setTimeout(() => {
@@ -55,9 +110,7 @@ function sendRequest(
 				),
 			);
 		}, timeoutMs);
-		socket.once("connect", () => {
-			socket.write(encodeFrame(request as never));
-		});
+		socket.write(encodeFrame(request as never));
 		socket.setEncoding("utf8");
 		socket.on("data", (chunk: string) => {
 			for (const line of reader.push(chunk)) {
@@ -159,7 +212,7 @@ export async function ensureHostRunning(
  * multiplexed-request bookkeeping needed. */
 export class HostClient {
 	constructor(
-		private readonly socketPath: string,
+		private readonly socketPath: HostEndpoint,
 		private readonly timeoutMs = 30_000,
 	) {}
 
@@ -296,7 +349,7 @@ export class HostClient {
 	 * id (see `WatchRequest`). A watch that never starts — the host refuses the
 	 * run, closes the socket, or says nothing — rejects instead of leaving the
 	 * caller on a spinner forever. */
-	watch(
+	async watch(
 		runId: string,
 		onFrame: (value: unknown) => void,
 		options: {
@@ -317,8 +370,8 @@ export class HostClient {
 			onClose?: (error?: Error) => void;
 		} = {},
 	): Promise<() => void> {
+		const socket = await connectHost(this.socketPath, this.timeoutMs);
 		return new Promise((resolve, reject) => {
-			const socket = net.createConnection(this.socketPath);
 			const reader = new FrameReader();
 			let settled = false;
 			// The latest full value, kept only when the watcher asked for patches.
@@ -352,18 +405,16 @@ export class HostClient {
 					),
 				this.timeoutMs,
 			);
-			socket.once("connect", () =>
-				socket.write(
-					encodeFrame({
-						type: "watch",
-						runId,
-						...(options.conversationId
-							? { conversationId: options.conversationId }
-							: {}),
-						...(options.view ? { view: options.view } : {}),
-						...(options.patches ? { patch: true } : {}),
-					}),
-				),
+			socket.write(
+				encodeFrame({
+					type: "watch",
+					runId,
+					...(options.conversationId
+						? { conversationId: options.conversationId }
+						: {}),
+					...(options.view ? { view: options.view } : {}),
+					...(options.patches ? { patch: true } : {}),
+				}),
 			);
 			socket.setEncoding("utf8");
 			socket.on("data", (chunk: string) => {
@@ -501,10 +552,14 @@ export function watchStream(
 						resolve();
 						return;
 					}
-					wake = resolve;
-					controller.signal.addEventListener("abort", () => resolve(), {
-						once: true,
-					});
+					const settle = () => {
+						controller.signal.removeEventListener("abort", settle);
+						wake = undefined;
+						resolve();
+					};
+					wake = settle;
+					controller.signal.addEventListener("abort", settle, { once: true });
+					if (dropped || controller.signal.aborted) settle();
 				});
 				innerStop = undefined;
 				if (controller.signal.aborted) return;

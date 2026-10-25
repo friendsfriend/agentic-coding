@@ -34,8 +34,6 @@ import {
 	type MarkdownBlockPart,
 	MarkdownViewer,
 	ScrollableContent,
-	type StreamingMarkdownBlockParts,
-	streamingMarkdownBlockParts,
 	streamingTailSource,
 	uiColors,
 	useHover,
@@ -57,6 +55,7 @@ import {
 } from "solid-js";
 import {
 	type AgentSessionBlock,
+	type AgentSessionConnection,
 	type AgentSessionTone,
 	BROWSER_TOOL_GLYPH,
 	formatCallDuration,
@@ -73,6 +72,7 @@ import {
 import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 import { Spinner } from "./Spinner.tsx";
+import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
 import { ToolSurfaceHoverContext, TranscriptFile } from "./TranscriptFile.tsx";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
@@ -99,6 +99,9 @@ export interface AgentSessionViewProps {
 	readonly model?: string;
 	readonly thinking?: string;
 	readonly working: boolean;
+	/** Connecting has no stale transcript yet; disconnected preserves the last
+	 * received transcript. Both pause controls until a fresh frame arrives. */
+	readonly connection?: AgentSessionConnection;
 	readonly error?: string;
 	/** Prompt tokens of the newest generation (the active context size). */
 	readonly contextTokens?: number;
@@ -1622,15 +1625,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const [foldedRows, setFoldedRows] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
-	// The parsed markdown parts per message, kept for the life of the view: the
-	// streaming assistant block changes on every host frame, and this is what
-	// lets a frame lex only its tail instead of the whole message.
-	const markdownCache = new Map<string, StreamingMarkdownBlockParts>();
-	const markdownParts: MarkdownPartsFor = (key, text) => {
-		const next = streamingMarkdownBlockParts(markdownCache.get(key), text);
-		markdownCache.set(key, next);
-		return next.parts;
-	};
+	// Reuse a streaming message's settled parts without retaining every message
+	// that has ever passed through this view's bounded transcript projection.
+	const markdownCache = new SessionMarkdownCache();
+	const markdownParts: MarkdownPartsFor = (key, text) =>
+		markdownCache.parts(key, text);
+	const controlsPaused = () =>
+		props.connection === "connecting" || props.connection === "disconnected";
 	const toggleRow = (key: string) => {
 		keepPlace();
 		setFoldedRows((current) => {
@@ -1874,7 +1875,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const state = picker();
 		if (!state) return;
 		const value = pickerItems()[selectedIndex ?? state.selected];
-		if (value) {
+		if (value && (state.kind === "timeline" || !controlsPaused())) {
 			if (state.kind === "timeline") jumpToBlock(value.value);
 			else
 				props.onConfigure(
@@ -1928,6 +1929,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	});
 
 	const runCommand = (name: string) => {
+		if (controlsPaused()) return;
 		props.onHistoryAppend(name);
 		historyIndex = 0;
 		if (name === MODEL_COMMAND || name === MODELS_COMMAND) openPicker("model");
@@ -1955,6 +1957,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		setPrompt("");
 	};
 	const submit = () => {
+		if (controlsPaused()) return;
 		// An open autocomplete owns Enter: it runs the highlighted command
 		// rather than sending the raw text.
 		const items = autocompleteItems();
@@ -2312,6 +2315,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							</Show>
 						</box>
 					</Show>
+					<Show when={controlsPaused()}>
+						<text fg={uiColors.warning} flexShrink={0}>
+							{props.connection === "connecting"
+								? "Connecting to the recorded session; controls paused."
+								: "Disconnected — reconnecting. Transcript is stale; controls paused."}
+						</text>
+					</Show>
 					{/* opencode v2's prompt: a left-bordered raised block holding the
 					    input and a metadata row with a live working indicator. */}
 					<box
@@ -2352,7 +2362,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 									inputRef = editor;
 								}}
 								focused={
-									picker() === undefined && (props.inputActive?.() ?? true)
+									!controlsPaused() &&
+									picker() === undefined &&
+									(props.inputActive?.() ?? true)
 								}
 								// The editor owns its buffer once mounted; the effect above syncs
 								// it with every external draft write.

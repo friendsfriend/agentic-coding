@@ -6,7 +6,7 @@
 // dashboard page, and reports a missing tmux on `n`. The
 // overview read is stubbed at the gateway port, so the test pins presentation
 // and navigation rather than the store.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +15,18 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { activeErrorModal, dismissErrorModal, uiColors } from "@ui";
 import { onCleanup } from "solid-js";
+import { HostClient } from "../../src/agent-host/client.ts";
+import { hostLayout } from "../../src/agent-host/layout.ts";
+import * as recovery from "../../src/agent-host/recovery.ts";
+import * as workflowSessions from "../../src/agent-host/workflow-session.ts";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
-import type { WorkflowOverview } from "../../src/contracts/workflow.ts";
+import type {
+	DashboardData,
+	WorkflowOverview,
+} from "../../src/contracts/workflow.ts";
 import { TraceDb } from "../../src/server/telemetry-db";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 import { App } from "../../src/tui/otel/app/App.tsx";
@@ -163,6 +171,10 @@ function stubGateway(
 	 * observation raises the global error modal, which owns every key until it is
 	 * dismissed and would swallow the next cycle press. */
 	view: "throw" | "pending" = "throw",
+	dashboard?: {
+		data: DashboardData;
+		onObserve?: (request: ObservationRequest) => void;
+	},
 ): void {
 	configureGateway({
 		kind: "in-process",
@@ -175,6 +187,10 @@ function stubGateway(
 							(call) => call.workflowId === entry.state.workflowId,
 						),
 				);
+			if (observation.kind === "dashboard" && dashboard) {
+				dashboard.onObserve?.(observation);
+				return dashboard.data;
+			}
 			throw new Error(`unexpected observation ${observation.kind}`);
 		},
 		view:
@@ -194,7 +210,12 @@ function stubGateway(
 async function renderShell(
 	/** Kitty keyboard protocol: the terminal that reports Ctrl+H as its own key
 	 * instead of the Backspace byte. */
-	options: { kittyKeyboard?: boolean } = {},
+	options: {
+		kittyKeyboard?: boolean;
+		sidebarSide?: "left" | "right";
+		width?: number;
+		onKeymap?: (keymap: ReturnType<typeof createDefaultOpenTuiKeymap>) => void;
+	} = {},
 ): Promise<Test> {
 	const db = new TraceDb(mkdtempSync(join(tmpdir(), "sidebar-render-")));
 	const configDir = mkdtempSync(join(tmpdir(), "sidebar-config-"));
@@ -208,9 +229,11 @@ async function renderShell(
 			const keymap = createDefaultOpenTuiKeymap(renderer);
 			const disposeKeymap = setupKeymap(keymap);
 			keymap.setData("modal.active", "none");
+			options.onKeymap?.(keymap);
 			onCleanup(disposeKeymap);
 			return (
 				<App
+					sidebarSide={options.sidebarSide}
 					repos={["/demo"]}
 					db={db}
 					traceStore={new TraceStore()}
@@ -221,7 +244,11 @@ async function renderShell(
 				/>
 			);
 		},
-		{ width: 140, height: 40, ...options },
+		{
+			width: options.width ?? 140,
+			height: 40,
+			kittyKeyboard: options.kittyKeyboard,
+		},
 	);
 	await advance(t);
 	return t;
@@ -1256,6 +1283,379 @@ test("the Backspace byte cycles back only while the sidebar holds focus", async 
 		t.mockInput.pressBackspace();
 		await advance(t);
 		expect(crumbLine(t.captureCharFrame())).toContain("wf-active");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Ctrl+A focuses the right-hand run index without changing the workspace filter", async () => {
+	const observed = overview("wf-active", "active");
+	observed.state.runs = [
+		{
+			id: "worker-run",
+			role: "worker",
+			stepId: "apply",
+			attempt: 1,
+			status: "working",
+			runtime: "pi",
+			profile: "default",
+		},
+		{
+			id: "review-run",
+			role: "reviewer",
+			stepId: "review",
+			attempt: 1,
+			status: "completed",
+			runtime: "pi",
+			profile: "default",
+		},
+	];
+	stubGateway([observed], "pending");
+	const t = await renderShell();
+	try {
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(await renderUntil(t, "worker")).toBe(true);
+		let frame = t.captureCharFrame();
+		const agentLine = frame.split("\n").find((line) => line.includes("Agents"));
+		expect(agentLine?.indexOf("Agents")).toBeGreaterThan(90);
+		expect(frame).not.toContain("reviewer");
+		expect(frame).toContain("Ctrl+A");
+		t.mockInput.pressKey("?");
+		await advance(t);
+		expect(await renderUntil(t, "select agent run")).toBe(true);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(t.captureCharFrame()).toContain("select agent run");
+		t.mockInput.pressEscape();
+		await advance(t);
+		t.mockInput.pressKey("f");
+		await advance(t);
+		expect(await renderUntil(t, "reviewer")).toBe(true);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		frame = t.captureCharFrame();
+		expect(frame).not.toContain("reviewer");
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Enter on a selected agent crosses the shell boundary with the exact target, run and conversation", async () => {
+	const sessionSocket = hostLayout(
+		"/trusted-workflow-data/wf-agent-target",
+	).socketPath;
+	const observed = overview("wf-agent-target", "active", {
+		target: "research://standalone",
+		repository: "/not-the-target",
+	});
+	observed.state.runs = ["alpha", "worker"].map((role) => ({
+		id: `${role}-run`,
+		role,
+		stepId: "apply",
+		attempt: 1,
+		status: "working",
+		runtime: "pi",
+		profile: "default",
+		hostSocket: sessionSocket,
+		conversationId: `durable-${role}`,
+	}));
+	const data = testDashboard("apply");
+	data.state = observed.state;
+	data.agents = observed.state.runs.map((run) => ({
+		role: run.role,
+		runId: run.id,
+		status: run.status,
+	}));
+	const requests: ObservationRequest[] = [];
+	const sessions: Array<[string, string | undefined]> = [];
+	// Store and host boundaries are stubbed: recovery must not open a real
+	// workflow store for this synthetic navigation target either.
+	const recover = spyOn(recovery, "recoverWorkflowSession").mockResolvedValue({
+		runId: "worker-run",
+		hostSocket: sessionSocket,
+		conversationId: "durable-worker",
+	});
+	const resolver = spyOn(
+		workflowSessions,
+		"createWorkflowSessionResolver",
+	).mockImplementation((target, workflowId) => ({
+		async resolve(runId, socket) {
+			return workflowSessions.workflowSessionSocket(
+				target,
+				workflowId,
+				runId,
+				socket,
+			);
+		},
+		async connection(runId, socket) {
+			return {
+				socket: await this.resolve(runId, socket),
+				fingerprint: "render-test",
+			};
+		},
+		dispose() {},
+	}));
+	const lookup = spyOn(
+		workflowSessions,
+		"workflowSessionSocket",
+	).mockImplementation((target, workflowId, runId, socket) => {
+		if (
+			target !== "research://standalone" ||
+			workflowId !== "wf-agent-target" ||
+			runId !== "worker-run" ||
+			socket !== sessionSocket
+		)
+			throw new Error("unverified workflow session");
+		return sessionSocket;
+	});
+	const watch = spyOn(HostClient.prototype, "watch").mockImplementation(
+		async (runId, _onFrame, options) => {
+			if (options?.view !== "docs")
+				sessions.push([runId, options?.conversationId]);
+			return () => {};
+		},
+	);
+	stubGateway([observed], "throw", {
+		data,
+		onObserve: (request) => requests.push(request),
+	});
+	const t = await renderShell();
+	try {
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(await renderUntil(t, "worker")).toBe(true);
+		t.mockInput.pressKey("j");
+		await advance(t);
+		t.mockInput.pressEnter();
+		await t.waitForFrame(
+			(frame) => sessions.length === 1 && frame.includes("Ask anything…"),
+		);
+		expect(requests).toContainEqual({
+			kind: "dashboard",
+			repo: "research://standalone",
+			workflowId: "wf-agent-target",
+		});
+		expect(sessions).toEqual([["worker-run", "durable-worker"]]);
+		expect(recover).toHaveBeenCalledWith(
+			"research://standalone",
+			"wf-agent-target",
+			"worker-run",
+		);
+		expect(lookup).toHaveBeenCalledWith(
+			"research://standalone",
+			"wf-agent-target",
+			"worker-run",
+			sessionSocket,
+		);
+		expect(crumbLine(t.captureCharFrame())).toContain("wf-agent-target");
+		t.mockInput.pressEscape();
+		await advance(t);
+		expect(t.captureCharFrame()).not.toContain("Ask anything…");
+		// A new activation on the same mounted workflow is not mistaken for a
+		// consumed request, and clearing route params did not remount the view.
+		// Historical recovery is ineligible, but authenticated observation of
+		// the exact durable association must remain available.
+		recover.mockRejectedValue(new Error("historical run is not recoverable"));
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		t.mockInput.pressEnter();
+		await t.waitForFrame(
+			(frame) => sessions.length === 2 && frame.includes("Ask anything…"),
+		);
+		expect(sessions).toEqual([
+			["worker-run", "durable-worker"],
+			["worker-run", "durable-worker"],
+		]);
+	} finally {
+		t.renderer.destroy();
+		watch.mockRestore();
+		recover.mockRestore();
+		lookup.mockRestore();
+		resolver.mockRestore();
+		clearGateway();
+	}
+});
+
+test("e toggles the agent panel mode through its shell keymap and controls its unfocused width", async () => {
+	const observed = overview("wf-active", "active");
+	observed.state.runs = [
+		{
+			id: "worker-run",
+			role: "worker",
+			stepId: "apply",
+			attempt: 1,
+			status: "working",
+			runtime: "pi",
+			profile: "default",
+		},
+	];
+	stubGateway([observed], "pending");
+	const t = await renderShell();
+	const titleColumn = () =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.find((line) => line.includes("Agents"))
+			?.indexOf("Agents") ?? -1;
+	try {
+		expect(t.captureCharFrame()).not.toContain("worker");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(await renderUntil(t, "worker")).toBe(true);
+		const expandedColumn = titleColumn();
+		expect(t.captureCharFrame()).toContain("e size");
+		t.mockInput.pressKey("?");
+		expect(await renderUntil(t, "toggle sidebar size")).toBe(true);
+		t.mockInput.pressEscape();
+		await advance(t);
+		expect(expandedColumn).toBeGreaterThanOrEqual(140 - 34);
+		expect(expandedColumn).toBeLessThan(140 - 24);
+		t.mockInput.pressKey("e");
+		await advance(t);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(t.captureCharFrame()).toContain("worker");
+		expect(titleColumn()).toBe(expandedColumn);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		t.mockInput.pressKey("e");
+		await advance(t);
+		expect(t.captureCharFrame()).toContain("worker");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(t.captureCharFrame()).not.toContain("worker");
+		expect(titleColumn()).toBe(-1);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("a superseded overview completion cannot mark a newer observation stale", async () => {
+	const pending: Array<(value: WorkflowOverview[]) => void> = [];
+	const polls: Array<() => void> = [];
+	const originalInterval = globalThis.setInterval;
+	const captureInterval = (
+		...parameters: Parameters<typeof originalInterval>
+	) => {
+		const [handler, delay, ...args] = parameters;
+		if (delay === 5_000 && typeof handler === "function")
+			polls.push(() => handler(...args));
+		return originalInterval(handler, delay, ...args);
+	};
+	const interval = spyOn(globalThis, "setInterval").mockImplementation(
+		Object.assign(captureInterval, originalInterval),
+	);
+	configureGateway({
+		kind: "in-process",
+		connectionState: () => "open",
+		observe: async (request: ObservationRequest) => {
+			if (request.kind === "workflows")
+				return new Promise<WorkflowOverview[]>((resolve) =>
+					pending.push(resolve),
+				);
+			throw new Error(`unexpected observation ${request.kind}`);
+		},
+		view: () => new Promise<never>(() => {}),
+		subscribe: () => () => {},
+	} as unknown as DashboardGateway);
+	const t = await renderShell();
+	try {
+		expect(pending).toHaveLength(1);
+		const poll = polls[0];
+		if (!poll) throw new Error("sidebar poll missing");
+		for (let tick = 0; tick < 6; tick += 1) poll();
+		await advance(t);
+		expect(pending).toHaveLength(7);
+		const observed = overview("newer-workflow", "active");
+		observed.state.runs = [
+			{
+				id: "newer-run",
+				role: "newer-worker",
+				stepId: "apply",
+				attempt: 1,
+				status: "working",
+				runtime: "pi",
+				profile: "default",
+			},
+		];
+		pending.at(-1)?.([observed]);
+		t.mockInput.pressKey("a", { ctrl: true });
+		expect(await renderUntil(t, "newer-worker")).toBe(true);
+		for (const complete of pending.slice(0, -1)) complete([]);
+		await advance(t);
+		expect(t.captureCharFrame()).toContain("newer-worker");
+		expect(t.captureCharFrame()).not.toContain("stale");
+	} finally {
+		t.renderer.destroy();
+		interval.mockRestore();
+		clearGateway();
+	}
+});
+
+test("the agent panel remains outermost when the workspace panel is on the right in a narrow terminal", async () => {
+	stubGateway([], "pending");
+	const t = await renderShell({ sidebarSide: "right", width: 60 });
+	try {
+		await focusSidebar(t);
+		t.mockInput.pressKey("e");
+		await advance(t);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(await renderUntil(t, "Agents")).toBe(true);
+		const titles = t
+			.captureCharFrame()
+			.split("\n")
+			.find((line) => line.includes("Workspaces"));
+		expect(titles).toContain("Agents");
+		expect(titles?.indexOf("Workspaces")).toBeGreaterThanOrEqual(24);
+		expect(titles?.indexOf("Agents")).toBeGreaterThan(
+			titles?.indexOf("Workspaces") ?? 0,
+		);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("Ctrl+A leaves modal and text-entry ownership intact", async () => {
+	stubGateway([], "pending");
+	let keymap: ReturnType<typeof createDefaultOpenTuiKeymap> | undefined;
+	const t = await renderShell({
+		onKeymap: (value) => {
+			keymap = value;
+		},
+	});
+	try {
+		if (!keymap) throw new Error("keymap missing");
+		keymap.setData("textEntry.active", true);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("content");
+		keymap.setData("textEntry.active", false);
+		keymap.setData("modal.active", "feature-dialog");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("content");
+		keymap.setData("modal.active", "none");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("agent");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("content");
+		await focusSidebar(t);
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("agent");
+		t.mockInput.pressKey("a", { ctrl: true });
+		await advance(t);
+		expect(keymap.getData("shell.panel")).toBe("sidebar");
 	} finally {
 		t.renderer.destroy();
 		clearGateway();

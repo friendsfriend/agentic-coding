@@ -5,7 +5,7 @@
 // reopenable, and a run that parked itself stays parked.
 
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
 	type ResolvedProfile,
 	type WorkflowRouting,
 } from "../src/contracts/workflow.ts";
+import * as caller from "../src/workflow/cli/caller-environment.ts";
 import { runResumeRun } from "../src/workflow/cli/commands/dispatch-actions.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { agentRunEnvironmentFile } from "../src/workflow/run-env.ts";
@@ -271,26 +272,18 @@ test("a capability cannot reopen a run it is not the capability of", () => {
 /** The environment one managed run carries: what `resume-run` resolves its own
  * identity and capability from. */
 function asManagedRun(started: Started): () => void {
-	const previous = {
-		HERDR_WORKFLOW_TARGET: process.env.HERDR_WORKFLOW_TARGET,
-		HERDR_WORKFLOW_ID: process.env.HERDR_WORKFLOW_ID,
-		HERDR_RUN_ID: process.env.HERDR_RUN_ID,
-		HERDR_STEP_ID: process.env.HERDR_STEP_ID,
-		HERDR_ROLE: process.env.HERDR_ROLE,
-		HERDR_RUN_TOKEN: process.env.HERDR_RUN_TOKEN,
-	};
-	process.env.HERDR_WORKFLOW_TARGET = started.repo;
-	process.env.HERDR_WORKFLOW_ID = "change";
-	process.env.HERDR_RUN_ID = started.runId;
-	process.env.HERDR_STEP_ID = started.stepId;
-	process.env.HERDR_ROLE = started.role;
-	process.env.HERDR_RUN_TOKEN = started.token;
-	return () => {
-		for (const [key, value] of Object.entries(previous)) {
-			if (value === undefined) delete process.env[key];
-			else process.env[key] = value;
-		}
-	};
+	// Linux authenticates launch identity from /proc, not mutable process.env.
+	// Supply only this fixture's caller at the boundary; never read/use the
+	// implementation or verifier run's live capability for a test command.
+	const identity = spyOn(caller, "callerEnvironment").mockReturnValue({
+		HERDR_WORKFLOW_TARGET: started.repo,
+		HERDR_WORKFLOW_ID: "change",
+		HERDR_RUN_ID: started.runId,
+		HERDR_STEP_ID: started.stepId,
+		HERDR_ROLE: started.role,
+		HERDR_RUN_TOKEN: started.token,
+	});
+	return () => identity.mockRestore();
 }
 
 /** Capture what one `resume-run` invocation printed (its one JSON line). */

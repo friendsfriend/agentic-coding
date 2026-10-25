@@ -133,7 +133,14 @@ await Bun.build({
 			"--",
 		],
 	},
-	entrypoints: ["./src/cli.ts", parserWorker, codemodeWorker],
+	// The canonical-session validator also needs its own embedded entrypoint:
+	// source-relative worker paths do not exist beside a compiled executable.
+	entrypoints: [
+		"./src/cli.ts",
+		parserWorker,
+		codemodeWorker,
+		"./src/agent-host/workflow-session-worker.ts",
+	],
 	// `playwright-core` requires `chromium-bidi` lazily, only for the BiDi-over-CDP
 	// transport this server never uses, and declares it as no dependency of its
 	// own. Bundling the require would fail the build for a module that is never
@@ -144,6 +151,9 @@ await Bun.build({
 	define: {
 		AGENTIC_CODING_VERSION: `'${appVersion}'`,
 		OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
+		WORKFLOW_SESSION_WORKER_PATH: JSON.stringify(
+			`${bunfsRoot}src/agent-host/workflow-session-worker.ts`,
+		),
 		PI_CODEMODE_WORKER_PATH: JSON.stringify(
 			bunfsRoot + codemodeWorkerRelativePath,
 		),

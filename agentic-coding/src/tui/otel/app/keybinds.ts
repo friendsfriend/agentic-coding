@@ -6,13 +6,14 @@ import {
 import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
 /** The page body's panel section: the dedicated Ctrl+S toggle and the
- * Ctrl+H/Ctrl+L workspace cycle, all host keys so every surface (including
- * feature views that claim h/l) reaches them. */
+ * Ctrl+A agent-panel toggle and Ctrl+H/Ctrl+L workspace cycle, all host keys so
+ * every surface (including feature views that claim h/l) reaches them. */
 export function workspaceSidebarPanelSection(): KeybindSection {
 	return {
 		title: "Panels",
 		keybinds: [
 			hostKeybind("ctrl+s"),
+			hostKeybind("ctrl+a"),
 			hostKeybind("ctrl+h"),
 			hostKeybind("ctrl+l"),
 		],
@@ -21,9 +22,10 @@ export function workspaceSidebarPanelSection(): KeybindSection {
 
 /**
  * Footer/help catalog for an embedded terminal agent page. The agent owns
- * every key except the three panel host keys the shell keeps while the
- * terminal has focus: Ctrl+S leaves for the sidebar, Ctrl+H/Ctrl+L cycle
- * workspaces. A `helpKey` is advertised only when the agent itself handles that
+ * every key except the panel host keys the shell keeps while the terminal
+ * has focus: Ctrl+S leaves for the workspace sidebar; Ctrl+H/Ctrl+L cycle
+ * workspaces. Ctrl+A stays with the terminal's editable input.
+ * A `helpKey` is advertised only when the agent itself handles that
  * key; the shell does not claim `?`, `q`, Escape or Ctrl+T on the content page.
  */
 export function terminalAgentKeybindCatalog(
@@ -82,6 +84,30 @@ export function piKeybindCatalog(): KeybindSection[] {
  * (host keys, so they also work from the page body) and the dedicated Ctrl+S
  * toggle back to the page body.
  */
+export function agentSidebarKeybindCatalog(): KeybindSection[] {
+	return [
+		{
+			title: "Agents",
+			keybinds: [
+				{
+					key: "j/k or ↑/↓",
+					action: "select agent run",
+					standard: true,
+				},
+				{
+					key: "Enter",
+					action: "open selected run / durable agent session",
+					short: "open",
+				},
+				{ key: "f", action: "switch Active/All filter", short: "filter" },
+				{ key: "e", action: "toggle sidebar size", short: "size" },
+				{ key: "Esc", action: "focus the main content", standard: true },
+				hostKeybind("ctrl+a"),
+			],
+		},
+	];
+}
+
 export function workspaceSidebarKeybindCatalog(
 	options: { embeddedPage?: boolean } = {},
 ): KeybindSection[] {
@@ -117,6 +143,7 @@ export function workspaceSidebarKeybindCatalog(
 		hostKeybind("ctrl+h"),
 		hostKeybind("ctrl+l"),
 		hostKeybind("ctrl+s"),
+		hostKeybind("ctrl+a"),
 		hostKeybind("ctrl+p"),
 		hostKeybind("?"),
 		hostDiagnosticsKeybind(),
@@ -166,6 +193,7 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 				hostKeybind("ctrl+h"),
 				hostKeybind("ctrl+l"),
 				hostKeybind("ctrl+s"),
+				hostKeybind("ctrl+a"),
 				hostKeybind("ctrl+t"),
 				hostKeybind("?"),
 				hostDiagnosticsKeybind(),

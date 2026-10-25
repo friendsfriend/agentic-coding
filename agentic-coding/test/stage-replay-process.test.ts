@@ -138,7 +138,7 @@ describe("compiled replay process", () => {
 				secretNames: [],
 			});
 			expect(result.timedOut).toBe(false);
-			expect(result.exitCode).toBe(0);
+			expect(result.exitCode, JSON.stringify(result)).toBe(0);
 			expect(fs.existsSync(result.resultPath)).toBe(true);
 			const run = JSON.parse(fs.readFileSync(result.resultPath, "utf8")) as {
 				status: string;

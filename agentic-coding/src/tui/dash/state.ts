@@ -36,6 +36,9 @@ export interface PanelState {
 	readonly setActive: Setter<number>;
 	readonly agent: () => number;
 	readonly setAgent: Setter<number>;
+	/** Exact run requested by the shell, including a superseded role attempt. */
+	readonly focusedAgentRunId: () => string | undefined;
+	readonly setFocusedAgentRunId: Setter<string | undefined>;
 	/** OpenSpec artifacts shown by the artifact panel and their selection. */
 	readonly artifacts: () => string[];
 	readonly setArtifacts: Setter<string[]>;
@@ -58,6 +61,7 @@ export interface PanelState {
 export function createPanelState(): PanelState {
 	const [active, setActiveSignal] = createSignal(0);
 	const [agent, setAgentSignal] = createSignal(0);
+	const [focusedAgentRunId, setFocusedAgentRunId] = createSignal<string>();
 	const [artifacts, setArtifactsSignal] = createSignal<string[]>([]);
 	const [artifact, setArtifactSignal] = createSignal(0);
 	const [decision, setDecisionSignal] = createSignal(0);
@@ -69,6 +73,8 @@ export function createPanelState(): PanelState {
 		setActive: setActiveSignal,
 		agent,
 		setAgent: setAgentSignal,
+		focusedAgentRunId,
+		setFocusedAgentRunId,
 		artifacts,
 		setArtifacts: setArtifactsSignal,
 		artifact,
