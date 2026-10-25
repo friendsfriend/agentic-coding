@@ -112,10 +112,20 @@ export const SIDEBAR_PI_PIN: SidebarPin = {
 	page: "pi",
 };
 
+/** The durable coding session: a plain pi-durable coding agent rendered with
+ * the Orchestrator's transcript view, with no workflow in the loop. */
+export const SIDEBAR_PI_DURABLE_PIN: SidebarPin = {
+	glyph: "∞",
+	label: "Pi Durable",
+	meta: "durable · session · code",
+	page: "pi-durable",
+};
+
 export const SIDEBAR_HOME_PINS: readonly SidebarPin[] = [
 	SIDEBAR_ORCHESTRATOR_PIN,
 	SIDEBAR_OPENCODE_PIN,
 	SIDEBAR_PI_PIN,
+	SIDEBAR_PI_DURABLE_PIN,
 ];
 
 /** Cursor positions the sidebar offers: the pinned entries first, then the

@@ -86,6 +86,7 @@ import {
 	type ToolSurfaceOptions,
 } from "./tool-surface.ts";
 import {
+	CODING_SESSION_PREAMBLE,
 	codingTools,
 	createAskJevExtension,
 	createDebugRequestExtension,
@@ -327,6 +328,11 @@ export interface DurableHostOptions {
 	 * tools and the orchestrator extension, and serves the `orchestrator` tool
 	 * policy instead of workflow runs. */
 	readonly orchestrator?: boolean;
+	/** Standalone coding-session mode (`--session`): the host installs the
+	 * coding tools, `grep`, `codemode` and the repository context prompt, but
+	 * none of the workflow tools or the workflow preamble. It serves the
+	 * `default` policy only. */
+	readonly session?: boolean;
 	readonly log?: (line: string) => void;
 	/** Test-only overrides: a faux `Models` collection and/or an in-memory
 	 * `Storage` in place of the real SQLite file and live pi credentials.
@@ -476,7 +482,7 @@ export class DurableHost {
 
 	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, the
 	 * environment tools, and the workflow system prompt. Never installed in
-	 * orchestrator mode. */
+	 * orchestrator mode or in a standalone coding session. */
 	private static installWorkflowExtensions(
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
@@ -547,6 +553,10 @@ export class DurableHost {
 	}
 
 	static async open(options: DurableHostOptions): Promise<DurableHost> {
+		if (options.orchestrator && options.session)
+			throw new Error(
+				"a host serves either the orchestrator session or a coding session, not both",
+			);
 		fs.mkdirSync(options.layout.root, { recursive: true, mode: 0o700 });
 		fs.mkdirSync(options.layout.runEnvDir, { recursive: true, mode: 0o700 });
 		const registry = createRegistry();
@@ -581,14 +591,28 @@ export class DurableHost {
 			? createOrchestratorExtension(lookup)
 			: undefined;
 		if (orchestrator) registry.install(orchestrator);
-		const workflowTools = orchestrator
-			? { readOnlyTools: [], workflowTools: [] }
-			: DurableHost.installWorkflowExtensions(
-					registry,
-					lookup,
-					options,
-					surface,
-				);
+		// A standalone coding session is a plain coding agent: it gets the
+		// repository context prompt and `grep`, but no workflow dialogue,
+		// environment, stage or debug tools and no managed-run preamble.
+		if (options.session) {
+			registry.install(createSearchExtension(surface));
+			registry.install(
+				createPromptExtension(
+					options.globalAgentDir,
+					(cwd) => cwd,
+					CODING_SESSION_PREAMBLE,
+				),
+			);
+		}
+		const workflowTools =
+			orchestrator || options.session
+				? { readOnlyTools: [], workflowTools: [] }
+				: DurableHost.installWorkflowExtensions(
+						registry,
+						lookup,
+						options,
+						surface,
+					);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
 		// additional tool: the run keeps its direct tools either way. The
@@ -1037,6 +1061,14 @@ export class DurableHost {
 				...codingTools(false),
 				...(this.orchestratorExtension.tools ?? []),
 			];
+		}
+		if (this.options.session) {
+			if (policy !== "default")
+				throw new Error("this host only serves the coding session");
+			// The session's default selection is exactly the coding tools plus the
+			// search extension, prompt context and any configured codemode: the
+			// host installed nothing else.
+			return undefined;
 		}
 		if (policy === "orchestrator")
 			throw new Error("the orchestrator policy needs an orchestrator host");

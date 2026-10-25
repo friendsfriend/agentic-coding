@@ -116,12 +116,16 @@ test("bash streams the latest output without expansion and retains its full log"
 		await t.renderOnce();
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("stream row 19");
-		expect(t.captureCharFrame()).not.toContain("stream row 0");
-		expect(t.captureCharFrame()).toContain("earlier lines");
+		expect(t.captureCharFrame()).toContain("stream row 0");
+		expect(t.captureCharFrame()).not.toContain("earlier lines");
 		const row = t
 			.captureCharFrame()
 			.split("\n")
 			.findIndex((line) => line.includes(command));
+		await t.mockMouse.click(8, row);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("stream row 0");
+		expect(t.captureCharFrame()).toContain("earlier lines");
 		await t.mockMouse.click(8, row);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("stream row 0");
@@ -252,87 +256,87 @@ for (const width of [80, 160]) {
 }
 
 for (const width of [80, 160]) {
-	test(`hovered diffs own wheel scrolling in both directions at width ${width}`, async () => {
-		let transcript: ScrollBoxRenderable | undefined;
-		const content = `@@ -1,30 +1,30 @@\n${Array.from({ length: 30 }, (_, i) => `-old ${i}`).join("\n")}\n${Array.from({ length: 30 }, (_, i) => `+new ${i}`).join("\n")}\n`;
-		const t = await testRender(
-			() => (
-				<scrollbox
-					ref={(box) => {
-						transcript = box;
-					}}
-					height={24}
-				>
-					<text height={8} flexShrink={0}>
-						before diff
-					</text>
-					<box maxHeight={8} overflow="hidden" flexShrink={0}>
-						<TranscriptFile file={{ kind: "diff", path: "a.txt", content }} />
-					</box>
-					<text height={40} flexShrink={0}>
-						after diff
-					</text>
-				</scrollbox>
-			),
-			{ width, height: 24 },
-		);
-		try {
-			await t.renderOnce();
-			await t.renderOnce();
-			if (!transcript) throw new Error("Missing transcript scroll box");
-			transcript.scrollTop = 4;
-			await t.renderOnce();
-			const codes = renderTree(transcript).filter(
-				(node) => node instanceof CodeRenderable,
+	for (const kind of ["code", "diff"] as const) {
+		test(`wheel over full ${kind} content scrolls the transcript at width ${width}`, async () => {
+			let transcript: ScrollBoxRenderable | undefined;
+			const content =
+				kind === "diff"
+					? `@@ -1,30 +1,30 @@\n${Array.from({ length: 30 }, (_, i) => `-old ${i}`).join("\n")}\n${Array.from({ length: 30 }, (_, i) => `+new ${i}`).join("\n")}\n`
+					: Array.from({ length: 60 }, (_, i) => `source ${i}`).join("\n");
+			const t = await testRender(
+				() => (
+					<scrollbox
+						ref={(box) => {
+							transcript = box;
+						}}
+						height={24}
+					>
+						<text height={8} flexShrink={0}>
+							before diff
+						</text>
+						<box flexShrink={0}>
+							<TranscriptFile file={{ kind, path: "a.txt", content }} />
+						</box>
+						<text height={40} flexShrink={0}>
+							after diff
+						</text>
+					</scrollbox>
+				),
+				{ width, height: 24 },
 			);
-			const code = codes[0];
-			if (!code) throw new Error("Missing diff code renderer");
-			const x = code.x + 8;
-			const y = 6;
-			const initial = transcript.scrollTop;
-			await t.mockMouse.scroll(x, y, "down");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-			expect(code.scrollY).toBeGreaterThan(0);
-			const down = code.scrollY;
-			await t.mockMouse.scroll(x, y, "up");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-			expect(code.scrollY).toBeLessThan(down);
-			// Line-number gutters belong to the diff as well, not the transcript.
-			await t.mockMouse.scroll(1, y, "down");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-			expect(code.scrollY).toBeGreaterThan(0);
-			if (width > 120) {
-				const right = codes[1];
-				if (!right) throw new Error("Missing right diff side");
-				expect(right.scrollY).toBe(code.scrollY);
-				await t.mockMouse.scroll(right.x + 8, y, "down");
+			try {
+				await t.renderOnce();
+				await t.renderOnce();
+				if (!transcript) throw new Error("Missing transcript scroll box");
+				transcript.scrollTop = 4;
+				await t.renderOnce();
+				const codes = renderTree(transcript).filter(
+					(node) => node instanceof CodeRenderable,
+				);
+				const code = codes[0];
+				if (!code) throw new Error("Missing diff code renderer");
+				const x = code.x + 8;
+				const y = 6;
+				const initial = transcript.scrollTop;
+				await t.mockMouse.scroll(x, y, "down");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBeGreaterThan(initial);
+				expect(code.scrollY).toBe(0);
+				await t.mockMouse.scroll(x, y, "up");
 				await t.renderOnce();
 				expect(transcript.scrollTop).toBe(initial);
-				expect(right.scrollY).toBe(code.scrollY);
+				expect(code.scrollY).toBe(0);
+				// The line-number gutters also pass their wheel to the transcript.
+				await t.mockMouse.scroll(1, y, "down");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBeGreaterThan(initial);
+				await t.mockMouse.scroll(1, y, "up");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBe(initial);
+				if (width > 120 && kind === "diff") {
+					const right = codes[1];
+					if (!right) throw new Error("Missing right diff side");
+					expect(right.scrollY).toBe(code.scrollY);
+					await t.mockMouse.scroll(right.x + 8, y, "down");
+					await t.renderOnce();
+					expect(transcript.scrollTop).toBeGreaterThan(initial);
+					expect(right.scrollY).toBe(0);
+					await t.mockMouse.scroll(right.x + 8, y, "up");
+					await t.renderOnce();
+					expect(transcript.scrollTop).toBe(initial);
+				}
+				// Moving outside the diff changes the scroll owner, not keyboard focus.
+				await t.mockMouse.scroll(x, 1, "down");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBeGreaterThan(initial);
+				await t.mockMouse.scroll(x, 1, "up");
+				await t.renderOnce();
+				expect(transcript.scrollTop).toBe(initial);
+			} finally {
+				t.renderer.destroy();
 			}
-			// Even at the diff's top, the wheel must not leak to the transcript.
-			code.scrollY = 0;
-			await t.mockMouse.scroll(x, y, "up");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-			for (const side of codes) side.scrollY = 10000;
-			await t.mockMouse.scroll(x, y, "down");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-			// Moving outside the diff changes the scroll owner, not keyboard focus.
-			await t.mockMouse.scroll(x, 1, "down");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBeGreaterThan(initial);
-			await t.mockMouse.scroll(x, 1, "up");
-			await t.renderOnce();
-			expect(transcript.scrollTop).toBe(initial);
-		} finally {
-			t.renderer.destroy();
-		}
-	});
+		});
+	}
 }
 
 test("file code configures native syntax highlighting and numbered source", async () => {
@@ -412,7 +416,7 @@ const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 ];
 
 for (const name of ["read", "write", "edit"] as const) {
-	test(`${name} shows the same full file content in collapsed and expanded states`, async () => {
+	test(`${name} starts fully expanded and toggles without disclosure indicators`, async () => {
 		const lines = Array.from({ length: 12 }, (_, i) => `${name} source ${i}`);
 		const t = await testRender(
 			() => (
@@ -458,13 +462,17 @@ for (const name of ["read", "write", "edit"] as const) {
 			const row = compact
 				.split("\n")
 				.findIndex((line) => line.includes("src/file.ts"));
-			await t.mockMouse.click(4, row);
+			const contentRow = compact
+				.split("\n")
+				.findIndex((line) => line.includes(`${name} source 7`));
+			await t.mockMouse.click(15, contentRow);
 			await t.renderOnce();
-			expect(t.captureCharFrame()).toContain(`${name} source 11`);
+			expect(t.captureCharFrame()).not.toContain(`${name} source 11`);
 			expect(t.captureCharFrame()).not.toContain("more lines");
 			await t.mockMouse.click(4, row);
 			await t.renderOnce();
 			expect(t.captureCharFrame()).toContain(`${name} source 11`);
+			expect(t.captureCharFrame()).not.toMatch(/[▸▾]/);
 		} finally {
 			t.renderer.destroy();
 		}
@@ -2087,7 +2095,7 @@ test("tool rows get a view from their call and result, and a generic default", a
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 22 },
+		{ width: 80, height: 40 },
 	);
 	const diffSign = (source: string, sign: string) =>
 		t
@@ -2104,18 +2112,17 @@ test("tool rows get a view from their call and result, and a generic default", a
 		await t.renderOnce();
 		const collapsed = t.captureCharFrame();
 		// Each view names its own subject: the file, the range, the command.
-		expect(collapsed).toContain("▸ → Read src/a.ts");
+		expect(collapsed).toContain("→ Read src/a.ts");
 		expect(collapsed).toContain("40-120 of 512");
-		expect(collapsed).toContain("▸ ← Edit src/a.ts");
+		expect(collapsed).toContain("← Edit src/a.ts");
 		expect(collapsed).toContain("1 edit · +1 −1");
 		// The judgment view names the verdict; a tool without a view keeps the
 		// generic row.
-		expect(collapsed).toContain("◆ leak → 0.12");
-		expect(collapsed).toContain("agent_ask role=planner");
+		expect(collapsed).toContain("◆ Judge files (1)");
+		expect(collapsed).toContain("leak (noul) · 0.12");
+		expect(collapsed).toContain("Agent ask planner");
 
-		// Ctrl+O expands every tool row: the diff and the text appear.
-		t.mockInput.pressKey("o", { ctrl: true });
-		await t.renderOnce();
+		// Tool output is already expanded by default.
 		const expanded = t.captureCharFrame();
 		expect(expanded).toContain("- const a = 1;");
 		expect(expanded).toContain("+ const b = 2;");
@@ -2285,9 +2292,6 @@ test("generic tool output and result detail use primary text", async () => {
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		t.mockInput.pressKey("o", { ctrl: true });
-		await t.renderOnce();
-		await t.renderOnce();
 		const spans = t.captureSpans();
 		const foreground = (text: string) => {
 			for (const line of spans.lines) {
@@ -2397,7 +2401,7 @@ test("every tool row uses the raised block surface", async () => {
 			lines.find((line) => line.includes(needle)) ?? "";
 		// A specialized view and the generic fallback share the same raised block:
 		// the heavy left rule is the first cell of every tool row.
-		expect(row("Read src/a.ts")).toContain("▸ → Read src/a.ts");
+		expect(row("Read src/a.ts")).toContain("→ Read src/a.ts");
 		expect(row("Read src/a.ts").trimStart().startsWith("┃")).toBe(true);
 		// The block keeps one blank line of its raised surface above and below the
 		// call, rather than letting the header touch the block's edge.
@@ -2406,9 +2410,9 @@ test("every tool row uses the raised block surface", async () => {
 		expect(lines[readLine - 1]).toMatch(/^┃\s*$/);
 		expect(lines[readLine + 1]).toMatch(/^┃\s+1 a\s*$/);
 		expect(lines[readLine + 2]).toMatch(/^┃\s*$/);
-		expect(row("search query=needle")).toContain("▸ • search query=needle");
-		expect(row("search query=needle").trimStart().startsWith("┃")).toBe(true);
-		expect(row("bun test")).toContain("▸ $ bun test");
+		expect(row("Search “needle”")).toContain("✱ Search “needle”");
+		expect(row("Search “needle”").trimStart().startsWith("┃")).toBe(true);
+		expect(row("bun test")).toContain("$ bun test");
 		expect(row("bun test").trimStart().startsWith("┃")).toBe(true);
 	} finally {
 		t.renderer.destroy();
@@ -2589,7 +2593,7 @@ test("browser tools carry the browser glyph before their action icon", async () 
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 22 },
+		{ width: 80, height: 40 },
 	);
 	try {
 		await t.renderOnce();
@@ -2784,14 +2788,15 @@ test("consecutive successful reads group without adding or replacing tools", asy
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 18 },
+		{ width: 80, height: 35 },
 	);
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("2 reads");
-		expect(collapsed).not.toContain("src/alpha.ts");
+		expect(collapsed).toContain("src/alpha.ts");
+		expect(collapsed).toContain("src/beta.ts");
 		expect(collapsed).toContain("src/gamma.ts");
 		const groupLine = collapsed
 			.split("\n")
@@ -2803,8 +2808,8 @@ test("consecutive successful reads group without adding or replacing tools", asy
 		await t.mockMouse.click(8, groupLine);
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
-		expect(expanded).toContain("src/alpha.ts");
-		expect(expanded).toContain("src/beta.ts");
+		expect(expanded).not.toContain("src/alpha.ts");
+		expect(expanded).not.toContain("src/beta.ts");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -2894,7 +2899,7 @@ test("a running tool shows an in-progress row that its result replaces in place"
 		await t.renderOnce();
 		const done = t.captureCharFrame();
 		expect(done).not.toContain("running…");
-		expect(done).toContain("▸ $ npm test");
+		expect(done).toContain("$ npm test");
 		expect(done).toContain("1 lines");
 		expect(done.match(/npm test/g)).toHaveLength(1);
 	} finally {
@@ -2975,7 +2980,10 @@ test("file and generic summaries wrap fully while shell commands expand beyond t
 			tool: "custom_tool",
 			toolCall: {
 				name: "custom_tool",
-				args: { query: "src/a.ts" },
+				args: {
+					query:
+						"src/some/deeply/nested/directory/with/a/long/value/that/reachesTheLastWord",
+				},
 				callId: "c3",
 			},
 		},
@@ -3021,7 +3029,7 @@ test("file and generic summaries wrap fully while shell commands expand beyond t
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 50, height: 30 },
+		{ width: 50, height: 50 },
 	);
 	try {
 		await t.renderOnce();
@@ -3029,11 +3037,11 @@ test("file and generic summaries wrap fully while shell commands expand beyond t
 		const frame = t.captureCharFrame();
 		// Shell commands reserve at most two compact rows; file paths and generic
 		// tool summaries keep their full wrapping.
-		expect(frame).not.toContain("very-last-word");
+		expect(frame).toContain("very-last-word");
 		expect(frame).toContain("reporter verbose");
 		expect(frame).toContain("module-under-edit.");
 		// The raised block's left rule is repeated on every wrapped row.
-		expect(frame).toMatch(/module-under-edit\. *\n┃ +ts/);
+		expect(frame).toContain("module-under-edit.ts");
 		// A tool without a specialized view wraps its own summary too.
 		expect(frame).toContain("reachesTheLastWord");
 		// The spinner in the icon gutter is the running marker; the row's own
@@ -3042,7 +3050,7 @@ test("file and generic summaries wrap fully while shell commands expand beyond t
 		expect(frame).not.toContain("reading…");
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
-		expect(t.captureCharFrame()).toContain("very-last-word");
+		expect(t.captureCharFrame()).not.toContain("very-last-word");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -3058,7 +3066,7 @@ test("a generic tool view wraps its request and output instead of truncating the
 		tool: "custom_tool",
 		toolCall: {
 			name: "custom_tool",
-			args: { query: "src/a.ts" },
+			args: { query: "src/some/deeply/nested/value/that/reachesTheLastWord" },
 			callId: "c1",
 		},
 		request: "custom_tool query=aRequestThatReachesItsOwnLastWord",
@@ -3083,7 +3091,7 @@ test("a generic tool view wraps its request and output instead of truncating the
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 50, height: 20 },
+		{ width: 50, height: 35 },
 	);
 	try {
 		await t.renderOnce();
@@ -3091,14 +3099,17 @@ test("a generic tool view wraps its request and output instead of truncating the
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("reachesTheLastWord");
 		expect(collapsed).not.toContain("...");
-		expect(collapsed).not.toContain("ItsOwnLastWord");
+		expect(collapsed).toContain("ItsOwnLastWord");
 
 		// Ctrl+O opens the fold: the request line and the output rows are read
 		// whole too, not cut in the middle.
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("ItsOwnLastWord");
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
 		const expanded = t.captureCharFrame();
-		expect(expanded).toContain("aRequestThatReachesItsOwnLastWord");
+		expect(expanded).not.toContain("aRequestThatReachesItsOwnLastWord");
 		expect(expanded).toContain("anOutputLineThatReachesItsOwnLastWord");
 		expect(expanded).not.toContain("...");
 	} finally {
@@ -3145,8 +3156,6 @@ test("an expanded specialized tool wraps its output rows instead of truncating t
 	);
 	try {
 		await t.renderOnce();
-		await t.renderOnce();
-		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
 		const frame = t.captureCharFrame();
 		expect(frame).toContain("theLastOutputWord");
@@ -3456,11 +3465,12 @@ test("codemode brackets expanded script, native tool cards and output that fold 
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
 		expect(expanded).toContain("╭─ λ Codemode");
+		expect(expanded).not.toMatch(/[▸▾]/);
 		expect(expanded).toContain("2 calls · 1 failed");
-		expect(expanded).toContain("glob pattern=*.ts");
+		expect(expanded).toContain("Glob *.ts");
 		expect(expanded).toContain("Read src/a.ts");
-		expect(expanded).toContain("▾ λ Script");
-		expect(expanded).toContain("▾ $ Output");
+		expect(expanded).toContain("λ Script");
+		expect(expanded).toContain("$ Output");
 		expect(expanded).toContain("tools.glob");
 		expect(expanded).toContain('return: ["a.ts","b.ts"]');
 		expect(expanded).toContain("╰─ Codemode completed");
@@ -3470,9 +3480,9 @@ test("codemode brackets expanded script, native tool cards and output that fold 
 		await t.mockMouse.click(10, scriptRow);
 		await t.renderOnce();
 		const opened = t.captureCharFrame();
-		expect(opened).toContain("▸ λ Script");
+		expect(opened).toContain("λ Script");
 		expect(opened).not.toContain("tools.glob");
-		expect(opened).toContain("▾ $ Output");
+		expect(opened).toContain("$ Output");
 		expect(opened).toContain("Read src/a.ts");
 	} finally {
 		t.renderer.destroy();
@@ -3582,6 +3592,20 @@ test("codemode uses native file cards expanded by default and lets each fold to 
 		await t.mockMouse.click(10, readRow);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).not.toContain("line one");
+		const promptRow = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("Ask anything"));
+		await t.mockMouse.click(10, promptRow);
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("return 1;");
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("return 1;");
+		expect(t.captureCharFrame()).toContain("+ b");
+		expect(t.captureCharFrame()).toContain("line one");
+		expect(t.captureCharFrame()).not.toMatch(/[▸▾]/);
 	} finally {
 		t.renderer.destroy();
 	}
@@ -3657,23 +3681,22 @@ test("a developer question shows its context, options, and chosen answer", async
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("? Which backend should the wiki use?");
 		expect(collapsed).toContain("answered · developer");
-		expect(collapsed).not.toContain("SQLite in-process");
+		expect(collapsed).toContain("SQLite in-process");
 
-		// Expanded: the context and the question are folds of their own.
-		t.mockInput.pressKey("o", { ctrl: true });
-		await t.renderOnce();
+		// Details start open and each subcomponent folds independently.
 		const expanded = t.captureCharFrame();
-		expect(expanded).toContain("▸ context");
+		expect(expanded).toContain("Context");
 		expect(expanded).toContain("→ SQLite in-process");
-		expect(expanded).not.toContain("No service to run.");
+		expect(expanded).toContain("No service to run.");
+		expect(expanded).not.toMatch(/[▸▾]/);
 
 		// The context folds open into the markdown it is.
 		const contextRow = expanded
 			.split("\n")
-			.findIndex((line) => line.includes("▸ context"));
+			.findIndex((line) => line.includes("Context"));
 		await t.mockMouse.click(10, contextRow);
 		await t.renderOnce();
-		expect(t.captureCharFrame()).toContain(
+		expect(t.captureCharFrame()).not.toContain(
 			"The migration script must pick one.",
 		);
 
@@ -3682,6 +3705,9 @@ test("a developer question shows its context, options, and chosen answer", async
 			.captureCharFrame()
 			.split("\n")
 			.findIndex((line) => line.includes("→ SQLite in-process"));
+		await t.mockMouse.click(10, questionRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("● ★ SQLite in-process");
 		await t.mockMouse.click(10, questionRow);
 		await t.renderOnce();
 		const opened = t.captureCharFrame();
@@ -3694,7 +3720,7 @@ test("a developer question shows its context, options, and chosen answer", async
 			.findIndex((line) => line.includes("● ★ SQLite in-process"));
 		await t.mockMouse.click(10, optionRow);
 		await t.renderOnce();
-		expect(t.captureCharFrame()).toContain("No service to run.");
+		expect(t.captureCharFrame()).not.toContain("No service to run.");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -3749,6 +3775,9 @@ test("expanding a block keeps the reader's place", async () => {
 		await t.renderOnce();
 		await t.renderOnce();
 		// Scroll into the transcript: the tool block is now above the viewport.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		await t.renderOnce();
 		if (box) box.scrollTop = 12;
 		await t.renderOnce();
 		const before = topLine();

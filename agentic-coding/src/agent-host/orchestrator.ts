@@ -42,6 +42,7 @@ import {
 	decodeWorkflowIds,
 	rankSimilarIds,
 } from "./orchestrator-resolve.ts";
+import { toolViewDetails } from "./tool-view-details.ts";
 import type { DurableRunContext, RunContextLookup } from "./tools.ts";
 
 export const ORCHESTRATOR_EXTENSION = "agentic.orchestrator";
@@ -51,6 +52,7 @@ const MAX_RESULT_CHARS = 60_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 type Result = {
+	details?: ReturnType<typeof toolViewDetails>;
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
@@ -61,6 +63,7 @@ function text(value: unknown): Result {
 	// backlog item 5).
 	const raw = typeof value === "string" ? value : JSON.stringify(value);
 	return {
+		details: toolViewDetails(value, MAX_RESULT_CHARS),
 		content: [
 			{
 				type: "text",

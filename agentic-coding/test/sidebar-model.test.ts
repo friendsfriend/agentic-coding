@@ -19,6 +19,7 @@ import {
 	SIDEBAR_HOME_PINS,
 	SIDEBAR_OPENCODE_PIN,
 	SIDEBAR_ORCHESTRATOR_PIN,
+	SIDEBAR_PI_DURABLE_PIN,
 	SIDEBAR_PI_PIN,
 	sidebarCollapsedRow,
 	sidebarCursorCount,
@@ -193,7 +194,7 @@ describe("workspace sidebar filters", () => {
 });
 
 describe("workspace sidebar pinned entries", () => {
-	test("names the Orchestrator, OpenCode and Pi and carries their marks", () => {
+	test("names the Orchestrator, OpenCode, Pi and Pi Durable and carries their marks", () => {
 		expect(SIDEBAR_ORCHESTRATOR_PIN.label).toBe("Orchestrator");
 		// The same mark an orchestrator-started workflow row carries.
 		expect(SIDEBAR_ORCHESTRATOR_PIN.glyph).toBe("⌂");
@@ -204,10 +205,14 @@ describe("workspace sidebar pinned entries", () => {
 		expect(SIDEBAR_PI_PIN.label).toBe("Pi");
 		expect(SIDEBAR_PI_PIN.glyph).toBe("π");
 		expect(SIDEBAR_PI_PIN.page).toBe("pi");
+		expect(SIDEBAR_PI_DURABLE_PIN.label).toBe("Pi Durable");
+		expect(SIDEBAR_PI_DURABLE_PIN.glyph).toBe("∞");
+		expect(SIDEBAR_PI_DURABLE_PIN.page).toBe("pi-durable");
 		expect(SIDEBAR_HOME_PINS).toEqual([
 			SIDEBAR_ORCHESTRATOR_PIN,
 			SIDEBAR_OPENCODE_PIN,
 			SIDEBAR_PI_PIN,
+			SIDEBAR_PI_DURABLE_PIN,
 		]);
 	});
 

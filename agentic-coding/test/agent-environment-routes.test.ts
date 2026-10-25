@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readActionProgress } from "../src/agent-host/action-progress.ts";
 import type { ActionRegistry } from "../src/server/actions/registry.ts";
 import {
 	type ActionRouteContext,
@@ -819,6 +820,64 @@ describe("env_build and env_test run in the workflow's checkout", () => {
 			cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
 		};
 	}
+
+	test("build streaming returns real progress and redacts secrets split across chunks", async () => {
+		const fixture = buildFixture(
+			"printf 'first\\nprivate-pa'; while [ ! -f stream-continue ]; do sleep 0.01; done; printf 'ssword\\nlast\\n'",
+		);
+		const abort = new AbortController();
+		const deadline = setTimeout(() => abort.abort(), 5000);
+		fs.writeFileSync(
+			path.join(fixture.deps.configDir, ".env"),
+			"PASSWORD=private-password\n",
+		);
+		try {
+			const url = new URL("http://localhost/api/v1/agent-env/build");
+			const request = new Request(url, {
+				method: "POST",
+				signal: abort.signal,
+				headers: {
+					"content-type": "application/json",
+					accept: "application/x-ndjson",
+				},
+				body: JSON.stringify({ app: "shop" }),
+			});
+			const response = await handleAgentEnvironmentRoute(
+				fixture.deps,
+				request,
+				url,
+				OWNER,
+			);
+			if (!response) throw new Error("Missing response");
+			expect(response.headers.get("content-type")).toContain(
+				"application/x-ndjson",
+			);
+			const progress: string[] = [];
+			const result = (await readActionProgress(response, async (value) => {
+				const text = String((value as { output?: string }).output ?? "");
+				progress.push(text);
+				if (text.includes("first"))
+					fs.writeFileSync(
+						path.join(fixture.checkout, "stream-continue"),
+						"go",
+					);
+			})) as { output: string; status: string };
+			expect(
+				progress.some(
+					(text) => text.includes("first") && !text.includes("last"),
+				),
+			).toBe(true);
+			expect(progress.join("\n")).not.toContain("private-pa");
+			expect(result.output).not.toContain("private-password");
+			expect(result.output).toContain("«redacted:PASSWORD»");
+			expect(result.output).toContain("last");
+			expect(result.status).toBe("completed");
+		} finally {
+			clearTimeout(deadline);
+			abort.abort();
+			fixture.cleanup();
+		}
+	});
 
 	test("a build runs the app's action against the workflow's checkout and reports its output", async () => {
 		const fixture = buildFixture("pwd; echo built-ok");

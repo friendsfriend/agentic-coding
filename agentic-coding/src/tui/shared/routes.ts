@@ -58,6 +58,7 @@ export type PageId =
 	| "orchestrator"
 	| "opencode"
 	| "pi"
+	| "pi-durable"
 	| "workflows.detail";
 
 /** A location: page identity + required resource identity + typed params. */
@@ -369,6 +370,13 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	// no shell-managed multi-session surface, so this page hosts one client.
 	pi: {
 		label: "Pi",
+		parent: () => ({ page: "home" }),
+	},
+	// The standalone pi-durable coding session, reached from its sidebar pin: a
+	// plain coding agent rendered with the durable transcript the Orchestrator
+	// uses. Not a picker destination and not a feature body of its own.
+	"pi-durable": {
+		label: "Pi Durable",
 		parent: () => ({ page: "home" }),
 	},
 	// The per-workflow dashboard page (workspace sidebar navigation). Not a

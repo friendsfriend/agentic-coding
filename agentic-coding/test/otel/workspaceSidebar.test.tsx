@@ -777,7 +777,7 @@ test("rows show the state that needs a reader as a glyph", async () => {
 	}
 });
 
-test("the pinned Orchestrator, OpenCode and Pi entries are always visible", async () => {
+test("the pinned Orchestrator, OpenCode, Pi and Pi Durable entries are always visible", async () => {
 	stubGateway();
 	const t = await renderShell();
 	try {
@@ -785,6 +785,7 @@ test("the pinned Orchestrator, OpenCode and Pi entries are always visible", asyn
 		expect(t.captureCharFrame()).toContain("⌂");
 		expect(t.captureCharFrame()).toContain("󱚞");
 		expect(t.captureCharFrame()).toContain("π");
+		expect(t.captureCharFrame()).toContain("∞");
 		await focusSidebar(t);
 		expect(await renderUntil(t, "Orchestrator")).toBe(true);
 		expect(t.captureCharFrame()).toContain("chat · launch · manage");
@@ -792,6 +793,8 @@ test("the pinned Orchestrator, OpenCode and Pi entries are always visible", asyn
 		expect(t.captureCharFrame()).toContain("sessions · prompts · code");
 		expect(t.captureCharFrame()).toContain("Pi");
 		expect(t.captureCharFrame()).toContain("standard · prompt · code");
+		expect(t.captureCharFrame()).toContain("Pi Durable");
+		expect(t.captureCharFrame()).toContain("durable · session · code");
 
 		// The filter only changes the workflow rows underneath: the pinned entry is
 		// chrome above them and never disappears with them.
@@ -1234,14 +1237,10 @@ test("the Backspace byte cycles back only while the sidebar holds focus", async 
 		// A terminal without the kitty keyboard protocol reports Ctrl+H as the
 		// Backspace byte. The sidebar is the one surface where that byte edits no
 		// text, so it moves from the second workflow to the first.
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		for (let index = 0; index < SIDEBAR_HOME_PINS.length + 1; index += 1) {
+			t.mockInput.pressKey("j");
+			await advance(t);
+		}
 		// The terminal's Ctrl+H byte, which is also what `pressBackspace` sends: the
 		// two are one key on a terminal without the kitty keyboard protocol.
 		t.mockInput.pressBackspace();

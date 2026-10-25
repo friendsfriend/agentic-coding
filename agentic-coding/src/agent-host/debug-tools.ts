@@ -25,6 +25,7 @@ import {
 	ENVIRONMENT_URL_ENV,
 	environmentOwnerFor,
 } from "./environment-capability.ts";
+import { toolViewDetails } from "./tool-view-details.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const DEBUG_EXTENSION = "agentic.debug";
@@ -40,6 +41,7 @@ const DB_TIMEOUT_MS = 180_000;
 const HTTP_TIMEOUT_MS = 120_000;
 
 type Result = {
+	details?: ReturnType<typeof toolViewDetails>;
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
@@ -48,6 +50,7 @@ function text(value: unknown): Result {
 	const raw =
 		typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	return {
+		details: toolViewDetails(value, MAX_RESULT_CHARS),
 		content: [
 			{
 				type: "text",

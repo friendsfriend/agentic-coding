@@ -509,7 +509,7 @@ function entryBlocks(
 									.map((part) => (isRecord(part) ? part.text : ""))
 									.join("\n")
 							: "",
-					(name === "read" && !failed) || name === "bash",
+					true,
 				);
 				const [first] = lines;
 				return [
@@ -623,10 +623,7 @@ function liveBlocks(
 		// started, so its row is the committed one upgraded to running (in place)
 		// instead of a second row beside it.
 		const callId = typeof slot.callId === "string" ? slot.callId : undefined;
-		const detail = outputLines(
-			slot.output,
-			name === "bash" || name === "codemode",
-		);
+		const detail = outputLines(slot.output, true);
 		blocks.push({
 			id: `live:tool:${index}`,
 			live: true,

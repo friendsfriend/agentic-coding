@@ -42,6 +42,45 @@ function redactString(
 	return redacted;
 }
 
+/** Do not publish a suffix that could become a secret when the next chunk
+ * arrives. Progress uses snapshots; the final response flushes the full value. */
+export function redactProgress(
+	value: string,
+	secrets: readonly EnvironmentSecret[],
+): string {
+	let end = value.length;
+	for (const secret of secrets) {
+		for (
+			let size = Math.min(secret.value.length - 1, value.length);
+			size > 0;
+			size--
+		) {
+			if (value.endsWith(secret.value.slice(0, size))) {
+				end = Math.min(end, value.length - size);
+				break;
+			}
+		}
+	}
+	// A held suffix may overlap another complete secret. Move the boundary to
+	// its start rather than exposing that secret's now-incomplete prefix.
+	let previous = -1;
+	while (previous !== end) {
+		previous = end;
+		for (const secret of secrets) {
+			if (!secret.value) continue;
+			let start = value.indexOf(secret.value);
+			while (start >= 0 && start < end) {
+				if (start + secret.value.length > end) {
+					end = start;
+					break;
+				}
+				start = value.indexOf(secret.value, start + 1);
+			}
+		}
+	}
+	return redactString(value.slice(0, end), secrets);
+}
+
 /** Deep-replace declared secret values in one response or stored artifact. */
 export function redact(
 	value: unknown,

@@ -165,7 +165,7 @@ test("embedded agents own content keys, stay mounted, and stop on shutdown", asy
 		expect(await renderUntil(t, "Keybindings")).toBe(true);
 		const helpFrame = t.captureCharFrame();
 		expect(helpFrame).toContain(
-			"select the Orchestrator, OpenCode, Pi, or a workflow",
+			"select the Orchestrator, OpenCode, Pi, Pi Durable, or a workflow",
 		);
 		expect(helpFrame).toContain("Ctrl+H");
 		expect(helpFrame).toContain("Ctrl+L");

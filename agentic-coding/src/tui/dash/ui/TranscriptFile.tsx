@@ -1,10 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import {
-	CodeRenderable,
-	type MouseEvent,
-	type Renderable,
-	RGBA,
-} from "@opentui/core";
+import { RGBA } from "@opentui/core";
 import { uiColors, useMarkdownSyntaxStyle } from "@ui";
 import { createContext, createSignal, Show, useContext } from "solid-js";
 import { type ToolView, transcriptFiletype } from "./tool-views.ts";
@@ -29,27 +24,8 @@ function liftedDiffColor(color: string): RGBA {
 	);
 }
 
-/** Code handles its own wheel before the event reaches the diff. Its gutters
- * are siblings of the code, so forward those wheels to both diff sides once. */
-function ownDiffWheel(diff: Renderable, event: MouseEvent) {
-	event.stopPropagation();
-	let target = event.target;
-	while (target && target !== diff) {
-		if (target instanceof CodeRenderable) return;
-		target = target.parent;
-	}
-	const direction = event.scroll?.direction;
-	if (direction !== "up" && direction !== "down") return;
-	const delta = (event.scroll?.delta ?? 0) * (direction === "up" ? -1 : 1);
-	const scrollCode = (node: Renderable) => {
-		if (node instanceof CodeRenderable) node.scrollY += delta;
-		else for (const child of node.getChildren()) scrollCode(child);
-	};
-	scrollCode(diff);
-}
-
 /** Native code/diff renderers share the transcript's theme and syntax cache.
- * The parent clips the compact view, never the underlying source or diff. */
+ * File content is fully laid out; wheel events bubble to the transcript. */
 export function TranscriptFile(props: { file: NonNullable<ToolView["file"]> }) {
 	const syntaxStyle = useMarkdownSyntaxStyle();
 	const hovered = useContext(ToolSurfaceHoverContext);
@@ -91,15 +67,9 @@ export function TranscriptFile(props: { file: NonNullable<ToolView["file"]> }) {
 				}
 			>
 				<diff
-					onMouseScroll={function (this: Renderable, event: MouseEvent) {
-						// Own both directions even at an edge; the transcript only gets
-						// wheels whose pointer is outside this diff's visible bounds.
-						ownDiffWheel(this, event);
-					}}
 					diff={props.file.content}
 					view={width() > 120 ? "split" : "unified"}
 					showLineNumbers
-					syncScroll
 					filetype={transcriptFiletype(props.file.path)}
 					syntaxStyle={syntaxStyle}
 					wrapMode="word"

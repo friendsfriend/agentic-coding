@@ -115,6 +115,13 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 				orchestratorView(value, ctx) {
 					ctx.require("orchestrator.view", String(value));
 				},
+				// The standalone Pi Durable session is a separate page that can mount
+				// and unmount independently of the Orchestrator, so it writes its own
+				// field rather than sharing `orchestrator.view`: sharing would let one
+				// page's cleanup clear the other page's picker keys.
+				durableView(value, ctx) {
+					ctx.require("durable.view", String(value));
+				},
 				// The environment feature owns its dialog state on its own key: the
 				// dashboard and wiki write `modal.active` while their body is hidden,
 				// and a shared field left every environment layer parked (all of them
