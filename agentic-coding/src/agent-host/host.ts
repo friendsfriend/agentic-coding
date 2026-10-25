@@ -35,6 +35,7 @@ import {
 	resolveCompactionPolicy,
 	STAGE_TESTER_COMPACTION_CEILING_TOKENS,
 } from "../workflow/compaction.ts";
+import { parseRunEnvFile } from "../workflow/run-env.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
@@ -178,18 +179,6 @@ export function withDurableSession(models: MutableModels): MutableModels {
 	return models;
 }
 
-function parseRunEnvFile(contents: string): Record<string, string> {
-	const env: Record<string, string> = {};
-	for (const line of contents.split("\n")) {
-		const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-		if (!match) continue;
-		const [, key, raw] = match;
-		if (!key || raw === undefined) continue;
-		env[key] = raw.replace(/^'|'$/g, "").replace(/'\\'''/g, "'");
-	}
-	return env;
-}
-
 /** The marker the monitor's delivered notes carry as their first line. A note is
  * the orchestrator's own delivery, not the developer speaking. */
 const MONITOR_NOTE_PREFIX = "[workflow-monitor]";
@@ -234,6 +223,7 @@ export interface EnsureRunInput {
 	/** The engine's canonical agent name: the run-map dedup key (see
 	 * `protocol.ts`'s `EnsureRunRequest.name`). */
 	readonly name: string;
+	readonly expectedConversationId?: string;
 	readonly toolPolicy: ToolPolicy;
 	readonly model?: string;
 	readonly thinking?: string;
@@ -690,9 +680,24 @@ export class DurableHost {
 		}
 		const map = await this.harness.snapshot(RunMapDoc, context);
 		const existingId = map?.runs[key]?.conversationId;
+		if (
+			input.expectedConversationId !== undefined &&
+			String(existingId) !== input.expectedConversationId
+		)
+			throw new Error("run recovery conversation ownership mismatch");
 		let conversation: Conversation | undefined = existingId
 			? await this.harness.conversation(existingId as ConversationId, context)
 			: undefined;
+		if (input.expectedConversationId !== undefined && !conversation)
+			throw new Error("run recovery conversation is missing");
+		if (input.expectedConversationId !== undefined) {
+			for (const [runId, record] of this.runs) {
+				if (runId !== input.runId && record.conversationId === existingId)
+					throw new Error(
+						"run recovery refused: conversation has another live owner",
+					);
+			}
+		}
 		const readOnly = input.toolPolicy === "read-only";
 		const debugRun = envVars.HERDR_ROLE === "debug";
 		const toolSelection = this.toolSelectionFor(input.toolPolicy, debugRun);
@@ -2229,10 +2234,18 @@ export class DurableHost {
 						hostId: this.options.layout.root,
 					});
 					return;
+				case "recoverRun":
 				case "ensureRun": {
+					if (
+						request.type === "recoverRun" &&
+						(typeof request.expectedConversationId !== "string" ||
+							!request.expectedConversationId)
+					)
+						throw new Error("run recovery requires a conversation identity");
 					const result = await this.ensureRun({
 						runId: request.runId,
 						name: request.name,
+						expectedConversationId: request.expectedConversationId,
 						cwd: request.cwd,
 						runEnvPath: request.runEnvPath,
 						toolPolicy: request.toolPolicy,

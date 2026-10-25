@@ -27,9 +27,19 @@ export interface EnsureRunRequest {
 	 * across rounds, so the durable host reuses one conversation per name
 	 * instead of inventing a second persistence key. */
 	readonly name: string;
+	/** Recovery only: refuse a missing/rebound conversation instead of creating
+	 * a replacement. Taken from the authoritative workflow run handle. */
+	readonly expectedConversationId?: string;
 	readonly toolPolicy: ToolPolicy;
 	readonly model?: string;
 	readonly thinking?: string;
+}
+/** Separate verb so an older host fails closed rather than ignoring recovery's
+ * no-create precondition on an ordinary ensureRun request. */
+export interface RecoverRunRequest
+	extends Omit<EnsureRunRequest, "type" | "expectedConversationId"> {
+	readonly type: "recoverRun";
+	readonly expectedConversationId: string;
 }
 export interface SubmitRequest {
 	readonly type: "submit";
@@ -107,6 +117,7 @@ export interface HelloRequest {
 export type HostRequest =
 	| HelloRequest
 	| EnsureRunRequest
+	| RecoverRunRequest
 	| SubmitRequest
 	| StatusRequest
 	| ConfigureRunRequest

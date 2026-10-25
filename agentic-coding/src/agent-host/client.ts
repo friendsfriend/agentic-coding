@@ -174,6 +174,19 @@ export class HostClient {
 		if (response.type !== "ensureRun") throw unexpected(response);
 		return response;
 	}
+	async recoverRun(
+		request: Omit<EnsureRunRequest, "type"> & {
+			expectedConversationId: string;
+		},
+	): Promise<EnsureRunResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "recoverRun" },
+			this.timeoutMs,
+		);
+		if (response.type !== "ensureRun") throw unexpected(response);
+		return response;
+	}
 	async submit(
 		runId: string,
 		text: string,

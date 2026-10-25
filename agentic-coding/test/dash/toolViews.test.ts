@@ -898,6 +898,8 @@ describe("toolPendingView", () => {
 
 	test("bash names the command it is running", () => {
 		expect(toolPendingView(call("bash", { command: "npm test" }))).toEqual({
+			preview: true,
+			shell: true,
 			icon: "$",
 			summary: "npm test",
 		});
@@ -908,9 +910,14 @@ describe("toolPendingView", () => {
 			toolPendingView(
 				call("codemode", { code: "// @options: {}\nconst x = 1;" }),
 			),
-		).toEqual({
+		).toMatchObject({
 			icon: "λ",
-			label: "Executing const x = 1;",
+			label: "Codemode",
+			codemode: {
+				script: "// @options: {}\nconst x = 1;",
+				calls: [],
+				output: [],
+			},
 			summary: "const x = 1;",
 			hint: "2 lines",
 		});

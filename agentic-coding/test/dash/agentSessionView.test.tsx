@@ -20,16 +20,235 @@ import { createSignal, onCleanup } from "solid-js";
 import {
 	type AgentSessionBlock,
 	BROWSER_TOOL_GLYPH,
+	buildAgentSessionView,
 } from "../../src/tui/dash/agent-session.ts";
 import {
 	AgentSessionView,
 	SESSION_PICKER_KEYS,
 } from "../../src/tui/dash/ui/AgentSessionView.tsx";
 import { TranscriptFile } from "../../src/tui/dash/ui/TranscriptFile.tsx";
+import { shellOutputPreview } from "../../src/tui/dash/ui/TranscriptShellOutput.tsx";
 import { guardOrchestratorSubmit } from "../../src/tui/orchestrator/submission.ts";
 
 function renderTree(node: Renderable): Renderable[] {
 	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+test("bash streams the latest output without expansion and retains its full log", async () => {
+	const command = "bun run streaming-test";
+	const entries = [
+		{
+			kind: "pi.assistant",
+			model: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "bash-live",
+							name: "bash",
+							arguments: { command },
+						},
+					],
+				},
+			],
+		},
+	];
+	const [output, setOutput] = createSignal("");
+	const [done, setDone] = createSignal(false);
+	const blocks = () =>
+		buildAgentSessionView({
+			entries: done()
+				? [
+						...entries,
+						{
+							kind: "pi.tool-result",
+							model: [
+								{
+									toolName: "bash",
+									toolCallId: "bash-live",
+									isError: false,
+									content: [{ type: "text", text: output() }],
+								},
+							],
+						},
+					]
+				: entries,
+			docs: {
+				"pi.live": {
+					tools: done()
+						? []
+						: [
+								{
+									name: "bash",
+									callId: "bash-live",
+									status: "running",
+									output: output(),
+								},
+							],
+				},
+			},
+		});
+	const t = await testRender(
+		() => (
+			<PickerRoute
+				onSubmit={() => {}}
+				onConfigure={() => {}}
+				blocks={blocks()}
+			/>
+		),
+		{ width: 100, height: 40 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain(command);
+		setOutput("first chunk\n\n  indented chunk");
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("first chunk");
+		expect(t.captureCharFrame()).toContain("  indented chunk");
+		const log = Array.from(
+			{ length: 20 },
+			(_, index) => `stream row ${index}`,
+		).join("\n");
+		setOutput(log);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("stream row 19");
+		expect(t.captureCharFrame()).not.toContain("stream row 0");
+		expect(t.captureCharFrame()).toContain("earlier lines");
+		const row = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes(command));
+		await t.mockMouse.click(8, row);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("stream row 0");
+		expect(t.captureCharFrame()).toContain("stream row 19");
+		setDone(true);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame().match(/bun run streaming-test/g)).toHaveLength(
+			1,
+		);
+		expect(t.captureCharFrame()).toContain("$ bun run streaming-test");
+		expect(t.captureCharFrame()).toContain("stream row 19");
+		await t.mockMouse.click(8, row);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("stream row 0");
+		expect(t.captureCharFrame()).toContain("stream row 19");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("shell previews retain the newest output within OpenCode's compact budget", () => {
+	const output = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+	const preview = shellOutputPreview("bun test", output, 80);
+	expect(preview.split("\n")).toHaveLength(8);
+	expect(preview).toStartWith("(13 earlier lines)");
+	expect(preview).toEndWith("line 19");
+	expect(
+		shellOutputPreview("first\nsecond", output, 80).split("\n"),
+	).toHaveLength(7);
+	expect(shellOutputPreview("bun test", "small output", 80)).toBe(
+		"small output",
+	);
+	expect(
+		shellOutputPreview("bun test", `${"x".repeat(1000)}TAIL`, 20),
+	).toEndWith("TAIL");
+});
+
+for (const width of [80, 160]) {
+	test(`diff content and gutters follow their card hover at width ${width}`, async () => {
+		const t = await testRender(
+			() => (
+				<PickerRoute
+					onSubmit={() => {}}
+					onConfigure={() => {}}
+					blocks={[
+						{
+							id: "hover-diff",
+							kind: "tool",
+							text: "edit",
+							tone: "success",
+							toolCall: {
+								name: "edit",
+								args: { path: "a.ts" },
+								result: {
+									lines: [],
+									notes: [],
+									isError: false,
+									details: {
+										diff: "@@ -1,2 +1,2 @@\n context_line();\n-removed_line();\n+added_line();",
+									},
+								},
+							},
+						},
+					]}
+				/>
+			),
+			{ width, height: 24 },
+		);
+		const background = (text: string) => {
+			const span = t
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.find((span) => span.text.includes(text));
+			if (!span) throw new Error(`Missing painted text: ${text}`);
+			return Array.from(span.bg.buffer).map(Math.round).join(",");
+		};
+		const rowOf = (text: string) =>
+			t
+				.captureCharFrame()
+				.split("\n")
+				.findIndex((line) => line.includes(text));
+		try {
+			await t.renderOnce();
+			await t.renderOnce();
+			const resting = [
+				background("context_line"),
+				background("removed_line"),
+				background("added_line"),
+			];
+			// Hovering the header must lift the whole diff, not only its padding.
+			await t.mockMouse.moveTo(12, rowOf("Edit a.ts"));
+			await t.renderOnce();
+			await t.renderOnce();
+			const lifted = [
+				background("context_line"),
+				background("removed_line"),
+				background("added_line"),
+			];
+			for (let i = 0; i < resting.length; i++)
+				expect(lifted[i]).not.toBe(resting[i]);
+			expect(background("context_line")).toBe(background("Edit a.ts"));
+			expect(lifted[1]).not.toBe(lifted[0]);
+			expect(lifted[2]).not.toBe(lifted[0]);
+			const diff = renderTree(t.renderer.root).find(
+				(node) => node instanceof DiffRenderable,
+			);
+			if (!(diff instanceof DiffRenderable)) throw new Error("Missing diff");
+			expect(diff.lineNumberBg).toEqual(diff.contextBg);
+			expect(diff.addedLineNumberBg).toEqual(diff.addedBg);
+			expect(diff.removedLineNumberBg).toEqual(diff.removedBg);
+			// Entering the file itself is still the same card hover.
+			await t.mockMouse.moveTo(20, rowOf("context_line"));
+			await t.renderOnce();
+			expect(background("context_line")).toBe(lifted[0]);
+			await t.mockMouse.moveTo(width - 2, 23);
+			await t.renderOnce();
+			await t.renderOnce();
+			expect([
+				background("context_line"),
+				background("removed_line"),
+				background("added_line"),
+			]).toEqual(resting);
+		} finally {
+			t.renderer.destroy();
+		}
+	});
 }
 
 for (const width of [80, 160]) {
@@ -193,7 +412,7 @@ const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 ];
 
 for (const name of ["read", "write", "edit"] as const) {
-	test(`${name} previews eight rows and opens the complete file content on click`, async () => {
+	test(`${name} shows the same full file content in collapsed and expanded states`, async () => {
 		const lines = Array.from({ length: 12 }, (_, i) => `${name} source ${i}`);
 		const t = await testRender(
 			() => (
@@ -234,8 +453,8 @@ for (const name of ["read", "write", "edit"] as const) {
 			const compact = t.captureCharFrame();
 			expect(compact).toContain(`${name} source 0`);
 			expect(compact).toContain(`${name} source 7`);
-			expect(compact).not.toContain(`${name} source 8`);
-			expect(compact).toContain("… 4 more lines");
+			expect(compact).toContain(`${name} source 11`);
+			expect(compact).not.toContain("more lines");
 			const row = compact
 				.split("\n")
 				.findIndex((line) => line.includes("src/file.ts"));
@@ -245,7 +464,7 @@ for (const name of ["read", "write", "edit"] as const) {
 			expect(t.captureCharFrame()).not.toContain("more lines");
 			await t.mockMouse.click(4, row);
 			await t.renderOnce();
-			expect(t.captureCharFrame()).not.toContain(`${name} source 8`);
+			expect(t.captureCharFrame()).toContain(`${name} source 11`);
 		} finally {
 			t.renderer.destroy();
 		}
@@ -2661,8 +2880,8 @@ test("a running tool shows an in-progress row that its result replaces in place"
 		expect(pending).not.toContain("all good");
 		expect(pending.match(/npm test/g)).toHaveLength(1);
 
-		// The output produced so far is there when the row is expanded, like a
-		// finished result's own rows.
+		// Live output is visible without opening the tool; expansion retains it.
+		expect(pending).toContain("compiling…");
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("compiling…");
@@ -2741,7 +2960,7 @@ test("a streaming write stays one compact line instead of its content", async ()
 	}
 });
 
-test("a collapsed tool row wraps its whole summary instead of cutting it with an ellipsis", async () => {
+test("file and generic summaries wrap fully while shell commands expand beyond two rows", async () => {
 	const command =
 		"cd /Users/dev/project && bun run test --filter alpha-suite --reporter verbose && echo the-very-last-word";
 	const path =
@@ -2808,9 +3027,9 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		await t.renderOnce();
 		await t.renderOnce();
 		const frame = t.captureCharFrame();
-		// Nothing is cut: the tail of the command and of the path reach the
-		// screen, wrapped over further rows (a hyphen is a break point).
-		expect(frame).toContain("very-last-word");
+		// Shell commands reserve at most two compact rows; file paths and generic
+		// tool summaries keep their full wrapping.
+		expect(frame).not.toContain("very-last-word");
 		expect(frame).toContain("reporter verbose");
 		expect(frame).toContain("module-under-edit.");
 		// The raised block's left rule is repeated on every wrapped row.
@@ -2821,6 +3040,9 @@ test("a collapsed tool row wraps its whole summary instead of cutting it with an
 		// text adds no ellipsis.
 		expect(frame).not.toContain("running…");
 		expect(frame).not.toContain("reading…");
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("very-last-word");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -3079,7 +3301,105 @@ test("a tool call aborted before it ran is marked aborted", async () => {
 	}
 });
 
-test("a codemode row lists its calls, and its script and output fold away", async () => {
+test("codemode renders live native tool progress and full script output by default", async () => {
+	const [output, setOutput] = createSignal("script first");
+	const [nested, setNested] = createSignal("nested first");
+	const blocks = () =>
+		buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [
+								{
+									type: "toolCall",
+									id: "cm-live",
+									name: "codemode",
+									arguments: {
+										code: 'text("script first"); await tools.bash({command: "run-task"});',
+									},
+								},
+							],
+						},
+					],
+				},
+			],
+			docs: {
+				"pi.live": {
+					tools: [
+						{
+							name: "codemode",
+							callId: "cm-live",
+							status: "running",
+							output: output(),
+							details: {
+								calls: [
+									{
+										name: "bash",
+										args: { command: "run-task" },
+										status: "running",
+										output: nested(),
+									},
+								],
+							},
+						},
+					],
+				},
+			},
+		});
+	const t = await testRender(
+		() => (
+			<PickerRoute
+				blocks={blocks()}
+				onSubmit={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 70 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("nested first");
+		expect(t.captureCharFrame()).toContain("script first");
+		expect(t.captureCharFrame()).toContain("Codemode running…");
+		expect(t.captureCharFrame()).not.toContain("failed");
+		setOutput(
+			Array.from({ length: 20 }, (_, i) => `script output ${i}`).join("\n"),
+		);
+		setNested("nested second");
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("nested second");
+		setNested("nested without script output");
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("nested without script output");
+		expect(t.captureCharFrame()).toContain("script output 0");
+		expect(t.captureCharFrame()).toContain("script output 19");
+		const header = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("Output"));
+		await t.mockMouse.click(10, header);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("script output 0");
+		expect(t.captureCharFrame()).toContain("script output 19");
+		expect(t.captureCharFrame()).toContain("earlier lines");
+		// New frames preserve a reader's fold choices.
+		setOutput(`${output()}\nscript output 20`);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("script output 0");
+		expect(t.captureCharFrame()).toContain("script output 20");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("codemode brackets expanded script, native tool cards and output that fold independently", async () => {
 	const block: AgentSessionBlock = {
 		id: "c1",
 		kind: "tool",
@@ -3129,50 +3449,37 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 70, height: 20 },
+		{ width: 100, height: 50 },
 	);
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		// Collapsed: only the call's own metadata line. The calls a script made
-		// belong to the expanded body, so a run's transcript stays a list of
-		// one-line summaries.
-		const collapsed = t.captureCharFrame();
-		expect(collapsed).toContain("▸ λ 2 calls · 1 failed");
-		expect(collapsed).not.toContain("glob *.ts");
-		expect(collapsed).not.toContain("tools.glob");
-
-		// Expanded: one line per call, with the script and its output kept as
-		// compact parts that open on demand.
-		t.mockInput.pressKey("o", { ctrl: true });
-		await t.renderOnce();
 		const expanded = t.captureCharFrame();
-		expect(expanded).toContain("✱ glob *.ts (ok)");
-		expect(expanded).toContain("→ read src/a.ts (error)");
-		expect(expanded).toContain("▸ script (2 lines)");
-		expect(expanded).toContain("▸ output (3 lines)");
-		expect(expanded).not.toContain("tools.glob");
-		expect(expanded).not.toContain("Script completed");
-
-		// Opening a part shows its rows and keeps its header, so the call list
-		// stays in view beside it.
+		expect(expanded).toContain("╭─ λ Codemode");
+		expect(expanded).toContain("2 calls · 1 failed");
+		expect(expanded).toContain("glob pattern=*.ts");
+		expect(expanded).toContain("Read src/a.ts");
+		expect(expanded).toContain("▾ λ Script");
+		expect(expanded).toContain("▾ $ Output");
+		expect(expanded).toContain("tools.glob");
+		expect(expanded).toContain('return: ["a.ts","b.ts"]');
+		expect(expanded).toContain("╰─ Codemode completed");
 		const scriptRow = expanded
 			.split("\n")
-			.findIndex((line) => line.includes("script (2 lines)"));
+			.findIndex((line) => line.includes("λ Script"));
 		await t.mockMouse.click(10, scriptRow);
 		await t.renderOnce();
 		const opened = t.captureCharFrame();
-		expect(opened).toContain("▾ script (2 lines)");
-		expect(opened).toContain(
-			'const hits = await tools.glob({ pattern: "*.ts" });',
-		);
-		expect(opened).toContain("▸ output (3 lines)");
+		expect(opened).toContain("▸ λ Script");
+		expect(opened).not.toContain("tools.glob");
+		expect(opened).toContain("▾ $ Output");
+		expect(opened).toContain("Read src/a.ts");
 	} finally {
 		t.renderer.destroy();
 	}
 });
 
-test("a script's call rows fold into their own tool view", async () => {
+test("codemode uses native file cards expanded by default and lets each fold to a header", async () => {
 	const block: AgentSessionBlock = {
 		id: "c2",
 		kind: "tool",
@@ -3232,32 +3539,49 @@ test("a script's call rows fold into their own tool view", async () => {
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 24 },
+		{ width: 80, height: 50 },
 	);
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		t.mockInput.pressKey("o", { ctrl: true });
-		await t.renderOnce();
 		const expanded = t.captureCharFrame();
-		// Each call is its own fold, so one edit can be read without the rest.
-		expect(expanded).toContain("edit src/b.ts");
-		expect(expanded).not.toContain("+b");
+		expect(expanded).toContain("Edit src/b.ts");
+		expect(expanded).toContain("+ b");
+		expect(expanded).toContain("line one");
+		const background = (text: string) => {
+			const span = t
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.find((span) => span.text.includes(text));
+			if (!span) throw new Error(`Missing text: ${text}`);
+			return Array.from(span.bg.buffer).join(",");
+		};
+		const scriptRest = background("Script");
+		const readRest = background("Read src/c.ts");
+		const editRest = background("Edit src/b.ts");
+		const bracketRest = background("╭─ λ Codemode");
 		const editRow = expanded
 			.split("\n")
-			.findIndex((line) => line.includes("edit src/b.ts"));
-		await t.mockMouse.click(5, editRow);
+			.findIndex((line) => line.includes("Edit src/b.ts"));
+		await t.mockMouse.moveTo(20, editRow);
 		await t.renderOnce();
-		expect(t.captureCharFrame()).toContain("+b");
+		expect(background("Edit src/b.ts")).not.toBe(editRest);
+		expect(background("Read src/c.ts")).toBe(readRest);
+		expect(background("Script")).toBe(scriptRest);
+		expect(background("╭─ λ Codemode")).toBe(bracketRest);
+		await t.mockMouse.click(10, editRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("+ b");
+		expect(t.captureCharFrame()).toContain("line one");
 
 		// The read call folds into the text it read.
 		const readRow = t
 			.captureCharFrame()
 			.split("\n")
-			.findIndex((line) => line.includes("read src/c.ts"));
-		await t.mockMouse.click(5, readRow);
+			.findIndex((line) => line.includes("Read src/c.ts"));
+		await t.mockMouse.click(10, readRow);
 		await t.renderOnce();
-		expect(t.captureCharFrame()).toContain("line one");
+		expect(t.captureCharFrame()).not.toContain("line one");
 	} finally {
 		t.renderer.destroy();
 	}

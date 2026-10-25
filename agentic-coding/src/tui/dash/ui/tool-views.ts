@@ -66,6 +66,15 @@ export interface ToolViewSection {
  * expanded), and the sections a long view splits into so its parts can be read
  * one at a time. */
 export interface ToolView {
+	readonly codemode?: {
+		readonly script: string;
+		readonly calls: readonly {
+			readonly call: AgentSessionToolCall;
+			readonly status: string;
+			readonly durationMs?: number;
+		}[];
+		readonly output: readonly ToolViewRow[];
+	};
 	readonly icon: string;
 	/** The row's label. opencode names the verb (`Read src/a.ts`); a view
 	 * without one shows only its subject. Child rows keep `summary`. */
@@ -74,8 +83,10 @@ export interface ToolView {
 	readonly hint?: string;
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
-	/** File tools keep a bounded preview visible before their fold is opened. */
+	/** Keep content visible even before the fold is opened. */
 	readonly preview?: boolean;
+	/** Shells show a live tail by default, unlike folded generic tool output. */
+	readonly shell?: boolean;
 	readonly file?: {
 		readonly kind: "code" | "diff";
 		readonly path: string;
@@ -336,6 +347,8 @@ function bashView(call: AgentSessionToolCall): ToolView {
 	const exit = /exited with code (\d+)/.exec(lines.join("\n"));
 	return {
 		icon: "$",
+		preview: true,
+		shell: true,
 		summary: command,
 		hint: exit
 			? `exit ${exit[1]}`
@@ -1032,11 +1045,10 @@ function codemodeCallResult(
 ): AgentSessionToolCall["result"] | undefined {
 	if (call.output === undefined && call.details === undefined) return undefined;
 	return {
-		lines: (call.output ?? "")
-			.split("\n")
-			.map((line) => line.replace(/\s+$/g, ""))
-			.filter((line) => line.length > 0),
-		isError: call.isError === true,
+		lines: (call.output ?? "").split("\n"),
+		isError:
+			call.isError === true ||
+			(call.status !== "ok" && call.status !== "running"),
 		...(call.details === undefined ? {} : { details: call.details }),
 		notes: [],
 	};
@@ -1066,16 +1078,16 @@ function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
 		);
 }
 
-/** `codemode`: collapsed, the one-line script summary (`λ 11 calls · 0.5s`).
- * Expanded, the calls the script made — one line each, each folding into its
- * own tool view — with the script that made them and what it produced kept as
- * compact parts that open on demand, so the call list stays the whole view. */
+/** `codemode`: structured script, native calls and output for the bracketed
+ * transcript. Legacy row/section projections remain available to plain readers. */
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
 	const calls = codemodeCalls(call.result?.details, lines);
 	const failed = call.result?.isError === true;
-	const errors = calls.filter((entry) => entry.status !== "ok").length;
+	const errors = calls.filter(
+		(entry) => entry.status !== "ok" && entry.status !== "running",
+	).length;
 	const script = codemodeScriptRows(code);
 	const output: ToolViewRow[] = lines.map((text) =>
 		failed
@@ -1096,6 +1108,29 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "λ",
+		codemode: {
+			script: code,
+			calls: calls.map((entry) => ({
+				call: {
+					name: entry.name,
+					args: entry.args ?? {},
+					result: codemodeCallResult(entry),
+				},
+				status: entry.status,
+				...(entry.durationMs === undefined
+					? {}
+					: { durationMs: entry.durationMs }),
+			})),
+			output: (typeof call.result?.details?.output === "string"
+				? call.result.details.output.length > 0
+					? call.result.details.output.split("\n")
+					: []
+				: lines.filter(
+						(line) =>
+							!/^(?:Script completed$|Script failed$|calls: )/.test(line),
+					)
+			).map((text) => ({ text })),
+		},
 		summary: summary.length > 0 ? summary.join(" · ") : codemodeHeadline(code),
 		rows: codemodeCallRows(calls),
 		sections: [
@@ -1223,6 +1258,8 @@ function editPendingView(call: AgentSessionToolCall): ToolView {
 function bashPendingView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
+		preview: true,
+		shell: true,
 		summary: stringArg(call.args, "command") ?? call.name,
 	};
 }
@@ -1333,7 +1370,19 @@ export function toolPendingView(
 		case "execute":
 			return withRunningOutput(bashPendingView(call), output);
 		case "codemode":
-			return withRunningOutput(codemodePendingView(call), output);
+			return {
+				...codemodePendingView(call),
+				...codemodeView({
+					...call,
+					result: {
+						lines: output,
+						notes: [],
+						isError: false,
+						details: call.progress,
+					},
+				}),
+				label: "Codemode",
+			};
 		case "ask_jev":
 			return withRunningOutput(jevPendingView(call), output);
 		case "developer_question":

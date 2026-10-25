@@ -1042,7 +1042,16 @@ export function App(props: {
 					"../../agent-host/client.ts"
 				);
 				const { readAgentSessionMetadata } = await import("./agent-session.ts");
-				const client = new HostClient(session.hostSocket);
+				const { recoverWorkflowSession } = await import(
+					"../../agent-host/recovery.ts"
+				);
+				const recovered = await recoverWorkflowSession(
+					props.repo,
+					props.workflowId,
+					session.runId,
+				);
+				if (agentSession()?.runId !== session.runId) return;
+				const client = new HostClient(recovered.hostSocket);
 				// The catalog is best-effort: an old host without the request just
 				// leaves the pickers empty instead of failing the session view.
 				void client
@@ -1108,6 +1117,18 @@ export function App(props: {
 			}
 		})();
 	};
+	const recoveredAgentClient = async (runId: string) => {
+		const { recoverWorkflowSession } = await import(
+			"../../agent-host/recovery.ts"
+		);
+		const { HostClient } = await import("../../agent-host/client.ts");
+		const recovered = await recoverWorkflowSession(
+			props.repo,
+			props.workflowId,
+			runId,
+		);
+		return new HostClient(recovered.hostSocket);
+	};
 	const rememberAgentSessionInput = (text: string) => {
 		const history = overlays.agentSessionHistory();
 		if (history.at(-1) === text) return;
@@ -1128,8 +1149,7 @@ export function App(props: {
 		if (!session) return;
 		void (async () => {
 			try {
-				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				const client = await recoveredAgentClient(session.runId);
 				const response = await client.submit(
 					session.runId,
 					text,
@@ -1158,8 +1178,7 @@ export function App(props: {
 		if (!session) return;
 		void (async () => {
 			try {
-				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				const client = await recoveredAgentClient(session.runId);
 				await client.configureRun(session.runId, change);
 				// Show the accepted override immediately; the next watch frame carries
 				// the same value in `pi.agent` and reconciles any concurrent update.
@@ -1189,8 +1208,7 @@ export function App(props: {
 		if (!session) return;
 		void (async () => {
 			try {
-				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				const client = await recoveredAgentClient(session.runId);
 				// A manual compaction is a conversation-owned, non-background task, so
 				// the abort cancels it too: say so in the transcript instead of leaving a
 				// compaction block that will never produce a summary.
@@ -1232,8 +1250,7 @@ export function App(props: {
 		if (!session) return;
 		void (async () => {
 			try {
-				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				const client = await recoveredAgentClient(session.runId);
 				const answer = await client.compactRun(session.runId, instructions);
 				switch (answer.status) {
 					case "started":

@@ -44,6 +44,8 @@ export interface AgentSessionToolCall {
 	readonly callId?: string;
 	/** The result, once the call has one. */
 	readonly result?: AgentSessionToolResult;
+	/** Structured progress from a running tool (for codemode's nested calls). */
+	readonly progress?: Readonly<Record<string, unknown>>;
 }
 
 export interface AgentSessionToolResult {
@@ -337,7 +339,7 @@ const PRIMARY_ARGS = [
 	"description",
 	"prompt",
 ];
-function argsSummary(value: unknown): string {
+export function toolArgsSummary(value: unknown): string {
 	if (!isRecord(value)) return "";
 	const entries = Object.entries(value).filter(([, entry]) =>
 		["string", "number", "boolean"].includes(typeof entry),
@@ -453,7 +455,7 @@ function entryBlocks(
 						block.type === "toolCall" &&
 						typeof block.name === "string"
 					) {
-						const args = argsSummary(block.arguments);
+						const args = toolArgsSummary(block.arguments);
 						// An aborted generation commits its partial with `stopReason:
 						// "aborted"`: the call never ran, so its row is marked rather than
 						// read as a finished call.
@@ -507,7 +509,7 @@ function entryBlocks(
 									.map((part) => (isRecord(part) ? part.text : ""))
 									.join("\n")
 							: "",
-					name === "read" && !failed,
+					(name === "read" && !failed) || name === "bash",
 				);
 				const [first] = lines;
 				return [
@@ -586,7 +588,7 @@ function partialToolBlocks(
 		if (typeof block.name !== "string") continue;
 		const name = block.name;
 		const args = toolArgs(block.arguments);
-		const summary = argsSummary(args);
+		const summary = toolArgsSummary(args);
 		blocks.push({
 			id: `live:toolcall:${blocks.length}`,
 			live: true,
@@ -621,7 +623,10 @@ function liveBlocks(
 		// started, so its row is the committed one upgraded to running (in place)
 		// instead of a second row beside it.
 		const callId = typeof slot.callId === "string" ? slot.callId : undefined;
-		const detail = outputLines(slot.output);
+		const detail = outputLines(
+			slot.output,
+			name === "bash" || name === "codemode",
+		);
 		blocks.push({
 			id: `live:tool:${index}`,
 			live: true,
@@ -631,7 +636,12 @@ function liveBlocks(
 			icon: toolIcon(name),
 			pending: true,
 			tool: name,
-			toolCall: { name, args: {}, ...(callId === undefined ? {} : { callId }) },
+			toolCall: {
+				name,
+				args: {},
+				...(callId === undefined ? {} : { callId }),
+				...(isRecord(slot.details) ? { progress: slot.details } : {}),
+			},
 			...(detail.length > 0 ? { detail } : {}),
 		});
 	}
@@ -735,6 +745,8 @@ function blockKey(block: AgentSessionBlock): string {
 		block.startedAt ?? "",
 		block.endedAt ?? "",
 		liveArgsKey(block),
+		// Nested codemode calls can change without any script output arriving.
+		block.toolCall?.progress ? JSON.stringify(block.toolCall.progress) : "",
 		(block.detail ?? []).join("\u0000"),
 	].join("\u0001");
 }
@@ -828,6 +840,14 @@ function mergeToolLifecycle(
 						out[index] = {
 							...call,
 							pending: true,
+							...(call.toolCall && block.toolCall?.progress
+								? {
+										toolCall: {
+											...call.toolCall,
+											progress: block.toolCall.progress,
+										},
+									}
+								: {}),
 							tone: block.tone,
 							...(block.detail ? { detail: block.detail } : {}),
 						};

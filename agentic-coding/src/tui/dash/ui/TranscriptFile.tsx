@@ -3,10 +3,31 @@ import {
 	CodeRenderable,
 	type MouseEvent,
 	type Renderable,
+	RGBA,
 } from "@opentui/core";
 import { uiColors, useMarkdownSyntaxStyle } from "@ui";
-import { createSignal, Show } from "solid-js";
+import { createContext, createSignal, Show, useContext } from "solid-js";
 import { type ToolView, transcriptFiletype } from "./tool-views.ts";
+
+/** The card owns hover, including its header, padding and nested file view. */
+export const ToolSurfaceHoverContext = createContext<() => boolean>(
+	() => false,
+);
+
+/** Apply the card's surface lift without losing a change's red/green tint. */
+function liftedDiffColor(color: string): RGBA {
+	const base = RGBA.fromHex(color);
+	const resting = RGBA.fromHex(uiColors.bgMantle);
+	const hovered = RGBA.fromHex(uiColors.bgHover);
+	const lift = (value: number, from: number, to: number) =>
+		Math.max(0, Math.min(1, value + to - from));
+	return RGBA.fromValues(
+		lift(base.r, resting.r, hovered.r),
+		lift(base.g, resting.g, hovered.g),
+		lift(base.b, resting.b, hovered.b),
+		1,
+	);
+}
 
 /** Code handles its own wheel before the event reaches the diff. Its gutters
  * are siblings of the code, so forward those wheels to both diff sides once. */
@@ -31,6 +52,15 @@ function ownDiffWheel(diff: Renderable, event: MouseEvent) {
  * The parent clips the compact view, never the underlying source or diff. */
 export function TranscriptFile(props: { file: NonNullable<ToolView["file"]> }) {
 	const syntaxStyle = useMarkdownSyntaxStyle();
+	const hovered = useContext(ToolSurfaceHoverContext);
+	const contextBg = () =>
+		hovered() ? uiColors.bgHover : uiColors.diffContextBg;
+	const addedBg = () =>
+		hovered() ? liftedDiffColor(uiColors.diffAddedBg) : uiColors.diffAddedBg;
+	const removedBg = () =>
+		hovered()
+			? liftedDiffColor(uiColors.diffRemovedBg)
+			: uiColors.diffRemovedBg;
 	const [width, setWidth] = createSignal(0);
 	return (
 		<box
@@ -74,15 +104,15 @@ export function TranscriptFile(props: { file: NonNullable<ToolView["file"]> }) {
 					syntaxStyle={syntaxStyle}
 					wrapMode="word"
 					fg={uiColors.textPrimary}
-					addedBg={uiColors.diffAddedBg}
-					removedBg={uiColors.diffRemovedBg}
-					contextBg={uiColors.diffContextBg}
+					addedBg={addedBg()}
+					removedBg={removedBg()}
+					contextBg={contextBg()}
 					addedSignColor={uiColors.diffAdded}
 					removedSignColor={uiColors.diffRemoved}
 					lineNumberFg={uiColors.textMuted}
-					lineNumberBg={uiColors.diffContextBg}
-					addedLineNumberBg={uiColors.diffAddedBg}
-					removedLineNumberBg={uiColors.diffRemovedBg}
+					lineNumberBg={contextBg()}
+					addedLineNumberBg={addedBg()}
+					removedLineNumberBg={removedBg()}
 				/>
 			</Show>
 		</box>

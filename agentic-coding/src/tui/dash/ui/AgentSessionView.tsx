@@ -67,10 +67,13 @@ import {
 	isBrowserTool,
 	reuseAgentSessionBlocks,
 	SLOW_CALL_MS,
+	toolArgsSummary,
+	toolIcon,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 import { Spinner } from "./Spinner.tsx";
-import { TranscriptFile } from "./TranscriptFile.tsx";
+import { ToolSurfaceHoverContext, TranscriptFile } from "./TranscriptFile.tsx";
+import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 import {
 	type ToolViewRow,
 	type ToolViewSection,
@@ -197,8 +200,6 @@ const TRANSCRIPT_WINDOW = 60;
 const TRANSCRIPT_PAGE = 40;
 /** Compact user prompts while preserving the full text for click-to-expand. */
 const USER_PROMPT_PREVIEW_LINES = 5;
-/** A visual-row budget, so long wrapped source lines cannot flood the page. */
-const FILE_TOOL_PREVIEW_LINES = 8;
 
 /** The separator between the transcript and its newest output: a rule in the
  * theme's accent with `new` and a down arrow centered on it, so the boundary is
@@ -544,7 +545,9 @@ function ToolFrame(props: { color: string; children: JSX.Element }) {
 			onMouseOver={hover.onMouseOver}
 			onMouseOut={hover.onMouseOut}
 		>
-			{props.children}
+			<ToolSurfaceHoverContext.Provider value={hover.hovered}>
+				{props.children}
+			</ToolSurfaceHoverContext.Provider>
 		</box>
 	);
 }
@@ -563,6 +566,7 @@ function ToolCallHeader(props: {
 	expandable: boolean;
 	expanded: boolean;
 	onToggle: () => void;
+	compact?: boolean;
 }) {
 	const failed = () =>
 		props.block.tone === "error" ||
@@ -597,7 +601,13 @@ function ToolCallHeader(props: {
 			    folds the row to see the call, not to see a clipped one: it wraps
 			    onto further lines instead of being cut with an ellipsis. The fold
 			    glyph, icon and facts stay on the first line. */}
-			<text fg={labelFg()} flexGrow={1} minWidth={0} wrapMode="word">
+			<text
+				fg={labelFg()}
+				flexGrow={1}
+				minWidth={0}
+				wrapMode={props.compact ? "char" : "word"}
+				maxHeight={props.compact ? 2 : undefined}
+			>
 				{props.label}
 			</text>
 			<Show when={props.hint}>
@@ -666,6 +676,8 @@ function Block(props: {
 	block: AgentSessionBlock;
 	role: string;
 	expanded: boolean;
+	/** Nested codemode cards start open but may fold down to just their header. */
+	foldContent?: boolean;
 	onToggle: (id: string) => void;
 	/** The parsed markdown parts of a block, reused across this view's frames. */
 	transcript: MarkdownPartsFor;
@@ -805,9 +817,128 @@ function Block(props: {
 			? toolPendingView(props.block.toolCall, props.block.detail ?? [])
 			: toolView(props.block.toolCall)
 		: undefined;
+	if (tool?.codemode) {
+		const group = tool.codemode;
+		const scriptId = `${props.block.id}:script`;
+		const outputId = `${props.block.id}:output`;
+		const open = (id: string) => !props.openRows().has(id);
+		const childBlocks = group.calls.map(
+			(entry, index): AgentSessionBlock => ({
+				id: `${props.block.id}:call:${index}`,
+				kind: "tool",
+				text: `${entry.call.name} ${toolArgsSummary(entry.call.args)}`.trimEnd(),
+				icon: toolIcon(entry.call.name),
+				tool: entry.call.name,
+				toolCall: entry.call,
+				pending: entry.status === "running",
+				tone:
+					entry.status === "running"
+						? "warning"
+						: entry.status === "ok"
+							? "success"
+							: "error",
+				detail: entry.call.result?.lines,
+				...(entry.durationMs === undefined
+					? {}
+					: { durationMs: entry.durationMs }),
+			}),
+		);
+		return (
+			<box flexDirection="column" flexShrink={0}>
+				<box flexDirection="row">
+					<text fg={toolBorderColor(props.block)}>╭─ λ Codemode</text>
+					<text fg={uiColors.textMuted} flexGrow={1}>
+						{group.calls.length > 0 ? ` · ${tool.summary}` : ""}
+					</text>
+					<Stamp block={props.block} duration />
+				</box>
+				<box
+					border={["left"]}
+					borderColor={toolBorderColor(props.block)}
+					paddingLeft={2}
+					paddingTop={1}
+					paddingBottom={1}
+					flexDirection="column"
+					gap={1}
+				>
+					<ToolFrame color={uiColors.textMuted}>
+						<box flexDirection="column">
+							<ToolCallHeader
+								block={{
+									...props.block,
+									id: scriptId,
+									pending: false,
+									toolCall: undefined,
+									tone: "muted",
+								}}
+								icon="λ"
+								label="Script"
+								hint={`${group.script.split("\n").length} lines`}
+								expandable
+								expanded={open(scriptId)}
+								onToggle={() => props.onToggleRow(scriptId)}
+							/>
+							<Show when={open(scriptId)}>
+								<box paddingTop={1} paddingLeft={2}>
+									<TranscriptFile
+										file={{
+											kind: "code",
+											path: "script.js",
+											content: group.script,
+										}}
+									/>
+								</box>
+							</Show>
+						</box>
+					</ToolFrame>
+					<For each={childBlocks}>
+						{(block) => (
+							<Block
+								{...props}
+								block={block}
+								foldContent
+								expanded={open(block.id)}
+								onToggle={props.onToggleRow}
+							/>
+						)}
+					</For>
+					<ToolFrame color={toolBorderColor(props.block)}>
+						<box flexDirection="column">
+							<ToolCallHeader
+								block={props.block}
+								icon="$"
+								label="Output"
+								hint={
+									group.output.length > 0
+										? `${group.output.length} lines`
+										: undefined
+								}
+								expandable
+								expanded={open(outputId)}
+								onToggle={() => props.onToggleRow(outputId)}
+							/>
+							<box paddingLeft={2}>
+								<TranscriptShellOutput
+									command="Output"
+									rows={group.output}
+									expanded={open(outputId)}
+									failed={props.block.toolCall?.result?.isError === true}
+								/>
+							</box>
+						</box>
+					</ToolFrame>
+				</box>
+				<text
+					fg={toolBorderColor(props.block)}
+				>{`╰─ Codemode ${props.block.aborted ? "aborted" : props.block.pending ? "running…" : props.block.toolCall?.result?.isError || props.block.tone === "error" ? "failed" : "completed"}`}</text>
+			</box>
+		);
+	}
 	if (tool && (props.block.kind === "tool" || props.block.kind === "result")) {
 		const expandable = () =>
-			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
+			(tool.rows?.length ?? 0) > 0 ||
+			(tool.sections?.length ?? 0) > 0 ||
+			tool.shell === true;
 		return (
 			<ToolFrame color={toolBorderColor(props.block)}>
 				<box flexDirection="column">
@@ -815,52 +946,52 @@ function Block(props: {
 						block={props.block}
 						icon={tool.icon}
 						label={tool.label ?? tool.summary}
+						compact={tool.shell && !props.expanded}
 						hint={tool.hint}
 						expandable={expandable()}
 						expanded={props.expanded}
 						onToggle={() => props.onToggle(props.block.id)}
 					/>
-					<Show when={props.expanded || tool.preview}>
+					<Show
+						when={
+							props.expanded ||
+							(tool.preview && (!props.foldContent || tool.shell))
+						}
+					>
 						<box paddingLeft={2} flexDirection="column">
-							<box
-								maxHeight={props.expanded ? undefined : FILE_TOOL_PREVIEW_LINES}
-								overflow="hidden"
-								flexDirection="column"
-							>
-								<Show
-									when={tool.file}
-									fallback={
-										<For
-											each={
-												props.expanded
-													? (tool.rows ?? [])
-													: (tool.rows ?? []).slice(0, FILE_TOOL_PREVIEW_LINES)
+							<Show
+								when={tool.shell}
+								fallback={
+									<box flexDirection="column">
+										<Show
+											when={tool.file}
+											fallback={
+												<For each={tool.rows ?? []}>
+													{(row) => (
+														<ToolRow
+															block={props.block}
+															row={row}
+															openRows={props.openRows}
+															onToggleRow={props.onToggleRow}
+															transcript={props.transcript}
+														/>
+													)}
+												</For>
 											}
 										>
-											{(row) => (
-												<ToolRow
-													block={props.block}
-													row={row}
-													openRows={props.openRows}
-													onToggleRow={props.onToggleRow}
-													transcript={props.transcript}
-												/>
-											)}
-										</For>
-									}
-								>
-									{(file) => <TranscriptFile file={file()} />}
-								</Show>
-							</box>
-							<Show
-								when={
-									!props.expanded &&
-									(tool.rows?.length ?? 0) > FILE_TOOL_PREVIEW_LINES
+											{(file) => <TranscriptFile file={file()} />}
+										</Show>
+									</box>
 								}
 							>
-								<text fg={uiColors.textMuted}>
-									{`… ${(tool.rows?.length ?? 0) - FILE_TOOL_PREVIEW_LINES} more lines`}
-								</text>
+								<Show when={(tool.rows?.length ?? 0) > 0}>
+									<TranscriptShellOutput
+										command={tool.summary}
+										rows={tool.rows ?? []}
+										expanded={props.expanded}
+										failed={props.block.toolCall?.result?.isError === true}
+									/>
+								</Show>
 							</Show>
 							{/* A long view splits into parts: the header stays, so
 							    folding one away keeps the overview. */}
