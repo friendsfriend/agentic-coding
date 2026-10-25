@@ -3850,7 +3850,9 @@ test("a streaming message holds its fenced code instead of re-drawing it", async
 		live: true,
 	});
 	expect(live).toContain("Here is the fix:");
-	expect(live).not.toContain("const a = 1;");
+	// A warm grammar may already paint the code. The invariant is that raw
+	// fences do not flash back into the streaming transcript.
+	expect(live).not.toContain("```");
 });
 
 test("a watch frame never blanks the transcript's markdown", async () => {
@@ -4171,14 +4173,17 @@ test("assistant markdown leaves one blank row between top-level blocks", async (
 				value.includes("Tight tail") &&
 				value.includes("Spaced tail") &&
 				value.includes("const tight = 1;") &&
-				value.includes("const spaced = 1;"),
+				value.includes("const spaced = 1;") &&
+				!value.includes("```"),
 		);
 		const lines = frame
 			.trimEnd()
 			.split("\n")
 			.map((line) => line.trimEnd());
 		const at = (needle: string) => {
-			const index = lines.findIndex((line) => line.includes(needle));
+			const index = lines.findIndex(
+				(line) => line.trim().replace(/^(?:#{1,6}|[-•●])\s+/, "") === needle,
+			);
 			expect(index).toBeGreaterThanOrEqual(0);
 			return index;
 		};
@@ -4195,16 +4200,16 @@ test("assistant markdown leaves one blank row between top-level blocks", async (
 		// renderer must add the separation itself. The second already carries
 		// them; it must not get a second blank row from the inter-part margin.
 		oneBlankApart([
-			"# Tight",
+			"Tight",
 			"Tight paragraph",
-			"- tight item",
+			"tight item",
 			"const tight = 1;",
 			"Tight tail",
 		]);
 		oneBlankApart([
-			"# Spaced",
+			"Spaced",
 			"Spaced paragraph",
-			"- spaced item",
+			"spaced item",
 			"const spaced = 1;",
 			"Spaced tail",
 		]);

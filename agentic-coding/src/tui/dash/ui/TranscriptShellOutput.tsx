@@ -2,6 +2,7 @@
 import { uiColors } from "@ui";
 import { createMemo, createSignal } from "solid-js";
 import type { ToolViewRow } from "./tool-views.ts";
+import { estimateTextRows, VirtualToolBody } from "./transcript-viewport.tsx";
 
 /** OpenCode reserves ten compact rows for command, separator and output. Keep
  * the tail rather than the head, so each streamed chunk is visible immediately. */
@@ -44,7 +45,9 @@ export function TranscriptShellOutput(props: {
 	const [width, setWidth] = createSignal(80);
 	const output = createMemo(() => props.rows.map((row) => row.text).join("\n"));
 	const preview = createMemo(() =>
-		shellOutputPreview(props.command, output().trimEnd(), width()),
+		props.expanded
+			? ""
+			: shellOutputPreview(props.command, output().trimEnd(), width()),
 	);
 	return (
 		<box
@@ -54,13 +57,20 @@ export function TranscriptShellOutput(props: {
 				setWidth(this.width);
 			}}
 		>
-			<text
-				fg={props.failed ? uiColors.error : uiColors.textMuted}
-				wrapMode="char"
-				maxHeight={props.expanded ? undefined : 8}
+			<VirtualToolBody
+				cacheKey={props.expanded ? output() : preview()}
+				estimateHeight={(columns) =>
+					estimateTextRows(props.expanded ? output() : preview(), columns)
+				}
 			>
-				{props.expanded ? output() : preview()}
-			</text>
+				<text
+					fg={props.failed ? uiColors.error : uiColors.textMuted}
+					wrapMode="char"
+					maxHeight={props.expanded ? undefined : 8}
+				>
+					{props.expanded ? output() : preview()}
+				</text>
+			</VirtualToolBody>
 		</box>
 	);
 }

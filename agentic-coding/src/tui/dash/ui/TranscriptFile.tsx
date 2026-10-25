@@ -3,6 +3,11 @@ import { RGBA } from "@opentui/core";
 import { uiColors, useMarkdownSyntaxStyle } from "@ui";
 import { createContext, createSignal, Show, useContext } from "solid-js";
 import { type ToolView, transcriptFiletype } from "./tool-views.ts";
+import {
+	estimateDiffRows,
+	estimateTextRows,
+	VirtualToolBody,
+} from "./transcript-viewport.tsx";
 
 /** The card owns hover, including its header, padding and nested file view. */
 export const ToolSurfaceHoverContext = createContext<() => boolean>(
@@ -39,52 +44,73 @@ export function TranscriptFile(props: { file: NonNullable<ToolView["file"]> }) {
 			: uiColors.diffRemovedBg;
 	const [width, setWidth] = createSignal(0);
 	return (
-		<box
-			width="100%"
-			flexDirection="column"
-			onSizeChange={function () {
-				setWidth(this.width);
-			}}
+		<VirtualToolBody
+			cacheKey={`${props.file.kind}\u0000${props.file.content}`}
+			estimateHeight={(columns) =>
+				props.file.kind === "diff"
+					? estimateDiffRows(props.file.content, columns)
+					: estimateTextRows(
+							props.file.content,
+							columns -
+								Math.max(
+									3,
+									String(
+										(props.file.startLine ?? 1) +
+											props.file.content.split("\n").length -
+											1,
+									).length,
+								) -
+								1,
+						)
+			}
 		>
-			<Show
-				when={props.file.kind === "diff"}
-				fallback={
-					<line_number
-						fg={uiColors.textMuted}
-						minWidth={3}
-						paddingRight={1}
-						lineNumberOffset={(props.file.startLine ?? 1) - 1}
-					>
-						<code
-							content={props.file.content}
-							filetype={transcriptFiletype(props.file.path)}
-							syntaxStyle={syntaxStyle}
-							drawUnstyledText
-							fg={uiColors.textPrimary}
-							wrapMode="word"
-						/>
-					</line_number>
-				}
+			<box
+				width="100%"
+				flexDirection="column"
+				onSizeChange={function () {
+					setWidth(this.width);
+				}}
 			>
-				<diff
-					diff={props.file.content}
-					view={width() > 120 ? "split" : "unified"}
-					showLineNumbers
-					filetype={transcriptFiletype(props.file.path)}
-					syntaxStyle={syntaxStyle}
-					wrapMode="word"
-					fg={uiColors.textPrimary}
-					addedBg={addedBg()}
-					removedBg={removedBg()}
-					contextBg={contextBg()}
-					addedSignColor={uiColors.diffAdded}
-					removedSignColor={uiColors.diffRemoved}
-					lineNumberFg={uiColors.textMuted}
-					lineNumberBg={contextBg()}
-					addedLineNumberBg={addedBg()}
-					removedLineNumberBg={removedBg()}
-				/>
-			</Show>
-		</box>
+				<Show
+					when={props.file.kind === "diff"}
+					fallback={
+						<line_number
+							fg={uiColors.textMuted}
+							minWidth={3}
+							paddingRight={1}
+							lineNumberOffset={(props.file.startLine ?? 1) - 1}
+						>
+							<code
+								content={props.file.content}
+								filetype={transcriptFiletype(props.file.path)}
+								syntaxStyle={syntaxStyle}
+								drawUnstyledText
+								fg={uiColors.textPrimary}
+								wrapMode="word"
+							/>
+						</line_number>
+					}
+				>
+					<diff
+						diff={props.file.content}
+						view={width() > 120 ? "split" : "unified"}
+						showLineNumbers
+						filetype={transcriptFiletype(props.file.path)}
+						syntaxStyle={syntaxStyle}
+						wrapMode="word"
+						fg={uiColors.textPrimary}
+						addedBg={addedBg()}
+						removedBg={removedBg()}
+						contextBg={contextBg()}
+						addedSignColor={uiColors.diffAdded}
+						removedSignColor={uiColors.diffRemoved}
+						lineNumberFg={uiColors.textMuted}
+						lineNumberBg={contextBg()}
+						addedLineNumberBg={addedBg()}
+						removedLineNumberBg={removedBg()}
+					/>
+				</Show>
+			</box>
+		</VirtualToolBody>
 	);
 }

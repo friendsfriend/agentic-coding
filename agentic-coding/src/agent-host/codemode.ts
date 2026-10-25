@@ -9,6 +9,7 @@
 // written against pi-coding-agent's own extension API, which pi-durable does
 // not share.
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import {
 	type CodemodeJsonSchema,
@@ -29,6 +30,10 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { codemodeWasmPath, codemodeWorkerUrl } from "./codemode-assets.ts";
+import {
+	boundedLiveOutput,
+	createProgressPublisher,
+} from "./progress-publisher.ts";
 import { BATCHING_RULE, CODEMODE_PIPELINE } from "./tool-surface.ts";
 
 export const CODEMODE_TOOL_NAME = "codemode";
@@ -107,13 +112,20 @@ function nestedTool(
 	api: ToolExecutionApi,
 	context: Context,
 	recorded: RecordedCall[],
-	publish: () => Promise<void>,
+	publish: () => void,
 ): CodemodeTool {
 	return {
 		name: tool.name,
 		...(tool.description ? { description: tool.description } : {}),
 		inputSchema: tool.parameters as CodemodeJsonSchema,
-		execute: async (rawArgs) => {
+		execute: async (rawArgs, toolContext) => {
+			const nestedContext = withAbortSignal(
+				AbortSignal.any([
+					toolContext.signal,
+					...(context.abortSignal ? [context.abortSignal] : []),
+				]),
+				context,
+			);
 			// The sandbox pushes its own record as the call starts, so the
 			// wrapper's records line up with `result.calls` by position. The
 			// record is filled in as the call settles.
@@ -127,34 +139,44 @@ function nestedTool(
 			const index = recorded.length;
 			recorded.push(record);
 			const started = Date.now();
-			await publish();
+			publish();
 			let captured = "";
+			let truncated = false;
+			const retained = () =>
+				truncated ? `[earlier output omitted]\n${captured}` : captured;
 			const decoder = new TextDecoder();
 			let details: unknown;
 			const nested: ToolExecutionApi = {
 				...api,
 				callId: `${api.callId}:${index}`,
 				output: (chunk) => {
-					captured +=
+					const next = boundedLiveOutput(
+						captured,
 						typeof chunk === "string"
 							? chunk
-							: decoder.decode(chunk, { stream: true });
-					record.output = captured;
-					// The final awaited publication reports failures; callbacks cannot await.
-					void publish().catch(() => {});
+							: decoder.decode(chunk, { stream: true }),
+					);
+					captured = next.text;
+					truncated ||= next.truncated;
+					record.output = retained();
+					publish();
 				},
 				diagnostic: () => {},
 				details: async (value) => {
 					details = value;
 					record.details = value;
-					await publish();
+					publish();
 				},
 			};
 			try {
-				const result = await tool.execute(rawArgs as never, nested, context);
+				const result = await tool.execute(
+					rawArgs as never,
+					nested,
+					nestedContext,
+				);
 				const text = result.content
 					? contentToText(result.content)
-					: captured + decoder.decode();
+					: retained() + decoder.decode();
 				record.output = text;
 				record.isError = result.isError === true;
 				record.status = record.isError ? "error" : "ok";
@@ -178,7 +200,7 @@ function nestedTool(
 				throw error;
 			} finally {
 				record.durationMs = Date.now() - started;
-				await publish();
+				publish();
 			}
 		},
 	};
@@ -267,16 +289,10 @@ export function createDurableCodemode(): DurableCodemode {
 				(entry) => entry.name !== CODEMODE_TOOL_NAME,
 			);
 			const recorded: RecordedCall[] = [];
-			let publications = Promise.resolve();
-			let finished = false;
-			const publish = (): Promise<void> => {
-				if (finished) return publications;
-				const snapshot = { calls: recorded.map((call) => ({ ...call })) };
-				publications = publications.then(() =>
-					api.details(snapshot as JsonValue, context),
-				);
-				return publications;
-			};
+			const progress = createProgressPublisher(
+				() => ({ calls: recorded.map((call) => ({ ...call })) }),
+				(snapshot) => api.details(snapshot as JsonValue, context),
+			);
 			let parsed: ReturnType<typeof parseCodemodeSource>;
 			try {
 				parsed = parseCodemodeSource(args.code);
@@ -291,7 +307,7 @@ export function createDurableCodemode(): DurableCodemode {
 			try {
 				sandbox = new CodemodeSandbox({
 					tools: callable.map((entry) =>
-						nestedTool(entry, api, context, recorded, publish),
+						nestedTool(entry, api, context, recorded, progress.request),
 					),
 					wasm: await loadQuickJSWasm(codemodeWasmPath()),
 					timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -320,9 +336,12 @@ export function createDurableCodemode(): DurableCodemode {
 					store,
 				});
 			} finally {
-				finished = true;
 				void sandbox.close().catch(() => undefined);
-				await publications;
+				try {
+					await progress.flush();
+				} finally {
+					progress.dispose();
+				}
 			}
 			if (result.ok) {
 				const next: Record<string, unknown> = {

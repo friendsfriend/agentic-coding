@@ -79,6 +79,7 @@ import {
 } from "../shared/preferences.ts";
 import { createAgentActivitySource } from "./agent-activity.ts";
 import {
+	AgentSessionProjectionCache,
 	createAgentSessionProjection,
 	streamAgentSessionProjection,
 	submissionStateNote,
@@ -1001,10 +1002,12 @@ export function App(props: {
 	 * previous frame is superseded, and the reader is looking at the newest rows
 	 * either way.
 	 */
+	const agentSessionProjectionCache = new AgentSessionProjectionCache();
 	const projectAgentSessionTranscript = (value: unknown) => {
 		agentSessionStopProjection();
 		agentSessionStopProjection = streamAgentSessionProjection(
 			createAgentSessionProjection(value, {
+				cache: agentSessionProjectionCache,
 				notices: agentSessionNotices(),
 			}),
 			(blocks) => setAgentSessionBlocks(blocks),

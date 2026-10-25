@@ -726,44 +726,45 @@ function entryId(entry: unknown, index: number): string {
 
 /** One block's identity and content as a comparison key: two blocks with the
  * same key are the same block, unchanged. */
-function blockKey(block: AgentSessionBlock): string {
-	return [
-		block.id,
-		block.kind,
-		block.tone,
-		block.text,
-		block.icon ?? "",
-		block.pending ? "pending" : "",
-		block.aborted ? "aborted" : "",
-		block.live ? "live" : "",
-		block.tool ?? "",
-		block.request ?? "",
-		block.durationMs ?? "",
-		block.startedAt ?? "",
-		block.endedAt ?? "",
-		liveArgsKey(block),
-		// Nested codemode calls can change without any script output arriving.
-		block.toolCall?.progress ? JSON.stringify(block.toolCall.progress) : "",
-		(block.detail ?? []).join("\u0000"),
-	].join("\u0001");
+/** JSON from immutable watch patches normally shares references. Compare those
+ * first, without allocating serialized copies of every historical tool log.
+ * Fresh snapshots still get exact comparisons (including same-length edits). */
+function sameValue(left: unknown, right: unknown): boolean {
+	if (left === right) return true;
+	if (Array.isArray(left) && Array.isArray(right))
+		return (
+			left.length === right.length &&
+			left.every((item, index) => sameValue(item, right[index]))
+		);
+	if (!isRecord(left) || !isRecord(right)) return false;
+	const keys = Object.keys(left);
+	return (
+		keys.length === Object.keys(right).length &&
+		keys.every(
+			(key) => Object.hasOwn(right, key) && sameValue(left[key], right[key]),
+		)
+	);
 }
 
-/** A live block's argument identity. A streaming call's arguments change every
- * frame while its own text does not (a `write` names its path once and then
- * streams the content), so without this the reuse pass would hand the previous
- * frame's block back and the in-progress row would freeze. A long string is
- * reduced to its length so the identity costs no more than the frame it
- * describes. */
-function liveArgsKey(block: AgentSessionBlock): string {
-	if (block.live !== true || block.toolCall === undefined) return "";
-	return Object.entries(block.toolCall.args)
-		.map(([key, value]) => {
-			if (typeof value === "string") return `${key}#${value.length}`;
-			if (value === null || typeof value !== "object")
-				return `${key}=${String(value)}`;
-			return `${key}~${(JSON.stringify(value) ?? "").length}`;
-		})
-		.join(",");
+function sameBlock(left: AgentSessionBlock, right: AgentSessionBlock): boolean {
+	return (
+		left === right ||
+		(left.id === right.id &&
+			left.kind === right.kind &&
+			left.tone === right.tone &&
+			left.text === right.text &&
+			left.icon === right.icon &&
+			left.pending === right.pending &&
+			left.aborted === right.aborted &&
+			left.live === right.live &&
+			left.tool === right.tool &&
+			left.request === right.request &&
+			left.durationMs === right.durationMs &&
+			left.startedAt === right.startedAt &&
+			left.endedAt === right.endedAt &&
+			sameValue(left.detail, right.detail) &&
+			sameValue(left.toolCall, right.toolCall))
+	);
 }
 
 /**
@@ -783,14 +784,17 @@ export function reuseAgentSessionBlocks(
 	if (previous.length === 0) return next;
 	const available = new Map<string, AgentSessionBlock[]>();
 	for (const block of previous) {
-		const key = blockKey(block);
+		const key = block.id;
 		const list = available.get(key);
 		if (list) list.push(block);
 		else available.set(key, [block]);
 	}
 	let unchanged = previous.length === next.length;
 	const reused = next.map((block, index) => {
-		const before = available.get(blockKey(block))?.pop();
+		const candidates = available.get(block.id);
+		const match =
+			candidates?.findIndex((candidate) => sameBlock(candidate, block)) ?? -1;
+		const before = match >= 0 ? candidates?.splice(match, 1)[0] : undefined;
 		if (!before) {
 			unchanged = false;
 			return block;
@@ -1011,9 +1015,83 @@ export interface AgentSessionProjection {
  * requested the abort. */
 export interface AgentSessionProjectionOptions {
 	readonly notices?: readonly AgentSessionBlock[];
+	/** Opt-in for immutable watch snapshots; scoped to one mounted session. */
+	readonly cache?: AgentSessionProjectionCache;
+}
+
+export class AgentSessionProjectionCache {
+	// LRU metadata must not keep raw history (or projected blocks) alive.
+	private readonly recent = new Map<WeakRef<object>, true>();
+	private readonly entries = new WeakMap<
+		object,
+		{
+			ref: WeakRef<object>;
+			key: string;
+			generationMs?: number;
+			thinkingMs?: number;
+			label?: string;
+			blocks: AgentSessionBlock[];
+		}
+	>();
+	private readonly labels = new WeakMap<
+		readonly unknown[],
+		{ length: number; value: ReadonlyMap<string, string> }
+	>();
+	compactions(entries: readonly unknown[]): ReadonlyMap<string, string> {
+		const before = this.labels.get(entries);
+		if (before?.length === entries.length) return before.value;
+		const value = compactionEntryLabels(entries);
+		this.labels.set(entries, { length: entries.length, value });
+		return value;
+	}
+	project(
+		entry: unknown,
+		key: string,
+		timing: EntryTiming | undefined,
+		label: string | undefined,
+		build: () => AgentSessionBlock[],
+	): AgentSessionBlock[] {
+		if (!isRecord(entry)) return build();
+		const before = this.entries.get(entry);
+		if (
+			before?.key === key &&
+			before.generationMs === timing?.generationMs &&
+			before.thinkingMs === timing?.thinkingMs &&
+			before.label === label
+		) {
+			this.recent.delete(before.ref);
+			this.recent.set(before.ref, true);
+			return before.blocks;
+		}
+		const blocks = build();
+		if (before) this.recent.delete(before.ref);
+		if (blocks.length === 0) {
+			this.entries.delete(entry);
+			return blocks;
+		}
+		const ref = before?.ref ?? new WeakRef(entry);
+		this.entries.set(entry, {
+			ref,
+			key,
+			generationMs: timing?.generationMs,
+			thinkingMs: timing?.thinkingMs,
+			label,
+			blocks,
+		});
+		this.recent.set(ref, true);
+		while (this.recent.size > 512) {
+			const oldest = this.recent.keys().next().value;
+			if (!oldest) break;
+			this.recent.delete(oldest);
+			const expired = oldest.deref();
+			if (expired) this.entries.delete(expired);
+		}
+		return blocks;
+	}
 }
 
 class AgentSessionProjectionImpl implements AgentSessionProjection {
+	private readonly cache: AgentSessionProjectionCache | undefined;
 	private readonly entries: readonly unknown[];
 	private readonly timings: Readonly<Record<string, EntryTiming>>;
 	private readonly live: Readonly<Record<string, unknown>> | undefined;
@@ -1031,6 +1109,7 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private done = false;
 
 	constructor(value: unknown, options: AgentSessionProjectionOptions = {}) {
+		this.cache = options.cache;
 		const record = isRecord(value) ? value : {};
 		const docs = isRecord(record.docs) ? record.docs : {};
 		this.live = isRecord(docs["pi.live"]) ? docs["pi.live"] : undefined;
@@ -1041,7 +1120,9 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 		this.notices = options.notices ?? [];
 		const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
 		this.inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
-		this.compactionLabels = compactionEntryLabels(this.entries);
+		this.compactionLabels =
+			this.cache?.compactions(this.entries) ??
+			compactionEntryLabels(this.entries);
 		this.start = this.entries.length;
 		this.project(FIRST_PAINT_BLOCKS);
 	}
@@ -1079,13 +1160,18 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	): void {
 		const chunks: AgentSessionBlock[][] = [];
 		let projected = 0;
+		let blockCount = this.pending.length;
+		const stopAt = Math.max(MAX_BLOCKS * 2, blockCount + PROJECTION_CHUNK);
 		while (
 			this.start > 0 &&
+			(!mayStopEarly || blockCount < stopAt) &&
 			(projected < target ||
 				(deadline !== undefined && performance.now() < deadline))
 		) {
 			this.start--;
-			chunks.push(this.entryBlocksAt(this.start));
+			const blocks = this.entryBlocksAt(this.start);
+			chunks.push(blocks);
+			blockCount += blocks.length;
 			projected++;
 		}
 		if (projected > 0) {
@@ -1098,10 +1184,28 @@ class AgentSessionProjectionImpl implements AgentSessionProjection {
 	private entryBlocksAt(index: number): AgentSessionBlock[] {
 		const entry = this.entries[index];
 		const key = entryId(entry, index);
-		const blocks = entryBlocks(entry, this.timings, key, this.compactionLabels);
-		const summary = assistantSummaryBlock(entry, this.timings, key);
-		if (summary) blocks.push(summary);
-		return blocks;
+		const build = () => {
+			const blocks = entryBlocks(
+				entry,
+				this.timings,
+				key,
+				this.compactionLabels,
+			);
+			const summary = assistantSummaryBlock(entry, this.timings, key);
+			if (summary) blocks.push(summary);
+			return blocks;
+		};
+		return (
+			this.cache?.project(
+				entry,
+				key,
+				isRecord(entry) && typeof entry.id === "string"
+					? this.timings[entry.id]
+					: undefined,
+				this.compactionLabels.get(key),
+				build,
+			) ?? build()
+		);
 	}
 
 	/** Merge what is projected and remember the window. `mayStopEarly` is the

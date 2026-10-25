@@ -70,3 +70,33 @@ folding and transcript-owned scrolling.
 
 Run `bun run test test/dash test/agent-action-progress.test.ts` plus relevant host
 and route tests, then the whole-project lint/type-check gates.
+
+## Performance invariants
+
+- Read groups and codemode containers are keyed by durable identity. Updating
+  one child must not recreate the script or completed native code views.
+- Mounted sessions opt into `AgentSessionProjectionCache` for immutable watch
+  snapshots. Entry projections are reused until timing or compaction labels
+  change. Public uncached projection still accepts fresh/mutable input. The
+  dashboard, standalone coding page and orchestrator all project progressively.
+- Block comparison uses shared references and exact value comparison rather
+  than repeatedly serializing full historical logs. Same-length argument edits
+  and structured-result changes still invalidate the appropriate block.
+- Codemode snapshots are coalesced before copying/publishing, with one write
+  in flight and one dirty flag. Completion flushes the newest state. Live
+  per-call logs retain at most 50,000 UTF-16 units plus an omission diagnostic;
+  native final content is retained as returned by its tool. Child cancellation
+  signals reach the nested tool and publishers are disposed on completion.
+- Heavy file/source/log bodies, read cards and table/row chunks use the single
+  transcript viewport observer, not per-component timers. Offscreen bodies keep
+  scroll-height placeholders; measured heights are retained and refinements
+  anchor the reader's visible content. Resizing re-estimates wrapping. All
+  retained rows stay reachable through the transcript's own scrollbar.
+- Expanded shell views do not compute their unused compact preview. Diff hover
+  decorations coalesce into one native rebuild (see `patches/README.md`).
+
+Structural regression tests live in `test/dash/transcriptPerformance.test.ts`,
+`test/dash/transcriptPerformance.test.tsx`, and `test/progress-publisher.test.ts`.
+They check resource identity, bounded mounted nodes, output reachability,
+resize/scroll behavior, cadence, backpressure and final flushing without flaky
+wall-clock performance assertions.

@@ -132,6 +132,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		string | undefined
 	>();
 	let stopWatch: (() => void) | undefined;
+	let stopProjection = () => {};
 	let scrollBox: ScrollBoxRenderable | undefined;
 	let pickerHandler: ((event: KeyEvent) => boolean) | undefined;
 	let disposed = false;
@@ -152,6 +153,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 	const connect = async (fresh = false) => {
 		setSessionReady(false);
 		stopWatch?.();
+		stopProjection();
 		stopWatch = undefined;
 		try {
 			const [{ openOrchestratorSession }, view, model] = await Promise.all([
@@ -184,11 +186,19 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			// silently on reconnect; before the first frame a drop keeps the
 			// "Connecting…" placeholder rather than going blank.
 			let receivedFrame = false;
+			const cache = new view.AgentSessionProjectionCache();
 			const stop = watchStream(host, opened.runId, {
 				onFrame: (value) => {
 					if (session()?.runId !== opened.runId) return;
 					receivedFrame = true;
-					setBlocks(view.buildAgentSessionView(value, { notices: notices() }));
+					stopProjection();
+					stopProjection = view.streamAgentSessionProjection(
+						view.createAgentSessionProjection(value, {
+							notices: notices(),
+							cache,
+						}),
+						setBlocks,
+					);
 					setMetadata(view.readAgentSessionMetadata(value));
 					setSessionReady(true);
 				},
@@ -554,6 +564,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		})),
 	});
 	onCleanup(() => {
+		stopProjection();
 		disposed = true;
 		stopWatch?.();
 		disposeSession();

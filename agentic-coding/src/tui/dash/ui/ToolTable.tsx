@@ -1,8 +1,39 @@
 /** @jsxImportSource @opentui/solid */
 import { uiColors } from "@ui";
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { statusRow, title } from "./tool-content.ts";
 import type { ToolViewRow } from "./tool-views.ts";
+import { estimateTextRows, VirtualToolBody } from "./transcript-viewport.tsx";
+
+const TABLE_CHUNK = 20;
+export function estimateTableRow(
+	row: readonly string[],
+	columns: readonly string[],
+	width: number,
+): number {
+	if (width >= columns.length * 18) {
+		const cell = Math.max(
+			1,
+			Math.floor(
+				(width - Math.max(0, columns.length - 1) * 2) /
+					Math.max(1, columns.length),
+			),
+		);
+		return Math.max(
+			1,
+			...columns.map((_, index) => estimateTextRows(row[index] ?? "—", cell)),
+		);
+	}
+	return (
+		1 +
+		columns.reduce(
+			(height, column, index) =>
+				height +
+				estimateTextRows(`${title(column)}: ${row[index] ?? "—"}`, width),
+			0,
+		)
+	);
+}
 
 function cellColor(column: string, value: string | undefined): string {
 	if (!/^(status|outcome|severity|level)$/i.test(column))
@@ -22,6 +53,12 @@ function cellColor(column: string, value: string | undefined): string {
 export function ToolTable(props: { table: NonNullable<ToolViewRow["table"]> }) {
 	const [width, setWidth] = createSignal(80);
 	const wide = () => width() >= props.table.columns.length * 18;
+	const chunks = createMemo(() =>
+		Array.from(
+			{ length: Math.ceil(props.table.rows.length / TABLE_CHUNK) },
+			(_, index) => index * TABLE_CHUNK,
+		),
+	);
 	return (
 		<box
 			flexDirection="column"
@@ -52,29 +89,48 @@ export function ToolTable(props: { table: NonNullable<ToolViewRow["table"]> }) {
 					fg={uiColors.textMuted}
 				>{`No results · ${props.table.columns.map(title).join(", ")}`}</text>
 			</Show>
-			<For each={props.table.rows}>
-				{(row) => (
-					<box
-						flexDirection={wide() ? "row" : "column"}
-						gap={wide() ? 2 : 0}
-						marginBottom={wide() ? 0 : 1}
+			<For each={chunks()}>
+				{(start) => (
+					<VirtualToolBody
+						force
+						cacheKey={props.table}
+						estimateHeight={(columns) =>
+							props.table.rows
+								.slice(start, start + TABLE_CHUNK)
+								.reduce(
+									(height, row) =>
+										height +
+										estimateTableRow(row, props.table.columns, columns),
+									0,
+								)
+						}
 					>
-						<For each={props.table.columns}>
-							{(column, index) => (
-								<text
-									fg={cellColor(column, row[index()])}
-									flexGrow={wide() ? 1 : 0}
-									flexBasis={wide() ? 0 : undefined}
-									minWidth={0}
-									wrapMode="word"
+						<For each={props.table.rows.slice(start, start + TABLE_CHUNK)}>
+							{(row) => (
+								<box
+									flexDirection={wide() ? "row" : "column"}
+									gap={wide() ? 2 : 0}
+									marginBottom={wide() ? 0 : 1}
 								>
-									{wide()
-										? row[index()]
-										: `${title(column)}: ${row[index()] ?? "—"}`}
-								</text>
+									<For each={props.table.columns}>
+										{(column, index) => (
+											<text
+												fg={cellColor(column, row[index()])}
+												flexGrow={wide() ? 1 : 0}
+												flexBasis={wide() ? 0 : undefined}
+												minWidth={0}
+												wrapMode="word"
+											>
+												{wide()
+													? row[index()]
+													: `${title(column)}: ${row[index()] ?? "—"}`}
+											</text>
+										)}
+									</For>
+								</box>
 							)}
 						</For>
-					</box>
+					</VirtualToolBody>
 				)}
 			</For>
 		</box>

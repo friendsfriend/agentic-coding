@@ -54,6 +54,7 @@
 		"typescript": "^7.0.2"
 	},
 	"patchedDependencies": {
-		"@earendil-works/pi-codemode@1.0.0": "patches/@earendil-works%2Fpi-codemode@1.0.0.patch"
+		"@earendil-works/pi-codemode@1.0.0": "patches/@earendil-works%2Fpi-codemode@1.0.0.patch",
+		"@opentui/core@0.6.6": "patches/@opentui%2Fcore@0.6.6.patch"
 	}
 }
