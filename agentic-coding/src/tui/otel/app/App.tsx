@@ -191,6 +191,7 @@ import {
 	workflowTarget,
 } from "../../shared/routes.ts";
 import { openViewWindow } from "../../shared/side-app.ts";
+import { AgentSidebar } from "../components/AgentSidebar.tsx";
 import { DeleteWorkflowModal } from "../components/DeleteWorkflowModal.tsx";
 import { EmbeddedAgentView } from "../components/EmbeddedAgentView.tsx";
 import { NotificationOverlay } from "../components/Notification.tsx";
@@ -216,10 +217,21 @@ import { TraceListView } from "../views/TraceListView.tsx";
 import { TraceTreeView } from "../views/TraceTreeView.tsx";
 import { WikiView, wikiCommentEntryActive } from "../views/WikiView.tsx";
 import {
+	type AgentSelection,
+	type AgentSidebarFilter,
+	type AgentSidebarMode,
+	type AgentSidebarRow,
+	createAgentSidebarProjector,
+	filterAgentSidebarRows,
+	reconcileAgentSelection,
+	shellSidebarWidths,
+} from "./agent-sidebar-model.ts";
+import {
 	diagnosticsSection,
 	diagnosticsStatusText,
 } from "./diagnostics-status.ts";
 import {
+	agentSidebarKeybindCatalog,
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
 	opencodeKeybindCatalog,
@@ -502,9 +514,17 @@ export function App(props: {
 			);
 		}
 	};
-	const [focusPanel, setFocusPanel] = createSignal<"sidebar" | "content">(
-		"content",
-	);
+	const [focusPanel, setFocusPanel] = createSignal<
+		"sidebar" | "agent" | "content"
+	>("content");
+	const [agentReturnPanel, setAgentReturnPanel] = createSignal<
+		"sidebar" | "content"
+	>("content");
+	const focusAgentSidebar = (): void => {
+		const current = focusPanel();
+		if (current !== "agent") setAgentReturnPanel(current);
+		setFocusPanel("agent");
+	};
 	const [sidebarFilter, setSidebarFilter] = createSignal<SidebarFilter>(
 		DEFAULT_SIDEBAR_FILTER,
 	);
@@ -512,13 +532,88 @@ export function App(props: {
 		WorkflowOverview[]
 	>([]);
 	const [sidebarLoading, setSidebarLoading] = createSignal(true);
+	const [workflowSourceState, setWorkflowSourceState] = createSignal<
+		"loading" | "fresh" | "stale"
+	>("loading");
+	const agentSourceState = (): "loading" | "fresh" | "stale" => {
+		const gateway = gatewayOrUndefined();
+		return gateway && gateway.connectionState() !== "open"
+			? "stale"
+			: workflowSourceState();
+	};
 	const [sidebarIndex, setSidebarIndex] = createSignal(0);
+	const [agentSidebarMode, setAgentSidebarMode] =
+		createSignal<AgentSidebarMode>("expanding");
+	const [agentSidebarFilter, setAgentSidebarFilter] =
+		createSignal<AgentSidebarFilter>("active");
+	const [agentSelection, setAgentSelection] = createSignal<AgentSelection>({
+		index: 0,
+	});
+	let agentRequestSequence = 0;
 	/** Workflow the delete confirmation names; undefined closes it. */
 	const [deleteTarget, setDeleteTarget] = createSignal<WorkflowOverview>();
 	const sidebarRows = () =>
 		filterOverviews(sidebarOverviews(), sidebarFilter());
+	const projectAgentRows = createAgentSidebarProjector();
+	const allAgentRows = createMemo(() => projectAgentRows(sidebarOverviews()));
+	const agentRows = createMemo(() =>
+		filterAgentSidebarRows(allAgentRows(), agentSidebarFilter()),
+	);
+	const visibleAgentSelection = (): AgentSelection =>
+		reconcileAgentSelection({
+			selection: agentSelection(),
+			sourceRows: allAgentRows(),
+			visibleRows: agentRows(),
+		});
+	const selectedAgentIndex = (): number => visibleAgentSelection().index;
+	const selectAgentIndex = (index: number): void => {
+		const row = agentRows()[index];
+		if (row) setAgentSelection({ preferredKey: row.key, index });
+	};
+	createEffect(() => {
+		const current = agentSelection();
+		const next = visibleAgentSelection();
+		if (
+			current.index !== next.index ||
+			current.preferredKey !== next.preferredKey
+		)
+			setAgentSelection(next);
+	});
+	const toggleAgentSidebarMode = (): void => {
+		setAgentSidebarMode((mode) =>
+			mode === "expanding" ? "permanent" : "expanding",
+		);
+	};
+	const sidebarWidths = () =>
+		shellSidebarWidths({
+			terminalWidth: dimensions().width,
+			workspaceExpanded:
+				sidebarAvailable() &&
+				(sidebarMode() === "permanent" || focusPanel() === "sidebar"),
+			agentExpanded:
+				sidebarAvailable() &&
+				(agentSidebarMode() === "permanent" || focusPanel() === "agent"),
+		});
 	/** Workflow dashboard target of the current route, when it is one. */
-	const workflow = () => workflowTarget(pages.current());
+	const workflow = createMemo(
+		() => workflowTarget(pages.current()),
+		undefined,
+		{
+			// Request consumption changes route params, not the mounted workflow.
+			equals: (previous, next) =>
+				previous?.repo === next?.repo &&
+				previous?.workflowId === next?.workflowId,
+		},
+	);
+	const agentRunRequest = () => {
+		const route = pages.current();
+		const requestId = route.params?.agentRequestId;
+		const runId = route.params?.agentRunId;
+		return requestId && runId ? { requestId, runId } : undefined;
+	};
+	const consumeAgentRunRequest = (requestId: string): void => {
+		pages.consumeAgentRunRequest(requestId);
+	};
 	const sidebarAvailable = () => Boolean(props.dashboard);
 	/** The project directory embedded agents and the orchestrator's OpenCode
 	 * session tools share. `/demo` is the shell's synthetic default repository,
@@ -551,6 +646,15 @@ export function App(props: {
 			// The target, not `state.repository`: a repository-independent
 			// workflow's rows live in the shared wiki/research store.
 			workflowRoute(overview.target, overview.state.workflowId),
+		);
+		setFocusPanel("content");
+	};
+	/** Navigate with an explicit, one-shot run identity. The dashboard consumes
+	 * the request once; a later live refresh cannot reopen a closed transcript. */
+	const openAgentRun = (row: AgentSidebarRow): void => {
+		const requestId = String(++agentRequestSequence);
+		pages.navigate(
+			workflowRoute(row.target, row.workflowId, row.runId, requestId),
 		);
 		setFocusPanel("content");
 	};
@@ -791,6 +895,37 @@ export function App(props: {
 			return;
 		}
 	};
+	const handleAgentSidebarKey = (event: KeyEvent): void => {
+		const key = event.name.toLowerCase();
+		const rows = agentRows();
+		const current = selectedAgentIndex();
+		if (key === "j" || key === "down") {
+			if (rows.length > 0)
+				selectAgentIndex(Math.min(rows.length - 1, Math.max(0, current) + 1));
+			return;
+		}
+		if (key === "k" || key === "up") {
+			if (rows.length > 0)
+				selectAgentIndex(Math.max(0, (current < 0 ? 0 : current) - 1));
+			return;
+		}
+		if (key === "enter" || key === "return") {
+			const row = rows[current];
+			if (row) openAgentRun(row);
+			return;
+		}
+		if (key === "f") {
+			setAgentSidebarFilter((filter) =>
+				filter === "active" ? "all" : "active",
+			);
+			return;
+		}
+		if (key === "e") {
+			toggleAgentSidebarMode();
+			return;
+		}
+		if (key === "escape") setFocusPanel("content");
+	};
 	// Closing the confirmation by any path (answer, Escape, navigation) drops
 	// the target, so a later open can never delete the previous workflow.
 	createEffect(() => {
@@ -812,17 +947,27 @@ export function App(props: {
 		if (!sidebarAvailable()) return;
 		let disposed = false;
 		let ticks = 0;
+		let refreshGeneration = 0;
 		const refresh = async (force: boolean): Promise<void> => {
+			const generation = ++refreshGeneration;
 			try {
 				const next = await loadOverviews(
 					undefined,
 					force ? { refresh: true } : undefined,
 				);
-				if (disposed || !next) return;
+				if (disposed || generation !== refreshGeneration) return;
+				if (!next) {
+					setWorkflowSourceState("stale");
+					return;
+				}
 				setSidebarOverviews(next);
 				setSidebarLoading(false);
+				setWorkflowSourceState("fresh");
 			} catch {
-				// A failed observation keeps the last list; the next poll retries.
+				// Preserve the last rows, but distinguish stale observations from a
+				// successful empty result. The next poll retries automatically.
+				if (!disposed && generation === refreshGeneration)
+					setWorkflowSourceState("stale");
 			}
 		};
 		void refresh(true);
@@ -913,6 +1058,39 @@ export function App(props: {
 		})),
 	});
 	onCleanup(() => disposeSidebarLayer?.());
+	const disposeAgentSidebarLayer = props.dashboard?.keymap.registerLayer({
+		name: "Agent Sidebar",
+		priority: 1510,
+		appView: "home",
+		activeModal: "none",
+		shellPanel: "agent",
+		commands: [
+			{
+				name: "agent-sidebar.handle",
+				run: ({ event }) => {
+					if (focusPanel() !== "agent") return false;
+					handleAgentSidebarKey(event);
+					return true;
+				},
+			},
+		],
+		bindings: [
+			"j",
+			"k",
+			"up",
+			"down",
+			"enter",
+			"return",
+			"f",
+			"e",
+			"escape",
+		].map((key) => ({
+			key,
+			cmd: "agent-sidebar.handle",
+			preventDefault: false,
+		})),
+	});
+	onCleanup(() => disposeAgentSidebarLayer?.());
 	// A shell overlay owns input: while one is on top the feature keymap layers
 	// are parked through the shared `modal.active` field, so typing in the
 	// location picker cannot reach a dashboard or environment binding. The field
@@ -2436,6 +2614,8 @@ export function App(props: {
 				return;
 			}
 			if (phase() === "starting" || phase() === "stopping") return;
+			// The interactive PTY owns editable input while focused. In particular,
+			// Ctrl+A remains its readline/select-all key, not a host panel action.
 			const shellOwned =
 				event.ctrl && (key === "s" || key === "h" || key === "l");
 			if (!shellOwned) return;
@@ -2485,6 +2665,25 @@ export function App(props: {
 			return;
 		}
 		if (phase() === "starting" || phase() === "stopping") return;
+
+		// Ctrl+A toggles between the page body and the right-hand agent index. It
+		// is a host key on every surface, but modal and editable input ownership
+		// always wins (including an embedded dashboard prompt or wiki comment).
+		if (
+			nav.modal() === "none" &&
+			(traceDashModal === undefined || traceDashModal === "none") &&
+			sidebarAvailable() &&
+			!modalHelpOpen() &&
+			!searchMode() &&
+			!wikiCommentEntryActive() &&
+			props.dashboard?.keymap.getData?.("textEntry.active") !== true &&
+			event.ctrl &&
+			key === "a"
+		) {
+			if (focusPanel() === "agent") setFocusPanel(agentReturnPanel());
+			else focusAgentSidebar();
+			return;
+		}
 
 		// Ctrl+T opens the view currently shown in a new tmux window (the tmux
 		// new-window instinct). Host-owned, so every surface reaches it; the
@@ -3373,8 +3572,12 @@ export function App(props: {
 	// shared store. The dashboard (workflow tab) publishes its own catalog, so
 	// the shell skips it there instead of fighting for the store.
 	createEffect(() => {
-		// The sidebar panel owns the footer while it holds focus: its keys are the
+		// Each shell panel owns the footer while it holds focus: its keys are the
 		// ones the next press will act on.
+		if (focusPanel() === "agent") {
+			setActiveKeybindCatalog(agentSidebarKeybindCatalog());
+			return;
+		}
 		if (focusPanel() === "sidebar") {
 			setActiveKeybindCatalog(
 				workspaceSidebarKeybindCatalog({
@@ -3497,6 +3700,7 @@ export function App(props: {
 							active={focusPanel() === "sidebar"}
 							mode={sidebarMode()}
 							side={sidebarSide()}
+							maxWidth={sidebarWidths().workspace}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
 							pins={sidebarPins()}
@@ -3536,8 +3740,7 @@ export function App(props: {
 								flexDirection: "column",
 								paddingLeft:
 									sidebarAvailable() && sidebarSide() === "left" ? 1 : 0,
-								paddingRight:
-									sidebarAvailable() && sidebarSide() === "right" ? 1 : 0,
+								paddingRight: sidebarAvailable() ? 1 : 0,
 							}}
 						>
 							{/* Destination pages: Home and the category pages. */}
@@ -3855,6 +4058,9 @@ export function App(props: {
 											<DashApp
 												repo={target.repo}
 												workflowId={target.workflowId}
+												agentRunId={agentRunRequest()?.runId}
+												agentRequestId={agentRunRequest()?.requestId}
+												onAgentRunRequestConsumed={consumeAgentRunRequest}
 												keymap={props.dashboard.keymap}
 												shellFeature="workflows"
 												active={() => focusPanel() === "content"}
@@ -3885,6 +4091,7 @@ export function App(props: {
 							active={focusPanel() === "sidebar"}
 							mode={sidebarMode()}
 							side={sidebarSide()}
+							maxWidth={sidebarWidths().workspace}
 							onToggleMode={toggleSidebarModePersisted}
 							overviews={sidebarRows()}
 							pins={sidebarPins()}
@@ -3896,6 +4103,22 @@ export function App(props: {
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}
+						/>
+					</Show>
+					<Show when={sidebarAvailable()}>
+						<AgentSidebar
+							active={focusPanel() === "agent"}
+							mode={agentSidebarMode()}
+							widthLimit={sidebarWidths().agent}
+							rows={agentRows()}
+							filter={agentSidebarFilter()}
+							selectedIndex={selectedAgentIndex()}
+							sourceState={agentSourceState()}
+							onToggleMode={toggleAgentSidebarMode}
+							onFilterChange={setAgentSidebarFilter}
+							onSelectIndex={selectAgentIndex}
+							onOpen={openAgentRun}
+							onFocus={focusAgentSidebar}
 						/>
 					</Show>
 				</box>

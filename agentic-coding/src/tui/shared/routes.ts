@@ -413,8 +413,21 @@ export function resourceRoute(
 /** The dashboard route of one durable workflow (workspace-sidebar navigation).
  * The repository travels in the params because the dashboard addresses a
  * workflow by repository + workflow id. */
-export function workflowRoute(repo: string, workflowId: string): Route {
-	return { page: "workflows.detail", resourceId: workflowId, params: { repo } };
+export function workflowRoute(
+	repo: string,
+	workflowId: string,
+	agentRunId?: string,
+	agentRequestId?: string,
+): Route {
+	return {
+		page: "workflows.detail",
+		resourceId: workflowId,
+		params: {
+			repo,
+			...(agentRunId ? { agentRunId } : {}),
+			...(agentRequestId ? { agentRequestId } : {}),
+		},
+	};
 }
 
 /** Repository + workflow identity of a workflow-dashboard route, or undefined
@@ -602,6 +615,34 @@ export function currentRoute(state: RouterState): Route {
 	return state.current;
 }
 
+/** One-shot agent requests belong to their navigation entries, not a growing
+ * shell-lifetime registry. Clear every retained copy so Back/Forward cannot
+ * replay a consumed request, even if consumption raced navigation away. */
+export function consumeAgentRunRequest(
+	state: RouterState,
+	requestId: string,
+): RouterState {
+	let changed = false;
+	const clear = (route: Route): Route => {
+		if (
+			route.page !== "workflows.detail" ||
+			route.params?.agentRequestId !== requestId
+		)
+			return route;
+		const {
+			agentRunId: _run,
+			agentRequestId: _request,
+			...params
+		} = route.params;
+		changed = true;
+		return { ...route, params };
+	};
+	const current = clear(state.current);
+	const history = state.history.map(clear);
+	const future = state.forward.map(clear);
+	return changed ? { ...state, current, history, forward: future } : state;
+}
+
 export function canGoBack(state: RouterState): boolean {
 	return state.history.length > 0;
 }
@@ -732,6 +773,8 @@ export function createPageNavigation(initial: RouterState) {
 		canForward: () => canGoForward(state()),
 		remembered: (feature: FeatureId) => rememberedRoute(state(), feature),
 		navigate: (route: Route) => setState((s) => navigate(s, route)),
+		consumeAgentRunRequest: (requestId: string) =>
+			setState((s) => consumeAgentRunRequest(s, requestId)),
 		replace: (route: Route) => setState((s) => replace(s, route)),
 		back: () => setState((s) => back(s)),
 		forward: () => setState((s) => forward(s)),

@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import tls from "node:tls";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue, Op } from "@earendil-works/chord/delta";
@@ -51,6 +52,7 @@ import {
 	toolSurfaceMonitorFor,
 } from "./fail-fast.ts";
 import { createBatchThrottle, createFrameThrottle } from "./frame-throttle.ts";
+import { createHostIdentity, hostIdentityPaths } from "./host-identity.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
 import {
@@ -68,6 +70,7 @@ import {
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
 import { createStageExtension } from "./stage-tools.ts";
+import { backupHostStore } from "./storage-upgrade.ts";
 import {
 	attachTelemetry,
 	type EntryTiming,
@@ -140,14 +143,64 @@ async function reprobeToolHost(
 }
 
 interface RunMapState extends JsonObject {
+	format: number;
 	runs: Record<string, { conversationId: number }>;
+	/** Legacy ownership map, drained into individually keyed documents on open.
+	 * Storage predating ownership evidence may lack this field. */
+	runConversations: Record<string, { conversationId: number }>;
 }
 const RunMapDoc = defineDoc<RunMapState>({
 	kind: "agentic.runs",
-	version: 1,
+	version: 2,
 	scope: "session",
-	initial: () => ({ runs: {} }),
+	initial: () => ({ format: 2, runs: {}, runConversations: {} }),
+	// Materialization keeps legacy evidence intact until the atomic commit.
+	migrate: (value) => ({ ...(value as RunMapState), format: 1 }),
 });
+
+interface ConversationAssociation extends JsonObject {
+	identity: string;
+	conversationId: number;
+}
+
+/** One constant-size durable document per identity, not a history-sized map.
+ * Hash the key so arbitrary protocol identities cannot alias document kinds. */
+function associationDoc(kind: "run" | "role", identity: string) {
+	return defineDoc<ConversationAssociation>({
+		kind: `agentic.${kind}.${createHash("sha256").update(identity).digest("hex")}`,
+		version: 1,
+		scope: "session",
+		initial: () => ({ identity, conversationId: 0 }),
+	});
+}
+
+/** One-time, atomic upgrade of already-issued ownership and role reuse keys.
+ * Clear the legacy maps in the same commit: later opens, ensures and recovery
+ * never snapshot the historical aggregate again. No workflow state is changed. */
+async function migrateAssociations(
+	harness: Harness,
+	context: Context,
+	backup?: () => void,
+) {
+	const map = await harness.snapshot(RunMapDoc, context);
+	if (map?.format === 2) return;
+	backup?.();
+	await harness.commit(async (tx) => {
+		const legacy = await tx.doc(RunMapDoc);
+		for (const [kind, entries] of [
+			["role", legacy.runs],
+			["run", legacy.runConversations ?? {}],
+		] as const) {
+			for (const [identity, { conversationId }] of Object.entries(entries)) {
+				const association = await tx.doc(associationDoc(kind, identity));
+				association.conversationId = conversationId;
+			}
+		}
+		legacy.runs = {};
+		legacy.runConversations = {};
+		legacy.format = 2; // v1 readers now explicitly reject the stored version.
+	}, context);
+}
 
 /** pi-durable never threads pi-ai's `options.sessionId`, but the built-in
  * `opencode-go` provider needs it to emit its required `x-opencode-session`
@@ -445,6 +498,8 @@ export class DurableHost {
 		Promise<void>
 	>();
 	private server: net.Server | undefined;
+	private authenticatedServer: tls.Server | undefined;
+	private readonly authenticatedSockets = new Set<net.Socket>();
 	private closing = false;
 
 	/** Thinking levels pi-ai accepts, newest first for the picker. */
@@ -660,6 +715,19 @@ export class DurableHost {
 			},
 			context,
 		);
+		try {
+			await migrateAssociations(
+				harness,
+				context,
+				// Injected storage is caller-owned (in-memory in focused tests).
+				options.storage
+					? undefined
+					: () => backupHostStore(options.layout.storagePath),
+			);
+		} catch (error) {
+			await harness.close(context);
+			throw error;
+		}
 		harness.resume();
 		const instance = new DurableHost(
 			harness,
@@ -676,7 +744,37 @@ export class DurableHost {
 		return instance;
 	}
 
-	async ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
+	private readonly ensuringRuns = new Map<
+		string,
+		Promise<{ conversationId: string }>
+	>();
+	private readonly ensuringRoles = new Map<string, Promise<void>>();
+
+	ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
+		const pending = this.ensuringRuns.get(input.runId);
+		if (pending) return pending;
+		// Duplicate/replayed run requests converge; distinct runs that reuse one
+		// role are ordered through live-record installation, not only the commit.
+		const previous = this.ensuringRoles.get(input.name) ?? Promise.resolve();
+		const operation = previous.then(() => this.ensureRunOnce(input));
+		this.ensuringRuns.set(input.runId, operation);
+		const settled = operation.then(
+			() => {},
+			() => {},
+		);
+		this.ensuringRoles.set(input.name, settled);
+		void settled.then(() => {
+			if (this.ensuringRuns.get(input.runId) === operation)
+				this.ensuringRuns.delete(input.runId);
+			if (this.ensuringRoles.get(input.name) === settled)
+				this.ensuringRoles.delete(input.name);
+		});
+		return operation;
+	}
+
+	private async ensureRunOnce(
+		input: EnsureRunInput,
+	): Promise<{ conversationId: string }> {
 		const context = BACKGROUND_CONTEXT;
 		const key = input.name;
 		// The run's environment is read before the tool selection: the `debug`
@@ -688,8 +786,14 @@ export class DurableHost {
 		} catch {
 			/* a run without a readable run.env still launches, with an empty environment */
 		}
-		const map = await this.harness.snapshot(RunMapDoc, context);
-		const existingId = map?.runs[key]?.conversationId;
+		const ownership = await this.harness.snapshot(
+			associationDoc("run", input.runId),
+			context,
+		);
+		const role = ownership?.conversationId
+			? undefined
+			: await this.harness.snapshot(associationDoc("role", key), context);
+		const existingId = ownership?.conversationId || role?.conversationId;
 		let conversation: Conversation | undefined = existingId
 			? await this.harness.conversation(existingId as ConversationId, context)
 			: undefined;
@@ -714,12 +818,6 @@ export class DurableHost {
 				},
 				context,
 			);
-			await this.harness.commit(async (tx) => {
-				const doc = await tx.doc(RunMapDoc);
-				doc.runs[key] = {
-					conversationId: conversation?.id as unknown as number,
-				};
-			}, context);
 			createdConversation = true;
 		} else if (toolSelection) {
 			await conversation.configure(
@@ -729,6 +827,17 @@ export class DurableHost {
 		} else {
 			await conversation.configure({ cwd: input.cwd }, context);
 		}
+		// Commit just this role and run's keyed associations before returning the
+		// handle. Historical ownership stays addressable without a growing map.
+		const conversationId = conversation.id as unknown as number;
+		await this.harness.commit(async (tx) => {
+			if (createdConversation) {
+				const role = await tx.doc(associationDoc("role", key));
+				role.conversationId = conversationId;
+			}
+			const issued = await tx.doc(associationDoc("run", input.runId));
+			issued.conversationId = conversationId;
+		}, context);
 		const runContext: DurableRunContext = {
 			runId: input.runId,
 			cwd: input.cwd,
@@ -1991,15 +2100,28 @@ export class DurableHost {
 			readonly onPatch?: (patch: WatchPatch) => void;
 		} = {},
 	): Promise<() => void> {
-		// A host that restarted no longer tracks the runs it served before, and the
-		// run id lives only in that in-memory map. The conversation is durable, so a
-		// watcher that still holds it keeps reading the transcript the run wrote;
-		// mutations keep refusing an unknown run id (they resolve runs, never
-		// conversations).
+		// A recovery hint is not ownership evidence. Both full and docs/patch
+		// watches verify the pair before acquiring or publishing any view. Recovery
+		// stays observational: it never registers a run for submit/abort/control.
 		const record = this.runs.get(runId);
-		const conversationId = record
-			? record.conversationId
-			: parseConversationId(recoveredConversationId);
+		const requestedId = parseConversationId(recoveredConversationId);
+		let conversationId = record?.conversationId;
+		if (record) {
+			if (
+				recoveredConversationId !== undefined &&
+				requestedId !== record.conversationId
+			)
+				throw new Error(`unverified conversation for run: ${runId}`);
+		} else {
+			if (requestedId === undefined) throw new Error(`unknown run: ${runId}`);
+			const issued = await this.harness.snapshot(
+				associationDoc("run", runId),
+				BACKGROUND_CONTEXT,
+			);
+			if (issued?.identity !== runId || issued.conversationId !== requestedId)
+				throw new Error(`unverified conversation for run: ${runId}`);
+			conversationId = requestedId;
+		}
 		if (conversationId === undefined) throw new Error(`unknown run: ${runId}`);
 		const conversation = await this.harness.conversation(
 			conversationId,
@@ -2114,6 +2236,9 @@ export class DurableHost {
 		if (this.closing) return;
 		this.closing = true;
 		this.server?.close();
+		this.authenticatedServer?.close();
+		for (const socket of this.authenticatedSockets) socket.destroy();
+		this.authenticatedSockets.clear();
 		for (const stop of this.telemetry.values()) {
 			try {
 				stop();
@@ -2133,6 +2258,9 @@ export class DurableHost {
 		await this.harness.close(BACKGROUND_CONTEXT);
 		try {
 			fs.rmSync(this.options.layout.socketPath, { force: true });
+			const identity = hostIdentityPaths(this.options.layout.socketPath);
+			fs.rmSync(identity.socket, { force: true });
+			fs.rmSync(identity.certificate, { force: true });
 			fs.rmSync(this.options.layout.lockPath, { force: true });
 		} catch {
 			/* best-effort cleanup */
@@ -2154,20 +2282,59 @@ export class DurableHost {
 		} catch {
 			/* stale socket from an unclean previous shutdown */
 		}
+		const paths = hostIdentityPaths(socketPath);
+		fs.rmSync(paths.socket, { force: true });
 		fs.writeFileSync(lockPath, String(process.pid), { mode: 0o600 });
+		const identity = createHostIdentity();
+		const authenticated = tls.createServer(
+			{ key: identity.key, cert: identity.cert, minVersion: "TLSv1.3" },
+			(socket) => this.handleConnection(socket),
+		);
+		this.authenticatedServer = authenticated;
+		authenticated.on("connection", (socket) => {
+			this.authenticatedSockets.add(socket);
+			socket.once("close", () => this.authenticatedSockets.delete(socket));
+		});
 		const server = net.createServer((socket) => this.handleConnection(socket));
 		this.server = server;
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen(socketPath, () => {
-				try {
-					fs.chmodSync(socketPath, 0o600);
-				} catch {
-					/* best-effort permission tightening */
-				}
-				resolve();
-			});
-		});
+		try {
+			for (const [listener, file] of [
+				[server, socketPath],
+				[authenticated, paths.socket],
+			] as const) {
+				await new Promise<void>((resolve, reject) => {
+					listener.once("error", reject);
+					listener.listen(file, () => {
+						try {
+							fs.chmodSync(file, 0o600);
+							resolve();
+						} catch (error) {
+							reject(error);
+						}
+					});
+				});
+			}
+			// Publish only the public certificate, atomically, after both listeners
+			// are ready. The private key exists only in this host instance's memory.
+			const temporary = `${paths.certificate}.${randomUUID()}`;
+			try {
+				fs.writeFileSync(temporary, identity.cert, { flag: "wx", mode: 0o600 });
+				fs.renameSync(temporary, paths.certificate);
+			} finally {
+				fs.rmSync(temporary, { force: true });
+			}
+		} catch (error) {
+			server.close();
+			authenticated.close();
+			for (const file of [
+				socketPath,
+				paths.socket,
+				paths.certificate,
+				lockPath,
+			])
+				fs.rmSync(file, { force: true });
+			throw error;
+		}
 	}
 
 	private handleConnection(socket: net.Socket): void {
@@ -2197,19 +2364,19 @@ export class DurableHost {
 				);
 			}
 		});
-		socket.on("close", () => {
-			for (const cleanup of cleanups) cleanup();
+		const closed = () => {
 			this.watchers.delete(socket);
-		});
-		socket.on("error", () => {
 			for (const cleanup of cleanups) cleanup();
-		});
+			cleanups.clear();
+		};
+		socket.on("close", closed);
+		socket.on("error", closed);
 	}
 
 	private async handleRequest(
 		request: HostRequest,
 		send: (response: HostResponse) => void,
-		_socket: net.Socket,
+		socket: net.Socket,
 		cleanups: Set<() => void>,
 	): Promise<void> {
 		try {
@@ -2323,7 +2490,11 @@ export class DurableHost {
 							},
 						},
 					);
-					cleanups.add(stop);
+					// Close/error may have drained the set while acquisition awaited
+					// durable storage. Never strand a late subscription without a peer.
+					if (socket.destroyed || this.watchers.get(socket) !== cleanups)
+						stop();
+					else cleanups.add(stop);
 					return;
 				}
 				default:

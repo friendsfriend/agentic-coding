@@ -42,6 +42,15 @@ export const HOST_KEYBINDS: readonly HostKeybind[] = [
 		standard: true,
 	},
 	{
+		// The right-hand workflow-agent index is a second shell panel. This host
+		// key is present on every page, but its handler yields to modal and text
+		// input owners before changing shell focus.
+		binding: "ctrl+a",
+		key: "Ctrl+A",
+		action: "toggle focus to the agent sidebar",
+		short: "agents",
+	},
+	{
 		// The one sidebar key that must work on every surface, including feature
 		// views whose own layers claim h/l (the environment tables): it toggles
 		// focus between the workspace sidebar and the page body.

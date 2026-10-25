@@ -4,6 +4,7 @@ import {
 	breadcrumb,
 	canGoBack,
 	canGoForward,
+	consumeAgentRunRequest,
 	createPageNavigation,
 	createRouterState,
 	currentRoute,
@@ -21,6 +22,7 @@ import {
 	routeKey,
 	setViewState,
 	viewState,
+	workflowRoute,
 } from "../../src/tui/shared/routes.ts";
 
 // Page routing (replace-nested-tabs-with-page-navigation, task 1.2): typed
@@ -188,6 +190,54 @@ describe("page routes: chronological history", () => {
 		expect(viewState(state, deleted)).toBeUndefined();
 		expect(viewState<{ draft: string }>(state, kept)?.draft).toBe("kept");
 		expect(dropViewState(state, deleted)).toBe(state);
+	});
+});
+
+describe("one-shot agent navigation requests", () => {
+	test("consumption clears retained entries without replay on Back/Forward", () => {
+		const requested = workflowRoute("/repo", "flow", "run-1", "request-1");
+		let state = navigate(createRouterState({ page: "home" }), requested);
+		state = navigate(state, { page: "wiki" });
+		state = consumeAgentRunRequest(state, "request-1");
+		expect(state.history.at(-1)).toEqual(workflowRoute("/repo", "flow"));
+		state = back(state);
+		expect(state.current.params?.agentRequestId).toBeUndefined();
+		state = forward(state);
+		state = back(state);
+		expect(state.current.params?.agentRunId).toBeUndefined();
+		expect(consumeAgentRunRequest(state, "request-1")).toBe(state);
+		// A pending request in the forward branch is cleared there too.
+		state = navigate(
+			state,
+			workflowRoute("/repo", "flow", "run-2", "request-2"),
+		);
+		state = back(state);
+		state = consumeAgentRunRequest(state, "request-2");
+		expect(forward(state).current).toEqual(workflowRoute("/repo", "flow"));
+	});
+
+	test("many same-workflow activations retain no consumed-id registry or request params", () => {
+		const pages = createPageNavigation(createRouterState({ page: "home" }));
+		for (let index = 0; index < 300; index += 1) {
+			const id = `request-${index}`;
+			pages.navigate(workflowRoute("/repo", "flow", `run-${index}`, id));
+			pages.consumeAgentRunRequest(id);
+		}
+		expect(Object.keys(pages.state()).sort()).toEqual([
+			"current",
+			"forward",
+			"history",
+			"viewState",
+		]);
+		expect(
+			[
+				pages.current(),
+				...pages.state().history,
+				...pages.state().forward,
+			].every(
+				(route) => !route.params?.agentRequestId && !route.params?.agentRunId,
+			),
+		).toBe(true);
 	});
 });
 

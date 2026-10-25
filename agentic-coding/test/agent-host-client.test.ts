@@ -348,6 +348,45 @@ describe("HostClient over the control socket", () => {
 		expect(states).toContain("closed");
 	});
 
+	test("watchStream releases its abort wait listener on every drop and on stop", async () => {
+		const { getEventListeners } = await import("node:events");
+		const client = new HostClient("unused");
+		let close: (() => void) | undefined;
+		let connections = 0;
+		const waitsAfterDrop: number[] = [];
+		let signal: AbortSignal | undefined;
+		client.watch = async (_runId, _onFrame, options) => {
+			connections++;
+			close = options?.onClose;
+			return () => {};
+		};
+		const stop = watchStream(client, "flapping-run", {
+			onFrame: () => {},
+			sleep: async (_ms, current) => {
+				signal = current;
+				if (current)
+					waitsAfterDrop.push(getEventListeners(current, "abort").length);
+			},
+		});
+		try {
+			for (let attempt = 1; attempt <= 24; attempt++) {
+				await waitFor(() => connections === attempt);
+				close?.();
+				await waitFor(() => connections === attempt + 1);
+			}
+			expect(waitsAfterDrop).toEqual(Array.from({ length: 24 }, () => 0));
+			expect(signal).toBeDefined();
+			if (!signal) throw new Error("watch did not reach the reconnect wait");
+			expect(getEventListeners(signal, "abort")).toHaveLength(1);
+			stop();
+			await Promise.resolve();
+			expect(getEventListeners(signal, "abort")).toHaveLength(0);
+			expect(connections).toBe(25);
+		} finally {
+			stop();
+		}
+	});
+
 	test("watchStream stops cleanly and does not reconnect after stop", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });

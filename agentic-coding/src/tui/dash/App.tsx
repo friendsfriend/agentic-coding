@@ -31,6 +31,7 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { createWorkflowSessionResolver } from "../../agent-host/workflow-session.ts";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
 import type {
 	DebugRequests,
@@ -77,7 +78,15 @@ import {
 	MAX_PROMPT_HISTORY,
 	savePromptHistory,
 } from "../shared/preferences.ts";
-import { createAgentActivitySource } from "./agent-activity.ts";
+import {
+	createAgentActivitySource,
+	watchAgentActivity,
+} from "./agent-activity.ts";
+import {
+	focusDashboardAgent,
+	focusedAgentPosition,
+	indexDashboardAgents,
+} from "./agent-navigation.ts";
 import {
 	createAgentSessionProjection,
 	streamAgentSessionProjection,
@@ -132,7 +141,11 @@ import { Overlays } from "./modals/Overlays.tsx";
 import { workflowGraphRows } from "./modals/WorkflowGraphModal.tsx";
 import { notify } from "./notifications.ts";
 import { openFindingInEditor } from "./open-finding.ts";
-import { CLASSIFIER_PANEL, EVIDENCE_PANEL } from "./panel-grid.ts";
+import {
+	AGENTS_PANEL,
+	CLASSIFIER_PANEL,
+	EVIDENCE_PANEL,
+} from "./panel-grid.ts";
 import { panelPointerHandlers } from "./panel-pointer.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
@@ -200,6 +213,10 @@ export function App(props: {
 	 * delete confirmation) holds the keyboard. Keymap-only, so the dashboard's
 	 * inputs must blur themselves rather than keep reading keys behind it. */
 	overlay?: () => boolean;
+	/** One-shot exact run navigation request from the shell's agent index. */
+	agentRunId?: string;
+	agentRequestId?: string;
+	onAgentRunRequestConsumed?: (requestId: string) => void;
 	/** Composition-root Escape boundary: true when the root handled it. Inside
 	 * the unified shell the root leaves the workflow page for its structural
 	 * parent (Home); a standalone dashboard leaves it unset and Escape no-ops. */
@@ -274,6 +291,21 @@ export function App(props: {
 					costBreakdown: [],
 				};
 	const [data, setData] = createSignal<DashboardData>(initialData);
+	const agentIndex = createMemo(() => indexDashboardAgents(data()));
+	const panels = createPanelState();
+	const focusedAgentRunId = panels.focusedAgentRunId;
+	const setFocusedAgentRunId = panels.setFocusedAgentRunId;
+	const agentPanelData = createMemo(() =>
+		focusDashboardAgent(data(), agentIndex(), focusedAgentRunId()),
+	);
+	const historicalAgentRunId = () => {
+		const runId = focusedAgentRunId();
+		return runId &&
+			agentIndex().runsById.has(runId) &&
+			!agentIndex().positionsByRunId.has(runId)
+			? runId
+			: undefined;
+	};
 	let refreshGeneration = 0;
 	let refreshRunning = false;
 	// The test profile and an explicit fixture are already the full observation;
@@ -302,7 +334,6 @@ export function App(props: {
 	const [reviewFinishing, setReviewFinishing] = createSignal(false);
 	const [reviewFinishingMessage, setReviewFinishingMessage] = createSignal("");
 	let changeScroll: ScrollBoxRenderable | undefined;
-	const panels = createPanelState();
 	const activePanel = panels.active;
 	const setActivePanel = panels.setActive;
 	const selectedAgent = panels.agent;
@@ -847,7 +878,7 @@ export function App(props: {
 	const classifications = createMemo(() => classificationEntries(data().state));
 	createEffect(() =>
 		panels.clamp({
-			agents: data().agents.length,
+			agents: agentPanelData().agents.length,
 			artifacts: artifacts().length,
 			classifications: classifications().length,
 			// The rows the panel paints, not the manifest's entries: a stage flow
@@ -948,6 +979,15 @@ export function App(props: {
 	// (see `projectAgentSessionTranscript`). A no-op until a frame starts one, so
 	// every teardown path can call it without a guard.
 	let agentSessionStopProjection: () => void = () => {};
+	let agentSessionGeneration = 0;
+	const stopAgentSessionWatch = (): void => {
+		// Invalidate pending imports and callbacks as well as an installed watch.
+		agentSessionGeneration += 1;
+		agentSessionStopWatch?.();
+		agentSessionStopWatch = undefined;
+		agentSessionStopProjection();
+	};
+	onCleanup(stopAgentSessionWatch);
 	// The transcript scroll box, owned by the view and scrolled by the
 	// agent-session keymap layer registered below.
 	let agentSessionScrollbox: ScrollBoxRenderable | undefined;
@@ -966,7 +1006,27 @@ export function App(props: {
 	// is the "what is it doing right now" the workflow store cannot give, so the
 	// Agents panel badge tracks the running tool instead of waiting for the
 	// engine's next status observation.
-	const agentActivity = createAgentActivitySource();
+	const sessionSockets = createWorkflowSessionResolver(
+		props.repo,
+		props.workflowId,
+	);
+	onCleanup(() => sessionSockets.dispose());
+	const agentActivity = createAgentActivitySource({
+		watch: async (target, onValue, onState) => {
+			// A refresh's activity acquisitions share one authoritative store/path
+			// validation batch, instead of synchronous I/O once per agent.
+			const socket = await sessionSockets.resolve(
+				target.runId,
+				target.hostSocket,
+			);
+			return watchAgentActivity(
+				{ ...target, hostSocket: socket },
+				onValue,
+				onState,
+				() => sessionSockets.connection(target.runId, target.hostSocket),
+			);
+		},
+	});
 	createEffect(() => {
 		agentActivity.sync(data().agents);
 	});
@@ -974,12 +1034,16 @@ export function App(props: {
 	/** A nonterminal status is provisional until the full observation has landed
 	 * and, for a durable agent, its activity watch has delivered a first frame.
 	 * Terminal statuses are real verdicts, not a guess, so they stay on screen. */
-	const agentStatusPending = (role: string) => {
-		const agent = data().agents.find((item) => item.role === role);
-		if (!agent) return false;
-		if (agent.status !== "pending" && agent.status !== "working") return false;
+	const agentStatusPending = (role: string, runId?: string) => {
+		const index = agentIndex();
+		if (!index.pendingRoles.has(role)) return false;
+		if (runId && index.runByRole.get(role) !== runId) return false;
 		return !dashboardLoaded() || agentActivity.pending(role);
 	};
+	const rowAgentActivity = (role: string, runId?: string) =>
+		runId && agentIndex().runByRole.get(role) !== runId
+			? undefined
+			: agentActivity.activity(role);
 	/**
 	 * Leave the view for the dashboard grid. The run keeps streaming into the
 	 * session state, so reopening the panel's agent lands on the live view
@@ -1010,21 +1074,53 @@ export function App(props: {
 			(blocks) => setAgentSessionBlocks(blocks),
 		);
 	};
-	const openAgentSession = (session: {
-		role: string;
+	const unavailableAgentSession = (runId: string): void => {
+		stopAgentSessionWatch();
+		backAgentSession();
+		setActivePanel(AGENTS_PANEL);
+		setFocusedAgentRunId(runId);
+		setSelectedAgent(focusedAgentPosition(agentIndex(), runId));
+		notify(`Recorded session for agent run ${runId} is unavailable`, "warning");
+	};
+	// Every new connection, including watch retries, gets fresh ownership and
+	// an instance pin. Route changes invalidate asynchronous control work.
+	const agentSessionEndpoint = (session: {
 		runId: string;
 		hostSocket: string;
-		/** The run's durable conversation. The run id lives only in the host's
-		 * in-memory map, so a host that restarted since the run was launched still
-		 * serves the transcript through this. */
-		conversationId?: string;
 	}) => {
-		agentSessionStopWatch?.();
-		agentSessionStopWatch = undefined;
-		agentSessionStopProjection();
+		const generation = agentSessionGeneration;
+		return async () => {
+			if (
+				generation !== agentSessionGeneration ||
+				agentSession()?.runId !== session.runId
+			)
+				throw new Error("agent session changed");
+			const endpoint = await sessionSockets.connection(
+				session.runId,
+				session.hostSocket,
+			);
+			if (generation !== agentSessionGeneration)
+				throw new Error("agent session changed");
+			return endpoint;
+		};
+	};
+	const openAgentSession = (
+		session: {
+			role: string;
+			runId: string;
+			hostSocket: string;
+			/** Recovery hint only: the host verifies its durable association with
+			 * this run before serving a transcript after restart. */
+			conversationId?: string;
+		},
+		onUnavailable?: () => void,
+	) => {
+		stopAgentSessionWatch();
+		const generation = agentSessionGeneration;
+		const isCurrent = () => generation === agentSessionGeneration;
 		setAgentSessionNotices([]);
 		setAgentSessionDraft("");
-		setAgentSessionMetadata({ working: false });
+		setAgentSessionMetadata({ working: false, connection: "connecting" });
 		setAgentSessionBlocks([
 			{
 				id: "route:connecting",
@@ -1033,45 +1129,90 @@ export function App(props: {
 				text: "Connecting…",
 			},
 		]);
-		setAgentSession(session);
+		// Do not expose an unverified handle to submit/configure controls while
+		// asynchronous batch validation is pending.
+		setAgentSession(undefined);
 		setAgentSessionOpen(true);
 		props.keymap.setData("agent.view", "session");
 		void (async () => {
+			let socket: string;
+			try {
+				socket = await sessionSockets.resolve(
+					session.runId,
+					session.hostSocket,
+				);
+			} catch {
+				if (isCurrent()) {
+					if (onUnavailable) onUnavailable();
+					else unavailableAgentSession(session.runId);
+				}
+				return;
+			}
+			if (!isCurrent()) return;
+			setAgentSession({ ...session, hostSocket: socket });
 			try {
 				const { HostClient, watchStream } = await import(
 					"../../agent-host/client.ts"
 				);
+				if (!isCurrent()) return;
 				const { readAgentSessionMetadata } = await import("./agent-session.ts");
-				const client = new HostClient(session.hostSocket);
+				if (!isCurrent()) return;
+				const client = new HostClient(agentSessionEndpoint(session));
 				// The catalog is best-effort: an old host without the request just
 				// leaves the pickers empty instead of failing the session view.
 				void client
 					.catalog()
 					.then((catalog) => {
-						if (agentSession()?.runId !== session.runId) return;
+						if (!isCurrent()) return;
 						setAgentSessionModels([...catalog.models]);
 						setAgentSessionThinkingLevels([...catalog.thinkingLevels]);
 						setAgentSessionContextWindows(catalog.contextWindows ?? {});
 					})
 					.catch(() => undefined);
-				// The stream stays live across a host restart or a dropped socket:
-				// `watchStream` reconnects instead of freezing the transcript on the
-				// last frame. Once a frame has arrived the transcript stays and
-				// silently refreshes on reconnect; before the first frame a drop keeps
-				// the "Connecting…" placeholder rather than going blank.
+				// After a first frame, preserve the transcript across reconnects but
+				// mark it stale and pause controls until another frame arrives. Any
+				// open that cannot obtain its first frame returns to the exact run;
+				// retrying an unavailable/older host is then an explicit row open.
 				let receivedFrame = false;
 				const stop = watchStream(client, session.runId, {
 					...(session.conversationId
 						? { conversationId: session.conversationId }
 						: {}),
 					onFrame: (value) => {
-						if (agentSession()?.runId !== session.runId) return;
+						if (!isCurrent()) return;
 						receivedFrame = true;
 						projectAgentSessionTranscript(value);
-						setAgentSessionMetadata(readAgentSessionMetadata(value));
+						setAgentSessionMetadata({
+							...readAgentSessionMetadata(value),
+							connection: "connected",
+						});
 					},
 					onState: (state) => {
-						if (agentSession()?.runId !== session.runId) return;
+						if (!isCurrent()) return;
+						if (state === "closed" && !receivedFrame) {
+							if (onUnavailable) onUnavailable();
+							else unavailableAgentSession(session.runId);
+							return;
+						}
+						if (state !== "open") {
+							// Cancel idle projection work too: it must not publish live
+							// spinners over the disconnected transcript after this turn.
+							agentSessionStopProjection();
+							setAgentSessionBlocks((blocks) =>
+								blocks.map((block) =>
+									block.live || block.pending
+										? { ...block, live: false, pending: false }
+										: block,
+								),
+							);
+							setAgentSessionMetadata((metadata) => ({
+								...metadata,
+								connection: receivedFrame ? "disconnected" : "connecting",
+								working: false,
+								compacting: undefined,
+								tokensPerSecond: undefined,
+							}));
+						}
 						if (state !== "open" && !receivedFrame) {
 							// A reconnect before the first frame owns the placeholder
 							// again: nothing may publish over it.
@@ -1087,13 +1228,17 @@ export function App(props: {
 						}
 					},
 				});
-				if (agentSession()?.runId !== session.runId) {
+				if (!isCurrent()) {
 					stop();
 					return;
 				}
 				agentSessionStopWatch = stop;
 			} catch (error) {
-				if (agentSession()?.runId !== session.runId) return;
+				if (!isCurrent()) return;
+				if (onUnavailable) {
+					onUnavailable();
+					return;
+				}
 				agentSessionStopProjection();
 				setAgentSessionBlocks([
 					{
@@ -1108,6 +1253,48 @@ export function App(props: {
 			}
 		})();
 	};
+	// Consume the route request once after the dashboard has a concrete workflow
+	// snapshot. A missing session handle focuses only the matching run row; it
+	// never opens a different role's latest session as a substitute.
+	let handledAgentRequest: string | undefined;
+	createEffect(() => {
+		const requestId = props.agentRequestId;
+		const runId = props.agentRunId;
+		if (!requestId || !runId || handledAgentRequest === requestId) return;
+		const current = data();
+		if (current.state.phase === "loading") return;
+		const run = agentIndex().runsById.get(runId);
+		setFocusedAgentRunId(run?.id);
+		handledAgentRequest = requestId;
+		stopAgentSessionWatch();
+		backAgentSession();
+		setActivePanel(AGENTS_PANEL);
+		if (!run) {
+			setSelectedAgent(-1);
+			notify(`Agent run ${runId} is no longer available`, "warning");
+			props.onAgentRunRequestConsumed?.(requestId);
+			return;
+		}
+		// Superseded authoritative runs have a transient row at index zero.
+		setSelectedAgent(focusedAgentPosition(agentIndex(), run.id));
+		if (!run.hostSocket)
+			notify(
+				`Agent run ${runId} has no recorded session handle; showing its workflow row`,
+				"warning",
+			);
+		if (run.hostSocket) {
+			openAgentSession(
+				{
+					role: run.role,
+					runId: run.id,
+					hostSocket: run.hostSocket,
+					...(run.conversationId ? { conversationId: run.conversationId } : {}),
+				},
+				() => unavailableAgentSession(runId),
+			);
+		}
+		props.onAgentRunRequestConsumed?.(requestId);
+	});
 	const rememberAgentSessionInput = (text: string) => {
 		const history = overlays.agentSessionHistory();
 		if (history.at(-1) === text) return;
@@ -1123,25 +1310,36 @@ export function App(props: {
 			);
 		}
 	};
+	// Opening another session (even the same run again) invalidates pending
+	// controls. Neither success nor failure may publish into its replacement.
+	const currentAgentSessionControl = (runId: string) => {
+		const generation = agentSessionGeneration;
+		return () =>
+			generation === agentSessionGeneration && agentSession()?.runId === runId;
+	};
 	const submitAgentSession = (text: string) => {
 		const session = agentSession();
-		if (!session) return;
+		if (!session || agentSessionMetadata().connection !== "connected") return;
+		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				if (!isCurrent()) return;
+				const client = new HostClient(agentSessionEndpoint(session));
 				const response = await client.submit(
 					session.runId,
 					text,
 					crypto.randomUUID(),
 					"steer",
 				);
+				if (!isCurrent()) return;
 				// What the prompt did to the run's workflow state is part of the
 				// answer: an aborted run comes back active, a run that already handed
 				// off is reported instead of being quietly reopened.
 				const note = submissionStateNote(response.workflowState);
 				if (note) notify(note.text, note.tone);
 			} catch (error) {
+				if (!isCurrent()) return;
 				notify(
 					"Could not send message: " +
 						(error instanceof Error ? error.message : String(error)),
@@ -1155,12 +1353,15 @@ export function App(props: {
 		thinking?: string;
 	}) => {
 		const session = agentSession();
-		if (!session) return;
+		if (!session || agentSessionMetadata().connection !== "connected") return;
+		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				if (!isCurrent()) return;
+				const client = new HostClient(agentSessionEndpoint(session));
 				await client.configureRun(session.runId, change);
+				if (!isCurrent()) return;
 				// Show the accepted override immediately; the next watch frame carries
 				// the same value in `pi.agent` and reconciles any concurrent update.
 				if (agentSession()?.runId === session.runId)
@@ -1176,6 +1377,7 @@ export function App(props: {
 					"success",
 				);
 			} catch (error) {
+				if (!isCurrent()) return;
 				notify(
 					"Could not apply the change: " +
 						(error instanceof Error ? error.message : String(error)),
@@ -1186,11 +1388,13 @@ export function App(props: {
 	};
 	const abortAgentSession = () => {
 		const session = agentSession();
-		if (!session) return;
+		if (!session || agentSessionMetadata().connection !== "connected") return;
+		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				if (!isCurrent()) return;
+				const client = new HostClient(agentSessionEndpoint(session));
 				// A manual compaction is a conversation-owned, non-background task, so
 				// the abort cancels it too: say so in the transcript instead of leaving a
 				// compaction block that will never produce a summary.
@@ -1198,6 +1402,7 @@ export function App(props: {
 					(block) => block.kind === "compaction" && block.live === true,
 				);
 				await client.abort(session.runId);
+				if (!isCurrent()) return;
 				if (compacting) {
 					setAgentSessionNotices((notices) => [
 						...notices.filter(
@@ -1216,6 +1421,7 @@ export function App(props: {
 					);
 				} else notify("Abort requested", "info");
 			} catch (error) {
+				if (!isCurrent()) return;
 				notify(
 					"Could not abort the run: " +
 						(error instanceof Error ? error.message : String(error)),
@@ -1229,12 +1435,15 @@ export function App(props: {
 	 * compact" is never mistaken for a started compaction. */
 	const compactAgentSession = (instructions?: string) => {
 		const session = agentSession();
-		if (!session) return;
+		if (!session || agentSessionMetadata().connection !== "connected") return;
+		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
-				const client = new HostClient(session.hostSocket);
+				if (!isCurrent()) return;
+				const client = new HostClient(agentSessionEndpoint(session));
 				const answer = await client.compactRun(session.runId, instructions);
+				if (!isCurrent()) return;
 				switch (answer.status) {
 					case "started":
 						notify(
@@ -1256,6 +1465,7 @@ export function App(props: {
 						return;
 				}
 			} catch (error) {
+				if (!isCurrent()) return;
 				const message = error instanceof Error ? error.message : String(error);
 				notify(
 					message.includes("unknown-run")
@@ -1926,14 +2136,21 @@ export function App(props: {
 				if (next && !refreshDisposed && generation === refreshGeneration) {
 					setDashboardLoaded(true);
 					lastRefreshError = undefined;
+					const selectedRunId = agentPanelData().agents[selectedAgent()]?.runId;
 					setData(next);
 					traceTui("tui.dashboard.refresh", {
 						surface: "dashboard",
 						action: "refresh",
 					});
-					setSelectedAgent((index) =>
-						Math.min(index, Math.max(0, next.agents.length - 1)),
-					);
+					setSelectedAgent((index) => {
+						const agents = agentPanelData().agents;
+						const retained = selectedRunId
+							? agents.findIndex((agent) => agent.runId === selectedRunId)
+							: -1;
+						return retained >= 0
+							? retained
+							: Math.min(index, Math.max(0, agents.length - 1));
+					});
 				}
 			})
 			.catch((error) => {
@@ -2438,7 +2655,7 @@ export function App(props: {
 		setSelectedDecision,
 		openEvidenceView,
 		artifacts,
-		data,
+		data: agentPanelData,
 		setData,
 		dimensions,
 		notify,
@@ -2551,9 +2768,9 @@ export function App(props: {
 	});
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
-		// No agent session page is open until the Agents panel opens one; the
-		// grid's detail layer requires this field.
-		props.keymap.setData("agent.view", "none");
+		// A shell run request can open the session before mount; do not reset
+		// its field while installing the grid and session keymap layers.
+		props.keymap.setData("agent.view", agentSessionOpen() ? "session" : "none");
 		// Same for the evidence subview: only `Enter` on the Evidence panel opens
 		// it, and the grid's layer requires this field.
 		props.keymap.setData("evidence.view", "none");
@@ -3638,7 +3855,6 @@ export function App(props: {
 			disposeAgentSession();
 			disposeAgentSessionPicker();
 			disposeEvidenceView();
-			agentSessionStopWatch?.();
 			// The unmounted pages must not leave their keymap fields parking the grid
 			// layers of whatever surface mounts next.
 			props.keymap.setData("agent.view", "none");
@@ -3886,11 +4102,13 @@ export function App(props: {
 									/>
 								</box>
 								<AgentsPanel
-									data={data()}
+									data={agentPanelData()}
+									focusedRunId={focusedAgentRunId()}
+									historicalRunId={historicalAgentRunId()}
 									active={activePanel() === 1}
 									selectedIndex={selectedAgent()}
 									narrow={dimensions().width < 90}
-									activity={agentActivity.activity}
+									activity={rowAgentActivity}
 									statusPending={agentStatusPending}
 									detailsPending={!dashboardLoaded()}
 									onSelectIndex={setSelectedAgent}

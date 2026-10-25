@@ -371,11 +371,8 @@ describe("watch streams the conversation view over the control socket", () => {
 		}
 	});
 
-	test("a watch that names the conversation serves a run the host no longer tracks", async () => {
-		// The run id lives only in the host's in-memory run map: a host that
-		// restarted since the run was launched answers `unknown-run`. The
-		// conversation is durable, so a watcher that still holds it reads the
-		// transcript the run wrote — without ever registering a run to mutate.
+	test("a conversation hint cannot recover a run the host never issued", async () => {
+		// Knowing another run's conversation is not ownership evidence.
 		const dir = tempWorkflowDir();
 		const layout = hostLayout(dir);
 		const faux = fauxProvider();
@@ -402,19 +399,12 @@ describe("watch streams the conversation view over the control socket", () => {
 			const client = new HostClient(layout.socketPath, 10_000);
 			const forgotten = "run-id-from-a-previous-host";
 			const frames: unknown[] = [];
-			const stop = await client.watch(
-				forgotten,
-				(value) => frames.push(value),
-				{
+			await expect(
+				client.watch(forgotten, (value) => frames.push(value), {
 					conversationId: ensured.conversationId,
-				},
-			);
-			try {
-				expect(frames.length).toBeGreaterThanOrEqual(1);
-				expect(entryCount(frames[frames.length - 1])).toBe(0);
-			} finally {
-				stop();
-			}
+				}),
+			).rejects.toThrow(/unverified conversation/);
+			expect(frames).toEqual([]);
 			// Without the conversation there is nothing to serve: the client is told
 			// instead of waiting for a frame that never comes.
 			await expect(client.watch(forgotten, () => {})).rejects.toThrow(
@@ -423,13 +413,128 @@ describe("watch streams the conversation view over the control socket", () => {
 			// A conversation that does not exist is refused too.
 			await expect(
 				client.watch(forgotten, () => {}, { conversationId: "999999" }),
-			).rejects.toThrow(/conversation gone/);
+			).rejects.toThrow(/unverified conversation/);
 			// The recovery is read-only: the run id still names no run to mutate.
 			await expect(
 				client.submit(forgotten, "hi", "req-recovered"),
 			).rejects.toThrow(/unknown-run/);
 		} finally {
 			await host.shutdown();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("verified run ownership survives a real host restart, retirement and conversation reuse", async () => {
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const options = { layout, settings: {}, globalAgentDir: dir, models };
+		// Default SQLite storage, closed and reopened: this must exercise durable
+		// ownership, not a still-live host's in-memory run table.
+		const first = await DurableHost.open(options);
+		let restarted: DurableHost | undefined;
+		const stops: Array<() => void> = [];
+		try {
+			await first.listen();
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "");
+			const input = {
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default" as const,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			};
+			const a = await first.ensureRun({
+				...input,
+				runId: "run-a",
+				name: "worker",
+			});
+			const reused = await first.ensureRun({
+				...input,
+				runId: "run-a-retry",
+				name: "worker",
+			});
+			const b = await first.ensureRun({
+				...input,
+				runId: "run-b",
+				name: "other-worker",
+			});
+			expect(a.conversationId).toBe(reused.conversationId);
+			expect(a.conversationId).not.toBe(b.conversationId);
+			for (const [runId, text] of [
+				["run-a", "private transcript A"],
+				["run-b", "private transcript B"],
+			] as const) {
+				faux.setResponses([fauxAssistantMessage([fauxText(text)])]);
+				await first.submit(runId, text, `request-${runId}`);
+				for (
+					let i = 0;
+					i < 50 && (await first.status(runId)).status !== "idle";
+					i++
+				)
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				expect((await first.status(runId)).status).toBe("idle");
+			}
+			const initialClient = new HostClient(layout.socketPath, 10_000);
+			const leaked: unknown[] = [];
+			// Even a live in-memory run must not silently ignore a contradictory hint.
+			await expect(
+				initialClient.watch("run-a", (value) => leaked.push(value), {
+					conversationId: b.conversationId,
+				}),
+			).rejects.toThrow(/unverified conversation/);
+			await first.stopRun("run-a");
+			await first.shutdown();
+			restarted = await DurableHost.open(options);
+			await restarted.listen();
+			const client = new HostClient(layout.socketPath, 10_000);
+			for (const runId of ["run-a", "run-a-retry"]) {
+				const frames: unknown[] = [];
+				stops.push(
+					await client.watch(runId, (value) => frames.push(value), {
+						conversationId: a.conversationId,
+						patches: true,
+					}),
+				);
+				expect(frames.length).toBeGreaterThan(0);
+				const transcript = buildAgentSessionView(frames[0])
+					.map((block) => block.text)
+					.join("\n");
+				expect(transcript).toContain("private transcript A");
+				expect(transcript).not.toContain("private transcript B");
+			}
+			// Both run ids genuinely exist, but they do not own each other's
+			// conversations. Reject full, docs-only and patch requests before frames.
+			for (const mode of [{}, { view: "docs" as const }, { patches: true }]) {
+				for (const [runId, conversationId] of [
+					["run-a", b.conversationId],
+					["run-b", a.conversationId],
+					["never-issued", b.conversationId],
+					["run-a", "999999"],
+				] as const) {
+					await expect(
+						client.watch(runId, (value) => leaked.push(value), {
+							...mode,
+							conversationId,
+						}),
+					).rejects.toThrow(/unverified conversation/);
+				}
+			}
+			expect(leaked).toEqual([]);
+			await expect(client.watch("run-a", () => {})).rejects.toThrow(
+				/unknown-run/,
+			);
+			// A recovered watch is not authority to control a run after restart.
+			await expect(
+				client.submit("run-a", "must not send", "recovered-submit"),
+			).rejects.toThrow(/unknown-run/);
+			await expect(client.abort("run-a")).rejects.toThrow(/unknown-run/);
+		} finally {
+			for (const stop of stops) stop();
+			await restarted?.shutdown();
+			await first.shutdown();
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});

@@ -82,11 +82,10 @@ export interface ShutdownRequest {
 export interface WatchRequest {
 	readonly type: "watch";
 	readonly runId: string;
-	/** The run's durable conversation, for a client that still holds it while the
-	 * host no longer tracks the run: a host restart drops the in-memory run map,
-	 * and the run id lives only there. Read-only by construction — the watch
-	 * serves the transcript the conversation already holds and never registers a
-	 * run, so `submit`/`abort` keep refusing an unknown run id. */
+	/** Recovery hint for a run whose in-memory record was lost on host restart.
+	 * The host must verify its persisted run/conversation association before
+	 * publishing any frame; a caller-supplied conversation alone is not evidence.
+	 * Recovery never registers a run, so submit/abort still refuse unknown runs. */
 	readonly conversationId?: string;
 	/** What each frame must carry. `docs` serves the live documents (`pi.live`,
 	 * `pi.inbox`) without the committed transcript: the Agents panel's activity

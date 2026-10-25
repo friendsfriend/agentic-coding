@@ -255,6 +255,45 @@ test("a watch that never connects stops gathering and falls back to the status",
 	source.dispose();
 });
 
+test("disconnect and reconnect clear an observed tool until a fresh frame arrives", async () => {
+	const { calls, watch } = fakeWatch();
+	const source = createAgentActivitySource({ watch });
+	try {
+		source.sync([
+			{ role: "worker", runId: "run-1", hostSocket: "/tmp/host.sock" },
+		]);
+		await settle();
+		const call = calls[0];
+		if (!call) throw new Error("watch not acquired");
+		for (const state of ["closed", "connecting"] as const) {
+			call.onValue(
+				liveFrame({ run: {}, tools: [{ name: "bash", status: "running" }] }),
+			);
+			expect(source.activity("worker")?.label).toBe("bash");
+			call.onState?.(state);
+			expect(source.activity("worker")).toBeUndefined();
+			call.onState?.("open");
+			expect(source.activity("worker")).toBeUndefined();
+		}
+		call.onValue(
+			liveFrame({ run: {}, tools: [{ name: "write", status: "running" }] }),
+		);
+		expect(source.activity("worker")?.label).toBe("write");
+		// A delayed disconnect from the old identity cannot clear a newer run.
+		source.sync([
+			{ role: "worker", runId: "run-2", hostSocket: "/tmp/host.sock" },
+		]);
+		await settle();
+		calls[1]?.onValue(
+			liveFrame({ run: {}, tools: [{ name: "read", status: "running" }] }),
+		);
+		call.onState?.("closed");
+		expect(source.activity("worker")?.label).toBe("read");
+	} finally {
+		source.dispose();
+	}
+});
+
 test("removing an agent and disposing the source clear the gathering state", async () => {
 	const { watch } = fakeWatch();
 	const source = createAgentActivitySource({ watch });

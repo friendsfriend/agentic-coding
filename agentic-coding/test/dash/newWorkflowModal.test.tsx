@@ -141,10 +141,22 @@ async function frameContaining(
 	t: Awaited<ReturnType<typeof testRender>>,
 	needle: string,
 ): Promise<string> {
-	let frame = t.captureCharFrame();
-	for (let attempt = 0; attempt < 50 && !frame.includes(needle); attempt++) {
+	let frame = "";
+	for (let attempt = 0; attempt < 50; attempt++) {
+		try {
+			frame = t.captureCharFrame();
+			if (frame.includes(needle)) return frame;
+		} catch (error) {
+			// The native output thread can briefly hold the capture buffer lease.
+			// Retry only that transient refusal, not assertion/rendering failures.
+			if (
+				!(error instanceof Error) ||
+				!error.message.includes("OutputBusy") ||
+				attempt === 49
+			)
+				throw error;
+		}
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		frame = t.captureCharFrame();
 	}
 	return frame;
 }
@@ -338,6 +350,7 @@ test("a catalog read the cache superseded is retried, not shown as no projects",
 	);
 	const frame = await frameContaining(t, "Billing API");
 	expect(reads).toBeGreaterThan(1);
+	expect(frame).toContain("Billing API");
 	expect(frame).not.toContain("Configured projects");
 	t.renderer.destroy();
 });

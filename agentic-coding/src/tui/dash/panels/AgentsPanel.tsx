@@ -19,15 +19,21 @@ export interface AgentsPanelProps {
 	readonly data: DashboardData;
 	readonly active: boolean;
 	readonly selectedIndex: number;
+	/** Exact route focus, including a transient superseded run row. */
+	readonly focusedRunId?: string | undefined;
+	readonly historicalRunId?: string | undefined;
 	/** The finding summary takes three rows below this width. */
 	readonly narrow: boolean;
 	/** What a durable run is doing right now, from its host watch. Absent (or
 	 * nothing in flight) keeps the workflow status badge. */
-	readonly activity?: (role: string) => AgentActivity | undefined;
+	readonly activity?: (
+		role: string,
+		runId?: string,
+	) => AgentActivity | undefined;
 	/** True while the row's status is still provisional: the cheap seed before
 	 * the full observation lands, or a durable watch before its first frame.
 	 * The badge then gathers instead of naming a status that may be wrong. */
-	readonly statusPending?: (role: string) => boolean;
+	readonly statusPending?: (role: string, runId?: string) => boolean;
 	/** True while per-agent details (the verifier verdict) are still derived
 	 * from the seed rather than the full observation. */
 	readonly detailsPending?: boolean;
@@ -48,18 +54,30 @@ export function AgentsPanel(props: AgentsPanelProps) {
 	// terminal has). `undefined` until the first measurement, so the list keeps its
 	// host-chrome fallback for the frame that precedes it.
 	const [bodyLines, setBodyLines] = createSignal<number | undefined>(undefined);
+	const [bodyColumns, setBodyColumns] = createSignal(30);
 	let body: BoxRenderable | undefined;
 	const measure = () => {
 		if (!body) return;
 		const next = Math.max(1, body.height ?? 0);
 		if (next !== bodyLines()) setBodyLines(next);
+		// Reserve the selection marker and row padding. Identity text wraps by
+		// character so even a full historical UUID remains visible when narrow.
+		setBodyColumns(Math.max(1, body.width - 4));
 	};
 	const findingSummaryRows = () => (props.narrow ? 3 : 1);
 	/** The row heights, in item order: role + runtime/model, plus the metrics
 	 * line and the finding summary when present. `SelectableList` needs them to
 	 * fill the panel — a single estimate cannot cover two- to five-line rows. */
+	const focusCaption = (agent: DashboardData["agents"][number]) =>
+		agent.runId === props.historicalRunId ? "Historical run:" : "Run:";
+	const focusLines = (agent: DashboardData["agents"][number]) =>
+		agent.runId && agent.runId === props.focusedRunId
+			? Math.ceil(focusCaption(agent).length / bodyColumns()) +
+				Math.ceil(agent.runId.length / bodyColumns())
+			: 0;
 	const rowHeight = (agent: DashboardData["agents"][number]): number =>
 		2 +
+		focusLines(agent) +
 		(agentMetricLine(agent.metrics) ? 1 : 0) +
 		(agent.findingCounts ? findingSummaryRows() : 0);
 	const rowHeights = () => props.data.agents.map(rowHeight);
@@ -100,9 +118,11 @@ export function AgentsPanel(props: AgentsPanelProps) {
 					{...(props.onActivateRow ? { onActivate: props.onActivateRow } : {})}
 					renderItem={(agent, _selected) => {
 						const timeline = () =>
-							props.data.verifierTimeline.find(
-								(item) => item.role === agent.role,
-							);
+							agent.runId && agent.runId === props.historicalRunId
+								? undefined
+								: props.data.verifierTimeline.find(
+										(item) => item.role === agent.role,
+									);
 						const metricsLine = () => agentMetricLine(agent.metrics);
 						const runtimeModelLine = () =>
 							agentRuntimeModelLine(
@@ -113,13 +133,14 @@ export function AgentsPanel(props: AgentsPanelProps) {
 						// flight: the badge then names what the run is doing (bash/read/thinking)
 						// instead of the status word it will only settle into later.
 						const activity = () => {
-							const current = props.activity?.(agent.role);
+							const current = props.activity?.(agent.role, agent.runId);
 							return current?.active ? current : undefined;
 						};
 						// A live step is already the truth; otherwise a provisional
 						// status gathers instead of painting the seed's guess.
 						const statusLoading = () =>
-							!activity() && props.statusPending?.(agent.role) === true;
+							!activity() &&
+							props.statusPending?.(agent.role, agent.runId) === true;
 						const highlight = (): Highlight => {
 							if (statusLoading()) return "highlight2";
 							const running = activity();
@@ -142,6 +163,17 @@ export function AgentsPanel(props: AgentsPanelProps) {
 								flexDirection="column"
 								paddingRight={1}
 							>
+								<Show when={agent.runId && agent.runId === props.focusedRunId}>
+									<text
+										fg={uiColors.textMuted}
+										height={focusLines(agent)}
+										wrapMode="char"
+									>
+										{focusCaption(agent)}
+										{"\n"}
+										{agent.runId}
+									</text>
+								</Show>
 								<box width="100%" height={1} flexDirection="row">
 									<box flexGrow={1} minWidth={0} overflow="hidden">
 										<text

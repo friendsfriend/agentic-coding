@@ -4,7 +4,7 @@
 // styling), and its input drives submit/abort without any competing text keymap
 // binding while the view owns the keyboard (see the module comment in
 // AgentSessionView.tsx for why).
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
 	CodeRenderable,
 	DiffRenderable,
@@ -18,15 +18,185 @@ import { testRender, useRenderer } from "@opentui/solid";
 import { uiColors } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import {
+	AGENT_SESSION_BLOCK_LIMIT,
 	type AgentSessionBlock,
+	type AgentSessionConnection,
 	BROWSER_TOOL_GLYPH,
 } from "../../src/tui/dash/agent-session.ts";
 import {
 	AgentSessionView,
 	SESSION_PICKER_KEYS,
 } from "../../src/tui/dash/ui/AgentSessionView.tsx";
+import { SessionMarkdownCache } from "../../src/tui/dash/ui/session-markdown-cache.ts";
 import { TranscriptFile } from "../../src/tui/dash/ui/TranscriptFile.tsx";
 import { guardOrchestratorSubmit } from "../../src/tui/orchestrator/submission.ts";
+
+for (const connection of ["connecting", "disconnected"] as const) {
+	test(`${connection} preserves drafts and pauses submit and session commands until recovery`, async () => {
+		const [state, setState] = createSignal<AgentSessionConnection>(connection);
+		const [draft, setDraft] = createSignal("keep draft");
+		const calls: string[] = [];
+		const t = await testRender(
+			() => (
+				<AgentSessionView
+					role="worker"
+					blocks={[]}
+					working={false}
+					connection={state()}
+					history={[]}
+					onHistoryAppend={() => calls.push("history")}
+					models={["test/model"]}
+					thinkingLevels={["off", "high"]}
+					draft={draft()}
+					onDraftChange={setDraft}
+					onSubmit={(text) => calls.push(`submit:${text}`)}
+					onAbort={() => calls.push("abort")}
+					onBack={() => {}}
+					onConfigure={() => calls.push("configure")}
+					onCompact={() => calls.push("compact")}
+				/>
+			),
+			{ width: 110, height: 30 },
+		);
+		try {
+			await t.renderOnce();
+			const frame = t.captureCharFrame();
+			expect(frame).toContain("keep draft");
+			expect(frame).toContain("controls paused");
+			if (connection === "connecting") {
+				expect(frame).toContain("Connecting to the recorded session");
+				expect(frame).not.toContain("stale");
+			} else expect(frame).toContain("Transcript is stale");
+			for (const text of [
+				"/compact retain important context",
+				"/abort",
+				"/model",
+				"/thinking",
+				"keep draft",
+			]) {
+				setDraft(text);
+				await t.renderOnce();
+				t.mockInput.pressEnter();
+				await t.renderOnce();
+				expect(draft()).toBe(text);
+				expect(calls).toEqual([]);
+			}
+			setState("connected");
+			await t.renderOnce();
+			expect(t.captureCharFrame()).not.toContain("controls paused");
+			expect(t.captureCharFrame()).toContain("keep draft");
+			t.mockInput.pressEnter();
+			await t.renderOnce();
+			expect(calls).toEqual(["history", "submit:keep draft"]);
+			expect(draft()).toBe("");
+		} finally {
+			t.renderer.destroy();
+		}
+	});
+}
+
+test("a picker opened before disconnection cannot dispatch configuration while paused", async () => {
+	const [connection, setConnection] =
+		createSignal<AgentSessionConnection>("connected");
+	const [draft, setDraft] = createSignal("");
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	let configured = 0;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[]}
+				working={false}
+				connection={connection()}
+				history={[]}
+				onHistoryAppend={() => {}}
+				models={["test/model"]}
+				thinkingLevels={["off"]}
+				draft={draft()}
+				onDraftChange={setDraft}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => configured++}
+				onCompact={() => {}}
+				onPickerKeyReady={(value) => {
+					handler = value;
+				}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.renderOnce();
+		for (const character of "/model") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Select model");
+		setConnection("disconnected");
+		handler?.({ name: "enter" } as KeyEvent);
+		await t.renderOnce();
+		expect(configured).toBe(0);
+		expect(t.captureCharFrame()).not.toContain("Select model");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("rolling session-view blocks use a projection-bounded markdown cache", async () => {
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([]);
+	const seen = new Set<SessionMarkdownCache>();
+	const original = SessionMarkdownCache.prototype.parts;
+	const parts = spyOn(
+		SessionMarkdownCache.prototype,
+		"parts",
+	).mockImplementation(function (this: SessionMarkdownCache, key, content) {
+		seen.add(this);
+		return original.call(this, key, content);
+	});
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={false}
+				history={[]}
+				onHistoryAppend={() => {}}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		for (let batch = 0; batch < 16; batch++) {
+			setBlocks(
+				Array.from({ length: 24 }, (_, index) => ({
+					id: `batch-${batch}-${index}`,
+					kind: "assistant",
+					text: `answer batch ${batch} message ${index}`,
+					tone: "base",
+				})),
+			);
+			await t.renderOnce();
+			await t.renderOnce();
+		}
+		expect(seen.size).toBe(1);
+		expect(parts.mock.calls.length).toBeGreaterThan(AGENT_SESSION_BLOCK_LIMIT);
+		for (const cache of seen)
+			expect(cache.size).toBe(AGENT_SESSION_BLOCK_LIMIT);
+		expect(t.captureCharFrame()).toContain("answer batch 15");
+	} finally {
+		t.renderer.destroy();
+		parts.mockRestore();
+	}
+});
 
 function renderTree(node: Renderable): Renderable[] {
 	return [node, ...node.getChildren().flatMap(renderTree)];

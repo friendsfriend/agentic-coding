@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
 import {
+	agentSidebarKeybindCatalog,
 	observabilityKeybindCatalog,
 	opencodeKeybindCatalog,
 	piKeybindCatalog,
@@ -123,11 +124,21 @@ describe("workspace sidebar keybind catalog", () => {
 
 	it("names the cycle in the page body's panel section", () => {
 		// The page body advertises how to reach and walk the sidebar, so the
-		// cycle travels with the Ctrl+S toggle rather than living only in the
-		// panel's own catalog.
+		// cycle and agent toggle travel with the Ctrl+S toggle rather than living
+		// only in their own panel catalogs.
 		expect(
 			catalogKeybinds([workspaceSidebarPanelSection()]).map((kb) => kb.key),
-		).toEqual(["Ctrl+S", "Ctrl+H", "Ctrl+L"]);
+		).toEqual(["Ctrl+S", "Ctrl+A", "Ctrl+H", "Ctrl+L"]);
+	});
+
+	it("lists the agent sidebar toggle with its navigation keys", () => {
+		const all = catalogKeybinds(agentSidebarKeybindCatalog());
+		expect(all.find((keybind) => keybind.key === "Ctrl+A")?.action).toBe(
+			"toggle focus to the agent sidebar",
+		);
+		expect(all.find((keybind) => keybind.key === "j/k or ↑/↓")?.standard).toBe(
+			true,
+		);
 	});
 
 	it("does not advertise Ctrl+T while the OpenCode page is selected", () => {
@@ -135,6 +146,7 @@ describe("workspace sidebar keybind catalog", () => {
 		const all = catalogKeybinds(catalog);
 		expect(all.map((keybind) => keybind.key)).not.toContain("Ctrl+T");
 		expect(all.map((keybind) => keybind.key)).toContain("Ctrl+S");
+		expect(all.map((keybind) => keybind.key)).toContain("Ctrl+A");
 	});
 });
 
