@@ -102,6 +102,9 @@ describe("page routes: structural hierarchy", () => {
 		expect(PAGES.pi.label).toBe("Pi");
 		expect(parentRoute({ page: "pi" })).toEqual({ page: "home" });
 		expect(picker.some((entry) => entry.page === "pi")).toBe(false);
+		expect(PAGES["pi-durable"].label).toBe("Pi Durable");
+		expect(parentRoute({ page: "pi-durable" })).toEqual({ page: "home" });
+		expect(picker.some((entry) => entry.page === "pi-durable")).toBe(false);
 		// Resource destinations need an identity, so they are not picker rows.
 		expect(picker.some((entry) => entry.page === "environments.resource")).toBe(
 			false,

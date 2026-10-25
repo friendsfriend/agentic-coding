@@ -66,17 +66,28 @@ import {
 	isBrowserTool,
 	reuseAgentSessionBlocks,
 	SLOW_CALL_MS,
+	toolArgsSummary,
+	toolIcon,
 } from "../agent-session.ts";
+import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
-import { TranscriptFile } from "./TranscriptFile.tsx";
+import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
+import { ToolSurfaceHoverContext, TranscriptFile } from "./TranscriptFile.tsx";
+import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 import {
 	type ToolViewRow,
 	type ToolViewSection,
 	toolPendingView,
 	toolView,
 } from "./tool-views.ts";
+import {
+	createTranscriptViewport,
+	estimateTextRows,
+	TranscriptViewportContext,
+	VirtualToolBody,
+} from "./transcript-viewport.tsx";
 
 export interface AgentSessionViewProps {
 	readonly role: string;
@@ -200,8 +211,6 @@ const TRANSCRIPT_WINDOW = 60;
 const TRANSCRIPT_PAGE = 40;
 /** Compact user prompts while preserving the full text for click-to-expand. */
 const USER_PROMPT_PREVIEW_LINES = 5;
-/** A visual-row budget, so long wrapped source lines cannot flood the page. */
-const FILE_TOOL_PREVIEW_LINES = 8;
 
 /** The separator between the transcript and its newest output: a rule in the
  * theme's accent with `new` and a down arrow centered on it, so the boundary is
@@ -441,39 +450,52 @@ function Stamp(props: {
 function ToolRow(props: {
 	block: AgentSessionBlock;
 	row: ToolViewRow;
-	/** Which rows are folded open, and how to fold one. */
+	/** IDs folded away from their expanded default, and how to toggle one. */
 	openRows: () => ReadonlySet<string>;
 	onToggleRow: (key: string) => void;
 	transcript: MarkdownPartsFor;
 }) {
 	const key = () => `${props.block.id}:${props.row.id ?? props.row.text}`;
-	const open = () => props.openRows().has(key());
+	const open = () => !props.openRows().has(key());
 	const detail = () => props.row.detail ?? [];
 	const syntaxStyle = useMarkdownSyntaxStyle();
+	if (props.row.table) return <ToolTable table={props.row.table} />;
 	// A row of source — a codemode script — is drawn as the code it is, one
 	// highlighted block rather than a fold. `drawUnstyledText` keeps it visible
 	// while the tree-sitter pass is still in flight.
 	if (props.row.syntax)
 		return (
-			<box flexDirection="column">
-				<code
-					filetype={props.row.syntax}
-					content={props.row.text}
-					syntaxStyle={syntaxStyle}
-					drawUnstyledText
-					fg={toolTextColor(props.row)}
-				/>
-			</box>
+			<VirtualToolBody
+				cacheKey={props.row.text}
+				estimateHeight={(width) => estimateTextRows(props.row.text, width)}
+			>
+				<box flexDirection="column">
+					<code
+						filetype={props.row.syntax}
+						content={props.row.text}
+						syntaxStyle={syntaxStyle}
+						drawUnstyledText
+						fg={toolTextColor(props.row)}
+						wrapMode="word"
+					/>
+				</box>
+			</VirtualToolBody>
 		);
 	return (
 		<box flexDirection="column">
 			<box
 				flexDirection="row"
-				{...(detail().length > 0 ? useTap(() => props.onToggleRow(key())) : {})}
+				{...(detail().length > 0
+					? useTap(() => props.onToggleRow(key()), { stopPropagation: true })
+					: {})}
 			>
-				<Show when={detail().length > 0}>
-					<text width={2} flexShrink={0} fg={uiColors.textMuted}>
-						{open() ? "▾" : "▸"}
+				<Show when={props.row.lineNumber !== undefined}>
+					<text
+						fg={uiColors.textMuted}
+						width={Math.max(3, String(props.row.lineNumber).length) + 1}
+						flexShrink={0}
+					>
+						{String(props.row.lineNumber).padStart(3)}{" "}
 					</text>
 				</Show>
 				<Show
@@ -481,37 +503,110 @@ function ToolRow(props: {
 					fallback={
 						// A row is read in place: a long output line wraps onto the
 						// next rows instead of losing its middle to an ellipsis.
-						<text fg={toolTextColor(props.row)} wrapMode="word">
-							{props.row.text}
+						<text
+							fg={toolTextColor(props.row)}
+							wrapMode="word"
+							flexGrow={1}
+							minWidth={0}
+						>
+							{props.row.highlight &&
+							props.row.text.includes(props.row.highlight)
+								? props.row.text
+										.split(props.row.highlight)
+										.flatMap((part, index) =>
+											index === 0
+												? [part]
+												: [
+														<span style={{ fg: uiColors.accent }}>
+															{props.row.highlight}
+														</span>,
+														part,
+													],
+										)
+								: props.row.text}
 						</text>
 					}
 				>
-					<AssistantMarkdown
-						transcript={props.transcript}
-						partKey={key()}
-						text={props.row.text}
-						fg={toolTextColor(props.row)}
-					/>
+					<VirtualToolBody
+						cacheKey={props.row.text}
+						estimateHeight={(width) => estimateTextRows(props.row.text, width)}
+					>
+						<AssistantMarkdown
+							transcript={props.transcript}
+							partKey={key()}
+							text={props.row.text}
+							fg={toolTextColor(props.row)}
+						/>
+					</VirtualToolBody>
 				</Show>
 			</box>
-			<Show when={open()}>
+			<Show when={detail().length > 0 && open()}>
 				<box flexDirection="column" paddingLeft={2}>
 					{/* A row's detail is rows again: a question folds into its options, an
 					    option into the description the agent attached to it. */}
-					<For each={detail()}>
-						{(row) => (
-							<ToolRow
-								block={props.block}
-								row={row}
-								openRows={props.openRows}
-								onToggleRow={props.onToggleRow}
-								transcript={props.transcript}
-							/>
-						)}
-					</For>
+					<ToolRows {...props} rows={detail()} />
 				</box>
 			</Show>
 		</box>
+	);
+}
+
+function ToolRows(props: {
+	rows: readonly ToolViewRow[];
+	block: AgentSessionBlock;
+	openRows: () => ReadonlySet<string>;
+	onToggleRow: (key: string) => void;
+	transcript: MarkdownPartsFor;
+}) {
+	const render = (row: ToolViewRow) => <ToolRow {...props} row={row} />;
+	const height = (row: ToolViewRow, width: number): number => {
+		if (row.table) {
+			const table = row.table;
+			return (
+				1 +
+				table.rows.reduce(
+					(sum, item) => sum + estimateTableRow(item, table.columns, width),
+					0,
+				)
+			);
+		}
+		return (
+			estimateTextRows(row.text, width) +
+			(props.openRows().has(`${props.block.id}:${row.id ?? row.text}`)
+				? 0
+				: (row.detail ?? []).reduce(
+						(sum, item) => sum + height(item, Math.max(1, width - 2)),
+						0,
+					))
+		);
+	};
+	const chunks = createMemo(() =>
+		Array.from(
+			{ length: Math.ceil(props.rows.length / 30) },
+			(_, index) => index * 30,
+		),
+	);
+	return (
+		<Show
+			when={props.rows.length > 80}
+			fallback={<For each={props.rows}>{render}</For>}
+		>
+			<For each={chunks()}>
+				{(start) => (
+					<VirtualToolBody
+						force
+						cacheKey={[props.rows, props.openRows()]}
+						estimateHeight={(width) =>
+							props.rows
+								.slice(start, start + 30)
+								.reduce((sum, row) => sum + height(row, width), 0)
+						}
+					>
+						<For each={props.rows.slice(start, start + 30)}>{render}</For>
+					</VirtualToolBody>
+				)}
+			</For>
+		</Show>
 	);
 }
 
@@ -519,7 +614,8 @@ function ToolRow(props: {
  * block of source drawn as one highlighted code row. */
 function sectionLineCount(section: ToolViewSection): number {
 	return section.rows.reduce(
-		(total, row) => total + row.text.split("\n").length,
+		(total, row) =>
+			total + (row.table ? row.table.rows.length : row.text.split("\n").length),
 		0,
 	);
 }
@@ -531,43 +627,64 @@ function sectionLineCount(section: ToolViewSection): number {
  * uses the block for every tool so a run reads as one consistent stack of call
  * surfaces rather than switching shapes by tool. The pointer lifts the fill one
  * surface step; the state rule keeps its own color. */
-function ToolFrame(props: { color: string; children: JSX.Element }) {
-	const hover = useHover();
+function ToolFrame(props: {
+	color: string;
+	children: JSX.Element;
+	onToggle?: () => void;
+	neutral?: boolean;
+}) {
+	const tap = useTap(() => props.onToggle?.(), {
+		enabled: () => props.onToggle !== undefined,
+		stopPropagation: true,
+	});
+	const hover = useHover(tap.onMouseOut);
 	return (
 		<box
 			border={["left"]}
 			borderStyle="heavy"
 			borderColor={props.color}
-			backgroundColor={hover.hovered() ? uiColors.bgHover : uiColors.bgMantle}
+			backgroundColor={
+				props.neutral
+					? undefined
+					: hover.hovered()
+						? uiColors.bgHover
+						: uiColors.bgMantle
+			}
 			paddingTop={1}
 			paddingBottom={1}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
+			{...tap}
 			onMouseOver={hover.onMouseOver}
 			onMouseOut={hover.onMouseOut}
 		>
-			{props.children}
+			<ToolSurfaceHoverContext.Provider
+				value={() => !props.neutral && hover.hovered()}
+			>
+				{props.children}
+			</ToolSurfaceHoverContext.Provider>
 		</box>
 	);
 }
 
-/** A tool call's header row: fold, family glyph, action icon, label, facts and
+/** A tool call's header row: family glyph, action icon, label, facts and
  * timing. Browser tools carry their web glyph before the action icon, so the
  * family reads at a glance while the action icon keeps the call's state. The
  * icon slot carries the spinner while the call runs, the way opencode draws a
  * running tool. The label is the call's primary content, so it stays regular;
  * only a failed call takes the error color, and the hint stays muted. */
 function ToolCallHeader(props: {
+	failed?: boolean;
 	block: AgentSessionBlock;
 	icon: string;
 	label: string;
 	hint?: string;
-	expandable: boolean;
-	expanded: boolean;
 	onToggle: () => void;
+	compact?: boolean;
 }) {
 	const failed = () =>
+		props.failed ||
 		props.block.tone === "error" ||
 		props.block.toolCall?.result?.isError === true;
 	const iconFg = () => (failed() ? uiColors.error : uiColors.textMuted);
@@ -575,12 +692,10 @@ function ToolCallHeader(props: {
 	const browser = () =>
 		isBrowserTool(props.block.toolCall?.name ?? props.block.tool);
 	return (
-		<box flexDirection="row" {...useTap(props.onToggle)}>
-			{/* The fold glyph leads the row, so a list of tool rows reads as a list
-			    of folds rather than a ragged right edge. */}
-			<text width={2} flexShrink={0} fg={uiColors.textMuted}>
-				{props.expandable ? (props.expanded ? "▾" : "▸") : ""}
-			</text>
+		<box
+			flexDirection="row"
+			{...useTap(props.onToggle, { stopPropagation: true })}
+		>
 			{/* Browser tools need one more cell: family glyph + action glyph + the
 			    gap before the label. Other tools keep the existing two-cell gutter. */}
 			<box width={browser() ? 3 : 2} flexShrink={0} flexDirection="row">
@@ -600,12 +715,24 @@ function ToolCallHeader(props: {
 			    folds the row to see the call, not to see a clipped one: it wraps
 			    onto further lines instead of being cut with an ellipsis. The fold
 			    glyph, icon and facts stay on the first line. */}
-			<text fg={labelFg()} flexGrow={1} minWidth={0} wrapMode="word">
+			<text
+				fg={labelFg()}
+				flexGrow={1}
+				minWidth={0}
+				wrapMode={props.compact ? "char" : "word"}
+				maxHeight={props.compact ? 2 : undefined}
+			>
 				{props.label}
 			</text>
 			<Show when={props.hint}>
 				{(hint) => (
-					<text fg={uiColors.textMuted} flexShrink={0}>
+					<text
+						fg={uiColors.textMuted}
+						flexShrink={1}
+						minWidth={0}
+						maxWidth="45%"
+						wrapMode="word"
+					>
 						{` ${hint()}`}
 					</text>
 				)}
@@ -665,23 +792,205 @@ function UserPrompt(props: {
 /** One transcript entry. Assistant output is markdown with no status box;
  * thinking is collapsible; a tool call is a raised bordered block; every other
  * entry is a status box with the same left highlight the prompt uses. */
-function Block(props: {
+interface BlockProps {
 	block: AgentSessionBlock;
 	role: string;
 	expanded: boolean;
 	onToggle: (id: string) => void;
 	/** The parsed markdown parts of a block, reused across this view's frames. */
 	transcript: MarkdownPartsFor;
-	/** Which parts a reader toggled away from their default, and how to toggle
-	 * one: a part that starts folded (`script`) opens on a click, one that starts
-	 * open closes on it. */
+	/** Sections folded away from the expanded default, and how to toggle one. */
 	toggledSections: () => ReadonlySet<string>;
 	onToggleSection: (key: string) => void;
 	/** The rows folded open, and how to fold one: a call inside a script opens
 	 * into its own view without expanding the rest. */
 	openRows: () => ReadonlySet<string>;
 	onToggleRow: (key: string) => void;
-}) {
+}
+
+/** A codemode container survives progress changes; only a changed child card
+ * is replaced. Script and completed native code views keep their resources. */
+function CodemodeBlock(props: BlockProps) {
+	const tool = createMemo(() => {
+		const call = props.block.toolCall;
+		return call
+			? props.block.pending
+				? toolPendingView(call, props.block.detail ?? [])
+				: toolView(call)
+			: undefined;
+	});
+	const group = () => tool()?.codemode;
+	const script = createMemo(() => group()?.script ?? "");
+	const output = createMemo(() =>
+		(group()?.output ?? []).map((row) => row.text).join("\n"),
+	);
+	const outputRows = createMemo(() =>
+		output()
+			? output()
+					.split("\n")
+					.map((text) => ({ text }))
+			: [],
+	);
+	const scriptId = `${props.block.id}:script`;
+	const outputId = `${props.block.id}:output`;
+	const open = (id: string) => !props.openRows().has(id);
+	const childBlocks = createMemo(
+		(previous: readonly AgentSessionBlock[] | undefined) =>
+			reuseAgentSessionBlocks(
+				previous ?? [],
+				(group()?.calls ?? []).map(
+					(entry, index): AgentSessionBlock => ({
+						id: `${props.block.id}:call:${index}`,
+						kind: "tool",
+						text: `${entry.call.name} ${toolArgsSummary(entry.call.args)}`.trimEnd(),
+						icon: toolIcon(entry.call.name),
+						tool: entry.call.name,
+						toolCall: entry.call,
+						pending: entry.status === "running",
+						tone:
+							entry.status === "running"
+								? "warning"
+								: entry.status === "ok"
+									? "success"
+									: "error",
+						detail: entry.call.result?.lines,
+						...(entry.durationMs === undefined
+							? {}
+							: { durationMs: entry.durationMs }),
+					}),
+				),
+			),
+		undefined,
+	);
+	return (
+		<box flexDirection="column" flexShrink={0}>
+			<box flexDirection="row">
+				<text fg={toolBorderColor(props.block)}>╭─ λ Codemode</text>
+				<text fg={uiColors.textMuted} flexGrow={1}>
+					{(group()?.calls.length ?? 0) > 0 ? ` · ${tool()?.summary}` : ""}
+				</text>
+				<Stamp block={props.block} duration />
+			</box>
+			<box
+				border={["left"]}
+				borderColor={toolBorderColor(props.block)}
+				paddingLeft={2}
+				paddingTop={1}
+				paddingBottom={1}
+				flexDirection="column"
+				gap={1}
+			>
+				<ToolFrame
+					color={uiColors.textMuted}
+					onToggle={() => props.onToggleRow(scriptId)}
+				>
+					<box flexDirection="column">
+						<ToolCallHeader
+							block={{
+								...props.block,
+								id: scriptId,
+								pending: false,
+								toolCall: undefined,
+								tone: "muted",
+							}}
+							icon="λ"
+							label="Script"
+							hint={`${script().split("\n").length} lines`}
+							onToggle={() => props.onToggleRow(scriptId)}
+						/>
+						<Show when={open(scriptId)}>
+							<box paddingTop={1} paddingLeft={2}>
+								<TranscriptFile
+									file={{ kind: "code", path: "script.js", content: script() }}
+								/>
+							</box>
+						</Show>
+					</box>
+				</ToolFrame>
+				<For each={childBlocks()}>
+					{(block) => (
+						<Block
+							{...props}
+							block={block}
+							expanded={open(block.id)}
+							onToggle={props.onToggleRow}
+						/>
+					)}
+				</For>
+				<ToolFrame
+					color={toolBorderColor(props.block)}
+					onToggle={() => props.onToggleRow(outputId)}
+				>
+					<box flexDirection="column">
+						<ToolCallHeader
+							block={props.block}
+							icon="$"
+							label="Output"
+							hint={
+								outputRows().length > 0
+									? `${outputRows().length} lines`
+									: undefined
+							}
+							onToggle={() => props.onToggleRow(outputId)}
+						/>
+						<box paddingLeft={2}>
+							<TranscriptShellOutput
+								command="Output"
+								rows={outputRows()}
+								expanded={open(outputId)}
+								failed={props.block.toolCall?.result?.isError === true}
+							/>
+							<Show when={open(outputId)}>
+								<For each={props.block.toolCall?.result?.notes ?? []}>
+									{(note) => <text fg={uiColors.textMuted}>{note}</text>}
+								</For>
+							</Show>
+						</box>
+					</box>
+				</ToolFrame>
+			</box>
+			<text
+				fg={toolBorderColor(props.block)}
+			>{`╰─ Codemode ${props.block.aborted ? "aborted" : props.block.pending ? "running…" : props.block.toolCall?.result?.isError || props.block.tone === "error" ? "failed" : "completed"}`}</text>
+		</box>
+	);
+}
+
+function GroupedRead(props: BlockProps) {
+	const source = createMemo(() =>
+		(props.block.toolCall?.result?.lines ?? props.block.detail ?? []).join(
+			"\n",
+		),
+	);
+	return (
+		<VirtualToolBody
+			cacheKey={[props.block, props.expanded]}
+			estimateHeight={(width) => {
+				const path = String(
+					props.block.toolCall?.args.path ?? props.block.text,
+				);
+				const header =
+					2 + estimateTextRows(`Read ${path}`, Math.max(1, width - 24));
+				const notes = props.block.toolCall?.result?.notes ?? [];
+				return (
+					header +
+					(props.expanded
+						? estimateTextRows(source(), Math.max(1, width - 10)) +
+							notes.reduce(
+								(height, note) =>
+									height + estimateTextRows(note, Math.max(1, width - 6)),
+								0,
+							)
+						: 0)
+				);
+			}}
+		>
+			<Block {...props} />
+		</VirtualToolBody>
+	);
+}
+
+function Block(props: BlockProps) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
 		// opencode's assistant footer: agent · model · duration · tok/s.
@@ -799,113 +1108,156 @@ function Block(props: {
 			</box>
 		);
 	}
-	// The tools a run leans on get a view built from their call and result; a
-	// tool without one keeps the generic row below (icon, name, argument). A call
+	// Every structured call uses the same native/family presenters. Historical
+	// entries without a structured call keep the plain fallback below. A call
 	// still in flight takes the in-progress view instead, so its row appears the
 	// moment its name is known and only the arguments (not the answer) are shown.
-	const tool = props.block.toolCall
+	const call =
+		props.block.toolCall &&
+		!props.block.pending &&
+		!props.block.toolCall.result &&
+		props.block.detail
+			? {
+					...props.block.toolCall,
+					result: {
+						lines: props.block.detail,
+						notes: [],
+						isError: props.block.tone === "error",
+					},
+				}
+			: props.block.toolCall;
+	const tool = call
 		? props.block.pending === true
-			? toolPendingView(props.block.toolCall, props.block.detail ?? [])
-			: toolView(props.block.toolCall)
+			? toolPendingView(call, props.block.detail ?? [])
+			: toolView(call)
 		: undefined;
+	if (tool?.codemode) {
+		return <CodemodeBlock {...props} />;
+	}
 	if (tool && (props.block.kind === "tool" || props.block.kind === "result")) {
-		const expandable = () =>
-			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
 		return (
-			<ToolFrame color={toolBorderColor(props.block)}>
+			<ToolFrame
+				color={tool.failed ? uiColors.error : toolBorderColor(props.block)}
+				onToggle={() => props.onToggle(props.block.id)}
+				neutral={!tool.shell && (tool.sections?.length ?? 0) > 0}
+			>
 				<box flexDirection="column">
 					<ToolCallHeader
 						block={props.block}
+						failed={tool.failed}
 						icon={tool.icon}
-						label={tool.label ?? tool.summary}
+						label={
+							!props.expanded && tool.compactLabel
+								? tool.compactLabel
+								: (tool.label ?? tool.summary)
+						}
+						compact={tool.shell && !props.expanded}
 						hint={tool.hint}
-						expandable={expandable()}
-						expanded={props.expanded}
 						onToggle={() => props.onToggle(props.block.id)}
 					/>
-					<Show when={props.expanded || tool.preview}>
+					<Show when={props.expanded || (tool.preview && tool.shell)}>
 						<box paddingLeft={2} flexDirection="column">
-							<box
-								maxHeight={props.expanded ? undefined : FILE_TOOL_PREVIEW_LINES}
-								overflow="hidden"
-								flexDirection="column"
-							>
-								<Show
-									when={tool.file}
-									fallback={
-										<For
-											each={
-												props.expanded
-													? (tool.rows ?? [])
-													: (tool.rows ?? []).slice(0, FILE_TOOL_PREVIEW_LINES)
-											}
-										>
-											{(row) => (
-												<ToolRow
-													block={props.block}
-													row={row}
-													openRows={props.openRows}
-													onToggleRow={props.onToggleRow}
-													transcript={props.transcript}
-												/>
-											)}
-										</For>
-									}
-								>
-									{(file) => <TranscriptFile file={file()} />}
-								</Show>
-							</box>
 							<Show
-								when={
-									!props.expanded &&
-									(tool.rows?.length ?? 0) > FILE_TOOL_PREVIEW_LINES
+								when={tool.shell}
+								fallback={
+									<box flexDirection="column">
+										<Show
+											when={tool.file}
+											fallback={<ToolRows {...props} rows={tool.rows ?? []} />}
+										>
+											{(file) => <TranscriptFile file={file()} />}
+										</Show>
+									</box>
 								}
 							>
-								<text fg={uiColors.textMuted}>
-									{`… ${(tool.rows?.length ?? 0) - FILE_TOOL_PREVIEW_LINES} more lines`}
-								</text>
+								<Show when={(tool.rows?.length ?? 0) > 0}>
+									<TranscriptShellOutput
+										command={tool.summary}
+										rows={tool.rows ?? []}
+										expanded={props.expanded}
+										failed={
+											tool.failed ||
+											props.block.toolCall?.result?.isError === true
+										}
+									/>
+								</Show>
 							</Show>
 							{/* A long view splits into parts: the header stays, so
 							    folding one away keeps the overview. */}
-							<For each={tool.sections ?? []}>
-								{(section) => {
-									const key = `${props.block.id}:${section.id}`;
-									// The signal keys the sections a reader moved; whether a key means
-									// "open" or "closed" is the section's own default.
-									const open = () => {
-										const toggled = props.toggledSections().has(key);
-										return section.collapsed === true ? toggled : !toggled;
-									};
-									return (
-										<box flexDirection="column">
-											<box
-												flexDirection="row"
-												{...useTap(() => props.onToggleSection(key))}
+							<Show when={props.expanded}>
+								<For each={tool.sections ?? []}>
+									{(section) => {
+										const key = `${props.block.id}:${section.id}`;
+										// The signal keys the sections a reader moved; whether a key means
+										// "open" or "closed" is the section's own default.
+										const open = () => {
+											const toggled = props.toggledSections().has(key);
+											return !toggled;
+										};
+										return (
+											<ToolFrame
+												color={
+													section.tone
+														? toolTextColor({
+																text: "",
+																emphasis: "highlight",
+																tone: section.tone,
+															})
+														: uiColors.textMuted
+												}
+												onToggle={() => props.onToggleSection(key)}
 											>
-												<text fg={uiColors.textMuted} wrapMode="word">
-													{open() ? "▾" : "▸"} {section.label}{" "}
-													{`(${sectionLineCount(section)} lines)`}
-												</text>
-											</box>
-											<Show when={open()}>
-												<box flexDirection="column" paddingLeft={2}>
-													<For each={section.rows}>
-														{(row) => (
-															<ToolRow
-																block={props.block}
-																row={row}
-																openRows={props.openRows}
-																onToggleRow={props.onToggleRow}
-																transcript={props.transcript}
-															/>
-														)}
-													</For>
+												<box flexDirection="column">
+													<box
+														flexDirection="row"
+														{...useTap(() => props.onToggleSection(key), {
+															stopPropagation: true,
+														})}
+													>
+														<text fg={uiColors.textMuted} wrapMode="word">
+															{section.label}{" "}
+															{`(${sectionLineCount(section)} ${section.rows.some((row) => row.table) ? "rows" : "lines"})`}
+														</text>
+													</box>
+													<Show when={open() || section.shell}>
+														<box flexDirection="column" paddingLeft={2}>
+															<Show
+																when={section.shell}
+																fallback={
+																	<ToolRows {...props} rows={section.rows} />
+																}
+															>
+																<TranscriptShellOutput
+																	command={section.label}
+																	rows={section.rows}
+																	expanded={open()}
+																	failed={
+																		tool.failed ||
+																		props.block.toolCall?.result?.isError ===
+																			true
+																	}
+																/>
+															</Show>
+														</box>
+													</Show>
 												</box>
-											</Show>
-										</box>
-									);
-								}}
-							</For>
+											</ToolFrame>
+										);
+									}}
+								</For>
+							</Show>
+							<Show
+								when={
+									props.expanded &&
+									!tool.sections?.some(
+										(section) => section.id === "diagnostics",
+									)
+								}
+							>
+								<For each={call?.result?.notes ?? []}>
+									{(note) => <text fg={uiColors.textMuted}>{note}</text>}
+								</For>
+							</Show>
 						</box>
 					</Show>
 				</box>
@@ -918,17 +1270,12 @@ function Block(props: {
 			case "tool": {
 				// A tool without a specialized view is still a raised block: its own
 				// one-line call, with the full request and output under the fold.
-				const expandable =
-					(props.block.detail?.length ?? 0) > 0 ||
-					props.block.request !== undefined;
 				return (
 					<box flexDirection="column">
 						<ToolCallHeader
 							block={props.block}
 							icon={props.block.icon ?? "•"}
 							label={props.block.text}
-							expandable={expandable}
-							expanded={props.expanded}
 							onToggle={() => props.onToggle(props.block.id)}
 						/>
 						<Show when={props.expanded}>
@@ -984,7 +1331,12 @@ function Block(props: {
 	};
 	if (props.block.kind === "tool")
 		return (
-			<ToolFrame color={toolBorderColor(props.block)}>{content()}</ToolFrame>
+			<ToolFrame
+				color={toolBorderColor(props.block)}
+				onToggle={() => props.onToggle(props.block.id)}
+			>
+				{content()}
+			</ToolFrame>
 		);
 	return (
 		// The status hint is the same left highlight the prompt uses, but the row
@@ -1037,6 +1389,7 @@ interface PickerItem {
 }
 
 export function AgentSessionView(props: AgentSessionViewProps) {
+	const viewport = createTranscriptViewport();
 	let inputRef: TextareaRenderable | undefined;
 	// The editor buffer is the source of truth while typing (native editing,
 	// undo and selection); the draft signal is kept in step with it. The prompt
@@ -1206,6 +1559,11 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		},
 		[],
 	);
+	const renderRows = createKeyedItems(displayRows, (row) =>
+		"displayKind" in row
+			? row.id
+			: `${row.id}:${row.kind}:${row.toolCall?.name ?? row.tool ?? ""}`,
+	);
 	let scrollBox: ScrollBoxRenderable | undefined;
 	/** A load in flight: the frame that lays the older rows out moves the
 	 * viewport down by their height, so the reader keeps their place. */
@@ -1255,19 +1613,16 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	// handler already implements (closing the filter first, then the picker).
 	const pickerBackdrop = useModalBackdrop({ kind: "agent-session-picker" });
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
-	// Which thinking blocks are expanded, by block id: collapsed by default so a
-	// long reasoning block is one line until asked for, and an entry keeps its
-	// state while output arrives around it.
+	// Overrides of each block's default: tools start open; thinking and user
+	// messages retain their compact default. IDs stay stable across live frames.
 	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
-	const [expandedReadGroups, setExpandedReadGroups] = createSignal<
+	const [foldedReadGroups, setFoldedReadGroups] = createSignal<
 		ReadonlySet<string>
 	>(new Set());
-	// Which tool-view rows are folded open, by `${block.id}:${row.id}`: a
-	// codemode call row opens into that call's own view, and stays shut until
-	// asked for so the call list keeps its overview.
-	const [expandedRows, setExpandedRows] = createSignal<ReadonlySet<string>>(
+	// Tool details and codemode parts start open; this set holds folded IDs.
+	const [foldedRows, setFoldedRows] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
 	// Reuse a streaming message's settled parts without retaining every message
@@ -1279,16 +1634,14 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		props.connection === "connecting" || props.connection === "disconnected";
 	const toggleRow = (key: string) => {
 		keepPlace();
-		setExpandedRows((current) => {
+		setFoldedRows((current) => {
 			const next = new Set(current);
 			if (next.has(key)) next.delete(key);
 			else next.add(key);
 			return next;
 		});
 	};
-	// Which parts of an expanded tool view a reader moved away from their
-	// default, by `${block.id}:${section.id}`. Empty means every part is in its
-	// own default state: a section with `collapsed` starts folded, the rest open.
+	// Tool sections start expanded; this set holds sections the reader folded.
 	const [toggledSections, setToggledSections] = createSignal<
 		ReadonlySet<string>
 	>(new Set());
@@ -1310,27 +1663,65 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			return next;
 		});
 	};
+	const blockExpanded = (block: AgentSessionBlock) =>
+		block.kind === "tool" || block.kind === "result"
+			? !expandedBlocks().has(block.id)
+			: expandedBlocks().has(block.id);
 	/** Ctrl+T / Ctrl+O: expand every block of one kind, or collapse them all. */
 	const toggleBlocksOfKind = (kind: AgentSessionBlock["kind"]) => {
 		keepPlace();
-		const ids = props.blocks.flatMap((block) =>
-			block.kind === kind ? [block.id] : [],
+		const blocks = props.blocks.filter(
+			(block) =>
+				block.kind === kind || (kind === "tool" && block.kind === "result"),
 		);
+		const ids = blocks.map((block) => block.id);
+		const codemodeIds =
+			kind === "tool"
+				? blocks.flatMap((block) => {
+						if (block.toolCall?.name !== "codemode") return [];
+						const view = block.pending
+							? toolPendingView(block.toolCall, block.detail ?? [])
+							: toolView(block.toolCall);
+						return [
+							`${block.id}:script`,
+							`${block.id}:output`,
+							...(view?.codemode?.calls ?? []).map(
+								(_, index) => `${block.id}:call:${index}`,
+							),
+						];
+					})
+				: [];
 		const groups =
 			kind === "tool"
 				? displayRows().flatMap((row) => ("displayKind" in row ? [row.id] : []))
 				: [];
 		const collapse =
-			ids.some((id) => expandedBlocks().has(id)) ||
-			groups.some((id) => expandedReadGroups().has(id));
-		setExpandedBlocks(collapse ? new Set<string>() : new Set<string>(ids));
-		setExpandedReadGroups(
-			collapse ? new Set<string>() : new Set<string>(groups),
-		);
+			blocks.some(blockExpanded) ||
+			groups.some((id) => !foldedReadGroups().has(id)) ||
+			codemodeIds.some((id) => !foldedRows().has(id));
+		setExpandedBlocks((current) => {
+			const next = new Set(current);
+			for (const id of ids) {
+				if (kind === "tool" ? collapse : !collapse) next.add(id);
+				else next.delete(id);
+			}
+			return next;
+		});
+		if (kind === "tool") {
+			setFoldedReadGroups(collapse ? new Set(groups) : new Set<string>());
+			setFoldedRows((current) => {
+				const next = new Set(current);
+				for (const id of codemodeIds) {
+					if (collapse) next.add(id);
+					else next.delete(id);
+				}
+				return next;
+			});
+		}
 	};
 	const toggleReadGroup = (id: string) => {
 		keepPlace();
-		setExpandedReadGroups((current) => {
+		setFoldedReadGroups((current) => {
 			const next = new Set(current);
 			if (next.has(id)) next.delete(id);
 			else next.add(id);
@@ -1631,6 +2022,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				setAnchor(undefined);
 				setLatestHovered(false);
 			}
+			viewport.sample();
 		};
 		renderer.on(CliRenderEvents.FRAME, onFrame);
 		onCleanup(() => renderer.off(CliRenderEvents.FRAME, onFrame));
@@ -1647,6 +2039,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 
 	const attachScrollBox = (box: ScrollBoxRenderable) => {
 		scrollBox = box;
+		viewport.box = box;
 		const onScroll = () => {
 			// The box only re-reads "the reader scrolled away from the bottom"
 			// from its own `scrollTop` setter, which a `scrollBy` from the keymap
@@ -1699,101 +2092,123 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						// prompt it completes.
 						style={{ marginBottom: 0 }}
 					>
-						<box flexDirection="column" gap={1}>
-							<For each={displayRows()}>
-								{(row) => {
-									if ("displayKind" in row) {
-										const expanded = () => expandedReadGroups().has(row.id);
-										const latest = row.blocks.at(-1);
+						<TranscriptViewportContext.Provider value={viewport}>
+							<box flexDirection="column" gap={1}>
+								<For each={renderRows()}>
+									{(slot) => {
+										if ("displayKind" in untrack(slot.value)) {
+											const row = () => slot.value() as ReadActivityGroup;
+											const expanded = () => !foldedReadGroups().has(row().id);
+											const latest = () => row().blocks.at(-1);
+											const groupColor = () => {
+												const block = latest();
+												return block
+													? toolBorderColor(block)
+													: uiColors.textMuted;
+											};
+											return (
+												<box width="100%" flexDirection="column">
+													<Show
+														when={row().blocks.some(
+															(block) => block.id === transcript().dividerId,
+														)}
+													>
+														<NewContentDivider />
+													</Show>
+													<ToolFrame
+														onToggle={() => toggleReadGroup(row().id)}
+														color={groupColor()}
+													>
+														<box
+															flexDirection="row"
+															{...useTap(() => toggleReadGroup(row().id), {
+																stopPropagation: true,
+															})}
+														>
+															<text
+																width={2}
+																flexShrink={0}
+																fg={uiColors.textMuted}
+															>
+																→
+															</text>
+															<text fg={uiColors.textPrimary} flexGrow={1}>
+																{readGroupLabel(row().blocks)}
+															</text>
+															<Show when={latest()}>
+																{(block) => <Stamp block={block()} />}
+															</Show>
+														</box>
+													</ToolFrame>
+													<Show when={expanded()}>
+														<box flexDirection="column" gap={1}>
+															<For each={row().blocks}>
+																{(block) => (
+																	<GroupedRead
+																		block={block}
+																		role={props.role}
+																		expanded={blockExpanded(block)}
+																		onToggle={toggleBlock}
+																		toggledSections={toggledSections}
+																		onToggleSection={toggleSection}
+																		openRows={foldedRows}
+																		onToggleRow={toggleRow}
+																		transcript={markdownParts}
+																	/>
+																)}
+															</For>
+														</box>
+													</Show>
+												</box>
+											);
+										}
+										const block = () => slot.value() as AgentSessionBlock;
 										return (
 											<box width="100%" flexDirection="column">
-												<Show
-													when={row.blocks.some(
-														(block) => block.id === transcript().dividerId,
-													)}
-												>
+												{/* Above the newest output's first block, and only there:
+											    the divider is the boundary, not a mark on the
+											    content. */}
+												<Show when={block().id === transcript().dividerId}>
 													<NewContentDivider />
 												</Show>
-												<ToolFrame
-													color={
-														latest
-															? toolBorderColor(latest)
-															: uiColors.textMuted
-													}
-												>
-													<box
-														flexDirection="row"
-														{...useTap(() => toggleReadGroup(row.id))}
-													>
-														<text
-															width={2}
-															flexShrink={0}
-															fg={uiColors.textMuted}
-														>
-															{expanded() ? "▾" : "▸"}
-														</text>
-														<text
-															width={2}
-															flexShrink={0}
-															fg={uiColors.textMuted}
-														>
-															→
-														</text>
-														<text fg={uiColors.textPrimary} flexGrow={1}>
-															{readGroupLabel(row.blocks)}
-														</text>
-														<Show when={latest}>
-															{(block) => <Stamp block={block()} />}
-														</Show>
-													</box>
-												</ToolFrame>
-												<Show when={expanded()}>
-													<box flexDirection="column" gap={1}>
-														<For each={row.blocks}>
-															{(block) => (
+												<Show
+													when={block().toolCall?.name === "codemode"}
+													fallback={
+														<Show when={block()} keyed>
+															{(current) => (
 																<Block
-																	block={block}
+																	block={current}
 																	role={props.role}
-																	expanded={expandedBlocks().has(block.id)}
+																	expanded={blockExpanded(current)}
 																	onToggle={toggleBlock}
 																	toggledSections={toggledSections}
 																	onToggleSection={toggleSection}
-																	openRows={expandedRows}
+																	openRows={foldedRows}
 																	onToggleRow={toggleRow}
 																	transcript={markdownParts}
 																/>
 															)}
-														</For>
-													</box>
+														</Show>
+													}
+												>
+													<CodemodeBlock
+														block={block()}
+														role={props.role}
+														expanded={blockExpanded(block())}
+														onToggle={toggleBlock}
+														toggledSections={toggledSections}
+														onToggleSection={toggleSection}
+														openRows={foldedRows}
+														onToggleRow={toggleRow}
+														transcript={markdownParts}
+													/>
 												</Show>
 											</box>
 										);
-									}
-									const block = row;
-									return (
-										<box width="100%" flexDirection="column">
-											{/* Above the newest output's first block, and only there:
-											    the divider is the boundary, not a mark on the
-											    content. */}
-											<Show when={block.id === transcript().dividerId}>
-												<NewContentDivider />
-											</Show>
-											<Block
-												block={block}
-												role={props.role}
-												expanded={expandedBlocks().has(block.id)}
-												onToggle={toggleBlock}
-												toggledSections={toggledSections}
-												onToggleSection={toggleSection}
-												openRows={expandedRows}
-												onToggleRow={toggleRow}
-												transcript={markdownParts}
-											/>
-										</box>
-									);
-								}}
-							</For>
-						</box>
+									}}
+								</For>
+							</box>
+						</TranscriptViewportContext.Provider>
 					</ScrollableContent>
 					<box
 						width="100%"

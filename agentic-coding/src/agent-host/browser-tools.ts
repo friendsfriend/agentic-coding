@@ -49,6 +49,7 @@ import {
 	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
+import { toolViewDetails } from "./tool-view-details.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const BROWSER_EXTENSION = "agentic.browser";
@@ -76,12 +77,17 @@ const STAGE_REPLAY_TIMEOUT_MS = 960_000;
 type ContentBlock =
 	| { type: "text"; text: string }
 	| { type: "image"; data: string; mimeType: string };
-type Result = { content: ContentBlock[]; isError?: boolean };
+type Result = {
+	content: ContentBlock[];
+	isError?: boolean;
+	details?: ReturnType<typeof toolViewDetails>;
+};
 
 function text(value: unknown): Result {
 	const raw =
 		typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	return {
+		details: toolViewDetails(value, MAX_RESULT_CHARS),
 		content: [
 			{
 				type: "text",
@@ -215,7 +221,10 @@ function stageBlocksResult(value: unknown): Result {
 				})}`,
 			);
 	}
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** A flow list as one line per reviewed spec. It exposes hashes and input
@@ -252,7 +261,10 @@ function stageFlowsResult(value: unknown): Result {
 			if (problem)
 				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
 		}
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** A replay result as a bounded ledger. A dry run never starts a process; a
@@ -358,7 +370,10 @@ function stageReplayResult(value: unknown): Result {
 			if (problem)
 				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
 		}
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 function stageSuiteResult(value: unknown): Result {
@@ -399,7 +414,10 @@ function stageSuiteResult(value: unknown): Result {
 			if (problem)
 				lines.push(`issue: ${String(problem.code)} ${String(problem.message)}`);
 		}
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** A plan result as a compact ledger. The journal and evidence hold the detail;
@@ -486,7 +504,10 @@ function stageRunResult(value: unknown): Result {
 					`issue: ${String(problem.code)}${typeof problem.routeStepId === "string" ? ` (${problem.routeStepId})` : ""} ${String(problem.message)}`,
 				);
 		}
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** A saved draft's one-paragraph receipt: what the block is, the digest a plan
@@ -520,7 +541,10 @@ function stageBlockSaveResult(value: unknown): Result {
 		"",
 		"Run it with stage_run (the draft is executable in this run only); review approval promotes it into the shared store.",
 	);
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** The default text view for an action/wait/script result. The observation is
@@ -546,7 +570,10 @@ function observationResult(value: unknown): Result {
 	lines.push("", record.observation);
 	const timing = timingLine(record.timing);
 	if (timing) lines.push("", timing);
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** A find answer as one line per match, never as the parseable node map. */
@@ -578,7 +605,10 @@ function findResult(value: unknown): Result {
 	}
 	const timing = timingLine(record.timing);
 	if (timing) lines.push("", timing);
-	return text(lines.join("\n"));
+	return {
+		...text(lines.join("\n")),
+		details: toolViewDetails(record, MAX_RESULT_CHARS),
+	};
 }
 
 /** One authenticated call to the server's owner-scoped browser surface.

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-// The prompt's top line: a thin aurora line that spans the full box width while
-// the agent works, and stays blank otherwise, so the prompt never grows or
+// The prompt's top line: a soft highlight pulse that spreads from the center
+// toward both edges while the agent works, and stays blank otherwise, so it never grows or
 // shifts. It sits outside the input's horizontal padding, so the line reaches
 // the box edges, and it replaces the blank top padding, so moving the status
 // indicator "on top" costs no extra line.
@@ -15,45 +15,59 @@ import {
 	RGBA,
 } from "@opentui/core";
 import { useTimeline } from "@opentui/solid";
-import {
-	auroraColor,
-	createAuroraPalette,
-	DEFAULT_ANIMATION_HIGHLIGHTS,
-	uiColors,
-} from "@ui";
+import { uiColors } from "@ui";
+import { createEffect } from "solid-js";
 
 /** Upper one-eighth block: a thin line at the top of the cell. */
 const TOP_LINE = "▔";
-/** How far each aurora color is blended toward the prompt background: higher is
- * paler. Kept low enough that the working line reads as a solid accent rather
- * than a washed-out hint, and softened just enough not to look like a filled
- * bar against the input beneath it. */
-const PALE = 0.2;
+const PULSE_MS = 2400;
+const REST_INTENSITY = 0.06;
+const PEAK_INTENSITY = 0.65;
+const PULSE_WIDTH = 0.4;
+
+/** A mirrored, smooth-edged wave: center peaks first, edges last. Both cycle
+ * endpoints rest at the same dim level, so the loop never flashes or reverses. */
+export function promptPulseIntensity(
+	position: number,
+	progress: number,
+): number {
+	if (!Number.isFinite(position) || !Number.isFinite(progress))
+		return REST_INTENSITY;
+	const distance = Math.abs(Math.max(0, Math.min(1, position)) * 2 - 1);
+	const front =
+		Math.max(0, Math.min(1, progress)) * (1 + 2 * PULSE_WIDTH) - PULSE_WIDTH;
+	const band = Math.max(0, 1 - Math.abs(distance - front) / PULSE_WIDTH);
+	const smooth = band * band * (3 - 2 * band);
+	return Math.min(
+		PEAK_INTENSITY,
+		REST_INTENSITY + (PEAK_INTENSITY - REST_INTENSITY) * smooth,
+	);
+}
 
 export interface PromptPulseProps {
-	/** The agent is working: run the sweep. */
+	/** The agent is working: pulse outward from the center. */
 	readonly active: boolean;
 	/** The newest generation failed: hold a static error-colored line. */
 	readonly error?: boolean;
 }
 
 export function PromptPulse(props: PromptPulseProps) {
-	const palette = createAuroraPalette(DEFAULT_ANIMATION_HIGHLIGHTS);
 	const state = { progress: 0 };
-	const timeline = useTimeline({ duration: 2000, loop: true });
-	timeline.add(state, { progress: 1, duration: 2000, ease: "linear" });
+	const timeline = useTimeline({
+		duration: PULSE_MS,
+		loop: true,
+		autoplay: false,
+	});
+	timeline.add(state, { progress: 1, duration: PULSE_MS, ease: "linear" });
+	createEffect(() => {
+		if (props.active && !props.error) timeline.play();
+		else timeline.pause();
+	});
 
 	const renderAfter = function (this: BoxRenderable, buffer: OptimizedBuffer) {
 		const width = this.width;
 		if (width <= 0) return;
 		const background = parseColor(uiColors.bgMantle);
-		const pale = (color: RGBA) =>
-			RGBA.fromValues(
-				color.r + (background.r - color.r) * PALE,
-				color.g + (background.g - color.g) * PALE,
-				color.b + (background.b - color.b) * PALE,
-				1,
-			);
 		const paint = (color: (index: number) => RGBA) => {
 			for (let index = 0; index < width; index++) {
 				buffer.setCell(
@@ -71,15 +85,20 @@ export function PromptPulse(props: PromptPulseProps) {
 			return;
 		}
 		if (!props.active) return;
-		// Ping-pong the aurora phase so the fade runs left→right and back rather
-		// than restarting at the left.
-		const pingPong =
-			state.progress <= 0.5 ? state.progress * 2 : (1 - state.progress) * 2;
-		paint((index) =>
-			pale(
-				auroraColor(palette, width <= 1 ? 0 : index / (width - 1), pingPong),
-			),
-		);
+		// Resolve theme colors per paint so changing themes also changes the pulse.
+		const highlight = parseColor(uiColors.highlight);
+		paint((index) => {
+			const intensity = promptPulseIntensity(
+				width <= 1 ? 0.5 : index / (width - 1),
+				state.progress,
+			);
+			return RGBA.fromValues(
+				background.r + (highlight.r - background.r) * intensity,
+				background.g + (highlight.g - background.g) * intensity,
+				background.b + (highlight.b - background.b) * intensity,
+				1,
+			);
+		});
 	};
 
 	return (

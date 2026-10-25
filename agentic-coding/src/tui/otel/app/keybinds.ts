@@ -114,7 +114,8 @@ export function workspaceSidebarKeybindCatalog(
 	const keybinds = [
 		{
 			key: "j/k or ↑/↓",
-			action: "select the Orchestrator, OpenCode, Pi, or a workflow",
+			action:
+				"select the Orchestrator, OpenCode, Pi, Pi Durable, or a workflow",
 			standard: true,
 		},
 		{ key: "Enter", action: "open the selected entry", short: "open" },

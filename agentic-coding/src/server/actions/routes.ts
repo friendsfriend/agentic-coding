@@ -982,7 +982,7 @@ async function executeRun(
 	// stdio. Route askpass requests through the dashboard's existing credential
 	// modal; all other command types keep the regular process runner.
 	const command = new CommandHandler(
-		actionCommandRunner(context.worktrees),
+		actionCommandRunner(context.worktrees, observer !== undefined),
 		commandSink,
 	);
 	const readiness = new ReadinessHandler(
@@ -1111,6 +1111,12 @@ const MAX_AGENT_ACTION_OUTPUT_CHARS = 40_000;
 /** One agent-requested build or test of an app, in the workflow's own
  * checkout (`add-agent-environment-tools`). */
 export interface AgentActionRequest {
+	readonly onOutput?: (
+		progress: Pick<
+			AgentActionResult,
+			"runId" | "targetId" | "runtime" | "output" | "truncated"
+		>,
+	) => void;
 	readonly app: ActionApp;
 	readonly action: "build" | "test";
 	/** The caller's checkout: the action runs there, not in the app's own. */
@@ -1302,9 +1308,19 @@ export async function runAppBuildTestAction(
 	context.cancels.set(runId, controller);
 	const abort = () => controller.abort();
 	request.signal?.addEventListener("abort", abort, { once: true });
+	if (request.signal?.aborted) controller.abort();
 	let output = "";
 	let truncated = false;
 	let exitCode: number | null = null;
+	const progress = () =>
+		request.onOutput?.({
+			runId,
+			targetId: target.id,
+			runtime: target.runtime,
+			output,
+			truncated,
+		});
+	progress();
 	try {
 		const outcome = await executeRun(
 			context,
@@ -1321,12 +1337,9 @@ export async function runAppBuildTestAction(
 						truncated = true;
 						return;
 					}
-					if (event.chunk.length > room) {
-						output += event.chunk.slice(0, room);
-						truncated = true;
-						return;
-					}
-					output += event.chunk;
+					output += event.chunk.slice(0, room);
+					if (event.chunk.length > room) truncated = true;
+					progress();
 				},
 			},
 		);
@@ -1414,8 +1427,11 @@ export function worktreeCommand(
 	};
 }
 
-export function actionCommandRunner(worktrees: WorktreePort): CommandRunner {
-	const regular = new OSCommandRunner();
+export function actionCommandRunner(
+	worktrees: WorktreePort,
+	liveOutput = false,
+): CommandRunner {
+	const regular = new OSCommandRunner(liveOutput);
 	return {
 		run: async (spec, output, signal) => {
 			if (spec.name !== "git") return regular.run(spec, output, signal);

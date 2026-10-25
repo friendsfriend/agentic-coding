@@ -26,6 +26,7 @@ import {
 	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
+import { toolViewDetails } from "./tool-view-details.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const STAGE_EXTENSION = "agentic.stages";
@@ -42,6 +43,7 @@ const MAX_API_BODY_CHARS = MAX_RESULT_CHARS - 2_000;
 const READ_TIMEOUT_MS = 120_000;
 
 type Result = {
+	details?: ReturnType<typeof toolViewDetails>;
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
@@ -50,6 +52,7 @@ function text(value: unknown): Result {
 	const raw =
 		typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	return {
+		details: toolViewDetails(value, MAX_RESULT_CHARS),
 		content: [
 			{
 				type: "text",

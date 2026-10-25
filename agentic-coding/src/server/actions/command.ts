@@ -76,11 +76,12 @@ function abortError(signal: AbortSignal): Error {
 }
 
 /**
- * Runs one command to completion, buffering both streams and emitting them
- * afterwards, exactly like Go's `exec.Cmd.Run` with `bytes.Buffer`. A cancelled
- * signal kills the child and the result carries the abort reason.
+ * By default, buffers both streams like Go's `exec.Cmd.Run` with bytes.Buffer.
+ * Observed agent actions opt into live chunks while retaining the same final
+ * stdout/stderr capture. Cancellation kills the child and retains its reason.
  */
 export class OSCommandRunner implements CommandRunner {
+	constructor(private readonly liveOutput = false) {}
 	async run(
 		spec: CommandSpec,
 		output?: (stream: "stdout" | "stderr", chunk: string) => void,
@@ -128,9 +129,32 @@ export class OSCommandRunner implements CommandRunner {
 		const onAbort = () => killProcessTree(proc.pid, { signal: "SIGKILL" });
 		signal?.addEventListener("abort", onAbort, { once: true });
 		try {
+			const read = async (
+				stream: ReadableStream<Uint8Array>,
+				name: "stdout" | "stderr",
+			): Promise<string> => {
+				if (!this.liveOutput) return new Response(stream).text();
+				const reader = stream.getReader();
+				const decoder = new TextDecoder();
+				let text = "";
+				try {
+					while (true) {
+						const part = await reader.read();
+						const chunk = decoder.decode(part.value, { stream: !part.done });
+						if (chunk) {
+							text += chunk;
+							output?.(name, chunk);
+						}
+						if (part.done) break;
+					}
+					return text;
+				} finally {
+					reader.releaseLock();
+				}
+			};
 			const [stdout, stderr] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
+				read(proc.stdout, "stdout"),
+				read(proc.stderr, "stderr"),
 			]);
 			await proc.exited;
 			const signalCode = proc.signalCode ?? null;
@@ -146,7 +170,7 @@ export class OSCommandRunner implements CommandRunner {
 			}
 			// Both streams are reported after the command finishes, in the same
 			// order Go's buffer flush produces them.
-			if (output) {
+			if (output && !this.liveOutput) {
 				if (stdout !== "") output("stdout", stdout);
 				if (stderr !== "") output("stderr", stderr);
 			}

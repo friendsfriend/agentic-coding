@@ -157,8 +157,7 @@ export class PiDurableAdapter implements AgentAdapter {
 		return Effect.tryPromise({
 			try: async () => {
 				const runId = requireDurableRunId(handle);
-				const { HostClient } = await import("../agent-host/client.ts");
-				const client = new HostClient(requireDurableSocket(handle));
+				const client = await recoveredDurableClient(handle);
 				await client.submit(
 					runId,
 					message,
@@ -178,43 +177,12 @@ export class PiDurableAdapter implements AgentAdapter {
 			try: async () => {
 				if (!handle.hostSocket || !handle.sessionId)
 					return { status: "unknown" as const };
-				const { HostClient, ensureHostRunning } = await import(
-					"../agent-host/client.ts"
-				);
-				const { hostLayout } = await import("../agent-host/layout.ts");
-				const client = new HostClient(handle.hostSocket);
 				try {
+					const client = await recoveredDurableClient(handle);
 					const result = await client.status(handle.sessionId);
-					return {
-						status: result.status,
-						...(handle.sessionId ? { sessionId: handle.sessionId } : {}),
-					};
+					return { status: result.status, sessionId: handle.sessionId };
 				} catch {
-					// One restart/resume attempt per observation before reporting
-					// unknown (durable-agent-host D4): a crashed host must not
-					// permanently block the run it was serving.
-					try {
-						const runtimeDir = path.dirname(path.dirname(handle.hostSocket));
-						const layout = hostLayout(runtimeDir);
-						const entry = selfExecEntry();
-						await ensureHostRunning(layout, {
-							command: process.execPath,
-							args: [
-								...(entry ? [entry] : []),
-								"agent",
-								"host",
-								"--workflow-dir",
-								runtimeDir,
-							],
-							cwd: runtimeDir,
-						});
-						const retried = await new HostClient(layout.socketPath).status(
-							handle.sessionId,
-						);
-						return { status: retried.status };
-					} catch {
-						return { status: "unknown" as const };
-					}
+					return { status: "unknown" as const };
 				}
 			},
 			catch: toError,
@@ -259,4 +227,20 @@ function requireDurableSocket(handle: AgentHandle): string {
 	if (!handle.hostSocket)
 		throw new Error("pi-durable handle is missing its host socket");
 	return handle.hostSocket;
+}
+
+/** Resolve both a dead host and a restarted host whose in-memory run map is
+ * empty. Do not re-submit an assignment or retry an ambiguous submission. */
+async function recoveredDurableClient(handle: AgentHandle) {
+	const { HostClient } = await import("../agent-host/client.ts");
+	const client = new HostClient(requireDurableSocket(handle));
+	try {
+		if ((await client.status(requireDurableRunId(handle))).status !== "unknown")
+			return client;
+	} catch {
+		// A missing socket and an empty run map use the same validated recovery.
+	}
+	const { recoverDurableHandle } = await import("../agent-host/recovery.ts");
+	const recovered = await recoverDurableHandle(handle);
+	return new HostClient(recovered.hostSocket);
 }

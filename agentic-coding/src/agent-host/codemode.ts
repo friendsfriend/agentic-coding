@@ -9,6 +9,7 @@
 // written against pi-coding-agent's own extension API, which pi-durable does
 // not share.
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import {
 	type CodemodeJsonSchema,
@@ -29,6 +30,10 @@ import {
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { codemodeWasmPath, codemodeWorkerUrl } from "./codemode-assets.ts";
+import {
+	boundedLiveOutput,
+	createProgressPublisher,
+} from "./progress-publisher.ts";
 import { BATCHING_RULE, CODEMODE_PIPELINE } from "./tool-surface.ts";
 
 export const CODEMODE_TOOL_NAME = "codemode";
@@ -97,6 +102,8 @@ interface RecordedCall {
 	/** The tool's own result text, as the script received it. */
 	output: string;
 	isError: boolean;
+	status: "running" | "ok" | "error";
+	durationMs?: number;
 	details?: JsonValue;
 }
 
@@ -105,12 +112,20 @@ function nestedTool(
 	api: ToolExecutionApi,
 	context: Context,
 	recorded: RecordedCall[],
+	publish: () => void,
 ): CodemodeTool {
 	return {
 		name: tool.name,
 		...(tool.description ? { description: tool.description } : {}),
 		inputSchema: tool.parameters as CodemodeJsonSchema,
-		execute: async (rawArgs) => {
+		execute: async (rawArgs, toolContext) => {
+			const nestedContext = withAbortSignal(
+				AbortSignal.any([
+					toolContext.signal,
+					...(context.abortSignal ? [context.abortSignal] : []),
+				]),
+				context,
+			);
 			// The sandbox pushes its own record as the call starts, so the
 			// wrapper's records line up with `result.calls` by position. The
 			// record is filled in as the call settles.
@@ -119,34 +134,74 @@ function nestedTool(
 				args: rawArgs as JsonValue,
 				output: "",
 				isError: false,
+				status: "running",
 			};
+			const index = recorded.length;
 			recorded.push(record);
+			const started = Date.now();
+			publish();
 			let captured = "";
+			let truncated = false;
+			const retained = () =>
+				truncated ? `[earlier output omitted]\n${captured}` : captured;
+			const decoder = new TextDecoder();
 			let details: unknown;
 			const nested: ToolExecutionApi = {
 				...api,
-				callId: `${api.callId}:${tool.name}`,
+				callId: `${api.callId}:${index}`,
 				output: (chunk) => {
-					captured +=
-						typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+					const next = boundedLiveOutput(
+						captured,
+						typeof chunk === "string"
+							? chunk
+							: decoder.decode(chunk, { stream: true }),
+					);
+					captured = next.text;
+					truncated ||= next.truncated;
+					record.output = retained();
+					publish();
 				},
 				diagnostic: () => {},
 				details: async (value) => {
 					details = value;
+					record.details = value;
+					publish();
 				},
 			};
-			const result = await tool.execute(rawArgs as never, nested, context);
-			const text = result.content ? contentToText(result.content) : captured;
-			record.output = text;
-			record.isError = result.isError === true;
-			// Some tools (edit's diff, read's truncation) report their structured
-			// result through `result.details` instead of `api.details`; capture
-			// either, so a nested call keeps the same expandable view it would have
-			// as a standalone row.
-			const structured = details ?? result.details;
-			if (structured !== undefined) record.details = structured as JsonValue;
-			if (result.isError) throw new Error(text.trim() || `${tool.name} failed`);
-			return details !== undefined ? details : text;
+			try {
+				const result = await tool.execute(
+					rawArgs as never,
+					nested,
+					nestedContext,
+				);
+				const text = result.content
+					? contentToText(result.content)
+					: retained() + decoder.decode();
+				record.output = text;
+				record.isError = result.isError === true;
+				record.status = record.isError ? "error" : "ok";
+				// Some tools (edit's diff, read's truncation) report their structured
+				// result through `result.details` instead of `api.details`; capture
+				// either, so a nested call keeps the same expandable view it would have
+				// as a standalone row.
+				const structured = details ?? result.details;
+				if (structured !== undefined) record.details = structured as JsonValue;
+				if (result.isError)
+					throw new Error(text.trim() || `${tool.name} failed`);
+				return details !== undefined ? details : text;
+			} catch (error) {
+				record.status = "error";
+				record.isError = true;
+				const message = errorMessage(error);
+				if (!record.output.includes(message))
+					record.output = record.output
+						? `${record.output}\n${message}`
+						: message;
+				throw error;
+			} finally {
+				record.durationMs = Date.now() - started;
+				publish();
+			}
 		},
 	};
 }
@@ -183,6 +238,13 @@ function formatResult(
 	return {
 		...textResult(lines.join("\n"), !result.ok),
 		details: {
+			output: [
+				...output,
+				...(result.ok && result.value !== undefined
+					? [`return: ${JSON.stringify(result.value)}`]
+					: []),
+				...(!result.ok ? [`Script error: ${result.error.message}`] : []),
+			].join("\n"),
 			calls: result.calls.map((call, index) => ({
 				name: call.name,
 				status: call.status,
@@ -227,6 +289,10 @@ export function createDurableCodemode(): DurableCodemode {
 				(entry) => entry.name !== CODEMODE_TOOL_NAME,
 			);
 			const recorded: RecordedCall[] = [];
+			const progress = createProgressPublisher(
+				() => ({ calls: recorded.map((call) => ({ ...call })) }),
+				(snapshot) => api.details(snapshot as JsonValue, context),
+			);
 			let parsed: ReturnType<typeof parseCodemodeSource>;
 			try {
 				parsed = parseCodemodeSource(args.code);
@@ -241,7 +307,7 @@ export function createDurableCodemode(): DurableCodemode {
 			try {
 				sandbox = new CodemodeSandbox({
 					tools: callable.map((entry) =>
-						nestedTool(entry, api, context, recorded),
+						nestedTool(entry, api, context, recorded, progress.request),
 					),
 					wasm: await loadQuickJSWasm(codemodeWasmPath()),
 					timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -260,6 +326,9 @@ export function createDurableCodemode(): DurableCodemode {
 			let result: CodemodeResult;
 			try {
 				result = await sandbox.execute(parsed.code, {
+					onOutput: (item) => {
+						if (item.type === "text") api.output(`${item.text}\n`);
+					},
 					...(parsed.options.timeoutMs !== undefined
 						? { timeoutMs: parsed.options.timeoutMs }
 						: {}),
@@ -268,6 +337,11 @@ export function createDurableCodemode(): DurableCodemode {
 				});
 			} finally {
 				void sandbox.close().catch(() => undefined);
+				try {
+					await progress.flush();
+				} finally {
+					progress.dispose();
+				}
 			}
 			if (result.ok) {
 				const next: Record<string, unknown> = {

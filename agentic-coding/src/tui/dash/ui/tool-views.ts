@@ -6,14 +6,12 @@
 // produced, the command a bash call ran and how it ended.
 //
 // Presentation only and pure: a block's structured tool data in, rows out. A
-// tool without a specialized view here (a search, anything a future host adds)
-// keeps the generic row.
+// tool family uses compositional presenters in custom-tool-views.ts; unknown
+// tools keep a structured fallback, never an invented execution state.
 import { resolveDeveloperQuestionOption } from "../../../contracts/workflow.ts";
-import {
-	type AgentSessionToolCall,
-	formatDuration,
-	toolIcon,
-} from "../agent-session.ts";
+import { type AgentSessionToolCall, formatDuration } from "../agent-session.ts";
+import { customToolView } from "./custom-tool-views.ts";
+import { metadataWithout } from "./tool-content.ts";
 
 /** How a tool-view line is weighted: secondary context, the view's primary
  * content, or a status detail worth noticing. */
@@ -27,10 +25,15 @@ export type ToolViewHighlight =
 	| "info"
 	| "accent";
 
-/** One row of an expanded tool view, with the weight it is drawn in. A row may
- * carry a detail of its own — a codemode call is a whole tool call, so its row
- * folds open into that call's own view. */
+/** One row of an expanded tool view. Structured fields and option descriptions
+ * may carry independently foldable details; codemode uses actual tool cards. */
 export interface ToolViewRow {
+	readonly table?: {
+		readonly columns: readonly string[];
+		readonly rows: readonly (readonly string[])[];
+	};
+	readonly highlight?: string;
+	readonly lineNumber?: number;
 	/** Stable identity for a row that folds, unique within its block. */
 	readonly id?: string;
 	readonly text: string;
@@ -44,7 +47,7 @@ export interface ToolViewRow {
 	/** The text is markdown, drawn rendered instead of as a plain line. It is
 	 * the body of a fold — a question's context — not a header. */
 	readonly markdown?: boolean;
-	/** The text is source in this tree-sitter filetype (a codemode script): drawn
+	/** The text is source in this tree-sitter filetype (JSON, SQL or a script): drawn
 	 * as one highlighted code block instead of a line. */
 	readonly syntax?: string;
 	readonly detail?: readonly ToolViewRow[];
@@ -52,13 +55,11 @@ export interface ToolViewRow {
 
 /** One independently collapsible part of an expanded tool view. */
 export interface ToolViewSection {
+	readonly tone?: ToolViewHighlight;
+	readonly shell?: boolean;
 	readonly id: string;
 	readonly label: string;
 	readonly rows: readonly ToolViewRow[];
-	/** The part starts folded: its header shows (`script (12 lines)`), its rows
-	 * wait for a click. A script's source and output are reference material, so
-	 * an expanded codemode row leads with the calls the script made. */
-	readonly collapsed?: boolean;
 }
 
 /** A tool call's transcript view: the row label (wrapped to the row's width),
@@ -66,16 +67,30 @@ export interface ToolViewSection {
  * expanded), and the sections a long view splits into so its parts can be read
  * one at a time. */
 export interface ToolView {
+	/** A domain operation failed even if its transport completed normally. */
+	readonly failed?: boolean;
+	readonly codemode?: {
+		readonly script: string;
+		readonly calls: readonly {
+			readonly call: AgentSessionToolCall;
+			readonly status: string;
+			readonly durationMs?: number;
+		}[];
+		readonly output: readonly ToolViewRow[];
+	};
 	readonly icon: string;
 	/** The row's label. opencode names the verb (`Read src/a.ts`); a view
 	 * without one shows only its subject. Child rows keep `summary`. */
 	readonly label?: string;
+	readonly compactLabel?: string;
 	readonly summary: string;
 	readonly hint?: string;
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
-	/** File tools keep a bounded preview visible before their fold is opened. */
+	/** Keep content visible even before the fold is opened. */
 	readonly preview?: boolean;
+	/** Shells show a live tail by default, unlike folded generic tool output. */
+	readonly shell?: boolean;
 	readonly file?: {
 		readonly kind: "code" | "diff";
 		readonly path: string;
@@ -336,6 +351,8 @@ function bashView(call: AgentSessionToolCall): ToolView {
 	const exit = /exited with code (\d+)/.exec(lines.join("\n"));
 	return {
 		icon: "$",
+		preview: true,
+		shell: true,
 		summary: command,
 		hint: exit
 			? `exit ${exit[1]}`
@@ -375,12 +392,11 @@ function oneLine(value: string, max = 300): string {
 /** The question text: the instructions string, or the question field of the
  * object form the tool also accepts. */
 function questionText(value: unknown): string | undefined {
-	if (typeof value === "string") return oneLine(value);
+	if (typeof value === "string") return value;
 	if (!isRecord(value)) return undefined;
 	for (const key of ["question", "instructions", "text"]) {
 		const text = value[key];
-		if (typeof text === "string" && text.trim().length > 0)
-			return oneLine(text);
+		if (typeof text === "string" && text.trim().length > 0) return text;
 	}
 	return undefined;
 }
@@ -402,7 +418,7 @@ function jevQuestions(value: unknown): JevQuestion[] {
 		const criteria = isRecord(question.criteria)
 			? Object.entries(question.criteria).flatMap(([key, description]) =>
 					typeof description === "string" && description.trim().length > 0
-						? [`${key}: ${oneLine(description, 200)}`]
+						? [`${key}: ${description}`]
 						: [],
 				)
 			: [];
@@ -444,7 +460,6 @@ function jevAnswers(
 						(entry): entry is [string, number] => typeof entry[1] === "number",
 					)
 					.sort((a, b) => b[1] - a[1])
-					.slice(0, 6)
 			: [];
 		const legend = isRecord(record.legend)
 			? Object.entries(record.legend).flatMap(([index, label]) =>
@@ -536,6 +551,9 @@ function jevRows(lines: readonly string[]): ToolViewRow[] {
 function jevView(call: AgentSessionToolCall): ToolView {
 	const questions = jevQuestions(call.args.questions);
 	const answers = jevAnswers(call.result?.details);
+	const structuredAnswers = isRecord(call.result?.details?.answers)
+		? call.result.details.answers
+		: undefined;
 	const lowest = answers
 		.flatMap((answer) =>
 			answer.confidence === undefined ? [] : [answer.confidence],
@@ -546,8 +564,10 @@ function jevView(call: AgentSessionToolCall): ToolView {
 		);
 	const sources = jevSources(call.args);
 	const hint = [
-		lowest === undefined ? undefined : `conf ${lowest.toFixed(2)}`,
-		sources,
+		answers.length > 0
+			? `${answers.length} judgment${answers.length === 1 ? "" : "s"}`
+			: undefined,
+		lowest !== undefined && lowest < 0.5 ? "low confidence" : undefined,
 	]
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
@@ -555,20 +575,13 @@ function jevView(call: AgentSessionToolCall): ToolView {
 	// with its confidence, and the distribution the classifier put behind it. A
 	// call with no structured answers (a failed one) keeps its own text.
 	const rows: ToolViewRow[] = [];
-	for (const answer of answers) {
-		rows.push(
-			...jevQuestionRows(
-				questions.find((question) => question.id === answer.id),
-				answer,
-			),
-		);
-	}
 	for (const warning of jevRows(call.result?.lines ?? []).filter((row) =>
 		row.text.startsWith("- "),
 	))
 		rows.push(warning);
 	return {
 		icon: "◆",
+		label: `Judge ${sources?.startsWith("$") ? "command" : (sources?.split(" · $")[0] ?? "state")}`,
 		summary:
 			answers.length > 0
 				? answers.map((answer) => `${answer.id} → ${answer.value}`).join(" · ")
@@ -576,7 +589,83 @@ function jevView(call: AgentSessionToolCall): ToolView {
 					? questions.map((question) => question.id).join(", ")
 					: "judgment",
 		...(hint.length > 0 ? { hint } : {}),
-		rows: rows.length > 0 ? rows : jevRows(call.result?.lines ?? []),
+		sections: [
+			...(metadataWithout(call.args, ["questions"]).length > 0
+				? [
+						{
+							id: "sources",
+							label: "Sources",
+							rows: metadataWithout(call.args, ["questions"]),
+						},
+					]
+				: []),
+			...(answers.length === 0
+				? questions.map((question) => ({
+						id: `question:${question.id}`,
+						label: `Question ${question.id}`,
+						rows: [
+							{ text: question.text ?? question.id },
+							...(question.criteria ?? []).map((text) => ({
+								text,
+								emphasis: "muted" as const,
+							})),
+						],
+					}))
+				: []),
+			...answers.map((answer) => ({
+				id: `judgment:${answer.id}`,
+				label: `Judgment ${answer.id}`,
+				rows: [
+					...jevQuestionRows(
+						questions.find((question) => question.id === answer.id),
+						answer,
+					),
+					...metadataWithout(structuredAnswers?.[answer.id], [
+						"noul",
+						"choice",
+						"score",
+						"confidence",
+						"probabilities",
+						"legend",
+					]),
+				],
+			})),
+			...(rows.filter((row) => row.tone === "warning").length > 0
+				? [
+						{
+							id: "warnings",
+							label: "Warnings",
+							rows: rows.filter((row) => row.tone === "warning"),
+						},
+					]
+				: []),
+			...(answers.length === 0 && (call.result?.lines.length ?? 0) > 0
+				? [
+						{
+							id: "output",
+							label: call.result?.isError ? "Error" : "Output",
+							rows: jevRows(call.result?.lines ?? []).map((row) =>
+								call.result?.isError
+									? {
+											...row,
+											emphasis: "highlight" as const,
+											tone: "error" as const,
+										}
+									: row,
+							),
+						},
+					]
+				: []),
+			...(metadataWithout(call.result?.details, ["answers"]).length > 0
+				? [
+						{
+							id: "metadata",
+							label: "Details",
+							rows: metadataWithout(call.result?.details, ["answers"]),
+						},
+					]
+				: []),
+		],
 	};
 }
 
@@ -817,7 +906,7 @@ function questionDetail(
 			: undefined;
 	if (custom)
 		rows.push({
-			text: `custom: ${oneLine(custom, 400)}`,
+			text: `custom: ${custom}`,
 			emphasis: "regular",
 		});
 	return rows;
@@ -825,16 +914,9 @@ function questionDetail(
 
 function dialogueRows(
 	questions: readonly DialogueQuestion[],
-	context: string | undefined,
+	includeQuestion = true,
 ): ToolViewRow[] {
 	const rows: ToolViewRow[] = [];
-	if (context?.trim())
-		rows.push({
-			id: "context",
-			text: "context",
-			emphasis: "muted",
-			detail: [{ text: context, emphasis: "muted", markdown: true }],
-		});
 	questions.forEach((question, index) => {
 		// One blank line between the question groups, so a questionnaire reads as
 		// groups rather than as one list.
@@ -846,10 +928,9 @@ function dialogueRows(
 		const warning = questionWarning(question);
 		rows.push({
 			id: `question:${index}`,
-			text: `${prefix === undefined ? "" : `[${prefix}] `}${oneLine(
-				question.text ?? "question",
-				200,
-			)}${summary === undefined ? "" : `   ${summary}`}`,
+			text: includeQuestion
+				? `${prefix === undefined ? "" : `[${prefix}] `}${question.text ?? "question"}${summary === undefined ? "" : `   ${summary}`}`
+				: (summary ?? "Awaiting answer"),
 			emphasis: warning ? "highlight" : "regular",
 			...(warning ? { tone: "warning" as const } : {}),
 			...(detail.length > 0 ? { detail } : {}),
@@ -889,7 +970,7 @@ function dialogueView(call: AgentSessionToolCall): ToolView | undefined {
 			: typeof record?.context === "string"
 				? record.context
 				: stringArg(call.args, "context");
-	const rows = dialogueRows(questions, context);
+	const rows = dialogueRows(questions, questions.length > 1);
 	// A result that is not a question record — an error the tool reported, a
 	// host without the dialogue — keeps its own words under the question.
 	if (record === undefined && lines.length > 0)
@@ -902,9 +983,43 @@ function dialogueView(call: AgentSessionToolCall): ToolView | undefined {
 		);
 	return {
 		icon: "?",
-		summary: oneLine(headline, 160),
-		hint: `${status ?? "asking"} · ${requester}`,
-		rows,
+		summary: headline,
+		compactLabel: oneLine(headline, 160),
+		hint: `${call.result?.isError ? "failed" : (status ?? "asking")} · ${requester}`,
+		sections: [
+			...(context?.trim()
+				? [
+						{
+							id: "context",
+							label: "Context",
+							rows: [
+								{ text: context, markdown: true, emphasis: "muted" as const },
+							],
+						},
+					]
+				: []),
+			...rows
+				.filter((row) => row.id?.startsWith("question:"))
+				.map((row, index) => ({
+					id: row.id ?? `question:${index}`,
+					label:
+						questions.length === 1
+							? "Choices and answer"
+							: `Question ${index + 1}`,
+					rows: [{ ...row, detail: undefined }, ...(row.detail ?? [])],
+				})),
+			...(record === undefined && lines.length > 0
+				? [
+						{
+							id: "output",
+							label: call.result?.isError ? "Error" : "Output",
+							rows: rows.filter(
+								(row) => row.id === undefined && row.text.length > 0,
+							),
+						},
+					]
+				: []),
+		],
 	};
 }
 
@@ -958,31 +1073,6 @@ function codemodeCalls(
 		});
 }
 
-/** The first argument worth naming, for a tool that has no view of its own. */
-function primaryArg(
-	args: Readonly<Record<string, unknown>>,
-): string | undefined {
-	for (const value of Object.values(args))
-		if (typeof value === "string" && value.length > 0) return value;
-	return undefined;
-}
-
-/** One call line. With the call's arguments the line borrows the tool's own
- * specialized subject — a script's read names its file, its bash its command —
- * and a tool without a view keeps its type glyph and names its first argument. */
-function codemodeCallText(call: CodemodeCall): string {
-	const view = call.args
-		? toolView({ name: call.name, args: call.args })
-		: undefined;
-	const primary = call.args ? primaryArg(call.args) : undefined;
-	// The name is prefixed once, so a generic tool's subject is its argument.
-	const subject = view ? view.summary : (primary ?? "");
-	const hint = view?.hint ? ` · ${view.hint}` : "";
-	// The name stays on the line: the glyph alone does not say which tool ran.
-	const named = subject.length > 0 ? `${call.name} ${subject}` : call.name;
-	return `${view?.icon ?? toolIcon(call.name)} ${named}${hint} (${call.status})`;
-}
-
 /** The first line of a script that says something: its own `// @options:` line
  * is configuration, not a headline. */
 function codemodeHeadline(code: string): string {
@@ -993,38 +1083,6 @@ function codemodeHeadline(code: string): string {
 	return line ?? "script";
 }
 
-/** The script's own source, whole, as the one highlighted code row of its
- * section: the source is JavaScript, and the tree-sitter pass needs it whole to
- * highlight it. */
-function codemodeScriptRows(code: string): ToolViewRow[] {
-	return code.length === 0
-		? []
-		: [
-				{
-					text: code,
-					emphasis: "regular" as const,
-					syntax: "javascript",
-				},
-			];
-}
-
-/** One line per call a script made: its name and how it ended, failures
- * highlighted in the error color. This is the collapsed view's whole content —
- * the shape of the work — and stays visible once expanded. */
-function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
-	return calls.map((entry, index) => {
-		const detail = codemodeCallDetail(entry);
-		const ok = entry.status === "ok";
-		return {
-			id: `call:${index}`,
-			text: codemodeCallText(entry),
-			emphasis: ok ? ("regular" as const) : ("highlight" as const),
-			...(ok ? {} : { tone: "error" as const }),
-			...(detail.length > 0 ? { detail } : {}),
-		};
-	});
-}
-
 /** The result a call reported, as the projection's own result shape, so a call
  * row can render through the same view its standalone transcript row would. */
 function codemodeCallResult(
@@ -1032,56 +1090,25 @@ function codemodeCallResult(
 ): AgentSessionToolCall["result"] | undefined {
 	if (call.output === undefined && call.details === undefined) return undefined;
 	return {
-		lines: (call.output ?? "")
-			.split("\n")
-			.map((line) => line.replace(/\s+$/g, ""))
-			.filter((line) => line.length > 0),
-		isError: call.isError === true,
+		lines: (call.output ?? "").split("\n"),
+		isError:
+			call.isError === true ||
+			(call.status !== "ok" && call.status !== "running"),
 		...(call.details === undefined ? {} : { details: call.details }),
 		notes: [],
 	};
 }
 
-/** A call's own view, as the rows it would show in the transcript: the answers
- * a judgment came back with, the diff an edit produced, the text a read read.
- * A call whose view has nothing to show still opens into the text it answered
- * with, so every call that produced something can be read in place. */
-function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
-	const result = codemodeCallResult(call);
-	const view = toolView({
-		name: call.name,
-		args: call.args ?? {},
-		...(result ? { result } : {}),
-	});
-	const rows = view?.rows ?? [];
-	if (rows.length > 0) return rows;
-	return (call.output ?? "")
-		.split("\n")
-		.map((line) => line.replace(/\s+$/g, ""))
-		.filter((line) => line.length > 0)
-		.map((text) =>
-			call.isError === true
-				? { text, emphasis: "highlight" as const, tone: "error" as const }
-				: { text, emphasis: "regular" as const },
-		);
-}
-
-/** `codemode`: collapsed, the one-line script summary (`λ 11 calls · 0.5s`).
- * Expanded, the calls the script made — one line each, each folding into its
- * own tool view — with the script that made them and what it produced kept as
- * compact parts that open on demand, so the call list stays the whole view. */
+/** `codemode`: structured script, native calls and output for the bracketed
+ * transcript. Nested calls are rendered exclusively through real tool cards. */
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
 	const calls = codemodeCalls(call.result?.details, lines);
 	const failed = call.result?.isError === true;
-	const errors = calls.filter((entry) => entry.status !== "ok").length;
-	const script = codemodeScriptRows(code);
-	const output: ToolViewRow[] = lines.map((text) =>
-		failed
-			? { text, emphasis: "highlight" as const, tone: "error" as const }
-			: { text, emphasis: "regular" as const },
-	);
+	const errors = calls.filter(
+		(entry) => entry.status !== "ok" && entry.status !== "running",
+	).length;
 	// The row is the call's own metadata — how much it ran, what failed, how long
 	// it spent in tools — and every call gets its own line below it.
 	const spent = calls.reduce(
@@ -1096,22 +1123,36 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "λ",
+		codemode: {
+			script: code,
+			calls: calls.map((entry) => ({
+				call: {
+					name: entry.name,
+					args: entry.args ?? {},
+					result: codemodeCallResult(entry),
+					...(entry.status === "running" ? { progress: entry.details } : {}),
+				},
+				status: entry.status,
+				...(entry.durationMs === undefined
+					? {}
+					: { durationMs: entry.durationMs }),
+			})),
+			output: (typeof call.result?.details?.output === "string"
+				? call.result.details.output.length > 0
+					? call.result.details.output.split("\n")
+					: []
+				: lines.filter(
+						(line) =>
+							!/^(?:Script completed$|Script failed$|calls: )/.test(line),
+					)
+			).map((text) => ({ text })),
+		},
 		summary: summary.length > 0 ? summary.join(" · ") : codemodeHeadline(code),
-		rows: codemodeCallRows(calls),
-		sections: [
-			...(script.length > 0
-				? [{ id: "script", label: "script", rows: script, collapsed: true }]
-				: []),
-			...(output.length > 0
-				? [{ id: "output", label: "output", rows: output, collapsed: true }]
-				: []),
-		],
 	};
 }
 
-/** The specialized view of one tool call, or undefined when the tool keeps the
- * generic row (icon, name, primary argument). */
-export function toolView(call: AgentSessionToolCall): ToolView | undefined {
+/** Native and custom family projections, with a structured fallback for future tools. */
+export function toolView(call: AgentSessionToolCall): ToolView {
 	switch (call.name) {
 		case "read":
 			return readView(call);
@@ -1125,11 +1166,11 @@ export function toolView(call: AgentSessionToolCall): ToolView | undefined {
 			return jevView(call);
 		case "developer_question":
 		case "agent_ask":
-			return dialogueView(call);
+			return dialogueView(call) ?? customToolView(call);
 		case "codemode":
 			return codemodeView(call);
 		default:
-			return undefined;
+			return customToolView(call);
 	}
 }
 
@@ -1223,6 +1264,8 @@ function editPendingView(call: AgentSessionToolCall): ToolView {
 function bashPendingView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "$",
+		preview: true,
+		shell: true,
 		summary: stringArg(call.args, "command") ?? call.name,
 	};
 }
@@ -1252,47 +1295,6 @@ function jevPendingView(call: AgentSessionToolCall): ToolView {
 		label: `Judging ${summary}`,
 		summary,
 		hint: progressHint([sources]),
-	};
-}
-
-/** `grep`/`glob`/`find`/`ls`: the pattern it is searching for. */
-function searchPendingView(call: AgentSessionToolCall): ToolView {
-	const pattern =
-		stringArg(call.args, "pattern") ??
-		stringArg(call.args, "query") ??
-		call.name;
-	const where = stringArg(call.args, "path") ?? stringArg(call.args, "glob");
-	return {
-		icon: toolIcon(call.name),
-		label: `Searching ${pattern}`,
-		summary: pattern,
-		hint: progressHint([where === undefined ? undefined : `in ${where}`]),
-	};
-}
-
-/** `webfetch`/`websearch`: the address or query it is asking for. */
-function webPendingView(call: AgentSessionToolCall): ToolView {
-	const subject =
-		stringArg(call.args, "url") ?? stringArg(call.args, "query") ?? call.name;
-	return {
-		icon: toolIcon(call.name),
-		label:
-			stringArg(call.args, "url") === undefined
-				? `Searching web for ${subject}`
-				: `Fetching ${subject}`,
-		summary: subject,
-	};
-}
-
-/** The fallback for a tool without a view of its own: its glyph, its name or
- * first argument, and the spinner in its icon gutter. */
-function genericPendingView(call: AgentSessionToolCall): ToolView {
-	const primary = primaryArg(call.args);
-	const summary = primary === undefined ? call.name : oneLine(primary, 160);
-	return {
-		icon: toolIcon(call.name),
-		label: summary,
-		summary,
 	};
 }
 
@@ -1333,28 +1335,52 @@ export function toolPendingView(
 		case "execute":
 			return withRunningOutput(bashPendingView(call), output);
 		case "codemode":
-			return withRunningOutput(codemodePendingView(call), output);
+			return {
+				...codemodePendingView(call),
+				...codemodeView({
+					...call,
+					result: {
+						lines: output,
+						notes: [],
+						isError: false,
+						details: call.progress,
+					},
+				}),
+				label: "Codemode",
+			};
 		case "ask_jev":
-			return withRunningOutput(jevPendingView(call), output);
+			return {
+				...jevView({
+					...call,
+					result: {
+						lines: output,
+						notes: [],
+						isError: false,
+						details: call.progress,
+					},
+				}),
+				...jevPendingView(call),
+			};
 		case "developer_question":
-		case "agent_ask":
-			return withRunningOutput(
-				dialogueView(call) ?? genericPendingView(call),
-				output,
-			);
+		case "agent_ask": {
+			const view = dialogueView(call);
+			return view
+				? withRunningOutput(view, output)
+				: customToolView(call, output, true);
+		}
 		case "grep":
 		case "glob":
 		case "find":
 		case "ls":
 		case "search":
-			return withRunningOutput(searchPendingView(call), output);
+			return customToolView(call, output, true);
 		case "webfetch":
 		case "websearch":
 		case "web_fetch":
 		case "web_search":
 		case "fetch":
-			return withRunningOutput(webPendingView(call), output);
+			return customToolView(call, output, true);
 		default:
-			return withRunningOutput(genericPendingView(call), output);
+			return customToolView(call, output, true);
 	}
 }

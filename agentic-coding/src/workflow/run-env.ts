@@ -40,6 +40,18 @@ export function agentRunEnvironmentFile(input: {
 	return path.join(runDirectory, "runtime-bin", input.runId, "run.env");
 }
 
+export function parseRunEnvFile(contents: string): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const line of contents.split("\n")) {
+		const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+		if (!match) continue;
+		const [, key, raw] = match;
+		if (!key || raw === undefined) continue;
+		env[key] = raw.replace(/^'|'$/g, "").replace(/'\\'''/g, "'");
+	}
+	return env;
+}
+
 function shQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }

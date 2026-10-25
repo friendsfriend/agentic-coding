@@ -15,6 +15,7 @@ import { createEnvironmentExtension } from "../src/agent-host/environment-tools.
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import type { RunContextLookup } from "../src/agent-host/tools.ts";
+import { actionProgressResponse } from "../src/server/environment/action-progress-stream.ts";
 
 const ENV_TOOLS = [
 	"env_list",
@@ -134,6 +135,55 @@ async function invoke(
 }
 
 describe("environment tool surface", () => {
+	test("build progress uses the authenticated stream and publishes live structured details", async () => {
+		let finish: ((value: unknown) => void) | undefined;
+		let progressed: (() => void) | undefined;
+		const observed = new Promise<void>((resolve) => {
+			progressed = resolve;
+		});
+		const snapshots: unknown[] = [];
+		const send = (async (_input: unknown, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			expect(headers.get("accept")).toBe("application/x-ndjson");
+			expect(headers.get(ENVIRONMENT_OWNER_HEADER)).toBe("workflow:wf-alpha");
+			expect(headers.get("authorization")).toBe(
+				"Bearer capability-for-wf-alpha",
+			);
+			return actionProgressResponse(
+				async (publish) => {
+					publish({ output: "first", status: "running" });
+					return new Promise((resolve) => {
+						finish = resolve;
+					});
+				},
+				(value) => value,
+				() => ({ code: "failed", message: "failed" }),
+			);
+		}) as typeof fetch;
+		const extension = createEnvironmentExtension(lookup, { fetch: send });
+		const result = toolOf(extension, "env_build").execute(
+			{ app: "demo" },
+			{
+				conversationId: 1,
+				details: async (value: unknown) => {
+					snapshots.push(value);
+					progressed?.();
+				},
+			},
+			{},
+		);
+		await observed;
+		expect(snapshots).toEqual([
+			{ view: { output: "first", status: "running" } },
+		]);
+		finish?.({ output: "first\nlast", status: "completed", exitCode: 0 });
+		const completed = await result;
+		expect(JSON.parse(completed.content[0]?.text ?? "null")).toMatchObject({
+			output: "first\nlast",
+			status: "completed",
+			exitCode: 0,
+		});
+	});
 	test("a read-only run is offered every environment tool and still no write or edit", async () => {
 		// A verifier must be able to start and read the app it verifies, so the
 		// environment tools are installed for every durable run, read-only runs

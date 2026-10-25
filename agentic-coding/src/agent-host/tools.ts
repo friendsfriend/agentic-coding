@@ -1048,23 +1048,32 @@ export function createSearchExtension(
 	});
 }
 
+/** The preamble of a workflow run: the managed-run contract, whose progress a
+ * workflow engine is waiting on. */
+export const WORKFLOW_PREAMBLE =
+	"You are a coding agent running inside a managed agentic-coding workflow. Use the available tools to read and change the repository, run focused checks, and report progress through the workflow's own handoff command.";
+
+/** The preamble of the standalone coding session (`agent host --session`): the
+ * developer drives the conversation directly, so there is no workflow to hand
+ * off to and no managed-run contract to report against. */
+export const CODING_SESSION_PREAMBLE =
+	"You are a coding agent working directly with the developer in their repository. Use the available tools to read and change the code, run focused checks, and report what you did. The developer drives the session, so keep the working tree in a state they can review.";
+
 /** The durable system prompt (durable-agent-tools: "System prompt context"):
  * a coding-agent preamble, repository/global context files, and the working
  * directory. `repoRootLookup` resolves a run's repository root for the
- * upward `AGENTS.md`/`CLAUDE.md` walk; absent repos stop at `cwd` itself. */
+ * upward `AGENTS.md`/`CLAUDE.md` walk; absent repos stop at `cwd` itself.
+ * `preamble` is the run's contract: the managed workflow by default, the
+ * standalone coding session when the host serves one. */
 export function createPromptExtension(
 	globalAgentDir: string,
 	repoRootLookup: (cwd: string) => string = (cwd) => cwd,
+	preamble: string = WORKFLOW_PREAMBLE,
 ): Extension {
 	return defineExtension({
 		name: "agentic.prompt",
 		sections: [
-			section(
-				"preamble",
-				() =>
-					"You are a coding agent running inside a managed agentic-coding workflow. Use the available tools to read and change the repository, run focused checks, and report progress through the workflow's own handoff command.",
-				{ tag: false },
-			),
+			section("preamble", () => preamble, { tag: false }),
 			section("cwd", (input) => input.env?.cwd),
 			section("context", (input) => {
 				const cwd = input.env?.cwd;

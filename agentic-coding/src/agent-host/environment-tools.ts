@@ -21,6 +21,7 @@ import {
 	AGENT_EVIDENCE_ATTACH_PATH,
 	AGENT_EVIDENCE_LIST_PATH,
 } from "../server/protocol.ts";
+import { readActionProgress } from "./action-progress.ts";
 import {
 	ENVIRONMENT_OWNER_HEADER,
 	ENVIRONMENT_TOKEN_ENV,
@@ -28,6 +29,7 @@ import {
 	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
+import { boundedToolLog, toolViewDetails } from "./tool-view-details.ts";
 import type { RunContextLookup } from "./tools.ts";
 
 export const ENVIRONMENT_EXTENSION = "agentic.environment";
@@ -44,14 +46,25 @@ const READ_TIMEOUT_MS = 120_000;
 const ACTION_TIMEOUT_MS = 30 * 60_000;
 
 type Result = {
+	details?: ReturnType<typeof toolViewDetails>;
 	content: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
 
 function text(value: unknown): Result {
+	value = boundedToolLog(value, MAX_RESULT_CHARS);
 	const raw =
-		typeof value === "string" ? value : JSON.stringify(value, null, 2);
+		typeof value === "string"
+			? value
+			: JSON.stringify(
+					value,
+					null,
+					value && typeof value === "object" && "output" in value
+						? undefined
+						: 2,
+				);
 	return {
+		details: toolViewDetails(value, MAX_RESULT_CHARS),
 		content: [
 			{
 				type: "text",
@@ -300,7 +313,12 @@ export function createEnvironmentExtension(
 		env: Readonly<Record<string, string>>,
 		method: "GET" | "POST",
 		path: string,
-		init: { body?: unknown; timeoutMs: number; signal?: AbortSignal },
+		init: {
+			body?: unknown;
+			timeoutMs: number;
+			signal?: AbortSignal;
+			onProgress?: (value: unknown) => Promise<void>;
+		},
 	): Promise<unknown> => {
 		const binding = bindingOf(env);
 		if (!binding) throw new Error(NO_BINDING);
@@ -311,6 +329,7 @@ export function createEnvironmentExtension(
 		const response = await send(`${binding.url}${path}`, {
 			method,
 			headers: {
+				...(init.onProgress ? { accept: "application/x-ndjson" } : {}),
 				authorization: `Bearer ${binding.token}`,
 				[ENVIRONMENT_OWNER_HEADER]: binding.owner,
 				...(init.body === undefined
@@ -322,6 +341,12 @@ export function createEnvironmentExtension(
 				: { body: JSON.stringify(withoutBlankOptionals(init.body)) }),
 			signal: AbortSignal.any(signals),
 		});
+		if (
+			response.ok &&
+			init.onProgress &&
+			response.headers.get("content-type")?.includes("application/x-ndjson")
+		)
+			return readActionProgress(response, init.onProgress);
 		const parsed = (await response.json().catch(() => undefined)) as
 			| {
 					ok?: boolean;
@@ -529,13 +554,21 @@ export function createEnvironmentExtension(
 				description:
 					"Run an app's build action in this workflow's checkout and return its bounded output. Needs no app slot, so it can run while someone else holds the app.",
 				parameters: EnvActionParameters,
-				execute: async (args, api) => {
+				execute: async (args, api, context) => {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("env_build: run context unavailable");
 					try {
 						return text(
 							await call(run.env, "POST", "/api/v1/agent-env/build", {
 								timeoutMs: ACTION_TIMEOUT_MS,
+								signal: context.abortSignal,
+								onProgress: async (value) => {
+									const details = toolViewDetails(
+										boundedToolLog(value, MAX_RESULT_CHARS),
+										MAX_RESULT_CHARS,
+									);
+									if (details) await api.details(details, context);
+								},
 								body: {
 									app: args.app,
 									...(args.target ? { target: args.target } : {}),
@@ -553,13 +586,21 @@ export function createEnvironmentExtension(
 				description:
 					"Run an app's test action in this workflow's checkout and return its bounded output. Needs no app slot, so it can run while someone else holds the app.",
 				parameters: EnvActionParameters,
-				execute: async (args, api) => {
+				execute: async (args, api, context) => {
 					const run = lookup(api.conversationId);
 					if (!run) return failure("env_test: run context unavailable");
 					try {
 						return text(
 							await call(run.env, "POST", "/api/v1/agent-env/test", {
 								timeoutMs: ACTION_TIMEOUT_MS,
+								signal: context.abortSignal,
+								onProgress: async (value) => {
+									const details = toolViewDetails(
+										boundedToolLog(value, MAX_RESULT_CHARS),
+										MAX_RESULT_CHARS,
+									);
+									if (details) await api.details(details, context);
+								},
 								body: {
 									app: args.app,
 									...(args.target ? { target: args.target } : {}),

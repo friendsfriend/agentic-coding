@@ -76,10 +76,13 @@ import {
 	type EnvironmentSecret,
 	environmentSecrets,
 	redact,
+	redactProgress,
 } from "./secrets.ts";
 import { stagedSymlinkedDefinitions } from "./setup-drafts.ts";
 
 export { environmentSecrets, redact } from "./secrets.ts";
+
+import { actionProgressResponse } from "./action-progress-stream.ts";
 
 /** The infrastructure-service fields the log reader and the listing need. The
  * configured and runtime models both carry them, so either is accepted rather
@@ -295,6 +298,34 @@ async function dispatch(
 			actionPath,
 			await readJsonBody(request),
 		);
+		if (request.headers.get("accept")?.includes("application/x-ndjson")) {
+			const secrets = [
+				...environmentSecrets(deps.configDir),
+				...actionSecrets(deps.registry),
+			].sort((left, right) => right.value.length - left.value.length);
+			return actionProgressResponse(
+				(publish, signal) =>
+					environmentBuildTest(deps, owner, body, action, {
+						signal: AbortSignal.any([request.signal, signal]),
+						onOutput: (value) =>
+							publish({
+								...value,
+								status: "running",
+								output: redactProgress(value.output, secrets),
+							}),
+					}),
+				(value) => redact(value, secrets),
+				(error) => ({
+					code:
+						error instanceof EnvironmentInstanceError
+							? error.code
+							: error instanceof ActionConflictError
+								? error.code
+								: "action-failed",
+					message: message(error),
+				}),
+			);
+		}
 		return ok(await environmentBuildTest(deps, owner, body, action));
 	}
 	return errorResponse(
@@ -1188,6 +1219,10 @@ async function environmentBuildTest(
 	owner: string,
 	body: AgentEnvironmentBuild,
 	action: "build" | "test",
+	options: {
+		signal?: AbortSignal;
+		onOutput?: Parameters<typeof runAppBuildTestAction>[1]["onOutput"];
+	} = {},
 ): Promise<unknown> {
 	if (!deps.actions)
 		throw new EnvironmentInstanceError(
@@ -1211,6 +1246,7 @@ async function environmentBuildTest(
 		app,
 	);
 	const result = await runAppBuildTestAction(deps.actions, {
+		...options,
 		app,
 		action,
 		checkoutDir: checkout,

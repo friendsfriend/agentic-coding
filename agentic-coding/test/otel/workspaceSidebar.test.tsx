@@ -17,6 +17,7 @@ import { activeErrorModal, dismissErrorModal, uiColors } from "@ui";
 import { onCleanup } from "solid-js";
 import { HostClient } from "../../src/agent-host/client.ts";
 import { hostLayout } from "../../src/agent-host/layout.ts";
+import * as recovery from "../../src/agent-host/recovery.ts";
 import * as workflowSessions from "../../src/agent-host/workflow-session.ts";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
@@ -803,7 +804,7 @@ test("rows show the state that needs a reader as a glyph", async () => {
 	}
 });
 
-test("the pinned Orchestrator, OpenCode and Pi entries are always visible", async () => {
+test("the pinned Orchestrator, OpenCode, Pi and Pi Durable entries are always visible", async () => {
 	stubGateway();
 	const t = await renderShell();
 	try {
@@ -811,6 +812,7 @@ test("the pinned Orchestrator, OpenCode and Pi entries are always visible", asyn
 		expect(t.captureCharFrame()).toContain("⌂");
 		expect(t.captureCharFrame()).toContain("󱚞");
 		expect(t.captureCharFrame()).toContain("π");
+		expect(t.captureCharFrame()).toContain("∞");
 		await focusSidebar(t);
 		expect(await renderUntil(t, "Orchestrator")).toBe(true);
 		expect(t.captureCharFrame()).toContain("chat · launch · manage");
@@ -818,6 +820,8 @@ test("the pinned Orchestrator, OpenCode and Pi entries are always visible", asyn
 		expect(t.captureCharFrame()).toContain("sessions · prompts · code");
 		expect(t.captureCharFrame()).toContain("Pi");
 		expect(t.captureCharFrame()).toContain("standard · prompt · code");
+		expect(t.captureCharFrame()).toContain("Pi Durable");
+		expect(t.captureCharFrame()).toContain("durable · session · code");
 
 		// The filter only changes the workflow rows underneath: the pinned entry is
 		// chrome above them and never disappears with them.
@@ -1260,14 +1264,10 @@ test("the Backspace byte cycles back only while the sidebar holds focus", async 
 		// A terminal without the kitty keyboard protocol reports Ctrl+H as the
 		// Backspace byte. The sidebar is the one surface where that byte edits no
 		// text, so it moves from the second workflow to the first.
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
-		t.mockInput.pressKey("j");
-		await advance(t);
+		for (let index = 0; index < SIDEBAR_HOME_PINS.length + 1; index += 1) {
+			t.mockInput.pressKey("j");
+			await advance(t);
+		}
 		// The terminal's Ctrl+H byte, which is also what `pressBackspace` sends: the
 		// two are one key on a terminal without the kitty keyboard protocol.
 		t.mockInput.pressBackspace();
@@ -1373,6 +1373,13 @@ test("Enter on a selected agent crosses the shell boundary with the exact target
 	}));
 	const requests: ObservationRequest[] = [];
 	const sessions: Array<[string, string | undefined]> = [];
+	// Store and host boundaries are stubbed: recovery must not open a real
+	// workflow store for this synthetic navigation target either.
+	const recover = spyOn(recovery, "recoverWorkflowSession").mockResolvedValue({
+		runId: "worker-run",
+		hostSocket: sessionSocket,
+		conversationId: "durable-worker",
+	});
 	const resolver = spyOn(
 		workflowSessions,
 		"createWorkflowSessionResolver",
@@ -1434,6 +1441,11 @@ test("Enter on a selected agent crosses the shell boundary with the exact target
 			workflowId: "wf-agent-target",
 		});
 		expect(sessions).toEqual([["worker-run", "durable-worker"]]);
+		expect(recover).toHaveBeenCalledWith(
+			"research://standalone",
+			"wf-agent-target",
+			"worker-run",
+		);
 		expect(lookup).toHaveBeenCalledWith(
 			"research://standalone",
 			"wf-agent-target",
@@ -1446,6 +1458,9 @@ test("Enter on a selected agent crosses the shell boundary with the exact target
 		expect(t.captureCharFrame()).not.toContain("Ask anything…");
 		// A new activation on the same mounted workflow is not mistaken for a
 		// consumed request, and clearing route params did not remount the view.
+		// Historical recovery is ineligible, but authenticated observation of
+		// the exact durable association must remain available.
+		recover.mockRejectedValue(new Error("historical run is not recoverable"));
 		t.mockInput.pressKey("a", { ctrl: true });
 		await advance(t);
 		t.mockInput.pressEnter();
@@ -1459,6 +1474,7 @@ test("Enter on a selected agent crosses the shell boundary with the exact target
 	} finally {
 		t.renderer.destroy();
 		watch.mockRestore();
+		recover.mockRestore();
 		lookup.mockRestore();
 		resolver.mockRestore();
 		clearGateway();

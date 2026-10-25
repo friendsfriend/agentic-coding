@@ -88,6 +88,7 @@ import {
 	indexDashboardAgents,
 } from "./agent-navigation.ts";
 import {
+	AgentSessionProjectionCache,
 	createAgentSessionProjection,
 	streamAgentSessionProjection,
 	submissionStateNote,
@@ -1065,10 +1066,12 @@ export function App(props: {
 	 * previous frame is superseded, and the reader is looking at the newest rows
 	 * either way.
 	 */
+	const agentSessionProjectionCache = new AgentSessionProjectionCache();
 	const projectAgentSessionTranscript = (value: unknown) => {
 		agentSessionStopProjection();
 		agentSessionStopProjection = streamAgentSessionProjection(
 			createAgentSessionProjection(value, {
+				cache: agentSessionProjectionCache,
 				notices: agentSessionNotices(),
 			}),
 			(blocks) => setAgentSessionBlocks(blocks),
@@ -1137,6 +1140,11 @@ export function App(props: {
 		void (async () => {
 			let socket: string;
 			try {
+				// Historical runs may be watched but must not recover a writable
+				// binding. Authentication below remains mandatory even when recovery
+				// is ineligible; controls require successful recovery separately.
+				await recoverAgentSession(session.runId).catch(() => undefined);
+				if (!isCurrent()) return;
 				socket = await sessionSockets.resolve(
 					session.runId,
 					session.hostSocket,
@@ -1295,6 +1303,12 @@ export function App(props: {
 		}
 		props.onAgentRunRequestConsumed?.(requestId);
 	});
+	const recoverAgentSession = async (runId: string) => {
+		const { recoverWorkflowSession } = await import(
+			"../../agent-host/recovery.ts"
+		);
+		await recoverWorkflowSession(props.repo, props.workflowId, runId);
+	};
 	const rememberAgentSessionInput = (text: string) => {
 		const history = overlays.agentSessionHistory();
 		if (history.at(-1) === text) return;
@@ -1323,6 +1337,7 @@ export function App(props: {
 		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
+				await recoverAgentSession(session.runId);
 				const { HostClient } = await import("../../agent-host/client.ts");
 				if (!isCurrent()) return;
 				const client = new HostClient(agentSessionEndpoint(session));
@@ -1357,6 +1372,7 @@ export function App(props: {
 		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
+				await recoverAgentSession(session.runId);
 				const { HostClient } = await import("../../agent-host/client.ts");
 				if (!isCurrent()) return;
 				const client = new HostClient(agentSessionEndpoint(session));
@@ -1392,6 +1408,7 @@ export function App(props: {
 		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
+				await recoverAgentSession(session.runId);
 				const { HostClient } = await import("../../agent-host/client.ts");
 				if (!isCurrent()) return;
 				const client = new HostClient(agentSessionEndpoint(session));
@@ -1439,6 +1456,7 @@ export function App(props: {
 		const isCurrent = currentAgentSessionControl(session.runId);
 		void (async () => {
 			try {
+				await recoverAgentSession(session.runId);
 				const { HostClient } = await import("../../agent-host/client.ts");
 				if (!isCurrent()) return;
 				const client = new HostClient(agentSessionEndpoint(session));

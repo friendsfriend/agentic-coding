@@ -21,6 +21,7 @@ import {
 } from "../src/agent-host/codemode.ts";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { buildAgentSessionView } from "../src/tui/dash/agent-session.ts";
 import { CODEMODE_SECTION_BUDGET } from "../src/workflow/prompt-inventory.ts";
 
 const roots: string[] = [];
@@ -180,6 +181,78 @@ test("a durable run runs a codemode script that calls its own tools", async () =
 		},
 	]);
 	await host.shutdown();
+});
+
+test("codemode publishes script output and nested tool progress before completion", async () => {
+	const dir = tempWorkflowDir();
+	enableCodemode(dir);
+	const { host, faux } = await openHost(dir);
+	try {
+		await host.ensureRun({
+			runId: "stream",
+			name: "stream",
+			cwd: dir,
+			runEnvPath: writeRunEnv(dir, {}),
+			toolPolicy: "default",
+			model: `${faux.getModel().provider}/${faux.getModel().id}`,
+		});
+		const live: Array<{ output: readonly string[]; calls: unknown }> = [];
+		const stop = await host.watchRun("stream", (value) => {
+			const block = buildAgentSessionView(value).find(
+				(block) => block.pending && block.toolCall?.name === "codemode",
+			);
+			if (block)
+				live.push({
+					output: block.detail ?? [],
+					calls: block.toolCall?.progress?.calls,
+				});
+		});
+		try {
+			faux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("codemode", {
+							code: 'text("script before"); await tools.bash({ command: "printf nested-progress; sleep 0.4" }); text("script after"); return "done";',
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+			]);
+			await host.submit("stream", "stream codemode", "stream-request");
+			faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
+			await settle(host, "stream");
+			expect(
+				live.some(
+					(frame) =>
+						frame.output.includes("script before") &&
+						!frame.output.includes("script after"),
+				),
+			).toBe(true);
+			expect(
+				live.some(
+					(frame) =>
+						Array.isArray(frame.calls) &&
+						frame.calls.some(
+							(call) =>
+								call.name === "bash" &&
+								call.status === "running" &&
+								call.output.includes("nested-progress"),
+						),
+				),
+			).toBe(true);
+			const result = toolResultText(
+				await host.entriesForTest("stream"),
+				"codemode",
+			);
+			expect(result).toContain("script before");
+			expect(result).toContain("script after");
+			expect(result.match(/script before/g)).toHaveLength(1);
+		} finally {
+			stop();
+		}
+	} finally {
+		await host.shutdown();
+	}
 });
 
 test("a nested edit keeps its diff in the call's structured details", async () => {

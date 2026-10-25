@@ -120,6 +120,10 @@ import {
 } from "../../lifecycle.ts";
 import { startWorkflowMonitor } from "../../orchestrator/monitor.ts";
 import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
+import {
+	PiDurableView,
+	piDurableKeybindCatalog,
+} from "../../pi-durable/PiDurableView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
 	acceptCredentialKeystroke,
@@ -287,6 +291,7 @@ type Tab =
 	| "orchestrator"
 	| "opencode"
 	| "pi"
+	| "pi-durable"
 	| "traces"
 	| "metrics"
 	| "logs"
@@ -482,7 +487,8 @@ export function App(props: {
 		if (page.startsWith("workflows")) return "workflows";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
-		if (page === "opencode" || page === "pi") return page;
+		if (page === "opencode" || page === "pi" || page === "pi-durable")
+			return page;
 		if (page.startsWith("observability")) return "observability";
 		return "home";
 	};
@@ -622,8 +628,8 @@ export function App(props: {
 		const repo = props.repos[0];
 		return repo && repo !== "/demo" ? repo : process.cwd();
 	};
-	/** Home pins the Orchestrator, OpenCode and Pi above every workflow row. The
-	 * attached shell has no Home surface, so it pins none. */
+	/** Home pins the Orchestrator, OpenCode, Pi and Pi Durable above every
+	 * workflow row. The attached shell has no Home surface, so it pins none. */
 	const sidebarPins = () =>
 		props.dashboard?.mode === "home" ? SIDEBAR_HOME_PINS : [];
 	/** Cursor positions the sidebar offers: the pinned entries first, then the
@@ -1167,6 +1173,7 @@ export function App(props: {
 		if (page === "orchestrator") return "orchestrator";
 		if (page === "opencode") return "opencode";
 		if (page === "pi") return "pi";
+		if (page === "pi-durable") return "pi-durable";
 		if (page.includes("metrics")) return "metrics";
 		if (page.includes("logs")) return "logs";
 		if (page.includes("topology")) return "topology";
@@ -3069,6 +3076,7 @@ export function App(props: {
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
+			activeTab() === "pi-durable" ||
 			((activeTab() === "opencode" || activeTab() === "pi") &&
 				focusPanel() === "content")
 		)
@@ -3469,7 +3477,8 @@ export function App(props: {
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
 			activeTab() === "opencode" ||
-			activeTab() === "pi"
+			activeTab() === "pi" ||
+			activeTab() === "pi-durable"
 		)
 			return ["content"];
 		return ["breadcrumb", "content"];
@@ -3558,6 +3567,7 @@ export function App(props: {
 		const tab = activeTab();
 		if (tab === "opencode") return opencodeKeybindCatalog();
 		if (tab === "pi") return piKeybindCatalog();
+		if (tab === "pi-durable") return piDurableKeybindCatalog();
 		const base = observabilityKeybindCatalog({
 			tab: tab === "home" || tab === "orchestrator" ? "traces" : tab,
 			view: traceView(),
@@ -3620,6 +3630,8 @@ export function App(props: {
 		if (settingsSection() === "agents") return;
 		// The Orchestrator page publishes its session catalog itself.
 		if (currentPage() === "orchestrator") return;
+		// The Pi Durable page publishes its own session catalog the same way.
+		if (currentPage() === "pi-durable") return;
 		if (settingsSection()) {
 			setActiveKeybindCatalog(
 				sidebarAvailable()
@@ -3895,6 +3907,29 @@ export function App(props: {
 												onHelp={() => {
 													setHelpOffset(0);
 													nav.pushModal("help", "orchestrator");
+												}}
+											/>
+										</box>
+									);
+								})()}
+							{/* Sidebar → Pi Durable: the same durable transcript over a plain
+							    coding-session host, mounted while its page is current. */}
+							{props.dashboard?.mode === "home" &&
+								currentPage() === "pi-durable" &&
+								(() => {
+									const keymap = props.dashboard?.keymap;
+									if (!keymap) return null;
+									return (
+										<box style={{ flexGrow: 1, minHeight: 0 }}>
+											<PiDurableView
+												keymap={keymap}
+												active={() => focusPanel() === "content"}
+												overlay={() => nav.modal() !== "none"}
+												cwd={agentProject()}
+												onBack={() => pages.goToParent()}
+												onHelp={() => {
+													setHelpOffset(0);
+													nav.pushModal("help", "pi-durable");
 												}}
 											/>
 										</box>

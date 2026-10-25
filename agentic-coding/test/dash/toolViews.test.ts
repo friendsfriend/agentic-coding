@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionToolCall } from "../../src/tui/dash/agent-session.ts";
 import {
+	type ToolView,
 	toolPendingView,
 	toolView,
 	transcriptFiletype,
@@ -16,6 +17,16 @@ const call = (
 	args,
 	...(result ? { result } : {}),
 });
+
+const judgmentRows = (view: ToolView | undefined) =>
+	(view?.sections ?? [])
+		.filter(
+			(section) =>
+				section.id.startsWith("judgment:") ||
+				section.id === "warnings" ||
+				section.id === "output",
+		)
+		.flatMap((section) => section.rows);
 
 describe("toolView", () => {
 	test("file renderers use tree-sitter names rather than filename extensions", () => {
@@ -229,10 +240,10 @@ describe("toolView", () => {
 		expect(view?.icon).toBe("◆");
 		// The verdict is the headline; the state it judged rides beside it.
 		expect(view?.summary).toBe("leak → 0.12");
-		expect(view?.hint).toBe("conf 0.40 · files (2) · $ npm test");
+		expect(view?.hint).toBe("1 judgment · low confidence");
 		// Expanded: the question the agent asked, its verdict with the confidence,
 		// the distribution behind it, and the caution it earned.
-		expect(view?.rows).toEqual([
+		expect(judgmentRows(view)).toEqual([
 			{ text: "does it leak?", emphasis: "muted" },
 			{ text: "leak (noul) · 0.12 · confidence 0.40", emphasis: "regular" },
 			{
@@ -282,7 +293,7 @@ describe("toolView", () => {
 				},
 			),
 		);
-		expect(view?.rows).toEqual([
+		expect(judgmentRows(view)).toEqual([
 			{ text: "which core owns the file?", emphasis: "muted" },
 			{ text: "leak (choice) · auth · confidence 0.71", emphasis: "regular" },
 			{
@@ -331,7 +342,7 @@ describe("toolView", () => {
 				},
 			),
 		);
-		expect(view?.rows).toEqual([
+		expect(judgmentRows(view)).toEqual([
 			{ text: "how core is it?", emphasis: "muted" },
 			{ text: "core (score) · 0.78 · confidence 0.90", emphasis: "regular" },
 			{
@@ -353,8 +364,9 @@ describe("toolView", () => {
 			}),
 		);
 		expect(view?.summary).toBe("scope, leak");
-		expect(view?.hint).toBe("reuse s7f3a2");
-		expect(view?.rows).toEqual([]);
+		expect(view?.label).toBe("Judge reuse s7f3a2");
+		expect(view?.hint).toBeUndefined();
+		expect(judgmentRows(view)).toEqual([]);
 	});
 
 	test("a failed ask_jev keeps its own message", () => {
@@ -370,7 +382,7 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.summary).toBe("leak");
-		expect(view?.rows?.[0]?.text).toContain("nothing to judge");
+		expect(judgmentRows(view)[0]?.text).toContain("nothing to judge");
 	});
 
 	test("developer_question shows the context, the options, and the chosen answer", () => {
@@ -412,11 +424,10 @@ describe("toolView", () => {
 		expect(view?.summary).toBe("Which backend should the wiki use?");
 		expect(view?.hint).toBe("answered · developer");
 		// The context is a fold of its own, carrying the markdown it is.
-		expect(view?.rows?.[0]).toEqual({
+		expect(view?.sections?.[0]).toMatchObject({
 			id: "context",
-			text: "context",
-			emphasis: "muted",
-			detail: [
+			label: "Context",
+			rows: [
 				{
 					text: "The migration script must pick one.",
 					emphasis: "muted",
@@ -424,23 +435,20 @@ describe("toolView", () => {
 				},
 			],
 		});
-		// A blank line, then the question with its answer in the header.
-		expect(view?.rows?.[1]).toEqual({ text: "", emphasis: "muted" });
-		const question = view?.rows?.[2];
-		expect(question?.text).toBe(
-			"Which backend should the wiki use?   → SQLite in-process",
-		);
+		const choices = view?.sections?.[1]?.rows ?? [];
+		const question = choices[0];
+		expect(question?.text).toBe("→ SQLite in-process");
 		expect(question?.emphasis).toBe("regular");
 		expect(question?.tone).toBeUndefined();
-		expect(question?.detail?.map((row) => row.text)).toEqual([
+		expect(choices.slice(1).map((row) => row.text)).toEqual([
 			"● ★ SQLite in-process",
 			"○   Postgres via compose",
 		]);
-		expect(question?.detail?.[0]?.emphasis).toBe("highlight");
-		expect(question?.detail?.[0]?.tone).toBe("success");
-		expect(question?.detail?.[1]?.emphasis).toBe("muted");
-		expect(question?.detail?.[1]?.tone).toBeUndefined();
-		expect(question?.detail?.[0]?.detail).toEqual([
+		expect(choices[1]?.emphasis).toBe("highlight");
+		expect(choices[1]?.tone).toBe("success");
+		expect(choices[2]?.emphasis).toBe("muted");
+		expect(choices[2]?.tone).toBeUndefined();
+		expect(choices[1]?.detail).toEqual([
 			{ text: "No service to run.", emphasis: "muted", markdown: true },
 		]);
 	});
@@ -489,24 +497,23 @@ describe("toolView", () => {
 		);
 		expect(view?.summary).toBe("2 questions");
 		expect(view?.hint).toBe("answered · developer");
-		expect(view?.rows?.map((row) => row.text)).toEqual([
+		expect(view?.sections?.map((section) => section.rows[0]?.text)).toEqual([
 			"[state] Which state store?   → SQLite",
-			"",
 			"[drop] Drop the old table?   ⊘ cancelled",
 		]);
 		// The item's own context opens above its options.
-		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+		expect(view?.sections?.[0]?.rows.slice(1).map((row) => row.text)).toEqual([
 			"The planner needs a store.",
 			"●   SQLite",
 			"○ ★ Redis",
 		]);
-		expect(view?.rows?.[0]?.detail?.[0]).toEqual({
+		expect(view?.sections?.[0]?.rows[1]).toEqual({
 			text: "The planner needs a store.",
 			emphasis: "muted",
 			markdown: true,
 		});
-		expect(view?.rows?.[2]?.emphasis).toBe("highlight");
-		expect(view?.rows?.[2]?.tone).toBe("warning");
+		expect(view?.sections?.[1]?.rows[0]?.emphasis).toBe("highlight");
+		expect(view?.sections?.[1]?.rows[0]?.tone).toBe("warning");
 	});
 
 	test("a custom answer is quoted and a peer question names its peer", () => {
@@ -531,10 +538,10 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.hint).toBe("answered · peer verifier");
-		expect(view?.rows?.[0]?.text).toBe(
-			"Is the cache warm?   → “warm after the first call”",
+		expect(view?.sections?.[0]?.rows[0]?.text).toBe(
+			"→ “warm after the first call”",
 		);
-		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+		expect(view?.sections?.[0]?.rows.slice(1).map((row) => row.text)).toEqual([
 			"○   Warm",
 			"custom: warm after the first call",
 		]);
@@ -553,13 +560,15 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.summary).toBe("Which backend?");
-		expect(view?.hint).toBe("asking · developer");
-		expect(view?.rows?.map((row) => row.text)).toEqual([
-			"Which backend?",
+		expect(view?.hint).toBe("failed · developer");
+		expect(
+			view?.sections?.flatMap((section) => section.rows).map((row) => row.text),
+		).toEqual([
+			"Awaiting answer",
 			"developer_question: run context unavailable",
 		]);
-		expect(view?.rows?.[1]?.emphasis).toBe("highlight");
-		expect(view?.rows?.[1]?.tone).toBe("error");
+		expect(view?.sections?.[1]?.rows[0]?.emphasis).toBe("highlight");
+		expect(view?.sections?.[1]?.rows[0]?.tone).toBe("error");
 	});
 
 	test("codemode lists one line per call, with what each call did", () => {
@@ -608,36 +617,22 @@ describe("toolView", () => {
 		// Collapsed the row is only the call's metadata; expanded it carries one
 		// line per call below it, each with its tool's type glyph.
 		expect(view?.summary).toBe("2 calls · 1 failed · 3.0s");
-		expect(view?.rows).toEqual([
-			{ id: "call:0", text: "→ read src/a.ts (ok)", emphasis: "regular" },
-			{
-				id: "call:1",
-				text: "← edit src/b.ts · 1 edit (error)",
-				emphasis: "highlight",
-				tone: "error",
-			},
+		expect(
+			view?.codemode?.calls.map((entry) => ({
+				name: entry.call.name,
+				status: entry.status,
+			})),
+		).toEqual([
+			{ name: "read", status: "ok" },
+			{ name: "edit", status: "error" },
 		]);
 		expect(view?.hint).toBeUndefined();
-		// The script and its output are compact parts of their own: they start
-		// folded so the expanded row is the call list, and open on a click.
-		expect(view?.sections?.map((section) => section.id)).toEqual([
-			"script",
-			"output",
+		expect(view?.codemode?.script).toBe(code);
+		expect(view?.codemode?.output).toEqual([
+			{ text: 'return: ["a.ts","b.ts"]' },
 		]);
-		expect(view?.sections?.map((section) => section.collapsed)).toEqual([
-			true,
-			true,
-		]);
-		// The script stays whole in one highlighted row: the tree-sitter pass
-		// needs the source as a single block.
-		expect(view?.sections?.[0]?.rows).toEqual([
-			{ text: code, emphasis: "regular", syntax: "javascript" },
-		]);
-		expect(view?.sections?.[1]?.rows).toEqual([
-			{ text: "Script completed", emphasis: "regular" },
-			{ text: 'return: ["a.ts","b.ts"]', emphasis: "regular" },
-			{ text: "calls: glob (ok), read (error)", emphasis: "regular" },
-		]);
+		expect(view?.rows).toBeUndefined();
+		expect(view?.sections).toBeUndefined();
 	});
 
 	test("a script's calls fold into their own tool views", () => {
@@ -673,10 +668,10 @@ describe("toolView", () => {
 		);
 		// Each call is an expanded row with the same detail a standalone row would
 		// have: the edit's diff and the read's text.
-		expect(view?.rows?.[0]?.detail?.some((row) => row.text === "+b")).toBe(
-			true,
-		);
-		expect(view?.rows?.[1]?.detail?.map((row) => row.text)).toEqual([
+		const edit = view?.codemode?.calls[0]?.call;
+		if (!edit) throw new Error("Missing edit");
+		expect(toolView(edit)?.file?.content).toContain("+b");
+		expect(view?.codemode?.calls[1]?.call.result?.lines).toEqual([
 			"line one",
 			"line two",
 		]);
@@ -733,7 +728,7 @@ describe("toolView", () => {
 		);
 		// `glob` has no view of its own; the text it answered with is what the call
 		// row opens into.
-		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+		expect(view?.codemode?.calls[0]?.call.result?.lines).toEqual([
 			"a.ts",
 			"b.ts",
 		]);
@@ -752,14 +747,14 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.summary).toBe("2 calls · 1 failed");
-		expect(view?.rows).toEqual([
-			{ id: "call:0", text: "✱ glob (ok)", emphasis: "regular" },
-			{
-				id: "call:1",
-				text: "→ read (error)",
-				emphasis: "highlight",
-				tone: "error",
-			},
+		expect(
+			view?.codemode?.calls.map((entry) => ({
+				name: entry.call.name,
+				status: entry.status,
+			})),
+		).toEqual([
+			{ name: "glob", status: "ok" },
+			{ name: "read", status: "error" },
 		]);
 	});
 
@@ -774,9 +769,9 @@ describe("toolView", () => {
 			'const x = await tools.read({ path: "a.ts" });',
 		);
 		expect(pending?.hint).toBeUndefined();
-		expect(pending?.rows).toEqual([]);
+		expect(pending?.codemode?.calls).toEqual([]);
 		// A script that never got a result still shows its source.
-		expect(pending?.sections?.map((section) => section.id)).toEqual(["script"]);
+		expect(pending?.codemode?.script).toContain("const x = await tools.read");
 
 		// A failed script keeps its output and its error in the error tone.
 		const failed = toolView(
@@ -792,11 +787,10 @@ describe("toolView", () => {
 		);
 		expect(failed?.summary).toBe("script failed");
 		expect(failed?.hint).toBeUndefined();
-		expect(
-			failed?.sections?.[1]?.rows.every(
-				(row) => row.emphasis === "highlight" && row.tone === "error",
-			),
-		).toBe(true);
+		expect(failed?.codemode?.output.map((row) => row.text)).toEqual([
+			"console output",
+			"Script error: boom",
+		]);
 	});
 
 	test("expanded views keep every line the tool produced", () => {
@@ -821,9 +815,9 @@ describe("toolView", () => {
 				},
 			),
 		);
-		expect(view?.sections?.[0]?.rows[0]?.text.split("\n").length).toBe(20);
-		expect(view?.rows?.length).toBe(9);
-		expect(view?.rows?.at(-1)?.text).toBe("• tool8 (ok)");
+		expect(view?.codemode?.script.split("\n")).toHaveLength(20);
+		expect(view?.codemode?.calls).toHaveLength(9);
+		expect(view?.codemode?.calls.at(-1)?.call.name).toBe("tool8");
 
 		// The same for a write's content and a diff.
 		const content = Array.from(
@@ -849,8 +843,10 @@ describe("toolView", () => {
 	});
 
 	test("keeps the generic row for a tool without a view", () => {
-		expect(toolView(call("grep", { pattern: "x" }))).toBeUndefined();
-		expect(toolView(call("agent_ask", { role: "planner" }))).toBeUndefined();
+		expect(toolView(call("grep", { pattern: "x" }))?.label).toBe("Search “x”");
+		expect(toolView(call("agent_ask", { role: "planner" }))?.label).toBe(
+			"Agent ask planner",
+		);
 	});
 });
 
@@ -898,6 +894,8 @@ describe("toolPendingView", () => {
 
 	test("bash names the command it is running", () => {
 		expect(toolPendingView(call("bash", { command: "npm test" }))).toEqual({
+			preview: true,
+			shell: true,
 			icon: "$",
 			summary: "npm test",
 		});
@@ -908,9 +906,14 @@ describe("toolPendingView", () => {
 			toolPendingView(
 				call("codemode", { code: "// @options: {}\nconst x = 1;" }),
 			),
-		).toEqual({
+		).toMatchObject({
 			icon: "λ",
-			label: "Executing const x = 1;",
+			label: "Codemode",
+			codemode: {
+				script: "// @options: {}\nconst x = 1;",
+				calls: [],
+				output: [],
+			},
 			summary: "const x = 1;",
 			hint: "2 lines",
 		});
@@ -940,34 +943,38 @@ describe("toolPendingView", () => {
 		// A dialogue call with no question keeps the generic pending row.
 		expect(
 			toolPendingView(call("agent_ask", { role: "planner" })),
-		).toMatchObject({ summary: "planner", label: "planner" });
+		).toMatchObject({ summary: "planner", label: "Agent ask planner" });
 	});
 
 	test("search and fetch name their pattern and address", () => {
 		expect(
 			toolPendingView(call("grep", { pattern: "foo", path: "src" })),
-		).toEqual({
+		).toMatchObject({
 			icon: "✱",
-			label: "Searching foo",
+			label: "Search “foo”",
 			summary: "foo",
-			hint: "in src",
+			hint: "src",
 		});
-		expect(toolPendingView(call("webfetch", { url: "https://x" }))).toEqual({
-			icon: "%",
-			label: "Fetching https://x",
+		expect(
+			toolPendingView(call("webfetch", { url: "https://x" })),
+		).toMatchObject({
+			icon: "↗",
+			label: "Fetch https://x",
 			summary: "https://x",
 		});
 	});
 
 	test("an unknown tool keeps its glyph, name, and label", () => {
-		expect(toolPendingView(call("frobnicate"))).toEqual({
+		expect(toolPendingView(call("frobnicate"))).toMatchObject({
 			icon: "•",
-			label: "frobnicate",
-			summary: "frobnicate",
+			label: "Frobnicate",
+			summary: "Frobnicate",
 		});
-		expect(toolPendingView(call("frobnicate", { target: "thing" }))).toEqual({
+		expect(
+			toolPendingView(call("frobnicate", { target: "thing" })),
+		).toMatchObject({
 			icon: "•",
-			label: "thing",
+			label: "Frobnicate thing",
 			summary: "thing",
 		});
 	});
