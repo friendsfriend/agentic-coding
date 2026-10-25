@@ -2265,7 +2265,7 @@ test("tool rows get a view from their call and result, and a generic default", a
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 40 },
+		{ width: 80, height: 70 },
 	);
 	const diffSign = (source: string, sign: string) =>
 		t
@@ -2560,7 +2560,7 @@ test("every tool row uses the raised block surface", async () => {
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 80, height: 20 },
+		{ width: 80, height: 70 },
 	);
 	try {
 		await t.renderOnce();
@@ -2578,8 +2578,9 @@ test("every tool row uses the raised block surface", async () => {
 		const readLine = lines.findIndex((line) => line.includes("Read src/a.ts"));
 		expect(readLine).toBeGreaterThan(0);
 		expect(lines[readLine - 1]).toMatch(/^┃\s*$/);
-		expect(lines[readLine + 1]).toMatch(/^┃\s+1 a\s*$/);
-		expect(lines[readLine + 2]).toMatch(/^┃\s*$/);
+		expect(lines[readLine + 1]).toMatch(/^┃\s*$/);
+		expect(lines[readLine + 2]).toMatch(/^┃\s+1 a\s*$/);
+		expect(lines[readLine + 3]).toMatch(/^┃\s*$/);
 		expect(row("Search “needle”")).toContain("✱ Search “needle”");
 		expect(row("Search “needle”").trimStart().startsWith("┃")).toBe(true);
 		expect(row("bun test")).toContain("$ bun test");
@@ -3842,7 +3843,7 @@ test("a developer question shows its context, options, and chosen answer", async
 				onCompact={() => {}}
 			/>
 		),
-		{ width: 100, height: 24 },
+		{ width: 100, height: 70 },
 	);
 	try {
 		await t.renderOnce();
@@ -3874,11 +3875,15 @@ test("a developer question shows its context, options, and chosen answer", async
 		const questionRow = t
 			.captureCharFrame()
 			.split("\n")
-			.findIndex((line) => line.includes("→ SQLite in-process"));
+			.findIndex((line) => line.includes("Choices and answer"));
 		await t.mockMouse.click(10, questionRow);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).not.toContain("● ★ SQLite in-process");
-		await t.mockMouse.click(10, questionRow);
+		const foldedQuestionRow = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("Choices and answer"));
+		await t.mockMouse.click(10, foldedQuestionRow);
 		await t.renderOnce();
 		const opened = t.captureCharFrame();
 		expect(opened).toContain("● ★ SQLite in-process");

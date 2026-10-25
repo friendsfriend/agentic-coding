@@ -541,7 +541,7 @@ function ToolRow(props: {
 				</Show>
 			</box>
 			<Show when={detail().length > 0 && open()}>
-				<box flexDirection="column" paddingLeft={2}>
+				<box flexDirection="column" paddingTop={1}>
 					{/* A row's detail is rows again: a question folds into its options, an
 					    option into the description the agent attached to it. */}
 					<ToolRows {...props} rows={detail()} />
@@ -574,8 +574,9 @@ function ToolRows(props: {
 			estimateTextRows(row.text, width) +
 			(props.openRows().has(`${props.block.id}:${row.id ?? row.text}`)
 				? 0
-				: (row.detail ?? []).reduce(
-						(sum, item) => sum + height(item, Math.max(1, width - 2)),
+				: (row.detail?.length ? 1 : 0) +
+					(row.detail ?? []).reduce(
+						(sum, item) => sum + height(item, width),
 						0,
 					))
 		);
@@ -899,7 +900,7 @@ function CodemodeBlock(props: BlockProps) {
 							onToggle={() => props.onToggleRow(scriptId)}
 						/>
 						<Show when={open(scriptId)}>
-							<box paddingTop={1} paddingLeft={2}>
+							<box paddingTop={1}>
 								<TranscriptFile
 									file={{ kind: "code", path: "script.js", content: script() }}
 								/>
@@ -933,7 +934,7 @@ function CodemodeBlock(props: BlockProps) {
 							}
 							onToggle={() => props.onToggleRow(outputId)}
 						/>
-						<box paddingLeft={2}>
+						<box flexDirection="column" gap={1}>
 							<TranscriptShellOutput
 								command="Output"
 								rows={outputRows()}
@@ -975,7 +976,9 @@ function GroupedRead(props: BlockProps) {
 				return (
 					header +
 					(props.expanded
-						? estimateTextRows(source(), Math.max(1, width - 10)) +
+						? 1 +
+							estimateTextRows(source(), Math.max(1, width - 10)) +
+							notes.length +
 							notes.reduce(
 								(height, note) =>
 									height + estimateTextRows(note, Math.max(1, width - 6)),
@@ -1156,18 +1159,26 @@ function Block(props: BlockProps) {
 						onToggle={() => props.onToggle(props.block.id)}
 					/>
 					<Show when={props.expanded || (tool.preview && tool.shell)}>
-						<box paddingLeft={2} flexDirection="column">
+						<box
+							paddingTop={props.expanded && !tool.shell ? 1 : 0}
+							flexDirection="column"
+							gap={1}
+						>
 							<Show
 								when={tool.shell}
 								fallback={
-									<box flexDirection="column">
-										<Show
-											when={tool.file}
-											fallback={<ToolRows {...props} rows={tool.rows ?? []} />}
-										>
-											{(file) => <TranscriptFile file={file()} />}
-										</Show>
-									</box>
+									<Show when={tool.file || (tool.rows?.length ?? 0) > 0}>
+										<box flexDirection="column">
+											<Show
+												when={tool.file}
+												fallback={
+													<ToolRows {...props} rows={tool.rows ?? []} />
+												}
+											>
+												{(file) => <TranscriptFile file={file()} />}
+											</Show>
+										</box>
+									</Show>
 								}
 							>
 								<Show when={(tool.rows?.length ?? 0) > 0}>
@@ -1220,7 +1231,10 @@ function Block(props: BlockProps) {
 														</text>
 													</box>
 													<Show when={open() || section.shell}>
-														<box flexDirection="column" paddingLeft={2}>
+														<box
+															flexDirection="column"
+															paddingTop={open() && !section.shell ? 1 : 0}
+														>
 															<Show
 																when={section.shell}
 																fallback={
@@ -1279,7 +1293,7 @@ function Block(props: BlockProps) {
 							onToggle={() => props.onToggle(props.block.id)}
 						/>
 						<Show when={props.expanded}>
-							<box paddingLeft={2} flexDirection="column">
+							<box paddingTop={1} flexDirection="column">
 								<Show when={props.block.request}>
 									{(request) => (
 										<text fg={uiColors.textMuted} wrapMode="word">
@@ -2141,7 +2155,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 														</box>
 													</ToolFrame>
 													<Show when={expanded()}>
-														<box flexDirection="column" gap={1}>
+														<box flexDirection="column" gap={1} paddingTop={1}>
 															<For each={row().blocks}>
 																{(block) => (
 																	<GroupedRead

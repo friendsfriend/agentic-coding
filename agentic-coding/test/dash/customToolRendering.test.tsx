@@ -37,6 +37,89 @@ function Session(props: { block: AgentSessionBlock }) {
 	);
 }
 
+for (const name of ["read", "edit", "write"]) {
+	test(`${name} separates its header, native file body, and notes`, async () => {
+		const t = await testRender(
+			() => (
+				<Session
+					block={{
+						id: `spacing:${name}`,
+						kind: "tool",
+						tone: "success",
+						text: name,
+						toolCall: {
+							name,
+							args: {
+								path: "spacing.txt",
+								content: "spacing_content",
+								edits: [{ oldText: "before", newText: "spacing_content" }],
+							},
+							result: {
+								lines: ["spacing_content"],
+								notes: ["spacing_note"],
+								isError: false,
+								details: { diff: "@@ -1 +1 @@\n-before\n+spacing_content\n" },
+							},
+						},
+					}}
+				/>
+			),
+			{ width: 140, height: 40 },
+		);
+		try {
+			for (let index = 0; index < 6; index++) await t.renderOnce();
+			const lines = t.captureCharFrame().split("\n");
+			const header = lines.findIndex((line) => line.includes("spacing.txt"));
+			const note = lines.findIndex((line) => line.includes("spacing_note"));
+			expect(header).toBeGreaterThanOrEqual(0);
+			expect(lines[header + 1]?.replaceAll("┃", "").trim()).toBe("");
+			expect(note).toBeGreaterThan(header + 2);
+			const headerColumn = lines[header]?.search(/[→←]/);
+			expect(lines[note]?.indexOf("spacing_note")).toBe(headerColumn);
+			expect(lines[note - 1]?.replaceAll("┃", "").trim()).toBe("");
+			expect(lines.some((line) => line.includes("spacing_content"))).toBe(true);
+		} finally {
+			t.renderer.destroy();
+		}
+	});
+}
+
+test("expanded tool content has a blank line below its header", async () => {
+	const t = await testRender(
+		() => (
+			<Session
+				block={{
+					id: "workflow-spacing",
+					kind: "tool",
+					tone: "success",
+					text: "Workflow agent-navigation-sidebar-v2",
+					toolCall: {
+						name: "workflow_status",
+						args: { workflowId: "agent-navigation-sidebar-v2" },
+						result: {
+							lines: ["unique workflow content"],
+							notes: [],
+							isError: false,
+						},
+					},
+				}}
+			/>
+		),
+		{ width: 140, height: 40 },
+	);
+	try {
+		for (let index = 0; index < 6; index++) await t.renderOnce();
+		const lines = t.captureCharFrame().split("\n");
+		const content = lines.findIndex((line) =>
+			line.includes("unique workflow content"),
+		);
+		expect(content).toBeGreaterThan(1);
+		expect(lines[content - 1]?.replaceAll("┃", "").trim()).toBe("");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("environment build cards render live detail snapshots without stdout chunks", async () => {
 	const [output, setOutput] = createSignal("first build output");
 	const block = () =>
