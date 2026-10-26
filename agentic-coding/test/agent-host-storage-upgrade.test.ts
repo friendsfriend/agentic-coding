@@ -39,7 +39,7 @@ test("the full private rollback snapshot includes committed WAL data and never o
 		db.exec("INSERT INTO conversations VALUES (2, 'after upgrade')");
 		expect(() => backupHostStore(file)).toThrow(/backup already exists/);
 		expect(fs.readFileSync(backup)).toEqual(original);
-		expect(fs.readdirSync(root).some((name) => name.endsWith(".tmp"))).toBe(
+		expect(fs.readdirSync(root).some((name) => name.includes(".tmp-"))).toBe(
 			false,
 		);
 	} finally {
