@@ -186,6 +186,8 @@ function isEnvironmentOwner(value: string): boolean {
 }
 
 /** Authorize an agent environment request and name the owner it acts as.
+ * Workflow capabilities act only as their bound workflow; the orchestrator
+ * capability acts only as the developer's user environment, not as operator.
  * Throws `AuthorizationError` for a missing/forged capability, an owner the
  * capability was not minted for, or an untrusted origin. */
 export function authorizeEnvironmentRequest(
@@ -195,7 +197,7 @@ export function authorizeEnvironmentRequest(
 	if (!originAllowed(request.headers.get("origin")))
 		throw new AuthorizationError(403, "untrusted origin");
 	const owner = (request.headers.get(ENVIRONMENT_OWNER_HEADER) ?? "").trim();
-	if (!isEnvironmentOwner(owner))
+	if (owner !== "user" && !isEnvironmentOwner(owner))
 		throw new AuthorizationError(
 			401,
 			"missing or invalid agent environment owner",
@@ -204,6 +206,14 @@ export function authorizeEnvironmentRequest(
 	if (!header.startsWith("Bearer "))
 		throw new AuthorizationError(401, "missing agent environment capability");
 	const supplied = header.slice("Bearer ".length).trim();
+	// The Home Orchestrator shares the developer's environment, never a
+	// workflow's lease or the operator's review/release authority.
+	if (owner === "user") {
+		if (constantTimeEqual(supplied, orchestratorTokenFor(authority.token)))
+			return owner;
+		throw new AuthorizationError(401, "invalid agent environment capability");
+	}
+
 	if (!constantTimeEqual(supplied, environmentTokenFor(authority.token, owner)))
 		throw new AuthorizationError(401, "invalid agent environment capability");
 	return owner;

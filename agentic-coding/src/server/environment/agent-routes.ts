@@ -490,10 +490,10 @@ async function targetsByApp(
 	const byApp = liveTargetsByApp(deps);
 	const symlinks = new Map<string, Array<{ path: string; target: string }>>();
 	for (const app of deps.apps?.getApps() ?? []) {
-		const overlay = deps.resolveOwnerOverlay?.(
-			owner as `workflow:${string}`,
-			app,
-		);
+		const overlay =
+			owner === "user"
+				? undefined
+				: deps.resolveOwnerOverlay?.(owner as `workflow:${string}`, app);
 		if (!overlay) continue;
 		// A staged path that is a symlink points at the developer's real file, so
 		// the author must know which ones those are before writing anything
@@ -1011,10 +1011,10 @@ function declaredRunTargetId(
 ): string | undefined {
 	const app = deps.apps?.getAppByIdent(appIdent);
 	if (!app) return undefined;
-	const overlay = deps.resolveOwnerOverlay?.(
-		owner as `workflow:${string}`,
-		app,
-	);
+	const overlay =
+		owner === "user"
+			? undefined
+			: deps.resolveOwnerOverlay?.(owner as `workflow:${string}`, app);
 	return declaredTargetId({
 		configDir: deps.configDir,
 		appIdent,
@@ -1231,20 +1231,20 @@ async function environmentBuildTest(
 			"the environment action engine is not attached",
 		);
 	const app = requireApp(deps, body.app);
-	const checkout = await deps.resolveOwnerCheckout?.(
-		owner as `workflow:${string}`,
-		app,
-	);
+	const checkout =
+		owner === "user"
+			? app.localDirectoryPath
+			: await deps.resolveOwnerCheckout?.(owner as `workflow:${string}`, app);
 	if (!checkout)
 		throw new EnvironmentInstanceError(
 			"owner-checkout-unavailable",
 			409,
 			`no managed checkout is available for ${owner}; ${action} runs in the workflow's own checkout`,
 		);
-	const overlay = deps.resolveOwnerOverlay?.(
-		owner as `workflow:${string}`,
-		app,
-	);
+	const overlay =
+		owner === "user"
+			? undefined
+			: deps.resolveOwnerOverlay?.(owner as `workflow:${string}`, app);
 	const result = await runAppBuildTestAction(deps.actions, {
 		...options,
 		app,

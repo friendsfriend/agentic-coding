@@ -103,7 +103,7 @@ describe("agent environment capability", () => {
 			),
 		).toThrow("missing or invalid agent environment owner");
 		// A name that is not a workflow owner is not a capability to verify.
-		for (const owner of ["user", "workflow:", "orchestrator"]) {
+		for (const owner of ["workflow:", "orchestrator"]) {
 			expect(() =>
 				authorizeEnvironmentRequest(
 					environmentRequest(
@@ -136,4 +136,36 @@ describe("agent environment capability", () => {
 			),
 		).not.toBe(alpha);
 	});
+});
+
+test("orchestrator environment capability is confined to user ownership", () => {
+	const token = orchestratorTokenFor(authority.token);
+	expect(
+		authorizeEnvironmentRequest(environmentRequest("user", token), authority),
+	).toBe("user");
+	for (const denied of [
+		authority.token,
+		environmentTokenFor(authority.token, "user"),
+		environmentTokenFor(authority.token, "workflow:alpha"),
+		orchestratorTokenFor("other-instance"),
+		"forged",
+	]) {
+		expect(() =>
+			authorizeEnvironmentRequest(
+				environmentRequest("user", denied),
+				authority,
+			),
+		).toThrow("invalid agent environment capability");
+	}
+	const headers = new Headers({
+		authorization: `Bearer ${token}`,
+		[ENVIRONMENT_OWNER_HEADER]: "user",
+		origin: "https://untrusted.example",
+	});
+	expect(() =>
+		authorizeEnvironmentRequest(
+			new Request("http://127.0.0.1/api/v1/agent-env/list", { headers }),
+			authority,
+		),
+	).toThrow("untrusted origin");
 });

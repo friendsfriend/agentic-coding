@@ -396,10 +396,10 @@ async function requiredByHeldApp(
 	for (const slot of held) {
 		const app = deps.apps?.getAppByIdent(slot.app);
 		if (!app) continue;
-		const checkout = await deps.resolveOwnerCheckout?.(
-			owner as `workflow:${string}`,
-			app,
-		);
+		const checkout =
+			owner === "user"
+				? app.localDirectoryPath
+				: await deps.resolveOwnerCheckout?.(owner as `workflow:${string}`, app);
 		if (!checkout) continue;
 		let targets: ActionTarget[];
 		try {

@@ -43,10 +43,8 @@ import {
 } from "../server/protocol.ts";
 import { describeDataBlockOperations } from "../stage-blocks/data-block.ts";
 import {
+	environmentBindingOf as bindingOf,
 	ENVIRONMENT_OWNER_HEADER,
-	ENVIRONMENT_TOKEN_ENV,
-	ENVIRONMENT_URL_ENV,
-	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
 import { toolViewDetails } from "./tool-view-details.ts";
@@ -667,22 +665,6 @@ async function call(
 		}
 	}
 	return value;
-}
-
-interface BrowserBinding {
-	readonly url: string;
-	readonly token: string;
-	readonly owner: string;
-}
-
-function bindingOf(
-	env: Readonly<Record<string, string>>,
-): BrowserBinding | undefined {
-	const url = env[ENVIRONMENT_URL_ENV];
-	const token = env[ENVIRONMENT_TOKEN_ENV];
-	const workflowId = env.HERDR_WORKFLOW_ID;
-	if (!url || !token || !workflowId) return undefined;
-	return { url, token, owner: environmentOwnerFor(workflowId) };
 }
 
 const NO_BINDING =

@@ -24,7 +24,6 @@ import {
 	INSPECTION_SPLIT,
 	INSPECTION_SPLIT_WITHOUT_SEARCH,
 	resolveCodemodeRegistered,
-	resolveSearchRegistered,
 	toolSurfaceNote,
 } from "../src/agent-host/tool-surface.ts";
 import { createSearchExtension } from "../src/agent-host/tools.ts";
@@ -194,10 +193,6 @@ test("codemode is registered from the run's own pi settings, never for the orche
 	expect(resolveCodemodeRegistered(settingsDir(["+codemode"]), true)).toBe(
 		false,
 	);
-	// `grep` is the search extension's tool: every workflow run has it, the
-	// orchestrator host never does.
-	expect(resolveSearchRegistered(false)).toBe(true);
-	expect(resolveSearchRegistered(true)).toBe(false);
 });
 
 test("the host offers descriptions for exactly the tools a run has", async () => {
@@ -234,7 +229,7 @@ test("the orchestrator host is told about the tools it has, and no others", asyn
 	const faux = fauxProvider();
 	models.setProvider(faux.provider);
 	// `codemode` is in the settings, and the orchestrator host still must not
-	// mention it: it installs neither `codemode` nor `grep`.
+	// mention it: codemode is not part of the orchestrator surface.
 	const dir = settingsDir(["+codemode"]);
 	const host = await DurableHost.open({
 		layout: hostLayout(dir),
@@ -248,8 +243,8 @@ test("the orchestrator host is told about the tools it has, and no others", asyn
 		const descriptions = host.toolDescriptionsForTest();
 		for (const name of ["bash", "read"]) {
 			const text = descriptions[name] ?? "";
-			expect(text).toContain(INSPECTION_SPLIT_WITHOUT_SEARCH);
-			expect(text).not.toContain("grep");
+			expect(text).toContain(INSPECTION_SPLIT);
+			expect(text).toContain("grep");
 			expect(text).not.toContain("codemode");
 		}
 		expect(descriptions.codemode).toBeUndefined();

@@ -84,9 +84,3 @@ export function resolveCodemodeRegistered(
 		(tool) => tool.tool === "codemode",
 	);
 }
-
-/** Whether this host's runs have `grep`: the search extension is installed for
- * every workflow run and never in orchestrator mode. */
-export function resolveSearchRegistered(orchestrator: boolean): boolean {
-	return !orchestrator;
-}

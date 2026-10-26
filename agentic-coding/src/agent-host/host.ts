@@ -85,7 +85,6 @@ import {
 import { suggestingCodingTools } from "./tool-suggestions.ts";
 import {
 	resolveCodemodeRegistered,
-	resolveSearchRegistered,
 	type ToolSurfaceOptions,
 } from "./tool-surface.ts";
 import {
@@ -624,13 +623,13 @@ export class DurableHost {
 		// the assignments name it (tool-surface.ts). A run is never told about a
 		// tool its tool set does not contain.
 		// The same resolution decides whether `grep` is named: orchestrator mode
-		// installs the coding tools but never the search extension.
+		// installs the same bounded search extension as workflow runs.
 		const surface: ToolSurfaceOptions = {
 			codemodeRegistered: resolveCodemodeRegistered(
 				options.globalAgentDir,
 				options.orchestrator === true,
 			),
-			searchRegistered: resolveSearchRegistered(options.orchestrator === true),
+			searchRegistered: true,
 		};
 		const codemodeRegistered = surface.codemodeRegistered === true;
 		// pi-durable's coding tools with the bounded `bash` in place of its own
@@ -661,9 +660,24 @@ export class DurableHost {
 				),
 			);
 		}
+		// Operational tools need no workflow identity. The orchestrator's existing
+		// server capability binds them to the developer's user environment; keep
+		// workflow-only dialogue, handoff and delegated debug tools out of it.
+		const operationalTools = orchestrator
+			? [
+					createSearchExtension(surface),
+					createEnvironmentExtension(lookup),
+					createBrowserExtension(lookup),
+					createDebugExtension(lookup),
+					createStageExtension(lookup),
+				].flatMap((extension) => {
+					registry.install(extension);
+					return extension.tools ?? [];
+				})
+			: [];
 		const workflowTools =
 			orchestrator || options.session
-				? { readOnlyTools: [], workflowTools: [] }
+				? { readOnlyTools: [], workflowTools: operationalTools }
 				: DurableHost.installWorkflowExtensions(
 						registry,
 						lookup,
@@ -1171,10 +1185,11 @@ export class DurableHost {
 				throw new Error("this host only serves the orchestrator session");
 			// The orchestrator decides for itself whether a request is a direct edit
 			// or a workflow: it gets the full coding tools (read/write/edit/bash)
-			// alongside its own workflow-management tools, not a read-only subset.
+			// alongside workflow management and operational tools, not a read-only subset.
 			return [
 				...codingTools(false),
 				...(this.orchestratorExtension.tools ?? []),
+				...this.workflowTools,
 			];
 		}
 		if (this.options.session) {

@@ -23,10 +23,8 @@ import {
 } from "../server/protocol.ts";
 import { readActionProgress } from "./action-progress.ts";
 import {
+	environmentBindingOf as bindingOf,
 	ENVIRONMENT_OWNER_HEADER,
-	ENVIRONMENT_TOKEN_ENV,
-	ENVIRONMENT_URL_ENV,
-	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
 import { boundedToolLog, toolViewDetails } from "./tool-view-details.ts";
@@ -88,23 +86,6 @@ export interface EnvironmentToolOptions {
 	readonly now?: () => number;
 	readonly sleep?: (ms: number) => Promise<void>;
 	readonly fetch?: typeof fetch;
-}
-
-interface EnvironmentBinding {
-	readonly url: string;
-	readonly token: string;
-	readonly owner: string;
-}
-
-/** The capability this run presents, or the reason it has none. */
-function bindingOf(
-	env: Readonly<Record<string, string>>,
-): EnvironmentBinding | undefined {
-	const url = env[ENVIRONMENT_URL_ENV];
-	const token = env[ENVIRONMENT_TOKEN_ENV];
-	const workflowId = env.HERDR_WORKFLOW_ID;
-	if (!url || !token || !workflowId) return undefined;
-	return { url, token, owner: environmentOwnerFor(workflowId) };
 }
 
 const NO_BINDING =

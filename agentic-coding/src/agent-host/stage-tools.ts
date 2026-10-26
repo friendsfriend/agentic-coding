@@ -20,10 +20,8 @@ import {
 	AGENT_STAGES_PATH,
 } from "../server/protocol.ts";
 import {
+	environmentBindingOf as bindingOf,
 	ENVIRONMENT_OWNER_HEADER,
-	ENVIRONMENT_TOKEN_ENV,
-	ENVIRONMENT_URL_ENV,
-	environmentOwnerFor,
 } from "./environment-capability.ts";
 import { withoutBlankOptionals } from "./optional-arguments.ts";
 import { toolViewDetails } from "./tool-view-details.ts";
@@ -90,22 +88,6 @@ function apiResult(value: unknown): Result {
 		body: `${body.slice(0, MAX_API_BODY_CHARS)}\n… (body truncated)`,
 		truncated: true,
 	});
-}
-
-interface StageBinding {
-	readonly url: string;
-	readonly token: string;
-	readonly owner: string;
-}
-
-function bindingOf(
-	env: Readonly<Record<string, string>>,
-): StageBinding | undefined {
-	const url = env[ENVIRONMENT_URL_ENV];
-	const token = env[ENVIRONMENT_TOKEN_ENV];
-	const workflowId = env.HERDR_WORKFLOW_ID;
-	if (!url || !token || !workflowId) return undefined;
-	return { url, token, owner: environmentOwnerFor(workflowId) };
 }
 
 const NO_BINDING =

@@ -177,7 +177,7 @@ async function call(
 	deps: AgentEnvironmentDeps,
 	method: string,
 	routePath: string,
-	init: { body?: unknown } = {},
+	init: { body?: unknown; owner?: string } = {},
 ): Promise<CallResult> {
 	const response = await handleAgentEnvironmentRoute(
 		deps,
@@ -191,7 +191,7 @@ async function call(
 					}),
 		}),
 		new URL(`http://127.0.0.1:4050${routePath}`),
-		OWNER,
+		init.owner ?? OWNER,
 	);
 	if (!response) throw new Error(`no route for ${routePath}`);
 	const text = await response.text();
@@ -907,6 +907,43 @@ describe("env_build and env_test run in the workflow's checkout", () => {
 			fixture.cleanup();
 		}
 	});
+
+	for (const action of ["build", "test"] as const) {
+		test(`orchestrator ${action} uses the configured user checkout, not a workflow resolver`, async () => {
+			const fixture = buildFixture("pwd; echo user-action-ok");
+			try {
+				const checkout =
+					fixture.deps.apps?.getAppByIdent("shop")?.localDirectoryPath;
+				if (!checkout) throw new Error("missing fixture checkout");
+				fs.mkdirSync(checkout, { recursive: true });
+				const result = await call(
+					{
+						...fixture.deps,
+						resolveOwnerCheckout: () => {
+							throw new Error("must not resolve a workflow checkout");
+						},
+						resolveOwnerOverlay: () => {
+							throw new Error("must not resolve a workflow overlay");
+						},
+					},
+					"POST",
+					`/api/v1/agent-env/${action}`,
+					{ owner: "user", body: { app: "shop" } },
+				);
+				expect(result.status).toBe(200);
+				const value = payloadOf(result);
+				expect(value).toMatchObject({
+					owner: "user",
+					status: "completed",
+					exitCode: 0,
+				});
+				expect(String(value.output)).toContain(checkout);
+				expect(String(value.output)).not.toContain(fixture.checkout);
+			} finally {
+				fixture.cleanup();
+			}
+		});
+	}
 
 	test("a failing build is a result with its output, not a transport error", async () => {
 		const fixture = buildFixture("echo boom >&2; exit 3");

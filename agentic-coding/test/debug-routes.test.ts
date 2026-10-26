@@ -222,6 +222,24 @@ function logRecord(input: {
 }
 
 describe("otel_query", () => {
+	test("orchestrator traces remain confined to the developer environment", async () => {
+		const index = new TraceIndex();
+		index.push(requestTrace({ traceId: "user-trace", owner: "user" }));
+		index.push(requestTrace({ traceId: "workflow-trace", owner: OWNER }));
+		const { status, json } = await post(
+			{ traceIndex: index },
+			AGENT_OTEL_QUERY_PATH,
+			{},
+			"user",
+		);
+		expect(status).toBe(200);
+		expect(
+			(valueIn(json).traces as Array<{ traceId: string }>).map(
+				(trace) => trace.traceId,
+			),
+		).toEqual(["user-trace"]);
+	});
+
 	test("answers with this workflow's runs and never a previous holder's", async () => {
 		const index = new TraceIndex();
 		// workflow:a held shop, exported a trace, and released it. The next holder
@@ -782,6 +800,54 @@ function dbDeps(overrides: Partial<DebugRouteDeps> = {}): DebugRouteDeps {
 }
 
 describe("db_query", () => {
+	test("orchestrator queries resolve only user-held app requirements through the user checkout", async () => {
+		const calls: SqlCall[] = [];
+		const deps = dbDeps({
+			sql: sqlPort({ calls }),
+			instances: instancesDouble([
+				{ app: "shop", holder: "user", endpoints: {} },
+			]),
+			resolveOwnerCheckout: () => {
+				throw new Error("must not resolve a workflow checkout");
+			},
+		});
+		const checkout = deps.apps?.getAppByIdent("shop")?.localDirectoryPath;
+		const discovery = deps.discovery;
+		if (!checkout) throw new Error("missing fixture checkout");
+		try {
+			const { status, json } = await post(
+				{
+					...deps,
+					discovery: (input) => {
+						expect(input.localDir).toBe(checkout);
+						return discovery?.(input) ?? [];
+					},
+				},
+				AGENT_DB_QUERY_PATH,
+				{ infra: "orders-db", sql: "SELECT 1" },
+				"user",
+			);
+			expect(status).toBe(200);
+			expect(valueIn(json).rowCount).toBe(1);
+			expect(calls.map((call) => call.statement)).toContain("ROLLBACK");
+			const denied = await post(
+				{
+					...deps,
+					instances: instancesDouble([
+						{ app: "shop", holder: OWNER, endpoints: {} },
+					]),
+				},
+				AGENT_DB_QUERY_PATH,
+				{ infra: "orders-db", sql: "SELECT 1" },
+				"user",
+			);
+			expect(denied.status).toBe(409);
+			expect(errorOf(denied.json).code).toBe("app-not-held");
+		} finally {
+			if (checkout) fs.rmSync(checkout, { recursive: true, force: true });
+		}
+	});
+
 	test("runs inside a read-only transaction and always rolls back", async () => {
 		const calls: SqlCall[] = [];
 		const closed = { count: 0 };

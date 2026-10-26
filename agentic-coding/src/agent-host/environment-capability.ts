@@ -27,6 +27,10 @@ import {
 	environmentTokenFor,
 } from "../server/auth.ts";
 import { discoverEnvironmentServer } from "../server/environment-discovery.ts";
+import {
+	ORCHESTRATOR_TOKEN_ENV,
+	ORCHESTRATOR_URL_ENV,
+} from "./orchestrator-env.ts";
 
 /** Base URL of the unified server the environment tools call. */
 export const ENVIRONMENT_URL_ENV = "AGENTIC_ENV_URL";
@@ -131,4 +135,25 @@ export function environmentRunEnv(workflowId: string): Record<string, string> {
  * tools cannot act is told so instead of discovering it call by call. */
 export function environmentToolsAvailable(workflowId: string): boolean {
 	return Object.keys(environmentRunEnv(workflowId)).length > 0;
+}
+
+/** Resolve operational tools without pretending the Home Orchestrator is a
+ * workflow. Its existing capability acts only on the developer's user
+ * environment; workflow capabilities retain their original owner binding. */
+export function environmentBindingOf(
+	env: Readonly<Record<string, string>>,
+):
+	| { readonly url: string; readonly token: string; readonly owner: string }
+	| undefined {
+	const workflowId = env.HERDR_WORKFLOW_ID;
+	if (workflowId) {
+		const url = env[ENVIRONMENT_URL_ENV];
+		const token = env[ENVIRONMENT_TOKEN_ENV];
+		return url && token
+			? { url, token, owner: environmentOwnerFor(workflowId) }
+			: undefined;
+	}
+	const url = env[ORCHESTRATOR_URL_ENV];
+	const token = env[ORCHESTRATOR_TOKEN_ENV];
+	return url && token ? { url, token, owner: "user" } : undefined;
 }
