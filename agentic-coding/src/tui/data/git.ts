@@ -163,6 +163,7 @@ export async function loadArtifact(
 	state: WorkflowState,
 	artifact: string,
 	signal?: Signal,
+	options: RefreshOptions = {},
 ): Promise<string | undefined> {
 	return cache.load(
 		`artifacts:${state.repository}:${state.workflowId}:${artifact}`,
@@ -172,7 +173,7 @@ export async function loadArtifact(
 				diffBodySchema,
 				signal,
 			),
-		{ signal },
+		{ signal, ...options },
 	);
 }
 

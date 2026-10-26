@@ -159,8 +159,10 @@ export interface ReviewFeatureContext {
 export interface ReviewFeature {
 	reviewOpen: () => boolean;
 	setReviewOpen: Setter<boolean>;
-	reviewKind: () => "developer" | "plan" | "wiki" | "setup" | "stage";
-	setReviewKind: Setter<"developer" | "plan" | "wiki" | "setup" | "stage">;
+	reviewKind: () => "developer" | "plan" | "wiki" | "setup" | "stage" | "debug";
+	setReviewKind: Setter<
+		"developer" | "plan" | "wiki" | "setup" | "stage" | "debug"
+	>;
 	stageWikiUpdateAvailable: () => boolean;
 	/** True while the stage-test plan gate owns the review; its synthetic plan
 	 * row cannot be reloaded from a worktree, so refresh must preserve it. */
@@ -317,7 +319,7 @@ export function createReviewFeature(
 
 	const [reviewOpen, setReviewOpen] = createSignal(false);
 	const [reviewKind, setReviewKind] = createSignal<
-		"developer" | "plan" | "wiki" | "setup" | "stage"
+		"developer" | "plan" | "wiki" | "setup" | "stage" | "debug"
 	>("developer");
 	const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
 	const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
@@ -798,11 +800,21 @@ export function createReviewFeature(
 		reviewController?.abort();
 		reviewController = new AbortController();
 		try {
-			if (data().state.definition?.id === "stage-test") {
-				const content = stageReportContent();
+			const debug = data().state.definition?.id === "debug";
+			if (data().state.definition?.id === "stage-test" || debug) {
+				const content = debug
+					? await loadArtifactOrEmpty(
+							data().state,
+							"debug-report.md",
+							reviewController.signal,
+							{ refresh: true },
+						)
+					: stageReportContent();
+				if (generation !== reviewGeneration) return;
+				if (debug && !content.trim()) throw new Error("Debug report is empty");
 				setReviewChanges([
 					{
-						newPath: "stage-report.md",
+						newPath: debug ? "debug-report.md" : "stage-report.md",
 						linesAdded: content.split("\n").length,
 						linesDeleted: 0,
 						newFile: false,
@@ -827,9 +839,9 @@ export function createReviewFeature(
 				setReviewDiff(content);
 				setReviewView("diff");
 				setReviewOpen(true);
-				setReviewKind("stage");
+				setReviewKind(debug ? "debug" : "stage");
 				queueMicrotask(() => setModalActive("developer-review"));
-				traceReview("stage-report-open");
+				traceReview(debug ? "debug-report-open" : "stage-report-open");
 				return;
 			}
 			const changes =
@@ -898,6 +910,14 @@ export function createReviewFeature(
 			traceReview("review-load");
 		} catch {
 			traceReview("review-load", "error");
+			if (
+				generation === reviewGeneration &&
+				data().state.definition?.id === "debug"
+			)
+				notify(
+					"Could not load the debug report; try opening it again",
+					"error",
+				);
 		} finally {
 			if (generation === reviewGeneration) {
 				setReviewLoading(false);
@@ -908,6 +928,11 @@ export function createReviewFeature(
 	const openReviewDiff = async () => {
 		const file = reviewVisibleChanges()[reviewChangeIndex()];
 		if (!file) return;
+		if (reviewKind() === "debug") {
+			setReviewLine(0);
+			setReviewView("diff");
+			return;
+		}
 		if (reviewKind() === "stage") {
 			setReviewDiff(stageReportContent());
 			setReviewLine(0);
@@ -969,7 +994,7 @@ export function createReviewFeature(
 				}));
 			const comments = [...reviewComments(), ...findingComments];
 			if (profile !== "test") {
-				if (reviewKind() !== "stage")
+				if (reviewKind() !== "stage" && reviewKind() !== "debug")
 					await saveDeveloperReview(repo, workflowId, comments);
 				const engineComments = reviewCommentsForEngine(comments, true);
 				await runWorkflow(
@@ -1153,6 +1178,9 @@ export function createReviewFeature(
 		reviewRefreshController = new AbortController();
 		try {
 			const kind = reviewKind();
+			// A debug gate reviews an immutable persisted report, not worktree edits.
+			// Reopening reads the latest attempt afresh; background refresh preserves it.
+			if (kind === "debug") return;
 			// A stage-test plan and a stage report are synthetic single-row
 			// reviews: their document is composed from the workflow snapshot, not
 			// from a worktree diff. Reloading would replace that row with an empty
@@ -1250,6 +1278,7 @@ export function createReviewFeature(
 		}
 	};
 	const navigateReviewFile = async (direction: 1 | -1) => {
+		if (reviewKind() === "debug" || reviewKind() === "stage") return;
 		const previous = reviewChangeIndex();
 		const total = reviewVisibleChanges().length;
 		if (!total) return;
@@ -1473,7 +1502,9 @@ export function createReviewFeature(
 		if (key === "escape") {
 			if (
 				reviewView() === "diff" &&
-				(reviewKind() === "stage" || stagePlanReview())
+				(reviewKind() === "stage" ||
+					reviewKind() === "debug" ||
+					stagePlanReview())
 			) {
 				// The stage report is the whole review: the file list holds one
 				// synthetic row that cannot be re-read from a worktree diff, so Esc
@@ -1534,9 +1565,7 @@ export function createReviewFeature(
 		else if (
 			reviewView() === "files" &&
 			key === "c" &&
-			((reviewKind() === "developer" &&
-				data().state.definition?.id === "debug" &&
-				reviewVisibleChanges().length === 0) ||
+			(reviewKind() === "debug" ||
 				(reviewKind() === "stage" &&
 					data().state.definition?.id === "stage-test"))
 		) {

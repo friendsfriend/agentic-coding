@@ -96,8 +96,9 @@ export async function loadArtifactOrEmpty(
 	state: WorkflowState,
 	artifact: string,
 	signal?: AbortSignal,
+	options: RefreshOptions = {},
 ): Promise<string> {
-	return (await loadArtifact(state, artifact, signal)) ?? "";
+	return (await loadArtifact(state, artifact, signal, options)) ?? "";
 }
 
 /** Developer-review findings for the review dialog. */

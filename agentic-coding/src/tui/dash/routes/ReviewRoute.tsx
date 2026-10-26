@@ -90,7 +90,9 @@ export function ReviewRoute(props: ReviewRouteProps) {
 									? "Environment review"
 									: reviewKind() === "stage"
 										? "Stage test report"
-										: (props.fallbackTitle ?? "Developer review")
+										: reviewKind() === "debug"
+											? "Debug report"
+											: (props.fallbackTitle ?? "Developer review")
 					}
 					widthPercent={0.9}
 					heightPercent={0.75}
@@ -160,7 +162,9 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					reviewOpen() &&
 					props.modalTop() === "review" &&
 					reviewView() === "diff" &&
-					(reviewKind() === "plan" || reviewKind() === "stage") &&
+					(reviewKind() === "plan" ||
+						reviewKind() === "stage" ||
+						reviewKind() === "debug") &&
 					reviewFile()
 				}
 			>
@@ -177,9 +181,17 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					footerKeybinds={
 						reviewKind() === "stage"
 							? props.stageReportKeybinds
-							: stagePlanReview()
-								? props.stagePlanKeybinds
-								: undefined
+							: reviewKind() === "debug"
+								? [
+										{ key: "j/k", action: "Scroll" },
+										{ key: "c", action: "Comment" },
+										{ key: "v", action: "Select lines" },
+										{ key: "f", action: "Finish review" },
+										{ key: "Esc", action: "Postpone" },
+									]
+								: stagePlanReview()
+									? props.stagePlanKeybinds
+									: undefined
 					}
 					discussions={currentReviewDiscussions()}
 					onSelectedLineChange={setReviewLine}
@@ -191,7 +203,11 @@ export function ReviewRoute(props: ReviewRouteProps) {
 					onClose={() => {
 						setReviewVisualMode(false);
 						setReviewCommentMode(false);
-						if (reviewKind() === "stage" || stagePlanReview()) {
+						if (
+							reviewKind() === "stage" ||
+							reviewKind() === "debug" ||
+							stagePlanReview()
+						) {
 							setReviewOpen(false);
 							props.setModalActive("none");
 						} else {
@@ -199,7 +215,9 @@ export function ReviewRoute(props: ReviewRouteProps) {
 						}
 					}}
 					onNavigateFile={(direction) =>
-						reviewKind() === "stage" || stagePlanReview()
+						reviewKind() === "stage" ||
+						reviewKind() === "debug" ||
+						stagePlanReview()
 							? undefined
 							: void navigatePlanMarkdownFile(direction)
 					}

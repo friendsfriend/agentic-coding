@@ -430,7 +430,7 @@ function press(name: string, shift = false): KeyEvent {
 	});
 }
 
-test("a report-only developer review can author a follow-up comment", () => {
+test("a report-only debug review can author a follow-up comment", () => {
 	// The debug gate reviews a report, not a diff: with no changed files there
 	// is nothing to Enter into, so `c` opens the comment modal directly and the
 	// follow-up cannot silently become an approval.
@@ -444,7 +444,7 @@ test("a report-only developer review can author a follow-up comment", () => {
 	});
 	createRoot((dispose) => {
 		const feature = createReviewFeature(context({ data: debugData }));
-		feature.setReviewKind("developer");
+		feature.setReviewKind("debug");
 		feature.setReviewView("files");
 		feature.setReviewChanges([]);
 		expect(feature.reviewVisibleChanges()).toHaveLength(0);
@@ -595,5 +595,170 @@ test("stage report f includes wiki by default and Shift+F explicitly skips it", 
 		expect(actions).toHaveLength(4);
 	} finally {
 		clearGateway();
+	}
+});
+
+function debugDashboard() {
+	const base = testDashboard();
+	return {
+		...base,
+		state: {
+			...base.state,
+			revision: 12,
+			definition: { id: "debug", version: 1, digest: "d", label: "Debug" },
+		},
+	};
+}
+
+test("debug opens persisted markdown first, preserves it on refresh, and dispatches report review", async () => {
+	let report = "# Summary\n\nMeasured findings.";
+	let reads = 0;
+	const actions: Array<{
+		actionId: string;
+		revision: number;
+		input?: unknown;
+	}> = [];
+	configureGateway({
+		observe: async (request: ObservationRequest) => {
+			expect(request.kind).toBe("artifact-content");
+			if (request.kind === "artifact-content")
+				expect(request.artifact).toBe("debug-report.md");
+			reads++;
+			return report;
+		},
+		action: async (request: {
+			actionId: string;
+			revision: number;
+			input?: unknown;
+		}) => {
+			actions.push(request);
+			return {};
+		},
+	} as unknown as DashboardGateway);
+	try {
+		await createRoot(async (dispose) => {
+			const feature = createReviewFeature(
+				context({
+					profile: undefined,
+					data: debugDashboard,
+					requiredUserAction: () => ({
+						key: "developer-review",
+						title: "Findings review",
+						prompt: "Review report",
+						items: [],
+					}),
+				}),
+			);
+			try {
+				await feature.openDeveloperReview();
+				expect(feature.reviewKind()).toBe("debug");
+				expect(feature.reviewOpen()).toBe(true);
+				expect(feature.reviewView()).toBe("diff");
+				expect(feature.reviewChanges().map((file) => file.newPath)).toEqual([
+					"debug-report.md",
+				]);
+				expect(feature.reviewDiff()).toBe(report);
+				await feature.refreshReviewFiles(true);
+				await feature.navigateReviewFile(1);
+				expect(reads).toBe(1);
+				expect(feature.reviewDiff()).toBe(report);
+				feature.handleReviewKey(press("c"));
+				expect(feature.reviewCommentMode()).toBe(true);
+				feature.setReviewCommentMode(false);
+				feature.handleReviewKey(press("escape"));
+				expect(feature.reviewOpen()).toBe(false);
+				expect(actions).toHaveLength(0);
+
+				// Reopening must bypass the artifact cache so a follow-up attempt is current.
+				report = "# Summary\n\nFollow-up findings.";
+				await feature.openDeveloperReview();
+				expect(reads).toBe(2);
+				expect(feature.reviewDiff()).toBe(report);
+				await feature.finishDeveloperReview();
+				expect(actions.at(-1)).toMatchObject({
+					actionId: "approve-review",
+					revision: 12,
+				});
+
+				await feature.openDeveloperReview();
+				feature.setReviewComments([
+					{
+						filePath: "debug-report.md",
+						line: 3,
+						body: "Measure the slow read.",
+					},
+				]);
+				await feature.finishDeveloperReview();
+				expect(actions.at(-1)).toMatchObject({
+					actionId: "review-comments",
+					revision: 12,
+					input: {
+						comments: [
+							{
+								file: "debug-report.md",
+								line: 3,
+								comment: "Measure the slow read.",
+							},
+						],
+					},
+				});
+			} finally {
+				feature.dispose();
+				dispose();
+			}
+		});
+	} finally {
+		clearGateway();
+	}
+});
+
+test("a debug report read that finishes after disposal cannot open a stale review", async () => {
+	let release!: (content: string) => void;
+	const pending = new Promise<string>((resolve) => {
+		release = resolve;
+	});
+	configureGateway({
+		observe: async () => pending,
+	} as unknown as DashboardGateway);
+	try {
+		await createRoot(async (dispose) => {
+			const feature = createReviewFeature(
+				context({ profile: undefined, data: debugDashboard }),
+			);
+			const opening = feature.openDeveloperReview();
+			expect(feature.reviewLoading()).toBe(true);
+			feature.dispose();
+			release("# Summary\n\nStale report.");
+			await opening;
+			expect(feature.reviewOpen()).toBe(false);
+			dispose();
+		});
+	} finally {
+		clearGateway();
+	}
+});
+
+test("missing or empty debug reports do not open an approvable blank document", async () => {
+	for (const missing of [false, true]) {
+		configureGateway({
+			observe: async () => {
+				if (missing) throw new Error("missing report");
+				return "";
+			},
+		} as unknown as DashboardGateway);
+		try {
+			await createRoot(async (dispose) => {
+				const feature = createReviewFeature(
+					context({ profile: undefined, data: debugDashboard }),
+				);
+				await feature.openDeveloperReview();
+				expect(feature.reviewOpen()).toBe(false);
+				expect(feature.reviewLoading()).toBe(false);
+				feature.dispose();
+				dispose();
+			});
+		} finally {
+			clearGateway();
+		}
 	}
 });
