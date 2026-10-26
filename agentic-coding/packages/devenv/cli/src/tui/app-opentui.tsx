@@ -1,9 +1,3 @@
-import { createClient, getLogger, registerFatalCleanup } from "@devenv/core";
-import type { App } from "@devenv/types";
-import { createCliRenderer } from "@opentui/core";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { KeymapProvider, useKeymap } from "@opentui/keymap/solid";
-import { render, usePaste, useRenderer } from "@opentui/solid";
 import {
 	getSelectableRows,
 	Header,
@@ -11,7 +5,13 @@ import {
 	StatusBar,
 	setGlobalSelectionMouseUpHandler,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { createClient, getLogger, registerFatalCleanup } from "@devenv/core";
+import type { App } from "@devenv/types";
+import { createCliRenderer } from "@opentui/core";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { KeymapProvider, useKeymap } from "@opentui/keymap/solid";
+import { render, usePaste, useRenderer } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,

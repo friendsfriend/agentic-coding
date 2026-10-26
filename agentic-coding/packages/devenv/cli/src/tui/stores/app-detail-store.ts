@@ -3,13 +3,13 @@ import { createSignal } from "solid-js";
 
 export const APP_DETAIL_PANEL_COUNT = 4;
 
+import type { AppDetailKind, DependencyNode } from "@agentic-coding/ui";
 import type {
 	ActionTarget,
 	App,
 	ChangeRequest,
 	ContainerStats,
 } from "@devenv/types";
-import type { AppDetailKind, DependencyNode } from "@ui";
 
 export function createAppDetailStore() {
 	const [appDetailApp, setAppDetailApp] = createSignal<App | undefined>(

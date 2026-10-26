@@ -49,7 +49,7 @@ describe("contracts layer purity", () => {
 			/tui\//,
 			/server\//,
 			/workflow\/(runtime|engine|store|steps|adapters|definitions)/,
-			/@ui/,
+			/@agentic-coding\/ui/,
 			/@devenv\//,
 			/^bun/,
 			/^node:(fs|path|process|child_process|net|http|https|os|sqlite)/,

@@ -8,6 +8,8 @@
 // Each cell draws the top-eighth block glyph (`▔`) rather than filling the
 // cell, so the highlight is a hairline across the top of the row and the
 // input's line below keeps its full height.
+
+import { uiColors } from "@agentic-coding/ui";
 import {
 	type BoxRenderable,
 	type OptimizedBuffer,
@@ -15,7 +17,6 @@ import {
 	RGBA,
 } from "@opentui/core";
 import { useTimeline } from "@opentui/solid";
-import { uiColors } from "@ui";
 import { createEffect } from "solid-js";
 
 /** Upper one-eighth block: a thin line at the top of the cell. */

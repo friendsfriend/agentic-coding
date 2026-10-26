@@ -2,7 +2,7 @@
 // Persistent navigation for the workflow-backed agent runs. Selection and
 // navigation identities are owned by the shell; this component owns only its
 // responsive presentation and independent scroll window.
-import { TextAttributes } from "@opentui/core";
+
 import {
 	Panel,
 	type RowGestureState,
@@ -12,7 +12,8 @@ import {
 	useTap,
 	useTerminalDimensions,
 	useWheelScroll,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import { createEffect, createSignal, For, Show, untrack } from "solid-js";
 import type {
 	AgentSidebarFilter,

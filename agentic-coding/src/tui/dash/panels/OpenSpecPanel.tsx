@@ -2,8 +2,8 @@
  * Props-in: the artifact list and selection come from the route that owns
  * them; opening an artifact is a callback. */
 
+import { Panel, SelectableList, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { Panel, SelectableList, uiColors } from "@ui";
 
 export interface OpenSpecPanelProps {
 	readonly artifacts: readonly string[];

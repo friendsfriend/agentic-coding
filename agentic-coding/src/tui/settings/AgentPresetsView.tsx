@@ -7,8 +7,7 @@
 // is no editor modal any more — the form is a page body that owns its keys
 // through a keymap layer while it is mounted, so a name can contain any
 // character without the shell's single-letter shortcuts firing.
-import type { KeyEvent, Renderable } from "@opentui/core";
-import type { Keymap } from "@opentui/keymap";
+
 import {
 	Card,
 	Form,
@@ -30,7 +29,9 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { KeyEvent, Renderable } from "@opentui/core";
+import type { Keymap } from "@opentui/keymap";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type {
 	ClassifierProviderOption,

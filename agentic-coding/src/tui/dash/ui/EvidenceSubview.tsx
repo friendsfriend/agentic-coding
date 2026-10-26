@@ -17,8 +17,7 @@
  * kitty probe, and its keymap layer owns `Esc`, the selection keys and the two
  * file actions. Without kitty graphics the image renderable is never mounted, so
  * no image bytes are ever sent to a terminal that would print them as garbage. */
-import type { ScrollBoxRenderable } from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
+
 import {
 	MarkdownBlockView,
 	Panel,
@@ -27,7 +26,9 @@ import {
 	SelectableList,
 	uiColors,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import type { EvidenceEntry } from "../../../contracts/environment.ts";
 import type { StageJournal } from "../../../contracts/stages.ts";

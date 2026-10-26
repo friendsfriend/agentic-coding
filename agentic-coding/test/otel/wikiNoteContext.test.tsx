@@ -3,13 +3,13 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { testRender, useRenderer } from "@opentui/solid";
 import {
 	activeKeybindCatalog,
 	activeKeybindContext,
 	footerKeybinds,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 import { TraceDb } from "../../src/server/telemetry-db";
 import { App } from "../../src/tui/otel/app/App.tsx";

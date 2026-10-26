@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { catalogKeybinds, footerKeybinds } from "@ui";
+import { catalogKeybinds, footerKeybinds } from "@agentic-coding/ui";
 import {
 	stagePlanReviewKeybindCatalog,
 	stagePlanReviewKeybindsForView,

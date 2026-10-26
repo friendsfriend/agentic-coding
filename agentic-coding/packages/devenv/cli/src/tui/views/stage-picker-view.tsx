@@ -11,9 +11,14 @@
 // The rows carry no credential, no login recipe and no session: the app URL is
 // the configured one, and Enter hands exactly that URL to the browser.
 
+import {
+	formatHelpText,
+	ListViewModal,
+	MatchedText,
+	uiColors,
+} from "@agentic-coding/ui";
 import type { StageAppStatus, StageStatus } from "@devenv/core";
 import { TextAttributes } from "@opentui/core";
-import { formatHelpText, ListViewModal, MatchedText, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
 import {
 	stageAppRowText,

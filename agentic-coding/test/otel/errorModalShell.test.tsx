@@ -3,9 +3,13 @@ import { beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	activeErrorModal,
+	resetErrorModal,
+	showErrorModal,
+} from "@agentic-coding/ui";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeErrorModal, resetErrorModal, showErrorModal } from "@ui";
 import { onCleanup } from "solid-js";
 import { TraceDb } from "../../src/server/telemetry-db";
 import { App } from "../../src/tui/otel/app/App.tsx";

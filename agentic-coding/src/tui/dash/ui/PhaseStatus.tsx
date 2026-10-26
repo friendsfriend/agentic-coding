@@ -1,7 +1,7 @@
 /** Phase status badges (establish-opencode-boundaries, task 6.1): the workflow
  * phase plus an explicit BLOCKED marker. Props-in and pure — the derivation
  * lives in `projections.ts`. */
-import { Badge } from "@ui";
+import { Badge } from "@agentic-coding/ui";
 import { createMemo, Show } from "solid-js";
 import { type PhaseStatusState, phaseStatus } from "../projections.ts";
 

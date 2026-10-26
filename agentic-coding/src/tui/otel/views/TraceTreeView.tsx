@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+
 import {
 	HighlightedText,
 	moveRowIndex,
@@ -10,7 +10,8 @@ import {
 	useTap,
 	useTerminalDimensions,
 	useWheelScroll,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import { createMemo, For } from "solid-js";
 import type { TreeNode } from "../../../contracts/telemetry.ts";
 

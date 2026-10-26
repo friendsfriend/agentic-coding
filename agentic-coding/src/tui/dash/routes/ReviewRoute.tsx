@@ -5,14 +5,14 @@
  * the route only decides what is visible and hands key ownership back to the
  * shell. */
 
-import type { Keybind } from "@ui";
+import type { Keybind } from "@agentic-coding/ui";
 import {
 	ChangedFilesView,
 	DiffReviewView as DiffViewModal,
 	GenericModal,
 	MarkdownReviewView as MarkdownViewModal,
 	useModalBackdrop,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { Show } from "solid-js";
 import type { createReviewFeature } from "../review.ts";
 

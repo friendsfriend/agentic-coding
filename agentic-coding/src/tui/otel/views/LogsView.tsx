@@ -1,12 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+
 import {
 	hostBodyLines,
 	SearchHeader,
 	SelectableList,
 	uiColors,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import { createMemo } from "solid-js";
 import type { LogStore } from "../model/logStore.ts";
 

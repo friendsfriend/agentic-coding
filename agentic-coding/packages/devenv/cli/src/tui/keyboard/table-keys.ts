@@ -1,4 +1,4 @@
-import { themeNames } from "@ui";
+import { themeNames } from "@agentic-coding/ui";
 import { handleAppDetailKeys } from "./app-detail-keys.ts";
 import { isDownKey, isUpKey } from "./nav-keys.ts";
 import {

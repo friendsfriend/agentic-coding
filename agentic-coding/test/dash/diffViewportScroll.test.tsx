@@ -8,10 +8,10 @@
  * stayed at the top of the file with the selected line far below it.
  */
 import { expect, test } from "bun:test";
+import type { Discussion } from "@agentic-coding/ui";
+import { DiffReviewView } from "@agentic-coding/ui";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
-import type { Discussion } from "@ui";
-import { DiffReviewView } from "@ui";
 import { createMemo, createSignal, Show } from "solid-js";
 
 type TestView = Awaited<ReturnType<typeof testRender>>;

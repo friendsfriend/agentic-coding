@@ -3,8 +3,8 @@
 // selects on a tap, and a drag — the gesture that selects text for copy, and
 // whose release lands wherever the drag ended — changes nothing.
 import { expect, spyOn, test } from "bun:test";
+import { DiffReviewView, MarkdownReviewView } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { DiffReviewView, MarkdownReviewView } from "@ui";
 import { createSignal } from "solid-js";
 
 test("a markdown review block selects on a tap and a drag changes nothing", async () => {

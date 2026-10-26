@@ -6,7 +6,7 @@
 // only owns focus/key dispatch, so the same rules are unit-testable without a
 // terminal and the write path cannot drift from the form.
 
-import type { FormErrors, FormField, FormValues } from "@ui";
+import type { FormErrors, FormField, FormValues } from "@agentic-coding/ui";
 import type { RuntimeId } from "../../contracts/workflow.ts";
 import {
 	type ClassificationMode,

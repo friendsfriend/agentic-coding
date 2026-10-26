@@ -6,8 +6,14 @@
  * read model (`workflow/runtime/view.ts`); this dialog only lays it out, and
  * the row projection below is pure so a test can pin the order without a
  * terminal. */
+
+import {
+	GenericModal,
+	uiColors,
+	useModalBackdrop,
+	useWheelScroll,
+} from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors, useModalBackdrop, useWheelScroll } from "@ui";
 import { createMemo, For, Show } from "solid-js";
 import {
 	decodeWorkflowDefinitionGraph,

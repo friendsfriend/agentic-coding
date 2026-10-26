@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
+import {
+	GenericModal,
+	SelectableList,
+	uiColors,
+	useModalBackdrop,
+} from "@agentic-coding/ui";
 import type { KeyEvent } from "@opentui/core";
-import { GenericModal, SelectableList, uiColors, useModalBackdrop } from "@ui";
 import { createSignal, onCleanup, onMount } from "solid-js";
 
 export interface PresetChoice {

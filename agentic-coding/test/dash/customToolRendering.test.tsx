@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { uiColors } from "@agentic-coding/ui";
 import {
 	CodeRenderable,
 	type Renderable,
 	type ScrollBoxRenderable,
 } from "@opentui/core";
 import { testRender } from "@opentui/solid";
-import { uiColors } from "@ui";
 import { createSignal } from "solid-js";
 import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
 import { buildAgentSessionView } from "../../src/tui/dash/agent-session.ts";

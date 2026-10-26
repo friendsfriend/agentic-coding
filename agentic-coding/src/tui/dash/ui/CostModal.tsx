@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ScrollBoxRenderable } from "@opentui/core";
 import {
 	GenericModal,
 	ScrollableContent,
@@ -9,7 +8,8 @@ import {
 	useKeyDispatch,
 	useModalBackdrop,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { createEffect, Show } from "solid-js";
 import type { CostMessage, CostRow } from "../../../contracts/workflow";
 

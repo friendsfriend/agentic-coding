@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ScrollBoxRenderable } from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
 import {
 	Badge,
 	GenericModal,
@@ -12,7 +10,9 @@ import {
 	useKeyDispatch,
 	useModalBackdrop,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { createEffect, Show } from "solid-js";
 
 export type FindingEvent = {

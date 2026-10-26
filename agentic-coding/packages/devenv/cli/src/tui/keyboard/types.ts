@@ -74,7 +74,7 @@ export interface KeyboardContext {
 	client: ReturnType<typeof import("@devenv/core").createClient>;
 	getSelectedApp: () => App | undefined;
 	launchPi: (sessionPath: string | null) => void;
-	getSelectableRows: typeof import("@ui").getSelectableRows;
+	getSelectableRows: typeof import("@agentic-coding/ui").getSelectableRows;
 	showError: UiStore["showError"];
 	/** Embedded in the unified shell: the shell owns process shutdown, so the
 	 * imported app must not bind q/Ctrl+C to its own exit path. */

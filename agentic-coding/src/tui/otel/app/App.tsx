@@ -1,9 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { Renderable } from "@opentui/core";
-import { type KeyEvent, TextAttributes } from "@opentui/core";
-import type { Keymap } from "@opentui/keymap";
-import { useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
 	activeKeybindCatalog,
@@ -31,7 +27,11 @@ import {
 	themeNames,
 	uiColors,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { Renderable } from "@opentui/core";
+import { type KeyEvent, TextAttributes } from "@opentui/core";
+import type { Keymap } from "@opentui/keymap";
+import { useRenderer } from "@opentui/solid";
 import {
 	batch,
 	createEffect,

@@ -13,7 +13,7 @@
  * (`useModalContentLines`), so the window a key scrolls and the window the body
  * paints are always the same number: a fixed budget would leave the tail of a
  * long report unreachable on a short terminal and blank rows on a tall one. */
-import { TextAttributes } from "@opentui/core";
+
 import {
 	GenericModal,
 	type RowGestureState,
@@ -25,7 +25,8 @@ import {
 	useRowMouse,
 	useWheelScroll,
 	wheelSelectsRow,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import type { DebugRequestView } from "../../../contracts/environment.ts";
 import {

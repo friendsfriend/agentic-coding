@@ -1,5 +1,5 @@
+import type { HelpSection } from "@agentic-coding/ui";
 import type { Keymap, KeymapEvent } from "@opentui/keymap";
-import type { HelpSection } from "@ui";
 import { KEYBINDS, type KeybindDef } from "./registry.ts";
 
 export interface FooterKeybind {

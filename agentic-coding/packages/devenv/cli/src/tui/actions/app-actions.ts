@@ -1,3 +1,8 @@
+import {
+	buildDependencyTree,
+	type DependencyNode,
+	runtimeState,
+} from "@agentic-coding/ui";
 import type { DevEnvClient } from "@devenv/core";
 import { getLogger } from "@devenv/core";
 import type {
@@ -11,7 +16,6 @@ import type {
 	ResourceKind,
 	RuntimeStatus,
 } from "@devenv/types";
-import { buildDependencyTree, type DependencyNode, runtimeState } from "@ui";
 import { batch } from "solid-js";
 import { exitApp } from "../exit.ts";
 import type { ActionRunStore } from "../stores/action-run-store.ts";

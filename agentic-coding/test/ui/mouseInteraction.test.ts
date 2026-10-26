@@ -17,7 +17,7 @@ import {
 	useRowMouse,
 	useWheelScroll,
 	wheelStep,
-} from "@ui";
+} from "@agentic-coding/ui";
 
 test("a tap needs the same cell: a press that moved is a drag", () => {
 	expect(classifyPointerGesture({ x: 4, y: 2 }, { x: 4, y: 2 })).toBe("tap");

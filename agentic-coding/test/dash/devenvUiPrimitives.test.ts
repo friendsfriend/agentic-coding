@@ -40,7 +40,7 @@ import {
 	useRowMouse as sharedUseRowMouse,
 	useTap as sharedUseTap,
 	useWheelScroll as sharedUseWheelScroll,
-} from "@ui";
+} from "@agentic-coding/ui";
 import {
 	backdropDismiss,
 	classifyPointerGesture,

@@ -398,7 +398,7 @@ describe("boundary enforcement is wired into the normal gates", () => {
 
 	test("negative fixtures cover every forbidden edge", () => {
 		const fixtures = fs.readdirSync(`${FIXTURES}/negative`);
-		// TUI -> backend, backend -> TUI, contracts -> I/O, @ui -> domain, cycles
+		// TUI -> backend, backend -> TUI, contracts -> I/O, @agentic-coding/ui -> domain, cycles
 		for (const name of [
 			"view-backend",
 			"server-tui-import",
@@ -422,7 +422,7 @@ describe("boundary enforcement is wired into the normal gates", () => {
 		expect(issues[0]?.message).toContain("node:fs");
 	});
 
-	test("a @ui fixture that imports a domain package fails", () => {
+	test("a @agentic-coding/ui fixture that imports a domain package fails", () => {
 		const root = path.join(FIXTURES, "negative", "ui-domain-import");
 		const issues = checkUiPackageBoundaries(root);
 		expect(issues.length).toBeGreaterThanOrEqual(1);

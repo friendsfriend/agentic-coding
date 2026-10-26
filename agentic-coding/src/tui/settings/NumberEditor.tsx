@@ -9,7 +9,7 @@
 // `readEditorDraft`) is what the shell's key dispatch and its tests use; the
 // component below only renders the draft the shell owns, exactly as the theme
 // picker renders the filter the shell owns.
-import { GenericModal, uiColors } from "@ui";
+import { GenericModal, uiColors } from "@agentic-coding/ui";
 import { Show } from "solid-js";
 import {
 	COMPACTION_ABSOLUTE_ONLY_FIELDS,

@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
-import { testRender } from "@opentui/solid";
 import {
 	Form,
 	type FormField,
@@ -11,7 +10,8 @@ import {
 	formStepOption,
 	formValues,
 	uiColors,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { testRender } from "@opentui/solid";
 
 const fields: FormField[] = [
 	{ key: "name", label: "Name", kind: "text" },

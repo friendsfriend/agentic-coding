@@ -1,10 +1,10 @@
-import { TextAttributes } from "@opentui/core";
 import {
 	HighlightedText,
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import type { TreeNode } from "../../../contracts/telemetry.ts";
 
 const duration = (node: TreeNode) =>

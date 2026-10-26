@@ -6,8 +6,9 @@
  * with the displayed engine action (`requiredUserAction`) and `data().state`.
  * Solid ownership: the factory runs under the App owner, and `dispose()` is
  * wired into App's unmount cleanup. */
+
+import type { Discussion } from "@agentic-coding/ui";
 import type { KeyEvent } from "@opentui/core";
-import type { Discussion } from "@ui";
 import { createMemo, createSignal, type Setter } from "solid-js";
 import type { RequiredUserAction } from "../../contracts/actions.ts";
 import type { LocalChange } from "../../contracts/integration.ts";

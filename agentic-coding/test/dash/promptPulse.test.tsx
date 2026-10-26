@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { uiColors } from "@agentic-coding/ui";
 import { parseColor } from "@opentui/core";
 import { testRender } from "@opentui/solid";
-import { uiColors } from "@ui";
 import {
 	PromptPulse,
 	promptPulseIntensity,

@@ -58,7 +58,7 @@ means the upgrade was source-compatible.
 - **`@grpc/proto-loader` 0.8.1** is already the latest release.
 - **`packageManager: bun@1.4.0`** is a runtime pin, not an npm dependency, and
   is left alone.
-- Workspace links (`@ui`, `@devenv/*`) track local sources.
+- Workspace links (`@agentic-coding/ui`, `@devenv/*`) track local sources.
 
 ## Migrations applied
 

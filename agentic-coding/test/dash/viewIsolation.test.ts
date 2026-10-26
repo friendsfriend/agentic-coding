@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 /**
  * Dashboard view isolation (establish-opencode-boundaries, tasks 6.4/5.6).
  *
- * A dashboard view may import contracts, `@ui`, OpenTUI/Solid, its own sibling
+ * A dashboard view may import contracts, `@agentic-coding/ui`, OpenTUI/Solid, its own sibling
  * modules and the provider seams (`tui/data/*`, `dash/live.ts`) — never a
  * server module, a transport, the filesystem, Git, Herdr or the workflow
  * runtime. Data fetching, engine construction and repository access live behind

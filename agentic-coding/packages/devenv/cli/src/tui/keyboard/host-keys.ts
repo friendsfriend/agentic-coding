@@ -7,4 +7,4 @@ export {
 	HOST_KEYBINDS,
 	hostKeybind,
 	hostOwnedKeys,
-} from "@ui";
+} from "@agentic-coding/ui";

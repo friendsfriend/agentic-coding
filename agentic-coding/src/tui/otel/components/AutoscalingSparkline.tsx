@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
+
+import { uiColors } from "@agentic-coding/ui";
 import { type BoxRenderable, type OptimizedBuffer, RGBA } from "@opentui/core";
-import { uiColors } from "@ui";
 import { createSignal } from "solid-js";
 
 const dots = [

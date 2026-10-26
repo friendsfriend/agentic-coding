@@ -3,7 +3,6 @@
 // semantics are asserted at the renderer boundary, with the same mock pointer
 // input the existing surfaces use.
 import { expect, spyOn, test } from "bun:test";
-import { testRender } from "@opentui/solid";
 import {
 	GenericModal,
 	ListViewModal,
@@ -13,7 +12,8 @@ import {
 	StatusBar,
 	useModalBackdrop,
 	useTap,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import {
 	Overlays,

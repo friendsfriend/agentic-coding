@@ -3,9 +3,10 @@
 // ("Stopping server…") progress. Portal-anchored at the renderer root (same
 // pattern as dash/ui/GenericModal.tsx) so it covers the terminal regardless of
 // the active tab. Renders nothing when the lifecycle phase is idle/running.
+
+import { colors, uiColors, useTerminalDimensions } from "@agentic-coding/ui";
 import { RGBA, TextAttributes } from "@opentui/core";
 import { Portal } from "@opentui/solid";
-import { colors, uiColors, useTerminalDimensions } from "@ui";
 import {
 	createEffect,
 	createMemo,

@@ -1,14 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 
 import { beforeEach, expect, test } from "bun:test";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { testRender, useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
 	ErrorModalOverlay,
 	resetErrorModal,
 	showErrorModal,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 
 // The error-modal signal is module-global; bun runs all files in one process,

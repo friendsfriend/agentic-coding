@@ -10,7 +10,7 @@ import {
 	restoreFocus,
 	restoreFocusTarget,
 	topModal,
-} from "@ui";
+} from "@agentic-coding/ui";
 
 type Kind = "help" | "review" | "theme";
 

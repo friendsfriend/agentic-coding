@@ -1,3 +1,4 @@
+import type { BranchInfo, EditorOption } from "@agentic-coding/ui";
 import type { StageAppStatus, StageStatus } from "@devenv/core";
 import type {
 	ActionTarget,
@@ -6,7 +7,6 @@ import type {
 	SshHost,
 	WorktreeInfo,
 } from "@devenv/types";
-import type { BranchInfo, EditorOption } from "@ui";
 import { createMemo, createSignal } from "solid-js";
 
 export type NotificationType = "info" | "success" | "warning" | "error";

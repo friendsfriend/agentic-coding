@@ -4,8 +4,14 @@
 // row stays exactly one line high and collapses middle ancestors on narrow
 // terminals while keeping the current location and the focused ancestor
 // readable.
+
+import {
+	uiColors,
+	useHover,
+	useTap,
+	useTerminalDimensions,
+} from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { uiColors, useHover, useTap, useTerminalDimensions } from "@ui";
 import { For, Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs.ts";

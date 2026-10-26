@@ -1,4 +1,4 @@
-import { createModalHost, restoreFocus } from "@ui";
+import { createModalHost, restoreFocus } from "@agentic-coding/ui";
 
 /**
  * Shell overlay authority (replace-nested-tabs-with-page-navigation, task 2.3).

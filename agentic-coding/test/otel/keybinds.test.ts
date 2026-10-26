@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
+import {
+	catalogKeybinds,
+	footerKeybinds,
+	keybindFooterLabel,
+} from "@agentic-coding/ui";
 import {
 	agentSidebarKeybindCatalog,
 	observabilityKeybindCatalog,

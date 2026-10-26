@@ -69,7 +69,7 @@ describe("dashboard data layer", () => {
 			// settings surface composes; it is the one server module allowed here
 			/\/engine\.ts$/,
 			/\/observations\.ts$/,
-			/@ui/,
+			/@agentic-coding\/ui/,
 			/@opentui/,
 		];
 		const violations: string[] = [];

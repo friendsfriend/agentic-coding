@@ -3,8 +3,6 @@
 // the same pointer surface step, so the primitive a surface is built from does
 // not change how it answers the pointer.
 import { expect, test } from "bun:test";
-import { parseColor } from "@opentui/core";
-import { testRender } from "@opentui/solid";
 import {
 	HelpText,
 	ModalTabs,
@@ -13,7 +11,9 @@ import {
 	SelectableList,
 	uiColors,
 	WorkItemCard,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { parseColor } from "@opentui/core";
+import { testRender } from "@opentui/solid";
 
 function rgb(hex: string): string {
 	const parsed = parseColor(hex) as unknown as {

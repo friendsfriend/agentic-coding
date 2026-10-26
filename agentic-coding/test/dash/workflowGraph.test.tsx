@@ -3,10 +3,10 @@
  * line, the workflow graph dialog (`g`), its keybind in the footer and `?` help,
  * and the pure row projection behind it. */
 import { expect, test } from "bun:test";
+import { StatusBar, uiColors } from "@agentic-coding/ui";
 import { parseColor } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { StatusBar, uiColors } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import {
 	type DashboardData,

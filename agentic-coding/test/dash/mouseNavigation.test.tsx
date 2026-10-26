@@ -4,8 +4,8 @@
 // row runs the same command `Enter` runs, tapping the panel focuses it, and the
 // layer behind the agent-session page takes no tap.
 import { expect, spyOn, test } from "bun:test";
+import { Panel, useKeyDispatch } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { Panel, useKeyDispatch } from "@ui";
 import { createSignal } from "solid-js";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { AgentsPanel } from "../../src/tui/dash/panels/AgentsPanel.tsx";

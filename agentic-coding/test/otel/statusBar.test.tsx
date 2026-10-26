@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import {
+	type KeybindSection,
+	StatusBar,
+	setActiveKeybindCatalog,
+} from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { type KeybindSection, StatusBar, setActiveKeybindCatalog } from "@ui";
 
 // The shell footer reads the reactive keybind store the active surface
 // publishes; it must show special keys only and follow store updates.

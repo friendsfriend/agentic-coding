@@ -10,10 +10,14 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	activeErrorModal,
+	dismissErrorModal,
+	uiColors,
+} from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeErrorModal, dismissErrorModal, uiColors } from "@ui";
 import { onCleanup } from "solid-js";
 import { HostClient } from "../../src/agent-host/client.ts";
 import { hostLayout } from "../../src/agent-host/layout.ts";

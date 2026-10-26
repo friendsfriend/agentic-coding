@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import type { KeyEvent, Renderable } from "@opentui/core";
-import type { Keymap } from "@opentui/keymap";
-import type { Discussion } from "@ui";
+
+import type { Discussion } from "@agentic-coding/ui";
 import {
 	FrontmatterModal,
 	hostBodyLines,
@@ -12,7 +11,9 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { KeyEvent, Renderable } from "@opentui/core";
+import type { Keymap } from "@opentui/keymap";
 import {
 	createEffect,
 	createMemo,

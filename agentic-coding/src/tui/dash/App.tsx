@@ -1,9 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { join } from "node:path";
-import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
-import type { Binding, Keymap } from "@opentui/keymap";
-import { useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
 	createModalHost,
@@ -21,7 +18,10 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
+import type { Binding, Keymap } from "@opentui/keymap";
+import { useRenderer } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,

@@ -5,8 +5,13 @@
  * overlay. Props-in: the dialogue state, the pending question group and the
  * credential request come from the routes that own them; answering is a
  * callback. */
+
+import {
+	MarkdownModal,
+	ModalHelpOverlay,
+	ProgressModal,
+} from "@agentic-coding/ui";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { MarkdownModal, ModalHelpOverlay, ProgressModal } from "@ui";
 import { createEffect, Show } from "solid-js";
 import type { DeveloperDialogueRecord } from "../../../contracts/workflow.ts";
 import type { DialogueState } from "../state.ts";

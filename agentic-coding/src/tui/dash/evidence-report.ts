@@ -9,11 +9,12 @@
 // route owns the reads.
 //
 // Rendering reuses the wiki's renderer (`parseMarkdownBlocks` / `MarkdownBlockView`
-// from `@ui`) rather than a second markdown implementation, so a citation reads
+// from `@agentic-coding/ui`) rather than a second markdown implementation, so a citation reads
 // the same in a note and in a report.
+
+import { parseMarkdownBlocks } from "@agentic-coding/ui";
 import type { TerminalCapabilities } from "@opentui/core";
 import { resolveImageRenderProtocol } from "@opentui/core";
-import { parseMarkdownBlocks } from "@ui";
 import type { EvidenceEntry } from "../../contracts/environment.ts";
 import { evidenceRowLabel } from "./evidence-panel.ts";
 

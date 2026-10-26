@@ -1,12 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { basename } from "node:path";
-import type {
-	InputRenderable,
-	KeyEvent,
-	TextareaRenderable,
-} from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
 import {
 	focusSoon,
 	GenericModal,
@@ -14,7 +8,13 @@ import {
 	ProgressModal,
 	uiColors,
 	useKeyDispatch,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type {
+	InputRenderable,
+	KeyEvent,
+	TextareaRenderable,
+} from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import {
 	createEffect,
 	createSignal,

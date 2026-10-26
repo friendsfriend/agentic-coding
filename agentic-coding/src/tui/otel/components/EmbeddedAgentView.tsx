@@ -7,12 +7,13 @@
 // agent session, its scrollback and any running turn survive navigation.
 // Keys and mouse input are handled by the renderable itself while it has
 // focus; the shell only keeps Ctrl+S/Ctrl+H/Ctrl+L (see App).
+
+import { uiColors } from "@agentic-coding/ui";
 import {
 	type EmbeddedTerminalRenderable,
 	RenderableEvents,
 } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { uiColors } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import "./embedded-terminal.ts";
 import type {

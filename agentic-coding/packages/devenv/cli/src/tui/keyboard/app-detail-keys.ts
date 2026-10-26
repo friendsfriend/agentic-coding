@@ -1,4 +1,4 @@
-import type { DependencyNode } from "@ui";
+import type { DependencyNode } from "@agentic-coding/ui";
 import type { AppDetailStore, AppStore } from "../stores/index.ts";
 import { isDownKey, isUpKey } from "./nav-keys.ts";
 import {

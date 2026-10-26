@@ -1,14 +1,15 @@
 // Environment TUI theme preferences — one adapter for every surface. Single
 // source: src/tui/shared/preferences.ts (canonical `$DEVENV_CONFIG_DIR/tui.json`)
 // plus src/tui/shared/terminal-theme.ts for renderer palette capture/mapping.
-import type { TerminalColors } from "@opentui/core";
+
 import {
 	buildSystemTheme,
 	setSystemTheme,
 	type TerminalThemeColors,
 	terminalColorsToThemeColors,
 	toCapturedPalette,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { TerminalColors } from "@opentui/core";
 import {
 	applyTheme,
 	loadCustomThemes,

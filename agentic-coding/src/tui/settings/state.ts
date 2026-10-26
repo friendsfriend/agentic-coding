@@ -6,7 +6,10 @@
 // open. Reads never fall back to a local configuration file, so an unavailable
 // server stays a retryable section error.
 
-import { type KeybindSection, PAGE_NAVIGATION_KEYBINDS } from "@ui";
+import {
+	type KeybindSection,
+	PAGE_NAVIGATION_KEYBINDS,
+} from "@agentic-coding/ui";
 import { createSignal } from "solid-js";
 import type { ProjectSnapshot, ProviderSnapshot } from "./items.ts";
 import { readProjectStatus, readProviderStatus } from "./server-config.ts";

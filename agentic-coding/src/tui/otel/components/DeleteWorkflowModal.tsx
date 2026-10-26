@@ -6,8 +6,9 @@
 // names the workflow, states what goes and what stays, and leaves the answer to
 // the shell's key dispatcher. It renders no keys of its own; the footer help
 // advertises the two answers.
+
+import { GenericModal, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors } from "@ui";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import { workflowDisplayName, workflowMeta } from "../app/sidebar-model.ts";
 

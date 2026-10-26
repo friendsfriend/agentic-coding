@@ -2,8 +2,8 @@
 // Theme picker rows (`tui-mouse-interaction`): a tap selects a theme and a tap
 // on the selected row applies it, exactly as the keys do.
 import { expect, test } from "bun:test";
+import { ThemePickerModal, ThemePickerView } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { ThemePickerModal, ThemePickerView } from "@ui";
 import { createSignal } from "solid-js";
 
 test("a theme row selects on a tap and applies on a tap of the selected row", async () => {

@@ -10,8 +10,6 @@
  * modal stack and the focus restoration.
  */
 
-import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
 import {
 	HelpModal,
 	ListViewModal,
@@ -20,7 +18,9 @@ import {
 	useKeyDispatch,
 	useModalBackdrop,
 	VerdictModal,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import type { DebugRequestView } from "../../../contracts/environment.ts";
 import type {

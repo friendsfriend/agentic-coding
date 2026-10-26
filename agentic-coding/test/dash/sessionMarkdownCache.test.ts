@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { markdownBlockParts } from "@ui";
+import { markdownBlockParts } from "@agentic-coding/ui";
 import { AGENT_SESSION_BLOCK_LIMIT } from "../../src/tui/dash/agent-session.ts";
 import { SessionMarkdownCache } from "../../src/tui/dash/ui/session-markdown-cache.ts";
 

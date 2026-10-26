@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { uiColors } from "@ui";
+import { uiColors } from "@agentic-coding/ui";
 import { createMemo, createSignal } from "solid-js";
 import type { ToolViewRow } from "./tool-views.ts";
 import { estimateTextRows, VirtualToolBody } from "./transcript-viewport.tsx";

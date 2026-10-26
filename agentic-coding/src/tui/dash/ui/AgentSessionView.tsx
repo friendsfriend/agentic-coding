@@ -21,14 +21,7 @@
 // accepting ordinary characters, including `j`, `k` and a `?` that starts a
 // message; a keymap-only surface (the workspace sidebar, an open dialog) blurs
 // it through `inputActive` so its keys are not swallowed.
-import type {
-	KeyEvent,
-	Renderable,
-	ScrollBoxRenderable,
-	TextareaRenderable,
-} from "@opentui/core";
-import { CliRenderEvents, TextAttributes } from "@opentui/core";
-import { useRenderer } from "@opentui/solid";
+
 import {
 	ListViewModal,
 	type MarkdownBlockPart,
@@ -41,7 +34,15 @@ import {
 	useModalBackdrop,
 	useRowMouse,
 	useTap,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type {
+	KeyEvent,
+	Renderable,
+	ScrollBoxRenderable,
+	TextareaRenderable,
+} from "@opentui/core";
+import { CliRenderEvents, TextAttributes } from "@opentui/core";
+import { useRenderer } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,

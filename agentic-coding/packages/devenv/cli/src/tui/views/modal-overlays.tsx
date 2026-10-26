@@ -1,4 +1,3 @@
-import { RGBA, TextAttributes } from "@opentui/core";
 import {
 	ActionTargetPickerView,
 	AddRepositoryModal,
@@ -31,7 +30,8 @@ import {
 	themeNames,
 	uiColors,
 	WorktreeManagerModal,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { RGBA, TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides/index.ts";
 import { ActionRunModal } from "./action-run-modal.tsx";

@@ -1,4 +1,3 @@
-import type { App, ChangeRequest, Issue, IssueScope } from "@devenv/types";
 import {
 	AppDetailView,
 	ChangedFilesView,
@@ -22,7 +21,8 @@ import {
 	TimelineView,
 	uiColors,
 	useKeyDispatch,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { App, ChangeRequest, Issue, IssueScope } from "@devenv/types";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides/index.ts";
 import { ActionsView } from "./actions-view.tsx";

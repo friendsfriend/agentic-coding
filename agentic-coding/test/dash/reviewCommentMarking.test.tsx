@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import type { Discussion } from "@agentic-coding/ui";
+import { DiffReviewView, MarkdownReviewView } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import type { Discussion } from "@ui";
-import { DiffReviewView, MarkdownReviewView } from "@ui";
 
 type TestView = Awaited<ReturnType<typeof testRender>>;
 

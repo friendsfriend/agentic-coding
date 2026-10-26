@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { testRender, useRenderer } from "@opentui/solid";
 import {
 	activeModalHelp,
 	GenericModal,
@@ -9,7 +7,9 @@ import {
 	ModalHelpOverlay,
 	modalHelpOpen,
 	withModalHelpKeybind,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 
 function keyLayer(props: { onKey?: (key: string) => boolean }) {

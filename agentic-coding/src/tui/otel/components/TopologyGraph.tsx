@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+
 import {
 	HighlightedText,
 	ScrollableContent,
@@ -7,7 +7,8 @@ import {
 	useHover,
 	useKeyDispatch,
 	useTap,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import { createMemo, For } from "solid-js";
 import type { LayoutNode } from "../model/topologyStore.ts";
 

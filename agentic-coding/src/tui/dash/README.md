@@ -28,7 +28,7 @@ observation ownership never live in the root.
 ## Pointer input (tui-mouse-navigation)
 
 Mouse handling is additive: no key binding changed and the keyboard remains the
-first input. The semantics live once in `@ui`
+first input. The semantics live once in `@agentic-coding/ui`
 (`packages/ui/src/components/mouse/`) and the dashboard only composes them:
 
 - a tap on a panel title or body focuses that panel (the `J/K/H/L` equivalent),

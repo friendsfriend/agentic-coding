@@ -1,4 +1,4 @@
-import type { TableColumn } from "@ui";
+import type { TableColumn } from "@agentic-coding/ui";
 import type {
 	AgentActions,
 	AppActions,

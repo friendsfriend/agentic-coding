@@ -1,10 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { FilterParameterOption, SortParameterOption } from "@ui";
+import type {
+	FilterParameterOption,
+	SortParameterOption,
+} from "@agentic-coding/ui";
 import {
 	FilterModal as SharedFilterModal,
 	SortModal as SharedSortModal,
-} from "@ui";
+} from "@agentic-coding/ui";
 import type {
 	SortCriterion,
 	SortField,

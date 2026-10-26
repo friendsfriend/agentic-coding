@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { RGBA, TextAttributes } from "@opentui/core";
-import type { Keybind, KeybindSection } from "@ui";
+
+import type { Keybind, KeybindSection } from "@agentic-coding/ui";
 import {
 	FilterStatusBar,
 	HelpText,
@@ -11,7 +11,8 @@ import {
 	uiColors,
 	useTerminalDimensions,
 	withModalHelpKeybind,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { RGBA, TextAttributes } from "@opentui/core";
 import { type JSX, onCleanup } from "solid-js";
 
 export type HelpEntry = Keybind;

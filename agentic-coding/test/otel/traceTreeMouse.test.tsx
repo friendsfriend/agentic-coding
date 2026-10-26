@@ -4,8 +4,8 @@
 // row opens the span detail, and the expander glyph toggles the node without also
 // dispatching `Enter`.
 import { expect, test } from "bun:test";
+import { ScrollableContent } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { ScrollableContent } from "@ui";
 import { createSignal } from "solid-js";
 import type { TreeNode } from "../../src/contracts/telemetry.ts";
 import { TraceTreeView } from "../../src/tui/otel/views/TraceTreeView.tsx";

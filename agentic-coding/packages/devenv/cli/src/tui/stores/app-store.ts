@@ -3,6 +3,8 @@ import { createMemo, createSignal } from "solid-js";
 
 export const KUBERNETES_PANEL_COUNT = 4;
 
+import type { TableTab } from "@agentic-coding/ui";
+import { runtimeState } from "@agentic-coding/ui";
 import type {
 	App,
 	InfraService,
@@ -11,8 +13,6 @@ import type {
 	ScriptVisibleRow,
 	TableRow,
 } from "@devenv/types";
-import type { TableTab } from "@ui";
-import { runtimeState } from "@ui";
 
 export type ViewMode =
 	| "table"

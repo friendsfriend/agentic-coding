@@ -6,7 +6,7 @@ import {
 	parseMarkdownBlocks,
 	streamingMarkdownBlockParts,
 	streamingTailSource,
-} from "@ui";
+} from "@agentic-coding/ui";
 
 /** The one part a document here renders as; every document below has one. */
 function onlyPart(content: string): MarkdownBlockPart {

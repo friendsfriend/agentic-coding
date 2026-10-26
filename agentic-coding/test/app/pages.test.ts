@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { footerKeybinds } from "@ui";
+import { footerKeybinds } from "@agentic-coding/ui";
 import {
 	breadcrumbSegments,
 	breadcrumbWidth,

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+
 import {
 	Badge,
 	HighlightedText,
@@ -9,7 +9,8 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { TextAttributes } from "@opentui/core";
 import type { TraceSummary } from "../../../contracts/telemetry.ts";
 
 const duration = (ms: number) =>

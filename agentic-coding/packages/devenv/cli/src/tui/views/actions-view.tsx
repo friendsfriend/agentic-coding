@@ -3,7 +3,7 @@ import {
 	type Highlight,
 	statusAnimationIntentForText,
 	statusAnimationModel,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { For, Show } from "solid-js";
 import type { ActionRunStore } from "../stores/action-run-store.ts";
 

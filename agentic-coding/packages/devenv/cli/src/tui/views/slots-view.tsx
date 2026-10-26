@@ -11,7 +11,7 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useRowMouse,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { For, Show } from "solid-js";
 import { type SlotRow, slotRowFields } from "../stores/slot-store.ts";
 

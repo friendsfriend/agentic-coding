@@ -5,6 +5,7 @@
 // binding while the view owns the keyboard (see the module comment in
 // AgentSessionView.tsx for why).
 import { expect, spyOn, test } from "bun:test";
+import { uiColors } from "@agentic-coding/ui";
 import {
 	CodeRenderable,
 	DiffRenderable,
@@ -15,7 +16,6 @@ import {
 } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { uiColors } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import {
 	AGENT_SESSION_BLOCK_LIMIT,

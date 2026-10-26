@@ -12,8 +12,8 @@
  * no read itself and, per its requirement, offers no mutating action: the route
  * owns every read and `Enter` is a key the key handler dispatches. */
 
+import { Panel, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { Panel, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
 import type { EvidenceEntry } from "../../../contracts/environment.ts";
 import type { StageJournal } from "../../../contracts/stages.ts";

@@ -1,11 +1,11 @@
-# `@ui` — the shared UI framework
+# `@agentic-coding/ui` — the shared UI framework
 
 One component set for every surface: the shell (Home/destinations, dashboard,
 observability, wiki), the environment feature, and the standalone dashboards.
 
 ```
 packages/ui/src/
-  index.ts        # the barrel; every consumer imports "@ui"
+  index.ts        # the barrel; every consumer imports "@agentic-coding/ui"
   components/     # primitives and composites (Card, Selectable, StatusBar, Text, …)
   components/utils/
   theme/          # semantic colours, the theme registry, scrollbar tokens
@@ -15,8 +15,8 @@ packages/ui/src/
 
 ## Rules
 
-- **Import from `@ui`.** The barrel is the only entry point; `bun` and `tsc`
-  both resolve it, and subpath imports (`@ui/components/...`) do not resolve at
+- **Import from `@agentic-coding/ui`.** The barrel is the only entry point; `bun` and `tsc`
+  both resolve it, and subpath imports (`@agentic-coding/ui/components/...`) do not resolve at
   runtime. Inside the package, modules import each other relatively so the
   barrel never has to import itself.
 - **A component has exactly one implementation.** A surface that needs a

@@ -1,7 +1,7 @@
 // Positive fixture: a feature consuming application operations, a typed
 // engine view, and a shared primitive.
 
-import { GenericModal } from "@ui";
+import { GenericModal } from "@agentic-coding/ui";
 import { drainEffects } from "../../workflow/operations.ts";
 import type { WorkflowView } from "../../workflow/runtime/view.ts";
 

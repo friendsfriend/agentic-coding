@@ -3,9 +3,13 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	activeErrorModal,
+	DiffReviewView,
+	resetErrorModal,
+} from "@agentic-coding/ui";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeErrorModal, DiffReviewView, resetErrorModal } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import type { DashboardData } from "../../src/contracts/workflow";
 import { App } from "../../src/tui/dash/App.tsx";

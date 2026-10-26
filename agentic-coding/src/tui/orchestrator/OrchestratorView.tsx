@@ -4,9 +4,13 @@
 // owns its keys through the `orchestrator.view` keymap field: the transcript
 // layer while the prompt is up, the model/thinking picker layer while a picker
 // is open. The prompt input itself owns text keys.
+
+import {
+	setActiveKeybindCatalog,
+	useTerminalDimensions,
+} from "@agentic-coding/ui";
 import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { setActiveKeybindCatalog, useTerminalDimensions } from "@ui";
 import {
 	createEffect,
 	createSignal,

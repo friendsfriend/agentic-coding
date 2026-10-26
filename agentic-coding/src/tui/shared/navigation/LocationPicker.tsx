@@ -4,7 +4,12 @@
 // than introducing a second overlay style: a bounded, searchable list of known
 // destinations that jumps straight to a page.
 
-import { Card, GenericModal, ScrollableList, uiColors } from "@ui";
+import {
+	Card,
+	GenericModal,
+	ScrollableList,
+	uiColors,
+} from "@agentic-coding/ui";
 import { createMemo, Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import { type DestinationEntry, filterPickerEntries } from "./destinations.ts";

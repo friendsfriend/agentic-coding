@@ -3,14 +3,14 @@
 // (`unified-feature-shell`): the table row rule, a guarded dialog's backdrop
 // policy and the wheel on a detail/log pane (the scroll box owns it natively).
 import { expect, spyOn, test } from "bun:test";
-import type { ScrollBoxRenderable } from "@opentui/core";
-import { testRender } from "@opentui/solid";
 import {
 	FilterModal,
 	GenericModal,
 	ScrollableContent,
 	WorkItemCard,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { testRender } from "@opentui/solid";
 import { createSignal, For } from "solid-js";
 import { SlotsView } from "../../packages/devenv/cli/src/tui/views/slots-view.tsx";
 

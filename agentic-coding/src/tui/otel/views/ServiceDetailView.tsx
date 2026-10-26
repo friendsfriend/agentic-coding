@@ -5,7 +5,7 @@ import {
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { createMemo, For } from "solid-js";
 import type { TopologyStore } from "../model/topologyStore.ts";
 

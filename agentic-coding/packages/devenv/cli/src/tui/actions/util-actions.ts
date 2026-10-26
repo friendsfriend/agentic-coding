@@ -1,7 +1,7 @@
+import { EDITOR_OPTIONS, type EditorChoice } from "@agentic-coding/ui";
 import type { DevEnvClient } from "@devenv/core";
 import { getLogger } from "@devenv/core";
 import type { ScriptParameter, SshHost, TableRow } from "@devenv/types";
-import { EDITOR_OPTIONS, type EditorChoice } from "@ui";
 import type { ActionRunStore } from "../stores/action-run-store.ts";
 import type { AgentStore } from "../stores/agent-store.ts";
 import type { AppStore } from "../stores/app-store.ts";

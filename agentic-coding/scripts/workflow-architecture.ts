@@ -353,7 +353,10 @@ export function checkServerBoundaries(
 			const target = intended
 				? toPosix(path.relative(root, intended))
 				: edge.specifier;
-			if (edge.specifier === "@ui" || edge.specifier.startsWith("@ui/")) {
+			if (
+				edge.specifier === "@agentic-coding/ui" ||
+				edge.specifier.startsWith("@agentic-coding/ui/")
+			) {
 				issues.push({
 					file,
 					line: edge.line,

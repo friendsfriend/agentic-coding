@@ -5,9 +5,13 @@
 // workflow tools and no orchestrator capability. The page owns its keys through
 // the `durable.view` keymap field: the transcript layer while the prompt is up,
 // the model/thinking picker layer while a picker is open.
+
+import {
+	setActiveKeybindCatalog,
+	useTerminalDimensions,
+} from "@agentic-coding/ui";
 import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { setActiveKeybindCatalog, useTerminalDimensions } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type {
 	AgentSessionBlock,

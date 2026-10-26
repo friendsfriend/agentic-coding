@@ -1,6 +1,3 @@
-import { actionRunDisplayLabel } from "@devenv/types";
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
 import {
 	Badge,
 	formatProfileLabel,
@@ -13,7 +10,10 @@ import {
 	statusAnimationModel,
 	uiColors,
 	useTap,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { actionRunDisplayLabel } from "@devenv/types";
+/** @jsxImportSource @opentui/solid */
+import { TextAttributes } from "@opentui/core";
 import {
 	createEffect,
 	createMemo,

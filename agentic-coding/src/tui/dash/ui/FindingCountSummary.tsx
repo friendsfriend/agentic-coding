@@ -1,7 +1,7 @@
 /** Finding counts as one line, or three lines when the terminal is narrow
  * (establish-opencode-boundaries, task 6.1). Props-in: counts and the compact
  * rule are supplied by the caller. */
-import { uiColors } from "@ui";
+import { uiColors } from "@agentic-coding/ui";
 import type { FindingCounts } from "../../../contracts/workflow.ts";
 
 export interface FindingCountSummaryProps {

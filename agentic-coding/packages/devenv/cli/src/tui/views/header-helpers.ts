@@ -1,5 +1,5 @@
+import { runtimeState, uiColors } from "@agentic-coding/ui";
 import type { App, InfraService } from "@devenv/types";
-import { runtimeState, uiColors } from "@ui";
 import type { HelpActions } from "../actions/index.ts";
 import type {
 	AppDetailStore,

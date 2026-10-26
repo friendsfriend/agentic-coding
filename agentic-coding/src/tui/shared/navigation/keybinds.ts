@@ -10,7 +10,7 @@ import {
 	type Keybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
-} from "@ui";
+} from "@agentic-coding/ui";
 
 /** Home/category destinations list: pick a destination, no tab order. */
 export function destinationPageKeybindCatalog(): KeybindSection[] {

@@ -1,4 +1,4 @@
-import type { HelpSection } from "@ui";
+import type { HelpSection } from "@agentic-coding/ui";
 import {
 	allContextHelpSectionsFromKeymap,
 	getActiveFooterKeybindsFromKeymap,

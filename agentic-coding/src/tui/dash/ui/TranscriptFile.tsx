@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
+
+import { uiColors, useMarkdownSyntaxStyle } from "@agentic-coding/ui";
 import { RGBA } from "@opentui/core";
-import { uiColors, useMarkdownSyntaxStyle } from "@ui";
 import { createContext, createSignal, Show, useContext } from "solid-js";
 import { type ToolView, transcriptFiletype } from "./tool-views.ts";
 import {

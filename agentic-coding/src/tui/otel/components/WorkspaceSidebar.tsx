@@ -23,7 +23,7 @@ import {
 	useHover,
 	useTap,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
 import {
 	createEffect,
 	createSignal,

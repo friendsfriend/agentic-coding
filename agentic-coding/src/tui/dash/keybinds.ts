@@ -1,4 +1,4 @@
-import type { Keybind, KeybindSection } from "@ui";
+import type { Keybind, KeybindSection } from "@agentic-coding/ui";
 import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 import {
 	AGENTS_PANEL,

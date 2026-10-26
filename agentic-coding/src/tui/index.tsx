@@ -15,15 +15,15 @@
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createCliRenderer } from "@opentui/core";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
-import { KeymapProvider } from "@opentui/keymap/solid";
-import { render } from "@opentui/solid";
 import {
 	applyCapturedSystemTheme,
 	setGlobalSelectionMouseUpHandler,
 	showErrorModal,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { createCliRenderer } from "@opentui/core";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { KeymapProvider } from "@opentui/keymap/solid";
+import { render } from "@opentui/solid";
 import { resolveConfigDir, resolveDevenvHome } from "../backend/home.ts";
 import { ownsEnvironmentBackend } from "../backend/ownership.ts";
 import { setConfigDiagnosticSink } from "../config-root.ts";

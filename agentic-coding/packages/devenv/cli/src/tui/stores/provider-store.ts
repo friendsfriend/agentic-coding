@@ -1,5 +1,9 @@
+import type {
+	AddRepositoryStep,
+	ConnectProviderStep,
+	FindRepoMode,
+} from "@agentic-coding/ui";
 import type { Provider, ProviderType, RepoSearchResult } from "@devenv/types";
-import type { AddRepositoryStep, ConnectProviderStep, FindRepoMode } from "@ui";
 import { createSignal } from "solid-js";
 
 export function createProviderStore() {

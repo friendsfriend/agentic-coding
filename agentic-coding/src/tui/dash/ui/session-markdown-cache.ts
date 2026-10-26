@@ -2,7 +2,7 @@ import {
 	type MarkdownBlockPart,
 	type StreamingMarkdownBlockParts,
 	streamingMarkdownBlockParts,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { AGENT_SESSION_BLOCK_LIMIT } from "../agent-session.ts";
 
 /** Per-view LRU, bounded to the transcript projection rather than all messages

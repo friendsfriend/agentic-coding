@@ -4,8 +4,8 @@
 // own column instead of extending the path, so it survives the truncation the
 // file list applies and the path stays the anchor identity comments match on.
 import { expect, test } from "bun:test";
+import { ChangedFilesView } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { ChangedFilesView } from "@ui";
 
 const CHANGE = {
 	old_path: "apps/compose/shop-compose.yml",

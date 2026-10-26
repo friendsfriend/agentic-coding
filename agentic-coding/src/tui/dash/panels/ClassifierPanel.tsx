@@ -8,8 +8,8 @@
  * steps) shows an explicit empty state rather than no panel at all, so the
  * place decisions will appear is always visible and focusable. */
 
+import { Panel, SelectableList, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { Panel, SelectableList, uiColors } from "@ui";
 import { Show } from "solid-js";
 import {
 	type ClassificationEntry,

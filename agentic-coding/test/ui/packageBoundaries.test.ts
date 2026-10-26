@@ -53,7 +53,7 @@ describe("packages/ui has no application dependency", () => {
 	test("no framework module imports the application, server or workflow", () => {
 		const forbidden = [
 			/^@devenv\//,
-			/^@ui$/, // the barrel is for consumers; internal imports are relative
+			/^@agentic-coding\/ui$/, // the barrel is for consumers; internal imports are relative
 			/\/src\/server\//,
 			/\/src\/workflow\//,
 			/\/src\/tui\//,
@@ -101,7 +101,7 @@ describe("packages/ui has no application dependency", () => {
 
 /**
  * The mouse layer is one implementation for every family
- * (`tui-shared-primitives`). The environment package renders `@ui` directly; a
+ * (`tui-shared-primitives`). The environment package renders `@agentic-coding/ui` directly; a
  * forked `useRowMouse`/`useTap`/row handler there would reintroduce the
  * divergence the shared layer removed, so the source is asserted, not just the
  * barrel's `toBe` identity in `test/dash/devenvUiPrimitives.test.ts`.
@@ -137,7 +137,7 @@ describe("the environment package carries no forked pointer layer", () => {
 				)
 					continue;
 				if (
-					spec === "@ui" ||
+					spec === "@agentic-coding/ui" ||
 					spec.endsWith("/tui/ui.ts") ||
 					spec.endsWith("/tui/ui")
 				)

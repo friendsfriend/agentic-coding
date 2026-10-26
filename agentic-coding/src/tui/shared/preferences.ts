@@ -13,7 +13,7 @@ import {
 	setCustomThemes,
 	type ThemeJson,
 	themeNames,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { resolveConfigRoot } from "../../config-root.ts";
 
 /** Directory that owns `tui.json` and the custom `themes/` folder. */

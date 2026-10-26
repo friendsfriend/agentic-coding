@@ -16,7 +16,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TerminalColors } from "@opentui/core";
 import {
 	buildSystemTheme,
 	captureRendererPalette,
@@ -27,7 +26,8 @@ import {
 	themeColor,
 	themeColorForTheme,
 	themeNames,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { TerminalColors } from "@opentui/core";
 import {
 	loadCustomThemes,
 	loadThemeName,

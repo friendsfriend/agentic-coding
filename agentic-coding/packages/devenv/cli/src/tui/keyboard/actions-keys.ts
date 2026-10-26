@@ -1,5 +1,5 @@
+import { formatProfileLabel } from "@agentic-coding/ui";
 import type { KeyEvent } from "@opentui/core";
-import { formatProfileLabel } from "@ui";
 import type { DockerActions } from "../actions/index.ts";
 import type { ActionRunStore } from "../stores/action-run-store.ts";
 import type { AppStore } from "../stores/app-store.ts";

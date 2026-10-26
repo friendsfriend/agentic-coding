@@ -3,16 +3,16 @@
  * dashboard, observability, wiki), the environment feature and the standalone
  * dashboards.
  *
- * Import from `@ui` (the barrel). `components/` holds the primitives and
+ * Import from `@agentic-coding/ui` (the barrel). `components/` holds the primitives and
  * composites, `theme/` the semantic colours, `views/` the multi-part surfaces
  * (reviews, providers, clusters, change requests, …). One implementation per
  * component; different behaviour is a prop, never a fork.
  */
 
-export * from "@ui";
-export * from "@ui";
-export * from "@ui";
-export * from "@ui";
+export * from "@agentic-coding/ui";
+export * from "@agentic-coding/ui";
+export * from "@agentic-coding/ui";
+export * from "@agentic-coding/ui";
 export * from "./components/AnimatedStatusText.tsx";
 export * from "./components/Badge.tsx";
 export * from "./components/Card.tsx";

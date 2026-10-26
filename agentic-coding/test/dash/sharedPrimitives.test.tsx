@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, spyOn, test } from "bun:test";
-import { testRender } from "@opentui/solid";
 import {
 	GenericModal as DashGenericModal,
 	ScrollableContent as DashScrollableContent,
@@ -10,7 +9,8 @@ import {
 	ScrollableContent as OtelScrollableContent,
 	SelectableList as OtelSelectableList,
 	setGlobalSelectionMouseUpHandler,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 
 // Renderer characterizations for the consolidated tui-shared-primitives:

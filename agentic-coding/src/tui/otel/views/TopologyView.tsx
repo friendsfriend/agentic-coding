@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { ScrollableContent, uiColors } from "@ui";
+import { ScrollableContent, uiColors } from "@agentic-coding/ui";
 import { createMemo, Show } from "solid-js";
 import { TopologyGraph } from "../components/TopologyGraph.tsx";
 import type { TopologyStore } from "../model/topologyStore.ts";

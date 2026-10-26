@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
-import { TextAttributes } from "@opentui/core";
 import {
 	focusSoon,
 	GenericModal,
@@ -13,7 +11,9 @@ import {
 	useKeyDispatch,
 	useTap,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import { createEffect, For, Show, untrack } from "solid-js";
 import { formatHandoffDeadline } from "../../../contracts/handoff-deadline.ts";
 import {

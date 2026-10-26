@@ -1,4 +1,4 @@
-import { themeNames } from "@ui";
+import { themeNames } from "@agentic-coding/ui";
 import { getGuide } from "../guides/index.ts";
 import { applyTheme, saveThemeName } from "../theme-settings.ts";
 

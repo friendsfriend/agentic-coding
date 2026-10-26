@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { useTerminalDimensions } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { useTerminalDimensions } from "@ui";
 import { For } from "solid-js";
 
 function Resizer() {

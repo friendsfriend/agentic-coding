@@ -1,4 +1,4 @@
-import { stripAnsi } from "@ui";
+import { stripAnsi } from "@agentic-coding/ui";
 import { createMemo, createSignal } from "solid-js";
 
 export function createLogStore() {

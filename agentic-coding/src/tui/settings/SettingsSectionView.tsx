@@ -12,7 +12,7 @@ import {
 	uiColors,
 	useKeyDispatch,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { Show } from "solid-js";
 import type { SettingsItem } from "./items.ts";
 

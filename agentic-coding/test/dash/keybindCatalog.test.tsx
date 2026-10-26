@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "bun:test";
-import { testRender } from "@opentui/solid";
 import {
 	catalogKeybinds,
 	footerKeybinds,
@@ -10,7 +9,8 @@ import {
 	setActiveKeybindCatalog,
 	specialKeybinds,
 	wrapHelpEntries,
-} from "@ui";
+} from "@agentic-coding/ui";
+import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import {
 	agentSessionKeybindCatalog,

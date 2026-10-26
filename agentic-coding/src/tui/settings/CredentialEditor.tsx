@@ -11,7 +11,11 @@
 // `readCredentialDraft`) is what the shell's key dispatch and its tests use; the
 // component below only renders the draft the shell owns, exactly as the numeric
 // editor renders its own.
-import { GenericModal, uiColors, useTerminalDimensions } from "@ui";
+import {
+	GenericModal,
+	uiColors,
+	useTerminalDimensions,
+} from "@agentic-coding/ui";
 import { Show } from "solid-js";
 
 /** Longest draft the editor accepts (the route caps the value at 4096). */

@@ -3,8 +3,8 @@
 // an option, a tap on the selected option runs the dialog's own `Enter`, and the
 // key reaches the same state.
 import { expect, spyOn, test } from "bun:test";
+import { ListViewModal } from "@agentic-coding/ui";
 import { testRender } from "@opentui/solid";
-import { ListViewModal } from "@ui";
 import { createSignal } from "solid-js";
 
 test("a dialog's option list selects on a tap and activates on a tap of the selected row", async () => {

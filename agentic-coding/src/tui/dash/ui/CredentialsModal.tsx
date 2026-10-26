@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
+
+import { GenericModal, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors } from "@ui";
 import { createSignal } from "solid-js";
 import { type CredentialPrompt, maskingFor } from "../../data/agents.ts";
 

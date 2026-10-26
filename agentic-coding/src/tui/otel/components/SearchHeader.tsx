@@ -4,7 +4,7 @@
 import {
 	type SearchHeaderProps,
 	SearchHeader as SharedSearchHeader,
-} from "@ui";
+} from "@agentic-coding/ui";
 
 export type { SearchHeaderProps };
 

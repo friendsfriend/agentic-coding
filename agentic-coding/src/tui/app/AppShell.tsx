@@ -5,7 +5,7 @@
 // the imported Environments feature is supplied as a render hook so the
 // `tui-feature` layer never imports the shell.
 
-import type { KeybindSection } from "@ui";
+import type { KeybindSection } from "@agentic-coding/ui";
 import { loadConfig } from "../../workflow/effects.ts";
 import { type DashboardTab, App as FeatureShell } from "../otel/app/App.tsx";
 import type { LogStore } from "../otel/model/logStore.ts";

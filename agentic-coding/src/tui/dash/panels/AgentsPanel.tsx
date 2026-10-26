@@ -6,8 +6,14 @@
  * from the route's host watches, and the narrow-terminal rule for the finding
  * summary is a prop rather than a global read. */
 
+import {
+	Badge,
+	type Highlight,
+	Panel,
+	SelectableList,
+	uiColors,
+} from "@agentic-coding/ui";
 import { type BoxRenderable, TextAttributes } from "@opentui/core";
-import { Badge, type Highlight, Panel, SelectableList, uiColors } from "@ui";
 import { createSignal, Show } from "solid-js";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { formatDuration } from "../../../workflow/format.ts";

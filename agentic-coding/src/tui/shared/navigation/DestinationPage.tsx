@@ -10,7 +10,7 @@ import {
 	ScrollableList,
 	uiColors,
 	useTerminalDimensions,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import type { DestinationEntry } from "./destinations.ts";

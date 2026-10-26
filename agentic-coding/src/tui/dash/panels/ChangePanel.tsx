@@ -7,7 +7,7 @@ import {
 	Panel,
 	ScrollableContent,
 	uiColors,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { For, Show } from "solid-js";
 import type {
 	DashboardData,

@@ -1,5 +1,5 @@
 {
-	"name": "@ui",
+	"name": "@agentic-coding/ui",
 	"version": "0.12.7",
 	"type": "module",
 	"main": "./src/index.ts",

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildSplitDiffLines, parseDiffLines } from "@ui";
+import { buildSplitDiffLines, parseDiffLines } from "@agentic-coding/ui";
 
 const DIFF = [
 	"--- a/file.ts",

@@ -4,8 +4,9 @@
 // domain cancellation boundary and then runs the same shutdown sequence;
 // declining returns to the shell. Noninteractive signals never render this
 // (see `requestShutdown({ signal: true })`).
+
+import { GenericModal, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, uiColors } from "@ui";
 import { Show } from "solid-js";
 import { quitConfirmation } from "../lifecycle.ts";
 

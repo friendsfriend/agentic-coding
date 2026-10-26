@@ -32,7 +32,7 @@ observability feature module.
 | Animated badge variant, animation palettes, inline progress, animated status text | `Badge.tsx`, `animationColors.ts`, `InlineProgressAnimation.tsx`, `AnimatedStatusText.tsx` | `dash/ui/animationColors.ts`, `dash/devenv-ui/components/*`, `packages/devenv/ui/components/*` |
 | Keybind contract, catalog store, `?` help modal | `keybinds.ts`, `HelpModal.tsx` | `dash/ui/HelpModal.tsx` |
 | Modal `?` help catalog + overlay | `modalHelp.ts`, `ModalHelpOverlay.tsx` | (surfaces render `ModalHelpOverlay`) |
-| Shared mouse interaction layer (tap/drag/wheel/dismiss semantics, row hooks, chip runner) | `packages/ui/src/components/mouse/` (`clickSemantics.ts`, `useRowMouse.ts`, `useTap.ts`, `useWheelScroll.ts`, `dismissPolicy.ts`, `useModalBackdrop.ts`, `useKeybindChips.ts`) | exported once from the `@ui` barrel; every surface family imports it instead of carrying its own click resolution |
+| Shared mouse interaction layer (tap/drag/wheel/dismiss semantics, row hooks, chip runner) | `packages/ui/src/components/mouse/` (`clickSemantics.ts`, `useRowMouse.ts`, `useTap.ts`, `useWheelScroll.ts`, `dismissPolicy.ts`, `useModalBackdrop.ts`, `useKeybindChips.ts`) | exported once from the `@agentic-coding/ui` barrel; every surface family imports it instead of carrying its own click resolution |
 | Corner toast overlay | `Notification.tsx` | `dash/ui/Notification.tsx`, `otel/components/Notification.tsx` |
 
 Family entry points are thin re-exports/wrappers. Wrappers pin a family's

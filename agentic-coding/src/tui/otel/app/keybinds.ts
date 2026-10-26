@@ -2,7 +2,7 @@ import {
 	hostDiagnosticsKeybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
-} from "@ui";
+} from "@agentic-coding/ui";
 import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
 /** The page body's panel section: the dedicated Ctrl+S toggle and the
