@@ -19,10 +19,11 @@ Durable tool results now use `output`, not `content` (transcript messages still
 use `content`). Document definitions explicitly keep delta history with
 `checkpointWhen: () => false`. Output wrappers forward skipped-output metadata
 or disable upstream skipping when they own their own transformed tail. The
-codemode wrapper supplies its own `retainedOutput`, rather than reading the
-outer call's output. Test environment fakes implement the new shell output
-metadata and retained-output contract. Nonzero bash exits now return error
-results with diagnostics rather than throwing upstream.
+native codemode extension owns script output and nested-call results; the host
+adapter only projects nested-call status into live details. Test environment
+fakes implement the new shell output metadata and retained-output contract.
+Nonzero bash exits now return error results with diagnostics rather than
+throwing upstream.
 
 Babel's parser keeps the CallExpression dynamic-import representation consumed
 by the existing boundary scanners. Obsolete syntax plugins were removed because
@@ -38,19 +39,60 @@ applied; bigint timestamps and rendered DOM text retain their required semantics
 - Durable parks a task after five consecutive crash restarts without a new
   checkpoint. Inspect `blocked: restart_limit` and use `retryTask` to recover;
   this is preferable to silently disabling the guard with Infinity.
-- Both existing vendor patches remain necessary: deferred unified-diff rebuilds
-  in OpenTUI, and streaming `onOutput` in pi-codemode. They were ported to the new
-  package layouts; neither fix is supplied by these published versions.
+- The deferred unified-diff rebuild patch remains necessary for OpenTUI.
+  The pi-codemode `onOutput` patch was removed with the native durable-codemode
+  migration: neither this host nor pi-coding-agent's codemode executor passes
+  that callback, and native durable codemode publishes script output at
+  completion.
 - OpenTUI's native input parser is experimental and remains off. Its shadow
   logging contains user input; do not enable it casually in production.
 
+## Native durable codemode
+
+The host now registers `createCodemodeExtension` from
+`@earendil-works/pi-durable/codemode` when the user's global Pi settings enable
+it; the orchestrator remains excluded. The native section and discovery helpers
+use the active conversation's callable-tool catalog. A small host adapter
+rechecks nested-call names against that run's callable set, adds live nested
+call status to the existing details projection, and supplies the host's
+five-minute default deadline. Native execution receives the installed QuickJS
+WASM and the source/compiled worker entrypoints; shutdown drains the harness
+before closing the shared sandbox.
+
+Native scripts use `CodemodeSandbox.start()` and the durable `api.executeTool()`
+path. The start data (including the fixed tool catalog, seed, clock and store
+snapshot) and each delivered nested-call result are journaled. Nested calls are
+keyed as `c<VM-call-id>`. A completed outer result is reused after recovery;
+completed nested results are reused unless the nested tool's own replay policy
+reruns them. A graceful host shutdown while a nested call is active aborts the
+outer codemode invocation and commits `Tool codemode was aborted`. On recovery,
+that committed abort result is reused rather than replaying the script. Its
+nested-call details may retain the last progress snapshot (`status: running`),
+which is historical state, not a live task; the dashboard presents this outer
+outcome as interrupted/cancelled. The recovery regression verifies that the
+active command is not reissued. This does not establish an exactly-once promise
+for external side effects or define abrupt-process-crash behavior; each nested
+tool's replay policy remains the boundary for those. A changed module version
+or sandbox fingerprint, expired deadline, or script path divergence fails
+closed.
+
+`store`/`load` values are conversation-scoped, rewindable and copied as of a
+fork. The native extension commits a successful script's store writes and its
+result atomically; an error result does not apply those writes. Native output is
+bounded by `max_output_tokens` (10,000 by default), with a full-output file when
+truncated, plus the harness's 4 MiB / 100,000-line guard. Native `start()` does
+not stream script-output callbacks, so script output is final-only by design;
+the developer approved this compatibility tradeoff. Nested tool progress and
+call details remain live in the host UI.
+
+The `pi-codemode` `onOutput` patch is no longer needed: the new durable host
+uses native `start()`, while pi-coding-agent's separate `sandbox.execute()`
+path does not pass `onOutput` either. Keep the direct `pi-codemode` dependency
+and build-time worker/WASM embedding; they are runtime assets, not a patch
+consumer.
+
 ## Follow-up simplifications (not implemented here)
 
-- `@earendil-works/pi-durable/codemode` and `api.executeTool()` provide durable
-  nested calls, replay journals, structured output validation, progress and
-  ownership. Evaluate replacing the manual nested-tool wrapper, output capture
-  and call bookkeeping in `src/agent-host/codemode.ts`. Preserve the existing
-  tool-selection policy, telemetry, UI details and script return-value contract.
 - `HarnessOptions.telemetry` now exposes content-free task/admission spans,
   metrics and propagation. It may replace portions of custom task telemetry,
   but not automatically the workflow-specific envelopes and attribution.

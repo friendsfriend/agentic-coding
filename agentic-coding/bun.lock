@@ -72,7 +72,6 @@
     },
   },
   "patchedDependencies": {
-    "@earendil-works/pi-codemode@1.4.0": "patches/@earendil-works%2Fpi-codemode@1.4.0.patch",
     "@opentui/core@0.7.0": "patches/@opentui%2Fcore@0.7.0.patch",
   },
   "packages": {

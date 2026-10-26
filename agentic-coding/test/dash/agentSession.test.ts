@@ -596,6 +596,60 @@ describe("buildAgentSessionView", () => {
 		expect(blocks[0]?.text).not.toContain("harness");
 	});
 
+	test("projects an interrupted codemode result as a warning, not a failure", () => {
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					id: "assistant-codemode",
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "toolUse",
+							content: [
+								{
+									type: "toolCall",
+									id: "codemode-call",
+									name: "codemode",
+									arguments: {
+										code: 'await tools.bash({ command: "sleep 5" })',
+									},
+								},
+							],
+						},
+					],
+				},
+				{
+					id: "result-codemode",
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolCallId: "codemode-call",
+							toolName: "codemode",
+							isError: true,
+							content: [
+								{
+									type: "text",
+									text: "<harness>\n[error] Tool codemode was aborted\n</harness>",
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		const codemode = blocks.find(
+			(block) => block.kind === "tool" && block.tool === "codemode",
+		);
+		expect(codemode).toMatchObject({
+			tone: "warning",
+			aborted: true,
+			icon: "⚠",
+		});
+		expect(codemode?.toolCall?.result?.isError).toBe(true);
+	});
+
 	test("renders a running tool and the in-flight generation as live blocks", () => {
 		const blocks = buildAgentSessionView({
 			entries: [],

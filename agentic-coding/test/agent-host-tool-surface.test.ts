@@ -90,7 +90,8 @@ test("codemode's own description states the pipeline and the batching rule", () 
 	expect(text).toContain(BATCHING_RULE);
 	// The existing contract is untouched: the rule is added to it, not instead
 	// of it.
-	expect(text).toContain("`ALL_TOOLS` lists the tools this script can call.");
+	expect(text).toContain("`ALL_TOOLS`");
+	expect(text).toContain("await searchTools");
 	expect(text).toContain(
 		"Calls still running when the script ends are cancelled",
 	);

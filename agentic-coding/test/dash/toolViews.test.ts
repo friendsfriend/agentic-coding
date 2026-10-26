@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSessionToolCall } from "../../src/tui/dash/agent-session.ts";
 import {
+	codemodeCallTone,
 	type ToolView,
 	toolPendingView,
 	toolView,
@@ -756,6 +757,43 @@ describe("toolView", () => {
 			{ name: "glob", status: "ok" },
 			{ name: "read", status: "error" },
 		]);
+	});
+
+	test("codemode presents cancellation separately from nested failures", () => {
+		const view = toolView(
+			call(
+				"codemode",
+				{ code: 'await tools.bash({ command: "sleep 5" });' },
+				{
+					lines: ["Tool codemode was aborted"],
+					isError: true,
+					details: {
+						calls: [
+							{
+								name: "bash",
+								status: "running",
+								isError: false,
+								output: "Cancelled",
+							},
+						],
+						omittedCalls: 3,
+					},
+					notes: [],
+				},
+			),
+		);
+
+		expect(view?.summary).toBe(
+			"1 calls · 3 omitted · 1 cancelled · script interrupted",
+		);
+		expect(view?.interrupted).toBe(true);
+		expect(codemodeCallTone("cancelled")).toBe("warning");
+		expect(codemodeCallTone("error")).toBe("error");
+		expect(codemodeCallTone("ok")).toBe("success");
+		expect(view?.codemode?.calls[0]?.call.result).toMatchObject({
+			isError: false,
+			lines: ["Cancelled"],
+		});
 	});
 
 	test("codemode before and after a failure", () => {

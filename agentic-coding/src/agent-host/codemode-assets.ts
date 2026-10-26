@@ -1,5 +1,5 @@
-// Embedded QuickJS assets for the durable codemode tool
-// (pi-durable-codemode-parity). A source run resolves both from `node_modules`;
+// Embedded QuickJS assets for the native pi-durable codemode extension. A
+// source run resolves both from `node_modules`;
 // a compiled `agentic-coding` binary has no `node_modules`, so
 // `scripts/build.ts` embeds the wasm file and the worker entrypoint and defines
 // `PI_CODEMODE_WORKER_PATH` with the `$bunfs` specifier.

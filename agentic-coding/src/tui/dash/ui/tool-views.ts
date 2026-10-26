@@ -69,6 +69,8 @@ export interface ToolViewSection {
 export interface ToolView {
 	/** A domain operation failed even if its transport completed normally. */
 	readonly failed?: boolean;
+	/** Codemode was aborted before a successful script result was committed. */
+	readonly interrupted?: boolean;
 	readonly codemode?: {
 		readonly script: string;
 		readonly calls: readonly {
@@ -1036,41 +1038,65 @@ interface CodemodeCall {
 	readonly details?: Readonly<Record<string, unknown>>;
 }
 
+const MAX_CODEMODE_VISIBLE_CALLS = 50;
+
+interface CodemodeCallHistory {
+	readonly calls: CodemodeCall[];
+	readonly omittedCalls: number;
+}
+
 /** The calls a codemode result reports. The host's structured `details.calls`
  * carry each call's arguments; the result's own `calls: a (ok), b (error)` line
  * is the fallback for a host that predates them. */
 function codemodeCalls(
 	details: Readonly<Record<string, unknown>> | undefined,
 	lines: readonly string[],
-): CodemodeCall[] {
+): CodemodeCallHistory {
+	const declaredOmitted =
+		typeof details?.omittedCalls === "number" &&
+		Number.isFinite(details.omittedCalls)
+			? Math.max(0, Math.floor(details.omittedCalls))
+			: 0;
 	const structured = Array.isArray(details?.calls) ? details.calls : undefined;
 	if (structured) {
-		return structured.flatMap((entry) => {
-			if (!isRecord(entry) || typeof entry.name !== "string") return [];
-			return [
-				{
-					name: entry.name,
-					status: typeof entry.status === "string" ? entry.status : "ok",
-					...(isRecord(entry.args) ? { args: entry.args } : {}),
-					...(typeof entry.durationMs === "number"
-						? { durationMs: entry.durationMs }
-						: {}),
-					...(typeof entry.output === "string" ? { output: entry.output } : {}),
-					...(entry.isError === true ? { isError: true } : {}),
-					...(isRecord(entry.details) ? { details: entry.details } : {}),
-				},
-			];
-		});
+		const calls = structured
+			.slice(0, MAX_CODEMODE_VISIBLE_CALLS)
+			.flatMap((entry) => {
+				if (!isRecord(entry) || typeof entry.name !== "string") return [];
+				return [
+					{
+						name: entry.name,
+						status: typeof entry.status === "string" ? entry.status : "ok",
+						...(isRecord(entry.args) ? { args: entry.args } : {}),
+						...(typeof entry.durationMs === "number"
+							? { durationMs: entry.durationMs }
+							: {}),
+						...(typeof entry.output === "string"
+							? { output: entry.output }
+							: {}),
+						...(entry.isError === true ? { isError: true } : {}),
+						...(isRecord(entry.details) ? { details: entry.details } : {}),
+					},
+				];
+			});
+		return {
+			calls,
+			omittedCalls: Math.max(declaredOmitted, structured.length - calls.length),
+		};
 	}
 	const line = lines.find((entry) => entry.startsWith("calls: "));
-	if (!line) return [];
-	return line
-		.slice("calls: ".length)
-		.split(", ")
+	if (!line) return { calls: [], omittedCalls: declaredOmitted };
+	const entries = line.slice("calls: ".length).split(", ");
+	const calls = entries
+		.slice(0, MAX_CODEMODE_VISIBLE_CALLS)
 		.flatMap((entry) => {
 			const match = /^(.+) \((\w+)\)$/.exec(entry);
 			return match ? [{ name: match[1] ?? "", status: match[2] ?? "" }] : [];
 		});
+	return {
+		calls,
+		omittedCalls: Math.max(declaredOmitted, entries.length - calls.length),
+	};
 }
 
 /** The first line of a script that says something: its own `// @options:` line
@@ -1085,15 +1111,25 @@ function codemodeHeadline(code: string): string {
 
 /** The result a call reported, as the projection's own result shape, so a call
  * row can render through the same view its standalone transcript row would. */
+export function codemodeCallTone(
+	status: string,
+): "warning" | "success" | "error" {
+	if (status === "running" || status === "cancelled") return "warning";
+	return status === "ok" ? "success" : "error";
+}
+
 function codemodeCallResult(
 	call: CodemodeCall,
 ): AgentSessionToolCall["result"] | undefined {
 	if (call.output === undefined && call.details === undefined) return undefined;
 	return {
-		lines: (call.output ?? "").split("\n"),
+		lines: (
+			call.output ?? (call.status === "cancelled" ? "Cancelled" : "")
+		).split("\n"),
 		isError:
-			call.isError === true ||
-			(call.status !== "ok" && call.status !== "running"),
+			call.status !== "cancelled" &&
+			(call.isError === true ||
+				(call.status !== "ok" && call.status !== "running")),
 		...(call.details === undefined ? {} : { details: call.details }),
 		notes: [],
 	};
@@ -1104,10 +1140,25 @@ function codemodeCallResult(
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
-	const calls = codemodeCalls(call.result?.details, lines);
-	const failed = call.result?.isError === true;
+	const history = codemodeCalls(call.result?.details, lines);
+	const interrupted =
+		call.result?.isError === true &&
+		lines.some((line) => /tool codemode was aborted/i.test(line));
+	const calls = history.calls.map((entry) =>
+		interrupted && entry.status === "running"
+			? { ...entry, status: "cancelled", isError: false }
+			: entry,
+	);
+	const cancelled = calls.filter(
+		(entry) => entry.status === "cancelled",
+	).length;
+	const failed =
+		call.result?.isError === true && cancelled === 0 && !interrupted;
 	const errors = calls.filter(
-		(entry) => entry.status !== "ok" && entry.status !== "running",
+		(entry) =>
+			entry.status !== "ok" &&
+			entry.status !== "running" &&
+			entry.status !== "cancelled",
 	).length;
 	// The row is the call's own metadata — how much it ran, what failed, how long
 	// it spent in tools — and every call gets its own line below it.
@@ -1117,12 +1168,19 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 	);
 	const summary = [
 		calls.length > 0 ? `${calls.length} calls` : undefined,
+		history.omittedCalls > 0 ? `${history.omittedCalls} omitted` : undefined,
+		cancelled > 0 ? `${cancelled} cancelled` : undefined,
 		errors > 0 ? `${errors} failed` : undefined,
-		failed ? "script failed" : undefined,
+		cancelled > 0 || interrupted
+			? "script interrupted"
+			: failed
+				? "script failed"
+				: undefined,
 		spent > 0 ? formatDuration(spent) : undefined,
 	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "λ",
+		...(interrupted ? { interrupted: true } : {}),
 		codemode: {
 			script: code,
 			calls: calls.map((entry) => ({
