@@ -3579,6 +3579,62 @@ test("codemode renders live native tool progress and full script output by defau
 	}
 });
 
+test("an interrupted codemode result renders as a cancelled warning card", async () => {
+	const block: AgentSessionBlock = {
+		id: "interrupted-codemode",
+		kind: "tool",
+		text: "Tool codemode was aborted",
+		tone: "warning",
+		icon: "⚠",
+		aborted: true,
+		tool: "codemode",
+		toolCall: {
+			name: "codemode",
+			args: { code: 'await tools.bash({ command: "sleep 5" })' },
+			callId: "interrupted-call",
+			result: {
+				lines: ["Tool codemode was aborted"],
+				isError: true,
+				details: {
+					calls: [{ name: "bash", status: "running", isError: false }],
+				},
+				notes: [],
+			},
+		},
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 100, height: 32 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("1 calls · 1 cancelled · script interrupted");
+		expect(frame).toContain("Codemode aborted");
+		expect(frame).not.toContain("Codemode failed");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("codemode brackets expanded script, native tool cards and output that fold independently", async () => {
 	const block: AgentSessionBlock = {
 		id: "c1",

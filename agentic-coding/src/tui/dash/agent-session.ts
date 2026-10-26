@@ -72,8 +72,7 @@ export interface AgentSessionBlock {
 	readonly icon?: string;
 	/** A tool call still in flight: rendered in the warning color. */
 	readonly pending?: boolean;
-	/** A tool call whose generation was aborted before it ever ran: the call
-	 * keeps its own row, marked as aborted rather than looking finished. */
+	/** A call that was never run or whose enclosing invocation was interrupted. */
 	readonly aborted?: boolean;
 	/** The block is still being produced (an in-flight generation or a running
 	 * tool): its text grows with every watch frame. */
@@ -563,6 +562,10 @@ function entryBlocks(
 							: "",
 					true,
 				);
+				const interrupted =
+					failed &&
+					name.toLowerCase() === "codemode" &&
+					lines.some((line) => /tool codemode was aborted/i.test(line));
 				const [first] = lines;
 				return [
 					{
@@ -588,9 +591,10 @@ function entryBlocks(
 							: `${name} ${failed ? "failed" : "done"}`,
 						// The result box carries the tool's outcome, so a successful
 						// result is green and a failed one red.
-						tone: failed ? "error" : "success",
-						icon: failed ? "✗" : "✓",
+						tone: interrupted ? "warning" : failed ? "error" : "success",
+						icon: interrupted ? "⚠" : failed ? "✗" : "✓",
 						tool: name,
+						...(interrupted ? { aborted: true } : {}),
 						...(endedAt !== undefined ? { endedAt } : {}),
 						// All lines, so expanding the paired tool block shows the whole
 						// answer (the collapsed header is `text`).
@@ -924,6 +928,7 @@ function mergeToolLifecycle(
 					tone: block.tone,
 					icon: block.icon,
 					pending: false,
+					...(block.aborted === true ? { aborted: true } : {}),
 					// How long the call took: its result's recording time minus the
 					// moment it was issued. A call with no known start has no duration
 					// to show; a clock that ran backwards is not shown either.

@@ -78,6 +78,7 @@ import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
 import { ToolSurfaceHoverContext, TranscriptFile } from "./TranscriptFile.tsx";
 import { TranscriptShellOutput } from "./TranscriptShellOutput.tsx";
 import {
+	codemodeCallTone,
 	type ToolViewRow,
 	type ToolViewSection,
 	toolPendingView,
@@ -252,10 +253,14 @@ function markerColor(tone: AgentSessionTone): string {
 }
 
 /** A tool block's left rule carries the call's state: light grey while it runs,
- * green once it succeeds, red when it fails. An aborted call never ran to a
- * result, so it stays neutral rather than reading as a failure. */
-function toolBorderColor(block: AgentSessionBlock): string {
+ * green once it succeeds, red for a completed failure, and warning for an
+ * interruption even when the native result retains an error flag. */
+function toolBorderColor(
+	block: AgentSessionBlock,
+	interrupted = block.aborted === true,
+): string {
 	if (block.pending === true) return uiColors.textMuted;
+	if (interrupted) return uiColors.warning;
 	if (block.tone === "error" || block.toolCall?.result?.isError === true)
 		return uiColors.error;
 	if (block.tone === "success" || block.toolCall?.result !== undefined)
@@ -275,9 +280,13 @@ function toolTextColor(row: ToolViewRow): string {
 	return uiColors.textPrimary;
 }
 
-/** A tool block's expanded detail: primary output, or the error color when the
- * call failed. */
-function toolDetailColor(block: AgentSessionBlock): string {
+/** Expanded details use warning for interruption, error for completed failure,
+ * and primary output otherwise. */
+function toolDetailColor(
+	block: AgentSessionBlock,
+	interrupted = block.aborted === true,
+): string {
+	if (interrupted) return uiColors.warning;
 	return block.tone === "error" || block.toolCall?.result?.isError === true
 		? uiColors.error
 		: uiColors.textPrimary;
@@ -822,6 +831,8 @@ function CodemodeBlock(props: BlockProps) {
 			: undefined;
 	});
 	const group = () => tool()?.codemode;
+	const interrupted = () =>
+		props.block.aborted === true || tool()?.interrupted === true;
 	const script = createMemo(() => group()?.script ?? "");
 	const output = createMemo(() =>
 		(group()?.output ?? []).map((row) => row.text).join("\n"),
@@ -849,12 +860,7 @@ function CodemodeBlock(props: BlockProps) {
 						tool: entry.call.name,
 						toolCall: entry.call,
 						pending: entry.status === "running",
-						tone:
-							entry.status === "running"
-								? "warning"
-								: entry.status === "ok"
-									? "success"
-									: "error",
+						tone: codemodeCallTone(entry.status),
 						detail: entry.call.result?.lines,
 						...(entry.durationMs === undefined
 							? {}
@@ -867,7 +873,9 @@ function CodemodeBlock(props: BlockProps) {
 	return (
 		<box flexDirection="column" flexShrink={0}>
 			<box flexDirection="row">
-				<text fg={toolBorderColor(props.block)}>╭─ λ Codemode</text>
+				<text fg={toolBorderColor(props.block, interrupted())}>
+					╭─ λ Codemode
+				</text>
 				<text fg={uiColors.textMuted} flexGrow={1}>
 					{(group()?.calls.length ?? 0) > 0 ? ` · ${tool()?.summary}` : ""}
 				</text>
@@ -875,7 +883,7 @@ function CodemodeBlock(props: BlockProps) {
 			</box>
 			<box
 				border={["left"]}
-				borderColor={toolBorderColor(props.block)}
+				borderColor={toolBorderColor(props.block, interrupted())}
 				paddingLeft={2}
 				paddingTop={1}
 				paddingBottom={1}
@@ -920,7 +928,7 @@ function CodemodeBlock(props: BlockProps) {
 					)}
 				</For>
 				<ToolFrame
-					color={toolBorderColor(props.block)}
+					color={toolBorderColor(props.block, interrupted())}
 					onToggle={() => props.onToggleRow(outputId)}
 				>
 					<box flexDirection="column">
@@ -940,7 +948,10 @@ function CodemodeBlock(props: BlockProps) {
 								command="Output"
 								rows={outputRows()}
 								expanded={open(outputId)}
-								failed={props.block.toolCall?.result?.isError === true}
+								failed={
+									!interrupted() &&
+									props.block.toolCall?.result?.isError === true
+								}
 							/>
 							<Show when={open(outputId)}>
 								<For each={props.block.toolCall?.result?.notes ?? []}>
@@ -952,8 +963,8 @@ function CodemodeBlock(props: BlockProps) {
 				</ToolFrame>
 			</box>
 			<text
-				fg={toolBorderColor(props.block)}
-			>{`╰─ Codemode ${props.block.aborted ? "aborted" : props.block.pending ? "running…" : props.block.toolCall?.result?.isError || props.block.tone === "error" ? "failed" : "completed"}`}</text>
+				fg={toolBorderColor(props.block, interrupted())}
+			>{`╰─ Codemode ${interrupted() ? "aborted" : props.block.pending ? "running…" : props.block.toolCall?.result?.isError || props.block.tone === "error" ? "failed" : "completed"}`}</text>
 		</box>
 	);
 }

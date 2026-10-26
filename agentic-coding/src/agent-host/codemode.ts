@@ -1,70 +1,50 @@
-// Durable codemode (pi-durable-codemode-parity): a `codemode` tool that runs
-// sandboxed JavaScript whose only capability is calling the run's own offered
-// tools. It is an *additional* tool — the run keeps its direct tools — and the
-// script's reach is exactly the tools this run was offered, so a read-only run
-// cannot reach `write`/`edit` through a script.
-//
-// Built on `@earendil-works/pi-codemode` (the same sandbox pi's builtin
-// `codemode` extension uses), not on pi-coding-agent's extension: that one is
-// written against pi-coding-agent's own extension API, which pi-durable does
-// not share.
-import type { Context, JsonValue } from "@earendil-works/chord";
-import { withAbortSignal } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
-import {
-	type CodemodeJsonSchema,
-	type CodemodeResult,
-	CodemodeSandbox,
-	type CodemodeTool,
-	loadQuickJSWasm,
-	parseCodemodeSource,
-	toCodemodeIdentifier,
-} from "@earendil-works/pi-codemode";
-import {
-	defineExtension,
-	defineTool,
-	type Extension,
-	section,
-	type ToolExecutionApi,
-	type ToolExecutionResult,
-	type ToolRegistration,
+// The durable host uses pi-durable's native codemode extension as its sole
+// sandbox and nested-call executor. This module only supplies the host's
+// embedded sandbox assets, a default deadline, and the dashboard's live call
+// projection; all discovery, replay, store/load and execution stay upstream.
+import type { JsonValue } from "@earendil-works/chord";
+import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
+import type {
+	Extension,
+	ToolExecutionApi,
+	ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { codemodeWasmPath, codemodeWorkerUrl } from "./codemode-assets.ts";
 import {
-	boundedLiveOutput,
-	createProgressPublisher,
-} from "./progress-publisher.ts";
+	createCodemodeExtension,
+	CODEMODE_TOOL_NAME as NATIVE_CODEMODE_TOOL_NAME,
+} from "@earendil-works/pi-durable/codemode";
+import { codemodeWasmPath, codemodeWorkerUrl } from "./codemode-assets.ts";
+import { createProgressPublisher } from "./progress-publisher.ts";
 import { BATCHING_RULE, CODEMODE_PIPELINE } from "./tool-surface.ts";
 
-export const CODEMODE_TOOL_NAME = "codemode";
+export const CODEMODE_TOOL_NAME = NATIVE_CODEMODE_TOOL_NAME;
 
-/** Overall deadline for one script, including time spent in its tool calls.
- * The script can override it with a `// @options:` line. */
-const DEFAULT_TIMEOUT_MS = 300_000;
+/** The maximum wall-clock time for one script unless it has its own options. */
+export const CODEMODE_DEFAULT_TIMEOUT_MS = 300_000;
 
-const CodemodeParameters = Type.Object({
-	code: Type.String({ description: "Raw JavaScript source." }),
-});
+/** The maximum number of nested calls retained for live and final details. */
+const MAX_RECORDED_CALLS = 50;
+const MAX_CALL_OUTPUT_CHARS = 4_000;
+const MAX_CALL_ARGUMENT_CHARS = 4_000;
+const MAX_CALL_DETAILS_CHARS = 4_000;
+const MAX_NATIVE_DETAILS_CHARS = 8_000;
+const MAX_DETAIL_DEPTH = 6;
+const MAX_DETAIL_ITEMS = 32;
+const MAX_DETAIL_NODES = 256;
 
-const CODEMODE_DESCRIPTION = [
-	"Run JavaScript that calls this run's other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level `await` and `return` work. No Node, file system, network, or timers.",
-	"- `await tools.<name>({ ...args })` resolves to the tool's text output as a string, and rejects with an Error when the call fails. Calls still running when the script ends are cancelled.",
-	'- Optional first line: `// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}`',
-	"Globals:",
-	"- `text(value)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script.",
-	"- `store(key, value)` and `load(key)` keep JSON values across codemode calls in this run.",
-	"- `ALL_TOOLS` lists the tools this script can call.",
-	// Its own place in the inspection split (efficiency backlog item 14): the
-	// tool exists to collapse a pipeline, and the batching rule holds here too.
-	`- ${CODEMODE_PIPELINE}.`,
-	`- ${BATCHING_RULE}.`,
-].join("\n");
+/** The native catalog estimates four characters per token. Leave room for its
+ * headings within the shared 7.5 KiB prompt-section budget. */
+const CODEMODE_INLINE_BUDGET = 1_800;
 
-/** A durable `codemode` extension plus the tool it registers, so the host can
- * put the tool in a read-only run's explicit tool selection. */
-export interface DurableCodemode {
-	readonly extension: Extension;
-	readonly tool: ToolRegistration;
+/** A nested call as shown in the host's codemode detail panel. */
+interface RecordedCall {
+	readonly name: string;
+	readonly args: JsonValue;
+	output: string;
+	isError: boolean;
+	status: "running" | "ok" | "error" | "cancelled";
+	durationMs?: number;
+	details?: JsonValue;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,334 +55,357 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** Tool-result content as one string (the value a script's call resolves to:
- * our tools declare no output schema, so text is the whole result). */
-function contentToText(content: unknown): string {
-	if (!Array.isArray(content)) return "";
-	return content
-		.flatMap((part) =>
-			isRecord(part) && part.type === "text" && typeof part.text === "string"
-				? [part.text]
-				: [],
-		)
-		.join("\n");
-}
-
-/** One offered tool as the script sees it. The nested call runs the tool's own
- * `execute` through a wrapper of the outer invocation's API, so validation and
- * the tool's environment are the same; `output`/`details`/`diagnostic` are
- * captured locally so a nested call never pollutes the codemode call's result. */
-/** One call a script made, as the host served it. The sandbox records the name,
- * status and duration; the wrapper adds what the call asked for and what came
- * back, so the dashboard can show a script's calls as the tool rows they are.
- * The arguments are JSON, since the sandbox hands tools their JSON round trip. */
-interface RecordedCall {
-	readonly name: string;
-	readonly args: JsonValue;
-	/** The tool's own result text, as the script received it. */
-	output: string;
-	isError: boolean;
-	status: "running" | "ok" | "error";
-	durationMs?: number;
-	details?: JsonValue;
-}
-
-function nestedTool(
-	tool: ToolRegistration,
-	api: ToolExecutionApi,
-	context: Context,
-	recorded: RecordedCall[],
-	publish: () => void,
-): CodemodeTool {
-	return {
-		name: tool.name,
-		...(tool.description ? { description: tool.description } : {}),
-		inputSchema: tool.parameters as CodemodeJsonSchema,
-		execute: async (rawArgs, toolContext) => {
-			const nestedContext = withAbortSignal(
-				AbortSignal.any([
-					toolContext.signal,
-					...(context.abortSignal ? [context.abortSignal] : []),
-				]),
-				context,
-			);
-			// The sandbox pushes its own record as the call starts, so the
-			// wrapper's records line up with `result.calls` by position. The
-			// record is filled in as the call settles.
-			const record: RecordedCall = {
-				name: tool.name,
-				args: rawArgs as JsonValue,
-				output: "",
-				isError: false,
-				status: "running",
-			};
-			const index = recorded.length;
-			recorded.push(record);
-			const started = Date.now();
-			publish();
-			let captured = "";
-			let truncated = false;
-			const retained = () =>
-				truncated ? `[earlier output omitted]\n${captured}` : captured;
-			const decoder = new TextDecoder();
-			let details: unknown;
-			const nested: ToolExecutionApi = {
-				...api,
-				callId: `${api.callId}:${index}`,
-				// This wrapper owns its bounded tail; upstream must not skip bytes
-				// using the outer codemode call's output window.
-				outputWindow: undefined,
-				retainedOutput: () => ({ text: retained(), truncated }),
-				output: (chunk) => {
-					const next = boundedLiveOutput(
-						captured,
-						typeof chunk === "string"
-							? chunk
-							: decoder.decode(chunk, { stream: true }),
-					);
-					captured = next.text;
-					truncated ||= next.truncated;
-					record.output = retained();
-					publish();
-				},
-				diagnostic: () => {},
-				details: async (value) => {
-					details = value;
-					record.details = value;
-					publish();
-				},
-			};
-			try {
-				const result = await tool.execute(
-					rawArgs as never,
-					nested,
-					nestedContext,
-				);
-				const text = result.output
-					? contentToText(result.output)
-					: retained() + decoder.decode();
-				record.output = text;
-				record.isError = result.isError === true;
-				record.status = record.isError ? "error" : "ok";
-				// Some tools (edit's diff, read's truncation) report their structured
-				// result through `result.details` instead of `api.details`; capture
-				// either, so a nested call keeps the same expandable view it would have
-				// as a standalone row.
-				const structured = details ?? result.details;
-				if (structured !== undefined) record.details = structured as JsonValue;
-				if (result.isError)
-					throw new Error(text.trim() || `${tool.name} failed`);
-				return details !== undefined ? details : text;
-			} catch (error) {
-				record.status = "error";
-				record.isError = true;
-				const message = errorMessage(error);
-				if (!record.output.includes(message))
-					record.output = record.output
-						? `${record.output}\n${message}`
-						: message;
-				throw error;
-			} finally {
-				record.durationMs = Date.now() - started;
-				publish();
+/** Convert native output without materializing an unbounded nested result. */
+export function valueToText(value: unknown): string {
+	if (typeof value === "string") return boundedText(value);
+	if (Array.isArray(value)) {
+		const chunks: string[] = [];
+		let length = 0;
+		let inspected = 0;
+		let omitted = false;
+		for (const part of value) {
+			if (inspected >= MAX_DETAIL_ITEMS) {
+				omitted = true;
+				break;
 			}
-		},
-	};
-}
-
-function textResult(text: string, isError = false): ToolExecutionResult {
-	return {
-		output: [{ type: "text", text }],
-		...(isError ? { isError: true } : {}),
-	};
-}
-
-/** The model-facing result: the script's output items, its return value, and
- * the calls it made, headed by whether it completed. The calls also travel as
- * structured details — with the arguments the sandbox does not record — so the
- * dashboard can show what each call actually did. */
-function formatResult(
-	result: CodemodeResult,
-	recorded: readonly RecordedCall[],
-): ToolExecutionResult {
-	const output = result.output.flatMap((item) =>
-		item.type === "text" ? [item.text] : [],
-	);
-	const lines = [result.ok ? "Script completed" : "Script failed"];
-	if (result.ok && result.value !== undefined)
-		lines.push(`return: ${JSON.stringify(result.value)}`);
-	lines.push(...output);
-	if (!result.ok) lines.push(`Script error: ${result.error.message}`);
-	if (result.calls.length > 0)
-		lines.push(
-			`calls: ${result.calls
-				.map((call) => `${call.name} (${call.status})`)
-				.join(", ")}`,
+			inspected += 1;
+			if (
+				!isRecord(part) ||
+				part.type !== "text" ||
+				typeof part.text !== "string"
+			)
+				continue;
+			const separator = chunks.length === 0 ? "" : "\n";
+			const available = MAX_CALL_OUTPUT_CHARS - length - separator.length;
+			if (available <= 0) {
+				omitted = true;
+				break;
+			}
+			chunks.push(`${separator}${part.text.slice(0, available)}`);
+			length += separator.length + Math.min(part.text.length, available);
+			if (part.text.length > available) {
+				omitted = true;
+				break;
+			}
+		}
+		let text = chunks.join("");
+		if (omitted) {
+			const marker = "…[output truncated]";
+			text = `${text.slice(0, MAX_CALL_OUTPUT_CHARS - marker.length)}${marker}`;
+		}
+		return text;
+	}
+	if (value === undefined) return "";
+	try {
+		return boundedPrefixText(
+			JSON.stringify(boundedJson(value, MAX_CALL_OUTPUT_CHARS)) ?? "",
 		);
+	} catch {
+		return "[unserializable output]";
+	}
+}
+
+function boundedText(value: string): string {
+	if (value.length <= MAX_CALL_OUTPUT_CHARS) return value;
+	const marker = "[earlier output omitted]\n";
+	return `${marker}${value.slice(-(MAX_CALL_OUTPUT_CHARS - marker.length))}`;
+}
+
+function boundedPrefixText(value: string): string {
+	if (value.length <= MAX_CALL_OUTPUT_CHARS) return value;
+	const marker = "…[truncated]";
+	return `${value.slice(0, MAX_CALL_OUTPUT_CHARS - marker.length)}${marker}`;
+}
+
+/** Keep structured arguments and details useful while bounding both their
+ * serialized size and the work needed to project them into live progress. */
+function boundedJsonValue(
+	value: unknown,
+	budget: { remaining: number },
+	depth = 0,
+	nodes: { remaining: number } = { remaining: MAX_DETAIL_NODES },
+): JsonValue {
+	if (budget.remaining <= 0 || nodes.remaining <= 0) return "[details omitted]";
+	nodes.remaining -= 1;
+	if (depth >= MAX_DETAIL_DEPTH) {
+		budget.remaining = Math.max(0, budget.remaining - 24);
+		return "[nested details omitted]";
+	}
+	if (typeof value === "string") {
+		if (value.length <= budget.remaining) {
+			budget.remaining -= value.length;
+			return value;
+		}
+		const marker = "…[truncated]";
+		const text = `${value.slice(0, Math.max(0, budget.remaining - marker.length))}${marker}`;
+		budget.remaining = 0;
+		return text;
+	}
+	if (
+		value === null ||
+		typeof value === "boolean" ||
+		typeof value === "number"
+	) {
+		budget.remaining = Math.max(0, budget.remaining - 16);
+		return value;
+	}
+	if (Array.isArray(value)) {
+		const result: JsonValue[] = [];
+		for (const item of value) {
+			if (result.length >= MAX_DETAIL_ITEMS || budget.remaining <= 0) {
+				result.push("[additional items omitted]");
+				break;
+			}
+			result.push(boundedJsonValue(item, budget, depth + 1, nodes));
+		}
+		return result;
+	}
+	if (isRecord(value)) {
+		const result: Record<string, JsonValue> = {};
+		let retained = 0;
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			if (retained >= MAX_DETAIL_ITEMS || budget.remaining <= 0) {
+				result.detailsOmitted = true;
+				break;
+			}
+			if (key === "__proto__") continue;
+			const boundedKey = key.slice(0, 128);
+			budget.remaining = Math.max(0, budget.remaining - boundedKey.length - 4);
+			result[boundedKey] = boundedJsonValue(
+				value[key],
+				budget,
+				depth + 1,
+				nodes,
+			);
+			retained += 1;
+		}
+		return result;
+	}
+	budget.remaining = Math.max(0, budget.remaining - 32);
+	return String(value).slice(0, 32);
+}
+
+function boundedJson(value: unknown, maxChars: number): JsonValue {
+	return boundedJsonValue(value, { remaining: maxChars });
+}
+
+function recordedCallValue(call: RecordedCall): Record<string, JsonValue> {
 	return {
-		...textResult(lines.join("\n"), !result.ok),
-		details: {
-			output: [
-				...output,
-				...(result.ok && result.value !== undefined
-					? [`return: ${JSON.stringify(result.value)}`]
-					: []),
-				...(!result.ok ? [`Script error: ${result.error.message}`] : []),
-			].join("\n"),
-			calls: result.calls.map((call, index) => ({
-				name: call.name,
-				status: call.status,
-				durationMs: call.durationMs,
-				...(recorded[index]
-					? {
-							args: recorded[index]?.args ?? null,
-							output: recorded[index]?.output ?? "",
-							isError: recorded[index]?.isError === true,
-							...(recorded[index]?.details === undefined
-								? {}
-								: { details: recorded[index]?.details }),
-						}
-					: {}),
-			})),
-		},
+		name: call.name,
+		args: call.args,
+		output: call.output,
+		isError: call.isError,
+		status: call.status,
+		...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
+		...(call.details === undefined ? {} : { details: call.details }),
 	};
 }
 
-/** The durable `codemode` tool. Enablement is the host's decision (global pi
- * settings); this only builds the tool and its prompt section. */
-export function createDurableCodemode(): DurableCodemode {
-	// `store()`/`load()` values, keyed by conversation: the sandbox is created
-	// per call, so the extension owns the persistence across calls in one run.
-	const stores = new Map<string, Record<string, unknown>>();
+function textContent(value: unknown): string {
+	return valueToText(value);
+}
 
-	const tool = defineTool({
-		name: CODEMODE_TOOL_NAME,
-		description: CODEMODE_DESCRIPTION,
-		parameters: CodemodeParameters,
+/** Wrap only the result/progress boundary. The native tool remains responsible
+ * for tool discovery, sandbox work, nested task ownership, and replay. */
+function withHostPresentation(tool: ToolRegistration): ToolRegistration {
+	const execute = tool.execute;
+	return {
+		...tool,
+		description: [
+			String(tool.description ?? ""),
+			`- ${CODEMODE_PIPELINE}.`,
+			`- ${BATCHING_RULE}.`,
+		]
+			.filter(Boolean)
+			.join("\n"),
 		execute: async (args, api, context) => {
-			let offered: readonly ToolRegistration[];
-			try {
-				offered = (await api.agent(context)).tools;
-			} catch (error) {
-				return textResult(
-					`codemode: could not resolve this run's tools (${errorMessage(error)})`,
-					true,
-				);
-			}
-			const callable = offered.filter(
-				(entry) => entry.name !== CODEMODE_TOOL_NAME,
+			const agent = await api.agent(context);
+			const allowed = new Set(
+				agent.callable
+					.map((entry) => entry.name)
+					.filter((name) => name !== CODEMODE_TOOL_NAME),
 			);
 			const recorded: RecordedCall[] = [];
+			const omittedCalls = { count: 0 };
 			const progress = createProgressPublisher(
-				() => ({ calls: recorded.map((call) => ({ ...call })) }),
+				() => ({
+					calls: recorded.map(recordedCallValue),
+					omittedCalls: omittedCalls.count,
+				}),
 				(snapshot) => api.details(snapshot as JsonValue, context),
 			);
-			let parsed: ReturnType<typeof parseCodemodeSource>;
+			const markCancelledCalls = () => {
+				if (!context.abortSignal?.aborted) return;
+				let changed = false;
+				for (const call of recorded) {
+					if (call.status !== "running") continue;
+					call.isError = false;
+					call.status = "cancelled";
+					call.output ||= "Cancelled";
+					changed = true;
+				}
+				if (changed) progress.request();
+			};
+			const observedApi: ToolExecutionApi = {
+				...api,
+				executeTool: async (name, nestedArgs, nestedContext, options) => {
+					const record: RecordedCall | undefined =
+						recorded.length < MAX_RECORDED_CALLS
+							? {
+									name,
+									args: boundedJson(nestedArgs, MAX_CALL_ARGUMENT_CHARS),
+									output: "",
+									isError: false,
+									status: "running",
+								}
+							: undefined;
+					if (record) recorded.push(record);
+					else omittedCalls.count += 1;
+					progress.request();
+					const started = Date.now();
+					try {
+						if (!allowed.has(name))
+							throw new Error(
+								`Tool ${name} is not available to this run's codemode script`,
+							);
+						const result = await api.executeTool(
+							name,
+							nestedArgs,
+							nestedContext,
+							options,
+						);
+						const diagnostics = result.diagnostics
+							.filter((diagnostic) => diagnostic.severity === "error")
+							.map((diagnostic) => diagnostic.message)
+							.join("\n");
+						if (record) {
+							record.output = boundedText(
+								valueToText(result.structuredOutput) || diagnostics,
+							);
+							record.isError = result.isError === true;
+							record.status = record.isError ? "error" : "ok";
+							if (result.details !== undefined)
+								record.details = boundedJson(
+									result.details,
+									MAX_CALL_DETAILS_CHARS,
+								);
+						}
+						return result;
+					} catch (error) {
+						if (record) {
+							record.isError = true;
+							record.status = context.abortSignal?.aborted
+								? "cancelled"
+								: "error";
+							record.output = boundedText(errorMessage(error));
+						}
+						throw error;
+					} finally {
+						if (record) record.durationMs = Date.now() - started;
+						progress.request();
+					}
+				},
+			};
+
 			try {
-				parsed = parseCodemodeSource(args.code);
-			} catch (error) {
-				return textResult(
-					`codemode: invalid script (${errorMessage(error)})`,
-					true,
+				const result = await execute(args, observedApi, context);
+				markCancelledCalls();
+				const nativeDetails = isRecord(result.details) ? result.details : {};
+				const nativeCalls = Array.isArray(nativeDetails.calls)
+					? nativeDetails.calls
+					: [];
+				const retainedCount = Math.min(
+					MAX_RECORDED_CALLS,
+					Math.max(nativeCalls.length, recorded.length),
 				);
-			}
-			const workerUrl = codemodeWorkerUrl();
-			let sandbox: CodemodeSandbox;
-			try {
-				sandbox = new CodemodeSandbox({
-					tools: callable.map((entry) =>
-						nestedTool(entry, api, context, recorded, progress.request),
-					),
-					wasm: await loadQuickJSWasm(codemodeWasmPath()),
-					timeoutMs: DEFAULT_TIMEOUT_MS,
-					...(workerUrl ? { workerUrl } : {}),
+				const calls = Array.from({ length: retainedCount }, (_, index) => {
+					const nativeCall = boundedJson(
+						nativeCalls[index],
+						MAX_CALL_DETAILS_CHARS,
+					);
+					return {
+						...(isRecord(nativeCall) ? nativeCall : {}),
+						...(recorded[index] ? recordedCallValue(recorded[index]) : {}),
+					};
 				});
-			} catch (error) {
-				// The compiled binary embeds the wasm and worker; a build that could
-				// not must report the tool unavailable rather than fail the run.
-				return textResult(
-					`codemode: the sandbox is unavailable in this build (${errorMessage(error)})`,
-					true,
+				const nativeMetadata: Record<string, unknown> = {};
+				for (const key in nativeDetails) {
+					if (
+						Object.hasOwn(nativeDetails, key) &&
+						key !== "calls" &&
+						key !== "output"
+					)
+						nativeMetadata[key] = nativeDetails[key];
+				}
+				const boundedMetadata = boundedJson(
+					nativeMetadata,
+					MAX_NATIVE_DETAILS_CHARS,
 				);
-			}
-			const key = String(api.conversationId);
-			const store = stores.get(key) ?? {};
-			let result: CodemodeResult;
-			try {
-				result = await sandbox.execute(parsed.code, {
-					onOutput: (item) => {
-						if (item.type === "text") api.output(`${item.text}\n`);
+				return {
+					...result,
+					details: {
+						...(isRecord(boundedMetadata) ? boundedMetadata : {}),
+						output: boundedText(textContent(result.output)),
+						calls,
+						omittedCalls: Math.max(
+							omittedCalls.count,
+							nativeCalls.length - retainedCount,
+						),
 					},
-					...(parsed.options.timeoutMs !== undefined
-						? { timeoutMs: parsed.options.timeoutMs }
-						: {}),
-					...(context.abortSignal ? { signal: context.abortSignal } : {}),
-					store,
-				});
+				};
 			} finally {
-				void sandbox.close().catch(() => undefined);
+				markCancelledCalls();
 				try {
 					await progress.flush();
 				} finally {
 					progress.dispose();
 				}
 			}
-			if (result.ok) {
-				const next: Record<string, unknown> = {
-					...store,
-					...result.storeWrites.set,
-				};
-				for (const deleted of result.storeWrites.delete) delete next[deleted];
-				stores.set(key, next);
-			}
-			return formatResult(result, recorded);
 		},
-	});
-
-	const extension = defineExtension({
-		name: "agentic.codemode",
-		tools: [tool],
-		sections: [
-			// pi-durable has no per-request tool description, so the calling
-			// convention and the callable tool list live in a prompt section
-			// rendered from the request's own offered tools.
-			section("codemode", (input) => {
-				if (
-					!input.agent.tools.some((entry) => entry.name === CODEMODE_TOOL_NAME)
-				)
-					return undefined;
-				const callable = input.agent.tools.filter(
-					(entry) => entry.name !== CODEMODE_TOOL_NAME,
-				);
-				if (callable.length === 0) return undefined;
-				return [
-					"codemode runs JavaScript that calls this run's tools as `tools.<name>(args)`. Use it to batch independent calls or chain a search → read → filter pipeline in one call; keep a single call, every edit, and the handoff direct. Available:",
-					...callable.map(
-						(entry) =>
-							`- tools.${toCodemodeIdentifier(entry.name)}: ${firstSentence(entry.description ?? entry.name)}`,
-					),
-				].join("\n");
-			}),
-		],
-	});
-
-	return { extension, tool };
+	};
 }
 
-/** Longest description the codemode prompt section lists per tool. */
-export const CODEMODE_SECTION_DESCRIPTION_LIMIT = 160;
+/** A native codemode extension plus its registered tool for hosts whose
+ * read-only selection explicitly names tools, and its sandbox shutdown hook. */
+export interface DurableCodemode {
+	readonly extension: Extension;
+	readonly tool: ToolRegistration;
+	readonly close: () => Promise<void>;
+}
 
-/** The first sentence of a tool description (cut at the first `. `), bounded to
- * {@link CODEMODE_SECTION_DESCRIPTION_LIMIT} characters at a word boundary. The
- * full description stays in the tool definition the model already receives, so
- * the section only has to say what each `tools.<name>` is for. */
-export function firstSentence(description: string): string {
-	const text = description.trim();
-	const end = /\.(\s|$)/.exec(text);
-	const sentence = end ? text.slice(0, end.index + 1) : text;
-	if (sentence.length <= CODEMODE_SECTION_DESCRIPTION_LIMIT)
-		return sentence.replace(/\s+/g, " ");
-	const cut = sentence.slice(0, CODEMODE_SECTION_DESCRIPTION_LIMIT);
-	const space = cut.lastIndexOf(" ");
-	return `${(space > 0 ? cut.slice(0, space) : cut).replace(/\s+/g, " ")}…`;
+/** Enablement remains the host's decision (the user's global Pi settings). */
+export function createDurableCodemode(): DurableCodemode {
+	const sandbox = new CodemodeSandbox({
+		wasm: loadQuickJSWasm(codemodeWasmPath()),
+		...(codemodeWorkerUrl() ? { workerUrl: codemodeWorkerUrl() } : {}),
+	});
+	const start = sandbox.start.bind(sandbox);
+	// The native extension uses start() for durable replay; that API otherwise
+	// defaults to no deadline, unlike this host's previous five-minute bound.
+	sandbox.start = (code, options) =>
+		start(code, {
+			...options,
+			timeoutMs: options.timeoutMs ?? CODEMODE_DEFAULT_TIMEOUT_MS,
+		});
+
+	const native = createCodemodeExtension({
+		sandbox,
+		models: false,
+		inlineBudget: CODEMODE_INLINE_BUDGET,
+	});
+	const nativeTool = native.tools?.find(
+		(entry) => entry.name === CODEMODE_TOOL_NAME,
+	);
+	if (!nativeTool)
+		throw new Error("The native codemode extension did not register codemode");
+	const tool = withHostPresentation(nativeTool);
+	const extension: Extension = {
+		...native,
+		name: "agentic.codemode",
+		tools: native.tools?.map((entry) =>
+			entry.name === CODEMODE_TOOL_NAME ? tool : entry,
+		),
+	};
+	return { extension, tool, close: () => sandbox.close() };
 }

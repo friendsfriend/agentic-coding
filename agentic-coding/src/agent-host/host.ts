@@ -497,7 +497,9 @@ export class DurableHost {
 	private server: net.Server | undefined;
 	private authenticatedServer: tls.Server | undefined;
 	private readonly authenticatedSockets = new Set<net.Socket>();
+	private readonly activeRequests = new Set<Promise<void>>();
 	private closing = false;
+	private shutdownPromise: Promise<void> | undefined;
 
 	/** Thinking levels pi-ai accepts, newest first for the picker. */
 	static readonly THINKING_LEVELS = [
@@ -517,6 +519,7 @@ export class DurableHost {
 		/** The durable `codemode` tool when the user's global pi settings enable
 		 * it, so a read-only run's explicit selection can still offer it. */
 		private readonly codemodeTool: ToolRegistration | undefined,
+		private readonly closeCodemode: (() => Promise<void>) | undefined,
 		/** The read-only run's share of the workflow extensions: `ask_jev` (the
 		 * in-session judgment tool the protocol tells every verifier to reach for),
 		 * `grep` (the bounded repository search a review needs), the environment
@@ -594,6 +597,10 @@ export class DurableHost {
 			readOnlyTools: shared,
 			workflowTools: [...(dialogue.tools ?? []), ...shared],
 		};
+	}
+
+	private assertOpen(): void {
+		if (this.closing) throw new Error("agent host is shutting down");
 	}
 
 	private log(line: string): void {
@@ -756,6 +763,11 @@ export class DurableHost {
 			);
 		} catch (error) {
 			await harness.close(context);
+			try {
+				await codemode?.close();
+			} catch {
+				/* preserve the opening failure */
+			}
 			throw error;
 		}
 		harness.resume();
@@ -764,6 +776,7 @@ export class DurableHost {
 			options,
 			models,
 			codemode?.tool,
+			codemode?.close,
 			workflowTools.readOnlyTools,
 			workflowTools.workflowTools,
 			orchestrator,
@@ -781,6 +794,7 @@ export class DurableHost {
 	private readonly ensuringRoles = new Map<string, Promise<void>>();
 
 	ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
+		if (this.closing) return Promise.reject(new Error("host is shutting down"));
 		const pending = this.ensuringRuns.get(input.runId);
 		if (pending) return pending;
 		// Duplicate/replayed run requests converge; distinct runs that reuse one
@@ -1554,6 +1568,7 @@ export class DurableHost {
 		runId: string,
 		instructions?: string,
 	): Promise<CompactRunResult> {
+		this.assertOpen();
 		const record = this.requireConversation(runId);
 		const text = instructions?.trim();
 		if (text && text.length > COMPACTION_MAX_INSTRUCTIONS)
@@ -1652,6 +1667,7 @@ export class DurableHost {
 		workflowState?: SubmitWorkflowState;
 		workflowNote?: string;
 	}> {
+		this.assertOpen();
 		const record = this.requireConversation(runId);
 		// The mode is normalized, never rejected: `steer`/`overwrite` interrupt
 		// the running turn, everything else queues behind it, and an idle
@@ -1857,6 +1873,7 @@ export class DurableHost {
 		runId: string,
 		change: { model?: string; thinking?: string },
 	): Promise<void> {
+		this.assertOpen();
 		const record = this.requireConversation(runId);
 		const conversation = await this.harness.conversation(
 			record.conversationId,
@@ -1937,6 +1954,7 @@ export class DurableHost {
 	}
 
 	async abort(runId: string): Promise<void> {
+		this.assertOpen();
 		const record = this.requireConversation(runId);
 		// The next message to this run reconciles its workflow state, so the run
 		// the developer aborted is the run that can be reopened.
@@ -2103,6 +2121,7 @@ export class DurableHost {
 	}
 
 	async stopRun(runId: string): Promise<void> {
+		this.assertOpen();
 		const record = this.runs.get(runId);
 		if (!record) return;
 		this.abortedRuns.delete(runId);
@@ -2290,13 +2309,16 @@ export class DurableHost {
 		};
 	}
 
-	async shutdown(): Promise<void> {
-		if (this.closing) return;
+	shutdown(): Promise<void> {
+		if (this.shutdownPromise) return this.shutdownPromise;
 		this.closing = true;
+		this.shutdownPromise = this.shutdownOnce();
+		return this.shutdownPromise;
+	}
+
+	private async shutdownOnce(): Promise<void> {
 		this.server?.close();
 		this.authenticatedServer?.close();
-		for (const socket of this.authenticatedSockets) socket.destroy();
-		this.authenticatedSockets.clear();
 		for (const stop of this.telemetry.values()) {
 			try {
 				stop();
@@ -2306,6 +2328,27 @@ export class DurableHost {
 		}
 		this.toolSurfaces.clear();
 		this.toolProbes.clear();
+		// The closing fence prevents new request dispatch and ensureRun admission.
+		// Drain work accepted before it before stopping conversations or closing the
+		// harness, so a late ensure cannot publish a run after the stop pass.
+		await Promise.allSettled([
+			...this.activeRequests,
+			...this.ensuringRuns.values(),
+			...this.ensuringRoles.values(),
+		]);
+		for (const [socket, cleanups] of this.watchers) {
+			for (const cleanup of cleanups) {
+				try {
+					cleanup();
+				} catch {
+					/* best-effort watcher teardown */
+				}
+			}
+			cleanups.clear();
+			socket.destroy();
+		}
+		this.watchers.clear();
+		this.authenticatedSockets.clear();
 		for (const runId of [...this.runs.keys()]) {
 			try {
 				await this.stopConversation(runId, false);
@@ -2313,16 +2356,29 @@ export class DurableHost {
 				/* best-effort drain before close */
 			}
 		}
-		await this.harness.close(BACKGROUND_CONTEXT);
+
+		let shutdownError: unknown;
 		try {
-			fs.rmSync(this.options.layout.socketPath, { force: true });
-			const identity = hostIdentityPaths(this.options.layout.socketPath);
-			fs.rmSync(identity.socket, { force: true });
-			fs.rmSync(identity.certificate, { force: true });
-			fs.rmSync(this.options.layout.lockPath, { force: true });
-		} catch {
-			/* best-effort cleanup */
+			await this.harness.close(BACKGROUND_CONTEXT);
+		} catch (error) {
+			shutdownError = error;
+		} finally {
+			try {
+				await this.closeCodemode?.();
+			} catch {
+				/* best-effort worker termination after the harness has drained */
+			}
+			try {
+				fs.rmSync(this.options.layout.socketPath, { force: true });
+				const identity = hostIdentityPaths(this.options.layout.socketPath);
+				fs.rmSync(identity.socket, { force: true });
+				fs.rmSync(identity.certificate, { force: true });
+				fs.rmSync(this.options.layout.lockPath, { force: true });
+			} catch {
+				/* best-effort cleanup */
+			}
 		}
+		if (shutdownError !== undefined) throw shutdownError;
 	}
 
 	/** Serve the control socket. Rejects with EADDRINUSE-shaped errors when
@@ -2414,11 +2470,16 @@ export class DurableHost {
 					send(decoded.error);
 					continue;
 				}
-				void this.handleRequest(
+				const request = this.handleRequest(
 					decoded.value as HostRequest,
 					send,
 					socket,
 					cleanups,
+				);
+				this.activeRequests.add(request);
+				void request.then(
+					() => this.activeRequests.delete(request),
+					() => this.activeRequests.delete(request),
 				);
 			}
 		});
@@ -2437,6 +2498,14 @@ export class DurableHost {
 		socket: net.Socket,
 		cleanups: Set<() => void>,
 	): Promise<void> {
+		if (this.closing && request.type !== "shutdown") {
+			send({
+				type: "error",
+				code: "invalid-request",
+				message: "agent host is shutting down",
+			});
+			return;
+		}
 		try {
 			switch (request.type) {
 				case "hello":
