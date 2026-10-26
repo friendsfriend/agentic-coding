@@ -62,20 +62,24 @@ export const workflowStartRequestSchema = Schema.Struct({
 	/** The operator-selected hosted stage for a stage-test workflow. */
 	stage: Schema.optional(Schema.String),
 }).pipe(
-	Schema.filter(
-		(request) =>
-			request.workflowType === undefined || request.blueprint === undefined,
-		{
-			message: () =>
-				"a start request cannot name both a workflowType and a blueprint",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(request) =>
+				request.workflowType === undefined || request.blueprint === undefined,
+			{
+				message:
+					"a start request cannot name both a workflowType and a blueprint",
+			},
+		),
 	),
-	Schema.filter(
-		(request) => request.task === undefined || request.taskRef === undefined,
-		{
-			message: () =>
-				"a start request cannot carry both a task and a taskRef; send exactly one",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(request) => request.task === undefined || request.taskRef === undefined,
+			{
+				message:
+					"a start request cannot carry both a task and a taskRef; send exactly one",
+			},
+		),
 	),
 );
 
@@ -83,7 +87,7 @@ export const workflowStartRequestSchema = Schema.Struct({
  * document is compiled without side effects and answered with its summary and
  * diagnostics, so it is deliberately undecoded here (`Unknown`). */
 export const workflowBlueprintValidateRequestSchema = Schema.Struct({
-	blueprint: Schema.Unknown,
+	blueprint: Schema.optionalKey(Schema.Unknown),
 });
 
 export const workflowRepairRequestSchema = Schema.Struct({
@@ -99,13 +103,13 @@ export const workflowQuestionRequestSchema = Schema.Struct({
 	workflowId: Schema.String,
 	revision: Schema.Number,
 	questionId: Schema.String,
-	answer: Schema.Unknown,
+	answer: Schema.optionalKey(Schema.Unknown),
 });
 
 export const reviewSaveRequestSchema = Schema.Struct({
 	repo: Schema.String,
 	workflowId: Schema.String,
-	kind: Schema.Literal("developer", "plan", "wiki"),
+	kind: Schema.Literals(["developer", "plan", "wiki"]),
 	comments: Schema.Array(Schema.Unknown),
 });
 
@@ -145,8 +149,8 @@ export const workflowDeletionSchema = Schema.Struct({
 
 export const agentHandoffRequestSchema = Schema.Struct({
 	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	outcome: Schema.Literal("complete", "blocked", "failed"),
+	environment: Schema.Record(Schema.String, Schema.String),
+	outcome: Schema.Literals(["complete", "blocked", "failed"]),
 	artifact: Schema.optional(Schema.String),
 	message: Schema.optional(Schema.String),
 	/** Records the handoff as a developer abort: the parked run keeps its
@@ -163,23 +167,23 @@ export const agentsMutationRequestSchema = Schema.Struct({
 	 * the effective agents section changed since (centralize-application-
 	 * settings, task 2.3). Omitted by callers that do not track a revision. */
 	expectedRevision: Schema.optional(Schema.String),
-	mutation: Schema.Unknown,
+	mutation: Schema.optionalKey(Schema.Unknown),
 });
 
 /** Managed-agent developer question across the transport. The request signal
  * bounds the wait; the engine validates the run capability. */
 export const agentQuestionRequestSchema = Schema.Struct({
 	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	input: Schema.Unknown,
+	environment: Schema.Record(Schema.String, Schema.String),
+	input: Schema.optionalKey(Schema.Unknown),
 	timeoutMs: Schema.optional(Schema.Number),
 });
 
 /** Managed researcher structured handoff across the transport. */
 export const agentResearchHandoffRequestSchema = Schema.Struct({
 	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	handoff: Schema.Unknown,
+	environment: Schema.Record(Schema.String, Schema.String),
+	handoff: Schema.optionalKey(Schema.Unknown),
 });
 
 /** The agent configuration read: opaque profile tables plus provenance and the
@@ -187,8 +191,8 @@ export const agentResearchHandoffRequestSchema = Schema.Struct({
 export type { AgentsListResponse } from "./gateway.ts";
 
 export const agentsListResponseSchema = Schema.Struct({
-	agents: Schema.Unknown,
-	provenance: Schema.Unknown,
+	agents: Schema.optionalKey(Schema.Unknown),
+	provenance: Schema.optionalKey(Schema.Unknown),
 	conflicts: Schema.Array(Schema.String),
 	revision: Schema.optional(Schema.String),
 	/** The user-scope compaction policy read (`add-agent-compaction`): the

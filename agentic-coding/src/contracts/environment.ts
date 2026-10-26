@@ -1,11 +1,11 @@
 // Environment wire contract: the observation requests the dashboard sends and
 // the state records it reads back. Pure schemas and types.
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { localChangeSchema } from "./integration.ts";
 
 const observedState = Schema.Unknown;
 
-const observationSchema = Schema.Union(
+const observationSchema = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal("workflows") }),
 	Schema.Struct({ kind: Schema.Literal("projects") }),
 	Schema.Struct({
@@ -33,8 +33,6 @@ const observationSchema = Schema.Union(
 		workflowId: Schema.String,
 		file: localChangeSchema,
 	}),
-	// The env-setup approval gate's view: the drafts diffed against the live
-	// configuration (`add-environment-setup-workflow`).
 	Schema.Struct({
 		kind: Schema.Literal("setup-changes"),
 		repo: Schema.String,
@@ -80,17 +78,11 @@ const observationSchema = Schema.Union(
 		workflowId: Schema.String,
 	}),
 	Schema.Struct({ kind: Schema.Literal("changes"), repo: Schema.String }),
-	// The orchestrator's compact listing of a repository's active OpenSpec
-	// changes (efficiency backlog item 21). It is a new kind rather than a
-	// reshaping of `changes`: the dashboard's bare id list keeps its shape.
 	Schema.Struct({
 		kind: Schema.Literal("openspec-changes"),
 		repo: Schema.String,
 		limit: Schema.optional(Schema.Int),
 	}),
-	// The identity rows `workflow_status` resolves an id with (efficiency
-	// backlog item 21): every board row reduced to its workflowId and target, so
-	// resolving one id costs two fields per workflow rather than a full state.
 	Schema.Struct({ kind: Schema.Literal("workflow-targets") }),
 	Schema.Struct({ kind: Schema.Literal("branches"), repo: Schema.String }),
 	Schema.Struct({
@@ -105,9 +97,6 @@ const observationSchema = Schema.Union(
 		repo: Schema.String,
 		workflowId: Schema.String,
 	}),
-	// The stage flow's step journal (`add-stage-flow-evidence`): the entries the
-	// Evidence panel groups into segments. A workflow without one answers empty,
-	// which is what the panel's unchanged rendering keys off.
 	Schema.Struct({
 		kind: Schema.Literal("stage-journal"),
 		repo: Schema.String,
@@ -117,7 +106,7 @@ const observationSchema = Schema.Union(
 		kind: Schema.Literal("sessions-report"),
 		since: Schema.optional(Schema.String),
 	}),
-);
+]);
 
 export type ObservationRequest = typeof observationSchema.Type;
 
@@ -138,17 +127,21 @@ function hasControlCharacters(value: string): boolean {
 }
 
 const safeInstanceText = Schema.String.pipe(
-	Schema.maxLength(512),
-	Schema.filter((value) => !hasControlCharacters(value), {
-		message: () => "control characters are not allowed",
-	}),
+	Schema.check(Schema.isMaxLength(512)),
+	Schema.check(
+		Schema.makeFilter((value) => !hasControlCharacters(value), {
+			message: "control characters are not allowed",
+		}),
+	),
 );
 
 export const acquireSlotsRequestSchema = Schema.Struct({
-	owner: safeInstanceText.pipe(Schema.minLength(1)),
-	apps: Schema.Array(safeInstanceText.pipe(Schema.minLength(1))).pipe(
-		Schema.minItems(1),
-		Schema.maxItems(16),
+	owner: safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
+	apps: Schema.Array(
+		safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
+	).pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(16)),
 	),
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
@@ -156,10 +149,12 @@ export const acquireSlotsRequestSchema = Schema.Struct({
 	 * longer than this. */
 	waitSec: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
-				message: () => "waitSec must be a non-negative number",
-			}),
-			Schema.lessThanOrEqualTo(300),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value >= 0, {
+					message: "waitSec must be a non-negative number",
+				}),
+			),
+			Schema.check(Schema.isLessThanOrEqualTo(300)),
 		),
 	),
 	/** Narrow the runtime the owner asked for (`docker`, `shell`,
@@ -171,10 +166,12 @@ export const acquireSlotsRequestSchema = Schema.Struct({
 	 * runtime rather than silently started as a single copy. */
 	replicas: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 1, {
-				message: () => "replicas must be an integer of at least 1",
-			}),
-			Schema.lessThanOrEqualTo(100),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 1, {
+					message: "replicas must be an integer of at least 1",
+				}),
+			),
+			Schema.check(Schema.isLessThanOrEqualTo(100)),
 		),
 	),
 });
@@ -188,10 +185,11 @@ export const acquireSlotsRequestSchema = Schema.Struct({
  * filter is what makes the body strictly empty.
  */
 export const appSlotOperationRequestSchema = Schema.Struct({}).pipe(
-	Schema.filter((value) => Object.keys(value as object).length === 0, {
-		message: () =>
-			"this route takes no body fields; the app is named by the path",
-	}),
+	Schema.check(
+		Schema.makeFilter((value) => Object.keys(value as object).length === 0, {
+			message: "this route takes no body fields; the app is named by the path",
+		}),
+	),
 );
 
 /**
@@ -203,9 +201,9 @@ export const appSlotOperationRequestSchema = Schema.Struct({}).pipe(
  * the staged configuration root.
  */
 export const environmentOwnerActionRequestSchema = Schema.Struct({
-	owner: safeInstanceText.pipe(Schema.minLength(1)),
-	app: safeInstanceText.pipe(Schema.minLength(1)),
-	action: Schema.Literal("build", "test"),
+	owner: safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
+	app: safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
+	action: Schema.Literals(["build", "test"]),
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
 });
@@ -220,7 +218,7 @@ export const environmentOwnerActionResultSchema = Schema.Struct({
 	status: Schema.String,
 	targetId: Schema.String,
 	runtime: Schema.String,
-	exitCode: Schema.Union(Schema.Number, Schema.Null),
+	exitCode: Schema.Union([Schema.Number, Schema.Null]),
 	output: Schema.String,
 	truncated: Schema.Boolean,
 	error: Schema.optional(Schema.String),
@@ -235,7 +233,7 @@ export type EnvironmentOwnerActionResult =
  * which apps an owner holds is the server's own state, never a request's claim.
  */
 export const environmentTeardownRequestSchema = Schema.Struct({
-	owner: safeInstanceText.pipe(Schema.minLength(1)),
+	owner: safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
 });
 
 /** What one owner teardown stopped, so the caller can record the release. */
@@ -259,10 +257,10 @@ export type AppSlotOperationRequest = typeof appSlotOperationRequestSchema.Type;
  * endpoints and grant id, and a caller reads the fields it needs — so this is
  * a shape check, not a second copy of the controller's type.
  */
-export const acquireSlotsResultSchema = Schema.Record({
-	key: Schema.String,
-	value: Schema.Unknown,
-});
+export const acquireSlotsResultSchema = Schema.Record(
+	Schema.String,
+	Schema.Unknown,
+);
 
 // ---------------------------------------------------------------------------
 // Agent environment requests (`add-agent-environment-tools`)
@@ -271,20 +269,20 @@ export const acquireSlotsResultSchema = Schema.Record({
 // it comes from the capability the run presents (`environmentTokenFor`), so a
 // request cannot name another workflow's apps.
 
-const agentAppName = safeInstanceText.pipe(Schema.minLength(1));
+const agentAppName = safeInstanceText.pipe(Schema.check(Schema.isMinLength(1)));
 /** How many apps one acquire may name, in the controller's own bound. */
 export const MAX_AGENT_ENV_APPS = 16;
 
 export const agentEnvironmentAcquireSchema = Schema.Struct({
 	/** One app name, or a bounded list: the tool sends every app it needs in
 	 * one call so the server can grant atomically and detect a deadlock. */
-	apps: Schema.Union(
+	apps: Schema.Union([
 		agentAppName,
 		Schema.Array(agentAppName).pipe(
-			Schema.minItems(1),
-			Schema.maxItems(MAX_AGENT_ENV_APPS),
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(MAX_AGENT_ENV_APPS)),
 		),
-	),
+	]),
 	target: Schema.optional(safeInstanceText),
 	profile: Schema.optional(safeInstanceText),
 	runtime: Schema.optional(safeInstanceText),
@@ -293,18 +291,22 @@ export const agentEnvironmentAcquireSchema = Schema.Struct({
 	 * once. */
 	replicas: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 1, {
-				message: () => "replicas must be an integer of at least 1",
-			}),
-			Schema.lessThanOrEqualTo(100),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 1, {
+					message: "replicas must be an integer of at least 1",
+				}),
+			),
+			Schema.check(Schema.isLessThanOrEqualTo(100)),
 		),
 	),
 	waitSec: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
-				message: () => "waitSec must be a non-negative number",
-			}),
-			Schema.lessThanOrEqualTo(300),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value >= 0, {
+					message: "waitSec must be a non-negative number",
+				}),
+			),
+			Schema.check(Schema.isLessThanOrEqualTo(300)),
 		),
 	),
 });
@@ -335,26 +337,30 @@ export type AgentEnvironmentBuild = typeof agentEnvironmentBuildSchema.Type;
  * with every control character but newline, carriage return and tab refused. */
 const agentFreeText = (max: number) =>
 	Schema.String.pipe(
-		Schema.maxLength(max),
-		Schema.filter(
-			(value) => {
-				for (let index = 0; index < value.length; index++) {
-					const code = value.charCodeAt(index);
-					if (code === 0x0a || code === 0x09 || code === 0x0d) continue;
-					if (code < 0x20 || code === 0x7f) return false;
-				}
-				return true;
-			},
-			{ message: () => "control characters are not allowed" },
+		Schema.check(Schema.isMaxLength(max)),
+		Schema.check(
+			Schema.makeFilter(
+				(value) => {
+					for (let index = 0; index < value.length; index++) {
+						const code = value.charCodeAt(index);
+						if (code === 0x0a || code === 0x09 || code === 0x0d) continue;
+						if (code < 0x20 || code === 0x7f) return false;
+					}
+					return true;
+				},
+				{ message: "control characters are not allowed" },
+			),
 		),
 	);
 
 const agentLimit = (max: number) =>
 	Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter(
-				(value) => Number.isInteger(value) && value >= 1 && value <= max,
-				{ message: () => `limit must be an integer between 1 and ${max}` },
+			Schema.check(
+				Schema.makeFilter(
+					(value) => Number.isInteger(value) && value >= 1 && value <= max,
+					{ message: `limit must be an integer between 1 and ${max}` },
+				),
 			),
 		),
 	);
@@ -363,10 +369,10 @@ const agentLimit = (max: number) =>
  * `traceId` names it. The owner comes from the capability, never the body. */
 export const agentOtelQuerySchema = Schema.Struct({
 	/** `traces` (the default) or the log records of the same runs. */
-	mode: Schema.optional(Schema.Literal("traces", "logs")),
+	mode: Schema.optional(Schema.Literals(["traces", "logs"])),
 	app: Schema.optional(agentAppName),
 	since: Schema.optional(safeInstanceText),
-	status: Schema.optional(Schema.Literal("all", "error", "success")),
+	status: Schema.optional(Schema.Literals(["all", "error", "success"])),
 	name: Schema.optional(safeInstanceText),
 	traceId: Schema.optional(safeInstanceText),
 	/** Trace-list filters: a minimum span count, the root span's kind, an HTTP
@@ -387,7 +393,7 @@ export const agentOtelQuerySchema = Schema.Struct({
  * query connection a held app requires. */
 export const agentDbQuerySchema = Schema.Struct({
 	infra: agentAppName,
-	sql: agentFreeText(20_000).pipe(Schema.minLength(1)),
+	sql: agentFreeText(20_000).pipe(Schema.check(Schema.isMinLength(1))),
 	schema: Schema.optional(safeInstanceText),
 	limit: agentLimit(200),
 });
@@ -398,16 +404,24 @@ export const agentHttpRequestSchema = Schema.Struct({
 	app: agentAppName,
 	endpoint: agentAppName,
 	method: Schema.optional(
-		Schema.Literal("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"),
+		Schema.Literals([
+			"GET",
+			"HEAD",
+			"POST",
+			"PUT",
+			"PATCH",
+			"DELETE",
+			"OPTIONS",
+		]),
 	),
 	path: Schema.optional(safeInstanceText),
 	headers: Schema.optional(
 		Schema.Array(
 			Schema.Struct({
-				name: safeInstanceText.pipe(Schema.maxLength(128)),
+				name: safeInstanceText.pipe(Schema.check(Schema.isMaxLength(128))),
 				value: agentFreeText(4096),
 			}),
-		).pipe(Schema.maxItems(32)),
+		).pipe(Schema.check(Schema.isMaxLength(32))),
 	),
 	body: Schema.optional(agentFreeText(65_536)),
 });
@@ -434,13 +448,12 @@ export const EVIDENCE_KINDS = [
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
-export const evidenceKindSchema: Schema.Schema<EvidenceKind> = Schema.Literal(
-	...EVIDENCE_KINDS,
-);
+export const evidenceKindSchema: Schema.Codec<EvidenceKind> =
+	Schema.Literals(EVIDENCE_KINDS);
 
 /** The caption and short metadata fields, bounded and control-character free. */
 const evidenceText = (max: number) =>
-	safeInstanceText.pipe(Schema.maxLength(max));
+	safeInstanceText.pipe(Schema.check(Schema.isMaxLength(max)));
 
 /** One recorded piece of evidence. `file` is relative to the workflow's
  * evidence root and always inside it (`[req-<requestId>/]<id>.<ext>`). */
@@ -461,9 +474,11 @@ export const evidenceEntrySchema = Schema.Struct({
 	/** Bytes on disk, so the workflow's quota is answerable from the manifest. */
 	bytes: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
-				message: () => "expected integer >= 0",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
+					message: "expected integer >= 0",
+				}),
+			),
 		),
 	),
 	/** Pinned evidence is kept by any future prune and is not charged against
@@ -478,9 +493,11 @@ export const evidenceEntrySchema = Schema.Struct({
 	 * journal steps of that segment link to this video at their own offset. */
 	segment: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer segment",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer segment",
+				}),
+			),
 		),
 	),
 });
@@ -493,14 +510,18 @@ export const evidenceManifestSchema = Schema.Struct({
 	entries: Schema.Array(evidenceEntrySchema),
 	/** Non-pinned bytes recorded, and the cap they are measured against. */
 	bytes: Schema.Number.pipe(
-		Schema.filter((value) => Number.isFinite(value) && value >= 0, {
-			message: () => "expected a non-negative number",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isFinite(value) && value >= 0, {
+				message: "expected a non-negative number",
+			}),
+		),
 	),
 	quotaBytes: Schema.Number.pipe(
-		Schema.filter((value) => Number.isFinite(value) && value >= 0, {
-			message: () => "expected a non-negative number",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isFinite(value) && value >= 0, {
+				message: "expected a non-negative number",
+			}),
+		),
 	),
 });
 export type EvidenceManifest = typeof evidenceManifestSchema.Type;
@@ -509,13 +530,13 @@ export type EvidenceManifest = typeof evidenceManifestSchema.Type;
  * (add-debug-subagent-requests): the durable row, the report text the debug run
  * produced, and the evidence filed under the request. Read-only: the view
  * offers navigation and opening files, never an action. */
-export const debugRequestStatusSchema = Schema.Literal(
+export const debugRequestStatusSchema = Schema.Literals([
 	"queued",
 	"running",
 	"done",
 	"failed",
 	"cancelled",
-);
+]);
 export const debugRequestViewSchema = Schema.Struct({
 	id: evidenceText(64),
 	status: debugRequestStatusSchema,
@@ -527,9 +548,11 @@ export const debugRequestViewSchema = Schema.Struct({
 	finishedAt: Schema.optional(evidenceText(64)),
 	durationSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value >= 0, {
-				message: () => "expected a non-negative number",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value >= 0, {
+					message: "expected a non-negative number",
+				}),
+			),
 		),
 	),
 	reportPath: Schema.optional(evidenceText(4096)),
@@ -537,7 +560,7 @@ export const debugRequestViewSchema = Schema.Struct({
 	report: Schema.optional(evidenceText(200_000)),
 	changedFiles: Schema.Array(evidenceText(1024)),
 	/** Whether the changed-file list could measure tracked changes at all. */
-	baseline: Schema.Literal("usable", "unavailable"),
+	baseline: Schema.Literals(["usable", "unavailable"]),
 	delivered: Schema.Boolean,
 	/** The request's own evidence entries, filtered from the workflow manifest. */
 	evidence: Schema.Array(evidenceEntrySchema),
@@ -554,11 +577,13 @@ export type DebugRequests = typeof debugRequestsSchema.Type;
  * `path` is an absolute path the server resolves and re-checks against the
  * workflow's own roots; it is never accepted as the destination. */
 export const evidenceAttachRequestSchema = Schema.Struct({
-	path: safeInstanceText.pipe(Schema.minLength(1)),
+	path: safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
 	kind: evidenceKindSchema,
 	caption: evidenceText(512),
 	/** The debug request this evidence belongs to, when it belongs to one. */
-	requestId: Schema.optional(safeInstanceText.pipe(Schema.minLength(1))),
+	requestId: Schema.optional(
+		safeInstanceText.pipe(Schema.check(Schema.isMinLength(1))),
+	),
 	step: Schema.optional(evidenceText(128)),
 	role: Schema.optional(evidenceText(128)),
 	app: Schema.optional(evidenceText(256)),
@@ -606,48 +631,59 @@ export interface WireError {
 	readonly detail?: string;
 }
 
-export const connectionStateSchema: Schema.Schema<ConnectionState> =
-	Schema.Literal("connecting", "open", "reconnecting", "closed");
+export const connectionStateSchema: Schema.Codec<ConnectionState> =
+	Schema.Literals(["connecting", "open", "reconnecting", "closed"]);
 
 /** Bounded envelope: every field is length-checked so a hostile or buggy
  * publisher cannot push an unbounded string into the dashboard. */
-export const dashboardEventSchema: Schema.Schema<EventEnvelope> = Schema.Struct(
-	{
-		instance: Schema.String.pipe(Schema.maxLength(128)),
+export const dashboardEventSchema: Schema.Codec<EventEnvelope, unknown> =
+	Schema.Struct({
+		instance: Schema.String.pipe(Schema.check(Schema.isMaxLength(128))),
 		sequence: Schema.Number.pipe(
-			Schema.filter((n) => Number.isInteger(n) && n >= 0, {
-				message: () => "expected integer >= 0",
-			}),
-		),
-		domain: Schema.String.pipe(Schema.maxLength(64)),
-		kind: Schema.String.pipe(Schema.maxLength(128)),
-		resource: Schema.optional(Schema.String.pipe(Schema.maxLength(512))),
-		runId: Schema.optional(Schema.String.pipe(Schema.maxLength(512))),
-		revision: Schema.optional(
-			Schema.Number.pipe(
-				Schema.filter((n) => Number.isInteger(n) && n >= 0, {
-					message: () => "expected integer >= 0",
+			Schema.check(
+				Schema.makeFilter((n) => Number.isInteger(n) && n >= 0, {
+					message: "expected integer >= 0",
 				}),
 			),
 		),
-		at: Schema.String.pipe(Schema.maxLength(64)),
-		payload: Schema.Unknown,
-	},
-);
+		domain: Schema.String.pipe(Schema.check(Schema.isMaxLength(64))),
+		kind: Schema.String.pipe(Schema.check(Schema.isMaxLength(128))),
+		resource: Schema.optional(
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(512))),
+		),
+		runId: Schema.optional(
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(512))),
+		),
+		revision: Schema.optional(
+			Schema.Number.pipe(
+				Schema.check(
+					Schema.makeFilter((n) => Number.isInteger(n) && n >= 0, {
+						message: "expected integer >= 0",
+					}),
+				),
+			),
+		),
+		at: Schema.String.pipe(Schema.check(Schema.isMaxLength(64))),
+		payload: Schema.Unknown.pipe(
+			Schema.withDecodingDefaultKey(Effect.succeed(undefined)),
+		),
+	});
 
-export const wireErrorSchema: Schema.Schema<WireError> = Schema.Struct({
-	code: Schema.String.pipe(Schema.maxLength(64)),
-	message: Schema.String.pipe(Schema.maxLength(512)),
-	detail: Schema.optional(Schema.String.pipe(Schema.maxLength(2048))),
+export const wireErrorSchema: Schema.Codec<WireError> = Schema.Struct({
+	code: Schema.String.pipe(Schema.check(Schema.isMaxLength(64))),
+	message: Schema.String.pipe(Schema.check(Schema.isMaxLength(512))),
+	detail: Schema.optional(
+		Schema.String.pipe(Schema.check(Schema.isMaxLength(2048))),
+	),
 });
 
 /** Every JSON response is one of these two shapes: a value, or a structured
  * error. Decoding it at the client boundary keeps a malformed body from being
  * mistaken for data. */
-export const wireEnvelopeSchema = Schema.Union(
+export const wireEnvelopeSchema = Schema.Union([
 	Schema.Struct({ ok: Schema.Literal(true), value: Schema.Unknown }),
 	Schema.Struct({ ok: Schema.Literal(false), error: wireErrorSchema }),
-);
+]);
 
 /** Decoded request type for `observeRequestSchema`. */
 export type ObserveRequest = typeof observeRequestSchema.Type;

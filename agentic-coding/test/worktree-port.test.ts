@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { resolveActiveWorktreePath } from "../src/server/environment/config.ts";
 import { TelemetrySink } from "../src/workflow/observability.ts";
 import {
@@ -412,12 +412,12 @@ describe("worktree argv", () => {
 	test("the primary worktree is refused with the port's own diagnostic", async () => {
 		const { adapter } = scripted(() => ({ stdout: LIST_REPLY }));
 		const outcome = await run(
-			Effect.either(adapter.remove({ repo: "/repo", branch: "main" })),
+			Effect.result(adapter.remove({ repo: "/repo", branch: "main" })),
 		);
-		expect(Either.isLeft(outcome)).toBe(true);
-		if (Either.isLeft(outcome)) {
-			expect(outcome.left.kind).toBe("conflict");
-			expect(outcome.left.message).toContain(
+		expect(Result.isFailure(outcome)).toBe(true);
+		if (Result.isFailure(outcome)) {
+			expect(outcome.failure.kind).toBe("conflict");
+			expect(outcome.failure.message).toContain(
 				"cannot remove the primary worktree",
 			);
 		}
@@ -427,19 +427,19 @@ describe("worktree argv", () => {
 		const { adapter } = scripted(() => ({ stdout: LIST_REPLY }));
 		expect(await run(adapter.find("/repo", "nope"))).toBeUndefined();
 		const outcome = await run(
-			Effect.either(adapter.remove({ repo: "/repo", branch: "nope" })),
+			Effect.result(adapter.remove({ repo: "/repo", branch: "nope" })),
 		);
-		expect(Either.isLeft(outcome)).toBe(true);
-		if (Either.isLeft(outcome)) expect(outcome.left.kind).toBe("absent");
+		expect(Result.isFailure(outcome)).toBe(true);
+		if (Result.isFailure(outcome)) expect(outcome.failure.kind).toBe("absent");
 	});
 
 	test("an unexpected reply shape is bounded, never silently defaulted", async () => {
 		const { adapter } = scripted(() => ({ stdout: "not json" }));
-		const outcome = await run(Effect.either(adapter.list("/repo")));
-		expect(Either.isLeft(outcome)).toBe(true);
-		if (Either.isLeft(outcome)) {
-			expect(outcome.left.kind).toBe("invalid-response");
-			expect(outcome.left.message).toContain("invalid JSON");
+		const outcome = await run(Effect.result(adapter.list("/repo")));
+		expect(Result.isFailure(outcome)).toBe(true);
+		if (Result.isFailure(outcome)) {
+			expect(outcome.failure.kind).toBe("invalid-response");
+			expect(outcome.failure.message).toContain("invalid JSON");
 		}
 	});
 });
@@ -481,16 +481,16 @@ describe("worktree failure classification", () => {
 		const bin = path.join(root, "fake wt");
 		try {
 			const validation = validateWorktrunk({ binPath: bin });
-			const missing = await run(Effect.either(validation));
-			expect(Either.isLeft(missing)).toBe(true);
-			if (Either.isLeft(missing)) {
-				expect(missing.left.kind).toBe("unavailable");
-				expect(missing.left.message).toContain("on PATH");
+			const missing = await run(Effect.result(validation));
+			expect(Result.isFailure(missing)).toBe(true);
+			if (Result.isFailure(missing)) {
+				expect(missing.failure.kind).toBe("unavailable");
+				expect(missing.failure.message).toContain("on PATH");
 			}
 			fs.writeFileSync(bin, `#!/bin/sh\necho wt v${MIN_WORKTRUNK_VERSION}\n`);
 			fs.chmodSync(bin, 0o755);
-			expect(await run(Effect.either(validation))).toEqual(
-				Either.right(undefined),
+			expect(await run(Effect.result(validation))).toEqual(
+				Result.succeed(undefined),
 			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -711,7 +711,7 @@ describe.skipIf(Bun.which("wt") === null)(
 				});
 				fs.writeFileSync(path.join(occupied, "notes.md"), "mine\n");
 				const outcome = await Effect.runPromise(
-					Effect.either(
+					Effect.result(
 						f.adapter.ensure({
 							repo: f.repo,
 							branch: "main",
@@ -720,11 +720,11 @@ describe.skipIf(Bun.which("wt") === null)(
 						}),
 					),
 				);
-				expect(Either.isLeft(outcome)).toBe(true);
-				if (Either.isLeft(outcome)) {
-					expect(outcome.left.kind).toBe("conflict");
-					expect(outcome.left.message).toContain(occupied);
-					expect(outcome.left.message).toContain("notes.md");
+				expect(Result.isFailure(outcome)).toBe(true);
+				if (Result.isFailure(outcome)) {
+					expect(outcome.failure.kind).toBe("conflict");
+					expect(outcome.failure.message).toContain(occupied);
+					expect(outcome.failure.message).toContain("notes.md");
 				}
 				// Nothing was deleted: the developer's file is still there.
 				expect(fs.readFileSync(path.join(occupied, "notes.md"), "utf8")).toBe(

@@ -74,7 +74,7 @@ describe("developer_question", () => {
 			undefined as never,
 		);
 		expect(result.isError).not.toBe(true);
-		expect(result.content?.[0]).toMatchObject({
+		expect(result.output?.[0]).toMatchObject({
 			type: "text",
 			text: "developer answered: proceed",
 		});
@@ -100,9 +100,9 @@ describe("developer_question", () => {
 			undefined as never,
 		);
 		expect(result.isError).toBe(true);
-		expect(result.content?.[0]).toMatchObject({ type: "text" });
+		expect(result.output?.[0]).toMatchObject({ type: "text" });
 		expect(
-			(result.content?.[0] as { text: string } | undefined)?.text,
+			(result.output?.[0] as { text: string } | undefined)?.text,
 		).toContain("question timed out");
 	});
 
@@ -146,7 +146,7 @@ describe("agent_ask", () => {
 			undefined as never,
 		);
 		expect(result.isError).not.toBe(true);
-		expect(result.content?.[0]).toMatchObject({
+		expect(result.output?.[0]).toMatchObject({
 			type: "text",
 			text: "peer answered: use approach B",
 		});
@@ -179,7 +179,7 @@ describe("question call lifecycle", () => {
 		const result = await pending;
 		expect(result.isError).toBe(true);
 		expect(
-			(result.content?.[0] as { text: string } | undefined)?.text,
+			(result.output?.[0] as { text: string } | undefined)?.text,
 		).toContain("cancelled");
 	});
 });

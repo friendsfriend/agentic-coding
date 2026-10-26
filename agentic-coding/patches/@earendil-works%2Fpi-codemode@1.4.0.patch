@@ -1,0 +1,49 @@
+diff --git a/dist/runtime/execution.js b/dist/runtime/execution.js
+index 2702b1475bebb89bb6e5ec7d7382dac516cbdef9..d651f400c39506895e37af57d9b4f5c7a9d495ce 100644
+--- a/dist/runtime/execution.js
++++ b/dist/runtime/execution.js
+@@ -128,6 +128,7 @@ class Execution {
+     signal;
+     timer;
+     output = [];
++    onOutput;
+     calls = [];
+     pending = new Map();
+     /** Whether the execution has its outcome. */
+@@ -139,6 +140,7 @@ class Execution {
+         this.executors = options.executors;
+         this.control = options.control;
+         this.signal = options.signal;
++        this.onOutput = options.onOutput;
+         if (Number.isFinite(options.timeoutMs)) {
+             this.timer = setTimeout(() => {
+                 this.finish({ kind: "timeout", message: `Execution timed out after ${options.timeoutMs} ms` });
+@@ -259,6 +261,7 @@ class Execution {
+         switch (message.type) {
+             case "output":
+                 this.output.push(message.item);
++                this.onOutput?.(message.item);
+                 break;
+             case "call":
+                 if (this.pending.has(message.id))
+@@ -426,6 +429,7 @@ export class CodemodeSandboxBase {
+             globals: [...this.globalsByName.values()],
+             executors: { tools, globals: this.globalsByName },
+             timeoutMs: options.timeoutMs ?? this.timeoutMs,
++            onOutput: options.onOutput,
+             signal: options.signal,
+             memoryLimitBytes: this.memoryLimitBytes,
+             store: serializeStore(options.store),
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 76b5c5895fc63180193bcf7340b353a055554d82..200e2284a3fe28dc4289acda9f666d085eb75683 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -234,6 +234,8 @@ export interface CodemodeRun {
+     deliver(seq: number, now: number, id: number, outcome: CodemodeOutcome): void;
+ }
+ export interface CodemodeExecuteOptions {
++    /** Observe script output as it arrives; the final result still retains it. */
++    onOutput?: (item: CodemodeOutputItem) => void;
+     signal?: AbortSignal;
+     /** Overrides the sandbox default for this execution. */
+     timeoutMs?: number;

@@ -1,7 +1,7 @@
 // Workflow wire contract: the shapes the server, dashboard, gateway and engine
 // exchange — views, actions, questions, hand-offs, commands, reviews. Pure:
 // Effect Schemas and structural types only, no runtime, TUI or server import.
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
 	boundedText,
 	ContractFailure,
@@ -1124,7 +1124,7 @@ export type WorkflowCommand =
 			type: "login-handoff.resolve";
 			workflowId: string;
 			recordId: string;
-			/** `done` lets the hand-off verify the login; `abort` ends it. Either way
+			/** `done` lets the hand-off verify the login; `abort` ends it. Result way
 			 * the resolution is recorded by the server, not by a run. */
 			answer: "done" | "abort";
 	  }
@@ -1181,13 +1181,13 @@ export type WorkflowCommand =
 // ---------------------------------------------------------------------------
 // Developer-question and workflow-command schemas
 // ---------------------------------------------------------------------------
-export const DeveloperQuestionOptionSchema: Schema.Schema<DeveloperQuestionOption> =
+export const DeveloperQuestionOptionSchema: Schema.Codec<DeveloperQuestionOption> =
 	Schema.Struct({
-		title: Schema.optionalWith(text(256), { exact: true }),
-		label: Schema.optionalWith(text(256), { exact: true }),
-		value: Schema.optionalWith(text(1024), { exact: true }),
-		recommended: Schema.optionalWith(Schema.Boolean, { exact: true }),
-		description: Schema.optionalWith(boundedText(4096), { exact: true }),
+		title: Schema.optionalKey(text(256)),
+		label: Schema.optionalKey(text(256)),
+		value: Schema.optionalKey(text(1024)),
+		recommended: Schema.optionalKey(Schema.Boolean),
+		description: Schema.optionalKey(boundedText(4096)),
 	});
 
 /** Structural option-list validation shared by command input and persisted
@@ -1195,22 +1195,25 @@ export const DeveloperQuestionOptionSchema: Schema.Schema<DeveloperQuestionOptio
  * feature (for example with two recommendations) still decodes; the
  * recommendation invariant is a command-input rule only. */
 export const questionOptions = Schema.Array(DeveloperQuestionOptionSchema).pipe(
-	Schema.filter(
-		(options) => {
-			const resolved = options.map(resolveDeveloperQuestionOption);
-			return (
-				options.length <= 16 &&
-				resolved.every(
-					(option) =>
-						option.label.trim().length > 0 && option.value.trim().length > 0,
-				) &&
-				new Set(resolved.map((option) => option.value)).size === resolved.length
-			);
-		},
-		{
-			message: () =>
-				"expected at most 16 options with a non-empty title and unique values",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(options) => {
+				const resolved = options.map(resolveDeveloperQuestionOption);
+				return (
+					options.length <= 16 &&
+					resolved.every(
+						(option) =>
+							option.label.trim().length > 0 && option.value.trim().length > 0,
+					) &&
+					new Set(resolved.map((option) => option.value)).size ===
+						resolved.length
+				);
+			},
+			{
+				message:
+					"expected at most 16 options with a non-empty title and unique values",
+			},
+		),
 	),
 );
 
@@ -1218,45 +1221,50 @@ export const questionOptions = Schema.Array(DeveloperQuestionOptionSchema).pipe(
  * invariant that at most one option is marked recommended. Never used to decode
  * persisted dialogue, so tightening it cannot strand older state. */
 export const commandQuestionOptions = questionOptions.pipe(
-	Schema.filter(
-		(options) =>
-			options.filter(
-				(option) => resolveDeveloperQuestionOption(option).recommended === true,
-			).length <= 1,
-		{ message: () => "expected at most one recommended option" },
+	Schema.check(
+		Schema.makeFilter(
+			(options) =>
+				options.filter(
+					(option) =>
+						resolveDeveloperQuestionOption(option).recommended === true,
+				).length <= 1,
+			{ message: "expected at most one recommended option" },
+		),
 	),
 );
 
 export const DeveloperQuestionItemSchema = Schema.Struct({
-	ident: Schema.optionalWith(text(256), { exact: true }),
-	question: Schema.optionalWith(text(4096), { exact: true }),
-	description: Schema.optionalWith(text(4096), { exact: true }),
-	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(commandQuestionOptions, {
-		exact: true,
-		default: () => [],
-	}),
+	ident: Schema.optionalKey(text(256)),
+	question: Schema.optionalKey(text(4096)),
+	description: Schema.optionalKey(text(4096)),
+	context: Schema.optionalKey(boundedText(4096)),
+	options: commandQuestionOptions.pipe(
+		Schema.withDecodingDefaultKey(Effect.sync(() => [])),
+	),
 }).pipe(
-	Schema.filter(
-		(item) => item.question !== undefined || item.description !== undefined,
-		{ message: () => "each question requires question or description" },
+	Schema.check(
+		Schema.makeFilter(
+			(item) => item.question !== undefined || item.description !== undefined,
+			{ message: "each question requires question or description" },
+		),
 	),
 );
 
 const MAX_QUESTIONNAIRE_ITEMS = 8;
 
-export const DeveloperQuestionAnswerSchema = Schema.Union(
+export const DeveloperQuestionAnswerSchema = Schema.Union([
 	Schema.Struct({
 		questionId: text(4096),
-		kind: Schema.Literal("option", "custom", "cancel"),
-		value: Schema.optionalWith(text(8192), { exact: true }),
+		kind: Schema.Literals(["option", "custom", "cancel"]),
+		value: Schema.optionalKey(text(8192)),
 	}).pipe(
-		Schema.filter(
-			(answer) => answer.kind === "cancel" || answer.value !== undefined,
-			{
-				message: () =>
-					"option and custom answers require a value; cancel does not",
-			},
+		Schema.check(
+			Schema.makeFilter(
+				(answer) => answer.kind === "cancel" || answer.value !== undefined,
+				{
+					message: "option and custom answers require a value; cancel does not",
+				},
+			),
 		),
 	),
 	Schema.Struct({
@@ -1268,24 +1276,25 @@ export const DeveloperQuestionAnswerSchema = Schema.Union(
 		responses: Schema.Array(
 			Schema.Struct({
 				questionId: text(4096),
-				kind: Schema.Literal("option", "custom"),
+				kind: Schema.Literals(["option", "custom"]),
 				value: text(8192),
 			}),
 		).pipe(
-			Schema.filter(
-				(responses) =>
-					responses.length >= 1 &&
-					responses.length <= MAX_QUESTIONNAIRE_ITEMS &&
-					new Set(responses.map((item) => item.questionId)).size ===
-						responses.length,
-				{
-					message: () =>
-						`expected 1-${MAX_QUESTIONNAIRE_ITEMS} unique responses`,
-				},
+			Schema.check(
+				Schema.makeFilter(
+					(responses) =>
+						responses.length >= 1 &&
+						responses.length <= MAX_QUESTIONNAIRE_ITEMS &&
+						new Set(responses.map((item) => item.questionId)).size ===
+							responses.length,
+					{
+						message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} unique responses`,
+					},
+				),
 			),
 		),
 	}),
-);
+]);
 
 // ---------------------------------------------------------------------------
 // Workflow command (discriminated union on `type`)
@@ -1296,12 +1305,10 @@ const developerActionSchema = Schema.Struct({
 	workflowId: text(4096),
 	revision: integer(),
 	actionId: text(4096),
-	input: Schema.Unknown,
+	input: Schema.optionalKey(Schema.Unknown),
 	/** The acting principal, handed over by the server from the authenticated
 	 * capability; the wire request cannot carry it. */
-	principal: Schema.optionalWith(Schema.Literal("operator", "orchestrator"), {
-		exact: true,
-	}),
+	principal: Schema.optionalKey(Schema.Literals(["operator", "orchestrator"])),
 });
 const agentQuestionSchema = Schema.Struct({
 	type: Schema.Literal("agent.question"),
@@ -1310,19 +1317,21 @@ const agentQuestionSchema = Schema.Struct({
 	stepId: text(4096),
 	role: text(4096),
 	token: text(1024),
-	description: Schema.optionalWith(text(4096), { exact: true }),
-	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(commandQuestionOptions, { exact: true }),
-	questions: Schema.optionalWith(
+	description: Schema.optionalKey(text(4096)),
+	context: Schema.optionalKey(boundedText(4096)),
+	options: Schema.optionalKey(commandQuestionOptions),
+	questions: Schema.optionalKey(
 		Schema.Array(DeveloperQuestionItemSchema).pipe(
-			Schema.filter(
-				(items) => items.length >= 1 && items.length <= MAX_QUESTIONNAIRE_ITEMS,
-				{
-					message: () => `expected 1-${MAX_QUESTIONNAIRE_ITEMS} question items`,
-				},
+			Schema.check(
+				Schema.makeFilter(
+					(items) =>
+						items.length >= 1 && items.length <= MAX_QUESTIONNAIRE_ITEMS,
+					{
+						message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} question items`,
+					},
+				),
 			),
 		),
-		{ exact: true },
 	),
 });
 const agentQuestionExpireSchema = Schema.Struct({
@@ -1349,8 +1358,8 @@ const agentAskSchema = Schema.Struct({
 	token: text(1024),
 	targetRole: text(4096),
 	description: text(4096),
-	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(commandQuestionOptions, { exact: true }),
+	context: Schema.optionalKey(boundedText(4096)),
+	options: Schema.optionalKey(commandQuestionOptions),
 });
 const agentAnswerSchema = Schema.Struct({
 	type: Schema.Literal("agent.answer"),
@@ -1378,7 +1387,7 @@ const loginHandoffResolveSchema = Schema.Struct({
 	type: Schema.Literal("login-handoff.resolve"),
 	workflowId: text(4096),
 	recordId: text(4096),
-	answer: Schema.Literal("done", "abort"),
+	answer: Schema.Literals(["done", "abort"]),
 });
 
 const agentHandoffSchema = Schema.Struct({
@@ -1386,10 +1395,10 @@ const agentHandoffSchema = Schema.Struct({
 	runId: text(4096),
 	generation: integer(1),
 	token: text(1024),
-	outcome: Schema.Literal("complete", "blocked", "failed"),
-	artifact: Schema.optionalWith(text(4096), { exact: true }),
-	message: Schema.optionalWith(text(4096), { exact: true }),
-	aborted: Schema.optionalWith(Schema.Boolean, { exact: true }),
+	outcome: Schema.Literals(["complete", "blocked", "failed"]),
+	artifact: Schema.optionalKey(text(4096)),
+	message: Schema.optionalKey(text(4096)),
+	aborted: Schema.optionalKey(Schema.Boolean),
 });
 const agentResumeSchema = Schema.Struct({
 	type: Schema.Literal("agent.resume"),
@@ -1406,14 +1415,14 @@ const agentResearchHandoffSchema = Schema.Struct({
 	stepId: text(4096),
 	role: text(4096),
 	token: text(1024),
-	handoff: Schema.Unknown,
+	handoff: Schema.optionalKey(Schema.Unknown),
 });
 const effectResultSchema = Schema.Struct({
 	type: Schema.Literal("effect.result"),
 	effectId: text(4096),
 	lease: text(4096),
-	outcome: Schema.Literal("complete", "retry", "failed"),
-	data: Schema.Unknown,
+	outcome: Schema.Literals(["complete", "retry", "failed"]),
+	data: Schema.optionalKey(Schema.Unknown),
 	/** Measured handler wall clock, reported on the exported telemetry event.
 	 * Optional so existing callers keep decoding unchanged. */
 	durationMs: Schema.optional(integer()),
@@ -1423,10 +1432,9 @@ const operatorRepairSchema = Schema.Struct({
 	workflowId: text(4096),
 	revision: integer(),
 	targetStep: text(4096),
-	reason: Schema.optionalWith(boundedText(2048), {
-		exact: true,
-		default: () => "",
-	}),
+	reason: boundedText(2048).pipe(
+		Schema.withDecodingDefaultKey(Effect.sync(() => "")),
+	),
 });
 const operatorRepinSchema = Schema.Struct({
 	type: Schema.Literal("operator.repin"),
@@ -1439,7 +1447,7 @@ const operatorResumeSchema = Schema.Struct({
 	revision: integer(),
 });
 
-export const WorkflowCommandSchema = Schema.Union(
+export const WorkflowCommandSchema = Schema.Union([
 	developerActionSchema,
 	agentQuestionSchema,
 	agentQuestionExpireSchema,
@@ -1455,7 +1463,7 @@ export const WorkflowCommandSchema = Schema.Union(
 	operatorRepairSchema,
 	operatorRepinSchema,
 	operatorResumeSchema,
-);
+]);
 
 // ---------------------------------------------------------------------------
 // Snapshot / profile / settings
@@ -1895,11 +1903,13 @@ export const workflowViewRequestSchema = Schema.Struct({
 // ---------------------------------------------------------------------------
 
 const boundedString = (max: number) =>
-	Schema.String.pipe(Schema.maxLength(max));
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(max)));
 const nonNegativeInt = Schema.Number.pipe(
-	Schema.filter((n) => Number.isInteger(n) && n >= 0, {
-		message: () => "expected integer >= 0",
-	}),
+	Schema.check(
+		Schema.makeFilter((n) => Number.isInteger(n) && n >= 0, {
+			message: "expected integer >= 0",
+		}),
+	),
 );
 
 const definitionPinResponseSchema = Schema.Struct({
@@ -1909,26 +1919,28 @@ const definitionPinResponseSchema = Schema.Struct({
 	label: boundedString(4096),
 });
 
-const workflowDefinitionOriginResponseSchema = Schema.Union(
+const workflowDefinitionOriginResponseSchema = Schema.Union([
 	Schema.Struct({ kind: Schema.Literal("built-in") }),
 	Schema.Struct({
 		kind: Schema.Literal("custom"),
 		origin: boundedString(64),
 	}),
-);
+]);
 
 const workflowDefinitionGraphResponseSchema = Schema.Struct({
 	steps: Schema.Array(
 		Schema.Struct({
 			id: boundedString(256),
 			label: boundedString(256),
-			actor: Schema.Literal("agent", "developer", "system"),
+			actor: Schema.Literals(["agent", "developer", "system"]),
 			inserted: Schema.Boolean,
 		}),
 	).pipe(
-		Schema.filter((steps) => steps.length <= 64, {
-			message: () => "expected at most 64 definition graph steps",
-		}),
+		Schema.check(
+			Schema.makeFilter((steps) => steps.length <= 64, {
+				message: "expected at most 64 definition graph steps",
+			}),
+		),
 	),
 	edges: Schema.Array(
 		Schema.Struct({
@@ -1938,9 +1950,11 @@ const workflowDefinitionGraphResponseSchema = Schema.Struct({
 			loop: Schema.optional(Schema.Struct({ maxAttempts: nonNegativeInt })),
 		}),
 	).pipe(
-		Schema.filter((edges) => edges.length <= 256, {
-			message: () => "expected at most 256 definition graph edges",
-		}),
+		Schema.check(
+			Schema.makeFilter((edges) => edges.length <= 256, {
+				message: "expected at most 256 definition graph edges",
+			}),
+		),
 	),
 });
 
@@ -1991,13 +2005,11 @@ const classifierDecisionRecordResponseSchema = Schema.Struct({
 		}),
 	),
 	answer: Schema.Struct({
-		type: Schema.Literal("choice", "noul"),
+		type: Schema.Literals(["choice", "noul"]),
 		choice: Schema.optional(Schema.String),
 		noul: Schema.optional(Schema.Number),
 		confidence: Schema.optional(Schema.Number),
-		probabilities: Schema.optional(
-			Schema.Record({ key: Schema.String, value: Schema.Number }),
-		),
+		probabilities: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
 	}),
 	result: Schema.Struct({
 		applied: Schema.Boolean,
@@ -2012,7 +2024,7 @@ const gateDecisionRecordResponseSchema = Schema.Struct({
 	stepId: Schema.String,
 	stage: Schema.String,
 	policy: Schema.String,
-	decision: Schema.Literal("run", "skip"),
+	decision: Schema.Literals(["run", "skip"]),
 	forced: Schema.Boolean,
 	noul: Schema.optional(Schema.Number),
 	reason: Schema.optional(Schema.String),
@@ -2028,7 +2040,7 @@ const repairRecordResponseSchema = Schema.Struct({
 });
 
 const waitResponseSchema = Schema.Struct({
-	kind: Schema.Literal("question", "handoff", "approval"),
+	kind: Schema.Literals(["question", "handoff", "approval"]),
 	subject: Schema.String,
 	since: Schema.optional(Schema.String),
 });
@@ -2085,7 +2097,7 @@ export const workflowViewSchema = Schema.Struct({
 	ticket: Schema.optional(Schema.String),
 	stage: Schema.optional(Schema.String),
 	stageSystem: Schema.optional(Schema.String),
-	stageAccess: Schema.optional(Schema.Literal("read-only", "writable")),
+	stageAccess: Schema.optional(Schema.Literals(["read-only", "writable"])),
 	stageTestPlan: Schema.optional(Schema.Unknown),
 	stageTestReport: Schema.optional(Schema.Unknown),
 	stageTestReportMarkdown: Schema.optional(boundedString(2 * 1024 * 1024)),
@@ -2105,10 +2117,8 @@ export const workflowViewSchema = Schema.Struct({
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
 	selectedPreset: Schema.optional(Schema.String),
-	startedBy: Schema.optional(Schema.Literal("developer", "orchestrator")),
-	gatePolicies: Schema.optional(
-		Schema.Record({ key: Schema.String, value: Schema.String }),
-	),
+	startedBy: Schema.optional(Schema.Literals(["developer", "orchestrator"])),
+	gatePolicies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 	currentStep: Schema.Struct({
 		id: Schema.String,
 		label: Schema.String,
@@ -2117,7 +2127,7 @@ export const workflowViewSchema = Schema.Struct({
 		context: Schema.optional(Schema.Unknown),
 	}),
 	runs: Schema.Array(workflowRunResponseSchema),
-	routing: Schema.Unknown,
+	routing: Schema.optionalKey(Schema.Unknown),
 	executionSettingsPreview: Schema.optional(Schema.Unknown),
 	effects: Schema.Array(
 		Schema.Struct({
@@ -2169,7 +2179,7 @@ export const workflowViewListSchema = Schema.Array(workflowViewSchema);
 
 /** Workflow start/agent-question answers return the new workflow id. */
 export const workflowIdResponseSchema = Schema.String.pipe(
-	Schema.maxLength(4096),
+	Schema.check(Schema.isMaxLength(4096)),
 );
 
 /** Saved review comments are not echoed back; the server returns a count. */
@@ -2186,7 +2196,7 @@ export const savedReviewResponseSchema = Schema.Unknown;
 const blueprintStepSchema = Schema.Struct({
 	id: text(256),
 	label: text(256),
-	actor: Schema.Literal("agent", "developer", "system"),
+	actor: Schema.Literals(["agent", "developer", "system"]),
 	outcomes: Schema.Array(text(256)),
 	description: boundedText(4096),
 });

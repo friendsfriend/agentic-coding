@@ -50,17 +50,24 @@ export interface EnvironmentAuthority {
 	readonly manager: EnvironmentManager;
 }
 
-const boundedText = Schema.String.pipe(Schema.maxLength(MAX_PATH_CHARS));
+const boundedText = Schema.String.pipe(
+	Schema.check(Schema.isMaxLength(MAX_PATH_CHARS)),
+);
 const boundedOptionalText = Schema.optional(boundedText);
-const eventJson = Schema.String.pipe(Schema.maxLength(MAX_EVENT_JSON_CHARS));
-const argsJson = Schema.Record({
-	key: boundedText,
-	value: Schema.String.pipe(Schema.maxLength(MAX_PATH_CHARS)),
-});
+const eventJson = Schema.String.pipe(
+	Schema.check(Schema.isMaxLength(MAX_EVENT_JSON_CHARS)),
+);
+const argsJson = Schema.Record(
+	boundedText,
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(MAX_PATH_CHARS))),
+);
 /** Retention limits are clamped by the store as well; the wire bound only
  * keeps a caller from asking for an unbounded scan. */
-const limit = Schema.Number.pipe(Schema.int(), Schema.between(0, 50000));
-const timestamp = Schema.String.pipe(Schema.maxLength(64));
+const limit = Schema.Number.pipe(
+	Schema.check(Schema.isInt()),
+	Schema.check(Schema.isBetween({ minimum: 0, maximum: 50000 })),
+);
+const timestamp = Schema.String.pipe(Schema.check(Schema.isMaxLength(64)));
 
 const appStateSchema = Schema.Struct({
 	ident: boundedText,
@@ -104,8 +111,7 @@ const appSchema = Schema.Struct({
 });
 
 /** Every accepted operation, with its bounded parameters. */
-export const environmentOperationSchema = Schema.Union(
-	// ---- state store ----
+export const environmentOperationSchema = Schema.Union([
 	Schema.Struct({
 		operation: Schema.Literal("state.getAppState"),
 		params: Schema.Struct({ ident: boundedText }),
@@ -195,7 +201,6 @@ export const environmentOperationSchema = Schema.Union(
 		operation: Schema.Literal("state.deleteDependencyLease"),
 		params: Schema.Struct({ targetId: boundedText, ownerRunId: boundedText }),
 	}),
-	// ---- configured environment (manager/catalog) ----
 	Schema.Struct({
 		operation: Schema.Literal("manager.getApps"),
 		params: Schema.Struct({}),
@@ -236,7 +241,7 @@ export const environmentOperationSchema = Schema.Union(
 		operation: Schema.Literal("manager.setMainWorktreeBranch"),
 		params: Schema.Struct({ ident: boundedText, branch: boundedText }),
 	}),
-);
+]);
 
 export type EnvironmentOperation = typeof environmentOperationSchema.Type;
 

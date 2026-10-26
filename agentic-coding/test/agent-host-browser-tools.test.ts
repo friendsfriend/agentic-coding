@@ -92,7 +92,7 @@ interface Executable {
 		args: unknown,
 		api: unknown,
 		context: unknown,
-	): Promise<{ content: ContentBlock[]; isError?: boolean }>;
+	): Promise<{ output: ContentBlock[]; isError?: boolean }>;
 }
 
 function toolOf(extension: Extension, name: string): Executable {
@@ -111,7 +111,7 @@ async function invoke(
 	name: string,
 	args: unknown,
 	server: FakeServer,
-): Promise<{ result: { content: ContentBlock[]; isError?: boolean } }> {
+): Promise<{ result: { output: ContentBlock[]; isError?: boolean } }> {
 	const extension = createBrowserExtension(lookup);
 	const tool = toolOf(extension, name);
 	// The extension builds its own fetch; swapping the global is the seam the
@@ -328,12 +328,12 @@ describe("browser tool surface", () => {
 			server,
 		);
 		expect(result.isError).toBeFalsy();
-		expect(result.content[1]).toEqual({
+		expect(result.output[1]).toEqual({
 			type: "image",
 			data: "ZmFrZQ==",
 			mimeType: "image/jpeg",
 		});
-		expect(textOf(result.content)).toContain("01ABC");
+		expect(textOf(result.output)).toContain("01ABC");
 		expect(server.calls[0]?.body).toEqual({
 			evidence: true,
 			caption: "the bug",
@@ -363,9 +363,9 @@ describe("browser tool surface", () => {
 		});
 		// No image block for a picture this call deliberately did not look at, and
 		// the caption is what tells the model which step the id belongs to.
-		expect(result.content.map((block) => block.type)).toEqual(["text"]);
-		expect(textOf(result.content)).toContain("01ABC");
-		expect(textOf(result.content)).toContain("the empty cart");
+		expect(result.output.map((block) => block.type)).toEqual(["text"]);
+		expect(textOf(result.output)).toContain("01ABC");
+		expect(textOf(result.output)).toContain("the empty cart");
 	});
 
 	test("a server refusal keeps its code and is an error result", async () => {
@@ -386,8 +386,8 @@ describe("browser tool surface", () => {
 			server,
 		);
 		expect(result.isError).toBe(true);
-		expect(textOf(result.content)).toContain("app-not-held");
-		expect(textOf(result.content)).toContain("workflow:other");
+		expect(textOf(result.output)).toContain("app-not-held");
+		expect(textOf(result.output)).toContain("workflow:other");
 	});
 
 	test("a run without the environment capability is told so, not failed opaquely", async () => {
@@ -402,7 +402,7 @@ describe("browser tool surface", () => {
 			{},
 		);
 		expect(result.isError).toBe(true);
-		expect(textOf(result.content)).toContain("no agent environment capability");
+		expect(textOf(result.output)).toContain("no agent environment capability");
 	});
 
 	test("stage_wait refuses an `until` that names more than one condition", async () => {
@@ -416,7 +416,7 @@ describe("browser tool surface", () => {
 			server,
 		);
 		expect(result.isError).toBe(true);
-		expect(textOf(result.content)).toContain(
+		expect(textOf(result.output)).toContain(
 			"exactly one of text, selector, url or mail",
 		);
 		// Nothing was sent: a refused wait never polls.
@@ -554,9 +554,9 @@ describe("browser tool surface", () => {
 			"http://127.0.0.1:4050/api/v1/agent-env/browser/snapshot",
 		);
 		expect(server.calls[0]?.body).toEqual({});
-		expect(textOf(result.content)).toContain("url: http://app.local/");
-		expect(textOf(result.content)).toContain("refs: 3");
-		expect(textOf(result.content)).toContain("tree");
+		expect(textOf(result.output)).toContain("url: http://app.local/");
+		expect(textOf(result.output)).toContain("refs: 3");
+		expect(textOf(result.output)).toContain("tree");
 	});
 
 	test("browser_run_script forwards the code, the save flag and the timeout", async () => {
@@ -634,7 +634,7 @@ describe("browser tool surface", () => {
 			depth: 3,
 			maxChars: 500,
 		});
-		const output = textOf(result.content);
+		const output = textOf(result.output);
 		expect(output).toContain("snapshotId: s2");
 		expect(output).toContain("mode: ai");
 		expect(output).toContain("timing: mode=ai");
@@ -687,7 +687,7 @@ describe("browser tool surface", () => {
 			ref: "e1",
 			snapshotId: "s2",
 		});
-		const output = textOf(result.content);
+		const output = textOf(result.output);
 		expect(output).toContain("snapshotId: s2");
 		expect(output).toContain('+ [e4] button "Delete"');
 		expect(output).toContain("timing: mode=ai");
@@ -735,7 +735,7 @@ describe("browser tool surface", () => {
 			within: "e1",
 			limit: 5,
 		});
-		const output = textOf(result.content);
+		const output = textOf(result.output);
 		expect(output).toContain("matches: 2 of 2");
 		expect(output).toContain('- [e1] button "Save"');
 		expect(output).toContain('- [f1e2] textbox "Card"');
@@ -779,7 +779,7 @@ describe("stage_blocks and stage_run", () => {
 			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-blocks",
 		);
 		expect(call?.body).toEqual({ app: "crm", effect: "read" });
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("mode: compact");
 		expect(text).toContain(
 			"crm.ui.open@1.0.0 crm [read] Open an application path",
@@ -820,7 +820,7 @@ describe("stage_blocks and stage_run", () => {
 			{ id: "crm.ui.open" },
 			server,
 		);
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("schema:");
 		expect(text).toContain('"path":"/"');
 	});
@@ -867,7 +867,7 @@ describe("stage_blocks and stage_run", () => {
 			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-run",
 		);
 		expect(call?.body).toMatchObject({ plan, session: "default" });
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("planId: plan-1");
 		expect(text).toContain("status: passed");
 		expect(text).toContain("passed [0] open crm.ui.open@1.0.0 30ms journal=1");
@@ -907,7 +907,7 @@ describe("stage_blocks and stage_run", () => {
 			{ plan: { steps: [{ block: "crm.nope" }] }, dryRun: true },
 			server,
 		);
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("dryRun: refused");
 		expect(text).toContain("issue: block-unknown");
 		expect(text).toContain("input path:");
@@ -956,7 +956,7 @@ describe("stage_flows and stage_replay", () => {
 			query: "customer",
 			limit: 10,
 		});
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("customer-address [crm-int] crm roles=clerk");
 		expect(text).toContain("routeHash: sha256:route");
 		expect(text).toContain('input path: {"type":"string"}');
@@ -976,7 +976,7 @@ describe("stage_flows and stage_replay", () => {
 		expect(server.calls[0]?.url).toBe(
 			"http://127.0.0.1:4050/api/v1/agent-env/browser/stage-flows",
 		);
-		expect(textOf(result.content)).toContain("total: 0");
+		expect(textOf(result.output)).toContain("total: 0");
 	});
 
 	test("stage_replay dry run validates inputs without opening a browser", async () => {
@@ -1029,7 +1029,7 @@ describe("stage_flows and stage_replay", () => {
 			dryRun: true,
 			inputs: { path: "/customers/C-2002" },
 		});
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("dryRun: not eligible");
 		expect(text).toContain("issue: flow-inputs-invalid");
 		expect(text).not.toContain("approved");
@@ -1087,7 +1087,7 @@ describe("stage_flows and stage_replay", () => {
 			{ flowId: "customer-address" },
 			server,
 		);
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain(
 			"failed [0] open crm.ui.open@1.0.0 100ms journal=4 evidence=ev-1",
 		);
@@ -1135,7 +1135,7 @@ describe("stage_flows and stage_replay", () => {
 			suiteId: "crm-regression",
 		});
 		expect(server.calls[0]?.body).not.toHaveProperty("flowId");
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("suiteId: crm-regression");
 		expect(text).toContain("status: failed");
 		expect(text).toContain("parallel: yes, stopOnFailure: no");

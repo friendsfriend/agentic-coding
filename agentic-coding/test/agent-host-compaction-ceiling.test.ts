@@ -25,6 +25,8 @@ import {
 	type CompactionConfig,
 } from "../src/workflow/compaction.ts";
 
+// Keep the test ceiling above the initial prompt/tool declarations (which grow
+// with upstream tool descriptions), so only the scripted context triggers it.
 const MODELS = [
 	{ id: "wide", contextWindow: 1_000_000 },
 	{ id: "narrow", contextWindow: 100_000 },
@@ -145,7 +147,7 @@ describe("cost ceiling of a durable host", () => {
 		const host = await openHost({
 			dir,
 			models,
-			compaction: () => ({ ceilingTokens: 30_000 }),
+			compaction: () => ({ ceilingTokens: 60_000 }),
 		});
 		try {
 			const telemetryPath = path.join(dir, "telemetry.jsonl");
@@ -163,10 +165,10 @@ describe("cost ceiling of a durable host", () => {
 				toolPolicy: "default",
 				model: modelRef(faux, "wide"),
 			});
-			// A 1M window puts the overflow guard at 700,000 tokens, so the 30,000
+			// A 1M window puts the overflow guard at 700,000 tokens, so the 60,000
 			// ceiling is far below it and is the trigger that actually fires.
 			expect(host.ceilingForTest("run-ceiling")).toMatchObject({
-				ceilingTokens: 30_000,
+				ceilingTokens: 60_000,
 				active: true,
 				overflowTokens: 700_000,
 			});
@@ -224,12 +226,12 @@ describe("cost ceiling of a durable host", () => {
 			).toMatchObject({ kind: "auto-ceiling", outcome: "completed" });
 			expect(
 				lines.find((line) => line.event === "runtime.compaction_ceiling"),
-			).toMatchObject({ status: "compact", ceilingTokens: 30_000 });
+			).toMatchObject({ status: "compact", ceilingTokens: 60_000 });
 			const settled = lines.filter((line) => line.event === "runtime.settled");
 			expect(settled.at(-1)).toMatchObject({ compactionsAutoCeiling: 1 });
 			expect(
 				settled.at(-1)?.peakContextTokens as number,
-			).toBeGreaterThanOrEqual(30_000);
+			).toBeGreaterThanOrEqual(60_000);
 			expect(host.ceilingStateForTest("run-ceiling")?.compactionTurns).toEqual([
 				1,
 			]);
@@ -246,7 +248,7 @@ describe("cost ceiling of a durable host", () => {
 		const host = await openHost({
 			dir,
 			models,
-			compaction: () => ({ ceilingTokens: 20_000, keepRecentTokens: 4096 }),
+			compaction: () => ({ ceilingTokens: 60_000, keepRecentTokens: 4096 }),
 		});
 		try {
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-floor" });
@@ -466,7 +468,7 @@ describe("cost ceiling of a durable host", () => {
 		const host = await openHost({
 			dir,
 			models,
-			compaction: () => ({ ceilingTokens: 30_000 }),
+			compaction: () => ({ ceilingTokens: 60_000 }),
 		});
 		try {
 			const telemetryPath = path.join(dir, "telemetry.jsonl");
@@ -520,7 +522,7 @@ describe("cost ceiling of a durable host", () => {
 		const host = await openHost({
 			dir,
 			models,
-			compaction: () => ({ ceilingTokens: 30_000 }),
+			compaction: () => ({ ceilingTokens: 60_000 }),
 			orchestrator: true,
 		});
 		try {

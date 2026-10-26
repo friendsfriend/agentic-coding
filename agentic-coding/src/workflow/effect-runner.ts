@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import {
 	ensureEnvironmentServer,
 	environmentRunEnv,
@@ -842,7 +842,7 @@ export class EffectRunner {
 							}),
 						catch: (error) => error as Error,
 					}).pipe(
-						Effect.catchAll((error) =>
+						Effect.catch((error) =>
 							Effect.sync(() => {
 								if (error.message.includes("effect lease is invalid")) return;
 								onFailure?.(effect.workflowId, error.message);
@@ -913,7 +913,7 @@ export class EffectRunner {
 								}
 							}
 						}).pipe(
-							Effect.catchAll(() =>
+							Effect.catch(() =>
 								Effect.sync(() => {
 									state.lost = true;
 									controller.abort();
@@ -936,43 +936,48 @@ export class EffectRunner {
 						defect instanceof Error ? defect : new Error(String(defect));
 					let data: unknown;
 					if (handler.observe) {
-						const observed = yield* Effect.either(
+						const observed = yield* Effect.result(
 							handler
 								.observe(effect, controller.signal)
 								.pipe(
-									Effect.catchAllDefect((defect) =>
+									Effect.catchDefect((defect) =>
 										Effect.fail(toFailure(defect)),
 									),
 								),
 						);
-						if (Either.isLeft(observed)) {
+						if (Result.isFailure(observed)) {
 							if (state.lost || controller.signal.aborted) {
 								yield* self.cancelHandler(handler, effect, onFailure);
 								return { _tag: "skipped" } satisfies ClaimOutcome;
 							}
 							return yield* Effect.sync(() =>
-								self.recordFailure(effect, observed.left, onFailure, startedAt),
+								self.recordFailure(
+									effect,
+									observed.failure,
+									onFailure,
+									startedAt,
+								),
 							);
 						}
 						if (state.lost || controller.signal.aborted) {
 							yield* self.cancelHandler(handler, effect, onFailure);
 							return { _tag: "skipped" } satisfies ClaimOutcome;
 						}
-						const observedValue = observed.right;
+						const observedValue = observed.success;
 						if (observedValue !== undefined && observedValue !== false) {
 							data =
 								observedValue === true ? { observed: true } : observedValue;
 						} else {
-							const executed = yield* Effect.either(
+							const executed = yield* Effect.result(
 								handler
 									.execute(effect, controller.signal)
 									.pipe(
-										Effect.catchAllDefect((defect) =>
+										Effect.catchDefect((defect) =>
 											Effect.fail(toFailure(defect)),
 										),
 									),
 							);
-							if (Either.isLeft(executed)) {
+							if (Result.isFailure(executed)) {
 								if (
 									state.lost ||
 									controller.signal.aborted ||
@@ -984,25 +989,25 @@ export class EffectRunner {
 								return yield* Effect.sync(() =>
 									self.recordFailure(
 										effect,
-										executed.left,
+										executed.failure,
 										onFailure,
 										startedAt,
 									),
 								);
 							}
-							data = executed.right;
+							data = executed.success;
 						}
 					} else {
-						const executed = yield* Effect.either(
+						const executed = yield* Effect.result(
 							handler
 								.execute(effect, controller.signal)
 								.pipe(
-									Effect.catchAllDefect((defect) =>
+									Effect.catchDefect((defect) =>
 										Effect.fail(toFailure(defect)),
 									),
 								),
 						);
-						if (Either.isLeft(executed)) {
+						if (Result.isFailure(executed)) {
 							if (
 								state.lost ||
 								controller.signal.aborted ||
@@ -1012,10 +1017,15 @@ export class EffectRunner {
 								return { _tag: "skipped" } satisfies ClaimOutcome;
 							}
 							return yield* Effect.sync(() =>
-								self.recordFailure(effect, executed.left, onFailure, startedAt),
+								self.recordFailure(
+									effect,
+									executed.failure,
+									onFailure,
+									startedAt,
+								),
 							);
 						}
-						data = executed.right;
+						data = executed.success;
 					}
 					// Final lease validation: cancellation alone cannot close the
 					// race between a final remote call and lease replacement.
@@ -1037,11 +1047,11 @@ export class EffectRunner {
 								durationMs: Date.now() - startedAt,
 							}),
 						catch: (error) => error as Error,
-					}).pipe(Effect.either);
-					if (Either.isLeft(published)) {
+					}).pipe(Effect.result);
+					if (Result.isFailure(published)) {
 						// A lease-invalid dispatch means a successor owns the effect
 						// now; cancel owned work but never publish under the old lease.
-						const dispatchError = published.left;
+						const dispatchError = published.failure;
 						if (
 							dispatchError instanceof Error &&
 							dispatchError.message.includes("effect lease is invalid")
@@ -1076,10 +1086,12 @@ export class EffectRunner {
 	): Effect.Effect<void, never, never> {
 		return Effect.gen(function* () {
 			if (!handler.cancel) return;
-			const outcome = yield* Effect.either(handler.cancel(effect, result));
-			if (Either.isLeft(outcome)) {
+			const outcome = yield* Effect.result(handler.cancel(effect, result));
+			if (Result.isFailure(outcome)) {
 				const message = String(
-					outcome.left instanceof Error ? outcome.left.message : outcome.left,
+					outcome.failure instanceof Error
+						? outcome.failure.message
+						: outcome.failure,
 				);
 				onFailure?.(effect.workflowId, `cancel cleanup failed: ${message}`);
 			}
@@ -1191,8 +1203,8 @@ function commitAndPushWiki(
 			root,
 			["rev-parse", "--show-toplevel"],
 			signal,
-		).pipe(Effect.either);
-		if (Either.isLeft(toplevel) || !samePath(toplevel.right, root))
+		).pipe(Effect.result);
+		if (Result.isFailure(toplevel) || !samePath(toplevel.success, root))
 			return { committed: false, pushed: false };
 		// Resolve the delivery target before committing so an unsafe remote
 		// fails the promotion without leaving a stray local commit behind.
@@ -1200,12 +1212,12 @@ function commitAndPushWiki(
 			root,
 			["rev-parse", "--abbrev-ref", "HEAD"],
 			signal,
-		).pipe(Effect.either);
+		).pipe(Effect.result);
 		const branchName =
-			Either.isRight(branch) &&
-			isSafeGitBranch(branch.right) &&
-			branch.right !== "HEAD"
-				? branch.right
+			Result.isSuccess(branch) &&
+			isSafeGitBranch(branch.success) &&
+			branch.success !== "HEAD"
+				? branch.success
 				: undefined;
 		let remote: string | undefined;
 		let args: string[] = [];
@@ -1214,20 +1226,20 @@ function commitAndPushWiki(
 				root,
 				["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
 				signal,
-			).pipe(Effect.either);
-			if (Either.isRight(upstream) && upstream.right) {
+			).pipe(Effect.result);
+			if (Result.isSuccess(upstream) && upstream.success) {
 				// Resolve the tracked remote name (everything before the first `/`).
-				remote = upstream.right.includes("/")
-					? upstream.right.slice(0, upstream.right.indexOf("/"))
-					: upstream.right;
+				remote = upstream.success.includes("/")
+					? upstream.success.slice(0, upstream.success.indexOf("/"))
+					: upstream.success;
 				args = ["push"];
 			} else {
 				const remotes = yield* git(root, ["remote"], signal).pipe(
-					Effect.either,
+					Effect.result,
 				);
 				const available =
-					Either.isRight(remotes) && remotes.right
-						? remotes.right
+					Result.isSuccess(remotes) && remotes.success
+						? remotes.success
 								.split("\n")
 								.map((name) => name.trim())
 								.filter(Boolean)
@@ -1247,10 +1259,10 @@ function commitAndPushWiki(
 				root,
 				["remote", "get-url", "--all", remote],
 				signal,
-			).pipe(Effect.either);
+			).pipe(Effect.result);
 			const resolved =
-				Either.isRight(urls) && urls.right
-					? urls.right
+				Result.isSuccess(urls) && urls.success
+					? urls.success
 							.split("\n")
 							.map((url) => url.trim())
 							.filter(Boolean)
@@ -2313,7 +2325,7 @@ export function agentEffectHandlers(
 					if (!adapter) return undefined;
 					const observed = yield* adapter
 						.observe(handle, signal)
-						.pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+						.pipe(Effect.catch(() => Effect.succeed(undefined)));
 					if (!observed || observed.status === "unknown") return undefined;
 					// Mint a real capability the same way execute() does, or the run never
 					// gets one and every later authenticated action (handoff, question,
@@ -2513,7 +2525,7 @@ export function agentEffectHandlers(
 								// A sidecar that cannot start — or does not settle within the
 								// classifier's own start bound — leaves the run exactly as it
 								// was before this change: no binding, and a tool that says so.
-								Effect.catchAll(() => Effect.void),
+								Effect.catch(() => Effect.void),
 							);
 						jev = jevSessionBinding(agents, pinned);
 					} catch {
@@ -2530,12 +2542,12 @@ export function agentEffectHandlers(
 						...(jev ? { jev } : {}),
 						signal,
 					};
-					const launchOutcome = yield* Effect.either(adapter.launch(ctx));
-					if (Either.isLeft(launchOutcome)) {
+					const launchOutcome = yield* Effect.result(adapter.launch(ctx));
+					if (Result.isFailure(launchOutcome)) {
 						const detail =
-							launchOutcome.left instanceof Error
-								? launchOutcome.left.message
-								: String(launchOutcome.left);
+							launchOutcome.failure instanceof Error
+								? launchOutcome.failure.message
+								: String(launchOutcome.failure);
 						yield* Effect.sync(() =>
 							emitAdapter(snapshot, run, {
 								event: "agent.launch",
@@ -2545,9 +2557,9 @@ export function agentEffectHandlers(
 								payload: { "herdr.error.class": detail.slice(0, 160) },
 							}),
 						);
-						return yield* Effect.fail(launchOutcome.left);
+						return yield* Effect.fail(launchOutcome.failure);
 					}
-					const handle = launchOutcome.right;
+					const handle = launchOutcome.success;
 					if (!live(effect)) {
 						if (engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")) {
 							try {
@@ -2684,14 +2696,14 @@ export function agentEffectHandlers(
 						throw new PermanentFailure("agent prompt requires a message");
 					if (!live(effect)) return { cancelled: true };
 					const deliveredStartedAt = Date.now();
-					const promptOutcome = yield* Effect.either(
+					const promptOutcome = yield* Effect.result(
 						adapter.prompt(run.handle, message, signal),
 					);
-					if (Either.isLeft(promptOutcome)) {
+					if (Result.isFailure(promptOutcome)) {
 						const detail =
-							promptOutcome.left instanceof Error
-								? promptOutcome.left.message
-								: String(promptOutcome.left);
+							promptOutcome.failure instanceof Error
+								? promptOutcome.failure.message
+								: String(promptOutcome.failure);
 						yield* Effect.sync(() =>
 							emitAdapter(snapshotFor(effect), run, {
 								event: "agent.error",
@@ -2701,7 +2713,7 @@ export function agentEffectHandlers(
 								payload: { "herdr.error.class": detail.slice(0, 160) },
 							}),
 						);
-						return yield* Effect.fail(promptOutcome.left);
+						return yield* Effect.fail(promptOutcome.failure);
 					}
 					yield* Effect.sync(() =>
 						emitAdapter(snapshotFor(effect), run, {
@@ -2858,7 +2870,7 @@ export function agentEffectHandlers(
 							snapshot.metadata.worktree,
 							["config", "user.email"],
 							undefined,
-						).pipe(Effect.catchAll(() => Effect.succeed("")));
+						).pipe(Effect.catch(() => Effect.succeed("")));
 					}
 					const actor = reviewer?.startsWith("human:")
 						? reviewer
@@ -2955,15 +2967,15 @@ export function agentEffectHandlers(
 						snapshot.metadata.worktree,
 						["rev-parse", "@{upstream}"],
 						signal,
-					).pipe(Effect.either);
-					if (Either.isLeft(upstream)) return false;
+					).pipe(Effect.result);
+					if (Result.isFailure(upstream)) return false;
 					const head = yield* git(
 						snapshot.metadata.worktree,
 						["rev-parse", "HEAD"],
 						signal,
-					).pipe(Effect.either);
-					if (Either.isLeft(head)) return false;
-					return upstream.right === head.right;
+					).pipe(Effect.result);
+					if (Result.isFailure(head)) return false;
+					return upstream.success === head.success;
 				}),
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
@@ -3024,14 +3036,14 @@ export function agentEffectHandlers(
 							signal,
 							env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
 						},
-					).pipe(Effect.either);
-					if (Either.isLeft(pushed)) {
+					).pipe(Effect.result);
+					if (Result.isFailure(pushed)) {
 						// A push that failed on authentication after an inconclusive check —
 						// or one the check left to a credential prompt that did not resolve
 						// it — blocks for the same reason the check itself does: retrying it
 						// unchanged reproduces the identical failure.
-						const matched = pushAuthFailureSignal(pushed.left.message);
-						if (!matched) throw pushed.left;
+						const matched = pushAuthFailureSignal(pushed.failure.message);
+						if (!matched) throw pushed.failure;
 						emitDeliveryPreflight(snapshot, effect, {
 							outcome: "auth-failed",
 							label: redactRemoteLabel(preflight.label || settings.remote),
@@ -3073,8 +3085,8 @@ export function agentEffectHandlers(
 					const outcome = yield* runProcessEffect([tool, ...args], {
 						cwd: snapshot.metadata.worktree,
 						signal,
-					}).pipe(Effect.either);
-					return !Either.isLeft(outcome) && outcome.right.exitCode === 0;
+					}).pipe(Effect.result);
+					return !Result.isFailure(outcome) && outcome.success.exitCode === 0;
 				}),
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
@@ -3208,15 +3220,15 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							`no environment server is attached to this process; ${owner} was not released`,
 						);
-					const outcome = yield* Effect.either(
+					const outcome = yield* Effect.result(
 						Effect.tryPromise({
 							try: () => client.stopByOwner(owner, signal),
 							catch: (error) =>
 								error instanceof Error ? error : new Error(String(error)),
 						}),
 					);
-					if (Either.isLeft(outcome)) {
-						const failure = outcome.left;
+					if (Result.isFailure(outcome)) {
+						const failure = outcome.failure;
 						if (failure instanceof BackendClientError) {
 							const detail = `${failure.code}: ${failure.message}`;
 							// A rejected request is permanent; a busy or unavailable server is
@@ -3238,7 +3250,7 @@ export function agentEffectHandlers(
 							`environment server could not release ${owner} (${failure.message})`,
 						);
 					}
-					return { owner, apps: outcome.right.apps };
+					return { owner, apps: outcome.success.apps };
 				}),
 		},
 		// The env-setup write guard (`add-environment-setup-workflow`): the first
@@ -3712,7 +3724,7 @@ export function agentEffectHandlers(
 					if (diverged.length > 0) {
 						// A refused or unreachable build is a *result* of the smoke check
 						// (the developer is offered the rollback), never a workflow defect.
-						const attempted = yield* Effect.either(
+						const attempted = yield* Effect.result(
 							Effect.tryPromise({
 								try: () =>
 									client.runOwnerAction(
@@ -3732,10 +3744,10 @@ export function agentEffectHandlers(
 									error instanceof Error ? error : new Error(String(error)),
 							}),
 						);
-						if (Either.isLeft(attempted)) {
-							buildFailure = `the default build of the promoted definition could not run: ${attempted.left.message}`;
+						if (Result.isFailure(attempted)) {
+							buildFailure = `the default build of the promoted definition could not run: ${attempted.failure.message}`;
 						} else {
-							const built = attempted.right;
+							const built = attempted.success;
 							buildLogTail = built.output
 								? built.output.split("\n").slice(-40).join("\n")
 								: undefined;
@@ -4025,10 +4037,10 @@ async function currentBranch(
 	const result = await Effect.runPromise(
 		runProcessEffect(["git", "-C", repo, "branch", "--show-current"], {
 			signal,
-		}).pipe(Effect.either),
+		}).pipe(Effect.result),
 	);
-	return !Either.isLeft(result) && result.right.exitCode === 0
-		? result.right.stdout.trim() || undefined
+	return !Result.isFailure(result) && result.success.exitCode === 0
+		? result.success.stdout.trim() || undefined
 		: undefined;
 }
 
@@ -4059,22 +4071,22 @@ function prepareRebaseCheckout(
 			repository,
 			["rev-parse", "--verify", `refs/heads/${sourceBranch}`],
 			signal,
-		).pipe(Effect.either);
-		if (Either.isLeft(source))
+		).pipe(Effect.result);
+		if (Result.isFailure(source))
 			throw new PermanentFailure(
 				`rebase source branch does not exist: ${sourceBranch}`,
 			);
 		const remote = snapshot.metadata.executionSettings?.remote;
 		if (remote)
 			yield* git(repository, ["fetch", "--prune", "--", remote], signal).pipe(
-				Effect.either,
+				Effect.result,
 			);
 		const resolved = yield* git(
 			repository,
 			["rev-parse", "--verify", `${target}^{commit}`],
 			signal,
-		).pipe(Effect.either);
-		if (Either.isLeft(resolved))
+		).pipe(Effect.result);
+		if (Result.isFailure(resolved))
 			throw new PermanentFailure(
 				`rebase target branch does not resolve: ${target}`,
 			);
@@ -4487,33 +4499,33 @@ function routingClassification(
 	phase: "plan" | "apply",
 ): Effect.Effect<RoutingClassification, Error> {
 	return Effect.gen(function* () {
-		const classified = yield* Effect.either(
+		const classified = yield* Effect.result(
 			Effect.suspend(build).pipe(
-				Effect.catchAllDefect((defect) =>
+				Effect.catchDefect((defect) =>
 					Effect.fail(
 						defect instanceof Error ? defect : new Error(String(defect)),
 					),
 				),
 			),
 		);
-		if (Either.isLeft(classified)) {
-			if (isOwnershipError(classified.left))
-				return yield* Effect.fail(classified.left);
+		if (Result.isFailure(classified)) {
+			if (isOwnershipError(classified.failure))
+				return yield* Effect.fail(classified.failure);
 			// Only a provider that is genuinely unavailable fails open (routing keeps
 			// each step's pool default). A hosted transport/status failure stays a
 			// real failure, so the durable outbox still retries it and the
 			// content-free error telemetry is still emitted.
-			if (!(classified.left instanceof ClassifierUnavailable))
-				return yield* Effect.fail(classified.left);
+			if (!(classified.failure instanceof ClassifierUnavailable))
+				return yield* Effect.fail(classified.failure);
 			return {
 				integration: ROUTING_INTEGRATION,
 				phase,
 				answers: {},
 				failOpen: true,
-				reason: classified.left.message,
+				reason: classified.failure.message,
 			};
 		}
-		return { integration: ROUTING_INTEGRATION, phase, ...classified.right };
+		return { integration: ROUTING_INTEGRATION, phase, ...classified.success };
 	});
 }
 
@@ -4579,7 +4591,7 @@ export function fileSignalSweep(
 	},
 ): Effect.Effect<FileSignalSweepOutcome | undefined, Error> {
 	return Effect.gen(function* () {
-		const attempted = yield* Effect.either(
+		const attempted = yield* Effect.result(
 			Effect.gen(function* () {
 				// Disabled is the default, and the check runs before a single file is
 				// read, so a disabled sweep costs nothing at all.
@@ -4629,11 +4641,11 @@ export function fileSignalSweep(
 				};
 			}),
 		);
-		if (Either.isLeft(attempted))
-			return yield* isOwnershipError(attempted.left)
-				? Effect.fail(attempted.left)
+		if (Result.isFailure(attempted))
+			return yield* isOwnershipError(attempted.failure)
+				? Effect.fail(attempted.failure)
 				: Effect.succeed(undefined);
-		return attempted.right;
+		return attempted.success;
 	});
 }
 
@@ -4722,7 +4734,7 @@ function classifyTriageRoles(
 			decision: "run",
 			forced: true,
 		} satisfies GateClassification;
-		const classified = yield* Effect.either(
+		const classified = yield* Effect.result(
 			Effect.gen(function* () {
 				const agents = loadClassifierAgents(snapshot);
 				const binding = resolveClassifierBinding(
@@ -4748,26 +4760,26 @@ function classifyTriageRoles(
 					answers,
 				};
 			}).pipe(
-				Effect.catchAllDefect((defect) =>
+				Effect.catchDefect((defect) =>
 					Effect.fail(
 						defect instanceof Error ? defect : new Error(String(defect)),
 					),
 				),
 			),
 		);
-		if (Either.isLeft(classified)) {
-			if (isOwnershipError(classified.left))
-				return yield* Effect.fail(classified.left);
+		if (Result.isFailure(classified)) {
+			if (isOwnershipError(classified.failure))
+				return yield* Effect.fail(classified.failure);
 			return {
 				integration: TRIAGE_INTEGRATION,
 				failOpen: true,
-				reason: classified.left.message,
+				reason: classified.failure.message,
 				...(automatic
-					? { gate: { ...forced, reason: classified.left.message } }
+					? { gate: { ...forced, reason: classified.failure.message } }
 					: {}),
 			};
 		}
-		const asked = classified.right;
+		const asked = classified.success;
 		const gate = automatic
 			? verificationGateVerdict(
 					definitionId,
@@ -4933,27 +4945,27 @@ function decideGate(
 	};
 	return Effect.gen(function* () {
 		if (policy === "always") return base;
-		const answered = yield* Effect.either(
+		const answered = yield* Effect.result(
 			Effect.gen(function* () {
 				const state = yield* collect();
 				return yield* ask(state as never);
 			}).pipe(
-				Effect.catchAllDefect((defect) =>
+				Effect.catchDefect((defect) =>
 					Effect.fail(
 						defect instanceof Error ? defect : new Error(String(defect)),
 					),
 				),
 			),
 		);
-		if (Either.isLeft(answered)) {
-			if (isOwnershipError(answered.left))
-				return yield* Effect.fail(answered.left);
-			return { ...base, reason: answered.left.message };
+		if (Result.isFailure(answered)) {
+			if (isOwnershipError(answered.failure))
+				return yield* Effect.fail(answered.failure);
+			return { ...base, reason: answered.failure.message };
 		}
 		const selection = selectGateDecision(
 			stage,
 			policy,
-			gateAnswer(stage, answered.right as never),
+			gateAnswer(stage, answered.success as never),
 		);
 		if (selection.decision === "skip") announceGateSkip(stage, selection.noul);
 		return { ...base, ...selection };

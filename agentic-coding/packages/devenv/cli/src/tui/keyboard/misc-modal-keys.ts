@@ -839,8 +839,7 @@ export async function handleMiscModalKeys(
 		// Guides tab: selection drives virtual scrolling.
 		if (!appStore.helpSearchActive() && appStore.helpActiveTab() === "guides") {
 			const maxIdx = allGuides.length - 1;
-			const current = () =>
-				appStore.helpGuideIndex() < 0 ? 0 : appStore.helpGuideIndex();
+			const current = () => Math.max(0, appStore.helpGuideIndex());
 			const moveGuide = (next: number) => {
 				if (maxIdx >= 0)
 					appStore.setHelpGuideIndex(Math.max(0, Math.min(next, maxIdx)));

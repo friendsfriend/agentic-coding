@@ -129,7 +129,7 @@ export async function spawnBoundedCatalog(
 		stdout = result.stdout?.toString() ?? "";
 		stderr = result.stderr?.toString() ?? "";
 		exitCode = result.exitCode ?? 1;
-		signalCode = result.signalCode ?? null;
+		signalCode = result.signalCode ? String(result.signalCode) : null;
 	} catch (error) {
 		throw new ProjectCatalogError(
 			`bounded catalog invocation failed to start: ${

@@ -23,7 +23,7 @@ See [`agentic-coding/docs/workflow-architecture.md`](agentic-coding/docs/workflo
 
 ## Workflow Effect conventions
 
-The workflow layer is migrating toward Effect. The single guide for writing/editing workflow code is [`agentic-coding/docs/workflow-effect.md`](agentic-coding/docs/workflow-effect.md) (locked Effect 3.22.2; one idiom per operation/error/schema/service/scope/test boundary). The module/caller inventory and migration-only bridge list live in [`agentic-coding/docs/workflow-effect-migration.md`](agentic-coding/docs/workflow-effect-migration.md).
+The workflow layer is migrating toward Effect. The single guide for writing/editing workflow code is [`agentic-coding/docs/workflow-effect.md`](agentic-coding/docs/workflow-effect.md) (locked Effect 4.0.6; one idiom per operation/error/schema/service/scope/test boundary). The module/caller inventory and migration-only bridge list live in [`agentic-coding/docs/workflow-effect-migration.md`](agentic-coding/docs/workflow-effect-migration.md).
 
 Exceptions, stated explicitly:
 

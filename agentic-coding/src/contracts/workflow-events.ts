@@ -156,16 +156,20 @@ export function isWorkflowEventId(value: unknown): value is WorkflowEventId {
 // credential-masked); the delivery frame is decoded with
 // `workflowEventDeliveryFrameSchema` before the shell reads it.
 // biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics do not line up with the per-id payload structs.
-export type WorkflowEventPayloadSchema = Schema.Schema<any, any, never>;
+export type WorkflowEventPayloadSchema = Schema.Codec<any, any, never>;
 
-const reasons = Schema.Array(Schema.String.pipe(Schema.maxLength(256)));
+const reasons = Schema.Array(
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(256))),
+);
 
 export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 	WorkflowEventId,
 	WorkflowEventPayloadSchema
 > = {
 	"workflow.started": Schema.Struct({
-		taskSummary: Schema.optional(Schema.String.pipe(Schema.maxLength(160))),
+		taskSummary: Schema.optional(
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(160))),
+		),
 	}),
 	"workflow.completed": Schema.Struct({
 		stepId: Schema.String,
@@ -185,13 +189,13 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 	// and `seconds` how long the closed wait had been open — a count, so the
 	// payload stays free of transcript content and of the wait's own text.
 	"workflow.waiting": Schema.Struct({
-		kind: Schema.Literal("question", "handoff", "approval"),
+		kind: Schema.Literals(["question", "handoff", "approval"]),
 		subject: Schema.String,
 		stepId: Schema.String,
 		since: Schema.optional(Schema.String),
 	}),
 	"workflow.waiting.ended": Schema.Struct({
-		kind: Schema.Literal("question", "handoff", "approval"),
+		kind: Schema.Literals(["question", "handoff", "approval"]),
 		subject: Schema.String,
 		stepId: Schema.String,
 		seconds: Schema.optional(Schema.Number),
@@ -269,7 +273,9 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		effectId: Schema.String,
 		kind: Schema.String,
 		attempts: Schema.Number,
-		error: Schema.optional(Schema.String.pipe(Schema.maxLength(256))),
+		error: Schema.optional(
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(256))),
+		),
 	}),
 	"delivery.push": Schema.Struct({
 		effectId: Schema.String,
@@ -291,7 +297,9 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 	}),
 	compaction: Schema.Struct({
 		role: Schema.String,
-		reason: Schema.optional(Schema.String.pipe(Schema.maxLength(128))),
+		reason: Schema.optional(
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(128))),
+		),
 		tokensBefore: Schema.optional(Schema.Number),
 		tokensAfter: Schema.optional(Schema.Number),
 	}),
@@ -504,13 +512,13 @@ export const workflowEventRecordSchema = Schema.Struct({
 	id: Schema.String,
 	repository: Schema.String,
 	workflowId: Schema.String,
-	startedBy: Schema.Literal("developer", "orchestrator"),
+	startedBy: Schema.Literals(["developer", "orchestrator"]),
 	stepId: Schema.String,
 	stepLabel: Schema.String,
-	severity: Schema.Literal("info", "warning", "critical"),
+	severity: Schema.Literals(["info", "warning", "critical"]),
 	humanNeeded: Schema.Boolean,
 	at: Schema.String,
-	payload: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+	payload: Schema.Record(Schema.String, Schema.Unknown),
 });
 
 export const WORKFLOW_EVENT_DELIVERY_MODES = [
@@ -547,26 +555,28 @@ export interface WorkflowEventSubscriptionFilter {
 }
 
 export const workflowEventSubscriptionFilterSchema = Schema.Struct({
-	scope: Schema.optional(Schema.Literal("mine", "all")),
+	scope: Schema.optional(Schema.Literals(["mine", "all"])),
 	workflowIds: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(128))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(128)))),
 	),
 	repositories: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(4096))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(4096)))),
 	),
 	eventIds: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(64))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(64)))),
 	),
 	categories: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(32))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(32)))),
 	),
 	reasons: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(256))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(256)))),
 	),
 	roles: Schema.optional(
-		Schema.Array(Schema.String.pipe(Schema.maxLength(128))),
+		Schema.Array(Schema.String.pipe(Schema.check(Schema.isMaxLength(128)))),
 	),
-	minSeverity: Schema.optional(Schema.Literal("info", "warning", "critical")),
+	minSeverity: Schema.optional(
+		Schema.Literals(["info", "warning", "critical"]),
+	),
 });
 
 export interface WorkflowEventSubscription {
@@ -599,7 +609,7 @@ export const workflowEventSubscriptionSchema = Schema.Struct({
 	session: Schema.String,
 	createdAt: Schema.String,
 	expiresAt: Schema.String,
-	mode: Schema.Literal("wake", "digest", "silent"),
+	mode: Schema.Literals(["wake", "digest", "silent"]),
 	filter: workflowEventSubscriptionFilterSchema,
 	lastDeliveredAt: Schema.optional(Schema.String),
 	coalesceMs: Schema.optional(Schema.Number),
@@ -614,11 +624,15 @@ export const workflowEventSubscriptionSchema = Schema.Struct({
  * a subscription always gets a label, a reason, a mode and an expiry. */
 export const workflowEventSubscribeRequestSchema = Schema.Struct({
 	filter: workflowEventSubscriptionFilterSchema,
-	label: Schema.String.pipe(Schema.maxLength(MAX_SUBSCRIPTION_LABEL_CHARS)),
-	reason: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(MAX_SUBSCRIPTION_REASON_CHARS)),
+	label: Schema.String.pipe(
+		Schema.check(Schema.isMaxLength(MAX_SUBSCRIPTION_LABEL_CHARS)),
 	),
-	mode: Schema.optional(Schema.Literal("wake", "digest", "silent")),
+	reason: Schema.optional(
+		Schema.String.pipe(
+			Schema.check(Schema.isMaxLength(MAX_SUBSCRIPTION_REASON_CHARS)),
+		),
+	),
+	mode: Schema.optional(Schema.Literals(["wake", "digest", "silent"])),
 	expiresAt: Schema.optional(Schema.String),
 	untilWorkflowClosed: Schema.optional(Schema.String),
 	remainingEvents: Schema.optional(Schema.Number),
@@ -631,7 +645,7 @@ export type WorkflowEventSubscribeRequest =
 	typeof workflowEventSubscribeRequestSchema.Type;
 
 export const workflowEventUnsubscribeRequestSchema = Schema.Struct({
-	subscriptionId: Schema.String.pipe(Schema.maxLength(128)),
+	subscriptionId: Schema.String.pipe(Schema.check(Schema.isMaxLength(128))),
 });
 
 export type WorkflowEventUnsubscribeRequest =
@@ -664,7 +678,7 @@ export const workflowEventDeliveryFrameSchema = Schema.Struct({
 		Schema.Struct({
 			id: Schema.String,
 			label: Schema.String,
-			mode: Schema.Literal("wake", "digest", "silent"),
+			mode: Schema.Literals(["wake", "digest", "silent"]),
 			coalesceMs: Schema.optional(Schema.Number),
 			minIntervalMs: Schema.optional(Schema.Number),
 			digestMinutes: Schema.optional(Schema.Number),

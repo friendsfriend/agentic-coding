@@ -195,10 +195,10 @@ export function createBoundedBashTool(
 								timedOut = true;
 							}),
 						}),
-				output: (chunk) => {
+				output: (chunk, skipped) => {
 					if (typeof chunk === "string" && chunk.length > 0)
 						tail = chunk.slice(-1);
-					api.output(chunk);
+					api.output(chunk, skipped);
 				},
 			};
 			try {

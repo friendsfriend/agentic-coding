@@ -1375,7 +1375,7 @@ test("every debug request tool calls the workflow CLI with the documented argv",
 			apps: ["app", "api"],
 		});
 		expect(
-			(request.content?.[0] as { text: string } | undefined)?.text,
+			(request.output?.[0] as { text: string } | undefined)?.text,
 		).toContain("shim: workflow debug-request");
 		await invoke("debug_result", { requestId: "request-1" });
 		await invoke("debug_wait", { requestId: "request-1", timeoutSec: 300 });

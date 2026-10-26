@@ -50,7 +50,7 @@ export function formValues(
 /** Index of `value` among a select field's options (0 when it is not listed). */
 export function formOptionIndex(field: FormField, value: string): number {
 	const index = (field.options ?? []).indexOf(value);
-	return index >= 0 ? index : 0;
+	return Math.max(index, 0);
 }
 
 /** Step a select field's value by `delta`, wrapping at the ends. */
@@ -274,5 +274,5 @@ export function firstErrorField(
 	errors: FormErrors,
 ): number {
 	const index = fields.findIndex((entry) => Boolean(errors[entry.key]));
-	return index < 0 ? 0 : index;
+	return Math.max(index, 0);
 }

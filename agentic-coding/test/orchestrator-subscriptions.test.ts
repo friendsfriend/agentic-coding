@@ -51,7 +51,7 @@ function operations(): ServerOperations {
 }
 
 interface ToolResult {
-	readonly content: Array<{ type: string; text: string }>;
+	readonly output: Array<{ type: string; text: string }>;
 	readonly isError?: boolean;
 }
 
@@ -113,8 +113,8 @@ describe("orchestrator event tools", () => {
 
 			const before = await call(list);
 			expect(before.isError).toBeUndefined();
-			expect(JSON.parse(before.content[0]?.text ?? "[]")).toHaveLength(1);
-			expect(before.content[0]?.text).toContain("default");
+			expect(JSON.parse(before.output[0]?.text ?? "[]")).toHaveLength(1);
+			expect(before.output[0]?.text).toContain("default");
 
 			const created = await call(subscribe, {
 				label: "attention",
@@ -127,7 +127,7 @@ describe("orchestrator event tools", () => {
 				minIntervalMs: 60_000,
 			});
 			expect(created.isError).toBeUndefined();
-			const record = JSON.parse(created.content[0]?.text ?? "{}") as {
+			const record = JSON.parse(created.output[0]?.text ?? "{}") as {
 				id?: string;
 				label?: string;
 				coalesceMs?: number;
@@ -138,15 +138,15 @@ describe("orchestrator event tools", () => {
 			expect(record.minIntervalMs).toBe(60_000);
 
 			const after = await call(list);
-			expect(after.content[0]?.text).toContain("attention");
-			expect(after.content[0]?.text).not.toContain('"default"');
+			expect(after.output[0]?.text).toContain("attention");
+			expect(after.output[0]?.text).not.toContain('"default"');
 
 			const removed = await call(unsubscribe, { subscriptionId: record.id });
 			expect(removed.isError).toBeUndefined();
 			const again = await call(unsubscribe, { subscriptionId: record.id });
-			expect(again.content[0]?.text).toContain("was not subscribed");
+			expect(again.output[0]?.text).toContain("was not subscribed");
 			const empty = await call(list);
-			expect(empty.content[0]?.text).toContain("default");
+			expect(empty.output[0]?.text).toContain("default");
 		});
 	});
 
@@ -177,7 +177,7 @@ describe("orchestrator event tools", () => {
 					expect(read).toBeTruthy();
 					if (!read) return;
 					const page = await call(read, { limit: 1 });
-					const body = JSON.parse(page.content[0]?.text ?? "{}") as {
+					const body = JSON.parse(page.output[0]?.text ?? "{}") as {
 						events?: Array<{ sequence: number }>;
 						nextCursor?: number;
 						oldestSequence?: number;
@@ -185,7 +185,7 @@ describe("orchestrator event tools", () => {
 					expect(body.events).toHaveLength(1);
 					expect(body.oldestSequence).toBe(3);
 					const stale = await call(read, { after: 1 });
-					expect(JSON.parse(stale.content[0]?.text ?? "{}")).toMatchObject({
+					expect(JSON.parse(stale.output[0]?.text ?? "{}")).toMatchObject({
 						cursorExpired: true,
 						oldestSequence: 3,
 					});
@@ -196,7 +196,7 @@ describe("orchestrator event tools", () => {
 					});
 					expect(
 						(
-							JSON.parse(narrowed.content[0]?.text ?? "{}") as {
+							JSON.parse(narrowed.output[0]?.text ?? "{}") as {
 								events?: unknown[];
 							}
 						).events,
@@ -204,7 +204,7 @@ describe("orchestrator event tools", () => {
 					const none = await call(read, { eventIds: ["review.waiting"] });
 					expect(
 						(
-							JSON.parse(none.content[0]?.text ?? "{}") as {
+							JSON.parse(none.output[0]?.text ?? "{}") as {
 								events?: unknown[];
 							}
 						).events,
@@ -241,7 +241,7 @@ describe("orchestrator event tools", () => {
 				repositories: [repo],
 			});
 			expect(unknown.isError).toBe(true);
-			expect(unknown.content[0]?.text).toContain("missing");
+			expect(unknown.output[0]?.text).toContain("missing");
 		});
 
 		const offBus = createWorkflowEventBus({
@@ -263,7 +263,7 @@ describe("orchestrator event tools", () => {
 						scope: "mine",
 					});
 					expect(refused.isError).toBe(true);
-					expect(refused.content[0]?.text).toContain(
+					expect(refused.output[0]?.text).toContain(
 						"[agents.orchestrator] monitor",
 					);
 				},
@@ -301,7 +301,7 @@ describe("orchestrator event tools", () => {
 						scope: "mine",
 					});
 					expect(refused.isError).toBe(true);
-					expect(refused.content[0]?.text).toContain("cannot be read");
+					expect(refused.output[0]?.text).toContain("cannot be read");
 					// The file is left exactly as it was.
 					const written = fs.readFileSync(
 						path.join(runtimeDir, "event-subscriptions.json"),

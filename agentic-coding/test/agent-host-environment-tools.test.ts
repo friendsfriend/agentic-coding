@@ -77,7 +77,7 @@ interface Executable {
 		api: unknown,
 		context: unknown,
 	): Promise<{
-		content: Array<{ type: string; text: string }>;
+		output: Array<{ type: string; text: string }>;
 		isError?: boolean;
 	}>;
 }
@@ -128,7 +128,7 @@ async function invoke(
 		options.context ?? {},
 	);
 	return {
-		text: result.content.map((block) => block.text).join(""),
+		text: result.output.map((block) => block.text).join(""),
 		isError: result.isError === true,
 		progress,
 	};
@@ -178,7 +178,7 @@ describe("environment tool surface", () => {
 		]);
 		finish?.({ output: "first\nlast", status: "completed", exitCode: 0 });
 		const completed = await result;
-		expect(JSON.parse(completed.content[0]?.text ?? "null")).toMatchObject({
+		expect(JSON.parse(completed.output[0]?.text ?? "null")).toMatchObject({
 			output: "first\nlast",
 			status: "completed",
 			exitCode: 0,
@@ -306,7 +306,7 @@ describe("evidence tools", () => {
 		});
 		const result = await toolOf(extension, name).execute(args, apiOf([]), {});
 		return {
-			text: result.content.map((block) => block.text).join(""),
+			text: result.output.map((block) => block.text).join(""),
 			isError: result.isError === true,
 		};
 	}
@@ -634,9 +634,7 @@ describe("env_start waits for a held app", () => {
 			{},
 		);
 		expect(result.isError).toBe(true);
-		expect(result.content[0]?.text).toContain(
-			"no agent environment capability",
-		);
+		expect(result.output[0]?.text).toContain("no agent environment capability");
 	});
 
 	test("a replica count is forwarded to the server, which owns the refusal", async () => {

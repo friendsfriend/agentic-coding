@@ -68,10 +68,10 @@ export interface WorkflowStoreShape {
 }
 
 /** Concrete workflow store dependency. */
-export class WorkflowStore extends Context.Tag("workflow/WorkflowStore")<
+export class WorkflowStore extends Context.Service<
 	WorkflowStore,
 	WorkflowStoreShape
->() {}
+>()("workflow/WorkflowStore") {}
 
 export interface WorkflowClockShape {
 	readonly now: () => Date;
@@ -79,10 +79,10 @@ export interface WorkflowClockShape {
 
 /** Concrete single clock used for claims, renewal, liveness, expiry, and
  * command-time validation. Tests inject a controlled clock here. */
-export class WorkflowClock extends Context.Tag("workflow/WorkflowClock")<
+export class WorkflowClock extends Context.Service<
 	WorkflowClock,
 	WorkflowClockShape
->() {}
+>()("workflow/WorkflowClock") {}
 
 /** Concrete configuration service: provenance-resolved workflow config reads
  * and execution-settings preflight at the Effect boundary, backed by the same
@@ -97,10 +97,10 @@ export interface WorkflowConfigShape {
 	) => Effect.Effect<WorkflowExecutionSettings, WorkflowRuntimeError>;
 }
 
-export class WorkflowConfig extends Context.Tag("workflow/WorkflowConfig")<
+export class WorkflowConfig extends Context.Service<
 	WorkflowConfig,
 	WorkflowConfigShape
->() {}
+>()("workflow/WorkflowConfig") {}
 
 /** Production configuration layer over the real config files. */
 export const WorkflowConfigLive: Layer.Layer<WorkflowConfig, never> =
@@ -201,9 +201,10 @@ export interface WorkflowTelemetryShape {
 	readonly emit: (directory: string, envelope: TelemetryEnvelope) => void;
 }
 
-export class WorkflowTelemetry extends Context.Tag(
-	"workflow/WorkflowTelemetry",
-)<WorkflowTelemetry, WorkflowTelemetryShape>() {}
+export class WorkflowTelemetry extends Context.Service<
+	WorkflowTelemetry,
+	WorkflowTelemetryShape
+>()("workflow/WorkflowTelemetry") {}
 
 /** Production telemetry layer over the bounded JSONL/export sink. */
 export const WorkflowTelemetryLive: Layer.Layer<WorkflowTelemetry, never> =

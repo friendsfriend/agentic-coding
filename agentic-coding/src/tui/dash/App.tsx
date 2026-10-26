@@ -1670,16 +1670,12 @@ export function App(props: {
 			const selected = item.options.findIndex(
 				(option) => option.value === draft.value,
 			);
-			setQuestionSelection(selected >= 0 ? selected : 0);
+			setQuestionSelection(Math.max(selected, 0));
 			setQuestionCustom(false);
 			setQuestionCustomText("");
 		} else {
 			setQuestionSelection(
-				draft
-					? item.options.length
-					: item.options.length > 0
-						? 0
-						: item.options.length,
+				draft ? item.options.length : Math.min(item.options.length, 0),
 			);
 			setQuestionCustom(Boolean(draft));
 			setQuestionCustomText(draft?.value ?? "");

@@ -48,12 +48,18 @@ function fakeEnv(options: {
 		exec: async (
 			_command: string,
 			execOptions?: {
-				readonly onOutput?: (text: string) => void;
+				readonly onOutput?: (
+					text: string,
+					context: unknown,
+					info: { stream: string },
+				) => void;
 			},
 		) => {
 			calls.push((execOptions ?? {}) as Record<string, unknown>);
 			if (options.delayMs) await Bun.sleep(options.delayMs);
-			execOptions?.onOutput?.(options.output ?? "");
+			execOptions?.onOutput?.(options.output ?? "", undefined, {
+				stream: "stdout",
+			});
 			if (options.timeoutSeconds !== undefined)
 				return { ok: false, error: { code: "timeout" } };
 			return { ok: true, value: { exitCode: options.exitCode ?? 0 } };
@@ -84,10 +90,20 @@ async function callBash(
 			);
 		},
 		diagnostic: () => {},
+		retainedOutput: () => ({ text: chunks.join(""), truncated: false }),
 		details: async () => {},
 	};
 	try {
-		await tool.execute(args as never, api as never, context as never);
+		const result = await tool.execute(
+			args as never,
+			api as never,
+			context as never,
+		);
+		if (result.isError)
+			return {
+				text: chunks.join(""),
+				error: new Error(result.diagnostics?.map((d) => d.message).join("\n")),
+			};
 		return { text: chunks.join("") };
 	} catch (error) {
 		return { text: chunks.join(""), error: error as Error };

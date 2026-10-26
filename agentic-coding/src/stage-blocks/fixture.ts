@@ -117,6 +117,7 @@ function locatorAdapter(locator: Locator): AdaptedLocator {
 			await locator.selectOption(values);
 		},
 		textContent: () => locator.textContent(),
+		// biome-ignore lint/performance/useDomNodeTextContent: The fixture contract requires rendered text, not hidden DOM content.
 		innerText: () => locator.innerText(),
 		isVisible: () => locator.isVisible(),
 		waitFor: (options) => locator.waitFor(options),

@@ -15,7 +15,7 @@
 // Schema implementation metadata never enters durable pins or wire values;
 // contract IDs/versions and definition/step digests are independent of the
 // parser implementation.
-import { Schema } from "effect";
+import { Effect, Schema, SchemaGetter } from "effect";
 import {
 	boundedText,
 	integer,
@@ -52,7 +52,7 @@ const definitionPinSchema = Schema.Struct({
 	id: text(4096),
 	version: integer(1),
 	digest: text(4096),
-	stepRefs: Schema.optionalWith(Schema.Array(stepRefSchema), { exact: true }),
+	stepRefs: Schema.optionalKey(Schema.Array(stepRefSchema)),
 });
 // Persisted snapshot capability enum. Extending this list does NOT bump
 // STORE_SCHEMA_VERSION: a stage-test start writes `vision` into the resolved
@@ -62,7 +62,7 @@ const definitionPinSchema = Schema.Struct({
 // (STAGE-MIG-002). A tolerant transform is the alternative once an older build
 // must keep reading a store a newer one wrote.
 const capabilitiesSchema = Schema.Array(
-	Schema.Literal(
+	Schema.Literals([
 		"interactive",
 		"prompt",
 		"persistent-session",
@@ -73,43 +73,41 @@ const capabilitiesSchema = Schema.Array(
 		"edit",
 		"runtime-bridge",
 		"vision",
-	),
+	]),
 );
 /** Persisted runtime ids: the current runtime plus the retired pane-hosted ids,
  * normalized on read so a snapshot or run written before the multiplexer
  * removal still decodes (multiplexer removal). */
-const runtimeSchema: Schema.Schema<RuntimeId, string> = Schema.transform(
-	Schema.String,
-	Schema.Literal("pi-durable"),
-	{
-		decode: () => "pi-durable" as const,
-		encode: () => "pi-durable" as const,
-	},
+const runtimeSchema: Schema.Codec<RuntimeId, string> = Schema.String.pipe(
+	Schema.decodeTo(Schema.Literal("pi-durable"), {
+		decode: SchemaGetter.transform(() => "pi-durable" as const),
+		encode: SchemaGetter.transform(() => "pi-durable" as const),
+	}),
 );
 const profileSchema = Schema.Struct({
 	name: text(4096),
 	runtime: runtimeSchema,
 	executable: text(4096),
-	model: Schema.optionalWith(text(4096), { exact: true }),
-	thinking: Schema.optionalWith(text(4096), { exact: true }),
+	model: Schema.optionalKey(text(4096)),
+	thinking: Schema.optionalKey(text(4096)),
 	tools: stringArray(),
 	extensions: stringArray(),
 	readOnly: Schema.Boolean,
 	capabilities: capabilitiesSchema,
 	digest: text(4096),
 });
-const executionSettingsSchema: Schema.Schema<WorkflowExecutionSettings> =
+const executionSettingsSchema: Schema.Codec<WorkflowExecutionSettings> =
 	Schema.Struct({
 		remote: text(256),
 		prTool: Schema.NullOr(text(4096)),
 		provenance: Schema.Struct({
-			source: Schema.Literal(
+			source: Schema.Literals([
 				"default",
 				"environment",
 				"user",
 				"legacy",
 				"project",
-			),
+			]),
 			files: stringArray(),
 		}),
 	});
@@ -118,21 +116,21 @@ const settingsPreviewSchema = Schema.Struct({
 	fingerprint: text(128),
 	revision: integer(),
 });
-const dialogueStatusSchema = Schema.Literal(
+const dialogueStatusSchema = Schema.Literals([
 	"pending",
 	"answered",
 	"cancelled",
 	"expired",
-);
+]);
 const dialogueAnswerSchema = Schema.Struct({
-	kind: Schema.Literal("option", "custom", "cancel"),
-	value: Schema.optionalWith(text(8192), { exact: true }),
+	kind: Schema.Literals(["option", "custom", "cancel"]),
+	value: Schema.optionalKey(text(8192)),
 });
 const classifierDecisionRecordSchema = Schema.Struct({
 	id: text(4096),
 	at: text(4096),
 	integration: text(4096),
-	phase: Schema.optionalWith(text(4096), { exact: true }),
+	phase: Schema.optionalKey(text(4096)),
 	questionId: text(4096),
 	model: text(4096),
 	input: boundedText(CLASSIFIER_DECISION_INPUT_MAX_BYTES),
@@ -141,25 +139,24 @@ const classifierDecisionRecordSchema = Schema.Struct({
 		Schema.Struct({
 			label: text(4096),
 			profile: text(4096),
-			criteria: Schema.optionalWith(Schema.Unknown, { exact: true }),
+			criteria: Schema.optionalKey(Schema.Unknown),
 		}),
 	),
 	answer: Schema.Struct({
-		type: Schema.Literal("choice", "noul"),
-		choice: Schema.optionalWith(text(4096), { exact: true }),
+		type: Schema.Literals(["choice", "noul"]),
+		choice: Schema.optionalKey(text(4096)),
 		// The necessity value of a "noul" answer: every question the
 		// classifier asks outside model-pool routing is a necessity question.
-		noul: Schema.optionalWith(Schema.Number, { exact: true }),
-		confidence: Schema.optionalWith(Schema.Number, { exact: true }),
-		probabilities: Schema.optionalWith(
-			Schema.Record({ key: Schema.String, value: Schema.Number }),
-			{ exact: true },
+		noul: Schema.optionalKey(Schema.Number),
+		confidence: Schema.optionalKey(Schema.Number),
+		probabilities: Schema.optionalKey(
+			Schema.Record(Schema.String, Schema.Number),
 		),
 	}),
 	result: Schema.Struct({
 		applied: Schema.Boolean,
 		profiles: stringArray(),
-		attention: Schema.optionalWith(boundedText(4096), { exact: true }),
+		attention: Schema.optionalKey(boundedText(4096)),
 	}),
 });
 const gateDecisionRecordSchema = Schema.Struct({
@@ -168,10 +165,10 @@ const gateDecisionRecordSchema = Schema.Struct({
 	stepId: text(4096),
 	stage: text(256),
 	policy: text(64),
-	decision: Schema.Literal("run", "skip"),
+	decision: Schema.Literals(["run", "skip"]),
 	forced: Schema.Boolean,
-	noul: Schema.optionalWith(Schema.Number, { exact: true }),
-	reason: Schema.optionalWith(boundedText(4096), { exact: true }),
+	noul: Schema.optionalKey(Schema.Number),
+	reason: Schema.optionalKey(boundedText(4096)),
 });
 const dialogueRecordSchema = Schema.Struct({
 	id: text(4096),
@@ -179,28 +176,28 @@ const dialogueRecordSchema = Schema.Struct({
 	runId: text(4096),
 	stepId: text(4096),
 	role: text(4096),
-	ident: Schema.optionalWith(text(256), { exact: true }),
+	ident: Schema.optionalKey(text(256)),
 	description: text(4096),
-	context: Schema.optionalWith(boundedText(4096), { exact: true }),
+	context: Schema.optionalKey(boundedText(4096)),
 	options: questionOptions,
-	groupId: Schema.optionalWith(text(4096), { exact: true }),
-	timerNonce: Schema.optionalWith(text(128), { exact: true }),
-	targetRole: Schema.optionalWith(text(4096), { exact: true }),
-	targetRunId: Schema.optionalWith(text(4096), { exact: true }),
-	answerNonceHash: Schema.optionalWith(text(128), { exact: true }),
-	itemIndex: Schema.optionalWith(integer(), { exact: true }),
+	groupId: Schema.optionalKey(text(4096)),
+	timerNonce: Schema.optionalKey(text(128)),
+	targetRole: Schema.optionalKey(text(4096)),
+	targetRunId: Schema.optionalKey(text(4096)),
+	answerNonceHash: Schema.optionalKey(text(128)),
+	itemIndex: Schema.optionalKey(integer()),
 	status: dialogueStatusSchema,
 	createdAt: text(4096),
 	expiresAt: text(4096),
-	answeredAt: Schema.optionalWith(text(4096), { exact: true }),
-	answer: Schema.optionalWith(dialogueAnswerSchema, { exact: true }),
+	answeredAt: Schema.optionalKey(text(4096)),
+	answer: Schema.optionalKey(dialogueAnswerSchema),
 });
 const stepResultsSchema = Schema.Array(
 	Schema.Struct({
 		runId: text(4096),
 		role: text(4096),
 		critical: integer(),
-		outputDigest: Schema.optionalWith(text(4096), { exact: true }),
+		outputDigest: Schema.optionalKey(text(4096)),
 	}),
 );
 const routingSchema = Schema.Struct({
@@ -208,27 +205,23 @@ const routingSchema = Schema.Struct({
 	routes: Schema.Array(
 		Schema.Struct({
 			stepId: text(4096),
-			role: Schema.optionalWith(text(4096), { exact: true }),
+			role: Schema.optionalKey(text(4096)),
 			profile: profileSchema,
 		}),
 	),
-	diversity: Schema.optionalWith(
+	diversity: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
 				routes: stringArray(),
 				satisfied: Schema.Boolean,
 			}),
 		),
-		{ exact: true },
 	),
 });
 const evidenceSchema = Schema.Array(
 	Schema.Struct({ kind: text(4096), path: text(4096), digest: text(4096) }),
 );
-const loopCountsSchema = Schema.Record({
-	key: Schema.String,
-	value: integer(),
-});
+const loopCountsSchema = Schema.Record(Schema.String, integer());
 const wikiBaselineSchema = Schema.Struct({
 	fingerprint: text(128),
 	concepts: Schema.Array(Schema.Struct({ id: text(4096), digest: text(128) })),
@@ -245,75 +238,86 @@ const verificationScopeDigestSchema = Schema.Struct({
 });
 const verificationScopeRoleSchema = Schema.Struct({
 	role: text(64),
-	reason: Schema.Literal(
+	reason: Schema.Literals([
 		"owner-touched",
 		"not-owner",
 		"below-minimum-diff",
 		"findings-reported",
 		"classifier-selected",
 		"classifier-skipped",
-	),
+	]),
 });
 const verificationScopeRolesSchema = Schema.Array(
 	verificationScopeRoleSchema,
 ).pipe(
-	Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
-		message: () =>
-			`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} scope roles`,
-	}),
+	Schema.check(
+		Schema.makeFilter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
+			message: `expected at most ${VERIFICATION_SCOPE_MAX_ROLES} scope roles`,
+		}),
+	),
 );
 const verificationScopeRecordSchema = Schema.Struct({
-	round: Schema.optionalWith(integer(), { exact: true }),
-	plan: Schema.optionalWith(
+	round: Schema.optionalKey(integer()),
+	plan: Schema.optionalKey(
 		Schema.Array(
 			Schema.Struct({
 				role: text(64),
 				files: Schema.Array(
 					boundedText(VERIFICATION_SCOPE_MAX_PATH_BYTES),
 				).pipe(
-					Schema.filter(
-						(items) => items.length <= VERIFICATION_SCOPE_MAX_FILES,
-						{
-							message: () =>
-								`expected at most ${VERIFICATION_SCOPE_MAX_FILES} plan files`,
-						},
+					Schema.check(
+						Schema.makeFilter(
+							(items) => items.length <= VERIFICATION_SCOPE_MAX_FILES,
+							{
+								message: `expected at most ${VERIFICATION_SCOPE_MAX_FILES} plan files`,
+							},
+						),
 					),
 				),
 			}),
 		).pipe(
-			Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
-				message: () =>
-					`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} plan roles`,
-			}),
+			Schema.check(
+				Schema.makeFilter(
+					(items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES,
+					{
+						message: `expected at most ${VERIFICATION_SCOPE_MAX_ROLES} plan roles`,
+					},
+				),
+			),
 		),
-		{ exact: true },
 	),
-	reported: Schema.optionalWith(
+	reported: Schema.optionalKey(
 		Schema.Struct({
 			round: integer(),
 			roles: Schema.Array(text(64)).pipe(
-				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES, {
-					message: () =>
-						`expected at most ${VERIFICATION_SCOPE_MAX_ROLES} reported roles`,
-				}),
+				Schema.check(
+					Schema.makeFilter(
+						(items) => items.length <= VERIFICATION_SCOPE_MAX_ROLES,
+						{
+							message: `expected at most ${VERIFICATION_SCOPE_MAX_ROLES} reported roles`,
+						},
+					),
+				),
 			),
 		}),
-		{ exact: true },
 	),
-	baseline: Schema.optionalWith(
+	baseline: Schema.optionalKey(
 		Schema.Struct({
 			round: integer(),
 			complete: Schema.Boolean,
 			files: Schema.Array(verificationScopeDigestSchema).pipe(
-				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_FILES, {
-					message: () =>
-						`expected at most ${VERIFICATION_SCOPE_MAX_FILES} baseline files`,
-				}),
+				Schema.check(
+					Schema.makeFilter(
+						(items) => items.length <= VERIFICATION_SCOPE_MAX_FILES,
+						{
+							message: `expected at most ${VERIFICATION_SCOPE_MAX_FILES} baseline files`,
+						},
+					),
+				),
 			),
 		}),
-		{ exact: true },
 	),
-	delta: Schema.optionalWith(
+	delta: Schema.optionalKey(
 		Schema.Struct({
 			round: integer(),
 			complete: Schema.Boolean,
@@ -324,19 +328,27 @@ const verificationScopeRecordSchema = Schema.Struct({
 					substantive: Schema.Boolean,
 				}),
 			).pipe(
-				Schema.filter((items) => items.length <= VERIFICATION_SCOPE_MAX_FILES, {
-					message: () =>
-						`expected at most ${VERIFICATION_SCOPE_MAX_FILES} delta files`,
-				}),
+				Schema.check(
+					Schema.makeFilter(
+						(items) => items.length <= VERIFICATION_SCOPE_MAX_FILES,
+						{
+							message: `expected at most ${VERIFICATION_SCOPE_MAX_FILES} delta files`,
+						},
+					),
+				),
 			),
 		}),
-		{ exact: true },
 	),
-	decision: Schema.optionalWith(
+	decision: Schema.optionalKey(
 		Schema.Struct({
 			round: integer(),
-			mode: Schema.Literal("first-round", "scoped", "suite-only", "full-set"),
-			reason: Schema.Literal(
+			mode: Schema.Literals([
+				"first-round",
+				"scoped",
+				"suite-only",
+				"full-set",
+			]),
+			reason: Schema.Literals([
 				"no-previous-round",
 				"owner-touched",
 				"below-minimum-diff",
@@ -347,7 +359,7 @@ const verificationScopeRecordSchema = Schema.Struct({
 				"unowned-touched-file",
 				"shared-touched-file",
 				"reported-role-outside-catalog",
-			),
+			]),
 			threshold: integer(),
 			touched: integer(),
 			changed: integer(),
@@ -355,7 +367,6 @@ const verificationScopeRecordSchema = Schema.Struct({
 			rerun: verificationScopeRolesSchema,
 			skipped: verificationScopeRolesSchema,
 		}),
-		{ exact: true },
 	),
 });
 const sourceBaselineSchema = Schema.Struct({ fingerprint: text(128) });
@@ -388,46 +399,50 @@ export const FindingsInputSchema = Schema.Struct({
 	findings: Schema.Array(
 		Schema.Struct({
 			id: text(4096),
-			severity: Schema.Literal("critical", "warning", "info"),
+			severity: Schema.Literals(["critical", "warning", "info"]),
 			detail: text(4096),
 			recommendation: Schema.optional(text(4096)),
 			path: text(4096),
 			line: integer(1),
 		}),
 	).pipe(
-		Schema.filter(
-			(entries) =>
-				new Set(entries.map((entry) => entry.id)).size === entries.length,
-			{ message: () => "duplicate stable ID" },
+		Schema.check(
+			Schema.makeFilter(
+				(entries) =>
+					new Set(entries.map((entry) => entry.id)).size === entries.length,
+				{ message: "duplicate stable ID" },
+			),
 		),
 	),
 });
 
 const researchHandoffDirectiveSchema = Schema.Struct({
 	target: text(512),
-	intent: Schema.Literal("create", "update"),
+	intent: Schema.Literals(["create", "update"]),
 	claims: Schema.Array(boundedText(2048)).pipe(
-		Schema.filter(
-			(claims) =>
-				claims.length >= 1 && claims.length <= MAX_RESEARCH_HANDOFF_CLAIMS,
-			{
-				message: () => `expected at most ${MAX_RESEARCH_HANDOFF_CLAIMS} claims`,
-			},
-		),
-	),
-	citations: Schema.optionalWith(
-		Schema.Array(boundedText(1024)).pipe(
-			Schema.filter(
-				(citations) =>
-					citations.length <= MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS,
+		Schema.check(
+			Schema.makeFilter(
+				(claims) =>
+					claims.length >= 1 && claims.length <= MAX_RESEARCH_HANDOFF_CLAIMS,
 				{
-					message: () =>
-						`expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS} citations`,
+					message: `expected at most ${MAX_RESEARCH_HANDOFF_CLAIMS} claims`,
 				},
 			),
 		),
-		{ exact: true, default: () => [] },
 	),
+	citations: Schema.Array(boundedText(1024))
+		.pipe(
+			Schema.check(
+				Schema.makeFilter(
+					(citations) =>
+						citations.length <= MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS,
+					{
+						message: `expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS} citations`,
+					},
+				),
+			),
+		)
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
 });
 
 export const StageTestPlanSchema = Schema.Struct({
@@ -435,25 +450,26 @@ export const StageTestPlanSchema = Schema.Struct({
 	/** Optional replay identity (`add-stage-flow-replay`). Additive: an existing
 	 * plan without these fields remains a valid exploratory plan. */
 	flowId: Schema.optional(boundedText(64)),
-	inputs: Schema.optional(
-		Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
-	),
-	knowledgeStatus: Schema.Literal("found", "none"),
+	inputs: Schema.optional(Schema.Record(boundedText(64), Schema.Unknown)),
+	knowledgeStatus: Schema.Literals(["found", "none"]),
 	expectations: Schema.Array(
 		Schema.Struct({
 			id: boundedText(64),
 			statement: boundedText(4096),
-			source: Schema.Literal("ticket", "wiki"),
-			priority: Schema.Literal("critical", "high", "medium", "low"),
+			source: Schema.Literals(["ticket", "wiki"]),
+			priority: Schema.Literals(["critical", "high", "medium", "low"]),
 		}),
-	).pipe(Schema.minItems(1), Schema.maxItems(50)),
+	).pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(50)),
+	),
 	knowledgeUsed: Schema.Array(
 		Schema.Struct({
 			concept: boundedText(512),
 			trustTier: boundedText(64),
 			stale: Schema.Boolean,
 		}),
-	).pipe(Schema.maxItems(100)),
+	).pipe(Schema.check(Schema.isMaxLength(100))),
 	route: Schema.Array(
 		Schema.Struct({
 			id: boundedText(64),
@@ -461,16 +477,16 @@ export const StageTestPlanSchema = Schema.Struct({
 			role: Schema.optional(boundedText(64)),
 			action: boundedText(2048),
 			expected: boundedText(4096),
-			capture: Schema.Array(boundedText(256)).pipe(Schema.maxItems(30)),
+			capture: Schema.Array(boundedText(256)).pipe(
+				Schema.check(Schema.isMaxLength(30)),
+			),
 			/** The reviewed block chosen for this route step. A step without one is
 			 * an exploratory gap, not a replay candidate. */
 			block: Schema.optional(
 				Schema.Struct({
 					id: boundedText(160),
 					version: Schema.optional(boundedText(32)),
-					args: Schema.optional(
-						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
-					),
+					args: Schema.optional(Schema.Record(boundedText(64), Schema.Unknown)),
 				}),
 			),
 			/** A block the tester is to author for this step
@@ -479,9 +495,7 @@ export const StageTestPlanSchema = Schema.Struct({
 				Schema.Struct({
 					id: boundedText(160),
 					version: Schema.optional(boundedText(32)),
-					args: Schema.optional(
-						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
-					),
+					args: Schema.optional(Schema.Record(boundedText(64), Schema.Unknown)),
 					intent: boundedText(2048),
 				}),
 			),
@@ -490,9 +504,7 @@ export const StageTestPlanSchema = Schema.Struct({
 				Schema.Struct({
 					id: boundedText(160),
 					version: Schema.optional(boundedText(32)),
-					args: Schema.optional(
-						Schema.Record({ key: boundedText(64), value: Schema.Unknown }),
-					),
+					args: Schema.optional(Schema.Record(boundedText(64), Schema.Unknown)),
 					reason: boundedText(2048),
 				}),
 			),
@@ -500,25 +512,34 @@ export const StageTestPlanSchema = Schema.Struct({
 			 * has to state. */
 			noBlockReason: Schema.optional(boundedText(2048)),
 			expectationIds: Schema.optional(
-				Schema.Array(boundedText(64)).pipe(Schema.maxItems(50)),
+				Schema.Array(boundedText(64)).pipe(
+					Schema.check(Schema.isMaxLength(50)),
+				),
 			),
 		}),
-	).pipe(Schema.minItems(1), Schema.maxItems(100)),
+	).pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(100)),
+	),
 	asyncWaits: Schema.Array(
 		Schema.Struct({
 			stepId: boundedText(64),
 			condition: boundedText(1024),
-			maxSeconds: integer(1).pipe(Schema.lessThanOrEqualTo(600)),
+			maxSeconds: integer(1).pipe(
+				Schema.check(Schema.isLessThanOrEqualTo(600)),
+			),
 		}),
-	).pipe(Schema.maxItems(30)),
+	).pipe(Schema.check(Schema.isMaxLength(30))),
 	createsData: Schema.Boolean,
-	dataCreated: Schema.Array(boundedText(1024)).pipe(Schema.maxItems(30)),
+	dataCreated: Schema.Array(boundedText(1024)).pipe(
+		Schema.check(Schema.isMaxLength(30)),
+	),
 	notTested: Schema.Array(
 		Schema.Struct({
 			expectationId: Schema.optional(boundedText(64)),
 			reason: boundedText(2048),
 		}),
-	).pipe(Schema.maxItems(50)),
+	).pipe(Schema.check(Schema.isMaxLength(50))),
 });
 
 export const StageTestReportSchema = Schema.Struct({
@@ -531,145 +552,151 @@ export const StageTestReportSchema = Schema.Struct({
 			 * expectation — still decodes and its run still resumes; the handoff
 			 * guard requires it for every verdict written now. */
 			statement: Schema.optional(boundedText(4096)),
-			verdict: Schema.Literal("pass", "fail", "blocked", "inconclusive"),
+			verdict: Schema.Literals(["pass", "fail", "blocked", "inconclusive"]),
 			severity: Schema.optional(
-				Schema.Literal("critical", "major", "minor", "info"),
+				Schema.Literals(["critical", "major", "minor", "info"]),
 			),
 			expected: boundedText(4096),
 			observed: boundedText(8192),
-			stepIds: Schema.Array(boundedText(64)).pipe(Schema.maxItems(100)),
-			evidenceIds: Schema.Array(boundedText(64)).pipe(Schema.maxItems(100)),
+			stepIds: Schema.Array(boundedText(64)).pipe(
+				Schema.check(Schema.isMaxLength(100)),
+			),
+			evidenceIds: Schema.Array(boundedText(64)).pipe(
+				Schema.check(Schema.isMaxLength(100)),
+			),
 		}),
-	).pipe(Schema.minItems(1), Schema.maxItems(50)),
+	).pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(50)),
+	),
 	applicationVersions: Schema.Array(
 		Schema.Struct({
 			application: boundedText(64),
-			status: Schema.Literal("available", "unavailable"),
+			status: Schema.Literals(["available", "unavailable"]),
 			version: Schema.optional(boundedText(256)),
 			reason: Schema.optional(boundedText(1024)),
 		}).pipe(
-			Schema.filter(
-				(item) =>
-					item.status === "available"
-						? Boolean(item.version?.trim()) && item.reason === undefined
-						: item.version === undefined && Boolean(item.reason?.trim()),
-				{
-					message: () =>
-						"available versions need a version; unavailable versions need a reason",
-				},
+			Schema.check(
+				Schema.makeFilter(
+					(item) =>
+						item.status === "available"
+							? Boolean(item.version?.trim()) && item.reason === undefined
+							: item.version === undefined && Boolean(item.reason?.trim()),
+					{
+						message:
+							"available versions need a version; unavailable versions need a reason",
+					},
+				),
 			),
 		),
-	).pipe(Schema.maxItems(100)),
+	).pipe(Schema.check(Schema.isMaxLength(100))),
 	createdData: Schema.Array(
 		Schema.Struct({
 			description: boundedText(1024),
 			cleanupHint: Schema.optional(boundedText(2048)),
 		}),
-	).pipe(Schema.maxItems(30)),
+	).pipe(Schema.check(Schema.isMaxLength(30))),
 	knowledgeObservations: Schema.Array(
 		Schema.Struct({
 			concept: boundedText(512),
-			kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+			kind: Schema.Literals(["confirmed", "contradicted", "missing", "new"]),
 			statement: Schema.optional(boundedText(2048)),
 			observed: Schema.optional(boundedText(2048)),
 			suspectedCause: Schema.optional(
-				Schema.Literal("product-change", "regression", "unknown"),
+				Schema.Literals(["product-change", "regression", "unknown"]),
 			),
 		}),
-	).pipe(Schema.maxItems(100)),
+	).pipe(Schema.check(Schema.isMaxLength(100))),
 	/** The block execution the report rests on (`author-stage-blocks-as-data`):
 	 * what ran and what the tester authored. The tester chose the route, so the
 	 * claim names the block and the document version rather than a plan step. */
-	blocksUsed: Schema.optionalWith(
-		Schema.Array(
-			Schema.Struct({
-				block: boundedText(160),
-				version: boundedText(32),
-			}),
-		).pipe(Schema.maxItems(100)),
-		{ exact: true, default: () => [] },
-	),
+	blocksUsed: Schema.Array(
+		Schema.Struct({
+			block: boundedText(160),
+			version: boundedText(32),
+		}),
+	)
+		.pipe(Schema.check(Schema.isMaxLength(100)))
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
 	// A created/adjusted claim names the *document*, not just the id and version:
 	// the digest `stage_block_save` returned is what the approval publishes, what
 	// the promotion refuses to publish over when the draft changed, and what its
 	// recovery compares, because a same-version re-save replaces the body
 	// (`SEC-005`, `CONC-105`, `CONC-107`, `CONC-108`).
-	blocksCreated: Schema.optionalWith(
-		Schema.Array(
-			Schema.Struct({
-				block: boundedText(160),
-				version: boundedText(32),
-				digest: boundedText(128),
-			}),
-		).pipe(Schema.maxItems(30)),
-		{ exact: true, default: () => [] },
-	),
-	blocksAdjusted: Schema.optionalWith(
-		Schema.Array(
-			Schema.Struct({
-				block: boundedText(160),
-				version: boundedText(32),
-				digest: boundedText(128),
-			}),
-		).pipe(Schema.maxItems(30)),
-		{ exact: true, default: () => [] },
-	),
+	blocksCreated: Schema.Array(
+		Schema.Struct({
+			block: boundedText(160),
+			version: boundedText(32),
+			digest: boundedText(128),
+		}),
+	)
+		.pipe(Schema.check(Schema.isMaxLength(30)))
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
+	blocksAdjusted: Schema.Array(
+		Schema.Struct({
+			block: boundedText(160),
+			version: boundedText(32),
+			digest: boundedText(128),
+		}),
+	)
+		.pipe(Schema.check(Schema.isMaxLength(30)))
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
 	/** What the tester deliberately did not test, in its own words: the report
 	 * no longer reconciles a plan's route steps, so a gap is stated rather than
 	 * accounted for (`remove-stage-test-planner`). */
-	notTested: Schema.optionalWith(
-		Schema.Array(
-			Schema.Struct({
-				expectationId: Schema.optional(boundedText(64)),
-				reason: boundedText(2048),
-			}),
-		).pipe(Schema.maxItems(50)),
-		{ exact: true, default: () => [] },
-	),
-	notes: Schema.optionalWith(boundedText(8192), { exact: true }),
+	notTested: Schema.Array(
+		Schema.Struct({
+			expectationId: Schema.optional(boundedText(64)),
+			reason: boundedText(2048),
+		}),
+	)
+		.pipe(Schema.check(Schema.isMaxLength(50)))
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
+	notes: Schema.optionalKey(boundedText(8192)),
 });
 
 export const ResearchHandoffSchema = Schema.Struct({
 	subject: text(512),
-	canonicalTarget: Schema.optionalWith(text(512), { exact: true }),
-	findings: Schema.optionalWith(boundedText(16384), {
-		exact: true,
-		default: () => "",
-	}),
-	directives: Schema.optionalWith(
-		Schema.Array(researchHandoffDirectiveSchema).pipe(
-			Schema.filter(
-				(directives) =>
-					directives.length >= 1 &&
-					directives.length <= MAX_RESEARCH_HANDOFF_DIRECTIVES,
-				{
-					message: () =>
-						`expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVES} documentation directives`,
-				},
-			),
-		),
-		{ exact: true, default: () => [] },
+	canonicalTarget: Schema.optionalKey(text(512)),
+	findings: boundedText(16384).pipe(
+		Schema.withDecodingDefaultKey(Effect.sync(() => "")),
 	),
-	citations: Schema.optionalWith(
-		Schema.Array(boundedText(1024)).pipe(
-			Schema.filter(
-				(citations) => citations.length <= MAX_RESEARCH_HANDOFF_CITATIONS,
-				{
-					message: () =>
-						`expected at most ${MAX_RESEARCH_HANDOFF_CITATIONS} source citations`,
-				},
+	directives: Schema.Array(researchHandoffDirectiveSchema)
+		.pipe(
+			Schema.check(
+				Schema.makeFilter(
+					(directives) =>
+						directives.length >= 1 &&
+						directives.length <= MAX_RESEARCH_HANDOFF_DIRECTIVES,
+					{
+						message: `expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVES} documentation directives`,
+					},
+				),
 			),
-		),
-		{ exact: true, default: () => [] },
-	),
+		)
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
+	citations: Schema.Array(boundedText(1024))
+		.pipe(
+			Schema.check(
+				Schema.makeFilter(
+					(citations) => citations.length <= MAX_RESEARCH_HANDOFF_CITATIONS,
+					{
+						message: `expected at most ${MAX_RESEARCH_HANDOFF_CITATIONS} source citations`,
+					},
+				),
+			),
+		)
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
 	noSourcesUsed: Schema.Boolean,
 }).pipe(
-	Schema.filter(
-		(handoff) => handoff.noSourcesUsed || handoff.citations.length > 0,
-		{
-			message: () =>
-				"expected at least one source citation, or noSourcesUsed set to true",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(handoff) => handoff.noSourcesUsed || handoff.citations.length > 0,
+			{
+				message:
+					"expected at least one source citation, or noSourcesUsed set to true",
+			},
+		),
 	),
 );
 
@@ -677,27 +704,30 @@ const triageEntrySchema = Schema.Struct({
 	role: text(4096),
 	reason: text(4096),
 	files: stringArray(),
-	hunks: Schema.optionalWith(
-		Schema.Record({
-			key: Schema.String,
-			value: Schema.Array(Schema.Number).pipe(
-				Schema.filter(
-					(ids) =>
-						ids.every((id) => Number.isInteger(id) && id >= 1 && id <= 8),
-					{ message: () => "invalid scoped hunk IDs" },
+	hunks: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Array(Schema.Number).pipe(
+				Schema.check(
+					Schema.makeFilter(
+						(ids) =>
+							ids.every((id) => Number.isInteger(id) && id >= 1 && id <= 8),
+						{ message: "invalid scoped hunk IDs" },
+					),
 				),
 			),
-		}),
-		{ exact: true },
+		),
 	),
 });
 
 export const TriagePlanSchema = Schema.Struct({
 	roles: Schema.Array(triageEntrySchema).pipe(
-		Schema.filter(
-			(entries) =>
-				new Set(entries.map((entry) => entry.role)).size === entries.length,
-			{ message: () => "duplicate role" },
+		Schema.check(
+			Schema.makeFilter(
+				(entries) =>
+					new Set(entries.map((entry) => entry.role)).size === entries.length,
+				{ message: "duplicate role" },
+			),
 		),
 	),
 });
@@ -710,9 +740,11 @@ export const PlanDraftSchema = Schema.Struct({
 			change: text(4096),
 		}),
 	).pipe(
-		Schema.filter((files) => files.length >= 1, {
-			message: () => "expected at least one planned file",
-		}),
+		Schema.check(
+			Schema.makeFilter((files) => files.length >= 1, {
+				message: "expected at least one planned file",
+			}),
+		),
 	),
 	risks: Schema.Array(Schema.Struct({ detail: text(4096) })),
 	questions: Schema.Array(Schema.Struct({ detail: text(4096) })),
@@ -720,10 +752,10 @@ export const PlanDraftSchema = Schema.Struct({
 
 export const PlanResultSchema = Schema.Struct({
 	primaryChangeId: text(80),
-	summary: Schema.optionalWith(text(16384), { exact: true }),
-	artifacts: Schema.optionalWith(stringArray(), { exact: true }),
-	risks: Schema.optionalWith(stringArray(), { exact: true }),
-	openQuestions: Schema.optionalWith(stringArray(), { exact: true }),
+	summary: Schema.optionalKey(text(16384)),
+	artifacts: Schema.optionalKey(stringArray()),
+	risks: Schema.optionalKey(stringArray()),
+	openQuestions: Schema.optionalKey(stringArray()),
 });
 
 // ---------------------------------------------------------------------------
@@ -734,23 +766,25 @@ export const PlanResultSchema = Schema.Struct({
  * carries exactly this block. Mirrors `WorkflowFamilyTraits` in `registry.ts`
  * (which cannot be imported as a value here without a cycle). */
 const blueprintFamilyTraitsSchema = Schema.Struct({
-	changeArtifacts: Schema.Literal("openspec", "none"),
-	planning: Schema.Literal("none", "single", "fusion"),
-	changeIdentity: Schema.Literal("planned", "workflow-id", "none"),
-	delivery: Schema.Literal("pull-request", "none"),
+	changeArtifacts: Schema.Literals(["openspec", "none"]),
+	planning: Schema.Literals(["none", "single", "fusion"]),
+	changeIdentity: Schema.Literals(["planned", "workflow-id", "none"]),
+	delivery: Schema.Literals(["pull-request", "none"]),
 	startRequirements: Schema.Array(
-		Schema.Literal(
+		Schema.Literals([
 			"task",
 			"clean-tree",
 			"openspec-project",
 			"openspec-change",
 			"base-commit",
 			"rebase-refs",
-		),
+		]),
 	).pipe(
-		Schema.filter((items) => items.length <= 6, {
-			message: () => "expected at most 6 start requirements",
-		}),
+		Schema.check(
+			Schema.makeFilter((items) => items.length <= 6, {
+				message: "expected at most 6 start requirements",
+			}),
+		),
 	),
 	openspecVerifier: Schema.Boolean,
 });
@@ -761,7 +795,7 @@ const blueprintEdgeSchema = Schema.Struct({
 	from: text(256),
 	outcome: text(256),
 	to: text(256),
-	loop: Schema.optionalWith(blueprintLoopSchema, { exact: true }),
+	loop: Schema.optionalKey(blueprintLoopSchema),
 });
 
 /** Sanity caps on the two model-authored arrays. The compiler rejects more than
@@ -783,22 +817,29 @@ export const BlueprintSchema = Schema.Struct({
 	label: text(256),
 	rationale: boundedText(4096),
 	traits: blueprintFamilyTraitsSchema,
-	checkoutRequired: Schema.optionalWith(Schema.Boolean, {
-		exact: true,
-		default: () => false,
-	}),
+	checkoutRequired: Schema.Boolean.pipe(
+		Schema.withDecodingDefaultKey(Effect.sync(() => false)),
+	),
 	verificationRounds: integer(1),
 	steps: Schema.Array(text(256)).pipe(
-		Schema.filter((items) => items.length <= BLUEPRINT_MAX_DECLARED_STEPS, {
-			message: () =>
-				`expected at most ${BLUEPRINT_MAX_DECLARED_STEPS} blueprint steps`,
-		}),
+		Schema.check(
+			Schema.makeFilter(
+				(items) => items.length <= BLUEPRINT_MAX_DECLARED_STEPS,
+				{
+					message: `expected at most ${BLUEPRINT_MAX_DECLARED_STEPS} blueprint steps`,
+				},
+			),
+		),
 	),
 	edges: Schema.Array(blueprintEdgeSchema).pipe(
-		Schema.filter((items) => items.length <= BLUEPRINT_MAX_DECLARED_EDGES, {
-			message: () =>
-				`expected at most ${BLUEPRINT_MAX_DECLARED_EDGES} blueprint edges`,
-		}),
+		Schema.check(
+			Schema.makeFilter(
+				(items) => items.length <= BLUEPRINT_MAX_DECLARED_EDGES,
+				{
+					message: `expected at most ${BLUEPRINT_MAX_DECLARED_EDGES} blueprint edges`,
+				},
+			),
+		),
 	),
 });
 
@@ -809,243 +850,212 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 	workflowId: text(4096),
 	revision: integer(),
 	definition: definitionPinSchema,
-	status: Schema.Literal(
+	status: Schema.Literals([
 		"active",
 		"paused",
 		"attention-required",
 		"completed",
 		"closed",
-	),
+	]),
 	currentStep: text(4096),
 	step: Schema.Struct({
 		attempt: integer(1),
-		mode: Schema.optionalWith(Schema.Literal("apply", "fix", "review-fix"), {
-			exact: true,
-		}),
+		mode: Schema.optionalKey(Schema.Literals(["apply", "fix", "review-fix"])),
 		activeRunIds: stringArray(),
 		completedRunIds: stringArray(),
 		selectedRoles: stringArray(),
 		testRunStarted: Schema.Boolean,
-		context: Schema.optionalWith(Schema.Unknown, { exact: true }),
+		context: Schema.optionalKey(Schema.Unknown),
 		results: stepResultsSchema,
 	}),
 	metadata: Schema.Struct({
 		repository: boundedText(4096),
 		worktree: text(4096),
-		changeId: Schema.optionalWith(boundedText(4096), {
-			exact: true,
-			default: () => "",
-		}),
+		changeId: boundedText(4096).pipe(
+			Schema.withDecodingDefaultKey(Effect.sync(() => "")),
+		),
 		branch: boundedText(4096),
 		baseBranch: boundedText(4096),
 		baseCommit: boundedText(4096),
-		workspace: Schema.optionalWith(text(4096), { exact: true }),
-		task: Schema.optionalWith(text(65536), { exact: true }),
-		ticket: Schema.optionalWith(text(4096), { exact: true }),
-		stage: Schema.optionalWith(boundedText(64), { exact: true }),
-		stageSystem: Schema.optionalWith(boundedText(STAGE_SYSTEM_MAX_BYTES), {
-			exact: true,
-		}),
-		stageWikiProcesses: Schema.optionalWith(
+		workspace: Schema.optionalKey(text(4096)),
+		task: Schema.optionalKey(text(65536)),
+		ticket: Schema.optionalKey(text(4096)),
+		stage: Schema.optionalKey(boundedText(64)),
+		stageSystem: Schema.optionalKey(boundedText(STAGE_SYSTEM_MAX_BYTES)),
+		stageWikiProcesses: Schema.optionalKey(
 			Schema.Array(boundedText(STAGE_WIKI_PROCESS_MAX_BYTES)),
-			{ exact: true },
 		),
-		stageAccess: Schema.optionalWith(Schema.Literal("read-only", "writable"), {
-			exact: true,
-		}),
-		stagePlanApproval: Schema.optionalWith(
-			Schema.Literal("always", "when-writing", "never"),
-			{ exact: true },
+		stageAccess: Schema.optionalKey(Schema.Literals(["read-only", "writable"])),
+		stagePlanApproval: Schema.optionalKey(
+			Schema.Literals(["always", "when-writing", "never"]),
 		),
-		stageTestPlan: Schema.optionalWith(StageTestPlanSchema, { exact: true }),
-		stageTestReport: Schema.optionalWith(StageTestReportSchema, {
-			exact: true,
-		}),
-		stageTestReportMarkdown: Schema.optionalWith(text(2 * 1024 * 1024), {
-			exact: true,
-		}),
+		stageTestPlan: Schema.optionalKey(StageTestPlanSchema),
+		stageTestReport: Schema.optionalKey(StageTestReportSchema),
+		stageTestReportMarkdown: Schema.optionalKey(text(2 * 1024 * 1024)),
 		/** What the pinned plan's blocks are, projected from the composed
 		 * registry when the plan is accepted: the review shows the title, effect
 		 * set and role scope of each block a route step names. Bounded to the
 		 * plan's own route size. */
-		stagePlanBlocks: Schema.optionalWith(
+		stagePlanBlocks: Schema.optionalKey(
 			Schema.Array(
 				Schema.Struct({
 					routeStepId: boundedText(64),
 					id: boundedText(160),
-					title: Schema.optionalWith(boundedText(512), { exact: true }),
-					app: Schema.optionalWith(boundedText(64), { exact: true }),
-					effects: Schema.optionalWith(Schema.Array(boundedText(32)), {
-						exact: true,
-					}),
-					roles: Schema.optionalWith(Schema.Array(boundedText(64)), {
-						exact: true,
-					}),
+					title: Schema.optionalKey(boundedText(512)),
+					app: Schema.optionalKey(boundedText(64)),
+					effects: Schema.optionalKey(Schema.Array(boundedText(32))),
+					roles: Schema.optionalKey(Schema.Array(boundedText(64))),
 				}),
 			),
-			{ exact: true },
 		),
 		/** The replay identity and evidence links for the optional stage.replay
 		 * step. It is a summary only; the result/report/heal JSON stays in the
 		 * evidence store. */
-		stageReplay: Schema.optionalWith(
+		stageReplay: Schema.optionalKey(
 			Schema.Struct({
-				status: Schema.Literal("passed", "failed", "ineligible"),
-				flowId: Schema.optionalWith(boundedText(64), { exact: true }),
-				planId: Schema.optionalWith(boundedText(128), { exact: true }),
-				revision: Schema.optionalWith(integer(0), { exact: true }),
-				inputsHash: Schema.optionalWith(boundedText(80), { exact: true }),
-				routeHash: Schema.optionalWith(boundedText(80), { exact: true }),
-				specHash: Schema.optionalWith(boundedText(80), { exact: true }),
-				blockVersions: Schema.optionalWith(
-					Schema.Record({ key: boundedText(160), value: boundedText(32) }),
-					{ exact: true },
+				status: Schema.Literals(["passed", "failed", "ineligible"]),
+				flowId: Schema.optionalKey(boundedText(64)),
+				planId: Schema.optionalKey(boundedText(128)),
+				revision: Schema.optionalKey(integer(0)),
+				inputsHash: Schema.optionalKey(boundedText(80)),
+				routeHash: Schema.optionalKey(boundedText(80)),
+				specHash: Schema.optionalKey(boundedText(80)),
+				blockVersions: Schema.optionalKey(
+					Schema.Record(boundedText(160), boundedText(32)),
 				),
-				blockDigests: Schema.optionalWith(
-					Schema.Record({ key: boundedText(160), value: boundedText(80) }),
-					{ exact: true },
+				blockDigests: Schema.optionalKey(
+					Schema.Record(boundedText(160), boundedText(80)),
 				),
-				resultEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
-				reportEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
-				healEvidenceId: Schema.optionalWith(boundedText(64), { exact: true }),
-				reason: Schema.optionalWith(boundedText(2048), { exact: true }),
-				stepCount: Schema.optionalWith(integer(0), { exact: true }),
-				durationMs: Schema.optionalWith(integer(0), { exact: true }),
+				resultEvidenceId: Schema.optionalKey(boundedText(64)),
+				reportEvidenceId: Schema.optionalKey(boundedText(64)),
+				healEvidenceId: Schema.optionalKey(boundedText(64)),
+				reason: Schema.optionalKey(boundedText(2048)),
+				stepCount: Schema.optionalKey(integer(0)),
+				durationMs: Schema.optionalKey(integer(0)),
 			}),
-			{ exact: true },
 		),
-		stageReplayHeal: Schema.optionalWith(
-			Schema.Record({ key: boundedText(256), value: Schema.Unknown }),
-			{ exact: true },
+		stageReplayHeal: Schema.optionalKey(
+			Schema.Record(boundedText(256), Schema.Unknown),
 		),
 		createdAt: text(4096),
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),
-		selectedPreset: Schema.optionalWith(boundedText(4096), { exact: true }),
+		selectedPreset: Schema.optionalKey(boundedText(4096)),
 		/** The configured app an `env-setup` workflow drafts definitions for. */
-		app: Schema.optionalWith(boundedText(4096), { exact: true }),
+		app: Schema.optionalKey(boundedText(4096)),
 		/** The env-setup drafts root, pinned at start like `wikiRoot`. */
-		setupDraftsDir: Schema.optionalWith(text(4096), { exact: true }),
+		setupDraftsDir: Schema.optionalKey(text(4096)),
 		/** The promotion journal's per-run authentication secret. */
-		setupPromotionSecret: Schema.optionalWith(text(256), { exact: true }),
+		setupPromotionSecret: Schema.optionalKey(text(256)),
 		/** The write guard's armed baselines, keyed by the run identity. The scope
 		 * marker and the scanned entries are optional so a baseline an older build
 		 * armed still decodes (and is then reported as needing a restart) rather
 		 * than being dropped as an unreadable snapshot. */
-		setupGuardBaselines: Schema.optionalWith(
-			Schema.Record({
-				key: text(256),
-				value: Schema.Struct({
+		setupGuardBaselines: Schema.optionalKey(
+			Schema.Record(
+				text(256),
+				Schema.Struct({
 					configDir: text(4096),
 					checkoutDir: text(4096),
 					configFingerprint: text(4096),
 					checkoutFingerprint: text(4096),
-					scope: Schema.optionalWith(boundedText(128), { exact: true }),
-					truncated: Schema.optionalWith(Schema.Boolean, { exact: true }),
-					entries: Schema.optionalWith(
+					scope: Schema.optionalKey(boundedText(128)),
+					truncated: Schema.optionalKey(Schema.Boolean),
+					entries: Schema.optionalKey(
 						Schema.Array(
 							Schema.Struct({
 								path: boundedText(4096),
-								kind: Schema.Literal("d", "f", "l"),
-								size: Schema.optionalWith(integer(0), { exact: true }),
-								digest: Schema.optionalWith(boundedText(128), { exact: true }),
-								target: Schema.optionalWith(boundedText(4096), { exact: true }),
+								kind: Schema.Literals(["d", "f", "l"]),
+								size: Schema.optionalKey(integer(0)),
+								digest: Schema.optionalKey(boundedText(128)),
+								target: Schema.optionalKey(boundedText(4096)),
 							}),
 						),
-						{ exact: true },
 					),
 				}),
-			}),
-			{ exact: true },
+			),
 		),
 		/** The reviewed digest of every drafted file, recorded when the validation
 		 * gate passed: the promotion refuses to publish anything else, so the
 		 * developer's approval authorises the bytes that become live and not merely
 		 * a path list (the authoring agent can write into the staged root while the
 		 * approval waits). Bounded, and never secret content. */
-		setupReviewedDrafts: Schema.optionalWith(
-			Schema.Record({ key: text(4096), value: text(128) }),
-			{ exact: true },
+		setupReviewedDrafts: Schema.optionalKey(
+			Schema.Record(text(4096), text(128)),
 		),
 		/** Action -> the target id the validation gate resolved as the default,
 		 * recorded when the gate passed (`fix-default-target-after-promotion`). The
 		 * smoke check compares the live resolver's answer with this, so "the live
 		 * default is what the gate validated" is a checked statement. Bounded to
 		 * three actions. */
-		setupValidatedDefaults: Schema.optionalWith(
-			Schema.Record({ key: text(64), value: text(512) }),
-			{ exact: true },
+		setupValidatedDefaults: Schema.optionalKey(
+			Schema.Record(text(64), text(512)),
 		),
 		/** Who started the workflow; absent on snapshots that predate the
 		 * attribution, which read as `developer`. */
-		startedBy: Schema.optionalWith(
-			Schema.Literal("developer", "orchestrator"),
-			{ exact: true },
+		startedBy: Schema.optionalKey(
+			Schema.Literals(["developer", "orchestrator"]),
 		),
 		/** The blueprint a custom-shaped workflow was started from
 		 * (add-orchestrator-blueprint-workflows): the authored label and rationale
 		 * plus the compiled digest the workflow pins. */
-		blueprint: Schema.optionalWith(
+		blueprint: Schema.optionalKey(
 			Schema.Struct({
 				label: boundedText(256),
 				rationale: boundedText(4096),
 				digest: boundedText(4096),
 			}),
-			{ exact: true },
 		),
-		gatePolicies: Schema.optionalWith(
-			Schema.Record({ key: Schema.String, value: Schema.String }),
-			{ exact: true },
+		gatePolicies: Schema.optionalKey(
+			Schema.Record(Schema.String, Schema.String),
 		),
-		classifier: Schema.optionalWith(boundedText(4096), { exact: true }),
-		wikiRoot: Schema.optionalWith(text(4096), { exact: true }),
-		executionSettings: Schema.optionalWith(executionSettingsSchema, {
-			exact: true,
-		}),
-		executionSettingsPreview: Schema.optionalWith(settingsPreviewSchema, {
-			exact: true,
-		}),
+		classifier: Schema.optionalKey(boundedText(4096)),
+		wikiRoot: Schema.optionalKey(text(4096)),
+		executionSettings: Schema.optionalKey(executionSettingsSchema),
+		executionSettingsPreview: Schema.optionalKey(settingsPreviewSchema),
 	}),
 	routing: routingSchema,
 	evidence: evidenceSchema,
 	loopCounts: loopCountsSchema,
 	attention: stringArray(),
-	developerDialogue: Schema.optionalWith(
-		Schema.Array(dialogueRecordSchema).pipe(
-			Schema.filter((items) => items.length <= 100, {
-				message: () => "expected at most 100 dialogue records",
-			}),
-		),
-		{ exact: true, default: () => [] },
-	),
-	classifierDecisions: Schema.optionalWith(
+	developerDialogue: Schema.Array(dialogueRecordSchema)
+		.pipe(
+			Schema.check(
+				Schema.makeFilter((items) => items.length <= 100, {
+					message: "expected at most 100 dialogue records",
+				}),
+			),
+		)
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
+	classifierDecisions: Schema.optionalKey(
 		Schema.Array(classifierDecisionRecordSchema).pipe(
-			Schema.filter(
-				(items) => items.length <= CLASSIFIER_DECISION_MAX_RECORDS,
-				{
-					message: () =>
-						`expected at most ${CLASSIFIER_DECISION_MAX_RECORDS} classifier decision records`,
-				},
+			Schema.check(
+				Schema.makeFilter(
+					(items) => items.length <= CLASSIFIER_DECISION_MAX_RECORDS,
+					{
+						message: `expected at most ${CLASSIFIER_DECISION_MAX_RECORDS} classifier decision records`,
+					},
+				),
 			),
 		),
-		{ exact: true },
 	),
 	// A snapshot that has taken no gate decision still decodes, as an empty
 	// list: the field is newer than every workflow already on disk.
-	gateDecisions: Schema.optionalWith(
-		Schema.Array(gateDecisionRecordSchema).pipe(
-			Schema.filter((items) => items.length <= GATE_DECISION_MAX_RECORDS, {
-				message: () =>
-					`expected at most ${GATE_DECISION_MAX_RECORDS} gate decision records`,
-			}),
-		),
-		{ exact: true, default: () => [] },
-	),
-	verificationScope: Schema.optionalWith(verificationScopeRecordSchema, {
-		exact: true,
-	}),
-	sourceBaseline: Schema.optionalWith(sourceBaselineSchema, { exact: true }),
-	wikiBaseline: Schema.optionalWith(wikiBaselineSchema, { exact: true }),
-	repaired: Schema.optionalWith(repairedSchema, { exact: true }),
-	repinned: Schema.optionalWith(repinnedSchema, { exact: true }),
+	gateDecisions: Schema.Array(gateDecisionRecordSchema)
+		.pipe(
+			Schema.check(
+				Schema.makeFilter(
+					(items) => items.length <= GATE_DECISION_MAX_RECORDS,
+					{
+						message: `expected at most ${GATE_DECISION_MAX_RECORDS} gate decision records`,
+					},
+				),
+			),
+		)
+		.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => []))),
+	verificationScope: Schema.optionalKey(verificationScopeRecordSchema),
+	sourceBaseline: Schema.optionalKey(sourceBaselineSchema),
+	wikiBaseline: Schema.optionalKey(wikiBaselineSchema),
+	repaired: Schema.optionalKey(repairedSchema),
+	repinned: Schema.optionalKey(repinnedSchema),
 });

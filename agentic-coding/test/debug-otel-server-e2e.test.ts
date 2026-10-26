@@ -143,7 +143,7 @@ interface Executable {
 		api: unknown,
 		context: unknown,
 	): Promise<{
-		content: Array<{ type: string; text: string }>;
+		output: Array<{ type: string; text: string }>;
 		isError?: boolean;
 	}>;
 }
@@ -171,7 +171,7 @@ async function otelQuery(
 	if (!tool) throw new Error("the debug extension offers no otel_query");
 	const result = await tool.execute(args, {}, {});
 	return {
-		text: result.content.map((block) => block.text).join(""),
+		text: result.output.map((block) => block.text).join(""),
 		isError: result.isError === true,
 	};
 }

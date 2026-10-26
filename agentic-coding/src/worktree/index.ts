@@ -8,7 +8,7 @@
 // action or a workflow asked for a worktree.
 import fs from "node:fs";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { HERDR_WORKFLOW_DIRECTORY } from "../workflow/observability.ts";
 import {
 	classifyWorktreeFailure,
@@ -112,7 +112,7 @@ export class WorktreeAdapter implements WorktreePort {
 
 	/** `wt -C <repo> list --format json`, normalized to port references. */
 	list(repo: string): Effect.Effect<readonly WorktreeRef[], WorktreeError> {
-		return Effect.gen(this, function* () {
+		return Effect.gen({ self: this }, function* () {
 			yield* this.ensureAvailable();
 			return yield* this.command(
 				worktrunkArgv(repo, ["list", "--format", "json"], {
@@ -142,7 +142,7 @@ export class WorktreeAdapter implements WorktreePort {
 
 	ensure(i: WorktreeEnsureInput): Effect.Effect<WorktreeRef, WorktreeError> {
 		if (i.detached) return this.ensureDetached(i);
-		return Effect.gen(this, function* () {
+		return Effect.gen({ self: this }, function* () {
 			yield* this.ensureAvailable();
 			// A base means the branch may not exist yet; a branch worktrunk
 			// already has wins over creating it, so a retried ensure reuses the
@@ -200,7 +200,7 @@ export class WorktreeAdapter implements WorktreePort {
 	private ensureDetached(
 		i: WorktreeEnsureInput,
 	): Effect.Effect<WorktreeRef, WorktreeError> {
-		return Effect.gen(this, function* () {
+		return Effect.gen({ self: this }, function* () {
 			yield* this.ensureAvailable();
 			const target = realpathOrSelf(this.detachedPath(i));
 			const atTarget = (refs: readonly WorktreeRef[]) =>
@@ -233,7 +233,7 @@ export class WorktreeAdapter implements WorktreePort {
 			// leftover of an earlier workflow at the same path, or content this port
 			// must not delete.
 			yield* this.reclaimLeftover(target);
-			const outcome = yield* Effect.either(
+			const outcome = yield* Effect.result(
 				this.run([
 					"git",
 					"-C",
@@ -248,16 +248,16 @@ export class WorktreeAdapter implements WorktreePort {
 					i.branch,
 				]),
 			);
-			if (Either.isLeft(outcome)) {
+			if (Result.isFailure(outcome)) {
 				// A create that lost a race (a sibling attempt created the worktree
 				// between the lookup and the add) is reuse, not conflict. Prune clears
 				// a half-registered entry, then one relist decides.
-				yield* Effect.either(
+				yield* Effect.result(
 					this.run(["git", "-C", i.repo, "worktree", "prune"]),
 				);
 				const after = atTarget(yield* this.list(i.repo));
 				if (after) return { ...after, created: false };
-				return yield* Effect.fail(outcome.left);
+				return yield* Effect.fail(outcome.failure);
 			}
 			return {
 				path: realpathOrSelf(target),
@@ -360,7 +360,7 @@ export class WorktreeAdapter implements WorktreePort {
 	}
 
 	remove(i: WorktreeRemoveInput): Effect.Effect<void, WorktreeError> {
-		return Effect.gen(this, function* () {
+		return Effect.gen({ self: this }, function* () {
 			const refs = yield* this.list(i.repo);
 			const target = refs.find((ref) =>
 				i.path ? ref.path === realpathOrSelf(i.path) : ref.branch === i.branch,

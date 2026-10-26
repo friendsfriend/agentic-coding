@@ -53,7 +53,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 type Result = {
 	details?: ReturnType<typeof toolViewDetails>;
-	content: Array<{ type: "text"; text: string }>;
+	output: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
 
@@ -64,7 +64,7 @@ function text(value: unknown): Result {
 	const raw = typeof value === "string" ? value : JSON.stringify(value);
 	return {
 		details: toolViewDetails(value, MAX_RESULT_CHARS),
-		content: [
+		output: [
 			{
 				type: "text",
 				text:
@@ -77,7 +77,7 @@ function text(value: unknown): Result {
 }
 
 function failure(message: string): Result {
-	return { content: [{ type: "text", text: message }], isError: true };
+	return { output: [{ type: "text", text: message }], isError: true };
 }
 
 /** One authenticated call to the unified server. Resolves to the envelope's

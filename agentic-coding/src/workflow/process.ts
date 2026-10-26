@@ -148,7 +148,7 @@ export function runProcessEffect(
 	args: readonly string[],
 	options: ProcessOptions = {},
 ): Effect.Effect<ProcessResult, ProcessFailure> {
-	return Effect.async<ProcessResult, ProcessFailure>((resume) => {
+	return Effect.callback<ProcessResult, ProcessFailure>((resume) => {
 		const timeoutMs = options.timeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
 		const maxOutputBytes = options.maxOutputBytes ?? MAX_PROCESS_OUTPUT_BYTES;
 		const proc = Bun.spawn([...args], {
@@ -311,7 +311,7 @@ export function runProcessEffect(
 					detail: String((error as Error).message ?? error),
 				}),
 			);
-		// Effect.async finalizer: called when the fiber is interrupted or the
+		// Effect.callback finalizer: called when the fiber is interrupted or the
 		// Effect is canceled — propagate to the real child and settle.
 		return Effect.sync(() => {
 			if (!settled) {

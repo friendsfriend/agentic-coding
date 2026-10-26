@@ -113,7 +113,7 @@ export interface DashboardGateway {
 	observe<T>(
 		observation: ObservationRequest,
 		// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-		schema: Schema.Schema<any, any, never>,
+		schema: Schema.Codec<any, any, never>,
 		signal?: AbortSignal,
 	): Promise<T>;
 	/** One evidence entry's recorded bytes — a screenshot, or the poster

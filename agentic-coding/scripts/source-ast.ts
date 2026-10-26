@@ -23,12 +23,7 @@ import {
 
 /** TypeScript syntax plugins. JSX is only enabled for `.tsx` so generic arrow
  * functions and angle-bracket assertions in `.ts` are not read as JSX. */
-const TS_PLUGINS: ParserPlugin[] = [
-	"typescript",
-	"decorators-legacy",
-	"importAttributes",
-	"explicitResourceManagement",
-];
+const TS_PLUGINS: ParserPlugin[] = ["typescript", "decorators-legacy"];
 
 export interface ParsedSource {
 	file: string;
@@ -45,6 +40,8 @@ export function parseSource(file: string, text: string): ParsedSource {
 		: TS_PLUGINS;
 	const ast = parse(text, {
 		sourceType: "module",
+		// Boundary scanners consume the CallExpression form used by Babel 7.
+		createImportExpressions: false,
 		plugins,
 		errorRecovery: false,
 	});

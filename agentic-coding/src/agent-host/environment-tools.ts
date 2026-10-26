@@ -47,7 +47,7 @@ const ACTION_TIMEOUT_MS = 30 * 60_000;
 
 type Result = {
 	details?: ReturnType<typeof toolViewDetails>;
-	content: Array<{ type: "text"; text: string }>;
+	output: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
 
@@ -65,7 +65,7 @@ function text(value: unknown): Result {
 				);
 	return {
 		details: toolViewDetails(value, MAX_RESULT_CHARS),
-		content: [
+		output: [
 			{
 				type: "text",
 				text:
@@ -78,7 +78,7 @@ function text(value: unknown): Result {
 }
 
 function failure(message: string): Result {
-	return { content: [{ type: "text", text: message }], isError: true };
+	return { output: [{ type: "text", text: message }], isError: true };
 }
 
 /** Test seams: the poll loop's clock and sleep are injected so a wait can be

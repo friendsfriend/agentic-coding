@@ -200,7 +200,7 @@ interface Executable {
 		args: unknown,
 		api: unknown,
 		context: unknown,
-	): Promise<{ content: ContentBlock[]; isError?: boolean }>;
+	): Promise<{ output: ContentBlock[]; isError?: boolean }>;
 }
 
 function toolOf(extension: Extension): Executable {
@@ -260,7 +260,7 @@ describe("stage_info", () => {
 			createStageExtension(lookup(RUN_ENV), { fetch: server }),
 		).execute({}, { conversationId: 1 }, {});
 		expect(result.isError).toBeUndefined();
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 
 		// The read presented the run's own capability, on the agent surface.
 		expect(calls).toHaveLength(1);
@@ -308,7 +308,7 @@ describe("stage_info", () => {
 		expect(calls[0]?.url).toBe(
 			`http://127.0.0.1:4050${AGENT_STAGES_PATH}/grid-int`,
 		);
-		const listed = JSON.parse(textOf(one.content)) as {
+		const listed = JSON.parse(textOf(one.output)) as {
 			stages: Array<{ ident: string }>;
 		};
 		expect(listed.stages.map((stage) => stage.ident)).toEqual(["grid-int"]);
@@ -321,7 +321,7 @@ describe("stage_info", () => {
 		expect(missing.isError).toBe(true);
 		// The failure carries the route's machine-readable code, so a run can tell
 		// a typo from a refused file.
-		expect(textOf(missing.content)).toContain("[stage-not-configured]");
+		expect(textOf(missing.output)).toContain("[stage-not-configured]");
 	});
 
 	test("a run without an environment capability is told the tool is unavailable", async () => {
@@ -331,7 +331,7 @@ describe("stage_info", () => {
 			createStageExtension(lookup(env as Record<string, string>)),
 		).execute({}, { conversationId: 1 }, {});
 		expect(result.isError).toBe(true);
-		expect(textOf(result.content)).toContain("no agent environment capability");
+		expect(textOf(result.output)).toContain("no agent environment capability");
 	});
 });
 
@@ -381,7 +381,7 @@ describe("stage_api_request", () => {
 			path: "/v1/requests?limit=5",
 		});
 		// The answer is what the model reads, unchanged.
-		expect(textOf(result.content)).toContain('"renewals": 0');
+		expect(textOf(result.output)).toContain('"renewals": 0');
 	});
 
 	test("a refused call answers the route's code, and the tool is told what it omitted", async () => {
@@ -410,7 +410,7 @@ describe("stage_api_request", () => {
 			path: "/v1/requests/1",
 		});
 		expect(result.isError).toBe(true);
-		expect(textOf(result.content)).toContain("[stage-app-ambiguous]");
+		expect(textOf(result.output)).toContain("[stage-app-ambiguous]");
 	});
 
 	test("query parameters travel as an object, next to the path", async () => {
@@ -459,7 +459,7 @@ describe("stage_api_request", () => {
 			{},
 		);
 		expect(result.isError).toBe(true);
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text).toContain("[stage-rate-limit]");
 		// A limit without its wait is a poll loop; the number the route sent is the
 		// one the model has to see (USAB-005).
@@ -488,7 +488,7 @@ describe("stage_api_request", () => {
 			{},
 		);
 		expect(result.isError).toBeUndefined();
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		expect(text.length).toBeLessThanOrEqual(40_000);
 		const parsed = JSON.parse(text) as Record<string, unknown>;
 		expect(parsed.status).toBe(200);
@@ -525,7 +525,7 @@ describe("stage_token_info", () => {
 			`http://127.0.0.1:4050${AGENT_STAGE_TOKEN_INFO_PATH}`,
 		);
 		expect(calls[0]?.body).toEqual({ stage: "grid-int", role: "service" });
-		const text = textOf(result.content);
+		const text = textOf(result.output);
 		// Epoch milliseconds, exactly as the contract documents it, and nothing the
 		// token holds beyond the four presentation fields (USAB-002).
 		expect(text).toContain("1767229200000");

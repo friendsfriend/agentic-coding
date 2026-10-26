@@ -66,7 +66,7 @@ function parsePerPage(value: string | null): number {
 	if (value === null || value === "") return DEFAULT_PER_PAGE;
 	const perPage = Number(value);
 	if (!Number.isInteger(perPage) || perPage < 1) return DEFAULT_PER_PAGE;
-	return perPage > MAX_PER_PAGE ? MAX_PER_PAGE : perPage;
+	return Math.min(perPage, MAX_PER_PAGE);
 }
 
 function splitCsv(value: string | null): string[] | undefined {

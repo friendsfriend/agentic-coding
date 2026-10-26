@@ -26,7 +26,7 @@ import type { ServerOperations } from "../src/server/handlers.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
 
 interface ToolResult {
-	readonly content: Array<{ type: string; text: string }>;
+	readonly output: Array<{ type: string; text: string }>;
 	readonly isError?: boolean;
 }
 
@@ -46,7 +46,7 @@ const call = (tool: Tool, args: Record<string, unknown> = {}) =>
 	tool.execute(args, { conversationId: "orchestrator" });
 
 const json = (result: ToolResult | undefined): unknown =>
-	JSON.parse(result?.content[0]?.text ?? "null");
+	JSON.parse(result?.output[0]?.text ?? "null");
 
 /** The tools of one orchestrator session, wired to `url` with the capability
  * the run's environment carries. `lastDeveloperMessage` is what the host records
@@ -564,7 +564,7 @@ describe("cheap wake-up tools", () => {
 				taskRef: { change: "add-flag" },
 			})) as ToolResult;
 			expect(both.isError).toBe(true);
-			expect(both.content[0]?.text).toContain("not both");
+			expect(both.output[0]?.text).toContain("not both");
 			// Preferring one silently would hide a reference that never resolved.
 			expect(
 				(await call(start, {
@@ -582,7 +582,7 @@ describe("cheap wake-up tools", () => {
 				taskRef: { change: "add-flag", previousMessage: true },
 			})) as ToolResult;
 			expect(bothShapes.isError).toBe(true);
-			expect(bothShapes.content[0]?.text).toContain("not both");
+			expect(bothShapes.output[0]?.text).toContain("not both");
 			expect(started).toHaveLength(0);
 		});
 	});
@@ -591,25 +591,25 @@ describe("cheap wake-up tools", () => {
 		// The tool's guard throws before it POSTs, so the boundary's own refusal is
 		// asserted on the start request schema: a caller that skips the tool still
 		// cannot send both.
-		const both = Schema.decodeUnknownEither(workflowStartRequestSchema)({
+		const both = Schema.decodeUnknownResult(workflowStartRequestSchema)({
 			repo: "/repo",
 			workflowId: "wf-1",
 			mode: "worktree",
 			task: "add a flag",
 			taskRef: { change: "add-flag" },
 		});
-		expect(both._tag).toBe("Left");
-		expect(both._tag === "Left" ? String(both.left.message) : "").toContain(
-			"cannot carry both",
-		);
-		const reference = Schema.decodeUnknownEither(workflowStartRequestSchema)({
+		expect(both._tag).toBe("Failure");
+		expect(
+			both._tag === "Failure" ? String(both.failure.message) : "",
+		).toContain("cannot carry both");
+		const reference = Schema.decodeUnknownResult(workflowStartRequestSchema)({
 			repo: "/repo",
 			workflowId: "wf-1",
 			mode: "worktree",
 			taskRef: { change: "add-flag" },
 		});
 		expect(
-			reference._tag === "Right" ? reference.right.task : "decoded",
+			reference._tag === "Success" ? reference.success.task : "decoded",
 		).toBeUndefined();
 	});
 
@@ -630,7 +630,7 @@ describe("cheap wake-up tools", () => {
 				// the answer says where the task came from and how long it was.
 				expect(started[0]?.task).toBe(message);
 				expect(started[0]?.taskRef).toBeUndefined();
-				expect(answer.content[0]?.text).toBe(
+				expect(answer.output[0]?.text).toBe(
 					`started wf-1 — task from the previous developer message, ${message.length} task chars`,
 				);
 			},
@@ -651,7 +651,7 @@ describe("cheap wake-up tools", () => {
 					taskRef: { previousMessage: true },
 				})) as ToolResult;
 				expect(answer.isError).toBe(true);
-				expect(answer.content[0]?.text).toContain("over the 16000-character");
+				expect(answer.output[0]?.text).toContain("over the 16000-character");
 				expect(started).toHaveLength(0);
 			},
 			{ lastDeveloperMessage: long },
@@ -669,7 +669,7 @@ describe("cheap wake-up tools", () => {
 				taskRef: { previousMessage: true },
 			})) as ToolResult;
 			expect(answer.isError).toBe(true);
-			expect(answer.content[0]?.text).toContain("no developer message yet");
+			expect(answer.output[0]?.text).toContain("no developer message yet");
 			expect(started).toHaveLength(0);
 		});
 	});
@@ -689,7 +689,7 @@ describe("cheap wake-up tools", () => {
 			// the reference passes the same start guard as an inline task.
 			expect(started[0]?.taskRef).toEqual({ change: "add-flag" });
 			expect(started[0]?.task).toBeUndefined();
-			expect(answer.content[0]?.text).toBe(
+			expect(answer.output[0]?.text).toBe(
 				'started wf-1 — task from change "add-flag", 640 task chars',
 			);
 		});
@@ -717,7 +717,7 @@ describe("cheap wake-up tools", () => {
 					task: "add a flag",
 				})) as ToolResult;
 				expect(answer.isError).toBe(true);
-				expect(answer.content[0]?.text).toBe(`${refusal} [bad-request]`);
+				expect(answer.output[0]?.text).toBe(`${refusal} [bad-request]`);
 			},
 			{ startError: refusal },
 		);

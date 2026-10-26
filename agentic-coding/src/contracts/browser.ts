@@ -5,18 +5,20 @@
 import { Schema } from "effect";
 
 /** One bounded, control-character-free text field. */
-function browserText(max: number): Schema.Schema<string> {
+function browserText(max: number) {
 	return Schema.String.pipe(
-		Schema.maxLength(max),
-		Schema.filter(
-			(value) => {
-				for (let index = 0; index < value.length; index++) {
-					const code = value.charCodeAt(index);
-					if (code < 0x20 || code === 0x7f) return false;
-				}
-				return true;
-			},
-			{ message: () => "control characters are not allowed" },
+		Schema.check(Schema.isMaxLength(max)),
+		Schema.check(
+			Schema.makeFilter(
+				(value) => {
+					for (let index = 0; index < value.length; index++) {
+						const code = value.charCodeAt(index);
+						if (code < 0x20 || code === 0x7f) return false;
+					}
+					return true;
+				},
+				{ message: "control characters are not allowed" },
+			),
 		),
 	);
 }
@@ -29,20 +31,25 @@ const browserField = (max: number) => browserText(max);
  * Captions keep the filtered field: a caption is stored in the evidence
  * manifest, whose own contract is control-character-free. */
 const browserFreeText = (max: number) =>
-	Schema.String.pipe(Schema.maxLength(max));
-const browserName = (max: number) => browserText(max).pipe(Schema.minLength(1));
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(max)));
+const browserName = (max: number) =>
+	browserText(max).pipe(Schema.check(Schema.isMinLength(1)));
 
 /** The width and height bounds the server enforces when it opens a session. */
 export const browserViewportSchema = Schema.Struct({
 	width: Schema.Number.pipe(
-		Schema.filter((value) => Number.isFinite(value), {
-			message: () => "viewport.width must be a finite number",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isFinite(value), {
+				message: "viewport.width must be a finite number",
+			}),
+		),
 	),
 	height: Schema.Number.pipe(
-		Schema.filter((value) => Number.isFinite(value), {
-			message: () => "viewport.height must be a finite number",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isFinite(value), {
+				message: "viewport.height must be a finite number",
+			}),
+		),
 	),
 });
 
@@ -52,16 +59,20 @@ const selectorField = Schema.optional(browserField(1024));
 const snapshotIdField = Schema.optional(browserName(64));
 const timeoutField = Schema.optional(
 	Schema.Number.pipe(
-		Schema.filter((value) => Number.isFinite(value) && value > 0, {
-			message: () => "timeoutMs must be a positive number",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isFinite(value) && value > 0, {
+				message: "timeoutMs must be a positive number",
+			}),
+		),
 	),
 );
 const positiveIntegerField = Schema.optional(
 	Schema.Number.pipe(
-		Schema.filter((value) => Number.isInteger(value) && value > 0, {
-			message: () => "expected a positive integer",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+				message: "expected a positive integer",
+			}),
+		),
 	),
 );
 
@@ -91,7 +102,7 @@ export type BrowserOpenRequest = typeof browserOpenRequestSchema.Type;
 export const browserCredentialRefSchema = Schema.Struct({
 	app: browserName(64),
 	role: browserName(64),
-	field: Schema.Literal("username", "password", "totp"),
+	field: Schema.Literals(["username", "password", "totp"]),
 });
 export type BrowserCredentialRef = typeof browserCredentialRefSchema.Type;
 
@@ -131,7 +142,7 @@ export type BrowserFindRequest = typeof browserFindRequestSchema.Type;
  * action-specific value. */
 export const browserActionRequestSchema = Schema.Struct({
 	session: sessionField,
-	action: Schema.Literal("click", "fill", "press", "select", "hover"),
+	action: Schema.Literals(["click", "fill", "press", "select", "hover"]),
 	snapshotId: snapshotIdField,
 	ref: refField,
 	selector: selectorField,
@@ -141,7 +152,7 @@ export const browserActionRequestSchema = Schema.Struct({
 	credential: Schema.optional(browserCredentialRefSchema),
 	key: Schema.optional(browserField(64)),
 	values: Schema.optional(
-		Schema.Array(browserField(512)).pipe(Schema.maxItems(32)),
+		Schema.Array(browserField(512)).pipe(Schema.check(Schema.isMaxLength(32))),
 	),
 	timeoutMs: timeoutField,
 });
@@ -236,7 +247,7 @@ export type BrowserWaitRequest = typeof browserWaitRequestSchema.Type;
 /** `browser_eval`: JavaScript evaluated in the page. */
 export const browserEvalRequestSchema = Schema.Struct({
 	session: sessionField,
-	code: browserFreeText(20_000).pipe(Schema.minLength(1)),
+	code: browserFreeText(20_000).pipe(Schema.check(Schema.isMinLength(1))),
 	timeoutMs: timeoutField,
 });
 export type BrowserEvalRequest = typeof browserEvalRequestSchema.Type;
@@ -247,17 +258,21 @@ export const browserLogRequestSchema = Schema.Struct({
 	level: Schema.optional(browserField(32)),
 	status: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value), {
-				message: () => "status must be an integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value), {
+					message: "status must be an integer",
+				}),
+			),
 		),
 	),
 	url: Schema.optional(browserField(2048)),
 	limit: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "limit must be a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "limit must be a positive integer",
+				}),
+			),
 		),
 	),
 });
@@ -284,7 +299,7 @@ export type BrowserScreenshotRequest =
  * leaves neither file nor manifest entry behind. */
 export const browserRecordRequestSchema = Schema.Struct({
 	session: sessionField,
-	action: Schema.Literal("start", "stop"),
+	action: Schema.Literals(["start", "stop"]),
 	keep: Schema.optional(Schema.Boolean),
 	caption: Schema.optional(browserField(512)),
 });
@@ -293,7 +308,7 @@ export type BrowserRecordRequest = typeof browserRecordRequestSchema.Type;
 /** `browser_run_script`: Playwright JavaScript against the session page. */
 export const browserScriptRequestSchema = Schema.Struct({
 	session: sessionField,
-	code: browserFreeText(200_000).pipe(Schema.minLength(1)),
+	code: browserFreeText(200_000).pipe(Schema.check(Schema.isMinLength(1))),
 	save: Schema.optional(Schema.Boolean),
 	observe: Schema.optional(Schema.Boolean),
 	caption: Schema.optional(browserField(512)),
@@ -319,9 +334,11 @@ export const browserStageLoginWaitRequestSchema = Schema.Struct({
 	session: sessionField,
 	timeoutSec: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value > 0, {
-				message: () => "expected a positive number of seconds",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value > 0, {
+					message: "expected a positive number of seconds",
+				}),
+			),
 		),
 	),
 });
@@ -330,21 +347,20 @@ export type BrowserStageLoginWaitRequest =
 
 /** One agent-captured value: a name and a short text, both redacted before the
  * journal is written. */
-const stageCaptureKey = browserText(128).pipe(Schema.minLength(1));
-const stageCaptures = Schema.Record({
-	key: stageCaptureKey,
-	value: browserFreeText(1024),
-});
+const stageCaptureKey = browserText(128).pipe(
+	Schema.check(Schema.isMinLength(1)),
+);
+const stageCaptures = Schema.Record(stageCaptureKey, browserFreeText(1024));
 
 /** The optional knowledge observation a journal step may carry
  * (`add-stage-flow-evidence`): what the step showed about the process being
  * tested, and — for a contradiction — which cause the agent suspects. */
 export const stageKnowledgeSchema = Schema.Struct({
-	concept: browserField(256).pipe(Schema.minLength(1)),
+	concept: browserField(256).pipe(Schema.check(Schema.isMinLength(1))),
 	section: Schema.optional(browserField(256)),
-	kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+	kind: Schema.Literals(["confirmed", "contradicted", "missing", "new"]),
 	suspectedCause: Schema.optional(
-		Schema.Literal("product-change", "regression", "unknown"),
+		Schema.Literals(["product-change", "regression", "unknown"]),
 	),
 });
 export type StageKnowledge = typeof stageKnowledgeSchema.Type;
@@ -355,12 +371,12 @@ export type StageKnowledge = typeof stageKnowledgeSchema.Type;
  * server, never accepted from the caller. */
 export const browserStageStepRequestSchema = Schema.Struct({
 	session: sessionField,
-	label: browserField(512).pipe(Schema.minLength(1)),
+	label: browserField(512).pipe(Schema.check(Schema.isMinLength(1))),
 	expected: Schema.optional(browserFreeText(4096)),
 	observed: Schema.optional(browserFreeText(4096)),
 	captures: Schema.optional(stageCaptures),
 	evidence: Schema.optional(
-		Schema.Array(browserName(32)).pipe(Schema.maxItems(64)),
+		Schema.Array(browserName(32)).pipe(Schema.check(Schema.isMaxLength(64))),
 	),
 	knowledge: Schema.optional(stageKnowledgeSchema),
 });
@@ -373,9 +389,11 @@ export const browserStageJournalRequestSchema = Schema.Struct({
 	app: Schema.optional(browserName(64)),
 	limit: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter(
-				(value) => Number.isInteger(value) && value > 0 && value <= 200,
-				{ message: () => "limit must be an integer between 1 and 200" },
+			Schema.check(
+				Schema.makeFilter(
+					(value) => Number.isInteger(value) && value > 0 && value <= 200,
+					{ message: "limit must be an integer between 1 and 200" },
+				),
 			),
 		),
 	),
@@ -400,17 +418,19 @@ export const stageWaitConditionSchema = Schema.Struct({
 	url: Schema.optional(browserField(2048)),
 	mail: Schema.optional(stageWaitMailSchema),
 }).pipe(
-	Schema.filter(
-		(value) =>
-			[
-				value.text !== undefined,
-				value.selector !== undefined,
-				value.url !== undefined,
-				value.mail !== undefined,
-			].filter(Boolean).length === 1,
-		{
-			message: () => "`until` takes exactly one of text, selector, url or mail",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(value) =>
+				[
+					value.text !== undefined,
+					value.selector !== undefined,
+					value.url !== undefined,
+					value.mail !== undefined,
+				].filter(Boolean).length === 1,
+			{
+				message: "`until` takes exactly one of text, selector, url or mail",
+			},
+		),
 	),
 );
 export type StageWaitCondition = typeof stageWaitConditionSchema.Type;
@@ -423,16 +443,20 @@ export const browserStageWaitRequestSchema = Schema.Struct({
 	reload: Schema.optional(Schema.Boolean),
 	intervalSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value > 0, {
-				message: () => "intervalSeconds must be a positive number",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value > 0, {
+					message: "intervalSeconds must be a positive number",
+				}),
+			),
 		),
 	),
 	timeoutSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isFinite(value) && value > 0, {
-				message: () => "timeoutSeconds must be a positive number",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isFinite(value) && value > 0, {
+					message: "timeoutSeconds must be a positive number",
+				}),
+			),
 		),
 	),
 });
@@ -508,23 +532,23 @@ export interface BrowserStatusResponse {
 	};
 }
 
-export const browserStatusResponseSchema: Schema.Schema<BrowserStatusResponse> =
+export const browserStatusResponseSchema: Schema.Codec<BrowserStatusResponse> =
 	Schema.Struct({
 		available: Schema.Boolean,
-		source: Schema.Literal("system-chrome", "installed-chromium", "none"),
+		source: Schema.Literals(["system-chrome", "installed-chromium", "none"]),
 		executablePath: Schema.optional(Schema.String),
 		channel: Schema.optional(Schema.Literal("chrome")),
 		browsersPath: Schema.String,
 		systemChrome: Schema.optional(Schema.String),
 		headed: Schema.Boolean,
 		install: Schema.Struct({
-			phase: Schema.Literal(
+			phase: Schema.Literals([
 				"idle",
 				"downloading",
 				"ready",
 				"failed",
 				"cancelled",
-			),
+			]),
 			detail: Schema.optional(Schema.String),
 			startedAt: Schema.optional(Schema.Number),
 		}),
@@ -541,7 +565,9 @@ export const browserStatusResponseSchema: Schema.Schema<BrowserStatusResponse> =
 /** The install/cancel routes take no body fields; the filter makes that
  * strict rather than merely empty. */
 export const browserInstallRequestSchema = Schema.Struct({}).pipe(
-	Schema.filter((value) => Object.keys(value as object).length === 0, {
-		message: () => "this route takes no body fields",
-	}),
+	Schema.check(
+		Schema.makeFilter((value) => Object.keys(value as object).length === 0, {
+			message: "this route takes no body fields",
+		}),
+	),
 );

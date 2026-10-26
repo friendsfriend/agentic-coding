@@ -1879,7 +1879,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const index = current ? choices.indexOf(current) : -1;
 		setPicker({
 			kind,
-			selected: index >= 0 ? index : 0,
+			selected: Math.max(index, 0),
 			filter: "",
 			filtering: false,
 		});

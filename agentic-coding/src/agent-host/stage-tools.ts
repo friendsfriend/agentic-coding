@@ -44,7 +44,7 @@ const READ_TIMEOUT_MS = 120_000;
 
 type Result = {
 	details?: ReturnType<typeof toolViewDetails>;
-	content: Array<{ type: "text"; text: string }>;
+	output: Array<{ type: "text"; text: string }>;
 	isError?: boolean;
 };
 
@@ -53,7 +53,7 @@ function text(value: unknown): Result {
 		typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	return {
 		details: toolViewDetails(value, MAX_RESULT_CHARS),
-		content: [
+		output: [
 			{
 				type: "text",
 				text:
@@ -66,7 +66,7 @@ function text(value: unknown): Result {
 }
 
 function failure(message: string): Result {
-	return { content: [{ type: "text", text: message }], isError: true };
+	return { output: [{ type: "text", text: message }], isError: true };
 }
 
 /**

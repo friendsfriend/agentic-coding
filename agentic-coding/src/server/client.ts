@@ -108,7 +108,7 @@ export class BackendClient implements DashboardGateway {
 	private decode<T>(
 		id: string,
 		// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-		schema: Schema.Schema<any, any, never>,
+		schema: Schema.Codec<any, any, never>,
 		value: unknown,
 		status = 200,
 	): T {
@@ -227,7 +227,7 @@ export class BackendClient implements DashboardGateway {
 	async observe<T>(
 		observation: ObservationRequest,
 		// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-		schema: Schema.Schema<any, any, never>,
+		schema: Schema.Codec<any, any, never>,
 		signal?: AbortSignal,
 	): Promise<T> {
 		return this.decode<T>(

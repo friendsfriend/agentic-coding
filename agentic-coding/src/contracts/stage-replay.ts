@@ -6,15 +6,20 @@
 import { Schema } from "effect";
 
 const text = (max: number) =>
-	Schema.String.pipe(Schema.minLength(1), Schema.maxLength(max));
+	Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(max)),
+	);
 const hash = Schema.String.pipe(
-	Schema.pattern(/^sha256:[a-f0-9]{64}$/),
-	Schema.maxLength(80),
+	Schema.check(Schema.isPattern(/^sha256:[a-f0-9]{64}$/)),
+	Schema.check(Schema.isMaxLength(80)),
 );
 const nonNegative = Schema.Number.pipe(
-	Schema.filter((value) => Number.isInteger(value) && value >= 0, {
-		message: () => "expected a non-negative integer",
-	}),
+	Schema.check(
+		Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
+			message: "expected a non-negative integer",
+		}),
+	),
 );
 
 export const stageReplayRequestSchema = Schema.Struct({
@@ -24,32 +29,36 @@ export const stageReplayRequestSchema = Schema.Struct({
 	 * with `flowId`. */
 	suiteId: Schema.optional(text(64)),
 	stage: Schema.optional(text(64)),
-	inputs: Schema.optional(
-		Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-	),
+	inputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 	dryRun: Schema.optional(Schema.Boolean),
 	role: Schema.optional(text(128)),
 }).pipe(
-	Schema.filter(
-		(request) =>
-			(request.flowId === undefined) !== (request.suiteId === undefined),
-		{
-			message: () => "a replay request needs exactly one of flowId or suiteId",
-		},
+	Schema.check(
+		Schema.makeFilter(
+			(request) =>
+				(request.flowId === undefined) !== (request.suiteId === undefined),
+			{
+				message: "a replay request needs exactly one of flowId or suiteId",
+			},
+		),
 	),
 );
 export type StageReplayRequest = typeof stageReplayRequestSchema.Type;
 
 export const stageFlowsRequestSchema = Schema.Struct({
 	stage: Schema.optional(text(64)),
-	query: Schema.optional(Schema.String.pipe(Schema.maxLength(256))),
+	query: Schema.optional(
+		Schema.String.pipe(Schema.check(Schema.isMaxLength(256))),
+	),
 	limit: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter(
-				(value) => Number.isInteger(value) && value > 0 && value <= 100,
-				{
-					message: () => "limit must be an integer between 1 and 100",
-				},
+			Schema.check(
+				Schema.makeFilter(
+					(value) => Number.isInteger(value) && value > 0 && value <= 100,
+					{
+						message: "limit must be an integer between 1 and 100",
+					},
+				),
 			),
 		),
 	),
@@ -65,13 +74,11 @@ export const replayEventSchema = Schema.Struct({
 	role: Schema.optional(text(128)),
 	url: Schema.optional(text(2048)),
 	subStep: text(512),
-	status: Schema.Literal("passed", "failed"),
+	status: Schema.Literals(["passed", "failed"]),
 	durationMs: nonNegative,
 	expected: Schema.optional(text(4096)),
 	observed: Schema.optional(text(4096)),
-	captures: Schema.optional(
-		Schema.Record({ key: text(128), value: text(1024) }),
-	),
+	captures: Schema.optional(Schema.Record(text(128), text(1024))),
 	evidence: Schema.optional(Schema.Array(text(256))),
 	error: Schema.optional(text(4096)),
 });
@@ -85,7 +92,7 @@ export const replayResultSchema = Schema.Struct({
 	stage: Schema.optional(text(64)),
 	routeHash: hash,
 	inputsHash: hash,
-	status: Schema.Literal("passed", "failed"),
+	status: Schema.Literals(["passed", "failed"]),
 	startedAt: text(64),
 	durationMs: nonNegative,
 	steps: Schema.Array(
@@ -95,11 +102,9 @@ export const replayResultSchema = Schema.Struct({
 			block: text(160),
 			version: text(32),
 			app: Schema.optional(text(64)),
-			status: Schema.Literal("passed", "failed", "skipped"),
+			status: Schema.Literals(["passed", "failed", "skipped"]),
 			durationMs: nonNegative,
-			outputs: Schema.optional(
-				Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-			),
+			outputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 			evidence: Schema.optional(Schema.Array(text(256))),
 			error: Schema.optional(text(4096)),
 		}),

@@ -226,6 +226,7 @@ test("legacy issued associations migrate atomically while role-only hints remain
 		kind: "agentic.runs",
 		version: 1,
 		scope: "session",
+		checkpointWhen: () => false,
 		initial: () => ({
 			runs: {} as Record<string, { conversationId: number }>,
 			runConversations: {} as Record<string, { conversationId: number }>,
@@ -311,6 +312,7 @@ test("a failed backup prevents the host-store version gate or ownership migratio
 		kind: "agentic.runs",
 		version: 1,
 		scope: "session",
+		checkpointWhen: () => false,
 		initial: () => ({ runs: {}, runConversations: {} }),
 	});
 	let harness = await Harness.open(
@@ -353,12 +355,14 @@ test("a newer durable document version explicitly rejects an older reader", asyn
 		kind: "agentic.format-probe",
 		version: 1,
 		scope: "session",
+		checkpointWhen: () => false,
 		initial: () => ({ value: 1 }),
 	});
 	const next = defineDoc({
 		kind: "agentic.format-probe",
 		version: 2,
 		scope: "session",
+		checkpointWhen: () => false,
 		initial: () => ({ value: 2 }),
 		migrate: (value) => value as { value: number },
 	});

@@ -18,7 +18,7 @@
 // Nothing here prints or persists key material: a URL's userinfo password is
 // masked, known credential shapes are redacted, and only one bounded, matched
 // error line is reported.
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { redactTelemetryText } from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
 
@@ -216,9 +216,9 @@ function pushRemoteUrlsEffect(
 				timeoutMs: Math.min(timeoutMs, PUSH_PREFLIGHT_CONFIG_TIMEOUT_MS),
 				maxOutputBytes: 16 * 1024,
 			},
-		).pipe(Effect.either);
-		if (Either.isLeft(listed)) return [];
-		return listed.right.stdout
+		).pipe(Effect.result);
+		if (Result.isFailure(listed)) return [];
+		return listed.success.stdout
 			.split("\n")
 			.map((line) => line.trim())
 			.filter((line) => line !== "");
@@ -238,7 +238,7 @@ function coreSshCommandEffect(
 		maxOutputBytes: 8 * 1024,
 	}).pipe(
 		Effect.map((result) => result.stdout.trim() || undefined),
-		Effect.catchAll(() => Effect.succeed(undefined)),
+		Effect.catch(() => Effect.succeed(undefined)),
 	);
 }
 
@@ -298,9 +298,9 @@ export function pushPreflightEffect(
 				timeoutMs,
 				maxOutputBytes: PUSH_PREFLIGHT_MAX_OUTPUT_BYTES,
 			},
-		).pipe(Effect.either);
-		if (Either.isRight(checked)) return settle("ok", { label: remoteUrl });
-		const failure = checked.left;
+		).pipe(Effect.result);
+		if (Result.isSuccess(checked)) return settle("ok", { label: remoteUrl });
+		const failure = checked.failure;
 		const signal = pushAuthFailureSignal(failure.detail);
 		if (signal)
 			return settle("auth-failed", { label: remoteUrl, detail: signal });

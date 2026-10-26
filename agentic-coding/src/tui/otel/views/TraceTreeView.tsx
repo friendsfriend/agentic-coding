@@ -132,6 +132,7 @@ export function TraceTreeView(props: {
 		const start = BigInt(actual[0].node.span.startTimeUnixNano);
 		const end = actual.reduce((latest, item) => {
 			const value = BigInt(item.node.span.endTimeUnixNano);
+			// biome-ignore lint/complexity/useMathMinMax: Math.max does not accept bigint timestamps.
 			return value > latest ? value : latest;
 		}, start);
 		const total = Math.max(1, Number((end - start) / 1_000_000n));

@@ -70,10 +70,10 @@ export const localChangesSchema = Schema.Array(localChangeSchema);
 
 /** One diff body (bounded so a hostile repository cannot stream forever). */
 export const diffBodySchema = Schema.String.pipe(
-	Schema.maxLength(4 * 1024 * 1024),
+	Schema.check(Schema.isMaxLength(4 * 1024 * 1024)),
 );
 
 /** Path lists: artifacts, changed files. */
 export const pathListSchema = Schema.Array(
-	Schema.String.pipe(Schema.maxLength(4096)),
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(4096))),
 );

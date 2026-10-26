@@ -7,15 +7,16 @@
 import { Schema } from "effect";
 
 const text = (max: number) =>
-	Schema.String.pipe(Schema.minLength(1), Schema.maxLength(max));
+	Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(max)),
+	);
 
 export const stageBlockStepRequestSchema = Schema.Struct({
 	id: Schema.optional(text(64)),
 	block: text(160),
 	version: Schema.optional(text(32)),
-	args: Schema.optional(
-		Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-	),
+	args: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 	save: Schema.optional(Schema.Boolean),
 });
 export type StageBlockStepRequest = typeof stageBlockStepRequestSchema.Type;
@@ -25,32 +26,36 @@ export const stageBlockPlanRequestSchema = Schema.Struct({
 	flowId: Schema.optional(text(64)),
 	revision: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
-				message: () => "expected a non-negative integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
+					message: "expected a non-negative integer",
+				}),
+			),
 		),
 	),
-	inputs: Schema.optional(
-		Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-	),
+	inputs: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 	steps: Schema.Array(stageBlockStepRequestSchema).pipe(
-		Schema.minItems(1),
-		Schema.maxItems(100),
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(100)),
 	),
 });
 export type StageBlockPlanRequest = typeof stageBlockPlanRequestSchema.Type;
 
 export const stageBlocksRequestSchema = Schema.Struct({
 	id: Schema.optional(text(160)),
-	query: Schema.optional(Schema.String.pipe(Schema.maxLength(256))),
+	query: Schema.optional(
+		Schema.String.pipe(Schema.check(Schema.isMaxLength(256))),
+	),
 	app: Schema.optional(text(64)),
-	effect: Schema.optional(Schema.Literal("read", "write", "destructive")),
+	effect: Schema.optional(Schema.Literals(["read", "write", "destructive"])),
 	full: Schema.optional(Schema.Boolean),
 	limit: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 });
@@ -59,7 +64,7 @@ export type StageBlocksRequest = typeof stageBlocksRequestSchema.Type;
 export const stageRunRequestSchema = Schema.Struct({
 	/** A standalone block plan (`{ planId?, flowId?, inputs?, steps }`): the
 	 * tester chooses its own route, so there is no approved plan to project. */
-	plan: Schema.Unknown,
+	plan: Schema.optionalKey(Schema.Unknown),
 	session: Schema.optional(text(64)),
 	stage: Schema.optional(text(64)),
 	stageApp: Schema.optional(text(64)),
@@ -73,7 +78,7 @@ export const stageBlockSaveRequestSchema = Schema.Struct({
 	/** The reviewed JSON document (`StageDataBlockDocument`). Its shape is owned
 	 * by the pure validator, which reports bounded issues instead of failing a
 	 * transport decode. */
-	document: Schema.Unknown,
+	document: Schema.optionalKey(Schema.Unknown),
 	session: Schema.optional(text(64)),
 	// The draft's plan id and revision are not request fields: the engine derives
 	// them from the workflow's pinned plan and its own revision, so a tester can

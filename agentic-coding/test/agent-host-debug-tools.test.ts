@@ -69,7 +69,7 @@ interface Executable {
 		api: unknown,
 		context: unknown,
 	): Promise<{
-		content: Array<{ type: string; text: string }>;
+		output: Array<{ type: string; text: string }>;
 		isError?: boolean;
 	}>;
 }
@@ -93,7 +93,7 @@ async function invoke(
 ): Promise<{ text: string; isError: boolean; value: unknown }> {
 	const extension = createDebugExtension(lookup, { fetch: fakeFetch(server) });
 	const result = await toolOf(extension, name).execute(args, {}, {});
-	const text = result.content.map((block) => block.text).join("");
+	const text = result.output.map((block) => block.text).join("");
 	return {
 		text,
 		isError: result.isError === true,
@@ -246,8 +246,6 @@ describe("debug tool surface", () => {
 		}));
 		const result = await toolOf(extension, "otel_query").execute({}, {}, {});
 		expect(result.isError).toBe(true);
-		expect(result.content[0]?.text).toContain(
-			"no agent environment capability",
-		);
+		expect(result.output[0]?.text).toContain("no agent environment capability");
 	});
 });

@@ -6,7 +6,7 @@
 // acquire/release. Guarded services never run their own nested Effect
 // runtime — every program is provided with the shared production
 // application layer here, at the named composition root.
-import { Cause, Chunk, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Result } from "effect";
 import { WorkflowRuntimeError } from "./contracts.ts";
 import type {
 	WorkflowClock,
@@ -70,11 +70,11 @@ export class WorkflowApplication {
 	): A {
 		const exit = Effect.runSyncExit(Effect.provide(program, this.layerFor()));
 		if (Exit.isSuccess(exit)) return exit.value;
-		const failure = Cause.failureOption(exit.cause);
+		const failure = Cause.findErrorOption(exit.cause);
 		if (Option.isSome(failure)) throw failure.value;
-		const firstDefect = Chunk.head(Cause.defects(exit.cause));
-		if (Option.isSome(firstDefect)) {
-			const defect = firstDefect.value;
+		const firstDefect = Cause.findDefect(exit.cause);
+		if (Result.isSuccess(firstDefect)) {
+			const defect = firstDefect.success;
 			if (defect instanceof WorkflowRuntimeError) throw defect;
 			throw toRuntimeError(defect);
 		}

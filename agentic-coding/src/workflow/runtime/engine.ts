@@ -18,7 +18,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
+import { Cause, Effect, Exit, type Layer, Option, Result } from "effect";
 import { environmentToolsAvailable } from "../../agent-host/environment-capability.ts";
 import { resolveConfigRoot } from "../../config-root.ts";
 import {
@@ -397,11 +397,11 @@ export class WorkflowEngine {
 	): A {
 		const exit = Effect.runSyncExit(effect.pipe(Effect.provide(this.layer)));
 		if (Exit.isSuccess(exit)) return exit.value;
-		const failure = Cause.failureOption(exit.cause);
+		const failure = Cause.findErrorOption(exit.cause);
 		if (Option.isSome(failure)) throw failure.value;
-		const firstDefect = Chunk.head(Cause.defects(exit.cause));
-		if (Option.isSome(firstDefect)) {
-			const defect = firstDefect.value;
+		const firstDefect = Cause.findDefect(exit.cause);
+		if (Result.isSuccess(firstDefect)) {
+			const defect = firstDefect.success;
 			if (defect instanceof WorkflowRuntimeError) throw defect;
 			throw toRuntimeError(defect);
 		}
@@ -535,7 +535,7 @@ export class WorkflowEngine {
 					catch: toRuntimeError,
 				});
 			}
-			const committed = yield* Effect.catchAll(
+			const committed = yield* Effect.catch(
 				store.transaction(repo, (db) =>
 					self.commitDispatch(db, command, preparedHandoff),
 				),
@@ -564,7 +564,7 @@ export class WorkflowEngine {
 										: command.type;
 							// The rejection audit is best-effort and runs separately from the
 							// workflow transaction's rollback; it never fails the command.
-							yield* Effect.catchAll(
+							yield* Effect.catch(
 								store.transaction(repo, (db) => {
 									db.query(
 										"INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)",
@@ -1924,7 +1924,7 @@ export class WorkflowEngine {
 		// `core.triage` is the accurate capture — nothing but verifier side effects
 		// separates it from the round it verifies — and `core.implementation` is the
 		// fallback capture for a definition that bypasses triage, so a
-		// verification-only family still scopes its second round. Either way the
+		// verification-only family still scopes its second round. Result way the
 		// fresh capture is the tree the next round verifies.
 		const baseline = captureVerificationBaseline(observation, opens);
 		if (!measuring) return { ...existing, baseline };

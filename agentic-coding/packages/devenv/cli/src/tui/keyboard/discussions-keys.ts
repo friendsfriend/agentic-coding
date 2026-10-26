@@ -100,11 +100,11 @@ export async function handleDiscussionsKeys(
 	const sortedDiscussions = [...filteredDiscussions].sort((a, b) => {
 		const aLatest = a.notes.reduce((latest, note) => {
 			const noteTime = new Date(note.created_at).getTime();
-			return noteTime > latest ? noteTime : latest;
+			return Math.max(noteTime, latest);
 		}, 0);
 		const bLatest = b.notes.reduce((latest, note) => {
 			const noteTime = new Date(note.created_at).getTime();
-			return noteTime > latest ? noteTime : latest;
+			return Math.max(noteTime, latest);
 		}, 0);
 		return bLatest - aLatest; // Newest first
 	});

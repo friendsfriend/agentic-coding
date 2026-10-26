@@ -912,7 +912,7 @@ export function App(props: {
 		}
 		if (key === "k" || key === "up") {
 			if (rows.length > 0)
-				selectAgentIndex(Math.max(0, (current < 0 ? 0 : current) - 1));
+				selectAgentIndex(Math.max(0, Math.max(current, 0) - 1));
 			return;
 		}
 		if (key === "enter" || key === "return") {
@@ -2089,7 +2089,7 @@ export function App(props: {
 		const index = summaries().findIndex(
 			(summary) => summary.traceId === traceId,
 		);
-		setSelectedListIndex(index < 0 ? 0 : index);
+		setSelectedListIndex(Math.max(index, 0));
 		setSelectedTraceId(traceId);
 		setTreeRoots(roots);
 		setTreeIndex(0);

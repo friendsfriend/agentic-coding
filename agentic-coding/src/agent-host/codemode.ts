@@ -149,6 +149,10 @@ function nestedTool(
 			const nested: ToolExecutionApi = {
 				...api,
 				callId: `${api.callId}:${index}`,
+				// This wrapper owns its bounded tail; upstream must not skip bytes
+				// using the outer codemode call's output window.
+				outputWindow: undefined,
+				retainedOutput: () => ({ text: retained(), truncated }),
 				output: (chunk) => {
 					const next = boundedLiveOutput(
 						captured,
@@ -174,8 +178,8 @@ function nestedTool(
 					nested,
 					nestedContext,
 				);
-				const text = result.content
-					? contentToText(result.content)
+				const text = result.output
+					? contentToText(result.output)
 					: retained() + decoder.decode();
 				record.output = text;
 				record.isError = result.isError === true;
@@ -208,7 +212,7 @@ function nestedTool(
 
 function textResult(text: string, isError = false): ToolExecutionResult {
 	return {
-		content: [{ type: "text", text }],
+		output: [{ type: "text", text }],
 		...(isError ? { isError: true } : {}),
 	};
 }

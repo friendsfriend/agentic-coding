@@ -78,7 +78,7 @@ type ContentBlock =
 	| { type: "text"; text: string }
 	| { type: "image"; data: string; mimeType: string };
 type Result = {
-	content: ContentBlock[];
+	output: ContentBlock[];
 	isError?: boolean;
 	details?: ReturnType<typeof toolViewDetails>;
 };
@@ -88,7 +88,7 @@ function text(value: unknown): Result {
 		typeof value === "string" ? value : JSON.stringify(value, null, 2);
 	return {
 		details: toolViewDetails(value, MAX_RESULT_CHARS),
-		content: [
+		output: [
 			{
 				type: "text",
 				text:
@@ -101,7 +101,7 @@ function text(value: unknown): Result {
 }
 
 function failure(message: string): Result {
-	return { content: [{ type: "text", text: message }], isError: true };
+	return { output: [{ type: "text", text: message }], isError: true };
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
@@ -1510,7 +1510,7 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						].join("\n");
 						const body = value.observation ?? value.snapshot ?? "";
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text: `${header}\n\n${body.slice(0, MAX_RESULT_CHARS)}`,
@@ -2062,9 +2062,9 @@ export function createBrowserExtension(lookup: RunContextLookup) {
 						// `view: false` answers with the evidence id alone, so no image block
 						// is built for a picture this call deliberately did not look at.
 						return value.base64 === undefined
-							? { content: [{ type: "text", text: summary }] }
+							? { output: [{ type: "text", text: summary }] }
 							: {
-									content: [
+									output: [
 										{ type: "text", text: summary },
 										{
 											type: "image",

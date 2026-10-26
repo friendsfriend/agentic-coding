@@ -101,7 +101,7 @@ export function handleActionsKeys(
 		const currentIndex = nodes.findIndex(
 			(node) => node.key === store.focusedTreeKey(),
 		);
-		const index = currentIndex < 0 ? 0 : currentIndex;
+		const index = Math.max(currentIndex, 0);
 		const next = isDownKey(event)
 			? Math.min(nodes.length - 1, index + 1)
 			: Math.max(0, index - 1);

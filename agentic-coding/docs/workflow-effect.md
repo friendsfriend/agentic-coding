@@ -1,14 +1,14 @@
 # Workflow Effect conventions
 
 This playbook is the single agent-facing guide for writing and changing the
-workflow layer with [Effect](https://effect.website/) (locked at **3.22.2**,
-the release line selected in task 1.1). It documents one standard pattern per
+workflow layer with [Effect](https://effect.website/) (locked at **4.0.6**,
+upgraded from the phase-1 Effect 3 release line). It documents one standard pattern per
 operation/error/schema/service/scope/test boundary. Every example imports a
 production symbol or lives in a type-checked module; none are uncompiled
 drift. The companion inventory is
 [`docs/workflow-effect-migration.md`](workflow-effect-migration.md).
 
-Version-matched official documentation:
+Official documentation (use the installed v4 declarations for version-specific signatures):
 
 - Effect Schema (data decoding): https://effect.website/docs/schema/introduction
 - Effect Schema union/optional/refinement: https://effect.website/docs/schema/type-schema
@@ -122,8 +122,8 @@ import { decodeContract } from "./schema.ts";
 
 const Answer = Schema.Struct({
 	questionId: Schema.String,
-	kind: Schema.Literal("option", "custom", "cancel"),
-	value: Schema.optionalWith(Schema.String, { exact: true }),
+	kind: Schema.Literals(["option", "custom", "cancel"]),
+	value: Schema.optionalKey(Schema.String),
 });
 
 const answer = decodeContract("core.developer-question", Answer, raw);
@@ -218,7 +218,7 @@ test("command decode accepts an omitted reason as empty", () => {
 ## Production-backed recipes (phase 4)
 
 Both recipes compile against production symbols and run with the locked
-Effect 3.22.2 — the focused verification commands are the same ones the
+Effect 4.0.6 — the focused verification commands are the same ones the
 workflow-owned test verifier runs against changed behavior.
 
 ### Recipe 1: a cancellable external handler with typed transient failure
@@ -291,3 +291,31 @@ Only the workflow engine's launch/composition points may run an Effect runtime
 in later phases. Everything downstream of a Schema decode stays inside typed
 values and tagged failures; the outer boundary maps `WorkflowFailure` to the
 bounded external diagnostic via `externalDiagnostic`.
+
+## Effect 4 migration notes
+
+The service boundaries and durable outbox policy above are unchanged. Use v4
+APIs directly, not v3 aliases or project-specific compatibility wrappers:
+
+- `Context.Service<Self, Shape>()("id")` for class-style service keys.
+- `Effect.gen({ self: this }, function* () { ... })` when the generator uses `this`.
+- `Effect.callback`, `Effect.catch`, `Effect.catchDefect`, and `Effect.result`.
+  Results use `Result.isSuccess` / `Result.isFailure`, `success` / `failure`.
+- `Cause.findErrorOption` and `Cause.findDefect` at the outer runtime boundary.
+- `Schema.Codec<T, Encoded>` at decode boundaries (`Schema.Schema<T>` no longer
+  guarantees a service-free decoder). Leave field builders inferred so record
+  key schemas retain their property-key constraints.
+- `Schema.Literals([...])`, `Schema.Union([...])`, `Schema.Record(key, value)`.
+- `Schema.check(Schema.makeFilter(predicate, { message: "..." }))` for custom
+  refinements; `Schema.check(Schema.isMaxLength(n))` for built-in checks.
+- `Schema.optionalKey` retains exact optional semantics. Defaults use
+  `Schema.withDecodingDefaultKey(Effect.sync(() => value))`, so each decode
+  receives a fresh array/object. Unlike v3, unknown-valued properties require
+  explicit optionality if absence is accepted by the wire contract.
+- `Schema.decodeTo` with `SchemaGetter.transform` normalizes retired runtime ids.
+- Diagnostics use `SchemaIssue.makeFormatterStandardSchemaV1` and explicitly
+  disable `reportInput`; paths and messages remain bounded and value-free.
+- v4 removed `onExcessProperty: "preserve"`. The contract decode boundary retains
+  snapshot unknown fields by merging only after validation, letting decoded,
+  normalized and defaulted values win at every known path. Ordinary wire
+  decoders still strip unknown fields; stage configuration still rejects them.

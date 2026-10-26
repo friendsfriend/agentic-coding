@@ -8,7 +8,7 @@ import { createSearchExtension } from "../src/agent-host/tools.ts";
 
 interface ToolResult {
 	readonly isError?: boolean;
-	readonly content?: readonly { readonly text?: string }[];
+	readonly output?: readonly { readonly text?: string }[];
 }
 
 interface ExecCall {
@@ -55,7 +55,7 @@ function grepTool() {
 }
 
 function textOf(result: ToolResult): string {
-	return (result.content ?? []).map((part) => part.text ?? "").join("\n");
+	return (result.output ?? []).map((part) => part.text ?? "").join("\n");
 }
 
 describe("durable grep tool", () => {

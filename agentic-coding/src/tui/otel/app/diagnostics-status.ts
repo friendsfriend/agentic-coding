@@ -41,9 +41,6 @@ export function diagnosticsStatusText(now = Date.now()): string | undefined {
 		.spikes()
 		.filter((spike) => Date.parse(spike.at) >= cut);
 	if (recent.length === 0) return undefined;
-	const worst = recent.reduce(
-		(max, spike) => (spike.lagMs > max ? spike.lagMs : max),
-		0,
-	);
+	const worst = recent.reduce((max, spike) => Math.max(spike.lagMs, max), 0);
 	return `lag ${worst}ms ×${recent.length}`;
 }

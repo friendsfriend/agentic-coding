@@ -139,7 +139,7 @@ export function createInProcessGateway(
 		async observe<T>(
 			observation: ObservationRequest,
 			// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-			schema: Schema.Schema<any, any, never>,
+			schema: Schema.Codec<any, any, never>,
 			signal?: AbortSignal,
 		): Promise<T> {
 			const value = await withSignal(

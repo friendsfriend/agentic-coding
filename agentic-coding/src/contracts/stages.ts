@@ -187,13 +187,16 @@ export interface StageIdentitiesResponse {
 export const stageIdentityForgetRequestSchema = Schema.Struct({
 	stage: Schema.optional(
 		Schema.String.pipe(
-			Schema.minLength(1),
-			Schema.maxLength(64),
-			Schema.pattern(/^[a-z0-9][a-z0-9-]{0,62}$/),
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(64)),
+			Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,62}$/)),
 		),
 	),
 	role: Schema.optional(
-		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(128)),
+		),
 	),
 });
 export type StageIdentityForgetRequest =
@@ -218,11 +221,14 @@ export interface AgentStagesResponse {
  * catalog actually references is accepted. */
 export const stageCredentialRequestSchema = Schema.Struct({
 	variable: Schema.String.pipe(
-		Schema.minLength(1),
-		Schema.maxLength(256),
-		Schema.pattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(256)),
+		Schema.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/)),
 	),
-	value: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(4096)),
+	value: Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(4096)),
+	),
 });
 export type StageCredentialRequest = typeof stageCredentialRequestSchema.Type;
 
@@ -256,38 +262,55 @@ export const stageApiRequestSchema = Schema.Struct({
 	/** The stage ident. Optional only when exactly one allow-listed stage exists,
 	 * which then applies to every request. */
 	stage: Schema.optional(
-		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(128)),
+		),
 	),
 	/** The application key. Optional only when the stage has exactly one `api`
 	 * application. */
 	app: Schema.optional(
-		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(128)),
+		),
 	),
 	/** The role whose token authenticates the request. */
-	role: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
-	method: Schema.Literal("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"),
+	role: Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(128)),
+	),
+	method: Schema.Literals(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]),
 	/** A path of that application, with an optional query string. */
-	path: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(2048)),
+	path: Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(2048)),
+	),
 	/** Query parameters, as an object. Refused together with a `?` in `path`, so
 	 * one request cannot express two different query strings. */
 	query: Schema.optional(
-		Schema.Record({
-			key: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(256)),
-			value: Schema.String.pipe(Schema.maxLength(2048)),
-		}),
+		Schema.Record(
+			Schema.String.pipe(
+				Schema.check(Schema.isMinLength(1)),
+				Schema.check(Schema.isMaxLength(256)),
+			),
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(2048))),
+		),
 	),
 	headers: Schema.optional(
-		Schema.Record({
-			key: Schema.String.pipe(
-				Schema.minLength(1),
-				Schema.maxLength(128),
-				Schema.pattern(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/),
+		Schema.Record(
+			Schema.String.pipe(
+				Schema.check(Schema.isMinLength(1)),
+				Schema.check(Schema.isMaxLength(128)),
+				Schema.check(Schema.isPattern(/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/)),
 			),
-			value: Schema.String.pipe(Schema.maxLength(4096)),
-		}),
+			Schema.String.pipe(Schema.check(Schema.isMaxLength(4096))),
+		),
 	),
 	body: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(MAX_STAGE_API_REQUEST_BYTES)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMaxLength(MAX_STAGE_API_REQUEST_BYTES)),
+		),
 	),
 });
 export type StageApiRequest = typeof stageApiRequestSchema.Type;
@@ -320,12 +343,21 @@ export interface StageApiRequestResponse {
  * about the role's token. */
 export const stageTokenInfoRequestSchema = Schema.Struct({
 	stage: Schema.optional(
-		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(128)),
+		),
 	),
 	app: Schema.optional(
-		Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+		Schema.String.pipe(
+			Schema.check(Schema.isMinLength(1)),
+			Schema.check(Schema.isMaxLength(128)),
+		),
 	),
-	role: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(128)),
+	role: Schema.String.pipe(
+		Schema.check(Schema.isMinLength(1)),
+		Schema.check(Schema.isMaxLength(128)),
+	),
 });
 export type StageTokenInfoRequest = typeof stageTokenInfoRequestSchema.Type;
 
@@ -359,16 +391,18 @@ export interface StageTokenInfoResponse {
 
 /** A bounded, control-character-free journal text field. */
 const journalText = (max: number) =>
-	Schema.String.pipe(Schema.maxLength(max)).pipe(
-		Schema.filter(
-			(value) => {
-				for (let index = 0; index < value.length; index++) {
-					const code = value.charCodeAt(index);
-					if (code < 0x20 || code === 0x7f) return false;
-				}
-				return true;
-			},
-			{ message: () => "control characters are not allowed" },
+	Schema.String.pipe(Schema.check(Schema.isMaxLength(max))).pipe(
+		Schema.check(
+			Schema.makeFilter(
+				(value) => {
+					for (let index = 0; index < value.length; index++) {
+						const code = value.charCodeAt(index);
+						if (code < 0x20 || code === 0x7f) return false;
+					}
+					return true;
+				},
+				{ message: "control characters are not allowed" },
+			),
 		),
 	);
 
@@ -376,9 +410,9 @@ const journalText = (max: number) =>
 export const stageJournalKnowledgeSchema = Schema.Struct({
 	concept: journalText(256),
 	section: Schema.optional(journalText(256)),
-	kind: Schema.Literal("confirmed", "contradicted", "missing", "new"),
+	kind: Schema.Literals(["confirmed", "contradicted", "missing", "new"]),
 	suspectedCause: Schema.optional(
-		Schema.Literal("product-change", "regression", "unknown"),
+		Schema.Literals(["product-change", "regression", "unknown"]),
 	),
 });
 export type StageJournalKnowledge = typeof stageJournalKnowledgeSchema.Type;
@@ -388,9 +422,11 @@ export type StageJournalKnowledge = typeof stageJournalKnowledgeSchema.Type;
  * back-filled with the kept segment's evidence id. */
 export const stageJournalEntrySchema = Schema.Struct({
 	seq: Schema.Number.pipe(
-		Schema.filter((value) => Number.isInteger(value) && value > 0, {
-			message: () => "seq must be a positive integer",
-		}),
+		Schema.check(
+			Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+				message: "seq must be a positive integer",
+			}),
+		),
 	),
 	at: journalText(64),
 	session: Schema.optional(journalText(64)),
@@ -405,14 +441,16 @@ export const stageJournalEntrySchema = Schema.Struct({
 	block: Schema.optional(journalText(160)),
 	blockVersion: Schema.optional(journalText(32)),
 	subStep: Schema.optional(journalText(512)),
-	status: Schema.optional(Schema.Literal("passed", "failed", "skipped")),
+	status: Schema.optional(Schema.Literals(["passed", "failed", "skipped"])),
 	/** Replay identity. Live exploratory entries omit these. */
 	flowId: Schema.optional(journalText(64)),
 	revision: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
-				message: () => "revision must be a non-negative integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
+					message: "revision must be a non-negative integer",
+				}),
+			),
 		),
 	),
 	inputsHash: Schema.optional(journalText(80)),
@@ -420,23 +458,25 @@ export const stageJournalEntrySchema = Schema.Struct({
 	source: Schema.optional(Schema.Literal("replay")),
 	expected: Schema.optional(journalText(4096)),
 	observed: Schema.optional(journalText(4096)),
-	captures: Schema.optional(
-		Schema.Record({ key: journalText(128), value: journalText(1024) }),
-	),
+	captures: Schema.optional(Schema.Record(journalText(128), journalText(1024))),
 	evidence: Schema.optional(Schema.Array(journalText(32))),
 	knowledge: Schema.optional(stageJournalKnowledgeSchema),
 	segment: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "segment must be a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "segment must be a positive integer",
+				}),
+			),
 		),
 	),
 	offsetMs: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value >= 0, {
-				message: () => "offsetMs must be a non-negative integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
+					message: "offsetMs must be a non-negative integer",
+				}),
+			),
 		),
 	),
 	video: Schema.optional(journalText(64)),

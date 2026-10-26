@@ -508,7 +508,7 @@ function compactWorkflowRows(frame: string): string[][] {
 	// The pinned marks and their rule have no numeric position; the first
 	// workflow row does.
 	const first = cells.findIndex((cell) => /^\d+$/.test(cell));
-	const start = first >= 0 ? first : 0;
+	const start = Math.max(first, 0);
 	const rows: string[][] = [];
 	for (let index = start; index + 2 < cells.length; index += 3) {
 		rows.push(cells.slice(index, index + 3));

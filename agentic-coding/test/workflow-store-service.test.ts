@@ -31,7 +31,7 @@ function run<A>(
 ): A {
 	const exit = Effect.runSyncExit(effect.pipe(Effect.provide(layer)));
 	if (Exit.isSuccess(exit)) return exit.value;
-	const failure = Cause.failureOption(exit.cause);
+	const failure = Cause.findErrorOption(exit.cause);
 	if (Option.isSome(failure)) throw failure.value;
 	throw new WorkflowRuntimeError("unavailable", Cause.pretty(exit.cause));
 }

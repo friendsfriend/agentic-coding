@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { runGitWithCredentialsEffect } from "../src/workflow/credentials.ts";
 import {
 	BUILTIN_EFFECTS,
@@ -353,12 +353,12 @@ test("cleanup failure stays observable and never commits false success", async (
 
 test("bounded process service reports exit, timeout, cancel, and overflow distinctly", async () => {
 	const exitFailure = await Effect.runPromise(
-		runProcessEffect(["sh", "-c", "echo oops >&2; exit 3"]).pipe(Effect.either),
+		runProcessEffect(["sh", "-c", "echo oops >&2; exit 3"]).pipe(Effect.result),
 	);
-	if (!Either.isLeft(exitFailure)) throw new Error("expected exit failure");
-	expect(exitFailure.left._tag).toBe("exit");
-	if (exitFailure.left._tag === "exit")
-		expect(exitFailure.left.exitCode).toBe(3);
+	if (!Result.isFailure(exitFailure)) throw new Error("expected exit failure");
+	expect(exitFailure.failure._tag).toBe("exit");
+	if (exitFailure.failure._tag === "exit")
+		expect(exitFailure.failure.exitCode).toBe(3);
 
 	const success = await Effect.runPromise(
 		runProcessEffect(["sh", "-c", "printf hello"]),
@@ -368,11 +368,11 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 
 	const timeoutOutcome = await Effect.runPromise(
 		runProcessEffect(["sh", "-c", "sleep 30"], { timeoutMs: 60 }).pipe(
-			Effect.either,
+			Effect.result,
 		),
 	);
-	if (!Either.isLeft(timeoutOutcome)) throw new Error("expected timeout");
-	expect(timeoutOutcome.left._tag).toBe("timeout");
+	if (!Result.isFailure(timeoutOutcome)) throw new Error("expected timeout");
+	expect(timeoutOutcome.failure._tag).toBe("timeout");
 
 	// The trailing descendant only has to outlive the drain window for this to
 	// prove that the service terminates the child on overflow rather than waiting
@@ -383,10 +383,10 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	const overflowOutcome = await Effect.runPromise(
 		runProcessEffect(["sh", "-c", "yes x | head -c 100000; sleep 3"], {
 			maxOutputBytes: 1024,
-		}).pipe(Effect.either),
+		}).pipe(Effect.result),
 	);
-	if (!Either.isLeft(overflowOutcome)) throw new Error("expected overflow");
-	expect(overflowOutcome.left._tag).toBe("overflow");
+	if (!Result.isFailure(overflowOutcome)) throw new Error("expected overflow");
+	expect(overflowOutcome.failure._tag).toBe("overflow");
 	expect(Date.now() - overflowStartedAt).toBeLessThan(2_000);
 
 	// A descendant that inherits the pipe but writes nothing is not evidence that
@@ -413,11 +413,11 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 			"sh",
 			"-c",
 			"echo early; (sleep 0.1; echo late; sleep 3) &",
-		]).pipe(Effect.either),
+		]).pipe(Effect.result),
 	);
-	if (!Either.isLeft(truncated)) throw new Error("expected a reported read");
-	expect(truncated.left._tag).toBe("overflow");
-	expect(truncated.left.detail).toContain("still being written");
+	if (!Result.isFailure(truncated)) throw new Error("expected a reported read");
+	expect(truncated.failure._tag).toBe("overflow");
+	expect(truncated.failure.detail).toContain("still being written");
 	expect(Date.now() - truncatedStartedAt).toBeLessThan(2_000);
 
 	// Interruption propagates to the real child promptly and reports cancellation
@@ -427,12 +427,12 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	const cancelOutcomePromise = Effect.runPromise(
 		runProcessEffect(["sh", "-c", "sleep 30"], {
 			signal: controller.signal,
-		}).pipe(Effect.either),
+		}).pipe(Effect.result),
 	);
 	setTimeout(() => controller.abort(), 60);
 	const cancelOutcome = await cancelOutcomePromise;
-	if (!Either.isLeft(cancelOutcome)) throw new Error("expected cancel");
-	expect(cancelOutcome.left._tag).toBe("canceled");
+	if (!Result.isFailure(cancelOutcome)) throw new Error("expected cancel");
+	expect(cancelOutcome.failure._tag).toBe("canceled");
 	expect(Date.now() - startedAt).toBeLessThan(3_000);
 
 	// Cancellation outranks the state of a surviving descendant. The two are
@@ -444,12 +444,12 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	const abortedWithDescendant = Effect.runPromise(
 		runProcessEffect(["sh", "-c", "sleep 3 & exit 0"], {
 			signal: abortedController.signal,
-		}).pipe(Effect.either),
+		}).pipe(Effect.result),
 	);
 	setTimeout(() => abortedController.abort(), 60);
 	const abortedOutcome = await abortedWithDescendant;
-	if (!Either.isLeft(abortedOutcome)) throw new Error("expected cancel");
-	expect(abortedOutcome.left._tag).toBe("canceled");
+	if (!Result.isFailure(abortedOutcome)) throw new Error("expected cancel");
+	expect(abortedOutcome.failure._tag).toBe("canceled");
 });
 
 test("credential Effect boundary classifies no-UI as permanent and removes the shim afterwards", async () => {
@@ -485,12 +485,12 @@ test("credential Effect boundary classifies no-UI as permanent and removes the s
 		const before = new Set(shimEntries());
 		const outcome = await Effect.runPromise(
 			runGitWithCredentialsEffect(dir, ["x"], { executable: file }).pipe(
-				Effect.either,
+				Effect.result,
 			),
 		);
-		if (!Either.isLeft(outcome))
+		if (!Result.isFailure(outcome))
 			throw new Error("expected permanent credential failure");
-		expect(outcome.left).toBeInstanceOf(PermanentFailure);
+		expect(outcome.failure).toBeInstanceOf(PermanentFailure);
 		// The askpass shim/FIFOs are scoped to the operation: no new dir remains
 		// (secrets are never retained after the call).
 		const after = shimEntries();

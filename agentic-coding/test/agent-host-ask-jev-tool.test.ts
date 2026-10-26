@@ -47,12 +47,12 @@ function runContext(
 
 interface ToolResult {
 	readonly isError?: boolean;
-	readonly content?: readonly { readonly text?: string }[];
+	readonly output?: readonly { readonly text?: string }[];
 	readonly details?: unknown;
 }
 
 function textOf(result: ToolResult): string {
-	return (result.content ?? []).map((part) => part.text ?? "").join("\n");
+	return (result.output ?? []).map((part) => part.text ?? "").join("\n");
 }
 
 /** One bound `ask_jev` call: the extension registers the tool once, and every
@@ -115,7 +115,7 @@ describe("ask_jev", () => {
 		);
 		expect(called).toBe(false);
 		expect(
-			(result.content?.[0] as { text: string } | undefined)?.text,
+			(result.output?.[0] as { text: string } | undefined)?.text,
 		).toContain("unavailable");
 		expect(result.isError).not.toBe(true);
 	});
@@ -220,7 +220,7 @@ describe("ask_jev", () => {
 		);
 		expect(result.isError).toBe(true);
 		expect(
-			(result.content?.[0] as { text: string } | undefined)?.text,
+			(result.output?.[0] as { text: string } | undefined)?.text,
 		).toContain("503");
 	});
 });

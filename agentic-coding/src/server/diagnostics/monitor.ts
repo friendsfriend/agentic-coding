@@ -200,7 +200,7 @@ export function createDiagnosticsMonitor(
 		// at least the threshold: the drift alone under-reports a block that lies
 		// between two ticks, while the section timing measures it exactly.
 		const slowestSectionMs = window.reduce(
-			(max, section) => (section.ms > max ? section.ms : max),
+			(max, section) => Math.max(section.ms, max),
 			0,
 		);
 		if (lagMs >= lagThresholdMs || slowestSectionMs >= lagThresholdMs) {

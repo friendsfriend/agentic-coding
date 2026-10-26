@@ -351,7 +351,7 @@ export function poolDraftEntries(
 			const isDefault =
 				mode === "roster"
 					? entry.default === true
-					: index === (defaultIndex < 0 ? 0 : defaultIndex);
+					: index === Math.max(defaultIndex, 0);
 			if (isDefault) normalized.default = true;
 			else delete normalized.default;
 			return normalized;

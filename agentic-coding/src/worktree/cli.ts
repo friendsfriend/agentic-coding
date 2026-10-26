@@ -53,33 +53,31 @@ export function worktrunkArgv(
 }
 
 const switchReply = Schema.Struct({
-	action: Schema.optionalWith(Schema.String, { exact: true }),
-	branch: Schema.optionalWith(Schema.String, { exact: true }),
-	path: Schema.optionalWith(Schema.String, { exact: true }),
-	created_branch: Schema.optionalWith(Schema.Boolean, { exact: true }),
+	action: Schema.optionalKey(Schema.String),
+	branch: Schema.optionalKey(Schema.String),
+	path: Schema.optionalKey(Schema.String),
+	created_branch: Schema.optionalKey(Schema.Boolean),
 });
 
 const listRow = Schema.Struct({
-	branch: Schema.optionalWith(Schema.NullOr(Schema.String), { exact: true }),
-	worktree: Schema.optionalWith(
+	branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	worktree: Schema.optionalKey(
 		Schema.Struct({
-			path: Schema.optionalWith(Schema.String, { exact: true }),
-			main: Schema.optionalWith(Schema.Boolean, { exact: true }),
-			detached: Schema.optionalWith(Schema.Boolean, { exact: true }),
-			prunable: Schema.optionalWith(
+			path: Schema.optionalKey(Schema.String),
+			main: Schema.optionalKey(Schema.Boolean),
+			detached: Schema.optionalKey(Schema.Boolean),
+			prunable: Schema.optionalKey(
 				Schema.Struct({
-					reason: Schema.optionalWith(Schema.String, { exact: true }),
+					reason: Schema.optionalKey(Schema.String),
 				}),
-				{ exact: true },
 			),
 		}),
-		{ exact: true },
 	),
 });
 
 const listReply = Schema.Struct({
-	schema: Schema.optionalWith(Schema.Number, { exact: true }),
-	items: Schema.optionalWith(Schema.Array(listRow), { exact: true }),
+	schema: Schema.optionalKey(Schema.Number),
+	items: Schema.optionalKey(Schema.Array(listRow)),
 });
 
 interface WorktrunkSwitchReply {
@@ -93,7 +91,7 @@ interface WorktrunkSwitchReply {
  * instead of a silently defaulted value. */
 function decodeWorktrunkJson<A>(
 	// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with decoded shapes; mirrored from decodeHerdrResult.
-	schema: Schema.Schema<A, any, never>,
+	schema: Schema.Codec<A, any, never>,
 	raw: string,
 	what: string,
 ): A {

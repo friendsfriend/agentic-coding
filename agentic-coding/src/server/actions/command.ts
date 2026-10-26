@@ -157,7 +157,7 @@ export class OSCommandRunner implements CommandRunner {
 				read(proc.stderr, "stderr"),
 			]);
 			await proc.exited;
-			const signalCode = proc.signalCode ?? null;
+			const signalCode = proc.signalCode ? String(proc.signalCode) : null;
 			const exitCode = signalCode ? -1 : (proc.exitCode ?? -1);
 			const result: CommandResult = { stdout, stderr, exitCode };
 			if (signalCode) {

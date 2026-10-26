@@ -14,8 +14,7 @@
 // enforce that a string *is* a reference — a literal that fails the check must
 // produce a diagnostic that never quotes it — so the check lives in the
 // catalog, which formats its own message.
-import { Schema } from "effect";
-import { ArrayFormatter, ParseError } from "effect/ParseResult";
+import { Schema, SchemaIssue } from "effect";
 import {
 	boundedText,
 	formatIssuePath,
@@ -31,16 +30,16 @@ export const STAGE_IDENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /** How a stage may be used, as a real control: `read-only` refuses every
  * state-changing request, `writable` allows them. */
-export const stageAccessSchema = Schema.Literal("read-only", "writable");
+export const stageAccessSchema = Schema.Literals(["read-only", "writable"]);
 
 /** What a staged application is: a UI to drive, an API to read, a mail catcher
  * to wait on, or a probe for version discovery. */
-export const stageAppKindSchema = Schema.Literal(
+export const stageAppKindSchema = Schema.Literals([
 	"ui",
 	"api",
 	"mail-catcher",
 	"probe",
-);
+]);
 
 /** The credential values a *login form* may type, in section order. */
 export const STAGE_CREDENTIAL_FIELDS = [
@@ -48,8 +47,8 @@ export const STAGE_CREDENTIAL_FIELDS = [
 	"password",
 	"totp",
 ] as const;
-export const stageCredentialFieldSchema = Schema.Literal(
-	...STAGE_CREDENTIAL_FIELDS,
+export const stageCredentialFieldSchema = Schema.Literals(
+	STAGE_CREDENTIAL_FIELDS,
 );
 
 /** The credential values one role may reference: the login form's three, plus
@@ -60,8 +59,8 @@ export const STAGE_ROLE_CREDENTIAL_FIELDS = [
 	...STAGE_CREDENTIAL_FIELDS,
 	"refreshToken",
 ] as const;
-export const stageRoleCredentialFieldSchema = Schema.Literal(
-	...STAGE_ROLE_CREDENTIAL_FIELDS,
+export const stageRoleCredentialFieldSchema = Schema.Literals(
+	STAGE_ROLE_CREDENTIAL_FIELDS,
 );
 
 /** The OAuth 2.0 grants a stage role may declare. The implicit and password
@@ -72,11 +71,11 @@ export const STAGE_OAUTH2_GRANTS = [
 	"refresh_token",
 	"authorization_code",
 ] as const;
-export const stageOAuth2GrantSchema = Schema.Literal(...STAGE_OAUTH2_GRANTS);
+export const stageOAuth2GrantSchema = Schema.Literals(STAGE_OAUTH2_GRANTS);
 
 /** How a confidential client authenticates at the token endpoint: HTTP basic
  * (the default) or the client id and secret in the form body. */
-export const stageOAuth2ClientAuthSchema = Schema.Literal("basic", "body");
+export const stageOAuth2ClientAuthSchema = Schema.Literals(["basic", "body"]);
 
 /** One named OAuth 2.0 provider of a stage. Every credential is a whole
  * `${VARIABLE}` reference, exactly as a role's are; `catalog.ts` refuses a
@@ -93,10 +92,7 @@ export const stageOAuth2ProviderSchema = Schema.Struct({
 
 /** The OAuth 2.0 providers a stage declares, by name. */
 export const stageOAuth2Schema = Schema.Struct({
-	providers: Schema.Record({
-		key: Schema.String,
-		value: stageOAuth2ProviderSchema,
-	}),
+	providers: Schema.Record(Schema.String, stageOAuth2ProviderSchema),
 });
 
 /** Where a login step finds one element: an accessible label, a role plus its
@@ -143,11 +139,11 @@ export const stageLoginSuccessSchema = Schema.Struct({
  * cannot perform at all, so the developer performs it in a headed window. An
  * `interactive` recipe declares no steps — its `success` is the only
  * declaration, and it is required (`validateRecipe`). */
-export const stageLoginRecipeKindSchema = Schema.Literal(
+export const stageLoginRecipeKindSchema = Schema.Literals([
 	"form",
 	"http-basic",
 	"interactive",
-);
+]);
 export const stageLoginRecipeSchema = Schema.Struct({
 	kind: stageLoginRecipeKindSchema,
 	/** The origin the recipe's steps run on; informational for `http-basic`. */
@@ -159,7 +155,7 @@ export const stageLoginRecipeSchema = Schema.Struct({
 /** Whether this server may open a headed window for a stage whose login it
  * cannot automate. The operator sets the policy; a stage may only narrow it
  * (default `local`). */
-export const stageInteractiveLoginSchema = Schema.Literal("local", "never");
+export const stageInteractiveLoginSchema = Schema.Literals(["local", "never"]);
 
 /** One role of one staged application. `login` names a recipe of the stage's
  * own `logins` table, or the reserved recipe kind `oauth2` — a login this server
@@ -207,9 +203,7 @@ export const stageAppSchema = Schema.Struct({
 	kind: stageAppKindSchema,
 	/** The product a mail-catcher application speaks (`mailpit`). */
 	api: Schema.optional(Schema.String),
-	roles: Schema.optional(
-		Schema.Record({ key: Schema.String, value: stageRoleSchema }),
-	),
+	roles: Schema.optional(Schema.Record(Schema.String, stageRoleSchema)),
 	version: Schema.optional(stageVersionProbeSchema),
 });
 
@@ -224,46 +218,58 @@ export const stageReadOnlyExceptionSchema = Schema.Struct({
 export const stageLimitsSchema = Schema.Struct({
 	maxSessions: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	maxActionsPerMinute: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	maxWaitSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	maxScreenshots: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	maxRecordingMinutes: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	/** How long one hand-off may wait for the developer before the deadline ends
 	 * it. Defaults to 900 s, ceilinged at 1800 s. */
 	maxLoginHandoffSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 });
@@ -293,10 +299,8 @@ export const stageDefinitionSchema = Schema.Struct({
 	/** Allow `http` for a host that is not loopback. Deliberate and staged: a
 	 * plaintext stage carries credentials in the clear. */
 	insecureHttp: Schema.optional(Schema.Boolean),
-	apps: Schema.Record({ key: Schema.String, value: stageAppSchema }),
-	logins: Schema.optional(
-		Schema.Record({ key: Schema.String, value: stageLoginRecipeSchema }),
-	),
+	apps: Schema.Record(Schema.String, stageAppSchema),
+	logins: Schema.optional(Schema.Record(Schema.String, stageLoginRecipeSchema)),
 	/** The named OAuth 2.0 providers a role's `oauth2` recipe selects from. */
 	oauth2: Schema.optional(stageOAuth2Schema),
 	allowedOrigins: Schema.optional(Schema.Array(Schema.String)),
@@ -357,18 +361,22 @@ export const stageIdentityCachePolicySchema = Schema.Struct({
 	 * by a read. Defaults to 240 (four hours). */
 	ttlMinutes: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	/** How many `(stage, role)` identities the process keeps at once; the oldest
 	 * capture is evicted first. Defaults to 8. */
 	maxEntries: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 	/** How often a living session re-captures its identity into the cache, so a
@@ -376,9 +384,11 @@ export const stageIdentityCachePolicySchema = Schema.Struct({
 	 * (two minutes). */
 	refreshSeconds: Schema.optional(
 		Schema.Number.pipe(
-			Schema.filter((value) => Number.isInteger(value) && value > 0, {
-				message: () => "expected a positive integer",
-			}),
+			Schema.check(
+				Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
+					message: "expected a positive integer",
+				}),
+			),
 		),
 	),
 });
@@ -440,7 +450,7 @@ type DecodeResult<T> =
 
 function decodeStageDocument<T>(
 	id: string,
-	schema: Schema.Schema<T>,
+	schema: Schema.Codec<T>,
 	value: unknown,
 ): DecodeResult<T> {
 	try {
@@ -448,16 +458,24 @@ function decodeStageDocument<T>(
 			schema,
 			// An unknown field is a typo in an allow-list file, so it is refused
 			// rather than silently dropped.
-			{ onExcessProperty: "error" },
+			{ onExcessProperty: "error", reportInput: false },
 		)(value) as T;
 		return { ok: true, value: decoded };
 	} catch (error) {
-		if (!(error instanceof ParseError)) throw error;
-		const issues = ArrayFormatter.formatErrorSync(error)
-			.slice(0, 8)
+		if (!Schema.isSchemaError(error)) throw error;
+		const issues = SchemaIssue.makeFormatterStandardSchemaV1()(error.issue)
+			.issues.slice(0, 8)
 			.map((issue) => ({
-				path: formatIssuePath(issue.path),
-				message: sanitizeIssueMessage(issue.message),
+				path: formatIssuePath(
+					(issue.path ?? []).map((part) =>
+						typeof part === "object" ? part.key : part,
+					),
+				),
+				message: sanitizeIssueMessage(
+					issue.message === "Missing key"
+						? "required property is missing"
+						: issue.message,
+				),
 			}));
 		return {
 			ok: false,

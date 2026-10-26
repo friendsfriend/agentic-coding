@@ -285,7 +285,7 @@ export function createWorkflowDialogueExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text: "developer_question: run context unavailable",
@@ -299,7 +299,7 @@ export function createWorkflowDialogueExtension(
 					else {
 						if (!args.description)
 							return {
-								content: [{ type: "text", text: "description is required" }],
+								output: [{ type: "text", text: "description is required" }],
 								isError: true,
 							};
 						cliArgs.push("--description", args.description);
@@ -313,12 +313,12 @@ export function createWorkflowDialogueExtension(
 					);
 					if (result.aborted)
 						return {
-							content: [{ type: "text", text: "Developer question cancelled" }],
+							output: [{ type: "text", text: "Developer question cancelled" }],
 							isError: true,
 						};
 					if (result.exitCode !== 0)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text:
@@ -329,7 +329,7 @@ export function createWorkflowDialogueExtension(
 							isError: true,
 						};
 					return {
-						content: [
+						output: [
 							{
 								type: "text",
 								text: result.stdout.trim() || "Developer question resolved",
@@ -347,7 +347,7 @@ export function createWorkflowDialogueExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{ type: "text", text: "agent_ask: run context unavailable" },
 							],
 							isError: true,
@@ -369,12 +369,12 @@ export function createWorkflowDialogueExtension(
 					);
 					if (result.aborted)
 						return {
-							content: [{ type: "text", text: "Peer question cancelled" }],
+							output: [{ type: "text", text: "Peer question cancelled" }],
 							isError: true,
 						};
 					if (result.exitCode !== 0)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text:
@@ -385,7 +385,7 @@ export function createWorkflowDialogueExtension(
 							isError: true,
 						};
 					return {
-						content: [
+						output: [
 							{
 								type: "text",
 								text: result.stdout.trim() || "Peer question resolved",
@@ -660,13 +660,13 @@ export function createAskJevExtension(lookup: RunContextLookup): Extension {
 				parameters: AskJevParameters,
 				execute: async (args, api, context) => {
 					const fail = (text: string) => ({
-						content: [{ type: "text" as const, text }],
+						output: [{ type: "text" as const, text }],
 						isError: true,
 					});
 					const run = lookup(api.conversationId);
 					if (!run?.jev)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text: "ask_jev: in-session judgment is unavailable (no classifier binding for this run)",
@@ -852,7 +852,7 @@ export function createAskJevExtension(lookup: RunContextLookup): Extension {
 							? ["", ...rendered.warnings.map((warning) => `- ${warning}`)]
 							: []),
 					].join("\n");
-					return { content: [{ type: "text", text }], details: { answers } };
+					return { output: [{ type: "text", text }], details: { answers } };
 				},
 			}),
 		],
@@ -926,7 +926,7 @@ export function createSearchExtension(
 				async execute(args, api, context) {
 					const env = api.env;
 					const fail = (text: string) => ({
-						content: [{ type: "text" as const, text: `grep: ${text}` }],
+						output: [{ type: "text" as const, text: `grep: ${text}` }],
 						isError: true,
 					});
 					if (!env) return fail("this run has no execution environment");
@@ -1013,7 +1013,7 @@ export function createSearchExtension(
 						);
 					if (shown.length === 0)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text: `grep: no match for /${args.pattern}/ in ${scoped.path}`,
@@ -1032,7 +1032,7 @@ export function createSearchExtension(
 						.map((note) => `… ${note}`)
 						.join("\n");
 					return {
-						content: [
+						output: [
 							{
 								type: "text",
 								text:
@@ -1150,12 +1150,12 @@ export function createDebugRequestExtension(
 		const result = await runWorkflowCli(cliArgs, run, signal);
 		if (result.aborted)
 			return {
-				content: [{ type: "text" as const, text: `${label} cancelled` }],
+				output: [{ type: "text" as const, text: `${label} cancelled` }],
 				isError: true,
 			};
 		if (result.exitCode !== 0)
 			return {
-				content: [
+				output: [
 					{
 						type: "text" as const,
 						text: `${label} failed: ${result.stderr.trim() || result.stdout.trim()}`,
@@ -1163,7 +1163,7 @@ export function createDebugRequestExtension(
 				],
 				isError: true,
 			};
-		return { content: [{ type: "text" as const, text: result.stdout.trim() }] };
+		return { output: [{ type: "text" as const, text: result.stdout.trim() }] };
 	};
 	return defineExtension({
 		name: "agentic.debug-request",
@@ -1177,7 +1177,7 @@ export function createDebugRequestExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{
 									type: "text",
 									text: "debug_request: run context unavailable",
@@ -1200,7 +1200,7 @@ export function createDebugRequestExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{ type: "text", text: "debug_result: run context unavailable" },
 							],
 							isError: true,
@@ -1222,7 +1222,7 @@ export function createDebugRequestExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{ type: "text", text: "debug_wait: run context unavailable" },
 							],
 							isError: true,
@@ -1247,7 +1247,7 @@ export function createDebugRequestExtension(
 					const run = lookup(api.conversationId);
 					if (!run)
 						return {
-							content: [
+							output: [
 								{ type: "text", text: "debug_cancel: run context unavailable" },
 							],
 							isError: true,

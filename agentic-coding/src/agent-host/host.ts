@@ -155,6 +155,7 @@ const RunMapDoc = defineDoc<RunMapState>({
 	kind: "agentic.runs",
 	version: 2,
 	scope: "session",
+	checkpointWhen: () => false,
 	initial: () => ({ format: 2, runs: {}, runConversations: {} }),
 	// Materialization keeps legacy evidence intact until the atomic commit.
 	migrate: (value) => ({ ...(value as RunMapState), format: 1 }),
@@ -172,6 +173,7 @@ function associationDoc(kind: "run" | "role", identity: string) {
 		kind: `agentic.${kind}.${createHash("sha256").update(identity).digest("hex")}`,
 		version: 1,
 		scope: "session",
+		checkpointWhen: () => false,
 		initial: () => ({ identity, conversationId: 0 }),
 	});
 }

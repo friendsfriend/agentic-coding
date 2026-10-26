@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import type {
 	AgentHandle,
 	WorkflowSnapshot,
@@ -797,17 +797,17 @@ test("wiki delivery rejects a non-allowlisted remote before committing", async (
 		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
 		const outcome = await Effect.runPromise(
 			effectRunnerTest.commitAndPushWiki(root, "Update wiki").pipe(
-				Effect.catchAllDefect((defect) =>
+				Effect.catchDefect((defect) =>
 					Effect.fail(
 						defect instanceof Error ? defect : new Error(String(defect)),
 					),
 				),
-				Effect.either,
+				Effect.result,
 			),
 		);
-		expect(Either.isLeft(outcome)).toBe(true);
-		if (Either.isLeft(outcome))
-			expect(outcome.left).toBeInstanceOf(PermanentFailure);
+		expect(Result.isFailure(outcome)).toBe(true);
+		if (Result.isFailure(outcome))
+			expect(outcome.failure).toBeInstanceOf(PermanentFailure);
 		expect(
 			execFileSync("git", ["-C", root, "log", "-1", "--pretty=%s"], {
 				encoding: "utf8",

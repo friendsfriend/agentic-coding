@@ -545,7 +545,7 @@ export interface RouteRequestSchema {
 	/** Contract id used in decode diagnostics. */
 	readonly schemaId: string;
 	// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-	readonly schema: Schema.Schema<any, any, never>;
+	readonly schema: Schema.Codec<any, any, never>;
 }
 
 export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
@@ -930,7 +930,7 @@ export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
 export function decodeRequest<T>(
 	id: string,
 	// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
-	schema: Schema.Schema<T, any, never>,
+	schema: Schema.Codec<T, any, never>,
 	value: unknown,
 ): T {
 	return decodeContract<T>(id, schema, value, { onExcessProperty: "error" });

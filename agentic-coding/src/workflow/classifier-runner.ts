@@ -409,10 +409,10 @@ function requestClassifier(
 			},
 			request.target.headers,
 			{ signal, timeoutMs: CLASSIFIER_TIMEOUT_MS },
-		).pipe(Effect.either);
-		if (attempted._tag === "Left") {
+		).pipe(Effect.result);
+		if (attempted._tag === "Failure") {
 			const error = new TransientFailure(
-				`classifier ${integrationId} request failed: ${attempted.left.message}`,
+				`classifier ${integrationId} request failed: ${attempted.failure.message}`,
 			);
 			notify(observer?.response, {
 				outcome: "error",
@@ -422,7 +422,7 @@ function requestClassifier(
 			});
 			return yield* Effect.fail(error);
 		}
-		const response = attempted.right;
+		const response = attempted.success;
 		if (response.status < 200 || response.status >= 300) {
 			const message = `classifier ${integrationId} provider returned ${response.status}`;
 			const error =
@@ -454,18 +454,18 @@ function requestClassifier(
 					: new PermanentFailure(
 							`classifier ${integrationId} response parsing failed: ${error instanceof Error ? error.message : String(error)}`,
 						),
-		}).pipe(Effect.either);
-		if (parsed._tag === "Left") {
+		}).pipe(Effect.result);
+		if (parsed._tag === "Failure") {
 			notify(observer?.response, {
 				outcome: "error",
 				durationMs: Date.now() - startedAt,
 				status: response.status,
 				statusClass: statusClass(response.status),
-				errorClass: parsed.left.name,
+				errorClass: parsed.failure.name,
 			});
-			return yield* Effect.fail(parsed.left);
+			return yield* Effect.fail(parsed.failure);
 		}
-		const counts = Object.values(parsed.right.answers).reduce(
+		const counts = Object.values(parsed.success.answers).reduce(
 			(result, answer) => {
 				result[answer.type]++;
 				return result;
@@ -479,12 +479,14 @@ function requestClassifier(
 			statusClass: statusClass(response.status),
 			choiceAnswers: counts.choice,
 			noulAnswers: counts.noul,
-			...(parsed.right.tokens !== undefined
-				? { tokens: parsed.right.tokens }
+			...(parsed.success.tokens !== undefined
+				? { tokens: parsed.success.tokens }
 				: {}),
-			...(parsed.right.cost !== undefined ? { cost: parsed.right.cost } : {}),
+			...(parsed.success.cost !== undefined
+				? { cost: parsed.success.cost }
+				: {}),
 		});
-		return parsed.right.answers;
+		return parsed.success.answers;
 	});
 }
 
@@ -1441,14 +1443,14 @@ export function invokeFileJudgment(
 									request,
 									undefined,
 									signal,
-								).pipe(Effect.either);
-								if (attempted._tag !== "Right")
+								).pipe(Effect.result);
+								if (attempted._tag !== "Success")
 									return {
 										path: entry.candidate.path,
 										noul: undefined,
 										cached: false,
 									};
-								const noul = noulOf(attempted.right);
+								const noul = noulOf(attempted.success);
 								const key = entry.key;
 								// Only a usable answer is remembered: caching an outage would turn
 								// a transient failure into a permanent verdict.
