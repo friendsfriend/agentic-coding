@@ -91,20 +91,27 @@ export class PiDurableAdapter implements AgentAdapter {
 				const { ensureHostRunning, HostClient } = await import(
 					"../agent-host/client.ts"
 				);
+				const { registerHostRetryTarget } = await import(
+					"../agent-host/retry-authority.ts"
+				);
 				const runtimeDir = durableRuntimeDir(ctx);
 				const layout = hostLayout(runtimeDir);
 				const entry = selfExecEntry();
-				await ensureHostRunning(layout, {
-					command: process.execPath,
-					args: [
-						...(entry ? [entry] : []),
-						"agent",
-						"host",
-						"--workflow-dir",
-						runtimeDir,
-					],
-					cwd: ctx.cwd,
-				});
+				await ensureHostRunning(
+					layout,
+					{
+						command: process.execPath,
+						args: [
+							...(entry ? [entry] : []),
+							"agent",
+							"host",
+							"--workflow-dir",
+							runtimeDir,
+						],
+						cwd: ctx.cwd,
+					},
+					{ requireRetryAuthority: true },
+				);
 				// The host reads the run's environment from this file
 				// (durable-agent-host: "Per-run execution environment"), including
 				// the classifier binding.
@@ -136,12 +143,20 @@ export class PiDurableAdapter implements AgentAdapter {
 					promptRequestId(ctx.assignment.runId, ctx.rendered.prompt),
 					"followUp",
 				);
+				const retryTargetLease = registerHostRetryTarget(
+					ctx.assignment.runId,
+					ensured.conversationId,
+					layout.socketPath,
+				);
+				if (!retryTargetLease)
+					throw new Error("agent host recovery authority is unavailable");
 				const handle: AgentHandle = {
 					runtime: this.id,
 					name: ctx.name,
 					hostSocket: layout.socketPath,
 					sessionId: ctx.assignment.runId,
 					conversationId: ensured.conversationId,
+					retryTargetLease,
 				};
 				return handle;
 			},
@@ -195,6 +210,16 @@ export class PiDurableAdapter implements AgentAdapter {
 				if (!handle.hostSocket || !handle.sessionId) return;
 				const { HostClient } = await import("../agent-host/client.ts");
 				await new HostClient(handle.hostSocket).stopRun(handle.sessionId);
+				if (handle.conversationId) {
+					const { unregisterHostRetryTarget } = await import(
+						"../agent-host/retry-authority.ts"
+					);
+					unregisterHostRetryTarget(
+						handle.sessionId,
+						handle.conversationId,
+						handle.retryTargetLease,
+					);
+				}
 			},
 			catch: toError,
 		});

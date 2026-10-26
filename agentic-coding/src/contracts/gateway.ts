@@ -12,6 +12,8 @@ import type {
 	AgentQuestionRequest,
 	AgentResearchHandoffRequest,
 	AgentsMutationRequest,
+	AgentTaskRetryRequest,
+	AgentTaskRetryResult,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
 	WorkflowDeleteRequest,
@@ -152,6 +154,8 @@ export interface DashboardGateway {
 		signal?: AbortSignal,
 	): Promise<string>;
 	researchHandoff(request: AgentResearchHandoffRequest): Promise<WorkflowView>;
+	/** Retry a parked native task through the operator-authorized host mediator. */
+	retryAgentTask(request: AgentTaskRetryRequest): Promise<AgentTaskRetryResult>;
 	saveAgents(request: AgentsMutationRequest): Promise<void>;
 	/** Start (or resume) the local classifier model acquisition; idempotent. */
 	classifierInstall(repository?: string): Promise<ClassifierStatusResponse>;

@@ -21,9 +21,16 @@ import {
 	FrameReader,
 	type HostResponse,
 	PROTOCOL_VERSION,
+	type PrepareRestartForReattachmentResponse,
+	type RetryTaskResponse,
 	type StatusResponse,
 	type SubmitResponse,
 } from "./protocol.ts";
+import {
+	hostRetryCapabilityAvailable,
+	releaseHostRetryCapability,
+	replaceHostRetryCapabilityForLaunch,
+} from "./retry-authority.ts";
 import { applyWatchPatch } from "./view-ops.ts";
 
 export class HostUnavailableError extends Error {}
@@ -140,19 +147,39 @@ async function sendRequest(
 /** Spawn the host detached from this process, so a bounded `workflow drain`
  * exiting never takes the agent's work with it (durable-agent-host: "Host
  * outlives drains and the dashboard"). */
-function spawnHost(target: HostSpawn, layout: HostLayout): ChildProcess {
+function spawnHost(
+	target: HostSpawn,
+	layout: HostLayout,
+	recoveryCapability: string,
+): ChildProcess {
 	// The host creates its own runtime directory when it opens, but the client
 	// opens the host log first: on a workflow's first durable launch nothing has
 	// created `agent-host/` yet, and the spawn dies on ENOENT before the host
 	// ever starts. Same mode as `DurableHost.open`.
 	fs.mkdirSync(layout.root, { recursive: true, mode: 0o700 });
 	const out = fs.openSync(layout.logPath, "a");
-	const child = spawn(target.command, target.args, {
-		cwd: target.cwd,
-		...(target.env ? { env: target.env } : {}),
-		detached: true,
-		stdio: ["ignore", out, out],
-	});
+	const env = { ...process.env, ...(target.env ?? {}) };
+	// Operator credentials are never inherited by the host's task subprocesses.
+	delete env.AGENTIC_WORKFLOW_TOKEN;
+	const child = spawn(
+		target.command,
+		[...target.args, "--retry-capability-fd", "3"],
+		{
+			cwd: target.cwd,
+			env,
+			detached: true,
+			stdio: ["ignore", out, out, "pipe"],
+		},
+	);
+	const pipe = child.stdio[3];
+	if (pipe && "end" in pipe) {
+		pipe.on("error", () => {});
+		pipe.end(recoveryCapability);
+	}
+	const releaseCapability = () =>
+		releaseHostRetryCapability(layout.socketPath, recoveryCapability);
+	child.once("exit", releaseCapability);
+	child.once("error", releaseCapability);
 	child.unref();
 	return child;
 }
@@ -177,33 +204,123 @@ function sleepUntilAborted(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-/** Ensure a workflow's host is reachable, spawning it when the socket is not
- * yet accepting connections. Idempotent under a concurrent caller: a host
- * that is still starting is simply retried against, and a host that won the
- * single-writer lock answers every later caller's requests (durable-agent-
- * host: "Concurrent host start"). */
+/** Serialize start/reattach decisions per host path so concurrent workflow
+ * launches cannot rotate authority while another caller is registering it. */
+const hostEnsureOperations = new Map<string, Promise<void>>();
+
 export async function ensureHostRunning(
 	layout: HostLayout,
 	target: HostSpawn,
-	options: { attempts?: number; delayMs?: number } = {},
+	options: {
+		attempts?: number;
+		delayMs?: number;
+		requireRetryAuthority?: boolean;
+	} = {},
+): Promise<void> {
+	const key = layout.socketPath;
+	const existing = hostEnsureOperations.get(key);
+	if (existing) {
+		await existing;
+		if (
+			options.requireRetryAuthority !== true ||
+			hostRetryCapabilityAvailable(layout.socketPath)
+		)
+			return;
+		return ensureHostRunning(layout, target, options);
+	}
+	const operation = ensureHostRunningOnce(layout, target, options);
+	hostEnsureOperations.set(key, operation);
+	try {
+		await operation;
+	} finally {
+		if (hostEnsureOperations.get(key) === operation)
+			hostEnsureOperations.delete(key);
+	}
+}
+
+async function ensureHostRunningOnce(
+	layout: HostLayout,
+	target: HostSpawn,
+	options: {
+		attempts?: number;
+		delayMs?: number;
+		requireRetryAuthority?: boolean;
+	},
 ): Promise<void> {
 	const attempts = options.attempts ?? 30;
 	const delayMs = options.delayMs ?? 200;
+	let spawned = false;
 	for (let attempt = 0; attempt < attempts; attempt++) {
+		let reachable = false;
 		try {
 			await sendRequest(
 				layout.socketPath,
 				{ type: "hello", protocolVersion: PROTOCOL_VERSION },
 				2_000,
 			);
-			return;
+			reachable = true;
 		} catch {
-			if (attempt === 0) spawnHost(target, layout);
+			if (!spawned) {
+				const recoveryCapability = replaceHostRetryCapabilityForLaunch(
+					layout.socketPath,
+				);
+				spawnHost(target, layout, recoveryCapability);
+				spawned = true;
+			}
 			await sleep(delayMs);
+			continue;
 		}
+		if (
+			reachable &&
+			options.requireRetryAuthority === true &&
+			!hostRetryCapabilityAvailable(layout.socketPath)
+		) {
+			const prepared = await sendRequest(
+				layout.socketPath,
+				{ type: "prepareRestartForReattachment" },
+				2_000,
+			);
+			if (prepared.type !== "prepareRestartForReattachment")
+				throw unexpected(prepared);
+			if (prepared.status !== "ready")
+				throw new HostUnavailableError(
+					"agent host is active; recovery authority cannot be restored without interrupting work",
+				);
+			await waitForHostUnavailable(layout.socketPath, attempts, delayMs);
+			const recoveryCapability = replaceHostRetryCapabilityForLaunch(
+				layout.socketPath,
+			);
+			spawnHost(target, layout, recoveryCapability);
+			spawned = true;
+			await sleep(delayMs);
+			continue;
+		}
+		return;
 	}
 	throw new HostUnavailableError(
 		`agent host did not become reachable: ${layout.socketPath}`,
+	);
+}
+
+async function waitForHostUnavailable(
+	socketPath: string,
+	attempts: number,
+	delayMs: number,
+): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			await sendRequest(
+				socketPath,
+				{ type: "hello", protocolVersion: PROTOCOL_VERSION },
+				2_000,
+			);
+			await sleep(delayMs);
+		} catch {
+			return;
+		}
+	}
+	throw new HostUnavailableError(
+		"agent host did not stop for safe recovery-authority reattachment",
 	);
 }
 
@@ -214,6 +331,7 @@ export class HostClient {
 	constructor(
 		private readonly socketPath: HostEndpoint,
 		private readonly timeoutMs = 30_000,
+		private readonly recoveryCapability?: string,
 	) {}
 
 	async ensureRun(
@@ -318,6 +436,29 @@ export class HostClient {
 		if (response.type !== "status") throw unexpected(response);
 		return response;
 	}
+
+	/** Explicitly retry one task the host has verified as parked at restart_limit. */
+	async retryTask(
+		runId: string,
+		conversationId: string,
+		taskId: string,
+		generation: number,
+	): Promise<RetryTaskResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{
+				type: "retryTask",
+				runId,
+				conversationId,
+				taskId,
+				generation,
+				recoveryCapability: this.recoveryCapability ?? "",
+			},
+			this.timeoutMs,
+		);
+		if (response.type !== "retryTask") throw unexpected(response);
+		return response;
+	}
 	async abort(runId: string): Promise<void> {
 		const response = await sendRequest(
 			this.socketPath,
@@ -333,6 +474,18 @@ export class HostClient {
 			this.timeoutMs,
 		);
 		if (response.type !== "ok") throw unexpected(response);
+	}
+	async prepareRestartForReattachment(): Promise<
+		PrepareRestartForReattachmentResponse["status"]
+	> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "prepareRestartForReattachment" },
+			this.timeoutMs,
+		);
+		if (response.type !== "prepareRestartForReattachment")
+			throw unexpected(response);
+		return response.status;
 	}
 	async shutdown(): Promise<void> {
 		const response = await sendRequest(

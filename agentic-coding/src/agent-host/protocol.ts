@@ -6,7 +6,7 @@
 
 /** Wire protocol version. A client whose `hello` names a different version is
  * refused rather than guessing compatibility. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Frames above this size are rejected before they are parsed, so a runaway
  * client cannot exhaust the host's memory one line at a time. */
@@ -89,6 +89,12 @@ export interface StopRunRequest {
 export interface ShutdownRequest {
 	readonly type: "shutdown";
 }
+/** Ask a surviving host to close only when no tracked run is doing live work.
+ * This contains no retry authority; a fresh host receives its new capability
+ * through the launcher's inherited descriptor. */
+export interface PrepareRestartForReattachmentRequest {
+	readonly type: "prepareRestartForReattachment";
+}
 export interface WatchRequest {
 	readonly type: "watch";
 	readonly runId: string;
@@ -122,9 +128,11 @@ export type HostRequest =
 	| ConfigureRunRequest
 	| CatalogRequest
 	| CompactRunRequest
+	| RetryTaskRequest
 	| AbortRequest
 	| StopRunRequest
 	| ShutdownRequest
+	| PrepareRestartForReattachmentRequest
 	| WatchRequest;
 
 export type RunStatus = "idle" | "working" | "blocked" | "done" | "unknown";
@@ -133,6 +141,10 @@ export interface HelloResponse {
 	readonly type: "hello";
 	readonly protocolVersion: number;
 	readonly hostId: string;
+}
+export interface PrepareRestartForReattachmentResponse {
+	readonly type: "prepareRestartForReattachment";
+	readonly status: "ready" | "busy";
 }
 export interface EnsureRunResponse {
 	readonly type: "ensureRun";
@@ -172,11 +184,75 @@ export function normalizeSubmitMode(value: unknown): "steer" | "followUp" {
 		? "steer"
 		: "followUp";
 }
+export interface RuntimeFailure {
+	readonly kind:
+		| "task_faulted"
+		| "task_parked"
+		| "host_failure"
+		| "session_failure"
+		| "extension_failure"
+		| "other_failure";
+	readonly domain: "task" | "host" | "session" | "extension" | "unknown";
+	readonly taskId?: string;
+	/** Current durable parked-failure episode, required to reject stale UI retries. */
+	readonly generation?: number;
+	readonly reason?: string;
+	readonly error?: string;
+}
+
+export type RetryTaskStatus =
+	| "retried"
+	| "already-in-progress"
+	| "stale"
+	| "refused";
+
+export interface RetryTaskRequest {
+	readonly type: "retryTask";
+	readonly runId: string;
+	readonly conversationId: string;
+	readonly taskId: string;
+	readonly generation: number;
+	/** Private host-launch capability. Never copied into a run environment or
+	 * returned in a response. */
+	readonly recoveryCapability: string;
+}
+
+export interface RetryTaskResponse {
+	readonly type: "retryTask";
+	readonly runId: string;
+	readonly taskId: string;
+	readonly status: RetryTaskStatus;
+	readonly reason?: string;
+}
+
+/** Bounded diagnostic text shared by host reports and defensive UI projections.
+ * Structured payloads are never stringified into diagnostics. */
+export function safeFailureMessage(value: unknown, limit = 240): string {
+	if (typeof value !== "string") return "";
+	const safe = value
+		.replace(/-----BEGIN[\s\S]*?-----END[^\n]*/g, "[REDACTED]")
+		.replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+		.replace(
+			/\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{16,})\b/g,
+			"[REDACTED]",
+		)
+		.replace(
+			/\b(HERDR_RUN_TOKEN|(?:api[_-]?)?key|token|secret|password|passwd|authorization)\s*[:=]\s*[^\s,;]+/gi,
+			"$1=[REDACTED]",
+		)
+		.replace(/\s+/g, " ")
+		.trim();
+	return safe.length > limit
+		? `${safe.slice(0, Math.max(0, limit - 1))}…`
+		: safe;
+}
+
 export interface StatusResponse {
 	readonly type: "status";
 	readonly runId: string;
 	readonly status: RunStatus;
 	readonly lastError?: string;
+	readonly runtimeFailure?: RuntimeFailure;
 }
 export interface OkResponse {
 	readonly type: "ok";
@@ -235,11 +311,13 @@ export interface WatchFrame {
 }
 export type HostResponse =
 	| HelloResponse
+	| PrepareRestartForReattachmentResponse
 	| EnsureRunResponse
 	| SubmitResponse
 	| StatusResponse
 	| CatalogResponse
 	| CompactRunResponse
+	| RetryTaskResponse
 	| OkResponse
 	| ErrorResponse
 	| WatchFrame;

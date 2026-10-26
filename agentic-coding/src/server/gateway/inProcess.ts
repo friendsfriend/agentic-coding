@@ -8,11 +8,14 @@
 // adapters answer with the same contract shapes.
 
 import type { Schema } from "effect";
+import { retryAgentTaskAsOperator } from "../../agent-host/retry-mediator.ts";
 import type {
 	AgentHandoffRequest,
 	AgentQuestionRequest,
 	AgentResearchHandoffRequest,
 	AgentsMutationRequest,
+	AgentTaskRetryRequest,
+	AgentTaskRetryResult,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
 	WorkflowDeleteRequest,
@@ -330,6 +333,12 @@ export function createInProcessGateway(
 				view.revision,
 			);
 			return view;
+		},
+
+		async retryAgentTask(
+			request: AgentTaskRetryRequest,
+		): Promise<AgentTaskRetryResult> {
+			return retryAgentTaskAsOperator(request);
 		},
 
 		async saveAgents(request: AgentsMutationRequest): Promise<void> {

@@ -97,6 +97,52 @@ for (const connection of ["connecting", "disconnected"] as const) {
 	});
 }
 
+test("retry-task commands dispatch recovery without submitting a prompt", async () => {
+	const [draft, setDraft] = createSignal("");
+	const submitted: string[] = [];
+	const retried: string[] = [];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[]}
+				working={false}
+				connection="connected"
+				history={[]}
+				onHistoryAppend={() => {}}
+				models={["test/model"]}
+				thinkingLevels={["off"]}
+				draft={draft()}
+				onDraftChange={setDraft}
+				onSubmit={(text) => submitted.push(text)}
+				onRetryTask={(taskId) => retried.push(taskId)}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
+		),
+		{ width: 110, height: 30 },
+	);
+	try {
+		await t.renderOnce();
+		setDraft("/retry-task 42");
+		await t.renderOnce();
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(retried).toEqual(["42"]);
+		expect(submitted).toEqual([]);
+		setDraft("normal prompt");
+		await t.renderOnce();
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(retried).toEqual(["42"]);
+		expect(submitted).toEqual(["normal prompt"]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a picker opened before disconnection cannot dispatch configuration while paused", async () => {
 	const [connection, setConnection] =
 		createSignal<AgentSessionConnection>("connected");

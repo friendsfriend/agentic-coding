@@ -65,6 +65,8 @@ import {
 	formatDuration,
 	formatTokenCount,
 	isBrowserTool,
+	RETRY_TASK_COMMAND,
+	retryTaskCommandId,
 	reuseAgentSessionBlocks,
 	SLOW_CALL_MS,
 	toolArgsSummary,
@@ -119,6 +121,8 @@ export interface AgentSessionViewProps {
 	/** A compaction in flight, so the status line shows a reason-carrying
 	 * indicator (`add-agent-compaction`: "Compaction feedback"). */
 	readonly compacting?: { readonly reason: string; readonly retrying?: string };
+	readonly runtimeFailure?: import("../../../agent-host/protocol.ts").RuntimeFailure;
+	readonly compactionFailure?: string;
 	/** Picker catalogs, from the host's `catalog` request. */
 	readonly models: readonly string[];
 	readonly thinkingLevels: readonly string[];
@@ -133,6 +137,8 @@ export interface AgentSessionViewProps {
 	 * are the free text after `/compact`; the host answers with one structured
 	 * outcome the route reports as a notice. */
 	readonly onCompact: (instructions?: string) => void;
+	/** Retry only an explicitly named parked Harness task. */
+	readonly onRetryTask?: (taskId: string) => void;
 	/** The transcript scroll box, so the route's keymap layer can scroll it. */
 	readonly onScrollBoxReady?: (box: ScrollBoxRenderable) => void;
 	/** The picker's key handler, registered while a picker is open. */
@@ -173,7 +179,6 @@ export const LATEST_COMMAND = "/latest";
  * free-text argument is passed to the summarizer as its instructions, exactly
  * as a `/model` or `/thinking` argument is passed to the host. */
 export const COMPACT_COMMAND = "/compact";
-
 interface SessionCommand {
 	readonly name: string;
 	readonly description: string;
@@ -187,6 +192,10 @@ const SESSION_COMMANDS: readonly SessionCommand[] = [
 	{
 		name: COMPACT_COMMAND,
 		description: "Summarize the context (optional instructions)",
+	},
+	{
+		name: RETRY_TASK_COMMAND,
+		description: "Retry a parked task by ID; external effects may repeat",
 	},
 	{ name: TIMELINE_COMMAND, description: "Jump to a user message" },
 	{ name: LATEST_COMMAND, description: "Jump to the latest output" },
@@ -1971,14 +1980,18 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			// `/model` and `/thinking`.
 			const instructions = name.slice(COMPACT_COMMAND.length).trim();
 			props.onCompact(instructions || undefined);
-		} else if (name === ABORT_COMMAND) props.onAbort();
-		else if (name === CLOSE_COMMAND) props.onBack();
-		else {
-			const extra = props.extraCommands?.find(
-				(command) => command.name === name,
-			);
-			if (extra) extra.run();
-			else props.onSubmit(name);
+		} else {
+			const retryTaskId = retryTaskCommandId(name);
+			if (retryTaskId !== undefined) props.onRetryTask?.(retryTaskId);
+			else if (name === ABORT_COMMAND) props.onAbort();
+			else if (name === CLOSE_COMMAND) props.onBack();
+			else {
+				const extra = props.extraCommands?.find(
+					(command) => command.name === name,
+				);
+				if (extra) extra.run();
+				else props.onSubmit(name);
+			}
 		}
 		setPrompt("");
 	};
@@ -2346,6 +2359,26 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							{props.connection === "connecting"
 								? "Connecting to the recorded session; controls paused."
 								: "Disconnected — reconnecting. Transcript is stale; controls paused."}
+						</text>
+					</Show>
+					<Show when={props.runtimeFailure?.kind === "task_parked"}>
+						<text fg={uiColors.warning} flexShrink={0} wrapMode="char">
+							{`Task ${props.runtimeFailure?.taskId ?? "unknown"} is parked (${props.runtimeFailure?.reason ?? "restart_limit"}). Use /retry-task ${props.runtimeFailure?.taskId ?? "<id>"} to resume; retry may repeat external effects.`}
+						</text>
+					</Show>
+					<Show
+						when={
+							props.runtimeFailure &&
+							props.runtimeFailure.kind !== "task_parked"
+						}
+					>
+						<text fg={uiColors.error} flexShrink={0} wrapMode="char">
+							{`${props.runtimeFailure?.kind ?? "runtime failure"}: ${props.runtimeFailure?.error ?? props.runtimeFailure?.reason ?? "see host diagnostics"}`}
+						</text>
+					</Show>
+					<Show when={props.compactionFailure}>
+						<text fg={uiColors.error} flexShrink={0} wrapMode="char">
+							{`Compaction failed: ${props.compactionFailure}`}
 						</text>
 					</Show>
 					{/* opencode v2's prompt: a left-bordered raised block holding the

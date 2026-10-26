@@ -15,7 +15,9 @@ import {
 	encodeFrame,
 	FrameReader,
 	type HostRequest,
+	PROTOCOL_VERSION,
 } from "../src/agent-host/protocol.ts";
+import { hostRetryCapabilityAvailable } from "../src/agent-host/retry-authority.ts";
 
 /** A minimal fake host: just enough of the protocol to exercise the client
  * without pulling in pi-durable (the real host lives in `host.ts`, tested by
@@ -158,6 +160,42 @@ describe("HostClient over the control socket", () => {
 		expect(seen[1]).toEqual({ type: "compactRun", runId: "run-1" });
 	});
 
+	test("retryTask carries both ownership identities and returns a bounded outcome", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		let request: Record<string, unknown> | undefined;
+		server = fakeServer(layout.socketPath, (value) => {
+			request = value as unknown as Record<string, unknown>;
+			return {
+				type: "retryTask",
+				runId: "run-1",
+				taskId: "task-7",
+				status: "retried",
+			};
+		});
+		const client = new HostClient(
+			layout.socketPath,
+			2_000,
+			"private-capability",
+		);
+		await expect(client.retryTask("run-1", "17", "task-7", 4)).resolves.toEqual(
+			{
+				type: "retryTask",
+				runId: "run-1",
+				taskId: "task-7",
+				status: "retried",
+			},
+		);
+		expect(request).toEqual({
+			type: "retryTask",
+			runId: "run-1",
+			conversationId: "17",
+			taskId: "task-7",
+			generation: 4,
+			recoveryCapability: "private-capability",
+		});
+	});
+
 	test("an unknown run is the refusal a finished run maps to", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });
@@ -282,6 +320,22 @@ describe("HostClient over the control socket", () => {
 		});
 	});
 
+	test("client requests a bounded idle-host restart for reattachment", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, (request) =>
+			request.type === "prepareRestartForReattachment"
+				? {
+						type: "prepareRestartForReattachment",
+						status: "ready",
+					}
+				: { type: "error", code: "invalid-request", message: "not used" },
+		);
+		await expect(
+			new HostClient(layout.socketPath, 2_000).prepareRestartForReattachment(),
+		).resolves.toBe("ready");
+	});
+
 	test("ensureHostRunning spawns nothing once the host already answers hello", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });
@@ -301,6 +355,121 @@ describe("HostClient over the control socket", () => {
 				{ attempts: 3, delayMs: 10 },
 			),
 		).resolves.toBeUndefined();
+	});
+
+	test("authority reattachment refuses a busy surviving host without restarting it", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		let restartChecks = 0;
+		server = fakeServer(layout.socketPath, (request) => {
+			if (request.type === "prepareRestartForReattachment") {
+				restartChecks++;
+				return { type: "prepareRestartForReattachment", status: "busy" };
+			}
+			return {
+				type: "hello",
+				protocolVersion: PROTOCOL_VERSION,
+				hostId: "busy-host",
+			};
+		});
+		await expect(
+			ensureHostRunning(
+				layout,
+				{ command: "must-not-spawn", args: [], cwd: dir },
+				{ attempts: 3, delayMs: 5, requireRetryAuthority: true },
+			),
+		).rejects.toThrow("cannot be restored without interrupting work");
+		expect(restartChecks).toBe(1);
+		expect(hostRetryCapabilityAvailable(layout.socketPath)).toBe(false);
+		expect(fs.existsSync(layout.logPath)).toBe(false);
+	});
+
+	test("reattaches retry authority by restarting only an idle surviving host", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		const oldServer = net.createServer((socket) => {
+			const reader = new FrameReader();
+			socket.setEncoding("utf8");
+			socket.on("data", (chunk: string) => {
+				for (const line of reader.push(chunk)) {
+					const decoded = decodeFrame(line);
+					if (!decoded.ok) continue;
+					const request = decoded.value as HostRequest;
+					if (request.type === "prepareRestartForReattachment") {
+						socket.end(
+							encodeFrame({
+								type: "prepareRestartForReattachment",
+								status: "ready",
+							}),
+						);
+						setTimeout(() => oldServer.close(), 0);
+						continue;
+					}
+					socket.end(
+						encodeFrame({
+							type: "hello",
+							protocolVersion: PROTOCOL_VERSION,
+							hostId: "old-host",
+						}),
+					);
+				}
+			});
+		});
+		server = oldServer;
+		await new Promise<void>((resolve) =>
+			oldServer.listen(layout.socketPath, resolve),
+		);
+		const pidPath = path.join(dir, "replacement-host.pid");
+		const childPath = path.join(dir, "replacement-host.mjs");
+		fs.writeFileSync(
+			childPath,
+			[
+				'import net from "node:net";',
+				'import fs from "node:fs";',
+				'fs.readFileSync(3, "utf8");',
+				"const server = net.createServer((socket) => {",
+				'  let input = "";',
+				'  socket.on("data", (chunk) => {',
+				"    input += chunk.toString();",
+				'    if (!input.includes("\\n")) return;',
+				"    const request = JSON.parse(input);",
+				'    socket.end(JSON.stringify({ type: "hello", protocolVersion: request.protocolVersion, hostId: "new-host" }) + "\\n");',
+				"  });",
+				"});",
+				"server.listen(process.env.REPLACEMENT_HOST_SOCKET, () => fs.writeFileSync(process.env.REPLACEMENT_HOST_PID, String(process.pid)));",
+			].join("\n"),
+		);
+		try {
+			await ensureHostRunning(
+				layout,
+				{
+					command: process.execPath,
+					args: [childPath],
+					cwd: dir,
+					env: {
+						REPLACEMENT_HOST_SOCKET: layout.socketPath,
+						REPLACEMENT_HOST_PID: pidPath,
+					},
+				},
+				{ attempts: 30, delayMs: 10, requireRetryAuthority: true },
+			);
+			expect(hostRetryCapabilityAvailable(layout.socketPath)).toBe(true);
+			expect(Number(fs.readFileSync(pidPath, "utf8"))).toBeGreaterThan(0);
+		} finally {
+			server = undefined;
+			if (oldServer.listening)
+				await new Promise<void>((resolve) => oldServer.close(() => resolve()));
+			if (fs.existsSync(pidPath)) {
+				const pid = Number(fs.readFileSync(pidPath, "utf8"));
+				if (Number.isSafeInteger(pid) && pid > 0) {
+					try {
+						process.kill(pid, "SIGTERM");
+					} catch {
+						/* child may already have exited */
+					}
+				}
+			}
+		}
 	});
 
 	test("watchStream reconnects after the host drops the stream", async () => {

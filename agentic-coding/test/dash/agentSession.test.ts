@@ -5,6 +5,7 @@ import {
 	createAgentSessionProjection,
 	readAgentSessionMetadata,
 	renderAgentSessionSummary,
+	retryTaskCommandId,
 	reuseAgentSessionBlocks,
 	streamAgentSessionProjection,
 	submissionStateNote,
@@ -16,6 +17,16 @@ const blocksOf = (value: unknown) =>
 	buildAgentSessionView(value).map(
 		({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
 	);
+
+describe("retryTaskCommandId", () => {
+	test("extracts only an explicit retry command task id", () => {
+		expect(retryTaskCommandId("/retry-task 42")).toBe("42");
+		expect(retryTaskCommandId("/retry-task  42 ")).toBe("42");
+		expect(retryTaskCommandId("/retry-task")).toBe("");
+		expect(retryTaskCommandId("/retry-tasking 42")).toBeUndefined();
+		expect(retryTaskCommandId("ordinary prompt")).toBeUndefined();
+	});
+});
 
 describe("buildAgentSessionView", () => {
 	test("read results preserve source whitespace for syntax and line numbering", () => {
@@ -1218,6 +1229,37 @@ describe("readAgentSessionMetadata", () => {
 			],
 		});
 		expect(info.error).toBe("boom");
+	});
+
+	test("surfaces a parked task and retained compaction failure, then clears on success", () => {
+		const parked = readAgentSessionMetadata({
+			entries: [],
+			docs: {
+				"pi.live": {
+					compactionFailure: { error: "Bearer sk-live-abcdefghijklmnop" },
+				},
+			},
+			runtimeFailure: {
+				kind: "task_parked",
+				domain: "task",
+				taskId: "task-7",
+				reason: "restart_limit",
+			},
+		});
+		expect(parked.runtimeFailure).toEqual({
+			kind: "task_parked",
+			domain: "task",
+			taskId: "task-7",
+			reason: "restart_limit",
+		});
+		expect(parked.compactionFailure).toBe("Bearer [REDACTED]");
+		expect(parked.compactionFailure).not.toContain("sk-live");
+		// pi.live owns this lifecycle: after a successful compaction its retained
+		// failure field disappears, and the projection must not preserve stale UI.
+		expect(
+			readAgentSessionMetadata({ entries: [], docs: { "pi.live": {} } })
+				.compactionFailure,
+		).toBeUndefined();
 	});
 
 	test("degrades to idle on an unexpected shape", () => {

@@ -31,6 +31,7 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { safeFailureMessage } from "../../agent-host/protocol.ts";
 import { createWorkflowSessionResolver } from "../../agent-host/workflow-session.ts";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
 import type {
@@ -71,6 +72,7 @@ import {
 	mergeDashboardLive,
 	previewRepair,
 	requestExecution,
+	retryAgentTask,
 	runWorkflow,
 } from "../data/workflow.ts";
 import {
@@ -93,6 +95,7 @@ import {
 	streamAgentSessionProjection,
 	submissionStateNote,
 } from "./agent-session.ts";
+import { dispatchAgentSessionRetry } from "./agent-session-retry.ts";
 import { openDebugRequestReport } from "./debug-requests-open.ts";
 import {
 	type DebugRequestsReadState,
@@ -1490,6 +1493,92 @@ export function App(props: {
 						? "This run has finished; nothing was compacted"
 						: `Could not compact: ${message}`,
 					message.includes("unknown-run") ? "info" : "error",
+				);
+			}
+		})();
+	};
+	/** `/retry-task <id>` is deliberately explicit. The view warns that an
+	 * external effect may repeat; the operator-authenticated server mediator
+	 * supplies the private host capability, and the host still revalidates task
+	 * ownership and workflow state before invoking pi-durable's native retry. */
+	const retryAgentSessionTask = (taskId: string) => {
+		const session = agentSession();
+		if (!session || agentSessionMetadata().connection !== "connected") return;
+		if (!taskId) {
+			notify("Usage: /retry-task <parked-task-id>", "warning");
+			return;
+		}
+		const conversationId = session.conversationId;
+		if (!conversationId) {
+			notify(
+				"The owning conversation is not available for validation",
+				"warning",
+			);
+			return;
+		}
+		const generation = agentSessionMetadata().runtimeFailure?.generation;
+		if (
+			typeof generation !== "number" ||
+			!Number.isSafeInteger(generation) ||
+			generation < 1
+		) {
+			notify(
+				"The parked task report is stale; refresh the session before retrying",
+				"warning",
+			);
+			return;
+		}
+		const isCurrent = currentAgentSessionControl(session.runId);
+		void (async () => {
+			try {
+				const answer = await dispatchAgentSessionRetry(
+					{
+						session,
+						connected: agentSessionMetadata().connection === "connected",
+						taskId,
+						generation,
+					},
+					{
+						recover: recoverAgentSession,
+						retry: retryAgentTask,
+						isCurrent,
+					},
+				);
+				if (!answer || !isCurrent()) return;
+				switch (answer.status) {
+					case "retried":
+						notify(
+							`Task ${answer.taskId} retry accepted — ${answer.reason ?? "external effects may repeat; exactly-once execution is not guaranteed"}`,
+							"warning",
+						);
+						return;
+					case "already-in-progress":
+						notify(
+							answer.reason ?? `Task ${answer.taskId} is already in progress`,
+							"info",
+						);
+						return;
+					case "stale":
+						notify(
+							`Task ${answer.taskId} is no longer retryable: ${answer.reason ?? "stale task"}`,
+							"warning",
+						);
+						return;
+					case "refused":
+						notify(
+							`Task ${answer.taskId} retry refused: ${answer.reason ?? "ownership or workflow state changed"}`,
+							"warning",
+						);
+						return;
+				}
+			} catch (error) {
+				if (!isCurrent()) return;
+				const message = safeFailureMessage(
+					error instanceof Error ? error.message : String(error),
+				);
+				notify(
+					`Could not retry task: ${message || "host request failed"}`,
+					"error",
 				);
 			}
 		})();
@@ -4171,6 +4260,7 @@ export function App(props: {
 									onBack={backAgentSession}
 									onConfigure={configureAgentSession}
 									onCompact={compactAgentSession}
+									onRetryTask={retryAgentSessionTask}
 									// The prompt reads keys only while the dashboard owns the keyboard:
 									// the shell sidebar/overlay or a dashboard dialog parks the
 									// keymap, so the input must blur too instead of swallowing the

@@ -28,6 +28,7 @@ import {
 import { ensureHostRunning, HostClient } from "./client.ts";
 import { hostLayout } from "./layout.ts";
 import type { EnsureRunRequest } from "./protocol.ts";
+import { registerHostRetryTarget } from "./retry-authority.ts";
 import { verifyWorkflowSessions } from "./workflow-session-lookup.ts";
 
 export interface RecoveredSession {
@@ -167,17 +168,21 @@ export async function recoverWorkflowSession(
 	const runtimeDir = path.dirname(path.dirname(handle.hostSocket));
 	const layout = hostLayout(runtimeDir);
 	const entry = selfExecEntry();
-	await ensureHostRunning(layout, {
-		command: process.execPath,
-		args: [
-			...(entry ? [entry] : []),
-			"agent",
-			"host",
-			"--workflow-dir",
-			runtimeDir,
-		],
-		cwd: snapshot.metadata.worktree,
-	});
+	await ensureHostRunning(
+		layout,
+		{
+			command: process.execPath,
+			args: [
+				...(entry ? [entry] : []),
+				"agent",
+				"host",
+				"--workflow-dir",
+				runtimeDir,
+			],
+			cwd: snapshot.metadata.worktree,
+		},
+		{ requireRetryAuthority: true },
+	);
 	const client = new HostClient(async () => {
 		const endpoint = verifyWorkflowSessions(repo, workflowId, [
 			{ runId, recordedSocket: layout.socketPath, authenticated: true },
@@ -188,9 +193,9 @@ export async function recoverWorkflowSession(
 			);
 		return { socket: endpoint.socket, fingerprint: endpoint.fingerprint };
 	});
-	if (request && (await client.status(run.id)).status === "unknown") {
-		// Starting a host yields to other workflow operations. Do not register a
-		// run that handed off or lost ownership while the process was starting.
+	// Starting/recovering a host yields to other workflow operations. Never
+	// install retry authority for a run that lost its authoritative ownership.
+	const verifyCurrentOwnership = () => {
 		const fresh = openReadStore(repo);
 		try {
 			const row = fresh
@@ -214,9 +219,20 @@ export async function recoverWorkflowSession(
 		} finally {
 			fresh.close();
 		}
+	};
+	if (request && (await client.status(run.id)).status === "unknown") {
+		verifyCurrentOwnership();
 		verifyEnvironment(request, run);
 		await client.recoverRun(request);
 	}
+	verifyCurrentOwnership();
+	const retryTargetLease = registerHostRetryTarget(
+		run.id,
+		handle.conversationId,
+		layout.socketPath,
+	);
+	if (!retryTargetLease)
+		throw new Error("agent host recovery authority is unavailable");
 	return {
 		runId: run.id,
 		hostSocket: layout.socketPath,

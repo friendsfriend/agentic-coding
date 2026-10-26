@@ -132,6 +132,50 @@ test("an active run with no finer step still reports working", () => {
 	});
 });
 
+test("parked tasks and compaction failures remain visible while idle", () => {
+	expect(
+		agentActivityFromValue({
+			docs: { "pi.live": {} },
+			runtimeFailure: {
+				kind: "task_parked",
+				domain: "task",
+				taskId: "task-7",
+				reason: "restart_limit",
+			},
+		}),
+	).toEqual({
+		label: "parked",
+		active: false,
+		tone: "blocked",
+		detail: "task task-7 · restart_limit",
+	});
+	expect(
+		agentActivityFromValue(
+			liveFrame({ compactionFailure: { error: "summary failed" } }),
+		),
+	).toEqual({
+		label: "compaction failed",
+		active: false,
+		tone: "blocked",
+		detail: "summary failed",
+	});
+	expect(agentActivityFromValue(liveFrame({}))).toBeUndefined();
+});
+
+test("failure details are redacted before they reach the panel", () => {
+	const activity = agentActivityFromValue({
+		docs: { "pi.live": {} },
+		runtimeFailure: {
+			kind: "task_faulted",
+			domain: "task",
+			taskId: "task-1",
+			error: "Bearer sk-live-abcdefghijklmnop",
+		},
+	});
+	expect(activity?.detail).toBe("Bearer [REDACTED]");
+	expect(activity?.detail).not.toContain("sk-live");
+});
+
 test("no live work reports nothing, so the panel keeps the status badge", () => {
 	expect(agentActivityFromValue(liveFrame({}))).toBeUndefined();
 	expect(agentActivityFromValue(frame({}))).toBeUndefined();

@@ -9,7 +9,10 @@ import type { Schema } from "effect";
 import {
 	type AgentsListResponse,
 	type AgentsMutationRequest,
+	type AgentTaskRetryRequest,
+	type AgentTaskRetryResult,
 	agentsListResponseSchema,
+	agentTaskRetryResultSchema,
 	type ClassifierStatusResponse,
 	classifierStatusResponseSchema,
 	type WorkflowDeletion,
@@ -545,6 +548,16 @@ export class BackendClient implements DashboardGateway {
 			"core.workflow-view",
 			workflowViewSchema,
 			await this.request("POST", "/api/v1/agent/research-handoff", request),
+		);
+	}
+
+	async retryAgentTask(
+		request: AgentTaskRetryRequest,
+	): Promise<AgentTaskRetryResult> {
+		return this.decode(
+			"core.agent-task-retry-result",
+			agentTaskRetryResultSchema,
+			await this.request("POST", "/api/v1/agent/retry-task", request),
 		);
 	}
 

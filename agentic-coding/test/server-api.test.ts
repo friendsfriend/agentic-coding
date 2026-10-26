@@ -5,15 +5,33 @@
 
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import tls from "node:tls";
 import { Schema } from "effect";
+import {
+	createHostIdentity,
+	hostIdentityPaths,
+} from "../src/agent-host/host-identity.ts";
+import {
+	encodeFrame,
+	FrameReader,
+	type HostRequest,
+} from "../src/agent-host/protocol.ts";
+import {
+	hostRetryCapabilityForLaunch,
+	registerHostRetryTarget,
+	releaseHostRetryCapability,
+	unregisterHostRetryTarget,
+} from "../src/agent-host/retry-authority.ts";
 import type { BrowserStatusResponse } from "../src/contracts/browser.ts";
 import type { ClassifierStatusResponse } from "../src/contracts/gateway.ts";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	authorizeRequest,
 	createInstanceAuthority,
+	orchestratorTokenFor,
 	originAllowed,
 } from "../src/server/auth.ts";
 import { BackendClient } from "../src/server/client.ts";
@@ -151,6 +169,7 @@ describe("server route ownership", () => {
 	test("static manifest resolves the versioned surface and its private operations", () => {
 		expect(routeOwner("GET", "/api/v1/health")?.owner).toBe("bun");
 		expect(routeOwner("POST", "/api/v1/observe")?.owner).toBe("bun");
+		expect(routeOwner("POST", "/api/v1/agent/retry-task")?.owner).toBe("bun");
 		expect(routeOwner("GET", "/api/v1/events")?.owner).toBe("bun");
 		expect(routeOwner("POST", "/api/v1/environment/private/state")?.owner).toBe(
 			"bun",
@@ -1135,6 +1154,148 @@ describe("agent handoff", () => {
 			});
 			expect(response.status).toBe(403);
 		});
+	});
+});
+
+describe("operator-mediated agent task recovery", () => {
+	test("requires operator authentication and keeps the host capability server-side", async () => {
+		await withServer(async (server) => {
+			const path = `${server.url}/api/v1/agent/retry-task`;
+			const body = JSON.stringify({
+				runId: "run-1",
+				conversationId: "conversation-1",
+				taskId: "task-1",
+				generation: 1,
+			});
+			const unauthorized = await fetch(path, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body,
+			});
+			expect(unauthorized.status).toBe(401);
+
+			const orchestrator = await fetch(path, {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${orchestratorTokenFor(server.token)}`,
+					"content-type": "application/json",
+				},
+				body,
+			});
+			expect(orchestrator.status).toBe(403);
+
+			const client = new BackendClient({
+				baseUrl: server.url,
+				token: server.token,
+				ownerId: "operator-ui",
+			});
+			await expect(
+				client.retryAgentTask({
+					runId: "run-1",
+					conversationId: "conversation-1",
+					taskId: "task-1",
+					generation: 1,
+				}),
+			).resolves.toEqual({
+				taskId: "task-1",
+				status: "refused",
+				reason: "host recovery authority is unavailable",
+			});
+		});
+	});
+
+	test("operator route retries the registered task over authenticated host TLS", async () => {
+		const dir = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "server-agent-retry-")),
+		);
+		const socketPath = path.join(dir, "host.sock");
+		const tlsPaths = hostIdentityPaths(socketPath);
+		const identity = createHostIdentity();
+		fs.writeFileSync(tlsPaths.certificate, identity.cert, { mode: 0o600 });
+		const capability = hostRetryCapabilityForLaunch(socketPath);
+		let received: HostRequest | undefined;
+		let rawConnections = 0;
+		const rawServer = net.createServer((socket) => {
+			rawConnections++;
+			socket.resume();
+		});
+		const hostServer = tls.createServer(
+			{ key: identity.key, cert: identity.cert, minVersion: "TLSv1.3" },
+			(socket) => {
+				const reader = new FrameReader();
+				socket.setEncoding("utf8");
+				socket.on("data", (chunk: string) => {
+					for (const line of reader.push(chunk)) {
+						const request = JSON.parse(line) as HostRequest;
+						if (request.type !== "retryTask") continue;
+						received = request;
+						socket.write(
+							encodeFrame({
+								type: "retryTask",
+								runId: request.runId,
+								taskId: request.taskId,
+								status: "retried",
+							}),
+						);
+					}
+				});
+			},
+		);
+		const listen = (server: net.Server, endpoint: string) =>
+			new Promise<void>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(endpoint, resolve);
+			});
+		let lease: string | undefined;
+		try {
+			await Promise.all([
+				listen(rawServer, socketPath),
+				listen(hostServer, tlsPaths.socket),
+			]);
+			lease = registerHostRetryTarget("run-9", "17", socketPath);
+			expect(lease).toBeString();
+			await withServer(async (server) => {
+				const client = new BackendClient({
+					baseUrl: server.url,
+					token: server.token,
+					ownerId: "operator-ui",
+				});
+				await expect(
+					client.retryAgentTask({
+						runId: "run-9",
+						conversationId: "17",
+						taskId: "task-7",
+						generation: 4,
+					}),
+				).resolves.toEqual({
+					taskId: "task-7",
+					status: "retried",
+					reason:
+						"external effects may repeat; exactly-once execution is not guaranteed",
+				});
+			});
+			expect(received).toMatchObject({
+				type: "retryTask",
+				runId: "run-9",
+				conversationId: "17",
+				taskId: "task-7",
+				generation: 4,
+				recoveryCapability: capability,
+			});
+			expect(rawConnections).toBe(0);
+		} finally {
+			unregisterHostRetryTarget("run-9", "17", lease);
+			releaseHostRetryCapability(socketPath, capability);
+			await Promise.all([
+				new Promise<void>((resolve) =>
+					rawServer.listening ? rawServer.close(() => resolve()) : resolve(),
+				),
+				new Promise<void>((resolve) =>
+					hostServer.listening ? hostServer.close(() => resolve()) : resolve(),
+				),
+			]);
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

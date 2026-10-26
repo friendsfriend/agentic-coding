@@ -847,6 +847,9 @@ export interface AgentHandle {
 	 * maps to (durable-agent-host). */
 	hostSocket?: string;
 	conversationId?: string;
+	/** Opaque registration lease used only to avoid a late stop removing a
+	 * newer retry target for a relaunched run. It is not a host capability. */
+	retryTargetLease?: string;
 }
 export interface WorkflowEffect {
 	id: string;

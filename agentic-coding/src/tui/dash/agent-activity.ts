@@ -15,6 +15,10 @@
 
 import { createSignal } from "solid-js";
 import type { AuthenticatedHostEndpoint } from "../../agent-host/host-identity.ts";
+import {
+	type RuntimeFailure,
+	safeFailureMessage,
+} from "../../agent-host/protocol.ts";
 
 /** The activity a durable run is in the middle of. `active` is true only while
  * something is actually in flight, so the panel can animate it (like the
@@ -28,6 +32,8 @@ export interface AgentActivity {
 	/** The status tone the badge takes while active: a running tool is
 	 * `working`; a question the run is blocked on is `blocked`. */
 	readonly tone: "working" | "blocked";
+	/** Bounded failure detail shown even when no task is currently running. */
+	readonly detail?: string;
 }
 
 /** One durable agent the panel wants activity for. Only `pi-durable` rows carry
@@ -143,7 +149,48 @@ export function agentActivityFromValue(
 	if (!isRecord(value)) return undefined;
 	const docs = isRecord(value.docs) ? value.docs : {};
 	const live = isRecord(docs["pi.live"]) ? docs["pi.live"] : undefined;
+	const runtimeFailure = isRecord(value.runtimeFailure)
+		? value.runtimeFailure
+		: undefined;
+	const failureKind = runtimeFailure?.kind;
+	const failure =
+		failureKind === "task_parked" ||
+		failureKind === "task_faulted" ||
+		failureKind === "host_failure" ||
+		failureKind === "session_failure" ||
+		failureKind === "extension_failure" ||
+		failureKind === "other_failure"
+			? (runtimeFailure as unknown as RuntimeFailure)
+			: undefined;
+	if (failure?.kind === "task_parked") {
+		return {
+			label: "parked",
+			active: false,
+			tone: "blocked",
+			detail: `task ${safeFailureMessage(failure.taskId ?? "unknown", 128)} · ${safeFailureMessage(failure.reason ?? "restart_limit", 80)}`,
+		};
+	}
+	if (failure) {
+		return {
+			label: failure.kind === "task_faulted" ? "faulted" : "failed",
+			active: false,
+			tone: "blocked",
+			detail: safeFailureMessage(failure.error ?? failure.kind, 180),
+		};
+	}
 	if (!live) return undefined;
+	if (live.compactionFailure !== undefined) {
+		const compactionFailure = isRecord(live.compactionFailure)
+			? (live.compactionFailure.error ?? live.compactionFailure.message)
+			: live.compactionFailure;
+		return {
+			label: "compaction failed",
+			active: false,
+			tone: "blocked",
+			detail:
+				safeFailureMessage(compactionFailure, 180) || "summary was not saved",
+		};
+	}
 
 	// A running tool is the most concrete activity: prefer the newest slot so a
 	// parallel batch reports the call that actually started last.
@@ -267,7 +314,8 @@ export function createAgentActivitySource(
 				before &&
 				before.label === activity.label &&
 				before.active === activity.active &&
-				before.tone === activity.tone
+				before.tone === activity.tone &&
+				before.detail === activity.detail
 			)
 				return current;
 			const next = new Map(current);
