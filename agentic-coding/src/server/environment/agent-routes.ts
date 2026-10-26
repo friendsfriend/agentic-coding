@@ -401,6 +401,26 @@ function rowTargetId(row: Record<string, unknown>): string | undefined {
 	return typeof targetId === "string" && targetId !== "" ? targetId : undefined;
 }
 
+/** Accept the compiled definition id shown by env_list as well as its target id.
+ * Only translate definitions owned by this app and action. */
+function listedTargetId(
+	deps: AgentEnvironmentDeps,
+	app: string,
+	action: "run" | "build" | "test",
+	target: string | undefined,
+): string | undefined {
+	const definition = deps.registry
+		?.snapshot()
+		.definitions.find(
+			(entry) =>
+				entry.id === target &&
+				entry.owner.kind === "app" &&
+				entry.owner.id === app &&
+				entry.type === action,
+		);
+	return (definition && definitionTargetId(definition)) || target;
+}
+
 /**
  * Mark the deterministic default target per action, so the choice between two
  * default-profile candidates is visible instead of silently picked
@@ -1052,12 +1072,19 @@ async function environmentAcquire(
 		!body.target && !body.runtime && !body.profile && claimed.length === 1
 			? declaredRunTargetId(deps, owner, claimed[0] as string)
 			: undefined;
+	const target =
+		claimed.length === 1
+			? listedTargetId(
+					deps,
+					claimed[0] as string,
+					"run",
+					body.target ?? declaredRun,
+				)
+			: body.target;
 	const result = await instances.acquire({
 		owner: parseEnvironmentOwner(owner),
 		apps: claimed,
-		...((body.target ?? declaredRun)
-			? { target: body.target ?? declaredRun }
-			: {}),
+		...(target ? { target } : {}),
 		...(body.profile ? { profile: body.profile } : {}),
 		...(body.runtime ? { runtime: body.runtime } : {}),
 		...(body.replicas === undefined ? {} : { replicas: body.replicas }),
@@ -1254,7 +1281,9 @@ async function environmentBuildTest(
 		// definition it staged, not the live one
 		// (`staged-env-setup-config-root`).
 		...(overlay ? { configOverlay: overlay } : {}),
-		...(body.target ? { target: body.target } : {}),
+		...(body.target
+			? { target: listedTargetId(deps, app.ident, action, body.target) }
+			: {}),
 		...(body.profile ? { profile: body.profile } : {}),
 	});
 	noteUse(requireInstances(deps), owner, [app.ident]);

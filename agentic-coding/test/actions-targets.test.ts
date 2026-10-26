@@ -194,7 +194,20 @@ function group(name: string): TargetGroup {
 describe("target-driven compilation", () => {
 	for (const scenario of fixture.groups) {
 		test(`${scenario.name} matches the definition Go produced`, () => {
-			expect(normalize(compile(scenario))).toEqual(normalize(scenario.actions));
+			// Target identity now survives replacement of Docker/Kubernetes leaves.
+			// Keep the captured execution tree comparison, adding only this metadata.
+			const expected = scenario.actions.map((action) =>
+				action.runtime === "tmux"
+					? action
+					: {
+							...action,
+							root: {
+								...action.root,
+								configuration: { targetId: scenario.target.id },
+							},
+						},
+			);
+			expect(normalize(compile(scenario))).toEqual(normalize(expected));
 		});
 	}
 

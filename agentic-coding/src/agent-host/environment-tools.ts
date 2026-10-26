@@ -122,31 +122,38 @@ const AppsParameter = Type.Union([
 	}),
 ]);
 
+/** Strict-schema clients use null for unused optional start arguments. */
+function nullableOptional<T extends Parameters<typeof Type.Optional>[0]>(
+	schema: T,
+) {
+	return Type.Optional(Type.Union([schema, Type.Null()]));
+}
+
 const EnvStartParameters = Type.Object({
 	apps: AppsParameter,
-	target: Type.Optional(
+	target: nullableOptional(
 		Type.String({
 			description:
 				"Run target id or label (from env_list); needed when the app offers several profiles",
 		}),
 	),
-	profile: Type.Optional(
+	profile: nullableOptional(
 		Type.String({ description: "Run profile from env_list" }),
 	),
-	runtime: Type.Optional(
+	runtime: nullableOptional(
 		Type.String({
 			description:
 				"Start only this runtime: docker, shell, systemshell or kubernetes. Docker is the default choice; `kubernetes` is the opt-in path for a problem that needs several replicas.",
 		}),
 	),
-	replicas: Type.Optional(
+	replicas: nullableOptional(
 		Type.Integer({
 			minimum: 1,
 			description:
 				'Replica count of a Kubernetes run; it needs `runtime: "kubernetes"` (or a Kubernetes target) and is refused for any other runtime. Use it only when the problem depends on more than one replica: the cluster run is the slow, opt-in path.',
 		}),
 	),
-	timeoutSec: Type.Optional(
+	timeoutSec: nullableOptional(
 		Type.Number({
 			maximum: MAX_TIMEOUT_SEC,
 			minimum: 1,
@@ -382,6 +389,7 @@ export function createEnvironmentExtension(
 					'Prefer Docker (a compose/container target); ask for `runtime: "shell"` only when the app has no container target and runs as a plain process. One copy of an app runs at a time whatever the runtime, so a second copy is never available.',
 					'Ask for `runtime: "kubernetes"` with `replicas` only when the problem depends on more than one replica (locking, caching, scheduled jobs, session affinity): the cluster run is the slow, opt-in path, and it fails with `cluster-unavailable` when the cluster does not exist rather than creating one.',
 					"While an app is held by another workflow this call waits in the queue and reports its position and holder; it returns `still-waiting` with the position once `timeoutSec` elapses — call it again to keep the position. `released-by-developer` means the developer took the app back; `deadlock` means two workflows hold what the other needs — stop an app you hold that the other is waiting for (`env_list` names the holders) and call again, because repeating the same call deadlocks again immediately.",
+					"For strict schemas, send null for unused optional arguments, especially replicas on a Docker or shell run.",
 					"Stop the apps you started when you are done: another workflow may be waiting for them.",
 					"A run whose process dies during startup fails the call with `run-exited` and the run's own exit status and last output lines; nothing is held and nothing needs stopping.",
 				].join(" "),
@@ -425,7 +433,7 @@ export function createEnvironmentExtension(
 										...(args.target ? { target: args.target } : {}),
 										...(args.profile ? { profile: args.profile } : {}),
 										...(args.runtime ? { runtime: args.runtime } : {}),
-										...(args.replicas === undefined
+										...(args.replicas == null
 											? {}
 											: { replicas: args.replicas }),
 										waitSec,

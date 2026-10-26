@@ -231,6 +231,35 @@ describe("the agent environment routes are owner-scoped", () => {
 		};
 	}
 
+	test("listed compiled run ids resolve to executable target ids", async () => {
+		const controller = controllerDouble({});
+		const deps = listingDeps(controller);
+		const definitions = registryDouble()
+			.snapshot()
+			.definitions.map((definition) => ({
+				...definition,
+				root: { configuration: { targetId: "app/shop/run/docker/Mocked" } },
+			}));
+		const withRegistry = {
+			...deps,
+			registry: {
+				snapshot: () => ({ definitions }),
+			} as unknown as ActionRegistry,
+		};
+		const result = await call(
+			withRegistry,
+			"POST",
+			"/api/v1/agent-env/acquire",
+			{
+				body: { apps: ["shop"], target: "app/shop/action/run/docker/default" },
+			},
+		);
+		expect(result.status).toBe(200);
+		expect(controller.acquired[0]).toMatchObject({
+			target: "app/shop/run/docker/Mocked",
+		});
+	});
+
 	test("the default listing is compact and carries the infrastructure section", async () => {
 		const controller = controllerDouble({
 			slots: [
@@ -1645,6 +1674,38 @@ describe("the build route refuses an ambiguous default target", () => {
 			cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
 		};
 	}
+
+	test("a listed compiled build id executes its canonical target", async () => {
+		const fixture = ambiguousFixture();
+		try {
+			const definitions = registryDouble()
+				.snapshot()
+				.definitions.map((definition) => ({
+					...definition,
+					root: { configuration: { targetId: "app/shop/build/shell" } },
+				}));
+			const result = await call(
+				{
+					...fixture.deps,
+					registry: {
+						snapshot: () => ({ definitions }),
+					} as unknown as ActionRegistry,
+				},
+				"POST",
+				"/api/v1/agent-env/build",
+				{
+					body: { app: "shop", target: "app/shop/action/build/shell/default" },
+				},
+			);
+			expect(result.status).toBe(200);
+			expect(payloadOf(result)).toMatchObject({
+				targetId: "app/shop/build/shell",
+				exitCode: 0,
+			});
+		} finally {
+			fixture.cleanup();
+		}
+	});
 
 	test("two default-profile build targets are an error naming both, not a silent pick", async () => {
 		const fixture = ambiguousFixture();

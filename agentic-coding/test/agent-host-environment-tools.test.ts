@@ -637,6 +637,30 @@ describe("env_start waits for a held app", () => {
 		expect(result.output[0]?.text).toContain("no agent environment capability");
 	});
 
+	test("strict-schema null start options omit replicas for Docker", async () => {
+		const server: FakeServer = { calls: [], replies: [{ outcome: "started" }] };
+		const result = await invoke(
+			"env_start",
+			{
+				apps: "shop",
+				target: "Mocked",
+				profile: null,
+				runtime: "docker",
+				replicas: null,
+				timeoutSec: null,
+			},
+			server,
+		);
+		expect(result.isError).toBe(false);
+		expect(server.calls[0]?.body).toMatchObject({
+			apps: ["shop"],
+			target: "Mocked",
+			runtime: "docker",
+		});
+		expect(server.calls[0]?.body).not.toHaveProperty("replicas");
+		expect(server.calls[0]?.body).not.toHaveProperty("profile");
+	});
+
 	test("a replica count is forwarded to the server, which owns the refusal", async () => {
 		// Replicas are a Kubernetes start option: the tool passes the count on and
 		// the slot controller decides (it refuses replicas of any other runtime).

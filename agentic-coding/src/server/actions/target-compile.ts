@@ -548,6 +548,7 @@ function compileTargetWithRuntime(
 	if (actionRuntime === "podman" && label === "Docker") label = "Podman";
 	const root = makeStep({
 		id: rootId,
+		configuration: { targetId: target.id },
 		kind: KIND.composite,
 		label: actionLabel(target.action, label),
 		children,
