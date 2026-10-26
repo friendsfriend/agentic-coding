@@ -1,6 +1,5 @@
 // Synchronous read-only authority adapter. Production batched acquisitions run
 // this module inside workflow-session-worker, never on the TUI event loop.
-import fs from "node:fs";
 import path from "node:path";
 import { openReadStore } from "../workflow/runtime/store.ts";
 import {
@@ -10,6 +9,7 @@ import {
 } from "../workflow/runtime/targets.ts";
 import { hostIdentityPaths, readHostCertificate } from "./host-identity.ts";
 import { hostLayout } from "./layout.ts";
+import { canonicalWorkflowSocket } from "./socket-path.ts";
 
 export interface SessionRequest {
 	readonly runId: string;
@@ -65,17 +65,12 @@ export function verifyWorkflowSessions(
 	const expected = hostLayout(runtimeDir).socketPath;
 	// Validate every path component, including ancestors. No persistent trust
 	// cache: every acquisition batch rechecks the store and canonical socket.
-	const canonical = fs.realpathSync(expected);
-	if (canonical !== expected)
-		throw new Error("workflow agent socket path contains a symlink");
+	const canonical = canonicalWorkflowSocket(expected);
 	let identity: { socket: string; fingerprint: string } | undefined;
 	if (requests.some((request) => request.authenticated)) {
 		try {
 			const secure = hostIdentityPaths(expected).socket;
-			if (fs.realpathSync(secure) !== secure)
-				throw new Error(
-					"authenticated workflow socket path contains a symlink",
-				);
+			canonicalWorkflowSocket(secure);
 			identity = { socket: secure, fingerprint: readHostCertificate(expected) };
 		} catch (error) {
 			throw new Error(

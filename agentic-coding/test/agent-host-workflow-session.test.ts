@@ -4,6 +4,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -508,5 +509,48 @@ test("a canonical-looking path cannot follow runtime, host-directory or socket s
 				layout.socketPath,
 			),
 		).toThrow(/symlink/);
+	}
+});
+
+test("real Unix sockets resolve for plain and authenticated workflow sessions", async () => {
+	const f = fixture();
+	const worktree = path.join(f.root, "worktree");
+	f.add("/repository", worktree);
+	const socket = hostLayout(path.join(worktree, ".herdr-workflow")).socketPath;
+	const paths = hostIdentityPaths(socket);
+	fs.rmSync(socket);
+	const identity = createHostIdentity();
+	fs.writeFileSync(paths.certificate, identity.cert, { mode: 0o600 });
+	const servers = [net.createServer(), net.createServer()];
+	try {
+		for (const [index, file] of [socket, paths.socket].entries()) {
+			const server = servers[index];
+			if (!server) throw new Error("missing server");
+			await new Promise<void>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(file, resolve);
+			});
+			expect(fs.lstatSync(file).isSocket()).toBe(true);
+		}
+		expect(
+			verifyWorkflowSessions("/repository", "flow", [
+				{ runId: "flow-run", recordedSocket: socket },
+				{ runId: "flow-run", recordedSocket: socket, authenticated: true },
+			]),
+		).toEqual([
+			{ socket },
+			{ socket: paths.socket, fingerprint: identity.fingerprint },
+		]);
+		// The leaf remains protected even though realpath is no longer called on it.
+		const alias = path.join(path.dirname(socket), "alias.sock");
+		fs.renameSync(socket, alias);
+		fs.symlinkSync(alias, socket);
+		expect(() =>
+			workflowSessionSocket("/repository", "flow", "flow-run", socket),
+		).toThrow(/symlink/);
+	} finally {
+		for (const server of servers)
+			if (server.listening)
+				await new Promise<void>((resolve) => server.close(() => resolve()));
 	}
 });
