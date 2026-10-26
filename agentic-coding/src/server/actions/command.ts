@@ -235,6 +235,14 @@ export class CommandHandler {
 	): Promise<StepResult> {
 		const configuration = step.configuration ?? {};
 		const values = context.values;
+		// Optional follow-up commands must not resolve templates or spawn until
+		// the preceding step actually produced the value they need.
+		const skipUnlessValue = configuration.skipUnlessValue;
+		if (typeof skipUnlessValue === "string") {
+			const data = values.get(skipUnlessValue)?.data;
+			if (typeof data !== "string" || data.trim() === "")
+				return { outcome: OUTCOME.skipped };
+		}
 		let spec: CommandSpec;
 		try {
 			spec = commandSpec(configuration);
@@ -325,11 +333,30 @@ export class CommandHandler {
 		if (typeof label === "string" && label !== "") {
 			try {
 				const parsed: unknown = JSON.parse(result.stdout.trim());
+				const optional = configuration.optionalJSONLabel === true;
+				if (
+					optional &&
+					(parsed === null ||
+						(isRecord(parsed) && !Object.hasOwn(parsed, label)))
+				)
+					return undefined;
 				if (!isRecord(parsed)) {
 					throw new Error("captured JSON is not an object");
 				}
 				if (typeof captureKey === "string") {
 					const data = parsed[label];
+					if (
+						optional &&
+						(typeof data !== "string" ||
+							data.trim() === "" ||
+							data !== data.trim() ||
+							[...data].some(
+								(char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+							))
+					)
+						throw new Error(
+							`image label ${label} must be a non-empty artifact path without surrounding whitespace or control characters`,
+						);
 					values.set(captureKey, {
 						type: "path",
 						visibility: "internal",

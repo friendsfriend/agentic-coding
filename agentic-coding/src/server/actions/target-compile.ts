@@ -1249,15 +1249,7 @@ function dockerBuildSteps(
 			args: ["cleanup", options.configDir, dir, templateMarker],
 			dir,
 		};
-	// Prune superseded images and unused volumes after every successful build.
-	// Docker also has a distinct BuildKit cache while podman's builder prune
-	// aliases image prune. Never `--all`: current tagged images must survive.
-	let pruneCommand = `${runtimeCommand} image prune -f && ${runtimeCommand} volume prune -f`;
-	if (runtimeCommand === "docker") {
-		pruneCommand = `docker builder prune -f && ${pruneCommand}`;
-	}
-	const prune = step("prune-old-images", "Prune old images", KIND.command);
-	prune.configuration = { command: "sh", args: ["-c", pruneCommand], dir };
+	// Building an image must not prune shared Docker caches, images or volumes.
 	const inspect = step("inspect-artifacts", "Inspect artifacts", KIND.command);
 	inspect.configuration = {
 		command: runtimeCommand,
@@ -1268,6 +1260,7 @@ function dockerBuildSteps(
 			valueTemplate("image.ref"),
 		],
 		captureJSONLabel: "devenv.artifacts",
+		optionalJSONLabel: true,
 		captureKey: "artifact.path",
 	};
 	inspect.consumes = [
@@ -1288,6 +1281,7 @@ function dockerBuildSteps(
 	create.configuration = {
 		command: runtimeCommand,
 		args: ["create", valueTemplate("image.ref")],
+		skipUnlessValue: "artifact.path",
 		captureStdout: "artifact.container.id",
 		captureType: "container-id",
 	};
@@ -1295,6 +1289,7 @@ function dockerBuildSteps(
 	create.produces = [containerId];
 	const copyArtifacts = step("copy-artifacts", "Copy artifacts", KIND.command);
 	copyArtifacts.configuration = {
+		skipUnlessValue: "artifact.path",
 		command: runtimeCommand,
 		args: [
 			"cp",
@@ -1326,6 +1321,7 @@ function dockerBuildSteps(
 	);
 	cleanup.failurePolicy = FAILURE_ALWAYS_RUN;
 	cleanup.configuration = {
+		skipUnlessValue: "artifact.container.id",
 		command: runtimeCommand,
 		args: ["rm", valueTemplate("artifact.container.id")],
 	};
@@ -1342,7 +1338,6 @@ function dockerBuildSteps(
 		...(usesTemplates ? [prepare] : []),
 		build,
 		...(usesTemplates ? [cleanupTemplates] : []),
-		prune,
 		inspect,
 		create,
 		copyArtifacts,

@@ -666,20 +666,6 @@
                 }
               },
               {
-                "id": "app/api/action/build/docker/default/step/prune-old-images",
-                "kind": "command",
-                "label": "Prune old images",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "docker builder prune -f \u0026\u0026 docker image prune -f \u0026\u0026 docker volume prune -f"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
-                }
-              },
-              {
                 "id": "app/api/action/build/docker/default/step/inspect-artifacts",
                 "kind": "command",
                 "label": "Inspect artifacts",
@@ -710,7 +696,8 @@
                   ],
                   "captureJSONLabel": "devenv.artifacts",
                   "captureKey": "artifact.path",
-                  "command": "docker"
+                  "command": "docker",
+                  "optionalJSONLabel": true
                 }
               },
               {
@@ -742,7 +729,8 @@
                   ],
                   "captureStdout": "artifact.container.id",
                   "captureType": "container-id",
-                  "command": "docker"
+                  "command": "docker",
+                  "skipUnlessValue": "artifact.path"
                 }
               },
               {
@@ -773,7 +761,8 @@
                     "."
                   ],
                   "command": "docker",
-                  "dir": "{{ROOT}}/apps/api"
+                  "dir": "{{ROOT}}/apps/api",
+                  "skipUnlessValue": "artifact.path"
                 }
               },
               {
@@ -796,7 +785,8 @@
                     "rm",
                     "${artifact.container.id}"
                   ],
-                  "command": "docker"
+                  "command": "docker",
+                  "skipUnlessValue": "artifact.container.id"
                 }
               }
             ]
@@ -850,20 +840,6 @@
                 }
               },
               {
-                "id": "app/api/action/build/podman/default/step/prune-old-images",
-                "kind": "command",
-                "label": "Prune old images",
-                "handler": "docker",
-                "configuration": {
-                  "args": [
-                    "-c",
-                    "podman image prune -f \u0026\u0026 podman volume prune -f"
-                  ],
-                  "command": "sh",
-                  "dir": "{{ROOT}}/apps/api"
-                }
-              },
-              {
                 "id": "app/api/action/build/podman/default/step/inspect-artifacts",
                 "kind": "command",
                 "label": "Inspect artifacts",
@@ -894,7 +870,8 @@
                   ],
                   "captureJSONLabel": "devenv.artifacts",
                   "captureKey": "artifact.path",
-                  "command": "podman"
+                  "command": "podman",
+                  "optionalJSONLabel": true
                 }
               },
               {
@@ -926,7 +903,8 @@
                   ],
                   "captureStdout": "artifact.container.id",
                   "captureType": "container-id",
-                  "command": "podman"
+                  "command": "podman",
+                  "skipUnlessValue": "artifact.path"
                 }
               },
               {
@@ -957,7 +935,8 @@
                     "."
                   ],
                   "command": "podman",
-                  "dir": "{{ROOT}}/apps/api"
+                  "dir": "{{ROOT}}/apps/api",
+                  "skipUnlessValue": "artifact.path"
                 }
               },
               {
@@ -980,7 +959,8 @@
                     "rm",
                     "${artifact.container.id}"
                   ],
-                  "command": "podman"
+                  "command": "podman",
+                  "skipUnlessValue": "artifact.container.id"
                 }
               }
             ]
@@ -1512,7 +1492,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "kind export kubeconfig --name api-local 2\u003e/dev/null || (kind create cluster --name api-local \u0026\u0026 kind export kubeconfig --name api-local)"
+                    "kind export kubeconfig --name api-local 2>/dev/null || (kind create cluster --name api-local && kind export kubeconfig --name api-local)"
                   ],
                   "command": "sh"
                 }
@@ -1538,7 +1518,7 @@
                 "configuration": {
                   "args": [
                     "-c",
-                    "docker save devenv-api:latest -o /tmp/devenv-image-app-api-action-run-docker-local.tar \u0026\u0026 kind load image-archive /tmp/devenv-image-app-api-action-run-docker-local.tar --name api-local"
+                    "docker save devenv-api:latest -o /tmp/devenv-image-app-api-action-run-docker-local.tar && kind load image-archive /tmp/devenv-image-app-api-action-run-docker-local.tar --name api-local"
                   ],
                   "command": "sh"
                 }

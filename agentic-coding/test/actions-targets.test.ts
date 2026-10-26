@@ -6,6 +6,10 @@
 // recipe tree (compose file, Dockerfile, chart, shell scripts), records every
 // path as `{{ROOT}}`, and stores the definitions Go compiled for each scenario.
 //
+// Post-build artifact extraction is now optional, and builds no longer prune
+// shared Docker resources. The fixture records those intentional deviations
+// from the Go build pipeline; build-artifacts.test.ts exercises their execution.
+//
 // One deliberate difference from the captured output
 // (`fix-default-target-after-promotion`): the recorded docker build/test
 // definitions carried the `prepare-build-context`/`cleanup-build-context` steps
