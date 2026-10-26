@@ -30,7 +30,9 @@ import {
 autoRemoveRepoFixtures();
 
 function fixture() {
-	const repo = createTempRepoFixture("session-recovery-", repoPreset.readme);
+	const repo = fs.realpathSync(
+		createTempRepoFixture("session-recovery-", repoPreset.readme),
+	);
 	const profile: ResolvedProfile = {
 		name: "fake",
 		runtime: "pi-durable",

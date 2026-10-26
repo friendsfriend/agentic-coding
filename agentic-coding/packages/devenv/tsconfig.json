@@ -16,6 +16,8 @@
 		"isolatedModules": true,
 		"noEmit": true,
 		"paths": {
+			"@ui": ["../ui/src"],
+			"@ui/*": ["../ui/src/*"],
 			"@devenv/cli": ["./cli/src"],
 			"@devenv/ui": ["./ui/src"],
 			"@devenv/core": ["./core/src"],

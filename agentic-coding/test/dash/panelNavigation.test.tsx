@@ -9,6 +9,7 @@ import { activeKeybindCatalog, activeKeybindContext } from "@ui";
 import { createSignal, onCleanup, Show } from "solid-js";
 import { HostClient } from "../../src/agent-host/client.ts";
 import { hostLayout } from "../../src/agent-host/layout.ts";
+import * as sessionRecovery from "../../src/agent-host/recovery.ts";
 import * as workflowSessions from "../../src/agent-host/workflow-session.ts";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type {
@@ -27,6 +28,17 @@ const roots: string[] = [];
 const demoSocket = hostLayout("/demo/.herdr-workflow").socketPath;
 const sessionLookups: Array<{ mockRestore: () => void }> = [];
 beforeEach(() => {
+	// Controls now recover the durable binding before submit/configure/abort.
+	// This harness has no real store or host: keep recovery synthetic too.
+	sessionLookups.push(
+		spyOn(sessionRecovery, "recoverWorkflowSession").mockImplementation(
+			async (target, workflowId, runId) => {
+				if (target !== "/demo" || workflowId !== "demo")
+					throw new Error("foreign workflow");
+				return { runId, hostSocket: demoSocket, conversationId: "render-test" };
+			},
+		),
+	);
 	// The store boundary has real read-only SQL/path tests in
 	// agent-host-workflow-session.test.ts. These are socket-free rendered tests.
 	sessionLookups.push(
@@ -234,7 +246,9 @@ async function waitForText(
 		if (predicate(frame)) return frame;
 		await new Promise((resolve) => setTimeout(resolve, 20));
 	}
-	throw new Error("Timed out waiting for frame predicate");
+	throw new Error(
+		`Timed out waiting for frame predicate\n${t.captureCharFrame()}`,
+	);
 }
 
 /** Fixture dashboard with `count` OpenSpec artifacts backed by real files. */

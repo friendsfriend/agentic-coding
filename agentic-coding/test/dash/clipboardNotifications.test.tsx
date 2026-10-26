@@ -1,12 +1,17 @@
 /** @jsxImportSource @opentui/solid */
-import { beforeEach, expect, spyOn, test } from "bun:test";
-import * as childProcess from "node:child_process";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App.tsx";
 import { resetNotifications } from "../../src/tui/dash/notifications.ts";
+import { stubClipboardCommand } from "../support/clipboard.ts";
+
+const renderers: Array<{ destroy(): void }> = [];
+afterEach(() => {
+	for (const renderer of renderers.splice(0).reverse()) renderer.destroy();
+});
 
 // The notification signal is module-global; bun runs all files in one
 // process, so a toast left by an earlier file would bleed into this one.
@@ -45,47 +50,22 @@ async function renderWithSelection(t: TestRendererSetup) {
 	expect(t.renderer.hasSelection).toBe(true);
 }
 
-/** Force every clipboard command to fail and disable the OSC 52 last-resort
- * fallback (by pretending to be a platform with no such fallback) so
- * `copyToClipboard` deterministically returns `false`. */
-function makeClipboardCommandsFail() {
-	const originalPlatform = process.platform;
-	Object.defineProperty(process, "platform", { value: "darwin" });
-	const spy = spyOn(childProcess, "execFileSync").mockImplementation(() => {
-		throw new Error("pbcopy: command not found");
-	});
-	return () => {
-		spy.mockRestore();
-		Object.defineProperty(process, "platform", { value: originalPlatform });
-	};
-}
-
-/** Stub stdout so a real OSC 52 fallback write can't leak escape sequences
- * into the captured test frame. */
-function suppressStdoutWrites() {
-	const original = process.stdout.write.bind(process.stdout);
-	process.stdout.write = (() => true) as typeof process.stdout.write;
-	return () => {
-		process.stdout.write = original;
-	};
-}
-
 test("Ctrl+C reports a copy-succeeded notification when the clipboard write succeeds", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
 		height: 40,
 	});
+	renderers.push(t.renderer);
 	await renderWithSelection(t);
 
-	const restoreStdout = suppressStdoutWrites();
+	const restoreClipboard = stubClipboardCommand(true);
 	try {
 		t.mockInput.pressKey("c", { ctrl: true });
 		const frame = await t.waitForFrame((f) => f.includes("Selection copied"));
 		expect(frame).not.toContain("Copy failed");
 	} finally {
-		restoreStdout();
+		restoreClipboard();
 	}
-	t.renderer.destroy();
 });
 
 test("Ctrl+C reports a copy-failed notification when the clipboard write fails", async () => {
@@ -93,9 +73,10 @@ test("Ctrl+C reports a copy-failed notification when the clipboard write fails",
 		width: 120,
 		height: 40,
 	});
+	renderers.push(t.renderer);
 	await renderWithSelection(t);
 
-	const restoreClipboard = makeClipboardCommandsFail();
+	const restoreClipboard = stubClipboardCommand(false);
 	try {
 		t.mockInput.pressKey("c", { ctrl: true });
 		const frame = await t.waitForFrame((f) => f.includes("Copy failed"));
@@ -103,7 +84,6 @@ test("Ctrl+C reports a copy-failed notification when the clipboard write fails",
 	} finally {
 		restoreClipboard();
 	}
-	t.renderer.destroy();
 });
 
 test("Meta+C reports a copy-succeeded notification when the clipboard write succeeds", async () => {
@@ -111,17 +91,17 @@ test("Meta+C reports a copy-succeeded notification when the clipboard write succ
 		width: 120,
 		height: 40,
 	});
+	renderers.push(t.renderer);
 	await renderWithSelection(t);
 
-	const restoreStdout = suppressStdoutWrites();
+	const restoreClipboard = stubClipboardCommand(true);
 	try {
 		t.mockInput.pressKey("c", { meta: true });
 		const frame = await t.waitForFrame((f) => f.includes("Selection copied"));
 		expect(frame).not.toContain("Copy failed");
 	} finally {
-		restoreStdout();
+		restoreClipboard();
 	}
-	t.renderer.destroy();
 });
 
 test("Meta+C reports a copy-failed notification when the clipboard write fails", async () => {
@@ -129,9 +109,10 @@ test("Meta+C reports a copy-failed notification when the clipboard write fails",
 		width: 120,
 		height: 40,
 	});
+	renderers.push(t.renderer);
 	await renderWithSelection(t);
 
-	const restoreClipboard = makeClipboardCommandsFail();
+	const restoreClipboard = stubClipboardCommand(false);
 	try {
 		t.mockInput.pressKey("c", { meta: true });
 		const frame = await t.waitForFrame((f) => f.includes("Copy failed"));
@@ -139,5 +120,4 @@ test("Meta+C reports a copy-failed notification when the clipboard write fails",
 	} finally {
 		restoreClipboard();
 	}
-	t.renderer.destroy();
 });

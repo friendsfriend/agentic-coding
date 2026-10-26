@@ -318,6 +318,7 @@ describe("every routed page has a definition and a label", () => {
 			"orchestrator",
 			"opencode",
 			"pi",
+			"pi-durable",
 			"workflows.detail",
 		];
 		for (const page of ids) {

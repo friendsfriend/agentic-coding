@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, spyOn, test } from "bun:test";
-import * as childProcess from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testRender } from "@opentui/solid";
@@ -11,35 +10,18 @@ import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { stubClipboardCommand } from "../support/clipboard.ts";
 
-/** Force every clipboard command to fail and pretend to be a platform with no
- * OSC 52 fallback (darwin/win32) so `copyToClipboard` deterministically
- * returns `false`, exercising the failure-notification path. */
-function makeClipboardCommandsFail() {
-	const originalPlatform = process.platform;
-	Object.defineProperty(process, "platform", { value: "darwin" });
-	const spy = spyOn(childProcess, "execFileSync").mockImplementation(() => {
-		throw new Error("pbcopy: command not found");
-	});
-	return () => {
-		spy.mockRestore();
-		Object.defineProperty(process, "platform", { value: originalPlatform });
-	};
-}
-
-/** Stub stdout so a real OSC 52 fallback write can't leak escape sequences
- * into the captured test frame. */
-function suppressStdoutWrites() {
-	const original = process.stdout.write.bind(process.stdout);
-	process.stdout.write = (() => true) as typeof process.stdout.write;
-	return () => {
-		process.stdout.write = original;
-	};
-}
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
 
 async function renderOtelApp() {
 	const dir = mkdtempSync(join(tmpdir(), "otel-copy-test-"));
+	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 	const db = new TraceDb(dir);
+	cleanups.push(() => db.close());
 	const t = await testRender(
 		() => (
 			<App
@@ -53,8 +35,9 @@ async function renderOtelApp() {
 		),
 		{ width: 120, height: 40 },
 	);
+	cleanups.push(() => t.renderer.destroy());
 	await t.renderOnce();
-	return { t, db };
+	return { t };
 }
 
 /** Drag-select the "AGENTIC CODING" header text so
@@ -71,22 +54,20 @@ async function selectAndCopy(
 }
 
 test("otel TUI copySelection reports a copy-succeeded notification when the clipboard write succeeds", async () => {
-	const { t, db } = await renderOtelApp();
-	const restoreStdout = suppressStdoutWrites();
+	const { t } = await renderOtelApp();
+	const restoreClipboard = stubClipboardCommand(true);
 	try {
 		await selectAndCopy(t);
 		const frame = await t.waitForFrame((f) => f.includes("Copied selection"));
 		expect(frame).not.toContain("Copy failed");
 	} finally {
-		restoreStdout();
+		restoreClipboard();
 	}
-	t.renderer.destroy();
-	db.close();
 });
 
 test("otel TUI copySelection reports a copy-failed notification when the clipboard write fails", async () => {
-	const { t, db } = await renderOtelApp();
-	const restoreClipboard = makeClipboardCommandsFail();
+	const { t } = await renderOtelApp();
+	const restoreClipboard = stubClipboardCommand(false);
 	try {
 		await selectAndCopy(t);
 		const frame = await t.waitForFrame((f) => f.includes("Copy failed"));
@@ -94,6 +75,4 @@ test("otel TUI copySelection reports a copy-failed notification when the clipboa
 	} finally {
 		restoreClipboard();
 	}
-	t.renderer.destroy();
-	db.close();
 });
