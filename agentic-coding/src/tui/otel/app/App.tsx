@@ -4146,11 +4146,9 @@ export function App(props: {
 							mode={agentSidebarMode()}
 							widthLimit={sidebarWidths().agent}
 							rows={agentRows()}
-							filter={agentSidebarFilter()}
 							selectedIndex={selectedAgentIndex()}
 							sourceState={agentSourceState()}
 							onToggleMode={toggleAgentSidebarMode}
-							onFilterChange={setAgentSidebarFilter}
 							onSelectIndex={selectAgentIndex}
 							onOpen={openAgentRun}
 							onFocus={focusAgentSidebar}

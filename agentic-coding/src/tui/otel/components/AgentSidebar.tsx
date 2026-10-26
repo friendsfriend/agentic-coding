@@ -16,7 +16,6 @@ import {
 import { TextAttributes } from "@opentui/core";
 import { createEffect, createSignal, For, Show, untrack } from "solid-js";
 import type {
-	AgentSidebarFilter,
 	AgentSidebarMode,
 	AgentSidebarRow,
 } from "../app/agent-sidebar-model.ts";
@@ -57,11 +56,9 @@ export interface AgentSidebarProps {
 	readonly mode: AgentSidebarMode;
 	readonly widthLimit: number;
 	readonly rows: readonly AgentSidebarRow[];
-	readonly filter: AgentSidebarFilter;
 	readonly selectedIndex: number;
 	readonly sourceState: "loading" | "fresh" | "stale";
 	onToggleMode: () => void;
-	onFilterChange: (filter: AgentSidebarFilter) => void;
 	onSelectIndex: (index: number) => void;
 	onOpen: (row: AgentSidebarRow) => void;
 	onFocus: () => void;
@@ -92,13 +89,6 @@ export function AgentSidebar(props: AgentSidebarProps) {
 		{ stopPropagation: true },
 	);
 	const toggleHover = useHover(toggleTap.onMouseOut);
-	const compactFilterTap = useTap(
-		() => {
-			props.onFocus();
-			props.onFilterChange(props.filter === "active" ? "all" : "active");
-		},
-		{ stopPropagation: true },
-	);
 
 	createEffect(() => {
 		const count = props.rows.length;
@@ -138,7 +128,7 @@ export function AgentSidebar(props: AgentSidebarProps) {
 	const sourceMessage = (): string => {
 		if (props.sourceState === "loading") return "Reading agents…";
 		if (props.sourceState === "stale") return "Workflow source unavailable";
-		return props.filter === "active" ? "No active agents" : "No agents";
+		return "";
 	};
 	const compactSourceMark = (): string =>
 		props.sourceState === "loading"
@@ -173,25 +163,6 @@ export function AgentSidebar(props: AgentSidebarProps) {
 						>
 							<text fg={uiColors.textMuted}>{toggleGlyph()}</text>
 						</box>
-						<box
-							height={1}
-							flexShrink={0}
-							paddingLeft={1}
-							{...compactFilterTap}
-						>
-							<text fg={uiColors.textMuted}>
-								{props.filter === "active" ? "Act" : "All"}
-							</text>
-						</box>
-						<Show
-							when={props.sourceState === "fresh" && props.rows.length === 0}
-						>
-							<box height={2} flexShrink={0}>
-								<text fg={uiColors.textMuted}>
-									{props.filter === "active" ? "No\nactive" : "No\nagents"}
-								</text>
-							</box>
-						</Show>
 						<Show when={compactSourceMark()}>
 							<box height={1} flexShrink={0} paddingLeft={1}>
 								<text
@@ -266,42 +237,22 @@ export function AgentSidebar(props: AgentSidebarProps) {
 						</box>
 					}
 				>
-					<box height={1} flexShrink={0} flexDirection="row">
-						<For each={["active", "all"] as const}>
-							{(filter) => {
-								const selected = () => props.filter === filter;
-								const tap = useTap(() => {
-									props.onFocus();
-									props.onFilterChange(filter);
-								});
-								const hover = useHover(tap.onMouseOut);
-								return (
-									<box marginRight={1} {...tap} {...hover}>
-										<text
-											fg={selected() ? uiColors.bgBase : uiColors.textMuted}
-											bg={selected() ? uiColors.primary : uiColors.bgMantle}
-										>
-											{` ${filter === "active" ? "Active" : "All"} `}
-										</text>
-									</box>
-								);
-							}}
-						</For>
-					</box>
 					<Show
 						when={props.rows.length > 0}
 						fallback={
-							<box flexGrow={1} minHeight={0} paddingTop={1}>
-								<text
-									fg={
-										props.sourceState === "stale"
-											? uiColors.warning
-											: uiColors.textMuted
-									}
-								>
-									{sourceMessage()}
-								</text>
-							</box>
+							<Show when={sourceMessage()}>
+								<box flexGrow={1} minHeight={0} paddingTop={1}>
+									<text
+										fg={
+											props.sourceState === "stale"
+												? uiColors.warning
+												: uiColors.textMuted
+										}
+									>
+										{sourceMessage()}
+									</text>
+								</box>
+							</Show>
 						}
 					>
 						<box

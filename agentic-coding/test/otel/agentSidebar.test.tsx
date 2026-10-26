@@ -23,10 +23,8 @@ const baseProps = {
 	active: true,
 	mode: "permanent" as const,
 	widthLimit: 34,
-	filter: "all" as const,
 	sourceState: "fresh" as const,
 	onToggleMode: () => {},
-	onFilterChange: () => {},
 	onSelectIndex: () => {},
 	onOpen: () => {},
 	onFocus: () => {},
@@ -147,12 +145,12 @@ test("stale observations keep their known rows and narrow allocations use compac
 	}
 });
 
-test("compact empty states name the filter and distinguish no active agents from no agents", async () => {
+test("empty sidebars show neither filters nor empty-state messages", async () => {
 	for (const [active, widthLimit] of [
 		[false, 34],
 		[true, 10],
+		[true, 34],
 	] as const) {
-		const [filter, setFilter] = createSignal<"active" | "all">("active");
 		const t = await testRender(
 			() => (
 				<AgentSidebar
@@ -162,22 +160,17 @@ test("compact empty states name the filter and distinguish no active agents from
 					widthLimit={widthLimit}
 					rows={[]}
 					selectedIndex={-1}
-					filter={filter()}
-					onFilterChange={setFilter}
 				/>
 			),
 			{ width: 40, height: 14 },
 		);
 		try {
 			await t.flush();
-			expect(t.captureCharFrame()).toContain("Act");
-			expect(t.captureCharFrame()).toContain("No");
-			expect(t.captureCharFrame()).toContain("active");
-			await t.mockMouse.click(2, 1);
-			await t.flush();
-			expect(filter()).toBe("all");
-			expect(t.captureCharFrame()).toContain("All");
-			expect(t.captureCharFrame()).toContain("agents");
+			const frame = t.captureCharFrame();
+			expect(frame).not.toContain("Act");
+			expect(frame).not.toContain("All");
+			expect(frame).not.toContain("No");
+			expect(frame).not.toContain("active");
 		} finally {
 			t.renderer.destroy();
 		}
@@ -207,7 +200,6 @@ test("compact source cues distinguish loading and stale data with or without cac
 					expect(frame.includes("Load…")).toBe(sourceState === "loading");
 					expect(frame).not.toContain("Off");
 					if (rows.length) expect(frame).toContain("im…");
-					else if (sourceState === "fresh") expect(frame).toContain("No");
 					else expect(frame).not.toContain("No");
 				} finally {
 					t.renderer.destroy();
@@ -220,7 +212,7 @@ test("compact source cues distinguish loading and stale data with or without cac
 test("distinguishes an empty observation from an unavailable workflow source", async () => {
 	for (const [sourceState, expected] of [
 		["loading", "Reading agents…"],
-		["fresh", "No active agents"],
+		["fresh", ""],
 		["stale", "Workflow source unavailable"],
 	] as const) {
 		const t = await testRender(
@@ -229,7 +221,6 @@ test("distinguishes an empty observation from an unavailable workflow source", a
 					{...baseProps}
 					rows={[]}
 					selectedIndex={-1}
-					filter="active"
 					sourceState={sourceState}
 				/>
 			),
