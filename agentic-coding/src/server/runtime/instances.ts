@@ -37,6 +37,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { composeFileArgs } from "../actions/compose-env.ts";
 import { discoverActionTargets } from "../actions/discovery.ts";
 import type {
 	ActionTarget,
@@ -1531,7 +1532,7 @@ export class EnvironmentInstanceController {
 		if (target) {
 			const result = await this.runCommand(
 				composeCommandForRuntime(docker.runtime.name),
-				["-f", target.sourcePath, "down"],
+				[...composeFileArgs(target.sourcePath, this.configDir), "down"],
 				{
 					cwd: record.checkoutPath,
 					env: environmentWith(
@@ -1715,7 +1716,7 @@ export class EnvironmentInstanceController {
 				// are what every routing, proxy and OAuth definition already assumes.
 				const result = await this.runCommand(
 					composeCommandForRuntime(runtime.runtime.name),
-					["-f", selected.sourcePath, "up", "-d"],
+					[...composeFileArgs(selected.sourcePath, this.configDir), "up", "-d"],
 					{ cwd: checkoutPath, env: environmentWith(variables, owner) },
 				);
 				runtime.client.invalidateCache();

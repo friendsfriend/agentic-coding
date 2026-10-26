@@ -611,6 +611,13 @@ describe("app slot starts", () => {
 	test("runs the definition's own project, names and ports once per app", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-start-"));
 		const fixture = composeFixture(root);
+		// Secrets live in the central config, not the app checkout. Pass the path
+		// for Compose interpolation without copying secret values into argv.
+		const envFile = path.join(fixture.configDir, ".env");
+		fs.writeFileSync(
+			envFile,
+			"ICON_APPLICATION_MASTERPASSWORD=test-only-password\n",
+		);
 		const state = tempState("start");
 		const slots = harness({
 			root,
@@ -647,6 +654,8 @@ describe("app slot starts", () => {
 			expect(slots.calls).toHaveLength(1);
 			expect(slots.calls[0]?.command).toBe("docker-compose");
 			expect(slots.calls[0]?.args).toEqual([
+				"--env-file",
+				envFile,
 				"-f",
 				fixture.sourcePath,
 				"up",
@@ -685,7 +694,13 @@ describe("app slot starts", () => {
 
 			const stopped = await slots.controller.stopApp("shop");
 			expect(stopped.status).toBe("stopped");
-			expect(slots.calls[1]?.args).toEqual(["-f", fixture.sourcePath, "down"]);
+			expect(slots.calls[1]?.args).toEqual([
+				"--env-file",
+				envFile,
+				"-f",
+				fixture.sourcePath,
+				"down",
+			]);
 			expect(await slots.occupancy("shop")).toBeUndefined();
 		} finally {
 			if (originalToken === undefined)
