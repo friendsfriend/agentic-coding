@@ -126,12 +126,18 @@ The bridge SHALL support user-configured Pi MCP servers over stdio and streamabl
 - **AND** it SHALL NOT expose the server's private endpoint, credentials or response body
 
 ### Requirement: Run policy, collision and exposure rules are fail-closed
-Every imported tool SHALL be checked against the owning run's `ToolPolicy` and native callable/model exposure semantics before registration and again before nested execution. Read-only and orchestrator runs SHALL receive no imported tools by default; a machine-local, tool-specific policy MAY explicitly allow a named external tool for a restricted policy. MCP annotations and extension claims SHALL NOT by themselves establish read-only permission, authorization or safe replay. Imported tools SHALL NOT replace or shadow an authoritative agentic-coding tool. A tool whose exposure cannot be represented without widening visibility or callable access SHALL remain unavailable with a diagnostic.
+Every imported tool SHALL be checked against the owning run's `ToolPolicy` and native callable/model exposure semantics before registration and again before nested execution. Orchestrator runs SHALL receive all compatible imported tools without a machine-local allow-list, subject to native exposure and collision rules. Read-only runs SHALL receive no imported tools by default; a machine-local, tool-specific policy MAY explicitly allow a named external tool for a read-only policy. MCP annotations and extension claims SHALL NOT by themselves establish read-only permission, authorization or safe replay. Imported tools SHALL NOT replace or shadow an authoritative agentic-coding tool. A tool whose exposure cannot be represented without widening visibility or callable access SHALL remain unavailable with a diagnostic.
 
 #### Scenario: Restricted run denies an imported tool by default
-- **WHEN** a read-only or orchestrator run is created with no machine-local allow rule for an imported tool
+- **WHEN** a read-only run is created with no machine-local allow rule for an imported tool
 - **THEN** the tool SHALL be absent from both model-visible and native codemode-callable catalogs
 - **AND** a nested invocation SHALL be refused without executing the external tool
+
+#### Scenario: Orchestrator needs no imported-tool allow-list
+- **WHEN** the local Pi bridge is enabled for an orchestrator run without any imported-tool allow-list
+- **THEN** all compatible imported tools SHALL be available according to their native exposure rules
+- **AND** their execution SHALL NOT require a tool-specific allow rule
+- **AND** authoritative tool collision protections SHALL remain enforced
 
 #### Scenario: Explicit restricted-run policy allows one named tool
 - **WHEN** a machine-local policy explicitly allows a named imported tool for the current restricted `ToolPolicy`

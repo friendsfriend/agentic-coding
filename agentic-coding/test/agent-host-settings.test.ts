@@ -20,7 +20,6 @@ describe("local Pi tool settings", () => {
 				enabled: true,
 				restrictedAllow: {
 					readOnly: ["pi__lookup__query"],
-					orchestrator: [],
 				},
 				replaySafe: ["mcp__docs__search"],
 			},

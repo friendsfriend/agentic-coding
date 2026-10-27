@@ -932,7 +932,7 @@ test("nested Pi calls preserve plain text and respect the read-only callable set
 	}
 });
 
-test("orchestrator runs invoke only explicitly allowed user Pi tools", async () => {
+test("orchestrator runs discover and invoke user Pi tools without an allow-list", async () => {
 	const dir = tempDir();
 	const eventsPath = path.join(dir, "orchestrator-pi-events.log");
 	const extensionPath = writeExtension(dir, extensionSource(eventsPath));
@@ -946,7 +946,7 @@ test("orchestrator runs invoke only explicitly allowed user Pi tools", async () 
 	const probeName = piExtensionToolName(probePath, "policy_probe");
 	const { host, faux } = await openHost(
 		dir,
-		{ readOnly: [], orchestrator: [allowedName, probeName] },
+		{ readOnly: [], orchestrator: [] },
 		true,
 		true,
 	);
@@ -982,7 +982,7 @@ test("orchestrator runs invoke only explicitly allowed user Pi tools", async () 
 			probeName,
 		);
 		expect(result).toContain("allowed-visible=true");
-		expect(result).toContain("denied-visible=false");
+		expect(result).toContain("denied-visible=true");
 		expect(result).toContain("allowed-error=false");
 		expect(result).toContain("denied-error=true");
 		expect(result).toContain('result={"value":"nested"}');

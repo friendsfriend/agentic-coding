@@ -11,7 +11,6 @@ export interface LocalPiToolsSettings {
 	readonly enabled: boolean;
 	readonly restrictedAllow: {
 		readonly readOnly: readonly string[];
-		readonly orchestrator: readonly string[];
 	};
 	readonly replaySafe: readonly string[];
 }
@@ -71,14 +70,13 @@ export function normalizeLocalPiToolsSettings(value: unknown): {
 	if (!allowRecord)
 		return { diagnostic: "local Pi tool bridge configuration is invalid" };
 	const readOnly = boundedNameList(allowRecord.readOnly);
-	const orchestrator = boundedNameList(allowRecord.orchestrator);
 	const replaySafe = boundedNameList(record.replaySafe);
-	if (!readOnly || !orchestrator || !replaySafe)
+	if (!readOnly || !replaySafe)
 		return { diagnostic: "local Pi tool bridge configuration is invalid" };
 	return {
 		settings: {
 			enabled,
-			restrictedAllow: { readOnly, orchestrator },
+			restrictedAllow: { readOnly },
 			replaySafe,
 		},
 	};

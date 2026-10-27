@@ -247,14 +247,14 @@ export class LocalPiToolBridge {
 		const allow =
 			policy === "read-only"
 				? this.settings.restrictedAllow.readOnly
-				: policy === "orchestrator"
-					? this.settings.restrictedAllow.orchestrator
-					: undefined;
+				: undefined;
 		const names = new Set(owner.tools.keys());
 		return [...names]
 			.filter((name) => {
 				if (this.conflictingNames.has(name)) return false;
-				return allow ? allow.includes(name) : policy === "default";
+				return allow
+					? allow.includes(name)
+					: policy === "default" || policy === "orchestrator";
 			})
 			.flatMap((name) => {
 				const registration = this.registrations.get(name)?.registration;
@@ -1095,12 +1095,11 @@ export class LocalPiToolBridge {
 	}
 
 	private isAllowedByPolicy(name: string, policy: ToolPolicy): boolean {
-		if (policy === "default") return true;
-		const allow =
-			policy === "read-only"
-				? this.settings.restrictedAllow.readOnly
-				: this.settings.restrictedAllow.orchestrator;
-		return allow.includes(name);
+		if (policy === "default" || policy === "orchestrator") return true;
+		return (
+			policy === "read-only" &&
+			this.settings.restrictedAllow.readOnly.includes(name)
+		);
 	}
 
 	private registeredTools(owner: BridgeOwner): readonly PiRegisteredTool[] {
