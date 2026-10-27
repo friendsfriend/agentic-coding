@@ -1,5 +1,42 @@
 import { describe, expect, test } from "bun:test";
-import { seedAgentHostSettings } from "../src/agent-host/settings.ts";
+import {
+	normalizeLocalPiToolsSettings,
+	seedAgentHostSettings,
+} from "../src/agent-host/settings.ts";
+
+describe("local Pi tool settings", () => {
+	test("normalizes machine-local policy lists without retaining duplicates", () => {
+		expect(
+			normalizeLocalPiToolsSettings({
+				enabled: true,
+				restrictedAllow: {
+					readOnly: ["pi__lookup__query", "pi__lookup__query"],
+					orchestrator: [],
+				},
+				replaySafe: ["mcp__docs__search"],
+			}),
+		).toEqual({
+			settings: {
+				enabled: true,
+				restrictedAllow: {
+					readOnly: ["pi__lookup__query"],
+					orchestrator: [],
+				},
+				replaySafe: ["mcp__docs__search"],
+			},
+		});
+	});
+
+	test("fails closed without echoing invalid policy values", () => {
+		const invalid = normalizeLocalPiToolsSettings({
+			secret: "never retain this",
+			restrictedAllow: { readOnly: ["bad\nname"] },
+		});
+		expect(invalid).toEqual({
+			diagnostic: "local Pi tool bridge configuration is invalid",
+		});
+	});
+});
 
 describe("agentHost settings seeding", () => {
 	test("seeds matching keys from the global pi settings when absent", () => {

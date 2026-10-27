@@ -186,6 +186,70 @@ section: provider auth is read live from `~/.pi/agent/auth.json` through
 section's `compaction` table is the hand-written escape hatch for the policy
 below: when it is present it wins over `[agents.compaction]`.
 
+### Local Pi tool bridge
+
+Durable `pi-durable` hosts can optionally adapt the user's existing **user-level**
+Pi extension and MCP tools. This is a trusted-code integration, not a sandbox:
+enabled extensions execute in the host process with the local user's OS
+permissions. The bridge is off unless `agentHost.localPiTools.enabled` is true.
+It reads extensions and `mcp.json`/`mcp-auth.json` from Pi's user agent directory
+(`PI_CODING_AGENT_DIR`, or Pi's normal default), and does not load a project's
+`.pi` extensions or MCP configuration. It does not duplicate server endpoints,
+credentials, environment expansions or auth state in agentic-coding config.
+
+```json
+{
+  "agentHost": {
+    "localPiTools": {
+      "enabled": true,
+      "restrictedAllow": {
+        "readOnly": ["pi__my-extension__lookup", "mcp__local__search"],
+        "orchestrator": []
+      },
+      "replaySafe": []
+    }
+  }
+}
+```
+
+The bridge supports static Pi `registerTool` definitions and MCP tools exposed
+by Pi's stdio and streamable-HTTP transports. Extension tools are named
+`pi__<module>__<tool>` (with a stable path hash when the name needs shortening);
+MCP keeps Pi's `mcp__<server>__<tool>` name. Direct and codemode-only exposure map to durable
+native callers; hidden tools are omitted, and model-only tools cannot be called
+from codemode. Deferred Pi exposure uses durable's native `tool_search`/`deferred`
+path; `tool_search` is installed only when the bridge is enabled and sees only
+the current run's policy-filtered deferred tools. Native codemode uses the same
+run-authorized callable set as direct execution. Calls are unsafe
+to replay by default; `replaySafe` is a machine-local, explicit opt-in by exact
+exported name and accepts the risk that an uncertain external side effect may be
+repeated.
+
+Read-only and orchestrator runs deny imported tools unless their exact names are
+listed in the matching `restrictedAllow` array. MCP annotations and extension
+descriptions do not grant permissions. Unsupported hooks, UI/session/model
+capabilities and dynamic tool registration fail closed with bounded diagnostics.
+When MCP authentication needs user interaction, sign in through Pi's normal
+local surface; durable runs do not open a browser or request/store credentials.
+An empty user Pi configuration adds no integration tools and opens no
+integration connections; disabling the bridge skips Pi extension/MCP startup
+entirely. The bridge retains at most 32 conversation owners and evicts the
+least-recently-used idle owner before opening another. Active calls are never
+evicted; if every owner is active, a new owner is refused with a bounded
+diagnostic. Host shutdown aborts calls and waits for them to settle before
+emitting `session_shutdown` and disposing Pi resources. A trusted local callback
+that ignores cancellation can therefore delay shutdown indefinitely: the bridge
+has no process boundary that could safely terminate arbitrary extension code.
+
+Each conversation exposes at most 256 imported tools. Result content is limited
+to 256 items and 64 KiB, progress scans at most 256 content items, and structured
+JSON conversion limits object/array traversal, depth and node count. Oversized
+content fails with a bounded result diagnostic; progress truncation is reported
+without logging the omitted text. Startup and MCP failures use bounded failure
+classes with a recovery hint (check user-level Pi settings or sign in through
+Pi as applicable). Diagnostics omit arguments, results, private endpoints and
+credential values.
+
 ## Compaction (`[agents.compaction]`)
 
 Durable (`pi-durable`) runs summarize their own conversation context. The policy

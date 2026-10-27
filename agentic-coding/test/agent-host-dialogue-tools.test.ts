@@ -45,7 +45,13 @@ afterEach(() => {
 function runContext(
 	overrides: Partial<DurableRunContext> = {},
 ): DurableRunContext {
-	return { runId: "run-1", cwd: process.cwd(), env: {}, ...overrides };
+	return {
+		runId: "run-1",
+		cwd: process.cwd(),
+		env: {},
+		...overrides,
+		toolPolicy: overrides.toolPolicy ?? "default",
+	};
 }
 
 describe("developer_question", () => {

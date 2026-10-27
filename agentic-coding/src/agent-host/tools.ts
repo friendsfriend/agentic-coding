@@ -32,6 +32,7 @@ import {
 	usageLine,
 	validateQuestions,
 } from "./jev.ts";
+import type { ToolPolicy } from "./protocol.ts";
 import { missingPathHint, suggestionDeps } from "./tool-suggestions.ts";
 import { type ToolSurfaceOptions, toolSurfaceNote } from "./tool-surface.ts";
 
@@ -43,6 +44,7 @@ import { type ToolSurfaceOptions, toolSurfaceNote } from "./tool-surface.ts";
  * below close over a getter rather than owning run state themselves. */
 export interface DurableRunContext {
 	readonly runId: string;
+	readonly toolPolicy: ToolPolicy;
 	readonly cwd: string;
 	readonly env: Readonly<Record<string, string>>;
 	/** The session's own last developer message, in the developer's words. The
