@@ -10,7 +10,23 @@
 // transcript (user prompt block, indented assistant text, tool rows with a
 // two-cell icon gutter, muted result output, red error rows); the renderer in
 // `ui/AgentSessionView.tsx` owns the actual styling.
-import type { SubmitWorkflowState } from "../../agent-host/protocol.ts";
+import {
+	type RuntimeFailure,
+	type SubmitWorkflowState,
+	safeFailureMessage,
+} from "../../agent-host/protocol.ts";
+
+export const RETRY_TASK_COMMAND = "/retry-task";
+
+/** The explicit task-id argument for the session's native retry command. */
+export function retryTaskCommandId(input: string): string | undefined {
+	if (
+		input !== RETRY_TASK_COMMAND &&
+		!input.startsWith(`${RETRY_TASK_COMMAND} `)
+	)
+		return undefined;
+	return input.slice(RETRY_TASK_COMMAND.length).trim();
+}
 
 /** Semantic color role of one block; the view maps it to a theme color. */
 export type AgentSessionTone =
@@ -1397,6 +1413,10 @@ export interface AgentSessionMetadata {
 	/** A compaction in flight, so the status line shows a reason-carrying
 	 * indicator (`add-agent-compaction`: "Compaction feedback"). */
 	readonly compacting?: { readonly reason: string; readonly retrying?: string };
+	/** A native Harness task/host failure projected separately from workflow gates. */
+	readonly runtimeFailure?: RuntimeFailure;
+	/** Retained pi.live compaction failure; absence means the live document cleared it. */
+	readonly compactionFailure?: string;
 }
 
 /** The host's measured wall-clock timing for one committed assistant entry
@@ -1603,7 +1623,49 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 			: undefined;
 	const compactionRetryError =
 		compactionRetry && typeof compactionRetry.error === "string"
-			? oneLine(compactionRetry.error, 200)
+			? safeFailureMessage(compactionRetry.error, 200)
+			: undefined;
+	const rawCompactionFailure = live?.compactionFailure;
+	const compactionFailureValue = isRecord(rawCompactionFailure)
+		? (rawCompactionFailure.error ?? rawCompactionFailure.message)
+		: rawCompactionFailure;
+	const compactionFailure = safeFailureMessage(compactionFailureValue, 200);
+	const rawRuntimeFailure = isRecord(value.runtimeFailure)
+		? value.runtimeFailure
+		: undefined;
+	const failureKind = rawRuntimeFailure?.kind;
+	const runtimeFailure: RuntimeFailure | undefined =
+		rawRuntimeFailure &&
+		(failureKind === "task_faulted" ||
+			failureKind === "task_parked" ||
+			failureKind === "host_failure" ||
+			failureKind === "session_failure" ||
+			failureKind === "extension_failure" ||
+			failureKind === "other_failure")
+			? {
+					kind: failureKind,
+					domain:
+						rawRuntimeFailure.domain === "task" ||
+						rawRuntimeFailure.domain === "host" ||
+						rawRuntimeFailure.domain === "session" ||
+						rawRuntimeFailure.domain === "extension"
+							? rawRuntimeFailure.domain
+							: "unknown",
+					...(typeof rawRuntimeFailure.taskId === "string"
+						? { taskId: safeFailureMessage(rawRuntimeFailure.taskId, 128) }
+						: {}),
+					...(Number.isSafeInteger(rawRuntimeFailure.generation) &&
+					typeof rawRuntimeFailure.generation === "number" &&
+					rawRuntimeFailure.generation > 0
+						? { generation: rawRuntimeFailure.generation }
+						: {}),
+					...(typeof rawRuntimeFailure.reason === "string"
+						? { reason: safeFailureMessage(rawRuntimeFailure.reason, 80) }
+						: {}),
+					...(typeof rawRuntimeFailure.error === "string"
+						? { error: safeFailureMessage(rawRuntimeFailure.error, 200) }
+						: {}),
+				}
 			: undefined;
 	return {
 		...(model ? { model } : {}),
@@ -1624,6 +1686,8 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 					},
 				}
 			: {}),
+		...(runtimeFailure ? { runtimeFailure } : {}),
+		...(compactionFailure ? { compactionFailure } : {}),
 	};
 }
 

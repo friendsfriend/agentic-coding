@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import tls from "node:tls";
@@ -9,6 +9,8 @@ import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import type {
 	CompactionResult,
+	Cursor,
+	ReportInfo,
 	Storage,
 	TaskId,
 } from "@earendil-works/pi-durable";
@@ -16,6 +18,7 @@ import {
 	type Conversation,
 	type ConversationId,
 	createRegistry,
+	DEFAULT_RESTART_LIMIT,
 	defineDoc,
 	type Extension,
 	Harness,
@@ -64,8 +67,11 @@ import {
 	type HostResponse,
 	normalizeSubmitMode,
 	PROTOCOL_VERSION,
+	type RetryTaskStatus,
 	type RunStatus,
+	type RuntimeFailure,
 	type SubmitWorkflowState,
+	safeFailureMessage,
 	type ToolPolicy,
 	type WatchPatch,
 } from "./protocol.ts";
@@ -163,6 +169,224 @@ const RunMapDoc = defineDoc<RunMapState>({
 interface ConversationAssociation extends JsonObject {
 	identity: string;
 	conversationId: number;
+}
+
+interface RuntimeFailureDoc extends JsonObject {
+	active: boolean;
+	runId: string;
+	conversationId: number;
+	generation: number;
+	retryAcceptedGeneration: number;
+	retryAcceptedRestarts: number;
+	kind: RuntimeFailure["kind"];
+	domain: RuntimeFailure["domain"];
+	taskId: string;
+	reason: string;
+	error: string;
+}
+
+function runtimeFailureDoc(conversationId: number) {
+	return defineDoc<RuntimeFailureDoc>({
+		kind: `agentic.failure.${createHash("sha256").update(String(conversationId)).digest("hex")}`,
+		version: 1,
+		scope: "session",
+		checkpointWhen: () => false,
+		initial: () => ({
+			active: false,
+			runId: "",
+			conversationId,
+			generation: 0,
+			retryAcceptedGeneration: -1,
+			retryAcceptedRestarts: -1,
+			kind: "other_failure",
+			domain: "unknown",
+			taskId: "",
+			reason: "",
+			error: "",
+		}),
+	});
+}
+
+type HarnessFailureReport = RuntimeFailure & {
+	readonly conversationId?: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function recordString(
+	record: Record<string, unknown> | undefined,
+	...keys: string[]
+): string | undefined {
+	for (const key of keys) {
+		const value = record?.[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return undefined;
+}
+
+function reportFailure(
+	_error: unknown,
+	info: ReportInfo,
+): HarnessFailureReport {
+	const task = "task" in info ? info.task : undefined;
+	const taskId = task?.id;
+	const conversationId =
+		task?.conversationId ??
+		(info.type === "extension_error" ? info.conversationId : undefined) ??
+		taskConversationId(info);
+	let kind: RuntimeFailure["kind"];
+	let domain: RuntimeFailure["domain"];
+	let reason: string | undefined;
+	switch (info.type) {
+		case "task_parked":
+			kind = "task_parked";
+			domain = "task";
+			reason = "restart_limit";
+			break;
+		case "task_faulted":
+			kind = "task_faulted";
+			domain = "task";
+			reason = info.reason;
+			break;
+		case "task_outdated":
+		case "migration_failed":
+		case "task_error":
+			kind = "other_failure";
+			domain = "task";
+			if (info.type === "task_outdated") reason = info.reason;
+			break;
+		case "host_error":
+			kind = "host_failure";
+			domain = "host";
+			break;
+		case "session_failed":
+			kind = "session_failure";
+			domain = "session";
+			break;
+		case "extension_error":
+			kind = "extension_failure";
+			domain = "extension";
+			break;
+		case "listener_error":
+			kind = "host_failure";
+			domain = "host";
+			break;
+	}
+	const safeReason =
+		reason === "restart_limit" ||
+		reason === "threw" ||
+		reason === "missing_task" ||
+		reason === "incompatible_task"
+			? reason
+			: undefined;
+	// Free-form exception messages can contain prompts, tool arguments or results.
+	// Keep only a bounded class name and the structured reason above.
+	const errorName = "HarnessError";
+	return {
+		kind,
+		domain,
+		...(taskId !== undefined
+			? { taskId: safeFailureMessage(String(taskId), 128) }
+			: {}),
+		...(safeReason ? { reason: safeReason } : {}),
+		error: errorName,
+		...(conversationId !== undefined ? { conversationId } : {}),
+	};
+}
+
+function taskState(task: unknown): { status?: string; reason?: string } {
+	const record = asRecord(task);
+	const state =
+		asRecord(record?.state) ??
+		asRecord(asRecord(record?.record)?.state) ??
+		record;
+	const blocked = asRecord(state?.blocked) ?? asRecord(record?.blocked);
+	const reason =
+		recordString(state, "reason", "blockedReason", "blocked_reason") ??
+		(typeof blocked?.reason === "string" ? blocked.reason : undefined);
+	const status = recordString(state, "status") ?? recordString(state, "kind");
+	return {
+		...(status ? { status } : {}),
+		...(reason ? { reason } : {}),
+	};
+}
+
+function taskConversationId(task: unknown): number | undefined {
+	const record = asRecord(task);
+	const taskRecord = asRecord(record?.record) ?? record;
+	const value = taskRecord?.conversationId;
+	if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+	if (typeof value === "string" && /^\d+$/.test(value)) {
+		const parsed = Number(value);
+		return Number.isSafeInteger(parsed) ? parsed : undefined;
+	}
+	return undefined;
+}
+
+function parseTaskId(value: string): TaskId | undefined {
+	if (!/^\d+$/.test(value)) return undefined;
+	const parsed = Number(value);
+	return Number.isSafeInteger(parsed) && parsed >= 0
+		? (parsed as TaskId)
+		: undefined;
+}
+
+function taskRestartCount(task: unknown): number | undefined {
+	const record = asRecord(asRecord(task)?.record) ?? asRecord(task);
+	const restarts = record?.restarts;
+	return restarts === undefined && record?.id !== undefined
+		? 0
+		: typeof restarts === "number" && Number.isSafeInteger(restarts)
+			? restarts
+			: undefined;
+}
+
+function isRestartLimitParked(task: unknown): boolean {
+	const state = taskState(task);
+	if (state.status !== undefined && state.status !== "pending")
+		return state.status === "blocked" && state.reason === "restart_limit";
+	const record = asRecord(asRecord(task)?.record) ?? asRecord(task);
+	const restarts = taskRestartCount(task);
+	return (
+		record?.abortRequested !== true &&
+		restarts !== undefined &&
+		restarts >= DEFAULT_RESTART_LIMIT
+	);
+}
+
+function sanitizePiLiveDiagnostics(value: unknown): unknown {
+	const live = asRecord(value);
+	if (!live) return value;
+	const safe = { ...live };
+	if (safe.compactionFailure !== undefined)
+		safe.compactionFailure = { error: "compaction failed" };
+	if (Array.isArray(safe.compactions))
+		safe.compactions = safe.compactions.map((candidate) => {
+			const compaction = asRecord(candidate);
+			const retry = asRecord(compaction?.retry);
+			if (!compaction || !retry) return candidate;
+			return { ...compaction, retry: { ...retry, error: "retry failed" } };
+		});
+	return safe;
+}
+
+function sanitizeWatchValue(
+	value: unknown,
+): Record<string, unknown> | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	const docs = asRecord(record.docs);
+	const live = docs?.["pi.live"];
+	return docs && live !== undefined
+		? {
+				...record,
+				docs: { ...docs, "pi.live": sanitizePiLiveDiagnostics(live) },
+			}
+		: record;
 }
 
 /** One constant-size durable document per identity, not a history-sized map.
@@ -387,6 +611,8 @@ export interface DurableHostOptions {
 	 * none of the workflow tools or the workflow preamble. It serves the
 	 * `default` policy only. */
 	readonly session?: boolean;
+	/** Private launch capability for the developer-mediated retry frame. */
+	readonly retryCapability?: string;
 	readonly log?: (line: string) => void;
 	/** Test-only overrides: a faux `Models` collection and/or an in-memory
 	 * `Storage` in place of the real SQLite file and live pi credentials.
@@ -407,6 +633,8 @@ export interface DurableHostOptions {
  * and the harness/storage lifecycle. */
 export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
+	private readonly runtimeFailureLogQueue: string[] = [];
+	private runtimeFailureLogDraining = false;
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
 	/** Each run's own environment, keyed by run id. A decision belongs to the run that
 	 * made it: after a rebinding `contexts` holds the successor's, so a retired run's
@@ -442,6 +670,13 @@ export class DurableHost {
 	 * arrives. The timing is not part of the conversation view, so it can change
 	 * without an operation to carry it. */
 	private readonly timingListeners = new Map<ConversationId, Set<() => void>>();
+	/** Synthetic runtime reports are durable in a small per-conversation doc,
+	 * not in pi.live. Wake both full-session and docs-only watches when one lands. */
+	private readonly runtimeFailureListeners = new Map<
+		ConversationId,
+		Set<() => void>
+	>();
+	private readonly retryingTasks = new Set<string>();
 	private readonly watchers = new Map<net.Socket, Set<() => void>>();
 	/** Runs whose `blocked` handoff this host recorded as a developer abort.
 	 * The developer's next message reconciles the workflow state for exactly
@@ -603,6 +838,38 @@ export class DurableHost {
 		if (this.closing) throw new Error("agent host is shutting down");
 	}
 
+	private enqueueRuntimeFailureLog(line: string): void {
+		if (this.runtimeFailureLogQueue.length >= 128) return;
+		this.runtimeFailureLogQueue.push(line);
+		if (this.runtimeFailureLogDraining) return;
+		this.runtimeFailureLogDraining = true;
+		void this.drainRuntimeFailureLogs();
+	}
+
+	private async drainRuntimeFailureLogs(): Promise<void> {
+		try {
+			while (this.runtimeFailureLogQueue.length > 0) {
+				const line = this.runtimeFailureLogQueue.shift();
+				if (!line) continue;
+				try {
+					await fs.promises.appendFile(
+						this.options.layout.logPath,
+						`${new Date().toISOString()} ${line}\n`,
+					);
+				} catch {
+					// Failure diagnostics are best effort and must not recurse.
+				}
+				try {
+					this.options.log?.(line);
+				} catch {
+					// A diagnostic callback must never destabilize the host.
+				}
+			}
+		} finally {
+			this.runtimeFailureLogDraining = false;
+		}
+	}
+
 	private log(line: string): void {
 		try {
 			fs.appendFileSync(
@@ -612,7 +879,11 @@ export class DurableHost {
 		} catch {
 			/* best-effort diagnostics only */
 		}
-		this.options.log?.(line);
+		try {
+			this.options.log?.(line);
+		} catch {
+			/* external diagnostic observers cannot affect the host */
+		}
 	}
 
 	static async open(options: DurableHostOptions): Promise<DurableHost> {
@@ -624,6 +895,21 @@ export class DurableHost {
 		fs.mkdirSync(options.layout.runEnvDir, { recursive: true, mode: 0o700 });
 		const registry = createRegistry();
 		const host: { instance?: DurableHost } = {};
+		const pendingReports: HarnessFailureReport[] = [];
+		const onReport = (error: unknown, info: ReportInfo) => {
+			try {
+				const report = reportFailure(error, info);
+				const instance = host.instance;
+				if (instance)
+					void instance.observeHarnessReport(report).catch(() => {
+						/* reports are diagnostic and cannot affect the harness */
+					});
+				else if (pendingReports.length < 32) pendingReports.push(report);
+			} catch {
+				// The Harness report callback is observational: malformed reports,
+				// diagnostic I/O and observers must never destabilize the host.
+			}
+		};
 		// Whether this host's runs get `codemode` at all, resolved once and before
 		// the coding tools are installed: the same flag decides whether the tool is
 		// registered below and whether the `read`/`grep`/`bash` descriptions and
@@ -724,7 +1010,9 @@ export class DurableHost {
 			{
 				models,
 				registry,
+				onReport,
 				settings: {
+					restartLimit: DEFAULT_RESTART_LIMIT,
 					// A getter, not a snapshot: `HarnessSettings` are "read at every
 					// resolution and never copied", so a saved configuration change reaches a
 					// *running* conversation without a host restart (design D4). The
@@ -783,6 +1071,10 @@ export class DurableHost {
 			registry,
 		);
 		host.instance = instance;
+		for (const report of pendingReports)
+			void instance.observeHarnessReport(report).catch(() => {
+				/* reports are diagnostic and cannot affect the harness */
+			});
 		for (const diagnostic of modelDiagnostics) instance.log(diagnostic);
 		return instance;
 	}
@@ -1013,7 +1305,11 @@ export class DurableHost {
 		// installs its own monitor (the hook installed with the stream reads it at
 		// call time), and a run the rule exempts installs none.
 		if (monitor) this.toolSurfaces.set(conversation.id, monitor);
-		this.log(`ensureRun ${input.runId} -> conversation ${conversation.id}`);
+		const activeRun = this.runs.get(input.runId);
+		if (ownership?.conversationId && activeRun) {
+			this.log(`ensureRun ${input.runId} -> conversation ${conversation.id}`);
+			await this.restoreParkedTaskFailure(input.runId, activeRun);
+		}
 		return { conversationId: String(conversation.id) };
 	}
 
@@ -1294,6 +1590,315 @@ export class DurableHost {
 		const found = this.runs.get(runId);
 		if (!found) throw new Error(`unknown run: ${runId}`);
 		return found;
+	}
+
+	private async restoreParkedTaskFailure(
+		runId: string,
+		run: RunRecord,
+	): Promise<void> {
+		try {
+			const stored = await this.harness.snapshot(
+				runtimeFailureDoc(run.conversationId),
+				BACKGROUND_CONTEXT,
+			);
+			if (
+				stored?.active &&
+				stored.runId === runId &&
+				stored.kind === "task_parked" &&
+				stored.reason === "restart_limit"
+			)
+				return;
+			const parkedTaskId = await this.parkedTaskForRestore(run.conversationId);
+			if (!parkedTaskId) return;
+			await this.observeHarnessReport({
+				kind: "task_parked",
+				domain: "task",
+				taskId: parkedTaskId,
+				reason: "restart_limit",
+				error: "HarnessError",
+				conversationId: run.conversationId,
+			});
+		} catch {
+			this.log("parked task state could not be restored after host reopen");
+		}
+	}
+
+	/** A paged, conversation-scoped lookup, never Harness.inspect(): that also
+	 * materializes unrelated tasks and queued submissions for the entire host. */
+	private async parkedTaskForRestore(
+		conversationId: ConversationId,
+	): Promise<string | undefined> {
+		return this.harness.commit(async (tx) => {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await tx.scanTasks(
+					{ conversationId, status: "pending" },
+					64,
+					cursor,
+				);
+				for (const task of page.items) {
+					if (isRestartLimitParked(task))
+						return safeFailureMessage(String(task.id), 128);
+				}
+				cursor = page.next;
+			} while (cursor !== undefined);
+			return undefined;
+		}, BACKGROUND_CONTEXT);
+	}
+
+	private async persistRuntimeFailure(
+		report: HarnessFailureReport,
+		runId: string,
+		conversationId: ConversationId,
+	): Promise<void> {
+		const doc = runtimeFailureDoc(conversationId);
+		let taskRestarts: number | undefined;
+		const nativeTaskId = parseTaskId(report.taskId ?? "");
+		if (report.kind === "task_parked" && nativeTaskId !== undefined) {
+			try {
+				const task = await this.harness.getTask(
+					nativeTaskId,
+					BACKGROUND_CONTEXT,
+				);
+				// A delayed duplicate callback cannot revive an episode after native
+				// retry cleared its restart counter or the task made progress.
+				if (task && !isRestartLimitParked(task)) {
+					this.notifyRuntimeFailure(conversationId);
+					return;
+				}
+				taskRestarts = taskRestartCount(task);
+			} catch {
+				// Failure persistence remains best effort if native state is unavailable.
+			}
+		}
+		const value: RuntimeFailureDoc = {
+			active: true,
+			runId,
+			conversationId,
+			generation: 0,
+			retryAcceptedGeneration: -1,
+			retryAcceptedRestarts: -1,
+			kind: report.kind,
+			domain: report.domain,
+			taskId: report.taskId ?? "",
+			reason:
+				report.reason ?? (report.kind === "task_parked" ? "restart_limit" : ""),
+			error: report.error ?? "",
+		};
+		try {
+			await this.harness.commit(async (tx) => {
+				const current = await tx.doc(doc);
+				const currentGeneration =
+					Number.isSafeInteger(current.generation) && current.generation >= 0
+						? current.generation
+						: 0;
+				const sameFailure =
+					current.active &&
+					current.runId === value.runId &&
+					current.conversationId === value.conversationId &&
+					current.kind === value.kind &&
+					current.domain === value.domain &&
+					current.taskId === value.taskId &&
+					current.reason === value.reason;
+				const retryAccepted =
+					current.retryAcceptedGeneration === currentGeneration;
+				const reparkedAfterAcceptance =
+					retryAccepted &&
+					taskRestarts !== undefined &&
+					current.retryAcceptedRestarts >= 0 &&
+					taskRestarts > current.retryAcceptedRestarts;
+				const sameEpisode = sameFailure && !reparkedAfterAcceptance;
+				const generation = sameEpisode
+					? currentGeneration
+					: currentGeneration + 1;
+				Object.assign(current, value, {
+					generation,
+					retryAcceptedGeneration: sameEpisode
+						? current.retryAcceptedGeneration
+						: -1,
+					retryAcceptedRestarts: sameEpisode
+						? current.retryAcceptedRestarts
+						: -1,
+				});
+			}, BACKGROUND_CONTEXT);
+		} catch (error) {
+			this.enqueueRuntimeFailureLog(
+				`runtime failure report could not be retained (${error instanceof Error ? "HarnessError" : "UnknownError"})`,
+			);
+		}
+		this.notifyRuntimeFailure(conversationId);
+	}
+
+	private async clearRuntimeFailure(
+		conversationId: ConversationId,
+		generation: number,
+	): Promise<void> {
+		try {
+			await this.harness.commit(async (tx) => {
+				const current = await tx.doc(runtimeFailureDoc(conversationId));
+				if ((current.generation ?? 0) !== generation) return;
+				current.active = false;
+				current.runId = "";
+				current.taskId = "";
+				current.reason = "";
+				current.error = "";
+			}, BACKGROUND_CONTEXT);
+		} catch {
+			/* clearing an expired synthetic view is best effort; native task state wins */
+		}
+		this.notifyRuntimeFailure(conversationId);
+	}
+
+	private notifyRuntimeFailure(conversationId: ConversationId): void {
+		for (const notify of this.runtimeFailureListeners.get(conversationId) ??
+			[]) {
+			try {
+				notify();
+			} catch {
+				/* observers cannot affect the host's report path */
+			}
+		}
+	}
+
+	private async markRuntimeFailureRetryAccepted(
+		runId: string,
+		conversationId: ConversationId,
+		taskId: string,
+		generation: number,
+		taskRestarts: number | undefined,
+	): Promise<boolean> {
+		let marked = false;
+		try {
+			await this.harness.commit(async (tx) => {
+				const current = await tx.doc(runtimeFailureDoc(conversationId));
+				if (
+					!current?.active ||
+					current.runId !== runId ||
+					current.conversationId !== conversationId ||
+					current.kind !== "task_parked" ||
+					current.taskId !== taskId ||
+					current.reason !== "restart_limit" ||
+					(current.generation ?? 0) !== generation ||
+					current.retryAcceptedGeneration === generation
+				)
+					return;
+				current.retryAcceptedGeneration = generation;
+				current.retryAcceptedRestarts = taskRestarts ?? -1;
+				marked = true;
+			}, BACKGROUND_CONTEXT);
+		} catch {
+			return false;
+		}
+		return marked;
+	}
+
+	private async runtimeFailureFor(
+		runId: string,
+		record: RunRecord,
+	): Promise<RuntimeFailure | undefined> {
+		let stored: Readonly<RuntimeFailureDoc> | undefined;
+		try {
+			stored = await this.harness.snapshot(
+				runtimeFailureDoc(record.conversationId),
+				BACKGROUND_CONTEXT,
+			);
+		} catch {
+			return undefined;
+		}
+		if (
+			!stored?.active ||
+			stored.runId !== runId ||
+			stored.conversationId !== record.conversationId
+		)
+			return undefined;
+		const nativeTaskId = parseTaskId(stored.taskId);
+		if (stored.taskId && nativeTaskId !== undefined) {
+			let task: unknown;
+			try {
+				task = await this.harness.getTask(nativeTaskId, BACKGROUND_CONTEXT);
+			} catch {
+				// Keep the bounded report visible if the native task is temporarily
+				// unavailable; retry still re-reads and fails closed.
+			}
+			if (stored.kind === "task_parked") {
+				const state = taskState(task);
+				const hasCurrentState = task !== undefined;
+				const parked = task !== undefined && isRestartLimitParked(task);
+				if (hasCurrentState && !parked && state.status !== undefined) {
+					await this.clearRuntimeFailure(
+						record.conversationId,
+						stored.generation ?? 0,
+					);
+					return undefined;
+				}
+			}
+			if (
+				stored.kind === "task_faulted" &&
+				taskState(task).status === "running"
+			) {
+				await this.clearRuntimeFailure(
+					record.conversationId,
+					stored.generation ?? 0,
+				);
+				return undefined;
+			}
+		}
+		return {
+			kind: stored.kind,
+			domain: stored.domain,
+			generation: stored.generation ?? 0,
+			...(stored.taskId ? { taskId: stored.taskId } : {}),
+			...(stored.reason ? { reason: stored.reason } : {}),
+			...(stored.error ? { error: stored.error } : {}),
+		};
+	}
+
+	private async observeHarnessReport(
+		report: HarnessFailureReport,
+	): Promise<void> {
+		const conversationId =
+			report.conversationId !== undefined
+				? (report.conversationId as ConversationId)
+				: undefined;
+		let owner: { runId: string; record: RunRecord } | undefined;
+		if (conversationId !== undefined) {
+			const runId = this.boundRunId(conversationId);
+			const record = runId ? this.runs.get(runId) : undefined;
+			if (
+				runId &&
+				record?.conversationId === conversationId &&
+				this.ownsConversation(runId, record.conversationId)
+			)
+				owner = { runId, record };
+		}
+		const identity = owner
+			? this.telemetryIdentities.get(owner.record.conversationId)
+			: undefined;
+		try {
+			if (identity)
+				emitRuntimeEnvelope(identity, "runtime.failure", {
+					"pi.failure.kind": report.kind,
+					"pi.failure.domain": report.domain,
+					...(report.taskId ? { "pi.task.id": report.taskId } : {}),
+					...(report.reason ? { "pi.failure.reason": report.reason } : {}),
+					...(report.error ? { "pi.failure.error": report.error } : {}),
+				});
+		} catch {
+			/* telemetry is observational; retain the durable status regardless */
+		}
+		this.enqueueRuntimeFailureLog(
+			`harness ${report.kind}${report.taskId ? ` task=${report.taskId}` : ""}${report.reason ? ` reason=${report.reason}` : ""}${report.error ? ` error=${report.error}` : ""}`,
+		);
+		if (
+			owner &&
+			owner.record.conversationId ===
+				(conversationId ?? owner.record.conversationId)
+		)
+			await this.persistRuntimeFailure(
+				report,
+				owner.runId,
+				owner.record.conversationId,
+			);
 	}
 
 	/** One conversation's current model ref, from `pi.agent`: the document both
@@ -1833,9 +2438,11 @@ export class DurableHost {
 		return state;
 	}
 
-	async status(
-		runId: string,
-	): Promise<{ status: RunStatus; lastError?: string }> {
+	async status(runId: string): Promise<{
+		status: RunStatus;
+		lastError?: string;
+		runtimeFailure?: RuntimeFailure;
+	}> {
 		const record = this.runs.get(runId);
 		if (!record) return { status: "unknown" };
 		const conversation = await this.harness.conversation(
@@ -1844,6 +2451,7 @@ export class DurableHost {
 		);
 		if (!conversation) return { status: "unknown" };
 		const state = await conversation.viewState(BACKGROUND_CONTEXT);
+		let status: RunStatus;
 		try {
 			const live = state.value.docs["pi.live"] as
 				| { run?: unknown; tools?: Array<{ name: string; status: string }> }
@@ -1851,18 +2459,187 @@ export class DurableHost {
 			const inbox = state.value.docs["pi.inbox"] as
 				| { items?: unknown[] }
 				| undefined;
-			if (!live?.run) {
-				if (inbox?.items?.length) return { status: "working" };
-				return { status: "idle" };
+			if (!live?.run) status = inbox?.items?.length ? "working" : "idle";
+			else {
+				const blockedOnQuestion = (live.tools ?? []).some(
+					(slot) =>
+						slot.status === "running" &&
+						(slot.name === "developer_question" || slot.name === "agent_ask"),
+				);
+				status = blockedOnQuestion ? "blocked" : "working";
 			}
-			const blockedOnQuestion = (live.tools ?? []).some(
-				(slot) =>
-					slot.status === "running" &&
-					(slot.name === "developer_question" || slot.name === "agent_ask"),
-			);
-			return { status: blockedOnQuestion ? "blocked" : "working" };
 		} finally {
 			state.dispose();
+		}
+		const runtimeFailure = await this.runtimeFailureFor(runId, record);
+		return { status, ...(runtimeFailure ? { runtimeFailure } : {}) };
+	}
+
+	/** Explicit recovery for one native task parked at pi-durable's restart
+	 * limit. This validates the host's persisted run/conversation association,
+	 * current task state and workflow gate before asking the native harness to
+	 * retry. It does not promise exactly-once external effects. */
+	async retryParkedTask(
+		runId: string,
+		conversationIdValue: string,
+		taskIdValue: string,
+		generationValue: number,
+	): Promise<{ status: RetryTaskStatus; reason?: string }> {
+		if (
+			typeof runId !== "string" ||
+			typeof conversationIdValue !== "string" ||
+			typeof taskIdValue !== "string" ||
+			!Number.isSafeInteger(generationValue) ||
+			generationValue < 1
+		)
+			return { status: "refused", reason: "invalid task identity" };
+		const conversationId = parseConversationId(conversationIdValue);
+		const taskId = safeFailureMessage(taskIdValue, 128);
+		const nativeTaskId = parseTaskId(taskIdValue);
+		if (
+			!conversationId ||
+			!Number.isSafeInteger(conversationId) ||
+			!taskId ||
+			nativeTaskId === undefined ||
+			taskId !== taskIdValue.trim()
+		)
+			return { status: "refused", reason: "invalid task identity" };
+		const initial = this.runs.get(runId);
+		if (!initial || initial.conversationId !== conversationId)
+			return {
+				status: "refused",
+				reason: "run/conversation ownership mismatch",
+			};
+		const lockKey = `${runId}:${conversationId}:${taskId}`;
+		if (this.retryingTasks.has(lockKey))
+			return { status: "already-in-progress" };
+		this.retryingTasks.add(lockKey);
+		try {
+			return await this.serialized(initial, async () => {
+				const current = this.runs.get(runId);
+				if (
+					!current ||
+					current.conversationId !== conversationId ||
+					this.boundRunId(conversationId) !== runId
+				)
+					return { status: "refused", reason: "run is no longer active" };
+				const stored = await this.harness.snapshot(
+					runtimeFailureDoc(conversationId),
+					BACKGROUND_CONTEXT,
+				);
+				if (
+					!stored?.active ||
+					stored.runId !== runId ||
+					stored.conversationId !== conversationId ||
+					stored.kind !== "task_parked" ||
+					stored.taskId !== taskId ||
+					stored.reason !== "restart_limit" ||
+					stored.generation !== generationValue
+				)
+					return {
+						status: "stale",
+						reason: "task is not the reported parked task",
+					};
+
+				let task: unknown;
+				try {
+					task = await this.harness.getTask(nativeTaskId, BACKGROUND_CONTEXT);
+				} catch {
+					return { status: "stale", reason: "task is no longer available" };
+				}
+				if (!task)
+					return { status: "stale", reason: "task is no longer available" };
+				const state = taskState(task);
+				if (state.status === "running" || state.status === "ready")
+					return { status: "already-in-progress" };
+				if (!isRestartLimitParked(task))
+					return {
+						status: "stale",
+						reason: "task is no longer parked at restart_limit",
+					};
+				const ownerConversationId = taskConversationId(task);
+				if (ownerConversationId !== conversationId)
+					return {
+						status: "refused",
+						reason: "task belongs to another conversation",
+					};
+				const context = this.runContexts.get(runId);
+				if (!context)
+					return { status: "refused", reason: "run context is unavailable" };
+				let workflowState: ResumedRunState;
+				try {
+					workflowState = await recordResumedRunHandoff(context);
+				} catch {
+					return {
+						status: "refused",
+						reason: "workflow state could not be verified",
+					};
+				}
+				if (
+					workflowState.state !== "active" &&
+					workflowState.state !== "resumed"
+				)
+					return {
+						status: "refused",
+						reason: `workflow is ${workflowState.state}`,
+					};
+				if (
+					this.runs.get(runId)?.conversationId !== conversationId ||
+					this.boundRunId(conversationId) !== runId
+				)
+					return {
+						status: "refused",
+						reason: "run ownership changed during validation",
+					};
+				if (stored.retryAcceptedGeneration === (stored.generation ?? 0))
+					return { status: "already-in-progress" };
+				const accepted = await this.markRuntimeFailureRetryAccepted(
+					runId,
+					conversationId,
+					taskId,
+					generationValue,
+					taskRestartCount(task),
+				);
+				if (!accepted)
+					return {
+						status: "stale",
+						reason: "parked task episode changed during validation",
+					};
+				try {
+					await this.harness.retryTask(nativeTaskId, BACKGROUND_CONTEXT);
+					// Native retry resets restarts to zero. Retain the post-retry
+					// baseline so another crash loop reaching the same limit is a new
+					// episode even if no status reader saw the intervening progress.
+					try {
+						const resumed = await this.harness.getTask(
+							nativeTaskId,
+							BACKGROUND_CONTEXT,
+						);
+						const restarts = taskRestartCount(resumed);
+						if (restarts !== undefined)
+							await this.harness.commit(async (tx) => {
+								const report = await tx.doc(runtimeFailureDoc(conversationId));
+								if (
+									report.generation === generationValue &&
+									report.retryAcceptedGeneration === generationValue
+								)
+									report.retryAcceptedRestarts = restarts;
+							}, BACKGROUND_CONTEXT);
+					} catch {
+						// Keep the durable uncertain acceptance, never admit a duplicate.
+					}
+					return { status: "retried" };
+				} catch {
+					// The durable acceptance precedes the native call so a host crash
+					// cannot admit a duplicate. Its outcome is therefore uncertain.
+					return {
+						status: "already-in-progress",
+						reason: "native retry outcome is uncertain; do not resubmit",
+					};
+				}
+			});
+		} finally {
+			this.retryingTasks.delete(lockKey);
 		}
 	}
 
@@ -2212,21 +2989,43 @@ export class DurableHost {
 		const watch = await conversation.watch(BACKGROUND_CONTEXT);
 		const measuredTimings = () =>
 			this.timings.get(conversationId) ?? NO_TIMINGS;
-		// The measured timings travel with the conversation view, the only place
-		// the dashboard can read them (pi-durable stores no timing itself). A
-		// docs-only watcher reads the live documents and nothing else, so the
-		// committed transcript never crosses the socket for it.
+		let latestValue: unknown = watch.value;
+		let currentFailure = await this.runtimeFailureFor(runId, {
+			conversationId,
+			readOnly: false,
+		});
+		let watchClosed = false;
+		// The measured timings and synthetic Harness report travel with the
+		// conversation view. Docs-only watchers still receive no transcript.
 		const augment = (
 			value: unknown,
 			timings: Record<string, EntryTiming> = measuredTimings(),
 		) => {
-			const record = value as Record<string, unknown> | undefined;
-			if (view === "docs") return { docs: record?.docs ?? {} };
+			const record = sanitizeWatchValue(value);
+			const base =
+				view === "docs"
+					? { docs: record?.docs ?? {} }
+					: { ...(record ?? {}), timings };
 			return {
-				...(record ?? {}),
-				timings,
+				...base,
+				...(currentFailure ? { runtimeFailure: currentFailure } : {}),
 			};
 		};
+		const refreshFailure = () => {
+			void this.runtimeFailureFor(runId, { conversationId, readOnly: false })
+				.then((failure) => {
+					if (watchClosed) return;
+					currentFailure = failure;
+					onValue(augment(latestValue));
+				})
+				.catch(() => {
+					/* runtime diagnostics never interrupt the conversation watch */
+				});
+		};
+		const failureListeners =
+			this.runtimeFailureListeners.get(conversationId) ?? new Set<() => void>();
+		failureListeners.add(refreshFailure);
+		this.runtimeFailureListeners.set(conversationId, failureListeners);
 		// Capture the initial timings and publish them together, so the patch
 		// baseline is exactly what the watcher received (a timing committed
 		// between the two reads must not be mistaken for "already delivered").
@@ -2242,10 +3041,15 @@ export class DurableHost {
 				deliver: (value) => onValue(value),
 			});
 			watch.start(async (value) => {
+				latestValue = value;
 				frames.push(augment(value));
 			});
 			return () => {
+				watchClosed = true;
 				frames.dispose();
+				failureListeners.delete(refreshFailure);
+				if (failureListeners.size === 0)
+					this.runtimeFailureListeners.delete(conversationId);
 				void watch.stop();
 			};
 		}
@@ -2257,19 +3061,49 @@ export class DurableHost {
 		// transcript are dropped before they are queued, so they never take up a
 		// patch slot.
 		const projectOps = (ops: readonly Op[]): Op[] => {
-			if (view !== "docs") return [...ops];
 			const projected: Op[] = [];
+			let liveChanged = false;
 			for (const op of ops) {
 				if (op[0] === "r") {
-					const record = op[1] as Record<string, unknown> | undefined;
-					projected.push([
-						"r",
-						{ docs: (record?.docs ?? {}) as JsonValue } as JsonValue,
-					]);
+					const record = sanitizeWatchValue(op[1]);
+					projected.push(
+						view === "docs"
+							? ["r", { docs: (record?.docs ?? {}) as JsonValue } as JsonValue]
+							: ["r", (record ?? op[1]) as JsonValue],
+					);
 					continue;
 				}
 				const path = op[1];
-				if (Array.isArray(path) && path[0] === "docs") projected.push(op);
+				if (view === "docs" && path[0] !== "docs") continue;
+				if (path.length === 1 && path[0] === "docs" && op[0] === "s") {
+					const docs = asRecord(op[2]);
+					projected.push([
+						"s",
+						["docs"],
+						docs?.["pi.live"] === undefined
+							? (op[2] as JsonValue)
+							: ({
+									...docs,
+									"pi.live": sanitizePiLiveDiagnostics(docs["pi.live"]),
+								} as JsonValue),
+					]);
+					continue;
+				}
+				if (path[0] === "docs" && path[1] === "pi.live") {
+					liveChanged = true;
+					continue;
+				}
+				projected.push(op);
+			}
+			if (liveChanged) {
+				const docs = asRecord(asRecord(latestValue)?.docs);
+				if (docs?.["pi.live"] !== undefined)
+					projected.push([
+						"s",
+						["docs", "pi.live"],
+						sanitizePiLiveDiagnostics(docs["pi.live"]) as JsonValue,
+					]);
+				else projected.push(["d", ["docs", "pi.live"]]);
 			}
 			return projected;
 		};
@@ -2297,16 +3131,40 @@ export class DurableHost {
 			this.timingListeners.get(conversationId) ?? new Set<() => void>();
 		listeners.add(wake);
 		this.timingListeners.set(conversationId, listeners);
-		watch.start(async (_value, ops) => {
+		watch.start(async (value, ops) => {
+			latestValue = value;
 			const projected = projectOps(ops);
 			if (projected.length > 0) frames.push(projected);
 		});
 		return () => {
+			watchClosed = true;
 			frames.dispose();
 			listeners.delete(wake);
 			if (listeners.size === 0) this.timingListeners.delete(conversationId);
+			failureListeners.delete(refreshFailure);
+			if (failureListeners.size === 0)
+				this.runtimeFailureListeners.delete(conversationId);
 			void watch.stop();
 		};
+	}
+
+	prepareRestartForReattachment(): "ready" | "busy" {
+		if (
+			this.closing ||
+			this.operations.size > 0 ||
+			this.retryingTasks.size > 0 ||
+			this.ensuringRuns.size > 0 ||
+			this.activeRequests.size > 0
+		)
+			return "busy";
+		try {
+			// Scheduler memory includes unbound conversations and background work;
+			// a parked task is inactive, but running/ready/sleeping work is not.
+			const wake = this.harness.wake();
+			return wake.active || wake.at !== undefined ? "busy" : "ready";
+		} catch {
+			return "busy";
+		}
 	}
 
 	shutdown(): Promise<void> {
@@ -2492,6 +3350,18 @@ export class DurableHost {
 		socket.on("error", closed);
 	}
 
+	private retryCapabilityMatches(supplied: unknown): boolean {
+		const expected = this.options.retryCapability;
+		if (
+			!expected ||
+			typeof supplied !== "string" ||
+			!/^[a-f0-9]{64}$/.test(supplied) ||
+			expected.length !== supplied.length
+		)
+			return false;
+		return timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
+	}
+
 	private async handleRequest(
 		request: HostRequest,
 		send: (response: HostResponse) => void,
@@ -2588,6 +3458,31 @@ export class DurableHost {
 					send({ type: "compactRun", runId: request.runId, ...result });
 					return;
 				}
+				case "retryTask": {
+					if (!this.retryCapabilityMatches(request.recoveryCapability)) {
+						send({
+							type: "retryTask",
+							runId: safeFailureMessage(request.runId, 128),
+							taskId: safeFailureMessage(request.taskId, 128),
+							status: "refused",
+							reason: "operator recovery authority required",
+						});
+						return;
+					}
+					const result = await this.retryParkedTask(
+						request.runId,
+						request.conversationId,
+						request.taskId,
+						request.generation,
+					);
+					send({
+						type: "retryTask",
+						runId: safeFailureMessage(request.runId, 128),
+						taskId: safeFailureMessage(request.taskId, 128),
+						...result,
+					});
+					return;
+				}
 				case "catalog": {
 					const catalog = await this.catalog();
 					send({
@@ -2606,6 +3501,13 @@ export class DurableHost {
 					await this.stopRun(request.runId);
 					send({ type: "ok" });
 					return;
+				case "prepareRestartForReattachment": {
+					// No await between the idle check and shutdown's admission fence.
+					const status = this.prepareRestartForReattachment();
+					send({ type: "prepareRestartForReattachment", status });
+					if (status === "ready") void this.shutdown();
+					return;
+				}
 				case "shutdown":
 					send({ type: "ok" });
 					void this.shutdown();

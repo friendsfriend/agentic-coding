@@ -8,6 +8,8 @@ import { Schema } from "effect";
 import type {
 	AgentHandoffRequest,
 	AgentResearchHandoffRequest,
+	AgentTaskRetryRequest,
+	AgentTaskRetryResult,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
 	WorkflowDeletion,
@@ -393,6 +395,14 @@ export async function researchHandoff(
 	cache.invalidate(workflowKey(request.repo, view.workflowId));
 	cache.invalidate(dashboardKey(request.repo, view.workflowId));
 	return view;
+}
+
+/** Route an explicit parked-task retry through the operator-authorized host
+ * mediator. The private host capability never crosses the dashboard gateway. */
+export async function retryAgentTask(
+	request: AgentTaskRetryRequest,
+): Promise<AgentTaskRetryResult> {
+	return gateway().retryAgentTask(request);
 }
 
 /** Repair preview (which steps can be re-run and what they cost). */

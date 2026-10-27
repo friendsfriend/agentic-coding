@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -12,6 +12,11 @@ import {
 	recoverWorkflowSession,
 	recoveryRequest,
 } from "../src/agent-host/recovery.ts";
+import {
+	hostRetryCapabilityForLaunch,
+	hostRetryTargetFor,
+	releaseHostRetryCapability,
+} from "../src/agent-host/retry-authority.ts";
 import {
 	type AgentHandle,
 	DEVELOPER_ABORT_MESSAGE,
@@ -28,6 +33,11 @@ import {
 } from "./support/git-fixture.ts";
 
 autoRemoveRepoFixtures();
+const retryAuthorities: Array<{ socket: string; capability: string }> = [];
+afterEach(() => {
+	for (const { socket, capability } of retryAuthorities.splice(0))
+		releaseHostRetryCapability(socket, capability);
+});
 
 function fixture() {
 	const repo = fs.realpathSync(
@@ -83,8 +93,19 @@ function fixture() {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
+	const retryCapability = hostRetryCapabilityForLaunch(layout.socketPath);
+	retryAuthorities.push({
+		socket: layout.socketPath,
+		capability: retryCapability,
+	});
 	const open = () =>
-		DurableHost.open({ layout, settings: {}, globalAgentDir: repo, models });
+		DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: repo,
+			models,
+			retryCapability,
+		});
 	const persist = (conversationId: string) => {
 		const handle: AgentHandle = {
 			runtime: "pi-durable",
@@ -138,6 +159,9 @@ test("a restarted SQLite host recovers the exact aborted worker without clearing
 		).toBe("idle");
 		const recovered = await recoverWorkflowSession(f.repo, "change", f.run.id);
 		expect(recovered.conversationId).toBe(ensured.conversationId);
+		expect(
+			hostRetryTargetFor(f.run.id, recovered.conversationId),
+		).toBeDefined();
 		expect((await second.status(f.run.id)).status).toBe("idle");
 		expect(await recoverDurableHandle(handle)).toEqual(recovered);
 		expect(f.engine.getRun(f.repo, f.run.id).status).toBe("blocked");
@@ -268,7 +292,9 @@ test("opening a saved session starts an absent host and restores its SQLite bind
 			await import(${JSON.stringify(path.resolve(import.meta.dir, "../src/cli.ts"))});
 		} else {
 			const { recoverWorkflowSession } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../src/agent-host/recovery.ts"))});
-			console.log(JSON.stringify(await recoverWorkflowSession(${JSON.stringify(f.repo)}, "change", ${JSON.stringify(f.run.id)})));
+			const recovered = await recoverWorkflowSession(${JSON.stringify(f.repo)}, "change", ${JSON.stringify(f.run.id)});
+			const { hostRetryTargetFor } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../src/agent-host/retry-authority.ts"))});
+			console.log(JSON.stringify({ ...recovered, retryAuthorityAvailable: !!hostRetryTargetFor(recovered.runId, recovered.conversationId) }));
 		}
 	`,
 	);
@@ -282,6 +308,7 @@ test("opening a saved session starts an absent host and restores its SQLite bind
 		const error = await new Response(child.stderr).text();
 		expect(await child.exited, error).toBe(0);
 		expect(JSON.parse(output).conversationId).toBe(ensured.conversationId);
+		expect(JSON.parse(output).retryAuthorityAvailable).toBe(true);
 		expect(
 			(await new HostClient(f.layout.socketPath).status(f.run.id)).status,
 		).toBe("idle");

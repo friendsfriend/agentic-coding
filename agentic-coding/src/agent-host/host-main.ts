@@ -30,6 +30,30 @@ function readJsonFile(filePath: string): Record<string, unknown> | undefined {
 	}
 }
 
+/** Read the launcher's private capability from its inherited pipe, never from
+ * argv, environment, a workflow file or a task-visible setting. */
+function readRetryCapability(argv: readonly string[]): string | undefined {
+	const index = argv.indexOf("--retry-capability-fd");
+	if (index < 0) return undefined;
+	const descriptor = Number(argv[index + 1]);
+	if (!Number.isSafeInteger(descriptor) || descriptor < 3 || descriptor > 1024)
+		return undefined;
+	const buffer = Buffer.alloc(128);
+	try {
+		const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+		const value = buffer.toString("utf8", 0, bytes);
+		return /^[a-f0-9]{64}$/.test(value) ? value : undefined;
+	} catch {
+		return undefined;
+	} finally {
+		try {
+			fs.closeSync(descriptor);
+		} catch {
+			// A descriptor that was already closed carries no authority.
+		}
+	}
+}
+
 /** Resolve `agentHost` from the application configuration, seeding it once
  * from the matching keys of the global pi `settings.json` when absent
  * (durable-agent-configuration: "Durable agent settings section"). The seeded
@@ -132,6 +156,7 @@ export async function runAgentHost(
 	const workflowDir = dirIndex >= 0 ? argv[dirIndex + 1] : undefined;
 	if (!workflowDir) throw new Error("agent host requires --workflow-dir DIR");
 	const layout = hostLayout(path.resolve(workflowDir));
+	const retryCapability = readRetryCapability(argv);
 	const settings = loadAgentHostSettings(
 		options.configPath,
 		options.globalSettingsPath,
@@ -146,6 +171,7 @@ export async function runAgentHost(
 		globalAgentDir: piAgentDir(),
 		...(argv.includes("--orchestrator") ? { orchestrator: true } : {}),
 		...(argv.includes("--session") ? { session: true } : {}),
+		...(retryCapability ? { retryCapability } : {}),
 		// Test-only hook (unified-application-distribution: "Compiled executable
 		// hosts an agent"), gated behind an explicit env var so production use
 		// never takes it: lets a compiled-binary smoke test complete a model

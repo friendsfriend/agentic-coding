@@ -4,6 +4,7 @@ import {
 	agentQuestionRequestSchema,
 	agentResearchHandoffRequestSchema,
 	agentsMutationRequestSchema,
+	agentTaskRetryRequestSchema,
 	classifierRequestSchema,
 	reviewSaveRequestSchema,
 	workflowActionRequestSchema,
@@ -312,6 +313,12 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: "/api/v1/agent/research-handoff",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/agent/retry-task",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -633,6 +640,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/agent/research-handoff",
 		schemaId: "server.agent.research-handoff",
 		schema: agentResearchHandoffRequestSchema,
+	},
+	{
+		path: "/api/v1/agent/retry-task",
+		schemaId: "server.agent.retry-task",
+		schema: agentTaskRetryRequestSchema,
 	},
 	{
 		path: "/api/v1/config/agents",

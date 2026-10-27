@@ -5,12 +5,14 @@
 // runtime. Since the Go backend was retired there is no delegation: every route
 // is answered in this process or is 404.
 
+import { retryAgentTaskAsOperator } from "../agent-host/retry-mediator.ts";
 import { resolveConfigRoot } from "../config-root.ts";
 import type {
 	AgentHandoffRequest,
 	AgentQuestionRequest,
 	AgentResearchHandoffRequest,
 	AgentsMutationRequest,
+	AgentTaskRetryRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
 	WorkflowBlueprintValidateRequest,
@@ -1051,6 +1053,21 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				runId: value.workflowId,
 				revision: value.revision,
 			});
+			return json({ ok: true, value });
+		}
+
+		if (method === "POST" && path === "/api/v1/agent/retry-task") {
+			if (principal !== "operator")
+				return errorResponse(
+					403,
+					"operator-required",
+					"task recovery requires operator authority",
+				);
+			const decoded = decodeRouteRequest<AgentTaskRetryRequest>(
+				"/api/v1/agent/retry-task",
+				await readJsonBody(request),
+			);
+			const value = await retryAgentTaskAsOperator(decoded);
 			return json({ ok: true, value });
 		}
 

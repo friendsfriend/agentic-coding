@@ -81,8 +81,13 @@ export function AgentsPanel(props: AgentsPanelProps) {
 			? Math.ceil(focusCaption(agent).length / bodyColumns()) +
 				Math.ceil(agent.runId.length / bodyColumns())
 			: 0;
+	const failureDetailLines = (agent: DashboardData["agents"][number]) => {
+		const detail = props.activity?.(agent.role, agent.runId)?.detail;
+		return detail ? Math.max(1, Math.ceil(detail.length / bodyColumns())) : 0;
+	};
 	const rowHeight = (agent: DashboardData["agents"][number]): number =>
 		2 +
+		failureDetailLines(agent) +
 		focusLines(agent) +
 		(agentMetricLine(agent.metrics) ? 1 : 0) +
 		(agent.findingCounts ? findingSummaryRows() : 0);
@@ -140,7 +145,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 						// instead of the status word it will only settle into later.
 						const activity = () => {
 							const current = props.activity?.(agent.role, agent.runId);
-							return current?.active ? current : undefined;
+							return current?.active || current?.detail ? current : undefined;
 						};
 						// A live step is already the truth; otherwise a provisional
 						// status gathers instead of painting the seed's guess.
@@ -225,6 +230,17 @@ export function AgentsPanel(props: AgentsPanelProps) {
 														: "Interactive workflow agent")}
 										</text>
 									</box>
+									<Show when={activity()?.detail}>
+										{(detail) => (
+											<text
+												fg={uiColors.warning}
+												height={failureDetailLines(agent)}
+												wrapMode="char"
+											>
+												{detail()}
+											</text>
+										)}
+									</Show>
 									<Show when={props.detailsPending ? undefined : timeline()}>
 										{(entry) => {
 											const duration = entry().durationSeconds;

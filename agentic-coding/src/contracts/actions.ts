@@ -186,6 +186,26 @@ export const agentResearchHandoffRequestSchema = Schema.Struct({
 	handoff: Schema.optionalKey(Schema.Unknown),
 });
 
+/** Developer-authorized recovery for one parked native task. The server resolves
+ * the host capability from its in-memory launcher registry. */
+export const agentTaskRetryRequestSchema = Schema.Struct({
+	runId: Schema.String,
+	conversationId: Schema.String,
+	taskId: Schema.String,
+	generation: Schema.Number,
+});
+
+export const agentTaskRetryResultSchema = Schema.Struct({
+	taskId: Schema.String,
+	status: Schema.Literals([
+		"retried",
+		"already-in-progress",
+		"stale",
+		"refused",
+	]),
+	reason: Schema.optional(Schema.String),
+});
+
 /** The agent configuration read: opaque profile tables plus provenance and the
  * conflict list the settings UI renders. */
 export type { AgentsListResponse } from "./gateway.ts";
@@ -261,3 +281,7 @@ export type AgentQuestionRequest = typeof agentQuestionRequestSchema.Type;
 /** Decoded request type for `agentResearchHandoffRequestSchema`. */
 export type AgentResearchHandoffRequest =
 	typeof agentResearchHandoffRequestSchema.Type;
+
+/** Decoded request/result types for the operator-only parked-task recovery. */
+export type AgentTaskRetryRequest = typeof agentTaskRetryRequestSchema.Type;
+export type AgentTaskRetryResult = typeof agentTaskRetryResultSchema.Type;
