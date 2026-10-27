@@ -42,7 +42,13 @@ function fakeEnv(
 function runContext(
 	overrides: Partial<DurableRunContext> = {},
 ): DurableRunContext {
-	return { runId: "run-1", cwd: "/work", env: {}, ...overrides };
+	return {
+		runId: "run-1",
+		cwd: "/work",
+		env: {},
+		...overrides,
+		toolPolicy: overrides.toolPolicy ?? "default",
+	};
 }
 
 interface ToolResult {

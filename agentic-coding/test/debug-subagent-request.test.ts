@@ -1318,6 +1318,7 @@ test("the delegated debug request tools are withheld from a debug run", async ()
 		runId: "run-1",
 		cwd: process.cwd(),
 		env: {},
+		toolPolicy: "default",
 	}));
 	expect(extension.tools?.map((tool) => tool.name).sort()).toEqual(
 		[...names].sort(),
@@ -1357,6 +1358,7 @@ test("every debug request tool calls the workflow CLI with the documented argv",
 			runId: "run-1",
 			cwd: process.cwd(),
 			env: {},
+			toolPolicy: "default",
 		}));
 		const tools = new Map(
 			(extension.tools ?? []).map((tool) => [tool.name, tool]),

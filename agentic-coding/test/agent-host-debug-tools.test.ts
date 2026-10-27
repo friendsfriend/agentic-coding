@@ -84,6 +84,7 @@ const lookup: RunContextLookup = () => ({
 	runId: "run-1",
 	cwd: "/tmp",
 	env: RUN_ENV,
+	toolPolicy: "default",
 });
 
 async function invoke(
@@ -243,6 +244,7 @@ describe("debug tool surface", () => {
 			runId: "run-1",
 			cwd: "/tmp",
 			env: {},
+			toolPolicy: "default",
 		}));
 		const result = await toolOf(extension, "otel_query").execute({}, {}, {});
 		expect(result.isError).toBe(true);

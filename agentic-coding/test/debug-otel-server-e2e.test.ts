@@ -164,6 +164,7 @@ async function otelQuery(
 		runId: "run-e2e",
 		cwd: process.cwd(),
 		env,
+		toolPolicy: "default",
 	}));
 	const tool = (extension.tools ?? []).find(
 		(entry) => entry.name === "otel_query",

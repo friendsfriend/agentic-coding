@@ -28,6 +28,10 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import {
+	createToolSearchExtension,
+	TOOL_SEARCH_TOOL_NAME,
+} from "@earendil-works/pi-durable/tool-search";
 import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
@@ -62,6 +66,7 @@ import { createBatchThrottle, createFrameThrottle } from "./frame-throttle.ts";
 import { createHostIdentity, hostIdentityPaths } from "./host-identity.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
+import { LocalPiToolBridge } from "./pi-tool-bridge.ts";
 import {
 	decodeFrame,
 	encodeFrame,
@@ -78,7 +83,10 @@ import {
 	type ToolPolicy,
 	type WatchPatch,
 } from "./protocol.ts";
-import type { AgentHostSettings } from "./settings.ts";
+import {
+	type AgentHostSettings,
+	normalizeLocalPiToolsSettings,
+} from "./settings.ts";
 import { createStageExtension } from "./stage-tools.ts";
 import { backupHostStore } from "./storage-upgrade.ts";
 import {
@@ -775,6 +783,7 @@ export class DurableHost {
 		/** The published tool registry, kept only so a focused test can read what
 		 * a run of this host is actually offered (`toolDescriptionsForTest`). */
 		private readonly registry: Registry,
+		private readonly localPiBridge: LocalPiToolBridge | undefined,
 	) {}
 
 	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, the
@@ -997,6 +1006,28 @@ export class DurableHost {
 		// orchestrator never gets it: its tool surface is exactly its own.
 		const codemode = codemodeRegistered ? createDurableCodemode() : undefined;
 		if (codemode) registry.install(codemode.extension);
+		const bridgeConfig = normalizeLocalPiToolsSettings(
+			options.settings.localPiTools,
+		);
+		const localPiDiagnostics = bridgeConfig.diagnostic
+			? [bridgeConfig.diagnostic]
+			: [];
+		const localPiToolSearch =
+			bridgeConfig.settings?.enabled === true
+				? createToolSearchExtension()
+				: undefined;
+		if (localPiToolSearch) registry.install(localPiToolSearch);
+		const localPiBridge =
+			bridgeConfig.settings?.enabled === true
+				? new LocalPiToolBridge({
+						registry,
+						settings: bridgeConfig.settings,
+						globalAgentDir: options.globalAgentDir,
+						contextFor: (conversationId) =>
+							host.instance?.contexts.get(conversationId),
+						log: (line) => host.instance?.log(line),
+					})
+				: undefined;
 		// The one collection this host resolves and offers models from: pi-ai's
 		// built-ins with the user's global-pi `models.json` custom providers
 		// composed in (`configured-models.ts`), so the `/model` picker, the Settings
@@ -1073,6 +1104,7 @@ export class DurableHost {
 		} catch (error) {
 			await harness.close(context);
 			try {
+				await localPiBridge?.closeAll();
 				await codemode?.close();
 			} catch {
 				/* preserve the opening failure */
@@ -1089,6 +1121,7 @@ export class DurableHost {
 			workflowTools.workflowTools,
 			orchestrator,
 			registry,
+			localPiBridge,
 		);
 		host.instance = instance;
 		harness.resume();
@@ -1097,6 +1130,7 @@ export class DurableHost {
 				/* reports are diagnostic and cannot affect the harness */
 			});
 		for (const diagnostic of modelDiagnostics) instance.log(diagnostic);
+		for (const diagnostic of localPiDiagnostics) instance.log(diagnostic);
 		return instance;
 	}
 
@@ -1181,7 +1215,10 @@ export class DurableHost {
 		}
 		const readOnly = input.toolPolicy === "read-only";
 		const debugRun = envVars.HERDR_ROLE === "debug";
-		const toolSelection = this.toolSelectionFor(input.toolPolicy, debugRun);
+		const initialToolSelection = this.toolSelectionFor(
+			input.toolPolicy,
+			debugRun,
+		);
 		// Whether this run is the one the conversation was made for, which is what
 		// separates a `created` session window from an `adopted` one.
 		let createdConversation = false;
@@ -1195,19 +1232,12 @@ export class DurableHost {
 							? { thinkingLevel: input.thinking as never }
 							: {}),
 						cwd: input.cwd,
-						...(toolSelection ? { tools: toolSelection } : {}),
+						...(initialToolSelection ? { tools: initialToolSelection } : {}),
 					},
 				},
 				context,
 			);
 			createdConversation = true;
-		} else if (toolSelection) {
-			await conversation.configure(
-				{ tools: toolSelection, cwd: input.cwd },
-				context,
-			);
-		} else {
-			await conversation.configure({ cwd: input.cwd }, context);
 		}
 		// Commit just this role and run's keyed associations before returning the
 		// handle. Historical ownership stays addressable without a growing map.
@@ -1222,6 +1252,7 @@ export class DurableHost {
 		}, context);
 		const runContext: DurableRunContext = {
 			runId: input.runId,
+			toolPolicy: input.toolPolicy,
 			cwd: input.cwd,
 			env: envVars,
 			lastDeveloperMessage: () =>
@@ -1230,6 +1261,22 @@ export class DurableHost {
 		};
 		this.contexts.set(conversation.id, runContext);
 		this.runContexts.set(input.runId, runContext);
+		try {
+			await this.localPiBridge?.ensureConversation(conversation.id, input.cwd);
+		} catch {
+			this.log("local Pi bridge session initialization failed");
+		}
+		const toolSelection = this.toolSelectionFor(
+			input.toolPolicy,
+			debugRun,
+			conversation.id,
+		);
+		if (toolSelection)
+			await conversation.configure(
+				{ tools: toolSelection, cwd: input.cwd },
+				context,
+			);
+		else await conversation.configure({ cwd: input.cwd }, context);
 		const model =
 			(await this.conversationModelRef(conversation)) ?? input.model;
 		this.runs.set(input.runId, {
@@ -1516,39 +1563,73 @@ export class DurableHost {
 	/** The explicit tool list for a policy, or undefined for the full default
 	 * selection. A policy the host's mode cannot serve is refused, so a workflow
 	 * run never lands on an orchestrator host or the other way around. */
-	private toolSelectionFor(policy: ToolPolicy, debugRun = false) {
+	private toolSelectionFor(
+		policy: ToolPolicy,
+		debugRun = false,
+		conversationId?: ConversationId,
+	) {
+		const imported = conversationId
+			? (this.localPiBridge?.toolsForPolicy(conversationId, policy) ?? [])
+			: [];
+		const withImported = (
+			base: readonly ToolRegistration[],
+		): readonly ToolRegistration[] => [...base, ...imported];
+		const withToolSearch = (
+			base: readonly ToolRegistration[],
+		): readonly ToolRegistration[] => {
+			if (!this.localPiBridge) return base;
+			const searchTool = this.registry
+				.snapshot()
+				.tools()
+				.find(({ tool }) => tool.name === TOOL_SEARCH_TOOL_NAME)?.tool;
+			return searchTool ? [...base, searchTool] : base;
+		};
+		const allNativeTools = () =>
+			this.registry
+				.snapshot()
+				.tools()
+				.filter(({ tool }) => !this.localPiBridge?.isBridgeToolName(tool.name))
+				.map(({ tool }) => tool);
 		if (this.orchestratorExtension) {
 			if (policy !== "orchestrator")
 				throw new Error("this host only serves the orchestrator session");
 			// The orchestrator decides for itself whether a request is a direct edit
 			// or a workflow: it gets the full coding tools (read/write/edit/bash)
 			// alongside workflow management and operational tools, not a read-only subset.
-			return [
-				...codingTools(false),
-				...(this.orchestratorExtension.tools ?? []),
-				...this.workflowTools,
-			];
+			return withImported(
+				withToolSearch([
+					...codingTools(false),
+					...(this.orchestratorExtension.tools ?? []),
+					...this.workflowTools,
+				]),
+			);
 		}
 		if (this.options.session) {
 			if (policy !== "default")
 				throw new Error("this host only serves the coding session");
 			// The session's default selection is exactly the coding tools plus the
 			// search extension, prompt context and any configured codemode: the
-			// host installed nothing else.
-			return undefined;
+			// host installed nothing else. When the bridge is enabled, name that
+			// native set explicitly so another conversation's imported tools cannot
+			// leak through the registry-wide default.
+			return this.localPiBridge ? withImported(allNativeTools()) : undefined;
 		}
 		if (policy === "orchestrator")
 			throw new Error("the orchestrator policy needs an orchestrator host");
-		if (policy === "read-only") return this.readOnlyToolSelection(debugRun);
+		if (policy === "read-only")
+			return withImported(withToolSearch(this.readOnlyToolSelection(debugRun)));
 		// A debug run's tool list is explicit for one reason: the default
 		// selection would offer the delegated debug request tools, and a debug
 		// run must not delegate another request.
-		if (!debugRun) return undefined;
-		return [
-			...codingTools(false),
-			...withoutDebugRequestTools(this.workflowTools),
-			...(this.codemodeTool ? [this.codemodeTool] : []),
-		];
+		if (!debugRun)
+			return this.localPiBridge ? withImported(allNativeTools()) : undefined;
+		return withImported(
+			withToolSearch([
+				...codingTools(false),
+				...withoutDebugRequestTools(this.workflowTools),
+				...(this.codemodeTool ? [this.codemodeTool] : []),
+			]),
+		);
 	}
 
 	private readOnlyToolSelection(debugRun = false) {
@@ -3240,6 +3321,7 @@ export class DurableHost {
 
 		let shutdownError: unknown;
 		try {
+			await this.localPiBridge?.closeAll();
 			await this.harness.close(BACKGROUND_CONTEXT);
 		} catch (error) {
 			shutdownError = error;

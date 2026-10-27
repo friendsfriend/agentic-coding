@@ -103,6 +103,7 @@ const lookup: RunContextLookup = () => ({
 	runId: "run-1",
 	cwd: "/tmp",
 	env: RUN_ENV,
+	toolPolicy: "default",
 });
 
 async function invoke(
@@ -294,6 +295,7 @@ describe("evidence tools", () => {
 		runId: "run-1",
 		cwd: "/tmp/evidence-run",
 		env: EVIDENCE_ENV,
+		toolPolicy: "default",
 	});
 
 	async function callEvidence(
@@ -627,6 +629,7 @@ describe("env_start waits for a held app", () => {
 			runId: "run-1",
 			cwd: "/tmp",
 			env: { HERDR_WORKFLOW_ID: "wf-alpha" },
+			toolPolicy: "default",
 		}));
 		const result = await toolOf(extension, "env_start").execute(
 			{ apps: ["shop"] },

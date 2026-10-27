@@ -105,6 +105,7 @@ const lookup: RunContextLookup = () => ({
 	runId: "run-1",
 	cwd: "/tmp",
 	env: RUN_ENV,
+	toolPolicy: "default",
 });
 
 async function invoke(
@@ -395,6 +396,7 @@ describe("browser tool surface", () => {
 			runId: "run-1",
 			cwd: "/tmp",
 			env: {},
+			toolPolicy: "default",
 		}));
 		const result = await toolOf(extension, "browser_snapshot").execute(
 			{},

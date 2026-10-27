@@ -7,6 +7,15 @@
 
 import type { CompactionConfig } from "../workflow/compaction.ts";
 
+export interface LocalPiToolsSettings {
+	readonly enabled: boolean;
+	readonly restrictedAllow: {
+		readonly readOnly: readonly string[];
+		readonly orchestrator: readonly string[];
+	};
+	readonly replaySafe: readonly string[];
+}
+
 export interface AgentHostSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -21,6 +30,9 @@ export interface AgentHostSettings {
 	 * turn (pi-durable `Settings.steeringMode`/`followUpMode`). */
 	steeringMode?: "one-at-a-time" | "all";
 	followUpMode?: "one-at-a-time" | "all";
+	/** Opt-in adapter for the user's global Pi extensions and MCP tools.
+	 * Normalized and fail-closed by the host; never inferred from project config. */
+	localPiTools?: unknown;
 }
 
 /** The subset of the global pi `settings.json` shape this module reads. Pi's
@@ -34,6 +46,59 @@ export interface GlobalPiSettings {
 
 function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Validate the machine-local bridge policy without retaining malformed values. */
+export function normalizeLocalPiToolsSettings(value: unknown): {
+	readonly settings?: LocalPiToolsSettings;
+	readonly diagnostic?: string;
+} {
+	if (value === undefined) return {};
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return { diagnostic: "local Pi tool bridge configuration is invalid" };
+	const record = value as Record<string, unknown>;
+	if (record.enabled !== undefined && typeof record.enabled !== "boolean")
+		return { diagnostic: "local Pi tool bridge configuration is invalid" };
+	const enabled = record.enabled === true;
+	const allowRecord =
+		record.restrictedAllow === undefined
+			? {}
+			: record.restrictedAllow &&
+					typeof record.restrictedAllow === "object" &&
+					!Array.isArray(record.restrictedAllow)
+				? (record.restrictedAllow as Record<string, unknown>)
+				: undefined;
+	if (!allowRecord)
+		return { diagnostic: "local Pi tool bridge configuration is invalid" };
+	const readOnly = boundedNameList(allowRecord.readOnly);
+	const orchestrator = boundedNameList(allowRecord.orchestrator);
+	const replaySafe = boundedNameList(record.replaySafe);
+	if (!readOnly || !orchestrator || !replaySafe)
+		return { diagnostic: "local Pi tool bridge configuration is invalid" };
+	return {
+		settings: {
+			enabled,
+			restrictedAllow: { readOnly, orchestrator },
+			replaySafe,
+		},
+	};
+}
+
+function boundedNameList(value: unknown): readonly string[] | undefined {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > 256) return undefined;
+	const names: string[] = [];
+	for (const item of value) {
+		if (
+			typeof item !== "string" ||
+			item.trim().length === 0 ||
+			item.length > 128 ||
+			/[\r\n\0]/.test(item)
+		)
+			return undefined;
+		if (!names.includes(item)) names.push(item);
+	}
+	return names;
 }
 
 /** Seed `agentHost` once from the matching keys of the global pi settings

@@ -224,7 +224,12 @@ const textOf = (blocks: readonly ContentBlock[]): string =>
 		.join("");
 
 function lookup(env: Record<string, string>): RunContextLookup {
-	return () => ({ runId: "run-1", cwd: "/tmp", env });
+	return () => ({
+		runId: "run-1",
+		cwd: "/tmp",
+		env,
+		toolPolicy: "default",
+	});
 }
 
 describe("stage_info", () => {
