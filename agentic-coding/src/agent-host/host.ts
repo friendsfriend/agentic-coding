@@ -34,15 +34,18 @@ import {
 	type CompactionCeiling,
 	type CompactionConfig,
 	type CompactionPolicy,
+	compactionConfigForModel,
 	evaluateCompactionCeiling,
 	resolveCompactionCeiling,
 	resolveCompactionPolicy,
+	resolveModelCompactionPolicies,
 	STAGE_TESTER_COMPACTION_CEILING_TOKENS,
 } from "../workflow/compaction.ts";
 import { parseRunEnvFile } from "../workflow/run-env.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
+import { compactionSerializationExtension } from "./compaction-serialization.ts";
 import { configuredProviderIds, durableModels } from "./configured-models.ts";
 import { createDebugExtension } from "./debug-tools.ts";
 import {
@@ -895,6 +898,17 @@ export class DurableHost {
 		fs.mkdirSync(options.layout.runEnvDir, { recursive: true, mode: 0o700 });
 		const registry = createRegistry();
 		const host: { instance?: DurableHost } = {};
+		registry.install(
+			compactionSerializationExtension(
+				() => {
+					if (!host.instance) throw new Error("host is not initialized");
+					return host.instance.harness;
+				},
+				(delta) => {
+					if (host.instance) host.instance.compactionWaiters += delta;
+				},
+			),
+		);
 		const pendingReports: HarnessFailureReport[] = [];
 		const onReport = (error: unknown, info: ReportInfo) => {
 			try {
@@ -1002,9 +1016,16 @@ export class DurableHost {
 			options.storage ??
 			(await openNodeSqliteStorage(options.layout.storagePath));
 		const context: Context = BACKGROUND_CONTEXT;
-		const fallbackCompaction = resolveCompactionPolicy(
-			options.compaction?.() ?? options.settings.compaction ?? {},
-		);
+		const liveCompaction = () => {
+			const windows: Record<string, number | undefined> = {};
+			for (const provider of models.getProviders())
+				for (const model of models.getModels(provider.id))
+					windows[`${model.provider}/${model.id}`] = model.contextWindow;
+			return resolveModelCompactionPolicies(
+				options.compaction?.() ?? options.settings.compaction ?? {},
+				windows,
+			);
+		};
 		const harness = await Harness.open(
 			storage,
 			{
@@ -1016,10 +1037,10 @@ export class DurableHost {
 					// A getter, not a snapshot: `HarnessSettings` are "read at every
 					// resolution and never copied", so a saved configuration change reaches a
 					// *running* conversation without a host restart (design D4). The
-					// fallback keeps our documented defaults in place during `resume()`,
-					// before the run map exists.
+					// Catalog-derived exact entries also work during resume(), before
+					// the run map exists; no conversation supplies another's window.
 					get compaction() {
-						return host.instance?.compactionPolicy() ?? fallbackCompaction;
+						return liveCompaction();
 					},
 					...(options.settings.retry ? { retry: options.settings.retry } : {}),
 					...(options.settings.steeringMode
@@ -1058,7 +1079,6 @@ export class DurableHost {
 			}
 			throw error;
 		}
-		harness.resume();
 		const instance = new DurableHost(
 			harness,
 			options,
@@ -1071,12 +1091,19 @@ export class DurableHost {
 			registry,
 		);
 		host.instance = instance;
+		harness.resume();
 		for (const report of pendingReports)
 			void instance.observeHarnessReport(report).catch(() => {
 				/* reports are diagnostic and cannot affect the harness */
 			});
 		for (const diagnostic of modelDiagnostics) instance.log(diagnostic);
 		return instance;
+	}
+
+	private compactionWaiters = 0;
+
+	compactionWaitersForTest(): number {
+		return this.compactionWaiters;
 	}
 
 	private readonly ensuringRuns = new Map<
@@ -1578,12 +1605,17 @@ export class DurableHost {
 	 * window a percentage resolves against. Not part of the control protocol;
 	 * focused tests use these to confirm the live getter and the window
 	 * resolution (durable-agent-compaction). */
-	compactionPolicyForTest(): CompactionPolicy {
-		return this.compactionPolicy();
+	compactionPolicyForTest(model?: string): CompactionPolicy {
+		return model
+			? resolveCompactionPolicy(
+					compactionConfigForModel(this.compactionConfig(), model),
+					this.modelWindow(model),
+				)
+			: this.compactionPolicy();
 	}
 
-	referenceWindowForTest(): number | undefined {
-		return this.referenceWindow();
+	referenceWindowForTest(model?: string): number | undefined {
+		return model ? this.modelWindow(model) : undefined;
 	}
 
 	private requireConversation(runId: string): RunRecord {
@@ -1941,22 +1973,6 @@ export class DurableHost {
 		return window;
 	}
 
-	/** The smallest context window among the models the host's tracked runs use
-	 * (design D3). One harness-wide policy must stay safe for the smallest window
-	 * in play, so a percentage resolves against that one; `undefined` when no
-	 * tracked run names a model the catalog knows, which makes a percentage fall
-	 * back to its documented absolute default. */
-	private referenceWindow(): number | undefined {
-		let smallest: number | undefined;
-		for (const record of this.runs.values()) {
-			if (!record.model) continue;
-			const window = this.modelWindow(record.model);
-			if (window === undefined) continue;
-			if (smallest === undefined || window < smallest) smallest = window;
-		}
-		return smallest;
-	}
-
 	/** The effective compaction section, re-read at every resolution (design D4). */
 	private compactionConfig(): CompactionConfig {
 		return (
@@ -1964,23 +1980,22 @@ export class DurableHost {
 		);
 	}
 
-	/** The policy pi-durable receives, resolved at every read: the effective
-	 * configuration section against the current reference window. */
+	/** The no-model fallback. Native exact policies are built by the live getter. */
 	private compactionPolicy(): CompactionPolicy {
 		return resolveCompactionPolicy(
-			this.compactionConfig(),
-			this.referenceWindow(),
+			compactionConfigForModel(this.compactionConfig()),
 		);
 	}
 
 	/** The cost ceiling of one run: resolved against that run's own model window
-	 * (the window its conversation actually has), falling back to the smallest
-	 * window in play when its model is unknown. */
+	 * (the window its conversation actually has), using absolute defaults when
+	 * its model is unknown. Other conversations never supply a fallback window. */
 	private resolveRunCeiling(record: RunRecord): CompactionCeiling {
-		const window =
-			(record.model ? this.modelWindow(record.model) : undefined) ??
-			this.referenceWindow();
-		const config = this.compactionConfig();
+		const window = record.model ? this.modelWindow(record.model) : undefined;
+		const config = compactionConfigForModel(
+			this.compactionConfig(),
+			record.model,
+		);
 		if (record.role !== "stage-tester")
 			return resolveCompactionCeiling(config, window);
 		const resolved = resolveCompactionCeiling(config, window);
@@ -2244,6 +2259,15 @@ export class DurableHost {
 
 	/** The live compactions of one conversation, as `pi.live.compactions`
 	 * publishes them. */
+	async liveCompactionCountForTest(runId: string): Promise<number> {
+		const record = this.requireConversation(runId);
+		const conversation = await this.harness.conversation(
+			record.conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		return conversation ? (await this.liveCompactions(conversation)).length : 0;
+	}
+
 	private async liveCompactions(
 		conversation: Conversation,
 	): Promise<Array<{ taskId: string; reason: string }>> {
@@ -2664,8 +2688,7 @@ export class DurableHost {
 			},
 			BACKGROUND_CONTEXT,
 		);
-		// Track the model this run now uses, so a percentage threshold resolves
-		// against the smallest window actually in play (design D3).
+		// Track this run's actual model for its independent cost-ceiling policy.
 		const model =
 			change.model ??
 			(await this.conversationModelRef(conversation)) ??

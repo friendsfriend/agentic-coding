@@ -294,7 +294,7 @@ export function applyAgentsMutation(
  * `effective` is resolved with no reference window, which is the documented
  * behavior of a percentage when no run's model window is known: it falls back
  * to the field's absolute default. The host resolves the same section against
- * the smallest window its tracked runs use; the section names that rule rather
+ * each conversation's actual model window; the section names that rule rather
  * than inventing a window this process cannot see.
  */
 export function loadCompactionSettings(): CompactionSettingsRead {
@@ -322,7 +322,9 @@ export function loadCompactionSettings(): CompactionSettingsRead {
 		effective: resolveCompactionPolicy(effectiveSection),
 		ceiling: resolveCompactionCeiling(effectiveSection),
 		source,
-		validation: validateCompactionConfig(agentsCompaction ?? {}),
+		validation: validateCompactionConfig(
+			(source === "agentHost" ? agentHostCompaction : agentsCompaction) ?? {},
+		),
 		defaults: COMPACTION_DEFAULTS,
 	};
 }

@@ -122,7 +122,7 @@ describe("compaction section rows", () => {
 		// The reference window is per run, so the row states the rule.
 		expect(
 			items.find((item) => item.id === "compaction.reference-window")?.value,
-		).toContain("smallest model window");
+		).toContain("actual model window");
 	});
 
 	test("a configured value shows the effective one and its source", () => {
@@ -161,7 +161,7 @@ describe("compaction section rows", () => {
 		);
 		const row = items.find((item) => item.id === "compaction.keepRecentTokens");
 		expect(row?.value).toBe("15% → 20000 tokens without a known window");
-		expect(row?.detail).toContain("smallest context window");
+		expect(row?.detail).toContain("actual model window");
 	});
 
 	test("the agentHost override is named as the source, and a known window is shown", () => {

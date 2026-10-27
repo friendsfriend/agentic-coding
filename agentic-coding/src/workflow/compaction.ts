@@ -64,6 +64,8 @@ export type CompactionTokenValue = number | string;
 /** The `[agents.compaction]` section as it is written. Every key is optional;
  * an absent key falls back to the documented default. */
 export interface CompactionConfig {
+	/** Exact provider/modelId entries, merged field-wise over this section. */
+	modelOverrides?: Record<string, Omit<CompactionConfig, "modelOverrides">>;
 	enabled?: boolean;
 	reserveTokens?: CompactionTokenValue;
 	backgroundTokens?: CompactionTokenValue;
@@ -318,6 +320,38 @@ export function validateCompactionConfig(
 		const problem = validateCompactionField(field, raw);
 		if (problem) errors.push({ field, message: problem });
 	}
+	if (value.modelOverrides !== undefined) {
+		if (!isRecord(value.modelOverrides))
+			errors.push({
+				field: "enabled",
+				message: "modelOverrides must be a table",
+			});
+		else
+			for (const [identity, entry] of Object.entries(value.modelOverrides)) {
+				if (
+					!identity.includes("/") ||
+					identity.startsWith("/") ||
+					identity.endsWith("/")
+				)
+					errors.push({
+						field: "enabled",
+						message: `modelOverrides.${identity}: expected exact provider/modelId`,
+					});
+				if (isRecord(entry) && entry.modelOverrides !== undefined)
+					errors.push({
+						field: "enabled",
+						message: `modelOverrides.${identity}: nested overrides are not supported`,
+					});
+				const merged = isRecord(entry)
+					? { ...value, ...entry, modelOverrides: undefined }
+					: entry;
+				for (const error of validateCompactionConfig(merged))
+					errors.push({
+						...error,
+						message: `modelOverrides.${identity}: ${error.message}`,
+					});
+			}
+	}
 	const crossField = compactionKeepRecentBelowCeiling(value);
 	if (crossField)
 		errors.push({ field: "keepRecentTokens", message: crossField });
@@ -339,13 +373,39 @@ export function parseCompactionConfig(value: unknown): CompactionConfig {
 		if (compactionFieldFormProblem(field, raw) === undefined)
 			config[field] = raw as CompactionTokenValue;
 	}
+	if (isRecord(value.modelOverrides)) {
+		const entries: NonNullable<CompactionConfig["modelOverrides"]> = {};
+		for (const [identity, entry] of Object.entries(value.modelOverrides)) {
+			if (
+				identity.indexOf("/") <= 0 ||
+				identity.endsWith("/") ||
+				!isRecord(entry)
+			)
+				continue;
+			entries[identity] = parseCompactionConfig({
+				...entry,
+				modelOverrides: undefined,
+			});
+		}
+		if (Object.keys(entries).length > 0) config.modelOverrides = entries;
+	}
 	return config;
+}
+
+/** Exact entries never borrow the window or configuration of another run. */
+export function compactionConfigForModel(
+	config: CompactionConfig,
+	identity?: string,
+): CompactionConfig {
+	const { modelOverrides, ...global } = config;
+	return { ...global, ...(identity ? modelOverrides?.[identity] : undefined) };
 }
 
 /** Whether a section actually sets anything, so `source` can be reported. */
 export function compactionConfigIsEmpty(config: CompactionConfig): boolean {
 	return (
 		config.enabled === undefined &&
+		Object.keys(config.modelOverrides ?? {}).length === 0 &&
 		COMPACTION_TOKEN_FIELDS.every((field) => config[field] === undefined)
 	);
 }
@@ -531,6 +591,27 @@ export function resolveCompactionPolicy(
 			compactionCeilingKeptTailCap(ceiling.ceilingTokens),
 		);
 	return { enabled, reserveTokens, keepRecentTokens, backgroundTokens };
+}
+
+/** Native fallback plus exact policies. All windows are keyed by full identity. */
+export function resolveModelCompactionPolicies(
+	config: CompactionConfig,
+	windows: Readonly<Record<string, number | undefined>>,
+): CompactionPolicy & { modelOverrides: Record<string, CompactionPolicy> } {
+	const modelOverrides: Record<string, CompactionPolicy> = {};
+	for (const identity of new Set([
+		...Object.keys(windows),
+		...Object.keys(config.modelOverrides ?? {}),
+	])) {
+		modelOverrides[identity] = resolveCompactionPolicy(
+			compactionConfigForModel(config, identity),
+			windows[identity],
+		);
+	}
+	return {
+		...resolveCompactionPolicy(compactionConfigForModel(config)),
+		modelOverrides,
+	};
 }
 
 /** Why a ceiling compaction did not run: the reasons are reported, so a session

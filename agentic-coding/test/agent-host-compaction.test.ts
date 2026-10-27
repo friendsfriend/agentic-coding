@@ -138,7 +138,7 @@ describe("compaction policy of a durable host", () => {
 		}
 	});
 
-	test("the reference window is the smallest window among the tracked runs", async () => {
+	test("exact windows and policies remain independent across tracked runs and switches", async () => {
 		const dir = tempWorkflowDir();
 		const faux = fauxProvider({ models: MODELS });
 		const models = createModels();
@@ -154,7 +154,9 @@ describe("compaction policy of a durable host", () => {
 				toolPolicy: "default",
 				model: modelRef(faux, "wide"),
 			});
-			expect(host.referenceWindowForTest()).toBe(1_000_000);
+			expect(host.referenceWindowForTest(modelRef(faux, "wide"))).toBe(
+				1_000_000,
+			);
 
 			await host.ensureRun({
 				runId: "run-mid",
@@ -164,11 +166,25 @@ describe("compaction policy of a durable host", () => {
 				toolPolicy: "default",
 				model: modelRef(faux, "mid"),
 			});
-			expect(host.referenceWindowForTest()).toBe(200_000);
+			expect(host.referenceWindowForTest(modelRef(faux, "mid"))).toBe(200_000);
+			expect(
+				host.compactionPolicyForTest(modelRef(faux, "wide")).reserveTokens,
+			).toBe(300_000);
+			expect(
+				host.compactionPolicyForTest(modelRef(faux, "mid")).reserveTokens,
+			).toBe(60_000);
 
 			// A live `/model` override to a smaller window shrinks it again.
 			await host.configureRun("run-mid", { model: modelRef(faux, "narrow") });
-			expect(host.referenceWindowForTest()).toBe(100_000);
+			expect(host.referenceWindowForTest(modelRef(faux, "narrow"))).toBe(
+				100_000,
+			);
+			expect(
+				host.compactionPolicyForTest(modelRef(faux, "wide")).reserveTokens,
+			).toBe(300_000);
+			expect(host.compactionPolicyForTest("unknown/model").reserveTokens).toBe(
+				32000,
+			);
 
 			// And the percentage resolves against it.
 			const percentHost = await openHost({
@@ -218,9 +234,13 @@ describe("compaction policy of a durable host", () => {
 				toolPolicy: "default",
 				model: modelRef(faux, "wide"),
 			});
-			expect(host.referenceWindowForTest()).toBe(1_000_000);
+			expect(host.referenceWindowForTest(modelRef(faux, "wide"))).toBe(
+				1_000_000,
+			);
 			// 30% of the window: automatic compaction starts at 70% of it.
-			expect(host.compactionPolicyForTest().reserveTokens).toBe(300_000);
+			expect(
+				host.compactionPolicyForTest(modelRef(faux, "wide")).reserveTokens,
+			).toBe(300_000);
 
 			// A first, small turn, so the huge one has a verbatim tail to keep.
 			faux.setResponses([fauxAssistantMessage([fauxText("ok")])]);
@@ -256,6 +276,130 @@ describe("compaction policy of a durable host", () => {
 			await host.shutdown();
 		}
 	});
+});
+
+test("native overflow recovery uses exact model policy and retries once", async () => {
+	const dir = tempWorkflowDir();
+	const faux = fauxProvider({ models: MODELS });
+	const models = createModels();
+	models.setProvider(faux.provider);
+	const host = await openHost({
+		dir,
+		models,
+		compaction: () => ({
+			ceilingTokens: 0,
+			backgroundTokens: 0,
+			modelOverrides: {
+				[modelRef(faux, "narrow")]: { keepRecentTokens: 4096 },
+			},
+		}),
+	});
+	try {
+		await host.ensureRun({
+			runId: "overflow",
+			name: "overflow",
+			cwd: dir,
+			runEnvPath: writeRunEnv(dir, { HERDR_RUN_ID: "overflow" }),
+			toolPolicy: "default",
+			model: modelRef(faux, "narrow"),
+		});
+		faux.setResponses([
+			fauxAssistantMessage([fauxText("ok")]),
+			fauxAssistantMessage([fauxText("ok")]),
+		]);
+		await host.submit("overflow", "history ".repeat(15000), "seed");
+		await waitForIdle(host, "overflow");
+		await host.submit("overflow", "tail", "tail");
+		await waitForIdle(host, "overflow");
+		faux.appendResponses([
+			{
+				...fauxAssistantMessage([]),
+				stopReason: "error",
+				errorMessage: "maximum context length exceeded",
+			},
+			fauxAssistantMessage([fauxText("summary")]),
+			fauxAssistantMessage([fauxText("answer")]),
+		]);
+		await host.submit("overflow", "continue", "overflow");
+		await waitForIdle(host, "overflow");
+		const summaries = (await host.entriesForTest("overflow")).filter(
+			(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+		);
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0]).toMatchObject({ data: { reason: "overflow" } });
+	} finally {
+		await host.shutdown();
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("native policies isolate concurrent windows, live edits and a model switch", async () => {
+	const dir = tempWorkflowDir();
+	const faux = fauxProvider({ models: MODELS });
+	const models = createModels();
+	models.setProvider(faux.provider);
+	let config: CompactionConfig = {
+		enabled: false,
+		ceilingTokens: 0,
+		backgroundTokens: 0,
+	};
+	const host = await openHost({ dir, models, compaction: () => config });
+	try {
+		for (const id of ["narrow", "wide"]) {
+			await host.ensureRun({
+				runId: id,
+				name: id,
+				cwd: dir,
+				runEnvPath: writeRunEnv(dir, { HERDR_RUN_ID: id }),
+				toolPolicy: "default",
+				model: modelRef(faux, id),
+			});
+			faux.appendResponses([
+				fauxAssistantMessage([fauxText("ok")]),
+				fauxAssistantMessage([fauxText("ok")]),
+			]);
+			await host.submit(id, "old history ".repeat(30000), `seed-${id}`);
+			await waitForIdle(host, id);
+			await host.submit(id, "tail", `tail-${id}`);
+			await waitForIdle(host, id);
+		}
+		config = { ...config, enabled: true };
+		faux.appendResponses(
+			Array.from({ length: 8 }, () =>
+				fauxAssistantMessage([fauxText("summary or answer")]),
+			),
+		);
+		await Promise.all([
+			host.submit("narrow", "next", "next-narrow"),
+			host.submit("wide", "next", "next-wide"),
+		]);
+		await Promise.all([waitForIdle(host, "narrow"), waitForIdle(host, "wide")]);
+		const summaries = async (id: string) =>
+			(await host.entriesForTest(id)).filter(
+				(entry) => (entry as { kind?: string }).kind === "pi.compaction",
+			).length;
+		expect(await summaries("narrow")).toBe(1);
+		expect(await summaries("wide")).toBe(0);
+		await host.configureRun("wide", { model: modelRef(faux, "narrow") });
+		await host.submit("wide", "after switch", "switched");
+		await waitForIdle(host, "wide");
+		expect(await summaries("wide")).toBe(1);
+		config = {
+			...config,
+			modelOverrides: {
+				[modelRef(faux, "narrow")]: { enabled: false, keepRecentTokens: "10%" },
+			},
+		};
+		expect(
+			host.compactionPolicyForTest(modelRef(faux, "narrow")),
+		).toMatchObject({ enabled: false, keepRecentTokens: 10000 });
+		expect(host.compactionPolicyForTest(modelRef(faux, "wide")).enabled).toBe(
+			true,
+		);
+	} finally {
+		await host.shutdown();
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 describe("manual compaction outcomes", () => {

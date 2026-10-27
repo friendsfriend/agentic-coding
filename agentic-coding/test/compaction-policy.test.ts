@@ -227,6 +227,22 @@ describe("compaction section validation and parsing", () => {
 });
 
 describe("compaction configuration layering", () => {
+	test("ordinary edits preserve exact overrides", () =>
+		withConfigRoot((root) => {
+			const file = path.join(root, "config.json");
+			const overrides = { "p/family/model": { reserveTokens: "40%" } };
+			writeJson(file, {
+				agents: { compaction: { modelOverrides: overrides } },
+			});
+			applyAgentsMutation({
+				kind: "set-compaction",
+				field: "backgroundTokens",
+				value: 0,
+			});
+			expect(loadCompactionSection(file).config.modelOverrides).toEqual(
+				overrides,
+			);
+		}));
 	test("the host reads the configured section and prefers the agentHost override", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "compaction-host-"));
 		try {

@@ -70,8 +70,8 @@ assets and restart the application to use the new definition for new starts.
   with the bounded numeric editor (`src/tui/settings/NumberEditor.tsx`): digits
   plus one trailing `%`, per-field bounds, an inline message when an entry is
   refused, Enter to save and Escape to cancel. The percentage form is resolved
-  per run by the host against the smallest context window among the models its
-  tracked runs use (an absolute default applies when no window is known), which
+  per conversation against its actual model's context window
+  (an absolute default applies when that window is unknown), which
   is why the section states that rule and the effective fallback rather than a
   single window.
 - **Providers and environments** are owned by the connected server. Settings
@@ -214,11 +214,32 @@ flight, without a host restart.
 Each window-relative token value (`reserveTokens`, `backgroundTokens`,
 `keepRecentTokens`) is either a whole number of tokens or a percentage of the
 model's context window (`"15%"`). An absolute value is used as written, and a
-percentage is resolved against the smallest context window among the models the
-host's tracked runs use, falling back to that field's absolute default when no
-window is known. The cost ceiling is absolute only: a percentage of a 1M window
+percentage is resolved against that conversation's actual model window, falling
+back to that field's absolute default when its window is unknown. Other runs
+never supply a fallback window. The cost ceiling is absolute only: a percentage of a 1M window
 would silently become a different control on a 128k model, and the ceiling exists
 to bound absolute spend.
+
+Handwritten `modelOverrides` tables are keyed by exact `provider/modelId`
+(including any further slashes in the model ID). After selecting the whole
+`agentHost.compaction` section over `agents.compaction` over defaults, each exact
+entry replaces global fields individually, then the existing resolver applies
+that model's window, floors and clamps. All five fields above are supported,
+including the absolute ceiling and enabled switch. Unknown exact identities
+still use their entry, but percentage fields use absolute fallback until a
+window is known. Settings edits preserve these entries; validation identifies
+invalid entry paths. There is no separate per-conversation threshold API.
+
+The host supplies live native exact policies rather than one smallest-window
+policy. It also serializes summarizer calls per conversation through a
+`beforeCompact` hook ordered by native task ID. Native tasks may be admitted
+concurrently and a later serialized summary can be redundant; stale-cut handling
+remains native. Waiting is for task completion/write admission, never summary
+placement, so generation does not wait on its own turn boundary. Failure,
+abort and shutdown release native waits, with no persisted host guard. Before
+upgrading an old host, drain any already-duplicated summarize checkpoints:
+those checkpoints bypass select hooks on resume. See the change's design for
+the audited ownership boundary; no migration or dependency patch is required.
 
 The reserve's default is the one that is *not* absolute, because it is the value
 that decides when automatic compaction fires: every model the presets run

@@ -613,7 +613,7 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 				source,
 				row.why,
 				percent !== undefined
-					? "the host resolves the percentage against the smallest context window its runs use"
+					? "the host resolves the percentage against each conversation's actual model window"
 					: "",
 				row.field === "ceilingTokens"
 					? `Enter edits (whole tokens, 0 to turn it off, or ${COMPACTION_CEILING_MINIMUM}–${COMPACTION_TOKEN_CEILING})`
@@ -631,7 +631,7 @@ function compactionItems(context: SettingsContext): SettingsItem[] {
 		value:
 			snapshot.referenceWindow !== undefined
 				? `${snapshot.referenceWindow} tokens`
-				: "per run: the smallest model window its host tracks",
+				: "per conversation: its actual model window",
 		detail:
 			"a percentage resolves against it; with no known window the field's documented default applies · absolute values are used as written",
 		editable: false,
