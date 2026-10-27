@@ -225,7 +225,9 @@ exported name and accepts the risk that an uncertain external side effect may be
 repeated.
 
 Orchestrator runs receive all compatible imported tools without an allow-list,
-subject to native exposure and collision rules. Read-only runs deny imported
+subject to native exposure and collision rules. When global Pi settings enable
+`codemode`, orchestrator runs also receive native codemode, including access to
+imported tools configured with `exposure: "codemode"`. Read-only runs deny imported
 tools unless their exact names are listed in `restrictedAllow.readOnly`. MCP annotations and extension
 descriptions do not grant permissions. Unsupported hooks, UI/session/model
 capabilities and dynamic tool registration fail closed with bounded diagnostics.

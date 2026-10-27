@@ -166,13 +166,13 @@ When `codemode` is registered, its system-prompt section SHALL state the calling
 - **THEN** the `codemode` section SHALL NOT list `edit` or `write`
 
 ### Requirement: Durable codemode uses the native extension within the run's policy
-The durable host SHALL use `createCodemodeExtension` from `@earendil-works/pi-durable/codemode` as its codemode execution implementation. The host SHALL register it only where the user's global Pi settings enable `codemode`, and SHALL keep it excluded from orchestrator sessions. Native discovery and nested execution SHALL be limited to tools actually offered to and authorized for the current run; direct tools SHALL remain available as before, and a read-only run SHALL NOT discover or execute `write` or `edit` through codemode. The host SHALL use the extension's durable nested-call APIs and SHALL NOT retain a parallel custom sandbox or nested-call executor. It SHALL preserve bounded script output, live progress, nested-call errors, cancellation, and safe sandbox shutdown. The implementation SHALL verify and document the upstream nested-call recovery/replay contract and `store`/`load` lifetime and commit semantics; persisted values SHALL at minimum remain isolated by durable conversation, and no legacy process-local map SHALL be described as crash-persistent.
+The durable host SHALL use `createCodemodeExtension` from `@earendil-works/pi-durable/codemode` as its codemode execution implementation. The host SHALL register it wherever the user's global Pi settings enable `codemode`, including orchestrator sessions. Native discovery and nested execution SHALL be limited to tools actually offered to and authorized for the current run; direct tools SHALL remain available as before, and a read-only run SHALL NOT discover or execute `write` or `edit` through codemode. The host SHALL use the extension's durable nested-call APIs and SHALL NOT retain a parallel custom sandbox or nested-call executor. It SHALL preserve bounded script output, live progress, nested-call errors, cancellation, and safe sandbox shutdown. The implementation SHALL verify and document the upstream nested-call recovery/replay contract and `store`/`load` lifetime and commit semantics; persisted values SHALL at minimum remain isolated by durable conversation, and no legacy process-local map SHALL be described as crash-persistent.
 
 #### Scenario: User-local enablement and host exclusions
 - **WHEN** a durable coding host starts with the user's global Pi settings enabling `codemode`
-- **THEN** supported non-orchestrator host modes SHALL register the native codemode extension
+- **THEN** supported host modes, including the orchestrator, SHALL register the native codemode extension
 - **AND** direct tools SHALL remain offered
-- **AND** an orchestrator session SHALL NOT register codemode
+- **AND** an orchestrator session SHALL offer codemode with access to its authorized callable tool set
 - **AND** when the user setting does not enable codemode the host SHALL NOT register it
 
 #### Scenario: Offered tool discovery is run-specific

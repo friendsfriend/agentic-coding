@@ -225,15 +225,18 @@ NOT be expressible in the start request.
 
 ### Requirement: Orchestrator tool surface
 
-The orchestrator session SHALL be offered exactly the `read` tool and the
-orchestrator workflow tools; shell, file writes and codemode SHALL be
-unavailable. The workflow tools SHALL call the unified server only with the
-orchestrator capability from the session's run environment.
+The orchestrator session SHALL be offered the coding tools, orchestrator
+workflow tools, and operational tools. It SHALL also receive native codemode
+when enabled in the user's global Pi settings, including access to compatible
+codemode-only imported tools when the local Pi bridge is enabled. The workflow
+tools SHALL call the unified server only with the orchestrator capability from
+the session's run environment.
 
-#### Scenario: Shell call is unavailable
+#### Scenario: Codemode is available to the orchestrator
 
-- **WHEN** the orchestrator model calls `bash`
-- **THEN** the call SHALL fail as unavailable without running a command
+- **WHEN** global Pi settings enable codemode for an orchestrator session
+- **THEN** the session SHALL offer native codemode
+- **AND** it SHALL allow nested execution of the session's authorized callable tools
 
 ### Requirement: Orchestrator event subscription tools
 

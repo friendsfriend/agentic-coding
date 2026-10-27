@@ -177,23 +177,13 @@ test("the shared sentences keep their exact text", () => {
 	);
 });
 
-test("codemode is registered from the run's own pi settings, never for the orchestrator", () => {
-	// The flag every mention of `codemode` is gated on: the run's global pi
-	// settings, and never the orchestrator, whose tool surface is exactly its
-	// own.
-	expect(resolveCodemodeRegistered(settingsDir(["+codemode"]), false)).toBe(
-		true,
-	);
-	expect(resolveCodemodeRegistered(settingsDir(["read"]), false)).toBe(false);
+test("codemode registration follows the run's own pi settings", () => {
+	expect(resolveCodemodeRegistered(settingsDir(["+codemode"]))).toBe(true);
+	expect(resolveCodemodeRegistered(settingsDir(["read"]))).toBe(false);
 	// No settings file at all is the default: no `codemode`, and never the
 	// developer's own `~/.pi` settings, which the host is always given a
 	// directory for.
-	expect(resolveCodemodeRegistered(tempDir("tool-surface-bare-"), false)).toBe(
-		false,
-	);
-	expect(resolveCodemodeRegistered(settingsDir(["+codemode"]), true)).toBe(
-		false,
-	);
+	expect(resolveCodemodeRegistered(tempDir("tool-surface-bare-"))).toBe(false);
 });
 
 test("the host offers descriptions for exactly the tools a run has", async () => {
@@ -229,8 +219,7 @@ test("the orchestrator host is told about the tools it has, and no others", asyn
 	const models = createModels();
 	const faux = fauxProvider();
 	models.setProvider(faux.provider);
-	// `codemode` is in the settings, and the orchestrator host still must not
-	// mention it: codemode is not part of the orchestrator surface.
+	// The orchestrator receives native codemode when global Pi settings enable it.
 	const dir = settingsDir(["+codemode"]);
 	const host = await DurableHost.open({
 		layout: hostLayout(dir),
@@ -246,9 +235,9 @@ test("the orchestrator host is told about the tools it has, and no others", asyn
 			const text = descriptions[name] ?? "";
 			expect(text).toContain(INSPECTION_SPLIT);
 			expect(text).toContain("grep");
-			expect(text).not.toContain("codemode");
+			expect(text).toContain(CODEMODE_PIPELINE);
 		}
-		expect(descriptions.codemode).toBeUndefined();
+		expect(descriptions.codemode).toBeDefined();
 	} finally {
 		await host.shutdown();
 	}

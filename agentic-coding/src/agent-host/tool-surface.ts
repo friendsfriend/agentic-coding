@@ -71,15 +71,12 @@ export const ASSIGNMENT_TOOL_SURFACE = [
 	`${[INSPECTION_SPLIT, CODEMODE_ASSIGNMENT_CLAUSE, BATCHING_RULE].join(". ")}.`,
 ].join("\n");
 
-/** Whether this host's runs have `codemode`: never the orchestrator (its tool
- * surface is exactly its own), otherwise only when the run's global pi settings
- * register it. Resolved once, before any tool is installed, so the registration
- * and every description agree. */
+/** Whether this host's runs have `codemode`, including the orchestrator:
+ * enabled by the user's global pi settings. Resolved once, before any tool
+ * is installed, so the registration and every description agree. */
 export function resolveCodemodeRegistered(
 	globalAgentDir: string | undefined,
-	orchestrator: boolean,
 ): boolean {
-	if (orchestrator) return false;
 	return globalPiTools(piSettingsPath(globalAgentDir)).some(
 		(tool) => tool.tool === "codemode",
 	);

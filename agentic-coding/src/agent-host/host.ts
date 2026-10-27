@@ -941,10 +941,7 @@ export class DurableHost {
 		// The same resolution decides whether `grep` is named: orchestrator mode
 		// installs the same bounded search extension as workflow runs.
 		const surface: ToolSurfaceOptions = {
-			codemodeRegistered: resolveCodemodeRegistered(
-				options.globalAgentDir,
-				options.orchestrator === true,
-			),
+			codemodeRegistered: resolveCodemodeRegistered(options.globalAgentDir),
 			searchRegistered: true,
 		};
 		const codemodeRegistered = surface.codemodeRegistered === true;
@@ -1601,6 +1598,7 @@ export class DurableHost {
 					...codingTools(false),
 					...(this.orchestratorExtension.tools ?? []),
 					...this.workflowTools,
+					...(this.codemodeTool ? [this.codemodeTool] : []),
 				]),
 			);
 		}

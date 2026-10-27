@@ -991,6 +991,63 @@ test("orchestrator runs discover and invoke user Pi tools without an allow-list"
 	}
 });
 
+test("orchestrator codemode invokes a codemode-only imported tool without an allow-list", async () => {
+	const dir = tempDir();
+	fs.writeFileSync(
+		path.join(dir, "settings.json"),
+		JSON.stringify({ defaultTools: ["+codemode"] }),
+	);
+	const extensionPath = writeExtension(
+		dir,
+		extensionSource(path.join(dir, "events.log")).replace(
+			'name: "bridge_echo",',
+			'name: "bridge_echo", exposure: "codemode",',
+		),
+	);
+	const name = piExtensionToolName(extensionPath, "bridge_echo");
+	const { host, faux } = await openHost(
+		dir,
+		{ readOnly: [], orchestrator: [] },
+		true,
+		true,
+	);
+	try {
+		await host.ensureRun({
+			runId: "orchestrator-codemode",
+			name: "orchestrator-codemode",
+			cwd: dir,
+			runEnvPath: writeRunEnv(dir),
+			toolPolicy: "orchestrator",
+			model: `${faux.getModel().provider}/${faux.getModel().id}`,
+		});
+		faux.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall(CODEMODE_TOOL_NAME, {
+						code: `return await tools.${name}({ value: "orchestrator-native-codemode" });`,
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage([fauxText("done")]),
+		]);
+		await host.submit(
+			"orchestrator-codemode",
+			"call the codemode-only tool",
+			"orchestrator-codemode-request",
+		);
+		await settle(host, "orchestrator-codemode");
+		expect(
+			toolResult(
+				await host.entriesForTest("orchestrator-codemode"),
+				CODEMODE_TOOL_NAME,
+			),
+		).toContain("orchestrator-native-codemode");
+	} finally {
+		await host.shutdown();
+	}
+});
+
 test("an existing native tool wins over a colliding imported tool", async () => {
 	const dir = tempDir();
 	const events = path.join(dir, "events.log");
