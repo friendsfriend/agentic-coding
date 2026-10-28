@@ -769,8 +769,34 @@ export interface WorkflowSnapshot {
  * what it retired. `expiredEffects`, `retiredRuns` and `count` are absent in a
  * snapshot written before they were recorded, so they are read as “not
  * recorded” rather than as an empty repair. Both id lists hold at most 32 ids. */
+export interface WorkflowRecoveryPreview {
+	workflowId: string;
+	revision: number;
+	previewId: string;
+	eligible: boolean;
+	refusals: string[];
+	operation: "retry-current" | "structural-repair";
+	targetStep: string;
+	affectedRuns: string[];
+	affectedEffects: string[];
+	retainedEvidence: string[];
+	counts: { runs: number; effects: number; evidence: number };
+	truncated: boolean;
+	consequences: string[];
+	requiredInputs: readonly string[];
+}
+
 export interface WorkflowRepairRecord {
 	reason: string;
+	/** Optional for legacy repairs. Scoped to one replacement step attempt. */
+	recovery?: {
+		principal: WorkflowPrincipal;
+		instruction: string;
+		attempt: number;
+		revision: number;
+		previewId: string;
+		operation: "retry-current" | "structural-repair";
+	};
 	fromStep: string;
 	at: string;
 	expiredEffects?: readonly string[];
@@ -1032,6 +1058,7 @@ export interface WorkflowView {
 	/** The last operator repair: why, from where, and what it retired. Read next
 	 * to the run list, where a blocked handoff is read. */
 	repaired?: WorkflowRepairRecord;
+	recovery?: WorkflowRecoveryPreview;
 	/** The developer wait the workflow is in right now, when it is in one. A
 	 * projection of the state that already blocks the workflow — a pending
 	 * developer question, a blocked run, a developer step — never stored state, so
@@ -1177,6 +1204,12 @@ export type WorkflowCommand =
 			revision: number;
 			targetStep: string;
 			reason: string;
+			principal?: WorkflowPrincipal;
+			recovery?: {
+				previewId: string;
+				operation: "retry-current" | "structural-repair";
+				instruction: string;
+			};
 	  }
 	| { type: "operator.repin"; workflowId: string; revision: number }
 	| { type: "operator.resume"; workflowId: string; revision: number };
@@ -1430,11 +1463,46 @@ const effectResultSchema = Schema.Struct({
 	 * Optional so existing callers keep decoding unchanged. */
 	durationMs: Schema.optional(integer()),
 });
+export const recoveryInputSchema = Schema.Struct({
+	previewId: text(128),
+	operation: Schema.Literals(["retry-current", "structural-repair"]),
+	instruction: text(8000),
+});
+export const recoveryPreviewSchema = Schema.Struct({
+	workflowId: Schema.String,
+	revision: integer(),
+	previewId: Schema.String,
+	eligible: Schema.Boolean,
+	refusals: Schema.Array(Schema.String),
+	operation: Schema.Literals(["retry-current", "structural-repair"]),
+	targetStep: Schema.String,
+	affectedRuns: Schema.Array(Schema.String),
+	affectedEffects: Schema.Array(Schema.String),
+	retainedEvidence: Schema.Array(Schema.String),
+	counts: Schema.Struct({
+		runs: integer(),
+		effects: integer(),
+		evidence: integer(),
+	}),
+	truncated: Schema.Boolean,
+	consequences: Schema.Array(Schema.String),
+	requiredInputs: Schema.Array(Schema.String),
+});
+export const recoveryRecordSchema = Schema.Struct({
+	principal: Schema.Literals(["operator", "orchestrator"]),
+	instruction: text(8000),
+	attempt: integer(),
+	revision: integer(),
+	previewId: text(128),
+	operation: Schema.Literals(["retry-current", "structural-repair"]),
+});
 const operatorRepairSchema = Schema.Struct({
 	type: Schema.Literal("operator.repair"),
 	workflowId: text(4096),
 	revision: integer(),
 	targetStep: text(4096),
+	principal: Schema.optionalKey(Schema.Literals(["operator", "orchestrator"])),
+	recovery: Schema.optionalKey(recoveryInputSchema),
 	reason: boundedText(2048).pipe(
 		Schema.withDecodingDefaultKey(Effect.sync(() => "")),
 	),
@@ -2034,6 +2102,7 @@ const gateDecisionRecordResponseSchema = Schema.Struct({
 });
 
 const repairRecordResponseSchema = Schema.Struct({
+	recovery: Schema.optional(recoveryRecordSchema),
 	reason: boundedString(4096),
 	fromStep: Schema.String,
 	at: Schema.String,
@@ -2164,6 +2233,7 @@ export const workflowViewSchema = Schema.Struct({
 		Schema.Array(gateDecisionRecordResponseSchema),
 	),
 	repaired: Schema.optional(repairRecordResponseSchema),
+	recovery: Schema.optional(recoveryPreviewSchema),
 	waiting: Schema.optional(waitResponseSchema),
 	pendingQuestions: Schema.optional(Schema.Array(dialogueRecordResponseSchema)),
 	availableActions: Schema.Array(

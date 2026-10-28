@@ -27,6 +27,7 @@ import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
 } from "./support/git-fixture.ts";
+import { parkFixtureRuns } from "./support/workflow-recovery-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
@@ -462,11 +463,9 @@ describe("breaking workflow CLI surface", () => {
 			const staleRun = workflowEngine.getRun(repo, started.view.runs[0]?.id);
 			expect(staleRun.status).toBe("working");
 
-			// Operator repairs back into the same step/role while that agent is
-			// still mid-conversation: the old run is expired and a fresh `pending`
-			// run is created for the same (workflowId, stepId, role) in the same
-			// transaction, but its `agent.launch` effect has not been drained yet
-			// — the still-alive stale process was never re-prompted.
+			// Recovery requires the old worker to be terminal. A stale process can
+			// still hold its identity; it must not claim the replacement run.
+			parkFixtureRuns(workflowEngine, repo, started.view.workflowId);
 			const repaired = workflowEngine.dispatch(repo, {
 				type: "operator.repair",
 				workflowId: started.view.workflowId,
@@ -479,7 +478,7 @@ describe("breaking workflow CLI surface", () => {
 			);
 			expect(freshRun).toBeTruthy();
 			expect(freshRun?.id).not.toBe(staleRun.id);
-			expect(workflowEngine.getRun(repo, staleRun.id).status).toBe("expired");
+			expect(workflowEngine.getRun(repo, staleRun.id).status).toBe("blocked");
 
 			// The stale process (still holding its original, now-expired identity)
 			// must not be able to resolve — let alone hand off — the fresh,

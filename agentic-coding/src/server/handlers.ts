@@ -138,7 +138,7 @@ export interface ServerOperations {
 	/** Compile a blueprint without side effects: the summary and digest, or the
 	 * compiler's diagnostics. Never reads or writes a store. */
 	validateBlueprint(blueprint: unknown): BlueprintValidation;
-	repair(request: RepairRequest): WorkflowView;
+	repair(request: RepairRequest, options?: ActionOptions): WorkflowView;
 	question(request: QuestionRequest): WorkflowView;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
 	execute(request: ExecuteRequest): void;
@@ -237,13 +237,18 @@ export function startWorkflow(
 	});
 }
 
-export function repair(request: RepairRequest): WorkflowView {
+export function repair(
+	request: RepairRequest,
+	options: ActionOptions = {},
+): WorkflowView {
 	return repairWorkflow(
 		request.repo,
 		request.workflowId,
 		request.revision,
 		request.targetStep,
 		request.reason ?? "",
+		request.recovery,
+		options.principal,
 	);
 }
 

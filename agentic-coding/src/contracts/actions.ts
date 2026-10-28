@@ -1,6 +1,7 @@
 // Action wire contract: workflow action/start/repair/question requests, review
 // saves, and the managed-agent requests the CLI forwards. Pure schemas/types.
 import { Schema } from "effect";
+import { recoveryInputSchema } from "./workflow.ts";
 
 /** One entry of a required user action: an artifact to read, a workflow to
  * open, a review to answer, or an explicit dismissal. */
@@ -90,12 +91,20 @@ export const workflowBlueprintValidateRequestSchema = Schema.Struct({
 	blueprint: Schema.optionalKey(Schema.Unknown),
 });
 
+export const workflowRecoveryPreviewRequestSchema = Schema.Struct({
+	repo: Schema.String,
+	workflowId: Schema.String,
+	revision: Schema.Number,
+});
+export type WorkflowRecoveryPreviewRequest =
+	typeof workflowRecoveryPreviewRequestSchema.Type;
 export const workflowRepairRequestSchema = Schema.Struct({
 	repo: Schema.String,
 	workflowId: Schema.String,
 	revision: Schema.Number,
 	targetStep: Schema.String,
 	reason: Schema.optional(Schema.String),
+	recovery: Schema.optional(recoveryInputSchema),
 });
 
 export const workflowQuestionRequestSchema = Schema.Struct({

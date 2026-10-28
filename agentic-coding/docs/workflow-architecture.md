@@ -20,6 +20,50 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
+### Explicit current-step recovery
+
+The home orchestrator uses `workflow_status` → `workflow_recovery_preview` →
+`workflow_recover`, with the exact visible target, current revision and inspected
+preview identity. The authenticated server permits recovery only for workflows
+whose durable `startedBy` is `orchestrator`; visibility alone is not authority.
+The server derives the principal, never trusting an actor in request JSON.
+
+`runtime/recovery.ts` projects eligibility/consequences from run, question, debug
+and outbox state. Its pure projection is shared by status and read-only preview;
+`operator.repair` recomputes it inside the existing dispatch transaction. Supported
+operations are a terminal blocked/failed current-attempt retry and current-agent
+missing/non-active-run-reference or absent-attempt re-entry. Other pin/schema/
+routing defects are not repaired. Live workers/debug runs, open debug requests,
+leased effects, pending questions/lifecycle work and completed current-attempt
+work refuse replacement. A racing claim changes the preview identity; dispatch
+and claim use the existing store transaction fence and stable outbox keys.
+
+**All cross-step repairs are refused**, including legacy direct operator calls.
+Non-agent human review/system steps cannot be re-entered by recovery. There is no
+new artifact-approval ledger: classifier gate decisions are not human approvals.
+Evidence, prior blocked/failed outcomes and arrival context/mode survive same-step
+retry, and later reviews remain normal graph transitions. Legacy empty operator
+reasons still decode but do not bypass these guards.
+
+A successful request atomically stores a bounded masked reason, corrective
+instruction, principal, preview/revision, replacement attempt and affected-record
+consequences. The real assignment assembler reads that record after restart,
+scoped only to the replacement step/attempt (all roles of that attempt), not a
+prompt to the old worker. Instructions preserve reference formatting, are
+credential-masked before persistence and are never silently truncated. Compact
+status contains eligibility and limitations, not the instruction. Normal execution
+is requested only after the accepted commit; stale/repeated requests create no
+second attempt. No separate task-record lifecycle is introduced.
+
+Use corrective instructions for operational clarification and agreed API/design
+references, with a 1–160 character reason and 1–8000 character instruction. The
+home orchestrator is not a completed workflow role addressable by `agent_ask`.
+Forward new scope, architecture, permission or ambiguous decisions to the human.
+On refusal surface the blocker; do not loop or use file/config/credential edits,
+manual storage surgery, force merges or destructive reset to evade the boundary.
+Question answer/forward, paused-only resume, explicit failed-effect retry and
+preset switching remain separate operations with their existing semantics.
+
 ### Agent runtime and workspace surface
 
 There is no multiplexer boundary: the terminal multiplexer integration

@@ -42,6 +42,7 @@ import {
 	autoRemoveRepoFixtures,
 	createTempRepoFixture,
 } from "./support/git-fixture.ts";
+import { enterFixtureStep } from "./support/workflow-recovery-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
@@ -213,17 +214,14 @@ function startWorkflow(
 			],
 		},
 	});
-	// Straight to delivery, with no agent run: repair to the developer review —
-	// the step whose approval leads to delivery — and approve it. A repair
-	// expires the earlier step's pending effects, so nothing else is claimable
-	// while these effects are drained.
-	const reviewed = engine.dispatch(repo, {
-		type: "operator.repair",
-		workflowId: started.view.workflowId,
-		revision: started.view.revision,
-		targetStep: "core.developer-review",
-		reason: "preflight test",
-	}).view;
+	// Seed a test-only review fixture, then use the real developer approval.
+	// Production recovery deliberately cannot jump to this gate.
+	const reviewed = enterFixtureStep(
+		engine,
+		repo,
+		started.view.workflowId,
+		"core.developer-review",
+	).view;
 	engine.dispatch(repo, {
 		type: "developer.action",
 		workflowId: reviewed.workflowId,

@@ -187,6 +187,7 @@ import {
 	debugInvestigation,
 	resolveDefinitionAt,
 } from "./runtime/definitions.ts";
+import { recoveryAssignmentInput } from "./runtime/recovery.ts";
 import { debugReportSummary } from "./runtime/reducers/debug-request.ts";
 import { ACTIVE_RUN } from "./runtime/store.ts";
 import {
@@ -5289,6 +5290,7 @@ function assignmentFor(
 			? []
 			: [`Step input: ${JSON.stringify(context)}`]),
 		...(dialogueInput ? [dialogueInput] : []),
+		...recoveryAssignmentInput(snapshot, run),
 		...snapshot.evidence
 			.slice(-8)
 			.map((item) => `${item.kind}: ${item.path} (${item.digest})`),

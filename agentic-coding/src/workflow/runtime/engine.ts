@@ -103,6 +103,7 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
+import { validateRecoverableSnapshot } from "./recovery.ts";
 import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
@@ -2053,7 +2054,10 @@ export class WorkflowEngine {
 				"semantic step pin changed; repin only restores an identical definition",
 			);
 		const runList = runs(db, snapshot.workflowId);
-		if (!repin) validateSnapshot(snapshot, definition, runList, this.registry);
+		if (command.type === "operator.repair")
+			validateRecoverableSnapshot(snapshot, definition, runList, this.registry);
+		else if (!repin)
+			validateSnapshot(snapshot, definition, runList, this.registry);
 		const statusBefore = snapshot.status;
 		const stepBefore = snapshot.currentStep;
 		// The wait the workflow is in *before* this command reduces, read from the

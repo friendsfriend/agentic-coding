@@ -24,8 +24,8 @@ import {
 	ORCHESTRATOR_QUESTION_TARGET,
 } from "./dialogue.ts";
 import type { RepairPreview } from "./engine-types.ts";
+import { inspectRecovery, validateRecoverableSnapshot } from "./recovery.ts";
 import {
-	ACTIVE_RUN,
 	actions,
 	boundedError,
 	type EffectRow,
@@ -247,7 +247,14 @@ export function viewFromRows(
 		const runList = rows.runs();
 		// The snapshot was decoded above: the schema check `validateSnapshot`
 		// performs by decoding it again is already made for these exact bytes.
-		validateDecodedSnapshot(snapshot, definition, runList, registry);
+		let structuralDiagnostic: string | undefined;
+		try {
+			validateDecodedSnapshot(snapshot, definition, runList, registry);
+		} catch (error) {
+			validateRecoverableSnapshot(snapshot, definition, runList, registry);
+			structuralDiagnostic = boundedError(error);
+		}
+		const recovery = inspectRecovery(db, snapshot, definition, registry);
 		const effectList = rows.effects();
 		const failedActions = effectList
 			.filter((effect) => effect.status === "failed")
@@ -378,7 +385,14 @@ export function viewFromRows(
 				...(effect.lastError ? { lastError: effect.lastError } : {}),
 			})),
 			observations: [],
-			health: { valid: true, attention: snapshot.attention },
+			health: structuralDiagnostic
+				? {
+						valid: false,
+						attention: snapshot.attention,
+						diagnostic: structuralDiagnostic,
+					}
+				: { valid: true, attention: snapshot.attention },
+			recovery,
 			developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
 			classifierDecisions: snapshot.classifierDecisions ?? [],
 			gateDecisions: snapshot.gateDecisions ?? [],
@@ -672,21 +686,17 @@ export function previewRepair(
 			snapshot.definition.version,
 			snapshot.definition.digest,
 		);
-		const activeRuns = runs(db, snapshot.workflowId).filter((run) =>
-			ACTIVE_RUN.has(run.status),
-		);
-		return definition.steps
-			.filter(
-				(stepId) =>
-					!definition.terminal.includes(stepId) &&
-					registry.stepForDefinition(definition, stepId).actor !== "system",
-			)
-			.map((stepId) => ({
-				targetStep: stepId,
-				label: registry.stepForDefinition(definition, stepId).label,
-				expiresRuns: activeRuns.map((run) => run.id),
-				retainedEvidence: snapshot.evidence.map((item) => item.digest),
-			}));
+		const recovery = inspectRecovery(db, snapshot, definition, registry);
+		return [
+			{
+				targetStep: snapshot.currentStep,
+				label: registry.stepForDefinition(definition, snapshot.currentStep)
+					.label,
+				expiresRuns: recovery.affectedRuns,
+				retainedEvidence: recovery.retainedEvidence,
+				recovery,
+			},
+		];
 	} finally {
 		db.close();
 	}

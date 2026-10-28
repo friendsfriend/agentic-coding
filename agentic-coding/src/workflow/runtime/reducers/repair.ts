@@ -3,9 +3,10 @@
 // runs, re-entering a step, clearing attention). Moved verbatim out of
 // runtime.ts's `reduce()` dispatch (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
-import type {
-	WorkflowCommand,
-	WorkflowSnapshot,
+import {
+	redactSecrets,
+	type WorkflowCommand,
+	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { boundedSummary } from "../../../contracts/workflow-events.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
@@ -13,11 +14,8 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import {
-	openDebugRequestsForWorkflow,
-	updateDebugRequest,
-} from "../debug-requests.ts";
 import { enterStep, expireRuns, freshStep } from "../kernel.ts";
+import { inspectRecovery, requireRecoveryText } from "../recovery.ts";
 import { nowIso, requireRevision, runs, validateStructure } from "../store.ts";
 
 /** The repair record's own bounds. The reason is free text a developer typed, so
@@ -94,6 +92,51 @@ export function repair(
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
+	if (command.targetStep !== snapshot.currentStep)
+		throw new WorkflowRuntimeError(
+			"invalid-repair",
+			"Cross-step repair is not supported; recovery cannot bypass human gates or artifact validity.",
+		);
+	const preview = inspectRecovery(db, snapshot, definition, registry);
+	if (!preview.eligible)
+		throw new WorkflowRuntimeError(
+			"invalid-repair",
+			preview.refusals.join(" "),
+		);
+	if (
+		command.principal === "orchestrator" &&
+		(snapshot.metadata.startedBy !== "orchestrator" || !command.recovery)
+	)
+		throw new WorkflowRuntimeError(
+			"invalid-repair",
+			"Orchestrator recovery requires an owned workflow and an inspected recovery request.",
+		);
+	if (command.recovery) {
+		if (
+			command.recovery.previewId !== preview.previewId ||
+			command.recovery.operation !== preview.operation
+		)
+			throw new WorkflowRuntimeError(
+				"invalid-repair",
+				"Recovery preview no longer matches; inspect again.",
+			);
+		requireRecoveryText(command.reason, 160, "reason");
+	}
+	// Keep structured references/newlines intact. Do not silently truncate an
+	// instruction (including one whose masking expands beyond the bound).
+	const instruction = command.recovery
+		? requireRecoveryText(
+				redactSecrets(
+					requireRecoveryText(
+						command.recovery.instruction,
+						8000,
+						"instruction",
+					),
+				),
+				8000,
+				"masked instruction",
+			)
+		: undefined;
 	if (
 		!definition.steps.includes(command.targetStep) ||
 		definition.terminal.includes(command.targetStep) ||
@@ -107,34 +150,14 @@ export function repair(
 	// What the repair is about to retire and expire, captured before it is
 	// applied, so the committed record names the repair's effect and not only its
 	// target (efficiency backlog item 11).
-	const retiredRuns = [...snapshot.step.activeRunIds];
+	const retiredRuns = preview.affectedRuns;
 	const openEffects = openEffectIds(db, snapshot.workflowId);
 	expireRuns(db, snapshot, now);
-	// A repair re-enters the step with a fresh attempt, so the retired run's open
-	// debug requests are closed in the same transaction: an open request whose
-	// lifecycle effect was expired could never advance again, and it would hold
-	// one of the workflow's two open slots forever.
-	for (const request of openDebugRequestsForWorkflow(db, snapshot.workflowId)) {
-		updateDebugRequest(db, request.id, {
-			status: "cancelled",
-			finishedAt: nowIso(now),
-		});
-		if (request.debugRunId) {
-			const retired = db
-				.query(
-					"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
-				)
-				.run(nowIso(now), request.debugRunId);
-			if (retired.changes > 0) retiredRuns.push(request.debugRunId);
-		}
-	}
-	// Keep the debug-request lifecycle effects: their stable idempotency keys are
-	// the durable entry contract for the delegated run's launch and for the
-	// report's delivery, exactly as this reducer already keeps the other
-	// non-run lifecycle effects above. Expiring them would strand a request the
-	// caller already collected.
+	// Inspection in this same transaction refused every live run, open debug
+	// request and lease. Retire only unclaimed work; never steal lifecycle work
+	// or rewrite a terminal blocked/failed outcome.
 	db.query(
-		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind NOT IN ('debug.request.run','debug.request.deliver')",
+		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry')",
 	).run(snapshot.workflowId);
 	const expiredEffects = expiredEffectIds(db, openEffects);
 	const count = repairCount(db, snapshot.workflowId);
@@ -146,7 +169,10 @@ export function repair(
 	snapshot.currentStep = command.targetStep;
 	snapshot.metadata.stepEnteredAt = nowIso(now);
 	snapshot.status = "active";
-	snapshot.step = freshStep(snapshot.step.attempt + 1);
+	const prior = snapshot.step;
+	snapshot.step = freshStep(prior.attempt + 1);
+	if (prior.context !== undefined) snapshot.step.context = prior.context;
+	if (prior.mode !== undefined) snapshot.step.mode = prior.mode;
 	snapshot.repaired = {
 		reason,
 		fromStep: source,
@@ -154,13 +180,35 @@ export function repair(
 		expiredEffects: boundedIds(expiredEffects),
 		retiredRuns: boundedIds(retiredRuns),
 		count,
+		...(command.recovery
+			? {
+					recovery: {
+						principal: command.principal ?? "operator",
+						instruction: instruction ?? "",
+						attempt: snapshot.step.attempt,
+						revision: command.revision,
+						previewId: preview.previewId,
+						operation: preview.operation,
+					},
+				}
+			: {}),
 	};
 	snapshot.attention = [];
 	enterStep(db, snapshot, definition, registry, now);
 	return {
 		type: "operator.repair",
-		actor: { kind: "operator" },
+		actor: {
+			kind: "operator",
+			...(command.principal === "orchestrator"
+				? { principal: "orchestrator" }
+				: {}),
+		},
 		data: {
+			...(snapshot.repaired.recovery
+				? { recovery: snapshot.repaired.recovery }
+				: {}),
+			counts: preview.counts,
+			consequences: preview.consequences,
 			source,
 			target: command.targetStep,
 			reason,

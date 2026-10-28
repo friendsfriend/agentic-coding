@@ -364,14 +364,16 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 					Effect.gen(function* () {
 						yield* Effect.sleep(25);
 						const snapshot = engine.getSnapshot(repo, "repair-during-effect");
-						engine.dispatch(repo, {
-							type: "operator.repair",
-							workflowId: "repair-during-effect",
-							revision: snapshot.revision,
-							targetStep: "core.implementation",
-							reason: "lease test",
-						});
-						repaired = true;
+						expect(() =>
+							engine.dispatch(repo, {
+								type: "operator.repair",
+								workflowId: "repair-during-effect",
+								revision: snapshot.revision,
+								targetStep: "core.implementation",
+								reason: "lease test",
+							}),
+						).toThrow(/still live|leased/);
+						repaired = false;
 						yield* Effect.sleep(50);
 						return { written: true };
 					}),
@@ -382,8 +384,8 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 			},
 		});
 		await repairRunner.drain(1, 5_000);
-		expect(repaired).toBe(true);
-		expect(cancelled).toBe(2);
+		expect(repaired).toBe(false);
+		expect(cancelled).toBe(1);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
