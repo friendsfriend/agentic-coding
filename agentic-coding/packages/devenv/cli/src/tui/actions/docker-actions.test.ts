@@ -62,6 +62,73 @@ function createStores(
 }
 
 describe("docker actions", () => {
+	for (const entry of ["start", "run"] as const) {
+		test(`manual ${entry} offers variants instead of starting the default`, async () => {
+			const app = {
+				ident: "document-service",
+				displayName: "Document Service",
+				rowKind: "app",
+			};
+			const { appStore, uiStore } = createStores(app);
+			const definitions = ["Mocked", "QA-Ivy"].map((label, index) => ({
+				id: `app/document-service/action/run/docker/${label}`,
+				type: "run",
+				runtime: "docker",
+				label,
+				default: index === 0,
+				availability: { available: true },
+				root: {},
+			}));
+			const starts: string[] = [];
+			const errors: string[] = [];
+			let shown = false;
+			let targets: Array<{ id: string }> = [];
+			Object.assign(appStore, { tableFilteredApps: () => [app] });
+			Object.assign(uiStore, { setActionTargetPickerLoading: () => {} });
+			uiStore.setShowActionTargetPicker = (next: boolean) => {
+				shown = next;
+			};
+			uiStore.setActionTargetPickerTargets = (next: unknown[]) => {
+				targets = next as Array<{ id: string }>;
+			};
+			const actions = createDockerActions(
+				appStore as unknown as DockerActionStore,
+				uiStore as unknown as DockerActionUiStore,
+				{
+					getActionDefinitions: async () => ({ actions: definitions }),
+					getAppSlots: async () => [],
+					startActionRun: async (id: string) => {
+						starts.push(id);
+					},
+				} as unknown as DockerActionClient,
+				(_title, message) => errors.push(message),
+			);
+			if (entry === "start") {
+				await actions.performDockerOperation(
+					"start",
+					app as unknown as Parameters<
+						typeof actions.performDockerOperation
+					>[1],
+				);
+			} else {
+				await actions.performAppAction("run");
+			}
+			expect(errors).toEqual([]);
+			expect(starts).toEqual([]);
+			expect(shown).toBe(true);
+			expect(targets.map((target) => target.id)).toEqual(
+				definitions.map((target) => target.id),
+			);
+			await actions.runSelectedTarget(
+				app as unknown as Parameters<typeof actions.runSelectedTarget>[0],
+				"run",
+				targets[1] as unknown as Parameters<
+					typeof actions.runSelectedTarget
+				>[2],
+			);
+			expect(starts).toEqual([definitions[1]!.id]);
+		});
+	}
 	test("an agent-held app refuses the run with one actionable toast", async () => {
 		const app = { ident: "web", displayName: "Web" };
 		const target = {

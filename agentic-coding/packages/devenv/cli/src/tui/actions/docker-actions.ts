@@ -117,18 +117,27 @@ export function createDockerActions(
 						(definition) =>
 							definition.type === "run" && definition.availability.available,
 					);
+					if (!targetId && !profile && definitions.length > 1) {
+						openActionTargetPicker(
+							app as App,
+							"run",
+							definitions.map(definitionTarget),
+						);
+						return;
+					}
 					// An explicitly named target or profile wins; otherwise the server's
 					// authoritative marking decides (a declaration in
 					// `apps/defaults/<app>.json` first, then the platform's runtime
 					// preference), so a promotion cannot leave the UI starting a run
 					// target the gate never validated (`fix-default-target-after-promotion`).
 					const choice = selectActionTarget(definitions, "run");
-					const selected =
-						definitions.find(
-							(definition) =>
-								definition.id === targetId ||
-								definition.id.endsWith(`/${profile || "default"}`),
-						) ?? (targetId || profile ? undefined : choice.target);
+					const selected = targetId
+						? definitions.find((definition) => definition.id === targetId)
+						: profile
+							? definitions.find((definition) =>
+									definition.id.endsWith(`/${profile}`),
+								)
+							: choice.target;
 					if (selected) {
 						appStore.pushModal("actions");
 						await client.startActionRun(selected.id);
@@ -540,6 +549,12 @@ export function createDockerActions(
 			const targets = definitions
 				.filter((definition) => definition.availability.available)
 				.map(definitionTarget);
+			// Manual runs must offer all available variants even when the server
+			// marks a default for unattended callers.
+			if (action === "run" && targets.length > 1) {
+				openActionTargetPicker(app, action, targets);
+				return;
+			}
 			// The server marks the authoritative default on these definitions (the
 			// same resolver the gate, the agent tools and the smoke check use). Run
 			// that one; when several families are live with nothing declared, refuse
