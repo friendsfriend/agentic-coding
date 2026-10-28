@@ -1064,6 +1064,104 @@ const connectionFrame = (runId: string, compacting = false) => ({
 	},
 });
 
+test("opening an agent renders a paused connecting page while recovery is pending", async () => {
+	const recovery = Promise.withResolvers<void>();
+	const recover = spyOn(
+		sessionRecovery,
+		"recoverWorkflowSession",
+	).mockImplementation(async (_target, _workflowId, runId) => {
+		await recovery.promise;
+		return { runId, hostSocket: demoSocket, conversationId: "render-test" };
+	});
+	const watch = spyOn(HostClient.prototype, "watch").mockImplementation(
+		async (runId, onFrame, options) => {
+			if (options?.view !== "docs") onFrame(connectionFrame(runId));
+			return () => {};
+		},
+	);
+	const catalog = spyOn(HostClient.prototype, "catalog").mockRejectedValue(
+		new Error("no catalog"),
+	);
+	const submit = spyOn(HostClient.prototype, "submit");
+	const t = await testRender(
+		() => (
+			<TestDashboard
+				testData={connectionDashboard()}
+				agentRunId="first"
+				agentRequestId="pending-recovery"
+			/>
+		),
+		{ width: 150, height: 45 },
+	);
+	try {
+		const connecting = await waitForText(t, (value) =>
+			value.includes("Connecting to the recorded session"),
+		);
+		expect(connecting).toContain("controls paused");
+		expect(connecting).not.toContain("stale");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submit).not.toHaveBeenCalled();
+		recovery.resolve();
+		await waitForText(
+			t,
+			(value) =>
+				value.includes("test/first") && !value.includes("controls paused"),
+		);
+	} finally {
+		recovery.resolve();
+		t.renderer.destroy();
+		recover.mockRestore();
+		watch.mockRestore();
+		catalog.mockRestore();
+		submit.mockRestore();
+	}
+});
+
+test("opening an agent route renders its recorded transcript and subsequent frames", async () => {
+	let publish: ((value: unknown) => void) | undefined;
+	const frame = (text: string) => ({
+		...connectionFrame("first"),
+		entries: [
+			{
+				id: "answer",
+				kind: "pi.assistant",
+				model: [{ role: "assistant", content: [{ type: "text", text }] }],
+			},
+		],
+	});
+	const watch = spyOn(HostClient.prototype, "watch").mockImplementation(
+		async (_runId, onFrame, options) => {
+			if (options?.view === "docs") return () => {};
+			publish = onFrame;
+			onFrame(frame("Recorded agent answer"));
+			return () => {};
+		},
+	);
+	const catalog = spyOn(HostClient.prototype, "catalog").mockRejectedValue(
+		new Error("no catalog"),
+	);
+	const t = await testRender(
+		() => (
+			<TestDashboard
+				testData={connectionDashboard()}
+				agentRunId="first"
+				agentRequestId="recorded-transcript"
+			/>
+		),
+		{ width: 150, height: 45 },
+	);
+	try {
+		await waitForText(t, (value) => value.includes("Recorded agent answer"));
+		publish?.(frame("Updated agent answer"));
+		await waitForText(t, (value) => value.includes("Updated agent answer"));
+	} finally {
+		t.renderer.destroy();
+		watch.mockRestore();
+		catalog.mockRestore();
+	}
+});
+
 test("initial connection is paused without claiming a stale transcript before its first frame", async () => {
 	const firstFrame = Promise.withResolvers<void>();
 	let waiting = false;

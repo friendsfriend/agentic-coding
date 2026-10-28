@@ -1110,6 +1110,11 @@ export function App(props: {
 			return endpoint;
 		};
 	};
+	// The role of the run being opened, shown with the connecting page before
+	// its handle is authenticated (controls stay unavailable until then).
+	const [agentSessionPendingRole, setAgentSessionPendingRole] = createSignal<
+		string | undefined
+	>();
 	const openAgentSession = (
 		session: {
 			role: string;
@@ -1138,6 +1143,7 @@ export function App(props: {
 		// Do not expose an unverified handle to submit/configure controls while
 		// asynchronous batch validation is pending.
 		setAgentSession(undefined);
+		setAgentSessionPendingRole(session.role);
 		setAgentSessionOpen(true);
 		props.keymap.setData("agent.view", "session");
 		void (async () => {
@@ -4233,10 +4239,15 @@ export function App(props: {
 								onFocusRequest={() => focusPanelFromPointer(EVIDENCE_PANEL)}
 							/>
 						</box>
-						<Show when={agentSessionOpen() && agentSession()}>
-							{(session) => (
+						<Show
+							when={
+								agentSessionOpen() &&
+								(agentSession()?.role ?? agentSessionPendingRole())
+							}
+						>
+							{(role) => (
 								<AgentSessionView
-									role={session().role}
+									role={role()}
 									blocks={agentSessionBlocks()}
 									{...agentSessionMetadata()}
 									{...(agentSessionMetadata().model
