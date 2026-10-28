@@ -1095,9 +1095,9 @@ test("opening an agent renders a paused connecting page while recovery is pendin
 	);
 	try {
 		const connecting = await waitForText(t, (value) =>
-			value.includes("Connecting to the recorded session"),
+			value.includes("Connecting…"),
 		);
-		expect(connecting).toContain("controls paused");
+		expect(connecting).not.toContain("controls paused");
 		expect(connecting).not.toContain("stale");
 		t.mockInput.pressEnter();
 		await t.renderOnce();
@@ -1197,10 +1197,9 @@ test("initial connection is paused without claiming a stale transcript before it
 	try {
 		const connecting = await waitForText(
 			t,
-			(frame) =>
-				waiting && frame.includes("Connecting to the recorded session"),
+			(frame) => waiting && frame.includes("Connecting…"),
 		);
-		expect(connecting).toContain("controls paused");
+		expect(connecting).not.toContain("controls paused");
 		expect(connecting).not.toContain("stale");
 		expect(connecting).not.toContain("Disconnected");
 		t.mockInput.pressEnter();

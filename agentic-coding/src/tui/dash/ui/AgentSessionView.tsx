@@ -2354,11 +2354,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							</Show>
 						</box>
 					</Show>
-					<Show when={controlsPaused()}>
+					<Show when={props.connection === "disconnected"}>
 						<text fg={uiColors.warning} flexShrink={0}>
-							{props.connection === "connecting"
-								? "Connecting to the recorded session; controls paused."
-								: "Disconnected — reconnecting. Transcript is stale; controls paused."}
+							Disconnected — reconnecting. Transcript is stale; controls paused.
 						</text>
 					</Show>
 					<Show when={props.runtimeFailure?.kind === "task_parked"}>

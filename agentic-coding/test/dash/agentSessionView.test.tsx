@@ -64,11 +64,14 @@ for (const connection of ["connecting", "disconnected"] as const) {
 			await t.renderOnce();
 			const frame = t.captureCharFrame();
 			expect(frame).toContain("keep draft");
-			expect(frame).toContain("controls paused");
 			if (connection === "connecting") {
-				expect(frame).toContain("Connecting to the recorded session");
+				expect(frame).not.toContain("Connecting to the recorded session");
+				expect(frame).not.toContain("controls paused");
 				expect(frame).not.toContain("stale");
-			} else expect(frame).toContain("Transcript is stale");
+			} else {
+				expect(frame).toContain("controls paused");
+				expect(frame).toContain("Transcript is stale");
+			}
 			for (const text of [
 				"/compact retain important context",
 				"/abort",
