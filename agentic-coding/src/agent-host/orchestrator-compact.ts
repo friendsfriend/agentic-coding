@@ -108,6 +108,28 @@ function availableActionIds(view: Record_): Record_[] {
 	}));
 }
 
+export function orchestratorRecoveryStatus(view: Record_): Record_ | undefined {
+	if (!view.recovery) return undefined;
+	const recovery = asRecord(view.recovery);
+	const owned = view.startedBy === "orchestrator";
+	return {
+		eligible: owned && recovery.eligible === true,
+		operation: recovery.operation,
+		targetStep: recovery.targetStep,
+		refusals: [
+			...(Array.isArray(recovery.refusals) ? recovery.refusals : []),
+			...(owned
+				? []
+				: [
+						"Only visible workflows started by the orchestrator are within recovery authority.",
+					]),
+		],
+		requiredInputs: recovery.requiredInputs,
+		limitations:
+			"Current agent step only; no live runs, leased effects, pending questions or human review decisions. Use workflow_recovery_preview before workflow_recover.",
+	};
+}
+
 /** The default `workflow_status` row: identity, where it is, what it waits
  * for, what the caller may do next, and the one run that is current — a few
  * hundred bytes instead of the whole view. */
@@ -134,6 +156,7 @@ export function compactWorkflowStatusView(
 			: {}),
 		pendingQuestions: pendingQuestionUnion(view),
 		availableActions: availableActionIds(view),
+		...(view.recovery ? { recovery: orchestratorRecoveryStatus(view) } : {}),
 		failedEffects: failedEffects(view),
 		...(currentRun
 			? {

@@ -12,6 +12,7 @@ import {
 	workflowDeleteRequestSchema,
 	workflowExecuteRequestSchema,
 	workflowQuestionRequestSchema,
+	workflowRecoveryPreviewRequestSchema,
 	workflowRepairRequestSchema,
 	workflowStartRequestSchema,
 } from "../contracts/actions.ts";
@@ -265,6 +266,12 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: "/api/v1/workflow/blueprint/validate",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/workflow/recovery-preview",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -600,6 +607,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/workflow/blueprint/validate",
 		schemaId: "server.workflow.blueprint.validate",
 		schema: workflowBlueprintValidateRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/recovery-preview",
+		schemaId: "server.workflow.recovery-preview",
+		schema: workflowRecoveryPreviewRequestSchema,
 	},
 	{
 		path: "/api/v1/workflow/repair",

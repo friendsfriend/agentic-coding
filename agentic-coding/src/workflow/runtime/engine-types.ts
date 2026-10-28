@@ -5,6 +5,7 @@
 import type {
 	JsonValue,
 	WorkflowEffect,
+	WorkflowRecoveryPreview,
 	WorkflowSnapshot,
 	WorkflowView,
 } from "../../contracts/workflow.ts";
@@ -42,6 +43,7 @@ export interface ClaimedEffect extends WorkflowEffect {
 	runToken?: string;
 }
 export interface RepairPreview {
+	recovery?: WorkflowRecoveryPreview;
 	targetStep: string;
 	label: string;
 	expiresRuns: string[];

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
 	StartedBy,
+	WorkflowCommand,
 	WorkflowPrincipal,
 	WorkflowView,
 } from "../../contracts/workflow.ts";
@@ -101,6 +102,8 @@ export function repairWorkflow(
 	revision: number,
 	targetStep: string,
 	reason = "",
+	recovery?: Extract<WorkflowCommand, { type: "operator.repair" }>["recovery"],
+	principal?: WorkflowPrincipal,
 ) {
 	const engine = workflowEngineFactory(dashboardApplication);
 	const view = engine.status(repo, workflowId);
@@ -112,6 +115,8 @@ export function repairWorkflow(
 		revision,
 		targetStep,
 		reason,
+		...(recovery ? { recovery } : {}),
+		...(principal ? { principal } : {}),
 	});
 	requestWorkflowExecution(repo, workflowId);
 	return result.view;

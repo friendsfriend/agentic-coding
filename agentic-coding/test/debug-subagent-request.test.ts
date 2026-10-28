@@ -981,7 +981,7 @@ test("delivery stands down when the caller run has ended", async () => {
 	}
 });
 
-test("a repair closes the retired run's open requests and keeps their lifecycle effects", async () => {
+test("a repair refuses an open debug request without stealing its lifecycle effects", async () => {
 	const root = createTempRepoFixture("debug-request-repair-", {
 		files: { "README.md": "test\n" },
 		excludeWorkflowState: true,
@@ -996,22 +996,24 @@ test("a repair closes the retired run's open requests and keeps their lifecycle 
 		goal: "reproduce the empty result",
 	});
 	const view = engine.status(root, workflowId);
-	engine.dispatch(root, {
-		type: "operator.repair",
-		workflowId,
-		revision: view.revision,
-		targetStep: "core.implementation",
-		reason: "retry the implementation round",
-	});
+	expect(() =>
+		engine.dispatch(root, {
+			type: "operator.repair",
+			workflowId,
+			revision: view.revision,
+			targetStep: "core.implementation",
+			reason: "retry the implementation round",
+		}),
+	).toThrow(/still live|still open/);
 	const request = requireDefined(
 		engine.debugRequest(root, created.request.id),
 		"repaired request",
 	);
-	// The request is closed in the same transaction, so it cannot hold one of the
-	// workflow's two open slots with no effect that could ever advance it.
-	expect(request.status).toBe("cancelled");
-	expect(request.finishedAt).toBeDefined();
-	expect(engine.getRun(root, created.runId).status).toBe("expired");
+	// Recovery never cancels a live debug investigation. Its normal collection
+	// and cancellation controls retain authority over this slot.
+	expect(request.status).toBe(created.request.status);
+	expect(request.finishedAt).toBeUndefined();
+	expect(engine.getRun(root, created.runId).status).toBe("pending");
 	// Its lifecycle effect survives the blanket expiry: the idempotency key is the
 	// durable entry contract for the delegated run's launch.
 	expect(

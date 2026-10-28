@@ -32,6 +32,7 @@ import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
 } from "./support/git-fixture.ts";
+import { parkFixtureRuns } from "./support/workflow-recovery-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
@@ -691,6 +692,7 @@ test("dashboard repair and actions use displayed revision", async () => {
 				diversity: [],
 			},
 		}).view;
+		parkFixtureRuns(new WorkflowEngine(registerBuiltins()), repo, "repair");
 		expect(
 			previewWorkflowRepair(repo, "repair").find(
 				(item) => item.targetStep === "core.implementation",
@@ -772,6 +774,11 @@ test("dashboard repair dispatches with an empty/omitted reason", () => {
 				diversity: [],
 			},
 		}).view;
+		parkFixtureRuns(
+			new WorkflowEngine(registerBuiltins()),
+			repo,
+			"repair-empty",
+		);
 		const repairedWithOmittedReason = repairWorkflow(
 			repo,
 			"repair-empty",
@@ -779,6 +786,11 @@ test("dashboard repair dispatches with an empty/omitted reason", () => {
 			"core.implementation",
 		);
 		expect(repairedWithOmittedReason.status).toBe("active");
+		parkFixtureRuns(
+			new WorkflowEngine(registerBuiltins()),
+			repo,
+			"repair-empty",
+		);
 		const repairedWithEmptyReason = repairWorkflow(
 			repo,
 			"repair-empty",

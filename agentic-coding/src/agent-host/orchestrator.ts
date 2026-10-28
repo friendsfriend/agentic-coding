@@ -27,6 +27,7 @@ import {
 	compactWorkflowStatusView,
 	invalidateBranchCache,
 	noteFullDetail,
+	orchestratorRecoveryStatus,
 	pendingQuestionUnion,
 	projectAgentConfig,
 	projectWorkflowList,
@@ -171,6 +172,7 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 				lastError: effect.lastError,
 			})),
 		gateDecisions: view.gateDecisions,
+		...(view.recovery ? { recovery: orchestratorRecoveryStatus(view) } : {}),
 	};
 }
 
@@ -446,6 +448,8 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - Developer questions from the workflows you started are routed to you first and appear in \`pendingQuestions\` in workflow_status (their record carries \`targetRole: "orchestrator"\`; there is no separate orchestrator list). Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
 - workflow_status answers a compact row by default; poll it with \`sinceRevision\` set to the revision of the last answer, so a poll of an unchanged workflow costs a few bytes. The task text, the full run history and the gate decisions are not in that row: ask for the task with \`includeTask: true\` and for everything with \`detail: "full"\`, only when you actually need it.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
+- To unblock a terminal worker with no pending question, read workflow_status, then workflow_recovery_preview with its revision and the exact visible target. For an eligible workflow you started, call workflow_recover once with the inspected previewId/operation/target, a 1–160 character reason and a 1–8000 character corrective instruction. Agreed API references and operational clarifications are appropriate; the instruction is masked, audited and delivered durably to the replacement worker, not queued for the terminal run. The home orchestrator is not a completed workflow role addressable by agent_ask.
+- Recovery is current-agent-step only, including supported missing-run structural re-entry. No cross-step jumps, human-review decisions, live worker/debug replacement, leased-effect theft or pending-question bypass. On refusal surface the blocker; do not loop. Forward new scope, architecture and permission decisions to the developer. Recovery never authorizes configuration/credential edits, deletion, manual storage surgery, force merges, destructive resets or native-file workarounds around server boundaries. The general target discovery rule above does not widen recovery: it requires an exact visible orchestrator-started target.
 - Workflow events: the monitor delivers subscribed events to you as notes whose first line is "[workflow-monitor] subs=<labels>" followed by one line per (workflow, step, change), "- <workflowId> → <stepId> (<what changed>)" — the same change repeated inside one note is one line with its count ("… ×12") instead of twelve lines. The subs= list names the subscriptions that asked for the note; if you have no subscription of your own it reads subs=default, the monitor's own default, which list_subscriptions shows. That default digests info progress on a short interval, but a blocked or failed run, an attention request, a waiting review, a pending question and a workflow completion still reach you promptly, so you need not subscribe just to hear about them. The notifications the developer needs (a review waiting, a pending developer question) always reach the shell whatever you subscribe to. Use subscribe_events to choose what wakes you (mode wake for immediate coalesced notes, digest for one note per interval, silent to record without delivering), list_subscriptions to see them, unsubscribe_events to remove one, and read_events to pull recorded events since a cursor when you would rather poll than be woken. A note that carries only info progress your subscription did not name is absorbed: it stays readable with read_events and does not wake you. Every subscription expires, so give it a label, a reason and an expiry or an until-condition. Completion and progress events (workflow.completed, step.*, run.completed) are severity info, so minSeverity "warning" excludes them: to be told when a workflow finishes, name the terminal events in eventIds (workflow.completed, workflow.failed, workflow.closed) or pass minSeverity "info".
 - OpenCode: use \`opencode_session\` to start a coding session in the shell's OpenCode page (always with an initial prompt) or to admit a follow-up prompt to an existing \`sessionId\`. It shares the default OpenCode background service and project with the page, returns the session id and the admitted user message, and does not wait for OpenCode's answer: the developer reads and drives that session in the OpenCode page, so tell them the id when one is created.
 - Report what you did and the resulting workflow status. Be concise.`;
@@ -1013,6 +1017,62 @@ export function createOrchestratorExtension(
 						// lists of every repository are dropped before the next poll.
 						invalidateBranchCache();
 						return `${typeof message === "string" ? message : JSON.stringify(message)}${echo}`;
+					},
+				),
+			}),
+			defineTool({
+				name: "workflow_recovery_preview",
+				description:
+					"Inspect bounded current-step recovery before changing anything. Pass the current workflow_status revision and exact visible target. Only workflows started by this orchestrator are within authority. Returns a revision/state-bound preview identity, supported operation/target, affected records, retained evidence, consequences and refusals. Never approves reviews or starts execution.",
+				parameters: Type.Object({
+					repo: RepoParameter,
+					workflowId: WorkflowIdParameter,
+					revision: Type.Integer({ minimum: 0 }),
+				}),
+				execute: run(
+					async (
+						args: { repo: string; workflowId: string; revision: number },
+						env,
+					) => call(env, "POST", "/api/v1/workflow/recovery-preview", args),
+				),
+			}),
+			defineTool({
+				name: "workflow_recover",
+				description:
+					"Explicit one-shot recovery after workflow_recovery_preview: retry a terminal blocked/failed worker or repair supported same-step missing-run integrity, with durable masked corrective context in the replacement assignment. Requires inspected revision/preview/operation/target plus bounded reason and instruction. Only visible orchestrator-started workflows, current agent step, no live runs/leased effects/pending questions. Refuses cross-step jumps and human reviews. Does not grant new scope or file/config/credential permissions; forward ambiguous decisions to the developer. Returns updated compact status and requests normal execution after commit; never loops automatically.",
+				parameters: Type.Object({
+					repo: RepoParameter,
+					workflowId: WorkflowIdParameter,
+					revision: Type.Integer({ minimum: 0 }),
+					previewId: Type.String({ minLength: 1, maxLength: 128 }),
+					operation: Type.Union([
+						Type.Literal("retry-current"),
+						Type.Literal("structural-repair"),
+					]),
+					targetStep: Type.String({ minLength: 1, maxLength: 4096 }),
+					reason: Type.String({ minLength: 1, maxLength: 160 }),
+					instruction: Type.String({ minLength: 1, maxLength: 8000 }),
+				}),
+				execute: run(
+					async (
+						args: {
+							repo: string;
+							workflowId: string;
+							revision: number;
+							previewId: string;
+							operation: "retry-current" | "structural-repair";
+							targetStep: string;
+							reason: string;
+							instruction: string;
+						},
+						env,
+					) => {
+						const { previewId, operation, instruction, ...request } = args;
+						const view = (await call(env, "POST", "/api/v1/workflow/repair", {
+							...request,
+							recovery: { previewId, operation, instruction },
+						})) as Record<string, unknown>;
+						return compactWorkflowStatusView(view);
 					},
 				),
 			}),

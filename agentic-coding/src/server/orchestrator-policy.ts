@@ -7,7 +7,7 @@
 // The orchestrator observes everything, starts and drains workflows, and
 // performs lifecycle management. It never decides a human review: plan,
 // developer, findings and wiki reviews stay with the developer, as do
-// configuration edits, repairs, deletions, and the environment and credential
+// configuration edits, deletions, and the environment and credential
 // surfaces. It may answer or forward the developer questions its own workflows
 // route to it first (route-developer-questions-through-orchestrator): the
 // reducer restricts `answer-question` to questions still marked for the
@@ -25,6 +25,8 @@ const ALLOWED_ROUTES: ReadonlySet<string> = new Set([
 	"POST /api/v1/workflow/blueprint/validate",
 	"POST /api/v1/workflow/action",
 	"POST /api/v1/workflow/execute",
+	"POST /api/v1/workflow/recovery-preview",
+	"POST /api/v1/workflow/repair",
 	"GET /api/v1/config/agents",
 	"GET /api/v1/classifier/status",
 	"GET /api/v1/events",

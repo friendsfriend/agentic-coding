@@ -19,6 +19,7 @@ import type {
 	WorkflowDeleteRequest,
 	WorkflowExecuteRequest,
 	WorkflowQuestionRequest,
+	WorkflowRecoveryPreviewRequest,
 	WorkflowRepairRequest,
 	WorkflowStartRequest,
 } from "../contracts/actions.ts";
@@ -929,12 +930,71 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			});
 		}
 
-		if (method === "POST" && path === "/api/v1/workflow/repair") {
-			const decoded = decodeRouteRequest<WorkflowRepairRequest>(
-				"/api/v1/workflow/repair",
-				await readJsonBody(request),
-			);
-			const value = operations.repair(decoded);
+		if (
+			method === "POST" &&
+			(path === "/api/v1/workflow/recovery-preview" ||
+				path === "/api/v1/workflow/repair")
+		) {
+			const decoded = decodeRouteRequest<
+				WorkflowRecoveryPreviewRequest | WorkflowRepairRequest
+			>(path, await readJsonBody(request));
+			if (principal === "orchestrator") {
+				// Check the catalog before opening any caller-selected store. Exact
+				// canonical target identity is required; aliases are not authority.
+				const targets = await operations.runObservation({
+					kind: "workflow-targets",
+				});
+				if (
+					!Array.isArray(targets) ||
+					!targets.some(
+						(row) =>
+							row &&
+							row.target === decoded.repo &&
+							row.workflowId === decoded.workflowId,
+					)
+				)
+					return errorResponse(
+						403,
+						"orchestrator-forbidden",
+						"Recovery requires an exact visible workflow target.",
+					);
+				const owned = operations.view(decoded.repo, decoded.workflowId);
+				if (owned.startedBy !== "orchestrator")
+					return errorResponse(
+						403,
+						"orchestrator-forbidden",
+						"Only workflows started by the orchestrator may be recovered by it.",
+					);
+				if (
+					path.endsWith("/repair") &&
+					(!("recovery" in decoded) || !decoded.recovery)
+				)
+					return errorResponse(
+						400,
+						"invalid-repair",
+						"Inspect recovery first and supply its preview identity, operation, reason and instruction.",
+					);
+			}
+			if (path.endsWith("/recovery-preview")) {
+				const previews = await operations.runObservation({
+					kind: "repair-preview",
+					repo: decoded.repo,
+					workflowId: decoded.workflowId,
+				});
+				const preview = Array.isArray(previews)
+					? previews[0]?.recovery
+					: undefined;
+				if (!preview || preview.revision !== decoded.revision)
+					return errorResponse(
+						409,
+						"stale-revision",
+						"No matching current recovery preview; inspect status again.",
+					);
+				return json({ ok: true, value: preview });
+			}
+			const value = operations.repair(decoded as WorkflowRepairRequest, {
+				principal,
+			});
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.repair",

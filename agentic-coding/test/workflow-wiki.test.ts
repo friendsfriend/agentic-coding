@@ -46,6 +46,7 @@ import {
 	createTempRepoFixture,
 	removeRepoFixture,
 } from "./support/git-fixture.ts";
+import { enterFixtureStep } from "./support/workflow-recovery-fixture.ts";
 
 autoRemoveRepoFixtures();
 
@@ -413,13 +414,7 @@ describe("OKF wiki bundle", () => {
 				preset: "fixed",
 			});
 			engine.start(prepared.input);
-			engine.dispatch(prepared.target, {
-				type: "operator.repair",
-				workflowId,
-				revision: engine.getSnapshot(prepared.target, workflowId).revision,
-				targetStep: "core.wiki",
-				reason: "stage wiki write fixture",
-			});
+			enterFixtureStep(engine, prepared.target, workflowId, "core.wiki");
 			await new EffectRunner(
 				prepared.target,
 				engine,

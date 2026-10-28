@@ -143,10 +143,14 @@ describe("orchestrator policy", () => {
 		expect(
 			orchestratorRouteAllowed("POST", "/api/v1/workflow/blueprint/validate"),
 		).toBe(true);
+		for (const path of [
+			"/api/v1/workflow/recovery-preview",
+			"/api/v1/workflow/repair",
+		])
+			expect(orchestratorRouteAllowed("POST", path)).toBe(true);
 		for (const [method, path] of [
 			["POST", "/api/v1/workflow/question"],
 			["POST", "/api/v1/workflow/review-save"],
-			["POST", "/api/v1/workflow/repair"],
 			["POST", "/api/v1/workflow/delete"],
 			["POST", "/api/v1/config/agents"],
 			["POST", "/api/v1/agent/handoff"],

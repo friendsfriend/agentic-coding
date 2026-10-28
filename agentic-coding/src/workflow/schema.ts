@@ -31,6 +31,7 @@ import {
 	CLASSIFIER_DECISION_MAX_RECORDS,
 	GATE_DECISION_MAX_RECORDS,
 	questionOptions,
+	recoveryRecordSchema,
 	STAGE_SYSTEM_MAX_BYTES,
 	STAGE_WIKI_PROCESS_MAX_BYTES,
 	VERIFICATION_SCOPE_DIGEST_LENGTH,
@@ -372,6 +373,7 @@ const verificationScopeRecordSchema = Schema.Struct({
 const sourceBaselineSchema = Schema.Struct({ fingerprint: text(128) });
 const repairedSchema = Schema.Struct({
 	reason: boundedText(4096),
+	recovery: Schema.optionalKey(recoveryRecordSchema),
 	fromStep: text(4096),
 	at: text(4096),
 	// The repair's effect, recorded since efficiency backlog item 11: the ids it

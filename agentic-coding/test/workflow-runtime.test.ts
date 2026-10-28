@@ -37,6 +37,10 @@ import {
 	createRepoFixture,
 	repoPreset,
 } from "./support/git-fixture.ts";
+import {
+	finishPlanFixture,
+	parkFixtureRuns,
+} from "./support/workflow-recovery-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
@@ -1660,13 +1664,7 @@ describe("transactional workflow runtime", () => {
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
-			const gate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: started.view.workflowId,
-				revision: started.view.revision,
-				targetStep: "core.plan-approval",
-				reason: "review proposal",
-			});
+			const gate = finishPlanFixture(engine, repo, started.view.workflowId);
 			const rejected = engine.dispatch(repo, {
 				type: "developer.action",
 				workflowId: started.view.workflowId,
@@ -1675,13 +1673,11 @@ describe("transactional workflow runtime", () => {
 				input: { reason: "needs more detail" },
 			});
 			expect(rejected.view.currentStep.id).toBe("core.plan");
-			const commentsGate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: started.view.workflowId,
-				revision: rejected.view.revision,
-				targetStep: "core.plan-approval",
-				reason: "review again",
-			});
+			const commentsGate = finishPlanFixture(
+				engine,
+				repo,
+				rejected.view.workflowId,
+			);
 			const comments = [
 				{ comment: "clarify scope", file: "proposal.md", line: 1 },
 			];
@@ -1702,7 +1698,7 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("developer CAS and repair invalidate runs and retrigger target step", () => {
+	test("cross-step repair is refused while developer CAS and gate actions remain available", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-repair-"));
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -1716,13 +1712,16 @@ describe("transactional workflow runtime", () => {
 			});
 			const startedView = advanceRouting(engine, repo, result.view);
 			const oldRun = requireDefined(startedView.runs[0], "first run");
-			const repaired = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: startedView.workflowId,
-				revision: startedView.revision,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			expect(() =>
+				engine.dispatch(repo, {
+					type: "operator.repair",
+					workflowId: startedView.workflowId,
+					revision: startedView.revision,
+					targetStep: "core.plan-approval",
+					reason: "operator confirmed evidence",
+				}),
+			).toThrow(/Cross-step repair/);
+			const repaired = finishPlanFixture(engine, repo, startedView.workflowId);
 			expect(repaired.view.status).toBe("active");
 			expect(repaired.view.currentStep.id).toBe("core.plan-approval");
 			expect(engine.getRun(repo, oldRun.id).status).toBe("expired");
@@ -1793,6 +1792,7 @@ describe("transactional workflow runtime", () => {
 				targetStep: "core.implementation",
 			}) as Extract<WorkflowCommand, { type: "operator.repair" }>;
 			expect(omitted.reason).toBe("");
+			parkFixtureRuns(engine, repo, started.view.workflowId);
 			const repaired = engine.dispatch(repo, { ...omitted });
 			expect(repaired.snapshot.repaired?.reason).toBe("");
 			const parsed = decodeSnapshot({
@@ -1803,6 +1803,7 @@ describe("transactional workflow runtime", () => {
 				},
 			});
 			expect(parsed.repaired?.reason).toBe("");
+			parkFixtureRuns(engine, repo, started.view.workflowId);
 			const empty = engine.dispatch(repo, {
 				type: "operator.repair",
 				workflowId: started.view.workflowId,
@@ -1831,11 +1832,12 @@ describe("transactional workflow runtime", () => {
 			});
 			const routed = advanceRouting(engine, repo, started.view);
 			const oldRun = requireDefined(routed.runs[0], "first run");
+			parkFixtureRuns(engine, repo, routed.workflowId);
 			const repaired = engine.dispatch(repo, {
 				type: "operator.repair",
 				workflowId: routed.workflowId,
 				revision: routed.revision,
-				targetStep: "core.plan-approval",
+				targetStep: routed.currentStep.id,
 				reason: `operator confirmed evidence api_key=abc123 ${"x".repeat(200)}`,
 			});
 			const record = requireDefined(
@@ -1883,11 +1885,12 @@ describe("transactional workflow runtime", () => {
 			for (const id of [...(record.expiredEffects ?? []), oldRun.id])
 				expect(payload).not.toContain(id);
 			// A second repair counts itself against the workflow's history.
+			parkFixtureRuns(engine, repo, routed.workflowId);
 			const again = engine.dispatch(repo, {
 				type: "operator.repair",
 				workflowId: routed.workflowId,
 				revision: repaired.view.revision,
-				targetStep: "core.plan-approval",
+				targetStep: repaired.view.currentStep.id,
 				reason: "second pass",
 			});
 			expect(again.snapshot.repaired?.count).toBe(2);
@@ -1920,13 +1923,7 @@ describe("transactional workflow runtime", () => {
 				routing: routing(),
 			});
 			const routed = advanceRouting(engine, repo, started.view);
-			const atGate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: routed.workflowId,
-				revision: routed.revision,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			const atGate = finishPlanFixture(engine, repo, routed.workflowId);
 			// The gate is the developer's, so the workflow waits for them from the
 			// step entry the snapshot already records.
 			expect(atGate.view.waiting).toEqual({
@@ -1944,14 +1941,17 @@ describe("transactional workflow runtime", () => {
 			const before = telemetry().length;
 			engine.status(repo, "wait-gate");
 			expect(telemetry()).toHaveLength(before);
-			// Re-entering the same gate is still the same wait, so it emits nothing.
-			const again = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: routed.workflowId,
-				revision: atGate.view.revision,
-				targetStep: "core.plan-approval",
-				reason: "second pass",
-			});
+			// Re-entering a developer gate is now refused without changing its wait.
+			expect(() =>
+				engine.dispatch(repo, {
+					type: "operator.repair",
+					workflowId: routed.workflowId,
+					revision: atGate.view.revision,
+					targetStep: "core.plan-approval",
+					reason: "second pass",
+				}),
+			).toThrow(/human reviews/);
+			const again = atGate;
 			expect(of("workflow.waiting")).toHaveLength(1);
 			expect(again.view.waiting?.kind).toBe("approval");
 			// Acting at the gate ends the wait, and the end says how long it was.
@@ -1987,13 +1987,7 @@ describe("transactional workflow runtime", () => {
 				routing: routing(),
 			});
 			const startedView = advanceRouting(engine, repo, result.view);
-			const atGate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: startedView.workflowId,
-				revision: startedView.revision,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			const atGate = finishPlanFixture(engine, repo, startedView.workflowId);
 			const comments = [
 				{ comment: "clarify scope", file: "proposal.md", line: 3 },
 				{
@@ -2037,13 +2031,7 @@ describe("transactional workflow runtime", () => {
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
-			const atGate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: result.view.workflowId,
-				revision: 0,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			const atGate = finishPlanFixture(engine, repo, result.view.workflowId);
 			const revision = atGate.view.revision;
 			const before = new Database(canonicalStorePath(repo))
 				.query("SELECT COUNT(*) AS count FROM workflow_events")
@@ -2091,13 +2079,7 @@ describe("transactional workflow runtime", () => {
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
-			const atGate = engine.dispatch(repo, {
-				type: "operator.repair",
-				workflowId: result.view.workflowId,
-				revision: 0,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			const atGate = finishPlanFixture(engine, repo, result.view.workflowId);
 			const approved = engine.dispatch(repo, {
 				type: "developer.action",
 				workflowId: result.view.workflowId,
@@ -2117,13 +2099,11 @@ describe("transactional workflow runtime", () => {
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
-			const rejectedGate = rejectedEngine.dispatch(rejectedRepo, {
-				type: "operator.repair",
-				workflowId: rejected.view.workflowId,
-				revision: 0,
-				targetStep: "core.plan-approval",
-				reason: "operator confirmed evidence",
-			});
+			const rejectedGate = finishPlanFixture(
+				rejectedEngine,
+				rejectedRepo,
+				rejected.view.workflowId,
+			);
 			const rejectedBack = rejectedEngine.dispatch(rejectedRepo, {
 				type: "developer.action",
 				workflowId: rejected.view.workflowId,
