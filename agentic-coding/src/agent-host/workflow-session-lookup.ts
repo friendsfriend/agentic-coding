@@ -56,7 +56,9 @@ export function verifyWorkflowSessions(
 	}
 	let runtimeDir: string;
 	if (NON_REPOSITORY_WORKFLOW_TARGETS.includes(target)) {
-		runtimeDir = path.join(wikiWorkflowDataRoot(), workflowId);
+		// Repository-independent launches keep their runtime (including the
+		// host) under runs/, matching agentRunEnvironmentFile and effect-runner.
+		runtimeDir = path.join(wikiWorkflowDataRoot(), workflowId, "runs");
 	} else {
 		if (typeof worktree !== "string" || !path.isAbsolute(worktree))
 			throw new Error("workflow runtime location is unavailable");

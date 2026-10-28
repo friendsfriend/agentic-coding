@@ -130,20 +130,29 @@ test("the selected target's exact workflow/run resolves its worktree host, not t
 test("repository-independent targets have separate workflow hosts under the canonical data root", () => {
 	const f = fixture();
 	const dataRoot = path.join(f.root, "data");
-	socketFile(path.join(dataRoot, "flow"));
+	socketFile(path.join(dataRoot, "flow", "runs"));
 	const wikiRoot = spyOn(targets, "wikiWorkflowDataRoot").mockReturnValue(
 		dataRoot,
 	);
 	cleanups.push(() => wikiRoot.mockRestore());
 	for (const target of targets.NON_REPOSITORY_WORKFLOW_TARGETS) {
 		f.add(target, "not-a-repository");
-		const socket = hostLayout(path.join(dataRoot, "flow")).socketPath;
+		const socket = hostLayout(path.join(dataRoot, "flow", "runs")).socketPath;
+		// The former lookup omitted runs/ and made real stage testers unavailable.
+		expect(() =>
+			workflowSessionSocket(
+				target,
+				"flow",
+				"flow-run",
+				hostLayout(path.join(dataRoot, "flow")).socketPath,
+			),
+		).toThrow(/does not belong/);
 		expect(workflowSessionSocket(target, "flow", "flow-run", socket)).toBe(
 			socket,
 		);
 		expect(f.open).toHaveBeenCalledWith(target);
 		const otherSocket = hostLayout(
-			path.join(dataRoot, "other-flow"),
+			path.join(dataRoot, "other-flow", "runs"),
 		).socketPath;
 		expect(() =>
 			workflowSessionSocket(target, "flow", "flow-run", otherSocket),
