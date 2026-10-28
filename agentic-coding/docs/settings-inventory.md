@@ -230,7 +230,20 @@ subject to native exposure and collision rules. When global Pi settings enable
 imported tools configured with `exposure: "codemode"`. Read-only runs deny imported
 tools unless their exact names are listed in `restrictedAllow.readOnly`. MCP annotations and extension
 descriptions do not grant permissions. Unsupported hooks, UI/session/model
-capabilities and dynamic tool registration fail closed with bounded diagnostics.
+capabilities and dynamic **Pi extension** tool registration fail closed with bounded diagnostics.
+MCP registrations are different: late tools from a connecting server propagate to
+that same durable conversation automatically. Ready tools remain usable while
+other servers connect; startup does not wait forever for an unavailable server.
+A bridge-owned wrapper observes the public MCP factory's registration/activation
+batch, publishes the registry, then adds authorized names to the owner's explicit
+selection. Prepared requests keep their original definitions; later requests,
+including already queued follow-ups, can discover and execute the additions through
+native tool search and codemode. Existing selections and deferred/model-tool state
+are preserved. Non-additive changes (removal, schema or exposure changes) wait until
+the conversation is idle, checked atomically with the selection commit. A conflicting
+schema belonging to another owner is refused rather than replacing that owner's
+registration. Notifications and idle watches are owner-scoped and stop on eviction
+or shutdown; no background polling is used.
 When MCP authentication needs user interaction, sign in through Pi's normal
 local surface; durable runs do not open a browser or request/store credentials.
 An empty user Pi configuration adds no integration tools and opens no

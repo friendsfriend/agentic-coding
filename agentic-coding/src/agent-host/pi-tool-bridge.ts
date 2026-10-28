@@ -210,6 +210,10 @@ export interface LocalPiToolBridgeOptions {
 		conversationId: ConversationId,
 	) => DurableRunContext | undefined;
 	readonly log: (diagnostic: string) => void;
+	readonly catalogChanged?: (conversationId: ConversationId) => void;
+	readonly ownerClosed?: (
+		conversationId: ConversationId,
+	) => void | Promise<void>;
 }
 
 /**
@@ -220,7 +224,6 @@ export interface LocalPiToolBridgeOptions {
 export class LocalPiToolBridge {
 	private readonly owners = new Map<ConversationId, BridgeOwner>();
 	private readonly registrations = new Map<string, BridgeRegistration>();
-	private readonly conflictingNames = new Set<string>();
 	private readonly reported = new Set<string>();
 	private readonly tools: ToolRegistration[] = [];
 	private readonly settings: LocalPiToolsSettings;
@@ -231,6 +234,15 @@ export class LocalPiToolBridge {
 	constructor(private readonly options: LocalPiToolBridgeOptions) {
 		this.settings = options.settings;
 		this.publishRegistry();
+	}
+
+	hasOwner(conversationId: ConversationId): boolean {
+		const owner = this.owners.get(conversationId);
+		return !this.closed && owner !== undefined && !owner.closing;
+	}
+
+	pruneCatalog(): void {
+		this.pruneUnusedRegistrations();
 	}
 
 	isBridgeToolName(name: string): boolean {
@@ -251,7 +263,6 @@ export class LocalPiToolBridge {
 		const names = new Set(owner.tools.keys());
 		return [...names]
 			.filter((name) => {
-				if (this.conflictingNames.has(name)) return false;
 				return allow
 					? allow.includes(name)
 					: policy === "default" || policy === "orchestrator";
@@ -272,7 +283,9 @@ export class LocalPiToolBridge {
 		if (existing?.cwd === canonicalCwd && !existing.closing) {
 			existing.lastUsedAt = Date.now();
 			try {
-				await this.refreshOwnerTools(existing);
+				// Re-ensuring an owner is not evidence that its durable turn is idle.
+				// Destructive reconciliation belongs to the host's atomic admission.
+				this.refreshOwnerTools(existing, true);
 			} catch {
 				this.report(
 					"bridge",
@@ -355,6 +368,17 @@ export class LocalPiToolBridge {
 		this.options.registry.uninstall({ name: EXTENSION_NAME });
 	}
 
+	/** Called by the host inside its serialized catalog admission. Busy admissions
+	 * only add names: existing definitions and selections remain pinned. */
+	reconcileCatalog(
+		conversationId: ConversationId,
+		additionsOnly: boolean,
+	): void {
+		const owner = this.owners.get(conversationId);
+		if (this.closed || !owner || owner.closing) return;
+		this.refreshOwnerTools(owner, additionsOnly);
+	}
+
 	private async createOwner(
 		conversationId: ConversationId,
 		cwd: string,
@@ -369,6 +393,29 @@ export class LocalPiToolBridge {
 		const agentDir = path.resolve(this.options.globalAgentDir);
 		const settingsManager = SettingsManager.create(agentDir, agentDir);
 		settingsManager.setProjectTrusted(false);
+		let catalogOwner: BridgeOwner | undefined;
+		let notificationQueued = false;
+		const notify = () => {
+			if (notificationQueued || this.closed) return;
+			notificationQueued = true;
+			// MCP registers/activates a synchronous batch. Observe its completed
+			// public API calls, not the intermediate registerTool snapshot.
+			queueMicrotask(() => {
+				notificationQueued = false;
+				if (
+					this.closed ||
+					!catalogOwner ||
+					catalogOwner.closing ||
+					this.owners.get(conversationId) !== catalogOwner
+				)
+					return;
+				this.options.catalogChanged?.(conversationId);
+			});
+		};
+		const mcpFactory = createMcpExtension({
+			startupWaitMs: MCP_STARTUP_WAIT_MS,
+			openUrl: () => this.report("mcp", "sign-in-required-use-pi-login"),
+		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: agentDir,
 			agentDir,
@@ -376,10 +423,26 @@ export class LocalPiToolBridge {
 			extensionFactories: [
 				{
 					name: MCP_EXTENSION_NAME,
-					factory: createMcpExtension({
-						startupWaitMs: MCP_STARTUP_WAIT_MS,
-						openUrl: () => this.report("mcp", "sign-in-required-use-pi-login"),
-					}),
+					factory: (api) =>
+						mcpFactory(
+							new Proxy(api, {
+								get(target, property, receiver) {
+									if (property === "registerTool")
+										return (...args: Parameters<typeof api.registerTool>) => {
+											const result = target.registerTool(...args);
+											notify();
+											return result;
+										};
+									if (property === "setActiveTools")
+										return (...args: Parameters<typeof api.setActiveTools>) => {
+											const result = target.setActiveTools(...args);
+											notify();
+											return result;
+										};
+									return Reflect.get(target, property, receiver);
+								},
+							}),
+						),
 					hidden: true,
 				},
 			],
@@ -431,6 +494,7 @@ export class LocalPiToolBridge {
 			lastUsedAt: Date.now(),
 			closing: false,
 		};
+		catalogOwner = owner;
 		try {
 			await session.bindExtensions({
 				uiContext: this.safeUi(session.extensionRunner.getUIContext(), "mcp"),
@@ -557,7 +621,7 @@ export class LocalPiToolBridge {
 			this.report("mcp", "configured-tools-unavailable-at-startup");
 	}
 
-	private async refreshOwnerTools(owner: BridgeOwner): Promise<void> {
+	private refreshOwnerTools(owner: BridgeOwner, additionsOnly = false): void {
 		if (owner.closing) return;
 		const registered = this.registeredTools(owner);
 		const next = new Map<string, OwnerTool[]>();
@@ -615,19 +679,24 @@ export class LocalPiToolBridge {
 			group.push(candidate);
 			next.set(name, group);
 		}
-		owner.tools.clear();
+		const previous = new Map(owner.tools);
+		if (!additionsOnly) owner.tools.clear();
 		for (const [name, candidates] of next) {
+			if (additionsOnly && previous.has(name)) continue;
+			if (owner.tools.size >= MAX_TOOLS_PER_CONVERSATION) {
+				this.report("bridge", "tool-limit-reached");
+				break;
+			}
 			if (candidates.length > 1) {
-				this.disableName(
-					name,
-					"duplicate-imported-name",
+				this.report(
 					candidates[0]?.sourceId ?? "bridge",
+					"duplicate-imported-name",
 				);
 				continue;
 			}
 			const candidate = candidates[0];
 			if (!candidate) continue;
-			const registration = this.registrationFor(candidate);
+			const registration = this.registrationFor(candidate, additionsOnly);
 			if (!registration) continue;
 			owner.tools.set(name, candidate);
 		}
@@ -635,6 +704,7 @@ export class LocalPiToolBridge {
 
 	private registrationFor(
 		candidate: OwnerTool,
+		additionsOnly = false,
 	): BridgeRegistration | undefined {
 		const fingerprint = this.fingerprint(candidate.definition);
 		const existing = this.registrations.get(candidate.name);
@@ -643,8 +713,32 @@ export class LocalPiToolBridge {
 				existing.fingerprint !== fingerprint ||
 				existing.sourceId !== candidate.sourceId
 			) {
-				this.disableName(candidate.name, "duplicate-imported-name");
-				return undefined;
+				// A schema/exposure change is not an addition. Do not disturb a
+				// running owner or another owner's authoritative definition.
+				const shared = [...this.owners.values()].some((owner) =>
+					owner.tools.has(candidate.name),
+				);
+				if (
+					additionsOnly ||
+					shared ||
+					existing.sourceId !== candidate.sourceId
+				) {
+					this.report(candidate.sourceId, "duplicate-imported-name");
+					return undefined;
+				}
+				const registration = this.createRegistration(candidate);
+				const replacement = {
+					fingerprint,
+					registration,
+					sourceId: candidate.sourceId,
+				};
+				this.registrations.set(candidate.name, replacement);
+				const index = this.tools.findIndex(
+					(tool) => tool.name === candidate.name,
+				);
+				if (index >= 0) this.tools[index] = registration;
+				this.publishRegistry();
+				return replacement;
 			}
 			return existing;
 		}
@@ -709,8 +803,6 @@ export class LocalPiToolBridge {
 		args: Record<string, unknown>,
 		context: Context,
 	) {
-		if (this.conflictingNames.has(name))
-			return this.failedResult("This local Pi tool is unavailable.");
 		const owner = this.owners.get(api.conversationId);
 		const run = this.options.contextFor(api.conversationId);
 		const candidate = owner?.tools.get(name);
@@ -1148,25 +1240,13 @@ export class LocalPiToolBridge {
 					name: definition.name,
 					parameters: definition.parameters,
 					outputSchema: definition.outputSchema,
+					description: definition.description,
+					namespace: definition.namespace,
 					exposure: definition.exposure ?? "direct",
 					defaultActive: definition.defaultActive,
 				}),
 			)
 			.digest("hex");
-	}
-
-	private disableName(name: string, reason: string, label?: string): void {
-		this.conflictingNames.add(name);
-		this.report(
-			label ?? this.registrations.get(name)?.sourceId ?? "bridge",
-			reason,
-		);
-		if (!this.registrations.has(name)) return;
-		this.registrations.delete(name);
-		const index = this.tools.findIndex((tool) => tool.name === name);
-		if (index >= 0) this.tools.splice(index, 1);
-		for (const owner of this.owners.values()) owner.tools.delete(name);
-		this.publishRegistry();
 	}
 
 	private publishRegistry(): void {
@@ -1185,12 +1265,9 @@ export class LocalPiToolBridge {
 			const registration = this.tools[index];
 			if (!registration || usedNames.has(registration.name)) continue;
 			this.registrations.delete(registration.name);
-			this.conflictingNames.delete(registration.name);
 			this.tools.splice(index, 1);
 			changed = true;
 		}
-		for (const name of this.conflictingNames)
-			if (!usedNames.has(name)) this.conflictingNames.delete(name);
 		if (changed) this.publishRegistry();
 	}
 
@@ -1226,6 +1303,7 @@ export class LocalPiToolBridge {
 	): Promise<void> {
 		if (owner.closing) return;
 		owner.closing = true;
+		await this.options.ownerClosed?.(conversationId);
 		for (const controller of owner.activeControllers) controller.abort();
 		await Promise.allSettled([...owner.activeCalls]);
 		try {

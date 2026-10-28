@@ -15,14 +15,17 @@ import type {
 	TaskId,
 } from "@earendil-works/pi-durable";
 import {
+	AgentDoc,
 	type Conversation,
 	type ConversationId,
+	configure,
 	createRegistry,
 	DEFAULT_RESTART_LIMIT,
 	defineDoc,
 	type Extension,
 	Harness,
 	type JsonObject,
+	LiveDoc,
 	type Registry,
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
@@ -1023,6 +1026,8 @@ export class DurableHost {
 						contextFor: (conversationId) =>
 							host.instance?.contexts.get(conversationId),
 						log: (line) => host.instance?.log(line),
+						catalogChanged: (id) => host.instance?.schedulePiCatalog(id),
+						ownerClosed: (id) => host.instance?.closePiCatalogWatch(id),
 					})
 				: undefined;
 		// The one collection this host resolves and offers models from: pi-ai's
@@ -1142,6 +1147,132 @@ export class DurableHost {
 		Promise<{ conversationId: string }>
 	>();
 	private readonly ensuringRoles = new Map<string, Promise<void>>();
+	private readonly piCatalogWatches = new Map<
+		ConversationId,
+		() => Promise<void>
+	>();
+	private readonly piCatalogPending = new Set<ConversationId>();
+	private readonly piCatalogWork = new Map<ConversationId, Promise<void>>();
+	private readonly piCatalogAgain = new Set<ConversationId>();
+	private piCatalogFailureReported = false;
+
+	private reportPiCatalogFailure(): void {
+		if (this.piCatalogFailureReported) return;
+		this.piCatalogFailureReported = true;
+		this.log("local Pi bridge catalog reconciliation failed");
+	}
+
+	private async closePiCatalogWatch(id: ConversationId): Promise<void> {
+		this.piCatalogPending.delete(id);
+		this.piCatalogAgain.delete(id);
+		const stop = this.piCatalogWatches.get(id);
+		this.piCatalogWatches.delete(id);
+		await stop?.();
+	}
+
+	private async watchPiCatalog(id: ConversationId): Promise<void> {
+		if (!this.localPiBridge?.hasOwner(id) || this.closing) return;
+		if (this.piCatalogWatches.has(id)) {
+			this.schedulePiCatalog(id);
+			return;
+		}
+		const conversation = await this.harness.conversation(
+			id,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation) return;
+		const watch = await conversation.watch(BACKGROUND_CONTEXT);
+		if (this.closing || !this.localPiBridge.hasOwner(id)) {
+			await watch.stop();
+			return;
+		}
+		this.piCatalogWatches.set(id, async () => {
+			await watch.stop();
+		});
+		watch.start(async (value) => {
+			const live = value.docs["pi.live"] as { run?: unknown } | undefined;
+			if (this.piCatalogPending.has(id) && !live?.run)
+				this.schedulePiCatalog(id);
+		});
+		// Also close the notification gap between the initial snapshot and the
+		// run record/watch installation. This is bounded admission work, not polling.
+		this.schedulePiCatalog(id);
+	}
+
+	private schedulePiCatalog(id: ConversationId): void {
+		if (this.closing) return;
+		this.piCatalogPending.add(id);
+		if (this.piCatalogWork.has(id)) {
+			this.piCatalogAgain.add(id);
+			return;
+		}
+		const record = [...this.runs.values()].find(
+			(run) => run.conversationId === id,
+		);
+		if (!record) return;
+		const work = this.serialized(record, async () => {
+			await Promise.allSettled([...this.ensuringRuns.values()]);
+			if (this.closing || !this.piCatalogWatches.has(id)) return;
+			const run = this.contexts.get(id);
+			if (!run) return;
+			const idle = await this.harness.commit(async (tx) => {
+				const live = await tx.doc(LiveDoc, id);
+				const agent = await tx.doc(AgentDoc, id);
+				if (
+					this.closing ||
+					!this.piCatalogWatches.has(id) ||
+					this.contexts.get(id) !== run
+				)
+					return;
+				const busy = live.run !== undefined;
+				// The idle test and selection commit share the Harness transaction:
+				// queued generations cannot start between a stale idle read and configure.
+				this.localPiBridge?.reconcileCatalog(id, busy);
+				const selected =
+					this.localPiBridge?.toolsForPolicy(id, run.toolPolicy) ?? [];
+				const current = agent.tools;
+				if (!Array.isArray(current)) return;
+				const names = new Set(
+					current.filter(
+						(name) => busy || !this.localPiBridge?.isBridgeToolName(name),
+					),
+				);
+				for (const tool of selected) names.add(tool.name);
+				const next = [...names];
+				if (
+					next.length !== current.length ||
+					next.some((name, index) => current[index] !== name)
+				) {
+					const available = new Map(
+						this.registry
+							.snapshot()
+							.tools()
+							.map(({ tool }) => [tool.name, tool]),
+					);
+					const tools = next.map((name) => {
+						const tool = available.get(name);
+						if (!tool)
+							throw new Error("local Pi bridge selected tool unavailable");
+						return tool;
+					});
+					await configure(tx, id, { tools });
+				}
+				return !busy;
+			}, BACKGROUND_CONTEXT);
+			if (idle) {
+				this.piCatalogPending.delete(id);
+				this.localPiBridge?.pruneCatalog();
+			}
+		});
+		const settled = work
+			.catch(() => this.reportPiCatalogFailure())
+			.finally(() => {
+				this.piCatalogWork.delete(id);
+				if (this.piCatalogAgain.delete(id) && this.piCatalogWatches.has(id))
+					this.schedulePiCatalog(id);
+			});
+		this.piCatalogWork.set(id, settled);
+	}
 
 	ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
 		if (this.closing) return Promise.reject(new Error("host is shutting down"));
@@ -1282,6 +1413,7 @@ export class DurableHost {
 			...(envVars.HERDR_ROLE ? { role: envVars.HERDR_ROLE } : {}),
 			...(model ? { model } : {}),
 		});
+		await this.watchPiCatalog(conversation.id);
 		const identity: TelemetryIdentity = {
 			workflowId: envVars.HERDR_WORKFLOW_ID,
 			runId: envVars.HERDR_RUN_ID,
@@ -3317,6 +3449,12 @@ export class DurableHost {
 			}
 		}
 
+		await Promise.all(
+			[...this.piCatalogWatches.keys()].map((id) =>
+				this.closePiCatalogWatch(id),
+			),
+		);
+		await Promise.allSettled([...this.piCatalogWork.values()]);
 		let shutdownError: unknown;
 		try {
 			await this.localPiBridge?.closeAll();

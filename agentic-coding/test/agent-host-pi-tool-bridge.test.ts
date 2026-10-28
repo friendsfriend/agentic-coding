@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,6 +14,7 @@ import {
 	defineTool,
 	MemoryStorage,
 	type Registry,
+	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { TOOL_SEARCH_TOOL_NAME } from "@earendil-works/pi-durable/tool-search";
 import { Type } from "typebox";
@@ -60,13 +61,35 @@ function writeExtension(
 	return extensionPath;
 }
 
-async function mockHttpMcp(): Promise<{
+async function mockHttpMcp(
+	options: {
+		listGate?: Promise<void> | (() => Promise<void>);
+		callGate?: Promise<void>;
+		onList?: () => void;
+		onListFinished?: () => void;
+		onCall?: () => void;
+	} = {},
+): Promise<{
 	url: string;
 	requests: () => number;
 	close: () => Promise<void>;
+	listening: () => boolean;
+	updateTools: (tools: Record<string, unknown>[]) => void;
 }> {
 	let requestCount = 0;
+	let catalog: Record<string, unknown>[] | undefined;
+	const streams = new Set<ServerResponse>();
 	const server = createServer((request, response) => {
+		if (request.method === "GET") {
+			response.writeHead(200, {
+				"content-type": "text/event-stream",
+				"cache-control": "no-cache",
+			});
+			response.flushHeaders();
+			streams.add(response);
+			request.on("close", () => streams.delete(response));
+			return;
+		}
 		if (request.method === "DELETE") {
 			response.writeHead(200).end();
 			return;
@@ -76,7 +99,7 @@ async function mockHttpMcp(): Promise<{
 		request.on("data", (chunk: string) => {
 			body += chunk;
 		});
-		request.on("end", () => {
+		request.on("end", async () => {
 			requestCount += 1;
 			let message: {
 				id?: number | string;
@@ -93,16 +116,26 @@ async function mockHttpMcp(): Promise<{
 				response.writeHead(202).end();
 				return;
 			}
+			if (message.method === "tools/list") {
+				options.onList?.();
+				await (typeof options.listGate === "function"
+					? options.listGate()
+					: options.listGate);
+			}
+			if (message.method === "tools/call") {
+				options.onCall?.();
+				await options.callGate;
+			}
 			const result =
 				message.method === "initialize"
 					? {
 							protocolVersion: "2025-03-26",
-							capabilities: { tools: {} },
+							capabilities: { tools: { listChanged: true } },
 							serverInfo: { name: "local-http-fixture", version: "1" },
 						}
 					: message.method === "tools/list"
 						? {
-								tools: [
+								tools: catalog ?? [
 									{
 										name: "http_echo",
 										description: "Echoes a local HTTP MCP message",
@@ -185,6 +218,7 @@ async function mockHttpMcp(): Promise<{
 					"mcp-protocol-version": "2025-03-26",
 				})
 				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+			if (message.method === "tools/list") options.onListFinished?.();
 		});
 	});
 	await new Promise<void>((resolve, reject) => {
@@ -197,10 +231,20 @@ async function mockHttpMcp(): Promise<{
 	return {
 		url: `http://127.0.0.1:${address.port}/mcp`,
 		requests: () => requestCount,
-		close: () =>
-			new Promise<void>((resolve, reject) =>
+		listening: () => streams.size > 0,
+		updateTools: (tools) => {
+			catalog = tools;
+			for (const stream of streams)
+				stream.write(
+					`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n\n`,
+				);
+		},
+		close: () => {
+			for (const stream of streams) stream.end();
+			return new Promise<void>((resolve, reject) =>
 				server.close((error) => (error ? reject(error) : resolve())),
-			),
+			);
+		},
 	};
 }
 
@@ -1825,3 +1869,482 @@ test("local MCP configuration exposes stdio and streamable HTTP tools and dispos
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	expect(fs.readFileSync(marker, "utf8")).toContain("closed");
 });
+
+function barrier() {
+	let release = () => {};
+	const promise = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	return { promise, release };
+}
+
+async function eventually(
+	check: () => boolean | Promise<boolean>,
+): Promise<void> {
+	for (let index = 0; index < 200; index++) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("catalog condition did not settle");
+}
+
+for (const exposure of ["direct", "deferred", "codemode"] as const) {
+	test(`late ${exposure} MCP tools reach a queued orchestrator follow-up without an idle submission`, async () => {
+		const dir = tempDir();
+		const delayed = barrier();
+		const active = barrier();
+		const started = barrier();
+		const listed = barrier();
+		const fast = await mockHttpMcp({
+			callGate: active.promise,
+			onCall: started.release,
+		});
+		const slow = await mockHttpMcp({
+			listGate: delayed.promise,
+			onList: listed.release,
+		});
+		fs.writeFileSync(
+			path.join(dir, "settings.json"),
+			JSON.stringify({ defaultTools: ["+codemode"] }),
+		);
+		fs.writeFileSync(
+			path.join(dir, "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					fast: { url: fast.url, exposure: "direct" },
+					slow: { url: slow.url, exposure },
+				},
+			}),
+		);
+		let host: DurableHost | undefined;
+		try {
+			const opened = await openHost(
+				dir,
+				{ readOnly: [], orchestrator: [] },
+				true,
+				true,
+			);
+			host = opened.host;
+			const { faux } = opened;
+			const ensured = await host.ensureRun({
+				runId: "late",
+				name: "late",
+				cwd: dir,
+				runEnvPath: writeRunEnv(dir),
+				toolPolicy: "orchestrator",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+			await listed.promise;
+			expect(host.toolDescriptionsForTest()).not.toHaveProperty(
+				"mcp__slow__http_echo",
+			);
+			faux.setResponses([
+				fauxAssistantMessage(
+					[
+						exposure === "codemode"
+							? fauxToolCall(CODEMODE_TOOL_NAME, {
+									code: 'return await tools.mcp__fast__http_echo({ text: "active-fast" });',
+								})
+							: fauxToolCall("mcp__fast__http_echo", { text: "active-fast" }),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("first done")]),
+				fauxAssistantMessage(
+					[
+						fauxToolCall(CODEMODE_TOOL_NAME, {
+							code: `const found = await searchTools("mcp__slow__http_structured"); if (!found.some(t => t.name === "mcp__slow__http_structured")) throw new Error("late tool missing"); return await tools.mcp__slow__http_structured({});`,
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("follow-up done")]),
+			]);
+			await host.submit("late", "hold fast call", "first");
+			await started.promise;
+			await host.submit("late", "discover and call late tool", "queued");
+			delayed.release();
+			const running = host;
+			await eventually(() =>
+				Object.hasOwn(
+					running.toolDescriptionsForTest(),
+					"mcp__slow__http_structured",
+				),
+			);
+			// Publication alone was insufficient before the fix. Keep the first call
+			// active until the same conversation's explicit selected set is current.
+			const internal = host as unknown as {
+				harness: import("@earendil-works/pi-durable").Harness;
+			};
+			const { BACKGROUND_CONTEXT } = await import(
+				"@earendil-works/chord/context"
+			);
+			const conversation = await internal.harness.conversation(
+				Number(
+					ensured.conversationId,
+				) as import("@earendil-works/pi-durable").ConversationId,
+				BACKGROUND_CONTEXT,
+			);
+			if (!conversation) throw new Error("conversation missing");
+			await eventually(async () =>
+				(await conversation.agent(BACKGROUND_CONTEXT)).callable.some(
+					(tool) => tool.name === "mcp__slow__http_structured",
+				),
+			);
+			active.release();
+			await settle(host, "late");
+			const entries = await host.entriesForTest("late");
+			expect(
+				toolResult(
+					[...entries].reverse(),
+					exposure === "codemode" ? CODEMODE_TOOL_NAME : "mcp__fast__http_echo",
+				),
+			).toContain("http:active-fast");
+			expect(toolResult(entries, CODEMODE_TOOL_NAME)).toContain(
+				"structured-value",
+			);
+			expect(toolResultFailed(entries, CODEMODE_TOOL_NAME)).toBe(false);
+			const registry = (host as unknown as { registry: Registry }).registry;
+			const structured = registry
+				.snapshot()
+				.tools()
+				.find(({ tool }) => tool.name === "mcp__slow__http_structured")?.tool;
+			const bridge = host as unknown as {
+				localPiBridge: {
+					owners: Map<
+						number,
+						{
+							tools: Map<
+								string,
+								{
+									definition: {
+										outputSchema?: ToolRegistration["structuredOutputSchema"];
+									};
+								}
+							>;
+						}
+					>;
+				};
+			};
+			const importedSchema = bridge.localPiBridge.owners
+				.get(Number(ensured.conversationId))
+				?.tools.get("mcp__slow__http_structured")?.definition.outputSchema;
+			expect(importedSchema).toBeDefined();
+			expect(structured?.structuredOutputSchema).toBe(importedSchema);
+			expect(structured?.structuredOutputSchema).toMatchObject({
+				properties: {
+					structuredContent: {
+						type: "object",
+						properties: { value: { type: "string" } },
+						required: ["value"],
+					},
+				},
+			});
+			const agent = await conversation.agent(BACKGROUND_CONTEXT);
+			const direct = agent.tools.some(
+				(tool) => tool.name === "mcp__slow__http_echo",
+			);
+			expect(direct).toBe(exposure === "direct");
+			if (exposure === "deferred") {
+				faux.setResponses([
+					fauxAssistantMessage(
+						[
+							fauxToolCall(TOOL_SEARCH_TOOL_NAME, {
+								query: "mcp__slow__http_echo",
+							}),
+						],
+						{ stopReason: "toolUse" },
+					),
+					fauxAssistantMessage(
+						[
+							fauxToolCall("mcp__slow__http_echo", {
+								text: "late-deferred-direct",
+							}),
+						],
+						{ stopReason: "toolUse" },
+					),
+					fauxAssistantMessage([fauxText("loaded")]),
+				]);
+				await host.submit(
+					"late",
+					"load deferred tool",
+					"deferred-native-search",
+				);
+				await settle(host, "late");
+				expect(
+					toolResult(await host.entriesForTest("late"), "mcp__slow__http_echo"),
+				).toContain("late-deferred-direct");
+			}
+		} finally {
+			delayed.release();
+			active.release();
+			await host?.shutdown();
+			await fast.close();
+			await slow.close();
+		}
+	}, 15000);
+}
+
+test("a late MCP registration does not leak through the shared registry into another owner", async () => {
+	const dir = tempDir();
+	const first = barrier();
+	const second = barrier();
+	let lists = 0;
+	const fast = await mockHttpMcp();
+	const slow = await mockHttpMcp({
+		listGate: () => (++lists === 1 ? first.promise : second.promise),
+	});
+	fs.writeFileSync(
+		path.join(dir, "settings.json"),
+		JSON.stringify({ defaultTools: ["+codemode"] }),
+	);
+	fs.writeFileSync(
+		path.join(dir, "mcp.json"),
+		JSON.stringify({
+			mcpServers: {
+				fast: { url: fast.url, exposure: "direct" },
+				slow: { url: slow.url, exposure: "codemode" },
+			},
+		}),
+	);
+	const { host, faux } = await openHost(dir);
+	try {
+		const internal = host as unknown as {
+			harness: import("@earendil-works/pi-durable").Harness;
+		};
+		const { BACKGROUND_CONTEXT } = await import(
+			"@earendil-works/chord/context"
+		);
+		const ids = [];
+		for (const runId of ["owner-one", "owner-two"]) {
+			const result = await host.ensureRun({
+				runId,
+				name: runId,
+				cwd: dir,
+				runEnvPath: writeRunEnv(dir),
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+			ids.push(
+				Number(
+					result.conversationId,
+				) as import("@earendil-works/pi-durable").ConversationId,
+			);
+		}
+		await eventually(() => lists === 2);
+		first.release();
+		const conversations = await Promise.all(
+			ids.map((id) => internal.harness.conversation(id, BACKGROUND_CONTEXT)),
+		);
+		const [one, two] = conversations;
+		if (!one || !two) throw new Error("owner conversation missing");
+		await eventually(async () =>
+			(await one.agent(BACKGROUND_CONTEXT)).callable.some(
+				(tool) => tool.name === "mcp__slow__http_echo",
+			),
+		);
+		expect(
+			(await two.agent(BACKGROUND_CONTEXT)).callable.some(
+				(tool) => tool.name === "mcp__slow__http_echo",
+			),
+		).toBe(false);
+		faux.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall(CODEMODE_TOOL_NAME, {
+						code: 'return await tools.mcp__slow__http_echo({ text: "must-not-execute" });',
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage([fauxText("done")]),
+		]);
+		const before = slow.requests();
+		await host.submit(
+			"owner-two",
+			"try another owner's imported tool",
+			"deny-other-owner",
+		);
+		await settle(host, "owner-two");
+		expect(slow.requests()).toBe(before);
+		expect(
+			toolResultFailed(
+				await host.entriesForTest("owner-two"),
+				CODEMODE_TOOL_NAME,
+			),
+		).toBe(true);
+	} finally {
+		first.release();
+		second.release();
+		await host.shutdown();
+		await fast.close();
+		await slow.close();
+	}
+}, 15000);
+
+test("MCP schema changes and removals wait for the active call, then reconcile at idle", async () => {
+	const dir = tempDir();
+	const active = barrier();
+	const started = barrier();
+	const fixture = await mockHttpMcp({
+		callGate: active.promise,
+		onCall: started.release,
+	});
+	fs.writeFileSync(
+		path.join(dir, "mcp.json"),
+		JSON.stringify({
+			mcpServers: { fixture: { url: fixture.url, exposure: "direct" } },
+		}),
+	);
+	const { host, faux } = await openHost(dir);
+	try {
+		await host.ensureRun({
+			runId: "changes",
+			name: "changes",
+			cwd: dir,
+			runEnvPath: writeRunEnv(dir),
+			toolPolicy: "default",
+			model: `${faux.getModel().provider}/${faux.getModel().id}`,
+		});
+		await eventually(fixture.listening);
+		const internal = host as unknown as { registry: Registry };
+		const definition = () =>
+			internal.registry
+				.snapshot()
+				.tools()
+				.find(({ tool }) => tool.name === "mcp__fixture__http_echo")?.tool;
+		const before = definition();
+		faux.setResponses([
+			fauxAssistantMessage(
+				[fauxToolCall("mcp__fixture__http_echo", { text: "still-running" })],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage([fauxText("done")]),
+		]);
+		await host.submit("changes", "hold call", "hold");
+		await started.promise;
+		fixture.updateTools([
+			{
+				name: "http_echo",
+				description: "Updated echo schema",
+				inputSchema: {
+					type: "object",
+					properties: {
+						text: { type: "string" },
+						revision: { type: "string" },
+					},
+					required: ["text"],
+				},
+			},
+		]);
+		// tools/list is a server-side observation that the notification was consumed.
+		const count = fixture.requests();
+		await eventually(() => fixture.requests() > count);
+		expect(definition()).toBe(before);
+		active.release();
+		await settle(host, "changes");
+		await eventually(() =>
+			JSON.stringify(definition()?.parameters).includes("revision"),
+		);
+		expect(
+			toolResult(
+				await host.entriesForTest("changes"),
+				"mcp__fixture__http_echo",
+			),
+		).toContain("still-running");
+		fixture.updateTools([]);
+		// A removed registration may remain in the shared registry; authorization
+		// is the owning conversation's selection, never global registry presence.
+		const bridge = host as unknown as {
+			localPiBridge: { owners: Map<unknown, { tools: Map<string, unknown> }> };
+		};
+		await eventually(() =>
+			[...bridge.localPiBridge.owners.values()].every(
+				(owner) => !owner.tools.has("mcp__fixture__http_echo"),
+			),
+		);
+	} finally {
+		active.release();
+		await host.shutdown();
+		await fixture.close();
+	}
+}, 15000);
+
+test("late denied tools and never-ready servers stay bounded and cannot resurrect disposed owners", async () => {
+	const dir = tempDir();
+	const gate = barrier();
+	const waiting = barrier();
+	const neverReady = barrier();
+	const unavailableListed = barrier();
+	const lateResponse = barrier();
+	const fast = await mockHttpMcp();
+	const slow = await mockHttpMcp({
+		listGate: gate.promise,
+		onList: waiting.release,
+	});
+	const unavailable = await mockHttpMcp({
+		listGate: neverReady.promise,
+		onList: unavailableListed.release,
+		onListFinished: lateResponse.release,
+	});
+	fs.writeFileSync(
+		path.join(dir, "mcp.json"),
+		JSON.stringify({
+			mcpServers: {
+				fast: { url: fast.url, exposure: "direct" },
+				slow: { url: slow.url, exposure: "direct" },
+				unavailable: { url: unavailable.url, exposure: "direct" },
+			},
+		}),
+	);
+	const { host, faux } = await openHost(dir);
+	try {
+		const start = Date.now();
+		await host.ensureRun({
+			runId: "denied",
+			name: "denied",
+			cwd: dir,
+			runEnvPath: writeRunEnv(dir),
+			toolPolicy: "read-only",
+			model: `${faux.getModel().provider}/${faux.getModel().id}`,
+		});
+		expect(Date.now() - start).toBeLessThan(4000);
+		await waiting.promise;
+		await unavailableListed.promise;
+		const internal = host as unknown as {
+			localPiBridge: {
+				owners: Map<
+					import("@earendil-works/pi-durable").ConversationId,
+					unknown
+				>;
+				toolsForPolicy: (
+					id: import("@earendil-works/pi-durable").ConversationId,
+					policy: "read-only",
+				) => readonly unknown[];
+			};
+			piCatalogWatches: Map<unknown, unknown>;
+		};
+		gate.release();
+		await eventually(() =>
+			Object.hasOwn(host.toolDescriptionsForTest(), "mcp__slow__http_echo"),
+		);
+		for (const id of internal.localPiBridge.owners.keys())
+			expect(internal.localPiBridge.toolsForPolicy(id, "read-only")).toEqual(
+				[],
+			);
+		// Shutdown while one server is still unavailable. Releasing it afterwards
+		// must not select or republish anything for the closed owner.
+		await host.shutdown();
+		neverReady.release();
+		await lateResponse.promise;
+		expect(internal.localPiBridge.owners.size).toBe(0);
+		expect(internal.piCatalogWatches.size).toBe(0);
+	} finally {
+		gate.release();
+		neverReady.release();
+		await host.shutdown();
+		await fast.close();
+		await slow.close();
+		await unavailable.close();
+	}
+}, 15000);
