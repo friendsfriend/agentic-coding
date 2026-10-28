@@ -39,8 +39,9 @@ test("questionnaire tabs show short labels and response state", async () => {
 		width: 100,
 		height: 30,
 	});
-	await t.flush();
-	const frame = t.captureCharFrame();
+	const frame = await t.waitForFrame((value) =>
+		value.includes("Choose the implementation"),
+	);
 	expect(frame).toContain(">[1 Choose the imple… ·]");
 	expect(frame).toContain("[2 Choose the test ✓]");
 	expect(frame).toContain("Choose the implementation");
@@ -109,13 +110,15 @@ test("question tabs use the ident and options mark the recommendation and detail
 		attempt++
 	) {
 		await new Promise((resolve) => setTimeout(resolve, 20));
+		await t.flush();
 		frame = t.captureCharFrame();
 	}
 	expect(frame).toContain("Evidence line.");
 	expect(frame).toContain("Background");
 	expect(frame).toContain("[1 scope");
 	expect(frame).toContain("Which scope?");
-	expect(frame).toContain("★ Recommended path  (d)");
+	expect(frame).toContain("★ Recommended path");
+	expect(frame).not.toContain("(d)");
 	expect(frame).toContain("Alternative path");
 	t.renderer.destroy();
 });
@@ -142,6 +145,39 @@ test("custom response textarea keeps newline content", async () => {
 	t.renderer.destroy();
 });
 
+test("decision reading area expands rationale and identifies missing explanations", async () => {
+	const t = await testRender(
+		() => (
+			<DeveloperQuestionModal
+				{...baseProps}
+				questions={[richQuestion("one", "scope", "Which scope?")]}
+				responseState={["unanswered"]}
+			/>
+		),
+		{ width: 120, height: 48 },
+	);
+	try {
+		let frame = t.captureCharFrame();
+		for (
+			let attempt = 0;
+			attempt < 50 && !frame.includes("Because it is smaller.");
+			attempt++
+		) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await t.flush();
+			frame = t.captureCharFrame();
+		}
+		expect(frame).toContain("Because it is smaller.");
+		expect(frame).toContain("Recommended by agent");
+		expect(frame).toContain("No explanation provided by the agent.");
+		expect(frame).toContain("Workflow: workflow · Run: run");
+		expect(frame).toContain("Question 1 of 1 · 0 answered");
+		expect(frame).not.toContain("(d)");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a login hand-off offers Done and Abort and no custom response", async () => {
 	const handoff: DeveloperDialogueRecord = {
 		...question(
@@ -165,7 +201,9 @@ test("a login hand-off offers Done and Abort and no custom response", async () =
 		),
 		{ width: 110, height: 32 },
 	);
-	let frame = await t.waitForFrame((value) => value.includes("Done"));
+	let frame = await t.waitForFrame((value) =>
+		value.includes("Log in to Grid integration as clerk"),
+	);
 	// The two answers the hand-off accepts are the only rows: no "Custom
 	// response…", because the modal cannot produce one the coordinator would
 	// read (add-stage-interactive-login).

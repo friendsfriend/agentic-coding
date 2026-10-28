@@ -24,7 +24,6 @@ import {
 interface OptionRow {
 	label: string;
 	recommended: boolean;
-	hasDetail: boolean;
 }
 
 export function DeveloperQuestionModal(props: {
@@ -51,39 +50,29 @@ export function DeveloperQuestionModal(props: {
 	const dimensions = useTerminalDimensions();
 	const compact = () => dimensions().height < 18;
 	const extremeCompact = () => dimensions().height < 12;
-	// Content budget: the modal's own height minus its fixed chrome (padding,
-	// header, field label, footer). The context, question, and option list then
-	// share what is left, so the question is never pushed out of the dialog by a
-	// greedy option list.
+	// One reading viewport owns question, context and full option explanations.
+	// Only the answer controls sit outside it, so long evidence stays reachable.
 	const contentBudget = () =>
 		Math.max(
 			3,
 			Math.min(
 				dimensions().height,
-				Math.floor(dimensions().height * (compact() ? 1 : 0.72)),
+				Math.floor(dimensions().height * (compact() ? 1 : 0.92)),
 			) - 5,
 		);
-	const fixedBudget = () => (extremeCompact() ? 3 : 6);
 	const contextHeight = () =>
-		extremeCompact()
-			? 1
-			: Math.max(
-					1,
-					Math.min(8, Math.floor((contentBudget() - fixedBudget()) * 0.5)),
-				);
+		Math.max(1, contentBudget() - optionLines() - (compact() ? 3 : 5));
 	const optionLines = () =>
 		extremeCompact()
 			? 1
 			: Math.max(
 					1,
-					Math.min(8, contentBudget() - fixedBudget() - contextHeight()),
+					Math.min(rows().length, Math.floor(contentBudget() * 0.25)),
 				);
 	const editorHeight = () =>
-		extremeCompact()
-			? 1
-			: Math.max(1, Math.min(6, contentBudget() - contextHeight() - 4));
+		extremeCompact() ? 1 : Math.max(1, Math.min(6, optionLines()));
 	const contextWidth = () =>
-		Math.max(20, Math.floor(dimensions().width * 0.78) - 8);
+		Math.max(1, Math.floor(dimensions().width * 0.92) - 8);
 	const tinyHelp = () => dimensions().width < 60;
 	const compactHelp = () => compact() || dimensions().width * 0.78 < 95;
 	createEffect(() => contextScroll?.scrollTo(props.promptOffset));
@@ -100,11 +89,10 @@ export function DeveloperQuestionModal(props: {
 			return {
 				label: resolved.label,
 				recommended: resolved.recommended === true,
-				hasDetail: Boolean(resolved.description?.trim()),
 			};
 		}),
 		...(offersCustom()
-			? [{ label: "Custom response…", recommended: false, hasDetail: false }]
+			? [{ label: "Custom response…", recommended: false }]
 			: []),
 	];
 	const shortLabel = (item: DeveloperDialogueRecord) => {
@@ -139,9 +127,9 @@ export function DeveloperQuestionModal(props: {
 		<GenericModal
 			dismissKind="developer-question"
 			title={`Developer input · ${question()?.role ?? "agent"}`}
-			fieldLabel="Questionnaire"
-			widthPercent={0.78}
-			heightPercent={compact() ? 1 : 0.72}
+			fieldLabel={`Question ${props.activeIndex + 1} of ${props.questions.length} · ${props.responseState.filter((state) => state === "answered").length} answered`}
+			widthPercent={0.92}
+			heightPercent={compact() ? 1 : 0.92}
 			zIndex={20}
 			help={
 				props.custom
@@ -232,50 +220,94 @@ export function DeveloperQuestionModal(props: {
 				<Show when={question()} fallback={<box />}>
 					{(item) => (
 						<>
-							{/* Markdown context box: the background the developer needs to
-							    answer confidently, scrollable on its own. */}
-							<Show
-								when={item().context?.trim()}
-								fallback={<box style={{ height: 0 }} />}
+							<ScrollableContent
+								onScrollBoxReady={(scrollbox) => {
+									contextScroll = scrollbox;
+								}}
+								style={{
+									height: contextHeight(),
+									maxHeight: contextHeight(),
+									flexGrow: 0,
+								}}
 							>
-								{(context) => (
-									<ScrollableContent
-										onScrollBoxReady={(scrollbox) => {
-											contextScroll = scrollbox;
-										}}
-										style={{
-											height: contextHeight(),
-											maxHeight: contextHeight(),
-											flexGrow: 0,
-										}}
+								<box width="100%" flexDirection="column" gap={1} flexShrink={0}>
+									<text
+										fg={uiColors.textPrimary}
+										attributes={TextAttributes.BOLD}
 									>
-										<MarkdownViewer
-											content={context()}
-											width={contextWidth()}
-										/>
-									</ScrollableContent>
-								)}
-							</Show>
-							{/* The question itself, separated from its background. */}
-							<box width="100%" flexDirection="column">
-								<text
-									fg={uiColors.textPrimary}
-									attributes={TextAttributes.BOLD}
-								>
-									{item().description}
-								</text>
-								<Show when={!compact()} fallback={<box />}>
-									<box>
-										<text fg={uiColors.textMuted}>
-											Requester: {item().role} · {item().stepId}
-											{item().targetRole
-												? " · also routed to the orchestrator"
-												: ""}
-											{deadlineLine(item().expiresAt)}
-										</text>
-									</box>
-								</Show>
-							</box>
+										{item().description}
+									</text>
+									<text fg={uiColors.textMuted}>
+										Requester: {item().role} · {item().stepId}
+										{"\n"}
+										Workflow: {item().workflowId} · Run: {item().runId}
+										{item().targetRole
+											? " · also routed to the orchestrator"
+											: ""}
+										{deadlineLine(item().expiresAt)}
+									</text>
+									<Show when={item().context?.trim()}>
+										{(context) => (
+											<box flexDirection="column" flexShrink={0} gap={1}>
+												<text
+													fg={uiColors.textMuted}
+													attributes={TextAttributes.BOLD}
+												>
+													Context
+												</text>
+												<MarkdownViewer
+													content={context()}
+													width={contextWidth()}
+												/>
+											</box>
+										)}
+									</Show>
+									<text
+										fg={uiColors.textMuted}
+										attributes={TextAttributes.BOLD}
+									>
+										Choices · rationale and trade-offs
+									</text>
+									<For each={options()}>
+										{(option, index) => {
+											const resolved = () =>
+												resolveDeveloperQuestionOption(option);
+											return (
+												<box flexDirection="column" flexShrink={0} gap={1}>
+													<text
+														fg={
+															resolved().recommended
+																? uiColors.highlight
+																: uiColors.textPrimary
+														}
+														attributes={TextAttributes.BOLD}
+													>
+														{index() + 1}. {resolved().label}
+														{resolved().recommended
+															? " · Recommended by agent"
+															: ""}
+													</text>
+													<Show
+														when={resolved().description?.trim()}
+														fallback={
+															<text fg={uiColors.textMuted}>
+																No explanation provided by the agent.
+															</text>
+														}
+													>
+														{(detail) => (
+															<MarkdownViewer
+																content={detail()}
+																width={contextWidth()}
+															/>
+														)}
+													</Show>
+												</box>
+											);
+										}}
+									</For>
+								</box>
+							</ScrollableContent>
 							<box width="100%" flexDirection="column">
 								<Show
 									when={props.custom}
@@ -302,7 +334,6 @@ export function DeveloperQuestionModal(props: {
 														>
 															{row.recommended ? "★ " : "  "}
 															{row.label}
-															{row.hasDetail ? "  (d)" : ""}
 														</text>
 													</box>
 												)}

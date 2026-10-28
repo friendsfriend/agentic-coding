@@ -150,7 +150,7 @@ test("d opens the selected option's markdown detail modal", async () => {
 	t.renderer.destroy();
 });
 
-test("page down scrolls a long option-detail markdown modal", async () => {
+test("page down reaches expanded option rationale in the question reading area", async () => {
 	const lines = Array.from({ length: 60 }, (_, index) => `line-${index + 1}`);
 	lines[0] = "ALPHA_START";
 	lines[59] = "OMEGA_END";
@@ -173,17 +173,12 @@ test("page down scrolls a long option-detail markdown modal", async () => {
 		),
 		{ width: 120, height: 40 },
 	);
-	await t.waitForFrame((value) => value.includes("Developer input"));
-	t.mockInput.pressKey("d");
-	const initial = await t.waitForFrame((value) =>
-		value.includes("ALPHA_START"),
-	);
+	await t.waitForFrame((value) => value.includes("ALPHA_START"));
+	const initial = t.captureCharFrame();
 	expect(initial).toContain("ALPHA_START");
 	t.mockInput.pressKey("pagedown");
-	const scrolled = await t.waitForFrame(
-		(value) => !value.includes("ALPHA_START"),
-	);
-	expect(scrolled).not.toContain("ALPHA_START");
+	const scrolled = await t.waitForFrame((value) => value.includes("line-10"));
+	expect(scrolled).toContain("line-10");
 	t.renderer.destroy();
 });
 
