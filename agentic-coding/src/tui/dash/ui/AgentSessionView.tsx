@@ -74,6 +74,7 @@ import {
 } from "../agent-session.ts";
 import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
+import { paintPromptCursor } from "./prompt-cursor.ts";
 import { Spinner } from "./Spinner.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
@@ -2449,9 +2450,12 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							flexGrow={1}
 							paddingLeft={2}
 							paddingRight={2}
+							renderAfter={(buffer) => {
+								if (inputRef) paintPromptCursor.call(inputRef, buffer);
+							}}
 						>
 							<textarea
-								cursorStyle={{ style: "block", blinking: false }}
+								showCursor={false}
 								ref={(editor) => {
 									inputRef = editor;
 								}}
