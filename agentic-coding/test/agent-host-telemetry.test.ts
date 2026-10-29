@@ -65,6 +65,12 @@ describe("tool-call telemetry shape", () => {
 		secret?: string;
 	}): Promise<{ dir: string; envelopes: Array<Record<string, unknown>> }> {
 		const dir = tempWorkflowDir();
+		fs.writeFileSync(path.join(dir, "note.txt"), "nested read fixture");
+		if (options.tool === "codemode")
+			fs.writeFileSync(
+				path.join(dir, "settings.json"),
+				JSON.stringify({ defaultTools: ["+codemode"] }),
+			);
 		const layout = hostLayout(dir);
 		const faux = fauxProvider();
 		const models = createModels();
@@ -158,6 +164,46 @@ describe("tool-call telemetry shape", () => {
 		expect(end?.outcome).toBe("ok");
 		expect(end?.["pi.tool.failure_kind"]).toBeUndefined();
 		expect(end?.["pi.tool.result_bytes"]).toBeGreaterThan(0);
+	});
+
+	test("successful nested codemode reads are not host errors or a dead surface", async () => {
+		const { envelopes } = await runToolTurn({
+			tool: "codemode",
+			args: {
+				code: 'for (let i = 0; i < 6; i++) await tools.read({ path: "note.txt" }); return "done";',
+			},
+			callId: "req-nested-success",
+		});
+		const reads = envelopes.filter(
+			(e) => e.event === "runtime.tool" && e["pi.tool.name"] === "read",
+		);
+		expect(reads).toHaveLength(6);
+		for (const read of reads) {
+			expect(read["pi.tool.ok"]).toBe(true);
+			expect(read["pi.tool.failure_kind"]).toBeUndefined();
+			expect(read["pi.tool.result_bytes"]).toBeGreaterThan(0);
+		}
+		expect(envelopes.some((e) => e.event === "run.fail-fast")).toBe(false);
+		expect(
+			envelopes.find(
+				(e) => e.event === "runtime.tool" && e["pi.tool.name"] === "codemode",
+			)?.["pi.tool.ok"],
+		).toBe(true);
+	});
+
+	test("failed nested reads retain their actual failure kind", async () => {
+		const { envelopes } = await runToolTurn({
+			tool: "codemode",
+			args: {
+				code: 'return await tools.read({ path: "missing-nested.txt" });',
+			},
+			callId: "req-nested-error",
+		});
+		const read = envelopes.find(
+			(e) => e.event === "runtime.tool" && e["pi.tool.name"] === "read",
+		);
+		expect(read?.["pi.tool.ok"]).toBe(false);
+		expect(read?.["pi.tool.failure_kind"]).toBe("not-found");
 	});
 
 	test("a secret-looking argument never reaches the telemetry file", async () => {

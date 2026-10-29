@@ -17,6 +17,7 @@ import { telemetryWorkspaceRemoved } from "../workflow/observability.ts";
 import {
 	classifyToolFailure,
 	type ToolFailureKind,
+	type ToolResultEntryLike,
 	toolArgsTelemetry,
 	toolFailureLine,
 	toolResultTelemetry,
@@ -549,17 +550,38 @@ export async function attachTelemetry(
 					// The run that began this call, not the run bound when it ended.
 					const owner = callOwners.get(event.toolCallId) ?? current;
 					callOwners.delete(event.toolCallId);
-					const result = toolResultTelemetry(event.entry);
-					// A result entry that never survived is a host error (the tool task
-					// faulted or was orphaned); a surviving one states its own error flag,
-					// so a failed `edit` is no longer recorded as a success.
-					const isError = event.entry === undefined || result?.isError === true;
-					const failureKind = isError
-						? classifyToolFailure(event.entry)
-						: undefined;
+					// Model-issued calls carry an entry; nested calls (including codemode
+					// reads) carry a result instead. Only absence of both is a host error.
+					const entry: ToolResultEntryLike | undefined =
+						event.entry ??
+						(event.result === undefined
+							? undefined
+							: {
+									model: [
+										{
+											role: "toolResult",
+											isError: event.result.isError,
+											content: [
+												{
+													type: "text",
+													text:
+														typeof event.result.structuredOutput === "string"
+															? event.result.structuredOutput
+															: (JSON.stringify(
+																	event.result.structuredOutput,
+																) ?? ""),
+												},
+											],
+										},
+									],
+									data: { diagnostics: event.result.diagnostics },
+								});
+					const result = toolResultTelemetry(entry);
+					const isError = entry === undefined || result?.isError === true;
+					const failureKind = isError ? classifyToolFailure(entry) : undefined;
 					const turn =
 						tracked?.turnIndex ?? (turnIndex < 0 ? undefined : turnIndex);
-					const errorLine = isError ? toolFailureLine(event.entry) : undefined;
+					const errorLine = isError ? toolFailureLine(entry) : undefined;
 					// The envelope of the call, under the run that began it — the same identity
 					// the outcome below is reported with.
 					emit(owner, "runtime.tool", {
