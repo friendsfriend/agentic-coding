@@ -131,11 +131,7 @@ export function AgentSidebar(props: AgentSidebarProps) {
 		return "";
 	};
 	const compactSourceMark = (): string =>
-		props.sourceState === "loading"
-			? "Load…"
-			: props.sourceState === "stale"
-				? "Stale"
-				: "";
+		props.sourceState === "loading" ? "Load…" : "";
 	const textWidth = () => Math.max(0, width() - 5);
 
 	return (
@@ -165,15 +161,7 @@ export function AgentSidebar(props: AgentSidebarProps) {
 						</box>
 						<Show when={compactSourceMark()}>
 							<box height={1} flexShrink={0} paddingLeft={1}>
-								<text
-									fg={
-										props.sourceState === "stale"
-											? uiColors.warning
-											: uiColors.textMuted
-									}
-								>
-									{compactSourceMark()}
-								</text>
+								<text fg={uiColors.textMuted}>{compactSourceMark()}</text>
 							</box>
 						</Show>
 						<box {...wheel} flexGrow={1} minHeight={0} overflow="hidden">
@@ -219,9 +207,6 @@ export function AgentSidebar(props: AgentSidebarProps) {
 					style={{ flexGrow: 1, minHeight: 0 }}
 					accessory={
 						<box style={{ flexDirection: "row", gap: 1 }}>
-							<Show when={props.sourceState === "stale"}>
-								<text fg={uiColors.warning}>stale</text>
-							</Show>
 							<text
 								fg={
 									toggleHover.hovered()

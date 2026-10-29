@@ -119,7 +119,7 @@ test("stale observations keep their known rows and narrow allocations use compac
 	);
 	try {
 		await t.flush();
-		expect(t.captureCharFrame()).toContain("stale");
+		expect(t.captureCharFrame()).not.toContain("stale");
 		expect(t.captureCharFrame()).toContain("implementer");
 	} finally {
 		t.renderer.destroy();
@@ -196,7 +196,7 @@ test("compact source cues distinguish loading and stale data with or without cac
 				try {
 					await t.flush();
 					const frame = t.captureCharFrame();
-					expect(frame.includes("Stale")).toBe(sourceState === "stale");
+					expect(frame).not.toContain("Stale");
 					expect(frame.includes("Load…")).toBe(sourceState === "loading");
 					expect(frame).not.toContain("Off");
 					if (rows.length) expect(frame).toContain("im…");

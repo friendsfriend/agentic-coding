@@ -94,6 +94,12 @@ and route tests, then the whole-project lint/type-check gates.
   retained rows stay reachable through the transcript's own scrollbar.
 - Expanded shell views do not compute their unused compact preview. Diff hover
   decorations coalesce into one native rebuild (see `patches/README.md`).
+- Scrolling away from the bottom immediately disables transcript following,
+  including a single-line scroll before an output frame. A retained visible-row
+  anchor compensates for layout changes above the reader. Layout and anchor
+  corrections cannot resume following; returning to the bottom or explicitly
+  jumping to latest can. The prompt pulse stays mounted and invalidates only
+  its paint node on animation ticks, without rebuilding transcript content.
 
 Structural regression tests live in `test/dash/transcriptPerformance.test.ts`,
 `test/dash/transcriptPerformance.test.tsx`, and `test/progress-publisher.test.ts`.

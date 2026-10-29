@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { uiColors } from "@agentic-coding/ui";
-import { parseColor } from "@opentui/core";
+import { getTimelineEngine, parseColor } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import {
 	PromptPulse,
@@ -105,5 +105,24 @@ test("idle prompts stay blank and errors retain the static error line", async ()
 		} finally {
 			t.renderer.destroy();
 		}
+	}
+});
+
+test("animation ticks repaint the existing line without transcript updates", async () => {
+	const t = await testRender(() => <PromptPulse active />, {
+		width: 30,
+		height: 1,
+	});
+	try {
+		await t.renderOnce();
+		const before = t.captureSpans();
+		getTimelineEngine(t.renderer).update(600);
+		await t.renderOnce();
+		expect(t.captureSpans()).not.toEqual(before);
+		expect(t.captureCharFrame().trim()).toBe("▔".repeat(30));
+		await t.renderOnce();
+		expect(t.captureCharFrame().trim()).toBe("▔".repeat(30));
+	} finally {
+		t.renderer.destroy();
 	}
 });

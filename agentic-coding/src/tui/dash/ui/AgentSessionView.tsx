@@ -1615,6 +1615,17 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	 * was looking at.
 	 */
 	let pendingAnchor: { row: Renderable; screenY: number } | undefined;
+	let readingAnchor: { row: Renderable; offset: number } | undefined;
+	let restoringScroll = false;
+	let sampledHeight = 0;
+	let sampledViewportHeight = 0;
+	const rememberReadingPlace = () => {
+		const row = anchorRow();
+		readingAnchor =
+			row && scrollBox
+				? { row, offset: row.screenY - scrollBox.viewport.screenY }
+				: undefined;
+	};
 
 	/** The first row at or below the viewport's top edge. */
 	const anchorRow = (): Renderable | undefined => {
@@ -2022,8 +2033,11 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const onFrame = () => {
 			const box = scrollBox;
 			if (!box) return;
+			restoringScroll = true;
 			const jump = pendingJump;
 			if (jump?.kind === "latest") {
+				readingAnchor = undefined;
+				setAwayFromBottom(false);
 				pendingJump = undefined;
 				box.stickyScroll = true;
 				box.scrollTo(box.scrollHeight);
@@ -2035,12 +2049,27 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				);
 				const row = box.content.getChildren()[0]?.getChildren()[index];
 				if (index >= 0 && row && !row.isDestroyed) {
+					readingAnchor = undefined;
 					pendingJump = undefined;
 					box.stickyScroll = false;
 					box.scrollTo(
 						Math.max(0, box.scrollTop + row.screenY - box.viewport.screenY),
 					);
 				}
+			}
+			if (
+				!jump &&
+				!pendingAnchor &&
+				!pendingLoad &&
+				awayFromBottom() &&
+				readingAnchor &&
+				!readingAnchor.row.isDestroyed
+			) {
+				const moved =
+					readingAnchor.row.screenY -
+					box.viewport.screenY -
+					readingAnchor.offset;
+				if (moved !== 0) box.scrollTop += moved;
 			}
 			if (pendingAnchor) {
 				const moved = pendingAnchor.row.screenY - pendingAnchor.screenY;
@@ -2055,13 +2084,19 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				}
 			}
 			const away =
+				awayFromBottom() ||
 				box.scrollTop < Math.max(0, box.scrollHeight - box.viewport.height);
 			if (away !== awayFromBottom()) setAwayFromBottom(away);
+			box.stickyScroll = !away;
 			if (!away) {
 				setAnchor(undefined);
 				setLatestHovered(false);
 			}
 			viewport.sample();
+			if (away) rememberReadingPlace();
+			sampledHeight = box.scrollHeight;
+			sampledViewportHeight = box.viewport.height;
+			restoringScroll = false;
 		};
 		renderer.on(CliRenderEvents.FRAME, onFrame);
 		onCleanup(() => renderer.off(CliRenderEvents.FRAME, onFrame));
@@ -2080,6 +2115,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		scrollBox = box;
 		viewport.box = box;
 		const onScroll = () => {
+			// Scrollbar changes also come from layout, clamping and our own anchor
+			// corrections. Only reader navigation may resume bottom following.
+			if (restoringScroll || pendingJump) return;
+			if (
+				awayFromBottom() &&
+				(box.scrollHeight !== sampledHeight ||
+					box.viewport.height !== sampledViewportHeight)
+			)
+				return;
 			// The box only re-reads "the reader scrolled away from the bottom"
 			// from its own `scrollTop` setter, which a `scrollBy` from the keymap
 			// bypasses: without this the next frame would yank the viewport back
@@ -2092,8 +2136,12 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			const away =
 				box.scrollTop < Math.max(0, box.scrollHeight - box.viewport.height);
 			setAwayFromBottom(away);
-			if (away) freezeWindow();
-			else {
+			box.stickyScroll = !away;
+			if (away) {
+				freezeWindow();
+				rememberReadingPlace();
+			} else {
+				readingAnchor = undefined;
 				setAnchor(undefined);
 				setLatestHovered(false);
 			}
@@ -2392,22 +2440,10 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						    while working, held static red on error, a plain line when
 						    idle (so the prompt never changes height, and an idle prompt
 						    runs no animation). */}
-						<Show
-							when={props.working || props.error !== undefined}
-							fallback={
-								<box
-									width="100%"
-									height={1}
-									flexShrink={0}
-									backgroundColor={uiColors.bgMantle}
-								/>
-							}
-						>
-							<PromptPulse
-								active={props.working}
-								error={props.error !== undefined && !props.working}
-							/>
-						</Show>
+						<PromptPulse
+							active={props.working}
+							error={props.error !== undefined && !props.working}
+						/>
 						<box
 							flexDirection="column"
 							flexGrow={1}

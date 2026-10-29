@@ -53,16 +53,25 @@ export interface PromptPulseProps {
 }
 
 export function PromptPulse(props: PromptPulseProps) {
+	let line: BoxRenderable | undefined;
 	const state = { progress: 0 };
 	const timeline = useTimeline({
 		duration: PULSE_MS,
 		loop: true,
 		autoplay: false,
 	});
-	timeline.add(state, { progress: 1, duration: PULSE_MS, ease: "linear" });
+	timeline.add(state, {
+		progress: 1,
+		duration: PULSE_MS,
+		ease: "linear",
+		// Updating a plain animation target does not dirty the native paint node.
+		// Repaint this line, not the prompt or transcript, on every animation tick.
+		onUpdate: () => line?.requestRender(),
+	});
 	createEffect(() => {
 		if (props.active && !props.error) timeline.play();
 		else timeline.pause();
+		line?.requestRender();
 	});
 
 	const renderAfter = function (this: BoxRenderable, buffer: OptimizedBuffer) {
@@ -103,6 +112,15 @@ export function PromptPulse(props: PromptPulseProps) {
 	};
 
 	return (
-		<box width="100%" height={1} flexShrink={0} renderAfter={renderAfter} />
+		<box
+			ref={(node) => {
+				line = node;
+			}}
+			width="100%"
+			height={1}
+			flexShrink={0}
+			backgroundColor={uiColors.bgMantle}
+			renderAfter={renderAfter}
+		/>
 	);
 }

@@ -2022,6 +2022,94 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 	}
 });
 
+test("one upward scroll pauses following before the next output frame and returning to bottom resumes it", async () => {
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
+		Array.from({ length: 30 }, (_, index) => ({
+			id: `stable-${index}`,
+			kind: "result" as const,
+			text: `stable line ${index}`,
+			tone: "success" as const,
+		})),
+	);
+	let box: ScrollBoxRenderable | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value;
+				}}
+			/>
+		),
+		{ width: 80, height: 18 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		if (!box) throw new Error("Missing transcript scroll box");
+		box.scrollBy(-1);
+		const top = box.scrollTop;
+		setBlocks((current) => [
+			...current,
+			{ id: "live-one", kind: "result", text: "new output", tone: "success" },
+		]);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(box.scrollTop).toBe(top);
+		expect(box.stickyScroll).toBe(false);
+		const visibleLine = () => /stable line \d+/.exec(t.captureCharFrame())?.[0];
+		const reading = visibleLine();
+		expect(reading).toBeDefined();
+		setBlocks((current) =>
+			current.map((block, index) =>
+				index === 0
+					? {
+							...block,
+							text: "earlier content\nnow wraps\nonto several\nadditional lines\nabove the reader",
+						}
+					: block,
+			),
+		);
+		await t.renderOnce();
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(visibleLine()).toBe(reading);
+		expect(box.stickyScroll).toBe(false);
+		box.scrollTo(box.scrollHeight);
+		await t.renderOnce();
+		setBlocks((current) => [
+			...current,
+			{
+				id: "live-two",
+				kind: "result",
+				text: "latest output",
+				tone: "success",
+			},
+		]);
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(box.scrollTop).toBe(
+			Math.max(0, box.scrollHeight - box.viewport.height),
+		);
+		expect(t.captureCharFrame()).toContain("latest output");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("reaching the top loads the older rows the window left out", async () => {
 	const [blocks] = createSignal<readonly AgentSessionBlock[]>(
 		Array.from({ length: 80 }, (_, index) => ({
