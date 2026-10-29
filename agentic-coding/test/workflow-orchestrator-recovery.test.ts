@@ -530,6 +530,7 @@ describe("revision-bound orchestrator recovery", () => {
 						revision: f.snapshot.revision,
 						targetStep,
 						reason: "not an approval",
+						principal: "orchestrator",
 					}),
 				).toThrow();
 		});

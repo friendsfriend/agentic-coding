@@ -1698,7 +1698,7 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("cross-step repair is refused while developer CAS and gate actions remain available", () => {
+	test("manual cross-step repair restores the picker while orchestrator recovery stays bounded", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-repair-"));
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -1712,16 +1712,39 @@ describe("transactional workflow runtime", () => {
 			});
 			const startedView = advanceRouting(engine, repo, result.view);
 			const oldRun = requireDefined(startedView.runs[0], "first run");
+			const targets = engine.previewRepair(repo, startedView.workflowId);
+			expect(targets.map((target) => target.targetStep)).toContain(
+				"core.plan-approval",
+			);
+			expect(targets.map((target) => target.targetStep)).toContain(
+				"core.implementation",
+			);
+			expect(targets.map((target) => target.targetStep)).not.toContain(
+				"core.route-apply",
+			);
+			// Routing fixture claims setup effects too; settle them without running
+			// adapters. The pending plan run remains unstarted and may be retired.
+			const db = new Database(canonicalStorePath(repo));
+			db.query(
+				"UPDATE workflow_outbox SET status='completed',lease=NULL,lease_expires_at=NULL WHERE status='running'",
+			).run();
+			db.close();
+			const command = {
+				type: "operator.repair" as const,
+				workflowId: startedView.workflowId,
+				revision: startedView.revision,
+				targetStep: "core.plan-approval",
+				reason: "operator confirmed evidence",
+			};
 			expect(() =>
-				engine.dispatch(repo, {
-					type: "operator.repair",
-					workflowId: startedView.workflowId,
-					revision: startedView.revision,
-					targetStep: "core.plan-approval",
-					reason: "operator confirmed evidence",
-				}),
+				engine.dispatch(repo, { ...command, principal: "orchestrator" }),
 			).toThrow(/Cross-step repair/);
-			const repaired = finishPlanFixture(engine, repo, startedView.workflowId);
+			const repaired = engine.dispatch(repo, command);
+			expect(repaired.snapshot.repaired?.fromStep).toBe(
+				startedView.currentStep.id,
+			);
+			expect(repaired.snapshot.step.mode).toBeUndefined();
+			expect(repaired.snapshot.step.context).toBeUndefined();
 			expect(repaired.view.status).toBe("active");
 			expect(repaired.view.currentStep.id).toBe("core.plan-approval");
 			expect(engine.getRun(repo, oldRun.id).status).toBe("expired");
@@ -1762,6 +1785,65 @@ describe("transactional workflow runtime", () => {
 					actionId: "approve-plan",
 				}),
 			).toThrow(/stale revision/);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("manual step repair refuses working agents, leased effects and incompatible targets", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "manual-repair-safety-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			const started = engine.start({
+				repo,
+				workflowId: "manual-repair-safety",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: routing(),
+			});
+			const command = {
+				type: "operator.repair" as const,
+				workflowId: started.view.workflowId,
+				revision: started.view.revision,
+				targetStep: "core.developer-review",
+				reason: "developer selected destination",
+			};
+			const db = new Database(canonicalStorePath(repo));
+			try {
+				db.query(
+					"UPDATE workflow_runs SET status='working' WHERE status='pending'",
+				).run();
+				expect(() => engine.dispatch(repo, command)).toThrow(/still working/);
+				db.query(
+					"UPDATE workflow_runs SET status='pending' WHERE status='working'",
+				).run();
+				const leases = engine.claimEffects(repo, 1);
+				expect(leases).toHaveLength(1);
+				expect(() => engine.dispatch(repo, command)).toThrow(
+					/effect is leased/,
+				);
+				db.query(
+					"UPDATE workflow_outbox SET status='completed',lease=NULL,lease_expires_at=NULL WHERE status='running'",
+				).run();
+				for (const targetStep of ["unknown.step", "core.route-apply"]) {
+					expect(() =>
+						engine.dispatch(repo, { ...command, targetStep }),
+					).toThrow(/incompatible repair target/);
+				}
+				expect(engine.getSnapshot(repo, command.workflowId).revision).toBe(
+					command.revision,
+				);
+				expect(() =>
+					engine.dispatch(repo, { ...command, revision: command.revision + 1 }),
+				).toThrow(/stale revision/);
+			} finally {
+				db.close();
+			}
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

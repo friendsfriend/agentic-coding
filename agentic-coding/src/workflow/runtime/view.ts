@@ -686,17 +686,23 @@ export function previewRepair(
 			snapshot.definition.version,
 			snapshot.definition.digest,
 		);
-		const recovery = inspectRecovery(db, snapshot, definition, registry);
-		return [
-			{
-				targetStep: snapshot.currentStep,
-				label: registry.stepForDefinition(definition, snapshot.currentStep)
-					.label,
-				expiresRuns: recovery.affectedRuns,
-				retainedEvidence: recovery.retainedEvidence,
-				recovery,
-			},
-		];
+		// This is the developer's manual repair picker, not the orchestrator's
+		// bounded current-step recovery preview. A human chooses the destination.
+		const activeRuns = runs(db, snapshot.workflowId).filter(
+			(run) => run.status === "pending" || run.status === "working",
+		);
+		return definition.steps
+			.filter(
+				(stepId) =>
+					!definition.terminal.includes(stepId) &&
+					registry.stepForDefinition(definition, stepId).actor !== "system",
+			)
+			.map((stepId) => ({
+				targetStep: stepId,
+				label: registry.stepForDefinition(definition, stepId).label,
+				expiresRuns: activeRuns.map((run) => run.id),
+				retainedEvidence: snapshot.evidence.map((item) => item.digest),
+			}));
 	} finally {
 		db.close();
 	}

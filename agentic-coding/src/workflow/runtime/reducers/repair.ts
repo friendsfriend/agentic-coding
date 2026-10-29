@@ -14,9 +14,16 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
+import { openDebugRequestsForWorkflow } from "../debug-requests.ts";
 import { enterStep, expireRuns, freshStep } from "../kernel.ts";
 import { inspectRecovery, requireRecoveryText } from "../recovery.ts";
-import { nowIso, requireRevision, runs, validateStructure } from "../store.ts";
+import {
+	effects,
+	nowIso,
+	requireRevision,
+	runs,
+	validateStructure,
+} from "../store.ts";
 
 /** The repair record's own bounds. The reason is free text a developer typed, so
  * it is bounded and credential-masked exactly like every other recorded detail
@@ -92,13 +99,37 @@ export function repair(
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
-	if (command.targetStep !== snapshot.currentStep)
+	const boundedRecovery =
+		command.principal === "orchestrator" || command.recovery !== undefined;
+	if (boundedRecovery && command.targetStep !== snapshot.currentStep)
 		throw new WorkflowRuntimeError(
 			"invalid-repair",
-			"Cross-step repair is not supported; recovery cannot bypass human gates or artifact validity.",
+			"Cross-step repair is not supported for orchestrator recovery; use the developer's manual repair UI.",
 		);
+	// Human-directed step selection is distinct from automated recovery. It may
+	// retire unstarted work and revisit completed phases, but never interrupts a
+	// working agent, steals a lease, or abandons a pending question/debug request.
+	if (!boundedRecovery) {
+		const refusal =
+			snapshot.status === "closed"
+				? "A closed workflow cannot be repaired."
+				: runs(db, snapshot.workflowId).some((run) => run.status === "working")
+					? "A worker or debug run is still working; stop it before manual repair."
+					: effects(db, snapshot.workflowId).some(
+								(effect) => effect.status === "running",
+							)
+						? "An effect is leased; wait for it to settle before manual repair."
+						: openDebugRequestsForWorkflow(db, snapshot.workflowId).length > 0
+							? "A debug request is still open; collect or cancel it first."
+							: snapshot.developerDialogue.some(
+										(question) => question.status === "pending",
+									)
+								? "A question is pending; resolve it before manual repair."
+								: undefined;
+		if (refusal) throw new WorkflowRuntimeError("invalid-repair", refusal);
+	}
 	const preview = inspectRecovery(db, snapshot, definition, registry);
-	if (!preview.eligible)
+	if (boundedRecovery && !preview.eligible)
 		throw new WorkflowRuntimeError(
 			"invalid-repair",
 			preview.refusals.join(" "),
@@ -153,9 +184,9 @@ export function repair(
 	const retiredRuns = preview.affectedRuns;
 	const openEffects = openEffectIds(db, snapshot.workflowId);
 	expireRuns(db, snapshot, now);
-	// Inspection in this same transaction refused every live run, open debug
-	// request and lease. Retire only unclaimed work; never steal lifecycle work
-	// or rewrite a terminal blocked/failed outcome.
+	// The checks in this transaction refused working runs, open debug requests
+	// and leases. Retire only unclaimed work; never steal lifecycle work or
+	// rewrite a terminal blocked/failed outcome.
 	db.query(
 		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry')",
 	).run(snapshot.workflowId);
@@ -171,8 +202,10 @@ export function repair(
 	snapshot.status = "active";
 	const prior = snapshot.step;
 	snapshot.step = freshStep(prior.attempt + 1);
-	if (prior.context !== undefined) snapshot.step.context = prior.context;
-	if (prior.mode !== undefined) snapshot.step.mode = prior.mode;
+	if (source === command.targetStep) {
+		if (prior.context !== undefined) snapshot.step.context = prior.context;
+		if (prior.mode !== undefined) snapshot.step.mode = prior.mode;
+	}
 	snapshot.repaired = {
 		reason,
 		fromStep: source,
@@ -208,7 +241,12 @@ export function repair(
 				? { recovery: snapshot.repaired.recovery }
 				: {}),
 			counts: preview.counts,
-			consequences: preview.consequences,
+			consequences: boundedRecovery
+				? preview.consequences
+				: [
+						"Developer-selected step re-entry; prior outcomes, evidence and audit history are retained.",
+						"Unclaimed work is retired; no working agent or leased effect is interrupted.",
+					],
 			source,
 			target: command.targetStep,
 			reason,

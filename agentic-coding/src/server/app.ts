@@ -976,14 +976,12 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					);
 			}
 			if (path.endsWith("/recovery-preview")) {
-				const previews = await operations.runObservation({
-					kind: "repair-preview",
-					repo: decoded.repo,
-					workflowId: decoded.workflowId,
-				});
-				const preview = Array.isArray(previews)
-					? previews[0]?.recovery
-					: undefined;
+				// Automated recovery has its own current-step projection. Do not
+				// derive it from the developer's multi-target manual repair picker.
+				const preview = operations.view(
+					decoded.repo,
+					decoded.workflowId,
+				).recovery;
 				if (!preview || preview.revision !== decoded.revision)
 					return errorResponse(
 						409,
