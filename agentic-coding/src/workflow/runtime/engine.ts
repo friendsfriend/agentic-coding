@@ -2530,28 +2530,69 @@ export class WorkflowEngine {
 					? [at.toISOString(), at.toISOString(), kind]
 					: [at.toISOString(), at.toISOString()]) as [string, string]),
 			) as EffectRow[];
+		// Preflight every ready row before issuing any claim. A stale launch may
+		// occur *after* otherwise valid work for the same owner; claiming that
+		// work first would let a broken workflow partially execute. An invalid
+		// owner is isolated for this pass, not repaired or silently expired.
+		const contexts = new Map<
+			string,
+			{
+				snapshot: WorkflowSnapshot;
+				definition: CompiledWorkflowDefinition;
+				runList: WorkflowRun[];
+			}
+		>();
+		const invalidOwners = new Set<string>();
 		for (const row of rows) {
-			if (claimed.length + exhausted.length >= limit) break;
-			const owner = instance(db, row.workflow_id);
-			const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
-			let definition: CompiledWorkflowDefinition;
+			if (invalidOwners.has(row.workflow_id)) continue;
 			try {
-				definition = resolveDefinition(
+				let context = contexts.get(row.workflow_id);
+				if (!context) {
+					const owner = instance(db, row.workflow_id);
+					const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
+					const definition = resolveDefinition(
+						this.registry,
+						db,
+						snapshot.definition.id,
+						snapshot.definition.version,
+						snapshot.definition.digest,
+					);
+					const runList = runs(db, snapshot.workflowId);
+					validateSnapshot(snapshot, definition, runList, this.registry);
+					context = { snapshot, definition, runList };
+					contexts.set(row.workflow_id, context);
+				}
+				validateEffect(
+					row,
+					context.snapshot,
+					context.definition,
+					context.runList,
 					this.registry,
-					db,
-					snapshot.definition.id,
-					snapshot.definition.version,
-					snapshot.definition.digest,
 				);
 			} catch (error) {
-				// A stale workflow remains repairable through operator.repin, but its
-				// old outbox row must not block every newer workflow in this store —
-				// including the definition version a retired registry dropped.
-				if (staleDefinitionPin(error)) continue;
-				throw error;
+				if (
+					staleDefinitionPin(error) ||
+					(error instanceof WorkflowRuntimeError &&
+						error.code === "invalid-state")
+				) {
+					invalidOwners.add(row.workflow_id);
+					contexts.delete(row.workflow_id);
+					continue;
+				}
+				// Preserve the existing durable unsupported-kind diagnostic below.
+				// Unexpected defects/I/O failures still roll the transaction back.
+				if (
+					!(error instanceof WorkflowRuntimeError) ||
+					error.code !== "unknown-effect-kind"
+				)
+					throw error;
 			}
-			const runList = runs(db, snapshot.workflowId);
-			validateSnapshot(snapshot, definition, runList, this.registry);
+		}
+		for (const row of rows) {
+			if (claimed.length + exhausted.length >= limit) break;
+			const context = contexts.get(row.workflow_id);
+			if (!context) continue;
+			const { snapshot, definition, runList } = context;
 			let unsupportedKind: WorkflowRuntimeError | undefined;
 			try {
 				validateEffect(row, snapshot, definition, runList, this.registry);

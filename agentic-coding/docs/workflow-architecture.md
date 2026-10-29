@@ -20,6 +20,23 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
+### Repository-wide dispatch fault isolation
+
+A claim pass preflights its ready effects by workflow before issuing any claims.
+A typed snapshot/effect `invalid-state` error or unavailable definition pin
+excludes that owner's ready effects from the pass, even when valid-looking work
+precedes the offending row. Healthy sibling workflows can still claim work,
+including with the serial runner's limit of one. Unknown effect kinds retain
+their existing durable unsupported-kind handling; unexpected failures still
+abort and roll back the transaction.
+
+This is containment, not recovery: excluded snapshots, run outcomes, effect
+records, capabilities, leases and event history are not rewritten. In particular,
+a stale launch for an expired attempt is neither executed nor silently expired,
+and a current live lease is not taken over. The owning workflow still needs a
+supported repair; a successful claim for another workflow is not evidence that
+the damaged workflow has recovered.
+
 ### Explicit current-step recovery
 
 The home orchestrator uses `workflow_status` → `workflow_recovery_preview` →

@@ -1325,9 +1325,9 @@ describe("transactional workflow runtime", () => {
 			const view = engine.status(repo, "malformed");
 			expect(view.health.valid).toBe(false);
 			expect(view.health.diagnostic).toContain("step not in pinned definition");
-			expect(() => engine.claimEffects(repo)).toThrow(
-				/step not in pinned definition/,
-			);
+			// Claiming fails closed for this owner without failing the shared
+			// dispatcher. Commands still reject the malformed snapshot below.
+			expect(engine.claimEffects(repo)).toEqual([]);
 			expect(() =>
 				engine.dispatch(repo, {
 					type: "operator.repair",
@@ -2031,6 +2031,7 @@ describe("transactional workflow runtime", () => {
 					revision: atGate.view.revision,
 					targetStep: "core.plan-approval",
 					reason: "second pass",
+					principal: "orchestrator",
 				}),
 			).toThrow(/human reviews/);
 			const again = atGate;

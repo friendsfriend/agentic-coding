@@ -2451,6 +2451,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							paddingRight={2}
 						>
 							<textarea
+								cursorStyle={{ style: "block", blinking: false }}
 								ref={(editor) => {
 									inputRef = editor;
 								}}
