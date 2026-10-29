@@ -38,9 +38,11 @@ leased effects, pending questions/lifecycle work and completed current-attempt
 work refuse replacement. A racing claim changes the preview identity; dispatch
 and claim use the existing store transaction fence and stable outbox keys.
 
-**All cross-step repairs are refused**, including legacy direct operator calls.
-Non-agent human review/system steps cannot be re-entered by recovery. There is no
-new artifact-approval ledger: classifier gate decisions are not human approvals.
+Developer manual Repair retains its server-derived compatible multi-target list,
+including supported cross-step/review targets. It is separate from orchestrator
+recovery: the orchestrator can recover only its owned workflow's current agent
+step, never a human review/system step. Neither path fabricates human approval.
+There is no new artifact-approval ledger: classifier decisions are not approvals.
 Evidence, prior blocked/failed outcomes and arrival context/mode survive same-step
 retry, and later reviews remain normal graph transitions. Legacy empty operator
 reasons still decode but do not bypass these guards.
@@ -54,6 +56,68 @@ credential-masked before persistence and are never silently truncated. Compact
 status contains eligibility and limitations, not the instruction. Normal execution
 is requested only after the accepted commit; stale/repeated requests create no
 second attempt. No separate task-record lifecycle is introduced.
+
+#### Durable managed launch and `reconcile-launch`
+
+Ordinary launch uses the existing authenticated host control socket without the
+private parked-task recovery capability. That capability stays inherited and
+process-local; retry-target registration is optional, not admission authority.
+A surviving busy host is never restarted to manufacture launcher authority.
+
+Managed `admitWorkflowRun` requires a reachable, compatible workflow server.
+The host independently discovers and authenticates that server and verifies the
+exact live claim, current run/generation/step/attempt and legal effect before
+ensure and initial submit. The server supplies cwd, environment path, role name,
+profile and deterministic outbox request identity. Client paths, epochs or permits
+are not authority. There is no offline/unfenced fallback or implicit server start;
+unavailable/auth/version errors preserve intent with a bounded diagnostic. Legacy
+issued ownership can be explicitly reattached with its exact conversation, but
+legacy control cannot create a new managed admission or supersede a fenced role.
+
+`reconcile-launch` extends the existing preview/repair routes. A preview binds
+revision, source identities, hashed claim owner/expiry/attempt and fresh authenticated
+host observation. At most 32 launch/run identities are inspected; refused, unknown,
+malformed or unavailable observation is never absence. Live or renewed claims,
+questions, human gates, debug/consult/stop/cleanup barriers and completed work
+refuse. Matching admitted work may reattach in place, including a known working
+native request; mismatched request identity or unrelated working work refuses.
+
+Acceptance rechecks the inspected source in the workflow transaction, retires only
+scoped obsolete effects and requeues the SAME current run/effect/request with a
+fresh claim budget. It does not create an attempt or resubmit a second initial
+turn. Accepted reconciliation is not proof of running. Obsolete claimed work stays
+cancelled behind durable stop barriers, while verified absent expired obsolete
+claims can be retired. Native I/O never runs inside that SQLite transaction.
+
+Host run/role fences are version-1 documents committed through the existing
+harness API; workflow schema remains 6. Per-run and per-role serialization plus
+server re-verification rejects old owners. Initial native submit deduplicates by
+the server-derived request id across crashes and restart. Persisted managed handles
+also re-enter verified admission, never the generic reuse-and-prompt shortcut.
+Inspection serializes run and role ownership; a historical association never
+reports its successor's activity as its own. Accepted stop commits
+atomically record `stopping` and an unfinished-stop metadata index; startup settles
+that cancellation before native `resume()`, then commits `stopped` and removes the
+index entry. Successor ownership prevents late cleanup from aborting a rebound
+conversation. This index contains unfinished stop obligations only, not a second
+workflow queue or historical run map.
+
+| Transition / crash boundary | Invariant owner |
+| --- | --- |
+| Dispatch → outbox commit → claim | Workflow transaction and shared pure lifecycle eligibility |
+| Claim / renewal / publication | Exact current lease; source/revision CAS; old publication refused |
+| Ensure → initial submit → acknowledgement | Host run/role fence and native request dedup; acknowledgement is admission |
+| Handoff / same-step retry / cross-step replacement | Scoped run-effect retirement; terminal history and human gates retained |
+| Repair / preset switch / closure | Same retirement helper; claimed cancellation remains a stop barrier |
+| Repin | Compatibility validation; not a new admission or retry exemption |
+| Debug / consult | Explicit addressed lifecycle exceptions, never blanket historical-run revival |
+| Restart / delayed result | Durable stop settled before native resume; late owner cannot publish or abort successor |
+
+Status exposes `launchState` (`queued`, `launching`, `admitted`, `failed`,
+`cancelling`, `retired`, `unknown`). Durable run `working` means admitted and
+awaiting handoff, not proof of an executing model turn. Only a fresh host
+observation can establish actual native `working`; an execution request cannot.
+No live repair, deployment, host takeover or paid model validation is implied.
 
 Use corrective instructions for operational clarification and agreed API/design
 references, with a 1–160 character reason and 1–8000 character instruction. The

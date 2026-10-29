@@ -286,7 +286,19 @@ async function runFailingToolRun(options: {
 		HERDR_RUN_TOKEN: "token",
 		HERDR_TELEMETRY_PATH: telemetryPath,
 	});
+	// Fail-fast observes an already-issued legacy session. Fresh managed
+	// dispatch is covered separately through mandatory server verification.
+	const issued = await host.ensureRun({
+		runId: "run-fail-fast",
+		name: "worker-fail-fast",
+		cwd: dir,
+		runEnvPath: "",
+		toolPolicy: "default",
+		model: `${faux.getModel().provider}/${faux.getModel().id}`,
+	});
+	await host.stopRun("run-fail-fast");
 	await host.ensureRun({
+		expectedConversationId: issued.conversationId,
 		runId: "run-fail-fast",
 		name: "worker-fail-fast",
 		cwd: dir,
@@ -302,7 +314,9 @@ async function runFailingToolRun(options: {
 		),
 		fauxAssistantMessage([fauxText("done")]),
 	]);
-	await host.submit("run-fail-fast", "work", "req-fail-fast");
+	// Exercise native tool observation at the internal admission boundary.
+	// Public managed admission authority is tested with a real server/claim.
+	await host.submit("run-fail-fast", "work", "req-fail-fast", "followUp", true);
 	// Wait until every scripted call has been recorded: a stop then arrives on the
 	// same chain, and nothing here waits out a deadline it does not need.
 	await until(() => toolCallCount(telemetryPath) >= options.calls);

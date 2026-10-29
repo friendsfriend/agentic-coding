@@ -126,7 +126,9 @@ describe("docker actions", () => {
 					typeof actions.runSelectedTarget
 				>[2],
 			);
-			expect(starts).toEqual([definitions[1]!.id]);
+			const secondDefinition = definitions[1];
+			if (!secondDefinition) throw new Error("fixture needs a second target");
+			expect(starts).toEqual([secondDefinition.id]);
 		});
 	}
 	test("an agent-held app refuses the run with one actionable toast", async () => {

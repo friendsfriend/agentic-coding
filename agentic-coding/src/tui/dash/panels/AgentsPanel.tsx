@@ -198,7 +198,9 @@ export function AgentsPanel(props: AgentsPanelProps) {
 										text={
 											statusLoading()
 												? "loading"
-												: (activity()?.label ?? agent.status)
+												: (activity()?.label ??
+													agent.admissionState ??
+													agent.status)
 										}
 										appearance="text"
 										highlight={highlight()}
@@ -208,7 +210,9 @@ export function AgentsPanel(props: AgentsPanelProps) {
 										animation={
 											statusLoading() ||
 											activity()?.tone === "working" ||
-											(!activity() && agent.status === "working")
+											(!activity() &&
+												!agent.admissionState &&
+												agent.status === "working")
 												? "aurora"
 												: "static"
 										}

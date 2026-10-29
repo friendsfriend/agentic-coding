@@ -1007,6 +1007,31 @@ export function fusionDraftInputs(snapshot: WorkflowSnapshot): JsonValueType {
 		}));
 }
 
+// Retirement is run-scoped. Claimed work is cancelled under its existing
+// token until its owner settles; unclaimed terminal history is never erased.
+export function retireRunEffects(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	runId: string,
+): void {
+	const run = storeRuns(db, snapshot.workflowId).find(
+		(run) => run.id === runId,
+	);
+	const admittedRisk = db
+		.query(
+			"SELECT 1 FROM workflow_outbox WHERE workflow_id=? AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=? AND attempts>0 LIMIT 1",
+		)
+		.get(snapshot.workflowId, runId);
+	if (run && (run.handle || admittedRisk))
+		enqueue(db, snapshot, "agent.stop", `run:${runId}:retire-stop`, { runId });
+	db.query(
+		"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',json('true')) WHERE workflow_id=? AND status='running' AND kind IN ('agent.launch','artifact.write','agent.prompt') AND json_extract(payload_json,'$.runId')=? AND NOT (kind='agent.prompt' AND COALESCE(json_type(payload_json,'$.questionId'),'')='text')",
+	).run(snapshot.workflowId, runId);
+	db.query(
+		"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','failed') AND kind IN ('agent.launch','artifact.write','agent.prompt') AND json_extract(payload_json,'$.runId')=? AND NOT (kind='agent.prompt' AND COALESCE(json_type(payload_json,'$.questionId'),'')='text')",
+	).run(snapshot.workflowId, runId);
+}
+
 export function expireSiblingRuns(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -1016,12 +1041,10 @@ export function expireSiblingRuns(
 		snapshot.step.activeRunIds.includes(run.id),
 	);
 	for (const run of siblings) {
+		retireRunEffects(db, snapshot, run.id);
 		db.query(
 			"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 		).run(nowIso(now), run.id);
-		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND json_extract(payload_json,'$.runId')=?",
-		).run(snapshot.workflowId, run.id);
 	}
 	expireQuestions(
 		snapshot,
@@ -1034,29 +1057,29 @@ export function expireRuns(
 	db: Database,
 	snapshot: WorkflowSnapshot,
 	now: () => Date,
-	preserveRunningLaunches = false,
+	_preserveRunningLaunches = false,
 ): void {
-	const runIds = [...snapshot.step.activeRunIds];
+	const runIds = [
+		...new Set([
+			...snapshot.step.activeRunIds,
+			...storeRuns(db, snapshot.workflowId)
+				.filter(
+					(run) =>
+						run.stepId === snapshot.currentStep &&
+						run.attempt === snapshot.step.attempt,
+				)
+				.map((run) => run.id),
+		]),
+	];
 	for (const id of runIds) {
+		retireRunEffects(db, snapshot, id);
 		db.query(
 			"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 		).run(nowIso(now), id);
-		// A preset switch must retain a claimed launch row until its runner sees
-		// cancellation, so its stop barrier cannot race adapter.launch.
-		if (preserveRunningLaunches)
-			db.query(
-				"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',1) WHERE workflow_id=? AND status='running' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
-			).run(snapshot.workflowId, id);
-		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
-		).run(snapshot.workflowId, id);
-		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry') AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
-		).run(snapshot.workflowId, id);
 	}
 	if (snapshot.definition.id === "research")
 		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind='workspace.setup'",
+			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','failed') AND kind='workspace.setup'",
 		).run(snapshot.workflowId);
 	expireQuestions(snapshot, runIds, now);
 	snapshot.step.activeRunIds = [];

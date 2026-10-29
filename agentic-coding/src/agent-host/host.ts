@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import tls from "node:tls";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -67,6 +68,7 @@ import {
 } from "./fail-fast.ts";
 import { createBatchThrottle, createFrameThrottle } from "./frame-throttle.ts";
 import { createHostIdentity, hostIdentityPaths } from "./host-identity.ts";
+import { LaunchVerificationError } from "./launch-verifier.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
 import { LocalPiToolBridge } from "./pi-tool-bridge.ts";
@@ -405,6 +407,45 @@ function sanitizeWatchValue(
 
 /** One constant-size durable document per identity, not a history-sized map.
  * Hash the key so arbitrary protocol identities cannot alias document kinds. */
+interface LaunchFence extends JsonObject {
+	runId: string;
+	name: string;
+	revision: number;
+	claimAttempt: number;
+	requestId: string;
+	state: "prepared" | "admitted" | "stopping" | "stopped";
+}
+function launchFenceDoc(kind: "run" | "role", identity: string) {
+	return defineDoc<LaunchFence>({
+		kind: `agentic.launch.${kind}.${createHash("sha256").update(identity).digest("hex")}`,
+		version: 1,
+		scope: "session",
+		checkpointWhen: () => false,
+		initial: () => ({
+			runId: "",
+			name: "",
+			revision: 0,
+			claimAttempt: 0,
+			requestId: "",
+			state: "prepared",
+		}),
+	});
+}
+
+/** Index only unfinished accepted stop commits, never historical launches.
+ * It lets startup finish native cancellation BEFORE the harness resumes tasks.
+ * This is host fence metadata, not another workflow queue or authority. */
+interface StopBarriers extends JsonObject {
+	runs: Record<string, { name: string; conversationId: number }>;
+}
+const StopBarriersDoc = defineDoc<StopBarriers>({
+	kind: "agentic.launch.stopping",
+	version: 1,
+	scope: "session",
+	checkpointWhen: () => false,
+	initial: () => ({ runs: {} }),
+});
+
 function associationDoc(kind: "run" | "role", identity: string) {
 	return defineDoc<ConversationAssociation>({
 		kind: `agentic.${kind}.${createHash("sha256").update(identity).digest("hex")}`,
@@ -705,6 +746,130 @@ export class DurableHost {
 	/** Per-conversation chain of the mutating operations (`submit`, `abort`,
 	 * `stopRun`). See {@link serialized}. */
 	private readonly operations = new Map<string, Promise<void>>();
+	/** Admission and stop of an as-yet-unseen run share this lock. A successful
+	 * stop is a durable tombstone, not an inference from an empty run map. */
+	private readonly managedOperations = new Map<string, Promise<void>>();
+	private managedOperation<T>(
+		runId: string,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		const work = (this.managedOperations.get(runId) ?? Promise.resolve()).then(
+			operation,
+		);
+		const settled = work.then(
+			() => {},
+			() => {},
+		);
+		this.managedOperations.set(runId, settled);
+		void settled.then(() => {
+			if (this.managedOperations.get(runId) === settled)
+				this.managedOperations.delete(runId);
+		});
+		return work;
+	}
+
+	admitWorkflowRun(
+		input: import("./protocol.ts").AdmitWorkflowRunRequest,
+	): Promise<{ conversationId: string }> {
+		this.assertOpen();
+		return this.managedOperation(input.runId, async () => {
+			const { verifyWorkflowLaunch } = await import("./launch-verifier.ts");
+			const { decodeContract } = await import("../contracts/decode.ts");
+			const { launchClaimSchema } = await import("../contracts/launch.ts");
+			const claim = decodeContract<
+				import("../contracts/launch.ts").LaunchClaim
+			>("host.launch-claim", launchClaimSchema, input.claim);
+			if (claim.intent === "stop")
+				throw new Error("Cancellation claim cannot admit a run");
+			if (claim.runId !== input.runId)
+				throw new Error("Launch run identity mismatch");
+			let permit = await verifyWorkflowLaunch(claim);
+			if (
+				path.resolve(permit.hostRoot) !== path.resolve(this.options.layout.root)
+			)
+				throw new Error("Launch belongs to another host");
+			return this.managedOperation(`role:${permit.name}`, async () => {
+				permit = await verifyWorkflowLaunch(claim);
+				const environment = parseRunEnvFile(
+					fs.readFileSync(permit.runEnvPath, "utf8"),
+				);
+				if (
+					environment.HERDR_WORKFLOW_ID !== permit.workflowId ||
+					environment.HERDR_RUN_ID !== permit.runId
+				)
+					throw new Error(
+						"Authoritative run environment does not match the launch claim",
+					);
+				const runDoc = launchFenceDoc("run", input.runId);
+				const roleDoc = launchFenceDoc("role", permit.name);
+				let admitted = false;
+				await this.harness.commit(async (tx) => {
+					const run = await tx.doc(runDoc);
+					const role = await tx.doc(roleDoc);
+					if (
+						run.state === "stopped" ||
+						run.state === "stopping" ||
+						(run.runId && run.claimAttempt > permit.claimAttempt) ||
+						(role.runId &&
+							(role.revision > permit.revision ||
+								(role.runId === input.runId &&
+									role.claimAttempt > permit.claimAttempt)))
+					)
+						throw new Error("Launch is fenced by a newer admission or stop");
+					admitted = run.state === "admitted";
+					if (run.requestId && run.requestId !== permit.requestId && !admitted)
+						throw new Error(
+							"Unacknowledged launch request changed; inspect admission before dispatch",
+						);
+					const identity = {
+						name: permit.name,
+						runId: input.runId,
+						revision: permit.revision,
+						claimAttempt: permit.claimAttempt,
+						requestId: run.requestId || permit.requestId,
+						state: admitted ? ("admitted" as const) : ("prepared" as const),
+					};
+					Object.assign(run, identity);
+					Object.assign(role, identity);
+				}, BACKGROUND_CONTEXT);
+				const ensured = await this.ensureRun(
+					{
+						runId: input.runId,
+						name: permit.name,
+						cwd: permit.cwd,
+						runEnvPath: permit.runEnvPath,
+						toolPolicy: permit.toolPolicy,
+						...(permit.model ? { model: permit.model } : {}),
+						...(permit.thinking ? { thinking: permit.thinking } : {}),
+					},
+					true,
+				);
+				// Crash after submit/before this doc commit replays the SAME request id.
+				// Already-admitted work is only reattached, never submitted a second turn.
+				if (!admitted) {
+					permit = await verifyWorkflowLaunch(claim);
+					if (Date.parse(permit.leaseExpiresAt) <= Date.now())
+						throw new Error(
+							"Launch verification expired before admission; inspect workflow status",
+						);
+					await this.submit(
+						input.runId,
+						input.text,
+						permit.requestId,
+						"followUp",
+						true,
+					);
+					await this.harness.commit(async (tx) => {
+						const run = await tx.doc(runDoc);
+						run.state = "admitted";
+						const role = await tx.doc(roleDoc);
+						if (role.runId === input.runId) role.state = "admitted";
+					}, BACKGROUND_CONTEXT);
+				}
+				return ensured;
+			});
+		});
+	}
 	/** Context windows by model ref (see `modelWindow`). */
 	private readonly modelWindows = new Map<string, number | undefined>();
 	/** The cost ceiling's per-conversation bookkeeping, keyed by conversation. */
@@ -1126,6 +1291,14 @@ export class DurableHost {
 			localPiBridge,
 		);
 		host.instance = instance;
+		try {
+			const barriers = await harness.snapshot(StopBarriersDoc, context);
+			for (const runId of Object.keys(barriers?.runs ?? {}))
+				await instance.finishStopBarrier(runId);
+		} catch (error) {
+			await instance.shutdown();
+			throw error;
+		}
 		harness.resume();
 		for (const report of pendingReports)
 			void instance.observeHarnessReport(report).catch(() => {
@@ -1274,14 +1447,19 @@ export class DurableHost {
 		this.piCatalogWork.set(id, settled);
 	}
 
-	ensureRun(input: EnsureRunInput): Promise<{ conversationId: string }> {
+	ensureRun(
+		input: EnsureRunInput,
+		managedAdmission = false,
+	): Promise<{ conversationId: string }> {
 		if (this.closing) return Promise.reject(new Error("host is shutting down"));
 		const pending = this.ensuringRuns.get(input.runId);
 		if (pending) return pending;
 		// Duplicate/replayed run requests converge; distinct runs that reuse one
 		// role are ordered through live-record installation, not only the commit.
 		const previous = this.ensuringRoles.get(input.name) ?? Promise.resolve();
-		const operation = previous.then(() => this.ensureRunOnce(input));
+		const operation = previous.then(() =>
+			this.ensureRunOnce(input, managedAdmission),
+		);
 		this.ensuringRuns.set(input.runId, operation);
 		const settled = operation.then(
 			() => {},
@@ -1299,6 +1477,7 @@ export class DurableHost {
 
 	private async ensureRunOnce(
 		input: EnsureRunInput,
+		managedAdmission: boolean,
 	): Promise<{ conversationId: string }> {
 		const context = BACKGROUND_CONTEXT;
 		const key = input.name;
@@ -1310,6 +1489,24 @@ export class DurableHost {
 			envVars = parseRunEnvFile(fs.readFileSync(input.runEnvPath, "utf8"));
 		} catch {
 			/* a run without a readable run.env still launches, with an empty environment */
+		}
+		if (
+			envVars.HERDR_WORKFLOW_ID &&
+			!managedAdmission &&
+			input.expectedConversationId === undefined
+		)
+			throw new Error(
+				"Managed launch requires server-verified admission; legacy unfenced ensure refused",
+			);
+		if (!managedAdmission && input.expectedConversationId === undefined) {
+			const fence = await this.harness.snapshot(
+				launchFenceDoc("role", input.name),
+				context,
+			);
+			if (fence?.runId)
+				throw new Error(
+					"Managed role requires server-verified admission; legacy role takeover refused",
+				);
 		}
 		const ownership = await this.harness.snapshot(
 			associationDoc("run", input.runId),
@@ -2502,6 +2699,7 @@ export class DurableHost {
 		text: string,
 		requestId: string,
 		whenBusy = "followUp",
+		managedAdmission = false,
 	): Promise<{
 		submissionId: string;
 		workflowState?: SubmitWorkflowState;
@@ -2514,6 +2712,21 @@ export class DurableHost {
 		// conversation starts the next turn either way (normalizeSubmitMode).
 		const mode = normalizeSubmitMode(whenBusy);
 		return this.serialized(record, async () => {
+			if (!this.ownsConversation(runId, record.conversationId))
+				throw new Error("Run no longer owns this conversation");
+			if (
+				this.runContexts.get(runId)?.env.HERDR_WORKFLOW_ID &&
+				!managedAdmission
+			) {
+				const fence = await this.harness.snapshot(
+					launchFenceDoc("run", runId),
+					BACKGROUND_CONTEXT,
+				);
+				if (fence?.state !== "admitted")
+					throw new Error(
+						"Managed launch has no durable admission; inspect workflow status",
+					);
+			}
 			// The workflow follows the session: a run parked by a developer abort is
 			// reopened before the message lands, and a run that already finished is
 			// reported instead of being reopened.
@@ -3131,7 +3344,195 @@ export class DurableHost {
 		}
 	}
 
+	async inspectLaunch(
+		runId: string,
+	): Promise<import("../contracts/launch.ts").LaunchObservation> {
+		this.assertOpen();
+		return this.managedOperation(runId, async () => {
+			const fence = await this.harness.snapshot(
+				launchFenceDoc("run", runId),
+				BACKGROUND_CONTEXT,
+			);
+			if (!fence?.runId) {
+				const legacy = await this.harness.snapshot(
+					associationDoc("run", runId),
+					BACKGROUND_CONTEXT,
+				);
+				return {
+					runId,
+					state: "absent",
+					activity: legacy?.conversationId ? "unknown" : "absent",
+				};
+			}
+			if (fence.state === "stopped")
+				return {
+					runId,
+					state: "stopped",
+					activity: "absent",
+					...(fence.requestId ? { requestId: fence.requestId } : {}),
+				};
+			// Role rebind/stop and this observation must see one ownership epoch.
+			// Historical run associations alone cannot describe a successor's work.
+			return this.managedOperation(`role:${fence.name}`, async () => {
+				const role = await this.harness.snapshot(
+					launchFenceDoc("role", fence.name),
+					BACKGROUND_CONTEXT,
+				);
+				const unknown = {
+					runId,
+					state: fence.state,
+					activity: "unknown" as const,
+					...(fence.requestId ? { requestId: fence.requestId } : {}),
+				};
+				if (role?.runId !== runId) return unknown;
+				const issued = await this.harness.snapshot(
+					associationDoc("run", runId),
+					BACKGROUND_CONTEXT,
+				);
+				if (
+					issued?.conversationId &&
+					!this.ownsConversation(runId, issued.conversationId as ConversationId)
+				)
+					return unknown;
+				const conversation = issued?.conversationId
+					? await this.harness.conversation(
+							issued.conversationId as ConversationId,
+							BACKGROUND_CONTEXT,
+						)
+					: undefined;
+				let activity: import("../contracts/launch.ts").LaunchObservation["activity"] =
+					"absent";
+				if (conversation) {
+					const state = await conversation.viewState(BACKGROUND_CONTEXT);
+					try {
+						const live = state.value.docs["pi.live"] as
+							| {
+									run?: unknown;
+									tools?: Array<{ name: string; status: string }>;
+							  }
+							| undefined;
+						const inbox = state.value.docs["pi.inbox"] as
+							| { items?: unknown[] }
+							| undefined;
+						activity = live?.run
+							? (live.tools ?? []).some(
+									(tool) =>
+										tool.status === "running" &&
+										["developer_question", "agent_ask"].includes(tool.name),
+								)
+								? "blocked"
+								: "working"
+							: inbox?.items?.length
+								? "working"
+								: "idle";
+					} finally {
+						state.dispose();
+					}
+				}
+				if (fence.state === "stopping") activity = "unknown";
+				return {
+					runId,
+					state: fence.state,
+					activity,
+					...(fence.requestId ? { requestId: fence.requestId } : {}),
+				};
+			});
+		});
+	}
+
+	async fenceStoppedRun(
+		claim: import("../contracts/launch.ts").LaunchClaim,
+	): Promise<void> {
+		this.assertOpen();
+		return this.managedOperation(claim.runId, async () => {
+			const { verifyWorkflowLaunch } = await import("./launch-verifier.ts");
+			const permit = await verifyWorkflowLaunch({ ...claim, intent: "stop" });
+			if (
+				path.resolve(permit.hostRoot) !== path.resolve(this.options.layout.root)
+			)
+				throw new Error("Cancellation belongs to another host");
+			return this.managedOperation(`role:${permit.name}`, async () => {
+				const role = await this.harness.snapshot(
+					launchFenceDoc("role", permit.name),
+					BACKGROUND_CONTEXT,
+				);
+				if (!role?.runId && !this.runs.has(claim.runId)) {
+					const legacy = await this.harness.snapshot(
+						associationDoc("run", claim.runId),
+						BACKGROUND_CONTEXT,
+					);
+					if (legacy?.conversationId)
+						throw new Error(
+							"Legacy admission ownership is unknown; inspect the native session before reconciliation",
+						);
+				}
+				await this.harness.commit(async (tx) => {
+					const fence = await tx.doc(launchFenceDoc("run", claim.runId));
+					fence.runId = claim.runId;
+					fence.name = permit.name;
+					fence.state = "stopping";
+					fence.revision = permit.revision;
+					fence.claimAttempt = permit.claimAttempt;
+					const roleFence = await tx.doc(launchFenceDoc("role", permit.name));
+					if (!roleFence.runId || roleFence.runId === claim.runId)
+						Object.assign(roleFence, fence);
+					const barriers = await tx.doc(StopBarriersDoc);
+					const record = this.runs.get(claim.runId);
+					const issued = await tx.doc(associationDoc("run", claim.runId));
+					barriers.runs[claim.runId] = {
+						name: permit.name,
+						conversationId:
+							role?.runId === claim.runId
+								? issued.conversationId
+								: record &&
+										this.ownsConversation(claim.runId, record.conversationId)
+									? record.conversationId
+									: 0,
+					};
+				}, BACKGROUND_CONTEXT);
+				await this.finishStopBarrier(claim.runId);
+			});
+		});
+	}
+	private async finishStopBarrier(runId: string): Promise<void> {
+		const barriers = await this.harness.snapshot(
+			StopBarriersDoc,
+			BACKGROUND_CONTEXT,
+		);
+		const barrier = barriers?.runs[runId];
+		if (!barrier) return;
+		const role = await this.harness.snapshot(
+			launchFenceDoc("role", barrier.name),
+			BACKGROUND_CONTEXT,
+		);
+		if (
+			!this.runs.has(runId) &&
+			role?.runId === runId &&
+			barrier.conversationId
+		) {
+			const conversation = await this.harness.conversation(
+				barrier.conversationId as ConversationId,
+				BACKGROUND_CONTEXT,
+			);
+			await conversation?.abort(BACKGROUND_CONTEXT);
+		}
+		await this.stopRunOnce(runId);
+		await this.harness.commit(async (tx) => {
+			const fence = await tx.doc(launchFenceDoc("run", runId));
+			fence.state = "stopped";
+			const roleFence = await tx.doc(launchFenceDoc("role", barrier.name));
+			if (roleFence.runId === runId) roleFence.state = "stopped";
+			const pending = await tx.doc(StopBarriersDoc);
+			delete pending.runs[runId];
+		}, BACKGROUND_CONTEXT);
+	}
 	async stopRun(runId: string): Promise<void> {
+		this.assertOpen();
+		// Legacy control can stop only a tracked conversation. It cannot advance
+		// a durable fence for an arbitrary/unseen workflow run.
+		return this.managedOperation(runId, () => this.stopRunOnce(runId));
+	}
+	private async stopRunOnce(runId: string): Promise<void> {
 		this.assertOpen();
 		const record = this.runs.get(runId);
 		if (!record) return;
@@ -3150,7 +3551,8 @@ export class DurableHost {
 				record.conversationId,
 				BACKGROUND_CONTEXT,
 			);
-			await conversation?.abort(BACKGROUND_CONTEXT);
+			if (this.ownsConversation(runId, record.conversationId))
+				await conversation?.abort(BACKGROUND_CONTEXT);
 			this.runs.delete(runId);
 			this.runContexts.delete(runId);
 			// The conversation-keyed state belongs to whatever is bound to it *now*: a
@@ -3634,6 +4036,25 @@ export class DurableHost {
 						hostId: this.options.layout.root,
 					});
 					return;
+				case "inspectLaunch": {
+					const observation = await this.inspectLaunch(request.runId);
+					send({ type: "launchObservation", ...observation });
+					return;
+				}
+				case "fenceStoppedRun": {
+					await this.fenceStoppedRun(request.claim);
+					send({ type: "ok" });
+					return;
+				}
+				case "admitWorkflowRun": {
+					const result = await this.admitWorkflowRun(request);
+					send({
+						type: "ensureRun",
+						runId: request.runId,
+						conversationId: result.conversationId,
+					});
+					return;
+				}
 				case "recoverRun":
 				case "ensureRun": {
 					if (
@@ -3784,11 +4205,16 @@ export class DurableHost {
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const code = message.startsWith("unknown run")
-				? "unknown-run"
-				: message.startsWith("invalid request")
-					? "invalid-request"
-					: "internal";
+			const code =
+				error instanceof LaunchVerificationError
+					? error.kind === "unavailable"
+						? "launch-verifier-unavailable"
+						: "launch-claim-refused"
+					: message.startsWith("unknown run")
+						? "unknown-run"
+						: message.startsWith("invalid request")
+							? "invalid-request"
+							: "internal";
 			send({ type: "error", code, message });
 		}
 	}

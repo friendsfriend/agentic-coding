@@ -2,19 +2,27 @@
 // run/effect projection into `WorkflowView`. Read path only. Moved verbatim
 // out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
+import path from "node:path";
+import type { LaunchClaim, LaunchPermit } from "../../contracts/launch.ts";
 import type {
 	WorkflowDefinitionGraph,
 	WorkflowEffect,
 	WorkflowRun,
 	WorkflowView,
 } from "../../contracts/workflow.ts";
+import { canonicalAgentName, debugRunAgentName } from "../agent-name.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowEdge,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { agentRunEnvironmentFile } from "../run-env.ts";
 import { isInsertedStep } from "../steps/routing.ts";
+import {
+	debugRequestForRun,
+	openDebugRequestsForWorkflow,
+} from "./debug-requests.ts";
 import {
 	resolveDefinition,
 	resolveDefinitionWithOrigin,
@@ -23,6 +31,10 @@ import {
 	developerPendingQuestion,
 	ORCHESTRATOR_QUESTION_TARGET,
 } from "./dialogue.ts";
+import {
+	effectCancelled,
+	effectRetryEligibility,
+} from "./effect-eligibility.ts";
 import type { RepairPreview } from "./engine-types.ts";
 import { inspectRecovery, validateRecoverableSnapshot } from "./recovery.ts";
 import {
@@ -41,6 +53,8 @@ import {
 	STORE_SCHEMA_VERSION,
 	unsupportedStoreVersion,
 	validateDecodedSnapshot,
+	validateEffect,
+	validateSnapshot,
 } from "./store.ts";
 import { definitionStepActor, waitState, workflowWait } from "./waiting.ts";
 
@@ -257,7 +271,16 @@ export function viewFromRows(
 		const recovery = inspectRecovery(db, snapshot, definition, registry);
 		const effectList = rows.effects();
 		const failedActions = effectList
-			.filter((effect) => effect.status === "failed")
+			.filter(
+				(effect) =>
+					effectRetryEligibility(
+						effect,
+						snapshot,
+						definition,
+						runList,
+						registry,
+					).eligible,
+			)
 			.map((effect) => ({
 				id: `retry-effect:${effect.id}`,
 				label: `Retry ${effect.kind}`,
@@ -358,6 +381,22 @@ export function viewFromRows(
 				role: run.role,
 				attempt: run.attempt,
 				status: run.status,
+				launchState: (() => {
+					if (run.status === "expired") return "retired";
+					const launch = effectList.find(
+						(effect) =>
+							effect.kind === "agent.launch" &&
+							(effect.payload as { runId?: unknown }).runId === run.id,
+					);
+					if (launch && effectCancelled(launch) && launch.status !== "expired")
+						return "cancelling";
+					if (run.handle) return "admitted";
+					if (launch?.status === "failed") return "failed";
+					if (launch?.status === "running") return "launching";
+					if (launch && ["pending", "retry"].includes(launch.status))
+						return "queued";
+					return "unknown";
+				})(),
 				runtime: run.profile.runtime,
 				profile: run.profile.name,
 				...(run.profile.model ? { model: run.profile.model } : {}),
@@ -534,6 +573,162 @@ export function viewById(
 	try {
 		return view(db, id, registry, now);
 	} finally {
+		db.close();
+	}
+}
+
+// A read transaction gives the host one consistent, server-derived decision.
+// A caller-supplied epoch or pid is never authority to advance a host fence.
+export function launchRecoveryInputs(
+	repo: string,
+	workflowId: string,
+	registry: WorkflowRegistry,
+) {
+	const db = openReadStore(repo);
+	try {
+		db.exec("BEGIN");
+		const snapshot = decodeSnapshot(
+			JSON.parse(instance(db, workflowId).snapshot_json),
+		);
+		const definition = resolveDefinition(
+			registry,
+			db,
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+		);
+		const runList = runs(db, workflowId);
+		validateRecoverableSnapshot(snapshot, definition, runList, registry);
+		const effectList = effects(db, workflowId);
+		const runEnvPath = agentRunEnvironmentFile({
+			worktree: snapshot.metadata.worktree,
+			definitionId: snapshot.definition.id,
+			workflowId,
+			runId: "recovery-inspection",
+		});
+		return {
+			snapshot,
+			runList,
+			effectList,
+			actor: registry.stepForDefinition(definition, snapshot.currentStep).actor,
+			hasOpenDebugRequest:
+				openDebugRequestsForWorkflow(db, workflowId).length > 0,
+			socketPath: path.join(
+				path.dirname(path.dirname(path.dirname(runEnvPath))),
+				"agent-host",
+				"host.sock",
+			),
+		};
+	} finally {
+		if (db.inTransaction) db.exec("ROLLBACK");
+		db.close();
+	}
+}
+
+export function verifyLaunch(
+	claim: LaunchClaim,
+	registry: WorkflowRegistry,
+	now: () => Date,
+): LaunchPermit {
+	const db = openReadStore(claim.repo);
+	try {
+		db.exec("BEGIN");
+		const snapshot = decodeSnapshot(
+			JSON.parse(instance(db, claim.workflowId).snapshot_json),
+		);
+		const definition = resolveDefinition(
+			registry,
+			db,
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+		);
+		const runList = runs(db, snapshot.workflowId);
+		validateSnapshot(snapshot, definition, runList, registry);
+		const row = db
+			.query("SELECT * FROM workflow_outbox WHERE id=? AND workflow_id=?")
+			.get(claim.effectId, claim.workflowId) as EffectRow | null;
+		const run = runList.find((run) => run.id === claim.runId);
+		if (
+			row?.status !== "running" ||
+			row.lease !== claim.lease ||
+			!row.lease_expires_at ||
+			!Number.isFinite(Date.parse(row.lease_expires_at)) ||
+			new Date(row.lease_expires_at).toISOString() !== row.lease_expires_at ||
+			Date.parse(row.lease_expires_at) <= now().getTime() ||
+			!run ||
+			JSON.parse(row.payload_json).runId !== claim.runId
+		)
+			throw new WorkflowRuntimeError(
+				"stale-run",
+				"Launch claim is no longer current; inspect workflow status before dispatch.",
+			);
+		const cancelled = effectCancelled(effectFromRow(row));
+		if (
+			claim.intent === "stop"
+				? !(
+						row.kind === "agent.stop" ||
+						(row.kind === "agent.launch" && cancelled)
+					)
+				: row.kind !== "agent.launch" || cancelled
+		)
+			throw new WorkflowRuntimeError(
+				"stale-run",
+				"Claim does not authorize this admission or cancellation intent.",
+			);
+		validateEffect(row, snapshot, definition, runList, registry);
+		const runEnvPath = agentRunEnvironmentFile({
+			worktree: snapshot.metadata.worktree,
+			definitionId: snapshot.definition.id,
+			workflowId: snapshot.workflowId,
+			runId: run.id,
+		});
+		const debug = debugRequestForRun(db, run.id);
+		if (
+			claim.intent !== "stop" &&
+			debug &&
+			(debug.id !== JSON.parse(row.payload_json).debugRequestId ||
+				!["queued", "running"].includes(debug.status))
+		)
+			throw new WorkflowRuntimeError(
+				"stale-run",
+				"Debug request is no longer launchable.",
+			);
+		const name = debug
+			? debugRunAgentName(snapshot, run)
+			: canonicalAgentName(
+					snapshot.workflowId,
+					definition.id,
+					run,
+					registry.stepForDefinition(definition, run.stepId),
+				);
+		return {
+			workflowId: snapshot.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			generation: run.generation,
+			attempt: run.attempt,
+			revision: snapshot.revision,
+			claimAttempt: row.attempts,
+			requestId: row.idempotency_key,
+			leaseExpiresAt: row.lease_expires_at,
+			name,
+			cwd: snapshot.metadata.worktree,
+			runEnvPath,
+			hostRoot: path.join(
+				path.dirname(path.dirname(path.dirname(runEnvPath))),
+				"agent-host",
+			),
+			toolPolicy:
+				run.profile.readOnly || run.profile.capabilities.includes("read-only")
+					? "read-only"
+					: "default",
+			...(run.profile.model ? { model: run.profile.model } : {}),
+			...(run.profile.thinking ? { thinking: run.profile.thinking } : {}),
+		};
+	} finally {
+		if (db.inTransaction) db.exec("ROLLBACK");
 		db.close();
 	}
 }

@@ -82,6 +82,11 @@ import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
 import { linkedWorktreePath } from "../worktree/template.ts";
 import type { AgentAdapter, LaunchContext } from "./adapters.ts";
+import { canonicalAgentName, debugRunAgentName } from "./agent-name.ts";
+import { effectCancelled } from "./runtime/effect-eligibility.ts";
+
+export { canonicalAgentName, debugRunAgentName } from "./agent-name.ts";
+
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import { isClassifierProviderId } from "./classifier-providers.ts";
@@ -166,11 +171,7 @@ import {
 	pushPreflightEffect,
 	redactRemoteLabel,
 } from "./push-preflight.ts";
-import type {
-	StepDefinition,
-	WorkflowFamilyTraits,
-	WorkflowRegistry,
-} from "./registry.ts";
+import type { WorkflowFamilyTraits, WorkflowRegistry } from "./registry.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
 import {
 	boundedChangedFilesInput,
@@ -632,7 +633,6 @@ import {
 	openSecureDirectory,
 	writeAtomicPrivateFile,
 } from "./secure-fs.ts";
-import { stepBehavior } from "./steps/index.ts";
 import { stageReportIssues } from "./steps/stage-test.ts";
 import {
 	conceptPath,
@@ -1085,8 +1085,18 @@ export class EffectRunner {
 		onFailure?: (workflowId: string, message: string) => void,
 		result?: unknown,
 	): Effect.Effect<void, never, never> {
+		const self = this;
 		return Effect.gen(function* () {
-			if (!handler.cancel) return;
+			if (!handler.cancel) {
+				const lease = effect.lease;
+				if (!lease) return;
+				// Store-side flag and exact token are checked atomically. An older
+				// in-memory claim need not have seen the cancellation payload yet.
+				yield* Effect.sync(() =>
+					self.engine.acknowledgeCancelledEffect(self.repo, effect.id, lease),
+				);
+				return;
+			}
 			const outcome = yield* Effect.result(handler.cancel(effect, result));
 			if (Result.isFailure(outcome)) {
 				const message = String(
@@ -2316,6 +2326,10 @@ export function agentEffectHandlers(
 			observe: (effect, signal) =>
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
+					// A persisted managed handle is not admission authority. Re-enter
+					// execute's verified, deterministic admission instead of prompting
+					// a second initial turn from this generic reuse shortcut.
+					if (run.profile.runtime === "pi-durable") return undefined;
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
 					// Reuse is durable-host reuse: a persisted handle whose conversation
 					// is still answerable completes the effect without a relaunch. An
@@ -2395,10 +2409,7 @@ export function agentEffectHandlers(
 								snapshotDefinition(snapshot, options.registry),
 								run.stepId,
 							);
-					if (
-						(effect.payload as { cancelRequested?: unknown })
-							.cancelRequested === true
-					) {
+					if (effectCancelled(effect)) {
 						const ownsClaim = engine.effectOwnsLease(
 							repo,
 							effect.id,
@@ -2423,7 +2434,14 @@ export function agentEffectHandlers(
 								throw new PermanentFailure(
 									`adapter unavailable: ${run.profile.runtime}`,
 								);
-							yield* adapter.stop(handle, signal);
+							yield* adapter.stop(handle, signal, {
+								repo,
+								workflowId: run.workflowId,
+								runId: run.id,
+								effectId: effect.id,
+								lease: effect.lease ?? "",
+								intent: "stop",
+							});
 						}
 						yield* Effect.sync(() =>
 							engine.acknowledgeCancelledEffect(
@@ -2498,6 +2516,7 @@ export function agentEffectHandlers(
 					// must exist before the agent process boots inside adapter.launch.
 					const runDirectory =
 						snapshot.definition.id === "wiki-comments" ||
+						snapshot.definition.id === "research" ||
 						snapshot.definition.id === "stage-test"
 							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: undefined;
@@ -2535,6 +2554,13 @@ export function agentEffectHandlers(
 					const ctx: LaunchContext = {
 						profile: run.profile,
 						assignment,
+						claim: {
+							repo,
+							workflowId: run.workflowId,
+							runId: run.id,
+							effectId: effect.id,
+							lease: effect.lease ?? "",
+						},
 						rendered,
 						cwd: snapshot.metadata.worktree,
 						...(runDirectory ? { runDirectory } : {}),
@@ -2564,7 +2590,14 @@ export function agentEffectHandlers(
 					if (!live(effect)) {
 						if (engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")) {
 							try {
-								yield* adapter.stop(handle, signal);
+								yield* adapter.stop(handle, signal, {
+									repo,
+									workflowId: run.workflowId,
+									runId: run.id,
+									effectId: effect.id,
+									lease: effect.lease ?? "",
+									intent: "stop",
+								});
 							} catch {
 								/* preserve cancellation; the next drain can retry cleanup */
 							}
@@ -2596,11 +2629,7 @@ export function agentEffectHandlers(
 				}),
 			cancel: (effect, result) =>
 				Effect.gen(function* () {
-					if (
-						(effect.payload as { cancelRequested?: unknown })
-							.cancelRequested !== true
-					)
-						return;
+					if (!effectCancelled(effect)) return;
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
 					const _step = options.registry.stepForDefinition(
@@ -2647,7 +2676,15 @@ export function agentEffectHandlers(
 						engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
 					) {
 						const adapter = options.adapters.get(run.profile.runtime);
-						if (adapter) yield* adapter.stop(resolved);
+						if (adapter)
+							yield* adapter.stop(resolved, undefined, {
+								repo,
+								workflowId: run.workflowId,
+								runId: run.id,
+								effectId: effect.id,
+								lease: effect.lease ?? "",
+								intent: "stop",
+							});
 					}
 					yield* Effect.sync(() =>
 						engine.acknowledgeCancelledEffect(
@@ -2753,7 +2790,14 @@ export function agentEffectHandlers(
 							throw new PermanentFailure(
 								`adapter unavailable: ${run.profile.runtime}`,
 							);
-						yield* adapter.stop(resolved, signal);
+						yield* adapter.stop(resolved, signal, {
+							repo,
+							workflowId: run.workflowId,
+							runId: run.id,
+							effectId: effect.id,
+							lease: effect.lease ?? "",
+							intent: "stop",
+						});
 					}
 					yield* Effect.sync(() =>
 						emitAdapter(snapshot, run, {
@@ -4151,12 +4195,6 @@ function worktreePortOf(): WorktreePort {
 	return worktreePort();
 }
 
-function roundScoped(
-	stepId: string,
-	step?: Pick<StepDefinition, "behavior">,
-): boolean {
-	return (step?.behavior ?? stepBehavior(stepId)).roundScoped === true;
-}
 /**
  * Canonical Herdr agent name for a workflow-managed agent.
  *
@@ -4175,16 +4213,6 @@ function roundScoped(
  * (add-debug-subagent-requests): unique per run, because each request
  * investigates its own goal in its own conversation, while a **retried** launch
  * of the same run has to reach the same conversation again. */
-export function debugRunAgentName(
-	snapshot: WorkflowSnapshot,
-	run: { id: string },
-): string {
-	const hash = createHash("sha256")
-		.update(`${snapshot.workflowId}\n${run.id}`)
-		.digest("hex")
-		.slice(0, 12);
-	return `debug-${hash}`;
-}
 
 /** The assignment one delegated debug run receives: the caller's goal, the
  * caller's context, the shared-worktree rule both prompts state, and the
@@ -4339,22 +4367,6 @@ function readDebugReport(reportPath: string | undefined): string | undefined {
 	}
 }
 
-export function canonicalAgentName(
-	workflowId: string,
-	definitionId: string,
-	run: { stepId: string; role: string; id: string },
-	step?: Pick<StepDefinition, "behavior">,
-): string {
-	const hash = createHash("sha256")
-		.update(`${workflowId}\n${definitionId}\n${run.stepId}\n${run.role}`)
-		.digest("hex")
-		.slice(0, 8);
-	if (!roundScoped(run.stepId, step)) return `${run.role}-${hash}`;
-	const shortRole = run.role.endsWith("-verifier")
-		? `${run.role.slice(0, -9)}-verif`
-		: run.role;
-	return `${shortRole.slice(0, 14)}-${hash}`;
-}
 /** The durable handle of one run, derived from the workflow identity when the
  * engine has not persisted one yet: the host socket path is a function of the
  * runtime directory and the conversation is keyed by the run id. */

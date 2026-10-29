@@ -26,6 +26,7 @@ import type {
 import type { BrowserStatusResponse } from "../contracts/browser.ts";
 import type { ObservationRequest } from "../contracts/environment.ts";
 import type { ClassifierStatusResponse } from "../contracts/gateway.ts";
+import type { LaunchClaim, LaunchPermit } from "../contracts/launch.ts";
 import type {
 	DeveloperReviewComment,
 	PlanReviewComment,
@@ -127,6 +128,16 @@ type AgentsMutationRequest = Schema.Schema.Type<
 /** The bounded application operations the transport may invoke. Injectable so
  * transport tests never touch the filesystem/Go boundary. */
 export interface ServerOperations {
+	verifyLaunch?(request: LaunchClaim): LaunchPermit;
+	launchRecoveryPreview?(
+		repo: string,
+		workflowId: string,
+		revision: number,
+	): Promise<import("../contracts/workflow.ts").WorkflowRecoveryPreview>;
+	reconcileLaunch?(
+		request: RepairRequest,
+		options?: ActionOptions,
+	): Promise<WorkflowView>;
 	runObservation(request: ObservationRequest): Promise<unknown>;
 	listViews(repo: string): WorkflowView[];
 	view(repo: string, workflowId: string): WorkflowView;
@@ -441,6 +452,32 @@ export function researchHandoff(
 
 /** Production application operations behind the transport. */
 export const serverOperations: ServerOperations = {
+	verifyLaunch: (request) => workflowEngineFactory().verifyLaunch(request),
+	launchRecoveryPreview: (repo, workflowId, revision) =>
+		dashboardApplication.runPromise(
+			workflowEngineFactory(dashboardApplication).launchRecoveryPreviewEffect(
+				repo,
+				workflowId,
+				revision,
+			),
+		),
+	reconcileLaunch: async (request, options = {}) => {
+		const result = await dashboardApplication.runPromise(
+			workflowEngineFactory(dashboardApplication).reconcileLaunchEffect(
+				request.repo,
+				{
+					type: "operator.repair",
+					workflowId: request.workflowId,
+					revision: request.revision,
+					targetStep: request.targetStep,
+					reason: request.reason ?? "",
+					recovery: request.recovery,
+					principal: options.principal ?? "operator",
+				},
+			),
+		);
+		return result.view;
+	},
 	runObservation,
 	listViews: listWorkflowViewsFor,
 	view: workflowView,

@@ -10,6 +10,10 @@ import {
 	text,
 } from "./decode.ts";
 import type { WorktreeGitStatus } from "./integration.ts";
+import {
+	type LaunchRecoveryDetail,
+	launchRecoveryDetailSchema,
+} from "./launch.ts";
 
 export type ExternalDiagnosticCode =
 	| "invalid-command"
@@ -775,7 +779,10 @@ export interface WorkflowRecoveryPreview {
 	previewId: string;
 	eligible: boolean;
 	refusals: string[];
-	operation: "retry-current" | "structural-repair";
+	operation: "retry-current" | "structural-repair" | "reconcile-launch";
+	launches?: readonly LaunchRecoveryDetail[];
+	observedAt?: string;
+	observationExpiresAt?: string;
 	targetStep: string;
 	affectedRuns: string[];
 	affectedEffects: string[];
@@ -795,7 +802,7 @@ export interface WorkflowRepairRecord {
 		attempt: number;
 		revision: number;
 		previewId: string;
-		operation: "retry-current" | "structural-repair";
+		operation: "retry-current" | "structural-repair" | "reconcile-launch";
 	};
 	fromStep: string;
 	at: string;
@@ -1023,6 +1030,16 @@ export interface WorkflowView {
 		role: string;
 		attempt: number;
 		status: RunStatus;
+		/** Admission is not evidence that a native model turn is working.
+		 * Actual execution comes only from a fresh host observation. */
+		launchState?:
+			| "queued"
+			| "launching"
+			| "admitted"
+			| "failed"
+			| "cancelling"
+			| "retired"
+			| "unknown";
 		runtime: RuntimeId;
 		profile: string;
 		model?: string;
@@ -1207,7 +1224,7 @@ export type WorkflowCommand =
 			principal?: WorkflowPrincipal;
 			recovery?: {
 				previewId: string;
-				operation: "retry-current" | "structural-repair";
+				operation: "retry-current" | "structural-repair" | "reconcile-launch";
 				instruction: string;
 			};
 	  }
@@ -1463,9 +1480,14 @@ const effectResultSchema = Schema.Struct({
 	 * Optional so existing callers keep decoding unchanged. */
 	durationMs: Schema.optional(integer()),
 });
+const recoveryOperationSchema = Schema.Literals([
+	"retry-current",
+	"structural-repair",
+	"reconcile-launch",
+]);
 export const recoveryInputSchema = Schema.Struct({
 	previewId: text(128),
-	operation: Schema.Literals(["retry-current", "structural-repair"]),
+	operation: recoveryOperationSchema,
 	instruction: text(8000),
 });
 export const recoveryPreviewSchema = Schema.Struct({
@@ -1474,7 +1496,10 @@ export const recoveryPreviewSchema = Schema.Struct({
 	previewId: Schema.String,
 	eligible: Schema.Boolean,
 	refusals: Schema.Array(Schema.String),
-	operation: Schema.Literals(["retry-current", "structural-repair"]),
+	operation: recoveryOperationSchema,
+	launches: Schema.optionalKey(Schema.Array(launchRecoveryDetailSchema)),
+	observedAt: Schema.optionalKey(Schema.String),
+	observationExpiresAt: Schema.optionalKey(Schema.String),
 	targetStep: Schema.String,
 	affectedRuns: Schema.Array(Schema.String),
 	affectedEffects: Schema.Array(Schema.String),
@@ -1494,7 +1519,7 @@ export const recoveryRecordSchema = Schema.Struct({
 	attempt: integer(),
 	revision: integer(),
 	previewId: text(128),
-	operation: Schema.Literals(["retry-current", "structural-repair"]),
+	operation: recoveryOperationSchema,
 });
 const operatorRepairSchema = Schema.Struct({
 	type: Schema.Literal("operator.repair"),
@@ -1879,6 +1904,7 @@ export interface DashboardData {
 	agents: Array<{
 		role: string;
 		status: RunStatus;
+		admissionState?: WorkflowView["runs"][number]["launchState"];
 		runtime?: string;
 		model?: string;
 		cost?: number;
@@ -2047,6 +2073,17 @@ export function decodeWorkflowDefinitionGraph(
 }
 
 const workflowRunResponseSchema = Schema.Struct({
+	launchState: Schema.optional(
+		Schema.Literals([
+			"queued",
+			"launching",
+			"admitted",
+			"failed",
+			"cancelling",
+			"retired",
+			"unknown",
+		]),
+	),
 	id: boundedString(4096),
 	stepId: boundedString(4096),
 	role: boundedString(4096),

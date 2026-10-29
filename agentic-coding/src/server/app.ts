@@ -24,6 +24,7 @@ import type {
 	WorkflowStartRequest,
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
+import { decodeContract } from "../contracts/decode.ts";
 import type {
 	AcquireSlotsRequest,
 	AppSlotOperationRequest,
@@ -31,6 +32,7 @@ import type {
 	EnvironmentTeardownRequest,
 	ObserveRequest,
 } from "../contracts/environment.ts";
+import { LAUNCH_VERIFY_PATH, launchClaimSchema } from "../contracts/launch.ts";
 import type {
 	TelemetryPruneRequest,
 	TelemetryScanRequest,
@@ -551,6 +553,31 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		const method = request.method.toUpperCase();
 		const path = url.pathname;
 
+		if (method === "POST" && path === LAUNCH_VERIFY_PATH) {
+			// Only the instance principal may ask; the orchestrator route policy
+			// and agent-environment capability boundary refuse this private verb.
+			if (principal !== "operator")
+				return errorResponse(
+					403,
+					"forbidden",
+					"Instance authority required for launch verification.",
+				);
+			if (!operations.verifyLaunch)
+				return errorResponse(
+					503,
+					"launch-verifier-unavailable",
+					"Launch verifier is unavailable; start a compatible background server before dispatch.",
+				);
+			const claim = decodeContract<
+				import("../contracts/launch.ts").LaunchClaim
+			>(
+				"server.workflow.launch-claim",
+				launchClaimSchema,
+				await readJsonBody(request),
+			);
+			return json(operations.verifyLaunch(claim));
+		}
+
 		if (method === "GET" && path === "/api/v1/health") {
 			return json({
 				status: "ok",
@@ -978,7 +1005,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			if (path.endsWith("/recovery-preview")) {
 				// Automated recovery has its own current-step projection. Do not
 				// derive it from the developer's multi-target manual repair picker.
-				const preview = operations.view(
+				let preview = operations.view(
 					decoded.repo,
 					decoded.workflowId,
 				).recovery;
@@ -988,11 +1015,36 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 						"stale-revision",
 						"No matching current recovery preview; inspect status again.",
 					);
+				if (preview.operation === "reconcile-launch") {
+					if (!operations.launchRecoveryPreview)
+						return errorResponse(
+							503,
+							"unavailable",
+							"Launch reconciliation requires a compatible background server.",
+						);
+					preview = await operations.launchRecoveryPreview(
+						decoded.repo,
+						decoded.workflowId,
+						decoded.revision,
+					);
+				}
 				return json({ ok: true, value: preview });
 			}
-			const value = operations.repair(decoded as WorkflowRepairRequest, {
-				principal,
-			});
+			const repair = decoded as WorkflowRepairRequest;
+			if (
+				repair.recovery?.operation === "reconcile-launch" &&
+				!operations.reconcileLaunch
+			)
+				return errorResponse(
+					503,
+					"unavailable",
+					"Launch reconciliation requires a compatible background server.",
+				);
+			const value =
+				repair.recovery?.operation === "reconcile-launch" &&
+				operations.reconcileLaunch
+					? await operations.reconcileLaunch(repair, { principal })
+					: operations.repair(repair, { principal });
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.repair",

@@ -256,8 +256,20 @@ describe("durable Harness failure visibility and recovery", () => {
 				},
 			);
 			host = first.host;
+			// This recovery fixture represents already-issued legacy ownership, not
+			// new managed dispatch (which now requires a server-verified claim).
+			const issued = await host.ensureRun({
+				runEnvPath: "",
+				runId: "run-1",
+				name: "worker-1",
+				cwd: dir,
+				toolPolicy: "default",
+				model: `${first.faux.getModel().provider}/${first.faux.getModel().id}`,
+			});
+			await host.stopRun("run-1");
 			const env = writeRunEnv(dir, "run-1", workflowCli.statePath);
 			const run = await host.ensureRun({
+				expectedConversationId: issued.conversationId,
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -528,6 +540,7 @@ describe("durable Harness failure visibility and recovery", () => {
 				persistedGeneration,
 			);
 			const rebound = await continuationHost.ensureRun({
+				expectedConversationId: run.conversationId,
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -587,16 +600,27 @@ describe("durable Harness failure visibility and recovery", () => {
 				(status) => status.runtimeFailure?.taskId === "7",
 			);
 
+			const secondIssued = await continuationHost.ensureRun({
+				runEnvPath: "",
+				runId: "run-2",
+				name: "worker-2",
+				cwd: dir,
+				toolPolicy: "default",
+			});
+			// Fresh native issuance still needs no recovery scan.
+			expect(scanCalls).toBe(1);
+			await continuationHost.stopRun("run-2");
 			const secondEnv = writeRunEnv(dir, "run-2");
 			const secondRun = await continuationHost.ensureRun({
+				expectedConversationId: secondIssued.conversationId,
 				runId: "run-2",
 				name: "worker-2",
 				cwd: dir,
 				runEnvPath: secondEnv.path,
 				toolPolicy: "default",
 			});
-			// Fresh conversations do not need even a scoped recovery scan.
-			expect(scanCalls).toBe(1);
+			// Explicit legacy reattachment performs one conversation-scoped scan.
+			expect(scanCalls).toBe(2);
 			// Even a correct task id cannot be replayed through a different run's
 			// conversation, and a stale identity is not forwarded to native retry.
 			expect(
@@ -757,7 +781,9 @@ describe("durable Harness failure visibility and recovery", () => {
 				).toBeUndefined();
 
 				// A completed native retry leaves the conversation usable. The next
-				// normal turn settles idle and does not alter workflow lifecycle state.
+				// native turn settles idle and does not alter workflow lifecycle state.
+				// This unit fixture invokes the host's internal admission boundary;
+				// it deliberately does not authorize an unfenced control-socket turn.
 				reopened.faux.setResponses([
 					fauxAssistantMessage([fauxText("continued")]),
 				]);
@@ -765,6 +791,8 @@ describe("durable Harness failure visibility and recovery", () => {
 					"run-1",
 					"continue after explicit retry",
 					"after-retry",
+					"followUp",
+					true,
 				);
 				await waitForIdle(continuationHost, "run-1");
 
