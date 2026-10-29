@@ -295,6 +295,9 @@ export function repair(
 	const prior = snapshot.step;
 	snapshot.step = freshStep(prior.attempt + 1);
 	if (source === command.targetStep) {
+		// Role selection is arrival context too (for example a selected verifier
+		// subset). Keep it without reviving prior results or active runs.
+		snapshot.step.selectedRoles = [...prior.selectedRoles];
 		if (prior.context !== undefined) snapshot.step.context = prior.context;
 		if (prior.mode !== undefined) snapshot.step.mode = prior.mode;
 	}

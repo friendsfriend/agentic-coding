@@ -203,7 +203,17 @@ describe("per-role section selection", () => {
 	test("core rules survive every selection", () => {
 		for (const [stepId, role] of table) {
 			const text = prompt(stepId, role);
-			expect(text).toContain("Write only the declared output artifact");
+			expect(text).toContain(
+				"Perform the work authorized by your assigned role",
+			);
+			expect(text).toContain("Read-only roles remain read-only");
+			expect(text).toContain("Write the final workflow result");
+			expect(text).not.toContain("Write only the declared output artifact");
+			expect(text).toContain("Use engine-recorded developer answers");
+			expect(text).toContain("continue independent work if possible");
+			expect(text).toContain(
+				"task size or several required steps alone is not a blocker",
+			);
 			expect(text).toContain(
 				"exactly one allowed outcome through `agentic-coding workflow handoff`",
 			);
@@ -217,6 +227,15 @@ describe("per-role section selection", () => {
 });
 
 describe("guidance travels with the block it governs", () => {
+	test("implementation permits incremental edits without routine approval questions", () => {
+		const text = prompt("core.implementation", "worker");
+		expect(text).toContain("then edit and validate the repository");
+		expect(text).toContain("not a scope reduction requiring approval");
+		expect(text).toContain("recorded answers");
+		expect(text).toContain("diagnose, fix and rerun");
+		expect(text).toContain("Do not commit, push, archive, or launch agents");
+	});
+
 	test("each interaction mode states its meaning beside the mode", () => {
 		expect(prompt("core.plan", "planner")).toContain(
 			"Interaction: silent\nReport through the artifact and the handoff; no chat summary.",

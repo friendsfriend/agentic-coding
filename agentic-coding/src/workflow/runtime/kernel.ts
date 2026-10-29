@@ -931,6 +931,10 @@ export function enterStep(
 		if (!step.behavior.roles)
 			throw new Error(`missing role behavior for agent step ${step.id}`);
 		const roles = step.behavior.roles({ snapshot, traits });
+		// Re-entry (Repair/recovery) does not traverse an edge or run onArrive.
+		// Publish the registered role resolution so authorization sees the same
+		// roles we actually launch, including recovery from an empty selection.
+		snapshot.step.selectedRoles = [...roles];
 		const entry = step.behavior.onEnter?.({
 			snapshot,
 			traits,

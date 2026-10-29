@@ -42,7 +42,11 @@ import {
 } from "../src/workflow/effect-runner.ts";
 import { recoveryAssignmentInput } from "../src/workflow/runtime/recovery.ts";
 import { writeSnapshot } from "../src/workflow/runtime/store.ts";
-import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import {
+	canonicalStorePath,
+	STAGE_TEST_WORKFLOW_TARGET,
+	WorkflowEngine,
+} from "../src/workflow/runtime.ts";
 import { createRepoFixture, repoPreset } from "./support/git-fixture.ts";
 
 const roots: string[] = [];
@@ -54,10 +58,12 @@ afterEach(() => {
 function fixture(structural = false, definitionId = "solo") {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "recovery-proof-"));
 	roots.push(root);
-	const repo = createRepoFixture(
+	const repository = createRepoFixture(
 		path.join(root, "repo"),
 		repoPreset.specDriven,
 	);
+	const repo =
+		definitionId === "stage-test" ? STAGE_TEST_WORKFLOW_TARGET : repository;
 	let engine = new WorkflowEngine(registerBuiltins());
 	const profile = {
 		name: "test",
@@ -71,8 +77,13 @@ function fixture(structural = false, definitionId = "solo") {
 	};
 	const started = engine.start({
 		repo,
-		workflowId: "recovery-proof",
+		workflowId:
+			definitionId === "stage-test"
+				? `recovery-${path.basename(root).toLowerCase()}`
+				: "recovery-proof",
+		repositoryContext: repository,
 		definitionId,
+		...(definitionId === "stage-test" ? { definitionVersion: 1201 } : {}),
 		...(definitionId === "verify" ? { mode: "checkout" as const } : {}),
 		metadata: {
 			branch: "main",
@@ -89,16 +100,18 @@ function fixture(structural = false, definitionId = "solo") {
 				"core.triage",
 				"core.verification",
 				"core.archive",
+				"stage.execute",
 			].map((stepId) => ({ stepId, profile })),
 		},
 	});
 	const snapshot = engine.getSnapshot(repo, started.view.workflowId);
-	snapshot.currentStep = "core.implementation";
+	snapshot.currentStep =
+		definitionId === "stage-test" ? "stage.execute" : "core.implementation";
 	snapshot.status = "attention-required";
 	snapshot.step.activeRunIds = structural ? ["missing-current-run"] : [];
 	snapshot.step.context = { boundary: "agreed-api" };
 	snapshot.step.mode = "fix";
-	const evidencePath = path.join(repo, "agreed-api.txt");
+	const evidencePath = path.join(repository, "agreed-api.txt");
 	fs.writeFileSync(evidencePath, "Existing agreed API evidence\n");
 	snapshot.evidence.push({
 		kind: "prior-plan",
@@ -228,6 +241,50 @@ function fixture(structural = false, definitionId = "solo") {
 }
 
 describe("revision-bound orchestrator recovery", () => {
+	for (const selectedRoles of [["stage-tester"], []]) {
+		test(`stage recovery restores authorized roles from ${JSON.stringify(selectedRoles)}`, async () => {
+			const f = fixture(false, "stage-test");
+			f.mutate((snapshot) => {
+				snapshot.step.selectedRoles = [...selectedRoles];
+			});
+			const response = await f.post("repair", f.requestFor(await f.inspect()));
+			expect(response.status).toBe(200);
+			f.reopen();
+			const recovered = f.engine().getSnapshot(f.repo, f.snapshot.workflowId);
+			expect(recovered.currentStep).toBe("stage.execute");
+			expect(recovered.step.selectedRoles).toEqual(["stage-tester"]);
+			expect(recovered.step.attempt).toBe(f.snapshot.step.attempt + 1);
+			expect(recovered.step.context).toEqual(f.snapshot.step.context);
+			expect(recovered.step.results).toEqual([]);
+			expect(recovered.step.activeRunIds).toHaveLength(1);
+			const view = f.engine().status(f.repo, f.snapshot.workflowId);
+			expect(view.runs.filter((run) => run.status === "pending")).toHaveLength(
+				1,
+			);
+			expect(view.runs.find((run) => run.status === "pending")?.role).toBe(
+				"stage-tester",
+			);
+		});
+	}
+
+	test("same-step recovery preserves a selected verifier subset", async () => {
+		const f = fixture(false, "verify");
+		f.mutate((snapshot) => {
+			snapshot.currentStep = "core.verification";
+			snapshot.step.selectedRoles = ["security-verifier"];
+		});
+		const response = await f.post("repair", f.requestFor(await f.inspect()));
+		expect(response.status).toBe(200);
+		f.reopen();
+		const recovered = f.engine().getSnapshot(f.repo, f.snapshot.workflowId);
+		expect(recovered.step.selectedRoles).toEqual(["security-verifier"]);
+		const pending = f
+			.engine()
+			.status(f.repo, f.snapshot.workflowId)
+			.runs.filter((run) => run.status === "pending");
+		expect(pending.map((run) => run.role)).toEqual(["security-verifier"]);
+	});
+
 	test("home tools execute status → inspected preview → one-shot recovery over authenticated transport", async () => {
 		const f = fixture();
 		const request = f.requestFor(await f.inspect());
