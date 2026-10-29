@@ -81,6 +81,22 @@ export class WorkflowApplication {
 		throw toRuntimeError(new Error(Cause.pretty(exit.cause)));
 	}
 
+	/** Asynchronous server boundary for bounded host observation followed by
+	 * the same transactional engine program. Errors retain their domain tag. */
+	async runPromise<A>(
+		program: Effect.Effect<A, WorkflowRuntimeError, ApplicationServices>,
+	): Promise<A> {
+		const exit = await Effect.runPromiseExit(
+			Effect.provide(program, this.layerFor()),
+		);
+		if (Exit.isSuccess(exit)) return exit.value;
+		const failure = Cause.findErrorOption(exit.cause);
+		if (Option.isSome(failure)) throw failure.value;
+		const defect = Cause.findDefect(exit.cause);
+		if (Result.isSuccess(defect)) throw toRuntimeError(defect.success);
+		throw toRuntimeError(new Error(Cause.pretty(exit.cause)));
+	}
+
 	/** Release the owned layer (bounded shutdown finalization); reopening
 	 * re-acquires the production layer. */
 	dispose(): void {

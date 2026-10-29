@@ -38,6 +38,7 @@ import {
 	forwardQuestion,
 	ORCHESTRATOR_QUESTION_TARGET,
 } from "../dialogue.ts";
+import { effectRetryEligibility } from "../effect-eligibility.ts";
 import { validateSourceBaseline } from "../evidence.ts";
 import {
 	enqueue,
@@ -51,6 +52,7 @@ import {
 import {
 	ACTIVE_RUN,
 	actions,
+	effects,
 	nowIso,
 	requireRevision,
 	runs,
@@ -259,13 +261,22 @@ function reduceDeveloperAction(
 	}
 	if (command.actionId.startsWith("retry-effect:")) {
 		const id = command.actionId.slice(13);
-		const row = db
-			.query("SELECT status FROM workflow_outbox WHERE id=? AND workflow_id=?")
-			.get(id, snapshot.workflowId) as { status: string } | null;
-		if (row?.status !== "failed")
+		const row = effects(db, snapshot.workflowId).find(
+			(effect) => effect.id === id,
+		);
+		const decision = row
+			? effectRetryEligibility(
+					row,
+					snapshot,
+					definition,
+					runs(db, snapshot.workflowId),
+					registry,
+				)
+			: { eligible: false as const, reason: "effect is missing" };
+		if (!decision.eligible)
 			throw new WorkflowRuntimeError(
 				"unavailable",
-				`retry unavailable: ${command.actionId}`,
+				`retry unavailable: ${decision.reason}; refresh status or preview supported recovery`,
 				snapshot.revision,
 			);
 		db.query(

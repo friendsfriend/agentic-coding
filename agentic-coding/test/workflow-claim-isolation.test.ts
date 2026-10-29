@@ -81,8 +81,9 @@ describe("repository-wide effect claim fault isolation", () => {
 			if (!oldRun) throw new Error("fixture must start an implementation run");
 			const db = new Database(canonicalStorePath(f.repo));
 			try {
-				// Reproduce a failed launch surviving manual step re-entry, then a
-				// retry referring to the now expired previous attempt.
+				// Reproduce historical corruption after manual step re-entry. Repair
+				// now retires the failed launch, so explicitly revive that old row
+				// only in this isolated fixture to retain dispatcher containment coverage.
 				db.query(
 					"UPDATE workflow_outbox SET status='failed' WHERE workflow_id=? AND kind='agent.launch'",
 				).run("broken");
@@ -94,8 +95,8 @@ describe("repository-wide effect claim fault isolation", () => {
 					reason: "fixture re-entry",
 				});
 				db.query(
-					"UPDATE workflow_outbox SET status='retry' WHERE workflow_id=? AND status='failed' AND kind='agent.launch'",
-				).run("broken");
+					"UPDATE workflow_outbox SET status='retry' WHERE workflow_id=? AND status='expired' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
+				).run("broken", oldRun.id);
 				expect(f.engine.getRun(f.repo, oldRun.id).status).toBe("expired");
 				if (stalePosition === "last") {
 					// A healthy-looking row can precede the invalid launch. Preflight

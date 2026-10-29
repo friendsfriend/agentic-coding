@@ -164,7 +164,7 @@ export async function loadDashboardSeed(
 			run.status === "completed"
 				? "PASS"
 				: run.status === "working" || run.status === "pending"
-					? "RUN"
+					? (run.launchState ?? run.status).toUpperCase()
 					: "FAIL",
 		rawStatus: run.status,
 		model: run.model,
@@ -187,6 +187,9 @@ export async function loadDashboardSeed(
 						{
 							role,
 							status: run.status,
+							admissionState: ["pending", "working"].includes(run.status)
+								? run.launchState
+								: undefined,
 							runtime: run.runtime,
 							model: run.model,
 							runId: run.id,

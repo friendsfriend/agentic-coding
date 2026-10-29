@@ -15,8 +15,17 @@ import type {
 	WorkflowRegistry,
 } from "../../registry.ts";
 import { openDebugRequestsForWorkflow } from "../debug-requests.ts";
-import { enterStep, expireRuns, freshStep } from "../kernel.ts";
-import { inspectRecovery, requireRecoveryText } from "../recovery.ts";
+import {
+	enterStep,
+	expireRuns,
+	freshStep,
+	retireRunEffects,
+} from "../kernel.ts";
+import {
+	inspectRecovery,
+	type LaunchRecoveryEvidence,
+	requireRecoveryText,
+} from "../recovery.ts";
 import {
 	effects,
 	nowIso,
@@ -43,7 +52,7 @@ function openEffectIds(db: Database, workflowId: string): string[] {
 	return (
 		db
 			.query(
-				"SELECT id FROM workflow_outbox WHERE workflow_id=? AND status IN ('pending','retry','running') ORDER BY rowid",
+				"SELECT id FROM workflow_outbox WHERE workflow_id=? AND status IN ('pending','retry','running','failed') ORDER BY rowid",
 			)
 			.all(workflowId) as { id: string }[]
 	).map((row) => row.id);
@@ -97,6 +106,7 @@ export function repair(
 	command: Extract<WorkflowCommand, { type: "operator.repair" }>,
 	registry: WorkflowRegistry,
 	now: () => Date,
+	launchEvidence?: LaunchRecoveryEvidence,
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
 	const boundedRecovery =
@@ -128,7 +138,14 @@ export function repair(
 								: undefined;
 		if (refusal) throw new WorkflowRuntimeError("invalid-repair", refusal);
 	}
-	const preview = inspectRecovery(db, snapshot, definition, registry);
+	const preview = inspectRecovery(
+		db,
+		snapshot,
+		definition,
+		registry,
+		launchEvidence,
+		now,
+	);
 	if (boundedRecovery && !preview.eligible)
 		throw new WorkflowRuntimeError(
 			"invalid-repair",
@@ -178,18 +195,93 @@ export function repair(
 			"invalid-repair",
 			`incompatible repair target: ${command.targetStep}`,
 		);
+	if (command.recovery?.operation === "reconcile-launch") {
+		const before = openEffectIds(db, snapshot.workflowId);
+		const runList = runs(db, snapshot.workflowId);
+		const effectList = effects(db, snapshot.workflowId);
+		const retired: string[] = [];
+		const requeued: string[] = [];
+		for (const launch of preview.launches ?? []) {
+			const run = runList.find((run) => run.id === launch.runId);
+			const effect = effectList.find((effect) => effect.id === launch.effectId);
+			if (!effect)
+				throw new WorkflowRuntimeError(
+					"invalid-repair",
+					"Selected launch disappeared; inspect again.",
+				);
+			const current =
+				run &&
+				run.stepId === snapshot.currentStep &&
+				run.attempt === snapshot.step.attempt &&
+				run.generation === snapshot.step.attempt &&
+				snapshot.step.activeRunIds.includes(run.id) &&
+				["pending", "working"].includes(run.status);
+			if (current) {
+				// The authenticated serialized host observation and expired claim
+				// prove the old token cannot admit/publish. Re-drive this SAME
+				// effect/run/request; admitted native work is only reattached.
+				db.query(
+					"UPDATE workflow_outbox SET status='pending',lease=NULL,lease_expires_at=NULL,max_attempts=MAX(max_attempts,attempts+3),next_attempt_at=NULL WHERE workflow_id=? AND id=?",
+				).run(snapshot.workflowId, effect.id);
+				requeued.push(effect.id);
+			} else {
+				if (
+					launch.claimState === "expired" &&
+					launch.admission?.activity === "absent" &&
+					["absent", "stopped"].includes(launch.admission.state)
+				)
+					db.query(
+						"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE id=? AND workflow_id=? AND status='running' AND lease_expires_at<=?",
+					).run(launch.effectId, snapshot.workflowId, nowIso(now));
+				retireRunEffects(db, snapshot, launch.runId);
+				db.query(
+					"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE workflow_id=? AND id=? AND status IN ('pending','working')",
+				).run(nowIso(now), snapshot.workflowId, launch.runId);
+				retired.push(launch.runId);
+			}
+		}
+		const reason =
+			boundedSummary(command.reason, MAX_REPAIR_REASON_CHARS) ?? "";
+		const expired = boundedIds(expiredEffectIds(db, before));
+		snapshot.repaired = {
+			reason,
+			fromStep: snapshot.currentStep,
+			at: nowIso(now),
+			expiredEffects: expired,
+			retiredRuns: boundedIds(retired),
+			count: repairCount(db, snapshot.workflowId),
+			recovery: {
+				principal: command.principal ?? "operator",
+				instruction: instruction ?? "",
+				attempt: snapshot.step.attempt,
+				revision: command.revision,
+				previewId: preview.previewId,
+				operation: "reconcile-launch",
+			},
+		};
+		return {
+			type: "operator.repair",
+			actor: { kind: command.principal ?? "operator" },
+			data: {
+				operation: "reconcile-launch",
+				accepted: true,
+				previewId: preview.previewId,
+				reason,
+				requeuedEffects: boundedIds(requeued),
+				retiredRuns: boundedIds(retired),
+				expiredEffects: expired,
+				attempt: snapshot.step.attempt,
+			},
+		};
+	}
 	// What the repair is about to retire and expire, captured before it is
 	// applied, so the committed record names the repair's effect and not only its
 	// target (efficiency backlog item 11).
 	const retiredRuns = preview.affectedRuns;
 	const openEffects = openEffectIds(db, snapshot.workflowId);
 	expireRuns(db, snapshot, now);
-	// The checks in this transaction refused working runs, open debug requests
-	// and leases. Retire only unclaimed work; never steal lifecycle work or
-	// rewrite a terminal blocked/failed outcome.
-	db.query(
-		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry')",
-	).run(snapshot.workflowId);
+	// expireRuns retires only this attempt's run-bound work, including failed
+	// rows. Unrelated lifecycle/consult/debug work keeps its original lifetime.
 	const expiredEffects = expiredEffectIds(db, openEffects);
 	const count = repairCount(db, snapshot.workflowId);
 	// The reason is free text: it is bounded and credential-masked here, once,

@@ -35,6 +35,7 @@ import {
 } from "../secure-fs.ts";
 import { DEBUG_ROLE } from "../steps/debug.ts";
 import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
+import { effectEligibility } from "./effect-eligibility.ts";
 import { stageReplayEligible } from "./stage-replay-eligibility.ts";
 import {
 	canonicalStorePath,
@@ -1405,111 +1406,17 @@ export function validateEffect(
 			"unknown-effect-kind",
 			`unknown effect kind: ${row.kind}`,
 		);
-	const payload = JSON.parse(row.payload_json) as {
-		runId?: unknown;
-		questionId?: unknown;
-		cancelRequested?: unknown;
-		debugRequestId?: unknown;
-	};
-	const allowed = registry
-		.stepForDefinition(definition, snapshot.currentStep)
-		.allowedEffects.includes(row.kind);
-	// An edge effect is enqueued while advancing into its destination step, so
-	// it stays pending at that step and nowhere else. Judging it only by the
-	// step's `allowedEffects` would reject the promotion edges that deliberately
-	// enqueue into a step whose contract they do not broaden — the wiki approval
-	// promotion into delivery/completion, and, with per-step routing, into the
-	// routing step that now precedes archive. A row is therefore also legal at
-	// the current step when one of that step's own inbound edges declares it.
-	const declaredInbound = definition.edges.some(
-		(edge) =>
-			edge.to === snapshot.currentStep &&
-			(edge.effects ?? []).some((effect) => effect.kind === row.kind),
+	const decision = effectEligibility(
+		effectFromRow(row),
+		snapshot,
+		definition,
+		runs,
+		registry,
 	);
-	const setupBeforeEntry =
-		row.kind === "workspace.setup" &&
-		!snapshot.step.activeRunIds.length &&
-		snapshot.currentStep === definition.initial;
-	// Research deliberately starts its agent only after the repository-neutral
-	// workspace setup effect completes. The workflow can receive other
-	// revisions while that effect is pending, so keep that setup effect legal
-	// for the active research step instead of incorrectly treating it as stale.
-	const researchSetup =
-		row.kind === "workspace.setup" &&
-		snapshot.definition.id === "research" &&
-		snapshot.currentStep === "core.research";
-	// Two lifecycle effects are enqueued outside the contract of whatever step the
-	// workflow happens to be in. `agent.stop` retires an obsolete launch; the
-	// owner-bound `environment.teardown` is emitted when the workflow is closed
-	// and when it is deleted, and a delete can land at any step. Judging either by
-	// the current step's `allowedEffects` would refuse the row — and, at claim
-	// time, break the drain of the whole store rather than the one effect.
-	const stepIndependent =
-		row.kind === "agent.stop" ||
-		row.kind === "environment.teardown" ||
-		// The env-setup family's close removes its staged configuration root: a
-		// complete copy of the live configuration that must not outlive the
-		// workflow that owns it.
-		row.kind === "environment.setup-cleanup" ||
-		// The debug-request lifecycle is emitted by the CLI and by the delegated
-		// run's own handoff, neither of which moves the caller's step.
-		isDebugRequestEffect(row.kind);
-	if (
-		!allowed &&
-		!declaredInbound &&
-		!setupBeforeEntry &&
-		!researchSetup &&
-		!stepIndependent
-	)
+	if (!decision.eligible)
 		throw new WorkflowRuntimeError(
 			"invalid-state",
-			`effect ${row.kind} is illegal at ${snapshot.currentStep}`,
-		);
-	if (["artifact.write", "agent.launch", "agent.prompt"].includes(row.kind)) {
-		const run = runs.find((item) => item.id === payload.runId);
-		// A peer-question prompt deliberately targets a completed run at a
-		// different step. It stays legal for as long as the addressed record
-		// exists, even after the question resolves: the execute handler re-checks
-		// the record and no-ops, so a resolved question can never abort a claim
-		// transaction by leaving its prompt row behind.
-		const consultTarget =
-			row.kind === "agent.prompt" &&
-			typeof payload.questionId === "string" &&
-			snapshot.developerDialogue.some(
-				(item) =>
-					item.id === payload.questionId && item.targetRunId === payload.runId,
-			);
-		const cancelledLaunch =
-			row.kind === "agent.launch" && payload.cancelRequested === true;
-		// A delegated debug side run addresses a run that is deliberately outside
-		// the caller's step machinery, so the active-run/current-step invariants
-		// are the wrong question for it; the run's own existence and status are.
-		const debugSideRun =
-			row.kind === "agent.launch" &&
-			Boolean(run && isDebugSideRun(run, definition)) &&
-			payload.debugRequestId !== undefined;
-		if (
-			!run ||
-			(!consultTarget &&
-				!cancelledLaunch &&
-				!debugSideRun &&
-				(!ACTIVE_RUN.has(run.status) ||
-					!snapshot.step.activeRunIds.includes(run.id) ||
-					run.stepId !== snapshot.currentStep))
-		)
-			throw new WorkflowRuntimeError(
-				"invalid-state",
-				`effect run invariant failed: ${row.id}`,
-			);
-	}
-	if (
-		row.kind === "agent.stop" &&
-		(typeof payload.runId !== "string" ||
-			!runs.some((run) => run.id === payload.runId))
-	)
-		throw new WorkflowRuntimeError(
-			"invalid-state",
-			`stop effect run missing: ${row.id}`,
+			`effect ${row.id}: ${decision.reason}`,
 		);
 }
 export function expireDueQuestions(

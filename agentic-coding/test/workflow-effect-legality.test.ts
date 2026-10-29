@@ -15,7 +15,12 @@ import {
 const registry = registerBuiltins();
 
 function effectRow(kind: string): EffectRow {
-	return { id: "row", kind, payload_json: "{}" } as unknown as EffectRow;
+	return {
+		id: "row",
+		workflow_id: "wf",
+		kind,
+		payload_json: "{}",
+	} as unknown as EffectRow;
 }
 
 /** Only the fields `validateEffect` reads before the effect-legality check. */

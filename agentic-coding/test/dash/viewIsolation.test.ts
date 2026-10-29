@@ -192,6 +192,8 @@ describe("the dashboard route is a coordinator", () => {
 				"data",
 				// Whether the cheap seed has been replaced by the full observation.
 				"dashboardLoaded",
+				// Loading a native session is route-owned observation state.
+				"agentSessionPendingRole",
 				"demoIndex",
 				"reviewFinishing",
 				"reviewFinishingMessage",

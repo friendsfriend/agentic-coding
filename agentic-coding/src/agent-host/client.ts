@@ -9,6 +9,8 @@ import tls from "node:tls";
 import {
 	type AuthenticatedHostEndpoint,
 	certificateFingerprint,
+	hostIdentityPaths,
+	readHostCertificate,
 } from "./host-identity.ts";
 import type { HostLayout } from "./layout.ts";
 import {
@@ -36,6 +38,14 @@ import {
 import { applyWatchPatch } from "./view-ops.ts";
 
 export class HostUnavailableError extends Error {}
+export class HostLaunchVerificationError extends Error {
+	constructor(
+		readonly retryable: boolean,
+		message: string,
+	) {
+		super(message);
+	}
+}
 
 /** How to start a workflow's host process when none is reachable yet. The
  * adapter supplies the already-resolved executable and arguments (compiled
@@ -329,7 +339,58 @@ async function waitForHostUnavailable(
 /** Typed request/response client over one workflow's control socket. Every
  * call opens its own connection (NDJSON framing, D3): low volume, no
  * multiplexed-request bookkeeping needed. */
+export function authenticatedHostClient(
+	socketPath: string,
+	timeoutMs = 30_000,
+): HostClient {
+	return new HostClient(
+		async () => ({
+			socket: hostIdentityPaths(socketPath).socket,
+			fingerprint: readHostCertificate(socketPath),
+		}),
+		timeoutMs,
+	);
+}
+
 export class HostClient {
+	async inspectLaunch(
+		runId: string,
+	): Promise<import("../contracts/launch.ts").LaunchObservation> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "inspectLaunch", runId },
+			this.timeoutMs,
+		);
+		if (response.type !== "launchObservation") throw unexpected(response);
+		const { decodeContract } = await import("../contracts/decode.ts");
+		const { launchObservationSchema } = await import("../contracts/launch.ts");
+		return decodeContract(
+			"host.launch-observation",
+			launchObservationSchema,
+			response,
+		);
+	}
+	async fenceStoppedRun(
+		claim: import("../contracts/launch.ts").LaunchClaim,
+	): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "fenceStoppedRun", claim },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+	async admitWorkflowRun(
+		request: Omit<import("./protocol.ts").AdmitWorkflowRunRequest, "type">,
+	): Promise<EnsureRunResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "admitWorkflowRun" },
+			this.timeoutMs,
+		);
+		if (response.type !== "ensureRun") throw unexpected(response);
+		return response;
+	}
 	constructor(
 		private readonly socketPath: HostEndpoint,
 		private readonly timeoutMs = 30_000,
@@ -644,8 +705,17 @@ export class HostClient {
 }
 
 function unexpected(response: HostResponse): Error {
-	if (response.type === "error")
+	if (response.type === "error") {
+		if (
+			response.code === "launch-verifier-unavailable" ||
+			response.code === "launch-claim-refused"
+		)
+			return new HostLaunchVerificationError(
+				response.code === "launch-verifier-unavailable",
+				response.message,
+			);
 		return new Error(`agent host: ${response.code}: ${response.message}`);
+	}
 	return new Error(`agent host: unexpected response type ${response.type}`);
 }
 

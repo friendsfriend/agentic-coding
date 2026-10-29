@@ -183,11 +183,13 @@ test("ensure and recovery address only requested constant-size associations afte
 		}
 		snapshots.mockClear();
 		await first.ensureRun({ ...f.input, runId: "new-run", name: "worker" });
-		expect(snapshots).toHaveBeenCalledTimes(2);
+		// One keyed managed-role fence plus run/role associations; no history scan.
+		expect(snapshots).toHaveBeenCalledTimes(3);
 		const reads = await Promise.all(
 			snapshots.mock.results.map((result) => result.value),
 		);
 		expect(reads).toEqual([
+			undefined,
 			undefined,
 			{ identity: "worker", conversationId: Number(conversationId) },
 		]);
@@ -206,8 +208,9 @@ test("ensure and recovery address only requested constant-size associations afte
 			);
 			stop();
 			expect(values.length).toBeGreaterThan(0);
-			// One keyed ownership read plus the existing constant-size runtime
-			// failure read; neither enumerates retired run associations.
+			// Recovery reads the keyed ownership association and the keyed
+			// persisted runtime-failure document used by the watch augmentation.
+			// Both are constant-size; neither scans retired run history.
 			expect(snapshots).toHaveBeenCalledTimes(2);
 			expect(await snapshots.mock.results[0]?.value).toEqual({
 				identity: runId,

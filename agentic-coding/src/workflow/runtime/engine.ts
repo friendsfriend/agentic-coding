@@ -21,6 +21,7 @@ import path from "node:path";
 import { Cause, Effect, Exit, type Layer, Option, Result } from "effect";
 import { environmentToolsAvailable } from "../../agent-host/environment-capability.ts";
 import { resolveConfigRoot } from "../../config-root.ts";
+import type { LaunchClaim, LaunchPermit } from "../../contracts/launch.ts";
 import {
 	type DeveloperDialogueRecord,
 	decodeCommand,
@@ -34,6 +35,7 @@ import {
 	waitSeconds,
 } from "../../contracts/workflow.ts";
 import { setupDraftsDir } from "../../server/environment/setup-drafts.ts";
+import { observeLaunchRecovery } from "../adapters.ts";
 import type { RoutingDecisionSummary } from "../classifiers.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
@@ -78,6 +80,7 @@ import {
 	resolveDefinition,
 	resolveDefinitionAt,
 } from "./definitions.ts";
+import { effectCancelled } from "./effect-eligibility.ts";
 import type {
 	ClaimedEffect,
 	DispatchResult,
@@ -103,7 +106,13 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
-import { validateRecoverableSnapshot } from "./recovery.ts";
+import {
+	type LaunchRecoveryEvidence,
+	projectRecovery,
+	recoveryLaunches,
+	recoverySourceId,
+	validateRecoverableSnapshot,
+} from "./recovery.ts";
 import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
@@ -185,10 +194,12 @@ import {
 	wikiWorkflowDataRoot,
 } from "./targets.ts";
 import {
+	launchRecoveryInputs,
 	viewById,
 	list as viewList,
 	previewRepair as viewPreviewRepair,
 	status as viewStatus,
+	verifyLaunch as viewVerifyLaunch,
 } from "./view.ts";
 import { definitionStepActor, waitState, workflowWait } from "./waiting.ts";
 
@@ -656,6 +667,102 @@ export class WorkflowEngine {
 			};
 		});
 	}
+	private launchRecoveryInspection(
+		repo: string,
+		workflowId: string,
+		revision: number,
+	) {
+		const self = this;
+		return Effect.gen(function* () {
+			const input = yield* Effect.try({
+				try: () => launchRecoveryInputs(repo, workflowId, self.registry),
+				catch: toRuntimeError,
+			});
+			if (input.snapshot.revision !== revision)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"stale-revision",
+						"Inspect the current workflow revision before recovery.",
+						input.snapshot.revision,
+					),
+				);
+			const candidates = recoveryLaunches(
+				input.snapshot,
+				input.runList,
+				input.effectList,
+			);
+			const runIds = [
+				...new Set(
+					candidates.map((effect) =>
+						String((effect.payload as { runId?: unknown }).runId ?? ""),
+					),
+				),
+			];
+			if (!runIds.length || runIds.length > 32)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"invalid-repair",
+						"No bounded launch reconciliation target; inspect workflow status.",
+					),
+				);
+			const observations = yield* observeLaunchRecovery(
+				input.socketPath,
+				runIds,
+			);
+			const evidence = {
+				sourceId: recoverySourceId(
+					input.snapshot,
+					input.runList,
+					input.effectList,
+				),
+				observations,
+			};
+			const preview = projectRecovery(
+				input.snapshot,
+				input.runList,
+				input.effectList,
+				input.actor,
+				input.hasOpenDebugRequest,
+				evidence,
+				self.now,
+			);
+			return { preview, evidence };
+		});
+	}
+	launchRecoveryPreviewEffect(
+		repo: string,
+		workflowId: string,
+		revision: number,
+	) {
+		return this.launchRecoveryInspection(repo, workflowId, revision).pipe(
+			Effect.map((result) => result.preview),
+		);
+	}
+	reconcileLaunchEffect(repo: string, raw: unknown) {
+		const self = this;
+		return Effect.gen(function* () {
+			const command = yield* Effect.try({
+				try: () => decodeCommand(raw),
+				catch: toRuntimeError,
+			});
+			if (
+				command.type !== "operator.repair" ||
+				command.recovery?.operation !== "reconcile-launch"
+			)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"invalid-repair",
+						"Expected an inspected reconcile-launch request.",
+					),
+				);
+			const { evidence } = yield* self.launchRecoveryInspection(
+				repo,
+				command.workflowId,
+				command.revision,
+			);
+			return yield* self.dispatchEffect(repo, command, evidence);
+		});
+	}
 	dispatch(repo: string, raw: unknown): DispatchResult {
 		return this.run(this.dispatchEffect(repo, raw));
 	}
@@ -664,6 +771,7 @@ export class WorkflowEngine {
 	dispatchEffect(
 		repo: string,
 		raw: unknown,
+		launchEvidence?: LaunchRecoveryEvidence,
 	): Effect.Effect<
 		DispatchResult,
 		WorkflowRuntimeError,
@@ -716,7 +824,7 @@ export class WorkflowEngine {
 			}
 			const committed = yield* Effect.catch(
 				store.transaction(repo, (db) =>
-					self.commitDispatch(db, command, preparedHandoff),
+					self.commitDispatch(db, command, preparedHandoff, launchEvidence),
 				),
 				(error) =>
 					Effect.gen(function* () {
@@ -1190,7 +1298,7 @@ export class WorkflowEngine {
 					// A claimed launch is marked for cancellation so its runner stops the
 					// conversation; one that has not been claimed is simply expired.
 					db.query(
-						"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',1) WHERE workflow_id=? AND status='running' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
+						"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',json('true')) WHERE workflow_id=? AND status='running' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
 					).run(request.workflowId, runId);
 					db.query(
 						"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry') AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
@@ -1425,6 +1533,14 @@ export class WorkflowEngine {
 			try: () => viewList(repo, this.registry, this.now),
 			catch: toRuntimeError,
 		});
+	}
+	verifyLaunch(claim: LaunchClaim): LaunchPermit {
+		return this.run(
+			Effect.try({
+				try: () => viewVerifyLaunch(claim, this.registry, this.now),
+				catch: toRuntimeError,
+			}),
+		);
 	}
 	getRun(repo: string, runId: string): WorkflowRun {
 		return this.run(this.getRunEffect(repo, runId));
@@ -2215,6 +2331,7 @@ export class WorkflowEngine {
 		db: import("bun:sqlite").Database,
 		command: WorkflowCommand,
 		preparedHandoff?: PreparedHandoffEvidence,
+		launchEvidence?: LaunchRecoveryEvidence,
 	): CommittedDispatch {
 		const located = this.locate(db, command);
 		const snapshot = decodeSnapshot(JSON.parse(located.snapshot_json));
@@ -2269,6 +2386,7 @@ export class WorkflowEngine {
 			definition,
 			command,
 			preparedHandoff,
+			launchEvidence,
 		);
 		snapshot.revision += 1;
 		snapshot.metadata.updatedAt = nowIso(this.now);
@@ -2830,10 +2948,7 @@ export class WorkflowEngine {
 				});
 				continue;
 			}
-			const cancelledLaunch =
-				row.kind === "agent.launch" &&
-				(JSON.parse(row.payload_json) as { cancelRequested?: unknown })
-					.cancelRequested === true;
+			const cancelledLaunch = effectCancelled(effectFromRow(row));
 			if (
 				row.status === "running" &&
 				row.attempts >= row.max_attempts &&
@@ -2973,6 +3088,7 @@ export class WorkflowEngine {
 		definition: CompiledWorkflowDefinition,
 		command: WorkflowCommand,
 		preparedHandoff?: PreparedHandoffEvidence,
+		launchEvidence?: LaunchRecoveryEvidence,
 	): { type: string; actor: unknown; data: unknown } {
 		if (command.type === "developer.action")
 			return developerAction(
@@ -3055,7 +3171,15 @@ export class WorkflowEngine {
 				this.now,
 			);
 		if (command.type === "operator.repair")
-			return repair(db, snapshot, definition, command, this.registry, this.now);
+			return repair(
+				db,
+				snapshot,
+				definition,
+				command,
+				this.registry,
+				this.now,
+				launchEvidence,
+			);
 		if (command.type === "operator.repin")
 			return repin(db, snapshot, definition, command, this.registry, this.now);
 		if (command.type === "operator.resume")

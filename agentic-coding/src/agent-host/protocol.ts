@@ -31,6 +31,16 @@ export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
  * workflow-management tools, so it can act directly or launch a workflow. */
 export type ToolPolicy = "default" | "read-only" | "orchestrator";
 
+import type { LaunchClaim } from "../contracts/launch.ts";
+
+export interface AdmitWorkflowRunRequest
+	extends Omit<EnsureRunRequest, "type" | "expectedConversationId"> {
+	readonly type: "admitWorkflowRun";
+	readonly claim: LaunchClaim;
+	readonly text: string;
+	readonly requestId: string;
+}
+
 export interface EnsureRunRequest {
 	readonly type: "ensureRun";
 	readonly runId: string;
@@ -96,6 +106,10 @@ export interface AbortRequest {
 	readonly type: "abort";
 	readonly runId: string;
 }
+export interface FenceStoppedRunRequest {
+	readonly type: "fenceStoppedRun";
+	readonly claim: LaunchClaim;
+}
 export interface StopRunRequest {
 	readonly type: "stopRun";
 	readonly runId: string;
@@ -138,15 +152,18 @@ export type HostRequest =
 	| ScheduledAdmissionRequest
 	| HelloRequest
 	| EnsureRunRequest
+	| AdmitWorkflowRunRequest
 	| RecoverRunRequest
 	| SubmitRequest
 	| StatusRequest
+	| { readonly type: "inspectLaunch"; readonly runId: string }
 	| ConfigureRunRequest
 	| CatalogRequest
 	| CompactRunRequest
 	| RetryTaskRequest
 	| AbortRequest
 	| StopRunRequest
+	| FenceStoppedRunRequest
 	| ShutdownRequest
 	| PrepareRestartForReattachmentRequest
 	| WatchRequest;
@@ -303,6 +320,8 @@ export interface ErrorResponse {
 	readonly code:
 		| "oversized-frame"
 		| "version-mismatch"
+		| "launch-verifier-unavailable"
+		| "launch-claim-refused"
 		| "unknown-run"
 		| "invalid-request"
 		| "internal";
@@ -333,6 +352,9 @@ export type HostResponse =
 	| EnsureRunResponse
 	| SubmitResponse
 	| StatusResponse
+	| ({
+			readonly type: "launchObservation";
+	  } & import("../contracts/launch.ts").LaunchObservation)
 	| CatalogResponse
 	| CompactRunResponse
 	| RetryTaskResponse

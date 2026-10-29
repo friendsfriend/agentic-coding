@@ -7,6 +7,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { Effect } from "effect";
+import {
+	HostLaunchVerificationError,
+	HostUnavailableError,
+} from "../agent-host/client.ts";
+import type { LaunchClaim, LaunchObservation } from "../contracts/launch.ts";
 import type {
 	AgentHandle,
 	Assignment,
@@ -16,9 +21,35 @@ import type {
 import { selfExecEntry } from "../self-exec.ts";
 import type { RenderedAssignment } from "./assignment.ts";
 import type { JevSessionBinding } from "./classifier-runner.ts";
+import { WorkflowRuntimeError } from "./contracts.ts";
+import { PermanentFailure, TransientFailure } from "./failures.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
 
+// Read-only bounded observation: never starts, restarts or reattaches a host.
+export function observeLaunchRecovery(
+	socketPath: string,
+	runIds: readonly string[],
+): Effect.Effect<LaunchObservation[], WorkflowRuntimeError> {
+	return Effect.tryPromise({
+		try: async () => {
+			if (runIds.length > 32) throw new Error("inspection limit");
+			const { authenticatedHostClient } = await import(
+				"../agent-host/client.ts"
+			);
+			const client = authenticatedHostClient(socketPath, 5000);
+			return Promise.all(runIds.map((runId) => client.inspectLaunch(runId)));
+		},
+		catch: () =>
+			new WorkflowRuntimeError(
+				"unavailable",
+				"Host launch observation unavailable; check the background server and host, then inspect recovery again. No workflow state was changed.",
+			),
+	});
+}
+
 export interface LaunchContext {
+	/** Only a committed launch claim can authorize managed remote admission. */
+	claim?: LaunchClaim;
 	profile: ResolvedProfile;
 	assignment: Assignment;
 	rendered: RenderedAssignment;
@@ -59,7 +90,11 @@ export interface AgentAdapter {
 		handle: AgentHandle,
 		signal?: AbortSignal,
 	): Effect.Effect<AgentObservation, Error>;
-	stop(handle: AgentHandle, signal?: AbortSignal): Effect.Effect<void, Error>;
+	stop(
+		handle: AgentHandle,
+		signal?: AbortSignal,
+		claim?: LaunchClaim,
+	): Effect.Effect<void, Error>;
 }
 
 export class PiDurableAdapter implements AgentAdapter {
@@ -88,7 +123,7 @@ export class PiDurableAdapter implements AgentAdapter {
 		return Effect.tryPromise({
 			try: async () => {
 				const { hostLayout } = await import("../agent-host/layout.ts");
-				const { ensureHostRunning, HostClient } = await import(
+				const { ensureHostRunning, authenticatedHostClient } = await import(
 					"../agent-host/client.ts"
 				);
 				const { registerHostRetryTarget } = await import(
@@ -97,21 +132,17 @@ export class PiDurableAdapter implements AgentAdapter {
 				const runtimeDir = durableRuntimeDir(ctx);
 				const layout = hostLayout(runtimeDir);
 				const entry = selfExecEntry();
-				await ensureHostRunning(
-					layout,
-					{
-						command: process.execPath,
-						args: [
-							...(entry ? [entry] : []),
-							"agent",
-							"host",
-							"--workflow-dir",
-							runtimeDir,
-						],
-						cwd: ctx.cwd,
-					},
-					{ requireRetryAuthority: true },
-				);
+				await ensureHostRunning(layout, {
+					command: process.execPath,
+					args: [
+						...(entry ? [entry] : []),
+						"agent",
+						"host",
+						"--workflow-dir",
+						runtimeDir,
+					],
+					cwd: ctx.cwd,
+				});
 				// The host reads the run's environment from this file
 				// (durable-agent-host: "Per-run execution environment"), including
 				// the classifier binding.
@@ -124,39 +155,64 @@ export class PiDurableAdapter implements AgentAdapter {
 						...(ctx.jev ? { AGENTIC_JEV: JSON.stringify(ctx.jev) } : {}),
 					},
 				});
-				const client = new HostClient(layout.socketPath);
+				const client = authenticatedHostClient(layout.socketPath);
 				const readOnly =
 					ctx.profile.readOnly ||
 					ctx.profile.capabilities.includes("read-only");
-				const ensured = await client.ensureRun({
+				const request = {
 					runId: ctx.assignment.runId,
 					cwd: ctx.cwd,
 					runEnvPath,
 					name: ctx.name,
-					toolPolicy: readOnly ? "read-only" : "default",
+					toolPolicy: readOnly ? ("read-only" as const) : ("default" as const),
 					...(ctx.profile.model ? { model: ctx.profile.model } : {}),
 					...(ctx.profile.thinking ? { thinking: ctx.profile.thinking } : {}),
-				});
-				await client.submit(
+				};
+				// Real workflow assignments cannot fall back to the legacy ensure /
+				// submit pair. Interactive non-workflow callers retain that protocol.
+				const managed = Boolean(
+					ctx.assignment.workflowId ||
+						ctx.environment.HERDR_WORKFLOW_ID ||
+						ctx.claim,
+				);
+				if (managed && !ctx.claim)
+					throw new Error(
+						"Managed launch requires a committed claim and background server; inspect workflow status before dispatch.",
+					);
+				const requestId = promptRequestId(
 					ctx.assignment.runId,
 					ctx.rendered.prompt,
-					promptRequestId(ctx.assignment.runId, ctx.rendered.prompt),
-					"followUp",
 				);
+				const ensured = ctx.claim
+					? await client.admitWorkflowRun({
+							...request,
+							claim: ctx.claim,
+							text: ctx.rendered.prompt,
+							requestId,
+						})
+					: await client.ensureRun(request);
+				if (!managed)
+					await client.submit(
+						ctx.assignment.runId,
+						ctx.rendered.prompt,
+						requestId,
+						"followUp",
+					);
 				const retryTargetLease = registerHostRetryTarget(
 					ctx.assignment.runId,
 					ensured.conversationId,
 					layout.socketPath,
 				);
-				if (!retryTargetLease)
-					throw new Error("agent host recovery authority is unavailable");
+				// Ordinary authenticated admission outlives its launcher process.
+				// A fresh launcher cannot restore the private parked-task capability
+				// without restarting the host; successful admission must not require it.
 				const handle: AgentHandle = {
 					runtime: this.id,
 					name: ctx.name,
 					hostSocket: layout.socketPath,
 					sessionId: ctx.assignment.runId,
 					conversationId: ensured.conversationId,
-					retryTargetLease,
+					...(retryTargetLease ? { retryTargetLease } : {}),
 				};
 				return handle;
 			},
@@ -204,12 +260,37 @@ export class PiDurableAdapter implements AgentAdapter {
 		});
 	}
 
-	stop(handle: AgentHandle, _signal?: AbortSignal): Effect.Effect<void, Error> {
+	stop(
+		handle: AgentHandle,
+		_signal?: AbortSignal,
+		claim?: LaunchClaim,
+	): Effect.Effect<void, Error> {
 		return Effect.tryPromise({
 			try: async () => {
 				if (!handle.hostSocket || !handle.sessionId) return;
-				const { HostClient } = await import("../agent-host/client.ts");
-				await new HostClient(handle.hostSocket).stopRun(handle.sessionId);
+				const { authenticatedHostClient, ensureHostRunning } = await import(
+					"../agent-host/client.ts"
+				);
+				const { hostLayout } = await import("../agent-host/layout.ts");
+				const runtimeDir = path.dirname(path.dirname(handle.hostSocket));
+				const entry = selfExecEntry();
+				// Even an unseen run needs a durable stop tombstone. A dead host is
+				// restarted only through ordinary ownership-checked startup, never
+				// through privileged capability reattachment or busy-host takeover.
+				await ensureHostRunning(hostLayout(runtimeDir), {
+					command: process.execPath,
+					args: [
+						...(entry ? [entry] : []),
+						"agent",
+						"host",
+						"--workflow-dir",
+						runtimeDir,
+					],
+					cwd: path.dirname(runtimeDir),
+				});
+				const client = authenticatedHostClient(handle.hostSocket);
+				if (claim) await client.fenceStoppedRun({ ...claim, intent: "stop" });
+				else await client.stopRun(handle.sessionId);
 				if (handle.conversationId) {
 					const { unregisterHostRetryTarget } = await import(
 						"../agent-host/retry-authority.ts"
@@ -227,6 +308,12 @@ export class PiDurableAdapter implements AgentAdapter {
 }
 
 function toError(error: unknown): Error {
+	if (error instanceof HostLaunchVerificationError)
+		return error.retryable
+			? new TransientFailure(error.message)
+			: new PermanentFailure(error.message);
+	if (error instanceof HostUnavailableError)
+		return new TransientFailure(error.message);
 	return error instanceof Error ? error : new Error(String(error));
 }
 function durableRuntimeDir(ctx: LaunchContext): string {
@@ -257,8 +344,8 @@ function requireDurableSocket(handle: AgentHandle): string {
 /** Resolve both a dead host and a restarted host whose in-memory run map is
  * empty. Do not re-submit an assignment or retry an ambiguous submission. */
 async function recoveredDurableClient(handle: AgentHandle) {
-	const { HostClient } = await import("../agent-host/client.ts");
-	const client = new HostClient(requireDurableSocket(handle));
+	const { authenticatedHostClient } = await import("../agent-host/client.ts");
+	const client = authenticatedHostClient(requireDurableSocket(handle));
 	try {
 		if ((await client.status(requireDurableRunId(handle))).status !== "unknown")
 			return client;
@@ -267,5 +354,5 @@ async function recoveredDurableClient(handle: AgentHandle) {
 	}
 	const { recoverDurableHandle } = await import("../agent-host/recovery.ts");
 	const recovered = await recoverDurableHandle(handle);
-	return new HostClient(recovered.hostSocket);
+	return authenticatedHostClient(recovered.hostSocket);
 }
