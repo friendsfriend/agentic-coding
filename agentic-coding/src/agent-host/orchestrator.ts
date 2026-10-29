@@ -43,6 +43,10 @@ import {
 	decodeWorkflowIds,
 	rankSimilarIds,
 } from "./orchestrator-resolve.ts";
+import {
+	createSchedulingTools,
+	type SchedulingDestination,
+} from "./scheduling-tools.ts";
 import { toolViewDetails } from "./tool-view-details.ts";
 import type { DurableRunContext, RunContextLookup } from "./tools.ts";
 
@@ -450,6 +454,7 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
 - To unblock a terminal worker with no pending question, read workflow_status, then workflow_recovery_preview with its revision and the exact visible target. For an eligible workflow you started, call workflow_recover once with the inspected previewId/operation/target, a 1–160 character reason and a 1–8000 character corrective instruction. Agreed API references and operational clarifications are appropriate; the instruction is masked, audited and delivered durably to the replacement worker, not queued for the terminal run. The home orchestrator is not a completed workflow role addressable by agent_ask.
 - Recovery is current-agent-step only, including supported missing-run structural re-entry. No cross-step jumps, human-review decisions, live worker/debug replacement, leased-effect theft or pending-question bypass. On refusal surface the blocker; do not loop. Forward new scope, architecture and permission decisions to the developer. Recovery never authorizes configuration/credential edits, deletion, manual storage surgery, force merges, destructive resets or native-file workarounds around server boundaries. The general target discovery rule above does not widen recovery: it requires an exact visible orchestrator-started target.
+- Scheduling: offer scheduling when the user asks to check later. When explicitly instructed to remind yourself or recheck something after a specified delay, create a one-time wake-up pinned to this session with scheduling_destination, then scheduling to preview and create self-contained durable jobs/schedules or manage existing ones. Never infer recurring-task creation from ambiguous text: obtain an explicit cadence and timezone. Resolve relative timing through the shared preview and show its explicit instant/timezone and next run. Use stable request keys and current revisions; inspect affected schedules before editing a shared job. Execution needs the server running, never grants extra authority, and writable standalone execution needs operator approval. Do not promise OS wake or rely on conversation memory for delayed instructions.
 - Workflow events: the monitor delivers subscribed events to you as notes whose first line is "[workflow-monitor] subs=<labels>" followed by one line per (workflow, step, change), "- <workflowId> → <stepId> (<what changed>)" — the same change repeated inside one note is one line with its count ("… ×12") instead of twelve lines. The subs= list names the subscriptions that asked for the note; if you have no subscription of your own it reads subs=default, the monitor's own default, which list_subscriptions shows. That default digests info progress on a short interval, but a blocked or failed run, an attention request, a waiting review, a pending question and a workflow completion still reach you promptly, so you need not subscribe just to hear about them. The notifications the developer needs (a review waiting, a pending developer question) always reach the shell whatever you subscribe to. Use subscribe_events to choose what wakes you (mode wake for immediate coalesced notes, digest for one note per interval, silent to record without delivering), list_subscriptions to see them, unsubscribe_events to remove one, and read_events to pull recorded events since a cursor when you would rather poll than be woken. A note that carries only info progress your subscription did not name is absorbed: it stays readable with read_events and does not wake you. Every subscription expires, so give it a label, a reason and an expiry or an until-condition. Completion and progress events (workflow.completed, step.*, run.completed) are severity info, so minSeverity "warning" excludes them: to be told when a workflow finishes, name the terminal events in eventIds (workflow.completed, workflow.failed, workflow.closed) or pass minSeverity "info".
 - OpenCode: use \`opencode_session\` to start a coding session in the shell's OpenCode page (always with an initial prompt) or to admit a follow-up prompt to an existing \`sessionId\`. It shares the default OpenCode background service and project with the page, returns the session id and the admitted user message, and does not wait for OpenCode's answer: the developer reads and drives that session in the OpenCode page, so tell them the id when one is created.
 - Report what you did and the resulting workflow status. Be concise.`;
@@ -463,6 +468,7 @@ function nullableOptional(schema: Parameters<typeof Type.Optional>[0]) {
 
 export function createOrchestratorExtension(
 	lookup: RunContextLookup,
+	destination?: SchedulingDestination,
 ): Extension {
 	/** Run one tool body against the calling session's environment. */
 	const run =
@@ -491,6 +497,12 @@ export function createOrchestratorExtension(
 			section("orchestrator", () => ORCHESTRATOR_PROMPT, { tag: false }),
 		],
 		tools: [
+			...createSchedulingTools({
+				lookup,
+				...(destination ? { destination } : {}),
+				call: (env, request) =>
+					call(env, "POST", "/api/v1/scheduling", request),
+			}),
 			defineTool({
 				name: "list_projects",
 				description:

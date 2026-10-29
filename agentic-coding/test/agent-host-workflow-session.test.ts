@@ -55,6 +55,9 @@ function fixture() {
 			socketFile(path.join(worktree, ".herdr-workflow"));
 		const file = path.join(root, `store-${nextFile++}.db`);
 		const db = new Database(file);
+		// Real store capabilities require private main files and sidecars.
+		// Copies retain this mode before the lock connection creates a journal.
+		fs.chmodSync(file, 0o600);
 		try {
 			db.exec(
 				"CREATE TABLE workflow_instances(id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL); CREATE TABLE workflow_runs(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL)",

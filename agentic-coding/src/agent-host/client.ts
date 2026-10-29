@@ -23,6 +23,8 @@ import {
 	PROTOCOL_VERSION,
 	type PrepareRestartForReattachmentResponse,
 	type RetryTaskResponse,
+	type ScheduledAdmissionRequest,
+	type ScheduledAdmissionResponse,
 	type StatusResponse,
 	type SubmitResponse,
 } from "./protocol.ts";
@@ -358,6 +360,28 @@ export class HostClient {
 		if (response.type !== "ensureRun") throw unexpected(response);
 		return response;
 	}
+	async scheduledIdentity(): Promise<string> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "scheduledIdentity" },
+			this.timeoutMs,
+		);
+		if (response.type !== "scheduledIdentity") throw unexpected(response);
+		return response.hostId;
+	}
+
+	async scheduledAdmission(
+		request: Omit<ScheduledAdmissionRequest, "type">,
+	): Promise<ScheduledAdmissionResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "scheduledAdmission" },
+			this.timeoutMs,
+		);
+		if (response.type !== "scheduledAdmission") throw unexpected(response);
+		return response;
+	}
+
 	async submit(
 		runId: string,
 		text: string,

@@ -182,6 +182,7 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 		relPath.startsWith("tui/dash/") ||
 		relPath.startsWith("tui/otel/") ||
 		relPath.startsWith("tui/settings/") ||
+		relPath.startsWith("tui/schedules/") ||
 		relPath.startsWith("tui/orchestrator/") ||
 		relPath.startsWith("tui/pi-durable/")
 	)

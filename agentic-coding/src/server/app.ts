@@ -24,6 +24,7 @@ import type {
 	WorkflowStartRequest,
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
+import { ContractFailure } from "../contracts/decode.ts";
 import type {
 	AcquireSlotsRequest,
 	AppSlotOperationRequest,
@@ -31,6 +32,8 @@ import type {
 	EnvironmentTeardownRequest,
 	ObserveRequest,
 } from "../contracts/environment.ts";
+import { SchedulingError } from "../contracts/scheduling.ts";
+import type { SchedulingRequest } from "../contracts/scheduling-api.ts";
 import type {
 	TelemetryPruneRequest,
 	TelemetryScanRequest,
@@ -97,6 +100,7 @@ import {
 	SERVER_API_VERSION,
 } from "./protocol.ts";
 import { EnvironmentInstanceError } from "./runtime/instances.ts";
+import type { SchedulingApi } from "./scheduling/api.ts";
 import { stageBearerToken } from "./stages/api-request.ts";
 import { StageUsageRegistry } from "./stages/limits.ts";
 import { stageTokenStore } from "./stages/oauth2.ts";
@@ -135,6 +139,7 @@ export interface ServerAppOptions {
 	readonly now?: () => Date;
 	/** Override the application operations (transport tests). */
 	readonly operations?: ServerOperations;
+	readonly scheduling?: SchedulingApi;
 	/** Server-owned telemetry persistence/query operations. */
 	readonly telemetry?: TelemetryOperations;
 	/** Server-owned workflow refresh subscriptions. */
@@ -844,6 +849,73 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			}
 		}
 
+		if (method === "POST" && path === "/api/v1/scheduling") {
+			const scheduling = options.scheduling;
+			if (!scheduling)
+				return errorResponse(
+					503,
+					"scheduling-unavailable",
+					"This server does not own scheduling.",
+				);
+			const body = await readJsonBody(request, 256 * 1024);
+			const expectedStoreId = request.headers.get(
+				"x-herdr-scheduling-store-id",
+			);
+			if (
+				expectedStoreId !== null &&
+				expectedStoreId !== scheduling.service.store.identity
+			)
+				return errorResponse(
+					409,
+					"scheduling-store-changed",
+					"This request belongs to a different scheduling store. Restore the original server before retrying.",
+				);
+			try {
+				const decoded = decodeRouteRequest<SchedulingRequest>(path, body);
+				const value = await scheduling.execute(decoded, principal);
+				if ("requestId" in decoded)
+					events.publish({
+						domain: "workflow",
+						kind: "scheduling.changed",
+						resource: "scheduling",
+					});
+				return json({ ok: true, value });
+			} catch (error) {
+				const failure =
+					error instanceof ContractFailure
+						? new SchedulingError(
+								"invalid-input",
+								safeMessage(error),
+								error.issues.slice(0, 8),
+							)
+						: error;
+				if (failure instanceof SchedulingError) {
+					const status = {
+						"invalid-input": 400,
+						"not-found": 404,
+						conflict: 409,
+						limit: 429,
+						unavailable: 503,
+						forbidden: 403,
+					}[failure.code];
+					return json(
+						{
+							error: {
+								code: `scheduling-${failure.code}`,
+								message: safeMessage(failure),
+								issues: failure.issues,
+							},
+						},
+						status,
+					);
+				}
+				return errorResponse(
+					503,
+					"scheduling-unavailable",
+					"Scheduling destination is unavailable; verify repository, model/provider, and destination settings.",
+				);
+			}
+		}
 		if (method === "POST" && path === "/api/v1/workflow/action") {
 			const decoded = decodeRouteRequest<WorkflowActionRequest>(
 				"/api/v1/workflow/action",

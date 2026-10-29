@@ -281,6 +281,12 @@ export const STAGE_SYSTEM_MAX_BYTES = 256;
 export const STAGE_WIKI_PROCESS_MAX_BYTES = 512;
 
 export interface WorkflowMetadata {
+	/** Native scheduling provenance, committed atomically with activation; never agent context. */
+	schedulingOrigin?: {
+		occurrenceId: string;
+		contentDigest: string;
+		admittedAt: number;
+	};
 	/** Empty for repository-independent workflows such as wiki-comments. */
 	repository: string;
 	worktree: string;
@@ -963,6 +969,7 @@ export interface WorkflowActionView {
 	requiresInput?: boolean;
 }
 export interface WorkflowView {
+	schedulingOrigin?: WorkflowMetadata["schedulingOrigin"];
 	workflowId: string;
 	changeId: string;
 	revision: number;
@@ -2188,6 +2195,13 @@ export const workflowViewSchema = Schema.Struct({
 	),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
+	schedulingOrigin: Schema.optional(
+		Schema.Struct({
+			occurrenceId: Schema.String,
+			contentDigest: Schema.String,
+			admittedAt: Schema.Number,
+		}),
+	),
 	selectedPreset: Schema.optional(Schema.String),
 	startedBy: Schema.optional(Schema.Literals(["developer", "orchestrator"])),
 	gatePolicies: Schema.optional(Schema.Record(Schema.String, Schema.String)),

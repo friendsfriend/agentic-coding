@@ -604,7 +604,18 @@ export function validateStartEvidence(
 		effectiveFamilyTraits(definition)?.startRequirements ?? [],
 	);
 	const status = Bun.spawnSync(
-		["git", "-C", repository, "status", "--porcelain"],
+		// Native store/reservation artifacts are application state, not user changes.
+		// Reservation must not make its own later activation fail the clean-tree guard.
+		[
+			"git",
+			"-C",
+			repository,
+			"status",
+			"--porcelain",
+			"--",
+			".",
+			":(exclude).herdr-workflow",
+		],
 		{ stdout: "pipe", stderr: "pipe" },
 	);
 	if (status.exitCode !== 0)

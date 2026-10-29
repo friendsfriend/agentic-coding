@@ -341,6 +341,9 @@ export function viewFromRows(
 				: {}),
 			// Read-side default: a snapshot written before the attribution existed
 			// is operator-started work.
+			...(snapshot.metadata.schedulingOrigin
+				? { schedulingOrigin: snapshot.metadata.schedulingOrigin }
+				: {}),
 			startedBy: snapshot.metadata.startedBy ?? "developer",
 			currentStep: {
 				id: snapshot.currentStep,
@@ -445,6 +448,9 @@ export function viewFromRows(
 					updatedAt: snapshot.metadata.updatedAt,
 					...(snapshot.metadata.selectedPreset
 						? { selectedPreset: snapshot.metadata.selectedPreset }
+						: {}),
+					...(snapshot.metadata.schedulingOrigin
+						? { schedulingOrigin: snapshot.metadata.schedulingOrigin }
 						: {}),
 					startedBy: snapshot.metadata.startedBy ?? "developer",
 					currentStep: {

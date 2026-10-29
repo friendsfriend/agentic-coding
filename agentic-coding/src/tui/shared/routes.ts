@@ -21,6 +21,7 @@ export type FeatureId =
 	| "workflows"
 	| "observability"
 	| "wiki"
+	| "schedules"
 	| "orchestrator";
 
 /** Base view of a resource page (its own detail view). */
@@ -55,6 +56,7 @@ export type PageId =
 	| "observability.topology.service"
 	| "wiki"
 	| "wiki.note"
+	| "schedules"
 	| "orchestrator"
 	| "opencode"
 	| "pi"
@@ -339,6 +341,12 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 		parent: () => ({ page: "observability.topology" }),
 		requiresResource: true,
 	},
+	schedules: {
+		label: "Schedules",
+		feature: "schedules",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
 	wiki: {
 		label: "Wiki",
 		feature: "wiki",
@@ -543,6 +551,7 @@ export const FEATURE_ROOTS: Readonly<Record<FeatureId, Route>> = {
 	workflows: { page: "workflows.detail" },
 	observability: { page: "observability" },
 	wiki: { page: "wiki" },
+	schedules: { page: "schedules" },
 	orchestrator: { page: "orchestrator" },
 };
 

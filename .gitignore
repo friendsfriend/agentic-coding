@@ -1,6 +1,7 @@
 .DS_Store
 .herdr-workflow/
 agentic-coding/node_modules/
+agentic-coding/src/workflow/native/extension.generated.ts
 agentic-coding/.pytest_cache/
 agentic-coding/packages/devenv/dist/
 agentic-coding/packages/devenv/server-binaries/

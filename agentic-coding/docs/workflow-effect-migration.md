@@ -21,7 +21,7 @@ The four roadmap phases and their owners:
 | Group | Files | Owner phase | Callers | Pure/native boundary |
 | --- | --- | --- | --- | --- |
 | Contracts & definitions | `contracts.ts`, `schema.ts`, `definitions/contracts.ts`, `definitions/steps.ts`, `registry.ts` | 1 | engine, view, store, reducers, steps, CLI | Pure decoding; `path` normalization is a named pure step |
-| Store/kernel/reducers/security | `runtime/store.ts`, `runtime/engine.ts`, `runtime/view.ts`, `runtime/reducers/*`, `runtime/capability.ts`, `runtime/dialogue.ts` | 2 | CLI, dashboard | SQLite via `secure-fs.ts`/store adapter |
+| Store/kernel/reducers/security | `runtime/store.ts`, `runtime/engine.ts`, `runtime/view.ts`, `runtime/reducers/*`, `runtime/capability.ts`, `runtime/dialogue.ts` | 2 | CLI, dashboard | SQLite via `secure-fs.ts`, `native/database.ts` and the repository-owned `native/secure-sqlite.c` VFS/store adapter |
 | Startup/config/profiles | `startup.ts`, `profiles.ts`, `paths.ts` | 2 | CLI, engine | `Bun.file`/env via `effects.ts` seam |
 | Runner/adapters/credentials/wiki/assets | `effect-runner.ts`, `push-preflight.ts`, `adapters.ts`, `credentials.ts`, `wiki.ts`, `assets.ts`, `secure-fs.ts`, `process.ts`, `failures.ts`, `herdr-schema.ts` | 3 | engine | git/subprocess/fs/network are native boundary adapters |
 | Stage blocks | `stage-blocks/*` (pure document/plan/catalog/flow), `stage-blocks/data-store.ts` (store I/O) | 1/3 | runner (`effect-runner.ts`: `stage.report.render`, `stage.blocks.promote`), browser routes, CLI gates | pure compilation and validation; the store is a named fs boundary |

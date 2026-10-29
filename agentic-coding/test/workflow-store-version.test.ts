@@ -167,6 +167,7 @@ test("a fresh store is created directly at the current version, idempotently", (
 			{ name: "workflow_migration_diagnostics" },
 			{ name: "workflow_outbox" },
 			{ name: "workflow_runs" },
+			{ name: "workflow_scheduled_reservations" },
 			{ name: "workflow_security_audit" },
 		]);
 		db.close();
@@ -252,7 +253,9 @@ test("an unversioned store with tables is refused without modifying the store", 
 		const before = storeShape(root);
 		const bytes = storeBytes(root);
 		expect(() => initializeStore(root)).toThrow(
-			/unsupported workflow store version 0; this build only reads version 6/,
+			new RegExp(
+				`unsupported workflow store version 0; this build only reads version ${STORE_SCHEMA_VERSION}`,
+			),
 		);
 		expect(storeShape(root)).toEqual(before);
 		expect(storeBytes(root)).toBe(bytes);
@@ -275,7 +278,9 @@ test("a legacy workflows-only store is refused instead of imported", () => {
 		);
 		db.close();
 		expect(() => initializeStore(root)).toThrow(
-			/unsupported workflow store version 0; this build only reads version 6/,
+			new RegExp(
+				`unsupported workflow store version 0; this build only reads version ${STORE_SCHEMA_VERSION}`,
+			),
 		);
 		const check = new Database(canonicalStorePath(root), { readonly: true });
 		expect(check.query("PRAGMA user_version").get()).toEqual({
@@ -442,7 +447,9 @@ test("a version-0 WAL store and a non-SQLite file are both refused by name", () 
 		db.close();
 		const before = storeBytes(wal);
 		expect(() => initializeStore(wal)).toThrow(
-			/unsupported workflow store version 0; this build only reads version 6/,
+			new RegExp(
+				`unsupported workflow store version 0; this build only reads version ${STORE_SCHEMA_VERSION}`,
+			),
 		);
 		expect(storeBytes(wal)).toBe(before);
 	} finally {
@@ -457,7 +464,9 @@ test("a version-0 WAL store and a non-SQLite file are both refused by name", () 
 		fs.writeFileSync(file, Buffer.alloc(128));
 		const bytes = storeBytes(foreign);
 		expect(() => initializeStore(foreign)).toThrow(
-			/unsupported workflow store version 0; this build only reads version 6/,
+			new RegExp(
+				`unsupported workflow store version 0; this build only reads version ${STORE_SCHEMA_VERSION}`,
+			),
 		);
 		expect(storeBytes(foreign)).toBe(bytes);
 	} finally {

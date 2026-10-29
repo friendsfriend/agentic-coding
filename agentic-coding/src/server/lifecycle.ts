@@ -55,6 +55,7 @@ import {
 	startTelemetryReceivers,
 	type TelemetryReceiverConfig,
 } from "./receivers.ts";
+import { createSchedulingRuntime } from "./scheduling/runtime.ts";
 import {
 	startWorkflowEventHub,
 	type WorkflowEventHub,
@@ -252,7 +253,27 @@ export async function startWorkflowServer(
 	// lifetime, stopped with it. It reads the configured TTL on every pass, so an
 	// edit applies without a restart.
 	const stopIdleReaper = options.integrations?.instances?.startIdleReaper();
+	let schedulingUrl: string | undefined;
+	const scheduling = createSchedulingRuntime({
+		...(options.configDir ? { configDir: options.configDir } : {}),
+		server: () => {
+			if (!schedulingUrl) throw new Error("Scheduling server is not ready.");
+			return { serverUrl: schedulingUrl, serverToken: authority.token };
+		},
+		publish: (occurrence) =>
+			events.publish({
+				domain: "workflow",
+				kind: "scheduling.occurrence",
+				resource: occurrence.scheduleId,
+				payload: {
+					occurrenceId: occurrence.id,
+					state: occurrence.state,
+					jobId: occurrence.jobId,
+				},
+			}),
+	});
 	const app = createServerApp({
+		scheduling: scheduling.api,
 		authority,
 		events,
 		credentials,
@@ -317,6 +338,7 @@ export async function startWorkflowServer(
 	if (selectedClassifier === LAYA_LOCAL_PROVIDER)
 		void startSelectedLocalClassifier(selectedClassifier);
 	const url = `http://${listener.hostname}:${assignedPort}`;
+	schedulingUrl = url;
 	const tokenFile = instanceTokenFile(assignedPort);
 	publishInstanceToken(tokenFile, authority.token);
 	// Every durable run of this server's workflows gets its own owner-scoped
@@ -344,6 +366,7 @@ export async function startWorkflowServer(
 			pid: process.pid,
 		});
 	let stopped = false;
+	scheduling.start();
 	return {
 		url,
 		port: assignedPort,
@@ -355,6 +378,7 @@ export async function startWorkflowServer(
 		stop: async () => {
 			if (stopped) return;
 			stopped = true;
+			await scheduling.stop();
 			clearEnvironmentServer(authority.token);
 			if (discoveryConfigDir)
 				removeEnvironmentDiscovery(discoveryConfigDir, authority.token);

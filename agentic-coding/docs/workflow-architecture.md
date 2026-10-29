@@ -244,19 +244,23 @@ once instead of repeatedly.
 ### Store lifecycle
 
 `initializeStore()` is the only schema-writing boundary, and it writes
-exactly one schema: version 6, which stores custom workflow definitions
+exactly one current schema: version 7, which adds immutable, non-runnable
+scheduled-start reservations and their atomic activation receipts, stores custom workflow definitions
 beside the workflows that pin them (`custom-workflow-definitions`) and
 carries the delegated `debug_requests` table
 (`add-debug-subagent-requests`). A genuinely empty database is created
 directly with that DDL and its `PRAGMA user_version`, inside one
 `BEGIN IMMEDIATE` transaction, so two runtimes racing a first creation
 serialize on the SQLite write lock and the loser adopts the committed schema.
-A store with any other persisted version is refused before any DDL,
-transaction or row write, with
-`unsupported workflow store version N; this build only reads version 6`;
-the store is left byte-identical, so converting it needs the older build.
-An existing version 6 store is opened without changing its schema, rows or
-pragma: the canonical tables, columns, indexes, foreign keys and statement
+A validated version 6 store has one explicit upgrade: before any DDL, the
+writer serializes and fsyncs a private, exclusively created
+`.before-v7-<uuid>.sqlite` snapshot, then adds the reservation table and advances
+the version in one native transaction. The snapshot is retained for operator
+rollback; it is never overwritten. Other persisted versions are refused before
+DDL or row writes, with
+`unsupported workflow store version N; this build only reads version 7`.
+An existing version 7 store is opened without changing its schema or rows:
+the canonical tables, columns, indexes, foreign keys and statement
 structure are validated, and a table this build does not know is stepped over
 when it is empty (another feature or build may share the file without
 versioning it) and fails closed when it holds rows. Statement text is compared
@@ -266,6 +270,15 @@ transaction. Status and list never initialize or write: an absent store stays
 observationally absent and an unreadable one is reported as a diagnostic view.
 The explicit drain command accepts bounded `--limit` and `--wait-ms` values
 for retry progress without disguising execution as observation.
+
+SQLite I/O is owned by the descriptor-relative `workflow/native/` boundary.
+Writers use fully synchronous rollback transactions, not the non-durable
+`MEMORY` journal. Main and sidecar I/O retain directory/file capabilities;
+recovery and journal cleanup never traverse a rebound canonical directory.
+Open-file-description locks preserve the standard SQLite lock-byte protocol
+without dropping another connection's locks when a capability duplicate closes.
+Legacy WAL conversion requires an explicit writer; observation remains read-only.
+See `src/workflow/native/README.md` for the build/platform and recovery contract.
 
 ### Evidence store
 

@@ -16,6 +16,7 @@ import {
 	activeKeybindCatalog,
 	activeKeybindContext,
 	footerKeybinds,
+	keybindFooterLabel,
 } from "./keybinds.ts";
 import { useKeybindChips } from "./mouse/useKeybindChips.ts";
 import { RunningText } from "./RunningText.tsx";
@@ -38,8 +39,8 @@ export interface StatusBarProps {
 	 * summary: the worst recent main-thread lag the process observed). It is
 	 * plain text — a surface owns its wording and never smuggles styling in. */
 	status?: string;
-	/** Rows the footer may use. Default 1 (the shell footer). */
-	lines?: number;
+	/** Rows the footer may use. `auto` wraps every special key; default 1. */
+	lines?: number | "auto";
 	/** Show the right-anchored `?` help chip. Default true. A surface whose
 	 * focused content consumes `?` itself sets false, because the shell help
 	 * modal is not reachable from there. */
@@ -55,7 +56,11 @@ export interface StatusBarProps {
 export function StatusBar(props: StatusBarProps) {
 	const dimensions = useTerminalDimensions();
 	const chipRunner = useKeybindChips();
-	const lines = () => Math.max(1, props.lines ?? 1);
+	const lines = () =>
+		props.lines === "auto"
+			? Math.max(1, wrapped().length) +
+				(props.left !== undefined || props.center !== undefined ? 1 : 0)
+			: Math.max(1, props.lines ?? 1);
 	const keybinds = () =>
 		props.keybinds
 			? [...props.keybinds]
@@ -80,17 +85,23 @@ export function StatusBar(props: StatusBarProps) {
 
 	/**
 	 * Wrap the keybinds into the available rows, keeping each `key action` pair
-	 * whole. Only used when the surface asked for more than one row.
+	 * whole. Used for automatic or explicitly multi-row footers.
 	 */
 	const wrapped = createMemo(() => {
 		const all = entries();
 		if (all.length === 0) return [[]];
-		const width = Math.max(1, dimensions().width - 2);
+		const reserved =
+			props.left !== undefined || props.center !== undefined
+				? 0
+				: (props.showHelp !== false
+						? help().key.length + keybindFooterLabel(help()).length + 2
+						: 0) + (props.status ? props.status.length + 1 : 0);
+		const width = Math.max(1, dimensions().width - 2 - reserved);
 		const rows: Keybind[][] = [];
 		let row: Keybind[] = [];
 		let used = 0;
 		for (const entry of all) {
-			const chunk = entry.key.length + 1 + entry.action.length + 2;
+			const chunk = entry.key.length + 1 + keybindFooterLabel(entry).length + 3;
 			if (row.length > 0 && used + chunk > width) {
 				rows.push(row);
 				row = [];
@@ -100,7 +111,7 @@ export function StatusBar(props: StatusBarProps) {
 			used += chunk;
 		}
 		if (row.length > 0) rows.push(row);
-		return rows.slice(0, lines());
+		return rows;
 	});
 
 	/** The env surface's footer: one cells row, then the keybind rows. */
@@ -202,7 +213,9 @@ export function StatusBar(props: StatusBarProps) {
 				{lines() === 1 ? (
 					<HelpText entries={entries()} {...chips()} />
 				) : (
-					wrapped().map((row) => <HelpText entries={row} {...chips()} />)
+					wrapped()
+						.slice(0, lines())
+						.map((row) => <HelpText entries={row} {...chips()} />)
 				)}
 			</box>
 			<Show when={props.status}>

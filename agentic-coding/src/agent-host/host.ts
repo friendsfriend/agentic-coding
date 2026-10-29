@@ -87,6 +87,13 @@ import {
 	type WatchPatch,
 } from "./protocol.ts";
 import {
+	activateScheduled,
+	hasQueuedScheduled,
+	queryScheduled,
+	reserveScheduled,
+	type ScheduledEnvelope,
+} from "./scheduled-admission.ts";
+import {
 	type AgentHostSettings,
 	normalizeLocalPiToolsSettings,
 } from "./settings.ts";
@@ -960,7 +967,17 @@ export class DurableHost {
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator
-			? createOrchestratorExtension(lookup)
+			? createOrchestratorExtension(lookup, async (conversationId, context) => {
+					const instance = host.instance;
+					if (!instance) throw new Error("Host is not initialized.");
+					return {
+						kind: "wake-up",
+						hostId: await instance.scheduledIdentity(),
+						hostSocket: options.layout.socketPath,
+						conversationId: String(conversationId),
+						runId: context.runId,
+					};
+				})
 			: undefined;
 		if (orchestrator) registry.install(orchestrator);
 		// A standalone coding session is a plain coding agent: it gets the
@@ -2497,6 +2514,53 @@ export class DurableHost {
 		}
 	}
 
+	async scheduledIdentity(): Promise<string> {
+		return this.harness.commit(async (tx) => {
+			const identity = await tx.doc(
+				defineDoc<{ id: string }>({
+					kind: "agentic.scheduling-host-identity",
+					version: 1,
+					scope: "session",
+					checkpointWhen: () => false,
+					initial: () => ({ id: randomUUID() }),
+				}),
+			);
+			return identity.id;
+		}, BACKGROUND_CONTEXT);
+	}
+
+	async scheduledAdmission(
+		operation: "reserve" | "activate" | "query",
+		envelope: ScheduledEnvelope,
+		fence: number,
+	) {
+		this.assertOpen();
+		if (envelope.expectedHostId !== (await this.scheduledIdentity()))
+			throw new Error("scheduled host identity mismatch");
+		const conversationId = parseConversationId(envelope.expectedConversationId);
+		if (conversationId === undefined)
+			throw new Error("invalid scheduled conversation identity");
+		const issued = await this.harness.snapshot(
+			associationDoc("run", envelope.runId),
+			BACKGROUND_CONTEXT,
+		);
+		if (
+			issued?.identity !== envelope.runId ||
+			issued.conversationId !== conversationId
+		)
+			throw new Error("scheduled destination is missing or rebound");
+		const conversation = await this.harness.conversation(
+			conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation) throw new Error("scheduled conversation is unavailable");
+		if (operation === "reserve")
+			return reserveScheduled(conversation, envelope);
+		if (operation === "activate")
+			return activateScheduled(conversation, envelope, fence);
+		return queryScheduled(conversation, envelope.occurrenceId, envelope.digest);
+	}
+
 	async submit(
 		runId: string,
 		text: string,
@@ -3116,6 +3180,12 @@ export class DurableHost {
 			BACKGROUND_CONTEXT,
 		);
 		const context = this.runContexts.get(runId);
+		if (
+			conversation &&
+			!recordBlocked &&
+			(await hasQueuedScheduled(this.harness, conversation))
+		)
+			return;
 		await conversation?.abort(BACKGROUND_CONTEXT);
 		if (!recordBlocked || !context) return;
 		try {
@@ -3619,6 +3689,22 @@ export class DurableHost {
 		}
 		try {
 			switch (request.type) {
+				case "scheduledIdentity":
+					send({
+						type: "scheduledIdentity",
+						hostId: await this.scheduledIdentity(),
+					});
+					return;
+				case "scheduledAdmission":
+					send({
+						type: "scheduledAdmission",
+						receipt: await this.scheduledAdmission(
+							request.operation,
+							request.envelope,
+							request.fence,
+						),
+					});
+					return;
 				case "hello":
 					if (request.protocolVersion !== PROTOCOL_VERSION) {
 						send({

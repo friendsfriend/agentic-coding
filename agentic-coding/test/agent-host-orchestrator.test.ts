@@ -60,6 +60,20 @@ async function waitForResults(
 	return toolResults(await host.entriesForTest(runId));
 }
 
+test("scheduling guidance distinguishes explicit wake-ups from ambiguous recurring requests", () => {
+	expect(ORCHESTRATOR_PROMPT).toContain(
+		"offer scheduling when the user asks to check later",
+	);
+	expect(ORCHESTRATOR_PROMPT).toContain(
+		"create a one-time wake-up pinned to this session",
+	);
+	expect(ORCHESTRATOR_PROMPT).toContain(
+		"Never infer recurring-task creation from ambiguous text",
+	);
+	expect(ORCHESTRATOR_PROMPT).toContain("explicit cadence and timezone");
+	expect(ORCHESTRATOR_PROMPT).toContain("never grants extra authority");
+});
+
 describe("orchestrator host mode", () => {
 	test("tool hints and the prompt carry the ordered workflow-start checklist", () => {
 		const extension = createOrchestratorExtension(() => undefined);

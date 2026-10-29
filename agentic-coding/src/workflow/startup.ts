@@ -199,7 +199,14 @@ export function validateStart(
 		return;
 	}
 	if (requirements.has("clean-tree")) {
-		const dirty = runGit(repo, "status", "--porcelain");
+		const dirty = runGit(
+			repo,
+			"status",
+			"--porcelain",
+			"--",
+			".",
+			":(exclude).herdr-workflow",
+		);
 		if (dirty) throw new Error(cleanTreeRefusal(dirty));
 	}
 	// The detached-worktree debug family selects the branch it investigates; the

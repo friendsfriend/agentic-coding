@@ -29,6 +29,8 @@ export interface DestinationSurface {
 	settings: boolean;
 	/** The Orchestrator chat is rendered (home mode with a shell keymap). */
 	orchestrator?: boolean;
+	/** The authenticated server-owned scheduling surface is rendered. */
+	schedules?: boolean;
 }
 
 export interface DestinationEntry {
@@ -108,6 +110,15 @@ export function homeDestinations(
 			route: { page: "wiki" },
 		});
 	}
+	if (surface.schedules)
+		entries.push({
+			id: "schedules",
+			label: "Schedules",
+			description:
+				"Manage reusable jobs, timing, approvals and execution history",
+			group: "Destinations",
+			route: { page: "schedules" },
+		});
 	if (surface.orchestrator) {
 		entries.push({
 			id: "orchestrator",

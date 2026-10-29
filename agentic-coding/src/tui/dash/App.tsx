@@ -1112,9 +1112,8 @@ export function App(props: {
 	};
 	// The role of the run being opened, shown with the connecting page before
 	// its handle is authenticated (controls stay unavailable until then).
-	const [agentSessionPendingRole, setAgentSessionPendingRole] = createSignal<
-		string | undefined
-	>();
+	const agentSessionPendingRole = overlays.agentSessionPendingRole;
+	const setAgentSessionPendingRole = overlays.setAgentSessionPendingRole;
 	const openAgentSession = (
 		session: {
 			role: string;

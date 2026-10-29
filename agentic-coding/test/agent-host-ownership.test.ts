@@ -206,11 +206,14 @@ test("ensure and recovery address only requested constant-size associations afte
 			);
 			stop();
 			expect(values.length).toBeGreaterThan(0);
-			expect(snapshots).toHaveBeenCalledTimes(1);
+			// One keyed ownership read plus the existing constant-size runtime
+			// failure read; neither enumerates retired run associations.
+			expect(snapshots).toHaveBeenCalledTimes(2);
 			expect(await snapshots.mock.results[0]?.value).toEqual({
 				identity: runId,
 				conversationId: Number(conversationId),
 			});
+			expect(await snapshots.mock.results[1]?.value).toBeUndefined();
 		}
 	} finally {
 		snapshots.mockRestore();

@@ -52,6 +52,7 @@ import {
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
+import { schedulingRequestSchema } from "../contracts/scheduling-api.ts";
 import {
 	stageBlockSaveRequestSchema,
 	stageBlocksRequestSchema,
@@ -248,6 +249,12 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: "/api/v1/workflow/action",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/scheduling",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -597,6 +604,11 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/workflow/action",
 		schemaId: "server.workflow.action",
 		schema: workflowActionRequestSchema,
+	},
+	{
+		path: "/api/v1/scheduling",
+		schemaId: "server.scheduling",
+		schema: schedulingRequestSchema,
 	},
 	{
 		path: "/api/v1/workflow/start",

@@ -20,6 +20,10 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import {
+	releaseHostRetryCapability,
+	replaceHostRetryCapabilityForLaunch,
+} from "../src/agent-host/retry-authority.ts";
 import type { Assignment, ResolvedProfile } from "../src/contracts/workflow.ts";
 import { PiDurableAdapter } from "../src/workflow/adapters.ts";
 import type { RenderedAssignment } from "../src/workflow/assignment.ts";
@@ -59,8 +63,14 @@ describe("PiDurableAdapter against a real DurableHost", () => {
 		const faux = fauxProvider();
 		const models = createModels();
 		models.setProvider(faux.provider);
+		// A production launcher retains this private authority before starting
+		// the host. Mirror that contract so launch does not restart this fixture.
+		const retryCapability = replaceHostRetryCapabilityForLaunch(
+			layout.socketPath,
+		);
 		const host = await DurableHost.open({
 			layout,
+			retryCapability,
 			settings: {},
 			globalAgentDir: dir,
 			storage: new MemoryStorage(),
@@ -115,6 +125,7 @@ describe("PiDurableAdapter against a real DurableHost", () => {
 			await Effect.runPromise(adapter.stop(handle));
 		} finally {
 			await host.shutdown();
+			releaseHostRetryCapability(layout.socketPath, retryCapability);
 		}
 	});
 

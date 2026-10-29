@@ -88,6 +88,8 @@ export interface FormProps {
 	editing?: boolean;
 	/** Content lines the form may paint. */
 	availableLines?: number;
+	/** Width of the value pane; used to keep appended text and caret visible. */
+	availableColumns?: number;
 	/** Heading row shown above the fields. */
 	header?: string;
 	/** Custom right-pane content for action fields. */
@@ -114,6 +116,29 @@ export function Form(props: FormProps) {
 	const choiceCursor = () => props.choiceCursorIndex ?? optionIndex();
 	const listLines = (reservedLines = 0) =>
 		Math.max(1, (props.availableLines ?? 10) - 1 - reservedLines);
+
+	const editingLines = () => {
+		const width = Math.max(1, (props.availableColumns ?? 40) - 1);
+		const rows: string[] = [];
+		for (const line of `${value()}▌`.split("\n")) {
+			let row = "",
+				columns = 0;
+			for (const { segment } of new Intl.Segmenter(undefined, {
+				granularity: "grapheme",
+			}).segment(line)) {
+				const size = Bun.stringWidth(segment);
+				if (row && columns + size > width) {
+					rows.push(row);
+					row = "";
+					columns = 0;
+				}
+				row += segment;
+				columns += size;
+			}
+			rows.push(row);
+		}
+		return rows.slice(-Math.max(1, Math.min(8, listLines(4)))).join("\n");
+	};
 
 	return (
 		<box
@@ -203,17 +228,17 @@ export function Form(props: FormProps) {
 											</text>
 										}
 									>
-										<box height={1} flexDirection="row">
-											<text
-												fg={value() ? uiColors.textPrimary : uiColors.textMuted}
-											>
-												{formDisplay(active(), value())}
+										<box
+											height={Math.max(1, Math.min(8, listLines(4)))}
+											flexDirection="column"
+										>
+											<text fg={uiColors.textPrimary} wrapMode="none">
+												{editingLines()}
 											</text>
-											<text fg={uiColors.primary}>▌</text>
 										</box>
 									</Show>
 									<text fg={uiColors.textMuted}>
-										{props.editing ? "Esc to finish editing" : "e to edit"}
+										{props.editing ? "Editing value" : ""}
 									</text>
 								</Show>
 								<Show when={active().kind === "action"}>

@@ -246,6 +246,9 @@ export interface OverlayState {
 	 * keystroke or a watch frame never re-creates the whole overlay value. */
 	readonly agentSession: () => AgentSessionIdentity | undefined;
 	readonly setAgentSession: Setter<AgentSessionIdentity | undefined>;
+	/** Role shown while the session handle is still being authenticated. */
+	readonly agentSessionPendingRole: () => string | undefined;
+	readonly setAgentSessionPendingRole: Setter<string | undefined>;
 	/** Whether the session page is showing. The identity above (and its live
 	 * watch) outlives it: leaving for the grid keeps the run streaming, so
 	 * reopening the agent lands on a transcript that never stopped. */
@@ -357,6 +360,9 @@ export function createOverlayState(options: {
 	const [debugRequestsOffset, setDebugRequestsOffset] = createSignal(0);
 
 	const [agentSession, setAgentSession] = createSignal<AgentSessionIdentity>();
+	const [agentSessionPendingRole, setAgentSessionPendingRole] = createSignal<
+		string | undefined
+	>();
 	const [agentSessionOpen, setAgentSessionOpen] = createSignal(false);
 	const [agentSessionBlocks, setAgentSessionBlocks] = createSignal<
 		readonly AgentSessionBlock[]
@@ -428,6 +434,8 @@ export function createOverlayState(options: {
 		setPresetSwitcherChoices,
 		agentSession,
 		setAgentSession,
+		agentSessionPendingRole,
+		setAgentSessionPendingRole,
 		agentSessionOpen,
 		setAgentSessionOpen,
 		agentSessionBlocks,

@@ -40,6 +40,11 @@ import type {
 	GatewayEventHandlers,
 } from "../contracts/gateway.ts";
 import {
+	type SchedulingRequest,
+	type SchedulingResponse,
+	schedulingResponseSchema,
+} from "../contracts/scheduling-api.ts";
+import {
 	type TraceSummaryPage,
 	telemetryCountSchema,
 	telemetryRemovedSchema,
@@ -77,6 +82,7 @@ export class BackendClientError extends Error {
 		readonly status: number,
 		readonly code: string,
 		message: string,
+		readonly issues: readonly { path: string; message: string }[] = [],
 	) {
 		super(message);
 	}
@@ -147,16 +153,21 @@ export class BackendClient implements DashboardGateway {
 		path: string,
 		body: unknown,
 		signal?: AbortSignal,
+		extraHeaders?: Readonly<Record<string, string>>,
 	): Promise<unknown> {
 		let response: Response;
 		const token = this.authToken();
-		const send = (authorization: string) =>
-			fetch(`${this.baseUrl}${path}`, {
+		const send = (authorization: string) => {
+			const headers = this.headers(body !== undefined, authorization);
+			for (const [name, value] of Object.entries(extraHeaders ?? {}))
+				headers.set(name, value);
+			return fetch(`${this.baseUrl}${path}`, {
 				method,
-				headers: this.headers(body !== undefined, authorization),
+				headers,
 				body: body === undefined ? undefined : JSON.stringify(body),
 				...(signal ? { signal } : {}),
 			});
+		};
 		try {
 			response = await send(token);
 			// A stale fallback token can survive while a loopback server restarts.
@@ -184,13 +195,18 @@ export class BackendClient implements DashboardGateway {
 		}
 		if (!response.ok) {
 			const envelope = parsed as {
-				error?: { code?: string; message?: string };
+				error?: {
+					code?: string;
+					message?: string;
+					issues?: { path: string; message: string }[];
+				};
 			};
 			throw new BackendClientError(
 				response.status,
 				envelope.error?.code ?? "request-failed",
 				envelope.error?.message ??
 					`backend rejected the request (${response.status})`,
+				(envelope.error?.issues ?? []).slice(0, 8),
 			);
 		}
 		// Every JSON response is an envelope: decode it, so a body that is
@@ -240,6 +256,25 @@ export class BackendClient implements DashboardGateway {
 		);
 	}
 
+	async scheduling(
+		request: SchedulingRequest,
+		signal?: AbortSignal,
+		expectedStoreId?: string,
+	): Promise<SchedulingResponse> {
+		return this.decode<SchedulingResponse>(
+			"server.scheduling.response",
+			schedulingResponseSchema,
+			await this.request(
+				"POST",
+				"/api/v1/scheduling",
+				request,
+				signal,
+				expectedStoreId !== undefined
+					? { "x-herdr-scheduling-store-id": expectedStoreId }
+					: undefined,
+			),
+		);
+	}
 	async listViews(repo: string, signal?: AbortSignal): Promise<WorkflowView[]> {
 		const query = new URLSearchParams({ repo, list: "1" });
 		return this.decode<WorkflowView[]>(

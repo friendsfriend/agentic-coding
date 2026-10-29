@@ -6,6 +6,7 @@ import path from "node:path";
 const libc = dlopen(
 	process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6",
 	{
+		flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
 		dup: {
 			args: [FFIType.i32],
 			returns: FFIType.i32,
@@ -72,7 +73,8 @@ function openChild(parent: number, name: string, create: boolean): number {
 		O_RDONLY | O_NOFOLLOW | O_DIRECTORY,
 	);
 	if (fd < 0 && create) {
-		libc.symbols.mkdirat(parent, encodedName, 0o700);
+		if (libc.symbols.mkdirat(parent, encodedName, 0o700) === 0)
+			fs.fsyncSync(parent);
 		fd = libc.symbols.openat(
 			parent,
 			encodedName,
@@ -223,6 +225,22 @@ export function openSecureDirectoryRelative(
 		fs.closeSync(current);
 		throw error;
 	}
+}
+
+/** Exclusive nonblocking ownership, released by close/process exit, not a stale lease file. */
+export function trySecureFileLock(
+	directory: number,
+	name: string,
+): number | undefined {
+	const fd = openSecureFile(
+		directory,
+		name,
+		fs.constants.O_RDWR | fs.constants.O_CREAT,
+		0o600,
+	);
+	if (libc.symbols.flock(fd, 2 | 4) === 0) return fd;
+	fs.closeSync(fd);
+	return undefined;
 }
 
 export function openSecureFile(

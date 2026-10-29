@@ -4,6 +4,20 @@
 // and framing only: no pi-durable or node:net import here, so this module is
 // safe for the workflow/dashboard layers to depend on directly.
 
+import type { TargetReceipt } from "../contracts/scheduling.ts";
+import type { ScheduledEnvelope } from "./scheduled-admission.ts";
+
+export interface ScheduledAdmissionRequest {
+	readonly type: "scheduledAdmission";
+	readonly operation: "reserve" | "activate" | "query";
+	readonly envelope: ScheduledEnvelope;
+	readonly fence: number;
+}
+export interface ScheduledAdmissionResponse {
+	readonly type: "scheduledAdmission";
+	readonly receipt: TargetReceipt;
+}
+
 /** Wire protocol version. A client whose `hello` names a different version is
  * refused rather than guessing compatibility. */
 export const PROTOCOL_VERSION = 2;
@@ -120,6 +134,8 @@ export interface HelloRequest {
 	readonly protocolVersion: number;
 }
 export type HostRequest =
+	| { readonly type: "scheduledIdentity" }
+	| ScheduledAdmissionRequest
 	| HelloRequest
 	| EnsureRunRequest
 	| RecoverRunRequest
@@ -310,6 +326,8 @@ export interface WatchFrame {
 	readonly patch?: WatchPatch;
 }
 export type HostResponse =
+	| { readonly type: "scheduledIdentity"; readonly hostId: string }
+	| ScheduledAdmissionResponse
 	| HelloResponse
 	| PrepareRestartForReattachmentResponse
 	| EnsureRunResponse

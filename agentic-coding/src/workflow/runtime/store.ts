@@ -8,6 +8,7 @@
 // tier. Moved out of runtime.ts
 // (split-workflow-god-modules).
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -22,10 +23,16 @@ import type {
 import { normalizeRuntimeId } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import { openSecureDatabase } from "../native/database.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
+import {
+	closeSecureDirectory,
+	openSecureDirectory,
+	openSecureFile,
+} from "../secure-fs.ts";
 import { DEBUG_ROLE } from "../steps/debug.ts";
 import { DEBUG_INVESTIGATE_STEP } from "./debug-requests.ts";
 import { stageReplayEligible } from "./stage-replay-eligibility.ts";
@@ -98,7 +105,11 @@ export function tableExists(db: Database, name: string): boolean {
 	);
 }
 
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
+
+/** v7: a native reservation owns an id before any instance/outbox exists. */
+const SCHEDULED_RESERVATIONS_DDL =
+	"CREATE TABLE IF NOT EXISTS workflow_scheduled_reservations(occurrence_id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL UNIQUE, content_digest TEXT NOT NULL, input_digest TEXT NOT NULL, definition_digest TEXT NOT NULL, input_json TEXT NOT NULL, created_at TEXT NOT NULL, activated_at TEXT, activation_fence INTEGER)";
 
 /** The content-addressed custom workflow definitions (store v6). */
 const DEFINITIONS_DDL =
@@ -108,7 +119,7 @@ const DEFINITIONS_DDL =
 const DEBUG_REQUESTS_DDL =
 	"CREATE TABLE IF NOT EXISTS debug_requests(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), caller_run_id TEXT NOT NULL, caller_role TEXT NOT NULL, goal TEXT NOT NULL, context TEXT, apps_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')), debug_run_id TEXT, baseline_ref TEXT, baseline_files_json TEXT, report_path TEXT, changed_files_json TEXT, created_at TEXT NOT NULL, finished_at TEXT, delivered_at TEXT)";
 
-const SCHEMA_DDL = `
+const V6_SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), step_id TEXT NOT NULL, role TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0), attempt INTEGER NOT NULL CHECK(attempt > 0), status TEXT NOT NULL CHECK(status IN ('pending','working','completed','blocked','failed','expired')), profile_json TEXT NOT NULL, issued_revision INTEGER NOT NULL, allowed_outcomes_json TEXT NOT NULL, capability_hash TEXT NOT NULL, capability_expires_at TEXT NOT NULL, assignment_path TEXT NOT NULL, output_path TEXT, output_schema_id TEXT, output_schema_version INTEGER, output_digest TEXT, handle_json TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workflow_id,id,generation));
 CREATE TABLE IF NOT EXISTS workflow_events(workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, type TEXT NOT NULL, actor_json TEXT NOT NULL, data_json TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(workflow_id,revision));
@@ -120,6 +131,8 @@ ${DEBUG_REQUESTS_DDL};
 CREATE INDEX IF NOT EXISTS workflow_runs_workflow_status ON workflow_runs(workflow_id,status);
 CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_attempt_at,lease_expires_at);
 `;
+
+const SCHEMA_DDL = `${V6_SCHEMA_DDL}\n${SCHEDULED_RESERVATIONS_DDL};`;
 
 const REQUIRED_TABLES = [
 	"workflow_instances",
@@ -137,40 +150,12 @@ const KNOWN_TABLES = [
 	...REQUIRED_TABLES,
 	DEFINITIONS_TABLE,
 	DEBUG_REQUESTS_TABLE,
+	"workflow_scheduled_reservations",
 ];
 
-/**
- * Pins a store to the MEMORY journal mode. SQLite derives its `-wal`/`-shm`
- * paths from the filename it is handed, so a store opened through
- * `/dev/fd/<n>` can never reach them and a WAL store fails every guarded open
- * with SQLite's `unable to open database file`. One connection through the
- * store's real path checkpoints it and pins it to MEMORY, the journal mode the
- * guarded open needs because it runs no sidecar files at all. Read-only
- * observation cannot convert a store, so it reports the store instead of
- * passing SQLite's message through.
- */
-function adoptMemoryJournal(
-	file: string,
-	guard: number,
-	readonly: boolean,
-): void {
-	const header = Buffer.alloc(2);
-	if (fs.readSync(guard, header, 0, 2, 18) !== 2) return;
-	if (header[0] !== 0x02 || header[1] !== 0x02) return;
-	if (readonly)
-		throw new WorkflowRuntimeError(
-			"invalid-state",
-			`workflow store ${JSON.stringify(file)} is still in WAL mode; it has to be opened for writing before it can be observed`,
-		);
-	const db = new Database(file, { create: true });
-	try {
-		db.exec("PRAGMA busy_timeout=10000");
-		db.exec("PRAGMA journal_mode=MEMORY");
-	} finally {
-		db.close();
-	}
-}
-
+/** Main and journal operations use held capabilities in the native VFS;
+ * neither SQLite's rollback recovery nor cleanup traverses the canonical path. */
+const storeDirectories = new WeakMap<Database, number>();
 function guardedDatabase(
 	repo: string,
 	file: string,
@@ -183,17 +168,37 @@ function guardedDatabase(
 	);
 	try {
 		const guardedStat = fs.fstatSync(guard);
-		adoptMemoryJournal(file, guard, options.readonly === true);
-		// Keep SQLite on descriptor's stable inode. Hard-link aliases make SQLite
-		// race journal/shared-memory files on macOS (`SQLITE_IOERR_VNODE`).
-		const db = new Database(
-			`${process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd"}/${guard}`,
-			options.readonly === true ? { readonly: true } : { create: true },
+		const directory = openSecureDirectory(
+			path.dirname(file),
+			path.dirname(path.dirname(file)),
+			false,
 		);
+		let db: Database;
+		try {
+			db = openSecureDatabase(directory, guard, options.readonly === true);
+		} catch (error) {
+			closeSecureDirectory(directory);
+			throw error;
+		}
+		storeDirectories.set(db, directory);
 		try {
 			db.exec("PRAGMA busy_timeout=10000");
+			const header = Buffer.alloc(2);
+			const wal =
+				fs.readSync(guard, header, 0, 2, 18) === 2 &&
+				header[0] === 2 &&
+				header[1] === 2;
+			if (wal && options.readonly === true)
+				throw new WorkflowRuntimeError(
+					"invalid-state",
+					`workflow store ${JSON.stringify(file)} is still in WAL mode; it has to be opened for writing before it can be observed`,
+				);
+			if (wal) db.exec("PRAGMA locking_mode=EXCLUSIVE");
+			if (options.readonly !== true) {
+				db.exec("PRAGMA journal_mode=TRUNCATE; PRAGMA synchronous=FULL");
+				if (wal) db.exec("PRAGMA locking_mode=NORMAL");
+			}
 			db.query("PRAGMA schema_version").get();
-			if (options.readonly !== true) db.exec("PRAGMA journal_mode=MEMORY");
 			const openedStat = fs.fstatSync(guard);
 			if (
 				openedStat.dev !== guardedStat.dev ||
@@ -205,11 +210,16 @@ function guardedDatabase(
 				);
 			verifyCanonicalStorePath(repo, file);
 			const close = db.close.bind(db);
+			let guardClosed = false;
 			Object.defineProperty(db, "close", {
 				value: () => {
+					if (guardClosed) return;
+					guardClosed = true;
 					try {
 						close();
 					} finally {
+						storeDirectories.delete(db);
+						closeSecureDirectory(directory);
 						fs.closeSync(guard);
 					}
 				},
@@ -217,6 +227,8 @@ function guardedDatabase(
 			return db;
 		} catch (error) {
 			db.close();
+			storeDirectories.delete(db);
+			closeSecureDirectory(directory);
 			throw error;
 		}
 	} catch (error) {
@@ -334,10 +346,13 @@ function ignorableTables(db: Database, names: Set<string>): Set<string> {
  * A store this build did not write — a drifted DDL, a missing object, a foreign
  * table holding rows — is refused rather than interpreted: there is no
  * historical shape to step over. */
-function validateCanonicalShape(db: Database): void {
+function validateCanonicalShape(
+	db: Database,
+	version = STORE_SCHEMA_VERSION,
+): void {
 	const reference = new Database(":memory:");
 	try {
-		reference.exec(SCHEMA_DDL);
+		reference.exec(version === 6 ? V6_SCHEMA_DDL : SCHEMA_DDL);
 		const objects = (source: Database) =>
 			(
 				source
@@ -386,6 +401,7 @@ function validateCanonicalShape(db: Database): void {
 			...REQUIRED_TABLES,
 			DEFINITIONS_TABLE,
 			DEBUG_REQUESTS_TABLE,
+			...(version === 6 ? [] : ["workflow_scheduled_reservations"]),
 		])
 			if (
 				foldLegacyRunDefaults(tableSql(db, table)) !==
@@ -694,7 +710,8 @@ export function initializeStore(repo: string): void {
 	if (
 		persisted !== undefined &&
 		persisted !== 0 &&
-		persisted !== STORE_SCHEMA_VERSION
+		persisted !== STORE_SCHEMA_VERSION &&
+		persisted !== 6
 	)
 		throw unsupportedStoreVersion(persisted);
 	// A store written without a version is not this build's format either: it
@@ -722,6 +739,44 @@ export function initializeStore(repo: string): void {
 				validateCanonicalShape(db);
 				foreignKeyCheck(db);
 				return;
+			}
+			if (observed === 6) {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					if (pragmaVersion(db) !== 6) {
+						db.exec("COMMIT");
+						continue;
+					}
+					validateCanonicalShape(db, 6);
+					foreignKeyCheck(db);
+					// Serialize the locked, validated database before its first schema write.
+					// Exclusive private backup never replaces an earlier recovery snapshot.
+					const directory = storeDirectories.get(db);
+					if (directory === undefined)
+						throw new Error("Workflow store directory capability missing.");
+					const backup = `${path.basename(file)}.before-v7-${randomUUID()}.sqlite`;
+					const fd = openSecureFile(
+						directory,
+						backup,
+						fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+						0o600,
+					);
+					try {
+						fs.writeFileSync(fd, db.serialize());
+						fs.fsyncSync(fd);
+						fs.fsyncSync(directory);
+					} finally {
+						fs.closeSync(fd);
+					}
+					db.exec(SCHEDULED_RESERVATIONS_DDL);
+					setPragmaVersion(db, STORE_SCHEMA_VERSION);
+					validateCanonicalShape(db);
+					db.exec("COMMIT");
+				} catch (error) {
+					rollback(db);
+					throw error;
+				}
+				continue;
 			}
 			if (observed !== 0) throw unsupportedStoreVersion(observed);
 			db.exec("BEGIN IMMEDIATE");

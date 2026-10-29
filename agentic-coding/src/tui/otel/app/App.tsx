@@ -124,6 +124,10 @@ import {
 	PiDurableView,
 	piDurableKeybindCatalog,
 } from "../../pi-durable/PiDurableView.tsx";
+import {
+	SchedulesView,
+	type SchedulingViewState,
+} from "../../schedules/SchedulesView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
 	acceptCredentialKeystroke,
@@ -288,6 +292,7 @@ type Tab =
 	| "environments"
 	| "workflow"
 	| "wiki"
+	| "schedules"
 	| "orchestrator"
 	| "opencode"
 	| "pi"
@@ -485,6 +490,7 @@ export function App(props: {
 	const bodyOwner = (page: string): string => {
 		if (page.startsWith("environments")) return "environments";
 		if (page.startsWith("workflows")) return "workflows";
+		if (page === "schedules") return "schedules";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
 		if (page === "opencode" || page === "pi" || page === "pi-durable")
@@ -1169,6 +1175,7 @@ export function App(props: {
 		if (page.startsWith("settings")) return "home";
 		if (page.startsWith("environments")) return "environments";
 		if (page.startsWith("workflows")) return "workflow";
+		if (page === "schedules") return "schedules";
 		if (page.startsWith("wiki")) return "wiki";
 		if (page === "orchestrator") return "orchestrator";
 		if (page === "opencode") return "opencode";
@@ -1248,6 +1255,7 @@ export function App(props: {
 		environments: Boolean(props.environments),
 		tracesOnly: Boolean(props.tracesOnly),
 		wiki: props.dashboard?.mode === "home",
+		schedules: props.dashboard?.mode === "home",
 		orchestrator: props.dashboard?.mode === "home",
 		// Settings owns the shared keymap the profile/preset editor needs, so the
 		// surface that renders it is the one that has a dashboard-mounted shell.
@@ -3071,11 +3079,13 @@ export function App(props: {
 		}
 
 		// Dashboard, wiki, orchestrator and embedded agent bodies own their keys
-		// through their own keymap layers or the focused terminal.
+		// through their own keymap layers or the focused terminal. Schedules use
+		// the shell's shared help below; printable '?' still belongs to text entry.
 		if (
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
+			(activeTab() === "schedules" && key !== "?") ||
 			activeTab() === "pi-durable" ||
 			((activeTab() === "opencode" || activeTab() === "pi") &&
 				focusPanel() === "content")
@@ -3137,7 +3147,11 @@ export function App(props: {
 
 		// Help (shell tabs): the `?` modal reads the active catalog. Ignore it
 		// while one of this tab's own modals (filter/sort/theme) owns the keys.
-		if (key === "?" && nav.modal() === "none") {
+		if (
+			key === "?" &&
+			nav.modal() === "none" &&
+			props.dashboard?.keymap.getData("textEntry.active") !== true
+		) {
 			// An embedded agent renderable may still be unwinding a focus
 			// transition; don't let its native handler receive the same `?` that the
 			// sidebar uses for shell help.
@@ -3476,6 +3490,7 @@ export function App(props: {
 			activeTab() === "workflow" ||
 			activeTab() === "wiki" ||
 			activeTab() === "orchestrator" ||
+			activeTab() === "schedules" ||
 			activeTab() === "opencode" ||
 			activeTab() === "pi" ||
 			activeTab() === "pi-durable"
@@ -3569,7 +3584,10 @@ export function App(props: {
 		if (tab === "pi") return piKeybindCatalog();
 		if (tab === "pi-durable") return piDurableKeybindCatalog();
 		const base = observabilityKeybindCatalog({
-			tab: tab === "home" || tab === "orchestrator" ? "traces" : tab,
+			tab:
+				tab === "home" || tab === "orchestrator" || tab === "schedules"
+					? "traces"
+					: tab,
 			view: traceView(),
 		});
 		// The page body advertises how to reach the sidebar (the dashboard
@@ -3632,6 +3650,7 @@ export function App(props: {
 		if (currentPage() === "orchestrator") return;
 		// The Pi Durable page publishes its own session catalog the same way.
 		if (currentPage() === "pi-durable") return;
+		if (currentPage() === "schedules") return;
 		if (settingsSection()) {
 			setActiveKeybindCatalog(
 				sidebarAvailable()
@@ -3912,6 +3931,40 @@ export function App(props: {
 										</box>
 									);
 								})()}
+							{props.dashboard?.mode === "home" &&
+								currentPage() === "schedules" &&
+								(() => {
+									const keymap = props.dashboard?.keymap;
+									if (!keymap) return null;
+									return (
+										<box style={{ flexGrow: 1, minHeight: 0 }}>
+											<SchedulesView
+												initialState={pages.viewState<SchedulingViewState>({
+													page: "schedules",
+												})}
+												onStateChange={(state) =>
+													pages.setViewState({ page: "schedules" }, state)
+												}
+												keymap={keymap}
+												active={() =>
+													focusPanel() === "content" && nav.modal() === "none"
+												}
+												onBack={() => pages.goToParent()}
+												additionalKeybinds={
+													sidebarAvailable()
+														? [workspaceSidebarPanelSection()]
+														: []
+												}
+												onOpenWorkflow={(target) => {
+													pages.navigate(
+														workflowRoute(target.repository, target.workflowId),
+													);
+													setFocusPanel("content");
+												}}
+											/>
+										</box>
+									);
+								})()}
 							{/* Sidebar → Pi Durable: the same durable transcript over a plain
 							    coding-session host, mounted while its page is current. */}
 							{props.dashboard?.mode === "home" &&
@@ -4162,6 +4215,7 @@ export function App(props: {
 				    focused content owns `?`, so the shell help chip is not advertised
 				    there; Ctrl+S reaches shell help through the sidebar instead. */}
 				<StatusBar
+					lines={currentPage() === "schedules" ? "auto" : 1}
 					status={diagnosticsStatusText()}
 					showHelp={!(currentPage() === "pi" && focusPanel() === "content")}
 				/>

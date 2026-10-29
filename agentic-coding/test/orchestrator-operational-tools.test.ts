@@ -178,6 +178,8 @@ test("the orchestrator can execute operational tools against the authenticated s
 			"stage_api_request",
 			"stage_login",
 			"start_workflow",
+			"scheduling",
+			"scheduling_destination",
 		])
 			expect(offered).toContain(name);
 		for (const name of ["developer_question", "agent_ask", "debug_request"])

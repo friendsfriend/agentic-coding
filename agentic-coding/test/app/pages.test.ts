@@ -316,6 +316,7 @@ describe("every routed page has a definition and a label", () => {
 			"wiki",
 			"wiki.note",
 			"orchestrator",
+			"schedules",
 			"opencode",
 			"pi",
 			"pi-durable",

@@ -2,7 +2,8 @@
 // Builds the single self-contained `agentic-coding` executable: the unified
 // frontend (one renderer, one lifecycle owner), the workflow engine, the
 // environment authority and the telemetry receivers — one Bun process, no
-// embedded backend, no compiler at build or run time. Everything the packaged
+// embedded backend and no runtime compiler. The descriptor-relative SQLite VFS
+// is compiled at build time from its repository-owned C source. Everything the packaged
 // executable needs is bundled: generated instructions, the imported guides
 // (text loader), the OTLP protocol definition and the OpenTUI native parser
 // worker/font assets. One version source: the root package.json. Only the host
@@ -14,6 +15,7 @@ import { $ } from "bun";
 
 const root = path.resolve(import.meta.dir, "..");
 process.chdir(root);
+await import("./build-secure-sqlite.ts");
 
 // The block catalog is a checked-in review artifact. A stale manifest must fail
 // the build, not ship a planner surface that disagrees with the registry.

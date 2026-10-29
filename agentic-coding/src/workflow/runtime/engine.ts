@@ -134,6 +134,13 @@ import {
 	observeVerificationTree,
 	unionVerificationDelta,
 } from "./reverification.ts";
+import {
+	queryScheduledWorkflow,
+	reserveScheduledWorkflow,
+	type ScheduledWorkflowAuthority,
+	type ScheduledWorkflowOwner,
+	scheduledReservation,
+} from "./scheduled-start.ts";
 import type { WorkflowClock } from "./services.ts";
 import {
 	engineLayer,
@@ -428,6 +435,170 @@ export class WorkflowEngine {
 			yield* store.initialize(repo);
 		});
 	}
+	/** Non-runnable native reservation: no instance, run, or outbox is written. */
+	reserveScheduled(input: StartWorkflowInput, owner: ScheduledWorkflowOwner) {
+		return this.run(this.reserveScheduledEffect(input, owner));
+	}
+	reserveScheduledEffect(
+		input: StartWorkflowInput,
+		owner: ScheduledWorkflowOwner,
+	) {
+		const self = this;
+		return Effect.gen(function* () {
+			const prepared = yield* Effect.try({
+				try: () => self.resolveStart(input),
+				catch: toRuntimeError,
+			});
+			yield* self.initializeProgram(prepared.storeTarget);
+			const store = yield* WorkflowStore;
+			return yield* store.transaction(prepared.storeTarget, (db) =>
+				reserveScheduledWorkflow(
+					db,
+					owner,
+					input,
+					prepared.snapshot.definition.digest,
+					nowIso(self.now),
+				),
+			);
+		});
+	}
+	queryScheduled(repo: string, owner: ScheduledWorkflowOwner) {
+		return this.run(this.queryScheduledEffect(repo, owner));
+	}
+	queryScheduledEffect(repo: string, owner: ScheduledWorkflowOwner) {
+		return Effect.try({
+			try: () => queryScheduledWorkflow(repo, owner),
+			catch: toRuntimeError,
+		});
+	}
+	/** Activation authority was committed by scheduling before entering this operation. */
+	activateScheduled(
+		repo: string,
+		authority: ScheduledWorkflowAuthority,
+	): DispatchResult {
+		return this.run(this.activateScheduledEffect(repo, authority));
+	}
+	activateScheduledEffect(repo: string, authority: ScheduledWorkflowAuthority) {
+		const self = this;
+		return Effect.gen(function* () {
+			if (
+				!Number.isSafeInteger(authority.admittedAt) ||
+				authority.admittedAt < 0 ||
+				!Number.isSafeInteger(authority.fence) ||
+				authority.fence < 1
+			)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"start-guard",
+						"Committed scheduling activation authority is required.",
+					),
+				);
+			const found = yield* self.queryScheduledEffect(repo, authority);
+			if (found.snapshot) {
+				if (
+					found.snapshot.metadata.schedulingOrigin?.admittedAt !==
+					authority.admittedAt
+				)
+					return yield* Effect.fail(
+						new WorkflowRuntimeError(
+							"start-guard",
+							"Scheduling activation authority mismatch.",
+						),
+					);
+				self.onCommitted(repo);
+				return {
+					snapshot: found.snapshot,
+					view: viewById(
+						repo,
+						found.reservation.workflowId,
+						self.registry,
+						self.now,
+					),
+				};
+			}
+			const input = found.reservation.input;
+			const prepared = yield* Effect.try({
+				try: () => self.resolveStart(input),
+				catch: toRuntimeError,
+			});
+			if (
+				prepared.snapshot.definition.digest !==
+				found.reservation.definitionDigest
+			)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"start-guard",
+						"Reserved workflow definition pin changed; refusing activation.",
+					),
+				);
+			const store = yield* WorkflowStore;
+			const result = yield* store.transaction(prepared.storeTarget, (db) => {
+				const reservation = scheduledReservation(db, authority);
+				if (
+					!reservation ||
+					reservation.inputDigest !== found.reservation.inputDigest
+				)
+					throw new WorkflowRuntimeError(
+						"start-guard",
+						"Scheduling reservation changed before activation.",
+					);
+				if (reservation.activatedAt) {
+					const snapshot = decodeSnapshot(
+						JSON.parse(instance(db, reservation.workflowId).snapshot_json),
+					);
+					const origin = snapshot.metadata.schedulingOrigin;
+					if (
+						origin?.occurrenceId !== authority.occurrenceId ||
+						origin.contentDigest !== authority.contentDigest ||
+						origin.admittedAt !== authority.admittedAt
+					)
+						throw new WorkflowRuntimeError(
+							"start-guard",
+							"Native scheduling ownership mismatch.",
+						);
+					return { snapshot, wait: undefined, replay: true };
+				}
+				prepared.snapshot.metadata.schedulingOrigin = {
+					occurrenceId: authority.occurrenceId,
+					contentDigest: authority.contentDigest,
+					admittedAt: authority.admittedAt,
+				};
+				const committed = self.commitStart(
+					db,
+					input,
+					prepared.snapshot,
+					prepared.sameCheckout,
+					authority,
+				);
+				db.query(
+					"UPDATE workflow_scheduled_reservations SET activated_at=?,activation_fence=? WHERE occurrence_id=?",
+				).run(nowIso(self.now), authority.fence, authority.occurrenceId);
+				return { ...committed, replay: false };
+			});
+			if (!result.replay) {
+				yield* self.telemetryEffect(result.snapshot, "workflow.started", {
+					stepId: result.snapshot.currentStep,
+					payload: self.startTelemetryPayload(result.snapshot),
+				});
+				if (result.wait)
+					yield* self.telemetryEffect(result.snapshot, "workflow.waiting", {
+						stepId: result.snapshot.currentStep,
+						payload: waitStartPayload(result.wait, result.snapshot.currentStep),
+					});
+			}
+			self.onCommitted(prepared.storeTarget);
+			recordWorkflowTarget(prepared.storeTarget);
+			return {
+				snapshot: result.snapshot,
+				view: viewById(
+					prepared.storeTarget,
+					input.workflowId,
+					self.registry,
+					self.now,
+				),
+			};
+		});
+	}
 	start(input: StartWorkflowInput): DispatchResult {
 		return this.run(this.startEffect(input));
 	}
@@ -443,6 +614,13 @@ export class WorkflowEngine {
 		const self = this;
 		return Effect.gen(function* () {
 			const store = yield* WorkflowStore;
+			if (input.metadata.schedulingOrigin !== undefined)
+				return yield* Effect.fail(
+					new WorkflowRuntimeError(
+						"start-guard",
+						"Scheduling provenance is native-engine owned.",
+					),
+				);
 			const prepared = yield* Effect.try({
 				try: () => self.resolveStart(input),
 				catch: toRuntimeError,
@@ -1603,6 +1781,7 @@ export class WorkflowEngine {
 		input: StartWorkflowInput,
 		snapshot: WorkflowSnapshot,
 		sameCheckout: boolean,
+		owner?: ScheduledWorkflowAuthority,
 	): {
 		snapshot: WorkflowSnapshot;
 		event: { type: string; data: unknown };
@@ -1610,6 +1789,20 @@ export class WorkflowEngine {
 		 * already the developer's (record-repairs-and-developer-waits). */
 		wait: WorkflowWait | undefined;
 	} {
+		const reservation = db
+			.query<{ occurrence_id: string; content_digest: string }, [string]>(
+				"SELECT occurrence_id,content_digest FROM workflow_scheduled_reservations WHERE workflow_id=?",
+			)
+			.get(input.workflowId);
+		if (
+			reservation &&
+			(owner?.occurrenceId !== reservation.occurrence_id ||
+				owner.contentDigest !== reservation.content_digest)
+		)
+			throw new WorkflowRuntimeError(
+				"already-exists",
+				"Workflow identity belongs to a scheduling reservation.",
+			);
 		// The refusal names the status the existing row is in: the orchestrator
 		// relayed "already exists" before, and the status is what tells the
 		// developer whether that id is finished, waiting on them, or still running.

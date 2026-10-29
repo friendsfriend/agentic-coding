@@ -19,6 +19,7 @@ import type { WorkflowReviewKind } from "../contracts/workflow-events.ts";
 const ALLOWED_ROUTES: ReadonlySet<string> = new Set([
 	"GET /api/v1/health",
 	"POST /api/v1/observe",
+	"POST /api/v1/scheduling",
 	"GET /api/v1/workflow/view",
 	"GET /api/v1/workflow/steps",
 	"POST /api/v1/workflow/start",

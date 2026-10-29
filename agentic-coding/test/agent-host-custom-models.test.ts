@@ -188,7 +188,7 @@ describe("global pi models.json custom providers", () => {
 				toolPolicy: "default",
 				model: "eon/claude-5-sonnet",
 			});
-			expect(host.referenceWindowForTest()).toBe(200000);
+			expect(host.referenceWindowForTest("eon/claude-5-sonnet")).toBe(200000);
 		} finally {
 			await host.shutdown();
 			sandbox.restore();
