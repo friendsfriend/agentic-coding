@@ -267,6 +267,54 @@ describe("revision-bound orchestrator recovery", () => {
 		});
 	}
 
+	for (const selectedRoles of [["triage"], ["security-verifier"]]) {
+		test(`triage recovery retains locked verifiers from ${JSON.stringify(selectedRoles)}`, async () => {
+			const f = fixture(false, "verify");
+			const roles = ["security-verifier", "quality-verifier"];
+			f.mutate((snapshot) => {
+				snapshot.currentStep = "core.triage";
+				snapshot.step.selectedRoles = [...selectedRoles];
+				snapshot.step.context = { roles };
+			});
+			const response = await f.post("repair", f.requestFor(await f.inspect()));
+			expect(response.status).toBe(200);
+			f.reopen();
+			const recovered = f.engine().getSnapshot(f.repo, f.snapshot.workflowId);
+			expect(recovered.step.selectedRoles).toEqual(
+				selectedRoles[0] === "triage" ? roles : selectedRoles,
+			);
+			expect(recovered.step.context).toEqual({ roles });
+			const pending = f
+				.engine()
+				.status(f.repo, f.snapshot.workflowId)
+				.runs.filter((run) => run.status === "pending");
+			expect(pending.map((run) => run.role)).toEqual(["triage"]);
+		});
+	}
+
+	for (const roles of [
+		undefined,
+		[],
+		["triage"],
+		["security-verifier", "security-verifier"],
+	]) {
+		test(`triage recovery rejects unusable retained context ${JSON.stringify(roles)}`, async () => {
+			const f = fixture(false, "verify");
+			f.mutate((snapshot) => {
+				snapshot.currentStep = "core.triage";
+				snapshot.step.selectedRoles = ["triage"];
+				snapshot.step.context = roles ? { roles } : {};
+			});
+			const response = await f.post("repair", f.requestFor(await f.inspect()));
+			expect(response.status).not.toBe(200);
+			f.reopen();
+			expect(
+				f.engine().getSnapshot(f.repo, f.snapshot.workflowId).step
+					.selectedRoles,
+			).toEqual(["triage"]);
+		});
+	}
+
 	test("same-step recovery preserves a selected verifier subset", async () => {
 		const f = fixture(false, "verify");
 		f.mutate((snapshot) => {

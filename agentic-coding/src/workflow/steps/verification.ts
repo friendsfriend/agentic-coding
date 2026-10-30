@@ -464,6 +464,31 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		protocolSections: () => ["file-signals", "jev"],
 		roles: () => ["triage"],
 		candidateRoles: () => ["triage"],
+		onEnter: ({ snapshot, traits }) => {
+			// Older enterStep code overwrote the verifier selection with the
+			// launched triage agent. Same-step recovery retains arrival context;
+			// restore only that exact corruption, never widen a valid selection.
+			if (
+				snapshot.step.selectedRoles.length !== 1 ||
+				snapshot.step.selectedRoles[0] !== "triage"
+			)
+				return;
+			const roles = arrivingRoles(
+				undefined,
+				snapshot.step.context,
+			).selectedRoles;
+			const eligible = triageRolesFor(snapshot.definition.id, traits);
+			if (
+				!roles?.length ||
+				new Set(roles).size !== roles.length ||
+				roles.some((role) => !eligible.includes(role))
+			)
+				throw new WorkflowRuntimeError(
+					"triage",
+					"cannot restore verifier selection from retained arrival context",
+				);
+			snapshot.step.selectedRoles = [...roles];
+		},
 		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
 		onAgentComplete: triageCompletion,
 		// Attempt is seeded from the verification round counter so a triage
