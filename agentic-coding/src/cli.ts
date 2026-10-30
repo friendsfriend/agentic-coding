@@ -59,8 +59,11 @@ if (surface === "__catalog") {
 	process.exit(2);
 } else if (surface === "--help" || surface === "-h" || surface === "help") {
 	console.log(
-		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  home       Unified shell, home route. `manager` is an alias.\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  stage      The stage identity cache of a running server: `agentic-coding stage identity list|forget`\n  diagnostics  Report the main-thread lag/memory diagnostics the shell writes for itself.\n  devenv     Thin alias of this executable (spawn/attach/server).",
+		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  home       Unified shell, home route. `manager` is an alias.\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  stage      The stage identity cache of a running server: `agentic-coding stage identity list|forget`\n  session    Named persistent workflowless sessions. Run `agentic-coding session --help`.\n  diagnostics  Report the main-thread lag/memory diagnostics the shell writes for itself.\n  devenv     Thin alias of this executable (spawn/attach/server).",
 	);
+} else if (surface === "session") {
+	const { sessionCommand } = await import("./agent-host/session-command.ts");
+	process.exitCode = await sessionCommand(rest);
 } else if (surface === "agent") {
 	// Hidden internal mode: the headless durable agent host
 	// (durable-agent-host spec). Lazily imported so every other command mode

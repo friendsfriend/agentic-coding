@@ -13,6 +13,7 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { claimFixtureEffects } from "./support/claim-fixture-effects.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -126,7 +127,7 @@ function advanceRouting(
 function tokenCache(engine: WorkflowEngine, repo: string) {
 	const tokens = new Map<string, string>();
 	return () => {
-		for (const effect of engine.claimEffects(repo, 100))
+		for (const effect of claimFixtureEffects(engine, repo))
 			if (effect.kind === "agent.launch" && effect.runToken)
 				tokens.set(
 					String((effect.payload as { runId?: string }).runId),

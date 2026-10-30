@@ -175,12 +175,14 @@ for (const outcome of ["success", "failure", "cancel", "shutdown"] as const)
 					]);
 				}
 				expect(active).toBe(1);
-				// An unrelated conversation must progress while this one waits.
+				// An unrelated conversation needs its own environment AND binding.
+				const independentEnv = path.join(dir, "independent.env");
+				fs.writeFileSync(independentEnv, "HERDR_RUN_ID='independent'\n");
 				await host.ensureRun({
 					runId: "independent",
 					name: "independent",
 					cwd: dir,
-					runEnvPath: envPath,
+					runEnvPath: independentEnv,
 					toolPolicy: "default",
 					model: `${independent.getModel("wide")?.provider}/wide`,
 				});

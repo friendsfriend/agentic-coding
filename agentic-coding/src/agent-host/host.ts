@@ -53,9 +53,11 @@ import { parseRunEnvFile } from "../workflow/run-env.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
+import { collectionExtension } from "./collection-extension.ts";
 import { compactionSerializationExtension } from "./compaction-serialization.ts";
 import { configuredProviderIds, durableModels } from "./configured-models.ts";
 import { createDebugExtension } from "./debug-tools.ts";
+import { digestReportExtension } from "./digest-report-tool.ts";
 import {
 	ENVIRONMENT_URL_ENV,
 	ensureEnvironmentServer,
@@ -693,6 +695,15 @@ export interface DurableHostOptions {
 /** One open durable harness plus its control socket. Owns exactly the state
  * `durable-agent-host` assigns a host: run bookkeeping, the socket server,
  * and the harness/storage lifecycle. */
+function sessionRevocationDoc(runId: string) {
+	return defineDoc<{ revoked: boolean }>({
+		kind: `agentic.session-revocation.${createHash("sha256").update(runId).digest("hex")}`,
+		version: 1,
+		scope: "session",
+		checkpointWhen: () => false,
+		initial: () => ({ revoked: false }),
+	});
+}
 export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly runtimeFailureLogQueue: string[] = [];
@@ -1149,6 +1160,8 @@ export class DurableHost {
 		// repository context prompt and `grep`, but no workflow dialogue,
 		// environment, stage or debug tools and no managed-run preamble.
 		if (options.session) {
+			registry.install(collectionExtension(lookup));
+			registry.install(digestReportExtension(lookup));
 			registry.install(createSearchExtension(surface));
 			registry.install(
 				createPromptExtension(
@@ -1555,7 +1568,8 @@ export class DurableHost {
 					);
 			}
 		}
-		const readOnly = input.toolPolicy === "read-only";
+		const readOnly =
+			input.toolPolicy === "read-only" || input.toolPolicy === "collection";
 		const debugRun = envVars.HERDR_ROLE === "debug";
 		const initialToolSelection = this.toolSelectionFor(
 			input.toolPolicy,
@@ -1945,6 +1959,32 @@ export class DurableHost {
 					...(this.orchestratorExtension.tools ?? []),
 					...this.workflowTools,
 					...(this.codemodeTool ? [this.codemodeTool] : []),
+				]),
+			);
+		}
+		if (policy === "collection") {
+			if (!this.codemodeTool)
+				throw new Error(
+					"Collection sessions require the configured codemode tool for reviewed Wiz discovery/execution.",
+				);
+			if (!this.options.session)
+				throw new Error(
+					"Collection policy requires a workflowless session host.",
+				);
+			const helpers = this.registry
+				.snapshot()
+				.tools()
+				.filter(
+					({ tool }) =>
+						tool.name === "digest_repositories" ||
+						tool.name === "render_daily_digest" ||
+						tool.name === "normalize_digest_source_page",
+				)
+				.map(({ tool }) => tool);
+			return withImported(
+				withToolSearch([
+					...(this.codemodeTool ? [this.codemodeTool] : []),
+					...helpers,
 				]),
 			);
 		}
@@ -2711,6 +2751,40 @@ export class DurableHost {
 		}
 	}
 
+	async resolveSession(runId: string): Promise<string | undefined> {
+		this.assertOpen();
+		if (!this.options.session || !/^pi-durable[\w-]*$/.test(runId))
+			throw new Error("Workflowless session lookup denied.");
+		const association = await this.harness.snapshot(
+			associationDoc("run", runId),
+			BACKGROUND_CONTEXT,
+		);
+		const role = association?.conversationId
+			? undefined
+			: await this.harness.snapshot(
+					associationDoc("role", runId),
+					BACKGROUND_CONTEXT,
+				);
+		const id = association?.conversationId || role?.conversationId;
+		if (!id) return undefined;
+		if (
+			(association && association.identity !== runId) ||
+			(role && role.identity !== runId)
+		)
+			throw new Error(
+				"Workflowless session association identity mismatch; no replacement was created.",
+			);
+		if (
+			!(await this.harness.conversation(
+				id as ConversationId,
+				BACKGROUND_CONTEXT,
+			))
+		)
+			throw new Error(
+				"Persisted workflowless native conversation is missing; no replacement was created.",
+			);
+		return String(id);
+	}
 	async scheduledIdentity(): Promise<string> {
 		return this.harness.commit(async (tx) => {
 			const identity = await tx.doc(
@@ -2751,11 +2825,78 @@ export class DurableHost {
 			BACKGROUND_CONTEXT,
 		);
 		if (!conversation) throw new Error("scheduled conversation is unavailable");
-		if (operation === "reserve")
+		if (operation === "reserve") {
+			if (
+				(
+					await this.harness.snapshot(
+						sessionRevocationDoc(envelope.runId),
+						BACKGROUND_CONTEXT,
+					)
+				)?.revoked
+			)
+				throw new Error("Session has been revoked");
 			return reserveScheduled(conversation, envelope);
-		if (operation === "activate")
-			return activateScheduled(conversation, envelope, fence);
+		}
+		if (operation === "activate") {
+			// Persisted wake-up receipts can be replayed after reopen before a live
+			// RunRecord is loaded. They still join the same conversation-keyed queue;
+			// never recreate a run merely to inspect/replay its durable admission.
+			const liveRecord = this.runs.get(envelope.runId);
+			const record = liveRecord ?? { conversationId, readOnly: true };
+			return this.serialized(record, async () => {
+				this.assertOpen();
+				const currentIssued = await this.harness.snapshot(
+					associationDoc("run", envelope.runId),
+					BACKGROUND_CONTEXT,
+				);
+				const currentOwner = this.runs.get(envelope.runId);
+				if (
+					currentIssued?.identity !== envelope.runId ||
+					currentIssued.conversationId !== conversationId ||
+					((liveRecord || currentOwner) &&
+						!this.ownsConversation(envelope.runId, conversationId)) ||
+					record.conversationId !== conversationId
+				)
+					throw new Error("Scheduled conversation owner changed");
+				if (
+					(
+						await this.harness.snapshot(
+							sessionRevocationDoc(envelope.runId),
+							BACKGROUND_CONTEXT,
+						)
+					)?.revoked
+				)
+					throw new Error("Session has been revoked");
+				return activateScheduled(conversation, envelope, fence);
+			});
+		}
 		return queryScheduled(conversation, envelope.occurrenceId, envelope.digest);
+	}
+
+	async revokeSession(
+		runId: string,
+		hostId: string,
+		conversationId: string,
+	): Promise<void> {
+		this.assertOpen();
+		if (
+			!this.options.session ||
+			!/^pi-durable[\w-]*$/.test(runId) ||
+			(await this.scheduledIdentity()) !== hostId
+		)
+			throw new Error("Session revocation custody mismatch");
+		const record = this.requireConversation(runId);
+		await this.serialized(record, async () => {
+			if (
+				!this.ownsConversation(runId, record.conversationId) ||
+				String(record.conversationId) !== conversationId
+			)
+				throw new Error("Session revocation binding mismatch");
+			await this.harness.commit(async (tx) => {
+				const doc = await tx.doc(sessionRevocationDoc(runId));
+				doc.revoked = true;
+			}, BACKGROUND_CONTEXT);
+		});
 	}
 
 	async submit(
@@ -3915,7 +4056,11 @@ export class DurableHost {
 		this.authenticatedSockets.clear();
 		for (const runId of [...this.runs.keys()]) {
 			try {
-				await this.stopConversation(runId, false);
+				const record = this.runs.get(runId);
+				if (record)
+					await this.serialized(record, () =>
+						this.stopConversation(runId, false),
+					);
 			} catch {
 				/* best-effort drain before close */
 			}
@@ -4091,6 +4236,20 @@ export class DurableHost {
 		}
 		try {
 			switch (request.type) {
+				case "revokeSession":
+					await this.revokeSession(
+						request.runId,
+						request.hostId,
+						request.conversationId,
+					);
+					send({ type: "ok" });
+					return;
+				case "resolveSession":
+					send({
+						type: "resolveSession",
+						conversationId: await this.resolveSession(request.runId),
+					});
+					return;
 				case "scheduledIdentity":
 					send({
 						type: "scheduledIdentity",

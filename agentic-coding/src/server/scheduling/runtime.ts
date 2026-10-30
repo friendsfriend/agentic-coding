@@ -16,6 +16,10 @@ import {
 } from "../operations/engine.ts";
 import { SchedulingApi } from "./api.ts";
 import { SchedulingService } from "./service.ts";
+import {
+	withSessionDestination,
+	workflowlessSessionAdapter,
+} from "./session.ts";
 import { standaloneAdapter } from "./standalone.ts";
 import { SchedulingStore } from "./store.ts";
 import { wakeUpAdapter } from "./wake-up.ts";
@@ -44,7 +48,10 @@ export function createSchedulingRuntime(options: {
 					configDir,
 				});
 			}),
-			standalone: standaloneAdapter(directory, { configDir }),
+			standalone: withSessionDestination(
+				standaloneAdapter(directory, { configDir }),
+				workflowlessSessionAdapter(configDir),
+			),
 			workflow: workflowAdapter(
 				() => engine(dashboardApplication),
 				requestWorkflowExecution,

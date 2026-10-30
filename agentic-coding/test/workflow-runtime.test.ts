@@ -2516,9 +2516,14 @@ describe("transactional workflow runtime", () => {
 				"run",
 			);
 			expect(security.status).toBe("expired");
-			expect(view.effects.some((effect) => effect.kind === "agent.stop")).toBe(
-				false,
-			);
+			// Expiration revokes authority; stopping the exact native sibling is
+			// still mandatory before a replacement launch can proceed.
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.filter((effect) => effect.kind === "agent.stop")
+					.map((effect) => (effect.payload as { runId: string }).runId),
+			).toContain(security.id);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

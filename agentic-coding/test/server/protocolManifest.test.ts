@@ -22,6 +22,14 @@ const served = (): Array<{ method: string; path: string }> => {
 		/if \(method === "(GET|POST)" && path === "(\/api\/v1\/[a-z/-]+)"\)/g,
 	))
 		rows.push({ method: match[1] ?? "", path: match[2] ?? "" });
+	// Shared handlers also use an explicit OR-group of literal paths. Discover
+	// those from the handler itself; never whitelist owned-but-unserved routes.
+	for (const match of app.matchAll(
+		/if \(\s*method === "(GET|POST)" &&\s*\(((?:\s*path === "\/api\/v1\/[a-z/-]+"\s*\|\|?)+\s*path === "\/api\/v1\/[a-z/-]+")\)\s*\)/g,
+	)) {
+		for (const path of (match[2] ?? "").matchAll(/path === "([^"]+)"/g))
+			rows.push({ method: match[1] ?? "", path: path[1] ?? "" });
+	}
 	return rows;
 };
 

@@ -86,7 +86,7 @@ describe("per-run execution environment isolation", () => {
 
 		const envA = writeRunEnv(dir, "run-a.env", { HERDR_RUN_ID: "run-a-id" });
 		await host.ensureRun({
-			runId: "run-a",
+			runId: "run-a-id",
 			name: "worker-a",
 			cwd: dir,
 			runEnvPath: envA,
@@ -100,12 +100,12 @@ describe("per-run execution environment isolation", () => {
 			),
 		]);
 		faux.appendResponses([fauxAssistantMessage([fauxText("done-a")])]);
-		await host.submit("run-a", "print your run id", "req-a");
-		const outputA = await waitForToolResult(host, "run-a");
+		await host.submit("run-a-id", "print your run id", "req-a");
+		const outputA = await waitForToolResult(host, "run-a-id");
 
 		const envB = writeRunEnv(dir, "run-b.env", { HERDR_RUN_ID: "run-b-id" });
 		await host.ensureRun({
-			runId: "run-b",
+			runId: "run-b-id",
 			name: "worker-b",
 			cwd: dir,
 			runEnvPath: envB,
@@ -119,8 +119,8 @@ describe("per-run execution environment isolation", () => {
 			),
 		]);
 		faux.appendResponses([fauxAssistantMessage([fauxText("done-b")])]);
-		await host.submit("run-b", "print your run id", "req-b");
-		const outputB = await waitForToolResult(host, "run-b");
+		await host.submit("run-b-id", "print your run id", "req-b");
+		const outputB = await waitForToolResult(host, "run-b-id");
 
 		expect(outputA).toContain("run-a-id");
 		expect(outputA).not.toContain("run-b-id");

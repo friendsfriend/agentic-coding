@@ -24,6 +24,10 @@ import {
 	COMPACTION_CEILING_MINIMUM,
 	type CompactionConfig,
 } from "../src/workflow/compaction.ts";
+import {
+	ensureFixtureRun,
+	submitFixtureRun,
+} from "./support/admitted-host-fixture.ts";
 
 // Keep the test ceiling above the initial prompt/tool declarations (which grow
 // with upstream tool descriptions), so only the scripted context triggers it.
@@ -157,7 +161,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-ceiling",
 				name: "worker-ceiling",
 				cwd: dir,
@@ -175,7 +179,8 @@ describe("cost ceiling of a durable host", () => {
 
 			// The assignment: the head the summarizer has to keep.
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit(
+			await submitFixtureRun(
+				host,
 				"run-ceiling",
 				"ASSIGNMENT: implement the cost ceiling. Plan: step 1, step 2.",
 				"req-0",
@@ -186,7 +191,7 @@ describe("cost ceiling of a durable host", () => {
 				factory("acknowledged"),
 				factory("summary of the older context"),
 			]);
-			await host.submit("run-ceiling", contextText(80_000), "req-1");
+			await submitFixtureRun(host, "run-ceiling", contextText(80_000), "req-1");
 			await waitFor(
 				async () => (await compactionEntries(host, "run-ceiling")).length > 0,
 			);
@@ -207,7 +212,7 @@ describe("cost ceiling of a durable host", () => {
 			// checkable after the fact. A generation after the placed summary measures
 			// the reduced context and flushes the compaction envelope with it.
 			faux.appendResponses([factory("after")]);
-			await host.submit("run-ceiling", "and now?", "req-2");
+			await submitFixtureRun(host, "run-ceiling", "and now?", "req-2");
 			await waitFor(
 				async () => (await compactionEntries(host, "run-ceiling")).length > 0,
 			);
@@ -252,7 +257,7 @@ describe("cost ceiling of a durable host", () => {
 		});
 		try {
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-floor" });
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-floor",
 				name: "worker-floor",
 				cwd: dir,
@@ -261,14 +266,14 @@ describe("cost ceiling of a durable host", () => {
 				model: modelRef(faux, "wide"),
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit("run-floor", "start", "req-0");
+			await submitFixtureRun(host, "run-floor", "start", "req-0");
 			await waitForIdle(host, "run-floor");
 
 			faux.appendResponses([
 				factory("acknowledged"),
 				factory("summary of the older context"),
 			]);
-			await host.submit("run-floor", contextText(80_000), "req-1");
+			await submitFixtureRun(host, "run-floor", contextText(80_000), "req-1");
 			await waitFor(
 				async () => (await compactionEntries(host, "run-floor")).length === 1,
 			);
@@ -281,7 +286,7 @@ describe("cost ceiling of a durable host", () => {
 			// the 40,000-token floor and within one turn: both floors hold, so nothing
 			// is admitted.
 			faux.appendResponses([factory("acknowledged")]);
-			await host.submit("run-floor", contextText(20_000), "req-2");
+			await submitFixtureRun(host, "run-floor", contextText(20_000), "req-2");
 			await waitForIdle(host, "run-floor");
 			expect(await compactionEntries(host, "run-floor")).toHaveLength(1);
 			expect(host.ceilingStateForTest("run-floor")?.compactionTurns).toEqual([
@@ -315,7 +320,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-guard",
 				name: "worker-guard",
 				cwd: dir,
@@ -324,7 +329,7 @@ describe("cost ceiling of a durable host", () => {
 				model: modelRef(faux, "wide"),
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit("run-guard", "start", "req-0");
+			await submitFixtureRun(host, "run-guard", "start", "req-0");
 			await waitForIdle(host, "run-guard");
 
 			for (let turn = 1; turn <= 6; turn++) {
@@ -332,7 +337,12 @@ describe("cost ceiling of a durable host", () => {
 					factory("acknowledged"),
 					factory("summary of the older context"),
 				]);
-				await host.submit("run-guard", contextText(60_000), `req-${turn}`);
+				await submitFixtureRun(
+					host,
+					"run-guard",
+					contextText(60_000),
+					`req-${turn}`,
+				);
 				// Wait for this turn's measurement to be decided: the recorded turn
 				// index only advances when the ceiling evaluated that turn.
 				await waitFor(() => {
@@ -379,7 +389,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-off",
 				name: "worker-off",
 				cwd: dir,
@@ -392,7 +402,7 @@ describe("cost ceiling of a durable host", () => {
 				inactive: "off",
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit("run-off", contextText(80_000), "req-0");
+			await submitFixtureRun(host, "run-off", contextText(80_000), "req-0");
 			await waitForIdle(host, "run-off");
 			expect(await compactionEntries(host, "run-off")).toHaveLength(0);
 			expect(
@@ -418,7 +428,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-narrow",
 				name: "worker-narrow",
 				cwd: dir,
@@ -434,11 +444,11 @@ describe("cost ceiling of a durable host", () => {
 				overflowTokens: 68_000,
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit("run-narrow", "small context", "req-0");
+			await submitFixtureRun(host, "run-narrow", "small context", "req-0");
 			await waitForIdle(host, "run-narrow");
 			// A second turn proves the warning is emitted once, not per turn.
 			faux.appendResponses([factory("acknowledged")]);
-			await host.submit("run-narrow", "and again", "req-1");
+			await submitFixtureRun(host, "run-narrow", "and again", "req-1");
 			await waitForIdle(host, "run-narrow");
 
 			const warnings = readLines(telemetryPath).filter(
@@ -477,7 +487,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "test-verifier",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-verifier",
 				name: "verifier-ceiling",
 				cwd: dir,
@@ -486,7 +496,8 @@ describe("cost ceiling of a durable host", () => {
 				model: modelRef(faux, "wide"),
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit(
+			await submitFixtureRun(
+				host,
 				"run-verifier",
 				"ASSIGNMENT: verify the cost ceiling. Findings so far: F-1 src/a.ts, F-2 src/b.ts.",
 				"req-0",
@@ -496,7 +507,12 @@ describe("cost ceiling of a durable host", () => {
 				factory("acknowledged"),
 				factory("summary of the older context"),
 			]);
-			await host.submit("run-verifier", contextText(80_000), "req-1");
+			await submitFixtureRun(
+				host,
+				"run-verifier",
+				contextText(80_000),
+				"req-1",
+			);
 			await waitFor(
 				async () => (await compactionEntries(host, "run-verifier")).length > 0,
 			);
@@ -532,7 +548,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "orchestrator",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureFixtureRun(host, {
 				runId: "run-orchestrator",
 				name: "orchestrator",
 				cwd: dir,
@@ -541,14 +557,24 @@ describe("cost ceiling of a durable host", () => {
 				model: modelRef(faux, "wide"),
 			});
 			faux.setResponses([factory("acknowledged")]);
-			await host.submit("run-orchestrator", "dispatch the workflow", "req-0");
+			await submitFixtureRun(
+				host,
+				"run-orchestrator",
+				"dispatch the workflow",
+				"req-0",
+			);
 			await waitForIdle(host, "run-orchestrator");
 
 			faux.appendResponses([
 				factory("acknowledged"),
 				factory("summary of the older context"),
 			]);
-			await host.submit("run-orchestrator", contextText(80_000), "req-1");
+			await submitFixtureRun(
+				host,
+				"run-orchestrator",
+				contextText(80_000),
+				"req-1",
+			);
 			await waitFor(
 				async () =>
 					(await compactionEntries(host, "run-orchestrator")).length > 0,

@@ -619,6 +619,10 @@ test("proposal choices submit their type, task, and fixed checkout mode", async 
 		for (const character of "Draft only") t.mockInput.pressKey(character);
 		await t.flush();
 		t.mockInput.pressEnter({ meta: true }); // task -> confirm
+		// Native editor input is asynchronous; do not send the confirmation
+		// through the modal handler while its task editor is still active.
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Confirm workflow");
 		handler?.(key("enter"));
 		await t.flush();
 		expect(completed).toHaveLength(1);

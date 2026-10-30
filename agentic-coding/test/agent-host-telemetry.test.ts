@@ -18,6 +18,10 @@ import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import { emitRuntimeEnvelope } from "../src/agent-host/telemetry.ts";
 import { agentMetrics } from "../src/workflow/run-projections.ts";
+import {
+	ensureFixtureRun,
+	submitFixtureRun,
+} from "./support/admitted-host-fixture.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-telemetry-"));
@@ -92,7 +96,7 @@ describe("tool-call telemetry shape", () => {
 			HERDR_RUN_GENERATION: "2",
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
-		await host.ensureRun({
+		await ensureFixtureRun(host, {
 			runId: "run-shape",
 			name: "worker-shape",
 			cwd: dir,
@@ -106,7 +110,7 @@ describe("tool-call telemetry shape", () => {
 			}),
 		]);
 		faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
-		await host.submit("run-shape", "do the thing", options.callId);
+		await submitFixtureRun(host, "run-shape", "do the thing", options.callId);
 		let status = await host.status("run-shape");
 		for (let i = 0; i < 100 && status.status !== "idle"; i++) {
 			await new Promise((resolve) => setTimeout(resolve, 20));
@@ -247,7 +251,7 @@ describe("durable host telemetry", () => {
 			HERDR_PROFILE: "durable-default",
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
-		await host.ensureRun({
+		await ensureFixtureRun(host, {
 			runId: "run-1",
 			name: "worker-telemetry",
 			cwd: dir,
@@ -261,7 +265,7 @@ describe("durable host telemetry", () => {
 			}),
 		]);
 		faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
-		await host.submit("run-1", "read a file", "req-1");
+		await submitFixtureRun(host, "run-1", "read a file", "req-1");
 		let status = await host.status("run-1");
 		for (let i = 0; i < 50 && status.status !== "idle"; i++) {
 			await new Promise((resolve) => setTimeout(resolve, 20));
@@ -314,7 +318,7 @@ describe("durable host telemetry", () => {
 			HERDR_TELEMETRY_PATH: telemetryPath,
 			HERDR_CAPTURE_CONTENT: "1",
 		});
-		await host.ensureRun({
+		await ensureFixtureRun(host, {
 			runId: "run-2",
 			name: "worker-telemetry-capture",
 			cwd: dir,
@@ -328,7 +332,7 @@ describe("durable host telemetry", () => {
 			}),
 		]);
 		faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
-		await host.submit("run-2", "read a file", "req-1");
+		await submitFixtureRun(host, "run-2", "read a file", "req-1");
 		let status = await host.status("run-2");
 		for (let i = 0; i < 50 && status.status !== "idle"; i++) {
 			await new Promise((resolve) => setTimeout(resolve, 20));

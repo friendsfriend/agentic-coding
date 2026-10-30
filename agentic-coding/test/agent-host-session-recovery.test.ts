@@ -26,6 +26,7 @@ import { PiDurableAdapter } from "../src/workflow/adapters.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { writeAgentRunEnv } from "../src/workflow/run-env.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { ensureFixtureRun } from "./support/admitted-host-fixture.ts";
 import {
 	autoRemoveRepoFixtures,
 	createTempRepoFixture,
@@ -131,7 +132,7 @@ function fixture() {
 test("a restarted SQLite host recovers the exact aborted worker without clearing its park", async () => {
 	const f = fixture();
 	const first = await f.open();
-	const ensured = await first.ensureRun({
+	const ensured = await ensureFixtureRun(first, {
 		runId: f.run.id,
 		name: "worker-test",
 		cwd: f.repo,
@@ -206,7 +207,7 @@ test("recovery rejects missing/rebound conversations without creating a replacem
 			"ownership mismatch",
 		);
 		expect((await host.status(f.run.id)).status).toBe("unknown");
-		const ensured = await host.ensureRun(inputWithoutExpected(input));
+		const ensured = await ensureFixtureRun(host, inputWithoutExpected(input));
 		await expect(
 			client.recoverRun({
 				...input,
@@ -273,7 +274,7 @@ test("foreign socket, launch identity, and historical attempts cannot recover a 
 test("opening a saved session starts an absent host and restores its SQLite binding", async () => {
 	const f = fixture();
 	const first = await f.open();
-	const ensured = await first.ensureRun({
+	const ensured = await ensureFixtureRun(first, {
 		runId: f.run.id,
 		name: "worker-test",
 		cwd: f.repo,

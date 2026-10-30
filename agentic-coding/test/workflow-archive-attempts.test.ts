@@ -25,6 +25,7 @@ import type {
 	AgentCompletionContext,
 	AssignmentInputsContext,
 } from "../src/workflow/steps/types.ts";
+import { claimFixtureEffects } from "./support/claim-fixture-effects.ts";
 import {
 	autoRemoveRepoFixtures,
 	createTempRepoFixture,
@@ -71,13 +72,11 @@ function launchToken(
 	root: string,
 	runId: string,
 ): string {
-	const effect = engine
-		.claimEffects(root, 100)
-		.find(
-			(item) =>
-				item.kind === "agent.launch" &&
-				(item.payload as { runId?: string }).runId === runId,
-		);
+	const effect = claimFixtureEffects(engine, root).find(
+		(item) =>
+			item.kind === "agent.launch" &&
+			(item.payload as { runId?: string }).runId === runId,
+	);
 	if (!effect?.runToken) throw new Error(`missing launch token for ${runId}`);
 	return effect.runToken;
 }

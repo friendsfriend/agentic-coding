@@ -62,6 +62,50 @@ export class SchedulingApi {
 			raw,
 		);
 		const store = this.service.store;
+		const authorize = () => {
+			if (principal === "operator") return;
+			const guarded = (job: JobInput) =>
+				job.target.kind === "standalone" &&
+				job.target.policy === "read-only" &&
+				job.target.destination !== undefined;
+			let protectedSession = false;
+			switch (request.operation) {
+				case "create":
+				case "jobs.create":
+					protectedSession = guarded(request.job);
+					break;
+				case "jobs.update":
+					protectedSession =
+						guarded(request.job) || guarded(store.job(request.id));
+					break;
+				case "jobs.delete":
+					protectedSession = guarded(store.job(request.id));
+					break;
+				case "schedules.create":
+					protectedSession = guarded(store.job(request.schedule.jobId));
+					break;
+				case "schedules.update":
+					protectedSession =
+						guarded(store.job(request.schedule.jobId)) ||
+						guarded(store.job(store.schedule(request.id).jobId));
+					break;
+				case "schedules.action":
+					protectedSession = guarded(
+						store.job(store.schedule(request.id).jobId),
+					);
+					break;
+				case "occurrences.approve":
+					protectedSession = guarded(store.occurrence(request.id).job);
+					break;
+			}
+			if (protectedSession)
+				throw new SchedulingError(
+					"forbidden",
+					"Only the authenticated operator may schedule or mutate a persistent workflowless-session destination.",
+				);
+		};
+		authorize();
+		let validatedJob: { id: string; revision: number } | undefined;
 		if (
 			schedulingOperationRequiresOperator(request.operation) &&
 			principal !== "operator"
@@ -210,9 +254,12 @@ export class SchedulingApi {
 				await this.service.validateJob(request.job);
 				break;
 			case "schedules.create":
-			case "schedules.update":
-				await this.service.validateJob(store.job(request.schedule.jobId));
+			case "schedules.update": {
+				const job = store.job(request.schedule.jobId);
+				validatedJob = { id: job.id, revision: job.revision };
+				await this.service.validateJob(job);
 				break;
+			}
 		}
 		// Recheck the request key, expected revisions, and shared-job fan-out together
 		// after validation; another request may have committed while I/O was pending.
@@ -221,6 +268,15 @@ export class SchedulingApi {
 			request.requestId,
 			request,
 			(): SchedulingResponse => {
+				authorize();
+				if (
+					validatedJob &&
+					store.job(validatedJob.id).revision !== validatedJob.revision
+				)
+					throw new SchedulingError(
+						"conflict",
+						"Referenced job changed during validation; reload and retry.",
+					);
 				const now = this.service.now();
 				switch (request.operation) {
 					case "jobs.create":

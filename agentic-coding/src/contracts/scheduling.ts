@@ -61,6 +61,15 @@ const targetSchema = Schema.Union([
 			policy: Schema.Literal("read-only"),
 			reviewPolicy: Schema.Literal("none"),
 			baseBranch: identity,
+			destination: Schema.optionalKey(
+				Schema.Struct({
+					kind: Schema.Literal("workflowless-session"),
+					sessionId: identity,
+					owner: identity,
+					hostId: identity,
+					conversationId: identity,
+				}),
+			),
 		}),
 		Schema.Struct({
 			kind: Schema.Literal("standalone"),
