@@ -1,73 +1,75 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { uiColors } from "@agentic-coding/ui";
-import { parseColor, type TextareaRenderable } from "@opentui/core";
+import { parseColor, type Renderable, TextareaRenderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { paintPromptCursor } from "../../src/tui/dash/ui/prompt-cursor.ts";
+import { AgentSessionView } from "../../src/tui/dash/ui/AgentSessionView.tsx";
 
-test("the prompt paints a steady cursor on every frame, preserving text and clearing on blur", async () => {
-	const [focused, setFocused] = createSignal(true);
-	let editor: TextareaRenderable | undefined;
+function findEditor(node: Renderable): TextareaRenderable | undefined {
+	if (node instanceof TextareaRenderable) return node;
+	for (const child of node.getChildren()) {
+		const found = findEditor(child);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+test("the actual transcript input retains OpenCode-style native block cursor settings through redraw and focus changes", async () => {
+	const [active, setActive] = createSignal(true);
+	const [working, setWorking] = createSignal(false);
 	const t = await testRender(
 		() => (
-			<box
-				width={12}
-				height={3}
-				renderAfter={(buffer) => {
-					if (editor) paintPromptCursor.call(editor, buffer);
-				}}
-			>
-				<textarea
-					ref={(node) => {
-						editor = node;
-					}}
-					width={12}
-					height={3}
-					focused={focused()}
-					initialValue="a界é"
-					showCursor={false}
-					backgroundColor={uiColors.bgMantle}
-				/>
-			</box>
+			<AgentSessionView
+				role="worker"
+				blocks={[]}
+				working={working()}
+				inputActive={active}
+				models={[]}
+				thinkingLevels={[]}
+				draft="a界é"
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onCompact={() => {}}
+			/>
 		),
-		{ width: 12, height: 3 },
+		{ width: 80, height: 20 },
 	);
 	try {
+		await new Promise((resolve) => setTimeout(resolve, 10));
 		await t.renderOnce();
-		if (!editor) throw new Error("Missing prompt editor");
-		const cursorColor = Array.from(parseColor(uiColors.textPrimary).buffer);
-		const cursorSpans = () =>
-			t
-				.captureSpans()
-				.lines.flatMap((line) => line.spans)
-				.filter((span) =>
-					Array.from(span.bg.buffer).every(
-						(value, index) => value === cursorColor[index],
-					),
-				);
-		for (const [col, glyph] of [
-			[0, "a"],
-			[1, "界"],
-			[3, "é"],
-			[4, " "],
-		] as const) {
-			editor.editBuffer.setCursor(0, col);
-			editor.requestRender();
+		const editor = findEditor(t.renderer.root);
+		if (!editor) throw new Error("Missing transcript prompt");
+		for (const busy of [true, false, true]) {
+			setWorking(busy);
 			await t.renderOnce();
-			expect(
-				cursorSpans()
-					.map((span) => span.text)
-					.join(""),
-			).toContain(glyph);
-			expect(editor.showCursor).toBe(false);
-			const before = t.captureSpans();
-			await t.renderOnce();
-			expect(t.captureSpans()).toEqual(before);
+			expect(findEditor(t.renderer.root)).toBe(editor);
+			expect(editor.focused).toBe(true);
+			expect(editor.showCursor).toBe(true);
+			expect(editor.cursorStyle).toMatchObject({
+				style: "block",
+				blinking: false,
+			});
+			expect(Array.from(editor.cursorColor.buffer)).toEqual(
+				Array.from(parseColor(uiColors.textPrimary).buffer),
+			);
 		}
-		setFocused(false);
+		setActive(false);
 		await t.renderOnce();
-		expect(cursorSpans()).toHaveLength(0);
+		expect(editor.focused).toBe(false);
+		setActive(true);
+		await t.renderOnce();
+		expect(editor.focused).toBe(true);
+		expect(editor.showCursor).toBe(true);
+		expect(editor.cursorStyle).toMatchObject({
+			style: "block",
+			blinking: false,
+		});
 	} finally {
 		t.renderer.destroy();
 	}

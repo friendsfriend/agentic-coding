@@ -74,7 +74,6 @@ import {
 } from "../agent-session.ts";
 import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
-import { paintPromptCursor } from "./prompt-cursor.ts";
 import { Spinner } from "./Spinner.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
@@ -1536,12 +1535,26 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	// than a screenful, so reaching the top loads the older rows the window left
 	// out rather than dropping them.
 	const [anchor, setAnchor] = createSignal<AgentSessionBlock | undefined>();
+	// Watch projections replace changed block objects. Never lose a pinned
+	// window merely because its oldest message received a new snapshot.
+	const anchorIndex = (
+		rows: readonly AgentSessionBlock[],
+		oldest: AgentSessionBlock | undefined,
+	) => {
+		if (!oldest) return -1;
+		const sameObject = rows.indexOf(oldest);
+		return sameObject >= 0
+			? sameObject
+			: rows.findIndex(
+					(row) => row.id === oldest.id && row.kind === oldest.kind,
+				);
+	};
 	const [awayFromBottom, setAwayFromBottom] = createSignal(false);
 	const [latestHovered, setLatestHovered] = createSignal(false);
 	const windowRows = () => {
 		const rows = transcript().rows;
 		const oldest = anchor();
-		const anchoredStart = oldest ? rows.indexOf(oldest) : -1;
+		const anchoredStart = anchorIndex(rows, oldest);
 		let start =
 			anchoredStart >= 0
 				? anchoredStart
@@ -1647,10 +1660,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		if (!box || pendingLoad) return;
 		const rows = transcript().rows;
 		const oldest = anchor();
+		const pinned = anchorIndex(rows, oldest);
 		const start =
-			oldest && rows.indexOf(oldest) >= 0
-				? rows.indexOf(oldest)
-				: Math.max(0, rows.length - TRANSCRIPT_WINDOW);
+			pinned >= 0 ? pinned : Math.max(0, rows.length - TRANSCRIPT_WINDOW);
 		if (start <= 0) return;
 		pendingLoad = { height: box.scrollHeight, top: box.scrollTop };
 		setAnchor(rows[Math.max(0, start - TRANSCRIPT_PAGE)]);
@@ -2450,14 +2462,21 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							flexGrow={1}
 							paddingLeft={2}
 							paddingRight={2}
-							renderAfter={(buffer) => {
-								if (inputRef) paintPromptCursor.call(inputRef, buffer);
-							}}
 						>
 							<textarea
-								showCursor={false}
+								showCursor
+								cursorColor={uiColors.textPrimary}
+								cursorStyle={{ style: "block", blinking: false }}
 								ref={(editor) => {
 									inputRef = editor;
+									// Match OpenCode's prompt: restore native cursor paint after
+									// the editor's initial focus/setup has finished.
+									const timer = setTimeout(() => {
+										if (editor.isDestroyed) return;
+										editor.cursorColor = uiColors.textPrimary;
+										editor.cursorStyle = { style: "block", blinking: false };
+									}, 0);
+									onCleanup(() => clearTimeout(timer));
 								}}
 								focused={
 									!controlsPaused() &&

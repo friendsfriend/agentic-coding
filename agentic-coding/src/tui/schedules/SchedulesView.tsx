@@ -1,12 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 
 import {
+	Card,
 	Form,
 	type FormErrors,
 	type FormValues,
 	firstErrorField,
 	formStepOption,
 	type KeybindSection,
+	ScrollableContent,
 	ScrollableList,
 	setActiveKeybindCatalog,
 	uiColors,
@@ -39,6 +41,7 @@ import {
 	BackendClientError,
 	backendClient,
 } from "../../server/client.ts";
+import { estimateTextRows } from "../dash/ui/transcript-viewport.tsx";
 import {
 	type EditorBasis,
 	type EditorMode,
@@ -50,6 +53,7 @@ import {
 	type SchedulingSurface,
 	schedulingKeybindCatalog,
 } from "./keybinds.ts";
+import { ScheduleDetails } from "./ScheduleDetails.tsx";
 
 type Summary = Extract<
 	SchedulingResponse,
@@ -153,6 +157,14 @@ export interface SchedulesViewProps {
 }
 export function SchedulesView(props: SchedulesViewProps) {
 	const dimensions = useTerminalDimensions();
+	const narrow = () => dimensions().width < 100;
+	const detailWidth = () =>
+		Math.max(
+			1,
+			surface() === "output" || narrow()
+				? dimensions().width - 4
+				: Math.floor(dimensions().width * 0.62) - 6,
+		);
 	const initial = props.initialState;
 	const [storeId, setStoreId] = createSignal(initial?.owner);
 	const [jobsAfter, setJobsAfter] = createSignal(initial?.after.jobs),
@@ -330,6 +342,20 @@ export function SchedulesView(props: SchedulesViewProps) {
 			: result;
 	});
 	const selected = () => rows()[index()];
+	const rowHeights = () => {
+		const width = Math.max(
+			1,
+			(narrow()
+				? dimensions().width - 2
+				: Math.floor((dimensions().width - 2) * 0.38)) - 4,
+		);
+		return rows().map(
+			(row) =>
+				estimateTextRows(row.label, width) +
+				estimateTextRows(row.description, width) +
+				1,
+		);
+	};
 	function captureInteraction() {
 		const source = surface(),
 			sourceTab = tab(),
@@ -831,7 +857,22 @@ export function SchedulesView(props: SchedulesViewProps) {
 		setOutputId(value.id);
 		setSurface("output");
 		setDetail(
-			`${JSON.stringify({ occurrenceId: value.id, state: value.state, reason: value.reason, target: value.job.target, receipt: value.receipt ? { ...value.receipt, result: undefined } : undefined }, null, 2)}\n\n${value.receipt?.result ?? "No terminal assistant output has been captured. Native identity/evidence links above remain authoritative."}`,
+			JSON.stringify(
+				{
+					occurrenceId: value.id,
+					state: value.state,
+					output:
+						value.receipt?.result ??
+						"No terminal assistant output has been captured. Native identity/evidence links below remain authoritative.",
+					reason: value.reason,
+					target: value.job.target,
+					receipt: value.receipt
+						? { ...value.receipt, result: undefined }
+						: undefined,
+				},
+				null,
+				2,
+			),
 		);
 		if (changed) detailScroll?.scrollTo(0);
 	}
@@ -1286,6 +1327,9 @@ export function SchedulesView(props: SchedulesViewProps) {
 			minHeight={0}
 			height="100%"
 			width="100%"
+			paddingLeft={1}
+			paddingRight={1}
+			backgroundColor={uiColors.bgBase}
 		>
 			<text fg={uiColors.textPrimary} flexShrink={0}>
 				{surface() === "output"
@@ -1326,44 +1370,62 @@ export function SchedulesView(props: SchedulesViewProps) {
 													fg={uiColors.textMuted}
 												>{`Filter loaded items: ${filter()}`}</text>
 											</Show>
-											<box flexDirection="row" flexGrow={1} minHeight={0}>
+											<box
+												flexDirection={narrow() ? "column" : "row"}
+												gap={1}
+												flexGrow={1}
+												minHeight={0}
+											>
 												<Show when={surface() !== "output"}>
-													<box width="42%" flexDirection="column" minHeight={0}>
+													<box
+														width={narrow() ? "100%" : "38%"}
+														height={
+															narrow()
+																? Math.max(3, Math.floor(lines() * 0.35))
+																: undefined
+														}
+														flexShrink={0}
+														flexDirection="column"
+														minHeight={0}
+													>
 														<ScrollableList
 															items={rows()}
 															selectedIndex={index()}
 															onSelect={choose}
-															availableLines={lines()}
-															estimatedItemHeight={2}
+															availableLines={
+																narrow()
+																	? Math.max(3, Math.floor(lines() * 0.35))
+																	: lines()
+															}
+															itemHeights={rowHeights()}
 															renderItem={(row, selectedRow) => (
-																<box flexDirection="column">
-																	<text
-																		fg={
-																			selectedRow()
-																				? uiColors.primary
-																				: uiColors.textPrimary
-																		}
-																	>
-																		{row.label}
-																	</text>
-																	<text fg={uiColors.textMuted} wrapMode="none">
-																		{row.description}
-																	</text>
-																</box>
+																<Card
+																	title={row.label}
+																	selected={selectedRow}
+																	style={{ marginBottom: 1 }}
+																	cells={[
+																		<text
+																			fg={uiColors.textMuted}
+																			wrapMode="word"
+																		>
+																			{row.description}
+																		</text>,
+																	]}
+																/>
 															)}
 														/>
 													</box>
 												</Show>
-												<scrollbox
-													ref={(box) => {
+												<ScrollableContent
+													onScrollBoxReady={(box) => {
 														detailScroll = box;
 													}}
-													flexGrow={1}
 												>
-													<text fg={uiColors.textPrimary} wrapMode="char">
-														{detail()}
-													</text>
-												</scrollbox>
+													<ScheduleDetails
+														content={detail()}
+														width={detailWidth()}
+													/>
+												</ScrollableContent>
 											</box>
 										</>
 									}
@@ -1372,16 +1434,16 @@ export function SchedulesView(props: SchedulesViewProps) {
 										{pending()?.label}
 										{pending()?.attempted ? " · acknowledgement unknown" : ""}
 									</text>
-									<scrollbox
-										ref={(box) => {
+									<ScrollableContent
+										onScrollBoxReady={(box) => {
 											detailScroll = box;
 										}}
-										flexGrow={1}
 									>
-										<text fg={uiColors.textPrimary} wrapMode="char">
-											{pending()?.detail}
-										</text>
-									</scrollbox>
+										<ScheduleDetails
+											content={pending()?.detail ?? ""}
+											width={dimensions().width - 4}
+										/>
+									</ScrollableContent>
 								</Show>
 							}
 						>

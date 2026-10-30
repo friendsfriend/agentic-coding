@@ -100,6 +100,9 @@ and route tests, then the whole-project lint/type-check gates.
   corrections cannot resume following; returning to the bottom or explicitly
   jumping to latest can. The prompt pulse stays mounted and invalidates only
   its paint node on animation ticks, without rebuilding transcript content.
+  The pinned window resolves its oldest block by durable ID and kind when a
+  watch snapshot replaces the block object; object identity alone must never
+  make history fall back to the moving tail.
 
 Structural regression tests live in `test/dash/transcriptPerformance.test.ts`,
 `test/dash/transcriptPerformance.test.tsx`, and `test/progress-publisher.test.ts`.

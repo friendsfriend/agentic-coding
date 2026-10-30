@@ -2022,9 +2022,9 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 	}
 });
 
-test("one upward scroll pauses following before the next output frame and returning to bottom resumes it", async () => {
+test("one upward scroll pins history across replacement snapshots and returning to bottom resumes following", async () => {
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
-		Array.from({ length: 30 }, (_, index) => ({
+		Array.from({ length: 120 }, (_, index) => ({
 			id: `stable-${index}`,
 			kind: "result" as const,
 			text: `stable line ${index}`,
@@ -2070,6 +2070,31 @@ test("one upward scroll pauses following before the next output frame and return
 		await t.renderOnce();
 		expect(box.scrollTop).toBe(top);
 		expect(box.stickyScroll).toBe(false);
+		// Real watch snapshots may replace every block object, unlike a local
+		// append that retains the historical array's object references.
+		const firstVisible = () =>
+			/stable line \d+/.exec(t.captureCharFrame())?.[0];
+		const firstBeforeSnapshots = firstVisible();
+		for (let snapshot = 0; snapshot < 3; snapshot++) {
+			setBlocks((current) => [
+				...current.map((block) => ({
+					...block,
+					text: `${block.text?.split(" · snapshot")[0]} · snapshot ${snapshot}`,
+				})),
+				{
+					id: `snapshot-${snapshot}`,
+					kind: "result",
+					text: `snapshot output ${snapshot}`,
+					tone: "success",
+				},
+			]);
+			await t.renderOnce();
+			expect(firstVisible()).toBe(firstBeforeSnapshots);
+			await t.renderOnce();
+			expect(box.scrollTop).toBe(top);
+			expect(box.stickyScroll).toBe(false);
+			expect(firstVisible()).toBe(firstBeforeSnapshots);
+		}
 		const visibleLine = () => /stable line \d+/.exec(t.captureCharFrame())?.[0];
 		const reading = visibleLine();
 		expect(reading).toBeDefined();
