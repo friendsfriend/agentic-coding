@@ -247,19 +247,51 @@ export async function runDeveloperQuestion(
 			wake = undefined;
 		}
 		if (interrupted) throw new Error("question wait interrupted");
-		const timedOutDialogue = read(run.workflowId).developerDialogue.filter(
+		let timedOutDialogue = read(run.workflowId).developerDialogue.filter(
 			(item) => questionIds.includes(item.id),
 		);
 		if (
 			timedOutDialogue.some(
 				(item) =>
-					item.status === "pending" && Date.parse(item.expiresAt) > Date.now(),
+					item.status === "pending" &&
+					item.kind !== "login-handoff" &&
+					(item.targetRole === undefined || item.targetRole === "orchestrator"),
+			)
+		) {
+			const waited = dispatch({
+				type: "agent.question-wait",
+				workflowId: run.workflowId,
+				runId: run.id,
+				stepId: run.stepId,
+				role: run.role,
+				token: identity.token,
+				questionId: questionIds[0] ?? "",
+			});
+			timedOutDialogue = waited.snapshot.developerDialogue.filter((item) =>
+				questionIds.includes(item.id),
+			);
+		}
+		if (
+			timedOutDialogue.every((item) => item.status !== "pending") ||
+			timedOutDialogue.some(
+				(item) =>
+					item.status === "pending" &&
+					((item.kind !== "login-handoff" &&
+						(item.targetRole === undefined ||
+							item.targetRole === "orchestrator")) ||
+						Date.parse(item.expiresAt) > Date.now()),
 			)
 		) {
 			if (!groupId) return JSON.stringify(timedOutDialogue[0]);
 			return JSON.stringify({
 				groupId,
-				status: "pending",
+				status: timedOutDialogue.some((item) => item.status === "pending")
+					? "pending"
+					: timedOutDialogue.some((item) => item.status === "expired")
+						? "expired"
+						: timedOutDialogue.some((item) => item.status === "cancelled")
+							? "cancelled"
+							: "answered",
 				responses: timedOutDialogue.map((question) => ({
 					questionId: question.id,
 					itemIndex: question.itemIndex,

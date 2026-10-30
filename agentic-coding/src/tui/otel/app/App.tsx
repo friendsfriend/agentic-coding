@@ -118,6 +118,10 @@ import {
 	quitConfirmation,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
+import {
+	attachWorkflowHome,
+	selectWorkflowHome,
+} from "../../orchestrator/clarifications.ts";
 import { startWorkflowMonitor } from "../../orchestrator/monitor.ts";
 import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import {
@@ -1937,6 +1941,16 @@ export function App(props: {
 		if (launchPending) return;
 		launchPending = true;
 		try {
+			let selection: Awaited<ReturnType<typeof selectWorkflowHome>> | undefined;
+			let selectionProblem: string | undefined;
+			if (input.clarificationHome === "selected") {
+				try {
+					selection = await selectWorkflowHome(input.repo);
+				} catch (error) {
+					selectionProblem =
+						error instanceof Error ? error.message : String(error);
+				}
+			}
 			const outcome = await launchWorkflow(input);
 			if (outcome.kind === "rejected") {
 				traceTui(
@@ -1957,6 +1971,32 @@ export function App(props: {
 			closeLaunch();
 			traceTui("tui.workflow.launch", { surface: "launch", action: "start" });
 			notify(outcome.message, "success");
+			if (input.clarificationHome === "selected") {
+				try {
+					const chosen = selection;
+					const gateway = gatewayOrUndefined();
+					if (!chosen || !gateway)
+						throw new Error(selectionProblem ?? "Selected Home is unavailable");
+					const view = await gateway.view(input.repo, outcome.workflowId);
+					await attachWorkflowHome(
+						gateway,
+						{
+							repo: input.repo,
+							workflowId: outcome.workflowId,
+							revision: view.revision,
+						},
+						{
+							open: async () => chosen.session,
+							hostIdentity: async () => chosen.hostId,
+						},
+					);
+				} catch (error) {
+					notify(
+						`Workflow ${outcome.workflowId} was accepted, but clarification Home attachment failed: ${error instanceof Error ? error.message : String(error)}. Inspect clarification custody from its dashboard before retrying.`,
+						"warning",
+					);
+				}
+			}
 			disposeHandoffWatch?.();
 			disposeHandoffWatch = watchAcceptedHandoff(
 				input.repo,

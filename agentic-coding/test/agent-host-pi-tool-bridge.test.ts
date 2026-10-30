@@ -1938,28 +1938,41 @@ for (const exposure of ["direct", "deferred", "codemode"] as const) {
 			expect(host.toolDescriptionsForTest()).not.toHaveProperty(
 				"mcp__slow__http_echo",
 			);
-			faux.setResponses([
-				fauxAssistantMessage(
-					[
-						exposure === "codemode"
-							? fauxToolCall(CODEMODE_TOOL_NAME, {
-									code: 'return await tools.mcp__fast__http_echo({ text: "active-fast" });',
-								})
-							: fauxToolCall("mcp__fast__http_echo", { text: "active-fast" }),
-					],
-					{ stopReason: "toolUse" },
-				),
-				fauxAssistantMessage([fauxText("first done")]),
-				fauxAssistantMessage(
-					[
-						fauxToolCall(CODEMODE_TOOL_NAME, {
-							code: `const found = await searchTools("mcp__slow__http_structured"); if (!found.some(t => t.name === "mcp__slow__http_structured")) throw new Error("late tool missing"); return await tools.mcp__slow__http_structured({});`,
-						}),
-					],
-					{ stopReason: "toolUse" },
-				),
-				fauxAssistantMessage([fauxText("follow-up done")]),
-			]);
+			// pi-durable may begin then cancel a speculative call at a queued-input
+			// boundary. Respond to the actual turn, not an assumed call ordinal.
+			faux.setResponses(
+				Array.from({ length: 12 }, () => (context) => {
+					const lastUser = context.messages.findLastIndex(
+						(message) => message.role === "user",
+					);
+					const followUp = JSON.stringify(context.messages[lastUser]).includes(
+						"discover and call late tool",
+					);
+					const results = context.messages
+						.slice(lastUser + 1)
+						.filter((message) => message.role === "toolResult");
+					if (results.length)
+						return fauxAssistantMessage([
+							fauxText(followUp ? "follow-up done" : "first done"),
+						]);
+					return fauxAssistantMessage(
+						[
+							followUp
+								? fauxToolCall(CODEMODE_TOOL_NAME, {
+										code: 'const found = await searchTools("mcp__slow__http_structured"); if (!found.some(t => t.name === "mcp__slow__http_structured")) throw new Error("late tool missing"); return await tools.mcp__slow__http_structured({});',
+									})
+								: exposure === "codemode"
+									? fauxToolCall(CODEMODE_TOOL_NAME, {
+											code: 'return await tools.mcp__fast__http_echo({ text: "active-fast" });',
+										})
+									: fauxToolCall("mcp__fast__http_echo", {
+											text: "active-fast",
+										}),
+						],
+						{ stopReason: "toolUse" },
+					);
+				}),
+			);
 			await host.submit("late", "hold fast call", "first");
 			await started.promise;
 			await host.submit("late", "discover and call late tool", "queued");
@@ -1992,6 +2005,14 @@ for (const exposure of ["direct", "deferred", "codemode"] as const) {
 				),
 			);
 			active.release();
+			// Idle can be observed between the active turn and its queued follow-up.
+			// Wait for the actual result, not that transient runtime observation.
+			await eventually(async () =>
+				toolResult(
+					await running.entriesForTest("late"),
+					CODEMODE_TOOL_NAME,
+				).includes("structured-value"),
+			);
 			await settle(host, "late");
 			const entries = await host.entriesForTest("late");
 			expect(

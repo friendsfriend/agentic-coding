@@ -598,6 +598,100 @@ function harness(
 }
 
 describe("monitor delivery", () => {
+	test("ordinary arrival and authenticated question parks are passive; login, review and real failures still notify", async () => {
+		const { gateway, notes, notifications, monitor } = harness();
+		try {
+			for (const [index, item] of [
+				{
+					id: "question.pending",
+					payload: {
+						questionId: "question",
+						role: "worker",
+						stepId: "core.implementation",
+					},
+				},
+				{
+					id: "question.routed",
+					payload: {
+						questionId: "question",
+						role: "worker",
+						stepId: "core.implementation",
+					},
+				},
+				{
+					id: "workflow.waiting",
+					payload: {
+						kind: "question",
+						subject: "question",
+						stepId: "core.implementation",
+					},
+				},
+				{
+					id: "workflow.failed",
+					payload: {
+						stepId: "core.implementation",
+						stepLabel: "Implementation",
+						reasons: ["Waiting for clarification"],
+						clarificationOnly: true,
+					},
+				},
+				{
+					id: "attention.raised",
+					payload: {
+						reasons: ["Waiting for clarification"],
+						clarificationOnly: true,
+					},
+				},
+			].entries())
+				gateway.frame({
+					event: event({
+						...item,
+						id: item.id as WorkflowEventRecord["id"],
+						sequence: index + 1,
+					}),
+					subscriptions: [subscription("default")],
+				});
+			await sleep(50);
+			expect(notes).toEqual([]);
+			expect(notifications).toEqual([]);
+			gateway.frame({
+				event: event({
+					id: "question.pending",
+					sequence: 6,
+					workflowId: "login",
+					payload: {
+						questionId: "login",
+						role: "worker",
+						kind: "login-handoff",
+						stepId: "core.implementation",
+					},
+				}),
+				subscriptions: [subscription("default")],
+			});
+			gateway.frame({
+				event: event({ sequence: 7, workflowId: "review" }),
+				subscriptions: [subscription("default")],
+			});
+			gateway.frame({
+				event: event({
+					id: "workflow.failed",
+					sequence: 8,
+					workflowId: "failed",
+					payload: {
+						stepId: "core.implementation",
+						stepLabel: "Implementation",
+						reasons: ["Actual failure"],
+					},
+				}),
+				subscriptions: [subscription("default")],
+			});
+			expect(notifications).toHaveLength(3);
+			await waitUntil(() => notes.length > 0);
+			expect(notes.join("\n")).not.toContain("wf-1");
+		} finally {
+			monitor.stop();
+		}
+	});
 	test("off observes nothing at all", () => {
 		const { gateway, notes, notifications, monitor } = harness({ mode: "off" });
 		expect(gateway.subscribes).toBe(0);

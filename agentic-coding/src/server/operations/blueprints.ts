@@ -15,6 +15,7 @@ import type {
 	BlueprintStepCatalog,
 	BlueprintSummary,
 	BlueprintValidation,
+	ClarificationAttachment,
 	StartedBy,
 	WorkflowPrincipal,
 } from "../../contracts/workflow.ts";
@@ -172,6 +173,7 @@ export interface BlueprintWorkflowStartInput {
 	readonly principal?: WorkflowPrincipal;
 	readonly enforceHumanReviewGates?: boolean;
 	readonly startedBy?: StartedBy;
+	readonly clarificationAttachment?: ClarificationAttachment;
 	readonly now?: () => Date;
 }
 
@@ -204,6 +206,7 @@ export function prepareBlueprintWorkflowStart(
 		...(input.preset ? { preset: input.preset } : {}),
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 		...(input.startedBy ? { startedBy: input.startedBy } : {}),
+		clarificationAttachment: input.clarificationAttachment,
 		blueprint: {
 			label: definition.label,
 			rationale: definition.rationale,

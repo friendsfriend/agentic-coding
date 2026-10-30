@@ -99,6 +99,13 @@ export function stagePlanReviewKeybindCatalog(
 	];
 }
 
+export function clarificationAttachmentKeybinds(): Keybind[] {
+	return [
+		{ key: "Enter", action: "Attach selected Home", short: "attach" },
+		{ key: "Esc", action: "Cancel attachment", short: "cancel" },
+	];
+}
+
 export function panelContext(panel: number): string {
 	if (panel === EVIDENCE_PANEL) return EVIDENCE_PANEL_CONTEXT;
 	if (panel === OPENSPEC_PANEL) return OPENSPEC_PANEL_CONTEXT;
@@ -227,6 +234,7 @@ export function dashboardDetailKeybindCatalog(options: {
 					key: "J/K/H/L",
 					action: "Move between panels",
 					short: "panels",
+					standard: true,
 				},
 				hostKeybind("ctrl+s"),
 				hostKeybind("ctrl+a"),
@@ -326,6 +334,11 @@ export function dashboardDetailKeybindCatalog(options: {
 					short: "debug",
 				},
 				{ key: "m", action: "Switch agent preset", short: "preset" },
+				{
+					key: "a",
+					action: "Attach / reattach clarification Home",
+					short: "attach",
+				},
 				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },
 				{ key: "r", action: "Refresh dashboard", short: "refresh" },

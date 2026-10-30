@@ -7,6 +7,7 @@ import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	authorizeRequest,
 	createInstanceAuthority,
+	orchestratorConversationTokenFor,
 	orchestratorTokenFor,
 } from "../src/server/auth.ts";
 import type {
@@ -276,6 +277,51 @@ describe("orchestrator over the transport", () => {
 			const claimed = await fetch(
 				`${server.url}/api/v1/workflow/start`,
 				post(server.token, { ...request, startedBy: "orchestrator" }),
+			);
+			expect(claimed.status).toBe(400);
+			expect(calls.starts).toHaveLength(2);
+		});
+	});
+
+	test("conversation starts attach only the authenticated caller and cannot smuggle custody", async () => {
+		await withServer("core.implementation", async (server, calls) => {
+			const request = {
+				repo: "/repo",
+				workflowId: "attached",
+				mode: "worktree",
+				workflowType: "openspec",
+				task: "x",
+			};
+			for (const conversationId of ["first", "second"]) {
+				const response = await fetch(
+					`${server.url}/api/v1/workflow/start`,
+					post(
+						orchestratorConversationTokenFor(server.token, {
+							hostId: "host",
+							conversationId,
+						}),
+						request,
+					),
+				);
+				expect(response.status).toBe(200);
+			}
+			expect(calls.starts).toEqual(
+				["first", "second"].map((conversationId) => ({
+					principal: "orchestrator",
+					enforceHumanReviewGates: true,
+					clarificationAttachment: { hostId: "host", conversationId, epoch: 1 },
+				})),
+			);
+			const claimed = await fetch(
+				`${server.url}/api/v1/workflow/start`,
+				post(server.token, {
+					...request,
+					clarificationAttachment: {
+						hostId: "host",
+						conversationId: "first",
+						epoch: 1,
+					},
+				}),
 			);
 			expect(claimed.status).toBe(400);
 			expect(calls.starts).toHaveLength(2);

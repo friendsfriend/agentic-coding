@@ -122,6 +122,7 @@ export async function activateScheduled(
 		{
 			type: "input",
 			content: envelope.text,
+			entry: { kind: "herdr.orchestrator.internal" },
 			requestId: `schedule:${envelope.occurrenceId}`,
 			whenBusy: "followUp",
 		},

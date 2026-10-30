@@ -23,6 +23,7 @@ import { environmentToolsAvailable } from "../../agent-host/environment-capabili
 import { resolveConfigRoot } from "../../config-root.ts";
 import type { LaunchClaim, LaunchPermit } from "../../contracts/launch.ts";
 import {
+	type ApprovedDesign,
 	type DeveloperDialogueRecord,
 	decodeCommand,
 	type EffectKind,
@@ -35,7 +36,7 @@ import {
 	waitSeconds,
 } from "../../contracts/workflow.ts";
 import { setupDraftsDir } from "../../server/environment/setup-drafts.ts";
-import { observeLaunchRecovery } from "../adapters.ts";
+import { captureApprovedDesign, observeLaunchRecovery } from "../adapters.ts";
 import type { RoutingDecisionSummary } from "../classifiers.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
@@ -122,6 +123,7 @@ import {
 	agentQuestion,
 	expireQuestion,
 	expireQuestionTimer,
+	markQuestionWait,
 } from "./reducers/agent-question.ts";
 import { agentResume } from "./reducers/agent-resume.ts";
 import {
@@ -822,9 +824,38 @@ export class WorkflowEngine {
 					catch: toRuntimeError,
 				});
 			}
+			let approvedDesign: ApprovedDesign | undefined;
+			if (
+				command.type === "developer.action" &&
+				command.actionId === "approve-plan" &&
+				command.principal !== "orchestrator"
+			) {
+				const view = yield* self.statusEffect(repo, command.workflowId);
+				if (
+					view.revision === command.revision &&
+					view.currentStep.id === "core.plan-approval"
+				) {
+					const captured = yield* captureApprovedDesign(
+						view.worktree,
+						view.changeId,
+					);
+					if (captured)
+						approvedDesign = {
+							...captured,
+							revision: command.revision + 1,
+							approvedAt: nowIso(self.now),
+						};
+				}
+			}
 			const committed = yield* Effect.catch(
 				store.transaction(repo, (db) =>
-					self.commitDispatch(db, command, preparedHandoff, launchEvidence),
+					self.commitDispatch(
+						db,
+						command,
+						preparedHandoff,
+						launchEvidence,
+						approvedDesign,
+					),
 				),
 				(error) =>
 					Effect.gen(function* () {
@@ -1884,6 +1915,9 @@ export class WorkflowEngine {
 				? { wikiBaseline: wikiBaselineFor(worktree, input.context) }
 				: {}),
 		};
+		// Approval evidence can only be minted by a committed operator approval,
+		// never inherited from caller-supplied start metadata.
+		delete snapshot.metadata.approvedDesign;
 		validateSnapshot(snapshot, definition, [], this.registry);
 		const storeTarget =
 			wikiOnlyTarget || researchTarget || stageTestTarget
@@ -2332,6 +2366,7 @@ export class WorkflowEngine {
 		command: WorkflowCommand,
 		preparedHandoff?: PreparedHandoffEvidence,
 		launchEvidence?: LaunchRecoveryEvidence,
+		approvedDesign?: ApprovedDesign,
 	): CommittedDispatch {
 		const located = this.locate(db, command);
 		const snapshot = decodeSnapshot(JSON.parse(located.snapshot_json));
@@ -2388,6 +2423,20 @@ export class WorkflowEngine {
 			preparedHandoff,
 			launchEvidence,
 		);
+		if (
+			command.type === "developer.action" &&
+			command.actionId === "approve-plan"
+		) {
+			delete snapshot.metadata.approvedDesign;
+			if (approvedDesign && approvedDesign.revision === snapshot.revision + 1)
+				snapshot.metadata.approvedDesign = approvedDesign;
+		}
+		if (
+			command.type === "developer.action" &&
+			stepBefore === "core.plan-approval" &&
+			command.actionId === "review-comments"
+		)
+			delete snapshot.metadata.approvedDesign;
 		snapshot.revision += 1;
 		snapshot.metadata.updatedAt = nowIso(this.now);
 		validateSnapshot(
@@ -3112,6 +3161,8 @@ export class WorkflowEngine {
 				this.registry,
 				this.now,
 			);
+		if (command.type === "agent.question-wait")
+			return markQuestionWait(db, snapshot, command, this.now);
 		if (command.type === "agent.question-expire")
 			return expireQuestion(db, snapshot, command, this.now);
 		if (command.type === "timer.question-expire")

@@ -20,6 +20,7 @@ import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import type { CompactionConfig } from "../src/workflow/compaction.ts";
 import { COMPACTION_DEFAULTS } from "../src/workflow/compaction.ts";
+import { ensureAdmittedFixtureRun } from "./support/admitted-host.ts";
 
 const MODELS = [
 	{ id: "wide", contextWindow: 1_000_000 },
@@ -146,7 +147,7 @@ describe("compaction policy of a durable host", () => {
 		const host = await openHost({ dir, models, compaction: () => ({}) });
 		try {
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-wide" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-wide",
 				name: "worker-wide",
 				cwd: dir,
@@ -158,7 +159,7 @@ describe("compaction policy of a durable host", () => {
 				1_000_000,
 			);
 
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-mid",
 				name: "worker-mid",
 				cwd: dir,
@@ -226,7 +227,7 @@ describe("compaction policy of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -295,7 +296,7 @@ test("native overflow recovery uses exact model policy and retries once", async 
 		}),
 	});
 	try {
-		await host.ensureRun({
+		await ensureAdmittedFixtureRun(host, {
 			runId: "overflow",
 			name: "overflow",
 			cwd: dir,
@@ -346,7 +347,7 @@ test("native policies isolate concurrent windows, live edits and a model switch"
 	const host = await openHost({ dir, models, compaction: () => config });
 	try {
 		for (const id of ["narrow", "wide"]) {
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: id,
 				name: id,
 				cwd: dir,
@@ -411,7 +412,7 @@ describe("manual compaction outcomes", () => {
 		const host = await openHost({ dir, models });
 		try {
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-empty" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-empty",
 				name: "worker-empty",
 				cwd: dir,
@@ -425,7 +426,7 @@ describe("manual compaction outcomes", () => {
 			// The host still serves a read-only run: compaction rewrites
 			// conversation context, not the repository.
 			const readOnlyEnv = writeRunEnv(dir, { HERDR_RUN_ID: "run-readonly" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-readonly",
 				name: "verifier-1",
 				cwd: dir,
@@ -450,7 +451,7 @@ describe("manual compaction outcomes", () => {
 		try {
 			await expect(host.compactRun("ghost")).rejects.toThrow(/unknown run/);
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-1" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -478,7 +479,7 @@ describe("manual compaction outcomes", () => {
 			const client = new HostClient(hostLayout(dir).socketPath, 5_000);
 			await expect(client.compactRun("ghost")).rejects.toThrow(/unknown-run/);
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-1" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -520,7 +521,7 @@ describe("manual compaction outcomes", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,
@@ -593,7 +594,7 @@ describe("manual compaction outcomes", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-1",
 				name: "worker-1",
 				cwd: dir,

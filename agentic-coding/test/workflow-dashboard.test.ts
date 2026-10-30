@@ -697,7 +697,7 @@ test("dashboard repair and actions use displayed revision", async () => {
 			previewWorkflowRepair(repo, "repair").find(
 				(item) => item.targetStep === "core.implementation",
 			)?.expiresRuns,
-		).toContain(started.runs[0]?.id);
+		).toEqual([]);
 		expect(() =>
 			repairWorkflow(
 				repo,
@@ -716,9 +716,9 @@ test("dashboard repair and actions use displayed revision", async () => {
 				"reason",
 			).status,
 		).toBe("active");
-		await expect(
+		expect(() =>
 			runWorkflowAction("resume", repo, "repair", started.revision),
-		).rejects.toThrow(/stale revision/);
+		).toThrow(/stale revision/);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

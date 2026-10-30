@@ -19,19 +19,24 @@ const served = (): Array<{ method: string; path: string }> => {
 	const app = readFileSync("src/server/app.ts", "utf8");
 	const rows: Array<{ method: string; path: string }> = [];
 	for (const match of app.matchAll(
-		/if \(method === "(GET|POST)" && path === "(\/api\/v1\/[a-z/-]+)"\)/g,
+		/if \(\s*method === "(GET|POST)"\s*&&\s*path === "(\/api\/v1\/[a-z/-]+)"\s*\)/g,
 	))
 		rows.push({ method: match[1] ?? "", path: match[2] ?? "" });
+	// Recovery/repair share a handler with a parenthesized path alternative.
+	for (const match of app.matchAll(
+		/if \(\s*method === "(GET|POST)"\s*&&\s*\(([^)]+)\)\s*\)/g,
+	))
+		for (const path of (match[2] ?? "").matchAll(
+			/path === "(\/api\/v1\/[a-z/-]+)"/g,
+		))
+			rows.push({ method: match[1] ?? "", path: path[1] ?? "" });
 	return rows;
 };
 
 describe("route ownership manifest", () => {
 	test("every served route has an ownership entry", () => {
 		const missing = served().filter(
-			(route) =>
-				!ROUTE_OWNERSHIP.some(
-					(entry) => entry.path === route.path && entry.method === route.method,
-				),
+			(route) => !routeOwner(route.method, route.path),
 		);
 		expect(missing).toEqual([]);
 	});
@@ -46,6 +51,17 @@ describe("route ownership manifest", () => {
 				),
 		);
 		expect(orphaned).toEqual([]);
+	});
+
+	test("finds multiline clarification routes and registers their request contracts", () => {
+		for (const path of [
+			"/api/v1/orchestrator/clarifications/reconcile",
+			"/api/v1/orchestrator/input/verify",
+		]) {
+			expect(served()).toContainEqual({ method: "POST", path });
+			expect(routeOwner("POST", path)).toBeDefined();
+			expect(ROUTE_REQUESTS.some((entry) => entry.path === path)).toBe(true);
+		}
 	});
 
 	test("ownership is resolvable for every route", () => {

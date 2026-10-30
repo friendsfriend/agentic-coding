@@ -50,14 +50,16 @@ export const ORCHESTRATOR_QUESTION_TARGET = "orchestrator";
  * predicate behind the developer modal, `view.pendingQuestions` and the
  * developer wait, so the three can never disagree about who owes an answer. */
 export function developerPendingQuestion(
-	item: Pick<DeveloperDialogueRecord, "status" | "expiresAt" | "targetRole">,
+	item: Pick<DeveloperDialogueRecord, "status" | "expiresAt" | "targetRole"> &
+		Pick<Partial<DeveloperDialogueRecord>, "kind">,
 	now: () => Date,
 ): boolean {
 	return (
 		(item.targetRole === undefined ||
 			item.targetRole === ORCHESTRATOR_QUESTION_TARGET) &&
 		item.status === "pending" &&
-		Date.parse(item.expiresAt) > now().getTime()
+		(item.kind !== "login-handoff" ||
+			Date.parse(item.expiresAt) > now().getTime())
 	);
 }
 
@@ -244,6 +246,23 @@ export function answerQuestion(
 			error instanceof Error ? error.message : String(error),
 		);
 	}
+	const selected = snapshot.developerDialogue.filter((item) =>
+		"groupId" in answer
+			? item.groupId === answer.groupId
+			: item.id === answer.questionId,
+	);
+	if (
+		selected.some(
+			(item) =>
+				item.kind !== "login-handoff" &&
+				(item.targetRole === undefined ||
+					item.targetRole === ORCHESTRATOR_QUESTION_TARGET),
+		)
+	)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"ordinary clarifications require explicit Home attachment and authenticated grounded or confirmed transcript relay",
+		);
 	if ("groupId" in answer) {
 		const group = snapshot.developerDialogue
 			.filter((item) => item.groupId === answer.groupId)
@@ -404,6 +423,21 @@ export function forwardQuestion(
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	const input = decodeForwardQuestionInput(raw);
+	if (
+		snapshot.developerDialogue.some(
+			(item) =>
+				item.kind !== "login-handoff" &&
+				(item.targetRole === undefined ||
+					item.targetRole === ORCHESTRATOR_QUESTION_TARGET) &&
+				("groupId" in input
+					? item.groupId === input.groupId
+					: item.id === input.questionId),
+		)
+	)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"attached clarifications remain in ordinary Home transcript discussion",
+		);
 	if ("groupId" in input) {
 		const group = snapshot.developerDialogue.filter(
 			(item) => item.groupId === input.groupId,

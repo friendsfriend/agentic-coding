@@ -452,6 +452,8 @@ function entryBlocks(
 	const timing = typeof entry.id === "string" ? timings[entry.id] : undefined;
 	switch (entry.kind) {
 		case "pi.user":
+		case "herdr.orchestrator.developer":
+		case "herdr.orchestrator.internal":
 			return (
 				model
 					.map((message) => {

@@ -5,6 +5,7 @@
 // verbatim out of runtime.ts's `reduce()` dispatch
 // (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
+import { clarificationActions } from "../../../contracts/clarification.ts";
 import type {
 	WorkflowCommand,
 	WorkflowSnapshot,
@@ -33,6 +34,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
+import { mutateClarification } from "../clarification-actions.ts";
 import {
 	answerQuestion,
 	forwardQuestion,
@@ -126,6 +128,34 @@ function reduceDeveloperAction(
 	now: () => Date,
 ): { type: string; actor: unknown; data: unknown } {
 	requireRevision(snapshot, command.revision);
+	if (clarificationActions.has(command.actionId)) {
+		if (
+			command.actionId !== "clarification.attach" &&
+			command.actionId !== "clarification.ack"
+		) {
+			const askingRunId =
+				command.input &&
+				typeof command.input === "object" &&
+				"askingRunId" in command.input
+					? command.input.askingRunId
+					: undefined;
+			const asker = runs(db, snapshot.workflowId).find(
+				(run) => run.id === askingRunId,
+			);
+			if (
+				!asker ||
+				(!ACTIVE_RUN.has(asker.status) && asker.status !== "blocked")
+			)
+				throw new WorkflowRuntimeError(
+					"stale-question",
+					"clarification asking run is no longer active or blocked",
+				);
+		}
+		const event = mutateClarification(snapshot, command, now);
+		return event.type === "developer.question.answered"
+			? resumeAskerAfterAnswer(db, snapshot, definition, registry, event, now)
+			: event;
+	}
 	if (command.actionId === "answer-question") {
 		// The orchestrator capability may only answer questions still routed to it;
 		// the operator may answer questions routed to it or to the orchestrator (the

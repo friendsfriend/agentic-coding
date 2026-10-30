@@ -31,6 +31,7 @@ import {
 	SESSION_PICKER_KEYS,
 } from "../dash/ui/AgentSessionView.tsx";
 import { loadAgentConfig } from "../data/agents.ts";
+import { gatewayOrUndefined } from "../data/index.ts";
 import {
 	loadEventSubscriptions,
 	removeEventSubscription,
@@ -40,8 +41,13 @@ import {
 	MAX_PROMPT_HISTORY,
 	savePromptHistory,
 } from "../shared/preferences.ts";
+import { attachWorkflowHomeFromTranscript } from "./clarifications.ts";
 import { configuredMonitorMode } from "./monitor.ts";
-import type { OrchestratorModel, OrchestratorSession } from "./session.ts";
+import {
+	type OrchestratorModel,
+	type OrchestratorSession,
+	submitOrchestratorDeveloperInput,
+} from "./session.ts";
 import { orchestratorSessionCommands } from "./session-commands.ts";
 import {
 	guardOrchestratorSubmit,
@@ -258,6 +264,42 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 		});
 	});
 
+	const attachFromTranscript = (argument?: string): void => {
+		const selected = session();
+		const gateway = gatewayOrUndefined();
+		if (!selected || !gateway) {
+			notify("Home attachment is unavailable; no custody changed", "warning");
+			return;
+		}
+		void attachWorkflowHomeFromTranscript(
+			gateway,
+			argument,
+			props.opencodeCwd ?? process.cwd(),
+			{ open: async () => selected },
+		)
+			.then(() => {
+				if (disposed) return;
+				setNotices((notices) => [
+					...notices.filter(
+						(item) => item.id !== "local:clarification-attachment",
+					),
+					{
+						id: "local:clarification-attachment",
+						kind: "notice",
+						tone: "muted",
+						text: `Clarification custody explicitly attached to this Home for ${argument}. Review, login and recovery authority are unchanged.`,
+					},
+				]);
+			})
+			.catch((error) => {
+				if (!disposed)
+					notify(
+						`Home attachment could not be confirmed; inspect workflow custody before retrying: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+			});
+	};
+
 	/** Re-read the session's event subscriptions (through the data layer). A
 	 * failed read is kept, so the listing can say the list may be stale instead
 	 * of claiming there is nothing. */
@@ -360,8 +402,9 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 					void (async () => {
 						try {
 							const { client: host, current } = await client();
-							const response = await host.submit(
-								current.runId,
+							const response = await submitOrchestratorDeveloperInput(
+								host,
+								current,
 								message,
 								crypto.randomUUID(),
 								"steer",
@@ -598,7 +641,7 @@ export function OrchestratorView(props: OrchestratorViewProps) {
 			onHelp={props.onHelp}
 			inputActive={() => props.active() && !props.overlay() && sessionReady()}
 			extraCommands={[
-				...orchestratorSessionCommands(startNewSession),
+				...orchestratorSessionCommands(startNewSession, attachFromTranscript),
 				...orchestratorSubscriptionCommands({
 					subscriptions: subscriptions(),
 					onList: listSubscriptions,

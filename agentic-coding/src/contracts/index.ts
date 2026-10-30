@@ -20,6 +20,7 @@ export * from "./decode.ts";
 export * from "./environment.ts";
 export * from "./gateway.ts";
 export * from "./integration.ts";
+export * from "./orchestrator-input.ts";
 export * from "./sessions-report.ts";
 export * from "./stage-blocks.ts";
 export * from "./telemetry.ts";

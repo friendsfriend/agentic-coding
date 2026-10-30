@@ -65,6 +65,43 @@ export interface RecoverRunRequest
 	readonly type: "recoverRun";
 	readonly expectedConversationId: string;
 }
+export interface ClarificationDeliveryRequest {
+	readonly type: "clarificationDelivery";
+	readonly hostId: string;
+	readonly conversationId: string;
+	readonly deliveryId: string;
+	readonly text: string;
+}
+export interface ClarificationDeliveryResponse {
+	readonly type: "clarificationDelivery";
+	readonly hostId: string;
+	readonly conversationId: string;
+	readonly deliveryId: string;
+	readonly runId: string;
+}
+export interface ClarificationTranscriptRequest {
+	readonly type: "clarificationTranscript";
+	readonly runId: string;
+	readonly hostId: string;
+	readonly conversationId: string;
+	/** Omitted lists recent real messages; selected references fail closed. */
+	readonly messageIds?: readonly string[];
+}
+export interface ClarificationClaimRequest
+	extends Omit<ClarificationTranscriptRequest, "type" | "messageIds"> {
+	readonly type: "clarificationClaim";
+	readonly confirmationMessageId: string;
+	readonly binding: string;
+}
+export interface ClarificationClaimResponse {
+	readonly type: "clarificationClaim";
+	readonly confirmationMessageId: string;
+	readonly binding: string;
+}
+export interface ClarificationTranscriptResponse {
+	readonly type: "clarificationTranscript";
+	readonly messages: readonly import("./clarification-transcript.ts").ClarificationTranscriptMessage[];
+}
 export interface SubmitRequest {
 	readonly type: "submit";
 	readonly runId: string;
@@ -77,6 +114,11 @@ export interface SubmitRequest {
 	 * ({@link normalizeSubmitMode}). An idle conversation always starts the next
 	 * turn, whatever the mode. */
 	readonly whenBusy?: string;
+	/** Internal attribution only. Developer provenance needs a separate
+	 * authenticated ingress; a socket caller cannot declare itself human. */
+	readonly source?: "internal";
+	readonly developerInput?: import("../contracts/orchestrator-input.ts").OrchestratorDeveloperInput;
+	readonly developerProof?: string;
 }
 export interface StatusRequest {
 	readonly type: "status";
@@ -150,6 +192,9 @@ export interface HelloRequest {
 export type HostRequest =
 	| { readonly type: "scheduledIdentity" }
 	| ScheduledAdmissionRequest
+	| ClarificationTranscriptRequest
+	| ClarificationDeliveryRequest
+	| ClarificationClaimRequest
 	| HelloRequest
 	| EnsureRunRequest
 	| AdmitWorkflowRunRequest
@@ -185,6 +230,8 @@ export interface EnsureRunResponse {
 	readonly conversationId: string;
 }
 export interface SubmitResponse {
+	/** Only a verified operator-attested input receives this acknowledgement. */
+	readonly developerInputAccepted?: true;
 	readonly type: "submit";
 	readonly runId: string;
 	readonly submissionId: string;
@@ -347,6 +394,9 @@ export interface WatchFrame {
 export type HostResponse =
 	| { readonly type: "scheduledIdentity"; readonly hostId: string }
 	| ScheduledAdmissionResponse
+	| ClarificationTranscriptResponse
+	| ClarificationDeliveryResponse
+	| ClarificationClaimResponse
 	| HelloResponse
 	| PrepareRestartForReattachmentResponse
 	| EnsureRunResponse

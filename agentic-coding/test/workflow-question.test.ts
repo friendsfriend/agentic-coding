@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
 	type AgentHandle,
+	type ClarificationAttachment,
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
 	type ResolvedProfile,
+	workflowViewSchema,
 } from "../src/contracts/workflow.ts";
 import { workflowLoginHandoffAttention } from "../src/server/browser/attention.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
@@ -22,6 +24,10 @@ import {
 	questionRecordCount,
 } from "../src/workflow/runtime/dialogue.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
+import {
+	clarificationEngineAction,
+	engineTestAttachment,
+} from "./support/clarification-engine-action.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -84,7 +90,12 @@ async function drainAssignments(repo: string, engine: WorkflowEngine) {
 	await new EffectRunner(repo, engine, handlers).drain();
 }
 
-function setup(options: { startedBy?: "developer" | "orchestrator" } = {}) {
+function setup(
+	options: {
+		startedBy?: "developer" | "orchestrator";
+		clarificationAttachment?: ClarificationAttachment;
+	} = {},
+) {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-question-"));
 	const repo = repository(root);
 	let time = new Date("2026-01-01T00:00:00Z");
@@ -99,6 +110,9 @@ function setup(options: { startedBy?: "developer" | "orchestrator" } = {}) {
 			baseCommit: "base",
 			task: "do work",
 			...(options.startedBy ? { startedBy: options.startedBy } : {}),
+			...(options.clarificationAttachment
+				? { clarificationAttachment: options.clarificationAttachment }
+				: {}),
 		},
 		routing: {
 			defaultProfile: "test",
@@ -126,6 +140,32 @@ function setup(options: { startedBy?: "developer" | "orchestrator" } = {}) {
 		now: (value: Date) => (time = value),
 	};
 }
+
+test("validated views expose explicit clarification custody independently of start attribution", () => {
+	for (const attachment of [
+		undefined,
+		{ hostId: "host", conversationId: "conversation", epoch: 1 },
+	]) {
+		const { repo, engine } = setup({ clarificationAttachment: attachment });
+		const view = engine.status(repo, "question");
+		expect(view.startedBy).toBe("developer");
+		expect(view.clarificationAttachment).toEqual(attachment);
+		expect(
+			Schema.decodeUnknownSync(workflowViewSchema)(view)
+				.clarificationAttachment,
+		).toEqual(attachment);
+		expect(() =>
+			Schema.decodeUnknownSync(workflowViewSchema)({
+				...view,
+				clarificationAttachment: {
+					hostId: "host",
+					conversationId: "conversation",
+					epoch: 0,
+				},
+			}),
+		).toThrow();
+	}
+});
 
 test("question contracts accept legacy snapshots and reject invalid answers", () => {
 	const snapshot = decodeSnapshot({
@@ -251,7 +291,9 @@ test("questionnaire contracts preserve order and require complete response sets"
 });
 
 test("questionnaires persist and answer all items atomically", () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
 		const identity = {
 			workflowId: run.workflowId,
@@ -260,7 +302,7 @@ test("questionnaires persist and answer all items atomically", () => {
 			role: run.role,
 			token,
 		};
-		const created = engine.dispatch(repo, {
+		const created = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			questions: [
@@ -276,7 +318,7 @@ test("questionnaires persist and answer all items atomically", () => {
 		expect(items.map((item) => item.itemIndex)).toEqual([0, 1]);
 		const beforeInvalid = engine.getSnapshot(repo, run.workflowId);
 		expect(() =>
-			engine.dispatch(repo, {
+			clarificationEngineAction(engine, repo, {
 				type: "developer.action",
 				workflowId: run.workflowId,
 				revision: created.snapshot.revision,
@@ -288,11 +330,11 @@ test("questionnaires persist and answer all items atomically", () => {
 					],
 				},
 			}),
-		).toThrow(/every item/);
+		).toThrow(/complete response set/);
 		expect(engine.getSnapshot(repo, run.workflowId).revision).toBe(
 			beforeInvalid.revision,
 		);
-		const answered = engine.dispatch(repo, {
+		const answered = clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: created.snapshot.revision,
@@ -391,7 +433,9 @@ test("rich question items normalize ident, question, context, and option metadat
 });
 
 test("an answer that would overflow the dialogue bound is rejected without losing the question", () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
 		const identity = {
 			workflowId: run.workflowId,
@@ -403,7 +447,7 @@ test("an answer that would overflow the dialogue bound is rejected without losin
 		// Max-size questions stay under the create-time bound; max-size custom
 		// answers then push the aggregate past it, which must fail with an
 		// actionable diagnostic instead of the opaque snapshot-decode rollback.
-		const created = engine.dispatch(repo, {
+		const created = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			questions: Array.from({ length: 8 }, (_, index) => ({
@@ -417,7 +461,7 @@ test("an answer that would overflow the dialogue bound is rejected without losin
 		if (!groupId) throw new Error("questionnaire metadata missing");
 		const before = engine.getSnapshot(repo, run.workflowId);
 		expect(() =>
-			engine.dispatch(repo, {
+			clarificationEngineAction(engine, repo, {
 				type: "developer.action",
 				workflowId: run.workflowId,
 				revision: created.snapshot.revision,
@@ -442,7 +486,9 @@ test("an answer that would overflow the dialogue bound is rejected without losin
 });
 
 test("questions persist, answer in FIFO order, and do not change workflow lifecycle", () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
 		const identity = {
 			workflowId: run.workflowId,
@@ -451,13 +497,13 @@ test("questions persist, answer in FIFO order, and do not change workflow lifecy
 			role: run.role,
 			token,
 		};
-		const first = engine.dispatch(repo, {
+		const first = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			description: "first decision",
 			options: [{ label: "Use A", value: "a" }],
 		});
-		const second = engine.dispatch(repo, {
+		const second = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			description: "second decision",
@@ -470,7 +516,7 @@ test("questions persist, answer in FIFO order, and do not change workflow lifecy
 			first.snapshot.developerDialogue[0]?.id,
 			second.snapshot.developerDialogue[1]?.id,
 		]);
-		const answered = engine.dispatch(repo, {
+		const answered = clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: second.snapshot.revision,
@@ -501,7 +547,7 @@ test("questions persist, answer in FIFO order, and do not change workflow lifecy
 	}
 });
 
-test("question capability rejects another run and expires after 24 hours", () => {
+test("question capabilities reject impostors while overdue unassigned clarification stays pending", () => {
 	const { repo, engine, run, token, now } = setup();
 	try {
 		const identity = {
@@ -530,7 +576,7 @@ test("question capability rejects another run and expires after 24 hours", () =>
 		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(1);
 		now(new Date("2026-01-02T00:00:00.000Z"));
 		const observedView = engine.status(repo, "question");
-		expect(observedView.pendingQuestions).toHaveLength(0);
+		expect(observedView.pendingQuestions).toHaveLength(1);
 		expect(observedView.revision).toBe(created.snapshot.revision);
 		expect(observedView.developerDialogue?.[0]?.status).toBe("pending");
 		const expired = engine.dispatch(repo, {
@@ -539,7 +585,7 @@ test("question capability rejects another run and expires after 24 hours", () =>
 			questionId,
 			timerNonce,
 		});
-		expect(expired.view.developerDialogue?.[0]?.status).toBe("expired");
+		expect(expired.view.developerDialogue?.[0]?.status).toBe("pending");
 		const expiredView = expired.view;
 		expect(() =>
 			engine.dispatch(repo, {
@@ -558,22 +604,23 @@ test("question capability rejects another run and expires after 24 hours", () =>
 				actionId: "answer-question",
 				input: { questionId, kind: "custom", value: "too late" },
 			}),
-		).toThrow(/no longer pending/);
+		).toThrow(/explicit Home attachment/);
 		now(new Date("2026-01-01T23:59:59.999Z"));
-		expect(() =>
-			engine.dispatch(repo, {
-				type: "agent.question-expire",
-				...identity,
-				questionId,
-			}),
-		).toThrow(/no longer pending/);
+		const retained = engine.dispatch(repo, {
+			type: "agent.question-expire",
+			...identity,
+			questionId,
+		});
+		expect(retained.view.developerDialogue?.[0]?.status).toBe("pending");
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
 
 test("a developer question opens a wait and the answer ends it", () => {
-	const { repo, engine, run, token, now } = setup();
+	const { repo, engine, run, token, now } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
 		const identity = {
 			workflowId: run.workflowId,
@@ -593,7 +640,7 @@ test("a developer question opens a wait and the answer ends it", () => {
 				.map((line) => JSON.parse(line) as Record<string, unknown>);
 		const of = (event: string) =>
 			telemetry().filter((envelope) => envelope.event === event);
-		const created = engine.dispatch(repo, {
+		const created = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			description: "which design?",
@@ -619,7 +666,7 @@ test("a developer question opens a wait and the answer ends it", () => {
 		expect(telemetry()).toHaveLength(polled);
 		// The answer ends the wait and says how long the developer took.
 		now(new Date("2026-01-01T00:01:40Z"));
-		const answered = engine.dispatch(repo, {
+		const answered = clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: created.snapshot.revision,
@@ -632,9 +679,8 @@ test("a developer question opens a wait and the answer ends it", () => {
 		expect(ended[0]?.["herdr.wait.kind"]).toBe("question");
 		expect(ended[0]?.["herdr.wait.subject"]).toBe(questionId);
 		expect(ended[0]?.["herdr.wait.seconds"]).toBe(100);
-		// An expiry ends the wait the same way, so a question nobody answers leaves
-		// no open wait behind.
-		const second = engine.dispatch(repo, {
+		// Overdue clarifications remain an open wait until an actual resolution.
+		const second = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			...identity,
 			description: "and now?",
@@ -643,22 +689,22 @@ test("a developer question opens a wait and the answer ends it", () => {
 		const secondQuestion = second.snapshot.developerDialogue[1];
 		if (!secondQuestion) throw new Error("second question missing");
 		expect(second.view.waiting?.subject).toBe(secondQuestion.id);
-		// Past the durable expiry the timer owns, the record may be expired.
+		// Passing the durable deadline does not cancel an ordinary clarification.
 		now(new Date(Date.parse(secondQuestion.expiresAt) + 1_000));
-		const expired = engine.dispatch(repo, {
+		const expired = clarificationEngineAction(engine, repo, {
 			type: "timer.question-expire",
 			workflowId: run.workflowId,
 			questionId: secondQuestion.id,
 			timerNonce: requireDefined(secondQuestion.timerNonce, "timer nonce"),
 		});
-		expect(expired.view.waiting).toBeUndefined();
-		expect(of("workflow.waiting.ended")).toHaveLength(2);
+		expect(expired.view.waiting?.subject).toBe(secondQuestion.id);
+		expect(of("workflow.waiting.ended")).toHaveLength(1);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
 
-test("orchestrator-started workflows route questions to the orchestrator first", () => {
+test("orchestrator start attribution never grants implicit clarification custody", () => {
 	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
 	try {
 		const identity = {
@@ -677,34 +723,28 @@ test("orchestrator-started workflows route questions to the orchestrator first",
 		const question = created.snapshot.developerDialogue[0];
 		const questionId = question?.id;
 		if (!questionId) throw new Error("question missing");
-		// Routed to the orchestrator: it sees the question, and the developer's
-		// pending set lists it too so an idle orchestrator cannot strand the
-		// workflow (make-developer-questions-asynchronous).
-		expect(question?.targetRole).toBe("orchestrator");
+		expect(question?.targetRole).toBeUndefined();
+		expect(question?.clarification).toBeUndefined();
 		const view = engine.status(repo, "question");
 		expect(view.pendingQuestions?.map((item) => item.id)).toEqual([questionId]);
-		expect(view.orchestratorQuestions?.map((item) => item.id)).toEqual([
-			questionId,
-		]);
-		// The orchestrator answers it.
-		const answered = engine.dispatch(repo, {
-			type: "developer.action",
-			workflowId: run.workflowId,
-			revision: created.snapshot.revision,
-			actionId: "answer-question",
-			principal: "orchestrator",
-			input: { questionId, kind: "option", value: "a" },
-		});
-		expect(answered.view.developerDialogue?.[0]?.status).toBe("answered");
-		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("a");
-		expect(answered.view.orchestratorQuestions).toHaveLength(0);
-		expect(answered.view.pendingQuestions).toHaveLength(0);
+		expect(view.orchestratorQuestions).toHaveLength(0);
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: view.revision,
+				actionId: "answer-question",
+				principal: "orchestrator",
+				input: { questionId, kind: "option", value: "a" },
+			}),
+		).toThrow(/explicit Home attachment/);
+		expect(engine.status(repo, "question").revision).toBe(view.revision);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
 
-test("the developer answers an orchestrator-routed question when the orchestrator does not act", () => {
+test("legacy operator answers cannot bypass explicit custody and transcript relay", () => {
 	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
 	try {
 		const identity = {
@@ -722,20 +762,18 @@ test("the developer answers an orchestrator-routed question when the orchestrato
 		});
 		const questionId = created.snapshot.developerDialogue[0]?.id;
 		if (!questionId) throw new Error("question missing");
-		const answered = engine.dispatch(repo, {
-			type: "developer.action",
-			workflowId: run.workflowId,
-			revision: created.snapshot.revision,
-			actionId: "answer-question",
-			input: { questionId, kind: "custom", value: "do it" },
-		});
-		expect(answered.view.developerDialogue?.[0]?.status).toBe("answered");
-		expect(answered.view.orchestratorQuestions).toHaveLength(0);
-		// The routing marker is cleared in durable state, so nothing forwards a
-		// question that is already answered.
-		expect(
-			engine.getSnapshot(repo, "question").developerDialogue[0]?.targetRole,
-		).toBeUndefined();
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "answer-question",
+				input: { questionId, kind: "custom", value: "do it" },
+			}),
+		).toThrow(/explicit Home attachment/);
+		expect(engine.status(repo, "question").developerDialogue?.[0]?.status).toBe(
+			"pending",
+		);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
@@ -765,7 +803,7 @@ test("the orchestrator cannot answer a developer-routed question", () => {
 				principal: "orchestrator",
 				input: { questionId, kind: "option", value: "a" },
 			}),
-		).toThrow(/another responder/);
+		).toThrow(/explicit Home attachment/);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
@@ -1154,9 +1192,11 @@ test("a workflow's refusal to raise the record is surfaced, not swallowed", asyn
 });
 
 test("a hand-off record never reaches an assignment's prior dialogue", async () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
-		engine.dispatch(repo, {
+		clarificationEngineAction(engine, repo, {
 			type: "login-handoff.open",
 			workflowId: run.workflowId,
 			recordId: "handoff-1",
@@ -1168,7 +1208,7 @@ test("a hand-off record never reaches an assignment's prior dialogue", async () 
 		});
 		// Resolved, so only the record's kind keeps it out of the assignment: a
 		// pending record would be dropped anyway.
-		engine.dispatch(repo, {
+		clarificationEngineAction(engine, repo, {
 			type: "login-handoff.resolve",
 			workflowId: run.workflowId,
 			recordId: "handoff-1",
@@ -1176,7 +1216,7 @@ test("a hand-off record never reaches an assignment's prior dialogue", async () 
 		});
 		// A real question, asked the ordinary way, is what the resumed attempt
 		// should see.
-		const asked = engine.dispatch(repo, {
+		const asked = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			workflowId: run.workflowId,
 			runId: run.id,
@@ -1190,7 +1230,7 @@ test("a hand-off record never reaches an assignment's prior dialogue", async () 
 			(item) => item.description === "which approach?",
 		)?.id;
 		if (!questionId) throw new Error("question missing");
-		const blocked = engine.dispatch(repo, {
+		const blocked = clarificationEngineAction(engine, repo, {
 			type: "agent.handoff",
 			runId: run.id,
 			generation: run.generation,
@@ -1198,7 +1238,7 @@ test("a hand-off record never reaches an assignment's prior dialogue", async () 
 			outcome: "blocked",
 			message: "waiting on the developer",
 		});
-		engine.dispatch(repo, {
+		clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: blocked.snapshot.revision,
@@ -1227,9 +1267,11 @@ test("a hand-off record never reaches an assignment's prior dialogue", async () 
 });
 
 test("an answered question resumes the blocked asking run with the answer in its assignment", async () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
-		const created = engine.dispatch(repo, {
+		const created = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			workflowId: run.workflowId,
 			runId: run.id,
@@ -1241,7 +1283,7 @@ test("an answered question resumes the blocked asking run with the answer in its
 		});
 		const questionId = created.snapshot.developerDialogue[0]?.id;
 		if (!questionId) throw new Error("question missing");
-		const blocked = engine.dispatch(repo, {
+		const blocked = clarificationEngineAction(engine, repo, {
 			type: "agent.handoff",
 			runId: run.id,
 			generation: run.generation,
@@ -1250,7 +1292,7 @@ test("an answered question resumes the blocked asking run with the answer in its
 			message: "waiting on the developer",
 		});
 		expect(blocked.view.status).toBe("attention-required");
-		const answered = engine.dispatch(repo, {
+		const answered = clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: blocked.snapshot.revision,
@@ -1280,9 +1322,11 @@ test("an answered question resumes the blocked asking run with the answer in its
 });
 
 test("a cancelled question leaves the parked run for explicit recovery", () => {
-	const { repo, engine, run, token } = setup();
+	const { repo, engine, run, token } = setup({
+		clarificationAttachment: engineTestAttachment,
+	});
 	try {
-		const created = engine.dispatch(repo, {
+		const created = clarificationEngineAction(engine, repo, {
 			type: "agent.question",
 			workflowId: run.workflowId,
 			runId: run.id,
@@ -1294,7 +1338,7 @@ test("a cancelled question leaves the parked run for explicit recovery", () => {
 		});
 		const questionId = created.snapshot.developerDialogue[0]?.id;
 		if (!questionId) throw new Error("question missing");
-		const blocked = engine.dispatch(repo, {
+		const blocked = clarificationEngineAction(engine, repo, {
 			type: "agent.handoff",
 			runId: run.id,
 			generation: run.generation,
@@ -1302,7 +1346,7 @@ test("a cancelled question leaves the parked run for explicit recovery", () => {
 			outcome: "blocked",
 			message: "waiting on the developer",
 		});
-		const cancelled = engine.dispatch(repo, {
+		const cancelled = clarificationEngineAction(engine, repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
 			revision: blocked.snapshot.revision,
@@ -1321,7 +1365,7 @@ test("a cancelled question leaves the parked run for explicit recovery", () => {
 	}
 });
 
-test("the orchestrator forwards a question it cannot answer to the developer", () => {
+test("ordinary clarifications cannot be forwarded into the legacy developer popup", () => {
 	const { repo, engine, run, token } = setup({ startedBy: "orchestrator" });
 	try {
 		const identity = {
@@ -1349,37 +1393,25 @@ test("the orchestrator forwards a question it cannot answer to the developer", (
 				input: { questionId },
 			}),
 		).toThrow(/reserved for the orchestrator/);
-		const forwarded = engine.dispatch(repo, {
-			type: "developer.action",
-			workflowId: run.workflowId,
-			revision: created.snapshot.revision,
-			actionId: "forward-question",
-			principal: "orchestrator",
-			input: { questionId },
-		});
-		// Now a normal developer question: visible to the developer, no longer the
-		// orchestrator's, and still pending.
-		expect(forwarded.view.orchestratorQuestions).toHaveLength(0);
-		expect(forwarded.view.pendingQuestions?.map((item) => item.id)).toEqual([
-			questionId,
-		]);
-		expect(forwarded.view.developerDialogue?.[0]?.status).toBe("pending");
-		expect(forwarded.view.developerDialogue?.[0]?.targetRole).toBeUndefined();
-		// The developer can now answer it.
-		const answered = engine.dispatch(repo, {
-			type: "developer.action",
-			workflowId: run.workflowId,
-			revision: forwarded.view.revision,
-			actionId: "answer-question",
-			input: { questionId, kind: "custom", value: "do A" },
-		});
-		expect(answered.view.developerDialogue?.[0]?.answer?.value).toBe("do A");
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "forward-question",
+				principal: "orchestrator",
+				input: { questionId },
+			}),
+		).toThrow(/ordinary Home transcript/);
+		expect(engine.status(repo, "question").developerDialogue?.[0]?.status).toBe(
+			"pending",
+		);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
 
-test("an unanswered orchestrator question auto-forwards to the developer on timeout", () => {
+test("an overdue unassigned question retains its original deadline without auto-forwarding", () => {
 	const { repo, engine, run, token, now } = setup({
 		startedBy: "orchestrator",
 	});
@@ -1409,14 +1441,14 @@ test("an unanswered orchestrator question auto-forwards to the developer on time
 			timerNonce,
 		});
 		const record = forwarded.view.developerDialogue?.[0];
-		// Not expired: forwarded to the developer with a fresh window.
+		// Not expired or forwarded: the original durable record remains available for explicit attachment.
 		expect(record?.status).toBe("pending");
 		expect(record?.targetRole).toBeUndefined();
 		expect(forwarded.view.pendingQuestions?.map((item) => item.id)).toEqual([
 			questionId,
 		]);
 		expect(Date.parse(record?.expiresAt ?? "")).toBe(
-			new Date("2026-01-02T00:00:00.000Z").getTime() + QUESTION_WAIT_MS,
+			Date.parse(question.expiresAt),
 		);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });

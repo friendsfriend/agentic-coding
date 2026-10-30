@@ -98,6 +98,26 @@ describe("buildAgentSessionView", () => {
 		]);
 	});
 
+	test("host-attributed orchestrator messages retain ordinary transcript rendering", () => {
+		for (const kind of [
+			"herdr.orchestrator.developer",
+			"herdr.orchestrator.internal",
+		]) {
+			expect(
+				blocksOf({
+					entries: [
+						{
+							kind,
+							model: [{ role: "user", content: "ordinary transcript text" }],
+						},
+					],
+				}),
+			).toEqual([
+				{ kind: "user", text: "ordinary transcript text", tone: "accent" },
+			]);
+		}
+	});
+
 	test("keeps the complete multiline user message for disclosure in the view", () => {
 		const prompt = Array.from(
 			{ length: 40 },

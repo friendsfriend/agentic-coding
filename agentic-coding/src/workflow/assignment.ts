@@ -28,7 +28,7 @@ const INTERACTION_GUIDANCE: Readonly<
 	Record<Assignment["interaction"], string>
 > = {
 	"developer-dialogue":
-		"Visible discussion is allowed; prefer `developer_question` for an unclear decision over a later round trip.",
+		"Visible discussion is allowed; use `developer_question` only for material unresolved decisions.",
 	silent: "Report through the artifact and the handoff; no chat summary.",
 };
 
@@ -305,7 +305,7 @@ export function assignmentParts(
 									]
 								: assignment.output.schemaId === "core.debug-report"
 									? [
-											"Payload: non-empty string `report` — the whole markdown investigation report, with the headings Summary, Environment, Reproduction, Expected, Actual, Findings, Code changes, and Open questions. Hand off `blocked` with a message when the behavior cannot be reproduced at all.",
+											"Payload: non-empty Markdown `report` with Summary, Environment, Reproduction, Expected, Actual, Findings, Code changes, Open questions. If unreproducible, hand off `blocked` with a message.",
 										]
 									: ["Payload: JSON value required by step instructions."]),
 				]

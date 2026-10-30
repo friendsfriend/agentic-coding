@@ -31,6 +31,7 @@ import {
 	discoverProjects,
 	type ProjectOption,
 } from "../../data/workflow.ts";
+import { workflowLaunchKeybindCatalog } from "../keybinds.ts";
 import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch.ts";
 import { workflowTypesForContext } from "../launch.ts";
 import {
@@ -170,6 +171,7 @@ export function NewWorkflowModal(props: {
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
 }) {
 	const [step, setStep] = createSignal(0);
+	const [attachHome, setAttachHome] = createSignal(false);
 	const [creating, setCreating] = createSignal(false);
 	/** The cursor, held as the identity of the entry it points at (`undefined` is
 	 * the step's first entry). Two list steps fill in asynchronously — the
@@ -912,7 +914,10 @@ export function NewWorkflowModal(props: {
 			// Yield one macrotask so the progress modal paints before the
 			// completion callback can block the event loop.
 			await new Promise((resolve) => setTimeout(resolve, 0));
-			await props.onComplete(values());
+			await props.onComplete({
+				...values(),
+				...(attachHome() ? { clarificationHome: "selected" as const } : {}),
+			});
 		} finally {
 			setCreating(false);
 		}
@@ -926,6 +931,10 @@ export function NewWorkflowModal(props: {
 			return true;
 		}
 		if (confirmStep()) {
+			if (["j", "k", "up", "down"].includes(name)) {
+				setAttachHome(!attachHome());
+				return true;
+			}
 			if (name === "return" || name === "enter") {
 				if (!canSubmit()) {
 					// Send the cursor to the field that is actually missing: the task for
@@ -1347,16 +1356,35 @@ export function NewWorkflowModal(props: {
 						dismissKind="new-workflow"
 						title="Confirm workflow"
 						summary={summary()}
-						summaryOnly
 						step={step()}
 						total={totalSteps()}
 						helpSections={false}
-						help={[
-							{ key: "Enter", action: "Create workflow" },
-							{ key: "Esc", action: "Back" },
-						]}
+						help={workflowLaunchKeybindCatalog()[0]?.keybinds.filter((entry) =>
+							["j/k", "Enter", "Esc"].includes(entry.key),
+						)}
 					>
-						<box />
+						<box flexDirection="column" gap={1}>
+							<Show when={values().stage}>
+								{(stage) => <text>{stageSummary(stage())}</text>}
+							</Show>
+							<Show when={!canSubmit()}>
+								<text fg={uiColors.textMuted}>
+									Still required:{" "}
+									{labelFor(fields()[Math.max(0, firstMissingStep())])}
+								</text>
+							</Show>
+							<text>
+								Clarification Home (review and login approvals stay separate)
+							</text>
+							<text fg={!attachHome() ? uiColors.primary : uiColors.textMuted}>
+								{!attachHome() ? "› " : "  "}Leave unassigned · attach later
+								from the workflow dashboard
+							</text>
+							<text fg={attachHome() ? uiColors.primary : uiColors.textMuted}>
+								{attachHome() ? "› " : "  "}Attach selected shell Home ·
+								explicit clarification custody
+							</text>
+						</box>
 					</GenericModal>
 				</Show>
 			</Show>

@@ -72,12 +72,63 @@ again on every later turn. A `detail: "full"` read records one runtime
 telemetry envelope (`orchestrator.detail_full`, naming the tool) so full-view
 usage stays measurable; it changes nothing about the answer.
 
-The server-side `orchestratorQuestions` list is gone from the tool result: a
-question routed to the orchestrator is already in `pendingQuestions` (the
-server's copy duplicated the same records byte for byte), and its record keeps
-`targetRole: "orchestrator"`, so it is still visible and still answerable with
-`workflow_action` `answer-question` or `forward-question`. `workflow_action`
-answers with the same compact row `workflow_status` returns by default.
+The tool reads pending clarification from `pendingQuestions`, not a duplicate
+`orchestratorQuestions` list. Custody comes exclusively from the validated
+`clarificationAttachment` (host, conversation and epoch), never `startedBy`,
+subscriptions or the visible Home. Legacy ordinary `answer-question` and
+`forward-question` are refused; peer questions and login/MFA retain their own paths.
+
+## Transcript clarification and explicit custody
+
+Authenticated Home starts pin their calling conversation. UI creation offers
+**Leave unassigned** (default) or **Attach selected shell Home** at confirmation.
+The selected native identity is captured before starting; a failed/uncertain
+attachment is reported without starting another workflow. From a workflow,
+the explicit attachment action confirms selected-Home custody without navigating.
+In Home, the developer may issue `/attach workflow-id [repository path]` to
+attach or reattach **that** conversation (the current repository is the default).
+This is a deliberate local developer command, not model output or passive matching
+of natural-language chat. It does not change start attribution, review or recovery
+permissions. A new conversation inherits no custody; reattachment increments the
+epoch and invalidates old delivery/candidate claims while retaining history.
+
+`workflow_action clarification.context` reads verified native message references,
+eligible agreed sources and on-demand protocol guidance. A `clarification.grounded`
+action needs the complete ordered response set, rationale, exact eligible source
+references and a stable receipt. Only agreed task, immutable operator-approved
+design bytes or recorded native-confirmed developer decisions qualify. Mutable
+`design.md` is visible but ineligible; source presence alone is not semantic support.
+Grounding is attributed as interpretation, not a new developer instruction.
+
+Otherwise discuss naturally, preview the complete exact proposal with context,
+present it in an ordinary assistant turn, and `clarification.stage` its native
+message id and version. Only a **later authenticated developer turn explicitly
+confirming that proposal** permits deliberate `clarification.confirm`. Edits need
+a new proposal/version and confirmation. Unrelated chat, partial answers, vague
+assent, model/tool/internal/legacy messages and another conversation confer no
+authority. Confirmation is durably single-use across workflows; exact accepted
+receipt replay is idempotent. Server checks provenance/order/content, while the
+Orchestrator remains responsible for interpreting explicit assent semantically.
+
+Delivery is a separate durable addressed channel, not the advisory event monitor.
+A stable native request id survives server/host reopen and the acceptance/ACK gap;
+only an exact server-verified native receipt acknowledges it. Do not call
+`clarification.ack` from the model. Automatic reconciliation honors off/notify;
+explicit opening/retry can deliver to the pinned Home. Missing Home, no attachment
+and overdue deadlines stay discoverably pending without fallback or auto-forward.
+Ordinary arrivals and question-only parked-asker alerts are passive: no modal,
+notification, navigation or focus theft. Login/MFA and review dialogs are unchanged.
+Accepted answers resume only through the existing transactional blocked-asker
+rule, including the authenticated pending-return/handoff race; cancellation and
+navigation do not launch replacements. `clarification.cancel` is intentional.
+
+Wiki-step revision targets are the existing **Home Orchestrator**, **developer
+questions / asynchronous dialogue**, **workflow lifecycle / blocked handoff** and
+**plan approval** concepts (search by these titles and the existing change keys
+`route-developer-questions-through-orchestrator` and
+`make-developer-questions-asynchronous`). The dedicated wiki step must resolve and
+revise the canonical pages, not create duplicate concepts. This change authors no
+wiki bundle or credentials content.
 
 A refused `start_workflow` names what to fix: an unclean worktree is refused
 with the dirty paths (at most 20, plus the total count) and a duplicate id is

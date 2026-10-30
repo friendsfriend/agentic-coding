@@ -2517,8 +2517,14 @@ describe("transactional workflow runtime", () => {
 			);
 			expect(security.status).toBe("expired");
 			expect(view.effects.some((effect) => effect.kind === "agent.stop")).toBe(
-				false,
+				true,
 			);
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.filter((effect) => effect.kind === "agent.stop")
+					.map((effect) => (effect.payload as { runId: string }).runId),
+			).toContain(security.id);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

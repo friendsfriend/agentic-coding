@@ -172,6 +172,8 @@ export async function runAgentHost(
 		...(argv.includes("--orchestrator") ? { orchestrator: true } : {}),
 		...(argv.includes("--session") ? { session: true } : {}),
 		...(retryCapability ? { retryCapability } : {}),
+		developerInputVerifierUrl:
+			process.env.AGENTIC_ORCHESTRATOR_INPUT_VERIFIER_URL,
 		// Test-only hook (unified-application-distribution: "Compiled executable
 		// hosts an agent"), gated behind an explicit env var so production use
 		// never takes it: lets a compiled-binary smoke test complete a model

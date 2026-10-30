@@ -18,6 +18,7 @@ import type { WorkflowReviewKind } from "../contracts/workflow-events.ts";
 /** Exact `METHOD path` pairs the orchestrator may call. Anything else is 403. */
 const ALLOWED_ROUTES: ReadonlySet<string> = new Set([
 	"GET /api/v1/health",
+	"POST /api/v1/orchestrator/input/verify",
 	"POST /api/v1/observe",
 	"POST /api/v1/scheduling",
 	"GET /api/v1/workflow/view",
@@ -88,7 +89,18 @@ function recoveryAction(actionId: string): boolean {
  * enforces that only orchestrator-routed questions are affected; this gate only
  * frees the action from the developer-reserved refusal, whatever the step. */
 function questionAction(actionId: string): boolean {
-	return actionId === "answer-question" || actionId === "forward-question";
+	return (
+		actionId === "answer-question" ||
+		actionId === "forward-question" ||
+		[
+			"clarification.context",
+			"clarification.stage",
+			"clarification.confirm",
+			"clarification.grounded",
+			"clarification.ack",
+			"clarification.cancel",
+		].includes(actionId)
+	);
 }
 
 /** Lifecycle actions offered once the work is done (completion step). */

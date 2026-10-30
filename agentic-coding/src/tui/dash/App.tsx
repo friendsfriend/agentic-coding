@@ -5,6 +5,7 @@ import {
 	activeErrorModal,
 	createModalHost,
 	findModal,
+	GenericModal,
 	getActiveThemeName,
 	handleModalHelpKey,
 	helpModalRowCount,
@@ -76,6 +77,11 @@ import {
 	runWorkflow,
 } from "../data/workflow.ts";
 import {
+	attachWorkflowHome,
+	clarificationStatus,
+	pendingClarifications,
+} from "../orchestrator/clarifications.ts";
+import {
 	loadPromptHistory,
 	MAX_PROMPT_HISTORY,
 	savePromptHistory,
@@ -121,6 +127,7 @@ import {
 } from "./handlers/keys.ts";
 import {
 	agentSessionKeybindCatalog,
+	clarificationAttachmentKeybinds,
 	dashboardDetailKeybindCatalog,
 	evidenceSubviewKeybindCatalog,
 	panelContext,
@@ -1623,6 +1630,7 @@ export function App(props: {
 		| "completed-picker"
 		| "repair"
 		| "question"
+		| "clarification-attachment"
 		| "cost"
 		| "debug-requests"
 		| "review"
@@ -1692,11 +1700,19 @@ export function App(props: {
 		setCredentialInput("");
 	});
 	onCleanup(() => setCredentialInput(""));
-	const pendingQuestion = createMemo(() => data().state.pendingQuestions?.[0]);
+	// Ordinary clarifications are passive workflow state, never modal input.
+	// Login Done/Abort remains a distinct, developer-owned handoff surface.
+	const pendingQuestion = createMemo(() =>
+		data().state.pendingQuestions?.find(
+			(item) => item.kind === "login-handoff",
+		),
+	);
 	const pendingQuestionGroup = createMemo<DeveloperDialogueRecord[]>(() => {
 		const question = pendingQuestion();
 		if (!question) return [];
-		const pending = data().state.pendingQuestions ?? [];
+		const pending = (data().state.pendingQuestions ?? []).filter(
+			(item) => item.kind === "login-handoff",
+		);
 		return (
 			question.groupId
 				? pending.filter((item) => item.groupId === question.groupId)
@@ -1725,6 +1741,39 @@ export function App(props: {
 	const setQuestionOptionDetail = dialogue.setOptionDetail;
 	const setQuestionDetailOffset = dialogue.setDetailOffset;
 	let modalBeforeCredential: string | undefined;
+	const attachingHome = overlays.attachingHome;
+	const setAttachingHome = overlays.setAttachingHome;
+	const attachmentError = overlays.attachmentError;
+	const setAttachmentError = overlays.setAttachmentError;
+	const closeAttachment = () => {
+		closeModal("clarification-attachment");
+		props.keymap.setData("modal.active", "none");
+	};
+	const attachHome = async () => {
+		if (attachingHome()) return;
+		const gateway = gatewayOrUndefined();
+		if (!gateway) {
+			setAttachmentError("Workflow server unavailable; no attachment changed.");
+			return;
+		}
+		setAttachingHome(true);
+		try {
+			await attachWorkflowHome(gateway, {
+				repo: props.repo,
+				workflowId: props.workflowId,
+				revision: data().state.revision,
+			});
+			closeAttachment();
+			refresh();
+		} catch (error) {
+			setAttachmentError(
+				error instanceof Error ? error.message : String(error),
+			);
+			refresh();
+		} finally {
+			setAttachingHome(false);
+		}
+	};
 	let modalBeforeQuestion: string | undefined;
 	let pendingQuestionId: string | undefined;
 	const commitCredential = () => {
@@ -2457,23 +2506,30 @@ export function App(props: {
 	const filteredThemes = () =>
 		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
 	const keybindCatalog = createMemo(() =>
-		agentSessionOpen()
-			? agentSessionKeybindCatalog()
-			: reviewOpen() && reviewKind() === "stage"
-				? stageReportReviewKeybindCatalog(
-						stageWikiUpdateAvailable(),
-						reviewView(),
-					)
-				: reviewOpen() && stagePlanReview()
-					? stagePlanReviewKeybindCatalog(rejectPlanAvailable(), reviewView())
-					: evidenceViewOpen()
-						? evidenceSubviewKeybindCatalog({
-								flow: stageJournal()?.flowPage !== undefined,
-							})
-						: dashboardDetailKeybindCatalog({
-								artifactsVisible: artifacts().length > 0,
-								definitionId: data().state.definition?.id,
-							}),
+		modalOpen("clarification-attachment")
+			? [
+					{
+						title: "Clarification Home",
+						keybinds: clarificationAttachmentKeybinds(),
+					},
+				]
+			: agentSessionOpen()
+				? agentSessionKeybindCatalog()
+				: reviewOpen() && reviewKind() === "stage"
+					? stageReportReviewKeybindCatalog(
+							stageWikiUpdateAvailable(),
+							reviewView(),
+						)
+					: reviewOpen() && stagePlanReview()
+						? stagePlanReviewKeybindCatalog(rejectPlanAvailable(), reviewView())
+						: evidenceViewOpen()
+							? evidenceSubviewKeybindCatalog({
+									flow: stageJournal()?.flowPage !== undefined,
+								})
+							: dashboardDetailKeybindCatalog({
+									artifactsVisible: artifacts().length > 0,
+									definitionId: data().state.definition?.id,
+								}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store; the route publishes the panel-scoped catalog here, or the
@@ -2487,7 +2543,9 @@ export function App(props: {
 			keybindCatalog(),
 			// A page owns every key while it is open, so the panel context (which scopes
 			// the footer to the focused panel) is suppressed on both of them.
-			agentSessionOpen() || evidenceViewOpen()
+			agentSessionOpen() ||
+				evidenceViewOpen() ||
+				modalOpen("clarification-attachment")
 				? undefined
 				: panelContext(activePanel()),
 		);
@@ -2621,6 +2679,7 @@ export function App(props: {
 			planRejectionOpen() ||
 			userActionOpen() ||
 			questionOpen() ||
+			modalOpen("clarification-attachment") ||
 			costOpen() ||
 			workflowGraphOpen() ||
 			presetSwitcherOpen() ||
@@ -2830,6 +2889,11 @@ export function App(props: {
 		requestExecution,
 		verdictLines,
 		requiredUserAction,
+		onAttachHome: () => {
+			setAttachmentError("");
+			openModal("clarification-attachment", "dashboard");
+			props.keymap.setData("modal.active", "clarification-attachment");
+		},
 		completedActions,
 		completedInputHint,
 		planRejectionReasons,
@@ -2952,6 +3016,28 @@ export function App(props: {
 				"down",
 				"?",
 			].map((key) => ({ key, cmd: "theme.handle" })),
+		});
+		const disposeAttachment = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "clarification-attachment",
+			priority: 1400,
+			activeModal: "clarification-attachment",
+			commands: [
+				{
+					name: "clarification-attachment.handle",
+					run: ({ event }) => {
+						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
+						if (key === "escape" && !attachingHome()) closeAttachment();
+						else if (key === "enter" || key === "return") void attachHome();
+						return true;
+					},
+				},
+			],
+			bindings: ["escape", "enter", "return", "?", "j", "k"].map((key) => ({
+				key,
+				cmd: "clarification-attachment.handle",
+			})),
 		});
 		const disposeQuestion = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -3926,6 +4012,7 @@ export function App(props: {
 				"v",
 				"c",
 				"m",
+				"a",
 				"p",
 				"?",
 				"j",
@@ -3945,6 +4032,7 @@ export function App(props: {
 		onCleanup(() => {
 			disposeTheme();
 			disposeQuestion();
+			disposeAttachment();
 			disposeCredentials();
 			disposeCompletedPicker();
 			disposeRepair();
@@ -4160,6 +4248,16 @@ export function App(props: {
 							// `evidence.view`.
 							visible={!agentSessionOpen() && !evidenceViewOpen()}
 						>
+							<Show
+								when={
+									pendingClarifications(data().state.pendingQuestions).length >
+									0
+								}
+							>
+								<text fg={uiColors.textMuted}>
+									{clarificationStatus(data().state.pendingQuestions ?? [])}
+								</text>
+							</Show>
 							<box
 								style={{
 									width: "100%",
@@ -4483,6 +4581,32 @@ export function App(props: {
 						: undefined
 				}
 			/>
+			<Show when={modalOpen("clarification-attachment")}>
+				<GenericModal
+					title="Attach clarification Home"
+					widthPercent={0.75}
+					heightPercent={0.45}
+					help={clarificationAttachmentKeybinds()}
+				>
+					<box flexDirection="column" gap={1}>
+						<text>
+							Attach {props.workflowId} to this shell's selected Home (opened on
+							confirmation if needed).
+						</text>
+						<text fg={uiColors.textMuted}>
+							This is explicit custody, not an answer. Reattachment invalidates
+							older proposals and deliveries. Discuss pending clarifications in
+							Home; review and login approvals remain separate.
+						</text>
+						<Show when={attachingHome()}>
+							<text>Attaching Home…</text>
+						</Show>
+						<Show when={attachmentError()}>
+							<text fg={uiColors.error}>{attachmentError()}</text>
+						</Show>
+					</box>
+				</GenericModal>
+			</Show>
 			<DialogueRoute
 				dialogue={dialogue}
 				open={questionOpen()}

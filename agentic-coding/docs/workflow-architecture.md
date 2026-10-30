@@ -145,6 +145,46 @@ manual storage surgery, force merges or destructive reset to evade the boundary.
 Question answer/forward, paused-only resume, explicit failed-effect retry and
 preset switching remain separate operations with their existing semantics.
 
+### Orchestrator transcript provenance boundary
+
+The host has explicit origin tagging at input admission. Monitor notes and
+scheduled input are internal. Socket input cannot claim developer origin;
+unattributed input also fails closed as internal for provenance. Home's
+interactive submitter instead signs a short-lived, exact input envelope using
+the shell's operator authority. The proof binds host, conversation, run, native
+request ID, exact text, delivery mode and expiry. The host checks ownership and
+calls a launch-pinned server verifier using its narrower conversation token.
+That token cannot mint a human-input proof. The verifier derives conversation
+identity from authentication, not body fields. Run environment/recovery JSON
+cannot select another verifier origin. Ownership is rechecked after verification,
+and the client requires an explicit authenticated-input acknowledgement.
+
+Only after successful verification does the host assign the developer entry
+kind. Native request deduplication retains exactly one input on an identical
+replay; expired/refused/unavailable verification cannot create human evidence.
+The model receives ordinary user input without proof or operator credentials.
+The session projection renders the host's custom entry kinds as ordinary
+transcript rows. Legacy `pi.user` entries are not retroactively certified as
+developer confirmations. Message text (including a literal "yes") never grants
+authority. This provenance path deliberately does not interpret assent or
+accept any workflow answer.
+
+The private `clarificationTranscript` control operation resolves a bounded set
+of real immutable message IDs in the owned orchestrator run, checking persistent
+host and exact conversation identity. It reads native history rather than the
+compacted active view. Returned roles come from native assistant entries or the
+host's trusted developer-admission kind, never lookup-caller/model JSON. Internal, tool, system,
+foreign-conversation, oversized and missing references fail closed. Native entry
+ID order supplies stable sequence across reopen. This read does not recover a
+run, create a conversation, approve a candidate or deliver an answer.
+
+This is infrastructure for the pending transcript-clarification integration, not
+an alternative answer path: the server must independently authenticate custody,
+question/epoch/revision and exact proposal before using these references. The
+full transcript-first replacement remains unfinished in the active OpenSpec
+change; existing question answer/forward presentation is not removed by this
+boundary.
+
 ### Agent runtime and workspace surface
 
 There is no multiplexer boundary: the terminal multiplexer integration
@@ -1416,7 +1456,7 @@ row):
 | `evidence.ts` | Git inspection, source-content fingerprinting, changed-file discovery, current-branch lookup, wiki baseline/verification content reads — all external-I/O reads. |
 | `evidence-store.ts` | The evidence store's location and lifecycle (`add-workflow-evidence-store`): `workflowDataRoot`/`workflowEvidenceRoot`/`workflowEvidenceScope` (the checkout's `.herdr-workflow` or the shared wiki/research data root, plus the roots an attach may resolve inside) and `workflowEvidencePresent`/`removeWorkflowEvidence`, which the engine's `workspace.cleanup` observation and execution both use. The manifest, ids, content checks and caps live in `server/evidence/store.ts`. |
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
-| `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`, including the developer's backstop answer for an orchestrator-routed record), finding the record an answer event names (`answeredQuestionRecord`), and marking questions expired (`expireQuestions`). The agent-facing wait (`AGENT_QUESTION_WAIT_MS`) and the durable lifetime (`QUESTION_WAIT_MS`) live here as separate constants. Needs only the clock. |
+| `dialogue.ts` | Question dialogue: resolving the asking run (`questionRun`), legacy peer/login answer handling (`answerQuestion`; ordinary clarification requires the canonical authenticated protocol), finding the record an answer event names (`answeredQuestionRecord`), and marking questions expired (`expireQuestions`). The agent-facing wait (`AGENT_QUESTION_WAIT_MS`) and the durable lifetime (`QUESTION_WAIT_MS`) live here as separate constants. Needs only the clock. |
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
 | `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, `resumeBlockedAsker`/`resumeAskerAfterAnswer` (re-issue the run that asked a question once its answer is recorded), plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because every `reducers/*.ts` module needs these without needing the `WorkflowEngine` class itself — importing `engine.ts` from a reducer would close the cycle `engine.ts -> reducer -> engine.ts`. |
 | `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
@@ -1872,10 +1912,11 @@ record; `developer_question`/`agent_ask` wait only `AGENT_QUESTION_WAIT_MS`
 (the agent grace) and then return the pending record. An agent that receives a
 pending record reports a bounded `blocked` handoff, so the workflow parks in
 `attention-required` with the question as its visible reason instead of holding
-a model turn open until the 24 h durable expiry.
+a model turn open. Ordinary clarification remains pending when overdue; login
+handoffs keep their own deadlines.
 
-When the answer arrives — from the developer's modal, the orchestrator's
-action, or a peer's `workflow answer` — the answer reducers call
+When the answer arrives — from an explicitly attached Home's grounded or
+native-confirmed canonical action, or a peer's `workflow answer` — the reducers call
 `resumeAskerAfterAnswer`, which re-issues only the run that asked (its attempt
 bumped) when that run handed off `blocked` for this question and no other run
 of its role is active. The answer reaches the new attempt through the
@@ -1883,10 +1924,24 @@ assignment's existing `## Prior dialogue (untrusted context)` section. A
 cancelled or expired question does not resume: the parked step waits for the
 developer's explicit repair or retry.
 
-An orchestrator-routed question stays the orchestrator's first, but it is also
-listed in the developer's `pendingQuestions` and `answerQuestion` accepts the
-developer's answer (clearing the routing marker), so an orchestrator session
-that is off or idle cannot strand the workflow. A developer abort of a run is
+Ordinary questions remain passively listed in `pendingQuestions` with explicit
+host/conversation/epoch custody, or unassigned until a deliberate UI or Home
+`/attach` command. Neither start attribution nor advisory subscriptions grant
+custody. Canonical clarification actions reject legacy answer/forward bypasses;
+login and peer paths remain separate. Delivery has a stable native request id
+and server-owned exact receipt, reconciled after reconnect/reopen without choosing
+the visible Home. Off/notify suppress automatic wake; unavailable and overdue
+records retain explicit retry/attachment paths. Native human provenance and
+single-use exact-proposal confirmation are verified at the server/host boundary;
+the engine stores bounded origin, source and candidate references atomically.
+Operator `approve-plan` preparation reads bounded confined design bytes outside
+the writer transaction, then the successful current-revision approval commits an
+immutable digest/content pin. Live edits are ineligible evidence, and caller
+start metadata cannot manufacture approval. Review rejection/reapproval clears or
+replaces the pin. Ordinary clarification never selects a question modal; login,
+plan/developer/findings/wiki review presentation remains unchanged.
+
+A developer abort of a run is
 recorded by the host as that run's `blocked` handoff (`--aborted`), so an
 interrupted turn parks the workflow rather than leaving a `working` run with no
 turn left to finish it. An aborted run is parked only while nobody is working
@@ -2193,3 +2248,15 @@ available), and the dashboard's undispatchable `close-clean` menu item is
 removed outright — it duplicated `workspace.cleanup`, which the engine
 already enqueues automatically after every `workspace.close` completes, so
 there was no missing capability to add.
+
+### Arrival selection and active roles
+
+`StepBehavior.preserveArrivalSelection` distinguishes classifier-selected verifier roles from the active triage agent. Only `core.triage` preserves that arrival selection when entering its agent step; ordinary steps still publish active roles for admission and tool authorization. Triage completion validates its proposed verifier plan against the preserved selection, never against `["triage"]`.
+
+For same-step recovery of earlier-written snapshots, triage's registered `onEnter`
+normalizes only the exact legacy `["triage"]` sentinel, before replacement run
+creation. It restores only a nonempty, unique, bounded array of eligible domain
+verifiers from the retained arrival context. Absent, empty, malformed or
+ineligible context stays fail-closed; unrelated selections are unchanged. This
+normalization commits with the ordinary repair transaction, not a store rewrite
+or an unconstrained-role fallback.

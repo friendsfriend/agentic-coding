@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
 	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+	type DeveloperDialogueRecord,
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
 	externalDiagnostic,
@@ -241,6 +242,56 @@ function minimalSnapshot(): Record<string, unknown> {
 		attention: [],
 	};
 }
+
+test("clarification custody is additive and survives snapshot decode/rewrite", () => {
+	const legacy = decodeSnapshot(minimalSnapshot());
+	expect(legacy.metadata.clarificationAttachment).toBeUndefined();
+	const attachment = {
+		hostId: "host",
+		conversationId: "conversation",
+		epoch: 1,
+	};
+	const record: DeveloperDialogueRecord = {
+		id: "question",
+		workflowId: "w",
+		runId: "run",
+		stepId: "core.verification",
+		role: "verifier",
+		description: "Which behavior?",
+		options: [],
+		status: "pending",
+		createdAt: "now",
+		expiresAt: "later",
+		clarification: {
+			attachment,
+			delivery: { id: "stable", status: "accepted", acceptedAt: "now" },
+		},
+	};
+	const snapshot = decodeSnapshot({
+		...legacy,
+		metadata: { ...legacy.metadata, clarificationAttachment: attachment },
+		developerDialogue: [record],
+	});
+	const reopened = decodeSnapshot(JSON.parse(JSON.stringify(snapshot)));
+	expect(reopened.metadata.clarificationAttachment).toEqual(attachment);
+	expect(reopened.developerDialogue).toEqual([record]);
+	for (const epoch of [0, -1, 1.5]) {
+		expect(() =>
+			decodeSnapshot({
+				...snapshot,
+				metadata: {
+					...snapshot.metadata,
+					clarificationAttachment: { ...attachment, epoch },
+				},
+			}),
+		).toThrow();
+	}
+	const { clarification: _clarification, ...legacyRecord } = record;
+	expect(
+		decodeSnapshot({ ...legacy, developerDialogue: [legacyRecord] })
+			.developerDialogue[0]?.clarification,
+	).toBeUndefined();
+});
 
 const scopeRecord: VerificationScopeRecord = {
 	round: 2,

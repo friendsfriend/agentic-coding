@@ -121,7 +121,8 @@ test("footer follows the focused detail panel and hides standard keys", async ()
 
 	// Change panel: its compact gate label is advertised; standard scroll is not.
 	const change = t.captureCharFrame();
-	expect(change).toContain("J/K/H/L panels");
+	expect(change).not.toContain("J/K/H/L panels");
+	expect(change).toContain("a attach");
 	expect(change).toContain("Enter approve");
 	expect(change).not.toContain("Scroll focused panel");
 	// The footer is the short view; the long action stays in `?` help.

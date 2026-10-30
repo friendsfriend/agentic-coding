@@ -13,6 +13,7 @@ import type {
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/contracts/workflow.ts";
+import { clarificationSources } from "../src/server/clarification.ts";
 import { decodePlanResult } from "../src/workflow/definitions/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
@@ -499,6 +500,70 @@ describe("the plan's file list reaches the implementation assignment", () => {
 			launchToken(engine, repo, run.id),
 		).rendered.prompt;
 	}
+
+	test("operator plan approval pins immutable design bytes, not later live edits, across engine reopen", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "approved-design-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const { view } = toWorker(
+				repo,
+				{ primaryChangeId: "scope-change" },
+				"approved-design",
+			);
+			expect(view.approvedDesign?.content).toBe("- [x] task\n");
+			const agreed = clarificationSources(view).find(
+				(source) => source.kind === "design" && source.eligible,
+			);
+			expect(agreed?.id).toBe(
+				`approved-design:${view.approvedDesign?.revision}`,
+			);
+			expect(agreed?.digest).toBe(view.approvedDesign?.digest);
+			fs.writeFileSync(
+				path.join(view.worktree, "openspec/changes/scope-change/design.md"),
+				"Unapproved later edit\n",
+			);
+			const reopened = new WorkflowEngine(registerBuiltins()).status(
+				repo,
+				view.workflowId,
+			);
+			expect(
+				clarificationSources(reopened).find(
+					(source) => source.kind === "design" && source.eligible,
+				),
+			).toEqual(agreed);
+			expect(
+				clarificationSources(reopened).find(
+					(source) => source.id === "design.md",
+				),
+			).toMatchObject({ content: "Unapproved later edit\n", eligible: false });
+			const liveFile = path.join(
+				view.worktree,
+				"openspec/changes/scope-change/design.md",
+			);
+			fs.writeFileSync(liveFile, "x".repeat(128 * 1024 + 1));
+			expect(
+				clarificationSources(reopened).some(
+					(source) => source.id === "design.md",
+				),
+			).toBe(false);
+			const outside = path.join(tmp, "outside-design.md");
+			fs.writeFileSync(outside, "Not worktree evidence");
+			fs.unlinkSync(liveFile);
+			fs.symlinkSync(outside, liveFile);
+			expect(
+				clarificationSources(reopened).some(
+					(source) => source.id === "design.md",
+				),
+			).toBe(false);
+			expect(
+				clarificationSources(reopened).find(
+					(source) => source.kind === "design" && source.eligible,
+				),
+			).toEqual(agreed);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 
 	test("the declared artifacts are rendered as the plan's file list", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-files-"));

@@ -285,6 +285,10 @@ export const STAGE_SYSTEM_MAX_BYTES = 256;
 export const STAGE_WIKI_PROCESS_MAX_BYTES = 512;
 
 export interface WorkflowMetadata {
+	/** Explicit clarification custody; absent means unassigned, never inferred
+	 * from startedBy or the currently visible Home conversation. */
+	clarificationAttachment?: ClarificationAttachment;
+	approvedDesign?: ApprovedDesign;
 	/** Native scheduling provenance, committed atomically with activation; never agent context. */
 	schedulingOrigin?: {
 		occurrenceId: string;
@@ -705,7 +709,106 @@ export interface ClassifierDecisionRecord {
  * the developer in the dashboard but never routed to, or resumed by, a run. */
 export type DeveloperDialogueKind = "login-handoff";
 
+export interface ApprovedDesign {
+	content: string;
+	digest: string;
+	revision: number;
+	approvedAt: string;
+}
+export const ApprovedDesignSchema = Schema.Struct({
+	content: text(128 * 1024),
+	digest: text(128),
+	revision: integer(1),
+	approvedAt: text(64),
+});
+
+export const ClarificationAttachmentSchema = Schema.Struct({
+	hostId: text(256),
+	conversationId: text(256),
+	epoch: integer(1),
+});
+
+export const ClarificationAuthoritySchema = Schema.Struct({
+	attachment: ClarificationAttachmentSchema,
+	messages: Schema.Array(
+		Schema.Struct({
+			hostId: text(256),
+			conversationId: text(256),
+			messageId: text(256),
+			sequence: integer(1),
+			role: Schema.Literals(["assistant", "developer"]),
+			text: text(8192),
+		}),
+	).pipe(Schema.check(Schema.isMaxLength(16))),
+	sources: Schema.Array(
+		Schema.Struct({
+			kind: Schema.Literals(["task", "design", "developer-decision"]),
+			id: text(4096),
+			digest: text(128),
+		}),
+	).pipe(Schema.check(Schema.isMaxLength(16))),
+});
+/** Populated only by trusted server lookup, never copied from action input. */
+export type ClarificationAuthority = typeof ClarificationAuthoritySchema.Type;
+
+export interface ClarificationAttachment {
+	hostId: string;
+	conversationId: string;
+	epoch: number;
+}
+
+/** References are resolved by the trusted host, not accepted as model claims. */
+export interface ClarificationTranscriptReference {
+	messageId: string;
+	sequence: number;
+}
+
+export interface ClarificationResponse {
+	questionId: string;
+	kind: "option" | "custom";
+	value: string;
+}
+
+/** Additive schema7 state. Absence preserves legacy history without inventing
+ * custody, provenance, or a delivery acknowledgement. */
+export interface ClarificationState {
+	/** The authenticated question tool returned pending before the answer. */
+	awaitingHandoff?: boolean;
+	attachment: ClarificationAttachment;
+	delivery: {
+		id: string;
+		status: "pending" | "accepted";
+		acceptedAt?: string;
+	};
+	candidate?: {
+		version: number;
+		responses: ClarificationResponse[];
+		digest: string;
+		proposal: ClarificationTranscriptReference;
+	};
+	resolution?:
+		| {
+				origin: "grounded-orchestrator";
+				rationale: string;
+				sources: Array<{
+					kind: "task" | "design" | "developer-decision";
+					id: string;
+					digest: string;
+				}>;
+				receipt: string;
+		  }
+		| {
+				origin: "confirmed-developer";
+				candidateVersion: number;
+				confirmation: ClarificationTranscriptReference;
+				receipt: string;
+		  };
+}
+
 export interface DeveloperDialogueRecord {
+	clarification?: ClarificationState;
+	/** Authenticated pending tool-return race marker, including unassigned work. */
+	clarificationAwaitingHandoff?: boolean;
 	id: string;
 	workflowId: string;
 	runId: string;
@@ -1020,6 +1123,9 @@ export interface WorkflowView {
 	/** Who started this workflow; always set by the projection, defaulting to
 	 * `developer` for a snapshot that predates the attribution. */
 	startedBy?: StartedBy;
+	/** Explicit clarification-only custody; absent means unassigned. */
+	clarificationAttachment?: ClarificationAttachment;
+	approvedDesign?: ApprovedDesign;
 	/** The gate policies pinned at start; absent when none were pinned. */
 	gatePolicies?: Record<string, string>;
 	currentStep: {
@@ -1107,6 +1213,16 @@ export type WorkflowCommand =
 			/** The principal the action arrived from; a server-decided option, never
 			 * a wire field. Absent reads as the operator. */
 			principal?: WorkflowPrincipal;
+			clarificationAuthority?: ClarificationAuthority;
+	  }
+	| {
+			type: "agent.question-wait";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+			questionId: string;
 	  }
 	| {
 			type: "agent.question";
@@ -1369,6 +1485,16 @@ const developerActionSchema = Schema.Struct({
 	/** The acting principal, handed over by the server from the authenticated
 	 * capability; the wire request cannot carry it. */
 	principal: Schema.optionalKey(Schema.Literals(["operator", "orchestrator"])),
+	clarificationAuthority: Schema.optionalKey(ClarificationAuthoritySchema),
+});
+const agentQuestionWaitSchema = Schema.Struct({
+	type: Schema.Literal("agent.question-wait"),
+	workflowId: text(4096),
+	runId: text(4096),
+	stepId: text(4096),
+	role: text(4096),
+	token: text(1024),
+	questionId: text(4096),
 });
 const agentQuestionSchema = Schema.Struct({
 	type: Schema.Literal("agent.question"),
@@ -1553,6 +1679,7 @@ const operatorResumeSchema = Schema.Struct({
 export const WorkflowCommandSchema = Schema.Union([
 	developerActionSchema,
 	agentQuestionSchema,
+	agentQuestionWaitSchema,
 	agentQuestionExpireSchema,
 	agentAskSchema,
 	agentAnswerSchema,
@@ -2241,6 +2368,8 @@ export const workflowViewSchema = Schema.Struct({
 	),
 	selectedPreset: Schema.optional(Schema.String),
 	startedBy: Schema.optional(Schema.Literals(["developer", "orchestrator"])),
+	clarificationAttachment: Schema.optional(ClarificationAttachmentSchema),
+	approvedDesign: Schema.optional(ApprovedDesignSchema),
 	gatePolicies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 	currentStep: Schema.Struct({
 		id: Schema.String,

@@ -35,6 +35,7 @@ import {
 	browserStageWaitRequestSchema,
 	browserWaitRequestSchema,
 } from "../contracts/browser.ts";
+import { clarificationReconcileSchema } from "../contracts/clarification.ts";
 import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
@@ -52,6 +53,7 @@ import {
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
+import { orchestratorDeveloperInputVerificationSchema } from "../contracts/orchestrator-input.ts";
 import { schedulingRequestSchema } from "../contracts/scheduling-api.ts";
 import {
 	stageBlockSaveRequestSchema,
@@ -419,6 +421,18 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "POST",
 		path: ORCHESTRATOR_SUBSCRIPTIONS_PATH,
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/orchestrator/clarifications/reconcile",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/orchestrator/input/verify",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -904,6 +918,16 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: ORCHESTRATOR_SUBSCRIPTIONS_DELETE_PATH,
 		schemaId: "server.orchestrator.subscriptions.delete",
 		schema: workflowEventUnsubscribeRequestSchema,
+	},
+	{
+		path: "/api/v1/orchestrator/clarifications/reconcile",
+		schemaId: "server.clarification.reconcile",
+		schema: clarificationReconcileSchema,
+	},
+	{
+		path: "/api/v1/orchestrator/input/verify",
+		schemaId: "server.orchestrator.input-proof",
+		schema: orchestratorDeveloperInputVerificationSchema,
 	},
 ];
 

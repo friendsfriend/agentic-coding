@@ -5,9 +5,12 @@
 import { describe, expect, test } from "bun:test";
 import {
 	authorizeEnvironmentRequest,
+	authorizeOrchestratorConversation,
+	authorizeRequest,
 	createInstanceAuthority,
 	ENVIRONMENT_OWNER_HEADER,
 	environmentTokenFor,
+	orchestratorConversationTokenFor,
 	orchestratorTokenFor,
 } from "../src/server/auth.ts";
 
@@ -135,6 +138,110 @@ describe("agent environment capability", () => {
 				"workflow:a",
 			),
 		).not.toBe(alpha);
+	});
+});
+
+describe("orchestrator conversation capability", () => {
+	const identity = { hostId: "host", conversationId: "conversation" };
+	const token = orchestratorConversationTokenFor(authority.token, identity);
+	const request = (capability: string) =>
+		environmentRequest("user", capability);
+
+	test("names only the authenticated conversation and keeps orchestrator policy", () => {
+		expect(
+			authorizeOrchestratorConversation(request(token), authority),
+		).toEqual(identity);
+		expect(authorizeRequest(request(token), authority)).toBe("orchestrator");
+		expect(authorizeEnvironmentRequest(request(token), authority)).toBe("user");
+		expect(() =>
+			authorizeEnvironmentRequest(
+				environmentRequest("workflow:alpha", token),
+				authority,
+			),
+		).toThrow();
+	});
+
+	test("instance and shared orchestrator tokens cannot claim a calling conversation", () => {
+		for (const capability of [
+			authority.token,
+			orchestratorTokenFor(authority.token),
+			environmentTokenFor(authority.token, "workflow:alpha"),
+		])
+			expect(() =>
+				authorizeOrchestratorConversation(request(capability), authority),
+			).toThrow();
+	});
+
+	test("refuses forgery, payload mutation, another instance and noncanonical envelopes", () => {
+		const payload = Buffer.from(
+			JSON.stringify(["host", "another-conversation"]),
+		).toString("base64url");
+		const signature = token.split(".")[2];
+		for (const capability of [
+			`oc1.${payload}.${signature}`,
+			orchestratorConversationTokenFor(
+				orchestratorTokenFor(authority.token),
+				identity,
+			),
+			orchestratorConversationTokenFor("another-instance", identity),
+			`${token}.extra`,
+			token.slice(0, -1),
+			`oc1.${Buffer.from("{}").toString("base64url")}.forged`,
+			`oc1.${"x".repeat(2048)}.forged`,
+		])
+			expect(() =>
+				authorizeOrchestratorConversation(request(capability), authority),
+			).toThrow();
+	});
+
+	test("caller JSON and headers cannot override authenticated identity", () => {
+		const forged = new Request("http://127.0.0.1/api/v1/workflow/action", {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${token}`,
+				"x-orchestrator-conversation": "another",
+			},
+			body: JSON.stringify({ hostId: "another", conversationId: "another" }),
+		});
+		expect(authorizeOrchestratorConversation(forged, authority)).toEqual(
+			identity,
+		);
+		const other = orchestratorConversationTokenFor(authority.token, {
+			...identity,
+			conversationId: "new",
+		});
+		expect(other).not.toBe(token);
+		expect(
+			authorizeOrchestratorConversation(request(other), authority)
+				.conversationId,
+		).toBe("new");
+	});
+
+	test("bounds identities and rejects untrusted origins", () => {
+		for (const hostId of [
+			"",
+			" ",
+			"x".repeat(257),
+			"😀".repeat(65),
+			"host\nother",
+		])
+			expect(() =>
+				orchestratorConversationTokenFor(authority.token, {
+					...identity,
+					hostId,
+				}),
+			).toThrow();
+		expect(() =>
+			authorizeOrchestratorConversation(
+				new Request("http://127.0.0.1/", {
+					headers: {
+						authorization: `Bearer ${token}`,
+						origin: "https://untrusted.example",
+					},
+				}),
+				authority,
+			),
+		).toThrow("untrusted origin");
 	});
 });
 
