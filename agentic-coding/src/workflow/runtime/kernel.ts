@@ -932,9 +932,9 @@ export function enterStep(
 			throw new Error(`missing role behavior for agent step ${step.id}`);
 		const roles = step.behavior.roles({ snapshot, traits });
 		// Re-entry (Repair/recovery) does not traverse an edge or run onArrive.
-		// Publish the registered role resolution so authorization sees the same
-		// roles we actually launch, including recovery from an empty selection.
-		snapshot.step.selectedRoles = [...roles];
+		// Publish launched roles for authorization, except at triage: there the
+		// selection constrains the downstream verifiers, not the triage agent.
+		if (step.id !== "core.triage") snapshot.step.selectedRoles = [...roles];
 		const entry = step.behavior.onEnter?.({
 			snapshot,
 			traits,

@@ -36,8 +36,10 @@ import {
 	costSummary,
 	countVerifierFindings,
 } from "../../src/workflow/run-projections.ts";
+import { workflowDataRoot } from "../../src/workflow/runtime/evidence-store.ts";
 import {
 	canonicalStorePath,
+	STAGE_TEST_WORKFLOW_TARGET,
 	WorkflowEngine,
 } from "../../src/workflow/runtime.ts";
 import {
@@ -148,6 +150,86 @@ test("workflow metadata task reaches dashboard state and request", async () => {
 		deletedFiles: 0,
 		noUpstream: true,
 	});
+});
+
+test("loadDashboard reads stage tester metrics from the shared data root", async () => {
+	const repository = fixture();
+	const workflowId = `stage-${repository.split("/").at(-1)?.toLowerCase()}`;
+	const engine = new WorkflowEngine(registerBuiltins());
+	engine.start({
+		repo: STAGE_TEST_WORKFLOW_TARGET,
+		repositoryContext: repository,
+		workflowId,
+		definitionId: "stage-test",
+		definitionVersion: 1201,
+		metadata: {
+			branch: "main",
+			baseBranch: "main",
+			baseCommit: runGit(repository, "rev-parse", "HEAD"),
+			task: "Test dashboard metrics",
+			stage: "fixture-stage",
+		},
+		routing: {
+			defaultProfile: "test",
+			routes: [
+				{
+					stepId: "stage.execute",
+					profile: {
+						name: "test",
+						runtime: "pi-durable",
+						executable: "sh",
+						tools: [],
+						extensions: [],
+						readOnly: false,
+						capabilities: ["prompt"],
+						digest: "fixture",
+					},
+				},
+			],
+		},
+	});
+	const snapshot = engine.getSnapshot(STAGE_TEST_WORKFLOW_TARGET, workflowId);
+	const root = join(
+		workflowDataRoot({
+			workflowId,
+			definitionId: snapshot.definition.id,
+			worktree: snapshot.metadata.worktree,
+		}),
+		workflowId,
+	);
+	roots.push(root);
+	mkdirSync(root, { recursive: true });
+	writeFileSync(
+		join(root, "telemetry.jsonl"),
+		`${[
+			{
+				role: "stage-tester",
+				event: "runtime.turn.started",
+				at: "2026-01-01T00:00:00Z",
+			},
+			{
+				role: "stage-tester",
+				event: "runtime.usage",
+				at: "2026-01-01T00:00:10Z",
+				cost: 0.25,
+				inputTokens: 100,
+				outputTokens: 50,
+				durationMs: 2000,
+			},
+		]
+			.map((event) => JSON.stringify(event))
+			.join("\n")}\n`,
+	);
+	const dashboard = await loadDashboard(STAGE_TEST_WORKFLOW_TARGET, workflowId);
+	expect(dashboard.costBreakdown).toMatchObject([
+		{
+			role: "stage-tester",
+			cost: 0.25,
+			inputTokens: 100,
+			outputTokens: 50,
+			messages: [{ cost: 0.25 }],
+		},
+	]);
 });
 
 test("loadDashboard projects the pinned runtime without fabricating a model", async () => {

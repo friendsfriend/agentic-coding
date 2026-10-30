@@ -71,6 +71,7 @@ import {
 } from "../../workflow/runtime/debug-requests.ts";
 import {
 	debugRequestReportPathFor,
+	workflowDataRoot,
 	workflowEvidenceScope,
 } from "../../workflow/runtime/evidence-store.ts";
 import {
@@ -78,7 +79,6 @@ import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
 	researchWorkflowTarget,
-	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 	workflowTargets,
 } from "../../workflow/runtime.ts";
@@ -2033,10 +2033,14 @@ export async function loadDashboard(
 	workflowId: string,
 ): Promise<DashboardData> {
 	const state = dashboardState(repo, workflowId) as WorkflowState;
-	const workflowRoot =
-		isResearchWorkflowTarget(repo) || state.definition?.id === "research"
-			? join(wikiWorkflowDataRoot(), workflowId)
-			: join(state.worktree, ".herdr-workflow", workflowId);
+	const workflowRoot = join(
+		workflowDataRoot({
+			workflowId,
+			worktree: state.worktree,
+			definitionId: state.definition?.id,
+		}),
+		workflowId,
+	);
 	const changeRoot = join(
 		state.worktree,
 		"openspec",
