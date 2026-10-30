@@ -4,6 +4,7 @@
 // (`merge-base(base, HEAD)..worktree`, committed work included, uncommitted
 // work allowed), and every round's findings land on a developer review that
 // selects what a worker fixes before verification runs again.
+import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -12,6 +13,7 @@ import path from "node:path";
 import { Effect } from "effect";
 import type {
 	AgentHandle,
+	JsonValue,
 	ResolvedProfile,
 	WorkflowRouting,
 	WorkflowView,
@@ -25,14 +27,19 @@ import {
 	EffectRunner,
 	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
-import { changedFilesIn, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { writeSnapshot } from "../src/workflow/runtime/store.ts";
+import {
+	canonicalStorePath,
+	changedFilesIn,
+	WorkflowEngine,
+} from "../src/workflow/runtime.ts";
 import {
 	prepareWorkflowStart,
 	validateStart,
 } from "../src/workflow/startup.ts";
 import {
 	autoRemoveRepoFixtures,
-	createRepoFixture,
+	createTempRepoFixture,
 	repoPreset,
 } from "./support/git-fixture.ts";
 
@@ -115,7 +122,7 @@ class Adapter implements AgentAdapter {
  * uncommitted file. Both are in the verify change set; only the committed one
  * is in `base..HEAD`. */
 function verifyRepo(): { root: string; baseCommit: string } {
-	const root = createRepoFixture("verify-", repoPreset.readme);
+	const root = createTempRepoFixture("verify-", repoPreset.readme);
 	git(root, ["branch", "base"]);
 	const baseCommit = git(root, ["rev-parse", "HEAD"]);
 	fs.writeFileSync(path.join(root, "committed.txt"), "committed\n");
@@ -307,6 +314,9 @@ function reachVerification(
 	classify(engine, root, "routing", { phase: "apply", answers: {} });
 	view = engine.status(root, view.workflowId);
 	expect(view.currentStep.id).toBe("core.triage");
+	expect(engine.getSnapshot(root, view.workflowId).step.selectedRoles).toEqual(
+		Array.isArray(triage.roles) ? triage.roles : [],
+	);
 	view = complete(engine, root, view, "triage", {
 		roles: plan.map((entry) => ({ ...entry, reason: "the branch changed" })),
 	});
@@ -316,6 +326,214 @@ function reachVerification(
 	expect(view.currentStep.id).toBe("core.verification");
 	return view;
 }
+
+test.each<{
+	name: string;
+	selection: string[];
+	context?: JsonValue;
+	expected: string[];
+	accepted: boolean;
+}>([
+	{
+		name: "exact legacy sentinel",
+		selection: ["triage"],
+		context: { roles: ["quality-verifier"], retained: "arrival" },
+		expected: ["quality-verifier"],
+		accepted: true,
+	},
+	{
+		name: "unaffected unconstrained selection",
+		selection: [],
+		context: { roles: ["quality-verifier"] },
+		expected: [],
+		accepted: true,
+	},
+	{
+		name: "unaffected valid selection",
+		selection: ["quality-verifier"],
+		context: { roles: ["security-verifier"] },
+		expected: ["quality-verifier"],
+		accepted: true,
+	},
+	{
+		name: "unrelated invalid selection",
+		selection: ["unknown"],
+		context: { roles: ["quality-verifier"] },
+		expected: ["unknown"],
+		accepted: false,
+	},
+	{
+		name: "mixed sentinel selection",
+		selection: ["triage", "unknown"],
+		context: { roles: ["quality-verifier"] },
+		expected: ["triage", "unknown"],
+		accepted: false,
+	},
+	{
+		name: "absent context",
+		selection: ["triage"],
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "absent roles",
+		selection: ["triage"],
+		context: { retained: "arrival" },
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "empty roles",
+		selection: ["triage"],
+		context: { roles: [] },
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "unknown context role",
+		selection: ["triage"],
+		context: { roles: ["quality-verifier", "unknown"] },
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "engine-owned context role",
+		selection: ["triage"],
+		context: { roles: ["test-verifier"] },
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "duplicate context role",
+		selection: ["triage"],
+		context: { roles: ["quality-verifier", "quality-verifier"] },
+		expected: ["triage"],
+		accepted: false,
+	},
+	{
+		name: "non-string context role",
+		selection: ["triage"],
+		context: { roles: [1] },
+		expected: ["triage"],
+		accepted: false,
+	},
+])(
+	"same-step triage recovery: $name",
+	async ({ selection, context, expected, accepted }) => {
+		const { root, baseCommit } = verifyRepo();
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const started = startVerify(engine, root, baseCommit);
+		await new EffectRunner(
+			root,
+			engine,
+			agentEffectHandlers(root, engine, {
+				registry,
+				adapters: new Map([["pi-durable", new Adapter()]]),
+			}),
+		).drain(1);
+		classify(engine, root, "triage", { roles: ["quality-verifier"] });
+		classify(engine, root, "routing", { phase: "apply", answers: {} });
+		const snapshot = engine.getSnapshot(root, started.workflowId);
+		expect(snapshot.currentStep).toBe("core.triage");
+		// Persist the earlier snapshot shape in this disposable store only. The
+		// old attempt is parked, not relaunched or completed behind admission.
+		snapshot.step.selectedRoles = selection;
+		if (context === undefined) delete snapshot.step.context;
+		else snapshot.step.context = context;
+		const db = new Database(canonicalStorePath(root));
+		try {
+			db.query(
+				"UPDATE workflow_runs SET status='blocked',capability_hash='' WHERE workflow_id=?",
+			).run(snapshot.workflowId);
+			db.query(
+				"UPDATE workflow_outbox SET status='completed',lease=NULL,lease_expires_at=NULL WHERE workflow_id=?",
+			).run(snapshot.workflowId);
+			writeSnapshot(db, snapshot);
+		} finally {
+			db.close();
+		}
+		const reopened = new WorkflowEngine(registerBuiltins());
+		const before = reopened.getSnapshot(root, snapshot.workflowId);
+		expect(before.step.selectedRoles).toEqual(selection);
+		const repaired = reopened.dispatch(root, {
+			type: "operator.repair",
+			workflowId: snapshot.workflowId,
+			revision: before.revision,
+			targetStep: "core.triage",
+			reason: "Retry persisted triage selection",
+		}).view;
+		const persisted = new WorkflowEngine(registerBuiltins()).getSnapshot(
+			root,
+			snapshot.workflowId,
+		);
+		expect(persisted.step.selectedRoles).toEqual(expected);
+		expect(persisted.step.context).toEqual(context);
+		expect(persisted.step.attempt).toBe(before.step.attempt + 1);
+		expect(persisted.step.activeRunIds).toHaveLength(1);
+		const run = reopened.getRun(
+			root,
+			requireDefined(persisted.step.activeRunIds[0], "repaired run"),
+		);
+		const launch = reopened
+			.claimEffects(root, 100)
+			.find(
+				(effect) =>
+					effect.kind === "agent.launch" &&
+					(effect.payload as { runId?: string }).runId === run.id,
+			);
+		const token = requireDefined(launch?.runToken, "repaired launch token");
+		const outputPath = requireDefined(run.outputPath, "triage output");
+		const submit = (
+			roles: Array<{ role: string; files: string[]; reason: string }>,
+		) => {
+			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			fs.writeFileSync(
+				outputPath,
+				JSON.stringify({
+					runId: run.id,
+					schemaId: run.outputSchema?.id,
+					schemaVersion: run.outputSchema?.version,
+					payload: { roles },
+				}),
+			);
+			return reopened.dispatch(root, {
+				type: "agent.handoff",
+				runId: run.id,
+				generation: run.generation,
+				token,
+				outcome: "complete",
+				artifact: outputPath,
+			}).view;
+		};
+		const plan = [
+			{
+				role: "quality-verifier",
+				files: ["committed.txt"],
+				reason: "Changed file",
+			},
+		];
+		if (accepted) {
+			// Recovery cannot expand a restored subset to a different reviewer.
+			if (expected.length)
+				expect(() =>
+					submit([
+						{
+							role: "security-verifier",
+							files: ["committed.txt"],
+							reason: "Not selected",
+						},
+					]),
+				).toThrow("invalid verifier role selection");
+			expect(submit(plan).currentStep.id).toBe("core.route-verification");
+		} else {
+			expect(() => submit(plan)).toThrow("invalid verifier role selection");
+			expect(reopened.status(root, repaired.workflowId).currentStep.id).toBe(
+				"core.triage",
+			);
+		}
+	},
+);
 
 test("the verify definition is triage, verification, and a findings review", () => {
 	const registry = registerBuiltins();

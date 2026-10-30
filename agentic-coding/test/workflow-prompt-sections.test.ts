@@ -203,24 +203,20 @@ describe("per-role section selection", () => {
 	test("core rules survive every selection", () => {
 		for (const [stepId, role] of table) {
 			const text = prompt(stepId, role);
-			expect(text).toContain(
-				"Perform the work authorized by your assigned role",
-			);
-			expect(text).toContain("Read-only roles remain read-only");
-			expect(text).toContain("Write the final workflow result");
+			expect(text).toContain("Honor assigned role/mode/scope");
+			expect(text).toContain("read-only restrictions");
+			expect(text).toContain("Write the declared run/schema artifact");
 			expect(text).not.toContain("Write only the declared output artifact");
-			expect(text).toContain("Use engine-recorded developer answers");
-			expect(text).toContain("continue independent work if possible");
+			expect(text).toContain("Only engine-recorded developer answers");
+			expect(text).toContain("Continue independent work");
+			expect(text).toContain("not task size");
 			expect(text).toContain(
-				"task size or several required steps alone is not a blocker",
-			);
-			expect(text).toContain(
-				"exactly one allowed outcome through `agentic-coding workflow handoff`",
+				"Finish exactly once via `agentic-coding workflow handoff`",
 			);
 			expect(text).toContain("hand off `blocked`");
-			expect(text).toContain("do not guess");
+			expect(text).toContain("never permits guessing");
 			expect(text).toContain("untrusted context");
-			expect(text).toContain("Never work around a redaction");
+			expect(text).toContain("never print or work around them");
 			expect(text).toContain("Never start agents or mutate workflow state");
 		}
 	});
@@ -243,7 +239,7 @@ describe("guidance travels with the block it governs", () => {
 		expect(
 			prompt("core.plan", "planner", { interaction: "developer-dialogue" }),
 		).toContain(
-			"Interaction: developer-dialogue\nVisible discussion is allowed; prefer `developer_question`",
+			"Interaction: developer-dialogue\nVisible discussion is allowed; use `developer_question` only for material unresolved decisions.",
 		);
 	});
 
@@ -295,9 +291,7 @@ describe("stage briefs keep their semantics", () => {
 		expect(tester).toContain("This is a test stage");
 		expect(tester).toContain("apply its configured prefix");
 		expect(tester).toContain("Do not expose credentials");
-		expect(tester).toContain(
-			"Raw URLs, other origins and apps the stage does not declare are refused",
-		);
+		expect(tester).toContain("No raw URLs, undeclared apps or other origins");
 		expect(tester).toContain("`browser_open({stage:");
 		expect(tester).toContain("`core.stage-report@1`");
 	});
@@ -320,13 +314,15 @@ describe("stage briefs keep their semantics", () => {
 			"when stale, flag stale reliance in the journal and observation",
 		);
 		expect(tester).toContain(
-			"at least one `new` observation for each business step learned",
+			"at least one `new` observation per learned business step",
 		);
-		expect(tester).toContain("what submit does");
+		expect(tester).toContain("submission effects");
 		expect(tester).toContain(
-			"UI/layout, selector and timing trouble are findings, not knowledge",
+			"UI/layout, selectors and timing are findings, not knowledge",
 		);
-		expect(tester).toContain("include that exact block ID");
+		expect(tester).toContain(
+			"Cite exact block IDs only for evidence-supported step mappings",
+		);
 	});
 
 	test("the stage wiki brief writes linked business process knowledge, not UI quirks", () => {
@@ -334,13 +330,13 @@ describe("stage briefs keep their semantics", () => {
 		for (const phrase of [
 			"projects/<system>/processes/<process>",
 			"sections Purpose, Actors, Steps, Decisions & rules, Inputs, Outputs and Open questions",
-			"exact implementing block ID",
-			"missing` details and unresolved `contradicted` claims",
-			"Never document UI, selector or timing quirks",
+			"exact implementing block IDs",
+			"Preserve missing/disputed details as Open questions",
+			"Exclude UI, selector and timing quirks",
 			"dated **Disputed** callout",
 			"`confirmed` alone causes no write",
 			"contentDigest` as `--expected-digest",
-			"re-read it, merge this run's approved observations",
+			"On a conflict, re-read, merge approved observations and retry",
 		])
 			expect(wiki).toContain(phrase);
 	});

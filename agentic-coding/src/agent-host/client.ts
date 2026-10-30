@@ -421,6 +421,41 @@ export class HostClient {
 		if (response.type !== "ensureRun") throw unexpected(response);
 		return response;
 	}
+	async claimClarification(
+		request: Omit<import("./protocol.ts").ClarificationClaimRequest, "type">,
+	): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "clarificationClaim" },
+			this.timeoutMs,
+		);
+		if (response.type !== "clarificationClaim") throw unexpected(response);
+		if (
+			response.binding !== request.binding ||
+			response.confirmationMessageId !== request.confirmationMessageId
+		)
+			throw new Error("clarification claim acknowledgement mismatch");
+	}
+
+	async deliverClarification(
+		request: Omit<import("./protocol.ts").ClarificationDeliveryRequest, "type">,
+	): Promise<import("./protocol.ts").ClarificationDeliveryResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "clarificationDelivery" },
+			this.timeoutMs,
+		);
+		if (response.type !== "clarificationDelivery") throw unexpected(response);
+		if (
+			response.hostId !== request.hostId ||
+			response.conversationId !== request.conversationId ||
+			response.deliveryId !== request.deliveryId ||
+			!response.runId
+		)
+			throw new Error("clarification delivery acknowledgement mismatch");
+		return response;
+	}
+
 	async scheduledIdentity(): Promise<string> {
 		const response = await sendRequest(
 			this.socketPath,
@@ -443,11 +478,50 @@ export class HostClient {
 		return response;
 	}
 
+	async clarificationTranscript(
+		request: Omit<
+			import("./protocol.ts").ClarificationTranscriptRequest,
+			"type"
+		>,
+	): Promise<import("./protocol.ts").ClarificationTranscriptResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "clarificationTranscript" },
+			this.timeoutMs,
+		);
+		if (response.type !== "clarificationTranscript") throw unexpected(response);
+		return response;
+	}
+
+	async submitDeveloperInput(
+		input: import("../contracts/orchestrator-input.ts").OrchestratorDeveloperInput,
+		proof: string,
+	): Promise<SubmitResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{
+				type: "submit",
+				runId: input.runId,
+				text: input.text,
+				requestId: input.requestId,
+				whenBusy: input.whenBusy,
+				developerInput: input,
+				developerProof: proof,
+			},
+			this.timeoutMs,
+		);
+		if (response.type !== "submit") throw unexpected(response);
+		if (response.developerInputAccepted !== true)
+			throw new Error("Host did not authenticate interactive input");
+		return response;
+	}
+
 	async submit(
 		runId: string,
 		text: string,
 		requestId: string,
 		whenBusy?: string,
+		source?: "internal",
 	): Promise<SubmitResponse> {
 		const response = await sendRequest(
 			this.socketPath,
@@ -457,6 +531,7 @@ export class HostClient {
 				text,
 				requestId,
 				...(whenBusy ? { whenBusy } : {}),
+				...(source ? { source } : {}),
 			},
 			this.timeoutMs,
 		);

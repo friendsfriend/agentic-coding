@@ -16,6 +16,7 @@ import {
 export { discoverChangeIds };
 
 import type {
+	ClarificationAttachment,
 	StartedBy,
 	WorkflowExecutionSettings,
 	WorkflowRouting,
@@ -121,6 +122,8 @@ export interface WorkflowStartRequest {
 	 * principal, never from a wire request; the engine-facing request defaults
 	 * to the operator (`developer`). */
 	startedBy?: StartedBy;
+	/** Trusted, explicit clarification custody; absent never infers a home. */
+	clarificationAttachment?: ClarificationAttachment;
 }
 
 export interface PreparedWorkflowStart {
@@ -1118,6 +1121,9 @@ function prepareFromContext(
 				// lifetime, and an operator start says so explicitly instead of
 				// leaving the reader to infer the default.
 				...{ startedBy: request.startedBy ?? "developer" },
+				...(request.clarificationAttachment
+					? { clarificationAttachment: request.clarificationAttachment }
+					: {}),
 				// The blueprint a custom-shaped start was compiled from, pinned with
 				// the definition it produced: the label and rationale the model
 				// authored and the digest the workflow pins.

@@ -24,6 +24,7 @@ import {
 	COMPACTION_CEILING_MINIMUM,
 	type CompactionConfig,
 } from "../src/workflow/compaction.ts";
+import { ensureAdmittedFixtureRun } from "./support/admitted-host.ts";
 
 // Keep the test ceiling above the initial prompt/tool declarations (which grow
 // with upstream tool descriptions), so only the scripted context triggers it.
@@ -157,7 +158,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-ceiling",
 				name: "worker-ceiling",
 				cwd: dir,
@@ -252,7 +253,7 @@ describe("cost ceiling of a durable host", () => {
 		});
 		try {
 			const envPath = writeRunEnv(dir, { HERDR_RUN_ID: "run-floor" });
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-floor",
 				name: "worker-floor",
 				cwd: dir,
@@ -315,7 +316,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-guard",
 				name: "worker-guard",
 				cwd: dir,
@@ -379,7 +380,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-off",
 				name: "worker-off",
 				cwd: dir,
@@ -418,7 +419,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "worker",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-narrow",
 				name: "worker-narrow",
 				cwd: dir,
@@ -477,7 +478,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "test-verifier",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-verifier",
 				name: "verifier-ceiling",
 				cwd: dir,
@@ -532,7 +533,7 @@ describe("cost ceiling of a durable host", () => {
 				HERDR_ROLE: "orchestrator",
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
-			await host.ensureRun({
+			await ensureAdmittedFixtureRun(host, {
 				runId: "run-orchestrator",
 				name: "orchestrator",
 				cwd: dir,

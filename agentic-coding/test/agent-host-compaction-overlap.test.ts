@@ -180,7 +180,11 @@ for (const outcome of ["success", "failure", "cancel", "shutdown"] as const)
 					runId: "independent",
 					name: "independent",
 					cwd: dir,
-					runEnvPath: envPath,
+					runEnvPath: (() => {
+						const independentEnv = path.join(dir, "independent.env");
+						fs.writeFileSync(independentEnv, "HERDR_RUN_ID=independent\n");
+						return independentEnv;
+					})(),
 					toolPolicy: "default",
 					model: `${independent.getModel("wide")?.provider}/wide`,
 				});

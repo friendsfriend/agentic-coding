@@ -388,6 +388,7 @@ describe("shared workflow startup", () => {
 			// A caller that says nothing is the operator: the pin is written
 			// explicitly instead of left absent for every reader to infer.
 			expect(operator.input.metadata.startedBy).toBe("developer");
+			expect(operator.input.metadata.clarificationAttachment).toBeUndefined();
 			const orchestrated = prepareWorkflowStart({
 				repo,
 				workflowId: "attribution-orchestrator",
@@ -396,8 +397,18 @@ describe("shared workflow startup", () => {
 				mode: "checkout",
 				preset: "fixed",
 				startedBy: "orchestrator",
+				clarificationAttachment: {
+					hostId: "host",
+					conversationId: "conversation",
+					epoch: 1,
+				},
 			});
 			expect(orchestrated.input.metadata.startedBy).toBe("orchestrator");
+			expect(orchestrated.input.metadata.clarificationAttachment).toEqual({
+				hostId: "host",
+				conversationId: "conversation",
+				epoch: 1,
+			});
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;

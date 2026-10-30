@@ -95,6 +95,8 @@ export interface WorkflowEventProjection {
 	 * so the diff below only reports a wait that opened or ended. */
 	readonly waiting: WorkflowWait | null;
 	readonly attention: readonly string[];
+	/** A parked authenticated question asker, not a new review/failure alert. */
+	readonly clarificationOnly?: boolean;
 	readonly pendingQuestions: readonly WorkflowQuestionRef[];
 	readonly routedQuestions: readonly WorkflowQuestionRef[];
 	readonly answeredQuestions: readonly WorkflowAnsweredQuestionRef[];
@@ -155,6 +157,29 @@ export function projectWorkflowEvents(
 	view: WorkflowView,
 ): WorkflowEventProjection {
 	const stepId = view.currentStep?.id ?? "";
+	const pendingAskers = new Set(
+		(view.pendingQuestions ?? [])
+			.filter(
+				(question) =>
+					question.kind !== "login-handoff" &&
+					(question.targetRole === undefined ||
+						question.targetRole === "orchestrator") &&
+					question.clarification?.awaitingHandoff,
+			)
+			.map((question) => question.runId),
+	);
+	const stopped = (view.runs ?? []).filter(
+		(run) =>
+			run.stepId === stepId &&
+			(run.status === "blocked" || run.status === "failed"),
+	);
+	const clarificationOnly =
+		view.waiting?.kind === "question" &&
+		stopped.length > 0 &&
+		stopped.every(
+			(run) => run.status === "blocked" && pendingAskers.has(run.id),
+		) &&
+		!(view.effects ?? []).some((effect) => effect.status === "failed");
 	return {
 		status: view.status,
 		startedBy: view.startedBy ?? "developer",
@@ -165,6 +190,7 @@ export function projectWorkflowEvents(
 		review: reviewKindForStep(stepId) ?? null,
 		waiting: view.waiting ?? null,
 		attention: [...(view.health?.attention ?? [])],
+		...(clarificationOnly ? { clarificationOnly: true } : {}),
 		pendingQuestions: questionRefs(view.pendingQuestions),
 		routedQuestions: questionRefs(view.orchestratorQuestions),
 		answeredQuestions: (view.developerDialogue ?? [])
@@ -253,6 +279,7 @@ export function deriveWorkflowEvents(
 				stepId: next.stepId,
 				stepLabel: next.stepLabel,
 				reasons: boundedReasons(next.attention),
+				...(next.clarificationOnly ? { clarificationOnly: true } : {}),
 			});
 		else if (next.status === "completed")
 			push("workflow.completed", { ...step });
@@ -298,7 +325,10 @@ export function deriveWorkflowEvents(
 	// The status edge is reported as `workflow.failed` alone; the reasons ride
 	// along there, so raising attention twice for one edge would be noise.
 	if (!statusEdge && gained.length > 0)
-		push("attention.raised", { reasons: boundedReasons(gained) });
+		push("attention.raised", {
+			reasons: boundedReasons(gained),
+			...(next.clarificationOnly ? { clarificationOnly: true } : {}),
+		});
 	if (lost.length > 0)
 		push("attention.cleared", { reasons: boundedReasons(lost) });
 

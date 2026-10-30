@@ -1778,33 +1778,45 @@ describe("app slot regressions", () => {
 		expect(await restarted.occupancy("shop")).toBeUndefined();
 	});
 
-	test("a script that exits before the start settles never holds the app", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-early-exit-"));
-		const fixture = scriptFixture(root);
-		const store = tempState("early-exit");
-		const slots = harness({
-			root,
-			configDir: fixture.configDir,
-			checkout: fixture.checkout,
-			apps: () => [app(fixture.checkout)],
-			store: store.store,
-			scriptInfra: spawningScriptInfra(50),
-		});
-		track([
-			() => store.store.close(),
-			() => fs.rmSync(root, { recursive: true, force: true }),
-		]);
-		// Both codes are the same outcome: the process that was supposed to serve
-		// the app is gone, so the start failed and the slot is released.
-		const failure = (await slots.controller
-			.acquire({ owner: "workflow:a", apps: ["shop"], waitSec: 1 })
-			.catch((error: unknown) => error)) as { code?: string };
-		expect(["run-exited", "start-failed"]).toContain(failure.code ?? "");
-		// The settled row is terminal, so the app is free again.
-		const record = store.store.findEnvironmentInstance("workflow:a", "shop");
-		expect(["stopped", "failed"]).toContain(record?.status ?? "missing");
-		expect(await slots.occupancy("shop")).toBeUndefined();
-	});
+	test.each([0, 100])(
+		"a script that exits before the start settles never holds the app (%i ms)",
+		async (exitDelayMs) => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-early-exit-"));
+			const fixture = scriptFixture(root);
+			// Cover both exit-before-launch-resolution and exit-during-settle.
+			fs.writeFileSync(
+				fixture.sourcePath,
+				`#!/bin/sh\nsleep ${exitDelayMs / 1000}\n`,
+			);
+			const store = tempState("early-exit");
+			const slots = harness({
+				root,
+				configDir: fixture.configDir,
+				checkout: fixture.checkout,
+				apps: () => [app(fixture.checkout)],
+				store: store.store,
+				scriptInfra: spawningScriptInfra(50),
+				// The child is real: a fake-clock settle sleep can win before the
+				// OS schedules its exit, especially during the parallel suite. Wait
+				// for the real exit (or the real bounded window), as the next test does.
+				sleep: (ms) => Bun.sleep(ms),
+			});
+			track([
+				() => store.store.close(),
+				() => fs.rmSync(root, { recursive: true, force: true }),
+			]);
+			// Both codes are the same outcome: the process that was supposed to serve
+			// the app is gone, so the start failed and the slot is released.
+			const failure = (await slots.controller
+				.acquire({ owner: "workflow:a", apps: ["shop"], waitSec: 1 })
+				.catch((error: unknown) => error)) as { code?: string };
+			expect(["run-exited", "start-failed"]).toContain(failure.code ?? "");
+			// The settled row is terminal, so the app is free again.
+			const record = store.store.findEnvironmentInstance("workflow:a", "shop");
+			expect(["stopped", "failed"]).toContain(record?.status ?? "missing");
+			expect(await slots.occupancy("shop")).toBeUndefined();
+		},
+	);
 
 	test("a run target that dies during startup is run-exited with its code and output", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "slots-run-exited-"));

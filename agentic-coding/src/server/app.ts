@@ -5,6 +5,8 @@
 // runtime. Since the Go backend was retired there is no delegation: every route
 // is answered in this process or is 404.
 
+import { clarificationDeliveries } from "../agent-host/clarification-delivery.ts";
+import { CLARIFICATION_GUIDANCE } from "../agent-host/clarification-guidance.ts";
 import { retryAgentTaskAsOperator } from "../agent-host/retry-mediator.ts";
 import { resolveConfigRoot } from "../config-root.ts";
 import type {
@@ -23,6 +25,7 @@ import type {
 	WorkflowRepairRequest,
 	WorkflowStartRequest,
 } from "../contracts/actions.ts";
+import { clarificationActions } from "../contracts/clarification.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
 import type {
@@ -33,6 +36,7 @@ import type {
 	ObserveRequest,
 } from "../contracts/environment.ts";
 import { LAUNCH_VERIFY_PATH, launchClaimSchema } from "../contracts/launch.ts";
+
 import { SchedulingError } from "../contracts/scheduling.ts";
 import type { SchedulingRequest } from "../contracts/scheduling-api.ts";
 import type {
@@ -48,6 +52,10 @@ import type {
 	WorkflowEventUnsubscribeRequest,
 } from "../contracts/workflow-events.ts";
 import { WorkflowRuntimeError } from "../workflow/contracts.ts";
+import {
+	loadProjectCatalog,
+	projectCanonicalRoots,
+} from "../workflow/project-catalog.ts";
 import { runAppBuildTestAction } from "./actions/routes.ts";
 import {
 	AuthorizationError,
@@ -56,14 +64,23 @@ import {
 	authorizeRequest,
 	type InstanceAuthority,
 	isPublicRoute,
+	orchestratorConversationFor,
 	originAllowed,
 	PayloadBoundError,
 	type Principal,
 	readJsonBody,
+	verifyOrchestratorDeveloperInputProof,
 } from "./auth.ts";
 import { workflowLoginHandoffAttention } from "./browser/attention.ts";
 import { type BrowserRouteDeps, handleBrowserRoute } from "./browser/routes.ts";
 import { type BrowserRuntime, browserRuntime } from "./browser/runtime.ts";
+import {
+	clarificationProposalPreview,
+	clarificationSources,
+	resolveClarificationAuthority,
+} from "./clarification.ts";
+import { createClarificationReconciler } from "./clarification-delivery.ts";
+import { acceptedClarificationReplay } from "./clarification-replay.ts";
 import type { CredentialRegistry } from "./credentials.ts";
 import { type DebugRouteDeps, handleDebugRoute } from "./debug/routes.ts";
 import type { LogIndex, TraceIndex } from "./debug/trace-index.ts";
@@ -287,6 +304,23 @@ function eventErrorResponse(error: unknown): Response {
 export function createServerApp(options: ServerAppOptions): ServerApp {
 	const { authority, events, credentials } = options;
 	const operations = options.operations ?? serverOperations;
+	const reconcileClarifications = createClarificationReconciler(
+		operations,
+		options.configDir,
+	);
+	const clarificationRepos = new Set<string>();
+	const retryClarifications = async (
+		repo: string,
+		workflowId: string,
+		explicit = false,
+	): Promise<void> => {
+		clarificationRepos.add(repo);
+		try {
+			await reconcileClarifications(repo, workflowId, explicit);
+		} catch {
+			/* Unavailable destination or concurrent revision: retain the durable pending receipt. */
+		}
+	};
 	const eventBus = options.eventBus;
 	const telemetryWatchers = new Map<string, () => void>();
 	// One browser runtime per server process: one Chromium, one session cap, one
@@ -543,6 +577,16 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// An engine failure keeps its own code (a stale revision must not
 			// degrade into "bad-request"); anything else is a malformed request.
 			const message = safeMessage(error);
+			if (error instanceof AuthorizationError)
+				return errorResponse(
+					error.status,
+					error.status === 403
+						? "orchestrator-forbidden"
+						: error.status === 401
+							? "unauthorized"
+							: "bad-request",
+					message,
+				);
 			if (error instanceof WorkflowRuntimeError)
 				return errorResponse(409, error.code, message);
 			return errorResponse(400, "bad-request", message);
@@ -787,8 +831,21 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		if (method === "GET" && path === "/api/v1/workflow/view") {
 			const repo = url.searchParams.get("repo") ?? "";
 			const workflowId = url.searchParams.get("workflowId") ?? "";
-			if (url.searchParams.get("list") === "1")
+			if (url.searchParams.get("list") === "1") {
+				const views = operations.listViews(repo);
+				const pending = views.filter(
+					(view) => clarificationDeliveries(view).length > 0,
+				);
+				if (pending.length === 0) return json({ ok: true, value: views });
+				await Promise.all(
+					pending.map((view) => retryClarifications(repo, view.workflowId)),
+				);
 				return json({ ok: true, value: operations.listViews(repo) });
+			}
+			const view = operations.view(repo, workflowId);
+			if (clarificationDeliveries(view).length === 0)
+				return json({ ok: true, value: view });
+			await retryClarifications(repo, workflowId);
 			return json({ ok: true, value: operations.view(repo, workflowId) });
 		}
 
@@ -942,11 +999,88 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				);
 			}
 		}
+		if (
+			method === "POST" &&
+			path === "/api/v1/orchestrator/clarifications/reconcile"
+		) {
+			if (principal !== "operator")
+				return errorResponse(
+					403,
+					"operator-required",
+					"Home reconnect reconciliation is operator-owned.",
+				);
+			const input = decodeRouteRequest<{
+				hostId: string;
+				conversationId: string;
+				repo?: string;
+			}>(
+				"/api/v1/orchestrator/clarifications/reconcile",
+				await readJsonBody(request),
+			);
+			const roots = new Set([
+				...clarificationRepos,
+				...projectCanonicalRoots(await loadProjectCatalog()),
+				...(input.repo ? [input.repo] : []),
+			]);
+			for (const repo of roots) {
+				try {
+					const views = operations.listViews(repo);
+					await Promise.all(
+						views
+							.filter(
+								(view) =>
+									view.clarificationAttachment?.hostId === input.hostId &&
+									view.clarificationAttachment.conversationId ===
+										input.conversationId,
+							)
+							.map((view) => retryClarifications(repo, view.workflowId, true)),
+					);
+				} catch {
+					/* One inaccessible project must not prevent other pending deliveries. */
+				}
+			}
+			return json({ ok: true });
+		}
+		if (method === "POST" && path === "/api/v1/orchestrator/input/verify") {
+			const identity = orchestratorConversationFor(request, authority);
+			if (!identity)
+				return errorResponse(
+					403,
+					"orchestrator-forbidden",
+					"Conversation identity is required.",
+				);
+			const { input, proof } = decodeRouteRequest<
+				import("../contracts/orchestrator-input.ts").OrchestratorDeveloperInputVerification
+			>(
+				"/api/v1/orchestrator/input/verify",
+				await readJsonBody(request, 256 * 1024),
+			);
+			if (
+				!verifyOrchestratorDeveloperInputProof(
+					authority,
+					identity,
+					input,
+					proof,
+				)
+			)
+				return errorResponse(
+					403,
+					"orchestrator-forbidden",
+					"Interactive input proof is invalid or expired.",
+				);
+			return json({ verified: true });
+		}
 		if (method === "POST" && path === "/api/v1/workflow/action") {
 			const decoded = decodeRouteRequest<WorkflowActionRequest>(
 				"/api/v1/workflow/action",
 				await readJsonBody(request),
 			);
+			if (decoded.actionId === "clarification.ack")
+				return errorResponse(
+					403,
+					"server-receipt-required",
+					"Delivery receipts are committed only after native host acceptance.",
+				);
 			if (principal === "orchestrator") {
 				const refusal = orchestratorActionRefusal(
 					decoded.actionId,
@@ -958,7 +1092,54 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// The principal is decided here and handed over as an option, so the
 			// event records the orchestrator without the wire being able to
 			// claim (or suppress) the attribution.
-			const value = operations.action(decoded, { principal });
+			if (
+				principal === "orchestrator" &&
+				(decoded.actionId === "clarification.grounded" ||
+					decoded.actionId === "clarification.confirm")
+			) {
+				const view = operations.view(decoded.repo, decoded.workflowId);
+				if (
+					acceptedClarificationReplay(
+						view,
+						decoded.actionId,
+						decoded.input,
+						orchestratorConversationFor(request, authority),
+					)
+				)
+					return json({ ok: true, value: view });
+			}
+			const clarificationAuthority =
+				clarificationActions.has(decoded.actionId) ||
+				decoded.actionId === "clarification.context"
+					? await resolveClarificationAuthority({
+							actionId: decoded.actionId,
+							input: decoded.input,
+							view: operations.view(decoded.repo, decoded.workflowId),
+							principal,
+							identity: orchestratorConversationFor(request, authority),
+							configDir: options.configDir,
+						})
+					: undefined;
+			if (decoded.actionId === "clarification.context") {
+				const view = operations.view(decoded.repo, decoded.workflowId);
+				return json({
+					ok: true,
+					value: {
+						revision: view.revision,
+						instructions: CLARIFICATION_GUIDANCE,
+						attachment: clarificationAuthority?.attachment,
+						messages: clarificationAuthority?.messages,
+						proposal: clarificationProposalPreview(view, decoded.input),
+						sources: clarificationSources(view),
+					},
+				});
+			}
+			const value = operations.action(decoded, {
+				principal,
+				...(clarificationAuthority ? { clarificationAuthority } : {}),
+			});
+			if (decoded.actionId === "clarification.attach")
+				void retryClarifications(decoded.repo, decoded.workflowId, true);
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.action",
@@ -994,7 +1175,14 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			// Orchestrator-started work keeps every human review: the server pins
 			// the plan, developer and wiki gates to `always`, whatever the preset.
 			// The same principal pins `startedBy` for the workflow's lifetime.
+			const conversation =
+				principal === "orchestrator"
+					? orchestratorConversationFor(request, authority)
+					: undefined;
 			const value = await operations.start(decoded, {
+				...(conversation
+					? { clarificationAttachment: { ...conversation, epoch: 1 } }
+					: {}),
 				...(principal === "orchestrator"
 					? { enforceHumanReviewGates: true }
 					: {}),
@@ -1208,14 +1396,16 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			const value = await operations.agentQuestion(
 				decoded,
 				request.signal,
-				(workflowId, revision) =>
+				(workflowId, revision) => {
 					events.publish({
 						domain: "workflow",
 						kind: "workflow.question",
 						resource: decoded.repo,
 						runId: workflowId,
 						revision,
-					}),
+					});
+					void retryClarifications(decoded.repo, workflowId);
+				},
 			);
 			return json({ ok: true, value });
 		}

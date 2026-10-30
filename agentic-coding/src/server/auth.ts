@@ -11,6 +11,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OrchestratorDeveloperInput } from "../contracts/orchestrator-input.ts";
 import type { WorkflowPrincipal } from "../contracts/workflow.ts";
 import { MAX_PATH_CHARS, MAX_REQUEST_BYTES } from "./protocol.ts";
 
@@ -156,6 +157,148 @@ export function orchestratorTokenFor(instanceToken: string): string {
 		.digest("hex");
 }
 
+/** Mint a conversation capability only at the operator bootstrap after
+ * the host has returned its durable identity. The instance-wide orchestrator
+ * token cannot derive it. Its authenticated payload, not caller JSON, names
+ * the conversation a clarification mutation may act for. */
+export interface OrchestratorConversationIdentity {
+	readonly hostId: string;
+	readonly conversationId: string;
+}
+
+function developerInputPayload(input: OrchestratorDeveloperInput): string {
+	return JSON.stringify([
+		input.hostId,
+		input.conversationId,
+		input.runId,
+		input.requestId,
+		input.text,
+		input.whenBusy,
+		input.expiresAt,
+	]);
+}
+
+/** Operator-only signing domain. A scoped/shared orchestrator token cannot
+ * mint a valid proof, even if it runs this same public signing function. */
+export function orchestratorDeveloperInputProofFor(
+	instanceToken: string,
+	input: OrchestratorDeveloperInput,
+): string {
+	return createHmac("sha256", instanceToken)
+		.update(`agentic-coding:developer-input:v1:${developerInputPayload(input)}`)
+		.digest("hex");
+}
+
+export function verifyOrchestratorDeveloperInputProof(
+	authority: InstanceAuthority,
+	identity: OrchestratorConversationIdentity,
+	input: OrchestratorDeveloperInput,
+	proof: string,
+	now = Date.now(),
+): boolean {
+	return (
+		input.hostId === identity.hostId &&
+		input.conversationId === identity.conversationId &&
+		input.expiresAt > now &&
+		input.expiresAt <= now + 120_000 &&
+		/^[0-9a-f]{64}$/.test(proof) &&
+		constantTimeEqual(
+			proof,
+			orchestratorDeveloperInputProofFor(authority.token, input),
+		)
+	);
+}
+
+function validConversationPart(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.trim().length > 0 &&
+		Buffer.byteLength(value) <= 256 &&
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: capability identity must not contain control characters
+		!/[\x00-\x1f\x7f]/.test(value)
+	);
+}
+
+export function orchestratorConversationTokenFor(
+	instanceToken: string,
+	identity: OrchestratorConversationIdentity,
+): string {
+	if (
+		!validConversationPart(identity.hostId) ||
+		!validConversationPart(identity.conversationId)
+	)
+		throw new AuthorizationError(
+			400,
+			"invalid orchestrator conversation identity",
+		);
+	const payload = Buffer.from(
+		JSON.stringify([identity.hostId, identity.conversationId]),
+	).toString("base64url");
+	const signature = createHmac("sha256", instanceToken)
+		.update(`agentic-coding:orchestrator-conversation:v1:${payload}`)
+		.digest("hex");
+	return `oc1.${payload}.${signature}`;
+}
+
+function conversationIdentityForToken(
+	supplied: string,
+	authority: InstanceAuthority,
+): OrchestratorConversationIdentity | undefined {
+	if (supplied.length > 2048 || !supplied.startsWith("oc1.")) return undefined;
+	const parts = supplied.split(".");
+	if (parts.length !== 3 || !parts[1]) return undefined;
+	try {
+		const decoded: unknown = JSON.parse(
+			Buffer.from(parts[1], "base64url").toString("utf8"),
+		);
+		if (
+			!Array.isArray(decoded) ||
+			decoded.length !== 2 ||
+			!validConversationPart(decoded[0]) ||
+			!validConversationPart(decoded[1])
+		)
+			return undefined;
+		const identity = { hostId: decoded[0], conversationId: decoded[1] };
+		return constantTimeEqual(
+			supplied,
+			orchestratorConversationTokenFor(authority.token, identity),
+		)
+			? identity
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Optional identity for compatibility reads/starts: shared capabilities do
+ * not imply custody. Mutation boundaries use the mandatory authorizer below. */
+export function orchestratorConversationFor(
+	request: Request,
+	authority: InstanceAuthority,
+): OrchestratorConversationIdentity | undefined {
+	if (!originAllowed(request.headers.get("origin")))
+		throw new AuthorizationError(403, "untrusted origin");
+	const header = request.headers.get("authorization") ?? "";
+	return header.startsWith("Bearer ")
+		? conversationIdentityForToken(header.slice(7).trim(), authority)
+		: undefined;
+}
+
+/** Deliberately rejects operator and shared capabilities: neither supplies a
+ * calling conversation. */
+export function authorizeOrchestratorConversation(
+	request: Request,
+	authority: InstanceAuthority,
+): OrchestratorConversationIdentity {
+	const identity = orchestratorConversationFor(request, authority);
+	if (!identity)
+		throw new AuthorizationError(
+			401,
+			"missing or invalid orchestrator conversation capability",
+		);
+	return identity;
+}
+
 /** Header naming the owner an agent environment capability was minted for. The
  * owner is not a claim the wire may choose: the server recomputes the
  * capability for the named owner and refuses a request whose token does not
@@ -209,7 +352,10 @@ export function authorizeEnvironmentRequest(
 	// The Home Orchestrator shares the developer's environment, never a
 	// workflow's lease or the operator's review/release authority.
 	if (owner === "user") {
-		if (constantTimeEqual(supplied, orchestratorTokenFor(authority.token)))
+		if (
+			constantTimeEqual(supplied, orchestratorTokenFor(authority.token)) ||
+			conversationIdentityForToken(supplied, authority)
+		)
 			return owner;
 		throw new AuthorizationError(401, "invalid agent environment capability");
 	}
@@ -233,7 +379,10 @@ export function authorizeRequest(
 		throw new AuthorizationError(401, "missing instance capability");
 	const supplied = header.slice("Bearer ".length).trim();
 	if (constantTimeEqual(supplied, authority.token)) return "operator";
-	if (constantTimeEqual(supplied, orchestratorTokenFor(authority.token)))
+	if (
+		constantTimeEqual(supplied, orchestratorTokenFor(authority.token)) ||
+		conversationIdentityForToken(supplied, authority)
+	)
 		return "orchestrator";
 	throw new AuthorizationError(401, "invalid instance capability");
 }

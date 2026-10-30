@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+	ClarificationAttachment,
 	StartedBy,
 	WorkflowCommand,
 	WorkflowPrincipal,
@@ -168,14 +169,17 @@ export async function switchWorkflowPreset(
 	requestWorkflowExecution(repo, workflowId);
 }
 
-export async function runWorkflowAction(
+/** Synchronous dispatch boundary: callers must observe a refused mutation before
+ * returning a committed view or accepting a delivery receipt. */
+export function runWorkflowAction(
 	actionId: string,
 	repo: string,
 	workflowId: string,
 	revision: number,
 	input?: string,
 	principal?: WorkflowPrincipal,
-): Promise<string> {
+	clarificationAuthority?: import("../../contracts/workflow.ts").ClarificationAuthority,
+): string {
 	const engine = workflowEngineFactory(dashboardApplication);
 	const view = engine.status(repo, workflowId);
 	let parsed: unknown;
@@ -195,6 +199,7 @@ export async function runWorkflowAction(
 		// The server-decided principal, so the event actor can name the
 		// orchestrator; the operator is the default and stays unlabelled.
 		...(principal === undefined ? {} : { principal }),
+		...(clarificationAuthority ? { clarificationAuthority } : {}),
 	});
 	requestWorkflowExecution(repo, workflowId);
 	return JSON.stringify(engine.status(repo, workflowId));
@@ -311,6 +316,7 @@ export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0] & {
 		enforceHumanReviewGates?: boolean;
 		startedBy?: StartedBy;
+		clarificationAttachment?: ClarificationAttachment;
 	},
 ): Promise<string> {
 	const args = startArgs(input);
@@ -330,6 +336,7 @@ export async function startWorkflowInProcess(
 		...(args.stage ? { stage: args.stage } : {}),
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 		...(input.startedBy ? { startedBy: input.startedBy } : {}),
+		clarificationAttachment: input.clarificationAttachment,
 	});
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
@@ -353,6 +360,7 @@ export interface BlueprintStartRequest {
 	principal?: WorkflowPrincipal;
 	enforceHumanReviewGates?: boolean;
 	startedBy?: StartedBy;
+	clarificationAttachment?: ClarificationAttachment;
 }
 
 /**
@@ -379,6 +387,7 @@ export async function startBlueprintWorkflowInProcess(
 		now: dashboardApplication.clock,
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 		...(input.startedBy ? { startedBy: input.startedBy } : {}),
+		clarificationAttachment: input.clarificationAttachment,
 	});
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);

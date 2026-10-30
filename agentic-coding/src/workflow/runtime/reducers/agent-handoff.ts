@@ -34,6 +34,7 @@ import { workflowEvidenceScope } from "../evidence-store.ts";
 import {
 	applyCompletionResult,
 	expireSiblingRuns,
+	resumeBlockedAsker,
 	transition,
 } from "../kernel.ts";
 import { readStageReplayEvidence } from "../stage-replay-evidence.ts";
@@ -379,11 +380,28 @@ export function agentHandoff(
 			now,
 		);
 	}
+	// The question tool durably records that it returned pending. If an answer
+	// won the race with this blocked handoff, reconcile through the same normal
+	// resume rule; no chat-side launcher or guessed handoff-message matching.
+	const answeredWait =
+		!aborted && command.outcome === "blocked"
+			? snapshot.developerDialogue.find(
+					(item) =>
+						item.runId === run.id &&
+						item.status === "answered" &&
+						item.clarification?.awaitingHandoff &&
+						item.clarification.resolution,
+				)
+			: undefined;
+	const resumed = answeredWait
+		? resumeBlockedAsker(db, snapshot, definition, registry, answeredWait, now)
+		: undefined;
 	return {
 		type: "agent.handoff",
 		actor: { kind: "agent", runId: run.id, role: run.role },
 		data: {
 			outcome: command.outcome,
+			...(resumed ? { resumedRunId: resumed.id } : {}),
 			outputDigest,
 			...(!aborted ? {} : { aborted: true }),
 			// The decision this handoff recorded, for the engine's post-commit

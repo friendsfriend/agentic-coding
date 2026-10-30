@@ -71,15 +71,37 @@ function launchToken(
 	root: string,
 	runId: string,
 ): string {
-	const effect = engine
-		.claimEffects(root, 100)
-		.find(
-			(item) =>
-				item.kind === "agent.launch" &&
-				(item.payload as { runId?: string }).runId === runId,
-		);
-	if (!effect?.runToken) throw new Error(`missing launch token for ${runId}`);
-	return effect.runToken;
+	for (let round = 0; round < 2; round++) {
+		for (const effect of engine.claimEffects(root, 100)) {
+			if (effect.kind === "agent.stop" && effect.lease)
+				engine.dispatch(root, {
+					type: "effect.result",
+					effectId: effect.id,
+					lease: effect.lease,
+					outcome: "complete",
+				});
+			if (
+				effect.kind === "agent.launch" &&
+				effect.runToken &&
+				effect.lease &&
+				(effect.payload as { runId?: string }).runId === runId
+			) {
+				engine.dispatch(root, {
+					type: "effect.result",
+					effectId: effect.id,
+					lease: effect.lease,
+					outcome: "complete",
+					data: {
+						runtime: "pi-durable",
+						name: runId,
+						paneId: `fake-${runId}`,
+					},
+				});
+				return effect.runToken;
+			}
+		}
+	}
+	throw new Error(`missing launch token for ${runId}`);
 }
 
 function pendingRun(view: WorkflowView, role: string) {

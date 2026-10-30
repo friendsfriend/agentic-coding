@@ -460,6 +460,36 @@ function verifierProtocolSections(role: string): readonly ProtocolSectionId[] {
 
 export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.triage": {
+		preserveArrivalSelection: true,
+		onEnter: ({ snapshot, traits }) => {
+			// Earlier entry code published the active agent role here. Repair
+			// carries arrival context without onArrive, so recover only that exact
+			// legacy sentinel from a complete, bounded eligible selection. Missing
+			// or malformed context must not turn corruption into an open selection.
+			if (
+				snapshot.step.selectedRoles.length !== 1 ||
+				snapshot.step.selectedRoles[0] !== "triage"
+			)
+				return;
+			const context = snapshot.step.context;
+			const roles =
+				context && typeof context === "object" && "roles" in context
+					? context.roles
+					: undefined;
+			const eligible = triageRolesFor(snapshot.definition.id, traits);
+			if (
+				!Array.isArray(roles) ||
+				roles.length === 0 ||
+				roles.length > eligible.length ||
+				new Set(roles).size !== roles.length ||
+				!roles.every(
+					(role): role is string =>
+						typeof role === "string" && eligible.includes(role),
+				)
+			)
+				return;
+			snapshot.step.selectedRoles = [...roles];
+		},
 		classification: "single",
 		protocolSections: () => ["file-signals", "jev"],
 		roles: () => ["triage"],

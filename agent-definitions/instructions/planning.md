@@ -1,6 +1,8 @@
 # Planning
 
-`$HERDR_WORKFLOW_ID` and the other HERDR_* variables identify this run (there is no change id yet — you choose it). Do not re-read run.env, run `agentic-coding workflow status` or inspect `.herdr-workflow` state: the engine owns the workflow.
+HERDR_* identifies this run, not a change id. Choose the change id. Do not re-read run.env, workflow status or `.herdr-workflow` except the review context below.
+
+Use ordinary clarification only for a material unresolved decision; do not ask for facts available in the repository or substitute a chat confirmation for the plan-review gate. The attached Home can ground an answer in agreed evidence or discuss and relay an explicitly confirmed exact proposal. A mutable design file alone does not establish approval; the operator plan-review gate pins approved design evidence.
 
 You own change scope. Decide whether the requested work fits one well-sized change or should be split, then:
 
@@ -11,7 +13,7 @@ You own change scope. Decide whether the requested work fits one well-sized chan
 openspec new change "<primary-change-id>" --description "<one-line summary>"
 ```
 
-3. If the remaining work is well-scoped follow-up that this workflow should not implement, author it as **additional proposal drafts**, each its own change directory with its own `openspec new change "<id>" --description "..."`. Each follow-up must be independently valid (own proposal/design/tasks/specs with at least one scenario), but this workflow only implements the primary; follow-up drafts are handed off to a human to promote into their own workflows later. When the requested work fits one change, author only the primary — the absence of follow-ups never fails the plan.
+3. Author well-scoped follow-ups as **additional proposal drafts**, each created with `openspec new change "<id>" --description "..."` and independently valid proposal/design/tasks/specs (at least one scenario). Only the primary is implemented here; humans may promote follow-ups later. A single-change plan needs no follow-ups.
 
 Then let openspec drive the artifact set instead of assuming it:
 
@@ -19,7 +21,7 @@ Then let openspec drive the artifact set instead of assuming it:
 openspec status --change "<primary-change-id>" --json
 ```
 
-Parse the JSON: `artifactPaths` gives each artifact's `resolvedOutputPath`, and the `requires` edges give the build order. Track the artifacts with your todo list.
+Use `artifactPaths`/`resolvedOutputPath` and `requires` for paths/build order; track them in your todo list.
 
 Create every required artifact in dependency order. For each:
 
@@ -27,7 +29,7 @@ Create every required artifact in dependency order. For each:
 openspec instructions <artifact-id> --change "<primary-change-id>" --json
 ```
 
-Use the returned `template` as the structure, follow `instruction` and `rules` (constraints for you — never copy them into the file), and write to `resolvedOutputPath`. Read the completed dependency artifacts from disk before writing the next one — always from disk, never from memory. After each artifact, re-run `openspec status --change "<primary-change-id>" --json` until every required artifact exists.
+Follow `template`, `instruction` and `rules` without copying constraints into artifacts. Write to `resolvedOutputPath`; read dependency artifacts from disk, never memory. Re-run status after each artifact until all required artifacts exist.
 
 As soon as `openspec status` names the first artifact's `resolvedOutputPath` and `openspec instructions` returns its template, write that artifact's skeleton — its headings, the id's intent, and what you already know — then extend it and each later artifact in place as you learn. Write nothing before the resolved path exists: the artifact set is openspec's to name, not yours to assume.
 

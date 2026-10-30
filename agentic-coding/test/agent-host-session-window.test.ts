@@ -27,6 +27,7 @@ import {
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { ensureAdmittedFixtureRun } from "./support/admitted-host.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-session-window-"));
@@ -132,7 +133,7 @@ describe("the session window of a durable conversation", () => {
 		const envBBytes = fs.readFileSync(envB, "utf8");
 
 		// The first run creates the conversation: `opened(created)`.
-		const first = await host.ensureRun({
+		const first = await ensureAdmittedFixtureRun(host, {
 			runId: "run-a",
 			name: "worker-window",
 			cwd: dir,
@@ -151,7 +152,7 @@ describe("the session window of a durable conversation", () => {
 		// The engine retires run-a, and the next run of the same step and role is
 		// served by the same conversation.
 		await host.stopRun("run-a");
-		const second = await host.ensureRun({
+		const second = await ensureAdmittedFixtureRun(host, {
 			runId: "run-b",
 			name: "worker-window",
 			cwd: dir,
@@ -228,7 +229,7 @@ describe("the session window of a durable conversation", () => {
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
 		const ensure = () =>
-			host.ensureRun({
+			ensureAdmittedFixtureRun(host, {
 				runId: "run-resume",
 				name: "worker-resume",
 				cwd: dir,
@@ -296,7 +297,7 @@ describe("the session window of a durable conversation", () => {
 			globalAgentDir: dir,
 			models,
 		});
-		const before = await first.ensureRun({
+		const before = await ensureAdmittedFixtureRun(first, {
 			runId: "run-before",
 			name: "worker-adopt",
 			cwd: dir,
@@ -316,7 +317,7 @@ describe("the session window of a durable conversation", () => {
 			globalAgentDir: dir,
 			models,
 		});
-		const adopted = await second.ensureRun({
+		const adopted = await ensureAdmittedFixtureRun(second, {
 			runId: "run-after",
 			name: "worker-adopt",
 			cwd: dir,
@@ -375,7 +376,7 @@ describe("the session window of a durable conversation", () => {
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
 		try {
-			const first = await host.ensureRun({
+			const first = await ensureAdmittedFixtureRun(host, {
 				runId: "run-creator",
 				name: "worker-ceiling-window",
 				cwd: dir,
@@ -389,7 +390,7 @@ describe("the session window of a durable conversation", () => {
 			});
 			// The creator is retired before it ever committed a turn.
 			await host.stopRun("run-creator");
-			const second = await host.ensureRun({
+			const second = await ensureAdmittedFixtureRun(host, {
 				runId: "run-successor",
 				name: "worker-ceiling-window",
 				cwd: dir,
@@ -432,14 +433,14 @@ describe("the session window of a durable conversation", () => {
 	test("a conversation with no run id records nothing", async () => {
 		const dir = tempWorkflowDir();
 		const { host, faux, telemetryPath, model } = await openHost(dir);
-		await host.ensureRun({
+		await ensureAdmittedFixtureRun(host, {
 			runId: "run-orchestrator",
 			name: "orchestrator",
 			cwd: dir,
 			// An orchestrator session carries no run id: the analysis is about runs,
 			// so the session window says nothing about it.
 			runEnvPath: writeRunEnv(dir, "run-orchestrator", {
-				HERDR_WORKFLOW_ID: "wf-orchestrator",
+				// Home is not a managed workflow and carries no workflow/run identity.
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			}),
 			toolPolicy: "default",
@@ -476,7 +477,7 @@ describe("the session window of a durable conversation", () => {
 		fs.writeFileSync(blocked, "not a directory\n");
 		const blockedPath = path.join(blocked, "telemetry.jsonl");
 		const ensure = (runId: string, telemetry: string) =>
-			host.ensureRun({
+			ensureAdmittedFixtureRun(host, {
 				runId,
 				name: "worker-window-retry",
 				cwd: dir,
@@ -532,7 +533,7 @@ describe("the session window of a durable conversation", () => {
 		const dir = tempWorkflowDir();
 		const { host, telemetryPath, model } = await openHost(dir);
 		const ensure = (runId: string) =>
-			host.ensureRun({
+			ensureAdmittedFixtureRun(host, {
 				runId,
 				name: "worker-window-chain",
 				cwd: dir,

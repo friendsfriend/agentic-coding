@@ -91,6 +91,7 @@ export interface DashboardKeyContext {
 	 * it (the shell moves focus to the workspace sidebar). A standalone
 	 * dashboard leaves it undefined and the key is a no-op. */
 	readonly onBack?: () => boolean;
+	readonly onAttachHome?: () => void;
 	readonly applyTheme: (name: string) => void;
 	readonly themeNames: readonly string[];
 	readonly setDemoIndex: (update: (index: number) => number) => void;
@@ -357,6 +358,10 @@ export function createDashboardKeyHandler(
 			// standalone dashboard has no page to return to, so Escape is a no-op
 			// there.
 			context.onBack?.();
+			return;
+		}
+		if (name === "a" && !key.shift) {
+			context.onAttachHome?.();
 			return;
 		}
 		if (name === "t" && key.shift) {

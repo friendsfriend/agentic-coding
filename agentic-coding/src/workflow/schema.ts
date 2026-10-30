@@ -22,10 +22,15 @@ import {
 	stringArray,
 	text,
 } from "../contracts/decode.ts";
-import type {
-	RuntimeId,
-	WorkflowExecutionSettings,
+import {
+	ApprovedDesignSchema,
+	ClarificationAttachmentSchema,
+	type RuntimeId,
+	type WorkflowExecutionSettings,
 } from "../contracts/workflow.ts";
+
+export { ClarificationAttachmentSchema } from "../contracts/workflow.ts";
+
 import {
 	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
 	CLASSIFIER_DECISION_MAX_RECORDS,
@@ -171,7 +176,92 @@ const gateDecisionRecordSchema = Schema.Struct({
 	noul: Schema.optionalKey(Schema.Number),
 	reason: Schema.optionalKey(boundedText(4096)),
 });
+const clarificationTranscriptReferenceSchema = Schema.Struct({
+	messageId: text(256),
+	sequence: integer(0),
+});
+export const ClarificationStateSchema = Schema.Struct({
+	awaitingHandoff: Schema.optionalKey(Schema.Boolean),
+	attachment: ClarificationAttachmentSchema,
+	delivery: Schema.Struct({
+		id: text(256),
+		status: Schema.Literals(["pending", "accepted"]),
+		acceptedAt: Schema.optionalKey(text(64)),
+	}),
+	candidate: Schema.optionalKey(
+		Schema.Struct({
+			version: integer(1),
+			responses: Schema.Array(
+				Schema.Struct({
+					questionId: text(4096),
+					kind: Schema.Literals(["option", "custom"]),
+					value: text(8192),
+				}),
+			).pipe(
+				Schema.check(Schema.isMinLength(1)),
+				Schema.check(Schema.isMaxLength(100)),
+			),
+			digest: text(128),
+			proposal: clarificationTranscriptReferenceSchema,
+		}),
+	),
+	resolution: Schema.optionalKey(
+		Schema.Union([
+			Schema.Struct({
+				origin: Schema.Literal("grounded-orchestrator"),
+				rationale: text(4096),
+				sources: Schema.Array(
+					Schema.Struct({
+						kind: Schema.Literals(["task", "design", "developer-decision"]),
+						id: text(4096),
+						digest: text(128),
+					}),
+				).pipe(
+					Schema.check(Schema.isMinLength(1)),
+					Schema.check(Schema.isMaxLength(16)),
+				),
+				receipt: text(256),
+			}),
+			Schema.Struct({
+				origin: Schema.Literal("confirmed-developer"),
+				candidateVersion: integer(1),
+				confirmation: clarificationTranscriptReferenceSchema,
+				receipt: text(256),
+			}),
+		]),
+	),
+}).pipe(
+	Schema.check(
+		Schema.makeFilter(
+			(state) => {
+				if (
+					(state.delivery.status === "accepted") !==
+					(state.delivery.acceptedAt !== undefined)
+				)
+					return false;
+				const candidate = state.candidate;
+				if (
+					candidate &&
+					new Set(candidate.responses.map((response) => response.questionId))
+						.size !== candidate.responses.length
+				)
+					return false;
+				const resolution = state.resolution;
+				return (
+					resolution?.origin !== "confirmed-developer" ||
+					(candidate !== undefined &&
+						resolution.candidateVersion === candidate.version &&
+						resolution.confirmation.sequence > candidate.proposal.sequence &&
+						resolution.confirmation.messageId !== candidate.proposal.messageId)
+				);
+			},
+			{ message: "inconsistent clarification delivery or proposal provenance" },
+		),
+	),
+);
 const dialogueRecordSchema = Schema.Struct({
+	clarification: Schema.optionalKey(ClarificationStateSchema),
+	clarificationAwaitingHandoff: Schema.optionalKey(Schema.Boolean),
 	id: text(4096),
 	workflowId: text(4096),
 	runId: text(4096),
@@ -871,6 +961,8 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		results: stepResultsSchema,
 	}),
 	metadata: Schema.Struct({
+		approvedDesign: Schema.optionalKey(ApprovedDesignSchema),
+		clarificationAttachment: Schema.optionalKey(ClarificationAttachmentSchema),
 		repository: boundedText(4096),
 		worktree: text(4096),
 		changeId: boundedText(4096).pipe(

@@ -1,5 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { StatusBar } from "@agentic-coding/ui";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
@@ -10,62 +13,27 @@ import type {
 import { App } from "../../src/tui/dash/App.tsx";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 
-function pendingQuestion(): DeveloperDialogueRecord {
+function question(): DeveloperDialogueRecord {
 	return {
 		id: "q-1",
-		workflowId: "demo-optional-realisation-date",
+		workflowId: "demo",
 		runId: "run-1",
 		stepId: "core.implementation",
 		role: "worker",
-		ident: "scope",
 		description: "Which implementation should land?",
-		context: "## Background\n\nEvidence for the decision.",
-		options: [
-			{
-				title: "Option A",
-				value: "a",
-				recommended: true,
-				description: "## Option detail\n\nThe A path in detail.",
-			},
-		],
+		options: [{ title: "Option A", value: "a" }],
 		status: "pending",
 		createdAt: "2026-01-01T00:00:00Z",
-		expiresAt: "2099-01-01T00:00:00Z",
+		expiresAt: "2026-01-02T00:00:00Z",
 	};
 }
-
-function questionnaireItem(
-	id: string,
-	ident: string,
-	description: string,
-	itemIndex: number,
-): DeveloperDialogueRecord {
-	return {
-		...pendingQuestion(),
-		id,
-		ident,
-		description,
-		groupId: "group-1",
-		itemIndex,
-		options: [
-			{ title: `Option ${itemIndex + 1}`, value: `value-${itemIndex}` },
-		],
-	};
-}
-
-function fixture(
-	questions: DeveloperDialogueRecord[] = [pendingQuestion()],
-): DashboardData {
+function fixture(questions: DeveloperDialogueRecord[]): DashboardData {
 	const dashboard = testDashboard();
 	return {
 		...dashboard,
-		state: {
-			...dashboard.state,
-			pendingQuestions: questions,
-		},
+		state: { ...dashboard.state, pendingQuestions: questions },
 	};
 }
-
 function TestDashboard(props: {
 	testData: DashboardData;
 	active?: () => boolean;
@@ -83,207 +51,158 @@ function TestDashboard(props: {
 		agentView(value, ctx) {
 			ctx.require("agent.view", String(value));
 		},
+		evidenceView(value, ctx) {
+			ctx.require("evidence.view", String(value));
+		},
 	});
 	onCleanup(() => dispose());
 	return (
-		<App
-			repo="/demo"
-			workflowId="demo"
-			profile="test"
-			testData={props.testData}
-			keymap={keymap}
-			active={props.active}
-		/>
+		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+			<box style={{ flexGrow: 1, minHeight: 0 }}>
+				<App
+					repo="/demo"
+					workflowId="demo"
+					profile="test"
+					testData={props.testData}
+					keymap={keymap}
+					active={props.active}
+				/>
+			</box>
+			<StatusBar />
+		</box>
 	);
 }
+function capture(name: string, frame: string) {
+	const root = process.env.HERDR_CLARIFICATION_EVIDENCE_DIR;
+	if (root) {
+		fs.mkdirSync(root, { recursive: true });
+		fs.writeFileSync(path.join(root, `${name}.txt`), frame);
+	}
+}
 
-test("a pending developer question opens the dashboard modal", async () => {
-	const t = await testRender(() => <TestDashboard testData={fixture()} />, {
-		width: 120,
-		height: 40,
+for (const attached of [false, true])
+	test(`ordinary ${attached ? "attached" : "unassigned"} clarification stays passive, including overdue records`, async () => {
+		const q = question();
+		if (attached)
+			q.clarification = {
+				attachment: {
+					hostId: "home",
+					conversationId: "conversation",
+					epoch: 1,
+				},
+				delivery: { id: "delivery", status: "pending" },
+			};
+		const t = await testRender(
+			() => <TestDashboard testData={fixture([q])} />,
+			{ width: 140, height: 40 },
+		);
+		try {
+			const frame = await t.waitForFrame((value) =>
+				value.includes("1 clarification pending"),
+			);
+			expect(frame).toContain(
+				attached
+					? "Home delivery pending"
+					: "awaiting explicit Home attachment",
+			);
+			expect(frame).not.toContain("Developer input");
+			expect(frame).not.toContain("Option A");
+			capture(attached ? "passive-attached" : "passive-unassigned", frame);
+		} finally {
+			t.renderer.destroy();
+		}
 	});
-	// The markdown context renders asynchronously, so wait for its body rather
-	// than only the dialog frame: this is the context box's covering assertion.
-	const frame = await t.waitForFrame((value) =>
-		value.includes("Evidence for the decision."),
-	);
-	expect(frame).toContain("Which implementation should land?");
-	expect(frame).toContain("Option A");
-	expect(frame).toContain("[1 scope");
-	t.renderer.destroy();
-});
 
-test("planning questions surface when the dashboard becomes active", async () => {
+test("returning to a dashboard with planning questions does not open a question form or take focus", async () => {
 	const [active, setActive] = createSignal(false);
-	const question = {
-		...pendingQuestion(),
-		workflowId: "demo",
-		runId: "planning-run",
-		stepId: "core.planning",
-		role: "planner",
-	};
-	const t = await testRender(
-		() => <TestDashboard testData={fixture([question])} active={active} />,
-		{ width: 120, height: 40 },
-	);
-
-	setActive(true);
-	const frame = await t.waitForFrame((value) =>
-		value.includes("Which implementation should land?"),
-	);
-	expect(frame).toContain("Developer input");
-	expect(frame).toContain("Option A");
-	t.renderer.destroy();
-});
-
-test("d opens the selected option's markdown detail modal", async () => {
-	const t = await testRender(() => <TestDashboard testData={fixture()} />, {
-		width: 120,
-		height: 40,
-	});
-	await t.waitForFrame((value) => value.includes("Developer input"));
-	t.mockInput.pressKey("d");
-	const frame = await t.waitForFrame((value) =>
-		value.includes("The A path in detail."),
-	);
-	expect(frame).toContain("The A path in detail.");
-	t.renderer.destroy();
-});
-
-test("page down reaches expanded option rationale in the question reading area", async () => {
-	const lines = Array.from({ length: 60 }, (_, index) => `line-${index + 1}`);
-	lines[0] = "ALPHA_START";
-	lines[59] = "OMEGA_END";
 	const t = await testRender(
 		() => (
 			<TestDashboard
 				testData={fixture([
-					{
-						...pendingQuestion(),
-						options: [
-							{
-								title: "Option A",
-								value: "a",
-								description: lines.join("\n\n"),
-							},
-						],
-					},
+					{ ...question(), role: "planner", stepId: "core.planning" },
 				])}
+				active={active}
 			/>
 		),
-		{ width: 120, height: 40 },
+		{ width: 140, height: 40 },
 	);
-	await t.waitForFrame((value) => value.includes("ALPHA_START"));
-	const initial = t.captureCharFrame();
-	expect(initial).toContain("ALPHA_START");
-	t.mockInput.pressKey("pagedown");
-	const scrolled = await t.waitForFrame((value) => value.includes("line-10"));
-	expect(scrolled).toContain("line-10");
-	t.renderer.destroy();
+	try {
+		setActive(true);
+		const frame = await t.waitForFrame((value) =>
+			value.includes("1 clarification pending"),
+		);
+		expect(frame).not.toContain("Developer input");
+		expect(frame).not.toContain("Option A");
+		// Existing plan reviews still own their modal. Dismiss that review,
+		// not a clarification form, before making the explicit attach gesture.
+		t.mockInput.pressEscape();
+		await t.waitForFrame((value) => !value.includes("Plan review"));
+		t.mockInput.pressKey("a");
+		const modal = await t.waitForFrame((value) =>
+			value.includes("Attach clarification Home"),
+		);
+		expect(modal).toContain("explicit custody, not an answer");
+		expect(modal).toContain("Enter attach");
+		expect(modal).toContain("Esc cancel");
+		capture("explicit-attachment", modal);
+		t.mockInput.pressEscape();
+		await t.waitForFrame(
+			(value) => !value.includes("Attach clarification Home"),
+		);
+		expect(t.captureCharFrame()).not.toContain("Developer input");
+	} finally {
+		t.renderer.destroy();
+	}
 });
 
-test("alt+enter confirms the current question and advances the questionnaire", async () => {
+test("attachment is declared in the actual footer and complete question-mark help", async () => {
 	const t = await testRender(
-		() => (
-			<TestDashboard
-				testData={fixture([
-					questionnaireItem("q-1", "scope", "First question?", 0),
-					questionnaireItem("q-2", "tests", "Second question?", 1),
-				])}
-			/>
-		),
-		{ width: 120, height: 40 },
+		() => <TestDashboard testData={fixture([question()])} />,
+		{ width: 140, height: 45 },
 	);
-	await t.waitForFrame((value) => value.includes("First question?"));
-	t.mockInput.pressEnter({ meta: true });
-	const advanced = await t.waitForFrame((value) =>
-		value.includes("Second question?"),
-	);
-	expect(advanced).toContain("[1 scope ✓]");
-	expect(advanced).toContain("[2 tests ·]");
-	t.renderer.destroy();
+	try {
+		const frame = await t.waitForFrame((value) =>
+			value.includes("1 clarification pending"),
+		);
+		expect(frame).toContain("Plan review");
+		t.mockInput.pressEscape();
+		const grid = await t.waitForFrame(
+			(value) => !value.includes("Plan review") && value.includes("a attach"),
+		);
+		expect(grid).toContain("a attach");
+		t.mockInput.pressKey("?");
+		const help = await t.waitForFrame((value) =>
+			value.includes("Attach / reattach clarification Home"),
+		);
+		capture("attachment-help", help);
+	} finally {
+		t.renderer.destroy();
+	}
 });
 
-test("tab and shift+tab navigate the questionnaire in both directions", async () => {
-	// Three items so forward and backward resolve to different tabs: from the
-	// last item Tab would wrap to the first while Shift+Tab must step back to
-	// the middle, so ignoring or inverting the direction fails the assertion.
-	const t = await testRender(
-		() => (
-			<TestDashboard
-				testData={fixture([
-					questionnaireItem("q-1", "scope", "First question?", 0),
-					questionnaireItem("q-2", "tests", "Second question?", 1),
-					questionnaireItem("q-3", "docs", "Third question?", 2),
-				])}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
-	await t.waitForFrame((value) => value.includes("First question?"));
-	t.mockInput.pressTab();
-	await t.waitForFrame((value) => value.includes("Second question?"));
-	t.mockInput.pressTab();
-	const forward = await t.waitForFrame((value) =>
-		value.includes("Third question?"),
-	);
-	expect(forward).toContain("[3 docs");
-	t.mockInput.pressTab({ shift: true });
-	const backward = await t.waitForFrame((value) =>
-		value.includes("Second question?"),
-	);
-	expect(backward).toContain("[2 tests");
-	t.renderer.destroy();
-});
-
-test("alt+enter submits a custom response from the focused textarea", async () => {
-	const t = await testRender(
-		() => (
-			<TestDashboard
-				testData={fixture([
-					questionnaireItem("q-1", "scope", "First question?", 0),
-					questionnaireItem("q-2", "tests", "Second question?", 1),
-				])}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
-	await t.waitForFrame((value) => value.includes("First question?"));
-	// Move past the single option to the custom row and enter the editor.
-	t.mockInput.pressKey("j");
-	t.mockInput.pressEnter();
-	await t.waitForFrame((value) => value.includes("Custom response"));
-	await t.mockInput.typeText("hello");
-	t.mockInput.pressEnter({ meta: true });
-	const advanced = await t.waitForFrame((value) =>
-		value.includes("Second question?"),
-	);
-	expect(advanced).toContain("[1 scope ✓]");
-	t.renderer.destroy();
-});
-
-test("a pending stage_login hand-off opens the same modal with its own answers", async () => {
-	const handoff: DeveloperDialogueRecord = {
-		...pendingQuestion(),
-		id: "handoff-1",
-		ident: undefined,
-		description: "Log in to Grid integration as clerk on stage grid-int",
-		context: undefined,
-		kind: "login-handoff",
+test("stage login still opens its real Done / Abort modal", async () => {
+	const q = {
+		...question(),
+		kind: "login-handoff" as const,
+		description: "Sign in to the test stage",
+		expiresAt: "2099-01-01T00:00:00Z",
 		options: [
 			{ title: "Done", value: "done" },
 			{ title: "Abort", value: "abort" },
 		],
 	};
-	const t = await testRender(
-		() => <TestDashboard testData={fixture([handoff])} />,
-		{ width: 120, height: 40 },
-	);
-	const frame = await t.waitForFrame((value) =>
-		value.includes("Log in to Grid integration as clerk"),
-	);
-	expect(frame).toContain("Done");
-	expect(frame).toContain("Abort");
-	expect(frame).not.toContain("Custom response");
-	t.renderer.destroy();
+	const t = await testRender(() => <TestDashboard testData={fixture([q])} />, {
+		width: 120,
+		height: 40,
+	});
+	try {
+		const frame = await t.waitForFrame((value) =>
+			value.includes("Sign in to the test stage"),
+		);
+		expect(frame).toContain("Done");
+		expect(frame).toContain("Abort");
+		capture("login-unchanged", frame);
+	} finally {
+		t.renderer.destroy();
+	}
 });

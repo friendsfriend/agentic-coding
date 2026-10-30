@@ -18,6 +18,7 @@ import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
 import { emitRuntimeEnvelope } from "../src/agent-host/telemetry.ts";
 import { agentMetrics } from "../src/workflow/run-projections.ts";
+import { ensureAdmittedFixtureRun } from "./support/admitted-host.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-telemetry-"));
@@ -92,7 +93,7 @@ describe("tool-call telemetry shape", () => {
 			HERDR_RUN_GENERATION: "2",
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
-		await host.ensureRun({
+		await ensureAdmittedFixtureRun(host, {
 			runId: "run-shape",
 			name: "worker-shape",
 			cwd: dir,
@@ -247,7 +248,7 @@ describe("durable host telemetry", () => {
 			HERDR_PROFILE: "durable-default",
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
-		await host.ensureRun({
+		await ensureAdmittedFixtureRun(host, {
 			runId: "run-1",
 			name: "worker-telemetry",
 			cwd: dir,
@@ -314,7 +315,7 @@ describe("durable host telemetry", () => {
 			HERDR_TELEMETRY_PATH: telemetryPath,
 			HERDR_CAPTURE_CONTENT: "1",
 		});
-		await host.ensureRun({
+		await ensureAdmittedFixtureRun(host, {
 			runId: "run-2",
 			name: "worker-telemetry-capture",
 			cwd: dir,

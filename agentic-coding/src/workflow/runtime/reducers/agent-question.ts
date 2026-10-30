@@ -4,6 +4,7 @@
 // (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
+import { ordinaryClarification } from "../../../contracts/clarification.ts";
 import {
 	type DeveloperDialogueRecord,
 	type DeveloperQuestionItem,
@@ -12,11 +13,10 @@ import {
 	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { clarificationDeliveryId } from "../clarification-actions.ts";
 import {
-	forwardToDeveloper,
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
 	MAX_DIALOGUE_BYTES,
-	ORCHESTRATOR_QUESTION_TARGET,
 	QUESTION_WAIT_MS,
 	questionRecordCount,
 	questionRun,
@@ -58,7 +58,8 @@ export function agentQuestion(
 	// it (clearing the marker). The orchestrator is not a workflow run, so there is
 	// no `targetRunId`; its standing capability, not a per-question nonce,
 	// authorizes its answer.
-	const orchestratorFirst = snapshot.metadata.startedBy === "orchestrator";
+	const attachment = snapshot.metadata.clarificationAttachment;
+	const orchestratorFirst = attachment !== undefined;
 	const questions = items.map(
 		(item, itemIndex): DeveloperDialogueRecord => ({
 			id: randomUUID(),
@@ -78,6 +79,19 @@ export function agentQuestion(
 			expiresAt,
 		}),
 	);
+	if (attachment)
+		for (const question of questions)
+			question.clarification = {
+				attachment: { ...attachment },
+				delivery: {
+					id: clarificationDeliveryId(
+						snapshot.workflowId,
+						groupId ?? question.id,
+						attachment.epoch,
+					),
+					status: "pending",
+				},
+			};
 	const nextDialogue = [...snapshot.developerDialogue, ...questions];
 	if (Buffer.byteLength(JSON.stringify(nextDialogue)) > MAX_DIALOGUE_BYTES)
 		throw new WorkflowRuntimeError(
@@ -94,6 +108,38 @@ export function agentQuestion(
 				: { groupId, questionIds: questions.map((question) => question.id) }),
 			role: run.role,
 		},
+	};
+}
+
+export function markQuestionWait(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	command: Extract<WorkflowCommand, { type: "agent.question-wait" }>,
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	const run = questionRun(db, snapshot, command, now);
+	const question = snapshot.developerDialogue.find(
+		(item) => item.id === command.questionId && item.runId === run.id,
+	);
+	if (!question || !ordinaryClarification(question))
+		throw new WorkflowRuntimeError(
+			"stale-question",
+			"attached clarification not found",
+		);
+	const group = question.groupId
+		? snapshot.developerDialogue.filter(
+				(item) => item.groupId === question.groupId,
+			)
+		: [question];
+	for (const item of group) {
+		if (item.status !== "pending") continue;
+		item.clarificationAwaitingHandoff = true;
+		if (item.clarification) item.clarification.awaitingHandoff = true;
+	}
+	return {
+		type: "clarification.waiting",
+		actor: { kind: "agent", runId: run.id, role: run.role },
+		data: { questionId: question.id },
 	};
 }
 
@@ -126,29 +172,21 @@ export function expireQuestionTimer(
 			"stale-question",
 			"question has not expired",
 		);
+	if (ordinaryClarification(question))
+		return {
+			type: "clarification.overdue",
+			actor: { kind: "system" },
+			data: {
+				questionId: question.id,
+				...(question.groupId ? { groupId: question.groupId } : {}),
+			},
+		};
 	const group = question.groupId
 		? snapshot.developerDialogue.filter(
 				(item) =>
 					item.groupId === question.groupId && item.status === "pending",
 			)
 		: [question];
-	// An orchestrator-routed question the orchestrator never answered does not
-	// expire at its deadline: it auto-forwards to the developer with a fresh
-	// window (route-developer-questions-through-orchestrator), so the developer is
-	// the backstop whenever the orchestrator session is off or silent.
-	if (question.targetRole === ORCHESTRATOR_QUESTION_TARGET) {
-		forwardToDeveloper(group, now);
-		return {
-			type: "developer.question.forwarded",
-			actor: { kind: "system" },
-			data: {
-				...(question.groupId
-					? { groupId: question.groupId }
-					: { questionId: question.id }),
-				reason: "orchestrator-timeout",
-			},
-		};
-	}
 	const at = nowIso(now);
 	for (const item of group) {
 		item.status = "expired";
@@ -182,6 +220,12 @@ export function expireQuestion(
 			"stale-question",
 			"question is no longer pending",
 		);
+	if (ordinaryClarification(question))
+		return {
+			type: "clarification.overdue",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: { questionId: question.id },
+		};
 	const group = question.groupId
 		? snapshot.developerDialogue.filter(
 				(item) =>

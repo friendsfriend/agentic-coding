@@ -161,7 +161,8 @@ export interface AgentSessionViewProps {
 export interface SessionRouteCommand {
 	readonly name: string;
 	readonly description: string;
-	readonly run: () => void;
+	readonly acceptsArguments?: boolean;
+	readonly run: (argument?: string) => void;
 }
 
 /** Typing one of these exact messages, instead of an ordinary one, performs
@@ -1999,9 +2000,11 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			else if (name === CLOSE_COMMAND) props.onBack();
 			else {
 				const extra = props.extraCommands?.find(
-					(command) => command.name === name,
+					(command) =>
+						command.name === name ||
+						(command.acceptsArguments && name.startsWith(`${command.name} `)),
 				);
-				if (extra) extra.run();
+				if (extra) extra.run(name.slice(extra.name.length).trim() || undefined);
 				else props.onSubmit(name);
 			}
 		}

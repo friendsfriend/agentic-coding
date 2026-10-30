@@ -952,6 +952,52 @@ test("a rebase whose branch read fails reports it instead of offering an empty l
 	t.renderer.destroy();
 });
 
+for (const selected of [false, true]) {
+	test(`UI start offers explicit Home custody, selected=${selected}`, async () => {
+		let handler: ((event: KeyEvent) => boolean) | undefined;
+		const completed: NewWorkflowInput[] = [];
+		const t = await testRender(
+			() => (
+				<NewWorkflowModal
+					context={PROJECT}
+					onKeyReady={(value) => {
+						handler = value;
+					}}
+					onCancel={() => {}}
+					onComplete={async (value) => {
+						completed.push(value);
+					}}
+				/>
+			),
+			{ width: 140, height: 40 },
+		);
+		await t.flush();
+		for (let index = 0; index < 10; index++) handler?.(key("j"));
+		handler?.(key("enter"));
+		await t.flush();
+		handler?.(key("enter"));
+		t.mockInput.pressEnter();
+		for (const character of "home-choice") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Clarification Home");
+		expect(t.captureCharFrame()).toContain("› Leave unassigned");
+		expect(t.captureCharFrame()).toContain("j/k");
+		if (selected) {
+			handler?.(key("j"));
+			await t.flush();
+			expect(t.captureCharFrame()).toContain("› Attach selected shell Home");
+		}
+		handler?.(key("enter"));
+		await t.flush();
+		expect(completed).toHaveLength(1);
+		expect(completed[0]?.clarificationHome).toBe(
+			selected ? "selected" : undefined,
+		);
+		t.renderer.destroy();
+	});
+}
+
 test("the verify type asks for no task and no checkout mode", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];

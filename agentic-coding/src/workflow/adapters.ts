@@ -5,6 +5,7 @@
 // (`pi`, `opencode`) and the multiplexer lifecycle they needed are gone, so an
 // adapter no longer receives a pane id, a bridge path or a launcher script.
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
 import {
@@ -14,6 +15,7 @@ import {
 import type { LaunchClaim, LaunchObservation } from "../contracts/launch.ts";
 import type {
 	AgentHandle,
+	ApprovedDesign,
 	Assignment,
 	ResolvedProfile,
 	RuntimeId,
@@ -24,6 +26,69 @@ import type { JevSessionBinding } from "./classifier-runner.ts";
 import { WorkflowRuntimeError } from "./contracts.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
+
+/** Snapshot the bounded, confined design bytes at the real operator approval
+ * boundary, before the writer transaction. Later file edits cannot rewrite the
+ * evidence that action approved. Missing/unsafe designs remain ineligible. */
+export function captureApprovedDesign(
+	worktree: string,
+	changeId: string,
+): Effect.Effect<
+	Pick<ApprovedDesign, "content" | "digest"> | undefined,
+	WorkflowRuntimeError
+> {
+	return Effect.try({
+		try: () => {
+			if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(changeId)) return undefined;
+			try {
+				const root = fs.realpathSync(worktree);
+				const file = fs.realpathSync(
+					path.join(root, "openspec", "changes", changeId, "design.md"),
+				);
+				const relative = path.relative(root, file);
+				if (
+					!relative ||
+					relative === ".." ||
+					relative.startsWith(`..${path.sep}`) ||
+					path.isAbsolute(relative)
+				)
+					return undefined;
+				const fd = fs.openSync(
+					file,
+					fs.constants.O_RDONLY |
+						fs.constants.O_NOFOLLOW |
+						fs.constants.O_NONBLOCK,
+				);
+				try {
+					if (!fs.fstatSync(fd).isFile()) return undefined;
+					const buffer = Buffer.alloc(128 * 1024 + 1);
+					const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
+					if (!count || count > 128 * 1024) return undefined;
+					const bytes = buffer.subarray(0, count);
+					const content = bytes.toString("utf8");
+					if (!Buffer.from(content).equals(bytes)) return undefined;
+					return {
+						content,
+						digest: createHash("sha256")
+							.update(JSON.stringify(content))
+							.digest("hex"),
+					};
+				} finally {
+					fs.closeSync(fd);
+				}
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === "ENOENT" || code === "ELOOP") return undefined;
+				throw error;
+			}
+		},
+		catch: (error) =>
+			new WorkflowRuntimeError(
+				"unavailable",
+				`Could not snapshot approved design: ${error instanceof Error ? error.message : String(error)}`,
+			),
+	});
+}
 
 // Read-only bounded observation: never starts, restarts or reattaches a host.
 export function observeLaunchRecovery(

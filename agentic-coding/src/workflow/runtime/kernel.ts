@@ -688,6 +688,15 @@ export function resumeBlockedAsker(
 	const asker = runList.find((run) => run.id === question.runId);
 	if (asker?.status !== "blocked") return undefined;
 	if (
+		snapshot.developerDialogue.some(
+			(item) =>
+				item.runId === asker.id &&
+				item.status === "pending" &&
+				item.clarification,
+		)
+	)
+		return undefined;
+	if (
 		runList.some(
 			(run) => run.role === question.role && ACTIVE_RUN.has(run.status),
 		)
@@ -932,9 +941,10 @@ export function enterStep(
 			throw new Error(`missing role behavior for agent step ${step.id}`);
 		const roles = step.behavior.roles({ snapshot, traits });
 		// Re-entry (Repair/recovery) does not traverse an edge or run onArrive.
-		// Publish the registered role resolution so authorization sees the same
-		// roles we actually launch, including recovery from an empty selection.
-		snapshot.step.selectedRoles = [...roles];
+		// Publish registered active roles for admission, except when the step
+		// explicitly owns a distinct arrival selection (triage reviewer scope).
+		if (!step.behavior.preserveArrivalSelection)
+			snapshot.step.selectedRoles = [...roles];
 		const entry = step.behavior.onEnter?.({
 			snapshot,
 			traits,

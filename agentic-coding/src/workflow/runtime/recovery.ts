@@ -264,7 +264,7 @@ export function projectRecovery(
 		snapshot.developerDialogue.some((question) => question.status === "pending")
 	)
 		refusals.push(
-			"A question is pending; answer, forward or resolve it instead.",
+			"A question is pending; resolve clarification in its attached Home, or finish the separate login/peer handoff.",
 		);
 	if (current.some((run) => run.status === "completed"))
 		refusals.push(

@@ -183,6 +183,7 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		stepId: Schema.String,
 		stepLabel: Schema.String,
 		reasons,
+		clarificationOnly: Schema.optionalKey(Schema.Boolean),
 	}),
 	// A developer wait opening and closing (record-repairs-and-developer-waits).
 	// The kind is `WorkflowWaitKind`, the subject the id a reader resolves it by,
@@ -239,7 +240,10 @@ export const WORKFLOW_EVENT_PAYLOAD_SCHEMAS: Record<
 		answeredBy: Schema.String,
 		kind: Schema.String,
 	}),
-	"attention.raised": Schema.Struct({ reasons }),
+	"attention.raised": Schema.Struct({
+		reasons,
+		clarificationOnly: Schema.optionalKey(Schema.Boolean),
+	}),
 	"attention.cleared": Schema.Struct({ reasons }),
 	"run.started": Schema.Struct({
 		runId: Schema.String,

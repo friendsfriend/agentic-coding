@@ -40,6 +40,8 @@ export type WorkflowLaunchContext =
 	| { kind: "independent" };
 
 export interface WorkflowLaunchInput {
+	/** Explicit operator confirmation only; omission leaves custody unassigned. */
+	clarificationHome?: "selected";
 	repo: string;
 	ticket: string;
 	workflowId: string;

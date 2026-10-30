@@ -122,12 +122,9 @@ function publicDialogue(
 	);
 }
 
-/** Pending questions the developer may answer in the modal. Peer-agent
- * questions are delivered and answered by another agent, so they never open the
- * developer modal even while they are pending. Records still routed to the
- * orchestrator stay listed: the orchestrator answers or forwards them first,
- * but the developer is the backstop when it does not act
- * (make-developer-questions-asynchronous). */
+/** Discoverable pending ordinary clarification and login records. The UI only
+ * selects login records for a modal; ordinary custody remains passive even
+ * when unassigned, unavailable or overdue. Peer questions remain agent-only. */
 function pendingDeveloperQuestions(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
 	now: () => Date,
@@ -137,10 +134,8 @@ function pendingDeveloperQuestions(
 	);
 }
 
-/** Pending questions routed to the orchestrator first
- * (route-developer-questions-through-orchestrator). The orchestrator session
- * reads these to answer or forward them; the developer never sees them until
- * they are forwarded (their marker cleared). */
+/** Compatibility projection of explicitly routed pending records. This is
+ * visibility only; canonical attachment and server authority fence mutations. */
 function pendingOrchestratorQuestions(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
 	now: () => Date,
@@ -149,7 +144,8 @@ function pendingOrchestratorQuestions(
 		(item) =>
 			item.targetRole === ORCHESTRATOR_QUESTION_TARGET &&
 			item.status === "pending" &&
-			Date.parse(item.expiresAt) > now().getTime(),
+			(item.kind !== "login-handoff" ||
+				Date.parse(item.expiresAt) > now().getTime()),
 	);
 }
 
@@ -368,6 +364,16 @@ export function viewFromRows(
 				? { schedulingOrigin: snapshot.metadata.schedulingOrigin }
 				: {}),
 			startedBy: snapshot.metadata.startedBy ?? "developer",
+			...(snapshot.metadata.approvedDesign
+				? { approvedDesign: { ...snapshot.metadata.approvedDesign } }
+				: {}),
+			...(snapshot.metadata.clarificationAttachment
+				? {
+						clarificationAttachment: {
+							...snapshot.metadata.clarificationAttachment,
+						},
+					}
+				: {}),
 			currentStep: {
 				id: snapshot.currentStep,
 				label: registry.stepForDefinition(definition, snapshot.currentStep)

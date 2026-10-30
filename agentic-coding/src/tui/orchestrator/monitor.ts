@@ -112,11 +112,31 @@ async function deliverToOrchestratorSession(
 		opencodeCwd ? { opencodeCwd } : {},
 	);
 	const client = new HostClient(session.hostSocket);
-	await client.submit(session.runId, note, crypto.randomUUID(), "followUp");
+	await client.submit(
+		session.runId,
+		note,
+		crypto.randomUUID(),
+		"followUp",
+		"internal",
+	);
 }
 
 /** The message a human-needed event shows: the workflow and the step it
  * reached, so the developer knows what to open. */
+export function isOrdinaryClarificationEvent(
+	frame: WorkflowEventDeliveryFrame,
+): boolean {
+	const event = frame.event;
+	return (
+		(event.id === "question.pending" &&
+			event.payload.kind !== "login-handoff") ||
+		event.id === "question.routed" ||
+		((event.id === "workflow.failed" || event.id === "attention.raised") &&
+			event.payload.clarificationOnly === true) ||
+		(event.id === "workflow.waiting" && event.payload.kind === "question")
+	);
+}
+
 export function notificationFor(frame: WorkflowEventDeliveryFrame): string {
 	return `${frame.event.workflowId}: ${describeWorkflowEvent(frame.event)} (${frame.event.stepId})`;
 }
@@ -196,6 +216,9 @@ export function startWorkflowMonitor(
 	};
 
 	const record = (frame: WorkflowEventDeliveryFrame): void => {
+		// Ordinary clarifications have a durable addressed path. Never toast or
+		// feed them to whichever Home happens to be visible. Keep login handoffs.
+		if (isOrdinaryClarificationEvent(frame)) return;
 		// The developer notification is independent of every subscription and of
 		// the mode (except `off`, which never starts this monitor), so it is
 		// raised before anything is queued.

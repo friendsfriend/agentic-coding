@@ -11,6 +11,7 @@ import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import type {
 	CompactionResult,
 	Cursor,
+	EntryId,
 	ReportInfo,
 	Storage,
 	TaskId,
@@ -36,6 +37,8 @@ import {
 	createToolSearchExtension,
 	TOOL_SEARCH_TOOL_NAME,
 } from "@earendil-works/pi-durable/tool-search";
+import { decodeContract } from "../contracts/decode.ts";
+import { orchestratorDeveloperInputVerificationSchema } from "../contracts/orchestrator-input.ts";
 import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
 import {
 	COMPACTION_MAX_INSTRUCTIONS,
@@ -52,6 +55,11 @@ import {
 import { parseRunEnvFile } from "../workflow/run-env.ts";
 import { boundedCodingTools } from "./bash-tool.ts";
 import { createBrowserExtension } from "./browser-tools.ts";
+import {
+	clarificationTranscriptMessage,
+	ORCHESTRATOR_DEVELOPER_ENTRY,
+	ORCHESTRATOR_INTERNAL_ENTRY,
+} from "./clarification-transcript.ts";
 import { createDurableCodemode } from "./codemode.ts";
 import { compactionSerializationExtension } from "./compaction-serialization.ts";
 import { configuredProviderIds, durableModels } from "./configured-models.ts";
@@ -71,6 +79,10 @@ import { createHostIdentity, hostIdentityPaths } from "./host-identity.ts";
 import { LaunchVerificationError } from "./launch-verifier.ts";
 import type { HostLayout } from "./layout.ts";
 import { createOrchestratorExtension } from "./orchestrator.ts";
+import {
+	ORCHESTRATOR_TOKEN_ENV,
+	ORCHESTRATOR_URL_ENV,
+} from "./orchestrator-env.ts";
 import { LocalPiToolBridge } from "./pi-tool-bridge.ts";
 import {
 	decodeFrame,
@@ -422,6 +434,18 @@ interface LaunchFence extends JsonObject {
 	requestId: string;
 	state: "prepared" | "admitted" | "stopping" | "stopped";
 }
+function clarificationClaimDoc(conversationId: string, messageId: string) {
+	return defineDoc<{ binding: string } & JsonObject>({
+		kind: `agentic.clarification.claim.${createHash("sha256")
+			.update(JSON.stringify([conversationId, messageId]))
+			.digest("hex")}`,
+		version: 1,
+		scope: "session",
+		checkpointWhen: () => false,
+		initial: () => ({ binding: "" }),
+	});
+}
+
 function launchFenceDoc(kind: "run" | "role", identity: string) {
 	return defineDoc<LaunchFence>({
 		kind: `agentic.launch.${kind}.${createHash("sha256").update(identity).digest("hex")}`,
@@ -675,6 +699,9 @@ export interface DurableHostOptions {
 	readonly session?: boolean;
 	/** Private launch capability for the developer-mediated retry frame. */
 	readonly retryCapability?: string;
+	/** Trusted operator launch binding; run.env/recovery cannot redirect human
+	 * provenance verification to an arbitrary responding service. */
+	readonly developerInputVerifierUrl?: string;
 	readonly log?: (line: string) => void;
 	/** Test-only overrides: a faux `Models` collection and/or an in-memory
 	 * `Storage` in place of the real SQLite file and live pi credentials.
@@ -2758,12 +2785,183 @@ export class DurableHost {
 		return queryScheduled(conversation, envelope.occurrenceId, envelope.digest);
 	}
 
+	/** One native developer confirmation may support exactly one candidate,
+	 * including across repositories/workflows and host restarts. This is a
+	 * provenance reservation, not a second answer ledger. Identical retries
+	 * survive a crash before the workflow transaction; conflicting reuse fails. */
+	async claimClarification(
+		request: Omit<import("./protocol.ts").ClarificationClaimRequest, "type">,
+	): Promise<void> {
+		if (
+			typeof request.binding !== "string" ||
+			!/^[0-9a-f]{64}$/.test(request.binding)
+		)
+			throw new Error("invalid clarification claim binding");
+		const transcript = await this.clarificationTranscript({
+			...request,
+			messageIds: [request.confirmationMessageId],
+		});
+		if (transcript.messages[0]?.role !== "developer")
+			throw new Error(
+				"clarification claim requires attributed developer input",
+			);
+		await this.harness.commit(async (tx) => {
+			const claim = await tx.doc(
+				clarificationClaimDoc(
+					request.conversationId,
+					request.confirmationMessageId,
+				),
+			);
+			if (claim.binding && claim.binding !== request.binding)
+				throw new Error(
+					"developer confirmation is already reserved for another candidate",
+				);
+			claim.binding = request.binding;
+		}, BACKGROUND_CONTEXT);
+	}
+
+	/** Address an already opened, owned Home only. Never ensure a host, recover
+	 * a run, select the visible session or create a replacement conversation.
+	 * Native request identity is durable across acceptance/receipt crashes. */
+	async deliverClarification(
+		request: Omit<import("./protocol.ts").ClarificationDeliveryRequest, "type">,
+	): Promise<import("./protocol.ts").ClarificationDeliveryResponse> {
+		this.assertOpen();
+		if (
+			typeof request.deliveryId !== "string" ||
+			!request.deliveryId ||
+			request.deliveryId.length > 256 ||
+			typeof request.text !== "string" ||
+			!request.text ||
+			Buffer.byteLength(request.text) > 32768 ||
+			(await this.scheduledIdentity()) !== request.hostId
+		)
+			throw new Error("invalid clarification delivery destination or content");
+		const candidates = [...this.runs.entries()].filter(
+			([id, record]) =>
+				String(record.conversationId) === request.conversationId &&
+				this.runContexts.get(id)?.toolPolicy === "orchestrator" &&
+				this.ownsConversation(id, record.conversationId),
+		);
+		const runId = candidates.length === 1 ? candidates[0]?.[0] : undefined;
+		if (!runId)
+			throw new Error(
+				"pinned clarification conversation is unavailable; open that Home to retry",
+			);
+		await this.clarificationTranscript({
+			hostId: request.hostId,
+			conversationId: request.conversationId,
+			runId,
+		});
+		await this.submit(
+			runId,
+			request.text,
+			request.deliveryId,
+			"followUp",
+			false,
+			"internal",
+		);
+		return {
+			type: "clarificationDelivery",
+			hostId: request.hostId,
+			conversationId: request.conversationId,
+			deliveryId: request.deliveryId,
+			runId,
+		};
+	}
+
+	/** Resolve immutable history, not the active (possibly compacted) view.
+	 * Recovery/creation is deliberately outside this read operation. */
+	async clarificationTranscript(
+		request: Omit<
+			import("./protocol.ts").ClarificationTranscriptRequest,
+			"type"
+		>,
+	): Promise<import("./protocol.ts").ClarificationTranscriptResponse> {
+		this.assertOpen();
+		const record = this.requireConversation(request.runId);
+		if (
+			this.runContexts.get(request.runId)?.toolPolicy !== "orchestrator" ||
+			!this.ownsConversation(request.runId, record.conversationId) ||
+			String(record.conversationId) !== request.conversationId ||
+			(await this.scheduledIdentity()) !== request.hostId
+		)
+			throw new Error("clarification transcript custody mismatch");
+		const ids = request.messageIds;
+		if (
+			ids !== undefined &&
+			(!Array.isArray(ids) ||
+				!ids.length ||
+				ids.length > 16 ||
+				new Set(ids).size !== ids.length ||
+				ids.some(
+					(id) =>
+						typeof id !== "string" ||
+						!/^[1-9][0-9]{0,15}$/.test(id) ||
+						!Number.isSafeInteger(Number(id)),
+				))
+		)
+			throw new Error("invalid clarification transcript references");
+		const conversation = await this.harness.conversation(
+			record.conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation)
+			throw new Error("clarification conversation unavailable");
+		const messages: import("./clarification-transcript.ts").ClarificationTranscriptMessage[] =
+			[];
+		if (ids) {
+			for (const id of ids) {
+				const entryId = Number(id) as EntryId;
+				const page = await conversation.entries(
+					{ minEntryId: entryId, maxEntryId: entryId, order: "ascending" },
+					1,
+					undefined,
+					BACKGROUND_CONTEXT,
+				);
+				const entry = page.items[0];
+				const message =
+					entry &&
+					clarificationTranscriptMessage(
+						request.hostId,
+						request.conversationId,
+						entry,
+					);
+				if (!message)
+					throw new Error(
+						"clarification transcript reference is unavailable or not an attributed message",
+					);
+				messages.push(message);
+			}
+		} else {
+			const page = await conversation.entries(
+				{ order: "descending" },
+				32,
+				undefined,
+				BACKGROUND_CONTEXT,
+			);
+			for (const entry of [...page.items].reverse()) {
+				const message = clarificationTranscriptMessage(
+					request.hostId,
+					request.conversationId,
+					entry,
+				);
+				if (message) messages.push(message);
+			}
+		}
+		return { type: "clarificationTranscript", messages };
+	}
+
+	/** The optional origin is trusted in-process admission metadata. The socket
+	 * dispatcher permits only internal/unattributed input; a real developer
+	 * ingress must independently authenticate before using the developer tag. */
 	async submit(
 		runId: string,
 		text: string,
 		requestId: string,
 		whenBusy = "followUp",
 		managedAdmission = false,
+		source?: "developer" | "internal",
 	): Promise<{
 		submissionId: string;
 		workflowState?: SubmitWorkflowState;
@@ -2771,6 +2969,10 @@ export class DurableHost {
 	}> {
 		this.assertOpen();
 		const record = this.requireConversation(runId);
+		if (source !== undefined && source !== "developer" && source !== "internal")
+			throw new Error("invalid input attribution");
+		const orchestrator =
+			this.runContexts.get(runId)?.toolPolicy === "orchestrator";
 		// The mode is normalized, never rejected: `steer`/`overwrite` interrupt
 		// the running turn, everything else queues behind it, and an idle
 		// conversation starts the next turn either way (normalizeSubmitMode).
@@ -2801,12 +3003,28 @@ export class DurableHost {
 			);
 			if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
 			const submission = await conversation.submit(
-				{ type: "input", content: text, requestId, whenBusy: mode },
+				{
+					type: "input",
+					content: text,
+					requestId,
+					whenBusy: mode,
+					...(orchestrator
+						? {
+								entry: {
+									kind:
+										source === "developer" && !managedAdmission
+											? ORCHESTRATOR_DEVELOPER_ENTRY
+											: ORCHESTRATOR_INTERNAL_ENTRY,
+								},
+							}
+						: {}),
+				},
 				BACKGROUND_CONTEXT,
 			);
 			// The developer's own message is what a `taskRef.previousMessage` start
 			// substitutes; a monitor note and an abort marker are not.
-			this.recordDeveloperMessage(record.conversationId, text, mode);
+			if (source !== "internal")
+				this.recordDeveloperMessage(record.conversationId, text, mode);
 			// A message admitted now may have released the one that was queued
 			// ahead of it; a turn already running keeps its own.
 			await this.promoteDequeuedMessages(record.conversationId);
@@ -3381,7 +3599,8 @@ export class DurableHost {
 	/** Abort a run's conversation. A developer-initiated abort (`recordBlocked`)
 	 * also records the run's `blocked` handoff, because the aborted turn can no
 	 * longer hand off itself and the engine would otherwise keep the run
-	 * `working` forever; a teardown (`shutdown`) records nothing. */
+	 * `working` forever; a teardown (`shutdown`) records nothing and preserves
+	 * queued Home input for native close/resume rather than withdrawing it. */
 	private async stopConversation(
 		runId: string,
 		recordBlocked: boolean,
@@ -3393,12 +3612,24 @@ export class DurableHost {
 			BACKGROUND_CONTEXT,
 		);
 		const context = this.runContexts.get(runId);
-		if (
-			conversation &&
-			!recordBlocked &&
-			(await hasQueuedScheduled(this.harness, conversation))
-		)
-			return;
+		if (conversation && !recordBlocked) {
+			// Admission is not consumption: native abort withdraws inbox inputs.
+			// Preserve Home's durable inbox through harness.close/resume, including
+			// clarifications whose server receipt is already committed. The native
+			// inbox, not an in-memory delivery index, is authoritative after reopen.
+			if (context?.toolPolicy === "orchestrator") {
+				const state = await conversation.viewState(BACKGROUND_CONTEXT);
+				try {
+					const inbox = state.value.docs["pi.inbox"] as
+						| { items?: unknown[] }
+						| undefined;
+					if (inbox?.items?.length) return;
+				} finally {
+					state.dispose();
+				}
+			}
+			if (await hasQueuedScheduled(this.harness, conversation)) return;
+		}
 		await conversation?.abort(BACKGROUND_CONTEXT);
 		if (!recordBlocked || !context) return;
 		try {
@@ -4091,6 +4322,20 @@ export class DurableHost {
 		}
 		try {
 			switch (request.type) {
+				case "clarificationDelivery":
+					send(await this.deliverClarification(request));
+					return;
+				case "clarificationClaim":
+					await this.claimClarification(request);
+					send({
+						type: "clarificationClaim",
+						binding: request.binding,
+						confirmationMessageId: request.confirmationMessageId,
+					});
+					return;
+				case "clarificationTranscript":
+					send(await this.clarificationTranscript(request));
+					return;
 				case "scheduledIdentity":
 					send({
 						type: "scheduledIdentity",
@@ -4167,16 +4412,92 @@ export class DurableHost {
 					return;
 				}
 				case "submit": {
+					// Never turn a caller's origin assertion into human provenance.
+					if (request.source !== undefined && request.source !== "internal")
+						throw new Error("developer input requires authenticated ingress");
+					let trustedSource: "internal" | "developer" | undefined =
+						request.source;
+					if (
+						request.developerInput !== undefined ||
+						request.developerProof !== undefined
+					) {
+						const { input, proof } = decodeContract<
+							import("../contracts/orchestrator-input.ts").OrchestratorDeveloperInputVerification
+						>(
+							"host.orchestrator.input-proof",
+							orchestratorDeveloperInputVerificationSchema,
+							{ input: request.developerInput, proof: request.developerProof },
+						);
+						const owned = this.requireConversation(request.runId);
+						const context = this.runContexts.get(request.runId);
+						if (
+							request.source !== undefined ||
+							context?.toolPolicy !== "orchestrator" ||
+							!this.ownsConversation(request.runId, owned.conversationId) ||
+							input.hostId !== (await this.scheduledIdentity()) ||
+							input.conversationId !== String(owned.conversationId) ||
+							input.runId !== request.runId ||
+							input.requestId !== request.requestId ||
+							input.text !== request.text ||
+							input.whenBusy !== (request.whenBusy ?? "followUp")
+						)
+							throw new Error("interactive input proof custody mismatch");
+						const base = this.options.developerInputVerifierUrl;
+						const token = context.env[ORCHESTRATOR_TOKEN_ENV];
+						if (
+							!base ||
+							!token ||
+							new URL(base).origin !==
+								new URL(context.env[ORCHESTRATOR_URL_ENV] ?? "about:blank")
+									.origin
+						)
+							throw new Error("interactive input verifier unavailable");
+						const response = await fetch(
+							new URL("/api/v1/orchestrator/input/verify", base),
+							{
+								method: "POST",
+								headers: {
+									authorization: `Bearer ${token}`,
+									"content-type": "application/json",
+								},
+								body: JSON.stringify({ input, proof }),
+								signal: AbortSignal.timeout(5000),
+								redirect: "error",
+							},
+						);
+						if (
+							!response.ok ||
+							((await response.json()) as { verified?: boolean }).verified !==
+								true
+						)
+							throw new Error("interactive input proof refused");
+						if (
+							this.runContexts.get(request.runId) !== context ||
+							!this.ownsConversation(request.runId, owned.conversationId) ||
+							String(this.requireConversation(request.runId).conversationId) !==
+								input.conversationId ||
+							input.expiresAt <= Date.now()
+						)
+							throw new Error(
+								"interactive input custody changed during verification",
+							);
+						trustedSource = "developer";
+					}
 					const result = await this.submit(
 						request.runId,
 						request.text,
 						request.requestId,
 						request.whenBusy,
+						false,
+						trustedSource,
 					);
 					send({
 						type: "submit",
 						runId: request.runId,
 						submissionId: result.submissionId,
+						...(trustedSource === "developer"
+							? { developerInputAccepted: true as const }
+							: {}),
 						...(result.workflowState
 							? { workflowState: result.workflowState }
 							: {}),

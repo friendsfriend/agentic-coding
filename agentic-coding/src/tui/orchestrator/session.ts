@@ -6,4 +6,5 @@ export {
 	openOrchestratorSession,
 	orchestratorHostEnv,
 	orchestratorRuntimeDir,
+	submitOrchestratorDeveloperInput,
 } from "../../agent-host/orchestrator-session.ts";

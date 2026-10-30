@@ -28,6 +28,7 @@ import type { ObservationRequest } from "../contracts/environment.ts";
 import type { ClassifierStatusResponse } from "../contracts/gateway.ts";
 import type { LaunchClaim, LaunchPermit } from "../contracts/launch.ts";
 import type {
+	ClarificationAttachment,
 	DeveloperReviewComment,
 	PlanReviewComment,
 	WikiReviewComment,
@@ -99,6 +100,8 @@ type ReviewSaveRequest = Schema.Schema.Type<typeof reviewSaveRequestSchema>;
 type ExecuteRequest = Schema.Schema.Type<typeof workflowExecuteRequestSchema>;
 /** Server-decided start options: never read from the wire request. */
 export interface StartOptions {
+	/** Trusted calling conversation, never decoded from the start body. */
+	readonly clarificationAttachment?: ClarificationAttachment;
 	/** Pin the human review gates to `always` (orchestrator-started work). */
 	readonly enforceHumanReviewGates?: boolean;
 	/** The authenticated principal the start arrived from. Decides the pinned
@@ -108,6 +111,7 @@ export interface StartOptions {
 
 /** Server-decided action options: never read from the wire request. */
 export interface ActionOptions {
+	readonly clarificationAuthority?: import("../contracts/workflow.ts").ClarificationAuthority;
 	/** The authenticated principal the action arrived from. Recorded beside the
 	 * event actor `kind`; absent reads as the operator, whose actor stays
 	 * exactly as it was. */
@@ -195,6 +199,7 @@ export function runAction(
 		request.revision,
 		request.input === undefined ? undefined : JSON.stringify(request.input),
 		options.principal,
+		options.clarificationAuthority,
 	);
 	return getWorkflowView(request.repo, request.workflowId);
 }
@@ -227,12 +232,14 @@ export function startWorkflow(
 				? { enforceHumanReviewGates: true }
 				: {}),
 			startedBy: startedByFor(options.principal),
+			clarificationAttachment: options.clarificationAttachment,
 		});
 	return startWorkflowInProcess({
 		...(options.enforceHumanReviewGates
 			? { enforceHumanReviewGates: true }
 			: {}),
 		startedBy: startedByFor(options.principal),
+		clarificationAttachment: options.clarificationAttachment,
 		repo: request.repo,
 		ticket: request.ticket ?? "",
 		workflowId: request.workflowId,

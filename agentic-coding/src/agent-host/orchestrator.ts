@@ -449,7 +449,7 @@ export const ORCHESTRATOR_PROMPT = `You are the agentic-coding Orchestrator. You
 - Choose the workflow type, preset and checkout mode that fit the request; explain the choice briefly, then start it.
 - Workflow ids are short, lowercase, kebab-case, and unique per repository.
 - Plan approval, developer review, findings review and wiki review always belong to the developer. When a workflow waits on one, tell the developer what is waiting and where; never try to decide it.
-- Developer questions from the workflows you started are routed to you first and appear in \`pendingQuestions\` in workflow_status (their record carries \`targetRole: "orchestrator"\`; there is no separate orchestrator list). Answer one from the design you and the developer agreed with workflow_action \`answer-question\` (input is the question answer, e.g. {questionId, kind:"custom", value:"..."} or {questionId, kind:"option", value:"<option value>"}). When you cannot answer from that shared design, hand it to the developer with workflow_action \`forward-question\` (input {questionId} or {groupId}); never guess. Unanswered questions auto-forward to the developer on timeout.
+- Clarifications belong only to their explicit clarificationAttachment, never startedBy or subscriptions. Read pendingQuestions with workflow_status. For an attached clarification, first call workflow_action clarification.context with input {epoch,questionId,askingRunId:question.runId}; the host injects homeRunId. Read its protocol instructions, verified sources, native transcript references and proposal preview before acting. Ground only from eligible agreed evidence; otherwise discuss normally, present the exact versioned proposal, then relay only after explicit subsequent native developer confirmation. Ambiguous, partial, unrelated or edited turns are discussion, not confirmation. Never use legacy answer-question/forward-question for attached records or bypass review gates. Unassigned records require developer-authorized attachment.
 - workflow_status answers a compact row by default; poll it with \`sinceRevision\` set to the revision of the last answer, so a poll of an unchanged workflow costs a few bytes. The task text, the full run history and the gate decisions are not in that row: ask for the task with \`includeTask: true\` and for everything with \`detail: "full"\`, only when you actually need it.
 - You may resume paused workflows, retry failed effects, switch presets, drain pending effects, and close or open a pull request for completed work.
 - To unblock a terminal worker with no pending question, read workflow_status, then workflow_recovery_preview with its revision and the exact visible target. For an eligible workflow you started, call workflow_recover once with the inspected previewId/operation/target, a 1–160 character reason and a 1–8000 character corrective instruction. Agreed API references and operational clarifications are appropriate; the instruction is masked, audited and delivered durably to the replacement worker, not queued for the terminal run. The home orchestrator is not a completed workflow role addressable by agent_ask.
@@ -1091,7 +1091,7 @@ export function createOrchestratorExtension(
 			defineTool({
 				name: "workflow_action",
 				description:
-					"Use after workflow_status, passing its current revision, to resume, retry-effect, switch-preset, close, create-pr or answer/forward a routed question; returns the updated workflow's compact row (the same shape workflow_status returns by default). Approval, rejection and review decisions are refused and belong to the developer.",
+					"Use after workflow_status with its current revision to resume, retry-effect, switch-preset, close, create-pr or intentionally manage an attached clarification with clarification.context/grounded/stage/confirm/cancel. Context returns verified sources/native message references and an exact proposal preview when responses are supplied; mutations return compact workflow status. Legacy answer/forward cannot resolve attached clarifications. Approval, rejection and review decisions belong to the developer.",
 				parameters: Type.Object({
 					repo: RepoParameter,
 					workflowId: WorkflowIdParameter,
@@ -1118,15 +1118,25 @@ export function createOrchestratorExtension(
 							input?: unknown;
 						},
 						env,
+						context,
 					) => {
+						const input =
+							args.actionId.startsWith("clarification.") &&
+							args.input &&
+							typeof args.input === "object" &&
+							!Array.isArray(args.input)
+								? { ...args.input, homeRunId: context.runId }
+								: args.input;
 						const view = (await call(env, "POST", "/api/v1/workflow/action", {
 							repo: args.repo,
 							workflowId: args.workflowId,
 							revision: args.revision,
 							actionId: args.actionId,
-							...(args.input === undefined ? {} : { input: args.input }),
+							...(input === undefined ? {} : { input }),
 						})) as Record<string, unknown>;
-						return compactWorkflowStatusView(view);
+						return args.actionId === "clarification.context"
+							? view
+							: compactWorkflowStatusView(view);
 					},
 				),
 			}),

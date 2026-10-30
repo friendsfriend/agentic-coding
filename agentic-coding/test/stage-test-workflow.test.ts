@@ -221,9 +221,9 @@ describe("stage-test planning and report contracts", () => {
 		expect(planner).toContain(
 			"Do not add abort-on-validation or stop-on-first-error rules",
 		);
-		expect(tester).toContain("try a materially different approach");
-		expect(tester).toContain("Repair artifact/schema/guard errors");
-		expect(tester).toContain("do not bypass product validation");
+		expect(tester).toContain("try a safe materially different approach");
+		expect(tester).toContain("Fix artifact/schema/guard errors");
+		expect(tester).toContain("Never bypass validation");
 		expect(tester).not.toContain("Retry a failed read or navigation once");
 	});
 

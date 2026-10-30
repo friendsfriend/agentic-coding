@@ -185,6 +185,10 @@ export function createDialogueState(): DialogueState {
  * these are values and selections only — the route still decides what is open
  * and the overlay module only renders it. */
 export interface OverlayState {
+	readonly attachingHome: () => boolean;
+	readonly setAttachingHome: Setter<boolean>;
+	readonly attachmentError: () => string;
+	readonly setAttachmentError: Setter<string>;
 	readonly verdict: () => { title: string; content: string } | undefined;
 	readonly setVerdict: Setter<{ title: string; content: string } | undefined>;
 	readonly verdictOffset: () => number;
@@ -306,6 +310,8 @@ export function createOverlayState(options: {
 	readonly themeIndex: number;
 	readonly promptHistory?: readonly string[];
 }): OverlayState {
+	const [attachingHome, setAttachingHome] = createSignal(false);
+	const [attachmentError, setAttachmentError] = createSignal("");
 	const [repairTargets, setRepairTargets] = createSignal<RepairTarget[]>([]);
 
 	const [presetSwitcherHandler, setPresetSwitcherHandler] =
@@ -384,6 +390,10 @@ export function createOverlayState(options: {
 		readonly string[]
 	>(options.promptHistory ?? []);
 	return {
+		attachingHome,
+		setAttachingHome,
+		attachmentError,
+		setAttachmentError,
 		verdict,
 		setVerdict,
 		verdictOffset,
