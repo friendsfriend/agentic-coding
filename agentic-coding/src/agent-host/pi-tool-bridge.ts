@@ -17,6 +17,11 @@ import {
 	type ToolExecutionApi,
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { collectionRepositories } from "./collection-extension.ts";
+import {
+	collectionCallAllowed,
+	collectionToolVisible,
+} from "./collection-policy.ts";
 import type { ToolPolicy } from "./protocol.ts";
 import type { LocalPiToolsSettings } from "./settings.ts";
 import type { DurableRunContext } from "./tools.ts";
@@ -263,6 +268,7 @@ export class LocalPiToolBridge {
 		const names = new Set(owner.tools.keys());
 		return [...names]
 			.filter((name) => {
+				if (policy === "collection") return collectionToolVisible(name);
 				return allow
 					? allow.includes(name)
 					: policy === "default" || policy === "orchestrator";
@@ -810,7 +816,19 @@ export class LocalPiToolBridge {
 			return this.failedResult(
 				"This local Pi tool is unavailable for this run.",
 			);
-		if (!this.isAllowedByPolicy(name, run.toolPolicy)) {
+		if (
+			!this.isAllowedByPolicy(name, run.toolPolicy) ||
+			(run.toolPolicy === "collection" &&
+				!collectionCallAllowed(
+					name,
+					args,
+					name.toLowerCase().includes("gitlab")
+						? (await collectionRepositories(run)).queryableProjects.map(
+								(project) => project.project,
+							)
+						: [],
+				))
+		) {
 			this.report(candidate.sourceId, "restricted-policy-denied");
 			return this.failedResult(
 				"This local Pi tool is not allowed by the run policy.",
@@ -1187,6 +1205,7 @@ export class LocalPiToolBridge {
 	}
 
 	private isAllowedByPolicy(name: string, policy: ToolPolicy): boolean {
+		if (policy === "collection") return collectionToolVisible(name);
 		if (policy === "default" || policy === "orchestrator") return true;
 		return (
 			policy === "read-only" &&

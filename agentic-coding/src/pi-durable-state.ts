@@ -40,10 +40,19 @@ export function currentPiDurableSessionName(
 	const file = piDurableSessionFile(runtimeDir);
 	let mtimeMs = -1;
 	try {
-		mtimeMs = fs.statSync(file).mtimeMs;
-	} catch {
+		const stat = fs.lstatSync(file);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
+			sessionNameCache.delete(runtimeDir);
+			return undefined;
+		}
+		mtimeMs = stat.mtimeMs;
+	} catch (error) {
 		sessionNameCache.delete(runtimeDir);
-		return DEFAULT_PI_DURABLE_SESSION_NAME;
+		// Only ENOENT is a fresh install. Permission/I/O failures must not
+		// silently redirect the caller into the default conversation.
+		return (error as NodeJS.ErrnoException).code === "ENOENT"
+			? DEFAULT_PI_DURABLE_SESSION_NAME
+			: undefined;
 	}
 	const cached = sessionNameCache.get(runtimeDir);
 	if (cached && cached.mtimeMs === mtimeMs) return cached.name;
@@ -54,6 +63,7 @@ export function currentPiDurableSessionName(
 		};
 		if (
 			typeof parsed.name === "string" &&
+			parsed.name.length <= 256 &&
 			/^pi-durable[\w-]*$/.test(parsed.name)
 		)
 			name = parsed.name;
@@ -70,10 +80,22 @@ export function savePiDurableSessionName(
 	runtimeDir: string,
 	name: string,
 ): void {
+	if (name.length > 256 || !/^pi-durable[\w-]*$/.test(name))
+		throw new Error("Invalid pi-durable session name.");
 	const file = piDurableSessionFile(runtimeDir);
-	const temporary = `${file}.${process.pid}.tmp`;
+	const temporary = `${file}.${crypto.randomUUID()}.tmp`;
 	fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
-	fs.writeFileSync(temporary, JSON.stringify({ name }), { mode: 0o600 });
-	fs.renameSync(temporary, file);
+	const descriptor = fs.openSync(temporary, "wx", 0o600);
+	try {
+		try {
+			fs.writeFileSync(descriptor, JSON.stringify({ name }));
+			fs.fsyncSync(descriptor);
+		} finally {
+			fs.closeSync(descriptor);
+		}
+		fs.renameSync(temporary, file);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
 	sessionNameCache.set(runtimeDir, { mtimeMs: -1, name });
 }

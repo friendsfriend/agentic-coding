@@ -27,7 +27,10 @@ import {
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
-import { ensureAdmittedFixtureRun } from "./support/admitted-host.ts";
+import {
+	ensureFixtureRun,
+	submitFixtureRun,
+} from "./support/admitted-host-fixture.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-session-window-"));
@@ -76,7 +79,7 @@ async function oneTurn(
 	runId: string,
 ): Promise<void> {
 	faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
-	await host.submit(runId, `work for ${runId}`, `req-${runId}`);
+	await submitFixtureRun(host, runId, `work for ${runId}`, `req-${runId}`);
 	let status = await host.status(runId);
 	for (let index = 0; index < 100 && status.status !== "idle"; index += 1) {
 		await new Promise((resolve) => setTimeout(resolve, 20));
@@ -133,7 +136,7 @@ describe("the session window of a durable conversation", () => {
 		const envBBytes = fs.readFileSync(envB, "utf8");
 
 		// The first run creates the conversation: `opened(created)`.
-		const first = await ensureAdmittedFixtureRun(host, {
+		const first = await ensureFixtureRun(host, {
 			runId: "run-a",
 			name: "worker-window",
 			cwd: dir,
@@ -152,7 +155,7 @@ describe("the session window of a durable conversation", () => {
 		// The engine retires run-a, and the next run of the same step and role is
 		// served by the same conversation.
 		await host.stopRun("run-a");
-		const second = await ensureAdmittedFixtureRun(host, {
+		const second = await ensureFixtureRun(host, {
 			runId: "run-b",
 			name: "worker-window",
 			cwd: dir,
@@ -229,7 +232,7 @@ describe("the session window of a durable conversation", () => {
 			HERDR_TELEMETRY_PATH: telemetryPath,
 		});
 		const ensure = () =>
-			ensureAdmittedFixtureRun(host, {
+			ensureFixtureRun(host, {
 				runId: "run-resume",
 				name: "worker-resume",
 				cwd: dir,
@@ -297,7 +300,7 @@ describe("the session window of a durable conversation", () => {
 			globalAgentDir: dir,
 			models,
 		});
-		const before = await ensureAdmittedFixtureRun(first, {
+		const before = await ensureFixtureRun(first, {
 			runId: "run-before",
 			name: "worker-adopt",
 			cwd: dir,
@@ -317,7 +320,7 @@ describe("the session window of a durable conversation", () => {
 			globalAgentDir: dir,
 			models,
 		});
-		const adopted = await ensureAdmittedFixtureRun(second, {
+		const adopted = await ensureFixtureRun(second, {
 			runId: "run-after",
 			name: "worker-adopt",
 			cwd: dir,
@@ -376,7 +379,7 @@ describe("the session window of a durable conversation", () => {
 				HERDR_TELEMETRY_PATH: telemetryPath,
 			});
 		try {
-			const first = await ensureAdmittedFixtureRun(host, {
+			const first = await ensureFixtureRun(host, {
 				runId: "run-creator",
 				name: "worker-ceiling-window",
 				cwd: dir,
@@ -390,7 +393,7 @@ describe("the session window of a durable conversation", () => {
 			});
 			// The creator is retired before it ever committed a turn.
 			await host.stopRun("run-creator");
-			const second = await ensureAdmittedFixtureRun(host, {
+			const second = await ensureFixtureRun(host, {
 				runId: "run-successor",
 				name: "worker-ceiling-window",
 				cwd: dir,
@@ -407,7 +410,12 @@ describe("the session window of a durable conversation", () => {
 			// Roughly 80,000 tokens of prose at pi-ai's four-characters estimate:
 			// far above the 30,000 ceiling, far below the 700,000 overflow guard.
 			const context = "context worth summarizing. ".repeat(12_800);
-			await host.submit("run-successor", context, "req-ceiling-window");
+			await submitFixtureRun(
+				host,
+				"run-successor",
+				context,
+				"req-ceiling-window",
+			);
 			const envelopes = await waitForEnvelopes(
 				telemetryPath,
 				"runtime.compaction_ceiling",
@@ -433,7 +441,7 @@ describe("the session window of a durable conversation", () => {
 	test("a conversation with no run id records nothing", async () => {
 		const dir = tempWorkflowDir();
 		const { host, faux, telemetryPath, model } = await openHost(dir);
-		await ensureAdmittedFixtureRun(host, {
+		await ensureFixtureRun(host, {
 			runId: "run-orchestrator",
 			name: "orchestrator",
 			cwd: dir,
@@ -477,7 +485,7 @@ describe("the session window of a durable conversation", () => {
 		fs.writeFileSync(blocked, "not a directory\n");
 		const blockedPath = path.join(blocked, "telemetry.jsonl");
 		const ensure = (runId: string, telemetry: string) =>
-			ensureAdmittedFixtureRun(host, {
+			ensureFixtureRun(host, {
 				runId,
 				name: "worker-window-retry",
 				cwd: dir,
@@ -533,7 +541,7 @@ describe("the session window of a durable conversation", () => {
 		const dir = tempWorkflowDir();
 		const { host, telemetryPath, model } = await openHost(dir);
 		const ensure = (runId: string) =>
-			ensureAdmittedFixtureRun(host, {
+			ensureFixtureRun(host, {
 				runId,
 				name: "worker-window-chain",
 				cwd: dir,

@@ -12,7 +12,7 @@ import {
 } from "@agentic-coding/ui";
 import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
@@ -42,6 +42,8 @@ export interface PiDurableViewProps {
 	readonly onHelp: () => void;
 	/** The repository the session works in (the shell's primary project). */
 	readonly cwd: string;
+	readonly sessionId?: string;
+	readonly onSessionsChanged?: (sessionId?: string) => void;
 }
 
 /** Footer and `?` catalog of the Pi Durable page: the session view's keys, with
@@ -111,6 +113,7 @@ export function PiDurableView(props: PiDurableViewProps) {
 	let scrollBox: ScrollBoxRenderable | undefined;
 	let pickerHandler: ((event: KeyEvent) => boolean) | undefined;
 	let disposed = false;
+	let connectionGeneration = 0;
 
 	const client = async () => {
 		const current = session();
@@ -122,21 +125,28 @@ export function PiDurableView(props: PiDurableViewProps) {
 	/** (Re)connect: ensure the host and conversation, then stream its
 	 * transcript. */
 	const connect = async (fresh = false) => {
+		const generation = ++connectionGeneration;
 		setSessionReady(false);
 		stopWatch?.();
 		stopProjection();
 		stopWatch = undefined;
+		setSession(undefined);
+		setNotices([]);
+		setDraft("");
 		try {
 			const [{ openPiDurableSession }, view] = await Promise.all([
 				import("./session.ts"),
 				import("../dash/agent-session.ts"),
 			]);
+			if (disposed || generation !== connectionGeneration) return;
 			const opened = await openPiDurableSession({
 				fresh,
 				cwd: props.cwd,
+				sessionId: props.sessionId,
 			});
-			if (disposed) return;
+			if (disposed || generation !== connectionGeneration) return;
 			setSession(opened);
+			props.onSessionsChanged?.(opened.sessionId);
 			const { HostClient, watchStream } = await import(
 				"../../agent-host/client.ts"
 			);
@@ -144,6 +154,7 @@ export function PiDurableView(props: PiDurableViewProps) {
 			void host
 				.catalog()
 				.then((catalog) => {
+					if (disposed || generation !== connectionGeneration) return;
 					setModels([...catalog.models]);
 					setThinkingLevels([...catalog.thinkingLevels]);
 					setContextWindows(catalog.contextWindows ?? {});
@@ -158,7 +169,12 @@ export function PiDurableView(props: PiDurableViewProps) {
 			const cache = new view.AgentSessionProjectionCache();
 			const stop = watchStream(host, opened.runId, {
 				onFrame: (value) => {
-					if (session()?.runId !== opened.runId) return;
+					if (
+						disposed ||
+						generation !== connectionGeneration ||
+						session()?.runId !== opened.runId
+					)
+						return;
 					receivedFrame = true;
 					stopProjection();
 					stopProjection = view.streamAgentSessionProjection(
@@ -172,7 +188,12 @@ export function PiDurableView(props: PiDurableViewProps) {
 					setSessionReady(true);
 				},
 				onState: (state) => {
-					if (session()?.runId !== opened.runId) return;
+					if (
+						disposed ||
+						generation !== connectionGeneration ||
+						session()?.runId !== opened.runId
+					)
+						return;
 					if (state !== "open" && !receivedFrame)
 						setBlocks([
 							{
@@ -184,13 +205,17 @@ export function PiDurableView(props: PiDurableViewProps) {
 						]);
 				},
 			});
-			if (disposed || session()?.runId !== opened.runId) {
+			if (
+				disposed ||
+				generation !== connectionGeneration ||
+				session()?.runId !== opened.runId
+			) {
 				stop();
 				return;
 			}
 			stopWatch = stop;
 		} catch (error) {
-			if (disposed) return;
+			if (disposed || generation !== connectionGeneration) return;
 			setBlocks([
 				{
 					id: "route:host-error",
@@ -204,8 +229,13 @@ export function PiDurableView(props: PiDurableViewProps) {
 		}
 	};
 
-	onMount(() => {
-		void connect();
+	createEffect(() => {
+		// The identity, not shell cwd/model or background report refreshes,
+		// owns reconnection. Stop stale in-flight opens from replacing it.
+		const requested = props.sessionId;
+		untrack(() => {
+			if (session()?.sessionId !== requested || !session()) void connect();
+		});
 	});
 
 	const submit = (text: string) => {
@@ -414,7 +444,11 @@ export function PiDurableView(props: PiDurableViewProps) {
 
 	return (
 		<AgentSessionView
-			role="pi durable"
+			role={
+				session()
+					? `Session ${session()?.sessionId.slice(0, 8)} · ${session()?.name ?? "pi durable"}`
+					: "pi durable"
+			}
 			blocks={blocks()}
 			{...metadata()}
 			{...(metadata().model

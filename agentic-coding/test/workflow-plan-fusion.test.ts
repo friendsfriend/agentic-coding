@@ -13,6 +13,7 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { claimFixtureEffects } from "./support/claim-fixture-effects.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -126,34 +127,12 @@ function advanceRouting(
 function tokenCache(engine: WorkflowEngine, repo: string) {
 	const tokens = new Map<string, string>();
 	return () => {
-		// A failed attempt's stop must be acknowledged before its successor can
-		// launch. Simulate the fixture adapter's successful stop, not the fence.
-		for (let round = 0; round < 2; round++) {
-			for (const effect of engine.claimEffects(repo, 100)) {
-				if (effect.kind === "agent.stop" && effect.lease)
-					engine.dispatch(repo, {
-						type: "effect.result",
-						effectId: effect.id,
-						lease: effect.lease,
-						outcome: "complete",
-					});
-				if (effect.kind === "agent.launch" && effect.runToken && effect.lease) {
-					const runId = String((effect.payload as { runId?: string }).runId);
-					tokens.set(runId, effect.runToken);
-					engine.dispatch(repo, {
-						type: "effect.result",
-						effectId: effect.id,
-						lease: effect.lease,
-						outcome: "complete",
-						data: {
-							runtime: "pi-durable",
-							name: runId,
-							paneId: `fake-${runId}`,
-						},
-					});
-				}
-			}
-		}
+		for (const effect of claimFixtureEffects(engine, repo))
+			if (effect.kind === "agent.launch" && effect.runToken)
+				tokens.set(
+					String((effect.payload as { runId?: string }).runId),
+					effect.runToken,
+				);
 		return tokens;
 	};
 }

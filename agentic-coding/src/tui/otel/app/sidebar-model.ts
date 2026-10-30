@@ -85,6 +85,8 @@ export interface SidebarPin {
 	readonly meta: string;
 	/** The page the pin opens. */
 	readonly page: PageId;
+	/** Exact workflowless session identity; never a workflow run id. */
+	readonly sessionId?: string;
 }
 
 export const SIDEBAR_ORCHESTRATOR_PIN: SidebarPin = {
@@ -120,6 +122,33 @@ export const SIDEBAR_PI_DURABLE_PIN: SidebarPin = {
 	meta: "durable · session · code",
 	page: "pi-durable",
 };
+
+export function namedDurableSessionPins(
+	sessions: readonly {
+		id: string;
+		name: string;
+		owner: string;
+		operationId?: string;
+		deletedAt?: number;
+	}[],
+	owner: string,
+): SidebarPin[] {
+	return sessions
+		.filter(
+			(session) => session.owner === owner && session.deletedAt === undefined,
+		)
+		.map((session) => ({
+			glyph: "∞",
+			label: session.name,
+			meta:
+				session.operationId === "first-session" ||
+				session.operationId === "legacy-adoption"
+					? "durable · session · code"
+					: `${session.id.slice(0, 8)} · workflowless`,
+			page: "pi-durable",
+			sessionId: session.id,
+		}));
+}
 
 export const SIDEBAR_HOME_PINS: readonly SidebarPin[] = [
 	SIDEBAR_ORCHESTRATOR_PIN,

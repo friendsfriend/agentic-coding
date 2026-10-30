@@ -692,12 +692,13 @@ test("dashboard repair and actions use displayed revision", async () => {
 				diversity: [],
 			},
 		}).view;
-		parkFixtureRuns(new WorkflowEngine(registerBuiltins()), repo, "repair");
 		expect(
 			previewWorkflowRepair(repo, "repair").find(
 				(item) => item.targetStep === "core.implementation",
 			)?.expiresRuns,
-		).toEqual([]);
+		).toContain(started.runs[0]?.id);
+		// Preview above describes the live run; park it before executing repair.
+		parkFixtureRuns(new WorkflowEngine(registerBuiltins()), repo, "repair");
 		expect(() =>
 			repairWorkflow(
 				repo,

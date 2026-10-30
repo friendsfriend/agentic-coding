@@ -456,6 +456,28 @@ export class HostClient {
 		return response;
 	}
 
+	/** Read-only legacy adoption lookup; never creates a native conversation. */
+	async resolveSession(runId: string): Promise<string | undefined> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "resolveSession", runId },
+			this.timeoutMs,
+		);
+		if (response.type !== "resolveSession") throw unexpected(response);
+		return response.conversationId;
+	}
+	async revokeSession(
+		runId: string,
+		hostId: string,
+		conversationId: string,
+	): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "revokeSession", runId, hostId, conversationId },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
 	async scheduledIdentity(): Promise<string> {
 		const response = await sendRequest(
 			this.socketPath,

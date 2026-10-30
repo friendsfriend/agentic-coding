@@ -29,7 +29,11 @@ export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 /** `orchestrator` is served only by a host opened in orchestrator mode: the
  * full coding tools (read/write/edit/bash) plus the orchestrator's own
  * workflow-management tools, so it can act directly or launch a workflow. */
-export type ToolPolicy = "default" | "read-only" | "orchestrator";
+export type ToolPolicy =
+	| "default"
+	| "read-only"
+	| "orchestrator"
+	| "collection";
 
 import type { LaunchClaim } from "../contracts/launch.ts";
 
@@ -190,6 +194,13 @@ export interface HelloRequest {
 	readonly protocolVersion: number;
 }
 export type HostRequest =
+	| {
+			readonly type: "revokeSession";
+			readonly runId: string;
+			readonly hostId: string;
+			readonly conversationId: string;
+	  }
+	| { readonly type: "resolveSession"; readonly runId: string }
 	| { readonly type: "scheduledIdentity" }
 	| ScheduledAdmissionRequest
 	| ClarificationTranscriptRequest
@@ -392,6 +403,7 @@ export interface WatchFrame {
 	readonly patch?: WatchPatch;
 }
 export type HostResponse =
+	| { readonly type: "resolveSession"; readonly conversationId?: string }
 	| { readonly type: "scheduledIdentity"; readonly hostId: string }
 	| ScheduledAdmissionResponse
 	| ClarificationTranscriptResponse

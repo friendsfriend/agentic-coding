@@ -7,7 +7,13 @@
 // overview read is stubbed at the gateway port, so the test pins presentation
 // and navigation rather than the store.
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,12 +21,21 @@ import {
 	dismissErrorModal,
 	uiColors,
 } from "@agentic-coding/ui";
+import {
+	createModels,
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxText,
+} from "@earendil-works/pi-ai";
 import { TextAttributes } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
+import * as hostClients from "../../src/agent-host/client.ts";
 import { HostClient } from "../../src/agent-host/client.ts";
+import { DurableHost } from "../../src/agent-host/host.ts";
 import { hostLayout } from "../../src/agent-host/layout.ts";
+import * as durableSessions from "../../src/agent-host/pi-durable-session.ts";
 import * as recovery from "../../src/agent-host/recovery.ts";
 import * as workflowSessions from "../../src/agent-host/workflow-session.ts";
 import type { ObservationRequest } from "../../src/contracts/environment.ts";
@@ -29,6 +44,20 @@ import type {
 	DashboardData,
 	WorkflowOverview,
 } from "../../src/contracts/workflow.ts";
+import {
+	bindDurableSession,
+	createDurableSession,
+	durableSessionOwner,
+	initializeDurableSessions,
+	readDurableSessionRegistry,
+} from "../../src/pi-durable-registry.ts";
+import { piDurableRuntimeDir } from "../../src/pi-durable-state.ts";
+import { dailyDigestProposal } from "../../src/scheduling/daily-digest-setup.ts";
+import { SchedulingInfrastructureError } from "../../src/server/scheduling/adapters.ts";
+import { SchedulingApi } from "../../src/server/scheduling/api.ts";
+import { SchedulingService } from "../../src/server/scheduling/service.ts";
+import { workflowlessSessionAdapter } from "../../src/server/scheduling/session.ts";
+import { SchedulingStore } from "../../src/server/scheduling/store.ts";
 import { TraceDb } from "../../src/server/telemetry-db";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
@@ -50,6 +79,8 @@ import {
 	renderUntil,
 	type Test,
 } from "../app/support/terminal.ts";
+import { configureDigestProgram } from "../helpers/digest-program.ts";
+import { fakeDigestWizMcp } from "../helpers/digest-wiz-mcp.ts";
 
 /** One theme colour as the red/green/blue triple the renderer reports a span's
  * foreground in. */
@@ -143,7 +174,11 @@ let currentConfigFile = "";
  * them so the sidebar's poll cannot resurrect a deleted row. */
 const deletedWorkflows: Array<{ repo: string; workflowId: string }> = [];
 
+const priorConfigRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
 afterEach(() => {
+	if (priorConfigRoot === undefined)
+		delete process.env.AGENTIC_CODING_CONFIG_DIR;
+	else process.env.AGENTIC_CODING_CONFIG_DIR = priorConfigRoot;
 	deletedWorkflows.length = 0;
 	delete process.env.HERDR_WORKFLOW_CONFIG;
 	for (const dir of tempConfigDirs.splice(0))
@@ -218,6 +253,7 @@ async function renderShell(
 		kittyKeyboard?: boolean;
 		sidebarSide?: "left" | "right";
 		width?: number;
+		setupSessions?: (configDir: string) => void | Promise<void>;
 		onKeymap?: (keymap: ReturnType<typeof createDefaultOpenTuiKeymap>) => void;
 	} = {},
 ): Promise<Test> {
@@ -227,6 +263,8 @@ async function renderShell(
 	writeFileSync(currentConfigFile, "{}\n");
 	tempConfigDirs.push(configDir);
 	process.env.HERDR_WORKFLOW_CONFIG = currentConfigFile;
+	process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+	await options.setupSessions?.(configDir);
 	const t = await testRender(
 		() => {
 			const renderer = useRenderer();
@@ -807,6 +845,526 @@ test("rows show the state that needs a reader as a glyph", async () => {
 		clearGateway();
 	}
 });
+
+test("persisted workflowless pins render separately and reopening each passes its exact identity without starting a host", async () => {
+	stubGateway();
+	const opened: string[] = [];
+	const open = spyOn(
+		durableSessions,
+		"openPiDurableSession",
+	).mockImplementation(async (options) => {
+		opened.push(options?.sessionId ?? "missing");
+		return new Promise<never>(() => {});
+	});
+	let dailyId = "",
+		scratchId = "",
+		duplicateId = "",
+		runtimeDir = "",
+		originalActive: string | null | undefined;
+	const t = await renderShell({
+		setupSessions: (configDir) => {
+			runtimeDir = piDurableRuntimeDir(configDir);
+			const owner = durableSessionOwner();
+			originalActive = initializeDurableSessions(
+				runtimeDir,
+				"/synthetic",
+				owner,
+			).activeId;
+			dailyId = createDurableSession(runtimeDir, {
+				operationId: "daily",
+				name: "Daily task digest",
+				owner,
+				cwd: "/synthetic",
+			}).id;
+			scratchId = createDurableSession(runtimeDir, {
+				operationId: "scratch",
+				name: "Scratch notes",
+				owner,
+				cwd: "/synthetic",
+			}).id;
+			duplicateId = createDurableSession(runtimeDir, {
+				operationId: "duplicate",
+				name: "Daily task digest",
+				owner,
+				cwd: "/synthetic",
+			}).id;
+		},
+	});
+	try {
+		// Background creation leaves Home/active selection alone.
+		expect(readDurableSessionRegistry(runtimeDir)?.activeId).toBe(
+			originalActive,
+		);
+		expect(opened).toEqual([]);
+		await focusSidebar(t);
+		if (!(await renderUntil(t, "Daily task digest")))
+			throw new Error(t.captureCharFrame());
+		expect(t.captureCharFrame()).toContain("Scratch notes");
+		for (const id of [dailyId, scratchId, duplicateId])
+			expect(t.captureCharFrame()).toContain(id.slice(0, 8));
+		expect(t.captureCharFrame()).toContain("wf-active");
+		await selectFirstWorkflow(t); // four original Home pins; now the Daily pin
+		t.mockInput.pressEnter();
+		await advance(t, 3, 60);
+		expect(opened).toEqual([dailyId]);
+		await focusSidebar(t);
+		t.mockInput.pressKey("j");
+		t.mockInput.pressEnter();
+		await advance(t, 3, 60);
+		expect(opened).toEqual([dailyId, scratchId]);
+		await focusSidebar(t);
+		t.mockInput.pressKey("j");
+		t.mockInput.pressEnter();
+		await advance(t, 3, 60);
+		expect(opened).toEqual([dailyId, scratchId, duplicateId]);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+		open.mockRestore();
+	}
+});
+
+test("background native reports: real scheduler-to-sidebar delivery collects paginated MCP and reconciles lost acknowledgement across native/store restart without focus theft", async () => {
+	stubGateway();
+	const isolatedKeys = [
+		"HOME",
+		"PI_CODING_AGENT_DIR",
+		"HERDR_WIKI_DIR",
+	] as const;
+	const previousDirs = isolatedKeys.map(
+		(key) => [key, process.env[key]] as const,
+	);
+	const faux = fauxProvider(),
+		models = createModels();
+	models.setProvider(faux.provider);
+	let native: DurableHost | undefined,
+		service: SchedulingService | undefined,
+		schedulingStore: SchedulingStore | undefined,
+		wiz: Awaited<ReturnType<typeof fakeDigestWizMcp>> | undefined;
+	let config = "",
+		reopenNative = async (): Promise<DurableHost> => {
+			throw new Error("fixture not ready");
+		};
+	const nominalDue = Date.parse("2026-03-30T07:00:00Z");
+	let now = nominalDue - 1000;
+	const pages = [
+		{
+			findings: [
+				{
+					id: "SYNTH-1",
+					title: "Synthetic retained daily report",
+					createdAt: new Date(nominalDue - 1000).toISOString(),
+					url: "https://wiz.example.invalid/one",
+					severity: "HIGH",
+				},
+			],
+			pageInfo: { hasNextPage: true, endCursor: "page-2" },
+		},
+		{
+			findings: [
+				{
+					id: "SYNTH-2",
+					title: "Synthetic second finding",
+					createdAt: new Date(nominalDue - 1000).toISOString(),
+					url: "https://wiz.example.invalid/two",
+					severity: "MEDIUM",
+				},
+			],
+			pageInfo: { hasNextPage: false },
+		},
+	];
+	const records = new Map<
+		string,
+		{ runId: string; hostSocket: string; sessionId: string; name?: string }
+	>();
+	const opened: string[] = [];
+	const realOpen = durableSessions.openPiDurableSession;
+	const start = spyOn(hostClients, "ensureHostRunning").mockResolvedValue(
+		undefined,
+	);
+	const identity = spyOn(
+		HostClient.prototype,
+		"scheduledIdentity",
+	).mockImplementation(() => {
+		if (!native) throw new Error("fixture host missing");
+		return native.scheduledIdentity();
+	});
+	const resolveSession = spyOn(
+		HostClient.prototype,
+		"resolveSession",
+	).mockImplementation((runId) => {
+		if (!native) throw new Error("fixture host missing");
+		return native.resolveSession(runId);
+	});
+	const ensure = spyOn(HostClient.prototype, "ensureRun").mockImplementation(
+		async (request) => {
+			if (!native) throw new Error("fixture host missing");
+			return {
+				type: "ensureRun",
+				runId: request.runId,
+				...(await native.ensureRun(request)),
+			};
+		},
+	);
+	const open = spyOn(
+		durableSessions,
+		"openPiDurableSession",
+	).mockImplementation(async (options) => {
+		if (options?.fresh) {
+			const result = await realOpen({
+				...options,
+				configDir: config,
+				cwd: realpathSync(config),
+				model: {
+					model: `${faux.getModel().provider}/${faux.getModel().id}`,
+					thinking: "off",
+				},
+			});
+			records.set(result.sessionId, result);
+			return result;
+		}
+		const id = options?.sessionId;
+		const result = id ? records.get(id) : undefined;
+		if (!result) throw new Error("unregistered fixture session");
+		opened.push(result.sessionId);
+		return result;
+	});
+	const watch = spyOn(HostClient.prototype, "watch").mockImplementation(
+		async (runId, onFrame) => {
+			if (!native) throw new Error("fixture host missing");
+			return native.watchRun(runId, onFrame);
+		},
+	);
+	const catalog = spyOn(HostClient.prototype, "catalog").mockImplementation(
+		async () => {
+			if (!native) throw new Error("fixture host missing");
+			return { type: "catalog" as const, ...(await native.catalog()) };
+		},
+	);
+	let dailyId = "",
+		scratchId = "";
+	let t: Awaited<ReturnType<typeof renderShell>> | undefined;
+	try {
+		t = await renderShell({
+			setupSessions: async (configDir) => {
+				config = configDir;
+				process.env.HOME = configDir;
+				process.env.PI_CODING_AGENT_DIR = configDir;
+				process.env.HERDR_WIKI_DIR = join(configDir, "wiki");
+				const runtimeDir = piDurableRuntimeDir(configDir),
+					owner = durableSessionOwner();
+				initializeDurableSessions(runtimeDir, configDir, owner);
+				writeFileSync(
+					join(configDir, "settings.json"),
+					JSON.stringify({ defaultTools: ["+codemode"] }),
+				);
+				const env = join(configDir, "synthetic.env");
+				writeFileSync(env, "");
+				wiz = await fakeDigestWizMcp(configDir, pages);
+				const nativeOptions = {
+					layout: hostLayout(runtimeDir),
+					globalAgentDir: configDir,
+					session: true,
+					settings: { localPiTools: { enabled: true } },
+					models,
+				};
+				reopenNative = async () => {
+					const host = await DurableHost.open(nativeOptions);
+					for (const record of readDurableSessionRegistry(runtimeDir)
+						?.sessions ?? []) {
+						if (record.binding)
+							await host.ensureRun({
+								runId: record.runId,
+								name: record.runId,
+								cwd: record.cwd,
+								model: record.model,
+								thinking: record.thinking,
+								runEnvPath: env,
+								toolPolicy: "collection",
+								expectedConversationId: record.binding.conversationId,
+							});
+					}
+					return host;
+				};
+				native = await reopenNative();
+				for (const [operationId, name] of [
+					["daily", "Daily task digest"],
+					["scratch", "Scratch notes"],
+				] as const) {
+					const model = `${faux.getModel().provider}/${faux.getModel().id}`;
+					const record = createDurableSession(runtimeDir, {
+						operationId,
+						name,
+						cwd: realpathSync(configDir),
+						owner,
+						model,
+						thinking: "off",
+						toolPolicy: "collection",
+					});
+					const result = await native.ensureRun({
+						runId: record.runId,
+						name: record.runId,
+						cwd: configDir,
+						model,
+						runEnvPath: env,
+						toolPolicy: "collection",
+					});
+					bindDurableSession(runtimeDir, record.id, owner, {
+						hostId: await native.scheduledIdentity(),
+						conversationId: result.conversationId,
+					});
+					records.set(record.id, {
+						name: record.name,
+						runId: record.runId,
+						sessionId: record.id,
+						hostSocket: "synthetic-no-socket",
+					});
+					if (operationId === "daily") dailyId = record.id;
+					else scratchId = record.id;
+				}
+			},
+		});
+		if (!native) throw new Error("fixture host missing");
+		const deliver = async (id: string, report: string) => {
+			const record = records.get(id);
+			if (!record) throw new Error("fixture missing");
+			faux.setResponses([fauxAssistantMessage([fauxText(report)])]);
+			if (!native) throw new Error("fixture host missing");
+			await native.submit(
+				record.runId,
+				"Synthetic fixture only; no source collection.",
+				crypto.randomUUID(),
+			);
+			for (let attempt = 0; attempt < 100; attempt++) {
+				if (
+					JSON.stringify(await native.entriesForTest(record.runId)).includes(
+						report,
+					)
+				)
+					return;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			throw new Error("synthetic report not delivered");
+		};
+		const owner = durableSessionOwner(),
+			runtimeDir = piDurableRuntimeDir(config),
+			registry = readDurableSessionRegistry(runtimeDir);
+		const daily = registry?.sessions.find((record) => record.id === dailyId);
+		if (!daily?.binding) throw new Error("fixture binding missing");
+		const adapter = workflowlessSessionAdapter(config, {
+			models: async () => [daily.model ?? ""],
+			validateBase: async () => {},
+			open: async (options) => {
+				expect(options?.select).toBe(false);
+				const record = records.get(options?.sessionId ?? "");
+				if (!record) throw new Error("exact fixture missing");
+				return record;
+			},
+			client: () => ({
+				scheduledAdmission: async (request) => {
+					if (!native) throw new Error("fixture host missing");
+					const receipt = await native.scheduledAdmission(
+						request.operation,
+						request.envelope,
+						request.fence,
+					);
+					if (request.operation === "activate" && loseAcknowledgement) {
+						loseAcknowledgement = false;
+						throw new SchedulingInfrastructureError(
+							"synthetic lost activation acknowledgement",
+						);
+					}
+					return { type: "scheduledAdmission", receipt };
+				},
+			}),
+		});
+		expect(daily.owner).toBe(owner);
+		let loseAcknowledgement = true;
+		const directory = join(config, "scheduler");
+		schedulingStore = SchedulingStore.open(directory);
+		const adapters = {
+			"wake-up": adapter,
+			standalone: adapter,
+			workflow: adapter,
+		};
+		service = new SchedulingService(schedulingStore, adapters, () => now);
+		const proposal = dailyDigestProposal(daily, "main");
+		const api = new SchedulingApi(service);
+		const created = await api.execute(
+			{
+				operation: "create",
+				requestId: "synthetic-end-to-end",
+				job: proposal.job,
+				schedule: {
+					...proposal.schedule,
+					timing: {
+						kind: "once",
+						at: new Date(nominalDue).toISOString(),
+						timezone: "Europe/Berlin",
+					},
+				},
+			},
+			"operator",
+		);
+		if (created.kind !== "created")
+			throw new Error("Synthetic API did not create its schedule");
+		configureDigestProgram(faux, nominalDue);
+		now = nominalDue + 1000;
+		await service.tick();
+		const dailyRun = records.get(dailyId);
+		if (!dailyRun) throw new Error("fixture run missing");
+		for (let attempt = 0; attempt < 300; attempt++) {
+			const entries = JSON.stringify(
+				await native.entriesForTest(dailyRun.runId),
+			);
+			if (
+				entries.includes("# Daily task digest") &&
+				(await native.status(dailyRun.runId)).status === "idle"
+			)
+				break;
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		const count = faux.state.callCount,
+			calls = wiz?.calls.length;
+		expect(count).toBe(3);
+		expect(wiz?.calls.map((call) => call.tool)).toEqual([
+			"discover",
+			"list_issues",
+			"list_issues",
+		]);
+		expect(wiz?.calls[2]?.parameters.after).toBe("page-2");
+		await service.stop();
+		schedulingStore.close();
+		await native.shutdown();
+		native = await reopenNative();
+		schedulingStore = SchedulingStore.open(directory);
+		service = new SchedulingService(schedulingStore, adapters, () => now);
+		for (
+			let attempt = 0;
+			attempt < 40 &&
+			schedulingStore.history(created.schedule.id)[0]?.state !== "succeeded";
+			attempt++
+		) {
+			now += 1000;
+			await service.tick();
+		}
+		const history = schedulingStore.history(created.schedule.id);
+		expect(history).toHaveLength(1);
+		expect(history[0]?.state).toBe("succeeded");
+		expect(history[0]?.receipt?.submission?.conversationId).toBe(
+			daily.binding.conversationId,
+		);
+		expect(history[0]?.receipt?.submission?.answerEntryId).toBeDefined();
+		expect(history[0]?.receipt?.result).toContain(
+			"Synthetic retained daily report",
+		);
+		expect(history[0]?.receipt?.result).toContain("Synthetic second finding");
+		expect(history[0]?.receipt?.result).toContain(
+			"Coverage: partial or unavailable",
+		);
+		expect(history[0]?.receipt?.result).toContain(
+			"jira / expected-source-not-reported: unavailable",
+		);
+		expect(history[0]?.receipt?.submission?.inputEntryId).toBeDefined();
+		const nativeAnswers = (await native.entriesForTest(dailyRun.runId)).filter(
+			(entry) =>
+				typeof entry === "object" &&
+				entry !== null &&
+				"kind" in entry &&
+				entry.kind === "pi.assistant" &&
+				JSON.stringify(entry).includes("# Daily task digest"),
+		);
+		expect(nativeAnswers).toHaveLength(1);
+		expect(readDurableSessionRegistry(runtimeDir)?.activeId).toBe(
+			registry?.activeId,
+		);
+		expect(faux.state.callCount).toBe(count);
+		expect(wiz?.calls).toHaveLength(calls ?? 0);
+		expect(opened).toEqual([]);
+		expect(t.captureCharFrame()).not.toContain(
+			"Synthetic retained daily report",
+		);
+		await focusSidebar(t);
+		await selectFirstWorkflow(t);
+		t.mockInput.pressEnter();
+		expect(await renderUntil(t, "Synthetic retained daily report")).toBe(true);
+		await deliver(scratchId, "Synthetic scratch report");
+		await advance(t);
+		expect(t.captureCharFrame()).toContain("Synthetic retained daily report");
+		expect(t.captureCharFrame()).not.toContain("Synthetic scratch report");
+		await focusSidebar(t);
+		t.mockInput.pressKey("j");
+		t.mockInput.pressEnter();
+		expect(await renderUntil(t, "Synthetic scratch report")).toBe(true);
+		await focusSidebar(t);
+		t.mockInput.pressKey("k");
+		t.mockInput.pressEnter();
+		expect(await renderUntil(t, "Synthetic retained daily report")).toBe(true);
+		expect(t.captureCharFrame()).toContain(
+			`${dailyId.slice(0, 8)} · Daily task digest`,
+		);
+		expect(opened).toEqual([dailyId, scratchId, dailyId]);
+		const unnamed: { id: string; name: string }[] = [];
+		for (let index = 0; index < 2; index++) {
+			await t.mockInput.typeText("/new");
+			await t.mockInput.pressKey("RETURN");
+			for (let attempt = 0; attempt < 100; attempt++) {
+				const sessions =
+					readDurableSessionRegistry(runtimeDir)?.sessions.filter((record) =>
+						record.name.startsWith("Coding session "),
+					) ?? [];
+				if (sessions.length > index) {
+					const record = sessions[index];
+					if (record) unnamed.push({ id: record.id, name: record.name });
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			const record = unnamed[index];
+			if (!record) throw new Error("/new did not persist its session");
+			for (let attempt = 0; attempt < 300 && !records.has(record.id); attempt++)
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			if (!(await renderUntil(t, `${record.id.slice(0, 8)} · ${record.name}`)))
+				throw new Error(t.captureCharFrame());
+		}
+		expect(unnamed[0]?.name).not.toBe(unnamed[1]?.name);
+		await focusSidebar(t);
+		for (const record of unnamed) {
+			expect(t.captureCharFrame()).toContain(record.name);
+			expect(t.captureCharFrame()).toContain(record.id.slice(0, 8));
+		}
+		const first = unnamed[0];
+		if (!first) throw new Error("first /new missing");
+		t.mockInput.pressKey("k");
+		await t.mockInput.pressKey("RETURN");
+		expect(
+			await renderUntil(t, `${first.id.slice(0, 8)} · ${first.name}`),
+		).toBe(true);
+		expect(faux.state.callCount).toBe(count + 1);
+		expect(wiz?.calls).toHaveLength(calls ?? 0);
+	} finally {
+		t?.renderer.destroy();
+		clearGateway();
+		open.mockRestore();
+		watch.mockRestore();
+		catalog.mockRestore();
+		start.mockRestore();
+		identity.mockRestore();
+		ensure.mockRestore();
+		resolveSession.mockRestore();
+		try {
+			await service?.stop();
+			schedulingStore?.close();
+			await native?.shutdown();
+			await wiz?.close();
+		} finally {
+			for (const [key, value] of previousDirs) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	}
+}, 20_000);
 
 test("the pinned Orchestrator, OpenCode, Pi and Pi Durable entries are always visible", async () => {
 	stubGateway();

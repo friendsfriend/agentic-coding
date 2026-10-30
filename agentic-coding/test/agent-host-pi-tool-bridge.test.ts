@@ -1938,36 +1938,46 @@ for (const exposure of ["direct", "deferred", "codemode"] as const) {
 			expect(host.toolDescriptionsForTest()).not.toHaveProperty(
 				"mcp__slow__http_echo",
 			);
-			// pi-durable may begin then cancel a speculative call at a queued-input
-			// boundary. Respond to the actual turn, not an assumed call ordinal.
+			// Updating callable tools may restart a provider request. Script from
+			// committed context, not a global response index that an aborted
+			// request can consume without committing its tool call.
 			faux.setResponses(
 				Array.from({ length: 12 }, () => (context) => {
-					const lastUser = context.messages.findLastIndex(
-						(message) => message.role === "user",
+					const followUp = JSON.stringify(
+						context.messages.findLast((message) => message.role === "user"),
+					).includes("discover and call late tool");
+					const callId = followUp ? "late-structured" : "active-fast";
+					const finished = context.messages.some(
+						(message) =>
+							message.role === "toolResult" && message.toolCallId === callId,
 					);
-					const followUp = JSON.stringify(context.messages[lastUser]).includes(
-						"discover and call late tool",
-					);
-					const results = context.messages
-						.slice(lastUser + 1)
-						.filter((message) => message.role === "toolResult");
-					if (results.length)
+					if (finished)
 						return fauxAssistantMessage([
 							fauxText(followUp ? "follow-up done" : "first done"),
 						]);
 					return fauxAssistantMessage(
 						[
 							followUp
-								? fauxToolCall(CODEMODE_TOOL_NAME, {
-										code: 'const found = await searchTools("mcp__slow__http_structured"); if (!found.some(t => t.name === "mcp__slow__http_structured")) throw new Error("late tool missing"); return await tools.mcp__slow__http_structured({});',
-									})
+								? fauxToolCall(
+										CODEMODE_TOOL_NAME,
+										{
+											code: 'const found = await searchTools("mcp__slow__http_structured"); if (!found.some(t => t.name === "mcp__slow__http_structured")) throw new Error("late tool missing"); return await tools.mcp__slow__http_structured({});',
+										},
+										{ id: callId },
+									)
 								: exposure === "codemode"
-									? fauxToolCall(CODEMODE_TOOL_NAME, {
-											code: 'return await tools.mcp__fast__http_echo({ text: "active-fast" });',
-										})
-									: fauxToolCall("mcp__fast__http_echo", {
-											text: "active-fast",
-										}),
+									? fauxToolCall(
+											CODEMODE_TOOL_NAME,
+											{
+												code: 'return await tools.mcp__fast__http_echo({ text: "active-fast" });',
+											},
+											{ id: callId },
+										)
+									: fauxToolCall(
+											"mcp__fast__http_echo",
+											{ text: "active-fast" },
+											{ id: callId },
+										),
 						],
 						{ stopReason: "toolUse" },
 					);
@@ -2005,13 +2015,12 @@ for (const exposure of ["direct", "deferred", "codemode"] as const) {
 				),
 			);
 			active.release();
-			// Idle can be observed between the active turn and its queued follow-up.
-			// Wait for the actual result, not that transient runtime observation.
+			// Idle can be observed between the held turn and its queued follow-up.
+			// Wait for the second durable answer, not that transient idle boundary.
 			await eventually(async () =>
-				toolResult(
-					await running.entriesForTest("late"),
-					CODEMODE_TOOL_NAME,
-				).includes("structured-value"),
+				JSON.stringify(await running.entriesForTest("late")).includes(
+					"follow-up done",
+				),
 			);
 			await settle(host, "late");
 			const entries = await host.entriesForTest("late");

@@ -49,6 +49,12 @@ import {
 } from "../../../contracts/telemetry.ts";
 import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
+	durableSessionOwner,
+	initializeDurableSessions,
+	readDurableSessionRegistry,
+} from "../../../pi-durable-registry.ts";
+import { piDurableRuntimeDir } from "../../../pi-durable-state.ts";
+import {
 	COMPACTION_CEILING_MINIMUM,
 	type CompactionField,
 	type CompactionTokenValue,
@@ -263,9 +269,11 @@ import {
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
+	namedDurableSessionPins,
 	SIDEBAR_HOME_PINS,
 	type SidebarFilter,
 	type SidebarMode,
+	type SidebarPin,
 	sidebarCursorCount,
 	sidebarCursorForWorkflow,
 	sidebarIndexFor,
@@ -640,8 +648,46 @@ export function App(props: {
 	};
 	/** Home pins the Orchestrator, OpenCode, Pi and Pi Durable above every
 	 * workflow row. The attached shell has no Home surface, so it pins none. */
+	const [durablePins, setDurablePins] = createSignal<readonly SidebarPin[]>([]);
+	const [selectedDurableId, setSelectedDurableId] = createSignal<string>();
+	let sessionDiagnostic: string | undefined;
+	const refreshDurablePins = () => {
+		if (props.dashboard?.mode !== "home") return;
+		try {
+			const registry =
+				readDurableSessionRegistry(piDurableRuntimeDir()) ??
+				initializeDurableSessions(
+					piDurableRuntimeDir(),
+					agentProject(),
+					durableSessionOwner(),
+				);
+			if (!selectedDurableId() && registry.activeId)
+				setSelectedDurableId(registry.activeId);
+			setDurablePins(
+				namedDurableSessionPins(registry.sessions, durableSessionOwner()),
+			);
+			sessionDiagnostic = undefined;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (sessionDiagnostic !== message) notify(message, "error");
+			sessionDiagnostic = message;
+			setDurablePins([]);
+		}
+	};
+	onMount(() => {
+		refreshDurablePins();
+		const timer = setInterval(refreshDurablePins, 2000);
+		onCleanup(() => clearInterval(timer));
+	});
 	const sidebarPins = () =>
-		props.dashboard?.mode === "home" ? SIDEBAR_HOME_PINS : [];
+		props.dashboard?.mode === "home"
+			? [
+					...SIDEBAR_HOME_PINS.filter((pin) => pin.page !== "pi-durable"),
+					...(durablePins().length
+						? durablePins()
+						: SIDEBAR_HOME_PINS.filter((pin) => pin.page === "pi-durable")),
+				]
+			: [];
 	/** Cursor positions the sidebar offers: the pinned entries first, then the
 	 * filter's workflow rows. */
 	const sidebarEntryCount = (): number =>
@@ -676,7 +722,8 @@ export function App(props: {
 	};
 	/** Open a pinned page (the sidebar's Orchestrator/OpenCode/Pi entries) and
 	 * focus it. */
-	const openPinnedPage = (page: PageId): void => {
+	const openPinnedPage = (page: PageId, sessionId?: string): void => {
+		if (page === "pi-durable") setSelectedDurableId(sessionId);
 		pages.navigate({ page });
 		setFocusPanel("content");
 	};
@@ -701,7 +748,11 @@ export function App(props: {
 	 * not-yet-polled workflow), so a reader is never moved onto a wrong row. */
 	const openWorkspaceCursor = (): number | undefined => {
 		const pin = sidebarPins().findIndex(
-			(entry) => entry.page === currentPage(),
+			(entry) =>
+				entry.page === currentPage() &&
+				(entry.page !== "pi-durable" ||
+					!selectedDurableId() ||
+					entry.sessionId === selectedDurableId()),
 		);
 		if (pin >= 0) return pin;
 		const index = sidebarIndexFor(sidebarRows(), workflow());
@@ -720,7 +771,7 @@ export function App(props: {
 	const openWorkspaceAt = (cursor: number): void => {
 		const pin = sidebarPins()[cursor];
 		if (pin) {
-			openPinnedPage(pin.page);
+			openPinnedPage(pin.page, pin.sessionId);
 			return;
 		}
 		const entry = sidebarWorkflowAt(cursor);
@@ -872,7 +923,7 @@ export function App(props: {
 		if (key === "enter" || key === "return") {
 			const pin = sidebarPins()[sidebarIndex()];
 			if (pin) {
-				openPinnedPage(pin.page);
+				openPinnedPage(pin.page, pin.sessionId);
 				return;
 			}
 			const entry = selectedSidebarWorkflow();
@@ -3779,7 +3830,7 @@ export function App(props: {
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
-							onOpenPin={(pin) => openPinnedPage(pin.page)}
+							onOpenPin={(pin) => openPinnedPage(pin.page, pin.sessionId)}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}
@@ -4019,6 +4070,11 @@ export function App(props: {
 												active={() => focusPanel() === "content"}
 												overlay={() => nav.modal() !== "none"}
 												cwd={agentProject()}
+												sessionId={selectedDurableId()}
+												onSessionsChanged={(id) => {
+													if (id) setSelectedDurableId(id);
+													refreshDurablePins();
+												}}
 												onBack={() => pages.goToParent()}
 												onHelp={() => {
 													setHelpOffset(0);
@@ -4227,7 +4283,7 @@ export function App(props: {
 							selectedIndex={sidebarIndex()}
 							loading={sidebarLoading()}
 							onSelectIndex={setSidebarIndex}
-							onOpenPin={(pin) => openPinnedPage(pin.page)}
+							onOpenPin={(pin) => openPinnedPage(pin.page, pin.sessionId)}
 							onOpen={openWorkflow}
 							onFilterChange={setSidebarFilter}
 							onFocus={() => setFocusPanel("sidebar")}

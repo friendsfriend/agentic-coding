@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -137,6 +137,99 @@ function fixture(
 		},
 	};
 }
+for (const operation of ["schedules.create", "schedules.update"] as const)
+	for (const change of [
+		"protected-new",
+		"protected-old",
+		"revision-new",
+	] as const) {
+		if (operation === "schedules.create" && change === "protected-old")
+			continue;
+		test(`${operation} rechecks current referenced authority and validated revision transactionally (${change})`, async () => {
+			const f = fixture(),
+				oldJob = f.store.createJob(job, 0),
+				newJob = f.store.createJob(job, 0);
+			const existing =
+				operation === "schedules.update"
+					? f.store.createSchedule({ ...schedule, jobId: oldJob.id }, 0)
+					: undefined;
+			let entered = () => {},
+				release = () => {};
+			const waiting = new Promise<void>((resolve) => {
+					entered = resolve;
+				}),
+				gate = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			const validate = spyOn(f.service, "validateJob").mockImplementation(
+				async () => {
+					entered();
+					await gate;
+				},
+			);
+			try {
+				const pending = f.api
+					.execute(
+						{
+							operation,
+							requestId: `racing-${change}`,
+							...(existing
+								? { id: existing.id, revision: existing.revision }
+								: {}),
+							schedule: { ...schedule, jobId: newJob.id },
+						},
+						change === "revision-new" ? "operator" : "orchestrator",
+					)
+					.then(
+						() => null,
+						(error) => error,
+					);
+				await waiting;
+				const changed = change === "protected-old" ? oldJob : newJob;
+				f.store.updateJob(
+					changed.id,
+					changed.revision,
+					{
+						...job,
+						name: "changed",
+						...(change !== "revision-new"
+							? {
+									target: {
+										kind: "standalone",
+										policy: "read-only",
+										reviewPolicy: "none",
+										repository: f.root,
+										baseBranch: "main",
+										model: "fake/model",
+										destination: {
+											kind: "workflowless-session",
+											sessionId: "synthetic-session",
+											owner: "uid:synthetic",
+											hostId: "synthetic-host",
+											conversationId: "1",
+										},
+									},
+								}
+							: {}),
+					},
+					1,
+				);
+				release();
+				expect(await pending).toMatchObject({
+					code: change === "revision-new" ? "conflict" : "forbidden",
+				});
+				expect(f.store.listSchedules()).toHaveLength(existing ? 1 : 0);
+				if (existing)
+					expect(f.store.schedule(existing.id).revision).toBe(
+						existing.revision,
+					);
+			} finally {
+				release();
+				validate.mockRestore();
+			}
+		});
+	}
+
 test("validation exposes bounded actionable field issues without submitted values", async () => {
 	const f = fixture();
 	const sentinel = "PRIVATE-INVALID-INPUT";
@@ -568,7 +661,9 @@ test("native orchestrator scheduling tools pin the originating conversation and 
 	);
 	expect(metadata.length).toBeLessThan(10000);
 	expect(metadata).not.toContain('"occurrences.approve"');
-	expect(metadata).not.toContain('"destination"');
+	// A target may have a destination field; only the operator bootstrap
+	// operation must stay out of agent-callable operation enums.
+	expect(metadata).not.toContain('"enum":["destination"]');
 	const listener = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
