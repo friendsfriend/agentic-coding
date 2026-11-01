@@ -63,56 +63,67 @@ describe("gatherContextFiles", () => {
 });
 
 describe("the durable system prompt reaches the model request", () => {
-	test("a repository AGENTS.md appears in the system message the faux provider receives", async () => {
-		const dir = tempDir("agent-host-prompt-e2e-");
-		fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNIQUE-AGENTS-MARKER-42");
-		const layout = hostLayout(dir);
-		const faux = fauxProvider();
-		const models = createModels();
-		models.setProvider(faux.provider);
-		const host = await DurableHost.open({
-			layout,
-			settings: {},
-			globalAgentDir: tempDir("agent-host-global-agent-dir-"),
-			storage: new MemoryStorage(),
-			models,
-		});
-		const runEnvPath = path.join(dir, "run.env");
-		fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='prompt-e2e'\n");
-		await host.ensureRun({
-			runId: "prompt-e2e",
-			name: "prompt-e2e-worker",
-			cwd: dir,
-			runEnvPath,
-			toolPolicy: "default",
-			model: `${faux.getModel().provider}/${faux.getModel().id}`,
-		});
-		let capturedMessages: Message[] = [];
-		faux.setResponses([
-			(context: { messages: Message[] }) => {
-				capturedMessages = context.messages;
-				return fauxAssistantMessage([fauxText("ok")]);
-			},
-		]);
-		await host.submit("prompt-e2e", "hello", "req-1");
-		let status = await host.status("prompt-e2e");
-		for (let i = 0; i < 50 && status.status !== "idle"; i++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			status = await host.status("prompt-e2e");
-		}
-		expect(status.status).toBe("idle");
-		// The system message's sections (not `content`) carry the rendered prompt
-		// sections (durable-agent-tools: "System prompt context" renders
-		// `createPromptExtension`'s `preamble`/`cwd`/`context` sections).
-		const systemText = capturedMessages
-			.filter((message) => message.role === "system")
-			.map((message) =>
-				JSON.stringify(
-					(message as unknown as { sections?: unknown }).sections ?? {},
-				),
-			)
-			.join("\n");
-		expect(systemText).toContain("UNIQUE-AGENTS-MARKER-42");
-		await host.shutdown();
-	});
+	test.each([false, true])(
+		"repository context and diagram capabilities reach the model (session=%s)",
+		async (session) => {
+			const dir = tempDir("agent-host-prompt-e2e-");
+			fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNIQUE-AGENTS-MARKER-42");
+			const layout = hostLayout(dir);
+			const faux = fauxProvider();
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const host = await DurableHost.open({
+				layout,
+				settings: {},
+				globalAgentDir: tempDir("agent-host-global-agent-dir-"),
+				storage: new MemoryStorage(),
+				models,
+				session,
+			});
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='prompt-e2e'\n");
+			await host.ensureRun({
+				runId: "prompt-e2e",
+				name: "prompt-e2e-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+			let capturedMessages: Message[] = [];
+			faux.setResponses([
+				(context: { messages: Message[] }) => {
+					capturedMessages = context.messages;
+					return fauxAssistantMessage([fauxText("ok")]);
+				},
+			]);
+			await host.submit("prompt-e2e", "hello", "req-1");
+			let status = await host.status("prompt-e2e");
+			for (let i = 0; i < 50 && status.status !== "idle"; i++) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				status = await host.status("prompt-e2e");
+			}
+			expect(status.status).toBe("idle");
+			// The system message's sections (not `content`) carry the rendered prompt
+			// sections (durable-agent-tools: "System prompt context" renders
+			// `createPromptExtension`'s `preamble`/`cwd`/`context` sections).
+			const systemText = capturedMessages
+				.filter((message) => message.role === "system")
+				.map((message) =>
+					JSON.stringify(
+						(message as unknown as { sections?: unknown }).sections ?? {},
+					),
+				)
+				.join("\n");
+			expect(systemText).toContain("UNIQUE-AGENTS-MARKER-42");
+			expect(systemText).toContain("output-capabilities");
+			expect(systemText).toContain("fenced `mermaid` blocks");
+			expect(systemText).toContain("Class and ER diagrams are not supported");
+			expect(systemText).toContain(
+				"do not add diagrams to routine status updates",
+			);
+			expect(systemText).toContain("no rendering tool is needed");
+			await host.shutdown();
+		},
+	);
 });

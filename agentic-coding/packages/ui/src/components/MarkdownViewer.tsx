@@ -4,12 +4,15 @@
 // block, anchored to source lines); the environment modal renders the whole
 // document through `MarkdownViewer`. Both use the theme-cached syntax style,
 // so a live theme change restyles markdown everywhere.
+import type { MarkdownOptions } from "@opentui/core";
 import { uiColors } from "../theme/colors";
 import { useMarkdownSyntaxStyle } from "./markdownSyntax.ts";
 
 export interface MarkdownViewerProps {
 	/** Whole-document markdown source. */
 	content: string;
+	/** Opt-in fenced block renderer; ordinary Markdown surfaces leave this unset. */
+	renderNode?: MarkdownOptions["renderNode"];
 	/**
 	 * Render width in terminal cells. Omit it to fill the surrounding box:
 	 * a markdown renderable that only flexes wraps to the width its parent
@@ -48,6 +51,7 @@ export function MarkdownViewer(props: MarkdownViewerProps) {
 	return (
 		<markdown
 			content={props.content}
+			renderNode={props.renderNode}
 			streaming={props.streaming ?? false}
 			syntaxStyle={syntaxStyle}
 			fg={props.fg ?? uiColors.textSecondary}

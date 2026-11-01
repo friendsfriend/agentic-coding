@@ -54,6 +54,7 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { createSessionMermaidRenderer } from "../../pi-durable/mermaid/renderer.ts";
 import {
 	type AgentSessionBlock,
 	type AgentSessionConnection,
@@ -359,11 +360,13 @@ function AssistantMarkdown(props: {
 	// per text (every streaming frame), not once per part — and a frame that only
 	// appended to the message reuses the parts the previous frame settled.
 	const parts = createMemo(() => props.transcript(props.partKey, props.text));
+	const mermaid = createSessionMermaidRenderer(useRenderer());
 	return (
 		<box flexDirection="column">
 			<For each={parts()}>
 				{(part, index) => (
 					<MarkdownViewer
+						renderNode={mermaid}
 						content={(() => {
 							const last = index() === parts().length - 1;
 							if (!last) {
@@ -374,6 +377,13 @@ function AssistantMarkdown(props: {
 								// blocks used to touch when the source had no blank line.
 								return part.source.replace(/\s+$/, "");
 							}
+							// Mermaid owns incomplete-line recovery; prose holdback can
+							// otherwise hide the entire first diagram while streaming.
+							if (
+								part.code &&
+								/^ {0,3}(?:`{3,}|~{3,})[\t ]*mermaid\b/i.test(part.source)
+							)
+								return part.source;
 							const source = streamingTailSource(part);
 							return props.live === true
 								? holdBackTrailingLine(source)

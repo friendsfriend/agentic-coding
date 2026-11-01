@@ -1076,6 +1076,11 @@ export function createPromptExtension(
 		name: "agentic.prompt",
 		sections: [
 			section("preamble", () => preamble, { tag: false }),
+			section(
+				"output-capabilities",
+				() =>
+					"The pi-durable transcript renders fenced `mermaid` blocks as terminal diagrams. Use a compact diagram when it clarifies architecture, control flow, interactions, or state transitions; do not add diagrams to routine status updates. Prefer flowchart TD, sequenceDiagram, or stateDiagram-v2 with short labels and simple syntax. Supported families also include timeline, gantt, and gitGraph. Class and ER diagrams are not supported. Avoid browser-only styling and interactions. Emit Mermaid source inside a fenced `mermaid` block, not pre-rendered ASCII art; no rendering tool is needed.",
+			),
 			section("cwd", (input) => input.env?.cwd),
 			section("context", (input) => {
 				const cwd = input.env?.cwd;
