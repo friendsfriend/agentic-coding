@@ -117,7 +117,8 @@ static Root *find_root(const char *name,const char **suffix){
 }
 static int sidecar_matches(Root*r,const char*s,const struct stat*st){
  int i=!strcmp(s,"-journal")?0:!strcmp(s,"-wal")?1:!strcmp(s,"-shm")?2:-1;
- if(i<0)return 0;enter();int known=r->sidecar_known&(1u<<i);
+ if(i<0)return 0;
+ enter();int known=r->sidecar_known&(1u<<i);
  int matches=!known || (r->sidecars[i].st_dev==st->st_dev && r->sidecars[i].st_ino==st->st_ino);
  if(matches && !known){r->sidecars[i]=*st;r->sidecar_known|=1u<<i;}leave();return matches;
 }
@@ -148,7 +149,8 @@ static int range_lock(File*f,short type,off_t start,off_t length){
 }
 static int lock_file(sqlite3_file*p,int n){
  File*f=(File*)p;if(!f->root)return f->inner->pMethods->xLock(f->inner,n);
- if(n<=f->lock_level)return SQLITE_OK;int rc;
+ if(n<=f->lock_level)return SQLITE_OK;
+ int rc;
  if(f->lock_level==SQLITE_LOCK_NONE){
   rc=range_lock(f,F_RDLCK,PENDING_BYTE,1);if(rc!=SQLITE_OK)return rc;
   rc=range_lock(f,F_RDLCK,SHARED_FIRST,SHARED_SIZE);
@@ -163,19 +165,22 @@ static int lock_file(sqlite3_file*p,int n){
 }
 static int unlock_file(sqlite3_file*p,int n){
  File*f=(File*)p;if(!f->root)return f->inner->pMethods->xUnlock(f->inner,n);
- if(n>=f->lock_level)return SQLITE_OK;int rc;
+ if(n>=f->lock_level)return SQLITE_OK;
+ int rc;
  if(n==SQLITE_LOCK_SHARED){
   rc=range_lock(f,F_RDLCK,SHARED_FIRST,SHARED_SIZE);if(rc!=SQLITE_OK)return rc;
   rc=range_lock(f,F_UNLCK,PENDING_BYTE,2);
  }else{rc=range_lock(f,F_UNLCK,PENDING_BYTE,SHARED_SIZE+2);}
- if(rc==SQLITE_OK)f->lock_level=n;return rc;
+ if(rc==SQLITE_OK)f->lock_level=n;
+ return rc;
 }
 static int reserved_file(sqlite3_file*p,int*n){
  File*f=(File*)p;if(!f->root)return f->inner->pMethods->xCheckReservedLock(f->inner,n);
  if(f->lock_level>=SQLITE_LOCK_RESERVED){*n=1;return SQLITE_OK;}
  struct flock lock;memset(&lock,0,sizeof(lock));lock.l_type=F_WRLCK;lock.l_whence=SEEK_SET;lock.l_start=RESERVED_BYTE;lock.l_len=1;
  int rc;do{rc=fcntl(f->held,F_OFD_GETLK,&lock);}while(rc<0 && errno==EINTR);
- if(rc<0)return SQLITE_IOERR_CHECKRESERVEDLOCK;*n=lock.l_type!=F_UNLCK;return SQLITE_OK;
+ if(rc<0)return SQLITE_IOERR_CHECKRESERVEDLOCK;
+ *n=lock.l_type!=F_UNLCK;return SQLITE_OK;
 }
 static int control_file(sqlite3_file*p,int op,void*arg){File*f=(File*)p;
  if(f->root && op==SQLITE_FCNTL_LOCKSTATE){*(int*)arg=f->lock_level;return SQLITE_OK;}
@@ -290,7 +295,9 @@ int herdr_register_root(const char*token,int directory,int mainfd,int readonly,c
   }else if(errno!=ENOENT)valid=0;
  }
  if(!valid){
-  if(r->directory>=0)close(r->directory);if(r->mainfd>=0)close(r->mainfd);sqlite3_free(r);return SQLITE_CANTOPEN;
+  if(r->directory>=0)close(r->directory);
+  if(r->mainfd>=0)close(r->mainfd);
+  sqlite3_free(r);return SQLITE_CANTOPEN;
  }
  enter();for(Root*p=roots;p;p=p->next)if(!strcmp(p->token,token)){leave();close(r->directory);close(r->mainfd);sqlite3_free(r);return SQLITE_MISUSE;}
  r->references=1;r->registered=1;r->next=roots;roots=r;leave();return SQLITE_OK;
@@ -308,7 +315,8 @@ __declspec(dllexport)
 #endif
 static int initialize_vfs(sqlite3*db,char**error,const sqlite3_api_routines*api){
  if(sqlite_api && sqlite_api->vfs_find(0)!=api->vfs_find(0))return SQLITE_MISMATCH;
- if(!sqlite_api)sqlite_api=api;(void)error;
+ if(!sqlite_api)sqlite_api=api;
+ (void)error;
  if(!underlying){
   underlying=sqlite3_vfs_find(0);if(!underlying)return SQLITE_ERROR;
   mutex=sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);if(!mutex){underlying=0;return SQLITE_NOMEM;}
