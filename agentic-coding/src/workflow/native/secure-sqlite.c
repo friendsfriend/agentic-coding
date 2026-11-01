@@ -74,7 +74,6 @@ struct Root {
 typedef struct {
  sqlite3_file base;
  sqlite3_file *inner;
- sqlite3_filename filename;
  Root *root;
  int held;
  int delete_on_close;
@@ -123,17 +122,49 @@ static int sidecar_matches(Root*r,const char*s,const struct stat*st){
  if(matches && !known){r->sidecars[i]=*st;r->sidecar_known|=1u<<i;}leave();return matches;
 }
 static int close_file(sqlite3_file *p){
- File *f=(File*)p;int rc=f->inner->pMethods->xClose(f->inner);
+ File *f=(File*)p;int rc=f->root?SQLITE_OK:f->inner->pMethods->xClose(f->inner);
  /* Logical deletion never unlinks a path that may have been replaced. Like
   * PERSIST/TRUNCATE journaling, a zero-length sidecar is reported as absent. */
  if(f->delete_on_close && f->root){if(!safe_regular(f->held) || ftruncate(f->held,0)!=0 || fsync(f->held)!=0)rc=SQLITE_IOERR_DELETE;}
- sqlite3_free(f->inner);if(f->filename)sqlite3_free_filename(f->filename);if(f->held>=0)close(f->held);release(f->root);f->base.pMethods=0;return rc;
+ sqlite3_free(f->inner);if(f->held>=0 && close(f->held)!=0 && rc==SQLITE_OK)rc=SQLITE_IOERR_CLOSE;release(f->root);f->base.pMethods=0;return rc;
 }
-static int read_file(sqlite3_file*p,void*b,int n,sqlite3_int64 o){File*f=(File*)p;return f->inner->pMethods->xRead(f->inner,b,n,o);}
-static int write_file(sqlite3_file*p,const void*b,int n,sqlite3_int64 o){File*f=(File*)p;if(f->root && (f->root->readonly || !safe_regular(f->held)))return SQLITE_IOERR_WRITE;return f->inner->pMethods->xWrite(f->inner,b,n,o);}
-static int truncate_file(sqlite3_file*p,sqlite3_int64 n){File*f=(File*)p;if(f->root && (f->root->readonly || !safe_regular(f->held)))return SQLITE_IOERR_TRUNCATE;return f->inner->pMethods->xTruncate(f->inner,n);}
-static int sync_file(sqlite3_file*p,int flags){File*f=(File*)p;int rc=f->inner->pMethods->xSync(f->inner,flags);if(rc==SQLITE_OK && f->root && fsync(f->root->directory)!=0)rc=SQLITE_IOERR_DIR_FSYNC;return rc;}
-static int size_file(sqlite3_file*p,sqlite3_int64*n){File*f=(File*)p;return f->inner->pMethods->xFileSize(f->inner,n);}
+/* Operate on held capabilities: modern SQLite opens final paths with
+ * O_NOFOLLOW, so reopening /proc/self/fd/<file> fails with ELOOP. */
+static int read_file(sqlite3_file*p,void*b,int n,sqlite3_int64 o){
+ File*f=(File*)p;if(!f->root)return f->inner->pMethods->xRead(f->inner,b,n,o);
+ unsigned char*bytes=b;int done=0;
+ while(done<n){ssize_t count=pread(f->held,bytes+done,(size_t)(n-done),(off_t)(o+done));
+  if(count<0){if(errno==EINTR)continue;return SQLITE_IOERR_READ;}
+  if(count==0){memset(bytes+done,0,(size_t)(n-done));return SQLITE_IOERR_SHORT_READ;}
+  done+=(int)count;
+ }
+ return SQLITE_OK;
+}
+static int write_file(sqlite3_file*p,const void*b,int n,sqlite3_int64 o){
+ File*f=(File*)p;if(!f->root)return f->inner->pMethods->xWrite(f->inner,b,n,o);
+ if(f->root->readonly || !safe_regular(f->held))return SQLITE_IOERR_WRITE;
+ const unsigned char*bytes=b;int done=0;
+ while(done<n){ssize_t count=pwrite(f->held,bytes+done,(size_t)(n-done),(off_t)(o+done));
+  if(count<0){if(errno==EINTR)continue;return errno==ENOSPC?SQLITE_FULL:SQLITE_IOERR_WRITE;}
+  if(count==0)return SQLITE_IOERR_WRITE;
+  done+=(int)count;
+ }
+ return SQLITE_OK;
+}
+static int truncate_file(sqlite3_file*p,sqlite3_int64 n){
+ File*f=(File*)p;if(!f->root)return f->inner->pMethods->xTruncate(f->inner,n);
+ if(f->root->readonly || !safe_regular(f->held))return SQLITE_IOERR_TRUNCATE;
+ return ftruncate(f->held,(off_t)n)==0?SQLITE_OK:SQLITE_IOERR_TRUNCATE;
+}
+static int sync_file(sqlite3_file*p,int flags){
+ File*f=(File*)p;if(!f->root)return f->inner->pMethods->xSync(f->inner,flags);
+ if(fsync(f->held)!=0)return SQLITE_IOERR_FSYNC;
+ return fsync(f->root->directory)==0?SQLITE_OK:SQLITE_IOERR_DIR_FSYNC;
+}
+static int size_file(sqlite3_file*p,sqlite3_int64*n){
+ File*f=(File*)p;if(!f->root)return f->inner->pMethods->xFileSize(f->inner,n);
+ struct stat st;if(fstat(f->held,&st)!=0)return SQLITE_IOERR_FSTAT;*n=st.st_size;return SQLITE_OK;
+}
 /* Standard SQLite rollback-lock bytes, held as OFD locks. POSIX process locks
  * would be silently released by closing ANY of our capability duplicates,
  * including a different connection's guard. OFD locks share the same conflict
@@ -186,10 +217,10 @@ static int control_file(sqlite3_file*p,int op,void*arg){File*f=(File*)p;
  if(f->root && op==SQLITE_FCNTL_LOCKSTATE){*(int*)arg=f->lock_level;return SQLITE_OK;}
  if(f->root && op==SQLITE_FCNTL_HAS_MOVED){*(int*)arg=!main_matches(f->root);return SQLITE_OK;}
  if(op==SQLITE_FCNTL_VFS_POINTER){*(sqlite3_vfs**)arg=&secure_vfs;return SQLITE_OK;}
- return f->inner->pMethods->xFileControl(f->inner,op,arg);
+ return f->root?SQLITE_NOTFOUND:f->inner->pMethods->xFileControl(f->inner,op,arg);
 }
-static int sector_file(sqlite3_file*p){File*f=(File*)p;return f->inner->pMethods->xSectorSize(f->inner);}
-static int characteristics_file(sqlite3_file*p){File*f=(File*)p;return f->inner->pMethods->xDeviceCharacteristics(f->inner);}
+static int sector_file(sqlite3_file*p){File*f=(File*)p;return f->root?4096:f->inner->pMethods->xSectorSize(f->inner);}
+static int characteristics_file(sqlite3_file*p){File*f=(File*)p;return f->root?0:f->inner->pMethods->xDeviceCharacteristics(f->inner);}
 /* Version 1 intentionally exposes no shared-memory callbacks. Legacy WAL is
  * opened with locking_mode=EXCLUSIVE before the first read, using a heap index. */
 static const sqlite3_io_methods methods={1,close_file,read_file,write_file,truncate_file,sync_file,size_file,lock_file,unlock_file,reserved_file,control_file,sector_file,characteristics_file,0,0,0,0,0,0};
@@ -217,26 +248,14 @@ static int open_file(sqlite3_vfs*v,const char*name,sqlite3_file*p,int flags,int*
   if(f->held<0 || !safe_regular(f->held)){rc=SQLITE_CANTOPEN;goto failed;}
   if(*s){struct stat st;if(fstat(f->held,&st)!=0 || !sidecar_matches(r,s,&st)){rc=SQLITE_IOERR;goto failed;}}
   strcpy(f->suffix,s);f->delete_on_close=!!(flags&SQLITE_OPEN_DELETEONCLOSE);
-  char fdpath[64];
-#ifdef __APPLE__
-  snprintf(fdpath,sizeof(fdpath),"/dev/fd/%d",f->held);
-#else
-  snprintf(fdpath,sizeof(fdpath),"/proc/self/fd/%d",f->held);
-#endif
-  /* The held file already exists. Treat it as a main file so the underlying
-   * VFS never derives directory-sync or cleanup paths from the fd alias. Our
-   * wrapper performs those operations through the held directory instead. */
-  int inner_flags=SQLITE_OPEN_MAIN_DB|((flags&SQLITE_OPEN_READONLY)?SQLITE_OPEN_READONLY:SQLITE_OPEN_READWRITE);
-  /* xOpen retains sqlite3_filename until xClose and may inspect its URI
-   * parameters even without URI flags. Allocate it using the public API. */
-  f->filename=sqlite3_create_filename(fdpath,"","",0,0);if(!f->filename){rc=SQLITE_NOMEM;goto failed;}
-  rc=underlying->xOpen(underlying,f->filename,f->inner,inner_flags,out);
+  if(out)*out=flags;
+  rc=SQLITE_OK;
  }
  if(rc!=SQLITE_OK)goto failed;
  f->base.pMethods=&methods;return SQLITE_OK;
  failed:
  if(f->inner->pMethods)f->inner->pMethods->xClose(f->inner);
- sqlite3_free(f->inner);if(f->filename)sqlite3_free_filename(f->filename);if(f->held>=0)close(f->held);release(r);return rc;
+ sqlite3_free(f->inner);if(f->held>=0)close(f->held);release(r);return rc;
 }
 static int delete_file(sqlite3_vfs*v,const char*name,int sync_dir){
  (void)v;const char*s="";Root*r=find_root(name,&s);

@@ -22,7 +22,6 @@ platform/architecture: the loader refuses that mismatch.
 
 Supported native platforms are modern macOS and Linux with `F_OFD_SETLK` and
 `F_OFD_GETLK`. The build fails rather than falling back to process-wide locks.
-SQLite must provide the public `sqlite3_create_filename`/`sqlite3_free_filename` APIs.
 On Linux, the VFS uses SQLite's public extension loader. macOS's system SQLite
 omits that loader, so the module binds public system-library functions only
 after its default VFS pointer exactly matches the pointer returned by Bun's
@@ -61,8 +60,14 @@ synchronized; each connection has a random private capability token.
   Read-only observation refuses that conversion and never performs hot-journal
   rollback. After a crash, an explicit writable open performs recovery before
   the normal native-store validation/query/command proceeds.
-- `sqlite3_filename` allocations outlive the delegated file handle; SQLite may
-  inspect URI metadata even when an fd alias has no URI parameters.
+- Main and sidecar reads/writes use `pread`/`pwrite` on held descriptors;
+  size, truncate and sync use `fstat`/`ftruncate`/`fsync`. This avoids reopening
+  `/proc/self/fd/<file>` or `/dev/fd/<file>` through SQLite's no-follow VFS.
+  Reads zero-fill short results as SQLite requires. Unnamed temporary files
+  still use the platform VFS. No optimistic device capabilities are advertised.
+- Scheduling initialization can resume a privately owned zero-length main file
+  only when every reserved sidecar is absent. Nonempty, incompatible or
+  potentially recoverable stores are never reset.
 
 Focused coverage lives in `workflow-secure-sqlite.test.ts`,
 `scheduling-workflow-crash.test.ts`, `workflow-store-service.test.ts` and

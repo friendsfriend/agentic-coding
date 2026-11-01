@@ -80,17 +80,18 @@ test("native reservation store recovers an interrupted commit atomically", async
  const insert=db.query("INSERT INTO workflow_scheduled_reservations(occurrence_id,workflow_id,content_digest,input_digest,definition_digest,input_json,created_at) VALUES (?,?,?,?,?,?,?)");
  for(let n=0;n<10000;n++)insert.run('crash-'+n,'workflow-'+n,'a'.repeat(64),'b'.repeat(64),'c'.repeat(64),'x'.repeat(8192),'fixture');
  db.exec('COMMIT; BEGIN IMMEDIATE');
+ const gate=Bun.stdin.stream().getReader();fs.writeSync(1,'READY-BEFORE-UPDATE\\n');await gate.read();
  db.query('UPDATE workflow_scheduled_reservations SET input_json=?').run('y'.repeat(8192));
- fs.writeSync(1,'READY-BEFORE-COMMIT\\n');await Bun.sleep(200);db.exec('COMMIT');await Bun.sleep(10000);`,
+ fs.writeSync(1,'READY-BEFORE-COMMIT\\n');await gate.read();db.exec('COMMIT');`,
 		],
-		{ stdout: "pipe", stderr: "pipe" },
+		{ stdin: "pipe", stdout: "pipe", stderr: "pipe" },
 	);
 	try {
+		// Hold COMMIT until the parent signals; large-file reads must not race a timer.
 		const reader = child.stdout.getReader();
 		const first = await reader.read();
-		reader.releaseLock();
 		expect(new TextDecoder().decode(first.value)).toContain(
-			"READY-BEFORE-COMMIT",
+			"READY-BEFORE-UPDATE",
 		);
 		// Observe an existing page being overwritten, not growth into previously
 		// unused pages (which can leave the old image valid) or a timer that might
@@ -99,6 +100,13 @@ test("native reservation store recovers an interrupted commit atomically", async
 			.readFileSync(databaseFile)
 			.indexOf(Buffer.alloc(128, 120));
 		expect(offset).toBeGreaterThan(0);
+		child.stdin.write("update\n");
+		child.stdin.flush();
+		const ready = await reader.read();
+		reader.releaseLock();
+		expect(new TextDecoder().decode(ready.value)).toContain(
+			"READY-BEFORE-COMMIT",
+		);
 		const fd = fs.openSync(databaseFile, "r"),
 			byte = Buffer.alloc(1);
 		try {

@@ -66,6 +66,19 @@ export function openSchedulingDatabase(directory: string): {
 				"unavailable",
 				"Scheduling database must be a private owned single-link file.",
 			);
+		// An interrupted first open can leave only the empty, privately owned
+		// main file. Never reinitialize one with sidecars that may hold recovery data.
+		if (
+			existing &&
+			stat.size === 0 &&
+			["-journal", "-wal", "-shm"].every(
+				(suffix) =>
+					fs.lstatSync(path.join(directory, BASENAME + suffix), {
+						throwIfNoEntry: false,
+					}) === undefined,
+			)
+		)
+			existing = false;
 		const header = Buffer.alloc(100);
 		if (existing) {
 			if (

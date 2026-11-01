@@ -60,6 +60,94 @@ test("scheduler establishes a fresh nested config root through private directory
 	}
 });
 
+test("scheduler initializes an empty store left by an interrupted first open and reopens it", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduling-empty-"));
+	roots.push(root);
+	const directory = path.join(root, "scheduling");
+	fs.mkdirSync(directory, { mode: 0o700 });
+	const filename = path.join(directory, "scheduling.sqlite");
+	fs.writeFileSync(filename, "", { mode: 0o600 });
+	const inode = fs.statSync(filename).ino;
+	const store = SchedulingStore.open(directory);
+	let identity: string;
+	try {
+		identity = store.identity;
+		expect(store.listJobs()).toEqual([]);
+		expect(fs.statSync(filename).ino).toBe(inode);
+		expect(fs.statSync(filename).size).toBeGreaterThan(0);
+		expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+	} finally {
+		store.close();
+	}
+	const reopened = SchedulingStore.open(directory);
+	try {
+		expect(reopened.identity).toBe(identity);
+		expect(reopened.listJobs()).toEqual([]);
+	} finally {
+		reopened.close();
+	}
+});
+
+for (const suffix of ["-journal", "-wal", "-shm"]) {
+	test(`scheduler preserves an empty main with a ${suffix} recovery sidecar`, () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "scheduling-empty-sidecar-"),
+		);
+		roots.push(root);
+		const filename = path.join(root, "scheduling.sqlite");
+		fs.writeFileSync(filename, "", { mode: 0o600 });
+		fs.writeFileSync(filename + suffix, "preserve recovery bytes", {
+			mode: 0o600,
+		});
+		expect(() => SchedulingStore.open(root)).toThrow("integrity/header");
+		expect(fs.statSync(filename).size).toBe(0);
+		expect(fs.readFileSync(filename + suffix, "utf8")).toBe(
+			"preserve recovery bytes",
+		);
+	});
+}
+
+test("compiled scheduler starts on a fresh machine and recovers an interrupted empty store without a compiler", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduling-compiled-"));
+	roots.push(root);
+	const binary = path.join(root, "scheduler-smoke");
+	const build = Bun.spawnSync(
+		[
+			process.execPath,
+			"build",
+			"--compile",
+			"--outfile",
+			binary,
+			path.resolve(import.meta.dir, "support/scheduling-store-smoke.ts"),
+		],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	expect(build.exitCode, build.stderr.toString()).toBe(0);
+	for (const interrupted of [false, true]) {
+		const directory = path.join(
+			root,
+			interrupted ? "interrupted" : "fresh",
+			"scheduling",
+		);
+		if (interrupted) {
+			fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+			fs.writeFileSync(path.join(directory, "scheduling.sqlite"), "", {
+				mode: 0o600,
+			});
+		}
+		const result = Bun.spawnSync([binary, directory], {
+			cwd: root,
+			env: { ...process.env, CC: path.join(root, "no-compiler") },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		expect(
+			fs.statSync(path.join(directory, "scheduling.sqlite")).size,
+		).toBeGreaterThan(0);
+	}
+}, 30_000);
+
 test("scheduler refuses non-private directories and files without fixing their permissions", () => {
 	for (const target of ["directory", "main"]) {
 		const f = fixture(),
