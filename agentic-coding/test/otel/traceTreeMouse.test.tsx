@@ -4,7 +4,8 @@
 // row opens the span detail, and the expander glyph toggles the node without also
 // dispatching `Enter`.
 import { expect, test } from "bun:test";
-import { ScrollableContent } from "@agentic-coding/ui";
+import { ScrollableContent, uiColors } from "@agentic-coding/ui";
+import { BoxRenderable, parseColor, type Renderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import type { TreeNode } from "../../src/contracts/telemetry.ts";
@@ -35,6 +36,114 @@ const roots = (): TreeNode[] => [
 	node("root", [node("child-a"), node("child-b")], true),
 	node("second"),
 ];
+
+function renderTree(item: Renderable): Renderable[] {
+	return [item, ...item.getChildren().flatMap(renderTree)];
+}
+
+test("live trace snapshots preserve row hover while labels, timing, status and current paths update", async () => {
+	const initial = roots();
+	const watched = initial[0]?.children[0];
+	if (!watched) throw new Error("Missing fixture span");
+	const [snapshot, setSnapshot] = createSignal(initial);
+	const selected: number[][] = [];
+	const toggled: { node: TreeNode; path: number[] }[] = [];
+	const t = await testRender(
+		() => (
+			<TraceTreeView
+				roots={snapshot}
+				selectedIndex={() => -1}
+				onSelect={(path) => selected.push(path)}
+				onToggle={(node, path) => toggled.push({ node, path })}
+			/>
+		),
+		{ width: 120, height: 18 },
+	);
+	const rowY = (name: string) =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes(name));
+	const background = (name: string) => {
+		const span = t
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes(name));
+		if (!span) throw new Error(`Missing span ${name}`);
+		return Array.from(span.bg.buffer);
+	};
+	try {
+		await t.flush();
+		await t.mockMouse.moveTo(20, rowY("child-a"));
+		await t.flush();
+		const surface = renderTree(t.renderer.root).find(
+			(item) =>
+				item instanceof BoxRenderable &&
+				item.height === 1 &&
+				item.backgroundColor.equals(parseColor(uiColors.bgHover)),
+		);
+		if (!surface) throw new Error("Missing hovered span row");
+		setSnapshot((current) =>
+			current.map((root, index) => ({
+				...root,
+				span: {
+					...root.span,
+					endTimeUnixNano: index === 0 ? "20000000" : root.span.endTimeUnixNano,
+				},
+				children: root.children.map((child) =>
+					child.span.spanId === watched.span.spanId
+						? {
+								...child,
+								span: {
+									...child.span,
+									name: "updated-child",
+									endTimeUnixNano: "5000000",
+									status: { code: 2, message: "failure" },
+								},
+								children: [node("nested-child")],
+								expanded: false,
+							}
+						: { ...child },
+				),
+			})),
+		);
+		await t.renderOnce();
+		expect(surface.isDestroyed).toBe(false);
+		expect(background("updated-child")).toEqual(
+			Array.from(parseColor(uiColors.bgHover).buffer),
+		);
+		const line = t.captureCharFrame().split("\n")[rowY("updated-child")] ?? "";
+		expect(line).toContain("5ms");
+		expect(line).toContain("25.0%");
+		expect(line).toContain("▶");
+		const durationSpan = t
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes("5ms"));
+		expect(durationSpan ? Array.from(durationSpan.fg.buffer) : []).toEqual(
+			Array.from(parseColor(uiColors.error).buffer),
+		);
+		setSnapshot((current) => [
+			node("new-root"),
+			...current.map((root) => ({
+				...root,
+				children: [...root.children].reverse(),
+			})),
+		]);
+		await t.flush();
+		expect(surface.isDestroyed).toBe(false);
+		await t.mockMouse.click(30, rowY("updated-child"));
+		await t.flush();
+		expect(selected.at(-1)).toEqual([1, 1]);
+		await t.mockMouse.click(3, rowY("updated-child"));
+		await t.flush();
+		expect(toggled.at(-1)?.path).toEqual([1, 1]);
+		expect(toggled.at(-1)?.node).toBe(snapshot()[1]?.children[1]);
+		expect(toggled.at(-1)?.node.span.name).toBe("updated-child");
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 test("the wheel moves the tree cursor by index, and stops at both ends", async () => {
 	const moved: number[] = [];

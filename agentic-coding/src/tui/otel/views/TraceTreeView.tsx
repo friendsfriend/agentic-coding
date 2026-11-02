@@ -12,7 +12,7 @@ import {
 	useWheelScroll,
 } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { TreeNode } from "../../../contracts/telemetry.ts";
 
 const durationMs = (node: TreeNode) =>
@@ -166,6 +166,12 @@ export function TraceTreeView(props: {
 		);
 		return { ...window, items: items.slice(window.start, window.end) };
 	});
+	// Snapshot projection creates fresh Item/TreeNode objects. Only durable span
+	// identity owns a row's mounted interaction surface; data and paths stay live.
+	const entries = createMemo(
+		() => new Map(data().items.map((item) => [spanKey(item.node), item])),
+	);
+	const visibleKeys = () => rows().items.map((item) => spanKey(item.node));
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -176,118 +182,139 @@ export function TraceTreeView(props: {
 				overflow="hidden"
 				flexDirection="column"
 			>
-				{data().items.length > 0 && (
-					<For each={rows().items}>
-						{(item, index) => {
-							const fullIndex = () => rows().start + index();
-							const selected = () => fullIndex() === props.selectedIndex();
-							const { node, path } = item;
-							const childMark = node.children.length
-								? node.expanded
-									? "▼"
-									: "▶"
-								: "·";
-							const status =
-								node.span.status.code === 2
-									? "negative"
-									: node.span.status.code === 1
-										? "warning"
-										: "positive";
-							const runtime = data().offsets.get(spanKey(node)) ?? {
-								offset: 0,
-								share: 0,
-								parentShare: 0,
-								color: uiColors.textMuted,
-							};
-							const offset = Math.max(
-								0,
-								Math.min(barWidth(), Math.round(runtime.offset * barWidth())),
-							);
-							const width = runtime.share
-								? Math.max(1, Math.round(runtime.share * barWidth()))
-								: 0;
-							const bar = `${" ".repeat(offset)}${"━".repeat(Math.min(width, Math.max(0, barWidth() - offset)))}`;
-							return (
-								<Selectable
-									gesture={gesture}
-									selected={selected()}
-									height={1}
-									onMouseUp={() => props.onSelect(path)}
-									onActivate={() => dispatch("Enter")}
-								>
-									<box height={1} flexDirection="row">
-										<box
-											width={42}
-											flexShrink={0}
-											overflow="hidden"
-											flexDirection="row"
-											paddingLeft={node.depth * 2}
+				<Show
+					when={data().items.length > 0}
+					fallback={
+						<box paddingLeft={1}>
+							<text fg={uiColors.textMuted}>Select a trace to view tree</text>
+						</box>
+					}
+				>
+					<For each={visibleKeys()}>
+						{(key, index) => (
+							<Show when={entries().get(key)}>
+								{(item) => {
+									const fullIndex = () => rows().start + index();
+									const selected = () => fullIndex() === props.selectedIndex();
+									const node = () => item().node;
+									const path = () => item().path;
+									const childMark = () =>
+										node().children.length
+											? node().expanded
+												? "▼"
+												: "▶"
+											: "·";
+									const status = () =>
+										node().span.status.code === 2
+											? "negative"
+											: node().span.status.code === 1
+												? "warning"
+												: "positive";
+									const runtime = () =>
+										data().offsets.get(key) ?? {
+											offset: 0,
+											share: 0,
+											parentShare: 0,
+											color: uiColors.textMuted,
+										};
+									const offset = () =>
+										Math.max(
+											0,
+											Math.min(
+												barWidth(),
+												Math.round(runtime().offset * barWidth()),
+											),
+										);
+									const width = () =>
+										runtime().share
+											? Math.max(1, Math.round(runtime().share * barWidth()))
+											: 0;
+									const bar = createMemo(
+										() =>
+											`${" ".repeat(offset())}${"━".repeat(Math.min(width(), Math.max(0, barWidth() - offset())))}`,
+									);
+									return (
+										<Selectable
+											gesture={gesture}
+											selected={selected()}
+											height={1}
+											onMouseUp={() => props.onSelect(path())}
+											onActivate={() => dispatch("Enter")}
 										>
-											<box
-												width={2}
-												flexShrink={0}
-												{...useTap(
-													() => {
-														props.onSelect(path);
-														if (node.children.length > 0)
-															props.onToggle(node, path);
-													},
-													// One tap, one action: the row must not also resolve a gesture (and
-													// dispatch `Enter`), so the glyph consumes its tap.
-													{ stopPropagation: true },
-												)}
-											>
-												<HighlightedText
-													text={childMark}
-													highlight={
-														node.children.length ? "secondary" : "primary"
-													}
-												/>
+											<box height={1} flexDirection="row">
+												<box
+													width={42}
+													flexShrink={0}
+													overflow="hidden"
+													flexDirection="row"
+													paddingLeft={node().depth * 2}
+												>
+													<box
+														width={2}
+														flexShrink={0}
+														{...useTap(
+															() => {
+																props.onSelect(path());
+																if (node().children.length > 0)
+																	props.onToggle(node(), path());
+															},
+															// One tap, one action: the row must not also resolve a gesture (and
+															// dispatch `Enter`), so the glyph consumes its tap.
+															{ stopPropagation: true },
+														)}
+													>
+														<HighlightedText
+															text={childMark()}
+															highlight={
+																node().children.length ? "secondary" : "primary"
+															}
+														/>
+													</box>
+													<HighlightedText
+														text={node().span.name}
+														highlight={selected() ? "highlight" : "secondary"}
+														attributes={selected() ? TextAttributes.BOLD : 0}
+													/>
+												</box>
+												<box width={1} flexShrink={0} />
+												<box
+													flexGrow={1}
+													flexShrink={1}
+													minWidth={0}
+													overflow="hidden"
+													flexDirection="row"
+												>
+													<text
+														fg={uiColors.textMuted}
+													>{`${(runtime().parentShare * 100).toFixed(1).padStart(5)}% `}</text>
+													<text fg={runtime().color}>{bar()}</text>
+												</box>
+												<box width={1} flexShrink={0} />
+												<box
+													width={12}
+													flexShrink={0}
+													justifyContent="flex-end"
+												>
+													<text
+														fg={
+															status() === "negative"
+																? uiColors.error
+																: status() === "warning"
+																	? uiColors.warning
+																	: uiColors.success
+														}
+													>
+														{duration(node())}
+													</text>
+												</box>
 											</box>
-											<HighlightedText
-												text={node.span.name}
-												highlight={selected() ? "highlight" : "secondary"}
-												attributes={selected() ? TextAttributes.BOLD : 0}
-											/>
-										</box>
-										<box width={1} flexShrink={0} />
-										<box
-											flexGrow={1}
-											flexShrink={1}
-											minWidth={0}
-											overflow="hidden"
-											flexDirection="row"
-										>
-											<text
-												fg={uiColors.textMuted}
-											>{`${(runtime.parentShare * 100).toFixed(1).padStart(5)}% `}</text>
-											<text fg={runtime.color}>{bar}</text>
-										</box>
-										<box width={1} flexShrink={0} />
-										<box width={12} flexShrink={0} justifyContent="flex-end">
-											<text
-												fg={
-													status === "negative"
-														? uiColors.error
-														: status === "warning"
-															? uiColors.warning
-															: uiColors.success
-												}
-											>
-												{duration(node)}
-											</text>
-										</box>
-									</box>
-								</Selectable>
-							);
-						}}
+										</Selectable>
+									);
+								}}
+							</Show>
+						)}
 					</For>
-				)}
-				{data().items.length === 0 && (
-					<box paddingLeft={1}>
-						<text fg={uiColors.textMuted}>Select a trace to view tree</text>
-					</box>
-				)}
+				</Show>
 			</box>
 		</box>
 	);

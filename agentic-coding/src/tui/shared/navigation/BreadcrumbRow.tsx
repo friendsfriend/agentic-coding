@@ -12,8 +12,8 @@ import {
 	useTerminalDimensions,
 } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { For, Show } from "solid-js";
-import type { Route } from "../routes.ts";
+import { createMemo, For, Show } from "solid-js";
+import { type Route, routeKey } from "../routes.ts";
 import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs.ts";
 
 export interface BreadcrumbRowProps {
@@ -30,8 +30,21 @@ export interface BreadcrumbRowProps {
 export function BreadcrumbRow(props: BreadcrumbRowProps) {
 	const dimensions = useTerminalDimensions();
 	const width = () => props.width ?? Math.max(0, dimensions().width - 2);
-	const segments = () =>
-		breadcrumbSegments(props.ancestors, width(), props.focusedIndex);
+	const segments = createMemo(() =>
+		breadcrumbSegments(props.ancestors, width(), props.focusedIndex),
+	);
+	// Labels/focus and route snapshots change independently of location identity.
+	// The collapsed range is one persistent chrome slot with a live click target.
+	const entries = createMemo(
+		() =>
+			new Map(
+				segments().map((segment) => [
+					segment.route ? `route:${routeKey(segment.route)}` : "collapsed",
+					segment,
+				]),
+			),
+	);
+	const keys = () => [...entries().keys()];
 	return (
 		<box
 			backgroundColor={uiColors.bgMantle}
@@ -45,50 +58,58 @@ export function BreadcrumbRow(props: BreadcrumbRowProps) {
 				overflow: "hidden",
 			}}
 		>
-			<For each={segments()}>
-				{(segment, index) => {
-					const tap = useTap(() => {
-						const route = segment.route;
-						if (!route) {
-							// Collapsed placeholder: reveal its first ancestor and let
-							// the keyboard cursor walk the hidden range.
-							props.onSelectIndex?.(segment.collapsedRange?.start ?? 0);
-							return;
-						}
-						const target = props.ancestors.indexOf(route);
-						if (target >= 0) props.onSelectIndex?.(target);
-						props.onNavigate?.(route);
-					});
-					const hover = useHover(tap.onMouseOut);
-					return (
-						<>
-							<Show when={index() > 0}>
-								<text fg={uiColors.textMuted}>{BREADCRUMB_SEPARATOR}</text>
-							</Show>
-							<box
-								{...tap}
-								{...hover}
-								backgroundColor={hover.hovered() ? uiColors.bgHover : undefined}
-								style={{ flexShrink: 0 }}
-							>
-								<text
-									fg={
-										segment.focused
-											? uiColors.primary
-											: hover.hovered()
-												? uiColors.textPrimary
-												: segment.route
-													? uiColors.textSecondary
-													: uiColors.textMuted
-									}
-									attributes={segment.focused ? TextAttributes.BOLD : undefined}
-								>
-									{segment.label}
-								</text>
-							</box>
-						</>
-					);
-				}}
+			<For each={keys()}>
+				{(key, index) => (
+					<Show when={entries().get(key)}>
+						{(segment) => {
+							const tap = useTap(() => {
+								const route = segment().route;
+								if (!route) {
+									// Collapsed placeholder: reveal its first ancestor and let
+									// the keyboard cursor walk the hidden range.
+									props.onSelectIndex?.(segment().collapsedRange?.start ?? 0);
+									return;
+								}
+								const target = props.ancestors.indexOf(route);
+								if (target >= 0) props.onSelectIndex?.(target);
+								props.onNavigate?.(route);
+							});
+							const hover = useHover(tap.onMouseOut);
+							return (
+								<>
+									<Show when={index() > 0}>
+										<text fg={uiColors.textMuted}>{BREADCRUMB_SEPARATOR}</text>
+									</Show>
+									<box
+										{...tap}
+										{...hover}
+										backgroundColor={
+											hover.hovered() ? uiColors.bgHover : undefined
+										}
+										style={{ flexShrink: 0 }}
+									>
+										<text
+											fg={
+												segment().focused
+													? uiColors.primary
+													: hover.hovered()
+														? uiColors.textPrimary
+														: segment().route
+															? uiColors.textSecondary
+															: uiColors.textMuted
+											}
+											attributes={
+												segment().focused ? TextAttributes.BOLD : undefined
+											}
+										>
+											{segment().label}
+										</text>
+									</box>
+								</>
+							);
+						}}
+					</Show>
+				)}
 			</For>
 		</box>
 	);

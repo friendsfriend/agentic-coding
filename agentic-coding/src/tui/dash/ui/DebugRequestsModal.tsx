@@ -82,6 +82,18 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 	const listRows = createMemo(() =>
 		debugRequestListWindow(props.requests, props.selectedIndex, lines()),
 	);
+	// Refreshes replace request objects. Keep the row surface attached to the
+	// durable request ID while its label and event index read the latest data.
+	const entries = createMemo(
+		() =>
+			new Map(
+				props.requests.map((request, index) => [
+					request.id,
+					{ request, index },
+				]),
+			),
+	);
+	const listKeys = () => listRows().map((request) => request.id);
 	// The wheel scrolls the pane the pointer is over: the report here, the list
 	// beside it, and neither one changes focus (design D7).
 	const reportWheel = useWheelScroll({
@@ -170,45 +182,50 @@ export function DebugRequestsModal(props: DebugRequestsModalProps) {
 								overflow: "hidden",
 							}}
 						>
-							<For each={listRows()}>
-								{(request) => {
-									const index = () => props.requests.indexOf(request);
-									const selected = () => index() === props.selectedIndex;
-									const mouse = useRowMouse({
-										gesture,
-										index: index(),
-										selectedIndex: () => props.selectedIndex,
-										activatable: () => props.onSelectIndex !== undefined,
-										onSelect: (row: number) => props.onSelectIndex?.(row),
-										onActivate: () => dispatch("Enter"),
-									});
-									const hover = useHover(mouse.onMouseOut);
-									return (
-										<box
-											{...mouse}
-											{...hover}
-											width="100%"
-											height={1}
-											overflow="hidden"
-											backgroundColor={
-												hover.hovered() ? uiColors.bgHover : undefined
-											}
-										>
-											<text
-												fg={
-													selected() || hover.hovered()
-														? uiColors.primary
-														: uiColors.textSecondary
-												}
-												attributes={selected() ? TextAttributes.BOLD : 0}
-												wrapMode="none"
-												truncate
-											>
-												{debugRequestRowLabel(request)}
-											</text>
-										</box>
-									);
-								}}
+							<For each={listKeys()}>
+								{(id) => (
+									<Show when={entries().get(id)}>
+										{(entry) => {
+											const request = () => entry().request;
+											const index = () => entry().index;
+											const selected = () => index() === props.selectedIndex;
+											const mouse = useRowMouse({
+												gesture,
+												index,
+												selectedIndex: () => props.selectedIndex,
+												activatable: () => props.onSelectIndex !== undefined,
+												onSelect: (row: number) => props.onSelectIndex?.(row),
+												onActivate: () => dispatch("Enter"),
+											});
+											const hover = useHover(mouse.onMouseOut);
+											return (
+												<box
+													{...mouse}
+													{...hover}
+													width="100%"
+													height={1}
+													overflow="hidden"
+													backgroundColor={
+														hover.hovered() ? uiColors.bgHover : undefined
+													}
+												>
+													<text
+														fg={
+															selected() || hover.hovered()
+																? uiColors.primary
+																: uiColors.textSecondary
+														}
+														attributes={selected() ? TextAttributes.BOLD : 0}
+														wrapMode="none"
+														truncate
+													>
+														{debugRequestRowLabel(request())}
+													</text>
+												</box>
+											);
+										}}
+									</Show>
+								)}
 							</For>
 						</box>
 						<box
