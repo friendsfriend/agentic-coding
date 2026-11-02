@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { JSX } from "solid-js";
+import type { Accessor, JSX } from "solid-js";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { useModalContentLines } from "./GenericModal.tsx";
@@ -103,9 +103,15 @@ export function Selectable(props: {
 
 export interface SelectableListProps<T> {
 	items: T[];
+	itemKey?: (item: T) => string | number;
 	selectedIndex: Value<number>;
 	itemHeight?: number;
 	renderItem: (item: T, selected: boolean, index: number) => JSX.Element;
+	renderReactiveItem?: (
+		item: Accessor<T>,
+		selected: Accessor<boolean>,
+		index: Accessor<number>,
+	) => JSX.Element;
 	onSelect?: (index: number) => void;
 	backgroundColor?: (item: T, index: number) => string | undefined;
 	/** Hover surface for every row; forwarded to the row's `Selectable`.
@@ -151,6 +157,7 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 	return (
 		<ScrollableList
 			items={props.items}
+			itemKey={props.itemKey}
 			selectedIndex={selectedIndex()}
 			availableLines={
 				props.availableLines ??
@@ -169,14 +176,19 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 			{...(props.wheelMovesCursor !== undefined
 				? { wheelMovesCursor: props.wheelMovesCursor }
 				: {})}
-			renderItem={(item, isSelected, index) => (
+			renderItem={(item, isSelected, index) =>
+				props.renderItem(item, isSelected(), index)
+			}
+			renderReactiveItem={(item, isSelected, index) => (
 				<Selectable
 					height={props.itemHeight}
 					selected={isSelected()}
-					backgroundColor={props.backgroundColor?.(item, index)}
+					backgroundColor={props.backgroundColor?.(item(), index())}
 					hoverBackground={props.hoverBackground}
 				>
-					{props.renderItem(item, isSelected(), index)}
+					{props.renderReactiveItem
+						? props.renderReactiveItem(item, isSelected, index)
+						: props.renderItem(item(), isSelected(), index())}
 				</Selectable>
 			)}
 		/>

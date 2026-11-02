@@ -25,6 +25,34 @@ packages/ui/src/
   props (they are views), but primitives stay data-free.
 - **Semantic colours only** — `uiColors`/`theme` tokens, never a raw palette.
 
+## Live list identity
+
+`ScrollableList` and `SelectableList` accept `itemKey` for durable row identity
+across refreshed object snapshots and reordering. Include the owning scope in
+the key when IDs are not globally unique. Without `itemKey`, the list preserves
+item-reference identity; duplicate occurrences get separate mounted rows.
+
+The interaction/hover surface remains mounted while its identity is visible.
+Rows leaving the virtual window are disposed. The legacy `renderItem` still
+refreshes its content when data/index/selection changes; use `renderReactiveItem`
+for stateful content that must also stay mounted:
+
+```tsx
+<ScrollableList
+  items={items()}
+  itemKey={(item) => item.id}
+  selectedIndex={selected()}
+  renderItem={(item) => <text>{item.label}</text>}
+  renderReactiveItem={(item, selected, index) => (
+    <Row item={item()} selected={selected()} index={index()} />
+  )}
+/>
+```
+
+Reactive renderers receive accessors. Read them inside JSX or reactive
+computations, not into setup-time constants. Ordinary refreshes must not key an
+entire component on a changing payload object.
+
 ## The review views (`views/`)
 
 `DiffReviewView` and `MarkdownReviewView` render a review surface: selectable

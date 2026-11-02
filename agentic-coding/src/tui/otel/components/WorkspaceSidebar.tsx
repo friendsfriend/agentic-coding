@@ -362,6 +362,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 						<Show when={props.overviews.length > 0}>
 							<SelectableList
 								items={props.overviews}
+								itemKey={(overview) =>
+									JSON.stringify([overview.target, overview.state.workflowId])
+								}
 								selectedIndex={props.selectedIndex - pinOffset()}
 								itemHeight={3}
 								hoverBackground={uiColors.bgHover}
@@ -508,6 +511,9 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 					>
 						<SelectableList
 							items={props.overviews}
+							itemKey={(overview) =>
+								JSON.stringify([overview.target, overview.state.workflowId])
+							}
 							selectedIndex={props.selectedIndex - pinOffset()}
 							itemHeight={3}
 							hoverBackground={uiColors.bgHover}

@@ -75,6 +75,10 @@ and route tests, then the whole-project lint/type-check gates.
 
 - Read groups and codemode containers are keyed by durable identity. Updating
   one child must not recreate the script or completed native code views.
+- Ordinary tool cards, sections and nested calls also retain their containers
+  across payload replacements. Key component resets on structural kind/family,
+  never on the changing block object. Tool projections must be reactive so this
+  preserves hover without freezing streamed output or completion state.
 - Mounted sessions opt into `AgentSessionProjectionCache` for immutable watch
   snapshots. Entry projections are reused until timing or compaction labels
   change. Public uncached projection still accepts fresh/mutable input. The

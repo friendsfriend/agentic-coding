@@ -18,6 +18,7 @@ import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { useKeyboard } from "@opentui/solid";
 import {
+	type Accessor,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -63,6 +64,20 @@ interface Row {
 	id: string;
 	label: string;
 	description: string;
+}
+function ScheduleCard(props: { row: Row; selected: Accessor<boolean> }) {
+	return (
+		<Card
+			title={props.row.label}
+			selected={props.selected}
+			style={{ marginBottom: 1 }}
+			cells={[
+				<text fg={uiColors.textMuted} wrapMode="word">
+					{props.row.description}
+				</text>,
+			]}
+		/>
+	);
 }
 function schedulingTextInput(event: KeyEvent): string {
 	if (event.ctrl || event.meta) return "";
@@ -1390,6 +1405,9 @@ export function SchedulesView(props: SchedulesViewProps) {
 													>
 														<ScrollableList
 															items={rows()}
+															itemKey={(row) =>
+																`${historyView() ? "history" : tab()}:${row.id}`
+															}
 															selectedIndex={index()}
 															onSelect={choose}
 															availableLines={
@@ -1398,20 +1416,11 @@ export function SchedulesView(props: SchedulesViewProps) {
 																	: lines()
 															}
 															itemHeights={rowHeights()}
-															renderItem={(row, selectedRow) => (
-																<Card
-																	title={row.label}
-																	selected={selectedRow}
-																	style={{ marginBottom: 1 }}
-																	cells={[
-																		<text
-																			fg={uiColors.textMuted}
-																			wrapMode="word"
-																		>
-																			{row.description}
-																		</text>,
-																	]}
-																/>
+															renderItem={(row, selected) => (
+																<ScheduleCard row={row} selected={selected} />
+															)}
+															renderReactiveItem={(row, selected) => (
+																<ScheduleCard row={row()} selected={selected} />
 															)}
 														/>
 													</box>

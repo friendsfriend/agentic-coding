@@ -7,6 +7,22 @@ import {
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+export const PROMPT_CURSOR_BLINK_MS = 600;
+
+/** Monotonic time, not frame count: streaming redraws never restart the blink. */
+export function createPromptCursorBlink(
+	now: () => number = () => performance.now(),
+) {
+	let epoch = now();
+	return {
+		visible: () =>
+			Math.floor(Math.max(0, now() - epoch) / PROMPT_CURSOR_BLINK_MS) % 2 === 0,
+		reset: () => {
+			epoch = now();
+		},
+	};
+}
+
 /** Final-frame cursor paint. Native editor paint runs after some scene hooks,
  * so a parent renderAfter overlay is not a reliable place for an input cursor.
  * Change only colors: retain the exact native glyph, including grapheme IDs. */

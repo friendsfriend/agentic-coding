@@ -122,6 +122,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 			>
 				<SelectableList
 					items={props.data.agents}
+					itemKey={(agent) => JSON.stringify([agent.role, agent.runId])}
 					availableLines={bodyLines()}
 					itemHeights={rowHeights()}
 					selectedIndex={props.active ? props.selectedIndex : -1}

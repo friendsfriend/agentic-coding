@@ -5,6 +5,29 @@ import { parseColor, type Renderable, TextareaRenderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import { AgentSessionView } from "../../src/tui/dash/ui/AgentSessionView.tsx";
+import {
+	createPromptCursorBlink,
+	PROMPT_CURSOR_BLINK_MS,
+} from "../../src/tui/dash/ui/prompt-cursor.ts";
+
+test("cursor blink follows elapsed time regardless of redraw frequency", () => {
+	let time = 0;
+	const blink = createPromptCursorBlink(() => time);
+	for (let frame = 0; frame < 1000; frame++) expect(blink.visible()).toBe(true);
+	time = PROMPT_CURSOR_BLINK_MS;
+	for (let frame = 0; frame < 1000; frame++)
+		expect(blink.visible()).toBe(false);
+	time = PROMPT_CURSOR_BLINK_MS * 2;
+	expect(blink.visible()).toBe(true);
+	time = PROMPT_CURSOR_BLINK_MS * 3 + 50;
+	expect(blink.visible()).toBe(false);
+	blink.reset();
+	expect(blink.visible()).toBe(true);
+	time += PROMPT_CURSOR_BLINK_MS - 1;
+	expect(blink.visible()).toBe(true);
+	time++;
+	expect(blink.visible()).toBe(false);
+});
 
 function findEditor(node: Renderable): TextareaRenderable | undefined {
 	if (node instanceof TextareaRenderable) return node;
@@ -96,6 +119,15 @@ test("the actual transcript paints a visible block on consecutive frames without
 		expect(editor.scrollY).toBeGreaterThan(0);
 		expect(cursorSpans().length).toBeGreaterThan(0);
 		expect(t.renderer.getCursorState().visible).toBe(false);
+		await new Promise((resolve) => setTimeout(resolve, 650));
+		await t.renderOnce();
+		expect(cursorSpans()).toHaveLength(0);
+		await t.renderOnce();
+		expect(cursorSpans()).toHaveLength(0);
+		// Editing restores the block immediately, without waiting for a phase.
+		editor.insertText("x");
+		await t.renderOnce();
+		expect(cursorSpans().length).toBeGreaterThan(0);
 		setActive(false);
 		await t.renderOnce();
 		expect(editor.focused).toBe(false);

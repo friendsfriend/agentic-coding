@@ -7,6 +7,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { uiColors } from "@agentic-coding/ui";
 import {
+	BoxRenderable,
 	CodeRenderable,
 	DiffRenderable,
 	type KeyEvent,
@@ -383,8 +384,87 @@ test("shell previews retain the newest output within OpenCode's compact budget",
 	).toEndWith("TAIL");
 });
 
+test("a stationary hover and tool surface survive streaming snapshots and completion", async () => {
+	const [revision, setRevision] = createSignal(0);
+	const [done, setDone] = createSignal(false);
+	const blocks = (): AgentSessionBlock[] => [
+		{
+			id: "hover-stream",
+			kind: "tool",
+			text: "bash",
+			tone: done() ? "success" : "muted",
+			pending: !done(),
+			toolCall: {
+				name: "bash",
+				args: { command: "bun run hover-stream" },
+				...(done()
+					? {
+							result: {
+								lines: [`output revision ${revision()}`],
+								notes: [],
+								isError: false,
+							},
+						}
+					: {}),
+			},
+			detail: [`output revision ${revision()}`],
+		},
+	];
+	const t = await testRender(
+		() => (
+			<PickerRoute
+				blocks={blocks()}
+				onSubmit={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	const headerRow = () =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("bun run hover-stream"));
+	const headerBackground = () => {
+		const span = t
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.find((span) => span.text.includes("bun run hover-stream"));
+		if (!span) throw new Error("Missing tool header");
+		return Array.from(span.bg.buffer);
+	};
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		await t.mockMouse.moveTo(12, headerRow());
+		await t.renderOnce();
+		await t.renderOnce();
+		const hoverColor = Array.from(parseColor(uiColors.bgHover).buffer);
+		expect(headerBackground()).toEqual(hoverColor);
+		const surface = renderTree(t.renderer.root).find(
+			(node) =>
+				node instanceof BoxRenderable &&
+				node.backgroundColor.equals(parseColor(uiColors.bgHover)),
+		);
+		if (!surface) throw new Error("Missing hovered tool surface");
+		for (let frame = 1; frame <= 4; frame++) {
+			setRevision(frame);
+			if (frame === 4) setDone(true);
+			await t.renderOnce();
+			expect(surface.isDestroyed).toBe(false);
+			expect(headerBackground()).toEqual(hoverColor);
+			expect(t.captureCharFrame()).toContain(`output revision ${frame}`);
+			await t.renderOnce();
+			expect(headerBackground()).toEqual(hoverColor);
+		}
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 for (const width of [80, 160]) {
 	test(`diff content and gutters follow their card hover at width ${width}`, async () => {
+		const [revision, setRevision] = createSignal(0);
 		const t = await testRender(
 			() => (
 				<PickerRoute
@@ -404,7 +484,7 @@ for (const width of [80, 160]) {
 									notes: [],
 									isError: false,
 									details: {
-										diff: "@@ -1,2 +1,2 @@\n context_line();\n-removed_line();\n+added_line();",
+										diff: `@@ -1,2 +1,2 @@\n context_line_${revision()}();\n-removed_line();\n+added_line();`,
 									},
 								},
 							},
@@ -456,6 +536,17 @@ for (const width of [80, 160]) {
 			expect(diff.lineNumberBg).toEqual(diff.contextBg);
 			expect(diff.addedLineNumberBg).toEqual(diff.addedBg);
 			expect(diff.removedLineNumberBg).toEqual(diff.removedBg);
+			setRevision(1);
+			await t.renderOnce();
+			expect(diff.isDestroyed).toBe(false);
+			expect(background("Edit a.ts")).toBe(lifted[0]);
+			await t.renderOnce();
+			expect(
+				renderTree(t.renderer.root).find(
+					(node) => node instanceof DiffRenderable,
+				),
+			).toBe(diff);
+			expect(t.captureCharFrame()).toContain("context_line_1");
 			// Entering the file itself is still the same card hover.
 			await t.mockMouse.moveTo(20, rowOf("context_line"));
 			await t.renderOnce();

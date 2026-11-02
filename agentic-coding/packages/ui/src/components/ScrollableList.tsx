@@ -1,6 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 
-import { createMemo, For, type JSX, Show } from "solid-js";
+import {
+	type Accessor,
+	createMemo,
+	createSignal,
+	For,
+	type JSX,
+	Show,
+} from "solid-js";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { AnimatedStatusText } from "./AnimatedStatusText.tsx";
@@ -37,6 +44,9 @@ export interface ScrollableListProps<T> {
 	// ── Data ───────────────────────────────────────────────────────────────────
 	/** Pre-filtered list of items to render. */
 	items: T[];
+	/** Durable identity for refreshed/reordered objects. Without it, item
+	 * reference identity is retained (including duplicate occurrences). */
+	itemKey?: (item: T) => string | number;
 
 	/** Currently selected item index within `items`. */
 	selectedIndex: number;
@@ -55,6 +65,13 @@ export interface ScrollableListProps<T> {
 		item: T,
 		isSelected: () => boolean,
 		absoluteIndex: number,
+	) => JSX.Element;
+	/** Mounted once per row identity. Read changing data inside JSX/accessors;
+	 * use this for stateful cards/editors that must survive payload replacement. */
+	renderReactiveItem?: (
+		item: Accessor<T>,
+		isSelected: Accessor<boolean>,
+		absoluteIndex: Accessor<number>,
 	) => JSX.Element;
 
 	// ── Height budget ───────────────────────────────────────────────────────────
@@ -331,6 +348,49 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 		});
 		return result.visibleItems;
 	});
+	type VisibleItem = { item: T; absoluteIndex: number };
+	type Slot = {
+		value: Accessor<VisibleItem>;
+		update: (value: VisibleItem) => void;
+	};
+	const slots = new Map<unknown, Slot[]>();
+	const visibleSlots = createMemo(() => {
+		const counts = new Map<unknown, number>();
+		const result = visibleItems().map((entry) => {
+			const key = props.itemKey ? props.itemKey(entry.item) : entry.item;
+			const occurrence = counts.get(key) ?? 0;
+			counts.set(key, occurrence + 1);
+			let bucket = slots.get(key);
+			if (!bucket) {
+				bucket = [];
+				slots.set(key, bucket);
+			}
+			const existing = bucket[occurrence];
+			if (existing) {
+				existing.update(entry);
+				return existing;
+			}
+			const [value, setValue] = createSignal(entry, {
+				equals: (before, after) =>
+					before.item === after.item &&
+					before.absoluteIndex === after.absoluteIndex,
+			});
+			const slot = {
+				value,
+				update: (entry: VisibleItem) => {
+					setValue(entry);
+				},
+			};
+			bucket[occurrence] = slot;
+			return slot;
+		});
+		for (const [key, bucket] of slots) {
+			const count = counts.get(key);
+			if (count === undefined) slots.delete(key);
+			else bucket.length = count;
+		}
+		return result;
+	});
 
 	/** True only when items overflow the visible window — drives scrollbar visibility. */
 	const needsScrollbar = () =>
@@ -514,29 +574,25 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 								overflow: "hidden",
 							}}
 						>
-							<For each={visibleItems()}>
-								{(visibleItem) => {
-									const isSelected = () =>
-										visibleItem.absoluteIndex === props.selectedIndex;
+							<For each={visibleSlots()}>
+								{(slot) => {
+									const item = () => slot.value().item;
+									const index = () => slot.value().absoluteIndex;
+									const isSelected = () => index() === props.selectedIndex;
 									const row = () =>
-										props.renderItem(
-											visibleItem.item,
-											isSelected,
-											visibleItem.absoluteIndex,
-										);
-									if (!canMouseRows()) return row();
+										props.renderReactiveItem
+											? props.renderReactiveItem(item, isSelected, index)
+											: props.renderItem(item(), isSelected, index());
+									if (!canMouseRows()) return <>{row()}</>;
 									// The renderer hands the row its absolute index, so a scrolled
 									// window selects the row the developer sees (design D4).
 									const mouse = useRowMouse({
 										gesture,
-										index: visibleItem.absoluteIndex,
+										index,
 										selectedIndex: () => props.selectedIndex,
 										activatable: () =>
 											props.activatable
-												? props.activatable(
-														visibleItem.item,
-														visibleItem.absoluteIndex,
-													)
+												? props.activatable(item(), index())
 												: props.onActivate !== undefined,
 										onSelect: (index) => props.onSelect?.(index),
 										onActivate: (index) => props.onActivate?.(index),

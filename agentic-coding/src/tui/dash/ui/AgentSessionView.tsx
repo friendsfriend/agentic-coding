@@ -75,7 +75,7 @@ import {
 } from "../agent-session.ts";
 import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
-import { paintPromptCursor } from "./prompt-cursor.ts";
+import { createPromptCursorBlink, paintPromptCursor } from "./prompt-cursor.ts";
 import { Spinner } from "./Spinner.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
@@ -891,6 +891,10 @@ function CodemodeBlock(props: BlockProps) {
 			),
 		undefined,
 	);
+	const childSlots = createKeyedItems(
+		childBlocks,
+		(block) => `${block.id}:${block.toolCall?.name ?? ""}`,
+	);
 	return (
 		<box flexDirection="column" flexShrink={0}>
 			<box flexDirection="row">
@@ -938,12 +942,12 @@ function CodemodeBlock(props: BlockProps) {
 						</Show>
 					</box>
 				</ToolFrame>
-				<For each={childBlocks()}>
-					{(block) => (
+				<For each={childSlots()}>
+					{(slot) => (
 						<Block
 							{...props}
-							block={block}
-							expanded={open(block.id)}
+							block={slot.value()}
+							expanded={open(slot.value().id)}
 							onToggle={props.onToggleRow}
 						/>
 					)}
@@ -1148,7 +1152,7 @@ function Block(props: BlockProps) {
 	// entries without a structured call keep the plain fallback below. A call
 	// still in flight takes the in-progress view instead, so its row appears the
 	// moment its name is known and only the arguments (not the answer) are shown.
-	const call =
+	const call = createMemo(() =>
 		props.block.toolCall &&
 		!props.block.pending &&
 		!props.block.toolCall.result &&
@@ -1161,154 +1165,179 @@ function Block(props: BlockProps) {
 						isError: props.block.tone === "error",
 					},
 				}
-			: props.block.toolCall;
-	const tool = call
-		? props.block.pending === true
-			? toolPendingView(call, props.block.detail ?? [])
-			: toolView(call)
-		: undefined;
-	if (tool?.codemode) {
+			: props.block.toolCall,
+	);
+	const tool = createMemo(() => {
+		const current = call();
+		return current
+			? props.block.pending === true
+				? toolPendingView(current, props.block.detail ?? [])
+				: toolView(current)
+			: undefined;
+	});
+	const sections = createKeyedItems(
+		() => tool()?.sections ?? [],
+		(section) => section.id,
+	);
+	if (tool()?.codemode) {
 		return <CodemodeBlock {...props} />;
 	}
-	if (tool && (props.block.kind === "tool" || props.block.kind === "result")) {
+	if (
+		tool() &&
+		(props.block.kind === "tool" || props.block.kind === "result")
+	) {
 		return (
-			<ToolFrame
-				color={tool.failed ? uiColors.error : toolBorderColor(props.block)}
-				onToggle={() => props.onToggle(props.block.id)}
-				neutral={!tool.shell && (tool.sections?.length ?? 0) > 0}
-			>
-				<box flexDirection="column">
-					<ToolCallHeader
-						block={props.block}
-						failed={tool.failed}
-						icon={tool.icon}
-						label={
-							!props.expanded && tool.compactLabel
-								? tool.compactLabel
-								: (tool.label ?? tool.summary)
+			<Show when={tool()}>
+				{(tool) => (
+					<ToolFrame
+						color={
+							tool().failed ? uiColors.error : toolBorderColor(props.block)
 						}
-						compact={tool.shell && !props.expanded}
-						hint={tool.hint}
 						onToggle={() => props.onToggle(props.block.id)}
-					/>
-					<Show when={props.expanded || (tool.preview && tool.shell)}>
-						<box
-							paddingTop={props.expanded && !tool.shell ? 1 : 0}
-							flexDirection="column"
-							gap={1}
-						>
-							<Show
-								when={tool.shell}
-								fallback={
-									<Show when={tool.file || (tool.rows?.length ?? 0) > 0}>
-										<box flexDirection="column">
-											<Show
-												when={tool.file}
-												fallback={
-													<ToolRows {...props} rows={tool.rows ?? []} />
-												}
-											>
-												{(file) => <TranscriptFile file={file()} />}
-											</Show>
-										</box>
-									</Show>
+						neutral={!tool().shell && (tool().sections?.length ?? 0) > 0}
+					>
+						<box flexDirection="column">
+							<ToolCallHeader
+								block={props.block}
+								failed={tool().failed}
+								icon={tool().icon}
+								label={
+									!props.expanded && tool().compactLabel
+										? (tool().compactLabel ?? tool().summary)
+										: (tool().label ?? tool().summary)
 								}
-							>
-								<Show when={(tool.rows?.length ?? 0) > 0}>
-									<TranscriptShellOutput
-										command={tool.summary}
-										rows={tool.rows ?? []}
-										expanded={props.expanded}
-										failed={
-											tool.failed ||
-											props.block.toolCall?.result?.isError === true
-										}
-									/>
-								</Show>
-							</Show>
-							{/* A long view splits into parts: the header stays, so
-							    folding one away keeps the overview. */}
-							<Show when={props.expanded}>
-								<For each={tool.sections ?? []}>
-									{(section) => {
-										const key = `${props.block.id}:${section.id}`;
-										// The signal keys the sections a reader moved; whether a key means
-										// "open" or "closed" is the section's own default.
-										const open = () => {
-											const toggled = props.toggledSections().has(key);
-											return !toggled;
-										};
-										return (
-											<ToolFrame
-												color={
-													section.tone
-														? toolTextColor({
-																text: "",
-																emphasis: "highlight",
-																tone: section.tone,
-															})
-														: uiColors.textMuted
-												}
-												onToggle={() => props.onToggleSection(key)}
+								compact={tool().shell && !props.expanded}
+								hint={tool().hint}
+								onToggle={() => props.onToggle(props.block.id)}
+							/>
+							<Show when={props.expanded || (tool().preview && tool().shell)}>
+								<box
+									paddingTop={props.expanded && !tool().shell ? 1 : 0}
+									flexDirection="column"
+									gap={1}
+								>
+									<Show
+										when={tool().shell}
+										fallback={
+											<Show
+												when={tool().file || (tool().rows?.length ?? 0) > 0}
 											>
 												<box flexDirection="column">
-													<box
-														flexDirection="row"
-														{...useTap(() => props.onToggleSection(key), {
-															stopPropagation: true,
-														})}
+													<Show
+														when={tool().file}
+														fallback={
+															<ToolRows {...props} rows={tool().rows ?? []} />
+														}
 													>
-														<text fg={uiColors.textMuted} wrapMode="word">
-															{section.label}{" "}
-															{`(${sectionLineCount(section)} ${section.rows.some((row) => row.table) ? "rows" : "lines"})`}
-														</text>
-													</box>
-													<Show when={open() || section.shell}>
-														<box
-															flexDirection="column"
-															paddingTop={open() && !section.shell ? 1 : 0}
-														>
-															<Show
-																when={section.shell}
-																fallback={
-																	<ToolRows {...props} rows={section.rows} />
-																}
-															>
-																<TranscriptShellOutput
-																	command={section.label}
-																	rows={section.rows}
-																	expanded={open()}
-																	failed={
-																		tool.failed ||
-																		props.block.toolCall?.result?.isError ===
-																			true
-																	}
-																/>
-															</Show>
-														</box>
+														{(file) => <TranscriptFile file={file()} />}
 													</Show>
 												</box>
-											</ToolFrame>
-										);
-									}}
-								</For>
-							</Show>
-							<Show
-								when={
-									props.expanded &&
-									!tool.sections?.some(
-										(section) => section.id === "diagnostics",
-									)
-								}
-							>
-								<For each={call?.result?.notes ?? []}>
-									{(note) => <text fg={uiColors.textMuted}>{note}</text>}
-								</For>
+											</Show>
+										}
+									>
+										<Show when={(tool().rows?.length ?? 0) > 0}>
+											<TranscriptShellOutput
+												command={tool().summary}
+												rows={tool().rows ?? []}
+												expanded={props.expanded}
+												failed={
+													tool().failed ||
+													props.block.toolCall?.result?.isError === true
+												}
+											/>
+										</Show>
+									</Show>
+									{/* A long view splits into parts: the header stays, so
+							    folding one away keeps the overview. */}
+									<Show when={props.expanded}>
+										<For each={sections()}>
+											{(slot) => {
+												const section = slot.value;
+												const key = `${props.block.id}:${section().id}`;
+												// The signal keys the sections a reader moved; whether a key means
+												// "open" or "closed" is the section's own default.
+												const open = () => {
+													const toggled = props.toggledSections().has(key);
+													return !toggled;
+												};
+												return (
+													<ToolFrame
+														color={
+															section().tone
+																? toolTextColor({
+																		text: "",
+																		emphasis: "highlight",
+																		tone: section().tone,
+																	})
+																: uiColors.textMuted
+														}
+														onToggle={() => props.onToggleSection(key)}
+													>
+														<box flexDirection="column">
+															<box
+																flexDirection="row"
+																{...useTap(() => props.onToggleSection(key), {
+																	stopPropagation: true,
+																})}
+															>
+																<text fg={uiColors.textMuted} wrapMode="word">
+																	{section().label}{" "}
+																	{`(${sectionLineCount(section())} ${section().rows.some((row) => row.table) ? "rows" : "lines"})`}
+																</text>
+															</box>
+															<Show when={open() || section().shell}>
+																<box
+																	flexDirection="column"
+																	paddingTop={
+																		open() && !section().shell ? 1 : 0
+																	}
+																>
+																	<Show
+																		when={section().shell}
+																		fallback={
+																			<ToolRows
+																				{...props}
+																				rows={section().rows}
+																			/>
+																		}
+																	>
+																		<TranscriptShellOutput
+																			command={section().label}
+																			rows={section().rows}
+																			expanded={open()}
+																			failed={
+																				tool().failed ||
+																				props.block.toolCall?.result
+																					?.isError === true
+																			}
+																		/>
+																	</Show>
+																</box>
+															</Show>
+														</box>
+													</ToolFrame>
+												);
+											}}
+										</For>
+									</Show>
+									<Show
+										when={
+											props.expanded &&
+											!tool().sections?.some(
+												(section) => section.id === "diagnostics",
+											)
+										}
+									>
+										<For each={call()?.result?.notes ?? []}>
+											{(note) => <text fg={uiColors.textMuted}>{note}</text>}
+										</For>
+									</Show>
+								</box>
 							</Show>
 						</box>
-					</Show>
-				</box>
-			</ToolFrame>
+					</ToolFrame>
+				)}
+			</Show>
 		);
 	}
 
@@ -1438,6 +1467,7 @@ interface PickerItem {
 export function AgentSessionView(props: AgentSessionViewProps) {
 	const viewport = createTranscriptViewport();
 	let inputRef: TextareaRenderable | undefined;
+	const cursorBlink = createPromptCursorBlink();
 	// The editor buffer is the source of truth while typing (native editing,
 	// undo and selection); the draft signal is kept in step with it. The prompt
 	// text is mirrored into a signal as it changes, so the autocomplete is live:
@@ -2057,11 +2087,26 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	// without this, the next frame would yank the viewport back to the bottom.
 	onMount(() => {
 		const renderer = useRenderer();
+		let cursorFocused = false;
+		let paintedCursorVisible = true;
 		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
-			if (inputRef) paintPromptCursor(buffer, inputRef);
+			const focused = inputRef?.focused ?? false;
+			if (focused && !cursorFocused) cursorBlink.reset();
+			cursorFocused = focused;
+			paintedCursorVisible = cursorBlink.visible();
+			if (inputRef && paintedCursorVisible) paintPromptCursor(buffer, inputRef);
 		};
 		renderer.addPostProcessFn(paintCursor);
-		onCleanup(() => renderer.removePostProcessFn(paintCursor));
+		// Wake an otherwise idle prompt only when the blink phase changes.
+		// The phase is measured from monotonic time even if a frame is delayed.
+		const blinkTimer = setInterval(() => {
+			if (inputRef?.focused && cursorBlink.visible() !== paintedCursorVisible)
+				renderer.requestRender();
+		}, 100);
+		onCleanup(() => {
+			clearInterval(blinkTimer);
+			renderer.removePostProcessFn(paintCursor);
+		});
 		const onFrame = () => {
 			const box = scrollBox;
 			if (!box) return;
@@ -2217,6 +2262,10 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 									{(slot) => {
 										if ("displayKind" in untrack(slot.value)) {
 											const row = () => slot.value() as ReadActivityGroup;
+											const reads = createKeyedItems(
+												() => row().blocks,
+												(block) => block.id,
+											);
 											const expanded = () => !foldedReadGroups().has(row().id);
 											const latest = () => row().blocks.at(-1);
 											const groupColor = () => {
@@ -2261,12 +2310,12 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 													</ToolFrame>
 													<Show when={expanded()}>
 														<box flexDirection="column" gap={1} paddingTop={1}>
-															<For each={row().blocks}>
-																{(block) => (
+															<For each={reads()}>
+																{(read) => (
 																	<GroupedRead
-																		block={block}
+																		block={read.value()}
 																		role={props.role}
-																		expanded={blockExpanded(block)}
+																		expanded={blockExpanded(read.value())}
 																		onToggle={toggleBlock}
 																		toggledSections={toggledSections}
 																		onToggleSection={toggleSection}
@@ -2293,12 +2342,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 												<Show
 													when={block().toolCall?.name === "codemode"}
 													fallback={
-														<Show when={block()} keyed>
-															{(current) => (
+														<Show
+															when={block().toolCall ? "structured" : "plain"}
+															keyed
+														>
+															{(_kind) => (
 																<Block
-																	block={current}
+																	block={block()}
 																	role={props.role}
-																	expanded={blockExpanded(current)}
+																	expanded={blockExpanded(block())}
 																	onToggle={toggleBlock}
 																	toggledSections={toggledSections}
 																	onToggleSection={toggleSection}
@@ -2484,6 +2536,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						>
 							<textarea
 								showCursor={false}
+								onCursorChange={() => cursorBlink.reset()}
 								ref={(editor) => {
 									inputRef = editor;
 								}}
@@ -2503,6 +2556,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 								wrapMode="word"
 								placeholder="Ask anything…"
 								onContentChange={() => {
+									cursorBlink.reset();
 									const value = promptText();
 									setPromptMirror(value);
 									if (value !== props.draft) props.onDraftChange(value);

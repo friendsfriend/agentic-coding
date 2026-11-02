@@ -57,6 +57,7 @@ export function TraceListView(props: {
 			{props.summaries().length > 0 && (
 				<SelectableList
 					items={props.summaries()}
+					itemKey={(summary) => summary.traceId}
 					availableLines={listLines()}
 					selectedIndex={props.selectedIndex}
 					onSelect={props.onSelect}
