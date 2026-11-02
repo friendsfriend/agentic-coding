@@ -8,6 +8,11 @@
 // report exists, the flow grouping kept when the workflow recorded a journal, and
 // the pointer wiring the panel used to own.
 import { expect, test } from "bun:test";
+import {
+	ImageRenderable,
+	MarkdownRenderable,
+	type Renderable,
+} from "@opentui/core";
 import { setRendererCapabilities } from "@opentui/core/testing";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
@@ -96,6 +101,119 @@ const REPORT = [
 	"",
 	`Checkout works [^${CITED.id}].`,
 ].join("\n");
+
+function renderTree(node: Renderable): Renderable[] {
+	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+test("updating a report section retains unchanged Markdown and refreshes image metadata by identity", async () => {
+	const [entries, setEntries] = createSignal([SHOT]);
+	const [report, setReport] = createSignal(
+		`# Stable heading\n\nRetained paragraph.\n\nSee [^${SHOT.id}].\n\nMutable tail one.`,
+	);
+	const t = await testRender(
+		() => (
+			<EvidenceSubview
+				entries={entries()}
+				report={report}
+				reportState="ready"
+				pathOf={(entry) => entry.file}
+				kitty={false}
+				selectedIndex={0}
+			/>
+		),
+		{ width: 160, height: 45 },
+	);
+	try {
+		await frameWith(
+			t,
+			(frame) => frame.includes("Retained paragraph"),
+			"initial report",
+		);
+		const retained = renderTree(t.renderer.root).find(
+			(node) =>
+				node instanceof MarkdownRenderable &&
+				node.content.includes("Retained paragraph"),
+		);
+		if (!(retained instanceof MarkdownRenderable))
+			throw new Error("Missing stable report section");
+		setReport(
+			`# Stable heading\n\nRetained paragraph.\n\nSee [^${SHOT.id}].\n\nMutable tail two.`,
+		);
+		await frameWith(
+			t,
+			(frame) => frame.includes("Mutable tail two"),
+			"updated report tail",
+		);
+		expect(retained.isDestroyed).toBe(false);
+		setEntries((current) =>
+			current.map((item) => ({ ...item, file: "updated-screenshot.png" })),
+		);
+		await frameWith(
+			t,
+			(frame) => frame.includes("updated-screenshot.png"),
+			"updated screenshot fallback",
+		);
+		expect(retained.isDestroyed).toBe(false);
+		expect(retained.content).toContain("Retained paragraph");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("cited images stay mounted when refreshed metadata changes the report sources", async () => {
+	const [entries, setEntries] = createSignal([SHOT]);
+	const images = { [SHOT.id]: PNG };
+	const t = await testRender(
+		() => (
+			<EvidenceSubview
+				entries={entries()}
+				report={() => `Screenshot [^${SHOT.id}].`}
+				reportState="ready"
+				kitty
+				images={() => images}
+				selectedIndex={0}
+			/>
+		),
+		{ width: 140, height: 35 },
+	);
+	try {
+		setRendererCapabilities(t.renderer, { kitty_graphics: true });
+		await t.renderOnce();
+		await frameWith(
+			t,
+			() =>
+				renderTree(t.renderer.root).some(
+					(node) => node instanceof ImageRenderable,
+				),
+			"cited image",
+		);
+		const image = renderTree(t.renderer.root).find(
+			(node) => node instanceof ImageRenderable,
+		);
+		if (!(image instanceof ImageRenderable))
+			throw new Error("Missing cited image");
+		setEntries((current) =>
+			current.map((entry) => ({
+				...entry,
+				caption: "Updated screenshot caption",
+			})),
+		);
+		await frameWith(
+			t,
+			(frame) => frame.includes("Updated screenshot caption"),
+			"updated sources caption",
+		);
+		expect(image.isDestroyed).toBe(false);
+		expect(
+			renderTree(t.renderer.root).find(
+				(node) => node instanceof ImageRenderable,
+			),
+		).toBe(image);
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 function subview(props: {
 	entries?: readonly EvidenceEntry[];

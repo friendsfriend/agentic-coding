@@ -4,7 +4,12 @@
  * and the pure row projection behind it. */
 import { expect, test } from "bun:test";
 import { StatusBar, uiColors } from "@agentic-coding/ui";
-import { parseColor } from "@opentui/core";
+import {
+	parseColor,
+	type Renderable,
+	TextAttributes,
+	TextRenderable,
+} from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
@@ -82,6 +87,81 @@ const graph: WorkflowDefinitionGraph = {
 		{ from: "core.developer-review", outcome: "approve", to: "core.closed" },
 	],
 };
+
+function renderTree(node: Renderable): Renderable[] {
+	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+test("graph steps and edges retain native rows through current-step updates, graph refreshes and scrolling", async () => {
+	const [snapshot, setSnapshot] = createSignal(graph);
+	const [current, setCurrent] = createSignal("core.implementation");
+	const [offset, setOffset] = createSignal(0);
+	const t = await testRender(
+		() => (
+			<WorkflowGraphModal
+				definition={{ label: "Test shape", version: 1 }}
+				graph={snapshot()}
+				currentStep={current()}
+				offset={offset()}
+				lines={6}
+			/>
+		),
+		{ width: 140, height: 30 },
+	);
+	const text = (prefix: string) =>
+		renderTree(t.renderer.root).find(
+			(node) =>
+				node instanceof TextRenderable && node.plainText.startsWith(prefix),
+		);
+	try {
+		await t.flush();
+		const implementation = text("Implementation ("),
+			gate = text("Review gate ("),
+			loop = text("blocked →"),
+			route = text("Route: implementation (");
+		if (
+			!(implementation instanceof TextRenderable) ||
+			!(gate instanceof TextRenderable) ||
+			!(loop instanceof TextRenderable) ||
+			!route
+		)
+			throw new Error("Missing graph rows");
+		expect(implementation.attributes & TextAttributes.BOLD).toBe(
+			TextAttributes.BOLD,
+		);
+		setCurrent("core.review-gate");
+		await t.renderOnce();
+		for (const node of [implementation, gate, loop, route])
+			expect(node.isDestroyed).toBe(false);
+		expect(implementation.attributes & TextAttributes.BOLD).toBe(0);
+		expect(gate.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD);
+		setSnapshot({
+			...graph,
+			steps: graph.steps.map((step) => ({
+				...step,
+				...(step.id === "core.implementation"
+					? { label: "Updated build" }
+					: {}),
+			})),
+			edges: graph.edges.map((edge) => ({
+				...edge,
+				...(edge.loop ? { loop: { maxAttempts: 8 } } : {}),
+			})),
+		});
+		await t.renderOnce();
+		expect(implementation.isDestroyed).toBe(false);
+		expect(loop.isDestroyed).toBe(false);
+		expect(implementation.plainText).toContain("Updated build");
+		expect(loop.plainText).toContain("blocked → Updated build ↻8");
+		setOffset(2);
+		await t.renderOnce();
+		expect(implementation.isDestroyed).toBe(false);
+		expect(loop.isDestroyed).toBe(false);
+		expect(route.isDestroyed).toBe(true);
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 const RATIONALE =
 	"One implementation agent, start to finish.\nThe rest of the rationale stays in the record.";

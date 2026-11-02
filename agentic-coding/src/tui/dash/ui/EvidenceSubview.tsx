@@ -29,7 +29,7 @@ import {
 } from "@agentic-coding/ui";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
-import { createMemo, For, Show } from "solid-js";
+import { type Accessor, createMemo, For, Index, Show, untrack } from "solid-js";
 import type { EvidenceEntry } from "../../../contracts/environment.ts";
 import type { StageJournal } from "../../../contracts/stages.ts";
 import {
@@ -47,6 +47,7 @@ import {
 	evidenceReportSections,
 	renderEvidenceReport,
 } from "../evidence-report.ts";
+import { createKeyedItems } from "./keyed-items.ts";
 
 /** What the report read is doing. `none` is a fact — the workflow attached no
  * report — and `absent` is the gateway's answer that the recorded file is gone;
@@ -157,8 +158,7 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 			left.length === right.length &&
 			left.every((block, index) => block.source === right[index]?.source),
 	});
-	/** The layout for those blocks. An unchanged answer keeps the previous identity,
-	 * so a refresh repaints nothing. */
+	/** Keep unchanged siblings mounted while refreshed image metadata stays live. */
 	const sections = createMemo<EvidenceReportSection[]>(
 		() =>
 			props.reportState === "ready"
@@ -167,7 +167,13 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 					})
 				: [],
 		[],
-		{ equals: sameSections },
+	);
+	const sectionSlots = createKeyedItems(sections, (section) =>
+		section.kind === "markdown"
+			? `markdown:${section.source}`
+			: section.kind === "image"
+				? `image:${section.entry.id}`
+				: "sources",
 	);
 	/** What the sidebar says when it has no rows: a read that has not landed, a read
 	 * that failed, and a run that attached nothing are three different facts, and the
@@ -218,25 +224,42 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 	};
 	/** One report section. A discriminated union, so each branch reads its own
 	 * fields without a cast. */
-	const renderSection = (section: EvidenceReportSection) => {
-		if (section.kind === "markdown")
+	const renderSection = (section: Accessor<EvidenceReportSection>) => {
+		// Slot identity includes kind, so only data—not the branch—can change.
+		const kind = untrack(section).kind;
+		if (kind === "markdown") {
+			const source = () => {
+				const current = section();
+				return current.kind === "markdown" ? current.source : "";
+			};
 			return (
 				<MarkdownBlockView
-					source={section.source}
+					source={source()}
 					width={reportWidth()}
 					fg={uiColors.textSecondary}
 				/>
 			);
-		if (section.kind === "image") {
-			const entry = section.entry;
+		}
+		if (kind === "image") {
+			const entry = createMemo(() => {
+				const current = section();
+				return current.kind === "image" ? current.entry : undefined;
+			});
 			// Read reactively: the cited bytes land after the first paint (the route
 			// starts those reads once the report text is in), so an eager read here would
 			// pin the text fallback for the life of the item.
-			const bytes = () =>
-				props.kitty ? props.images?.()[entry.id] : undefined;
-			const fallback = createMemo(() =>
-				evidenceImageFallbackLines(entry, props.pathOf?.(entry)),
-			);
+			const bytes = () => {
+				const current = entry();
+				return props.kitty && current
+					? props.images?.()[current.id]
+					: undefined;
+			};
+			const fallback = createMemo(() => {
+				const current = entry();
+				return current
+					? evidenceImageFallbackLines(current, props.pathOf?.(current))
+					: [];
+			});
 			return (
 				<Show
 					when={bytes()}
@@ -244,11 +267,13 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 						// No kitty graphics, or the bytes have not landed: the citation keeps
 						// its text and metadata instead of a half-block approximation.
 						<box style={{ width: "100%", flexDirection: "column" }}>
-							{fallback().map((line) => (
-								<box style={{ width: "100%", height: 1, overflow: "hidden" }}>
-									<text fg={uiColors.textMuted}>{line}</text>
-								</box>
-							))}
+							<Index each={fallback()}>
+								{(line) => (
+									<box style={{ width: "100%", height: 1, overflow: "hidden" }}>
+										<text fg={uiColors.textMuted}>{line()}</text>
+									</box>
+								)}
+							</Index>
 						</box>
 					}
 				>
@@ -264,16 +289,22 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 				</Show>
 			);
 		}
+		const sourceRows = () => {
+			const current = section();
+			return current.kind === "sources" ? current.rows : [];
+		};
 		return (
 			<box style={{ width: "100%", flexDirection: "column" }}>
 				<text fg={uiColors.textMuted}>sources</text>
-				{section.rows.map((row) => (
-					<box style={{ width: "100%", height: 1, overflow: "hidden" }}>
-						<text fg={row.known ? uiColors.textSecondary : uiColors.error}>
-							{row.label}
-						</text>
-					</box>
-				))}
+				<Index each={sourceRows()}>
+					{(row) => (
+						<box style={{ width: "100%", height: 1, overflow: "hidden" }}>
+							<text fg={row().known ? uiColors.textSecondary : uiColors.error}>
+								{row().label}
+							</text>
+						</box>
+					)}
+				</Index>
 			</box>
 		);
 	};
@@ -307,7 +338,9 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 							paddingRight: 1,
 						}}
 					>
-						<For each={sections()}>{(section) => renderSection(section)}</For>
+						<For each={sectionSlots()}>
+							{(slot) => renderSection(slot.value)}
+						</For>
 						{props.reportState === "ready" ? undefined : (
 							<box style={{ width: "100%", height: 1, overflow: "hidden" }}>
 								<text
@@ -347,6 +380,13 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 							fallback={
 								<SelectableList
 									items={rows()}
+									itemKey={(row) =>
+										row.entry
+											? `entry:${row.entry.id}`
+											: row.step
+												? `step:${row.step.seq}`
+												: `label:${row.label}`
+									}
 									availableLines={listLines()}
 									wheelMovesCursor={false}
 									// A row that opens a group spends a second line on its heading.
@@ -396,34 +436,6 @@ export function EvidenceSubview(props: EvidenceSubviewProps) {
 			</Panel>
 		</box>
 	);
-}
-
-/** Whether two section lists paint the same thing. Compared field by field, so an
- * identical resolution keeps the previous array and `<For>` does not rebuild the
- * report from scratch. */
-function sameSections(
-	left: readonly EvidenceReportSection[],
-	right: readonly EvidenceReportSection[],
-): boolean {
-	if (left === right) return true;
-	if (left.length !== right.length) return false;
-	return left.every((section, index) => {
-		const other = right[index];
-		if (other?.kind !== section.kind) return false;
-		if (section.kind === "markdown")
-			return other.kind === "markdown" && other.source === section.source;
-		if (section.kind === "image")
-			return other.kind === "image" && other.entry.id === section.entry.id;
-		return (
-			other.kind === "sources" &&
-			other.rows.length === section.rows.length &&
-			other.rows.every(
-				(row, rowIndex) =>
-					row.label === section.rows[rowIndex]?.label &&
-					row.known === section.rows[rowIndex]?.known,
-			)
-		);
-	});
 }
 
 /** One sidebar row: the group heading it opens (when it opens one) and the row's

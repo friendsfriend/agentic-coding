@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { For, type JSX, Show } from "solid-js";
+import { createMemo, For, type JSX, Show } from "solid-js";
 import {
 	statusAnimationIntentForOperation,
 	statusAnimationIntentForText,
@@ -319,6 +319,52 @@ function WorkItemTable<T = string>(
 	};
 
 	const hasSearch = () => (props.searchQuery ?? "").length > 0;
+	const tabs = createMemo(
+		() => new Map((props.tabs ?? []).map((tab) => [tab.id, tab])),
+	);
+	const WorkItemRow = (row: {
+		app: TableRow;
+		selected: boolean;
+		index: number;
+	}) => {
+		const hideIdleLibraryStatus = () =>
+			row.app.rowKind === "app" &&
+			row.app.appType !== "APP" &&
+			!row.app.operationStatus;
+		return (
+			<WorkItemCard
+				marker={appMarker(row.app)}
+				prefix={`[${appKind(row.app)}] `}
+				prefixColor={uiColors.primary}
+				title={row.app.displayName}
+				titleQuery={props.searchQuery}
+				statusText={hideIdleLibraryStatus() ? "" : appStatus(row.app)}
+				statusColor={appStatusColor(row.app)}
+				statusBadgeHighlight={
+					hideIdleLibraryStatus() ? undefined : appStatusHighlight(row.app)
+				}
+				statusAnimationIntent={
+					hideIdleLibraryStatus() ? undefined : appStatusAnimation(row.app)
+				}
+				statusTransitionKey={`${row.app.rowKind}:${row.app.ident}:status`}
+				statusSuffixText={appStatusSuffix(row.app)}
+				statusSuffixColor={
+					gitStatus(row.app) === "✓"
+						? uiColors.textMuted
+						: ["x", "...", "error"].includes(gitStatus(row.app))
+							? uiColors.error
+							: getGitStatusStyle(gitStatus(row.app)).color
+				}
+				metadata={appMetadata(row.app)}
+				rightMetadata={appRunTargetRightMetadata(row.app)}
+				rightMetadataColor={uiColors.highlight}
+				selected={row.selected}
+				index={row.index}
+				runningTextEnabled={props.runningTextEnabled}
+				runningTextOffset={props.runningTextOffset}
+			/>
+		);
+	};
 
 	const tableContent = () => (
 		<box
@@ -339,47 +385,53 @@ function WorkItemTable<T = string>(
 						gap: 1,
 					}}
 				>
-					<For each={props.tabs}>
-						{(tab) => {
-							const isActive = () => props.activeTab === tab.id;
-							const interactive = () => props.onTabChange !== undefined;
-							const tap = useTap(() => props.onTabChange?.(tab.id));
-							const hover = useHover(tap.onMouseOut);
-							return (
-								<box
-									backgroundColor={
-										interactive() && hover.hovered()
-											? uiColors.bgHover
-											: isActive()
-												? uiColors.bgSurface0
-												: uiColors.bgMantle
-									}
-									{...tap}
-									{...hover}
-									style={{
-										paddingLeft: 2,
-										paddingRight: 2,
-										height: 3,
-										alignItems: "center",
-										justifyContent: "center",
-									}}
-								>
-									<text
-										fg={
-											isActive()
-												? uiColors.primary
-												: interactive() && hover.hovered()
-													? uiColors.textPrimary
-													: uiColors.textMuted
-										}
-										attributes={isActive() ? TextAttributes.BOLD : undefined}
-									>
-										{tab.label}
-										{tab.count !== undefined ? ` (${tab.count})` : ""}
-									</text>
-								</box>
-							);
-						}}
+					<For each={[...tabs().keys()]}>
+						{(id) => (
+							<Show when={tabs().get(id)}>
+								{(tab) => {
+									const isActive = () => props.activeTab === tab().id;
+									const interactive = () => props.onTabChange !== undefined;
+									const tap = useTap(() => props.onTabChange?.(tab().id));
+									const hover = useHover(tap.onMouseOut);
+									return (
+										<box
+											backgroundColor={
+												interactive() && hover.hovered()
+													? uiColors.bgHover
+													: isActive()
+														? uiColors.bgSurface0
+														: uiColors.bgMantle
+											}
+											{...tap}
+											{...hover}
+											style={{
+												paddingLeft: 2,
+												paddingRight: 2,
+												height: 3,
+												alignItems: "center",
+												justifyContent: "center",
+											}}
+										>
+											<text
+												fg={
+													isActive()
+														? uiColors.primary
+														: interactive() && hover.hovered()
+															? uiColors.textPrimary
+															: uiColors.textMuted
+												}
+												attributes={
+													isActive() ? TextAttributes.BOLD : undefined
+												}
+											>
+												{tab().label}
+												{tab().count !== undefined ? ` (${tab().count})` : ""}
+											</text>
+										</box>
+									);
+								}}
+							</Show>
+						)}
 					</For>
 				</box>
 			</Show>
@@ -434,6 +486,7 @@ function WorkItemTable<T = string>(
 			>
 				<ScrollableList<TableRow>
 					items={props.apps}
+					itemKey={(app) => JSON.stringify([app.rowKind, app.ident])}
 					selectedIndex={props.selectedIndex}
 					{...(props.onSelect ? { onSelect: props.onSelect } : {})}
 					{...(props.onActivate ? { onActivate: props.onActivate } : {})}
@@ -443,47 +496,12 @@ function WorkItemTable<T = string>(
 					}
 					estimatedItemHeight={2}
 					showScrollIndicator={false}
-					renderItem={(app, isSelected, index) => {
-						// Libraries are dev-dependencies — no container status,
-						// but git status / branch info is still relevant.
-						const isLib = app.rowKind === "app" && app.appType !== "APP";
-						const hideIdleLibraryStatus = isLib && !app.operationStatus;
-						return (
-							<WorkItemCard
-								marker={appMarker(app)}
-								prefix={`[${appKind(app)}] `}
-								prefixColor={uiColors.primary}
-								title={app.displayName}
-								titleQuery={props.searchQuery}
-								statusText={hideIdleLibraryStatus ? "" : appStatus(app)}
-								statusColor={appStatusColor(app)}
-								statusBadgeHighlight={
-									hideIdleLibraryStatus ? undefined : appStatusHighlight(app)
-								}
-								statusAnimationIntent={
-									hideIdleLibraryStatus ? undefined : appStatusAnimation(app)
-								}
-								statusTransitionKey={`${app.rowKind}:${app.ident}:status`}
-								statusSuffixText={appStatusSuffix(app)}
-								statusSuffixColor={
-									gitStatus(app) === "✓"
-										? uiColors.textMuted
-										: gitStatus(app) === "x" ||
-												gitStatus(app) === "..." ||
-												gitStatus(app) === "error"
-											? uiColors.error
-											: getGitStatusStyle(gitStatus(app)).color
-								}
-								metadata={appMetadata(app)}
-								rightMetadata={appRunTargetRightMetadata(app)}
-								rightMetadataColor={uiColors.highlight}
-								selected={isSelected()}
-								index={index}
-								runningTextEnabled={props.runningTextEnabled}
-								runningTextOffset={props.runningTextOffset}
-							/>
-						);
-					}}
+					renderItem={(app, selected, index) => (
+						<WorkItemRow app={app} selected={selected()} index={index} />
+					)}
+					renderReactiveItem={(app, selected, index) => (
+						<WorkItemRow app={app()} selected={selected()} index={index()} />
+					)}
 				/>
 			</Show>
 		</box>

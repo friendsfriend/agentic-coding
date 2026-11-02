@@ -13,10 +13,14 @@ export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 	const service = createMemo(() =>
 		props.store.getServices().find((s) => s.id === props.id),
 	);
-	const rows = () => [
-		["Spans", String(service()?.spanCount ?? 0)],
-		["Errors", String(service()?.errorCount ?? 0)],
-		["Avg duration", `${(service()?.avgDurationMs ?? 0).toFixed(1)}ms`],
+	// Summary fields are fixed structure; only their values are live data.
+	const rows = [
+		{ label: "Spans", value: () => String(service()?.spanCount ?? 0) },
+		{ label: "Errors", value: () => String(service()?.errorCount ?? 0) },
+		{
+			label: "Avg duration",
+			value: () => `${(service()?.avgDurationMs ?? 0).toFixed(1)}ms`,
+		},
 	];
 	const dependencyRows = () => service()?.parentIds ?? [];
 	const dependentRows = () => service()?.childIds ?? [];
@@ -27,8 +31,8 @@ export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 				<HighlightedText text={props.id} highlight="highlight" />
 			</SearchHeader>
 			<ScrollableContent focusable={false}>
-				<For each={rows()}>
-					{([label, value]) => (
+				<For each={rows}>
+					{(row) => (
 						<box
 							height={1}
 							flexDirection="row"
@@ -36,16 +40,16 @@ export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 							paddingRight={1}
 						>
 							<box style={{ width: 16, flexShrink: 0 }}>
-								<HighlightedText text={label} highlight="secondary" />
+								<HighlightedText text={row.label} highlight="secondary" />
 							</box>
 							<text
 								fg={
-									label === "Errors" && Number(value) > 0
+									row.label === "Errors" && Number(row.value()) > 0
 										? uiColors.error
 										: uiColors.textPrimary
 								}
 							>
-								{value}
+								{row.value()}
 							</text>
 						</box>
 					)}

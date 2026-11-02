@@ -157,3 +157,91 @@ test("the diff viewport stays on the selected line across background refreshes",
 	}
 	view.renderer.destroy();
 });
+
+for (const markdown of [false, true]) {
+	for (const split of [false, true]) {
+		test(`${markdown ? "Markdown" : "plain"} ${split ? "split" : "unified"} diff preserves reader scroll on comment and no-op file refreshes`, async () => {
+			const content = [
+				"--- a/review.md",
+				"+++ b/review.md",
+				"@@ -1,160 +1,160 @@",
+				...Array.from({ length: 80 }, (_, index) => [
+					` Paragraph ${index}.`,
+					" ",
+				]).flat(),
+			].join("\n");
+			const [file, setFile] = createSignal({ path: "review.md", content });
+			const [selected, setSelected] = createSignal(1);
+			const [threads, setThreads] = createSignal<Discussion[]>([
+				{
+					id: "thread",
+					individual_note: false,
+					notes: [],
+					position: {
+						base_sha: "",
+						start_sha: "",
+						head_sha: "",
+						old_path: "review.md",
+						new_path: "review.md",
+						position_type: "text",
+						new_line: 1,
+					},
+				},
+			]);
+			let scroll: ScrollBoxRenderable | undefined;
+			const view = await testRender(
+				() => (
+					<DiffReviewView
+						filePath={file().path}
+						diff={file().content}
+						currentFileIndex={0}
+						totalFiles={1}
+						selectedLine={selected()}
+						onSelectedLineChange={setSelected}
+						visualModeActive={false}
+						visualModeStart={0}
+						commentMode={false}
+						commentText=""
+						forceSplitView={split}
+						renderMarkdown={markdown}
+						discussions={threads()}
+						onClose={() => {}}
+						onScrollBoxReady={(box) => {
+							scroll = box;
+						}}
+					/>
+				),
+				{ width: 140, height: 30 },
+			);
+			try {
+				await settle(view, () => scroll);
+				if (!scroll) throw new Error("Missing review scrollbox");
+				scroll.scrollTop = 8;
+				await view.flush();
+				expect(scroll.scrollTop).toBe(8);
+				const prefix = markdown ? "block-" : "line-";
+				const target = scroll
+					.getChildren()[0]
+					?.findDescendantById(`${prefix}1`);
+				if (!target) throw new Error("Missing selected review row");
+				setThreads((current) =>
+					current.map((thread) => ({
+						...thread,
+						position: thread.position ? { ...thread.position } : undefined,
+					})),
+				);
+				await settle(view, () => scroll);
+				expect(scroll.scrollTop).toBe(8);
+				setFile((current) => ({ ...current }));
+				await settle(view, () => scroll);
+				expect(scroll.scrollTop).toBe(8);
+				expect(target.isDestroyed).toBe(false);
+				setSelected(0);
+				await settle(view, () => scroll);
+				expect(scroll.scrollTop).toBeLessThan(8);
+			} finally {
+				view.renderer.destroy();
+			}
+		});
+	}
+}

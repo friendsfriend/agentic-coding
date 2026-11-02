@@ -21,6 +21,49 @@ export interface SplitDiffLine {
 	header?: string;
 }
 
+/** Preserve only fully unchanged records. Setup-time row projections remain
+ * valid because content, presentation and all source coordinates must match. */
+export function reuseDiffLines(
+	previous: readonly DiffLine[],
+	next: readonly DiffLine[],
+): DiffLine[] {
+	const existing = new Map(previous.map((line) => [line.lineNumber, line]));
+	return next.map((line) => {
+		const before = existing.get(line.lineNumber);
+		return before &&
+			before.type === line.type &&
+			before.content === line.content &&
+			before.oldLineNum === line.oldLineNum &&
+			before.newLineNum === line.newLineNum
+			? before
+			: line;
+	});
+}
+
+export function reuseSplitDiffLines(
+	previous: readonly SplitDiffLine[],
+	next: readonly SplitDiffLine[],
+): SplitDiffLine[] {
+	const existing = new Map(previous.map((line) => [line.lineNumber, line]));
+	type Side = SplitDiffLine["oldLine"] | SplitDiffLine["newLine"];
+	const sameSide = (before: Side, after: Side) =>
+		before === after ||
+		(!!before &&
+			!!after &&
+			before.lineNum === after.lineNum &&
+			before.content === after.content &&
+			before.type === after.type);
+	return next.map((line) => {
+		const before = existing.get(line.lineNumber);
+		return before &&
+			before.header === line.header &&
+			sameSide(before.oldLine, line.oldLine) &&
+			sameSide(before.newLine, line.newLine)
+			? before
+			: line;
+	});
+}
+
 /**
  * Parse a unified diff into typed lines. `--- `/`+++ ` file headers and `@@`
  * hunk headers become `header` rows; `+`/`-`/` ` prefixes become

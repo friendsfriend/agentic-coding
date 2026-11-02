@@ -2,6 +2,7 @@
 
 import {
 	Badge,
+	createKeyedItems,
 	GenericModal,
 	MarkdownViewer,
 	ScrollableContent,
@@ -13,10 +14,12 @@ import {
 } from "@agentic-coding/ui";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
-import { createEffect, Show } from "solid-js";
+import { createEffect, createMemo, on, Show } from "solid-js";
 
 export type FindingEvent = {
 	type: string;
+	/** Present on committed verifier findings; older callers may omit it. */
+	id?: string;
 	severity?: string;
 	path?: string;
 	line?: number;
@@ -27,6 +30,34 @@ export type FindingEvent = {
 	recommendation?: string;
 	verifier?: string;
 };
+
+function FindingSummary(props: { event: FindingEvent }) {
+	return (
+		<box width="100%" height={2} flexDirection="column" paddingRight={1}>
+			<box flexDirection="row">
+				<Badge
+					text={(props.event.severity ?? "info").toUpperCase()}
+					highlight={
+						props.event.severity === "critical"
+							? "negative"
+							: props.event.severity === "warning"
+								? "warning"
+								: "highlight2"
+					}
+				/>
+				<text fg={uiColors.textMuted}>
+					{" "}
+					{props.event.verifier ? `${props.event.verifier} · ` : ""}
+					{props.event.path ?? "repository"}
+					{props.event.line ? `:${props.event.line}` : ""}
+				</text>
+			</box>
+			<text fg={uiColors.textSecondary}>
+				{(props.event.detail ?? "").split(/\r?\n/, 1)[0].slice(0, 100)}
+			</text>
+		</box>
+	);
+}
 export function FindingsModal(props: {
 	title: string;
 	events: FindingEvent[];
@@ -42,17 +73,30 @@ export function FindingsModal(props: {
 		props.events.some((event) => event.severity === "critical")
 			? "FAIL"
 			: "PASS";
-	const findings = () =>
-		props.events.filter((event) => event.type === "finding");
-	const selectedFinding = () => findings()[props.selected];
+	const findings = createMemo(() =>
+		props.events.filter((event) => event.type === "finding"),
+	);
+	const findingSlots = createKeyedItems(findings, (finding) =>
+		JSON.stringify([
+			props.title,
+			finding.verifier,
+			finding.id ?? ["legacy", finding.path, finding.line, finding.detail],
+		]),
+	);
+	const selectedSlot = createMemo(() => findingSlots()[props.selected]);
+	const selectedFinding = () => selectedSlot()?.value();
 	const dimensions = useTerminalDimensions();
 	const contentWidth = () =>
 		Math.max(20, Math.floor(dimensions().width * 0.78) - 8);
 	let detailScroll: ScrollBoxRenderable | undefined;
-	createEffect(() => {
-		selectedFinding();
-		detailScroll?.scrollTo(0);
-	});
+	// Content refresh is not navigation. Only changing logical findings resets
+	// the reading position, including legacy duplicate occurrences.
+	createEffect(
+		on(
+			() => selectedSlot()?.key,
+			() => detailScroll?.scrollTo(0),
+		),
+	);
 	const markdown = (finding: FindingEvent) => {
 		return [
 			finding.detail ?? "",
@@ -87,7 +131,8 @@ export function FindingsModal(props: {
 				<text fg={uiColors.textMuted}>{findings().length} findings</text>
 			</box>
 			<SelectableList
-				items={findings()}
+				items={findingSlots().slice()}
+				itemKey={(slot) => slot.key}
 				estimatedItemHeight={2}
 				availableLines={Math.min(8, Math.max(2, findings().length * 2))}
 				selectedIndex={props.selected}
@@ -95,31 +140,8 @@ export function FindingsModal(props: {
 				{...(props.onSelectIndex
 					? { onActivate: () => dispatch("Enter") }
 					: {})}
-				renderItem={(event) => (
-					<box width="100%" height={2} flexDirection="column" paddingRight={1}>
-						<box flexDirection="row">
-							<Badge
-								text={(event.severity ?? "info").toUpperCase()}
-								highlight={
-									event.severity === "critical"
-										? "negative"
-										: event.severity === "warning"
-											? "warning"
-											: "highlight2"
-								}
-							/>
-							<text fg={uiColors.textMuted}>
-								{" "}
-								{event.verifier ? `${event.verifier} · ` : ""}
-								{event.path ?? "repository"}
-								{event.line ? `:${event.line}` : ""}
-							</text>
-						</box>
-						<text fg={uiColors.textSecondary}>
-							{(event.detail ?? "").split(/\r?\n/, 1)[0].slice(0, 100)}
-						</text>
-					</box>
-				)}
+				renderItem={(slot) => <FindingSummary event={slot.value()} />}
+				renderReactiveItem={(slot) => <FindingSummary event={slot().value()} />}
 			/>
 			<Show when={selectedFinding()}>
 				{(finding) => (

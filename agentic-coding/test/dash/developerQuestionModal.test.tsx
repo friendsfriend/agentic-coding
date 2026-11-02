@@ -1,6 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { uiColors } from "@agentic-coding/ui";
+import {
+	BoxRenderable,
+	MarkdownRenderable,
+	parseColor,
+	type Renderable,
+	TextareaRenderable,
+} from "@opentui/core";
 import { testRender } from "@opentui/solid";
+import { batch, createSignal } from "solid-js";
 import type { DeveloperDialogueRecord } from "../../src/contracts/workflow.ts";
 import { DeveloperQuestionModal } from "../../src/tui/dash/ui/DeveloperQuestionModal.tsx";
 
@@ -33,6 +42,192 @@ const baseProps = {
 	responseState: ["unanswered", "answered"],
 	onCustomTextChange: () => {},
 };
+
+function tree(node: Renderable): Renderable[] {
+	return [node, ...node.getChildren().flatMap(tree)];
+}
+
+test("question tabs retain hover and current click indices across response updates and reorder", async () => {
+	const [questions, setQuestions] = createSignal([
+		richQuestion("one", "scope", "Which scope?"),
+		richQuestion("two", "tests", "Which tests?"),
+	]);
+	const [responses, setResponses] = createSignal(["unanswered", "unanswered"]);
+	const clicked: number[] = [];
+	const t = await testRender(
+		() => (
+			<DeveloperQuestionModal
+				{...baseProps}
+				questions={questions()}
+				responseState={responses()}
+				onSelectTab={(index) => clicked.push(index)}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	const tabPoint = () => {
+		const lines = t.captureCharFrame().split("\n");
+		const y = lines.findIndex((line) => line.includes("[2 tests"));
+		return { x: (lines[y] ?? "").indexOf("[2 tests") + 3, y };
+	};
+	try {
+		await t.flush();
+		const point = tabPoint();
+		await t.mockMouse.moveTo(point.x, point.y);
+		await t.flush();
+		const surface = tree(t.renderer.root).find(
+			(node) =>
+				node instanceof BoxRenderable &&
+				node.backgroundColor.equals(parseColor(uiColors.bgHover)),
+		);
+		if (!surface) throw new Error("Missing hovered question tab");
+		setResponses(["unanswered", "answered"]);
+		setQuestions((current) => current.map((question) => ({ ...question })));
+		await t.renderOnce();
+		expect(surface.isDestroyed).toBe(false);
+		expect((surface as BoxRenderable).backgroundColor).toEqual(
+			parseColor(uiColors.bgHover),
+		);
+		expect(t.captureCharFrame()).toContain("[2 tests ✓]");
+		setQuestions((current) => [...current].reverse());
+		await t.flush();
+		expect(surface.isDestroyed).toBe(false);
+		const lines = t.captureCharFrame().split("\n");
+		const y = lines.findIndex((line) => line.includes("[1 tests"));
+		await t.mockMouse.click((lines[y] ?? "").indexOf("[1 tests") + 3, y);
+		await t.flush();
+		expect(clicked).toEqual([0]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("option surfaces and explanation renderers survive refreshed option objects", async () => {
+	const [questions, setQuestions] = createSignal([
+		richQuestion("one", "scope", "Which scope?"),
+	]);
+	const chosen: number[] = [];
+	const t = await testRender(
+		() => (
+			<DeveloperQuestionModal
+				{...baseProps}
+				questions={questions()}
+				selected={-1}
+				onSelectIndex={(index) => chosen.push(index)}
+			/>
+		),
+		{ width: 120, height: 50 },
+	);
+	try {
+		await t.flush();
+		const y = t
+			.captureCharFrame()
+			.split("\n")
+			.findLastIndex((line) => line.includes("Recommended path"));
+		await t.mockMouse.moveTo(12, y);
+		await t.flush();
+		const surface = tree(t.renderer.root).find(
+			(node) =>
+				node instanceof BoxRenderable &&
+				node.height === 1 &&
+				node.backgroundColor.equals(parseColor(uiColors.bgHover)),
+		);
+		const explanation = tree(t.renderer.root).find(
+			(node) =>
+				node instanceof MarkdownRenderable &&
+				node.content.includes("Because it is smaller."),
+		);
+		if (!surface || !(explanation instanceof MarkdownRenderable))
+			throw new Error("Missing hovered option/explanation");
+		setQuestions((current) =>
+			current.map((question) => ({
+				...question,
+				options: question.options.map((option) => ({
+					...option,
+					...(option.value === "recommended"
+						? {
+								title: "Updated path",
+								description: "Updated rationale",
+								recommended: false,
+							}
+						: {}),
+				})),
+			})),
+		);
+		await t.renderOnce();
+		expect(surface.isDestroyed).toBe(false);
+		expect(explanation.isDestroyed).toBe(false);
+		expect(explanation.content).toBe("Updated rationale");
+		expect((surface as BoxRenderable).backgroundColor).toEqual(
+			parseColor(uiColors.bgHover),
+		);
+		expect(t.captureCharFrame()).toContain("Updated path");
+		setQuestions((current) =>
+			current.map((question) => ({
+				...question,
+				options: [...question.options].reverse(),
+			})),
+		);
+		await t.flush();
+		expect(surface.isDestroyed).toBe(false);
+		expect(explanation.isDestroyed).toBe(false);
+		const movedY = t
+			.captureCharFrame()
+			.split("\n")
+			.findLastIndex((line) => line.includes("Updated path"));
+		await t.mockMouse.click(12, movedY);
+		await t.flush();
+		expect(chosen).toEqual([1]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("custom editors retain drafts by question identity, not tab position", async () => {
+	const [questions, setQuestions] = createSignal([
+		question("one", "First?"),
+		question("two", "Second?"),
+	]);
+	const [active, setActive] = createSignal(0);
+	const t = await testRender(
+		() => (
+			<DeveloperQuestionModal
+				{...baseProps}
+				questions={questions()}
+				activeIndex={active()}
+				custom
+				customText="Saved draft"
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	try {
+		await t.flush();
+		const editor = tree(t.renderer.root).find(
+			(node) => node instanceof TextareaRenderable,
+		);
+		if (!(editor instanceof TextareaRenderable))
+			throw new Error("Missing custom editor");
+		editor.insertText(" typed");
+		const draft = editor.plainText;
+		setQuestions((current) => current.map((question) => ({ ...question })));
+		await t.renderOnce();
+		expect(editor.isDestroyed).toBe(false);
+		expect(editor.plainText).toBe(draft);
+		batch(() => {
+			setQuestions((current) => [...current].reverse());
+			setActive(1);
+		});
+		await t.renderOnce();
+		expect(editor.isDestroyed).toBe(false);
+		expect(editor.plainText).toBe(draft);
+		setActive(0);
+		await t.renderOnce();
+		expect(editor.isDestroyed).toBe(true);
+	} finally {
+		t.renderer.destroy();
+	}
+});
 
 test("questionnaire tabs show short labels and response state", async () => {
 	const t = await testRender(() => <DeveloperQuestionModal {...baseProps} />, {

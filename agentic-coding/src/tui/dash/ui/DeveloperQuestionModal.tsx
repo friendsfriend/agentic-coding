@@ -20,10 +20,28 @@ import {
 	type DeveloperDialogueRecord,
 	resolveDeveloperQuestionOption,
 } from "../../../contracts/workflow.ts";
+import { createKeyedItems } from "./keyed-items.ts";
 
 interface OptionRow {
+	key: string;
 	label: string;
 	recommended: boolean;
+}
+
+const questionIdentity = (question: DeveloperDialogueRecord) =>
+	JSON.stringify([question.workflowId, question.runId, question.id]);
+
+function OptionLabel(props: { row: OptionRow }) {
+	return (
+		<box paddingLeft={1} height={1}>
+			<text
+				fg={props.row.recommended ? uiColors.highlight : uiColors.textPrimary}
+			>
+				{props.row.recommended ? "★ " : "  "}
+				{props.row.label}
+			</text>
+		</box>
+	);
 }
 
 export function DeveloperQuestionModal(props: {
@@ -77,6 +95,18 @@ export function DeveloperQuestionModal(props: {
 	const compactHelp = () => compact() || dimensions().width * 0.78 < 95;
 	createEffect(() => contextScroll?.scrollTo(props.promptOffset));
 	const options = () => question()?.options ?? [];
+	const currentIdentity = () => {
+		const current = question();
+		return current ? questionIdentity(current) : "";
+	};
+	// State belongs to a question/option, not its current tab/list position or
+	// the fresh object a dialogue snapshot projected for it.
+	const optionSlots = createKeyedItems(options, (option) =>
+		JSON.stringify([
+			currentIdentity(),
+			resolveDeveloperQuestionOption(option).value,
+		]),
+	);
 	// A `stage_login` hand-off is answered with Done or Abort only: no custom text
 	// is offered (add-stage-interactive-login).
 	const offersCustom = () => question()?.kind !== "login-handoff";
@@ -87,12 +117,19 @@ export function DeveloperQuestionModal(props: {
 		...options().map((option) => {
 			const resolved = resolveDeveloperQuestionOption(option);
 			return {
+				key: JSON.stringify([currentIdentity(), "option", resolved.value]),
 				label: resolved.label,
 				recommended: resolved.recommended === true,
 			};
 		}),
 		...(offersCustom()
-			? [{ label: "Custom response…", recommended: false }]
+			? [
+					{
+						key: JSON.stringify([currentIdentity(), "custom"]),
+						label: "Custom response…",
+						recommended: false,
+					},
+				]
 			: []),
 	];
 	const shortLabel = (item: DeveloperDialogueRecord) => {
@@ -119,10 +156,12 @@ export function DeveloperQuestionModal(props: {
 	const tabEntries = () => {
 		const { start, count } = tabWindow();
 		return props.questions.slice(start, start + count).map((item, offset) => ({
+			id: questionIdentity(item),
 			index: start + offset,
 			text: tabText(start + offset, item),
 		}));
 	};
+	const tabSlots = createKeyedItems(tabEntries, (entry) => entry.id);
 	return (
 		<GenericModal
 			dismissKind="developer-question"
@@ -182,9 +221,10 @@ export function DeveloperQuestionModal(props: {
 								{"… "}
 							</text>
 						</Show>
-						<For each={tabEntries()}>
-							{(entry, position) => {
-								const tap = useTap(() => props.onSelectTab?.(entry.index));
+						<For each={tabSlots()}>
+							{(slot, position) => {
+								const entry = slot.value;
+								const tap = useTap(() => props.onSelectTab?.(entry().index));
 								const hover = useHover(tap.onMouseOut);
 								return (
 									<box
@@ -200,7 +240,7 @@ export function DeveloperQuestionModal(props: {
 											fg={uiColors.textPrimary}
 											attributes={TextAttributes.BOLD}
 										>
-											{`${position() > 0 ? " " : ""}${tabLabel(entry.index, entry.text)}`}
+											{`${position() > 0 ? " " : ""}${tabLabel(entry().index, entry().text)}`}
 										</text>
 									</box>
 								);
@@ -268,10 +308,10 @@ export function DeveloperQuestionModal(props: {
 									>
 										Choices · rationale and trade-offs
 									</text>
-									<For each={options()}>
-										{(option, index) => {
+									<For each={optionSlots()}>
+										{(slot, index) => {
 											const resolved = () =>
-												resolveDeveloperQuestionOption(option);
+												resolveDeveloperQuestionOption(slot.value());
 											return (
 												<box flexDirection="column" flexShrink={0} gap={1}>
 													<text
@@ -315,6 +355,7 @@ export function DeveloperQuestionModal(props: {
 										<box width="100%" height={optionLines()} overflow="hidden">
 											<SelectableList
 												items={rows()}
+												itemKey={(row) => row.key}
 												selectedIndex={props.selected}
 												availableLines={optionLines()}
 												{...(props.onSelectIndex
@@ -323,19 +364,9 @@ export function DeveloperQuestionModal(props: {
 												{...(props.onSelectIndex
 													? { onActivate: () => dispatch("Enter") }
 													: {})}
-												renderItem={(row) => (
-													<box paddingLeft={1} height={1}>
-														<text
-															fg={
-																row.recommended
-																	? uiColors.highlight
-																	: uiColors.textPrimary
-															}
-														>
-															{row.recommended ? "★ " : "  "}
-															{row.label}
-														</text>
-													</box>
+												renderItem={(row) => <OptionLabel row={row} />}
+												renderReactiveItem={(row) => (
+													<OptionLabel row={row()} />
 												)}
 											/>
 										</box>
@@ -350,7 +381,7 @@ export function DeveloperQuestionModal(props: {
 											{extremeCompact() ? "" : "Custom response (required)"}
 										</text>
 										<Show
-											when={props.custom ? props.activeIndex + 1 : false}
+											when={props.custom ? currentIdentity() : false}
 											keyed
 											fallback={<box />}
 										>

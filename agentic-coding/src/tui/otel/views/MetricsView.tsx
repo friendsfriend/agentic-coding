@@ -1,4 +1,5 @@
 import {
+	createKeyedItems,
 	HighlightedText,
 	type RowGestureState,
 	ScrollableContent,
@@ -7,7 +8,7 @@ import {
 	useHover,
 	useRowMouse,
 } from "@agentic-coding/ui";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline.tsx";
 import type { MetricStore } from "../model/metricStore.ts";
 
@@ -27,18 +28,29 @@ export function MetricsView(props: {
 	/** One holder per list: a row the store replaced still completes its press. */
 	const gesture: RowGestureState = {};
 	const streams = createMemo(() => props.store.getStreams());
+	const streamSlots = createKeyedItems(streams, (stream) =>
+		JSON.stringify([stream.serviceName, stream.name]),
+	);
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
 			<SearchHeader>
 				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
-			{streams().length > 0 && (
+			<Show
+				when={streams().length > 0}
+				fallback={
+					<box paddingLeft={1}>
+						<text fg={uiColors.textMuted}>No metrics loaded</text>
+					</box>
+				}
+			>
 				<ScrollableContent focusable={false}>
-					<For each={streams()}>
-						{(stream, index) => {
+					<For each={streamSlots()}>
+						{(slot, index) => {
+							const stream = slot.value;
 							const selected = () => index() === props.selectedIndex();
-							const agg = props.store.aggregate(stream);
+							const agg = createMemo(() => props.store.aggregate(stream()));
 							// Shared tap rule: a tap selects the stream, a tap on the selected
 							// one opens its detail (a drag or another button does neither).
 							const mouse = useRowMouse({
@@ -50,7 +62,7 @@ export function MetricsView(props: {
 								onSelect: (row: number) => props.onSelectIndex(row),
 								onActivate: (row: number) => {
 									props.onSelectIndex(row);
-									props.onOpen(stream.name, stream.serviceName);
+									props.onOpen(stream().name, stream().serviceName);
 								},
 							});
 							const hover = useHover(mouse.onMouseOut);
@@ -88,21 +100,21 @@ export function MetricsView(props: {
 										<box height={1} width="100%" flexDirection="row">
 											<box width="60%" flexShrink={0} overflow="hidden">
 												<HighlightedText
-													text={stream.name}
+													text={stream().name}
 													highlight={selected() ? "highlight" : "secondary"}
 												/>
 											</box>
 											<box width="40%" flexShrink={0} overflow="hidden">
 												<text fg={uiColors.textMuted}>
-													{stream.serviceName} · {stream.type} ·{" "}
-													{stream.unit || "—"} · {agg.avg.toFixed(2)}
+													{stream().serviceName} · {stream().type} ·{" "}
+													{stream().unit || "—"} · {agg().avg.toFixed(2)}
 												</text>
 											</box>
 										</box>
 										<box height={2} width="100%">
 											<AutoscalingSparkline
-												values={stream.dataPoints.map((point) => point.value)}
-												color={metricColor(stream.type)}
+												values={stream().dataPoints.map((point) => point.value)}
+												color={metricColor(stream().type)}
 												backgroundColor={
 													selected() ? uiColors.bgSurface1 : uiColors.bgMantle
 												}
@@ -114,12 +126,7 @@ export function MetricsView(props: {
 						}}
 					</For>
 				</ScrollableContent>
-			)}
-			{streams().length === 0 && (
-				<box paddingLeft={1}>
-					<text fg={uiColors.textMuted}>No metrics loaded</text>
-				</box>
-			)}
+			</Show>
 		</box>
 	);
 }

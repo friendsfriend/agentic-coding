@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import {
+	createKeyedItems,
 	GenericModal,
 	ScrollableContent,
 	SelectableList,
@@ -10,12 +11,35 @@ import {
 	useTerminalDimensions,
 } from "@agentic-coding/ui";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { createEffect, Show } from "solid-js";
+import { createEffect, createMemo, For, Show } from "solid-js";
 import type { CostMessage, CostRow } from "../../../contracts/workflow";
 
 export type CostBreakdownRow = Omit<CostRow, "messages"> & {
 	messages: CostMessage[];
 };
+
+function CostOverviewRow(props: { row: CostBreakdownRow; selected: boolean }) {
+	return (
+		<box width="100%" height={1} flexDirection="row" paddingRight={1}>
+			<text
+				fg={props.selected ? uiColors.primary : uiColors.textPrimary}
+				width={22}
+			>
+				{props.row.role}
+			</text>
+			<text fg={uiColors.textSecondary} width={10}>
+				{props.row.messages.length}
+			</text>
+			<text
+				fg={uiColors.textSecondary}
+				width={24}
+			>{`${props.row.inputTokens}/${props.row.outputTokens}`}</text>
+			<text
+				fg={props.selected ? uiColors.primary : uiColors.textSecondary}
+			>{`$${props.row.cost.toFixed(2)}`}</text>
+		</box>
+	);
+}
 
 export function CostModal(props: {
 	rows: CostBreakdownRow[];
@@ -33,7 +57,15 @@ export function CostModal(props: {
 	let scrollbox: ScrollBoxRenderable | undefined;
 	createEffect(() => scrollbox?.scrollTo(props.offset));
 	const total = () => props.rows.reduce((sum, row) => sum + row.cost, 0);
-	const selectedRow = () => props.rows[props.selected];
+	const selectedRow = createMemo(() =>
+		props.agent
+			? props.rows.find((row) => row.role === props.agent)
+			: props.rows[props.selected],
+	);
+	const messages = createKeyedItems(
+		() => selectedRow()?.messages ?? [],
+		(message) => JSON.stringify([selectedRow()?.role, message.at]),
+	);
 	return (
 		<GenericModal
 			{...backdrop}
@@ -66,20 +98,22 @@ export function CostModal(props: {
 						}}
 					>
 						<box flexDirection="column" width={contentWidth()}>
-							{selectedRow()?.messages.map((message) => (
-								<box height={1} flexDirection="row" width="100%">
-									<text fg={uiColors.textMuted} width={18}>
-										{message.at}
-									</text>
-									<text
-										fg={uiColors.textSecondary}
-										width={24}
-									>{`in ${message.inputTokens} · out ${message.outputTokens}`}</text>
-									<text
-										fg={uiColors.textPrimary}
-									>{`$${message.cost.toFixed(4)}`}</text>
-								</box>
-							))}
+							<For each={messages()}>
+								{(slot) => (
+									<box height={1} flexDirection="row" width="100%">
+										<text fg={uiColors.textMuted} width={18}>
+											{slot.value().at}
+										</text>
+										<text
+											fg={uiColors.textSecondary}
+											width={24}
+										>{`in ${slot.value().inputTokens} · out ${slot.value().outputTokens}`}</text>
+										<text
+											fg={uiColors.textPrimary}
+										>{`$${slot.value().cost.toFixed(4)}`}</text>
+									</box>
+								)}
+							</For>
 						</box>
 					</ScrollableContent>
 				}
@@ -105,30 +139,17 @@ export function CostModal(props: {
 					</box>
 					<SelectableList
 						items={props.rows}
+						itemKey={(row) => row.role}
 						selectedIndex={props.selected}
 						{...(props.onSelectIndex ? { onSelect: props.onSelectIndex } : {})}
 						{...(props.onSelectIndex
 							? { onActivate: () => dispatch("Enter") }
 							: {})}
 						renderItem={(row, selected) => (
-							<box width="100%" height={1} flexDirection="row" paddingRight={1}>
-								<text
-									fg={selected ? uiColors.primary : uiColors.textPrimary}
-									width={22}
-								>
-									{row.role}
-								</text>
-								<text fg={uiColors.textSecondary} width={10}>
-									{row.messages.length}
-								</text>
-								<text
-									fg={uiColors.textSecondary}
-									width={24}
-								>{`${row.inputTokens}/${row.outputTokens}`}</text>
-								<text
-									fg={selected ? uiColors.primary : uiColors.textSecondary}
-								>{`$${row.cost.toFixed(2)}`}</text>
-							</box>
+							<CostOverviewRow row={row} selected={selected} />
+						)}
+						renderReactiveItem={(row, selected) => (
+							<CostOverviewRow row={row()} selected={selected()} />
 						)}
 					/>
 					<box

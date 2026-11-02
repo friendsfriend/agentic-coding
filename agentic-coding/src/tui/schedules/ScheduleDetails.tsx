@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { MarkdownViewer, uiColors } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Index, Show } from "solid-js";
 import { ToolTable } from "../dash/ui/ToolTable.tsx";
 import {
 	parseToolJson,
@@ -68,9 +68,9 @@ function DetailValue(props: { value: unknown; label?: string; width: number }) {
 								</Show>
 							}
 						>
-							<For each={Array.isArray(props.value) ? props.value : []}>
-								{(value) => <DetailValue value={value} width={props.width} />}
-							</For>
+							<Index each={Array.isArray(props.value) ? props.value : []}>
+								{(value) => <DetailValue value={value()} width={props.width} />}
+							</Index>
 							<Show
 								when={Array.isArray(props.value) && props.value.length === 0}
 							>
@@ -84,49 +84,55 @@ function DetailValue(props: { value: unknown; label?: string; width: number }) {
 			}
 		>
 			{(value) => (
-				<For each={Object.entries(value())}>
-					{([key, item]) => (
-						<Show
-							when={
-								(item !== null && typeof item === "object") ||
-								(typeof item === "string" &&
-									/^(prompt|description|context|result|output)$/i.test(key))
-							}
-							fallback={
-								<text fg={uiColors.textMuted} wrapMode="word">
-									{title(key)}:{" "}
-									<span
-										style={{
-											fg: /state|status|outcome/i.test(key)
-												? tone(item)
-												: uiColors.textPrimary,
-										}}
-									>
-										{scalar(item)}
-									</span>
-								</text>
-							}
-						>
-							<box
-								flexDirection="column"
-								flexShrink={0}
-								marginTop={1}
-								marginBottom={1}
-								border={["left"]}
-								borderColor={uiColors.bgMantle}
-								paddingLeft={1}
+				<For each={Object.keys(value())}>
+					{(key) => {
+						const item = () => value()[key];
+						return (
+							<Show
+								when={
+									(item() !== null && typeof item() === "object") ||
+									(typeof item() === "string" &&
+										/^(prompt|description|context|result|output)$/i.test(key))
+								}
+								fallback={
+									<text fg={uiColors.textMuted} wrapMode="word">
+										{title(key)}:{" "}
+										<span
+											style={{
+												fg: /state|status|outcome/i.test(key)
+													? tone(item())
+													: uiColors.textPrimary,
+											}}
+										>
+											{scalar(item())}
+										</span>
+									</text>
+								}
 							>
-								<text fg={uiColors.textMuted} attributes={TextAttributes.BOLD}>
-									{title(key)}
-								</text>
-								<DetailValue
-									value={item}
-									label={key}
-									width={Math.max(1, props.width - 2)}
-								/>
-							</box>
-						</Show>
-					)}
+								<box
+									flexDirection="column"
+									flexShrink={0}
+									marginTop={1}
+									marginBottom={1}
+									border={["left"]}
+									borderColor={uiColors.bgMantle}
+									paddingLeft={1}
+								>
+									<text
+										fg={uiColors.textMuted}
+										attributes={TextAttributes.BOLD}
+									>
+										{title(key)}
+									</text>
+									<DetailValue
+										value={item()}
+										label={key}
+										width={Math.max(1, props.width - 2)}
+									/>
+								</box>
+							</Show>
+						);
+					}}
 				</For>
 			)}
 		</Show>

@@ -6,11 +6,24 @@
 // marker and severity colour. `ReplyAffordance` is the one reply prompt/composer,
 // shown when a surface supplies a reply handler.
 import { TextAttributes } from "@opentui/core";
-import { For, type JSX, Show } from "solid-js";
+import { type Accessor, createMemo, For, type JSX, Show } from "solid-js";
 import { MarkdownViewer } from "../components/MarkdownViewer.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
+import { createKeyedItems } from "../components/utils/keyedItems.ts";
 import { uiColors } from "../theme/colors";
 import type { Discussion } from "./types.ts";
+
+/** Preserve thread instances across refreshed review snapshots. */
+export function DiscussionList(props: {
+	discussions: readonly Discussion[];
+	children: (discussion: Accessor<Discussion>) => JSX.Element;
+}) {
+	const slots = createKeyedItems(
+		() => props.discussions,
+		(discussion) => discussion.id,
+	);
+	return <For each={slots()}>{(slot) => props.children(slot.value)}</For>;
+}
 
 export function ReplyAffordance(props: { active: boolean; text: string }) {
 	return (
@@ -89,178 +102,199 @@ export function DiscussionThread(props: {
 	replyActive?: boolean;
 	replyText?: string;
 }) {
-	const notesCount = props.discussion.notes.length;
+	const notesCount = () => props.discussion.notes.length;
 	// A thread is anchored by its position, so one with no notes can reach this
 	// component; the badges and the collapsed summary all need the first note.
-	const firstNote = props.discussion.notes[0];
-	if (!firstNote) return null;
+	const first = () => props.discussion.notes[0];
+	const noteSlots = createKeyedItems(
+		() => props.discussion.notes,
+		(note) => JSON.stringify([props.discussion.id, note.id]),
+	);
 	return (
-		<MarkedThread selected={props.selected} range={props.range}>
-			<box
-				flexDirection="column"
-				paddingTop={1}
-				paddingBottom={1}
-				paddingLeft={Math.max(0, props.paddingLeft - 3)}
-				paddingRight={2}
-			>
-				{/* Header row with status badges */}
-				<box flexDirection="row" gap={2} marginBottom={0.5}>
-					<Show when={props.discussion.findingId}>
-						<text
-							fg={firstNote.resolved ? uiColors.success : uiColors.warning}
-							attributes={TextAttributes.BOLD}
-						>
-							{firstNote.resolved ? "☑ FIX" : "☐ FIX"}
-						</text>
-					</Show>
-					<Show when={props.outdated}>
-						<text fg={uiColors.warning} attributes={TextAttributes.BOLD}>
-							⚠ OUTDATED
-						</text>
-					</Show>
-					<Show when={firstNote.resolved}>
-						<text fg={uiColors.success} attributes={TextAttributes.BOLD}>
-							✓ Resolved
-						</text>
-					</Show>
-					<Show when={!firstNote.resolved && !props.outdated}>
-						<text fg={uiColors.warning} attributes={TextAttributes.BOLD}>
-							● Open
-						</text>
-					</Show>
-				</box>
+		<Show when={first()}>
+			{(firstNote) => (
+				<MarkedThread selected={props.selected} range={props.range}>
+					<box
+						flexDirection="column"
+						paddingTop={1}
+						paddingBottom={1}
+						paddingLeft={Math.max(0, props.paddingLeft - 3)}
+						paddingRight={2}
+					>
+						{/* Header row with status badges */}
+						<box flexDirection="row" gap={2} marginBottom={0.5}>
+							<Show when={props.discussion.findingId}>
+								<text
+									fg={
+										firstNote().resolved ? uiColors.success : uiColors.warning
+									}
+									attributes={TextAttributes.BOLD}
+								>
+									{firstNote().resolved ? "☑ FIX" : "☐ FIX"}
+								</text>
+							</Show>
+							<Show when={props.outdated}>
+								<text fg={uiColors.warning} attributes={TextAttributes.BOLD}>
+									⚠ OUTDATED
+								</text>
+							</Show>
+							<Show when={firstNote().resolved}>
+								<text fg={uiColors.success} attributes={TextAttributes.BOLD}>
+									✓ Resolved
+								</text>
+							</Show>
+							<Show when={!firstNote().resolved && !props.outdated}>
+								<text fg={uiColors.warning} attributes={TextAttributes.BOLD}>
+									● Open
+								</text>
+							</Show>
+						</box>
 
-				{/* Conversation Messages with Timeline */}
-				<Show when={!props.collapsed}>
-					<box flexDirection="column">
-						<For each={props.discussion.notes}>
-							{(note, noteIndex) => {
-								const isLastNote = () =>
-									noteIndex() === props.discussion.notes.length - 1;
-								return (
-									<box
-										style={{
-											width: "100%",
-											flexDirection: "row",
-											flexShrink: 0,
-										}}
-									>
-										{/* Timeline Column */}
-										<box
-											style={{
-												width: 4,
-												flexDirection: "column",
-												alignItems: "center",
-												flexShrink: 0,
-											}}
-										>
+						{/* Conversation Messages with Timeline */}
+						<Show when={!props.collapsed}>
+							<box flexDirection="column">
+								<For each={noteSlots()}>
+									{(slot, noteIndex) => {
+										const note = slot.value;
+										const timelineLines = createMemo(() =>
+											Math.max(
+												3,
+												Math.ceil((note().body?.length ?? 0) / 80) + 2,
+											),
+										);
+										const isLastNote = () =>
+											noteIndex() === props.discussion.notes.length - 1;
+										return (
 											<box
 												style={{
-													width: 3,
-													height: 1,
-													justifyContent: "center",
-													alignItems: "center",
+													width: "100%",
+													flexDirection: "row",
+													flexShrink: 0,
 												}}
 											>
-												<text fg={uiColors.primary}>●</text>
-											</box>
-											<Show when={!isLastNote()}>
+												{/* Timeline Column */}
 												<box
 													style={{
-														width: 1,
-														flexGrow: 1,
+														width: 4,
 														flexDirection: "column",
+														alignItems: "center",
+														flexShrink: 0,
 													}}
 												>
-													{(() => {
-														const bodyLength = note.body?.length || 0;
-														const lines = Math.max(
-															3,
-															Math.ceil(bodyLength / 80) + 2,
-														);
-														return Array(lines)
-															.fill(null)
-															.map((_, _i) => (
-																<text fg={uiColors.bgSurface1}>│</text>
-															));
-													})()}
+													<box
+														style={{
+															width: 3,
+															height: 1,
+															justifyContent: "center",
+															alignItems: "center",
+														}}
+													>
+														<text fg={uiColors.primary}>●</text>
+													</box>
+													<Show when={!isLastNote()}>
+														<box
+															style={{
+																width: 1,
+																flexGrow: 1,
+																flexDirection: "column",
+															}}
+														>
+															<For
+																each={Array.from(
+																	{ length: timelineLines() },
+																	(_, index) => index,
+																)}
+															>
+																{() => <text fg={uiColors.bgSurface1}>│</text>}
+															</For>
+														</box>
+													</Show>
 												</box>
-											</Show>
-										</box>
 
-										{/* Message Content */}
-										<box
-											style={{
-												flexGrow: 1,
-												flexDirection: "column",
-												paddingLeft: 1,
-												paddingBottom: 1.5,
-											}}
-										>
-											<box flexDirection="row" gap={1}>
-												<text
-													fg={uiColors.textPrimary}
-													attributes={TextAttributes.BOLD}
+												{/* Message Content */}
+												<box
+													style={{
+														flexGrow: 1,
+														flexDirection: "column",
+														paddingLeft: 1,
+														paddingBottom: 1.5,
+													}}
 												>
-													{note.author?.name || "Unknown"}
-												</text>
-												<text fg={uiColors.textMuted}>
-													{props.formatTimestamp(note.created_at)}
-												</text>
-											</box>
-											<box style={{ width: "100%", marginTop: 0.5 }}>
-												{/* A finding body is markdown, so it renders through the
+													<box flexDirection="row" gap={1}>
+														<text
+															fg={uiColors.textPrimary}
+															attributes={TextAttributes.BOLD}
+														>
+															{note().author?.name || "Unknown"}
+														</text>
+														<text fg={uiColors.textMuted}>
+															{props.formatTimestamp(note().created_at)}
+														</text>
+													</box>
+													<box style={{ width: "100%", marginTop: 0.5 }}>
+														{/* A finding body is markdown, so it renders through the
 								    markdown renderable — a sibling of `<text>`, never a child,
 								    since `<text>` only accepts string content. It flexes to the
 								    message column instead of taking a terminal-derived width, so it
 								    wraps inside the review modal instead of past its right edge. A
 								    human comment stays plain text. */}
-												<Show
-													when={props.discussion.findingId}
-													fallback={
-														<text fg={uiColors.textSecondary}>
-															{note.body || "(no content)"}
-														</text>
-													}
-												>
-													<MarkdownViewer
-														content={note.body || "(no content)"}
-													/>
-												</Show>
+														<Show
+															when={props.discussion.findingId}
+															fallback={
+																<text fg={uiColors.textSecondary}>
+																	{note().body || "(no content)"}
+																</text>
+															}
+														>
+															<MarkdownViewer
+																content={note().body || "(no content)"}
+															/>
+														</Show>
+													</box>
+												</box>
 											</box>
-										</box>
-									</box>
-								);
-							}}
-						</For>
-					</box>
-				</Show>
+										);
+									}}
+								</For>
+							</box>
+						</Show>
 
-				<Show when={props.repliesEnabled && !props.collapsed}>
-					<ReplyAffordance
-						active={props.replyActive === true}
-						text={props.replyText ?? ""}
-					/>
-				</Show>
+						<Show when={props.repliesEnabled && !props.collapsed}>
+							<ReplyAffordance
+								active={props.replyActive === true}
+								text={props.replyText ?? ""}
+							/>
+						</Show>
 
-				<Show when={props.collapsed}>
-					<box flexDirection="row" gap={1} alignItems="center" marginBottom={1}>
-						<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-							{firstNote.author?.name || "Unknown"}
-						</text>
-						<text fg={uiColors.textMuted}>
-							{props.formatTimestamp(firstNote.created_at)}
-						</text>
-						<text
-							fg={uiColors.borderHighlight}
-							attributes={TextAttributes.BOLD}
-						>
-							[t] Show {notesCount} {notesCount === 1 ? "message" : "messages"}
-						</text>
+						<Show when={props.collapsed}>
+							<box
+								flexDirection="row"
+								gap={1}
+								alignItems="center"
+								marginBottom={1}
+							>
+								<text
+									fg={uiColors.textPrimary}
+									attributes={TextAttributes.BOLD}
+								>
+									{firstNote().author?.name || "Unknown"}
+								</text>
+								<text fg={uiColors.textMuted}>
+									{props.formatTimestamp(firstNote().created_at)}
+								</text>
+								<text
+									fg={uiColors.borderHighlight}
+									attributes={TextAttributes.BOLD}
+								>
+									[t] Show {notesCount()}{" "}
+									{notesCount() === 1 ? "message" : "messages"}
+								</text>
+							</box>
+						</Show>
 					</box>
-				</Show>
-			</box>
-		</MarkedThread>
+				</MarkedThread>
+			)}
+		</Show>
 	);
 }
 

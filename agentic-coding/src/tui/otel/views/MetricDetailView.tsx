@@ -1,10 +1,11 @@
 import {
+	createKeyedItems,
 	HighlightedText,
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
 } from "@agentic-coding/ui";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Index, Show } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline.tsx";
 import type { MetricStore } from "../model/metricStore.ts";
 
@@ -22,6 +23,26 @@ export function MetricDetailView(props: {
 		const current = stream();
 		return current ? props.store.aggregate(current) : undefined;
 	});
+	const buckets = () => stream()?.dataPoints[0]?.bucketCounts ?? [];
+	const maxCount = createMemo(() => Math.max(...buckets(), 0));
+	// A sample's value is mutable payload. Timestamp/series coordinates own its
+	// row; canonical attributes avoid resets when a snapshot changes their order.
+	const points = createKeyedItems(
+		() => stream()?.dataPoints ?? [],
+		(point) =>
+			JSON.stringify([
+				props.serviceName,
+				props.name,
+				point.startTimeUnixNano,
+				point.timeUnixNano,
+				point.attributes
+					.map(({ key, value }) => ({ key, value }))
+					.sort(
+						(a, b) =>
+							a.key.localeCompare(b.key) || a.value.localeCompare(b.value),
+					),
+			]),
+	);
 
 	return (
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
@@ -30,30 +51,28 @@ export function MetricDetailView(props: {
 					{props.serviceName} · {stream()?.type} · {stream()?.unit || "no unit"}
 				</text>
 			</box>
-			{(() => {
-				const current = agg();
-				if (!current) return null;
-				return (
+			<Show when={agg()}>
+				{(current) => (
 					<box height={3} flexDirection="row" paddingLeft={1} paddingRight={1}>
 						<box style={{ width: "25%", flexDirection: "column" }}>
 							<text fg={uiColors.textMuted}>Avg</text>
-							<text fg={uiColors.textPrimary}>{current.avg.toFixed(2)}</text>
+							<text fg={uiColors.textPrimary}>{current().avg.toFixed(2)}</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
 							<text fg={uiColors.textMuted}>Min</text>
-							<text fg={uiColors.success}>{current.min.toFixed(2)}</text>
+							<text fg={uiColors.success}>{current().min.toFixed(2)}</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
 							<text fg={uiColors.textMuted}>Max</text>
-							<text fg={uiColors.error}>{current.max.toFixed(2)}</text>
+							<text fg={uiColors.error}>{current().max.toFixed(2)}</text>
 						</box>
 						<box style={{ width: "25%", flexDirection: "column" }}>
 							<text fg={uiColors.textMuted}>Data points</text>
-							<text fg={uiColors.textPrimary}>{current.count}</text>
+							<text fg={uiColors.textPrimary}>{current().count}</text>
 						</box>
 					</box>
-				);
-			})()}
+				)}
+			</Show>
 			<box height={3} paddingLeft={1} paddingRight={1}>
 				<AutoscalingSparkline
 					values={stream()?.dataPoints.map((dp) => dp.value) ?? []}
@@ -61,99 +80,101 @@ export function MetricDetailView(props: {
 			</box>
 
 			{/* Histogram bar chart (if histogram) */}
-			{stream()?.type === "histogram" &&
-				stream()?.dataPoints[0]?.bucketCounts && (
-					<box height={4} flexDirection="column">
-						<SearchHeader>
-							<HighlightedText
-								text="Bucket distribution"
-								highlight="secondary"
-							/>
-						</SearchHeader>
-						<box
-							height={3}
-							flexDirection="row"
-							alignItems="flex-end"
-							paddingLeft={1}
-							paddingRight={1}
-						>
-							<For each={stream()?.dataPoints[0]?.bucketCounts}>
-								{(count, index) => {
-									const maxCount = Math.max(
-										...(stream()?.dataPoints[0]?.bucketCounts ?? [1]),
-									);
-									const barHeight =
-										maxCount > 0
-											? Math.max(1, Math.round((count / maxCount) * 3))
-											: 1;
-									const label =
-										stream()?.dataPoints[0]?.explicitBounds?.[index()]?.toFixed(
-											0,
-										) ?? "";
-									return (
-										<box
-											style={{
-												flexDirection: "column",
-												alignItems: "center",
-												width: Math.max(
-													3,
-													60 /
-														(stream()?.dataPoints[0]?.bucketCounts?.length ??
-															1),
-												),
-											}}
-										>
-											<text fg={uiColors.primary}>
-												{barChars[barHeight - 1] ?? "█".repeat(barHeight)}
-											</text>
-											<text fg={uiColors.textMuted}>{label}</text>
-										</box>
-									);
-								}}
-							</For>
-						</box>
+			<Show
+				when={
+					stream()?.type === "histogram" &&
+					stream()?.dataPoints[0]?.bucketCounts !== undefined
+				}
+			>
+				<box height={4} flexDirection="column">
+					<SearchHeader>
+						<HighlightedText text="Bucket distribution" highlight="secondary" />
+					</SearchHeader>
+					<box
+						height={3}
+						flexDirection="row"
+						alignItems="flex-end"
+						paddingLeft={1}
+						paddingRight={1}
+					>
+						<Index each={buckets()}>
+							{(count, index) => {
+								const barHeight = () =>
+									maxCount() > 0
+										? Math.max(1, Math.round((count() / maxCount()) * 3))
+										: 1;
+								const label = () =>
+									stream()?.dataPoints[0]?.explicitBounds?.[index]?.toFixed(
+										0,
+									) ?? "";
+								return (
+									<box
+										style={{
+											flexDirection: "column",
+											alignItems: "center",
+											width: Math.max(
+												3,
+												60 /
+													(stream()?.dataPoints[0]?.bucketCounts?.length ?? 1),
+											),
+										}}
+									>
+										<text fg={uiColors.primary}>
+											{barChars[barHeight() - 1] ?? "█".repeat(barHeight())}
+										</text>
+										<text fg={uiColors.textMuted}>{label()}</text>
+									</box>
+								);
+							}}
+						</Index>
 					</box>
-				)}
+				</box>
+			</Show>
 
 			{/* Data point table */}
 			<SearchHeader>
 				<HighlightedText text="Data points" highlight="secondary" />
 			</SearchHeader>
 			<ScrollableContent focusable={false}>
-				<For each={stream()?.dataPoints ?? []}>
-					{(dp, index) => (
-						<box
-							height={1}
-							flexShrink={0}
-							flexDirection="row"
-							paddingLeft={1}
-							paddingRight={1}
-						>
-							<box style={{ width: 4, flexShrink: 0 }}>
-								<text fg={uiColors.textMuted}>
-									{String(index() + 1).padEnd(3)}
-								</text>
-							</box>
-							<box style={{ width: 25, flexShrink: 0 }} overflow="hidden">
-								<text fg={uiColors.textSecondary}>
-									{new Date(
-										Number(BigInt(dp.timeUnixNano) / 1_000_000n),
-									).toISOString()}
-								</text>
-							</box>
+				<For each={points()}>
+					{(slot, index) => {
+						const dp = slot.value;
+						return (
 							<box
-								style={{ width: 12, flexShrink: 0 }}
-								justifyContent="flex-end"
+								height={1}
+								flexShrink={0}
+								flexDirection="row"
+								paddingLeft={1}
+								paddingRight={1}
 							>
-								<text fg={uiColors.textPrimary}>{dp.value.toFixed(2)}</text>
+								<box style={{ width: 4, flexShrink: 0 }}>
+									<text fg={uiColors.textMuted}>
+										{String(index() + 1).padEnd(3)}
+									</text>
+								</box>
+								<box style={{ width: 25, flexShrink: 0 }} overflow="hidden">
+									<text fg={uiColors.textSecondary}>
+										{new Date(
+											Number(BigInt(dp().timeUnixNano) / 1_000_000n),
+										).toISOString()}
+									</text>
+								</box>
+								<box
+									style={{ width: 12, flexShrink: 0 }}
+									justifyContent="flex-end"
+								>
+									<text fg={uiColors.textPrimary}>{dp().value.toFixed(2)}</text>
+								</box>
+								<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
+									<text fg={uiColors.textMuted}>
+										{dp()
+											.attributes.map((a) => `${a.key}=${a.value}`)
+											.join(" ")}
+									</text>
+								</box>
 							</box>
-							<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
-								<text fg={uiColors.textMuted}>
-									{dp.attributes.map((a) => `${a.key}=${a.value}`).join(" ")}
-								</text>
-							</box>
-						</box>
-					)}
+						);
+					}}
 				</For>
 			</ScrollableContent>
 		</box>

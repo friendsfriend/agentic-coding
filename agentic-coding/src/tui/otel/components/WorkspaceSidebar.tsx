@@ -16,6 +16,7 @@
 // it frees may wait on an animation.
 
 import {
+	createKeyedItems,
 	Panel,
 	Selectable,
 	SelectableList,
@@ -221,6 +222,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 	/** Leading cursor slots the pinned entries take, so the workflow list keeps
 	 * its own 0-based index while the panel cursor counts the pins first. */
 	const pinCount = () => props.pins?.length ?? 0;
+	// Durable-session polling replaces metadata objects, not pin identity.
+	const pinSlots = createKeyedItems(
+		() => props.pins ?? [],
+		(pin) => JSON.stringify([pin.page, pin.sessionId ?? ""]),
+	);
 	const pinOffset = () => pinCount();
 	const listLines = () =>
 		Math.max(
@@ -346,13 +352,13 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 						    jump list, so a filler line ("No items") would be the only thing
 						    it ever says with no workflows. The expanded panel explains an
 						    empty list in words instead. */}
-						<For each={props.pins ?? []}>
-							{(pin, index) => (
+						<For each={pinSlots()}>
+							{(slot, index) => (
 								<PinRow
-									pin={pin}
+									pin={slot.value()}
 									selected={props.selectedIndex === index()}
 									height={1}
-									onActivate={() => activatePin(index(), pin)}
+									onActivate={() => activatePin(index(), slot.value())}
 								/>
 							)}
 						</For>
@@ -484,13 +490,13 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 					{/* Pinned entries sit above the windowed list, so they stay put
 					    while the workflows scroll under them, and they are drawn whatever
 					    the filter leaves. */}
-					<For each={props.pins ?? []}>
-						{(pin, index) => (
+					<For each={pinSlots()}>
+						{(slot, index) => (
 							<PinRow
-								pin={pin}
+								pin={slot.value()}
 								selected={props.selectedIndex === index()}
 								height={2}
-								onActivate={() => activatePin(index(), pin)}
+								onActivate={() => activatePin(index(), slot.value())}
 							/>
 						)}
 					</For>

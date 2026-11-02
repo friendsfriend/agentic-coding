@@ -79,6 +79,16 @@ and route tests, then the whole-project lint/type-check gates.
   across payload replacements. Key component resets on structural kind/family,
   never on the changing block object. Tool projections must be reactive so this
   preserves hover without freezing streamed output or completion state.
+- Markdown part containers are keyed by message identity, block position and
+  code/prose shape. A fresh streaming-tail parse updates the existing Markdown
+  renderer rather than rebuilding it per chunk; settling and turn completion
+  keep that renderer too. Existing unfinished-line holdback remains unchanged.
+- Nested content rows use their declared ID (or line number/position when no ID
+  exists), plus native rendering shape. Chunk containers remain in place when
+  a growing result crosses the lazy-mount threshold. Table cells are positional
+  because the table contract carries no row IDs; unchanged chunks retain their
+  measured heights when a sibling chunk changes. Foldable rows should declare
+  stable IDs so their fold state survives label changes.
 - Mounted sessions opt into `AgentSessionProjectionCache` for immutable watch
   snapshots. Entry projections are reused until timing or compaction labels
   change. Public uncached projection still accepts fresh/mutable input. The

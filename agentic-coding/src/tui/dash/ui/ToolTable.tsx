@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { uiColors } from "@agentic-coding/ui";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Index, Show } from "solid-js";
 import { statusRow, title } from "./tool-content.ts";
 import type { ToolViewRow } from "./tool-views.ts";
 import { estimateTextRows, VirtualToolBody } from "./transcript-viewport.tsx";
@@ -90,48 +90,71 @@ export function ToolTable(props: { table: NonNullable<ToolViewRow["table"]> }) {
 				>{`No results · ${props.table.columns.map(title).join(", ")}`}</text>
 			</Show>
 			<For each={chunks()}>
-				{(start) => (
-					<VirtualToolBody
-						force
-						cacheKey={props.table}
-						estimateHeight={(columns) =>
-							props.table.rows
-								.slice(start, start + TABLE_CHUNK)
-								.reduce(
+				{(start) => {
+					const chunk = createMemo<NonNullable<ToolViewRow["table"]>>(
+						() => ({
+							columns: props.table.columns,
+							rows: props.table.rows.slice(start, start + TABLE_CHUNK),
+						}),
+						{ columns: [], rows: [] },
+						{
+							equals: (before, after) =>
+								before.columns.length === after.columns.length &&
+								before.columns.every(
+									(column, index) => column === after.columns[index],
+								) &&
+								before.rows.length === after.rows.length &&
+								before.rows.every(
+									(row, index) =>
+										row.length === after.rows[index]?.length &&
+										row.every(
+											(cell, column) => cell === after.rows[index]?.[column],
+										),
+								),
+						},
+					);
+					return (
+						<VirtualToolBody
+							force
+							cacheKey={chunk()}
+							estimateHeight={(columns) =>
+								chunk().rows.reduce(
 									(height, row) =>
-										height +
-										estimateTableRow(row, props.table.columns, columns),
+										height + estimateTableRow(row, chunk().columns, columns),
 									0,
 								)
-						}
-					>
-						<For each={props.table.rows.slice(start, start + TABLE_CHUNK)}>
-							{(row) => (
-								<box
-									flexDirection={wide() ? "row" : "column"}
-									gap={wide() ? 2 : 0}
-									marginBottom={wide() ? 0 : 1}
-								>
-									<For each={props.table.columns}>
-										{(column, index) => (
-											<text
-												fg={cellColor(column, row[index()])}
-												flexGrow={wide() ? 1 : 0}
-												flexBasis={wide() ? 0 : undefined}
-												minWidth={0}
-												wrapMode="word"
-											>
-												{wide()
-													? row[index()]
-													: `${title(column)}: ${row[index()] ?? "—"}`}
-											</text>
-										)}
-									</For>
-								</box>
-							)}
-						</For>
-					</VirtualToolBody>
-				)}
+							}
+						>
+							{/* Tables expose no row IDs: preserve positional cells, while
+						    column names retain their own identity across schema updates. */}
+							<Index each={chunk().rows}>
+								{(row) => (
+									<box
+										flexDirection={wide() ? "row" : "column"}
+										gap={wide() ? 2 : 0}
+										marginBottom={wide() ? 0 : 1}
+									>
+										<For each={props.table.columns}>
+											{(column, index) => (
+												<text
+													fg={cellColor(column, row()[index()])}
+													flexGrow={wide() ? 1 : 0}
+													flexBasis={wide() ? 0 : undefined}
+													minWidth={0}
+													wrapMode="word"
+												>
+													{wide()
+														? row()[index()]
+														: `${title(column)}: ${row()[index()] ?? "—"}`}
+												</text>
+											)}
+										</For>
+									</box>
+								)}
+							</Index>
+						</VirtualToolBody>
+					);
+				}}
 			</For>
 		</box>
 	);

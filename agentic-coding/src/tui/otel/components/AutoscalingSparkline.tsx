@@ -2,7 +2,7 @@
 
 import { uiColors } from "@agentic-coding/ui";
 import { type BoxRenderable, type OptimizedBuffer, RGBA } from "@opentui/core";
-import { createSignal } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 
 const dots = [
 	[0x01, 0x08],
@@ -58,6 +58,14 @@ export function AutoscalingSparkline(props: {
 }) {
 	let box: BoxRenderable | undefined;
 	const [size, setSize] = createSignal({ width: 0, height: 0 });
+	// Custom paint reads are not reactive dependencies. Retained chart nodes
+	// must explicitly become dirty when their samples or theme inputs change.
+	createEffect(() => {
+		void props.values;
+		void props.color;
+		void props.backgroundColor;
+		box?.requestRender();
+	});
 	const updateSize = () => {
 		if (!box) return;
 		const next = {

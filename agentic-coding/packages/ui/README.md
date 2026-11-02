@@ -53,6 +53,12 @@ Reactive renderers receive accessors. Read them inside JSX or reactive
 computations, not into setup-time constants. Ordinary refreshes must not key an
 entire component on a changing payload object.
 
+Custom list layouts can use `createKeyedItems` from the same package: it returns
+stable slots with reactive `value()` accessors, keyed by an explicit identity
+function. Duplicate identities retain separate occurrence slots. Slots removed
+from the current list are released; genuine structural changes should be part
+of the identity when they require a different native renderer.
+
 ## The review views (`views/`)
 
 `DiffReviewView` and `MarkdownReviewView` render a review surface: selectable
@@ -65,6 +71,22 @@ Annotations are **one mechanism**: comments and review findings are both
 carries `findingId`/`findingSeverity`; that is the only visual difference (the
 FIX marker and severity colour). `ReplyAffordance` is the one reply
 prompt/composer, shown when the caller supplies `onReplyToDiscussion`.
+
+Review surfaces render thread collections through `DiscussionList`, keyed by
+discussion ID. `DiscussionThread` retains notes by thread/note ID and reads the
+first note and count reactively, so refreshed payloads update existing message
+renderers and notes arriving after an initially empty thread can appear.
+
+Review viewers separate source/comment metadata refresh from selection-driven
+scrolling. A comment update or fresh file wrapper with unchanged source must
+not reveal the selected row again while the reader is elsewhere. File,
+selection and presentation-mode changes may reveal it; split Markdown targets
+are resolved inside the side columns after layout.
+
+Raw diff projections also reuse fully unchanged unified/split records within
+the same file. All content, type and source coordinates must match; changed
+records and different files start fresh. Retained rows resolve their selectable
+index reactively instead of keeping a setup-time index.
 
 Surface differences are flags, never forks:
 

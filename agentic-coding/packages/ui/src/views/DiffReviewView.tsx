@@ -10,12 +10,14 @@
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, For, on, onCleanup, Show } from "solid-js";
 import type { SplitDiffLine } from "../components/diffView.ts";
 import {
 	buildSplitDiffLines,
 	type DiffLine,
 	parseDiffLines,
+	reuseDiffLines,
+	reuseSplitDiffLines,
 } from "../components/diffView.ts";
 import { GenericModal } from "../components/GenericModal.tsx";
 import { formatHelpTextLines } from "../components/HelpText.tsx";
@@ -29,7 +31,7 @@ import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
-import { DiscussionThread } from "./annotations.tsx";
+import { DiscussionList, DiscussionThread } from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
 
 /** Frames the auto-scroll waits for the re-created rows to be measured. */
@@ -153,7 +155,30 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	const isCommentMode = createMemo(() => props.commentMode);
 
 	// Parse unified diff into individual lines
-	const parsedLines = createMemo((): DiffLine[] => parseDiffLines(props.diff));
+	// Parent observations may replace their file object without changing either
+	// location or source. Coalesce that before parsing/replacing native rows.
+	const source = createMemo(
+		() => ({ file: props.filePath, content: props.diff }),
+		{ file: "", content: "" },
+		{
+			equals: (before, after) =>
+				before.file === after.file && before.content === after.content,
+		},
+	);
+	const parsedDocument = createMemo<{ file: string; lines: DiffLine[] }>(
+		(previous) => {
+			const current = source();
+			return {
+				file: current.file,
+				lines: reuseDiffLines(
+					previous.file === current.file ? previous.lines : [],
+					parseDiffLines(current.content),
+				),
+			};
+		},
+		{ file: "", lines: [] },
+	);
+	const parsedLines = () => parsedDocument().lines;
 
 	// Detect truly new/deleted files. Addition-only/deletion-only hunks in
 	// existing files still support split view.
@@ -161,7 +186,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 		return (
 			props.isNewFile === true ||
 			props.isDeletedFile === true ||
-			isDiffFileAddedOrDeleted(props.diff)
+			isDiffFileAddedOrDeleted(source().content)
 		);
 	});
 
@@ -177,9 +202,20 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	});
 
 	// Parse diff into split format (pairing old/new lines side-by-side)
-	const splitLines = createMemo((): SplitDiffLine[] =>
-		buildSplitDiffLines(parsedLines()),
+	const splitDocument = createMemo<{ file: string; lines: SplitDiffLine[] }>(
+		(previous) => {
+			const current = parsedDocument();
+			return {
+				file: current.file,
+				lines: reuseSplitDiffLines(
+					previous.file === current.file ? previous.lines : [],
+					buildSplitDiffLines(current.lines),
+				),
+			};
+		},
+		{ file: "", lines: [] },
 	);
+	const splitLines = () => splitDocument().lines;
 
 	// Filter out non-selectable lines (headers) - works for both unified and split
 	const selectableLines = createMemo(() => {
@@ -188,6 +224,10 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 		}
 		return parsedLines().filter((line) => line.type !== "header");
 	});
+	const selectableIndexByLine = createMemo(
+		() =>
+			new Map(selectableLines().map((line, index) => [line.lineNumber, index])),
+	);
 
 	/**
 	 * Block-level Markdown units for the wiki review diff.
@@ -574,7 +614,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 				: [];
 		props.onSelectedFindingIdsChange?.(selectedFindingIds);
 
-		// Auto-scroll when selected line changes.
+		// Keep the controlled selection valid as the projected index space changes.
 		const next = props.selectedLine;
 
 		// Wrap around if out of bounds
@@ -586,38 +626,74 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 			props.onSelectedLineChange(lines.length - 1);
 			return;
 		}
-
-		const idPrefix = markdownMode ? "block-" : "line-";
-		if (scrollFrame !== undefined) {
-			renderer.cancelAnimationFrame(scrollFrame);
-			scrollFrame = undefined;
-		}
-		// The rows are re-created whenever the file or the diff behind them
-		// changes, and re-created rows carry no geometry until the layout pass
-		// runs — in particular the scroll box reports a zero `scrollHeight`
-		// before it. Re-apply the scroll on later frames, once the rows are
-		// measured, or the viewport stays at the top of the file with the
-		// selected line far below it. A selection that is already visible makes
-		// this a no-op.
-		const retryScroll = (attempt: number) => {
-			if (scrollFrame !== undefined) renderer.cancelAnimationFrame(scrollFrame);
-			scrollFrame = renderer.requestAnimationFrame(() => {
-				scrollFrame = undefined;
-				const applied = scrollSelectionIntoView(
-					props.selectedLine,
-					markdownMode ? "block-" : "line-",
-				);
-				if (!applied && attempt < MAX_SCROLL_RETRY_FRAMES) {
-					retryScroll(attempt + 1);
-				}
-			});
-		};
-		const applied = scrollSelectionIntoView(next, idPrefix);
-		if (!applied) retryScroll(0);
-		onCleanup(() => {
-			if (scrollFrame !== undefined) renderer.cancelAnimationFrame(scrollFrame);
-		});
 	});
+
+	// Comment/read-model updates are not navigation. Only a file, selection or
+	// presentation-mode change should schedule a reveal of the selected row.
+	const navigation = createMemo(
+		() => ({
+			file: props.filePath,
+			index: props.selectedLine,
+			split: useSplitView(),
+			markdown: props.renderMarkdown === true,
+			currentOnly: props.currentSideOnly === true,
+		}),
+		{ file: "", index: -1, split: false, markdown: false, currentOnly: false },
+		{
+			equals: (before, after) =>
+				before.file === after.file &&
+				before.index === after.index &&
+				before.split === after.split &&
+				before.markdown === after.markdown &&
+				before.currentOnly === after.currentOnly,
+		},
+	);
+	createEffect(
+		on(
+			navigation,
+			({ index: next, split: isSplit, markdown: markdownMode }) => {
+				const lines = markdownMode
+					? isSplit
+						? markdownSideColumns().new.blocks
+						: markdownUnits().units
+					: selectableLines();
+				if (next < 0 || next >= lines.length) return;
+
+				const idPrefix = markdownMode ? "block-" : "line-";
+				if (scrollFrame !== undefined) {
+					renderer.cancelAnimationFrame(scrollFrame);
+					scrollFrame = undefined;
+				}
+				// The rows are re-created whenever the file or the diff behind them
+				// changes, and re-created rows carry no geometry until the layout pass
+				// runs — in particular the scroll box reports a zero `scrollHeight`
+				// before it. Re-apply the scroll on later frames, once the rows are
+				// measured, or the viewport stays at the top of the file with the
+				// selected line far below it. A selection that is already visible makes
+				// this a no-op.
+				const retryScroll = (attempt: number) => {
+					if (scrollFrame !== undefined)
+						renderer.cancelAnimationFrame(scrollFrame);
+					scrollFrame = renderer.requestAnimationFrame(() => {
+						scrollFrame = undefined;
+						const applied = scrollSelectionIntoView(
+							next,
+							markdownMode ? "block-" : "line-",
+						);
+						if (!applied && attempt < MAX_SCROLL_RETRY_FRAMES) {
+							retryScroll(attempt + 1);
+						}
+					});
+				};
+				const applied = scrollSelectionIntoView(next, idPrefix);
+				if (!applied) retryScroll(0);
+				onCleanup(() => {
+					if (scrollFrame !== undefined)
+						renderer.cancelAnimationFrame(scrollFrame);
+				});
+			},
+		),
+	);
 
 	/**
 	 * Keep `next` and any thread rendered under it in view.
@@ -628,13 +704,12 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	function scrollSelectionIntoView(next: number, idPrefix: string): boolean {
 		if (!scrollBox) return false;
 
-		// Find the target line by searching through the wrapper box's children
+		// Markdown split blocks live inside side columns, not directly under the
+		// wrapper. Resolve descendants so every presentation mode can navigate.
 		const wrapperBox = scrollBox.getChildren()[0];
 		if (!wrapperBox) return false;
 
-		const target = wrapperBox.getChildren().find((child) => {
-			return child.id === `${idPrefix}${next}`;
-		});
+		const target = wrapperBox.findDescendantById(`${idPrefix}${next}`);
 
 		if (!target) return false;
 		// Before the first layout pass the scroll box reports a zero scroll
@@ -644,9 +719,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 		// Bring following line into view first. Inline discussions render between
 		// selected line and following line, so this keeps comment content visible.
-		const following = wrapperBox
-			.getChildren()
-			.find((child) => child.id === `${idPrefix}${next + 1}`);
+		const following = wrapperBox.findDescendantById(`${idPrefix}${next + 1}`);
 		if (following) {
 			scrollBox.scrollChildIntoView(following.id);
 			// Keep selection visible without moving it during scrolling.
@@ -782,8 +855,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 									<For each={parsedLines()}>
 										{(line, _index) => {
 											// Calculate this line's index in the selectable lines array (headers are excluded)
-											const selectableIndex = selectableLines().findIndex(
-												(l) => l.lineNumber === line.lineNumber,
+											const selectableIndex = createMemo(
+												() =>
+													selectableIndexByLine().get(line.lineNumber) ?? -1,
 											);
 
 											// Skip headers from selection but still render them
@@ -799,11 +873,11 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 											// REACTIVE: Check if this line is selected (must be a function for reactivity!)
 											const isSelected = () =>
-												selectableIndex === props.selectedLine;
+												selectableIndex() === props.selectedLine;
 
 											// REACTIVE: Check if line is in visual selection range
 											const isInSelection = () =>
-												isInVisualSelection(selectableIndex);
+												isInVisualSelection(selectableIndex());
 
 											// Selection is marked by the left-edge block (`SelectionMarker`),
 											// never by a full-row background fill, so the diff tint always
@@ -877,13 +951,13 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 											return (
 												<>
 													<box
-														id={`line-${selectableIndex}`}
+														id={`line-${selectableIndex()}`}
 														flexDirection="row"
 														backgroundColor={bgColor()}
 														paddingRight={1}
 														{...useTap(() => {
-															if (selectableIndex >= 0) {
-																props.onSelectedLineChange(selectableIndex);
+															if (selectableIndex() >= 0) {
+																props.onSelectedLineChange(selectableIndex());
 															}
 														})}
 													>
@@ -934,12 +1008,14 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 												    record, so the line renders through the one shared
 												    thread component (findings get markdown bodies). */}
 													<Show when={getCommentsForLine(line).length > 0}>
-														<For each={getCommentsForLine(line)}>
+														<DiscussionList
+															discussions={getCommentsForLine(line)}
+														>
 															{(discussion) => (
 																<DiscussionThread
-																	discussion={discussion}
-																	outdated={isCommentOutdated(discussion)}
-																	collapsed={isCollapsed(discussion.id)}
+																	discussion={discussion()}
+																	outdated={isCommentOutdated(discussion())}
+																	collapsed={isCollapsed(discussion().id)}
 																	selected={isSelected()}
 																	range={isInSelection()}
 																	formatTimestamp={formatTimestamp}
@@ -949,14 +1025,14 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																	}
 																	replyActive={
 																		props.replyModeDiscussionId ===
-																		discussion.id
+																		discussion().id
 																	}
 																	{...(props.replyText !== undefined
 																		? { replyText: props.replyText }
 																		: {})}
 																/>
 															)}
-														</For>
+														</DiscussionList>
 													</Show>
 
 													{/* Show comment input inline after the selected line */}
@@ -1081,12 +1157,12 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 												</box>
 
 												<Show when={comments().length > 0}>
-													<For each={comments()}>
+													<DiscussionList discussions={comments()}>
 														{(discussion) => (
 															<DiscussionThread
-																discussion={discussion}
-																outdated={isCommentOutdated(discussion)}
-																collapsed={isCollapsed(discussion.id)}
+																discussion={discussion()}
+																outdated={isCommentOutdated(discussion())}
+																collapsed={isCollapsed(discussion().id)}
 																selected={isSelected()}
 																range={isInSelection()}
 																formatTimestamp={formatTimestamp}
@@ -1095,14 +1171,15 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																	props.onReplyToDiscussion !== undefined
 																}
 																replyActive={
-																	props.replyModeDiscussionId === discussion.id
+																	props.replyModeDiscussionId ===
+																	discussion().id
 																}
 																{...(props.replyText !== undefined
 																	? { replyText: props.replyText }
 																	: {})}
 															/>
 														)}
-													</For>
+													</DiscussionList>
 												</Show>
 
 												{isCommentMode() && isSelected() ? (
@@ -1136,8 +1213,8 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 								<For each={splitLines()}>
 									{(line) => {
 										// Calculate this line's index in the selectable lines array
-										const selectableIndex = selectableLines().findIndex(
-											(l) => l.lineNumber === line.lineNumber,
+										const selectableIndex = createMemo(
+											() => selectableIndexByLine().get(line.lineNumber) ?? -1,
 										);
 
 										// Headers span both columns
@@ -1153,7 +1230,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 										// REACTIVE: Check if this line is selected
 										const isSelected = () =>
-											selectableIndex === props.selectedLine;
+											selectableIndex() === props.selectedLine;
 										const findingComments = () =>
 											getCommentsForSplitLine(line).filter(
 												(discussion) => discussion.findingId,
@@ -1161,17 +1238,17 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 										// REACTIVE: Check if line is in visual selection range
 										const isInSelection = () =>
-											isInVisualSelection(selectableIndex);
+											isInVisualSelection(selectableIndex());
 
 										return (
 											<>
 												<box
-													id={`line-${selectableIndex}`}
+													id={`line-${selectableIndex()}`}
 													flexDirection="row"
 													backgroundColor={uiColors.diffContextBg}
 													{...useTap(() => {
-														if (selectableIndex >= 0) {
-															props.onSelectedLineChange(selectableIndex);
+														if (selectableIndex() >= 0) {
+															props.onSelectedLineChange(selectableIndex());
 														}
 													})}
 												>
@@ -1269,12 +1346,14 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 												    row renders through the one shared thread component (findings get
 												    markdown bodies). */}
 												<Show when={getCommentsForSplitLine(line).length > 0}>
-													<For each={getCommentsForSplitLine(line)}>
+													<DiscussionList
+														discussions={getCommentsForSplitLine(line)}
+													>
 														{(discussion) => (
 															<DiscussionThread
-																discussion={discussion}
-																outdated={isCommentOutdated(discussion)}
-																collapsed={isCollapsed(discussion.id)}
+																discussion={discussion()}
+																outdated={isCommentOutdated(discussion())}
+																collapsed={isCollapsed(discussion().id)}
 																selected={isSelected()}
 																range={isInSelection()}
 																formatTimestamp={formatTimestamp}
@@ -1283,14 +1362,15 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																	props.onReplyToDiscussion !== undefined
 																}
 																replyActive={
-																	props.replyModeDiscussionId === discussion.id
+																	props.replyModeDiscussionId ===
+																	discussion().id
 																}
 																{...(props.replyText !== undefined
 																	? { replyText: props.replyText }
 																	: {})}
 															/>
 														)}
-													</For>
+													</DiscussionList>
 												</Show>
 
 												{/* Show comment input inline after the selected line */}
@@ -1393,7 +1473,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 											return (
 												<>
 													<box
-														id={`block-${index}`}
+														id={`block-${index()}`}
 														flexDirection="row"
 														backgroundColor={
 															added
@@ -1431,12 +1511,12 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														/>
 													</box>
 													<Show when={comments().length > 0}>
-														<For each={comments()}>
+														<DiscussionList discussions={comments()}>
 															{(discussion) => (
 																<DiscussionThread
-																	discussion={discussion}
-																	outdated={isCommentOutdated(discussion)}
-																	collapsed={isCollapsed(discussion.id)}
+																	discussion={discussion()}
+																	outdated={isCommentOutdated(discussion())}
+																	collapsed={isCollapsed(discussion().id)}
 																	selected={isSelected()}
 																	range={isInSelection()}
 																	formatTimestamp={formatTimestamp}
@@ -1446,14 +1526,14 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																	}
 																	replyActive={
 																		props.replyModeDiscussionId ===
-																		discussion.id
+																		discussion().id
 																	}
 																	{...(props.replyText !== undefined
 																		? { replyText: props.replyText }
 																		: {})}
 																/>
 															)}
-														</For>
+														</DiscussionList>
 													</Show>
 													{isCommentMode() && isSelected() ? (
 														<box

@@ -1,13 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 
 import {
+	createKeyedItems,
 	HighlightedText,
 	ScrollableContent,
 	SearchHeader,
 	uiColors,
 } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { LogStore } from "../model/logStore.ts";
 
 export function LogDetailView(props: {
@@ -16,6 +17,10 @@ export function LogDetailView(props: {
 	onTraceLink?: (traceId: string) => void;
 }) {
 	const log = createMemo(() => props.store.getLogs()[props.index]);
+	const attributes = createKeyedItems(
+		() => log()?.attributes ?? [],
+		(attribute) => attribute.key,
+	);
 
 	return (
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
@@ -45,28 +50,32 @@ export function LogDetailView(props: {
 			</box>
 
 			{/* Trace/span link */}
-			{log()?.traceId && (
-				<box height={1} flexDirection="row" paddingLeft={1}>
-					<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
-						Trace:{" "}
-					</text>
-					<text fg={uiColors.accent}>{log()?.traceId}</text>
-					{log()?.spanId && (
-						<>
-							<text fg={uiColors.primary}> Span: </text>
-							<text fg={uiColors.accent}>{log()?.spanId}</text>
-						</>
-					)}
-				</box>
-			)}
+			<Show when={log()?.traceId}>
+				{(traceId) => (
+					<box height={1} flexDirection="row" paddingLeft={1}>
+						<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+							Trace:{" "}
+						</text>
+						<text fg={uiColors.accent}>{traceId()}</text>
+						<Show when={log()?.spanId}>
+							{(spanId) => (
+								<>
+									<text fg={uiColors.primary}> Span: </text>
+									<text fg={uiColors.accent}>{spanId()}</text>
+								</>
+							)}
+						</Show>
+					</box>
+				)}
+			</Show>
 
 			{/* Attributes */}
 			<SearchHeader>
 				<HighlightedText text="Attributes" highlight="secondary" />
 			</SearchHeader>
 			<ScrollableContent focusable={false}>
-				<For each={log()?.attributes ?? []}>
-					{(attr) => (
+				<For each={attributes()}>
+					{(slot) => (
 						<box
 							height={1}
 							flexShrink={0}
@@ -75,10 +84,10 @@ export function LogDetailView(props: {
 							paddingRight={1}
 						>
 							<box style={{ width: 24, flexShrink: 0 }} overflow="hidden">
-								<text fg={uiColors.primary}>{attr.key}</text>
+								<text fg={uiColors.primary}>{slot.value().key}</text>
 							</box>
 							<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
-								<text fg={uiColors.textSecondary}>{attr.value}</text>
+								<text fg={uiColors.textSecondary}>{slot.value().value}</text>
 							</box>
 						</box>
 					)}

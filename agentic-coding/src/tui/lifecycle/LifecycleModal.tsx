@@ -4,7 +4,12 @@
 // pattern as dash/ui/GenericModal.tsx) so it covers the terminal regardless of
 // the active tab. Renders nothing when the lifecycle phase is idle/running.
 
-import { colors, uiColors, useTerminalDimensions } from "@agentic-coding/ui";
+import {
+	colors,
+	createKeyedItems,
+	uiColors,
+	useTerminalDimensions,
+} from "@agentic-coding/ui";
 import { RGBA, TextAttributes } from "@opentui/core";
 import { Portal } from "@opentui/solid";
 import {
@@ -14,6 +19,7 @@ import {
 	For,
 	onCleanup,
 	Show,
+	untrack,
 } from "solid-js";
 import { message, phase, steps } from "../lifecycle.ts";
 
@@ -63,18 +69,35 @@ export function LifecycleModal() {
 			).length,
 	);
 	const progressWidth = () => Math.max(1, Math.floor(dimensions().width * 0.5));
+	const targetProgress = createMemo(
+		() => (progressWidth() * doneCount()) / Math.max(1, steps().length),
+	);
+	const stepSlots = createKeyedItems(steps, (step) =>
+		JSON.stringify([phase(), step.id]),
+	);
 	const [animatedProgress, setAnimatedProgress] = createSignal(0);
 	let progressTimer: ReturnType<typeof setInterval> | undefined;
+	let progressPhase: ReturnType<typeof phase> | undefined;
 	createEffect(() => {
 		clearInterval(progressTimer);
-		if (!visible()) return;
-		const target =
-			(progressWidth() * doneCount()) / Math.max(1, steps().length);
-		const startedAt = Date.now();
+		const currentPhase = phase();
+		const changedPhase = currentPhase !== progressPhase;
+		progressPhase = currentPhase;
+		if (!visible()) {
+			setAnimatedProgress(0);
+			return;
+		}
+		const target = targetProgress();
+		// The target memo ignores status-only payload changes. Reading the start
+		// untracked prevents each animation tick from restarting its own tween.
+		const start = changedPhase ? 0 : untrack(animatedProgress);
+		if (changedPhase) setAnimatedProgress(0);
+		if (start === target) return;
+		const startedAt = performance.now();
 		progressTimer = setInterval(() => {
-			const elapsed = Math.min(1, (Date.now() - startedAt) / 320);
+			const elapsed = Math.min(1, (performance.now() - startedAt) / 320);
 			const eased = 1 - (1 - elapsed) ** 3;
-			setAnimatedProgress(target * eased);
+			setAnimatedProgress(start + (target - start) * eased);
 			if (elapsed === 1) clearInterval(progressTimer);
 		}, 16);
 	});
@@ -137,19 +160,21 @@ export function LifecycleModal() {
 								</For>
 							</text>
 						</box>
-						<For each={steps()}>
-							{(step) => (
+						<For each={stepSlots()}>
+							{(slot) => (
 								<box height={1} flexDirection="row">
-									<text fg={stepColor(step.status)}>{GLYPHS[step.status]}</text>
+									<text fg={stepColor(slot.value().status)}>
+										{GLYPHS[slot.value().status]}
+									</text>
 									<text
 										fg={
-											step.status === "error"
+											slot.value().status === "error"
 												? uiColors.error
 												: uiColors.textPrimary
 										}
 									>
 										{" "}
-										{step.label}
+										{slot.value().label}
 									</text>
 								</box>
 							)}

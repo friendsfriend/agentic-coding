@@ -9,7 +9,7 @@ import {
 	useTap,
 } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { LayoutNode } from "../model/topologyStore.ts";
 
 const cardWidth = 24;
@@ -32,6 +32,13 @@ export function TopologyGraph(props: {
 		}
 		return [...map.entries()].sort(([a], [b]) => a - b);
 	});
+	// Layout projections allocate fresh layer tuples and nodes. Only layer
+	// numbers/service IDs own mounted surfaces; metrics are reactive payloads.
+	const layerEntries = createMemo(() => new Map(layers()));
+	const layerKeys = () => layers().map(([layer]) => layer);
+	const nodeEntries = createMemo(
+		() => new Map(props.layout().map((node) => [node.id, node])),
+	);
 	const graphHeight = () =>
 		Math.max(
 			6,
@@ -49,8 +56,8 @@ export function TopologyGraph(props: {
 					flexDirection: "row",
 				}}
 			>
-				<For each={layers()}>
-					{([layer, nodes], index) => (
+				<For each={layerKeys()}>
+					{(layer, index) => (
 						<>
 							<box
 								style={{
@@ -71,73 +78,89 @@ export function TopologyGraph(props: {
 										Layer {layer}
 									</text>
 								</box>
-								<For each={nodes}>
-									{(ln) => {
-										const selected = () => props.selected() === ln.id;
-										const tap = useTap(() =>
-											selected() ? dispatch("Enter") : props.onSelect(ln.id),
-										);
-										const hover = useHover(tap.onMouseOut);
-										return (
-											<box
-												height={cardHeight}
-												width={cardWidth}
-												flexShrink={0}
-												flexDirection="column"
-												backgroundColor={
-													selected() ? uiColors.bgSurface1 : uiColors.bgMantle
-												}
-												{...tap}
-												{...hover}
-											>
-												<box
-													width={1}
-													height={cardHeight}
-													position="absolute"
-													backgroundColor={
-														hover.hovered()
-															? uiColors.borderFocus
-															: selected()
-																? uiColors.accent
-																: uiColors.border
-													}
-												/>
-												<box paddingLeft={2} paddingRight={1} overflow="hidden">
-													<HighlightedText
-														text={ln.id}
-														highlight={selected() ? "highlight" : "secondary"}
-														attributes={TextAttributes.BOLD}
-													/>
-												</box>
-												<box
-													paddingLeft={2}
-													paddingRight={1}
-													flexDirection="row"
-												>
-													<text fg={uiColors.textMuted}>
-														{ln.node.spanCount} spans ·{" "}
-														{ln.node.avgDurationMs.toFixed(1)}ms
-													</text>
-												</box>
-												<box paddingLeft={2}>
-													<text
-														fg={
-															ln.node.errorCount
-																? uiColors.error
-																: uiColors.success
+								<For
+									each={(layerEntries().get(layer) ?? []).map(
+										(node) => node.id,
+									)}
+								>
+									{(id) => (
+										<Show when={nodeEntries().get(id)}>
+											{(ln) => {
+												const selected = () => props.selected() === id;
+												const tap = useTap(() =>
+													selected() ? dispatch("Enter") : props.onSelect(id),
+												);
+												const hover = useHover(tap.onMouseOut);
+												return (
+													<box
+														height={cardHeight}
+														width={cardWidth}
+														flexShrink={0}
+														flexDirection="column"
+														backgroundColor={
+															selected()
+																? uiColors.bgSurface1
+																: uiColors.bgMantle
 														}
+														{...tap}
+														{...hover}
 													>
-														{ln.node.errorCount
-															? `${ln.node.errorCount} errors`
-															: "healthy"}
-													</text>
-												</box>
-											</box>
-										);
-									}}
+														<box
+															width={1}
+															height={cardHeight}
+															position="absolute"
+															backgroundColor={
+																hover.hovered()
+																	? uiColors.borderFocus
+																	: selected()
+																		? uiColors.accent
+																		: uiColors.border
+															}
+														/>
+														<box
+															paddingLeft={2}
+															paddingRight={1}
+															overflow="hidden"
+														>
+															<HighlightedText
+																text={ln().id}
+																highlight={
+																	selected() ? "highlight" : "secondary"
+																}
+																attributes={TextAttributes.BOLD}
+															/>
+														</box>
+														<box
+															paddingLeft={2}
+															paddingRight={1}
+															flexDirection="row"
+														>
+															<text fg={uiColors.textMuted}>
+																{ln().node.spanCount} spans ·{" "}
+																{ln().node.avgDurationMs.toFixed(1)}ms
+															</text>
+														</box>
+														<box paddingLeft={2}>
+															<text
+																fg={
+																	ln().node.errorCount
+																		? uiColors.error
+																		: uiColors.success
+																}
+															>
+																{ln().node.errorCount
+																	? `${ln().node.errorCount} errors`
+																	: "healthy"}
+															</text>
+														</box>
+													</box>
+												);
+											}}
+										</Show>
+									)}
 								</For>
 							</box>
-							{index() < layers().length - 1 && (
+							<Show when={index() < layers().length - 1}>
 								<box
 									width={3}
 									height={graphHeight()}
@@ -146,7 +169,7 @@ export function TopologyGraph(props: {
 								>
 									<text fg={uiColors.textMuted}>──▶</text>
 								</box>
-							)}
+							</Show>
 						</>
 					)}
 				</For>

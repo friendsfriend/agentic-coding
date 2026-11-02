@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, For, on, Show } from "solid-js";
 import { GenericModal } from "../components/GenericModal.tsx";
 import { formatHelpTextLines } from "../components/HelpText.tsx";
 import type { Keybind } from "../components/keybinds.ts";
@@ -15,8 +15,13 @@ import { useTap } from "../components/mouse/useTap.ts";
 import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
+import { createKeyedItems } from "../components/utils/keyedItems.ts";
 import { uiColors } from "../theme/colors";
-import { DiscussionThread, formatTimestamp } from "./annotations.tsx";
+import {
+	DiscussionList,
+	DiscussionThread,
+	formatTimestamp,
+} from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
 
 export interface MarkdownReviewViewProps {
@@ -79,7 +84,11 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 	const isCommentMode = createMemo(() => props.commentMode);
 
 	// Every top-level block of the artifact is a selectable row.
-	const parsedBlocks = createMemo(() => parseMarkdownBlocks(props.content));
+	const source = createMemo(() => props.content);
+	const parsedBlocks = createMemo(() => parseMarkdownBlocks(source()));
+	const blockSlots = createKeyedItems(parsedBlocks, (block) =>
+		JSON.stringify([props.filePath, block.kind, block.source]),
+	);
 
 	const isInVisualSelection = (blockIndex: number): boolean => {
 		if (!props.visualModeActive) return false;
@@ -137,7 +146,7 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 		);
 		props.onSelectedSourceRangeChange?.(range.start, range.end);
 
-		// Auto-scroll when selected block changes.
+		// Keep the controlled selection inside the current document.
 		const next = props.selectedLine;
 
 		// Wrap around if out of bounds
@@ -149,25 +158,42 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 			props.onSelectedLineChange(blockList.length - 1);
 			return;
 		}
-
-		if (!scrollBox) return;
-
-		const wrapperBox = scrollBox.getChildren()[0];
-		if (!wrapperBox) return;
-
-		const target = wrapperBox.getChildren().find((child) => {
-			return child.id === `block-${next}`;
-		});
-
-		if (!target) return;
-
-		const following = wrapperBox
-			.getChildren()
-			.find((child) => child.id === `block-${next + 1}`);
-		if (following) scrollBox.scrollChildIntoView(following.id);
-
-		scrollBox.scrollChildIntoView(target.id);
 	});
+
+	// Content/comment refreshes are not reader navigation. Keep their source
+	// metadata current above, but reveal a block only on file/selection changes.
+	const navigation = createMemo(
+		() => ({ file: props.filePath, index: props.selectedLine }),
+		{ file: "", index: -1 },
+		{
+			equals: (before, after) =>
+				before.file === after.file && before.index === after.index,
+		},
+	);
+	createEffect(
+		on(navigation, ({ index: next }) => {
+			const blockList = parsedBlocks();
+			if (next < 0 || next >= blockList.length) return;
+
+			if (!scrollBox) return;
+
+			const wrapperBox = scrollBox.getChildren()[0];
+			if (!wrapperBox) return;
+
+			const target = wrapperBox.getChildren().find((child) => {
+				return child.id === `block-${next}`;
+			});
+
+			if (!target) return;
+
+			const following = wrapperBox
+				.getChildren()
+				.find((child) => child.id === `block-${next + 1}`);
+			if (following) scrollBox.scrollChildIntoView(following.id);
+
+			scrollBox.scrollChildIntoView(target.id);
+		}),
+	);
 
 	const customHeader = () => (
 		<SearchHeader>
@@ -239,8 +265,9 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 			}}
 		>
 			<box paddingLeft={props.page ? 0 : 2} paddingRight={props.page ? 0 : 2}>
-				<For each={parsedBlocks()}>
-					{(block, index) => {
+				<For each={blockSlots()}>
+					{(slot, index) => {
+						const block = slot.value;
 						const isSelected = () => index() === props.selectedLine;
 						const isInSelection = () => isInVisualSelection(index());
 
@@ -252,9 +279,9 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 						const fgColor = () => uiColors.textPrimary;
 
 						const lineLabel = () =>
-							block.endLine > block.startLine
-								? `${String(block.startLine)}-${String(block.endLine)}`
-								: String(block.startLine);
+							block().endLine > block().startLine
+								? `${String(block().startLine)}-${String(block().endLine)}`
+								: String(block().startLine);
 
 						return (
 							<>
@@ -278,7 +305,7 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 										{lineLabel()}
 									</text>
 									<MarkdownBlockView
-										source={block.source}
+										source={block().source}
 										fg={fgColor()}
 										width={Math.max(20, Math.floor(renderer.width * 0.7))}
 										flexGrow={1}
@@ -286,11 +313,11 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 								</box>
 
 								{/* Render inline comments for this block */}
-								<Show when={getCommentsForBlock(block).length > 0}>
-									<For each={getCommentsForBlock(block)}>
+								<Show when={getCommentsForBlock(block()).length > 0}>
+									<DiscussionList discussions={getCommentsForBlock(block())}>
 										{(discussion) => (
 											<DiscussionThread
-												discussion={discussion}
+												discussion={discussion()}
 												outdated={false}
 												collapsed={false}
 												selected={isSelected()}
@@ -299,7 +326,7 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 												paddingLeft={8}
 											/>
 										)}
-									</For>
+									</DiscussionList>
 								</Show>
 
 								{/* Show comment input inline after the selected block */}

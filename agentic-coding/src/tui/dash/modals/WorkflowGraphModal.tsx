@@ -8,6 +8,7 @@
  * terminal. */
 
 import {
+	createKeyedItems,
 	GenericModal,
 	uiColors,
 	useModalBackdrop,
@@ -120,16 +121,21 @@ export function WorkflowGraphModal(props: {
 	const safeGraph = createMemo(() =>
 		props.graph ? decodeWorkflowDefinitionGraph(props.graph) : undefined,
 	);
-	const rows = () => {
+	const rows = createMemo(() => {
 		const graph = safeGraph();
 		return graph ? workflowGraphRows(graph, props.currentStep) : [];
-	};
+	});
 	// The window is clamped here as well as in the key handler: a refresh that
 	// shrinks the graph must not leave the dialog scrolled past its own end.
 	const maxLines = () => Math.max(1, props.lines);
 	const start = () =>
 		Math.max(0, Math.min(props.offset, rows().length - maxLines()));
 	const visible = () => rows().slice(start(), start() + maxLines());
+	const rowSlots = createKeyedItems(visible, (row) =>
+		row.kind === "step"
+			? JSON.stringify(["step", row.id])
+			: JSON.stringify(["edge", row.from, row.outcome, row.to]),
+	);
 	// Read-only dialog: a backdrop tap is the same dismissal `Esc` performs.
 	const backdrop = useModalBackdrop({ kind: "workflow-graph" });
 	// The dialog windows its own rows, so the wheel scrolls exactly what `j`/`k`
@@ -175,57 +181,76 @@ export function WorkflowGraphModal(props: {
 						</text>
 					}
 				>
-					<For each={visible()}>
-						{(row) =>
-							row.kind === "step" ? (
-								<box flexDirection="row" flexShrink={0}>
-									<text
-										fg={row.current ? uiColors.primary : uiColors.textMuted}
-										attributes={row.current ? TextAttributes.BOLD : 0}
-										flexShrink={0}
-									>
-										{row.current ? "▸ " : "  "}
-									</text>
-									<text
-										fg={
-											row.inserted
-												? uiColors.textMuted
-												: row.current
-													? uiColors.primary
-													: uiColors.textPrimary
-										}
-										attributes={row.current ? TextAttributes.BOLD : 0}
-										flexGrow={1}
-										minWidth={0}
-										wrapMode="none"
-										truncate
-									>
-										{`${row.label} (${row.id} · ${row.actor})`}
-									</text>
-								</box>
-							) : (
-								<box flexDirection="row" flexShrink={0}>
-									<text fg={uiColors.textMuted} flexShrink={0}>
-										{"    "}
-									</text>
-									<text
-										fg={
-											row.inserted ? uiColors.textMuted : uiColors.textPrimary
-										}
-										flexGrow={1}
-										minWidth={0}
-										wrapMode="none"
-										truncate
-									>
-										{`${row.outcome} → ${row.toLabel}${
-											row.maxAttempts === undefined
-												? ""
-												: ` ↻${row.maxAttempts}`
-										}`}
-									</text>
-								</box>
-							)
-						}
+					<For each={rowSlots()}>
+						{(slot) => {
+							const step = () => {
+								const row = slot.value();
+								return row.kind === "step" ? row : undefined;
+							};
+							const edge = () => {
+								const row = slot.value();
+								return row.kind === "edge" ? row : undefined;
+							};
+							return (
+								<Show
+									when={step()}
+									fallback={
+										<Show when={edge()}>
+											{(row) => (
+												<box flexDirection="row" flexShrink={0}>
+													<text fg={uiColors.textMuted} flexShrink={0}>
+														{"    "}
+													</text>
+													<text
+														fg={
+															row().inserted
+																? uiColors.textMuted
+																: uiColors.textPrimary
+														}
+														flexGrow={1}
+														minWidth={0}
+														wrapMode="none"
+														truncate
+													>
+														{`${row().outcome} → ${row().toLabel}${row().maxAttempts === undefined ? "" : ` ↻${row().maxAttempts}`}`}
+													</text>
+												</box>
+											)}
+										</Show>
+									}
+								>
+									{(row) => (
+										<box flexDirection="row" flexShrink={0}>
+											<text
+												fg={
+													row().current ? uiColors.primary : uiColors.textMuted
+												}
+												attributes={row().current ? TextAttributes.BOLD : 0}
+												flexShrink={0}
+											>
+												{row().current ? "▸ " : "  "}
+											</text>
+											<text
+												fg={
+													row().inserted
+														? uiColors.textMuted
+														: row().current
+															? uiColors.primary
+															: uiColors.textPrimary
+												}
+												attributes={row().current ? TextAttributes.BOLD : 0}
+												flexGrow={1}
+												minWidth={0}
+												wrapMode="none"
+												truncate
+											>
+												{`${row().label} (${row().id} · ${row().actor})`}
+											</text>
+										</box>
+									)}
+								</Show>
+							);
+						}}
 					</For>
 				</Show>
 			</box>

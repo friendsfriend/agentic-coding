@@ -361,49 +361,58 @@ function AssistantMarkdown(props: {
 	// per text (every streaming frame), not once per part — and a frame that only
 	// appended to the message reuses the parts the previous frame settled.
 	const parts = createMemo(() => props.transcript(props.partKey, props.text));
+	// The splitter replaces the growing tail object on every chunk. Keep its
+	// native Markdown renderer mounted; only a new message or code/prose shape
+	// starts a different resource. Settled parts still reuse their cached source.
+	const partSlots = createKeyedItems(parts, (part, index) =>
+		JSON.stringify([props.partKey, index, part.code]),
+	);
 	const mermaid = createSessionMermaidRenderer(useRenderer());
 	return (
 		<box flexDirection="column">
-			<For each={parts()}>
-				{(part, index) => (
-					<MarkdownViewer
-						renderNode={mermaid}
-						content={(() => {
-							const last = index() === parts().length - 1;
-							if (!last) {
-								// A part's source runs to the next block's start, so it
-								// carries the blank line between them. Trim it and let the
-								// inter-part margin own the separation: the markdown
-								// renderable normalizes a trailing blank away, which is why
-								// blocks used to touch when the source had no blank line.
-								return part.source.replace(/\s+$/, "");
-							}
-							// Mermaid owns incomplete-line recovery; prose holdback can
-							// otherwise hide the entire first diagram while streaming.
-							if (
-								part.code &&
-								/^ {0,3}(?:`{3,}|~{3,})[\t ]*mermaid\b/i.test(part.source)
-							)
-								return part.source;
-							const source = streamingTailSource(part);
-							return props.live === true
-								? holdBackTrailingLine(source)
-								: source;
-						})()}
-						fg={props.fg ?? uiColors.textPrimary}
-						// Prose always takes the streaming preview: it draws the text
-						// concealed, so it never re-flashes its own markers. A fenced
-						// block draws its raw text instead, which re-adds the fence
-						// lines on every chunk — while the message is still arriving it
-						// keeps the text it already laid out instead, so the transcript
-						// holds its height and the reader is not jolted line by line.
-						streaming={part.code ? props.live === true : true}
-						// One blank row between every pair of top-level blocks, matching
-						// opencode's top-level markdown block flow. The first part keeps
-						// the page's own top inset.
-						{...(index() > 0 ? { marginTop: 1 } : {})}
-					/>
-				)}
+			<For each={partSlots()}>
+				{(slot, index) => {
+					const part = slot.value;
+					return (
+						<MarkdownViewer
+							renderNode={mermaid}
+							content={(() => {
+								const last = index() === parts().length - 1;
+								if (!last) {
+									// A part's source runs to the next block's start, so it
+									// carries the blank line between them. Trim it and let the
+									// inter-part margin own the separation: the markdown
+									// renderable normalizes a trailing blank away, which is why
+									// blocks used to touch when the source had no blank line.
+									return part().source.replace(/\s+$/, "");
+								}
+								// Mermaid owns incomplete-line recovery; prose holdback can
+								// otherwise hide the entire first diagram while streaming.
+								if (
+									part().code &&
+									/^ {0,3}(?:`{3,}|~{3,})[\t ]*mermaid\b/i.test(part().source)
+								)
+									return part().source;
+								const source = streamingTailSource(part());
+								return props.live === true
+									? holdBackTrailingLine(source)
+									: source;
+							})()}
+							fg={props.fg ?? uiColors.textPrimary}
+							// Prose always takes the streaming preview: it draws the text
+							// concealed, so it never re-flashes its own markers. A fenced
+							// block draws its raw text instead, which re-adds the fence
+							// lines on every chunk — while the message is still arriving it
+							// keeps the text it already laid out instead, so the transcript
+							// holds its height and the reader is not jolted line by line.
+							streaming={part().code ? props.live === true : true}
+							// One blank row between every pair of top-level blocks, matching
+							// opencode's top-level markdown block flow. The first part keeps
+							// the page's own top inset.
+							{...(index() > 0 ? { marginTop: 1 } : {})}
+						/>
+					);
+				}}
 			</For>
 		</box>
 	);
@@ -516,9 +525,10 @@ function ToolRow(props: {
 		<box flexDirection="column">
 			<box
 				flexDirection="row"
-				{...(detail().length > 0
-					? useTap(() => props.onToggleRow(key()), { stopPropagation: true })
-					: {})}
+				{...useTap(() => props.onToggleRow(key()), {
+					enabled: () => detail().length > 0,
+					stopPropagation: true,
+				})}
 			>
 				<Show when={props.row.lineNumber !== undefined}>
 					<text
@@ -582,14 +592,33 @@ function ToolRow(props: {
 	);
 }
 
-function ToolRows(props: {
+export function ToolRows(props: {
 	rows: readonly ToolViewRow[];
 	block: AgentSessionBlock;
 	openRows: () => ReadonlySet<string>;
 	onToggleRow: (key: string) => void;
 	transcript: MarkdownPartsFor;
 }) {
-	const render = (row: ToolViewRow) => <ToolRow {...props} row={row} />;
+	const rowSlots = createKeyedItems(
+		() => props.rows,
+		(row, index) => {
+			const identity =
+				row.id ??
+				(row.lineNumber !== undefined
+					? `line:${row.lineNumber}`
+					: `position:${index}`);
+			// ToolRow chooses its native renderer at mount. Only a genuine format
+			// change, not fresh payload data, should replace that renderer.
+			const shape = row.table
+				? "table"
+				: row.syntax
+					? `syntax:${row.syntax}`
+					: row.markdown
+						? "markdown"
+						: "text";
+			return JSON.stringify([identity, shape]);
+		},
+	);
 	const height = (row: ToolViewRow, width: number): number => {
 		if (row.table) {
 			const table = row.table;
@@ -619,26 +648,33 @@ function ToolRows(props: {
 		),
 	);
 	return (
-		<Show
-			when={props.rows.length > 80}
-			fallback={<For each={props.rows}>{render}</For>}
-		>
-			<For each={chunks()}>
-				{(start) => (
+		<For each={chunks()}>
+			{(start) => {
+				const rows = createMemo(() => rowSlots().slice(start, start + 30), [], {
+					equals: (before, after) =>
+						before.length === after.length &&
+						before.every((row, index) => row === after[index]),
+				});
+				const cacheKey = createMemo(() => ({
+					rows: rows().map((slot) => slot.value()),
+					folded: props.openRows(),
+				}));
+				return (
 					<VirtualToolBody
-						force
-						cacheKey={[props.rows, props.openRows()]}
+						force={props.rows.length > 80}
+						minRows={Number.POSITIVE_INFINITY}
+						cacheKey={cacheKey()}
 						estimateHeight={(width) =>
-							props.rows
-								.slice(start, start + 30)
-								.reduce((sum, row) => sum + height(row, width), 0)
+							rows().reduce((sum, slot) => sum + height(slot.value(), width), 0)
 						}
 					>
-						<For each={props.rows.slice(start, start + 30)}>{render}</For>
+						<For each={rows()}>
+							{(slot) => <ToolRow {...props} row={slot.value()} />}
+						</For>
 					</VirtualToolBody>
-				)}
-			</For>
-		</Show>
+				);
+			}}
+		</For>
 	);
 }
 

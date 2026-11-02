@@ -64,6 +64,7 @@ export * from "./components/ThemePicker.tsx";
 export * from "./components/ThemePickerModal.tsx";
 export * from "./components/utils/focusSoon";
 export * from "./components/utils/gitlabHtml.ts";
+export * from "./components/utils/keyedItems.ts";
 export * from "./components/utils/virtualScroll";
 export * from "./components/VerdictModal.tsx";
 export * from "./hooks/useTerminalDimensions.ts";
