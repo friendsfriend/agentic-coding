@@ -167,24 +167,51 @@ test("scheduler sends a synthetic digest only into the exact persisted collectio
 	}
 	expect(opens).toBe(0);
 	const service = new SchedulingService(store, adapters, () => 86_402_000);
-	await expect(
-		new SchedulingApi(service).execute(
-			{
-				operation: "jobs.create",
-				requestId: "foreign-custody",
-				job: {
-					name: job.name,
-					task: job.task,
-					originalInstruction: job.originalInstruction,
-					reason: job.reason,
-					references: job.references,
-					reportingDestination: job.reportingDestination,
-					target: job.target,
-				},
+	const api = new SchedulingApi(service);
+	const sessionJobRequest = {
+		operation: "jobs.create",
+		requestId: "orchestrator-session-job",
+		job: {
+			name: job.name,
+			task: job.task,
+			originalInstruction: job.originalInstruction,
+			reason: job.reason,
+			references: job.references,
+			reportingDestination: job.reportingDestination,
+			target: job.target,
+		},
+	} as const;
+	const created = await api.execute(sessionJobRequest, "orchestrator");
+	expect(created.kind).toBe("job");
+	expect(await api.execute(sessionJobRequest, "orchestrator")).toEqual(created);
+	const combinedRequest = {
+		operation: "create",
+		requestId: "orchestrator-session-schedule",
+		job: sessionJobRequest.job,
+		schedule: {
+			name: "Future digest",
+			timing: {
+				kind: "once",
+				at: new Date(172_800_000).toISOString(),
+				timezone: "UTC",
 			},
-			"orchestrator",
-		),
-	).rejects.toThrow("authenticated operator");
+			latePolicy: { kind: "run-late" },
+		},
+	} as const;
+	const combined = await api.execute(combinedRequest, "orchestrator");
+	if (combined.kind !== "created") throw new Error("expected creation");
+	expect(await api.execute(combinedRequest, "orchestrator")).toEqual(combined);
+	const paused = await api.execute(
+		{
+			operation: "schedules.action",
+			requestId: "orchestrator-session-pause",
+			id: combined.schedule.id,
+			revision: combined.schedule.revision,
+			action: "pause",
+		},
+		"orchestrator",
+	);
+	expect(paused.kind).toBe("schedule");
 	await expect(
 		workflowlessSessionAdapter(configDir, { models: async () => [] }).resolve(
 			job,

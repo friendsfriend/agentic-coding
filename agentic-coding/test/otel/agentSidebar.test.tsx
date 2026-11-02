@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { uiColors } from "@agentic-coding/ui";
+import { BoxRenderable, parseColor, type Renderable } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
 import type { AgentSidebarRow } from "../../src/tui/otel/app/agent-sidebar-model.ts";
@@ -29,6 +31,91 @@ const baseProps = {
 	onOpen: () => {},
 	onFocus: () => {},
 };
+
+function renderTree(node: Renderable): Renderable[] {
+	return [node, ...node.getChildren().flatMap(renderTree)];
+}
+
+for (const active of [false, true]) {
+	test(`${active ? "expanded" : "collapsed"} agent rows preserve hover across snapshots and use current indices after reorder`, async () => {
+		const [rows, setRows] = createSignal([
+			row("run-1", "one"),
+			row("run-2", "two"),
+		]);
+		const [selected, setSelected] = createSignal(-1);
+		const opened: AgentSidebarRow[] = [];
+		const t = await testRender(
+			() => (
+				<AgentSidebar
+					{...baseProps}
+					mode="expanding"
+					active={active}
+					rows={rows()}
+					selectedIndex={selected()}
+					onSelectIndex={setSelected}
+					onOpen={(agent) => opened.push(agent)}
+				/>
+			),
+			{ width: 80, height: 24 },
+		);
+		const rowY = () =>
+			t
+				.captureCharFrame()
+				.split("\n")
+				.findIndex((line) => line.includes("one"));
+		const background = () => {
+			const span = t
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.find((span) => span.text.includes("one"));
+			if (!span) throw new Error("Missing agent row");
+			return Array.from(span.bg.buffer);
+		};
+		try {
+			await t.flush();
+			await t.mockMouse.moveTo(active ? 5 : 2, rowY());
+			await t.flush();
+			const surface = renderTree(t.renderer.root).find(
+				(node) =>
+					node instanceof BoxRenderable &&
+					node.height === 3 &&
+					node.backgroundColor.equals(parseColor(uiColors.bgHover)),
+			);
+			if (!surface) throw new Error("Missing hovered agent surface");
+			const hoverColor = Array.from(parseColor(uiColors.bgHover).buffer);
+			expect(background()).toEqual(hoverColor);
+			for (const status of ["blocked", "failed"] as const) {
+				setRows((current) =>
+					current.map((agent) => ({
+						...agent,
+						...(agent.role === "one" ? { status, model: "model-new" } : {}),
+					})),
+				);
+				await t.renderOnce();
+				expect(surface.isDestroyed).toBe(false);
+				expect(background()).toEqual(hoverColor);
+				expect(t.captureCharFrame()).toContain(
+					status === "blocked" ? "!" : "×",
+				);
+				if (active) expect(t.captureCharFrame()).toContain("model-new");
+			}
+			setRows((current) => [...current].reverse());
+			await t.flush();
+			expect(surface.isDestroyed).toBe(false);
+			await t.mockMouse.click(active ? 5 : 2, rowY());
+			await t.flush();
+			expect(selected()).toBe(1);
+			expect(opened).toHaveLength(0);
+			await t.mockMouse.click(active ? 5 : 2, rowY());
+			await t.flush();
+			expect(opened).toHaveLength(1);
+			expect(opened[0]).toBe(rows()[1]);
+			expect(opened[0]?.status).toBe("failed");
+		} finally {
+			t.renderer.destroy();
+		}
+	});
+}
 
 test("renders recorded run identity and activates only a second tap on a selected row", async () => {
 	const opened: string[] = [];

@@ -62,50 +62,9 @@ export class SchedulingApi {
 			raw,
 		);
 		const store = this.service.store;
-		const authorize = () => {
-			if (principal === "operator") return;
-			const guarded = (job: JobInput) =>
-				job.target.kind === "standalone" &&
-				job.target.policy === "read-only" &&
-				job.target.destination !== undefined;
-			let protectedSession = false;
-			switch (request.operation) {
-				case "create":
-				case "jobs.create":
-					protectedSession = guarded(request.job);
-					break;
-				case "jobs.update":
-					protectedSession =
-						guarded(request.job) || guarded(store.job(request.id));
-					break;
-				case "jobs.delete":
-					protectedSession = guarded(store.job(request.id));
-					break;
-				case "schedules.create":
-					protectedSession = guarded(store.job(request.schedule.jobId));
-					break;
-				case "schedules.update":
-					protectedSession =
-						guarded(store.job(request.schedule.jobId)) ||
-						guarded(store.job(store.schedule(request.id).jobId));
-					break;
-				case "schedules.action":
-					protectedSession = guarded(
-						store.job(store.schedule(request.id).jobId),
-					);
-					break;
-				case "occurrences.approve":
-					protectedSession = guarded(store.occurrence(request.id).job);
-					break;
-			}
-			if (protectedSession)
-				throw new SchedulingError(
-					"forbidden",
-					"Only the authenticated operator may schedule or mutate a persistent workflowless-session destination.",
-				);
-		};
-		authorize();
-		let validatedJob: { id: string; revision: number } | undefined;
+		// Both authenticated principals may manage read-only session destinations.
+		// Writable execution approval and manual bootstrap remain operator-only.
+		const validatedJobs: { id: string; revision: number }[] = [];
 		if (
 			schedulingOperationRequiresOperator(request.operation) &&
 			principal !== "operator"
@@ -256,7 +215,11 @@ export class SchedulingApi {
 			case "schedules.create":
 			case "schedules.update": {
 				const job = store.job(request.schedule.jobId);
-				validatedJob = { id: job.id, revision: job.revision };
+				validatedJobs.push({ id: job.id, revision: job.revision });
+				if (request.operation === "schedules.update") {
+					const previous = store.job(store.schedule(request.id).jobId);
+					validatedJobs.push({ id: previous.id, revision: previous.revision });
+				}
 				await this.service.validateJob(job);
 				break;
 			}
@@ -268,10 +231,10 @@ export class SchedulingApi {
 			request.requestId,
 			request,
 			(): SchedulingResponse => {
-				authorize();
 				if (
-					validatedJob &&
-					store.job(validatedJob.id).revision !== validatedJob.revision
+					validatedJobs.some(
+						(job) => store.job(job.id).revision !== job.revision,
+					)
 				)
 					throw new SchedulingError(
 						"conflict",

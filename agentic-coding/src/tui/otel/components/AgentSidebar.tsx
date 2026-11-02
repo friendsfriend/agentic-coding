@@ -14,7 +14,14 @@ import {
 	useWheelScroll,
 } from "@agentic-coding/ui";
 import { TextAttributes } from "@opentui/core";
-import { createEffect, createSignal, For, Show, untrack } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	Show,
+	untrack,
+} from "solid-js";
 import type {
 	AgentSidebarMode,
 	AgentSidebarRow,
@@ -79,7 +86,13 @@ export function AgentSidebar(props: AgentSidebarProps) {
 	// Kept local rather than in the shell: scrolling is not selection.
 	const [offset, setOffset] = createSignal(0);
 	const gesture: RowGestureState = {};
-	const listRows = () => props.rows.slice(offset(), offset() + visibleCount());
+	// Render by durable run identity, not snapshot object identity. The lookup
+	// stays reactive so a retained surface reads current status and click index.
+	const entries = createMemo(
+		() => new Map(props.rows.map((row, index) => [row.key, { row, index }])),
+	);
+	const listKeys = () =>
+		props.rows.slice(offset(), offset() + visibleCount()).map((row) => row.key);
 	const toggleGlyph = () => (props.mode === "permanent" ? "»" : "«");
 	const toggleTap = useTap(
 		() => {
@@ -165,37 +178,47 @@ export function AgentSidebar(props: AgentSidebarProps) {
 							</box>
 						</Show>
 						<box {...wheel} flexGrow={1} minHeight={0} overflow="hidden">
-							<For each={listRows()}>
-								{(row, localIndex) => {
-									const index = () => offset() + localIndex();
-									const selected = () => props.selectedIndex === index();
-									const mark = status(row);
-									return (
-										<Selectable
-											gesture={gesture}
-											height={ROW_HEIGHT}
-											selected={selected()}
-											onMouseUp={() => select(index())}
-											onActivate={() => activate(index())}
-										>
-											<box
-												style={{ height: ROW_HEIGHT, flexDirection: "column" }}
-											>
-												<text
-													fg={
-														selected()
-															? uiColors.textPrimary
-															: uiColors.textSecondary
-													}
+							<For each={listKeys()}>
+								{(key) => (
+									<Show when={entries().get(key)}>
+										{(entry) => {
+											const row = () => entry().row;
+											const index = () => entry().index;
+											const selected = () => props.selectedIndex === index();
+											const mark = () => status(row());
+											return (
+												<Selectable
+													gesture={gesture}
+													height={ROW_HEIGHT}
+													selected={selected()}
+													onMouseUp={() => select(index())}
+													onActivate={() => activate(index())}
 												>
-													{clip(String(index() + 1), COLLAPSED_ROW_WIDTH)}
-												</text>
-												<text fg={mark.tone}>{mark.glyph}</text>
-												<text fg={uiColors.textMuted}>{clip(row.role, 3)}</text>
-											</box>
-										</Selectable>
-									);
-								}}
+													<box
+														style={{
+															height: ROW_HEIGHT,
+															flexDirection: "column",
+														}}
+													>
+														<text
+															fg={
+																selected()
+																	? uiColors.textPrimary
+																	: uiColors.textSecondary
+															}
+														>
+															{clip(String(index() + 1), COLLAPSED_ROW_WIDTH)}
+														</text>
+														<text fg={mark().tone}>{mark().glyph}</text>
+														<text fg={uiColors.textMuted}>
+															{clip(row().role, 3)}
+														</text>
+													</box>
+												</Selectable>
+											);
+										}}
+									</Show>
+								)}
 							</For>
 						</box>
 					</>
@@ -247,63 +270,71 @@ export function AgentSidebar(props: AgentSidebarProps) {
 							overflow="hidden"
 							flexDirection="column"
 						>
-							<For each={listRows()}>
-								{(row, localIndex) => {
-									const index = () => offset() + localIndex();
-									const selected = () => props.selectedIndex === index();
-									const mark = status(row);
-									return (
-										<Selectable
-											gesture={gesture}
-											height={ROW_HEIGHT}
-											selected={selected()}
-											onMouseUp={() => select(index())}
-											onActivate={() => activate(index())}
-										>
-											<box
-												height={ROW_HEIGHT}
-												minWidth={0}
-												flexDirection="column"
-												overflow="hidden"
-											>
-												<box
-													height={1}
-													minWidth={0}
-													flexDirection="row"
-													overflow="hidden"
+							<For each={listKeys()}>
+								{(key) => (
+									<Show when={entries().get(key)}>
+										{(entry) => {
+											const row = () => entry().row;
+											const index = () => entry().index;
+											const selected = () => props.selectedIndex === index();
+											const mark = () => status(row());
+											return (
+												<Selectable
+													gesture={gesture}
+													height={ROW_HEIGHT}
+													selected={selected()}
+													onMouseUp={() => select(index())}
+													onActivate={() => activate(index())}
 												>
-													<text fg={mark.tone} attributes={TextAttributes.BOLD}>
-														{mark.glyph}
-													</text>
-													<text
-														fg={
-															selected()
-																? uiColors.textPrimary
-																: uiColors.textSecondary
-														}
-														attributes={TextAttributes.BOLD}
+													<box
+														height={ROW_HEIGHT}
+														minWidth={0}
+														flexDirection="column"
+														overflow="hidden"
 													>
-														{` ${clip(row.role, Math.max(0, textWidth() - 2))}`}
-													</text>
-												</box>
-												<text fg={uiColors.textMuted}>
-													{clip(
-														`${row.workflowId}${row.workflowStep ? ` · ${row.workflowStep}` : ""}`,
-														textWidth(),
-													)}
-												</text>
-												<text fg={uiColors.textMuted}>
-													{clip(
-														[row.status, row.runtime, row.model]
-															.filter(Boolean)
-															.join(" · "),
-														textWidth(),
-													)}
-												</text>
-											</box>
-										</Selectable>
-									);
-								}}
+														<box
+															height={1}
+															minWidth={0}
+															flexDirection="row"
+															overflow="hidden"
+														>
+															<text
+																fg={mark().tone}
+																attributes={TextAttributes.BOLD}
+															>
+																{mark().glyph}
+															</text>
+															<text
+																fg={
+																	selected()
+																		? uiColors.textPrimary
+																		: uiColors.textSecondary
+																}
+																attributes={TextAttributes.BOLD}
+															>
+																{` ${clip(row().role, Math.max(0, textWidth() - 2))}`}
+															</text>
+														</box>
+														<text fg={uiColors.textMuted}>
+															{clip(
+																`${row().workflowId}${row().workflowStep ? ` · ${row().workflowStep}` : ""}`,
+																textWidth(),
+															)}
+														</text>
+														<text fg={uiColors.textMuted}>
+															{clip(
+																[row().status, row().runtime, row().model]
+																	.filter(Boolean)
+																	.join(" · "),
+																textWidth(),
+															)}
+														</text>
+													</box>
+												</Selectable>
+											);
+										}}
+									</Show>
+								)}
 							</For>
 						</box>
 					</Show>

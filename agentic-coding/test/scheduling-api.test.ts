@@ -145,7 +145,7 @@ for (const operation of ["schedules.create", "schedules.update"] as const)
 	] as const) {
 		if (operation === "schedules.create" && change === "protected-old")
 			continue;
-		test(`${operation} rechecks current referenced authority and validated revision transactionally (${change})`, async () => {
+		test(`${operation} rechecks current referenced job revisions transactionally (${change})`, async () => {
 			const f = fixture(),
 				oldJob = f.store.createJob(job, 0),
 				newJob = f.store.createJob(job, 0);
@@ -216,7 +216,7 @@ for (const operation of ["schedules.create", "schedules.update"] as const)
 				);
 				release();
 				expect(await pending).toMatchObject({
-					code: change === "revision-new" ? "conflict" : "forbidden",
+					code: "conflict",
 				});
 				expect(f.store.listSchedules()).toHaveLength(existing ? 1 : 0);
 				if (existing)
