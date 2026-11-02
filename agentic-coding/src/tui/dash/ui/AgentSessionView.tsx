@@ -75,6 +75,7 @@ import {
 } from "../agent-session.ts";
 import { createKeyedItems } from "./keyed-items.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
+import { paintPromptCursor } from "./prompt-cursor.ts";
 import { Spinner } from "./Spinner.tsx";
 import { SessionMarkdownCache } from "./session-markdown-cache.ts";
 import { estimateTableRow, ToolTable } from "./ToolTable.tsx";
@@ -2056,6 +2057,11 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	// without this, the next frame would yank the viewport back to the bottom.
 	onMount(() => {
 		const renderer = useRenderer();
+		const paintCursor = (buffer: Parameters<typeof paintPromptCursor>[0]) => {
+			if (inputRef) paintPromptCursor(buffer, inputRef);
+		};
+		renderer.addPostProcessFn(paintCursor);
+		onCleanup(() => renderer.removePostProcessFn(paintCursor));
 		const onFrame = () => {
 			const box = scrollBox;
 			if (!box) return;
@@ -2477,19 +2483,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 							paddingRight={2}
 						>
 							<textarea
-								showCursor
-								cursorColor={uiColors.textPrimary}
-								cursorStyle={{ style: "block", blinking: false }}
+								showCursor={false}
 								ref={(editor) => {
 									inputRef = editor;
-									// Match OpenCode's prompt: restore native cursor paint after
-									// the editor's initial focus/setup has finished.
-									const timer = setTimeout(() => {
-										if (editor.isDestroyed) return;
-										editor.cursorColor = uiColors.textPrimary;
-										editor.cursorStyle = { style: "block", blinking: false };
-									}, 0);
-									onCleanup(() => clearTimeout(timer));
 								}}
 								focused={
 									!controlsPaused() &&

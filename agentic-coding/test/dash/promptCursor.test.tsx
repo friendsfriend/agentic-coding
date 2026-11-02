@@ -15,7 +15,7 @@ function findEditor(node: Renderable): TextareaRenderable | undefined {
 	return undefined;
 }
 
-test("the actual transcript input retains OpenCode-style native block cursor settings through redraw and focus changes", async () => {
+test("the actual transcript paints a visible block on consecutive frames without toggling the hardware cursor", async () => {
 	const [active, setActive] = createSignal(true);
 	const [working, setWorking] = createSignal(false);
 	const t = await testRender(
@@ -45,31 +45,66 @@ test("the actual transcript input retains OpenCode-style native block cursor set
 		await t.renderOnce();
 		const editor = findEditor(t.renderer.root);
 		if (!editor) throw new Error("Missing transcript prompt");
+		const color = Array.from(parseColor(uiColors.textPrimary).buffer);
+		const cursorSpans = () =>
+			t
+				.captureSpans()
+				.lines.flatMap((line) => line.spans)
+				.filter((span) =>
+					Array.from(span.bg.buffer).every(
+						(value, index) => value === color[index],
+					),
+				);
 		for (const busy of [true, false, true]) {
 			setWorking(busy);
 			await t.renderOnce();
 			expect(findEditor(t.renderer.root)).toBe(editor);
 			expect(editor.focused).toBe(true);
-			expect(editor.showCursor).toBe(true);
-			expect(editor.cursorStyle).toMatchObject({
-				style: "block",
-				blinking: false,
-			});
-			expect(Array.from(editor.cursorColor.buffer)).toEqual(
-				Array.from(parseColor(uiColors.textPrimary).buffer),
-			);
+			expect(editor.showCursor).toBe(false);
+			expect(t.renderer.getCursorState().visible).toBe(false);
+			expect(cursorSpans().length).toBeGreaterThan(0);
+			const before = cursorSpans();
+			await t.renderOnce();
+			expect(cursorSpans()).toEqual(before);
 		}
+		editor.editBuffer.setCursor(0, 1);
+		editor.requestRender();
+		await t.renderOnce();
+		expect(
+			cursorSpans()
+				.map((span) => span.text)
+				.join(""),
+		).toBe("界");
+		editor.editBuffer.setCursor(0, 3);
+		editor.requestRender();
+		await t.renderOnce();
+		expect(
+			cursorSpans()
+				.map((span) => span.text)
+				.join(""),
+		).toBe("é");
+		// A long multiline draft scrolls inside the editor. Its visual cursor
+		// already accounts for that viewport; subtracting scrollY hides it.
+		editor.setText(
+			Array.from({ length: 14 }, (_, index) => `draft line ${index}`).join(
+				"\n",
+			),
+		);
+		editor.gotoBufferEnd();
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(editor.scrollY).toBeGreaterThan(0);
+		expect(cursorSpans().length).toBeGreaterThan(0);
+		expect(t.renderer.getCursorState().visible).toBe(false);
 		setActive(false);
 		await t.renderOnce();
 		expect(editor.focused).toBe(false);
+		expect(cursorSpans()).toHaveLength(0);
 		setActive(true);
 		await t.renderOnce();
 		expect(editor.focused).toBe(true);
-		expect(editor.showCursor).toBe(true);
-		expect(editor.cursorStyle).toMatchObject({
-			style: "block",
-			blinking: false,
-		});
+		expect(editor.showCursor).toBe(false);
+		expect(cursorSpans().length).toBeGreaterThan(0);
 	} finally {
 		t.renderer.destroy();
 	}
