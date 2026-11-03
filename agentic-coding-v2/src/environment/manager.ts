@@ -281,8 +281,8 @@ export class Environments {
 			throw new Error("Environment request identity mismatch");
 		return runs.map((run) => this.visible(run, true));
 	}
-	private visible(run: EnvironmentRun, output: boolean) {
-		const { output: stored, ...rest } = run;
+	private visible(run: EnvironmentRun, output: boolean, services = false) {
+		const { output: stored, serviceLogs: storedServices, ...rest } = run;
 		return {
 			...rest,
 			endpoints:
@@ -302,6 +302,9 @@ export class Environments {
 				? { runtimeStatuses: this.live.get(run.id)?.runtimeStatuses }
 				: {}),
 			...(output ? { output: this.live.get(run.id)?.logs ?? stored } : {}),
+			...(services
+				? { serviceLogs: this.live.get(run.id)?.serviceLogs ?? storedServices }
+				: {}),
 		};
 	}
 	async snapshot(app?: string) {
@@ -326,7 +329,7 @@ export class Environments {
 				.map(({ plans: _plans, ...waiter }) => waiter),
 		};
 	}
-	async logs(app: string, owner?: number) {
+	async logs(app: string, owner?: number, services = false) {
 		return recentRuns(
 			(await this.records()).filter(
 				(run) =>
@@ -339,7 +342,7 @@ export class Environments {
 					Number(holdsResource(b)) - Number(holdsResource(a)) ||
 					b.createdAt - a.createdAt,
 			)
-			.map((run) => this.visible(run, true));
+			.map((run) => this.visible(run, true, services));
 	}
 	async selectedLogs(
 		app: string,
@@ -348,10 +351,12 @@ export class Environments {
 	) {
 		return logView(
 			app,
-			(await this.logs(app, owner)).map((run) => ({
-				...run,
-				output: run.output ?? "",
-			})),
+			(await this.logs(app, owner, options.service !== undefined)).map(
+				(run) => ({
+					...run,
+					output: run.output ?? "",
+				}),
+			),
 			options,
 		);
 	}
@@ -365,6 +370,7 @@ export class Environments {
 				| "exitCode"
 				| "signal"
 				| "output"
+				| "serviceLogs"
 				| "error"
 				| "runtimeStatus"
 				| "runtimeStatuses"
@@ -582,6 +588,9 @@ export class Environments {
 							revision: run.revision + 1,
 							ready: plan.runtime !== "shell" || plan.readyText ? true : null,
 							output: process.logs,
+							...(process.serviceLogs
+								? { serviceLogs: process.serviceLogs }
+								: {}),
 							...(process.runtimeStatuses
 								? { runtimeStatuses: process.runtimeStatuses }
 								: {}),
@@ -649,6 +658,7 @@ export class Environments {
 				exitCode: exit.code,
 				signal: exit.signal,
 				output: process.logs,
+				...(process.serviceLogs ? { serviceLogs: process.serviceLogs } : {}),
 				...(process.runtimeStatuses
 					? { runtimeStatuses: process.runtimeStatuses }
 					: {}),
@@ -670,6 +680,7 @@ export class Environments {
 			await this.update(id, {
 				state: "interrupted",
 				output: process.logs,
+				...(process.serviceLogs ? { serviceLogs: process.serviceLogs } : {}),
 				...(process.runtimeStatuses
 					? { runtimeStatuses: process.runtimeStatuses }
 					: {}),

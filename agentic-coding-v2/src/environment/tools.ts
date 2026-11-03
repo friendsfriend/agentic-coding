@@ -251,10 +251,11 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_logs",
 				description:
-					"Read this task's retained, already-secret-redacted app logs: literal grep (not regex), then newest matching tail (default 200, maximum 1000 per run). At most 20 recent/live runs, with one shared 12 KiB encoded-output budget; whole lines only, omissions/counts explicit. No runtime CLI calls or historical completeness guarantee. Compose output is aggregate service buffers, not chronological; Kubernetes returns client diagnostics, not Pod logs. No timestamp, infrastructure or service filter yet. The home orchestrator may inspect all host runs.",
+					"Read this task's retained, already-secret-redacted app logs: literal grep (not regex), then newest matching tail (default 200, maximum 1000 per run). At most 20 recent/live runs, with one shared 12 KiB encoded-output budget; whole lines only, omissions/counts explicit. No runtime CLI calls or historical completeness guarantee. Compose output is aggregate service buffers, not chronological; Kubernetes returns client diagnostics, not Pod logs. Optional service selects an exact declared Compose service's captured buffer, never parsed header text or the stack-network buffer; unavailable/legacy/other-runtime captures are explicit and never fall back to aggregate output. No timestamp or infrastructure filter yet. The home orchestrator may inspect all host runs.",
 				parameters: Type.Object({
 					app: Type.String(),
 					grep: Type.Optional(Type.String({ maxLength: 512 })),
+					service: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 					tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
 				}),
 				replay: "safe",

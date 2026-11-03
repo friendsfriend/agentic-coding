@@ -52,6 +52,25 @@ export class ComposeProcess implements EnvironmentProcess {
 			),
 		];
 	}
+	get serviceLogs() {
+		const count = this.plan.composePlan?.services.length ?? 1,
+			cap = Math.floor(64000 / count);
+		return Object.fromEntries(
+			this.children.map((child, index) => {
+				const id = this.plan.composePlan?.services[index]?.id;
+				if (!id) throw new Error("Compose service log identity is missing");
+				const raw = child.logs,
+					truncated = raw.length >= 64000 || raw.length > cap;
+				let output = raw;
+				if (truncated) {
+					const suffix = raw.slice(-cap),
+						boundary = suffix.indexOf("\n");
+					output = boundary < 0 ? "" : suffix.slice(boundary + 1);
+				}
+				return [id, { output, truncated }];
+			}),
+		);
+	}
 	get logs() {
 		return [
 			this.network ? `[network]\n${this.network.logs}` : "",

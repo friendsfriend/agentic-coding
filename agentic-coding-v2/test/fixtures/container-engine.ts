@@ -32,6 +32,7 @@ if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr)
 	process.stderr.write(`${result.stderr} ${process.env.SERVICE_TOKEN ?? ""}\n`);
 if (result.follow) {
+	if (process.env.LOG_LINE) console.log(process.env.LOG_LINE);
 	console.log(`service log ${process.env.SERVICE_TOKEN ?? ""}`);
 	// Bound orphaned fixture clients to this disposable engine, even after a host SIGKILL.
 	setInterval(async () => {

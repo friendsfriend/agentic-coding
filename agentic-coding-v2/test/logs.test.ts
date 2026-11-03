@@ -76,6 +76,7 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 		call("env_start", { apps: ["api"] }),
 		() => call("env_logs", { app: "api", grep: "[x]", tail: 2 }),
 		() => call("env_logs", { app: "api", grep: "large", tail: 1 }),
+		() => call("env_logs", { app: "api", service: "worker" }),
 		(messages) => {
 			for (const message of messages.messages) {
 				if (message.role !== "toolResult" || message.toolName !== "env_logs")
@@ -92,7 +93,7 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 	});
 	await approve(app, task);
 	await app.harness.waitForTask(task as TaskId, context);
-	expect(observations).toHaveLength(2);
+	expect(observations).toHaveLength(3);
 	expect(observations[0]?.runs).toHaveLength(1);
 	expect(observations[0]?.runs[0]?.output).toBe(
 		"first [x] [REDACTED]\nlast [x]\n",
@@ -104,6 +105,10 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 		matchedRetainedLines: 1,
 		returnedLines: 0,
 		omittedForBudget: 1,
+	});
+	expect(observations[2]?.runs[0]).toMatchObject({
+		sourceAvailability: "unsupported-runtime",
+		output: "",
 	});
 	expect(JSON.stringify(observations)).not.toContain(secret);
 }, 15000);

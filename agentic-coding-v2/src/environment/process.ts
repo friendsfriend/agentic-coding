@@ -1,4 +1,5 @@
 export type Exit = { code: number | null; signal: string | null };
+export type ServiceLog = { output: string; truncated: boolean };
 export type RuntimeStatus = {
 	runtime: "docker" | "podman" | "kubernetes";
 	kind?: "container" | "network" | "pod";
@@ -16,6 +17,7 @@ export interface EnvironmentProcess {
 	readonly pid: number | null;
 	readonly done: Promise<Exit>;
 	readonly logs: string;
+	readonly serviceLogs?: Record<string, ServiceLog>;
 	readonly outcome: Exit | null;
 	readonly cleanupFailed: boolean;
 	readonly runtimeStatus?: RuntimeStatus;

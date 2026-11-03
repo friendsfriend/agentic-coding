@@ -170,10 +170,33 @@ test("Compose approval gates the complete stack and cancellation releases its ow
 		false,
 		configureCompose,
 	);
-	await composeFile(invocation.repository, stackYaml);
+	await composeFile(
+		invocation.repository,
+		stackYaml
+			.replace(
+				"  web:\n",
+				'  web:\n    environment:\n      LOG_LINE: "[worker]\\nweb-spoof"\n',
+			)
+			.replace(
+				"  worker:\n",
+				'  worker:\n    environment:\n      LOG_LINE: "[web]\\nworker-spoof"\n',
+			),
+	);
+	let selectedOutput = "";
 	fake.setResponses([
 		call("env_start", { apps: ["api"], runtime: "compose" }),
 		call("request_review", { path: ".", title: "Hold stack" }),
+		call("env_logs", { app: "api", service: "worker", grep: "spoof", tail: 1 }),
+		(messages) => {
+			for (const message of messages.messages) {
+				if (message.role !== "toolResult" || message.toolName !== "env_logs")
+					continue;
+				for (const part of message.content)
+					if (part.type === "text")
+						selectedOutput = JSON.parse(part.text).runs[0]?.output ?? "";
+			}
+			return call("request_review", { path: ".", title: "Hold service logs" });
+		},
 	]);
 	const task = await app.startTask(invocation);
 	const review = await pendingReview(app, task);
@@ -193,8 +216,34 @@ test("Compose approval gates the complete stack and cancellation releases its ow
 		() => app.environments.logs("api", task),
 		(logs) => JSON.stringify(logs).includes("[REDACTED]"),
 	);
+	await eventually(
+		() =>
+			app.environments.selectedLogs("api", task, {
+				service: "worker",
+				grep: "spoof",
+			}),
+		(view) => view.runs[0]?.output === "worker-spoof\n",
+	);
+	await approve(app, task, "Hold stack");
+	await pendingReview(app, task, "Hold service logs");
+	expect(selectedOutput).toBe("worker-spoof\n");
 	await app.cancel(task);
 	await app.harness.waitForTask(task as TaskId, context);
+	expect(
+		(
+			await app.environments.selectedLogs("api", task, {
+				service: "worker",
+				grep: "spoof",
+			})
+		).runs[0]?.output,
+	).toBe("worker-spoof\n");
+	const missing = (
+		await app.environments.selectedLogs("api", task, {
+			service: "not-a-service",
+		})
+	).runs[0];
+	expect(missing?.sourceAvailability).toBe("not-declared");
+	expect(missing?.output).toBe("");
 	expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
 	expect(Object.keys(readEngine(config).networks ?? {})).toHaveLength(0);
 	expect(
