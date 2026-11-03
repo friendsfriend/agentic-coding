@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseEnv } from "node:util";
 import { contained } from "../git.ts";
 import type { Plan } from "./catalog.ts";
+import { authentication } from "./http-options.ts";
 import type { Exit } from "./process.ts";
 
 export type { Exit } from "./process.ts";
@@ -22,14 +23,28 @@ export function processEnvironment(configDir: string, plan: Plan) {
 			return [key, value];
 		}),
 	);
+	const auth = Object.fromEntries(
+		Object.entries(plan.endpointAuthRefs ?? {}).map(([endpoint, ref]) => [
+			endpoint,
+			authentication(ref, resolved),
+		]),
+	);
 	const hidden = [
 		...new Set(
-			Object.values(resolved)
+			[
+				...Object.values(resolved),
+				...Object.values(auth).flatMap((value) => [
+					value,
+					value.replace(/^(Basic|Bearer) /, ""),
+				]),
+			]
 				.flatMap((value) => [value, ...value.split(/\r?\n/)])
 				.filter(Boolean),
 		),
 	].sort((a, b) => b.length - a.length);
 	return {
+		authorization: (endpoint: string) =>
+			Object.hasOwn(auth, endpoint) ? auth[endpoint] : undefined,
 		env: {
 			...Object.fromEntries(
 				["PATH", "HOME", "LANG", "TMPDIR", "TERM"].flatMap((key) =>
@@ -62,6 +77,7 @@ export class ShellProcess {
 	private cleanupUncertain = false;
 	readonly done: Promise<Exit>;
 	readonly redact: (value: string) => string;
+	readonly authorization: (endpoint: string) => string | undefined;
 	readonly spawned: Promise<boolean>;
 	constructor(
 		readonly plan: Plan,
@@ -76,8 +92,9 @@ export class ShellProcess {
 	) {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
-		const { env, redact } = processEnvironment(configDir, plan);
+		const { env, redact, authorization } = processEnvironment(configDir, plan);
 		this.redact = redact;
+		this.authorization = authorization;
 		const cwd = contained(
 			plan.workspace,
 			path.relative(plan.workspace, plan.cwd),

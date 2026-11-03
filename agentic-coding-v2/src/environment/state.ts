@@ -6,11 +6,12 @@ export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
 	stops: Record<string, string>;
 	reuses?: Record<string, string>;
+	httpOperations?: Record<string, string>;
 }>({
 	kind: "v2.environments",
 	version: 1,
 	scope: "session",
-	initial: () => ({ runs: {}, stops: {}, reuses: {} }),
+	initial: () => ({ runs: {}, stops: {}, reuses: {}, httpOperations: {} }),
 	checkpointWhen: () => true,
 });
 export type ReuseReceipt = {

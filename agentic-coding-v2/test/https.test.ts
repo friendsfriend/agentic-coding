@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -7,6 +6,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
+import { certificate } from "./fixtures/tls.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
@@ -32,31 +32,7 @@ test("HTTPS diagnostics verify certificate IPs and reject a changed approved pub
 			["good", "127.0.0.1"],
 			["bad", "127.0.0.2"],
 		]) {
-			const settings = path.join(config.configDir, `${name}.cnf`);
-			fs.writeFileSync(
-				settings,
-				`[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n[dn]\nCN=Disposable fixture\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:${ip}\n`,
-			);
-			execFileSync(
-				"openssl",
-				[
-					"req",
-					"-x509",
-					"-newkey",
-					"rsa:2048",
-					"-nodes",
-					"-days",
-					"1",
-					"-config",
-					settings,
-					"-keyout",
-					path.join(config.configDir, `${name}.key`),
-					"-out",
-					path.join(config.configDir, `${name}.pem`),
-				],
-				{ stdio: "ignore" },
-			);
-			fs.chmodSync(path.join(config.configDir, `${name}.key`), 0o600);
+			certificate(config.configDir, name, ip);
 		}
 		fs.writeFileSync(
 			path.join(config.configDir, "environments.json"),

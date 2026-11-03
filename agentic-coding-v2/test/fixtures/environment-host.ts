@@ -18,6 +18,7 @@ const input = JSON.parse(fs.readFileSync(process.argv[2] ?? "", "utf8")) as {
 	readyFile: string;
 	target?: string;
 	runtime?: string;
+	http?: { startedFile: string };
 };
 const fake = fauxProvider({
 	models: [{ id: "original" }, { id: "replacement" }],
@@ -35,6 +36,21 @@ fake.setResponses([
 			stopReason: "toolUse",
 		},
 	),
+	...(input.http
+		? [
+				fauxAssistantMessage(
+					fauxToolCall("env_http_request", {
+						app: "api",
+						endpoint: "web",
+						path: "/mutate",
+						method: "POST",
+						body: "mutate-once",
+						allowWrite: true,
+					}),
+					{ stopReason: "toolUse" },
+				),
+			]
+		: []),
 	fauxAssistantMessage(
 		fauxToolCall("request_review", {
 			path: ".",
@@ -73,16 +89,33 @@ for (let attempt = 0; attempt < 1000; attempt++) {
 		);
 		approved = true;
 	}
+	const httpApproval = input.http
+		? state.reviews.find(
+				(review) =>
+					review.taskId === id &&
+					review.title === "Endpoint POST: api/web" &&
+					review.state === "pending",
+			)
+		: undefined;
+	if (httpApproval)
+		await app.decide(
+			httpApproval.id,
+			httpApproval.revision,
+			"approved",
+			"Disposable fixture HTTP operation approved by test operator",
+		);
 	const run = state.environments.runs.find(
 		(run) => run.owner === id && run.state === "running",
 	);
 	if (
 		run &&
-		state.reviews.some(
-			(review) =>
-				review.title === "Keep crash fixture alive" &&
-				review.state === "pending",
-		)
+		(input.http
+			? fs.existsSync(input.http.startedFile)
+			: state.reviews.some(
+					(review) =>
+						review.title === "Keep crash fixture alive" &&
+						review.state === "pending",
+				))
 	) {
 		fs.writeFileSync(`${input.readyFile}.tmp`, JSON.stringify({ id, run }));
 		fs.renameSync(`${input.readyFile}.tmp`, input.readyFile);

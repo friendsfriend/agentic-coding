@@ -10,7 +10,14 @@ import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
 import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
 import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
-import { endpointGet } from "./http.ts";
+import { endpointRequest } from "./http.ts";
+import { type HttpOptions, httpOptions } from "./http-options.ts";
+import {
+	type HttpInput,
+	type HttpReceipt,
+	httpDigest,
+	replayHttp,
+} from "./http-receipts.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { EnvironmentProcess } from "./process.ts";
@@ -100,6 +107,7 @@ export class Environments {
 		endpoint: string,
 		path: string,
 		signal?: AbortSignal,
+		http?: HttpOptions,
 	): Promise<EndpointRequest> {
 		const { run } = await this.endpointRun(owner, app, signal),
 			base = run.plan.endpoints?.[endpoint];
@@ -108,18 +116,49 @@ export class Environments {
 		const ref = Object.hasOwn(run.plan.endpointCaRefs ?? {}, endpoint)
 			? run.plan.endpointCaRefs?.[endpoint]
 			: undefined;
+		const options = http ? httpOptions(http) : undefined,
+			auth =
+				options?.authenticate &&
+				Object.hasOwn(run.plan.endpointAuthRefs ?? {}, endpoint)
+					? run.plan.endpointAuthRefs?.[endpoint]
+					: undefined;
+		if (options?.authenticate && !auth)
+			throw new Error(
+				"Authentication requires a configured endpoint secret reference",
+			);
 		return {
 			run: run.id,
 			app,
 			endpoint,
 			url: endpointUrl(base, path),
+			...(options ? { http: options } : {}),
+			...(auth ? { authentication: auth } : {}),
 			...(ref ? { ca: prepareEndpointCa(this.config.configDir, ref) } : {}),
 		};
+	}
+	async httpReceipt(
+		owner: TaskInfo,
+		id: string,
+		input: HttpInput,
+		signal?: AbortSignal,
+	) {
+		this.check(owner.id, signal);
+		if (owner.policy !== "workspace-write")
+			throw new Error("HTTP receipt requires its workspace-write native owner");
+		const raw = await this.store.commit(async (tx) => {
+			const task = await tx.task(owner.id as TaskId);
+			if (!task || task.abortRequested || task.state.status === "terminal")
+				throw new Error("HTTP native owner has ended");
+			return (await tx.doc(EnvironmentState)).httpOperations?.[id];
+		}, background);
+		this.check(owner.id, signal);
+		return raw ? replayHttp(decode<HttpReceipt>(raw), owner.id, input) : null;
 	}
 	async getEndpoint(
 		owner: TaskInfo,
 		approved: EndpointRequest,
 		signal?: AbortSignal,
+		issuance?: { id: string; input: HttpInput },
 	) {
 		const { run, process } = await this.endpointRun(
 				owner,
@@ -137,18 +176,92 @@ export class Environments {
 			new URL(base).origin !== new URL(approved.url).origin
 		)
 			throw new Error("Approved endpoint no longer belongs to the held run");
+		const options = httpOptions(approved.http),
+			auth =
+				options.authenticate &&
+				Object.hasOwn(run.plan.endpointAuthRefs ?? {}, approved.endpoint)
+					? run.plan.endpointAuthRefs?.[approved.endpoint]
+					: undefined;
+		if (
+			(options.authenticate && !auth) ||
+			JSON.stringify(auth) !== JSON.stringify(approved.authentication) ||
+			(auth && new URL(approved.url).protocol !== "https:")
+		)
+			throw new Error(
+				"Approved endpoint authentication no longer matches the held run",
+			);
+		const authorization = auth
+			? process.authorization(approved.endpoint)
+			: undefined;
+		if (auth && !authorization)
+			throw new Error("Held endpoint credentials are unavailable");
 		const ca = approved.ca
 			? loadEndpointCa(this.config.configDir, approved.ca)
 			: undefined;
+		if (approved.http && !issuance)
+			throw new Error(
+				"HTTP operations require a durable native issuance identity",
+			);
+		if (
+			issuance &&
+			(issuance.input.app !== approved.app ||
+				issuance.input.endpoint !== approved.endpoint ||
+				endpointUrl(base, issuance.input.path) !== approved.url ||
+				JSON.stringify(issuance.input.http) !== JSON.stringify(options))
+		)
+			throw new Error("HTTP issuance does not match the approved request");
 		const operation = (async () => {
+			if (issuance) {
+				const previous = await this.store.commit(async (tx) => {
+					const task = await tx.task(owner.id as TaskId);
+					this.check(owner.id, signal, run.batch);
+					if (!task || task.abortRequested || task.state.status === "terminal")
+						throw new Error("HTTP native owner has ended");
+					const doc = await tx.doc(EnvironmentState);
+					this.check(owner.id, signal, run.batch);
+					doc.httpOperations ??= {};
+					const receipts = doc.httpOperations,
+						raw = receipts[issuance.id];
+					if (raw) return decode<HttpReceipt>(raw);
+					const receipt: HttpReceipt = {
+						owner: owner.id,
+						inputDigest: httpDigest(issuance.input),
+						approved,
+						issuedAt: Date.now(),
+						state: "issued",
+					};
+					receipts[issuance.id] = JSON.stringify(receipt);
+					return null;
+				}, background);
+				if (previous) return replayHttp(previous, owner.id, issuance.input);
+			}
 			this.check(owner.id, signal, run.batch);
 			if (process.outcome || process.cleanupFailed)
 				throw new Error("Endpoint app is closing; no request sent");
-			const result = await endpointGet(
+			const result = await endpointRequest(
 					approved.url,
+					options,
 					process.redact,
 					signal,
 					ca,
+					authorization,
+					async () => {
+						const current = await this.endpointRun(owner, approved.app, signal);
+						if (current.run.id !== run.id || current.process !== process)
+							throw new Error("Endpoint ownership changed");
+						return approved.ca
+							? loadEndpointCa(this.config.configDir, approved.ca)
+							: undefined;
+					},
+					() => {
+						this.check(owner.id, signal, run.batch);
+						if (
+							process.outcome ||
+							process.cleanupFailed ||
+							this.live.get(run.id) !== process
+						)
+							throw new Error("Endpoint app is closing; no request sent");
+					},
 				),
 				current = await this.endpointRun(owner, approved.app, signal);
 			this.check(owner.id, signal, run.batch);
@@ -159,7 +272,7 @@ export class Environments {
 				process.cleanupFailed
 			)
 				throw new Error("Endpoint ownership changed; response discarded");
-			return {
+			const response = {
 				...result,
 				run: run.id,
 				app: approved.app,
@@ -167,6 +280,43 @@ export class Environments {
 				observedAt: Date.now(),
 				...(approved.ca ? { caDigest: approved.ca.digest } : {}),
 			};
+			if (issuance)
+				await this.store.commit(async (tx) => {
+					const task = await tx.task(owner.id as TaskId);
+					this.check(owner.id, signal, run.batch);
+					if (!task || task.abortRequested || task.state.status === "terminal")
+						throw new Error("HTTP native owner ended; response discarded");
+					const doc = await tx.doc(EnvironmentState);
+					this.check(owner.id, signal, run.batch);
+					if (
+						process.outcome ||
+						process.cleanupFailed ||
+						this.live.get(run.id) !== process
+					)
+						throw new Error("Endpoint app ended; response discarded");
+					const raw = doc.httpOperations?.[issuance.id];
+					if (!raw)
+						throw new Error(
+							"HTTP issuance receipt is missing; no response accepted",
+						);
+					const receipt = decode<HttpReceipt>(raw);
+					if (
+						receipt.owner !== owner.id ||
+						receipt.inputDigest !== httpDigest(issuance.input) ||
+						receipt.state !== "issued" ||
+						JSON.stringify(receipt.approved) !== JSON.stringify(approved)
+					)
+						throw new Error(
+							"HTTP issuance identity changed; no response accepted",
+						);
+					if (doc.httpOperations)
+						doc.httpOperations[issuance.id] = JSON.stringify({
+							...receipt,
+							state: "completed",
+							result: response,
+						});
+				}, background);
+			return response;
 		})();
 		this.pending.set(operation, { owner: owner.id, batch: run.batch });
 		try {
@@ -392,9 +542,28 @@ export class Environments {
 		};
 	}
 	async snapshot(app?: string) {
-		const all = await this.records();
+		const state = await this.store.snapshot(EnvironmentState, background),
+			all = values<EnvironmentRun>(state?.runs),
+			operations = Object.entries(state?.httpOperations ?? {})
+				.map(([id, raw]) => ({ id, receipt: decode<HttpReceipt>(raw) }))
+				.filter(({ receipt }) => !app || receipt.approved.app === app);
 		return {
 			runtime: "task-owned",
+			httpOperationsTotal: operations.length,
+			httpHistoryLimit: 200,
+			httpOperations: operations.slice(-200).map(({ id, receipt }) => ({
+				id,
+				owner: receipt.owner,
+				run: receipt.approved.run,
+				app: receipt.approved.app,
+				endpoint: receipt.approved.endpoint,
+				method: receipt.approved.http?.method ?? "GET",
+				state: receipt.state,
+				issuedAt: receipt.issuedAt,
+				observedAt: receipt.result?.observedAt,
+				authority:
+					"diagnostic-only; issued means pending or uncertain, never dispatch/outcome or live authority",
+			})),
 			clusters: this.clusters.map(({ id, repository, context }) => ({
 				id,
 				repository,

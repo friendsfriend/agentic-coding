@@ -15,6 +15,7 @@ import { type ContainerTarget, readContainer } from "./container-config.ts";
 import { expandDependencies, validateDependencies } from "./dependencies.ts";
 import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
+import { type EndpointAuth, readEndpointAuth } from "./http-options.ts";
 import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
 import {
 	type Action,
@@ -42,6 +43,7 @@ export type Target = {
 	secretRefs: Record<string, string>;
 	endpoints?: Record<string, string>;
 	endpointCaRefs?: Record<string, string>;
+	endpointAuthRefs?: Record<string, EndpointAuth>;
 };
 export type Project = {
 	id: string;
@@ -110,6 +112,7 @@ function readTarget(raw: unknown): Target {
 		"kubernetes",
 		"endpoints",
 		"endpointCaRefs",
+		"endpointAuthRefs",
 	]);
 	if (
 		data.runtime !== "shell" &&
@@ -146,7 +149,9 @@ function readTarget(raw: unknown): Target {
 			"Shell commands/readiness and structured container configuration cannot be mixed",
 		);
 	if (
-		(data.endpoints !== undefined || data.endpointCaRefs !== undefined) &&
+		(data.endpoints !== undefined ||
+			data.endpointCaRefs !== undefined ||
+			data.endpointAuthRefs !== undefined) &&
 		(data.runtime !== "shell" || data.action !== "run")
 	)
 		throw new Error(
@@ -193,6 +198,15 @@ function readTarget(raw: unknown): Target {
 		id: identifier(data.id),
 		...(data.endpoints === undefined ? {} : { endpoints }),
 		...(data.endpointCaRefs === undefined ? {} : { endpointCaRefs }),
+		...(data.endpointAuthRefs === undefined
+			? {}
+			: {
+					endpointAuthRefs: readEndpointAuth(
+						data.endpointAuthRefs,
+						endpoints,
+						secretRefs,
+					),
+				}),
 		action: data.action as Action,
 		runtime: data.runtime,
 		...(container ? { container } : {}),
