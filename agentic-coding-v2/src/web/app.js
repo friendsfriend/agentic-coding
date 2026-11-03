@@ -1,3 +1,6 @@
+import { button, element } from "/dom.js";
+import { environmentDiagnostics } from "/environment-diagnostics.js";
+
 const $ = (id) => document.getElementById(id);
 let topic = null;
 let revision = "";
@@ -15,24 +18,6 @@ async function api(url, data) {
 	const value = await response.json();
 	if (!response.ok) throw new Error(value.error ?? response.statusText);
 	return value;
-}
-function element(tag, text, className) {
-	const el = document.createElement(tag);
-	if (text) el.textContent = text;
-	if (className) el.className = className;
-	return el;
-}
-function button(label, action) {
-	const el = element("button", label);
-	el.type = "button";
-	el.onclick = async () => {
-		try {
-			await action();
-		} catch (error) {
-			$("connection").textContent = String(error);
-		}
-	};
-	return el;
 }
 function reuseChildren(parent, ...cards) {
 	const keep = new Set(cards);
@@ -399,33 +384,36 @@ async function refresh() {
 						]),
 					]);
 					if (card.dataset.environmentRevision === renderRevision) return card;
-					const previousLogs = card.querySelector("pre.environment-logs");
-					const previousTelemetry = card.querySelector(
-						"pre.environment-telemetry",
+					const previousDiagnostics = card.querySelector(
+						".environment-diagnostics",
 					);
-					card.replaceChildren();
+					const content =
+						card.querySelector(".environment-run-details") ??
+						element("div", null, "environment-run-details");
+					content.replaceChildren();
+					if (!content.parentNode) card.prepend(content);
 					card.dataset.environmentRun = run.id;
 					card.dataset.environmentRevision = renderRevision;
-					card.append(
+					content.append(
 						element(
 							"strong",
 							`${run.plan.app} · ${run.plan.action}/${run.plan.id} · ${run.state}`,
 						),
 						element(
 							"p",
-							`Task ${run.owner} · ${resource ? `${resource.runtime} ${resource.name} · last observed ${resource.state} · health ${resource.health ?? "not checked"} · ownership ${resource.owned === null ? "unknown" : resource.owned ? "confirmed" : "foreign"} · ID ${resource.id ?? "unknown"} (diagnostic only)` : `PID ${run.pid ?? "unknown"} (diagnostic only)`} · startup readiness ${run.ready === null ? "not checked" : run.ready ? "observed" : "not observed"} · exit ${run.exitCode ?? run.signal ?? "unknown"}`,
+							`Task ${run.owner} · snapshot revision ${run.revision} · ${resource ? `${resource.runtime} ${resource.name} · last observed ${resource.state} · health ${resource.health ?? "not checked"} · ownership ${resource.owned === null ? "unknown" : resource.owned ? "confirmed" : "foreign"} · ID ${resource.id ?? "unknown"} (diagnostic only)` : `PID ${run.pid ?? "unknown"} (diagnostic only)`} · startup readiness ${run.ready === null ? "not checked" : run.ready ? "observed" : "not observed"} · exit ${run.exitCode ?? run.signal ?? "unknown"}`,
 							"meta",
 						),
 					);
 					for (const service of run.runtimeStatuses ?? [])
-						card.append(
+						content.append(
 							element(
 								"p",
 								`${service.name} · ${service.runtime}/${service.kind ?? "container"} · ${service.state} · health ${service.health ?? "not checked"} · ownership ${service.owned === null ? "unknown" : service.owned ? "confirmed" : "foreign"} · ID ${service.id ?? "unknown"} (diagnostic only)`,
 								"meta",
 							),
 						);
-					if (run.error) card.append(element("p", run.error));
+					if (run.error) content.append(element("p", run.error));
 					if (
 						run.state !== "exited" &&
 						run.state !== "interrupted" &&
@@ -434,7 +422,7 @@ async function refresh() {
 								task.id === run.owner && task.kind === "operator-environment",
 						)
 					)
-						card.append(
+						content.append(
 							button("Stop operator batch", async () => {
 								if (
 									!confirm(
@@ -446,58 +434,18 @@ async function refresh() {
 								await refresh();
 							}),
 						);
-					card.append(
-						button("View redacted logs", async () => {
-							const logs = await api(
-								`/api/environments/logs?app=${encodeURIComponent(run.plan.app)}`,
-							);
-							const log = logs.find((item) => item.id === run.id);
-							const pre =
-								card.querySelector("pre.environment-logs") ??
-								element("pre", null, "environment-logs");
-							pre.textContent = !log
-								? "This run is outside the retained log response window."
-								: log.output ||
-									(log.selection.omittedForBudget
-										? "Matching lines exceed the retained-log response budget; no complete line was returned."
-										: "No matching complete lines in the retained log window.");
-							card.append(pre);
-						}),
+					const diagnostics = environmentDiagnostics(
+						run,
+						api,
+						previousDiagnostics,
 					);
-					if (
-						run.state === "running" &&
-						run.ready === true &&
-						run.plan.telemetry
-					)
-						for (const mode of ["traces", "logs"])
-							card.append(
-								button(
-									mode === "traces"
-										? "View native trace summaries"
-										: "View native telemetry logs",
-									async () => {
-										const query = new URLSearchParams({
-											app: run.plan.app,
-											run: run.id,
-											mode,
-										});
-										const observation = await api(
-											`/api/environments/telemetry?${query}`,
-										);
-										const pre =
-											card.querySelector("pre.environment-telemetry") ??
-											element("pre", null, "environment-telemetry");
-										pre.textContent = JSON.stringify(observation, null, 2);
-										card.append(pre);
-									},
-								),
-							);
+					if (!previousDiagnostics) card.append(diagnostics);
 					if (
 						run.canRevoke &&
 						state.tasks.find((task) => task.id === run.owner)?.kind !==
 							"operator-environment"
 					)
-						card.append(
+						content.append(
 							button("Stop and revoke task environments", async () => {
 								if (
 									!confirm(
@@ -516,7 +464,7 @@ async function refresh() {
 							}),
 						);
 					if (run.state === "interrupted")
-						card.append(
+						content.append(
 							button("Release after inspection", async () => {
 								if (
 									!confirm(
@@ -532,8 +480,6 @@ async function refresh() {
 								await refresh();
 							}),
 						);
-					if (previousLogs) card.append(previousLogs);
-					if (previousTelemetry) card.append(previousTelemetry);
 					return card;
 				}),
 		);

@@ -16,6 +16,7 @@ type Trace = {
 };
 const limits = Object.freeze({
 	traces: 200,
+	evictedTraceIds: 200,
 	spansPerTrace: 500,
 	logs: 1000,
 	traceBytes: 3 * 1024 * 1024,
@@ -31,6 +32,7 @@ export class TelemetryCollector {
 	private readonly server: Bun.Server<undefined>;
 	private readonly traces = new Map<string, Trace>();
 	private readonly logs: Stored<LogObservation>[] = [];
+	private readonly evictedTraceIds = new Set<string>();
 	private readonly pending = new Set<Promise<Response>>();
 	private readonly readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
 	private readonly scope: Readonly<{ app: string; owner: number; run: string }>;
@@ -207,6 +209,7 @@ export class TelemetryCollector {
 			this.droppedSpans++;
 		}
 		this.traces.delete(row.traceId);
+		this.evictedTraceIds.delete(row.traceId);
 		this.traces.set(row.traceId, trace);
 		while (
 			this.traces.size > limits.traces ||
@@ -217,6 +220,13 @@ export class TelemetryCollector {
 			this.traces.delete(first[0]);
 			this.traceBytes -= first[1].bytes;
 			this.evictedTraces++;
+			this.evictedTraceIds.delete(first[0]);
+			this.evictedTraceIds.add(first[0]);
+			while (this.evictedTraceIds.size > limits.evictedTraceIds) {
+				const oldest = this.evictedTraceIds.values().next().value;
+				if (!oldest) break;
+				this.evictedTraceIds.delete(oldest);
+			}
 		}
 		return true;
 	}
@@ -236,6 +246,14 @@ export class TelemetryCollector {
 			this.droppedLogs++;
 		}
 		return true;
+	}
+	private traceAvailability(id: string, mode: string) {
+		if (mode === "logs")
+			return this.logs.some((entry) => entry.row.traceId === id)
+				? "retained"
+				: "not-retained";
+		if (this.traces.has(id)) return "retained";
+		return this.evictedTraceIds.has(id) ? "evicted" : "unknown";
 	}
 	query(options: TelemetryOptions) {
 		const allowed = new Set([
@@ -296,6 +314,7 @@ export class TelemetryCollector {
 			limits,
 			loss: {
 				evictedTraces: this.evictedTraces,
+				evictedTraceIdsRetained: this.evictedTraceIds.size,
 				droppedSpans: this.droppedSpans,
 				droppedLogs: this.droppedLogs,
 			},
@@ -367,7 +386,18 @@ export class TelemetryCollector {
 			...(options.traceId
 				? {
 						traceId: options.traceId.toLowerCase(),
-						availability: rows.length ? "retained" : "not-retained",
+						availability: this.traceAvailability(
+							options.traceId.toLowerCase(),
+							mode,
+						),
+						availabilityBasis:
+							mode === "logs"
+								? "unfiltered-retained-log-window"
+								: "unfiltered-trace-and-bounded-eviction-identity-windows",
+						unknownMeaning:
+							mode === "logs"
+								? "No linked logs in the retained window; this does not establish whether linked logs ever existed"
+								: "Never captured, not retained, or older than the bounded eviction-identity window; not proof that the trace never existed",
 					}
 				: {}),
 			representation:
@@ -389,6 +419,7 @@ export class TelemetryCollector {
 		if (this.stopping) return this.stopping;
 		this.closed = true;
 		this.traces.clear();
+		this.evictedTraceIds.clear();
 		this.logs.length = 0;
 		this.traceBytes = 0;
 		this.logBytes = 0;

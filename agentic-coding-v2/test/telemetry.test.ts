@@ -137,6 +137,39 @@ console.log('TELEMETRY READY');setInterval(()=>{},1000);
 			scope: { app: "api", owner: first, run: owned.id },
 			records: [{ traceId, spanCount: 1 }],
 		});
+		const byTrace = async (filters: Record<string, string>) => {
+			const target = new URL(query);
+			for (const [key, value] of Object.entries(filters))
+				target.searchParams.set(key, value);
+			if (filters.mode === "logs") target.searchParams.delete("status");
+			const response = await fetch(target, { headers });
+			expect(response.status).toBe(200);
+			return response.json();
+		};
+		expect(await byTrace({ traceId, status: "success" })).toMatchObject({
+			availability: "retained",
+			records: [],
+			selection: { matchedRetainedRecords: 0 },
+		});
+		expect(
+			await byTrace({
+				traceId: "00000000000000000000000000000001",
+				status: "all",
+			}),
+		).toMatchObject({ availability: "evicted", records: [] });
+		expect(
+			await byTrace({
+				traceId: "ffffffffffffffffffffffffffffffff",
+				status: "all",
+			}),
+		).toMatchObject({ availability: "unknown", records: [] });
+		expect(
+			await byTrace({ traceId, mode: "logs", severity: "INFO" }),
+		).toMatchObject({
+			availability: "retained",
+			records: [],
+			selection: { matchedRetainedRecords: 0 },
+		});
 		query.searchParams.set("run", "stale-run-not-owned");
 		expect((await fetch(query, { headers })).status).toBe(400);
 		query.searchParams.set("run", owned.id);

@@ -8,6 +8,10 @@ import { renderMarkdown } from "./markdown.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Review } from "./state.ts";
 import script from "./web/app.js" with { type: "text" };
+import dom from "./web/dom.js" with { type: "text" };
+import diagnostics from "./web/environment-diagnostics.js" with {
+	type: "text",
+};
 import html from "./web/index.html" with { type: "text" };
 import css from "./web/style.css" with { type: "text" };
 
@@ -107,6 +111,16 @@ export function serve(app: Runtime, port = 0) {
 		status = 200,
 		extra: Record<string, string> = {},
 	) => Response.json(value, { status, headers: { ...security, ...extra } });
+	const assets = new Map([
+		["/", { content: String(html), type: "text/html" }],
+		["/app.js", { content: script, type: "text/javascript" }],
+		["/dom.js", { content: dom, type: "text/javascript" }],
+		[
+			"/environment-diagnostics.js",
+			{ content: diagnostics, type: "text/javascript" },
+		],
+		["/style.css", { content: css, type: "text/css" }],
+	]);
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port,
@@ -118,26 +132,15 @@ export function serve(app: Runtime, port = 0) {
 				return json({ error: "Invalid host" }, 403);
 			if (request.method === "GET" && url.pathname === "/favicon.ico")
 				return new Response(null, { status: 204, headers: security });
-			if (
-				request.method === "GET" &&
-				["/", "/app.js", "/style.css"].includes(url.pathname)
-			) {
-				const content =
-					url.pathname === "/"
-						? String(html)
-						: url.pathname === "/app.js"
-							? script
-							: css;
-				const type =
-					url.pathname === "/"
-						? "text/html"
-						: url.pathname === "/app.js"
-							? "text/javascript"
-							: "text/css";
-				return new Response(content, {
-					headers: { ...security, "Content-Type": `${type}; charset=utf-8` },
+			const asset =
+				request.method === "GET" ? assets.get(url.pathname) : undefined;
+			if (asset)
+				return new Response(asset.content, {
+					headers: {
+						...security,
+						"Content-Type": `${asset.type}; charset=utf-8`,
+					},
 				});
-			}
 			const bearer =
 				request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
 			const cookie =

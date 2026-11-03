@@ -44,7 +44,8 @@ button {
 button:disabled {
 	opacity: 0.5;
 }
-.environment-project label {
+.environment-project label,
+.environment-filters label {
 	display: inline-flex;
 	flex-direction: column;
 	gap: 4px;
@@ -52,7 +53,9 @@ button:disabled {
 	max-width: 100%;
 }
 .environment-project select,
-.environment-project input {
+.environment-project input,
+.environment-filters select,
+.environment-filters input {
 	background: #151c27;
 	color: inherit;
 	border: 1px solid #43536b;
@@ -61,11 +64,17 @@ button:disabled {
 	font: inherit;
 	max-width: 100%;
 }
+.environment-filters {
+	margin: 12px 0;
+}
 nav button {
 	display: block;
 	width: 100%;
 	text-align: left;
 	margin: 8px 0;
+}
+.environment-diagnostics button {
+	margin: 8px 8px 0 0;
 }
 nav button[aria-current="true"] {
 	border-color: #82b5ff;
