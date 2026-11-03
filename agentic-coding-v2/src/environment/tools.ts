@@ -251,14 +251,19 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_logs",
 				description:
-					"Read bounded, known-secret-redacted complete log lines from this task's environment executions. The home orchestrator may inspect all host runs. In-progress unterminated lines are withheld.",
-				parameters: Type.Object({ app: Type.String() }),
+					"Read this task's retained, already-secret-redacted app logs: literal grep (not regex), then newest matching tail (default 200, maximum 1000 per run). At most 20 recent/live runs, with one shared 12 KiB encoded-output budget; whole lines only, omissions/counts explicit. No runtime CLI calls or historical completeness guarantee. Compose output is aggregate service buffers, not chronological; Kubernetes returns client diagnostics, not Pod logs. No timestamp, infrastructure or service filter yet. The home orchestrator may inspect all host runs.",
+				parameters: Type.Object({
+					app: Type.String(),
+					grep: Type.Optional(Type.String({ maxLength: 512 })),
+					tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+				}),
 				replay: "safe",
 				execute: async (args, api) =>
 					environmentResult(
-						await manager.logs(
+						await manager.selectedLogs(
 							args.app,
 							(await ownerOf(api.conversationId))?.id,
+							args,
 						),
 					),
 			}),

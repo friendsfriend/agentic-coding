@@ -12,6 +12,7 @@ import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
 import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
 import { endpointGet } from "./http.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
+import { type LogOptions, logView } from "./logs.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
@@ -339,6 +340,20 @@ export class Environments {
 					b.createdAt - a.createdAt,
 			)
 			.map((run) => this.visible(run, true));
+	}
+	async selectedLogs(
+		app: string,
+		owner: number | undefined,
+		options: LogOptions,
+	) {
+		return logView(
+			app,
+			(await this.logs(app, owner)).map((run) => ({
+				...run,
+				output: run.output ?? "",
+			})),
+			options,
+		);
 	}
 	private async update(
 		id: string,
