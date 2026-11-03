@@ -132,6 +132,12 @@ Available tools:
 - `env_http_get`: separately approved GET to one named local endpoint of this task's live ready shell app. No other owner's app or saved receipt grants network authority. See the limited endpoint contract below.
 - `env_stop`: live process-group or ownership-fenced container cleanup for this task's own selected apps and pending acquisitions. It cannot stop another owner. Durable stop receipts bind retries to the original selection, not newly started apps.
 
+### Repeated holder starts
+
+A new exact approved `env_start` request for the complete identical run plan already held by the same native task returns an explicit `acquisition:"already-held"` receipt. It names the original run/batch plus the new request batch and reuse time. No second process, reservation, reference count, secret resolution or application of changed workspace contents is implied. Changed/partial plans, closing batches, interrupted receipts and foreign tasks are not reusable. Current live-handle checks and native task cancellation fences apply within the receipt transaction.
+
+Reuse references are durable, but never restore execution/network/cleanup authority: replay resolves the original run's current recorded state; missing references fail closed. Native scenarios verify two independently approved starts produce one actual command/lease and one owned cleanup, while an approved different target cannot replace a held run. Bounded-wait queue continuation remains pending.
+
 ### Initial task-owned infrastructure and declared dependencies
 
 Projects may declare `"kind":"infrastructure"` in `environments.json`. These are **exclusive task-owned run resources**, using the same authorized repository/workspace, runtime selection, readiness observations, immutable approval, atomic batch reservation and live-receipt cleanup as apps. Infrastructure definitions are run-only: no implicit image build or database-query authority. Their identity is captured as `projectKind` in new execution plans; old receipts are not reclassified from today's catalog.

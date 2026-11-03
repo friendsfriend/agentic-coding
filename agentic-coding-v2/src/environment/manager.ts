@@ -20,6 +20,7 @@ import {
 	type EnvironmentRun,
 	EnvironmentState,
 	holdsResource,
+	type ReuseReceipt,
 	type StopReceipt,
 } from "./state.ts";
 
@@ -276,11 +277,93 @@ export class Environments {
 			);
 	}
 	async receipt(batch: string, owner: number, request: string) {
-		const runs = (await this.records()).filter((run) => run.batch === batch);
-		if (!runs.length) return null;
-		if (runs.some((run) => run.owner !== owner || run.request !== request))
+		const state = await this.store.snapshot(EnvironmentState, background),
+			raw = state?.reuses?.[batch],
+			reuse = raw ? decode<ReuseReceipt>(raw) : undefined;
+		if (reuse && (reuse.owner !== owner || reuse.request !== request))
 			throw new Error("Environment request identity mismatch");
-		return runs.map((run) => this.visible(run, true));
+		const runs = values<EnvironmentRun>(state?.runs).filter((run) =>
+			reuse ? reuse.runs.includes(run.id) : run.batch === batch,
+		);
+		if (reuse && runs.length !== reuse.runs.length)
+			throw new Error(
+				"Reused environment receipt is incomplete; no replay authorized",
+			);
+		if (!runs.length) return null;
+		if (
+			runs.some(
+				(run) => run.owner !== owner || (!reuse && run.request !== request),
+			)
+		)
+			throw new Error("Environment request identity mismatch");
+		return runs.map((run) => ({
+			...this.visible(run, true),
+			...(reuse
+				? {
+						acquisition: "already-held" as const,
+						requestBatch: batch,
+						reusedAt: reuse.createdAt,
+					}
+				: {}),
+		}));
+	}
+	private async reuse(
+		batch: string,
+		request: string,
+		owner: number,
+		plans: Plan[],
+		signal?: AbortSignal,
+	) {
+		return this.store.commit(async (tx) => {
+			this.check(owner, signal, batch);
+			const task = await tx.task(owner as TaskId);
+			this.check(owner, signal, batch);
+			if (!task || task.abortRequested || task.state.status === "terminal")
+				throw new Error("Environment task has ended");
+			const doc = await tx.doc(EnvironmentState);
+			const previous = doc.reuses?.[batch];
+			if (previous) {
+				const saved = decode<ReuseReceipt>(previous);
+				if (saved.owner !== owner || saved.request !== request)
+					throw new Error("Environment request identity mismatch");
+				return true;
+			}
+			const runs = values<EnvironmentRun>(doc.runs);
+			const held = runs.filter(
+				(run) =>
+					run.owner === owner &&
+					run.plan.action === "run" &&
+					holdsResource(run),
+			);
+			if (
+				held.length !== plans.length ||
+				runs.some(
+					(run) => run.batch === held[0]?.batch && run.state !== "running",
+				) ||
+				held.some((run) => run.batch !== held[0]?.batch) ||
+				!plans.every((plan) =>
+					held.some(
+						(run) =>
+							run.plan.app === plan.app &&
+							JSON.stringify(run.plan) === JSON.stringify(plan) &&
+							run.state === "running" &&
+							!this.stopped.has(run.batch) &&
+							this.live.has(run.id) &&
+							!this.live.get(run.id)?.outcome &&
+							!this.live.get(run.id)?.cleanupFailed,
+					),
+				)
+			)
+				return false;
+			doc.reuses ??= {};
+			doc.reuses[batch] = JSON.stringify({
+				owner,
+				request,
+				runs: held.map((run) => run.id),
+				createdAt: Date.now(),
+			} satisfies ReuseReceipt);
+			return true;
+		}, background);
 	}
 	private visible(run: EnvironmentRun, output: boolean, services = false) {
 		const { output: stored, serviceLogs: storedServices, ...rest } = run;
@@ -463,6 +546,11 @@ export class Environments {
 			throw new Error(
 				"Requested services overlap a container name or published port; no resources were acquired",
 			);
+		if (
+			plans[0]?.action === "run" &&
+			(await this.reuse(batch, request, owner.id, plans, signal))
+		)
+			return this.receipt(batch, owner.id, request);
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
 		const running = plans[0]?.action === "run";

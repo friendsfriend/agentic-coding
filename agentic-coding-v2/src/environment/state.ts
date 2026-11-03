@@ -5,13 +5,20 @@ import type { RuntimeStatus, ServiceLog } from "./process.ts";
 export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
 	stops: Record<string, string>;
+	reuses?: Record<string, string>;
 }>({
 	kind: "v2.environments",
 	version: 1,
 	scope: "session",
-	initial: () => ({ runs: {}, stops: {} }),
+	initial: () => ({ runs: {}, stops: {}, reuses: {} }),
 	checkpointWhen: () => true,
 });
+export type ReuseReceipt = {
+	owner: number;
+	request: string;
+	runs: string[];
+	createdAt: number;
+};
 export type StopReceipt = {
 	owner: number;
 	apps: string[] | null;
