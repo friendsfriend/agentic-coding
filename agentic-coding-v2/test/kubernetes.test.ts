@@ -15,7 +15,7 @@ afterEach(cleanup);
 // Minimal Kubernetes HTTP/CLI boundary: bounded PodList, Pod creation and
 // UID-preconditioned deletion. No scheduler, container or cluster simulation.
 const client = `import fs from "node:fs";
-if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,"invoked\\n");
+if(process.env.FIXTURE_CALLS)fs.appendFileSync(process.env.FIXTURE_CALLS,JSON.stringify({parent:process.ppid})+"\\n");
 const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0,gate:process.env.FIXTURE_GATE!=="closed"};
 const args=process.argv.slice(2),method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
 console.error("private-api-output");let result;
@@ -296,8 +296,17 @@ test("killed Pod hosts retain only diagnostic UIDs and quarantine occupancy with
 		});
 		host.kill("SIGKILL");
 		await host.exited;
-		const before = fs.readFileSync(callsFile, "utf8"),
-			restored = await state.open(),
+		// A pre-crash client may enter after SIGKILL. Attribute observations to
+		// the emitting host rather than claiming crash cancels already-issued effects.
+		// PIDs here are fixture audit data only, never cleanup/adoption authority.
+		const callsFromRestoredHost = () =>
+			fs
+				.readFileSync(callsFile, "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { parent: number })
+				.filter((call) => call.parent === process.pid);
+		const restored = await state.open(),
 			quarantined = (await restored.environments.snapshot()).runs[0];
 		if (!quarantined) throw new Error("Missing interrupted Pod receipt");
 		expect(quarantined).toMatchObject({ state: "interrupted", exitCode: null });
@@ -324,7 +333,7 @@ test("killed Pod hosts retain only diagnostic UIDs and quarantine occupancy with
 			status: "aborted",
 			reason: expect.stringContaining("Resources remain quarantined"),
 		});
-		expect(fs.readFileSync(callsFile, "utf8")).toBe(before);
+		expect(callsFromRestoredHost()).toEqual([]);
 		// The fixture operator removes only these synthetic UIDs, not a namespace,
 		// labels or names that could authorize touching an unrelated/replacement Pod.
 		const pods = JSON.parse(fs.readFileSync(podFile, "utf8")),
@@ -369,7 +378,7 @@ test("killed Pod hosts retain only diagnostic UIDs and quarantine occupancy with
 				exitCode: null,
 				inspection: { revision: quarantined.revision },
 			});
-			expect(fs.readFileSync(callsFile, "utf8")).toBe(before);
+			expect(callsFromRestoredHost()).toEqual([]);
 		} finally {
 			await server.stop();
 		}
