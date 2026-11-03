@@ -174,19 +174,26 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_list",
 				description:
-					"List configured environment projects, profiles, declared/default target choices, current task-owned slots and acquisition queues. No live legacy environments are imported.",
+					"List configured environment projects, profiles, declared/default target choices, current task-owned slots, idle protection/countdowns and acquisition queues. Owner-scoped reads renew a known live agent batch, not another task. No live legacy environments are imported.",
 				parameters: Type.Object({}),
 				replay: "safe",
-				execute: async () => environmentResult(await manager.snapshot()),
+				execute: async (_args, api) => {
+					const owner = await ownerOf(api.conversationId);
+					if (owner) manager.idle.touch(owner.id);
+					return environmentResult(await manager.snapshot());
+				},
 			}),
 			defineTool({
 				name: "env_status",
 				description:
-					"Inspect environment run receipts, process exit status, readiness and task ownership. Interrupted effects require developer inspection; never kill a saved PID.",
+					"Inspect environment run receipts, process exit status, readiness, task ownership, idle protection/countdowns and recorded expiry reasons. Owner-scoped inspection renews this agent batch. Interrupted effects require developer inspection; never kill a saved PID.",
 				parameters: Type.Object({ app: Type.Optional(Type.String()) }),
 				replay: "safe",
-				execute: async (args) =>
-					environmentResult(await manager.snapshot(args.app)),
+				execute: async (args, api) => {
+					const owner = await ownerOf(api.conversationId);
+					if (owner) manager.idle.touch(owner.id);
+					return environmentResult(await manager.snapshot(args.app));
+				},
 			}),
 			defineTool({
 				name: "env_logs",
@@ -335,6 +342,7 @@ export function createEnvironmentTools(
 						throw new Error(
 							"Stopping environments requires their owning skill task",
 						);
+					manager.idle.touch(owner.id);
 					return environmentResult({
 						stopped: await manager.stopOnce(
 							`env-stop-${api.taskId}`,

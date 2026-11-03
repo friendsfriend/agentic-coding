@@ -25,12 +25,14 @@ export type ReuseReceipt = {
 	runs: string[];
 	createdAt: number;
 };
+export type IdleReap = { at: number; lastActivityAt: number; ttlMs: number };
 export type StopReceipt = {
 	owner: number;
 	apps: string[] | null;
 	runs: string[];
 	batches: string[];
 	done: boolean;
+	idle?: IdleReap;
 };
 export type EnvironmentRun = {
 	id: string;
@@ -52,5 +54,6 @@ export type EnvironmentRun = {
 	runtimeStatus?: RuntimeStatus;
 	runtimeStatuses?: RuntimeStatus[];
 	inspection?: { confirmedAt: number; revision: number };
+	idleReap?: IdleReap;
 };
 export const holdsResource = (run: EnvironmentRun) => run.state !== "exited";

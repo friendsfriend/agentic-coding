@@ -290,6 +290,7 @@ export class Runtime {
 					current.tasks[String(info.id)] = JSON.stringify(saved);
 				}, context);
 			}
+			await this.environments.idle.reap(now);
 			await this.scheduler.tick(now);
 		} finally {
 			this.reconciling = false;

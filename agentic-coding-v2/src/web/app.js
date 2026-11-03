@@ -434,6 +434,24 @@ async function refresh() {
 								await refresh();
 							}),
 						);
+					if (run.idleReap)
+						content.append(
+							element(
+								"p",
+								`Idle expiry requested at ${new Date(run.idleReap.at).toISOString()}; cleanup state: ${run.state}. Coding task authority is not permanently revoked.`,
+								"meta",
+							),
+						);
+					else if (run.idle)
+						content.append(
+							element(
+								"p",
+								run.idle.protection
+									? `Idle expiry protected: ${run.idle.protection}`
+									: `Agent batch idle TTL: ${Math.ceil(run.idle.remainingMs / 1000)} seconds remaining; owner-scoped environment use renews the batch.`,
+								"meta",
+							),
+						);
 					const diagnostics = environmentDiagnostics(
 						run,
 						api,

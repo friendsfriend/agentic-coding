@@ -984,6 +984,11 @@ test("killed container and Compose hosts never adopt saved IDs or invoke an engi
 					Boolean(readEngine(fixtureState.config).networks?.[id]),
 				),
 			).toBe(true);
+			await restored.tick(Date.now() + 31 * 60_000);
+			const protectedRun = (await restored.environments.snapshot()).runs[0];
+			expect(protectedRun?.state).toBe("interrupted");
+			expect(protectedRun?.idle.protection).toBeTruthy();
+			expect(readEngine(fixtureState.config).history).toEqual(before);
 			await expect(
 				restored.environments.stopOnce("crash-stop", ready.id, ["api"]),
 			).rejects.toThrow("saved PID");

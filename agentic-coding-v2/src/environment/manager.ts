@@ -12,6 +12,7 @@ import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
 import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
+import { IdleLifecycle } from "./idle.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { Plan, TelemetryOptions } from "./model.ts";
@@ -52,6 +53,7 @@ export class Environments {
 	readonly database: DatabaseDiagnostics;
 	readonly acquisitions: Acquisitions;
 	readonly operator: OperatorRevocations;
+	readonly idle: IdleLifecycle;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
@@ -65,6 +67,17 @@ export class Environments {
 	private dependencyCleanup = new Map<number, Promise<void>>();
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
+		this.idle = new IdleLifecycle(config.configDir, {
+			store: () => this.store,
+			eligible: (run) => this.canIdleRun(run),
+			pending: (owner) =>
+				[...this.pending.values()].some((entry) => entry.owner === owner),
+			latch: (batches) => {
+				for (const batch of batches) this.stopped.add(batch);
+				this.acquisitions.notify();
+			},
+			stop: (runs, batches) => this.stopTargets(runs, batches, true),
+		});
 		this.clusters = loadClusters(config);
 		this.acquisitions = new Acquisitions(config.stateDir, {
 			store: () => this.store,
@@ -96,7 +109,10 @@ export class Environments {
 			records: () => this.records(),
 			live: this.live,
 			pending: this.pending,
-			check: (owner, signal, batch) => this.check(owner, signal, batch),
+			check: (owner, signal, batch) => {
+				this.check(owner, signal, batch);
+				this.idle.touch(owner);
+			},
 		};
 		this.http = new HeldHttp(config, authority);
 		this.database = new DatabaseDiagnostics(config, authority);
@@ -277,6 +293,26 @@ export class Environments {
 			return true;
 		}, background);
 	}
+	private canIdleRun(run: EnvironmentRun) {
+		const process = this.live.get(run.id);
+		const statuses =
+			process?.runtimeStatuses ??
+			(process?.runtimeStatus ? [process.runtimeStatus] : []);
+		return (
+			!this.closed &&
+			!this.revoked.has(run.owner) &&
+			!this.stopped.has(run.batch) &&
+			run.state === "running" &&
+			run.plan.action === "run" &&
+			!!process &&
+			!process.outcome &&
+			!process.cleanupFailed &&
+			(run.plan.runtime === "shell" || statuses.length > 0) &&
+			statuses.every(
+				(status) => status.owned === true && status.state === "running",
+			)
+		);
+	}
 	private hasLiveAuthority(run: EnvironmentRun) {
 		return (
 			!this.closed &&
@@ -334,6 +370,12 @@ export class Environments {
 			operations = Object.entries(state?.httpOperations ?? {})
 				.map(([id, raw]) => ({ id, receipt: decode<HttpReceipt>(raw) }))
 				.filter(({ receipt }) => !app || receipt.approved.app === app);
+		const protectedOwners = new Set(
+			all
+				.filter(holdsResource)
+				.filter((run) => !this.canIdleRun(run))
+				.map((run) => run.owner),
+		);
 		return {
 			runtime: "task-owned",
 			revocations: values<OperatorRevocation>(state?.operatorRevocations)
@@ -407,7 +449,15 @@ export class Environments {
 			runs: recentRuns(
 				all.filter((run) => !app || run.plan.app === app),
 				200,
-			).map((run) => this.visible(run, { output: false })),
+			).map((run) => ({
+				...this.visible(run, { output: false }),
+				idle: this.idle.view(run, {
+					waiting: values<WaitReceipt>(state?.waits).some(
+						(wait) => wait.owner === run.owner && wait.state === "waiting",
+					),
+					protectedBatch: protectedOwners.has(run.owner),
+				}),
+			})),
 			waiters: this.acquisitions.entries
 				.filter((waiter) => !app || waiter.apps.includes(app))
 				.map(({ plans: _plans, ...waiter }) => waiter),
@@ -419,6 +469,7 @@ export class Environments {
 		services = false,
 		kind?: Plan["projectKind"],
 	) {
+		if (owner !== undefined) this.idle.touch(owner);
 		return recentRuns(
 			(await this.records()).filter(
 				(run) =>
@@ -458,6 +509,7 @@ export class Environments {
 				"No owned live ready native telemetry run is held for this app",
 			);
 		this.check(run.owner, undefined, run.batch);
+		if (owner !== undefined) this.idle.touch(owner);
 		return process.telemetry.query(options);
 	}
 	async selectedLogs(
@@ -524,6 +576,7 @@ export class Environments {
 		retainQueue = false,
 		pollId = batch,
 	) {
+		this.idle.observe(owner);
 		const operation = this.perform(
 			batch,
 			request,
@@ -932,6 +985,7 @@ export class Environments {
 			);
 	}
 	async releaseOwner(owner: number) {
+		this.idle.forget(owner);
 		this.revoked.add(owner);
 		this.acquisitions.notify();
 		const runs = (await this.records()).filter(
