@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { object, text } from "./config.ts";
+import type { LogOptions } from "./environment/logs.ts";
 import { renderMarkdown } from "./markdown.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Review } from "./state.ts";
@@ -16,6 +17,30 @@ function equalSecret(actual: string, expected: string): boolean {
 function integer(value: unknown): number {
 	if (!Number.isSafeInteger(value)) throw new Error("Expected an integer");
 	return Number(value);
+}
+function environmentLogQuery(query: URLSearchParams): {
+	app: string;
+	options: LogOptions;
+} {
+	const allowed = new Set(["app", "since", "grep", "tail", "service", "kind"]);
+	for (const key of query.keys())
+		if (!allowed.has(key) || query.getAll(key).length !== 1)
+			throw new Error("Unknown or repeated environment log query parameter");
+	const kind = query.get("kind") ?? undefined;
+	if (kind !== undefined && kind !== "infrastructure")
+		throw new Error(
+			"Environment log kind must be infrastructure when supplied",
+		);
+	return {
+		app: text(query.get("app"), "environment app", 64),
+		options: {
+			since: query.get("since") ?? undefined,
+			grep: query.get("grep") ?? undefined,
+			service: query.get("service") ?? undefined,
+			tail: query.has("tail") ? Number(query.get("tail")) : undefined,
+			kind,
+		},
+	};
 }
 export function serve(app: Runtime, port = 0) {
 	const token = randomBytes(32).toString("hex");
@@ -118,12 +143,15 @@ export function serve(app: Runtime, port = 0) {
 				if (
 					request.method === "GET" &&
 					url.pathname === "/api/environments/logs"
-				)
-					return json(
-						await app.environments.logs(
-							text(url.searchParams.get("app"), "environment app", 64),
-						),
+				) {
+					const { app: project, options } = environmentLogQuery(
+						url.searchParams,
 					);
+					return json(
+						(await app.environments.selectedLogs(project, undefined, options))
+							.runs,
+					);
+				}
 				if (request.method !== "POST") return json({ error: "Not found" }, 404);
 				const body = object(await request.json());
 				if (url.pathname === "/api/session")

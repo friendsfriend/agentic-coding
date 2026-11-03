@@ -227,8 +227,12 @@ async function refresh() {
 							);
 							const log = logs.find((item) => item.id === run.id);
 							const pre = card.querySelector("pre") ?? element("pre");
-							pre.textContent =
-								log?.output || "No complete log lines captured.";
+							pre.textContent = !log
+								? "This run is outside the retained log response window."
+								: log.output ||
+									(log.selection.omittedForBudget
+										? "Matching lines exceed the retained-log response budget; no complete line was returned."
+										: "No matching complete lines in the retained log window.");
 							card.append(pre);
 						}),
 					);

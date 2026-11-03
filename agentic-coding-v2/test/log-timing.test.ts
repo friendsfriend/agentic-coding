@@ -4,6 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
+import { serve } from "../src/server.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
@@ -114,4 +115,41 @@ test("native since uses host receipt times rather than spoofable app dates and s
 	});
 	expect(failure).toContain("explicit ISO 8601 instant");
 	expect(JSON.stringify(observations)).not.toContain(secret);
+	const host = serve(app);
+	try {
+		const address = new URL(host.url);
+		const token = new URLSearchParams(address.hash.slice(1)).get("token");
+		if (!token) throw new Error("Disposable host omitted its private token");
+		const headers = { Authorization: `Bearer ${token}` };
+		const query = new URL("/api/environments/logs", address);
+		query.search = new URLSearchParams({
+			app: "api",
+			since,
+			grep: "[x]",
+			tail: "2",
+		}).toString();
+		const response = await fetch(query, { headers });
+		expect(response.status).toBe(200);
+		const selected = await response.json();
+		expect(selected).toMatchObject([
+			{
+				output: "1900-01-01T00:00:00Z late [x] [REDACTED]\n",
+				timeSelection: {
+					basis: "host-receipt-completed-lines",
+					availability: "available",
+				},
+				selection: { returnedLines: 1 },
+			},
+		]);
+		expect(JSON.stringify(selected)).not.toContain(secret);
+		query.searchParams.delete("since");
+		query.searchParams.set("sincee", since);
+		const refused = await fetch(query, { headers });
+		expect(refused.status).toBe(400);
+		expect(await refused.json()).toMatchObject({
+			error: "Unknown or repeated environment log query parameter",
+		});
+	} finally {
+		await host.stop();
+	}
 }, 15000);
