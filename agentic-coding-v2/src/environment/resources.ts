@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { digest } from "../config.ts";
 import type { Plan } from "./catalog.ts";
+import { containerPlans } from "./compose-config.ts";
 
 function localSocket(value: string) {
 	try {
@@ -11,6 +12,12 @@ function localSocket(value: string) {
 	}
 }
 export function runsConflict(left: Plan, right: Plan, stateDir: string) {
+	if (left.app === right.app) return true;
+	return containerPlans(left).some((a) =>
+		containerPlans(right).some((b) => containerConflict(a, b, stateDir)),
+	);
+}
+function containerConflict(left: Plan, right: Plan, stateDir: string) {
 	if (left.app === right.app) return true;
 	if (!left.container || !right.container) return false;
 	const name = (plan: Plan) =>

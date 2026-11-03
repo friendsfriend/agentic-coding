@@ -3,6 +3,8 @@ import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { loadProjects, type Plan, projectView } from "./catalog.ts";
+import { ComposeProcess } from "./compose.ts";
+import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -60,7 +62,7 @@ export class Environments {
 			for (const receipt of values<StopReceipt>(doc.stops))
 				for (const batch of receipt.batches) this.stopped.add(batch);
 			for (const run of values<EnvironmentRun>(doc.runs))
-				if (run.state !== "exited" && run.state !== "interrupted") {
+				if (run.state !== "exited") {
 					run.state = "interrupted";
 					if (run.runtimeStatus)
 						run.runtimeStatus = {
@@ -69,6 +71,12 @@ export class Environments {
 							health: null,
 							owned: null,
 						};
+					run.runtimeStatuses = run.runtimeStatuses?.map((status) => ({
+						...status,
+						state: "unknown",
+						health: null,
+						owned: null,
+					}));
 					run.revision++;
 					run.error =
 						"Host restarted with ambiguous environment effects. Inspect and stop/remove leftovers before releasing this resource. Saved PIDs, container IDs and labels are diagnostic only, never automatic cleanup/adoption authority.";
@@ -129,6 +137,9 @@ export class Environments {
 			...(this.live.get(run.id)?.runtimeStatus
 				? { runtimeStatus: this.live.get(run.id)?.runtimeStatus }
 				: {}),
+			...(this.live.get(run.id)?.runtimeStatuses
+				? { runtimeStatuses: this.live.get(run.id)?.runtimeStatuses }
+				: {}),
 			...(output ? { output: this.live.get(run.id)?.logs ?? stored } : {}),
 		};
 	}
@@ -175,6 +186,7 @@ export class Environments {
 				| "output"
 				| "error"
 				| "runtimeStatus"
+				| "runtimeStatuses"
 			>
 		>,
 	) {
@@ -244,6 +256,17 @@ export class Environments {
 		)
 			throw new Error(
 				"Requested apps overlap a container name or published port; no resources were acquired",
+			);
+		const resources = plans.flatMap(containerPlans);
+		if (
+			resources.some((plan, index) =>
+				resources
+					.slice(0, index)
+					.some((other) => runsConflict(plan, other, this.config.stateDir)),
+			)
+		)
+			throw new Error(
+				"Requested services overlap a container name or published port; no resources were acquired",
 			);
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
@@ -338,12 +361,19 @@ export class Environments {
 					process: EnvironmentProcess =
 						plan.runtime === "shell"
 							? new ShellProcess(plan, this.config.configDir)
-							: new ContainerProcess(
-									plan,
-									this.config.configDir,
-									this.config.stateDir,
-									id,
-								);
+							: plan.runtime === "compose"
+								? new ComposeProcess(
+										plan,
+										this.config.configDir,
+										this.config.stateDir,
+										id,
+									)
+								: new ContainerProcess(
+										plan,
+										this.config.configDir,
+										this.config.stateDir,
+										id,
+									);
 				this.live.set(id, process);
 				// Always attach finalization immediately, including startup/recording failure.
 				void process.done
@@ -369,6 +399,9 @@ export class Environments {
 							revision: run.revision + 1,
 							ready: plan.runtime !== "shell" || plan.readyText ? true : null,
 							output: process.logs,
+							...(process.runtimeStatuses
+								? { runtimeStatuses: process.runtimeStatuses }
+								: {}),
 							...(process.runtimeStatus
 								? { runtimeStatus: process.runtimeStatus }
 								: {}),
@@ -433,6 +466,9 @@ export class Environments {
 				exitCode: exit.code,
 				signal: exit.signal,
 				output: process.logs,
+				...(process.runtimeStatuses
+					? { runtimeStatuses: process.runtimeStatuses }
+					: {}),
 				...(process.runtimeStatus
 					? { runtimeStatus: process.runtimeStatus }
 					: {}),
@@ -451,6 +487,9 @@ export class Environments {
 			await this.update(id, {
 				state: "interrupted",
 				output: process.logs,
+				...(process.runtimeStatuses
+					? { runtimeStatuses: process.runtimeStatuses }
+					: {}),
 				...(process.runtimeStatus
 					? { runtimeStatus: process.runtimeStatus }
 					: {}),

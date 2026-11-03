@@ -5,6 +5,7 @@ export type Runtime =
 	| "powershell"
 	| "docker"
 	| "podman"
+	| "compose"
 	| "kubernetes";
 export type Selection = {
 	target?: string;
@@ -23,6 +24,7 @@ export type Candidate = {
 const preference: Runtime[] = [
 	"docker",
 	"podman",
+	"compose",
 	"shell",
 	"systemshell",
 	"powershell",

@@ -38,7 +38,8 @@ export function targetAvailability(target: Target): Availability {
 					"/bin/sh",
 				)
 			: result(false, "POSIX shell is not executable");
-	const socket = target.container?.socket;
+	const runtime = target.compose?.provider ?? target.runtime;
+	const socket = target.compose?.socket ?? target.container?.socket;
 	if (!socket) return result(false, "An explicit local API socket is required");
 	try {
 		if (!fs.statSync(socket).isSocket())
@@ -64,7 +65,7 @@ export function targetAvailability(target: Target): Availability {
 	if (paths.some((entry) => !path.isAbsolute(entry)))
 		return result(null, "Relative client PATH requires task-time resolution");
 	const program = paths
-		.map((entry) => path.join(entry, target.runtime))
+		.map((entry) => path.join(entry, runtime))
 		.find(executable);
 	return program
 		? result(
@@ -72,8 +73,5 @@ export function targetAvailability(target: Target): Availability {
 				"Client and socket metadata are eligible; daemon connectivity, health and permissions are not probed",
 				program,
 			)
-		: result(
-				false,
-				`Configured ${target.runtime} client is not executable on PATH`,
-			);
+		: result(false, `Configured ${runtime} client is not executable on PATH`);
 }

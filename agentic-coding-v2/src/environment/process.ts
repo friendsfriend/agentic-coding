@@ -16,6 +16,7 @@ export interface EnvironmentProcess {
 	readonly outcome: Exit | null;
 	readonly cleanupFailed: boolean;
 	readonly runtimeStatus?: RuntimeStatus;
+	readonly runtimeStatuses?: RuntimeStatus[];
 	ready(signal?: AbortSignal): Promise<void>;
 	wait(signal?: AbortSignal): Promise<Exit>;
 	stop(): Promise<void>;

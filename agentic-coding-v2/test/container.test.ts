@@ -4,7 +4,7 @@ import path from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
-import type { Config } from "../src/config.ts";
+import { type Config, digest } from "../src/config.ts";
 import type { EnvironmentRun } from "../src/environment/state.ts";
 import { git } from "../src/git.ts";
 import { serve } from "../src/server.ts";
@@ -130,6 +130,218 @@ function configure(config: Config) {
 		}),
 	);
 }
+
+function configureCompose(config: Config) {
+	configure(config);
+	const file = path.join(config.configDir, "environments.json");
+	const data = JSON.parse(fs.readFileSync(file, "utf8"));
+	const project = data.projects[0],
+		base = project.targets[0];
+	project.defaults = { run: "stack" };
+	project.targets = [
+		{
+			id: "stack",
+			action: "run",
+			runtime: "compose",
+			timeoutMs: 5000,
+			environment: base.environment,
+			secretRefs: base.secretRefs,
+			compose: {
+				file: "deploy/compose.yaml",
+				provider: "docker",
+				socket: base.container.socket,
+			},
+		},
+	];
+	data.projects = [project];
+	fs.writeFileSync(file, JSON.stringify(data));
+}
+async function composeFile(repository: string, body: string) {
+	fs.mkdirSync(path.join(repository, "deploy"), { recursive: true });
+	fs.writeFileSync(path.join(repository, "deploy/compose.yaml"), body);
+	await git(repository, ["add", "deploy/compose.yaml"]);
+	await git(repository, ["commit", "-m", "disposable Compose fixture"]);
+}
+const stackYaml =
+	"services:\n  web:\n    image: fixture:latest\n    command: [serve]\n    volumes:\n      - type: bind\n        source: .\n        target: /workspace\n  worker:\n    image: fixture:latest\n    command: [serve]\n";
+
+test("Compose native approval pins checkout-relative services, owns every creation and reverses cleanup", async () => {
+	const { app, config, fake, invocation } = await fixture(
+		false,
+		configureCompose,
+	);
+	await composeFile(invocation.repository, stackYaml);
+	fake.setResponses([
+		call("env_start", { apps: ["api"], runtime: "compose" }),
+		call("request_review", { path: ".", title: "Hold stack" }),
+	]);
+	const task = await app.startTask(invocation);
+	const review = await pendingReview(app, task);
+	expect(review.snapshot).toContain('"composePlan"');
+	expect(review.snapshot).not.toContain(secret);
+	expect(readEngine(config).history).toHaveLength(0);
+	await approve(app, task);
+	await pendingReview(app, task, "Hold stack");
+	const run = (await app.environments.snapshot()).runs[0];
+	expect(run?.state).toBe("running");
+	expect(run?.runtimeStatuses).toHaveLength(2);
+	expect(
+		run?.runtimeStatuses?.every(
+			(status) => status.owned === true && status.state === "running",
+		),
+	).toBe(true);
+	const history = readEngine(config).history;
+	expect(history.filter((args) => args[2] === "create")).toHaveLength(2);
+	expect(history.find((args) => args[2] === "create")?.join(" ")).toContain(
+		`src=${run?.plan.workspace}/deploy`,
+	);
+	await eventually(
+		() => app.environments.logs("api", task),
+		(logs) => JSON.stringify(logs).includes("[REDACTED]"),
+	);
+	await app.cancel(task);
+	await app.harness.waitForTask(task as TaskId, context);
+	expect(Object.keys(readEngine(config).containers)).toHaveLength(0);
+	expect((await app.environments.snapshot()).runs[0]?.state).toBe("exited");
+	const removals = readEngine(config)
+		.history.filter((args) => args[2] === "rm")
+		.map((args) => args[3]);
+	expect(removals).toEqual(
+		(run?.runtimeStatuses ?? [])
+			.map((status) => status.id ?? "missing")
+			.reverse(),
+	);
+}, 15000);
+
+test("Compose source changes and colliding service ports fail before any engine command", async () => {
+	for (const variant of ["changed", "collision"]) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		const body =
+			variant === "collision"
+				? stackYaml.replaceAll(
+						"    command: [serve]",
+						"    command: [serve]\n    ports:\n      - target: 8080\n        published: 12345",
+					)
+				: stackYaml;
+		await composeFile(invocation.repository, body);
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			fauxAssistantMessage("No stack effects"),
+		]);
+		const task = await app.startTask(invocation);
+		await pendingReview(app, task);
+		if (variant === "changed") {
+			const snapshot = JSON.parse((await pendingReview(app, task)).snapshot);
+			const owner = snapshot.plans[0];
+			fs.appendFileSync(
+				path.join(owner.workspace, "deploy/compose.yaml"),
+				"# changed after approval snapshot\n",
+			);
+		}
+		await approve(app, task);
+		await app.harness.waitForTask(task as TaskId, context);
+		expect(readEngine(config).history).toHaveLength(0);
+		expect(
+			(await app.environments.snapshot()).runs.every(
+				(run) => run.state === "exited",
+			),
+		).toBe(true);
+	}
+}, 15000);
+
+test("Compose partial startup rolls back live receipts but never stops an existing second service", async () => {
+	const { app, config, fake, invocation } = await fixture(
+		false,
+		configureCompose,
+	);
+	await composeFile(invocation.repository, stackYaml);
+	const foreignId = "f".repeat(64),
+		state = readEngine(config);
+	state.containers[foreignId] = {
+		Id: foreignId,
+		Name: `/acv2-api-worker-${digest(config.stateDir).slice(0, 8)}`,
+		Config: { Labels: { foreign: "operator" }, Env: [] },
+		State: { Running: true, ExitCode: 0 },
+	};
+	fs.writeFileSync(engine(config), JSON.stringify(state));
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		fauxAssistantMessage("Foreign service preserved"),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await app.harness.waitForTask(task as TaskId, context);
+	const after = readEngine(config);
+	expect(Object.keys(after.containers)).toEqual([foreignId]);
+	expect(after.containers[foreignId]?.State.Running).toBe(true);
+	expect(
+		after.history
+			.filter((args) => ["stop", "rm"].includes(args[2] ?? ""))
+			.every((args) => !args.includes(foreignId)),
+	).toBe(true);
+	expect(after.history.filter((args) => args[2] === "rm")).toHaveLength(1);
+}, 10000);
+
+test("Compose unsupported effects are refused, and daemon loss quarantines the complete stack", async () => {
+	for (const field of [
+		"networks: [external]",
+		"privileged: true",
+		"depends_on: [worker]",
+		"build: .",
+	]) {
+		const { app, config, fake, invocation } = await fixture(
+			false,
+			configureCompose,
+		);
+		await composeFile(
+			invocation.repository,
+			stackYaml.replace(
+				"    image: fixture:latest",
+				`    ${field}\n    image: fixture:latest`,
+			),
+		);
+		let transcript = "";
+		fake.setResponses([
+			call("env_start", { apps: ["api"] }),
+			(messages) => {
+				transcript = JSON.stringify(messages.messages);
+				return fauxAssistantMessage("Unsupported effects refused");
+			},
+		]);
+		const task = await app.startTask(invocation);
+		await app.harness.waitForTask(task as TaskId, context);
+		expect(transcript).toContain("Unsupported Compose field");
+		expect(readEngine(config).history).toHaveLength(0);
+	}
+	const { app, config, fake, invocation } = await fixture(
+		false,
+		configureCompose,
+	);
+	await composeFile(invocation.repository, stackYaml);
+	fake.setResponses([
+		call("env_start", { apps: ["api"] }),
+		call("request_review", { path: ".", title: "Hold uncertain stack" }),
+	]);
+	const task = await app.startTask(invocation);
+	await approve(app, task);
+	await pendingReview(app, task, "Hold uncertain stack");
+	const state = readEngine(config);
+	state.offline = true;
+	fs.writeFileSync(engine(config), JSON.stringify(state));
+	await app.cancel(task);
+	await app.harness.waitForTask(task as TaskId, context);
+	const run = (await app.environments.snapshot()).runs[0];
+	expect(run?.state).toBe("interrupted");
+	expect(run?.exitCode).toBeNull();
+	expect(run?.runtimeStatuses).toHaveLength(2);
+	expect(Object.keys(readEngine(config).containers)).toHaveLength(2);
+	expect(readEngine(config).history.some((args) => args[2] === "rm")).toBe(
+		false,
+	);
+}, 20000);
 
 test("native container approvals select profiles/providers, fence ownership, redact streams and return actual build/test receipts", async () => {
 	const { app, config, fake, invocation } = await fixture(false, configure);

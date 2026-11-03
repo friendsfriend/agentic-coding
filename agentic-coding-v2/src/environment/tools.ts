@@ -70,6 +70,12 @@ export function createEnvironmentTools(
 			{
 				plans,
 				waitTimeoutMs: timeoutSec * 1000,
+				...(plans.some((plan) => plan.compose)
+					? {
+							composeScope:
+								"Limited Compose-file adapter, not compose up/down: individually isolated containers, no shared network or service-name DNS. No dependencies, healthcheck overrides, interpolation, named/external resources, build/test or extends. Each service receives the target environment and secret references. Only literal environments, argv commands, long-form ports and contained bind mounts are supported.",
+						}
+					: {}),
 				authority:
 					"Execute these exact configured environment actions in the task workspace. Container clients use only the explicit local API socket, never the default or a remote daemon context. Named containers are never adopted; only resources created by this live operation with matching host/run labels may be stopped or removed. Container build artifacts can persist in the local engine. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
 			},
@@ -108,6 +114,7 @@ export function createEnvironmentTools(
 				Type.Literal("shell"),
 				Type.Literal("docker"),
 				Type.Literal("podman"),
+				Type.Literal("compose"),
 			]),
 		),
 	};
@@ -148,7 +155,7 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose currently supports an explicitly limited file subset with isolated containers, not shared-network/service-name DNS semantics. Acquisition timeout releases queue position; no app starts on timeout.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					...selectionFields,

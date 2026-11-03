@@ -35,6 +35,7 @@ export type EnvironmentRun = {
 	output: string;
 	error: string | null;
 	runtimeStatus?: RuntimeStatus;
+	runtimeStatuses?: RuntimeStatus[];
 	inspection?: { confirmedAt: number; revision: number };
 };
 export const holdsResource = (run: EnvironmentRun) => run.state !== "exited";

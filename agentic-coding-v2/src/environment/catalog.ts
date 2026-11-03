@@ -4,6 +4,12 @@ import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
 import { type Availability, targetAvailability } from "./availability.ts";
+import {
+	type ComposeDefinition,
+	type ComposePlan,
+	compileCompose,
+	readCompose,
+} from "./compose-config.ts";
 import { type ContainerTarget, readContainer } from "./container-config.ts";
 import {
 	type Action,
@@ -16,8 +22,9 @@ export type { Action } from "./selection.ts";
 export type Target = {
 	id: string;
 	action: Action;
-	runtime: "shell" | "docker" | "podman";
+	runtime: "shell" | "docker" | "podman" | "compose";
 	container?: ContainerTarget;
+	compose?: ComposeDefinition;
 	availability?: Availability;
 	command: string;
 	profile?: string;
@@ -35,7 +42,12 @@ export type Project = {
 	targets: Target[];
 	defaults?: Partial<Record<Action, string>>;
 };
-export type Plan = Target & { app: string; workspace: string; cwd: string };
+export type Plan = Target & {
+	app: string;
+	workspace: string;
+	cwd: string;
+	composePlan?: ComposePlan;
+};
 const identifier = (value: unknown) => {
 	const id = text(value, "environment identifier", 64);
 	if (!/^[a-z][a-z0-9-]*$/.test(id))
@@ -81,13 +93,24 @@ function readTarget(raw: unknown): Target {
 		"environment",
 		"secretRefs",
 		"container",
+		"compose",
 	]);
 	if (
 		data.runtime !== "shell" &&
 		data.runtime !== "docker" &&
-		data.runtime !== "podman"
+		data.runtime !== "podman" &&
+		data.runtime !== "compose"
 	)
 		throw new Error("Unsupported environment runtime");
+	if (data.runtime !== "compose" && data.compose !== undefined)
+		throw new Error("Compose configuration requires the Compose runtime");
+	if (
+		data.runtime === "compose" &&
+		(data.action !== "run" || data.container !== undefined)
+	)
+		throw new Error(
+			"Compose currently supports run targets only, without container overrides",
+		);
 	if (
 		data.runtime === "shell"
 			? data.container !== undefined
@@ -97,7 +120,9 @@ function readTarget(raw: unknown): Target {
 			"Shell commands/readiness and structured container configuration cannot be mixed",
 		);
 	const container =
-		data.runtime === "shell" ? undefined : readContainer(data.container);
+		data.runtime === "shell" || data.runtime === "compose"
+			? undefined
+			: readContainer(data.container);
 	if (!["run", "build", "test"].includes(String(data.action)))
 		throw new Error("Invalid environment target action");
 	const timeoutMs = data.timeoutMs ?? (data.action === "run" ? 30000 : 600000);
@@ -132,6 +157,9 @@ function readTarget(raw: unknown): Target {
 		action: data.action as Action,
 		runtime: data.runtime,
 		...(container ? { container } : {}),
+		...(data.runtime === "compose"
+			? { compose: readCompose(data.compose) }
+			: {}),
 		command:
 			data.runtime === "shell"
 				? text(data.command, "environment command", 16000)
@@ -267,6 +295,25 @@ export function resolvePlans(
 			throw new Error(
 				"Environment cwd must be an existing task workspace directory",
 			);
-		return { ...chosen, app, workspace: owner.workspace, cwd };
+		const composePlan = chosen.compose
+			? compileCompose(owner.workspace, chosen.compose)
+			: undefined;
+		if (
+			composePlan?.services.some((service) =>
+				Object.keys(service.environment).some(
+					(key) => key in chosen.secretRefs,
+				),
+			)
+		)
+			throw new Error(
+				"Compose literals cannot override declared secret references",
+			);
+		return {
+			...chosen,
+			app,
+			workspace: owner.workspace,
+			cwd,
+			...(composePlan ? { composePlan } : {}),
+		};
 	});
 }

@@ -46,6 +46,14 @@ function port(raw: unknown) {
 		throw new Error("Invalid container port");
 	return Number(raw);
 }
+export function readLocalSocket(raw: unknown) {
+	const socket = text(raw, "container socket", 4096);
+	if (!path.isAbsolute(socket) || /[\r\n]/.test(socket))
+		throw new Error(
+			"An explicit absolute local container API socket is required; implicit or remote daemon contexts are not used",
+		);
+	return socket;
+}
 export function readContainer(raw: unknown): ContainerTarget {
 	const data = object(raw);
 	keys(data, [
@@ -61,11 +69,7 @@ export function readContainer(raw: unknown): ContainerTarget {
 		"context",
 		"buildArgs",
 	]);
-	const socket = text(data.socket, "container socket", 4096);
-	if (!path.isAbsolute(socket) || /[\r\n]/.test(socket))
-		throw new Error(
-			"An explicit absolute local container API socket is required; implicit or remote daemon contexts are not used",
-		);
+	const socket = readLocalSocket(data.socket);
 	const image = text(data.image, "container image", 512);
 	if (image.startsWith("-") || /\s/.test(image))
 		throw new Error("Invalid container image");

@@ -188,6 +188,12 @@ async function refresh() {
 						resource?.state,
 						resource?.health,
 						resource?.owned,
+						(run.runtimeStatuses ?? []).map((status) => [
+							status.id,
+							status.state,
+							status.health,
+							status.owned,
+						]),
 					]);
 					if (card.dataset.environmentRevision === renderRevision) return card;
 					const previousLogs = card.querySelector("pre");
@@ -205,6 +211,14 @@ async function refresh() {
 							"meta",
 						),
 					);
+					for (const service of run.runtimeStatuses ?? [])
+						card.append(
+							element(
+								"p",
+								`${service.name} · ${service.runtime} · ${service.state} · health ${service.health ?? "not checked"} · ownership ${service.owned === null ? "unknown" : service.owned ? "confirmed" : "foreign"} · ID ${service.id ?? "unknown"} (diagnostic only)`,
+								"meta",
+							),
+						);
 					if (run.error) card.append(element("p", run.error));
 					card.append(
 						button("View redacted logs", async () => {
