@@ -29,6 +29,7 @@ export type Topic = { id: string; title: string; createdAt: number };
 export type ExecutionPolicy = "read-only" | "workspace-write";
 export type TaskInfo = {
 	id: number;
+	kind?: "operator-environment";
 	baseCommit?: string;
 	policy: ExecutionPolicy;
 	topicId: string;

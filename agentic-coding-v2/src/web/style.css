@@ -44,6 +44,23 @@ button {
 button:disabled {
 	opacity: 0.5;
 }
+.environment-project label {
+	display: inline-flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 8px 12px 8px 0;
+	max-width: 100%;
+}
+.environment-project select,
+.environment-project input {
+	background: #151c27;
+	color: inherit;
+	border: 1px solid #43536b;
+	border-radius: 6px;
+	padding: 8px;
+	font: inherit;
+	max-width: 100%;
+}
 nav button {
 	display: block;
 	width: 100%;

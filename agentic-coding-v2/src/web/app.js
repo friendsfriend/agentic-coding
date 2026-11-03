@@ -43,6 +43,203 @@ function reuseChildren(parent, ...cards) {
 			parent.insertBefore(card, parent.children[index] ?? null);
 	});
 }
+function environmentProject(project, existing) {
+	const card = existing ?? element("div", null, "task environment-project");
+	const version = JSON.stringify(project);
+	if (card.dataset.environmentProjectRevision === version) return card;
+	card.dataset.environmentProject = project.id;
+	card.dataset.environmentProjectRevision = version;
+	card.replaceChildren();
+	const field = (label, control) => {
+		const wrapper = element("label", `${label} `);
+		control.setAttribute("aria-label", `${project.id} ${label}`);
+		wrapper.append(control);
+		card.append(wrapper);
+		return wrapper;
+	};
+	const choices = (control, entries, selected) => {
+		control.replaceChildren(
+			...entries.map(([value, label, disabled]) => {
+				const option = element("option", label);
+				option.value = value;
+				option.disabled = Boolean(disabled);
+				return option;
+			}),
+		);
+		if (entries.some(([value]) => value === selected)) control.value = selected;
+	};
+	const action = element("select"),
+		runtime = element("select"),
+		profile = element("select"),
+		target = element("select"),
+		workspace = element("select"),
+		replicas = element("input"),
+		base = element("input");
+	base.value = "HEAD";
+	base.disabled = true;
+	replicas.type = "number";
+	replicas.min = "1";
+	replicas.max = "16";
+	replicas.value = "1";
+	choices(
+		workspace,
+		[
+			["checkout", "Developer checkout (includes local edits)"],
+			["worktree", "Isolated worktree (captured commit)"],
+		],
+		"checkout",
+	);
+	workspace.onchange = () => {
+		base.disabled = workspace.value !== "worktree";
+	};
+	card.append(
+		element("strong", `${project.id} · ${project.kind}`),
+		element("p", project.repository, "meta"),
+	);
+	field("Action", action);
+	field("Runtime", runtime);
+	field("Profile", profile);
+	field("Target", target);
+	field("Workspace", workspace);
+	field("Git base (worktree only)", base);
+	const replicaField = field("Replicas (Kubernetes)", replicas);
+	let replicaTarget = "";
+	const detail = element("p", null, "meta");
+	let request = null;
+	const submit = button("Prepare action for review", async () => {
+		submit.disabled = true;
+		try {
+			const selected = project.targets.find((item) => item.id === target.value);
+			if (!selected) throw new Error("Choose a target");
+			const body = {
+				apps: [project.id],
+				action: action.value,
+				target: selected.id,
+				runtime: selected.runtime,
+				profile: selected.profile ?? "default",
+				workspaceMode: workspace.value,
+				...(workspace.value === "worktree"
+					? { baseRef: base.value || "HEAD" }
+					: {}),
+				...(selected.runtime === "kubernetes"
+					? { replicas: Number(replicas.value) }
+					: {}),
+			};
+			const fingerprint = JSON.stringify(body);
+			if (!request || request.fingerprint !== fingerprint)
+				request = { fingerprint, requestId: crypto.randomUUID() };
+			const result = await api("/api/environments/actions", {
+				...body,
+				requestId: request.requestId,
+			});
+			request = null;
+			detail.textContent =
+				"Native environment task " +
+				result.taskId +
+				" admitted. Review the exact plan before execution.";
+			selectTopic("environments");
+		} finally {
+			submit.disabled = !target.value;
+		}
+	});
+	const updateTargets = () => {
+		const candidates = project.targets.filter(
+			(item) =>
+				item.action === action.value &&
+				(!runtime.value || item.runtime === runtime.value) &&
+				(!profile.value || (item.profile ?? "default") === profile.value),
+		);
+		const preferred = project.defaultTargets?.[action.value];
+		choices(
+			target,
+			candidates.map((item) => [
+				item.id,
+				(item.label ?? item.id) +
+					" · " +
+					item.runtime +
+					"/" +
+					(item.profile ?? "default") +
+					(item.availability?.eligible === false
+						? ` · unavailable: ${item.availability.reason}`
+						: ""),
+				item.availability?.eligible === false,
+			]),
+			candidates.some((item) => item.id === target.value)
+				? target.value
+				: preferred?.id,
+		);
+		if (target.selectedOptions[0]?.disabled) {
+			target.value =
+				candidates.find((item) => item.availability?.eligible !== false)?.id ??
+				"";
+		}
+		submit.disabled = !target.value;
+		const selected = candidates.find((item) => item.id === target.value);
+		replicaField.hidden = selected?.runtime !== "kubernetes";
+		if (replicaTarget !== target.value) {
+			replicas.value = String(selected?.kubernetes?.replicas ?? 1);
+			replicaTarget = target.value;
+		}
+		detail.textContent =
+			"Default: " +
+			(preferred?.id ?? "none") +
+			" (" +
+			(preferred?.reason ?? "not configured") +
+			"). " +
+			(selected?.availability?.reason ?? "Choose an eligible target.") +
+			" Startup compatibility is not verified by metadata.";
+	};
+	const updateFilters = () => {
+		const candidates = project.targets.filter(
+			(item) => item.action === action.value,
+		);
+		choices(
+			runtime,
+			[
+				["", "All configured runtimes"],
+				...[...new Set(candidates.map((item) => item.runtime))].map((value) => [
+					value,
+					value,
+				]),
+			],
+			"",
+		);
+		choices(
+			profile,
+			[
+				["", "All configured profiles"],
+				...[
+					...new Set(candidates.map((item) => item.profile ?? "default")),
+				].map((value) => [value, value]),
+			],
+			"",
+		);
+		updateTargets();
+	};
+	choices(
+		action,
+		[...new Set(project.targets.map((item) => item.action))].map((value) => [
+			value,
+			value,
+		]),
+	);
+	action.onchange = updateFilters;
+	runtime.onchange = updateTargets;
+	profile.onchange = updateTargets;
+	target.onchange = updateTargets;
+	card.append(
+		detail,
+		element(
+			"p",
+			"No agent or model runs. Developer-checkout actions include mutable local edits and may modify the checkout. Isolated-worktree actions use a captured commit without uncommitted edits. Review the exact commands, workspace and resource scope before execution.",
+			"meta",
+		),
+		submit,
+	);
+	updateFilters();
+	return card;
+}
+
 function selectTopic(value) {
 	topic = value;
 	revision = "";
@@ -144,25 +341,22 @@ async function refresh() {
 		);
 		reuseChildren(
 			$("environments"),
-			element(
-				"p",
-				environments.projects.length
-					? environments.projects
-							.map(
-								(project) =>
-									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}/${target.profile ?? "default"} · ${target.availability?.eligible === false ? `unavailable: ${target.availability.reason}` : target.availability?.eligible === true ? "metadata eligible (startup unverified)" : "availability unverified"}`).join(", ")}\nDefaults: ${Object.entries(
-										project.defaultTargets ?? {},
-									)
-										.map(
-											([action, choice]) =>
-												`${action}: ${choice.id ?? "unavailable"} (${choice.reason})`,
-										)
-										.join("; ")}`,
-							)
-							.join("\n")
-					: "No configured environments. Add CONFIG_DIR/environments.json.",
-				"meta",
-			),
+			...(environments.projects.length
+				? environments.projects.map((project) =>
+						environmentProject(
+							project,
+							Array.from($("environments").children).find(
+								(card) => card.dataset.environmentProject === project.id,
+							),
+						),
+					)
+				: [
+						element(
+							"p",
+							"No configured environments. Add CONFIG_DIR/environments.json.",
+							"meta",
+						),
+					]),
 			...environments.waiters
 				.filter((waiter) => !topic || ownerIds.has(waiter.owner))
 				.map((waiter) =>
@@ -223,6 +417,26 @@ async function refresh() {
 							),
 						);
 					if (run.error) card.append(element("p", run.error));
+					if (
+						run.state !== "exited" &&
+						run.state !== "interrupted" &&
+						state.tasks.some(
+							(task) =>
+								task.id === run.owner && task.kind === "operator-environment",
+						)
+					)
+						card.append(
+							button("Stop operator batch", async () => {
+								if (
+									!confirm(
+										"Stop this operator action and all coupled dependencies?",
+									)
+								)
+									return;
+								await api(`/api/tasks/${run.owner}/cancel`, {});
+								await refresh();
+							}),
+						);
 					card.append(
 						button("View redacted logs", async () => {
 							const logs = await api(

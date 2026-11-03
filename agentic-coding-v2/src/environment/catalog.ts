@@ -357,7 +357,7 @@ export function loadProjects(config: Config): Project[] {
 }
 export function resolvePlans(
 	projects: Project[],
-	owner: TaskInfo,
+	owner: Pick<TaskInfo, "policy" | "repository" | "workspace">,
 	apps: string[],
 	action: Action,
 	target?: string | Selection,

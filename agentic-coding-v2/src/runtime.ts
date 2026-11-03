@@ -15,6 +15,10 @@ import { createAgentTools, createTaskCodingTools } from "./agent-tools.ts";
 import { type Config, text } from "./config.ts";
 import { Environments } from "./environment/manager.ts";
 import {
+	type OperatorAction,
+	OperatorEnvironments,
+} from "./environment/operator.ts";
+import {
 	createEnvironmentTools,
 	environmentInspectionTools,
 } from "./environment/tools.ts";
@@ -42,11 +46,16 @@ export class Runtime {
 	private reconciling = false;
 	private closed = false;
 	readonly environments: Environments;
+	readonly operatorEnvironments: OperatorEnvironments;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
 	) {
 		this.environments = new Environments(config);
+		this.operatorEnvironments = new OperatorEnvironments(
+			config,
+			this.environments,
+		);
 	}
 	get harness(): Harness {
 		if (!this.engine) throw new Error("Harness not initialized");
@@ -84,6 +93,7 @@ export class Runtime {
 		registry.install(agentTools);
 		registry.install(environmentTools);
 		registry.install(orchestrator);
+		registry.install(app.operatorEnvironments.extension);
 		app.engine = await Harness.open(
 			storage,
 			{
@@ -116,7 +126,7 @@ export class Runtime {
 								environmentInspectionTools.has(tool.name),
 							),
 						],
-						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Environment execution belongs to workspace-write skill tasks and exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
+						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Use environment_action for direct Run/Build/Test controls without an agent/model profile. Workspace-write skill tasks may also use their own environment tools. Both require exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
 						cwd: null,
 						modelTools: null,
 					}),
@@ -153,6 +163,10 @@ export class Runtime {
 		if (this.closed || !this.admission)
 			throw new Error("Runtime is not accepting work");
 		return this.admission.start(invocation, slot);
+	}
+	async startEnvironmentAction(request: OperatorAction) {
+		if (this.closed) throw new Error("Runtime is closing");
+		return this.operatorEnvironments.start(this.harness, this.home, request);
 	}
 	async ownerOf(id: ConversationId): Promise<TaskInfo> {
 		const owner = await this.harness.commit(

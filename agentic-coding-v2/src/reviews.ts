@@ -45,6 +45,15 @@ export async function requestReview(
 		} else doc.reviews[id] = JSON.stringify(candidate);
 	}, context);
 	await api.details({ reviewId: id }, context);
+	return waitForReview(id, api, context);
+}
+
+/** A human decision remains a durable document, not a local promise's authority. */
+export async function waitForReview(
+	id: string,
+	api: Pick<ToolExecutionApi, "watchDoc">,
+	context: Context,
+): Promise<Review> {
 	const watch = await api.watchDoc(Catalog, context);
 	if (!watch) throw new Error("Review catalog missing");
 	try {

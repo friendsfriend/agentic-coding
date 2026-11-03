@@ -3,6 +3,7 @@ import path from "node:path";
 import { object, text } from "./config.ts";
 import type { LogOptions } from "./environment/logs.ts";
 import type { TelemetryOptions } from "./environment/model.ts";
+import type { OperatorAction } from "./environment/operator.ts";
 import { renderMarkdown } from "./markdown.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Review } from "./state.ts";
@@ -231,6 +232,10 @@ export function serve(app: Runtime, port = 0) {
 							text(body.content, "message", 64000),
 							text(body.requestId, "request ID", 256),
 						),
+					});
+				if (url.pathname === "/api/environments/actions")
+					return json({
+						taskId: await app.startEnvironmentAction(body as OperatorAction),
 					});
 				if (url.pathname === "/api/environments/release") {
 					if (body.inspectionConfirmed !== true)

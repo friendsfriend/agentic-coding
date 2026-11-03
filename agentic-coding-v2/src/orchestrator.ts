@@ -1,6 +1,7 @@
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { toolResult } from "./agent-tools.ts";
+import type { OperatorAction } from "./environment/operator.ts";
 import { nextDue } from "./recurrence.ts";
 import { requestReview } from "./reviews.ts";
 import type { Admission, Scheduler } from "./scheduler.ts";
@@ -10,6 +11,7 @@ import type { Invocation, TaskInfo } from "./state.ts";
 interface OrchestratorHost {
 	snapshot(): Promise<unknown>;
 	startTask: Admission;
+	startEnvironmentAction(request: OperatorAction): Promise<number>;
 	taskResult(id: number): Promise<unknown>;
 	cancel(id: number): Promise<unknown>;
 	validateInvocation(invocation: Invocation): Promise<unknown>;
@@ -69,6 +71,44 @@ export function createOrchestrator(
 				parameters: invocationSchema,
 				replay: "safe",
 				execute: async (args) => toolResult(await app.startTask(args)),
+			}),
+			defineTool({
+				name: "environment_action",
+				description:
+					"Prepare a direct Run/Build/Test environment action without launching an agent or selecting a model profile. Inspect env_list first. Choose apps, target/environment profile/runtime and optionally Kubernetes replicas and Git base. Choose workspaceMode checkout (default, includes mutable uncommitted files) or worktree (isolated at a captured commit; optional baseRef only here). The native action waits for exact HUMAN review in the environment UI before executing. Admission is not startup success. Use task_result/env_status for progress; cancel_task stops the action and all coupled resources. Saved resources are never adopted or automatically replayed.",
+				parameters: Type.Object({
+					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
+					action: Type.Union([
+						Type.Literal("run"),
+						Type.Literal("build"),
+						Type.Literal("test"),
+					]),
+					target: Type.Optional(Type.String()),
+					profile: Type.Optional(Type.String()),
+					runtime: Type.Optional(
+						Type.Union([
+							Type.Literal("shell"),
+							Type.Literal("docker"),
+							Type.Literal("podman"),
+							Type.Literal("compose"),
+							Type.Literal("kubernetes"),
+						]),
+					),
+					replicas: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+					baseRef: Type.Optional(Type.String()),
+					workspaceMode: Type.Optional(
+						Type.Union([Type.Literal("checkout"), Type.Literal("worktree")]),
+					),
+				}),
+				replay: "safe",
+				execute: async (args, api) =>
+					toolResult({
+						taskId: await app.startEnvironmentAction({
+							...args,
+							requestId: `orchestrator-environment-${api.taskId}`,
+						}),
+						state: "admitted; awaiting preparation and exact human review",
+					}),
 			}),
 			defineTool({
 				name: "task_result",
