@@ -136,6 +136,13 @@ interface MarkdownSideColumn {
 	fileEnds: Array<number | undefined>;
 }
 
+const emptyMarkdownColumn = (): MarkdownSideColumn => ({
+	blocks: [],
+	rows: [],
+	fileStarts: [],
+	fileEnds: [],
+});
+
 /** Inline review thread rendered under a Markdown-diff block. */
 /** The one reply affordance: a prompt under a thread, or the composer when the
  * parent put that thread into reply mode. */
@@ -307,49 +314,77 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	 * derived from removed + context rows, the new side from added + context
 	 * rows; each side is one whole document rendered as blocks.
 	 */
-	const markdownSideColumns = createMemo(() => {
-		const columns: { old: MarkdownSideColumn; new: MarkdownSideColumn } = {
-			old: { blocks: [], rows: [], fileStarts: [], fileEnds: [] },
-			new: { blocks: [], rows: [], fileStarts: [], fileEnds: [] },
-		};
-		if (!props.renderMarkdown || !useSplitView()) return columns;
-		const parsed = parsedLines();
-		const sideOf = (line: DiffLine) => {
-			if (line.type === "added") return "new" as const;
-			if (line.type === "removed") return "old" as const;
-			return null;
-		};
-		// Rows that belong to each side, in their document order.
-		const sideRows = { old: [] as DiffLine[], new: [] as DiffLine[] };
-		for (const line of parsed) {
-			const side = sideOf(line);
-			if (side) sideRows[side].push(line);
-			else if (line.type === "context") {
-				sideRows.old.push(line);
-				sideRows.new.push(line);
+	const markdownSideColumns = createMemo<{
+		file: string;
+		old: MarkdownSideColumn;
+		new: MarkdownSideColumn;
+	}>(
+		(previous) => {
+			const columns = {
+				file: source().file,
+				old: emptyMarkdownColumn(),
+				new: emptyMarkdownColumn(),
+			};
+			if (!props.renderMarkdown || !useSplitView()) return columns;
+			const parsed = parsedLines();
+			const sideOf = (line: DiffLine) => {
+				if (line.type === "added") return "new" as const;
+				if (line.type === "removed") return "old" as const;
+				return null;
+			};
+			// Rows that belong to each side, in their document order.
+			const sideRows = { old: [] as DiffLine[], new: [] as DiffLine[] };
+			for (const line of parsed) {
+				const side = sideOf(line);
+				if (side) sideRows[side].push(line);
+				else if (line.type === "context") {
+					sideRows.old.push(line);
+					sideRows.new.push(line);
+				}
 			}
-		}
-		for (const side of ["old", "new"] as const) {
-			const rows = sideRows[side];
-			if (!rows.length) continue;
-			const blocks = parseMarkdownBlocks(
-				rows.map((row) => row.content).join("\n"),
-			);
-			for (const block of blocks) {
-				const blockRows = rows.slice(block.startLine - 1, block.endLine);
-				columns[side].rows.push(blockRows);
-				columns[side].fileStarts.push(
-					blockRows[0]?.newLineNum ?? blockRows[0]?.oldLineNum,
+			for (const side of ["old", "new"] as const) {
+				const rows = sideRows[side];
+				if (!rows.length) continue;
+				const blocks = parseMarkdownBlocks(
+					rows.map((row) => row.content).join("\n"),
 				);
-				columns[side].fileEnds.push(
-					blockRows[blockRows.length - 1]?.newLineNum ??
-						blockRows[blockRows.length - 1]?.oldLineNum,
+				const existing = new Map(
+					previous.file === columns.file
+						? previous[side].blocks.map((block, index) => [
+								block.startLine,
+								{ block, rows: previous[side].rows[index] },
+							])
+						: [],
 				);
+				for (const block of blocks) {
+					const blockRows = rows.slice(block.startLine - 1, block.endLine);
+					const before = existing.get(block.startLine);
+					// Setup-time side colors are safe to retain only when both the
+					// Markdown and every backing diff record are fully unchanged.
+					columns[side].blocks.push(
+						before &&
+							before.block.kind === block.kind &&
+							before.block.source === block.source &&
+							before.block.endLine === block.endLine &&
+							before.rows?.length === blockRows.length &&
+							blockRows.every((row, index) => row === before.rows?.[index])
+							? before.block
+							: block,
+					);
+					columns[side].rows.push(blockRows);
+					columns[side].fileStarts.push(
+						blockRows[0]?.newLineNum ?? blockRows[0]?.oldLineNum,
+					);
+					columns[side].fileEnds.push(
+						blockRows[blockRows.length - 1]?.newLineNum ??
+							blockRows[blockRows.length - 1]?.oldLineNum,
+					);
+				}
 			}
-			columns[side].blocks = blocks;
-		}
-		return columns;
-	});
+			return columns;
+		},
+		{ file: "", old: emptyMarkdownColumn(), new: emptyMarkdownColumn() },
+	);
 
 	// Helper function to check if a line is within the visual selection range
 	const isInVisualSelection = (lineIndex: number): boolean => {
@@ -1074,130 +1109,171 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 												</box>
 											);
 										}
-										const mdRows = markdownUnits();
-										const unitIndex = mdRows.firstRowToUnit.get(
-											line.lineNumber,
-										);
-										if (unitIndex === undefined) return null;
-										const unit = mdRows.units[unitIndex];
-										if (!unit) return null;
-										const isSelected = () => unitIndex === props.selectedLine;
-										const isInSelection = () => isInVisualSelection(unitIndex);
-										const isBlock = unit.kind === "block";
-										// Selection is marked by the left-edge block, never by a background
-										// fill, so the diff tint of every unit stays visible.
-										const bgColor = () => {
-											if (isBlock)
-												return unit.status === "added"
-													? uiColors.diffAddedBg
-													: uiColors.diffContextBg;
-											return uiColors.diffRemovedBg;
-										};
-										const fgColor = () => {
-											if (isBlock)
-												return unit.status === "added"
-													? uiColors.diffAdded
-													: uiColors.diffContext;
-											return uiColors.diffRemoved;
-										};
-										const gutterLabel = () => {
-											if (!isBlock) return String(unit.line.oldLineNum ?? "");
-											const start =
-												unit.fileStart !== undefined
-													? String(unit.fileStart)
-													: "";
-											return unit.fileEnd !== undefined &&
-												unit.fileEnd !== unit.fileStart
-												? `${start}-${String(unit.fileEnd)}`
-												: start;
-										};
-										const sign = () =>
-											!isBlock ? "-" : unit.status === "added" ? "+" : " ";
-										const comments = () => getCommentsForUnit(unit);
+										const projection = createMemo(() => {
+											const current = markdownUnits();
+											const index = current.firstRowToUnit.get(line.lineNumber);
+											const unit =
+												index === undefined ? undefined : current.units[index];
+											return index === undefined || !unit
+												? undefined
+												: { unit, index };
+										});
 										return (
-											<>
-												<box
-													id={`block-${unitIndex}`}
-													flexDirection="row"
-													backgroundColor={bgColor()}
-													paddingRight={1}
-													{...useTap(() =>
-														props.onSelectedLineChange(unitIndex),
-													)}
-												>
-													<SelectionMarker
-														selected={isSelected()}
-														range={isInSelection()}
-													/>
-													<text
-														fg={uiColors.textMuted}
-														flexShrink={0}
-														width={10}
-													>
-														{gutterLabel()}
-													</text>
-													<text fg={fgColor()} flexShrink={0} width={2}>
-														{sign()}
-													</text>
-													{isBlock ? (
-														<MarkdownBlockView
-															source={unit.block.source}
-															fg={fgColor()}
-															width={Math.max(
-																20,
-																Math.floor(renderer.width * 0.6),
-															)}
-															flexGrow={1}
-														/>
-													) : (
-														<text fg={fgColor()} flexGrow={1}>
-															{unit.line.content}
-														</text>
-													)}
-												</box>
+											<Show when={projection()}>
+												{(current) => {
+													const unit = () => current().unit;
+													const unitIndex = () => current().index;
+													const isSelected = () =>
+														unitIndex() === props.selectedLine;
+													const isInSelection = () =>
+														isInVisualSelection(unitIndex());
+													const block = () => {
+														const current = unit();
+														return current.kind === "block"
+															? current.block
+															: undefined;
+													};
+													const removedContent = () => {
+														const current = unit();
+														return current.kind === "removed"
+															? current.line.content
+															: "";
+													};
+													// Selection is marked by the left-edge block, never by a background
+													// fill, so the diff tint of every unit stays visible.
+													const bgColor = () => {
+														const current = unit();
+														if (current.kind === "block")
+															return current.status === "added"
+																? uiColors.diffAddedBg
+																: uiColors.diffContextBg;
+														return uiColors.diffRemovedBg;
+													};
+													const fgColor = () => {
+														const current = unit();
+														if (current.kind === "block")
+															return current.status === "added"
+																? uiColors.diffAdded
+																: uiColors.diffContext;
+														return uiColors.diffRemoved;
+													};
+													const gutterLabel = () => {
+														const current = unit();
+														if (current.kind === "removed")
+															return String(current.line.oldLineNum ?? "");
+														const start =
+															current.fileStart !== undefined
+																? String(current.fileStart)
+																: "";
+														return current.fileEnd !== undefined &&
+															current.fileEnd !== current.fileStart
+															? `${start}-${String(current.fileEnd)}`
+															: start;
+													};
+													const sign = () => {
+														const current = unit();
+														return current.kind === "removed"
+															? "-"
+															: current.status === "added"
+																? "+"
+																: " ";
+													};
+													const comments = () => getCommentsForUnit(unit());
+													return (
+														<>
+															<box
+																id={`block-${unitIndex()}`}
+																flexDirection="row"
+																backgroundColor={bgColor()}
+																paddingRight={1}
+																{...useTap(() =>
+																	props.onSelectedLineChange(unitIndex()),
+																)}
+															>
+																<SelectionMarker
+																	selected={isSelected()}
+																	range={isInSelection()}
+																/>
+																<text
+																	fg={uiColors.textMuted}
+																	flexShrink={0}
+																	width={10}
+																>
+																	{gutterLabel()}
+																</text>
+																<text fg={fgColor()} flexShrink={0} width={2}>
+																	{sign()}
+																</text>
+																<Show
+																	when={block()}
+																	fallback={
+																		<text fg={fgColor()} flexGrow={1}>
+																			{removedContent()}
+																		</text>
+																	}
+																>
+																	{(block) => (
+																		<MarkdownBlockView
+																			source={block().source}
+																			fg={fgColor()}
+																			width={Math.max(
+																				20,
+																				Math.floor(renderer.width * 0.6),
+																			)}
+																			flexGrow={1}
+																		/>
+																	)}
+																</Show>
+															</box>
 
-												<Show when={comments().length > 0}>
-													<DiscussionList discussions={comments()}>
-														{(discussion) => (
-															<DiscussionThread
-																discussion={discussion()}
-																outdated={isCommentOutdated(discussion())}
-																collapsed={isCollapsed(discussion().id)}
-																selected={isSelected()}
-																range={isInSelection()}
-																formatTimestamp={formatTimestamp}
-																paddingLeft={10}
-																repliesEnabled={
-																	props.onReplyToDiscussion !== undefined
-																}
-																replyActive={
-																	props.replyModeDiscussionId ===
-																	discussion().id
-																}
-																{...(props.replyText !== undefined
-																	? { replyText: props.replyText }
-																	: {})}
-															/>
-														)}
-													</DiscussionList>
-												</Show>
+															<Show when={comments().length > 0}>
+																<DiscussionList discussions={comments()}>
+																	{(discussion) => (
+																		<DiscussionThread
+																			discussion={discussion()}
+																			outdated={isCommentOutdated(discussion())}
+																			collapsed={isCollapsed(discussion().id)}
+																			selected={isSelected()}
+																			range={isInSelection()}
+																			formatTimestamp={formatTimestamp}
+																			paddingLeft={10}
+																			repliesEnabled={
+																				props.onReplyToDiscussion !== undefined
+																			}
+																			replyActive={
+																				props.replyModeDiscussionId ===
+																				discussion().id
+																			}
+																			{...(props.replyText !== undefined
+																				? { replyText: props.replyText }
+																				: {})}
+																		/>
+																	)}
+																</DiscussionList>
+															</Show>
 
-												{isCommentMode() && isSelected() ? (
-													<box
-														flexDirection="row"
-														alignItems="center"
-														gap={1}
-														backgroundColor={uiColors.bgBase}
-														paddingLeft={1}
-														paddingRight={1}
-														flexGrow={1}
-													>
-														<text fg={uiColors.textPrimary}>
-															{String(props.commentText || "Comment here...")}█
-														</text>
-													</box>
-												) : null}
-											</>
+															{isCommentMode() && isSelected() ? (
+																<box
+																	flexDirection="row"
+																	alignItems="center"
+																	gap={1}
+																	backgroundColor={uiColors.bgBase}
+																	paddingLeft={1}
+																	paddingRight={1}
+																	flexGrow={1}
+																>
+																	<text fg={uiColors.textPrimary}>
+																		{String(
+																			props.commentText || "Comment here...",
+																		)}
+																		█
+																	</text>
+																</box>
+															) : null}
+														</>
+													);
+												}}
+											</Show>
 										);
 									}}
 								</For>

@@ -11,7 +11,7 @@ import {
 	uiColors,
 	useTerminalDimensions,
 } from "@agentic-coding/ui";
-import { Show } from "solid-js";
+import { type Accessor, createMemo, Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import type { DestinationEntry } from "./destinations.ts";
 
@@ -32,6 +32,24 @@ export interface DestinationPageProps {
 export function DestinationPage(props: DestinationPageProps) {
 	const dimensions = useTerminalDimensions();
 	const itemHeight = 2;
+	const renderEntry = (
+		entry: Accessor<DestinationEntry>,
+		selected: Accessor<boolean>,
+	) => {
+		const hasDescription = createMemo(() => Boolean(entry().description));
+		return (
+			<Card
+				height={itemHeight}
+				selected={selected()}
+				title={entry().label}
+				cells={
+					hasDescription()
+						? [<text fg={uiColors.textMuted}>{entry().description}</text>]
+						: undefined
+				}
+			/>
+		);
+	};
 	return (
 		<box
 			backgroundColor={uiColors.bgBase}
@@ -53,6 +71,7 @@ export function DestinationPage(props: DestinationPageProps) {
 			>
 				<ScrollableList
 					items={props.entries}
+					itemKey={(entry) => entry.id}
 					selectedIndex={props.selectedIndex}
 					availableLines={hostBodyLines(dimensions().height)}
 					estimatedItemHeight={itemHeight}
@@ -62,18 +81,8 @@ export function DestinationPage(props: DestinationPageProps) {
 						const entry = props.entries[index];
 						if (entry) props.onOpen(entry);
 					}}
-					renderItem={(entry, isSelected) => (
-						<Card
-							height={itemHeight}
-							selected={isSelected()}
-							title={entry.label}
-							cells={
-								entry.description
-									? [<text fg={uiColors.textMuted}>{entry.description}</text>]
-									: undefined
-							}
-						/>
-					)}
+					renderItem={(entry, selected) => renderEntry(() => entry, selected)}
+					renderReactiveItem={renderEntry}
 				/>
 			</Show>
 		</box>

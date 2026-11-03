@@ -17,7 +17,7 @@ type ReviewChange = ChangeRequestChange & {
 };
 
 import { TextAttributes } from "@opentui/core";
-import { createMemo, Show } from "solid-js";
+import { type Accessor, createMemo, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { Badge } from "./Badge.tsx";
 import { CenteredState } from "./CenteredState.tsx";
@@ -103,6 +103,88 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 	 * developer scans. */
 	const hasShared = () =>
 		props.changes.some((change) => change.affects_all_apps === true);
+	const renderChangeRow = (
+		change: Accessor<ReviewChange>,
+		isSelected: Accessor<boolean>,
+	) => {
+		const changeType = createMemo<ReturnType<typeof getChangeType>>(
+			() => getChangeType(change()),
+			{ type: "~", highlight: "warning" },
+			{
+				equals: (before, after) =>
+					before.type === after.type && before.highlight === after.highlight,
+			},
+		);
+		const filePath = createMemo(() => getFilePath(change()));
+		return (
+			<box
+				backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}
+				style={{ width: "100%", height: 1, flexDirection: "row" }}
+			>
+				<SelectionMarker selected={isSelected()} />
+				<box
+					style={{
+						flexGrow: 1,
+						width: 0,
+						flexDirection: "row",
+						paddingLeft: 1,
+						paddingRight: 1,
+					}}
+				>
+					<box style={{ width: 5 }}>
+						<Badge
+							text={changeType().type}
+							highlight={changeType().highlight}
+						/>
+					</box>
+					<box style={{ width: pathWidth() }}>
+						<MatchedText
+							text={filePath()}
+							query={props.searchQuery}
+							fg={highlightColor(isSelected() ? "primary" : "secondary")}
+							attributes={isSelected() ? TextAttributes.BOLD : undefined}
+						/>
+					</box>
+					<box style={{ width: statsWidth() }}>
+						<text fg={highlightColor(isSelected() ? "primary" : "secondary")}>
+							<span style={{ fg: highlightColor("positive") }}>
+								+{change().lines_added || 0}
+							</span>{" "}
+							<span style={{ fg: highlightColor("negative") }}>
+								-{change().lines_deleted || 0}
+							</span>
+						</text>
+					</box>
+					<Show when={hasShared()}>
+						<box style={{ width: "10%" }}>
+							<text
+								fg={
+									change().affects_all_apps
+										? uiColors.warning
+										: highlightColor("secondary")
+								}
+							>
+								{change().affects_all_apps ? "shared" : ""}
+							</text>
+						</box>
+					</Show>
+					<Show when={props.findings}>
+						<box style={{ width: "12%" }}>
+							<text
+								fg={
+									change().review_finding_count
+										? uiColors.warning
+										: highlightColor("secondary")
+								}
+							>
+								{change().review_finding_count || 0}
+							</text>
+						</box>
+					</Show>
+				</box>
+			</box>
+		);
+	};
 
 	const content = (
 		<>
@@ -219,92 +301,19 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 
 				<ScrollableList<ReviewChange>
 					items={props.changes}
+					itemKey={(change) =>
+						JSON.stringify([change.old_path, change.new_path])
+					}
 					selectedIndex={props.selectedIndex}
 					{...(embedded()
 						? { availableLines: props.availableLines }
 						: { reservedLines: reservedLines() })}
 					estimatedItemHeight={1}
 					showScrollIndicator={false}
-					renderItem={(change, isSelected) => {
-						const changeType = getChangeType(change);
-						const filePath = getFilePath(change);
-						return (
-							<box
-								backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}
-								style={{ width: "100%", height: 1, flexDirection: "row" }}
-							>
-								<SelectionMarker selected={isSelected()} />
-								<box
-									style={{
-										flexGrow: 1,
-										width: 0,
-										flexDirection: "row",
-										paddingLeft: 1,
-										paddingRight: 1,
-									}}
-								>
-									<box style={{ width: 5 }}>
-										<Badge
-											text={changeType.type}
-											highlight={changeType.highlight}
-										/>
-									</box>
-									<box style={{ width: pathWidth() }}>
-										<MatchedText
-											text={filePath}
-											query={props.searchQuery}
-											fg={highlightColor(
-												isSelected() ? "primary" : "secondary",
-											)}
-											attributes={
-												isSelected() ? TextAttributes.BOLD : undefined
-											}
-										/>
-									</box>
-									<box style={{ width: statsWidth() }}>
-										<text
-											fg={highlightColor(
-												isSelected() ? "primary" : "secondary",
-											)}
-										>
-											<span style={{ fg: highlightColor("positive") }}>
-												+{change.lines_added || 0}
-											</span>{" "}
-											<span style={{ fg: highlightColor("negative") }}>
-												-{change.lines_deleted || 0}
-											</span>
-										</text>
-									</box>
-									<Show when={hasShared()}>
-										<box style={{ width: "10%" }}>
-											<text
-												fg={
-													change.affects_all_apps
-														? uiColors.warning
-														: highlightColor("secondary")
-												}
-											>
-												{change.affects_all_apps ? "shared" : ""}
-											</text>
-										</box>
-									</Show>
-									<Show when={props.findings}>
-										<box style={{ width: "12%" }}>
-											<text
-												fg={
-													change.review_finding_count
-														? uiColors.warning
-														: highlightColor("secondary")
-												}
-											>
-												{change.review_finding_count || 0}
-											</text>
-										</box>
-									</Show>
-								</box>
-							</box>
-						);
-					}}
+					renderItem={(change, selected) =>
+						renderChangeRow(() => change, selected)
+					}
+					renderReactiveItem={renderChangeRow}
 				/>
 			</Show>
 		</>

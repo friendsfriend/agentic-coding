@@ -10,7 +10,7 @@ import {
 	ScrollableList,
 	uiColors,
 } from "@agentic-coding/ui";
-import { createMemo, Show } from "solid-js";
+import { type Accessor, createMemo, Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import { type DestinationEntry, filterPickerEntries } from "./destinations.ts";
 import {
@@ -32,6 +32,34 @@ export function LocationPicker(props: LocationPickerProps) {
 	const matches = createMemo(() =>
 		filterPickerEntries(props.entries, props.query),
 	);
+	const renderEntry = (
+		entry: Accessor<DestinationEntry>,
+		selected: Accessor<boolean>,
+		index: Accessor<number>,
+	) => {
+		const hasDescription = createMemo(() => Boolean(entry().description));
+		return (
+			<Card
+				height={2}
+				selected={selected()}
+				title={entry().label}
+				onMouseUp={() => {
+					const route = entry().route;
+					props.onSelectIndex(index());
+					if (route) props.onAccept(route);
+				}}
+				cells={
+					hasDescription()
+						? [
+								<text fg={uiColors.textMuted}>
+									{entry().group} · {entry().description}
+								</text>,
+							]
+						: undefined
+				}
+			/>
+		);
+	};
 	return (
 		<GenericModal
 			title="Locations"
@@ -56,32 +84,21 @@ export function LocationPicker(props: LocationPickerProps) {
 				>
 					<ScrollableList
 						items={matches()}
+						itemKey={(entry) => entry.id}
 						selectedIndex={props.selectedIndex}
 						estimatedItemHeight={2}
 						showScrollIndicator={false}
 						// The wheel scrolls the picker under the pointer (the list has no
 						// scroll box of its own, so the cursor moves as `j`/`k` does).
 						onSelect={props.onSelectIndex}
-						renderItem={(entry, isSelected, index) => (
-							<Card
-								height={2}
-								selected={isSelected()}
-								title={entry.label}
-								onMouseUp={() => {
-									props.onSelectIndex(index);
-									if (entry.route) props.onAccept(entry.route);
-								}}
-								cells={
-									entry.description
-										? [
-												<text fg={uiColors.textMuted}>
-													{entry.group} · {entry.description}
-												</text>,
-											]
-										: undefined
-								}
-							/>
-						)}
+						renderItem={(entry, selected, index) =>
+							renderEntry(
+								() => entry,
+								selected,
+								() => index,
+							)
+						}
+						renderReactiveItem={renderEntry}
 					/>
 				</Show>
 			</box>

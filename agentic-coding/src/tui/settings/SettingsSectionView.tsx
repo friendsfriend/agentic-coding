@@ -13,7 +13,7 @@ import {
 	useKeyDispatch,
 	useTerminalDimensions,
 } from "@agentic-coding/ui";
-import { Show } from "solid-js";
+import { type Accessor, Show } from "solid-js";
 import type { SettingsItem } from "./items.ts";
 
 export interface SettingsSectionViewProps {
@@ -48,6 +48,17 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 	const dimensions = useTerminalDimensions();
 	const availableLines = () =>
 		Math.max(1, dimensions().height - hostChromeLines(LAYOUT_CHROME_LINES) - 1);
+	const renderSetting = (
+		item: Accessor<SettingsItem>,
+		selected: Accessor<boolean>,
+	) => (
+		<Card
+			height={3}
+			selected={selected()}
+			title={itemTitle(item())}
+			cells={[<text fg={uiColors.textMuted}>{item().detail}</text>]}
+		/>
+	);
 
 	return (
 		<box
@@ -66,20 +77,15 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 			>
 				<ScrollableList
 					items={props.items}
+					itemKey={(item) => item.id}
 					selectedIndex={props.selectedIndex}
 					availableLines={availableLines()}
 					estimatedItemHeight={3}
 					showScrollIndicator={false}
 					onSelect={props.onSelectIndex}
 					onActivate={() => dispatch("Enter")}
-					renderItem={(item, isSelected) => (
-						<Card
-							height={3}
-							selected={isSelected()}
-							title={itemTitle(item)}
-							cells={[<text fg={uiColors.textMuted}>{item.detail}</text>]}
-						/>
-					)}
+					renderItem={(item, selected) => renderSetting(() => item, selected)}
+					renderReactiveItem={renderSetting}
 				/>
 			</Show>
 		</box>

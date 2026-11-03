@@ -32,7 +32,17 @@ import {
 } from "@agentic-coding/ui";
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+	type Accessor,
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 import type {
 	ClassifierProviderOption,
 	ClassifierStatusResponse,
@@ -1605,6 +1615,127 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		disposeLayer = undefined;
 	});
 
+	const menuItems = createMemo(menuEntries);
+	const classifierItems = createMemo(classifierOptions);
+	const preserveCursor = <T,>(
+		items: Accessor<T[]>,
+		index: Accessor<number>,
+		setIndex: (index: number) => void,
+		identify: (item: T) => string,
+	) => {
+		createEffect(
+			on(items, (next, previous) => {
+				if (!previous) return;
+				const cursor = untrack(index);
+				const before = previous[cursor];
+				const retained = before
+					? next.findIndex((item) => identify(item) === identify(before))
+					: -1;
+				setIndex(
+					Math.max(
+						0,
+						retained >= 0 ? retained : Math.min(cursor, next.length - 1),
+					),
+				);
+			}),
+		);
+	};
+	preserveCursor(menuItems, menuIndex, setMenuIndex, (entry) => entry.id);
+	preserveCursor(
+		classifierItems,
+		providerIndex,
+		setProviderIndex,
+		(option) => option.id,
+	);
+	const renderOrchestratorOption = (
+		option: Accessor<string>,
+		selected: Accessor<boolean>,
+	) => {
+		const current = () => {
+			const configured = agents()?.orchestrator;
+			if (orchestratorStage() === "model") return configured?.model;
+			if (orchestratorStage() === "thinking") return configured?.thinking;
+			return configured?.monitor;
+		};
+		const active = () =>
+			(current() ??
+				(orchestratorStage() === "monitor"
+					? DEFAULT_ORCHESTRATOR_MONITOR
+					: HOST_DEFAULT)) === option()
+				? "(active) "
+				: "";
+		return (
+			<box style={{ height: 1, paddingLeft: 1 }}>
+				<text
+					fg={selected() ? uiColors.accent : uiColors.textPrimary}
+				>{`${selected() ? "› " : "  "}${active()}${option()}`}</text>
+			</box>
+		);
+	};
+	const renderClassifierOption = (
+		option: Accessor<ClassifierProviderOption>,
+		selected: Accessor<boolean>,
+	) => (
+		<Card
+			height={3}
+			selected={selected}
+			title={`${option().id === activeProvider() ? "(active) " : ""}${option().label}`}
+			cells={[
+				<text fg={uiColors.textMuted}>{providerDetail(option().id)}</text>,
+			]}
+		/>
+	);
+	const renderMenuEntry = (
+		entry: Accessor<MenuEntry>,
+		selected: Accessor<boolean>,
+	) => (
+		<Card
+			height={3}
+			selected={selected}
+			title={`${entry().label}${entry().item?.editable === false ? " · read-only" : ""}`}
+			cells={[<text fg={uiColors.textMuted}>{entry().detail}</text>]}
+		/>
+	);
+	const renderListItem = (
+		name: Accessor<string>,
+		selected: Accessor<boolean>,
+	) => {
+		const preset = () => agents()?.presets?.[name()];
+		const profile = () => agents()?.profiles?.[name()];
+		return (
+			<Card
+				height={3}
+				selected={selected}
+				title={name() === BUILTIN_PRESET_NAME ? `${name()} (built-in)` : name()}
+				cells={[
+					<text fg={uiColors.textMuted}>
+						{listKind() === "profiles"
+							? [profile()?.runtime, profile()?.model]
+									.filter(Boolean)
+									.join(" · ") || "runtime pi"
+							: `${Object.keys(preset()?.pools ?? {}).length} pools`}
+					</text>,
+				]}
+			/>
+		);
+	};
+	const renderPoolEntry = (
+		entry: Accessor<PoolEntryValue>,
+		selected: Accessor<boolean>,
+	) => (
+		<Card
+			height={3}
+			selected={() => selected() && focusedPane() === "value"}
+			title={entry().label}
+			cells={[
+				<text fg={uiColors.textMuted}>
+					{entry().profile}
+					{entry().default ? " · default" : ""}
+				</text>,
+			]}
+		/>
+	);
+
 	return (
 		<box
 			backgroundColor={uiColors.bgBase}
@@ -1702,37 +1833,19 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					</box>
 					<ScrollableList
 						items={orchestratorOptions()}
+						itemKey={(option) =>
+							JSON.stringify([props.repository, orchestratorStage(), option])
+						}
 						selectedIndex={orchestratorIndex()}
 						onSelect={setOrchestratorIndex}
 						onActivate={() => dispatch("Enter")}
 						availableLines={Math.max(1, contentLines() - 3)}
 						estimatedItemHeight={1}
 						showScrollIndicator={false}
-						renderItem={(option, selected) => {
-							const current = () => {
-								const configured = agents()?.orchestrator;
-								if (orchestratorStage() === "model") return configured?.model;
-								if (orchestratorStage() === "thinking")
-									return configured?.thinking;
-								return configured?.monitor;
-							};
-							const active = () => {
-								const fallback =
-									orchestratorStage() === "monitor"
-										? DEFAULT_ORCHESTRATOR_MONITOR
-										: HOST_DEFAULT;
-								return (current() ?? fallback) === option ? "(active) " : "";
-							};
-							return (
-								<box style={{ height: 1, paddingLeft: 1 }}>
-									<text
-										fg={selected() ? uiColors.accent : uiColors.textPrimary}
-									>
-										{`${selected() ? "› " : "  "}${active()}${option}`}
-									</text>
-								</box>
-							);
-						}}
+						renderItem={(option, selected) =>
+							renderOrchestratorOption(() => option, selected)
+						}
+						renderReactiveItem={renderOrchestratorOption}
 					/>
 				</box>
 			</Show>
@@ -1749,45 +1862,35 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 						<text fg={uiColors.textMuted}>Local model {localStatusLine()}</text>
 					</box>
 					<ScrollableList
-						items={classifierOptions()}
+						items={classifierItems()}
+						itemKey={(option) => JSON.stringify([props.repository, option.id])}
 						selectedIndex={providerIndex()}
 						onSelect={setProviderIndex}
 						onActivate={() => dispatch("Enter")}
 						availableLines={Math.max(1, contentLines() - 3)}
 						estimatedItemHeight={3}
 						showScrollIndicator={false}
-						renderItem={(option, selected) => (
-							<Card
-								height={3}
-								selected={selected()}
-								title={`${option.id === activeProvider() ? "(active) " : ""}${option.label}`}
-								cells={[
-									<text fg={uiColors.textMuted}>
-										{providerDetail(option.id)}
-									</text>,
-								]}
-							/>
-						)}
+						renderItem={(option, selected) =>
+							renderClassifierOption(() => option, selected)
+						}
+						renderReactiveItem={renderClassifierOption}
 					/>
 				</box>
 			</Show>
 			<Show when={view() === "menu"}>
 				<ScrollableList
-					items={menuEntries()}
+					items={menuItems()}
+					itemKey={(entry) => JSON.stringify([props.repository, entry.id])}
 					selectedIndex={menuIndex()}
 					onSelect={setMenuIndex}
 					onActivate={() => dispatch("Enter")}
 					availableLines={contentLines()}
 					estimatedItemHeight={3}
 					showScrollIndicator={false}
-					renderItem={(entry, selected) => (
-						<Card
-							height={3}
-							selected={selected()}
-							title={`${entry.label}${entry.item?.editable === false ? " · read-only" : ""}`}
-							cells={[<text fg={uiColors.textMuted}>{entry.detail}</text>]}
-						/>
-					)}
+					renderItem={(entry, selected) =>
+						renderMenuEntry(() => entry, selected)
+					}
+					renderReactiveItem={renderMenuEntry}
 				/>
 			</Show>
 			<Show when={view() === "list"}>
@@ -1805,33 +1908,19 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				>
 					<ScrollableList
 						items={listItems()}
+						itemKey={(name) =>
+							JSON.stringify([props.repository, listKind(), name])
+						}
 						selectedIndex={listIndex()}
 						onSelect={setListIndex}
 						onActivate={() => dispatch("Enter")}
 						availableLines={contentLines()}
 						estimatedItemHeight={3}
 						showScrollIndicator={false}
-						renderItem={(name, selected) => {
-							const preset = () => agents()?.presets?.[name];
-							const profile = () => agents()?.profiles?.[name];
-							const builtIn = name === BUILTIN_PRESET_NAME;
-							return (
-								<Card
-									height={3}
-									selected={selected()}
-									title={builtIn ? `${name} (built-in)` : name}
-									cells={[
-										<text fg={uiColors.textMuted}>
-											{listKind() === "profiles"
-												? [profile()?.runtime, profile()?.model]
-														.filter(Boolean)
-														.join(" · ") || "runtime pi"
-												: `${Object.keys(preset()?.pools ?? {}).length} pools`}
-										</text>,
-									]}
-								/>
-							);
-						}}
+						renderItem={(name, selected) =>
+							renderListItem(() => name, selected)
+						}
+						renderReactiveItem={renderListItem}
 					/>
 				</Show>
 			</Show>
@@ -1889,25 +1978,23 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 										>
 											<ScrollableList
 												items={poolEntries(step())}
+												itemKey={(entry) =>
+													JSON.stringify([
+														props.repository,
+														step(),
+														entry.label,
+													])
+												}
 												selectedIndex={poolIndex()}
 												onSelect={setPoolIndex}
 												onActivate={() => dispatch("Enter")}
 												availableLines={Math.max(1, contentLines() - 4)}
 												estimatedItemHeight={3}
 												showScrollIndicator={false}
-												renderItem={(entry, selected) => (
-													<Card
-														height={3}
-														selected={selected() && focusedPane() === "value"}
-														title={entry.label}
-														cells={[
-															<text fg={uiColors.textMuted}>
-																{entry.profile}
-																{entry.default ? " · default" : ""}
-															</text>,
-														]}
-													/>
-												)}
+												renderItem={(entry, selected) =>
+													renderPoolEntry(() => entry, selected)
+												}
+												renderReactiveItem={renderPoolEntry}
 											/>
 										</Show>
 									</box>

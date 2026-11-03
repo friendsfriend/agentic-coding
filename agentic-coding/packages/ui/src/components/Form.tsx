@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // Shared form primitive: field selector on left, active field editor on right.
 import { TextAttributes } from "@opentui/core";
-import { type JSX, Show } from "solid-js";
+import { type Accessor, type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { ScrollableList } from "./ScrollableList.tsx";
 
@@ -139,6 +139,49 @@ export function Form(props: FormProps) {
 		}
 		return rows.slice(-Math.max(1, Math.min(8, listLines(4)))).join("\n");
 	};
+	const renderField = (
+		item: Accessor<FormField>,
+		selected: Accessor<boolean>,
+	) => {
+		const error = () => errors()[item().key];
+		return (
+			<box
+				backgroundColor={
+					selected() ? selectionBackground(pane() === "field") : undefined
+				}
+				style={{ height: 1, paddingLeft: 1 }}
+			>
+				<text
+					fg={
+						error()
+							? uiColors.error
+							: selected()
+								? uiColors.primary
+								: uiColors.textSecondary
+					}
+				>
+					{error() ? "⚠ " : ""}
+					{item().label}
+				</text>
+			</box>
+		);
+	};
+	const renderOption = (
+		option: Accessor<string>,
+		selected: Accessor<boolean>,
+	) => (
+		<box
+			backgroundColor={
+				selected() ? selectionBackground(pane() === "value") : undefined
+			}
+			style={{ height: 1, paddingLeft: 1 }}
+		>
+			<text fg={selected() ? uiColors.textPrimary : uiColors.textSecondary}>
+				{option() === value() ? "● " : "○ "}
+				{option() === "" ? "—" : option()}
+			</text>
+		</box>
+	);
 
 	return (
 		<box
@@ -166,37 +209,14 @@ export function Form(props: FormProps) {
 					</text>
 					<ScrollableList
 						items={[...props.fields]}
+						itemKey={(item) => item.key}
 						selectedIndex={props.activeIndex}
 						availableLines={listLines()}
 						estimatedItemHeight={1}
 						showScrollIndicator={false}
 						showScrollbar={false}
-						renderItem={(item, selected) => {
-							const error = () => errors()[item.key];
-							return (
-								<box
-									backgroundColor={
-										selected()
-											? selectionBackground(pane() === "field")
-											: undefined
-									}
-									style={{ height: 1, paddingLeft: 1 }}
-								>
-									<text
-										fg={
-											error()
-												? uiColors.error
-												: selected()
-													? uiColors.primary
-													: uiColors.textSecondary
-										}
-									>
-										{error() ? "⚠ " : ""}
-										{item.label}
-									</text>
-								</box>
-							);
-						}}
+						renderItem={(item, selected) => renderField(() => item, selected)}
+						renderReactiveItem={renderField}
 					/>
 				</box>
 
@@ -251,6 +271,7 @@ export function Form(props: FormProps) {
 								<Show when={active().kind === "select"}>
 									<ScrollableList
 										items={[...options()]}
+										itemKey={(option) => JSON.stringify([active().key, option])}
 										selectedIndex={choiceCursor()}
 										availableLines={listLines(
 											errors()[active().key] || active().hint ? 1 : 0,
@@ -258,27 +279,10 @@ export function Form(props: FormProps) {
 										estimatedItemHeight={1}
 										showScrollIndicator={false}
 										showScrollbar={false}
-										renderItem={(option, selected) => (
-											<box
-												backgroundColor={
-													selected()
-														? selectionBackground(pane() === "value")
-														: undefined
-												}
-												style={{ height: 1, paddingLeft: 1 }}
-											>
-												<text
-													fg={
-														selected()
-															? uiColors.textPrimary
-															: uiColors.textSecondary
-													}
-												>
-													{option === value() ? "● " : "○ "}
-													{option === "" ? "—" : option}
-												</text>
-											</box>
-										)}
+										renderItem={(option, selected) =>
+											renderOption(() => option, selected)
+										}
+										renderReactiveItem={renderOption}
 									/>
 								</Show>
 								<Show when={!errors()[active().key] && active().hint}>

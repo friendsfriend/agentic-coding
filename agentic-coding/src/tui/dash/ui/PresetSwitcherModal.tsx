@@ -7,7 +7,17 @@ import {
 	useModalBackdrop,
 } from "@agentic-coding/ui";
 import type { KeyEvent } from "@opentui/core";
-import { createSignal, onCleanup, onMount } from "solid-js";
+import {
+	type Accessor,
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 
 export interface PresetChoice {
 	label: string;
@@ -25,12 +35,40 @@ export function PresetSwitcherModal(props: {
 	onCancel: () => void;
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
 }) {
-	const items = () => [...props.choices];
+	const items = createMemo(() => [...props.choices]);
 	const [selectedIndex, setSelectedIndex] = createSignal(
 		Math.max(
 			0,
 			items().findIndex((item) => item.value === props.selected),
 		),
+	);
+	// Catalog refreshes may reorder or replace choice objects. Preserve the
+	// developer's cursor by preset value, without tracking keyboard navigation.
+	createEffect(
+		on(items, (next, previous) => {
+			if (!previous) return;
+			const index = untrack(selectedIndex);
+			const before = previous[index];
+			const retained = before
+				? next.findIndex((choice) => choice.value === before.value)
+				: -1;
+			setSelectedIndex(
+				Math.max(
+					0,
+					retained >= 0 ? retained : Math.min(index, next.length - 1),
+				),
+			);
+		}),
+	);
+	const renderChoice = (
+		item: Accessor<PresetChoice>,
+		active: Accessor<boolean>,
+	) => (
+		<text fg={active() ? uiColors.primary : uiColors.textSecondary}>
+			{item().value === props.selected
+				? `✓ ${item().label}`
+				: `  ${item().label}`}
+		</text>
 	);
 	const handler = (key: KeyEvent): boolean => {
 		const name = key.name.toLowerCase();
@@ -72,23 +110,27 @@ export function PresetSwitcherModal(props: {
 				{ key: "Esc", action: "Cancel" },
 			]}
 		>
-			{items().length ? (
+			<Show
+				when={items().length > 0}
+				fallback={
+					<text fg={uiColors.textMuted}>No agent presets configured.</text>
+				}
+			>
 				<SelectableList
 					items={items()}
+					itemKey={(item) => JSON.stringify([item.value])}
 					selectedIndex={selectedIndex()}
 					onSelect={setSelectedIndex}
 					onActivate={activateRow}
-					renderItem={(item, active) => (
-						<text fg={active ? uiColors.primary : uiColors.textSecondary}>
-							{item.value === props.selected
-								? `✓ ${item.label}`
-								: `  ${item.label}`}
-						</text>
-					)}
+					renderItem={(item, active) =>
+						renderChoice(
+							() => item,
+							() => active,
+						)
+					}
+					renderReactiveItem={renderChoice}
 				/>
-			) : (
-				<text fg={uiColors.textMuted}>No agent presets configured.</text>
-			)}
+			</Show>
 		</GenericModal>
 	);
 }

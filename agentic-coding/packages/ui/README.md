@@ -88,6 +88,12 @@ the same file. All content, type and source coordinates must match; changed
 records and different files start fresh. Retained rows resolve their selectable
 index reactively instead of keeping a setup-time index.
 
+Markdown-diff blocks resolve their current block data and source ranges
+reactively from the backing diff rows: retaining the first row cannot freeze
+later lines of a multi-line block or prevent a new block anchor from appearing.
+Split columns reuse blocks only when Markdown, coordinates and all backing
+diff records are unchanged, so setup-time side colors cannot become stale.
+
 Surface differences are flags, never forks:
 
 | flag | surface that uses it |
