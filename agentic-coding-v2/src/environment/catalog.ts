@@ -71,6 +71,7 @@ function readTarget(raw: unknown): Target {
 		"endpointCaRefs",
 		"endpointAuthRefs",
 		"queryConnection",
+		"telemetry",
 	]);
 	if (
 		data.runtime !== "shell" &&
@@ -137,8 +138,37 @@ function readTarget(raw: unknown): Target {
 		Number(timeoutMs) > 3600000
 	)
 		throw new Error("Invalid environment timeoutMs");
+	let telemetry: Target["telemetry"];
+	if (data.telemetry !== undefined) {
+		const capture = object(data.telemetry);
+		keysOnly(capture, ["protocol", "listen"]);
+		if (
+			capture.protocol !== "otlp-http-json" ||
+			capture.listen !== "127.0.0.1:0" ||
+			data.runtime !== "shell" ||
+			data.action !== "run" ||
+			!data.readyText
+		)
+			throw new Error(
+				"Native telemetry requires an explicit otlp-http-json loopback-ephemeral shell run target with readiness text",
+			);
+		telemetry = { protocol: "otlp-http-json", listen: "127.0.0.1:0" };
+	}
 	const environment = variables(data.environment),
 		secretRefs = variables(data.secretRefs);
+	if (
+		telemetry &&
+		[...Object.keys(environment), ...Object.keys(secretRefs)].some(
+			(key) =>
+				key.startsWith("AC_OTEL_") ||
+				key.startsWith("OTEL_EXPORTER_OTLP_") ||
+				key === "OTEL_RESOURCE_ATTRIBUTES" ||
+				key === "OTEL_METRICS_EXPORTER",
+		)
+	)
+		throw new Error(
+			"Native telemetry exporter and attribution variables cannot be overridden",
+		);
 	if (Object.keys(environment).some((key) => key in secretRefs))
 		throw new Error(
 			"Environment variable has both a literal and secret reference",
@@ -162,6 +192,7 @@ function readTarget(raw: unknown): Target {
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
 	return {
 		id: identifier(data.id),
+		...(telemetry ? { telemetry } : {}),
 		...(data.endpoints === undefined ? {} : { endpoints }),
 		...(data.endpointCaRefs === undefined ? {} : { endpointCaRefs }),
 		...(data.endpointAuthRefs === undefined

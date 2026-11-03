@@ -5,6 +5,20 @@ import type { EndpointAuth } from "./http-options.ts";
 import type { KubernetesTarget } from "./kubernetes-config.ts";
 import type { QueryConnection } from "./query-config.ts";
 import type { Action } from "./selection.ts";
+export type TelemetryOptions = {
+	mode?: "traces" | "logs";
+	traceId?: string;
+	limit?: number;
+	since?: string;
+	status?: "all" | "error" | "success";
+	name?: string;
+	severity?: string;
+	text?: string;
+};
+// Process consumers may read serialized observations, never control or recover a receiver.
+export type TelemetryReader = {
+	query(options: TelemetryOptions): Readonly<Record<string, unknown>>;
+};
 export type Availability = {
 	eligible: boolean | null;
 	reason: string;
@@ -52,6 +66,7 @@ export type Target = {
 	endpointCaRefs?: Record<string, string>;
 	endpointAuthRefs?: Record<string, EndpointAuth>;
 	queryConnection?: QueryConnection;
+	telemetry?: { protocol: "otlp-http-json"; listen: "127.0.0.1:0" };
 };
 export type Project = {
 	id: string;

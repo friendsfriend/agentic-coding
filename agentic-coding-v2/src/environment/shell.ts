@@ -6,6 +6,7 @@ import { contained } from "../git.ts";
 import { authentication } from "./http-options.ts";
 import type { Plan } from "./model.ts";
 import type { Exit, LogTiming } from "./process.ts";
+import type { TelemetryCollector } from "./telemetry.ts";
 
 export type { Exit } from "./process.ts";
 export function processEnvironment(configDir: string, plan: Plan) {
@@ -100,6 +101,7 @@ export class ShellProcess {
 		| Readonly<{ username: string; password: string }>
 		| undefined;
 	readonly spawned: Promise<boolean>;
+	readonly telemetry?: TelemetryCollector;
 	constructor(
 		readonly plan: Plan,
 		configDir: string,
@@ -110,13 +112,22 @@ export class ShellProcess {
 			privateOutput?: boolean;
 			input?: string;
 		},
+		capture?: {
+			collector: TelemetryCollector;
+			environment: ReturnType<typeof processEnvironment>;
+		},
 	) {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
-		const { env, redact, authorization, queryCredentials } = processEnvironment(
-			configDir,
-			plan,
-		);
+		if (Boolean(plan.telemetry) !== Boolean(capture))
+			throw new Error(
+				"Native telemetry requires the exact live approved startup scope",
+			);
+		const frozen = capture?.environment ?? processEnvironment(configDir, plan);
+		const { authorization, queryCredentials } = frozen;
+		const env = { ...frozen.env, ...capture?.collector.environment };
+		const redact = capture?.collector.redact ?? frozen.redact;
+		this.telemetry = capture?.collector;
 		this.queryCredentials = queryCredentials;
 		this.redact = redact;
 		this.authorization = authorization;
@@ -212,11 +223,13 @@ export class ShellProcess {
 			// remaining descendants before releasing the application slot.
 			this.child.once("exit", () => {
 				this.mainExited = true;
+				void this.closeTelemetry();
 				this.signal("SIGKILL");
 			});
 			this.child.once("close", async (code, signal) => {
 				for (const flush of flushers) flush();
 				await this.confirmGroupExit();
+				await this.closeTelemetry();
 				this.ended = true;
 				this.exit = { code, signal };
 				resolve(this.exit);
@@ -241,6 +254,13 @@ export class ShellProcess {
 	}
 	get cleanupFailed() {
 		return this.cleanupUncertain;
+	}
+	private async closeTelemetry() {
+		try {
+			await this.telemetry?.close();
+		} catch {
+			this.cleanupUncertain = true;
+		}
 	}
 	private signal(signal: NodeJS.Signals): boolean {
 		if (!this.child.pid) return true;
@@ -313,6 +333,7 @@ export class ShellProcess {
 	stop(): Promise<void> {
 		if (this.stopping) return this.stopping;
 		this.stopping = (async () => {
+			await this.closeTelemetry();
 			if (this.ended) return;
 			if (!this.signal("SIGTERM"))
 				throw new Error(

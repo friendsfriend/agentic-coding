@@ -19,6 +19,7 @@ export const environmentInspectionTools = new Set([
 	"env_list",
 	"env_status",
 	"env_logs",
+	"otel_query",
 ]);
 export function createEnvironmentTools(
 	manager: Environments,
@@ -91,6 +92,12 @@ export function createEnvironmentTools(
 								"A bounded acquisition timeout retains this exact plan's FIFO place without reserving or starting apps between calls. Only this native owner may explicitly continue it through env_wait; changing apps/selection requires cancelling it and fresh approval. Matching env_stop, task completion/cancellation and host shutdown/restart invalidate the live queue entry. Saved queue and poll receipts are diagnostic only and never restore execution authority. Continuation wait durations may be 1..7200 seconds per call; they do not extend the native task lifetime.",
 						}
 					: {}),
+				...(plans.some((plan) => plan.telemetry)
+					? {
+							telemetryScope:
+								"Each explicitly configured shell telemetry target also starts one authenticated OTLP/HTTP JSON receiver on an OS-selected ephemeral 127.0.0.1 port, never a public/external receiver. The approved command and descendants receive AC_OTEL_APP, AC_OTEL_OWNER, AC_OTEL_RUN, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL=http/json, OTEL_EXPORTER_OTLP_HEADERS with a new private bearer credential, OTEL_RESOURCE_ATTRIBUTES and OTEL_METRICS_EXPORTER=none. These values cannot be overridden by target literals/references; this is not automatic instrumentation or an OS credential sandbox. Native scope is immutable regardless of resource claims; app telemetry is diagnostic data, not execution/review authority. Ingress is limited to four pending 64 KiB JSON requests with five-second body deadlines. Only bounded redacted in-memory traces/logs are retained and queried while the live ready run is held; no metrics, external backend, persisted token/buffer adoption or complete history. Returned redacted observations can remain in native task/chat history as diagnostic tool results, never restored receiver/buffer authority. Stop, startup cancellation, process exit and owner cleanup close admission, discard buffers and join listener closure before release; uncertain cleanup quarantines the app slot.",
+						}
+					: {}),
 				...(plans.some((plan) => plan.kubernetes)
 					? {
 							kubernetesScope:
@@ -122,7 +129,11 @@ export function createEnvironmentTools(
 						}
 					: {}),
 				authority:
-					"Execute these exact configured environment actions in the task workspace. Container clients use only the explicit local API socket, never the default or a remote daemon context. Named containers are never adopted; only resources created by this live operation with matching host/run labels may be stopped or removed. Container build artifacts can persist in the local engine. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
+					"Execute these exact configured environment actions in the task workspace. Container clients use only the explicit local API socket, never the default or a remote daemon context. Named containers are never adopted; only resources created by this live operation with matching host/run labels may be stopped or removed. Container build artifacts can persist in the local engine. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR" +
+					(plans.some((plan) => plan.telemetry)
+						? ", plus the explicitly disclosed telemetryScope variables"
+						: "") +
+					" are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
 			},
 			null,
 			2,
@@ -263,9 +274,44 @@ export function createEnvironmentTools(
 				},
 			}),
 			defineTool({
+				name: "otel_query",
+				description:
+					"Read only this task's live ready shell app's opt-in native OTLP/HTTP JSON observations. An exact approved telemetry target creates a per-run authenticated ephemeral loopback receiver; no external backend queries, shared/global capture, saved-token adoption or execution effects. Traces mode lists retained trace summaries, or returns flat spans with parent IDs for traceId; logs mode reads retained structured log records. Since selects host receipt time, not exporter event time. Windows, protobuf/gRPC, metrics, events/links, provider integration and live-runtime parity are not claimed. Resource attributes cannot change native app/task/run attribution. Bounded counts, encoded-data windows and whole-record output omissions are explicit; no historical completeness guarantee. Native skill reads are owner scoped; the home orchestrator may inspect a live held host run.",
+				parameters: Type.Object({
+					app: Type.String({ minLength: 1, maxLength: 64 }),
+					mode: Type.Optional(
+						Type.Union([Type.Literal("traces"), Type.Literal("logs")]),
+					),
+					traceId: Type.Optional(Type.String({ pattern: "^[a-fA-F0-9]{32}$" })),
+					limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+					since: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+					status: Type.Optional(
+						Type.Union([
+							Type.Literal("all"),
+							Type.Literal("error"),
+							Type.Literal("success"),
+						]),
+					),
+					name: Type.Optional(Type.String({ maxLength: 512 })),
+					severity: Type.Optional(Type.String({ maxLength: 64 })),
+					text: Type.Optional(Type.String({ maxLength: 512 })),
+				}),
+				replay: "safe",
+				execute: async (args, api) => {
+					const { app, ...options } = args;
+					return environmentResult(
+						await manager.queryTelemetry(
+							app,
+							(await ownerOf(api.conversationId))?.id,
+							options,
+						),
+					);
+				},
+			}),
+			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external. Declared same-repository requires are expanded through their configured default targets, bounded to 16 total projects, and started dependency-first. Dependency batches have coupled lifetimes: stopping or losing any member cleans up all members, not partial last-reference release. No implicit Kubernetes starts. Only this task's repository/workspace is allowed. An identical complete live plan held by this task returns an explicit already-held receipt without executing again or reapplying secrets/workspace content. Changed/partial/closing/interrupted/foreign plans are not reusable. Release an existing batch before acquiring different apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Opt-in native telemetry additionally discloses a per-run authenticated ephemeral loopback JSON receiver and exporter variables; its buffers and receiver close with the owned shell process and grant no saved authority. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout normally releases queue position. Explicit retainQueue:true adds a disclosed retained wait receipt for env_wait continuation of only this approved plan, with no apps reserved/started between calls. Stops, task cleanup and host shutdown/restart invalidate the live entry; saved queue records never restore authority.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					retainQueue: Type.Optional(Type.Boolean()),

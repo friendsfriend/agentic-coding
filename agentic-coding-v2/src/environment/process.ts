@@ -1,3 +1,4 @@
+import type { TelemetryReader } from "./model.ts";
 export type Exit = { code: number | null; signal: string | null };
 export type LogTiming = {
 	basis: "host-receipt-completed-lines";
@@ -23,6 +24,7 @@ export interface EnvironmentProcess {
 	readonly done: Promise<Exit>;
 	readonly logs: string;
 	readonly logTiming?: LogTiming;
+	readonly telemetry?: TelemetryReader;
 	readonly serviceLogs?: Record<string, ServiceLog>;
 	readonly outcome: Exit | null;
 	readonly cleanupFailed: boolean;

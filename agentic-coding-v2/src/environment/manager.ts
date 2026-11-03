@@ -14,7 +14,7 @@ import { HeldHttp } from "./http-manager.ts";
 import type { HttpReceipt } from "./http-receipts.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
-import type { Plan } from "./model.ts";
+import type { Plan, TelemetryOptions } from "./model.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
 import { runsConflict } from "./resources.ts";
@@ -26,6 +26,7 @@ import {
 	type ReuseReceipt,
 	type StopReceipt,
 } from "./state.ts";
+import { TelemetryCollector } from "./telemetry.ts";
 
 import type { WaitReceipt } from "./wait.ts";
 
@@ -401,6 +402,27 @@ export class Environments {
 				this.visible(run, { output: true, services, timing: true }),
 			);
 	}
+	async queryTelemetry(
+		app: string,
+		owner: number | undefined,
+		options: TelemetryOptions,
+	) {
+		const run = (await this.records()).find(
+			(record) =>
+				record.plan.app === app &&
+				(owner === undefined || record.owner === owner) &&
+				record.state === "running" &&
+				record.ready === true &&
+				holdsResource(record),
+		);
+		const process = run ? this.live.get(run.id) : undefined;
+		if (!run || !process?.telemetry || process.outcome || process.cleanupFailed)
+			throw new Error(
+				"No owned live ready native telemetry run is held for this app",
+			);
+		this.check(run.owner, undefined, run.batch);
+		return process.telemetry.query(options);
+	}
 	async selectedLogs(
 		app: string,
 		owner: number | undefined,
@@ -550,10 +572,28 @@ export class Environments {
 		try {
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
-				const id = `${batch}:${plan.app}`,
-					process: EnvironmentProcess =
+				const id = `${batch}:${plan.app}`;
+				const frozen = plan.telemetry
+					? processEnvironment(this.config.configDir, plan)
+					: undefined;
+				const collector = frozen
+					? new TelemetryCollector(
+							{ app: plan.app, owner: owner.id, run: id },
+							frozen.redact,
+						)
+					: undefined;
+				let process: EnvironmentProcess;
+				try {
+					process =
 						plan.runtime === "shell"
-							? new ShellProcess(plan, this.config.configDir)
+							? new ShellProcess(
+									plan,
+									this.config.configDir,
+									undefined,
+									collector && frozen
+										? { collector, environment: frozen }
+										: undefined,
+								)
 							: plan.runtime === "compose"
 								? new ComposeProcess(
 										plan,
@@ -569,6 +609,18 @@ export class Environments {
 											this.config.stateDir,
 											id,
 										);
+				} catch (error) {
+					try {
+						await collector?.close();
+					} catch {
+						await this.update(id, {
+							state: "interrupted",
+							error:
+								"Native telemetry listener cleanup is uncertain; inspection required",
+						});
+					}
+					throw error;
+				}
 				this.live.set(id, process);
 				// Always attach finalization immediately, including startup/recording failure.
 				void process.done
