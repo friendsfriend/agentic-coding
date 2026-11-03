@@ -134,6 +134,97 @@ async function refresh() {
 					return el;
 				}),
 		);
+		const ownerIds = new Set(tasks.map((task) => task.id));
+		const environments = state.environments;
+		const existingEnvironments = new Map(
+			Array.from($("environments").children, (card) => [
+				card.dataset.environmentRun,
+				card,
+			]),
+		);
+		reuseChildren(
+			$("environments"),
+			element(
+				"p",
+				environments.projects.length
+					? environments.projects
+							.map(
+								(project) =>
+									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}`).join(", ")}`,
+							)
+							.join("\n")
+					: "No configured environments. Add CONFIG_DIR/environments.json.",
+				"meta",
+			),
+			...environments.waiters
+				.filter((waiter) => !topic || ownerIds.has(waiter.owner))
+				.map((waiter) =>
+					element(
+						"p",
+						`Task ${waiter.owner} waiting for ${waiter.apps.join(", ")} · FIFO acquisition`,
+					),
+				),
+			...environments.runs
+				.filter((run) => !topic || ownerIds.has(run.owner))
+				.sort(
+					(a, b) =>
+						Number(b.state !== "exited") - Number(a.state !== "exited") ||
+						b.createdAt - a.createdAt,
+				)
+				.map((run) => {
+					const card =
+						existingEnvironments.get(run.id) ?? element("div", null, "task");
+					if (card.dataset.environmentRevision === String(run.revision))
+						return card;
+					const previousLogs = card.querySelector("pre");
+					card.replaceChildren();
+					card.dataset.environmentRun = run.id;
+					card.dataset.environmentRevision = String(run.revision);
+					card.append(
+						element(
+							"strong",
+							`${run.plan.app} · ${run.plan.action}/${run.plan.id} · ${run.state}`,
+						),
+						element(
+							"p",
+							`Task ${run.owner} · PID ${run.pid ?? "unknown"} (diagnostic only) · readiness ${run.ready === null ? "not checked" : run.ready ? "observed" : "not observed"} · exit ${run.exitCode ?? run.signal ?? "unknown"}`,
+							"meta",
+						),
+					);
+					if (run.error) card.append(element("p", run.error));
+					card.append(
+						button("View redacted logs", async () => {
+							const logs = await api(
+								`/api/environments/logs?app=${encodeURIComponent(run.plan.app)}`,
+							);
+							const log = logs.find((item) => item.id === run.id);
+							const pre = card.querySelector("pre") ?? element("pre");
+							pre.textContent =
+								log?.output || "No complete log lines captured.";
+							card.append(pre);
+						}),
+					);
+					if (run.state === "interrupted")
+						card.append(
+							button("Release after inspection", async () => {
+								if (
+									!confirm(
+										"Confirm: I inspected this interrupted execution and stopped any leftover processes. Release its resource lock without executing or killing anything? A saved PID alone does not establish process identity.",
+									)
+								)
+									return;
+								await api("/api/environments/release", {
+									id: run.id,
+									revision: run.revision,
+									inspectionConfirmed: true,
+								});
+								await refresh();
+							}),
+						);
+					if (previousLogs) card.append(previousLogs);
+					return card;
+				}),
+		);
 		const existingReviews = new Map(
 			Array.from($("reviews").children, (card) => [
 				card.dataset.reviewId,

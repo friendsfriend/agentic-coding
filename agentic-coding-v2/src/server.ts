@@ -41,6 +41,8 @@ export function serve(app: Runtime, port = 0) {
 			// The Host check also prevents DNS rebinding to the loopback server.
 			if (url.hostname !== "127.0.0.1" || url.port !== String(server.port))
 				return json({ error: "Invalid host" }, 403);
+			if (request.method === "GET" && url.pathname === "/favicon.ico")
+				return new Response(null, { status: 204, headers: security });
 			if (
 				request.method === "GET" &&
 				["/", "/app.js", "/style.css"].includes(url.pathname)
@@ -113,6 +115,15 @@ export function serve(app: Runtime, port = 0) {
 						},
 					);
 				}
+				if (
+					request.method === "GET" &&
+					url.pathname === "/api/environments/logs"
+				)
+					return json(
+						await app.environments.logs(
+							text(url.searchParams.get("app"), "environment app", 64),
+						),
+					);
 				if (request.method !== "POST") return json({ error: "Not found" }, 404);
 				const body = object(await request.json());
 				if (url.pathname === "/api/session")
@@ -126,6 +137,17 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/release") {
+					if (body.inspectionConfirmed !== true)
+						throw new Error(
+							"Confirm inspection and cleanup before releasing an interrupted environment",
+						);
+					const id = text(body.id, "environment run", 128);
+					if (!/^env-\d+:[a-z][a-z0-9-]*$/.test(id))
+						throw new Error("Invalid environment run ID");
+					await app.environments.acknowledge(id, integer(body.revision));
+					return json({ ok: true });
+				}
 				const review = url.pathname.match(/^\/api\/reviews\/(review-\d+)$/);
 				if (review) {
 					const decision = text(body.decision, "decision") as Review["state"];

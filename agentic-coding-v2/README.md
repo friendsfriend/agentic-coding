@@ -67,6 +67,72 @@ Restart the host to discover changed user skills. Both kinds appear in the catal
 - `attach_image` copies PNG/JPEG content into local immutable attachments; Markdown image references are rendered as actual authenticated images. Remote tracking images and active HTML are not rendered.
 - Scheduling invokes exactly one skill through the same admission path. Creating a schedule requires human approval of its exact parameters. Replaying a successful creation returns its persisted state before checking today's profiles or future timing, without resuming paused schedules or rearming expired ones. Reusing the ID for different work is rejected; JSON property order is irrelevant. Once/interval/timezone-calendar timing, overlap skipping and explicit late behavior are supported. ISO weekdays are 1–7. Calendar DST gaps advance, and folds use the earlier occurrence. Missed repeated slots are coalesced, not replayed as a burst. Invalid scheduled admissions pause that schedule with a visible error instead of starving others. The server must be running; there is no OS wake or startup service.
 
+## Environment management — first runtime slice
+
+Environment management is native-task-owned, not workflow-owned. This slice supports **POSIX shell targets** for apps and libraries; Docker/Compose, Kubernetes, infrastructure dependencies, endpoint discovery and database/telemetry tools are **not migrated yet**. It does not import definitions, leases, containers or processes from the previous host.
+
+Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
+
+```json
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "web",
+      "kind": "app",
+      "repository": "/absolute/path/to/repository",
+      "targets": [
+        {
+          "id": "serve",
+          "action": "run",
+          "runtime": "shell",
+          "command": "bun run dev",
+          "readyText": "Listening on",
+          "timeoutMs": 30000,
+          "environment": { "NODE_ENV": "development" },
+          "secretRefs": { "DATABASE_URL": "WEB_DATABASE_URL" }
+        },
+        {
+          "id": "build",
+          "action": "build",
+          "runtime": "shell",
+          "command": "bun run build",
+          "timeoutMs": 600000
+        },
+        {
+          "id": "test",
+          "action": "test",
+          "runtime": "shell",
+          "command": "bun test",
+          "timeoutMs": 600000
+        }
+      ]
+    }
+  ]
+}
+```
+
+Repositories must already be explicitly authorized in `config.json`. IDs are lowercase kebab-case and unique within their scope. A library uses `"kind": "library"` and cannot have run targets. Only the documented fields are accepted; unsupported runtimes and unknown fields fail visibly instead of being silently ignored.
+
+`cwd` defaults to `.` and must resolve inside the owning task's worktree, including a containment recheck immediately before spawn. All selected apps must belong to that task's repository. Dependencies and uncommitted source-checkout files are not copied into worktrees: configure an appropriate, separately approved install/build target if needed.
+
+Literal `environment` values are public configuration and appear in catalog/review snapshots. **Do not put credentials there.** `secretRefs` maps child environment names to variables in `CONFIG_DIR/.env` (a dotenv data file, not executable shell); an explicitly referenced host environment variable is the fallback. Protect that file with user-only permissions. Missing references fail before acquiring or starting any app. Values are resolved after approval and are never placed in execution receipts or review snapshots. Only `PATH`, `HOME`, `LANG`, `TMPDIR`, `TERM`, the configured literals/references, and `WORKSPACE`/`CONFIG_DIR` are passed—not the host's whole environment. This is not a filesystem or credential sandbox: approved programs still run with the host user's OS authority.
+
+Available tools:
+
+- `env_list`, `env_status`, `env_logs`: inspect definitions, owners, queues, readiness, exit receipts and logs. A skill reads only its own logs; the home orchestrator and authenticated operator can inspect all host runs.
+- `env_start`: human approval for the exact command/cwd/variable-reference plan, then atomic reservation of the entire requested app batch. If a target is ambiguous, select its ID explicitly. Acquisition is FIFO; it waits inside the tool without model polling. `timeoutSec` defaults to 30 (maximum 7200); timeout/cancellation removes the queue entry and does not start anything. Acquire all required apps together; stop an existing batch before acquiring more, avoiding hold-and-wait deadlocks.
+- `env_build`, `env_test`: separately approved commands in the task's worktree, with actual exit codes and redacted output. They require no app slot, but concurrent build/test actions in the same workspace are refused. Nonzero exit codes remain failures reported as data, not invented successful verification.
+- `env_stop`: live process-group cleanup for this task's own selected apps and pending acquisitions. It cannot stop another owner. Durable stop receipts bind retries to the original selection, not newly started apps.
+
+Run `timeoutMs` is a startup/readiness deadline (default 30 seconds), not a service lifetime. `readyText`, when supplied, must appear in a complete redacted output line before startup completes. Without it, readiness is explicitly **not checked**; it is not an HTTP health check. Build/test `timeoutMs` bounds execution (default ten minutes). Both accept 100–3,600,000 ms. Startup failure stops the rest of that batch without taking over another task's resources.
+
+Task completion, cancellation and graceful host shutdown stop owned live process groups before releasing their slots. TERM escalates to KILL; unconfirmed cleanup is quarantined rather than reported as stopped. Skill results/cancellation reasons include an operator-inspection warning when resources remain quarantined. Programs that detach into other sessions or gain privileges can escape ordinary process-group cleanup: this is **not an OS sandbox**. Cancellation does not roll back filesystem, network or external effects.
+
+After an unclean host interruption, reserved/running/stopping receipts become **interrupted** and continue to hold their app/workspace resource. Nothing is re-executed, adopted or killed using a saved PID. Inspect and stop leftovers yourself, then use **Release after inspection** in the authenticated dashboard. This confirmation is revision-fenced, executes no command, and leaves unknown exit status unknown. Cancelling an ended/interrupted task does not silently clear its quarantine. Retrying work requires a fresh approved invocation.
+
+Logs retain at most 64,000 characters per execution; complete known secret values (including values split across stream chunks) are redacted before storage/display. Unterminated lines are withheld while running; oversize lines are omitted. This is best-effort literal redaction, not protection against a malicious command deliberately encoding or exfiltrating a secret. In-progress logs are live memory; startup and exit snapshots are durable, so a crash can lose later log lines. Tool responses are capped at 40,000 characters. Active/quarantined runs remain visible regardless of history limits. The environment dashboard exposes target IDs, owners, queue state, startup readiness, real exit status and redacted logs.
+
 ## Authority and safety limits
 
 Research tasks are read-only. File tools validate workspace containment and reject escaped symlinks and Git internals. Workspace-write tasks may edit their own workspace. Automatic Git operations disable hooks, fsmonitor programs, recursive submodule updates, auto-maintenance and configured clean/smudge/process filters. This prevents a read-only inspection or automatic checkout from silently executing repository-configured programs. Filtered content (including Git LFS pointers) stays unhydrated; running a filter or fetching content requires a separately approved shell command. These defenses are not an OS sandbox against concurrent hostile host/filesystem mutation. Arbitrary shell commands are **not sandboxed**: each requires operator approval of the exact command, working directory and timeout. A persisted start marker prevents automatic command re-execution after an ambiguous interruption; the operator must inspect effects before retrying. Approval is not a guarantee of harmlessness, and path validation is not OS-level isolation against concurrent filesystem mutation.
@@ -82,6 +148,6 @@ bun test
 bun run build
 ```
 
-The small test suite uses temporary repositories/storage and a fake model provider, including persisted restart, human approval, cancellation, scheduler accounting and authenticated image delivery. It makes no live model or credential calls. Tests focus on behavior and failure boundaries rather than helper coverage or implementation structure. An isolated real-browser smoke check also verified image decoding/delivery and that review draft text and keyboard focus survive an unrelated chat update and polling refresh.
+The small test suite uses temporary repositories/storage and a fake model provider, including persisted restart, human approval, cancellation, scheduler accounting and authenticated image delivery. Environment scenarios launch only isolated fixture processes: they verify atomic app contention/handoff, owner fencing, cleanup, build/test exit codes, secret redaction, readiness timeout, and real crash/quarantine recovery without saved-PID takeover. It makes no live model or credential calls. Tests focus on behavior and failure boundaries rather than helper coverage or implementation structure. Isolated real-browser smoke checks also verified image decoding/delivery, environment log redaction and retention across polling, and that review draft text and keyboard focus survive an unrelated chat update and polling refresh.
 
 Desloppify is installed locally in `.desloppify/venv`; its state and generated analysis are ignored. Its subjective dimensions are not yet independently assessed. No high quality score or production-readiness claim follows from a successful build or the current tests.

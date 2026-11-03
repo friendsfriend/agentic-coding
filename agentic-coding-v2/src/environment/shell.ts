@@ -1,0 +1,247 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { parseEnv } from "node:util";
+import { contained } from "../git.ts";
+import type { Plan } from "./catalog.ts";
+
+export type Exit = { code: number | null; signal: string | null };
+export function processEnvironment(configDir: string, plan: Plan) {
+	const file = path.join(configDir, ".env");
+	const secrets = fs.existsSync(file)
+		? parseEnv(fs.readFileSync(file, "utf8"))
+		: {};
+	const resolved = Object.fromEntries(
+		Object.entries(plan.secretRefs).map(([key, ref]) => {
+			const value = secrets[ref] ?? process.env[ref];
+			if (!value)
+				throw new Error(`Missing environment secret reference: ${ref}`);
+			if (value.includes("\0"))
+				throw new Error(`Invalid environment secret reference: ${ref}`);
+			return [key, value];
+		}),
+	);
+	const hidden = [
+		...new Set(
+			Object.values(resolved)
+				.flatMap((value) => [value, ...value.split(/\r?\n/)])
+				.filter(Boolean),
+		),
+	].sort((a, b) => b.length - a.length);
+	return {
+		env: {
+			...Object.fromEntries(
+				["PATH", "HOME", "LANG", "TMPDIR", "TERM"].flatMap((key) =>
+					process.env[key] ? [[key, process.env[key]]] : [],
+				),
+			),
+			...plan.environment,
+			...resolved,
+			WORKSPACE: plan.workspace,
+			CONFIG_DIR: configDir,
+		},
+		redact: (value: string) =>
+			hidden.reduce(
+				(result, secret) => result.replaceAll(secret, "[REDACTED]"),
+				value,
+			),
+	};
+}
+
+/** A live handle, never reconstructed from a persisted PID. POSIX process groups
+ * bound normal child cleanup; this is deliberately not an OS sandbox. */
+export class ShellProcess {
+	private child: ChildProcess;
+	private stopping: Promise<void> | null = null;
+	private ended = false;
+	private mainExited = false;
+	private output = "";
+	private exit: Exit | null = null;
+	private cleanupUncertain = false;
+	readonly done: Promise<Exit>;
+	readonly spawned: Promise<boolean>;
+	constructor(
+		readonly plan: Plan,
+		configDir: string,
+	) {
+		if (process.platform === "win32")
+			throw new Error("Shell environment runtime currently requires POSIX");
+		const { env, redact } = processEnvironment(configDir, plan);
+		const cwd = contained(
+			plan.workspace,
+			path.relative(plan.workspace, plan.cwd),
+		);
+		if (!fs.statSync(cwd).isDirectory())
+			throw new Error("Environment cwd is no longer a workspace directory");
+		try {
+			this.child = spawn("/bin/sh", ["-c", plan.command], {
+				cwd,
+				env,
+				detached: true,
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+		} catch {
+			throw new Error(
+				"Environment process could not start with the configured plan",
+			);
+		}
+		const append = (line: string) => {
+			this.output = `${this.output}${redact(line)}\n`.slice(-64000);
+		};
+		const flushers: (() => void)[] = [];
+		for (const stream of [this.child.stdout, this.child.stderr]) {
+			if (!stream) continue;
+			let pending = "",
+				dropping = false;
+			stream.setEncoding("utf8");
+			stream.on("data", (chunk: string) => {
+				const lines = `${pending}${chunk}`.split("\n");
+				pending = lines.pop() ?? "";
+				for (const line of lines) {
+					if (!dropping)
+						append(line.length > 8192 ? "[oversize log line omitted]" : line);
+					dropping = false;
+				}
+				if (pending.length > 8192) {
+					if (!dropping) append("[oversize log line omitted]");
+					pending = "";
+					dropping = true;
+				}
+			});
+			flushers.push(() => {
+				if (pending && !dropping) append(pending);
+			});
+		}
+		this.spawned = new Promise((resolve) => {
+			this.child.once("spawn", () => resolve(true));
+			this.child.once("error", () => resolve(false));
+		});
+		this.done = new Promise((resolve) => {
+			this.child.once("error", (error) => append(redact(error.message)));
+			// The main process may exit leaving children. Stop this live process group's
+			// remaining descendants before releasing the application slot.
+			this.child.once("exit", () => {
+				this.mainExited = true;
+				this.signal("SIGKILL");
+			});
+			this.child.once("close", async (code, signal) => {
+				for (const flush of flushers) flush();
+				await this.confirmGroupExit();
+				this.ended = true;
+				this.exit = { code, signal };
+				resolve(this.exit);
+			});
+		});
+	}
+	get pid() {
+		return this.child.pid ?? null;
+	}
+	get logs() {
+		return this.output;
+	}
+	get outcome() {
+		return this.exit;
+	}
+	get cleanupFailed() {
+		return this.cleanupUncertain;
+	}
+	private signal(signal: NodeJS.Signals): boolean {
+		if (!this.child.pid) return true;
+		try {
+			process.kill(-this.child.pid, signal);
+			return true;
+		} catch (error) {
+			if (
+				error &&
+				typeof error === "object" &&
+				"code" in error &&
+				error.code === "ESRCH"
+			)
+				return true;
+			this.cleanupUncertain = true;
+			return false;
+		}
+	}
+	private async confirmGroupExit() {
+		if (!this.child.pid) return;
+		const deadline = Date.now() + 1000;
+		for (;;) {
+			try {
+				process.kill(-this.child.pid, 0);
+			} catch (error) {
+				if (
+					!(
+						error &&
+						typeof error === "object" &&
+						"code" in error &&
+						error.code === "ESRCH"
+					)
+				)
+					this.cleanupUncertain = true;
+				return;
+			}
+			if (Date.now() >= deadline) {
+				this.cleanupUncertain = true;
+				return;
+			}
+			await Bun.sleep(10);
+		}
+	}
+	async ready(signal?: AbortSignal) {
+		if (!(await this.spawned))
+			throw new Error("Environment process could not start");
+		const deadline = Date.now() + this.plan.timeoutMs;
+		while (this.plan.readyText && !this.logs.includes(this.plan.readyText)) {
+			signal?.throwIfAborted();
+			if (this.mainExited || this.ended)
+				throw new Error("Environment process exited during startup");
+			if (Date.now() >= deadline)
+				throw new Error("Environment startup timed out");
+			await Bun.sleep(10);
+		}
+		signal?.throwIfAborted();
+		if (this.mainExited || this.ended)
+			throw new Error("Environment process exited during startup");
+	}
+	async wait(signal?: AbortSignal): Promise<Exit> {
+		const deadline = Date.now() + this.plan.timeoutMs;
+		while (!this.ended) {
+			signal?.throwIfAborted();
+			if (Date.now() >= deadline)
+				throw new Error("Environment action timed out");
+			await Bun.sleep(10);
+		}
+		return this.done;
+	}
+	stop(): Promise<void> {
+		if (this.stopping) return this.stopping;
+		this.stopping = (async () => {
+			if (this.ended) return;
+			if (!this.signal("SIGTERM"))
+				throw new Error(
+					"Process group cleanup could not be authorized by the OS",
+				);
+			const escalation = setTimeout(() => this.signal("SIGKILL"), 1000);
+			let deadline: ReturnType<typeof setTimeout> | null = null;
+			const uncertain = new Promise<never>((_, reject) => {
+				deadline = setTimeout(() => {
+					this.cleanupUncertain = true;
+					reject(
+						new Error(
+							"Process group cleanup did not settle; inspection required",
+						),
+					);
+				}, 2000);
+				deadline.unref();
+			});
+			escalation.unref();
+			try {
+				await Promise.race([this.done, uncertain]);
+			} finally {
+				clearTimeout(escalation);
+				if (deadline) clearTimeout(deadline);
+			}
+		})();
+		return this.stopping;
+	}
+}

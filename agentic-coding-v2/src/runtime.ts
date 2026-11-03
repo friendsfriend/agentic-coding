@@ -13,6 +13,11 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { TaskAdmission } from "./admission.ts";
 import { createAgentTools, createTaskCodingTools } from "./agent-tools.ts";
 import { type Config, text } from "./config.ts";
+import { Environments } from "./environment/manager.ts";
+import {
+	createEnvironmentTools,
+	environmentInspectionTools,
+} from "./environment/tools.ts";
 import { createOrchestrator, orchestratorPrompt } from "./orchestrator.ts";
 import { projectState } from "./projection.ts";
 import { Scheduler, type ScheduleSlot } from "./scheduler.ts";
@@ -36,10 +41,13 @@ export class Runtime {
 	private admission: TaskAdmission | null = null;
 	private reconciling = false;
 	private closed = false;
+	readonly environments: Environments;
 	private constructor(
 		readonly config: Config,
 		readonly models: Models,
-	) {}
+	) {
+		this.environments = new Environments(config);
+	}
 	get harness(): Harness {
 		if (!this.engine) throw new Error("Harness not initialized");
 		return this.engine;
@@ -61,10 +69,20 @@ export class Runtime {
 		const registry = createRegistry();
 		const coding = createTaskCodingTools((id) => app.ownerOf(id));
 		const agentTools = createAgentTools(config, (id) => app.ownerOf(id));
-		const skillTask = createSkillTask(config, coding, agentTools);
+		const environmentTools = createEnvironmentTools(app.environments, (id) =>
+			id === app.home.id ? Promise.resolve(null) : app.ownerOf(id),
+		);
+		const skillTask = createSkillTask(
+			config,
+			coding,
+			agentTools,
+			environmentTools,
+			(id) => app.environments.releaseOwner(id),
+		);
 		const orchestrator = createOrchestrator(app, skillTask);
 		registry.install(coding);
 		registry.install(agentTools);
+		registry.install(environmentTools);
 		registry.install(orchestrator);
 		app.engine = await Harness.open(
 			storage,
@@ -78,6 +96,7 @@ export class Runtime {
 			context,
 		);
 		try {
+			await app.environments.initialize(app.harness);
 			const profile = config.profiles.find(
 				(item) => item.id === config.orchestratorProfile,
 			);
@@ -90,9 +109,14 @@ export class Runtime {
 							? { provider: profile.provider, modelId: profile.modelId }
 							: null,
 						thinkingLevel: profile?.thinking ?? null,
-						extensions: [orchestrator],
-						tools: orchestrator.tools ?? [],
-						instructions: orchestratorPrompt,
+						extensions: [orchestrator, environmentTools],
+						tools: [
+							...(orchestrator.tools ?? []),
+							...(environmentTools.tools ?? []).filter((tool) =>
+								environmentInspectionTools.has(tool.name),
+							),
+						],
+						instructions: `${orchestratorPrompt}\nInspect env_list before proposing environment operations. Environment execution belongs to workspace-write skill tasks and exact human-approved targets. Interrupted process effects require operator inspection, not automatic retry or saved-PID cleanup.`,
 						cwd: null,
 						modelTools: null,
 					}),
@@ -113,7 +137,11 @@ export class Runtime {
 			app.harness.resume();
 			return app;
 		} catch (error) {
-			await app.harness.close(context);
+			try {
+				await app.environments.close();
+			} finally {
+				await app.harness.close(context);
+			}
 			throw error;
 		}
 	}
@@ -146,7 +174,9 @@ export class Runtime {
 	}
 	async cancel(id: number) {
 		await this.taskResult(id);
-		return this.harness.abortTask(nativeTaskId(id), context);
+		const requested = await this.harness.abortTask(nativeTaskId(id), context);
+		await this.environments.releaseOwner(id);
+		return requested;
 	}
 	async decide(
 		id: string,
@@ -208,7 +238,15 @@ export class Runtime {
 		);
 	}
 	async snapshot() {
-		return projectState(this.harness, this.home, this.config, this.models);
+		return {
+			...(await projectState(
+				this.harness,
+				this.home,
+				this.config,
+				this.models,
+			)),
+			environments: await this.environments.snapshot(),
+		};
 	}
 	async tick(now = Date.now()) {
 		if (this.reconciling || this.closed) return;
@@ -221,6 +259,7 @@ export class Runtime {
 			)) {
 				const task = await this.harness.getTask(nativeTaskId(info.id), context);
 				if (task?.state.status !== "terminal") continue;
+				await this.environments.releaseOwner(info.id);
 				await this.home.submit(
 					{
 						type: "input",
@@ -273,6 +312,10 @@ export class Runtime {
 	async close() {
 		this.closed = true;
 		while (this.reconciling) await Bun.sleep(10);
-		await this.harness.close(context);
+		try {
+			await this.environments.close();
+		} finally {
+			await this.harness.close(context);
+		}
 	}
 }
