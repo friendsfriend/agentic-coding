@@ -17,6 +17,7 @@ import { readEndpoints } from "./endpoint.ts";
 import { readEndpointCaRefs } from "./endpoint-ca.ts";
 import { type EndpointAuth, readEndpointAuth } from "./http-options.ts";
 import { type KubernetesTarget, readKubernetes } from "./kubernetes-config.ts";
+import { type QueryConnection, readQueryConnection } from "./query-config.ts";
 import {
 	type Action,
 	defaultTargets,
@@ -44,6 +45,7 @@ export type Target = {
 	endpoints?: Record<string, string>;
 	endpointCaRefs?: Record<string, string>;
 	endpointAuthRefs?: Record<string, EndpointAuth>;
+	queryConnection?: QueryConnection;
 };
 export type Project = {
 	id: string;
@@ -113,6 +115,7 @@ function readTarget(raw: unknown): Target {
 		"endpoints",
 		"endpointCaRefs",
 		"endpointAuthRefs",
+		"queryConnection",
 	]);
 	if (
 		data.runtime !== "shell" &&
@@ -157,6 +160,13 @@ function readTarget(raw: unknown): Target {
 		throw new Error(
 			"Named local endpoints currently require a shell run target",
 		);
+	if (
+		data.queryConnection !== undefined &&
+		(data.runtime !== "shell" || data.action !== "run" || !data.readyText)
+	)
+		throw new Error(
+			"Query connections require a shell run target with an explicit readiness marker",
+		);
 	const container =
 		data.runtime === "shell" ||
 		data.runtime === "compose" ||
@@ -192,6 +202,7 @@ function readTarget(raw: unknown): Target {
 	const cwd = text(data.cwd ?? ".", "environment cwd", 4096);
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
+	const queryConnection = readQueryConnection(data.queryConnection, secretRefs);
 	const endpoints = readEndpoints(data.endpoints),
 		endpointCaRefs = readEndpointCaRefs(data.endpointCaRefs, endpoints);
 	return {
@@ -234,6 +245,7 @@ function readTarget(raw: unknown): Target {
 				: text(data.readyText, "readiness text", 512),
 		environment,
 		secretRefs,
+		...(queryConnection ? { queryConnection } : {}),
 	};
 }
 function availableTargets(project: Project): Target[] {
@@ -320,6 +332,13 @@ export function loadProjects(config: Config): Project[] {
 				"Environment repository is not authorized by application configuration",
 			);
 		const targets = entry.targets.map(readTarget);
+		if (
+			entry.kind !== "infrastructure" &&
+			targets.some((target) => target.queryConnection)
+		)
+			throw new Error(
+				"Query connections belong only to declared infrastructure targets",
+			);
 		if (new Set(targets.map((target) => target.id)).size !== targets.length)
 			throw new Error("Duplicate environment target ID");
 		if (

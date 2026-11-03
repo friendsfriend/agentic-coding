@@ -19,6 +19,7 @@ const input = JSON.parse(fs.readFileSync(process.argv[2] ?? "", "utf8")) as {
 	target?: string;
 	runtime?: string;
 	http?: { startedFile: string };
+	sql?: { startedFile: string };
 };
 const fake = fauxProvider({
 	models: [{ id: "original" }, { id: "replacement" }],
@@ -46,6 +47,17 @@ fake.setResponses([
 						method: "POST",
 						body: "mutate-once",
 						allowWrite: true,
+					}),
+					{ stopReason: "toolUse" },
+				),
+			]
+		: []),
+	...(input.sql
+		? [
+				fauxAssistantMessage(
+					fauxToolCall("db_query", {
+						infra: "store",
+						sql: "SELECT pg_sleep(2) /* NATIVE_SQL_PROBE */",
 					}),
 					{ stopReason: "toolUse" },
 				),
@@ -104,13 +116,29 @@ for (let attempt = 0; attempt < 1000; attempt++) {
 			"approved",
 			"Disposable fixture HTTP operation approved by test operator",
 		);
+	const sqlApproval = input.sql
+		? state.reviews.find(
+				(review) =>
+					review.taskId === id &&
+					review.title === "Query store" &&
+					review.state === "pending",
+			)
+		: undefined;
+	if (sqlApproval)
+		await app.decide(
+			sqlApproval.id,
+			sqlApproval.revision,
+			"approved",
+			"Disposable fixture SQL approved by test operator",
+		);
+	const startedFile = input.http?.startedFile ?? input.sql?.startedFile;
 	const run = state.environments.runs.find(
 		(run) => run.owner === id && run.state === "running",
 	);
 	if (
 		run &&
-		(input.http
-			? fs.existsSync(input.http.startedFile)
+		(startedFile
+			? fs.existsSync(startedFile)
 			: state.reviews.some(
 					(review) =>
 						review.title === "Keep crash fixture alive" &&

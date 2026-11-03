@@ -132,6 +132,7 @@ Available tools:
 - `env_build`, `env_test`: separately approved commands in the task's worktree, with actual exit codes and redacted output. They require no app slot, but concurrent build/test actions in the same workspace are refused. Container builds conservatively serialize all image writers on the same local API socket, across workspaces and client families: Docker-compatible endpoints and Podman short-name policy make client-side tag identity unsafe to guess. An interrupted writer keeps that daemon's image-write resource quarantined. Nonzero exit codes remain failures reported as data, not invented successful verification.
 - `env_http_get`: separately approved credential-free, non-redirecting GET to one named local endpoint of this task's live ready shell app. No other owner's app or saved receipt grants network authority.
 - `env_http_request`: separately approved HTTP method/headers/body, optional bounded same-origin redirects and configured reference-only HTTPS authentication, with a durable native issuance fence. Non-read methods require `allowWrite:true`; this does not bypass human approval. See the endpoint contract below.
+- `db_query`: exact-approved PostgreSQL diagnostics on this task’s live ready shell infrastructure required by a held app; verified TLS, frozen referenced credentials, read-only transaction, bounded/redacted rows and durable issuance fencing. See the SQL contract below.
 - `env_stop`: live process-group or ownership-fenced container cleanup for this task's own selected apps and pending acquisitions. It cannot stop another owner. Durable stop receipts bind retries to the original selection, not newly started apps.
 
 ### Bounded acquisition continuation
@@ -157,6 +158,37 @@ Explicitly acquire all needed resources together, for example `env_start({apps:[
 A dependency-expanded batch has an explicitly approved **coupled lifetime**: selecting any member in `env_stop`, any member exiting, startup failure, task cleanup or host shutdown stops the entire batch, dependents before dependencies. No partial release or automatic restart. Callback exits retain resource occupancy until ordered live cleanup reaches that member; late callbacks cannot reconstruct authority from saved receipts. Known cleanup failures do not skip cleanup attempts for the remaining selected live resources. Native scenarios verify dependency-first readiness, immutable expanded approval, member-selected dependent-first cleanup, unexpected dependency loss, failed startup settling, cycle refusal and expanded-limit refusal before approval/reservation.
 
 There is **no cross-task sharing, external-service adoption or last-reference lease release yet**; do not treat these exclusive resources as shared services. No automatic endpoint/credential injection or new network links. Runtime readiness retains its existing limitations, not an end-to-end dependency health guarantee. Fixture verification is not a live infrastructure compatibility claim.
+
+### Initial held-infrastructure SQL diagnostics
+
+A declared infrastructure **shell run** target may add the following fields; it must also have an explicit `readyText`. The held application must require this infrastructure through its immutable `requires` graph in the **same native-owned atomic coupled batch**. Merely starting a standalone resource, knowing an ID, or reading an old receipt grants no SQL authority.
+
+```json
+{
+  "secretRefs": { "PGUSER": "LOCAL_DB_USER", "PGPASSWORD": "LOCAL_DB_PASSWORD" },
+  "queryConnection": {
+    "protocol": "postgres",
+    "host": "127.0.0.1",
+    "port": 55432,
+    "database": "application",
+    "usernameRef": "PGUSER",
+    "passwordRef": "PGPASSWORD",
+    "caRef": "certificates/database-root.pem"
+  }
+}
+```
+
+Only explicit PostgreSQL numeric loopback (`127.0.0.1` or `::1`) is supported. TLS and certificate/IP verification are mandatory; no plaintext fallback, caller connection/credentials, hostname override, client key, external/shared service, MySQL or container/Compose/Kubernetes binding. The optional public `caRef` has the same config containment, regular-file/64-KiB/single-CA restrictions as endpoint CAs. Its digest is included in approval and checked before issuance; system trust is used without it. Declared query ports also participate in native admission conflicts. Neither a port declaration nor TLS proves which process owns a socket.
+
+`db_query({infra:"store",sql:"SELECT id, status FROM requests",schema:"public",limit:50})` requires a workspace-write native task and **separate exact human approval**. The immutable request names the live infrastructure run, requiring app, connection references, SQL, schema, cap and public CA digest—not expanded credentials. Credentials and literal-secret redaction are frozen at approved infrastructure startup; later dotenv changes cannot replace them. The server verifies the connected database, session user, requested schema and read-only transaction mode before executing the user statement.
+
+SQL is a bounded **SELECT/WITH subset** (20 KiB, no leading comments, disallowed control bytes or parameter-like `$digits` text, conservatively including literals/comments). Parameters are not caller inputs. A reserved nonempty driver binding forces the PostgreSQL single-statement extended protocol; relying on `prepare:true` without parameters is unsafe for Bun’s `unsafe()` path. The row cap defaults to 50, range 1–200, with one lookahead row. Each server-side JSON row projection is capped at 1025 characters; over-1024-UTF-16-unit rows are wholly withheld, never returned as a possibly secret-bearing prefix. Complete rows share an 8192-byte JSON budget, with explicit omission/lookahead metadata and no invented total count. Database numeric values become exact lexical **strings**, avoiding bigint/decimal rounding; nested data beyond eight levels is omitted. Complete row strings/keys receive literal startup-secret redaction, not protection against arbitrary transformations/encodings.
+
+One reserved connection runs one **READ ONLY transaction**, a statement timeout and an explicit acknowledged `ROLLBACK` before success. One total ten-second deadline covers issuance/connection/query/rollback; connect has an additional five-second cap. Cancellation closes both the borrowed connection and pool, joins the run’s cleanup barrier, and rejects observations if any coupled member closes. READ ONLY is **not a sandbox for privileged SQL functions** or a guarantee against external/nontransactional effects; inspect the exact SQL and configure a least-privileged database role. On failure/cancellation, server-side rollback may be unconfirmed.
+
+The native tool-task ID and canonical input bind an `issued` journal marker committed **before connection/query dispatch**. Only a completed bounded diagnostic may replay; uncertain issuance never resends, reconnects or adopts a saved lease. This is not exactly-once execution. Status exposes up to 200 metadata-only entries (no SQL, row data or credentials); `issued` means pending-or-uncertain, not proof of dispatch or failure. Host reopen leaves saved runs quarantined and grants no database authority.
+
+Six native scenarios use a disposable in-memory PGlite relational engine, real PostgreSQL wire traffic, a small TLS-upgrade adapter and generated local certificates. They verify exact approval, frozen-secret JSON redaction, bigint precision, caps, database/schema/read-only binding, a refused function write and multi-statement transaction escape with unchanged data, certificate-IP/downgrade/changed-CA refusal, foreign/stopped refusal, total deadline, cancellation cleanup and SIGKILL/reopen without resend or saved-PID adoption. PGlite multiplexes one backend, reset between fixture connections; it does **not** establish production PostgreSQL authentication, concurrent-session, daemon, engine, MySQL or live-system parity. No existing database, real credential or live engine was used. The runtime adapter uses Bun’s built-in SQL client; PGlite packages are exact development-only fixture dependencies.
 
 ### Kubernetes crash/reopen verification
 

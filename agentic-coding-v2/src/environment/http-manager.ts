@@ -1,7 +1,8 @@
 import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context";
-import type { Harness, TaskId } from "@earendil-works/pi-durable";
+import type { TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo } from "../state.ts";
+import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
 import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
 import { endpointRequest } from "./http.ts";
@@ -12,21 +13,13 @@ import {
 	httpDigest,
 	replayHttp,
 } from "./http-receipts.ts";
-import type { EnvironmentProcess } from "./process.ts";
 import { ShellProcess } from "./shell.ts";
-import { type EnvironmentRun, EnvironmentState } from "./state.ts";
+import { EnvironmentState } from "./state.ts";
 
-type HttpAuthority = {
-	store: () => Harness;
-	records: () => Promise<EnvironmentRun[]>;
-	live: ReadonlyMap<string, EnvironmentProcess>;
-	pending: Map<Promise<unknown>, { owner: number; batch: string }>;
-	check: (owner: number, signal?: AbortSignal, batch?: string) => void;
-};
 export class HeldHttp {
 	constructor(
 		private config: Config,
-		private authority: HttpAuthority,
+		private authority: LiveEnvironmentAuthority,
 	) {}
 	private async endpointRun(
 		owner: TaskInfo,

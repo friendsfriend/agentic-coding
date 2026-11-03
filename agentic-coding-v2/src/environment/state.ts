@@ -7,6 +7,7 @@ export const EnvironmentState = defineDoc<{
 	stops: Record<string, string>;
 	reuses?: Record<string, string>;
 	httpOperations?: Record<string, string>;
+	queryOperations?: Record<string, string>;
 	waits?: Record<string, string>;
 	waitPolls?: Record<string, string>;
 	waitOrdinal?: number;

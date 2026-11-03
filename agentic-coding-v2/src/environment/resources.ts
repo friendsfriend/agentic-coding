@@ -16,9 +16,8 @@ function ports(plan: Plan) {
 		host: number;
 		protocol: string;
 		address: string;
-	}>(
-		(service) =>
-			service.container?.ports ??
+	}>((service) => [
+		...(service.container?.ports ??
 			Object.values(service.endpoints ?? {}).map((address) => {
 				const url = new URL(address);
 				return {
@@ -26,8 +25,17 @@ function ports(plan: Plan) {
 					protocol: "tcp",
 					address: url.hostname.replace(/^\[|\]$/g, ""),
 				};
-			}),
-	);
+			})),
+		...(service.queryConnection
+			? [
+					{
+						host: service.queryConnection.port,
+						protocol: "tcp",
+						address: service.queryConnection.host,
+					},
+				]
+			: []),
+	]);
 }
 export function runsConflict(left: Plan, right: Plan, stateDir: string) {
 	if (left.app === right.app) return true;

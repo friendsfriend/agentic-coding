@@ -3,6 +3,7 @@ import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
 import { Acquisitions } from "./acquisitions.ts";
+import type { LiveEnvironmentAuthority } from "./authority.ts";
 import { loadProjects, type Plan, projectView } from "./catalog.ts";
 import { inspectCluster, loadClusters, prepareCluster } from "./cluster.ts";
 import type { ClusterInspection } from "./cluster-types.ts";
@@ -14,6 +15,7 @@ import type { HttpReceipt } from "./http-receipts.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { EnvironmentProcess } from "./process.ts";
+import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
 import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
@@ -41,6 +43,7 @@ export class Environments {
 	readonly projects;
 	readonly clusters;
 	readonly http: HeldHttp;
+	readonly database: DatabaseDiagnostics;
 	readonly acquisitions: Acquisitions;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
@@ -72,13 +75,15 @@ export class Environments {
 					poll,
 				),
 		});
-		this.http = new HeldHttp(config, {
+		const authority: LiveEnvironmentAuthority = {
 			store: () => this.store,
 			records: () => this.records(),
 			live: this.live,
 			pending: this.pending,
 			check: (owner, signal, batch) => this.check(owner, signal, batch),
-		});
+		};
+		this.http = new HeldHttp(config, authority);
+		this.database = new DatabaseDiagnostics(config, authority);
 	}
 	prepareCluster(owner: TaskInfo, id: string) {
 		const cluster = this.clusters.find((item) => item.id === id);
@@ -303,6 +308,28 @@ export class Environments {
 					),
 					authority:
 						"diagnostic only; saved queue records never restore execution authority",
+				})),
+			queryHistoryLimit: 200,
+			queryOperations: Object.entries(state?.queryOperations ?? {})
+				.map(([id, raw]) => ({ id, receipt: decode<QueryReceipt>(raw) }))
+				.filter(
+					({ receipt }) =>
+						!app ||
+						receipt.approved.app === app ||
+						receipt.approved.input.infra === app,
+				)
+				.slice(-200)
+				.map(({ id, receipt }) => ({
+					id,
+					owner: receipt.owner,
+					run: receipt.approved.run,
+					app: receipt.approved.app,
+					infra: receipt.approved.input.infra,
+					state: receipt.state,
+					issuedAt: receipt.issuedAt,
+					observedAt: receipt.result?.observedAt,
+					authority:
+						"diagnostic only; issued means pending or uncertain, never execution, rollback or live authority",
 				})),
 			httpOperationsTotal: operations.length,
 			httpHistoryLimit: 200,

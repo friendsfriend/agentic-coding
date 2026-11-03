@@ -29,6 +29,20 @@ export function processEnvironment(configDir: string, plan: Plan) {
 			authentication(ref, resolved),
 		]),
 	);
+	const connection = plan.queryConnection,
+		queryCredentials = connection
+			? Object.freeze({
+					username: resolved[connection.usernameRef] ?? "",
+					password: resolved[connection.passwordRef] ?? "",
+				})
+			: undefined;
+	if (
+		queryCredentials &&
+		(!queryCredentials.username || !queryCredentials.password)
+	)
+		throw new Error(
+			"Query credentials are unavailable from the declared startup references",
+		);
 	const hidden = [
 		...new Set(
 			[
@@ -43,6 +57,7 @@ export function processEnvironment(configDir: string, plan: Plan) {
 		),
 	].sort((a, b) => b.length - a.length);
 	return {
+		queryCredentials: () => queryCredentials,
 		authorization: (endpoint: string) =>
 			Object.hasOwn(auth, endpoint) ? auth[endpoint] : undefined,
 		env: {
@@ -78,6 +93,9 @@ export class ShellProcess {
 	readonly done: Promise<Exit>;
 	readonly redact: (value: string) => string;
 	readonly authorization: (endpoint: string) => string | undefined;
+	readonly queryCredentials: () =>
+		| Readonly<{ username: string; password: string }>
+		| undefined;
 	readonly spawned: Promise<boolean>;
 	constructor(
 		readonly plan: Plan,
@@ -92,7 +110,11 @@ export class ShellProcess {
 	) {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
-		const { env, redact, authorization } = processEnvironment(configDir, plan);
+		const { env, redact, authorization, queryCredentials } = processEnvironment(
+			configDir,
+			plan,
+		);
+		this.queryCredentials = queryCredentials;
 		this.redact = redact;
 		this.authorization = authorization;
 		const cwd = contained(

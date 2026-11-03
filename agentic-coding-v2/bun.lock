@@ -15,6 +15,8 @@
       },
       "devDependencies": {
         "@biomejs/biome": "^2.6.3",
+        "@electric-sql/pglite": "0.3.15",
+        "@electric-sql/pglite-socket": "0.0.20",
         "@types/bun": "^1.4.4",
         "typescript": "^7.0.2",
       },
@@ -102,6 +104,10 @@
     "@earendil-works/pi-telemetry": ["@earendil-works/pi-telemetry@1.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@earendil-works/pi-telemetry/-/pi-telemetry-1.4.0.tgz", {}, "sha512-MLIfowwUYIY65jSjMX82paZOrX/NTvLk6D08h+3Jq42a99RzUOewzuCR0zOlPul3D6UBfddat76VT6LvsHEs1w=="],
 
     "@earendil-works/pi-tui": ["@earendil-works/pi-tui@1.4.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@earendil-works/pi-tui/-/pi-tui-1.4.0.tgz", { "dependencies": { "get-east-asian-width": "1.6.0", "marked": "18.0.11", "marked-cjk-friendly": "0.1.2" } }, "sha512-4obPOjgOD7g4mGSlngIvxyujC1UPdmyI9zdVthbr8GufacFEX+Ce0+scPgHg++k2xj5+QjESM2d5TxvIuzCVmg=="],
+
+    "@electric-sql/pglite": ["@electric-sql/pglite@0.3.15", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@electric-sql/pglite/-/pglite-0.3.15.tgz", {}, "sha512-Cj++n1Mekf9ETfdc16TlDi+cDDQF0W7EcbyRHYOAeZdsAe8M/FJg18itDTSwyHfar2WIezawM9o0EKaRGVKygQ=="],
+
+    "@electric-sql/pglite-socket": ["@electric-sql/pglite-socket@0.0.20", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@electric-sql/pglite-socket/-/pglite-socket-0.0.20.tgz", { "peerDependencies": { "@electric-sql/pglite": "0.3.15" }, "bin": { "pglite-server": "dist/scripts/server.js" } }, "sha512-J5nLGsicnD9wJHnno9r+DGxfcZWh+YJMCe0q/aCgtG6XOm9Z7fKeite8IZSNXgZeGltSigM9U/vAWZQWdgcSFg=="],
 
     "@google/genai": ["@google/genai@2.21.0", "https://repo.eon-cds.de/artifactory/api/npm/funke-npm-virtual/@google/genai/-/genai-2.21.0.tgz", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"], "hasInstallScript": true }, "sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q=="],
 

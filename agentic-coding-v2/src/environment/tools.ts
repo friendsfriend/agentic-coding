@@ -11,6 +11,7 @@ import type { TaskInfo } from "../state.ts";
 import { type Action, resolvePlans } from "./catalog.ts";
 import { createHttpTools } from "./http-tools.ts";
 import type { Environments } from "./manager.ts";
+import { createQueryTools } from "./query-tools.ts";
 import type { Selection } from "./selection.ts";
 import { environmentResult } from "./tool-result.ts";
 
@@ -169,6 +170,7 @@ export function createEnvironmentTools(
 		name: "v2.environments",
 		tools: [
 			...createHttpTools(manager, ownerOf),
+			...createQueryTools(manager.database, ownerOf),
 			defineTool({
 				name: "env_cluster_status",
 				description:
