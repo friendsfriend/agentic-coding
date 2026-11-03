@@ -4,8 +4,9 @@ import path from "node:path";
 import { parseEnv } from "node:util";
 import { contained } from "../git.ts";
 import type { Plan } from "./catalog.ts";
+import type { Exit } from "./process.ts";
 
-export type Exit = { code: number | null; signal: string | null };
+export type { Exit } from "./process.ts";
 export function processEnvironment(configDir: string, plan: Plan) {
 	const file = path.join(configDir, ".env");
 	const secrets = fs.existsSync(file)
@@ -63,6 +64,12 @@ export class ShellProcess {
 	constructor(
 		readonly plan: Plan,
 		configDir: string,
+		invocation?: {
+			executable: string;
+			args: string[];
+			captureStdout?: (chunk: string) => void;
+			privateOutput?: boolean;
+		},
 	) {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
@@ -74,12 +81,16 @@ export class ShellProcess {
 		if (!fs.statSync(cwd).isDirectory())
 			throw new Error("Environment cwd is no longer a workspace directory");
 		try {
-			this.child = spawn("/bin/sh", ["-c", plan.command], {
-				cwd,
-				env,
-				detached: true,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
+			this.child = spawn(
+				invocation?.executable ?? "/bin/sh",
+				invocation?.args ?? ["-c", plan.command],
+				{
+					cwd,
+					env,
+					detached: true,
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
 		} catch {
 			throw new Error(
 				"Environment process could not start with the configured plan",
@@ -95,6 +106,8 @@ export class ShellProcess {
 				dropping = false;
 			stream.setEncoding("utf8");
 			stream.on("data", (chunk: string) => {
+				if (stream === this.child.stdout) invocation?.captureStdout?.(chunk);
+				if (invocation?.privateOutput) return;
 				const lines = `${pending}${chunk}`.split("\n");
 				pending = lines.pop() ?? "";
 				for (const line of lines) {

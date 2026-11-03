@@ -2,7 +2,10 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
-import { loadProjects, type Plan } from "./catalog.ts";
+import { loadProjects, type Plan, projectDefaults } from "./catalog.ts";
+import { ContainerProcess } from "./container.ts";
+import type { EnvironmentProcess } from "./process.ts";
+import { actionsConflict, runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
 	type EnvironmentRun,
@@ -11,7 +14,13 @@ import {
 	type StopReceipt,
 } from "./state.ts";
 
-type Waiter = { batch: string; owner: number; apps: string[]; since: number };
+type Waiter = {
+	batch: string;
+	owner: number;
+	apps: string[];
+	since: number;
+	plans: Plan[];
+};
 function recentRuns(runs: EnvironmentRun[], history: number) {
 	const recent = new Set(
 		runs
@@ -26,7 +35,7 @@ function recentRuns(runs: EnvironmentRun[], history: number) {
 export class Environments {
 	readonly projects;
 	private engine: Harness | null = null;
-	private live = new Map<string, ShellProcess>();
+	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
 	private waiters: Waiter[] = [];
 	private listeners = new Set<() => void>();
@@ -53,9 +62,16 @@ export class Environments {
 			for (const run of values<EnvironmentRun>(doc.runs))
 				if (run.state !== "exited" && run.state !== "interrupted") {
 					run.state = "interrupted";
+					if (run.runtimeStatus)
+						run.runtimeStatus = {
+							...run.runtimeStatus,
+							state: "unknown",
+							health: null,
+							owned: null,
+						};
 					run.revision++;
 					run.error =
-						"Host restarted with ambiguous process effects. Inspect and stop leftovers before releasing this resource. A saved PID is not authority to kill a process.";
+						"Host restarted with ambiguous environment effects. Inspect and stop/remove leftovers before releasing this resource. Saved PIDs, container IDs and labels are diagnostic only, never automatic cleanup/adoption authority.";
 					doc.runs[run.id] = JSON.stringify(run);
 				}
 		}, background);
@@ -110,21 +126,29 @@ export class Environments {
 		const { output: stored, ...rest } = run;
 		return {
 			...rest,
+			...(this.live.get(run.id)?.runtimeStatus
+				? { runtimeStatus: this.live.get(run.id)?.runtimeStatus }
+				: {}),
 			...(output ? { output: this.live.get(run.id)?.logs ?? stored } : {}),
 		};
 	}
 	async snapshot(app?: string) {
 		const all = await this.records();
 		return {
-			runtime: "shell",
-			projects: this.projects.filter((project) => !app || project.id === app),
+			runtime: "task-owned",
+			projects: this.projects
+				.filter((project) => !app || project.id === app)
+				.map((project) => ({
+					...project,
+					defaultTargets: projectDefaults(project),
+				})),
 			runs: recentRuns(
 				all.filter((run) => !app || run.plan.app === app),
 				200,
 			).map((run) => this.visible(run, false)),
-			waiters: this.waiters.filter(
-				(waiter) => !app || waiter.apps.includes(app),
-			),
+			waiters: this.waiters
+				.filter((waiter) => !app || waiter.apps.includes(app))
+				.map(({ plans: _plans, ...waiter }) => waiter),
 		};
 	}
 	async logs(app: string, owner?: number) {
@@ -147,7 +171,13 @@ export class Environments {
 		patch: Partial<
 			Pick<
 				EnvironmentRun,
-				"state" | "pid" | "exitCode" | "signal" | "output" | "error"
+				| "state"
+				| "pid"
+				| "exitCode"
+				| "signal"
+				| "output"
+				| "error"
+				| "runtimeStatus"
 			>
 		>,
 	) {
@@ -207,6 +237,17 @@ export class Environments {
 		if (previous) return previous;
 		if (!plans.length || plans.some((plan) => plan.action !== plans[0]?.action))
 			throw new Error("Invalid environment batch");
+		if (
+			plans[0]?.action === "run" &&
+			plans.some((plan, index) =>
+				plans
+					.slice(0, index)
+					.some((other) => runsConflict(plan, other, this.config.stateDir)),
+			)
+		)
+			throw new Error(
+				"Requested apps overlap a container name or published port; no resources were acquired",
+			);
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
 		const running = plans[0]?.action === "run";
@@ -215,6 +256,7 @@ export class Environments {
 			owner: owner.id,
 			apps: plans.map((plan) => plan.app),
 			since: Date.now(),
+			plans,
 		};
 		if (running) this.waiters.push(waiter);
 		this.notify();
@@ -238,19 +280,29 @@ export class Environments {
 								"Release your existing app batch before acquiring another; interrupted runs need operator inspection",
 							);
 						if (
-							this.waiters[0] !== waiter ||
-							held.some((run) => waiter.apps.includes(run.plan.app))
+							this.waiters
+								.slice(0, this.waiters.indexOf(waiter))
+								.some((earlier) =>
+									earlier.plans.some((left) =>
+										plans.some((right) =>
+											runsConflict(left, right, this.config.stateDir),
+										),
+									),
+								) ||
+							held.some((run) =>
+								plans.some((plan) =>
+									runsConflict(run.plan, plan, this.config.stateDir),
+								),
+							)
 						)
 							return false;
 					} else if (
-						active.some(
-							(run) =>
-								run.plan.action !== "run" &&
-								run.plan.workspace === owner.workspace,
+						active.some((run) =>
+							plans.some((plan) => actionsConflict(run.plan, plan)),
 						)
 					)
 						throw new Error(
-							"An environment action already owns this workspace; inspect interrupted actions before retrying",
+							"An environment action already owns this workspace or container image tag; inspect interrupted actions before retrying",
 						);
 					for (const plan of plans) {
 						const run: EnvironmentRun = {
@@ -286,7 +338,15 @@ export class Environments {
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
 				const id = `${batch}:${plan.app}`,
-					process = new ShellProcess(plan, this.config.configDir);
+					process =
+						plan.runtime === "shell"
+							? new ShellProcess(plan, this.config.configDir)
+							: new ContainerProcess(
+									plan,
+									this.config.configDir,
+									this.config.stateDir,
+									id,
+								);
 				this.live.set(id, process);
 				// Always attach finalization immediately, including startup/recording failure.
 				void process.done
@@ -310,7 +370,7 @@ export class Environments {
 							...run,
 							state: "running",
 							revision: run.revision + 1,
-							ready: plan.readyText ? true : null,
+							ready: plan.runtime !== "shell" || plan.readyText ? true : null,
 							output: process.logs,
 						});
 					}, background);
@@ -358,7 +418,7 @@ export class Environments {
 			this.notify();
 		}
 	}
-	private async finish(id: string, process: ShellProcess) {
+	private async finish(id: string, process: EnvironmentProcess) {
 		const exit = await process.done;
 		await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState),
@@ -373,23 +433,29 @@ export class Environments {
 				exitCode: exit.code,
 				signal: exit.signal,
 				output: process.logs,
+				...(process.runtimeStatus
+					? { runtimeStatus: process.runtimeStatus }
+					: {}),
 				error: process.cleanupFailed
-					? "Process group cleanup could not be confirmed; inspect leftovers before releasing this resource."
+					? "Environment resource cleanup could not be confirmed; inspect leftovers before releasing this resource."
 					: run.error,
 			});
 		}, background);
 		this.live.delete(id);
 		this.notify();
 	}
-	private async stopLive(id: string, process: ShellProcess) {
+	private async stopLive(id: string, process: EnvironmentProcess) {
 		try {
 			await process.stop();
 		} catch {
 			await this.update(id, {
 				state: "interrupted",
 				output: process.logs,
+				...(process.runtimeStatus
+					? { runtimeStatus: process.runtimeStatus }
+					: {}),
 				error:
-					"Process group cleanup could not be confirmed; inspect leftovers before releasing this resource.",
+					"Environment resource cleanup could not be confirmed; inspect leftovers before releasing this resource.",
 			});
 			this.live.delete(id);
 			return false;

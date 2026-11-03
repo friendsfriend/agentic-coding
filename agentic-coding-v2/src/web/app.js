@@ -150,7 +150,14 @@ async function refresh() {
 					? environments.projects
 							.map(
 								(project) =>
-									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}`).join(", ")}`,
+									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}/${target.profile ?? "default"}`).join(", ")}\nDefaults: ${Object.entries(
+										project.defaultTargets ?? {},
+									)
+										.map(
+											([action, choice]) =>
+												`${action}: ${choice.id ?? "unavailable"} (${choice.reason})`,
+										)
+										.join("; ")}`,
 							)
 							.join("\n")
 					: "No configured environments. Add CONFIG_DIR/environments.json.",
@@ -174,12 +181,19 @@ async function refresh() {
 				.map((run) => {
 					const card =
 						existingEnvironments.get(run.id) ?? element("div", null, "task");
-					if (card.dataset.environmentRevision === String(run.revision))
-						return card;
+					const resource = run.runtimeStatus;
+					const renderRevision = JSON.stringify([
+						run.revision,
+						resource?.id,
+						resource?.state,
+						resource?.health,
+						resource?.owned,
+					]);
+					if (card.dataset.environmentRevision === renderRevision) return card;
 					const previousLogs = card.querySelector("pre");
 					card.replaceChildren();
 					card.dataset.environmentRun = run.id;
-					card.dataset.environmentRevision = String(run.revision);
+					card.dataset.environmentRevision = renderRevision;
 					card.append(
 						element(
 							"strong",
@@ -187,7 +201,7 @@ async function refresh() {
 						),
 						element(
 							"p",
-							`Task ${run.owner} · PID ${run.pid ?? "unknown"} (diagnostic only) · readiness ${run.ready === null ? "not checked" : run.ready ? "observed" : "not observed"} · exit ${run.exitCode ?? run.signal ?? "unknown"}`,
+							`Task ${run.owner} · ${resource ? `${resource.runtime} ${resource.name} · last observed ${resource.state} · health ${resource.health ?? "not checked"} · ownership ${resource.owned === null ? "unknown" : resource.owned ? "confirmed" : "foreign"} · ID ${resource.id ?? "unknown"} (diagnostic only)` : `PID ${run.pid ?? "unknown"} (diagnostic only)`} · startup readiness ${run.ready === null ? "not checked" : run.ready ? "observed" : "not observed"} · exit ${run.exitCode ?? run.signal ?? "unknown"}`,
 							"meta",
 						),
 					);
@@ -209,7 +223,7 @@ async function refresh() {
 							button("Release after inspection", async () => {
 								if (
 									!confirm(
-										"Confirm: I inspected this interrupted execution and stopped any leftover processes. Release its resource lock without executing or killing anything? A saved PID alone does not establish process identity.",
+										"Confirm: I inspected this interrupted execution and stopped/removed its leftover processes or container resources. Release its resource lock without executing or killing anything? A saved PID alone does not establish process identity.",
 									)
 								)
 									return;

@@ -9,8 +9,8 @@ import {
 	type EnvironmentRun,
 	EnvironmentState,
 } from "../src/environment/state.ts";
-import type { Runtime } from "../src/runtime.ts";
 import { serve } from "../src/server.ts";
+import { approve, pendingReview } from "./fixtures/environment.ts";
 import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup, apps } = createFixtures();
@@ -77,6 +77,12 @@ function configure(config: Config) {
 					targets: [run],
 				},
 				{
+					id: "independent",
+					kind: "app",
+					repository: config.repositories[0],
+					targets: [run],
+				},
+				{
 					id: "invalid-secret",
 					kind: "library",
 					repository: config.repositories[0],
@@ -96,40 +102,6 @@ function configure(config: Config) {
 		}),
 	);
 }
-async function pendingReview(app: Runtime, id: number, title?: string) {
-	const state = await eventually(
-		() => app.snapshot(),
-		(state) =>
-			state.reviews.some(
-				(review) =>
-					review.taskId === id &&
-					review.state === "pending" &&
-					(title
-						? review.title === title
-						: review.title.startsWith("Environment ")),
-			),
-	);
-	const review = state.reviews.find(
-		(review) =>
-			review.taskId === id &&
-			review.state === "pending" &&
-			(title
-				? review.title === title
-				: review.title.startsWith("Environment ")),
-	);
-	if (!review) throw new Error("Review disappeared");
-	return review;
-}
-async function approve(app: Runtime, id: number, title?: string) {
-	const review = await pendingReview(app, id, title);
-	await app.decide(
-		review.id,
-		review.revision,
-		"approved",
-		"Approve exact isolated fixture target",
-	);
-}
-
 test("environment batches wait for human approval, acquire atomically, fence foreign stops and clean up before handoff", async () => {
 	const { app, fake, invocation } = await fixture(false, configure);
 	fake.setResponses([
@@ -168,6 +140,24 @@ test("environment batches wait for human approval, acquire atomically, fence for
 			(run) => run.plan.app === "worker",
 		),
 	).toBe(false);
+	// FIFO applies to conflicting batches, not unrelated apps behind a blocked waiter.
+	fake.setResponses([
+		call("env_start", { apps: ["independent"] }),
+		call("request_review", { path: ".", title: "Hold independent app" }),
+	]);
+	const independent = await app.startTask({
+		...invocation,
+		requestId: "independent-waiter",
+	});
+	await approve(app, independent);
+	await pendingReview(app, independent, "Hold independent app");
+	expect(
+		(await app.environments.snapshot()).waiters.some(
+			(waiter) => waiter.owner === cancelled,
+		),
+	).toBe(true);
+	await app.cancel(independent);
+	await app.harness.waitForTask(independent as TaskId, context);
 	await app.cancel(cancelled);
 	await app.harness.waitForTask(cancelled as TaskId, context);
 	expect((await app.environments.snapshot()).waiters).toHaveLength(0);

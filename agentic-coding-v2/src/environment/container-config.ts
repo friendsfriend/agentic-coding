@@ -1,0 +1,146 @@
+import { isIP } from "node:net";
+import path from "node:path";
+import { text as configurationText, object } from "../config.ts";
+
+function text(value: unknown, label: string, max: number) {
+	const result = configurationText(value, label, max);
+	if (result.includes("\0")) throw new Error(`Invalid ${label}`);
+	return result;
+}
+export type ContainerTarget = {
+	socket: string;
+	image: string;
+	name?: string;
+	command: string[];
+	entrypoint?: string;
+	ports: {
+		host: number;
+		container: number;
+		protocol: "tcp" | "udp";
+		address: string;
+	}[];
+	mounts: { source: string; target: string; readOnly: boolean }[];
+	readiness: "running" | "healthy";
+	dockerfile: string;
+	context: string;
+	buildArgs: string[];
+};
+function keys(data: Record<string, unknown>, allowed: string[]) {
+	if (Object.keys(data).some((key) => !allowed.includes(key)))
+		throw new Error("Unsupported container configuration field");
+}
+function strings(raw: unknown, label: string): string[] {
+	if (raw === undefined) return [];
+	if (!Array.isArray(raw) || raw.length > 100)
+		throw new Error(`Invalid ${label}`);
+	return raw.map((value) => text(value, label, 4096));
+}
+function relative(raw: unknown, label: string, fallback: string) {
+	const value = text(raw ?? fallback, label, 4096);
+	if (path.isAbsolute(value) || value.split(/[\\/]/).includes(".."))
+		throw new Error(`${label} must be a contained workspace-relative path`);
+	return value;
+}
+function port(raw: unknown) {
+	if (!Number.isSafeInteger(raw) || Number(raw) < 1 || Number(raw) > 65535)
+		throw new Error("Invalid container port");
+	return Number(raw);
+}
+export function readContainer(raw: unknown): ContainerTarget {
+	const data = object(raw);
+	keys(data, [
+		"socket",
+		"image",
+		"name",
+		"command",
+		"entrypoint",
+		"ports",
+		"mounts",
+		"readiness",
+		"dockerfile",
+		"context",
+		"buildArgs",
+	]);
+	const socket = text(data.socket, "container socket", 4096);
+	if (!path.isAbsolute(socket) || /[\r\n]/.test(socket))
+		throw new Error(
+			"An explicit absolute local container API socket is required; implicit or remote daemon contexts are not used",
+		);
+	const image = text(data.image, "container image", 512);
+	if (image.startsWith("-") || /\s/.test(image))
+		throw new Error("Invalid container image");
+	const name =
+		data.name === undefined
+			? undefined
+			: text(data.name, "container name", 100);
+	if (name !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))
+		throw new Error("Invalid container name");
+	const buildArgs = strings(data.buildArgs, "container build argument");
+	if (buildArgs.some((key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)))
+		throw new Error(
+			"Build arguments must name explicitly declared environment variables, not literal secret values",
+		);
+	const ports = data.ports ?? [],
+		mounts = data.mounts ?? [];
+	if (
+		!Array.isArray(ports) ||
+		ports.length > 64 ||
+		!Array.isArray(mounts) ||
+		mounts.length > 64
+	)
+		throw new Error("Invalid container ports/mounts");
+	const readiness = data.readiness ?? "running";
+	if (readiness !== "running" && readiness !== "healthy")
+		throw new Error("Invalid container readiness");
+	return {
+		socket,
+		image,
+		...(name === undefined ? {} : { name }),
+		command: strings(data.command, "container argument"),
+		...(data.entrypoint === undefined
+			? {}
+			: { entrypoint: text(data.entrypoint, "container entrypoint", 4096) }),
+		buildArgs,
+		readiness,
+		dockerfile: relative(data.dockerfile, "Dockerfile", "Dockerfile"),
+		context: relative(data.context, "build context", "."),
+		ports: ports.map((raw) => {
+			const p = object(raw);
+			keys(p, ["host", "container", "protocol", "address"]);
+			const address = text(
+				p.address ?? "127.0.0.1",
+				"container publish address",
+				100,
+			);
+			if (!isIP(address))
+				throw new Error(
+					"Container publish address must be an explicit IP address",
+				);
+			const protocol = p.protocol ?? "tcp";
+			if (protocol !== "tcp" && protocol !== "udp")
+				throw new Error("Invalid container port protocol");
+			return {
+				host: port(p.host),
+				container: port(p.container),
+				protocol,
+				address,
+			};
+		}),
+		mounts: mounts.map((raw) => {
+			const m = object(raw);
+			keys(m, ["source", "target", "readOnly"]);
+			const source = relative(m.source, "container mount source", ".");
+			const target = text(m.target, "container mount destination", 4096);
+			if (
+				!target.startsWith("/") ||
+				source.includes(",") ||
+				target.includes(",") ||
+				/[\r\n]/.test(source + target)
+			)
+				throw new Error("Invalid bind mount path");
+			if (m.readOnly !== undefined && typeof m.readOnly !== "boolean")
+				throw new Error("Invalid bind mount readOnly");
+			return { source, target, readOnly: m.readOnly !== false };
+		}),
+	};
+}

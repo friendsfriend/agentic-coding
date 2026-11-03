@@ -1,5 +1,6 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { Plan } from "./catalog.ts";
+import type { RuntimeStatus } from "./process.ts";
 
 export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
@@ -33,6 +34,7 @@ export type EnvironmentRun = {
 	signal: string | null;
 	output: string;
 	error: string | null;
+	runtimeStatus?: RuntimeStatus;
 	inspection?: { confirmedAt: number; revision: number };
 };
 export const holdsResource = (run: EnvironmentRun) => run.state !== "exited";

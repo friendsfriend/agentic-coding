@@ -3,13 +3,23 @@ import path from "node:path";
 import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
+import { type ContainerTarget, readContainer } from "./container-config.ts";
+import {
+	type Action,
+	defaultTargets,
+	type Selection,
+	selectTarget,
+} from "./selection.ts";
 
-export type Action = "run" | "build" | "test";
+export type { Action } from "./selection.ts";
 export type Target = {
 	id: string;
 	action: Action;
-	runtime: "shell";
+	runtime: "shell" | "docker" | "podman";
+	container?: ContainerTarget;
 	command: string;
+	profile?: string;
+	label?: string;
 	cwd: string;
 	timeoutMs: number;
 	readyText: string | null;
@@ -21,6 +31,7 @@ export type Project = {
 	kind: "app" | "library";
 	repository: string;
 	targets: Target[];
+	defaults?: Partial<Record<Action, string>>;
 };
 export type Plan = Target & { app: string; workspace: string; cwd: string };
 const identifier = (value: unknown) => {
@@ -60,16 +71,31 @@ function readTarget(raw: unknown): Target {
 		"action",
 		"runtime",
 		"command",
+		"profile",
+		"label",
 		"cwd",
 		"timeoutMs",
 		"readyText",
 		"environment",
 		"secretRefs",
+		"container",
 	]);
-	if (data.runtime !== "shell")
+	if (
+		data.runtime !== "shell" &&
+		data.runtime !== "docker" &&
+		data.runtime !== "podman"
+	)
+		throw new Error("Unsupported environment runtime");
+	if (
+		data.runtime === "shell"
+			? data.container !== undefined
+			: data.command !== undefined || data.readyText !== undefined
+	)
 		throw new Error(
-			"Only shell environment targets are supported in this migration slice",
+			"Shell commands/readiness and structured container configuration cannot be mixed",
 		);
+	const container =
+		data.runtime === "shell" ? undefined : readContainer(data.container);
 	if (!["run", "build", "test"].includes(String(data.action)))
 		throw new Error("Invalid environment target action");
 	const timeoutMs = data.timeoutMs ?? (data.action === "run" ? 30000 : 600000);
@@ -88,14 +114,32 @@ function readTarget(raw: unknown): Target {
 	for (const ref of Object.values(secretRefs))
 		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref))
 			throw new Error("Invalid environment secret reference");
+	if (
+		container?.buildArgs.some(
+			(key) => !(key in environment) && !(key in secretRefs),
+		)
+	)
+		throw new Error(
+			"Container build arguments require declared variables or secret references",
+		);
 	const cwd = text(data.cwd ?? ".", "environment cwd", 4096);
 	if (path.isAbsolute(cwd))
 		throw new Error("Environment cwd must be relative to the task workspace");
 	return {
 		id: identifier(data.id),
 		action: data.action as Action,
-		runtime: "shell",
-		command: text(data.command, "environment command", 16000),
+		runtime: data.runtime,
+		...(container ? { container } : {}),
+		command:
+			data.runtime === "shell"
+				? text(data.command, "environment command", 16000)
+				: "",
+		...(data.profile === undefined
+			? {}
+			: { profile: identifier(data.profile) }),
+		...(data.label === undefined
+			? {}
+			: { label: text(data.label, "environment target label", 200) }),
 		cwd,
 		timeoutMs: Number(timeoutMs),
 		readyText:
@@ -105,6 +149,25 @@ function readTarget(raw: unknown): Target {
 		environment,
 		secretRefs,
 	};
+}
+export function projectDefaults(project: Project) {
+	return defaultTargets(project.targets, project.defaults);
+}
+function parseDefaults(
+	value: unknown,
+	targets: Target[],
+): Partial<Record<Action, string>> {
+	const data = object(value);
+	keysOnly(data, ["run", "build", "test"]);
+	const result: Partial<Record<Action, string>> = {};
+	for (const action of ["run", "build", "test"] as const) {
+		if (data[action] === undefined) continue;
+		const id = identifier(data[action]);
+		if (!targets.some((target) => target.id === id && target.action === action))
+			throw new Error(`Unknown ${action} default ${id}`);
+		result[action] = id;
+	}
+	return result;
 }
 export function loadProjects(config: Config): Project[] {
 	const file = path.join(config.configDir, "environments.json");
@@ -124,7 +187,7 @@ export function loadProjects(config: Config): Project[] {
 		);
 	const projects = data.projects.map((raw): Project => {
 		const entry = object(raw);
-		keysOnly(entry, ["id", "kind", "repository", "targets"]);
+		keysOnly(entry, ["id", "kind", "repository", "targets", "defaults"]);
 		if (
 			!["app", "library"].includes(String(entry.kind)) ||
 			!Array.isArray(entry.targets)
@@ -150,6 +213,9 @@ export function loadProjects(config: Config): Project[] {
 			kind: entry.kind as Project["kind"],
 			repository,
 			targets,
+			...(entry.defaults === undefined
+				? {}
+				: { defaults: parseDefaults(entry.defaults, targets) }),
 		};
 	});
 	if (new Set(projects.map((project) => project.id)).size !== projects.length)
@@ -161,7 +227,7 @@ export function resolvePlans(
 	owner: TaskInfo,
 	apps: string[],
 	action: Action,
-	target?: string,
+	target?: string | Selection,
 ): Plan[] {
 	if (owner.policy !== "workspace-write")
 		throw new Error(
@@ -175,14 +241,14 @@ export function resolvePlans(
 			throw new Error(
 				"Environment project must belong to this task's repository",
 			);
-		const candidates = project.targets.filter(
-			(item) =>
-				item.action === action && (target === undefined || item.id === target),
+		const selection: Selection =
+			typeof target === "string" ? { target } : (target ?? {});
+		const chosen = selectTarget(
+			project.targets,
+			action,
+			selection,
+			project.defaults?.[action],
 		);
-		if (candidates.length !== 1)
-			throw new Error(`Choose an unambiguous ${action} target for ${app}`);
-		const chosen = candidates[0];
-		if (!chosen) throw new Error("Environment target missing");
 		const cwd = contained(owner.workspace, chosen.cwd);
 		if (!fs.statSync(cwd).isDirectory())
 			throw new Error(

@@ -11,6 +11,7 @@ import { requestReview } from "../reviews.ts";
 import type { TaskInfo } from "../state.ts";
 import { type Action, resolvePlans } from "./catalog.ts";
 import type { Environments } from "./manager.ts";
+import type { Selection } from "./selection.ts";
 
 function environmentResult(value: unknown) {
 	const encoded = JSON.stringify(value);
@@ -32,7 +33,7 @@ export function createEnvironmentTools(
 	async function execute(
 		action: Action,
 		apps: string[],
-		target: string | undefined,
+		selection: Selection,
 		timeoutSec: number,
 		api: ToolExecutionApi,
 		context: Context,
@@ -44,18 +45,33 @@ export function createEnvironmentTools(
 			request = JSON.stringify({
 				action,
 				apps,
-				target: target ?? null,
+				target: selection.target ?? null,
+				...(selection.profile === undefined
+					? {}
+					: { profile: selection.profile }),
+				...(selection.runtime === undefined
+					? {}
+					: { runtime: selection.runtime }),
+				...(selection.replicas === undefined
+					? {}
+					: { replicas: selection.replicas }),
 				timeoutSec,
 			});
 		const previous = await manager.receipt(batch, owner.id, request);
 		if (previous) return environmentResult(previous);
-		const plans = resolvePlans(manager.projects, owner, apps, action, target);
+		const plans = resolvePlans(
+			manager.projects,
+			owner,
+			apps,
+			action,
+			selection,
+		);
 		const snapshot = JSON.stringify(
 			{
 				plans,
 				waitTimeoutMs: timeoutSec * 1000,
 				authority:
-					"Execute these exact shell commands in the task workspace. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
+					"Execute these exact configured environment actions in the task workspace. Container clients use only the explicit local API socket, never the default or a remote daemon context. Named containers are never adopted; only resources created by this live operation with matching host/run labels may be stopped or removed. Container build artifacts can persist in the local engine. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
 			},
 			null,
 			2,
@@ -83,14 +99,25 @@ export function createEnvironmentTools(
 			),
 		);
 	}
-	const target = Type.Optional(Type.String({ maxLength: 64 }));
+	const target = Type.Optional(Type.String({ maxLength: 200 }));
+	const selectionFields = {
+		target,
+		profile: Type.Optional(Type.String({ maxLength: 64 })),
+		runtime: Type.Optional(
+			Type.Union([
+				Type.Literal("shell"),
+				Type.Literal("docker"),
+				Type.Literal("podman"),
+			]),
+		),
+	};
 	return defineExtension({
 		name: "v2.environments",
 		tools: [
 			defineTool({
 				name: "env_list",
 				description:
-					"List configured environment projects and shell targets, current task-owned slots and acquisition queues. No live legacy environments are imported.",
+					"List configured environment projects, profiles, declared/default target choices, current task-owned slots and acquisition queues. No live legacy environments are imported.",
 				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async () => environmentResult(await manager.snapshot()),
@@ -121,10 +148,10 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Startup readiness is checked only when readyText is configured. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Acquisition timeout releases queue position; no app starts on timeout.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
-					target,
+					...selectionFields,
 					timeoutSec: Type.Optional(
 						Type.Integer({ minimum: 1, maximum: 7200 }),
 					),
@@ -132,24 +159,17 @@ export function createEnvironmentTools(
 				replay: "safe",
 				executionMode: "sequential",
 				execute: async (args, api, context) =>
-					execute(
-						"run",
-						args.apps,
-						args.target,
-						args.timeoutSec ?? 30,
-						api,
-						context,
-					),
+					execute("run", args.apps, args, args.timeoutSec ?? 30, api, context),
 			}),
 			...(["build", "test"] as const).map((action) =>
 				defineTool({
 					name: `env_${action}`,
 					description: `Request human approval and execute one configured ${action} target in this task's workspace, returning exit status and redacted output. Requires no app slot; one build/test action at a time per workspace. Action timeouts are configured per target.`,
-					parameters: Type.Object({ app: Type.String(), target }),
+					parameters: Type.Object({ app: Type.String(), ...selectionFields }),
 					replay: "safe",
 					executionMode: "sequential",
 					execute: async (args, api, context) =>
-						execute(action, [args.app], args.target, 30, api, context),
+						execute(action, [args.app], args, 30, api, context),
 				}),
 			),
 			defineTool({
