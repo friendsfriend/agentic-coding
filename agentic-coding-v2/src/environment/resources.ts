@@ -10,23 +10,6 @@ function localSocket(value: string) {
 		return path.resolve(value);
 	}
 }
-/** Docker's familiar-name aliases must not create parallel writers of one tag. */
-function imageIdentity(value: string) {
-	const parts = value.split("/"),
-		first = parts[0] ?? "";
-	if (
-		parts.length === 1 ||
-		(!first.includes(".") && !first.includes(":") && first !== "localhost")
-	)
-		parts.unshift("docker.io");
-	if (parts[0] === "index.docker.io") parts[0] = "docker.io";
-	if (parts[0] === "docker.io" && parts.length === 2)
-		parts.splice(1, 0, "library");
-	const image = parts.join("/");
-	return image.includes("@") || (parts.at(-1) ?? "").includes(":")
-		? image
-		: `${image}:latest`;
-}
 export function runsConflict(left: Plan, right: Plan, stateDir: string) {
 	if (left.app === right.app) return true;
 	if (!left.container || !right.container) return false;
@@ -57,7 +40,10 @@ export function actionsConflict(left: Plan, right: Plan) {
 		right.action !== "run"
 	)
 		return true;
-	// App slots protect runs; image tags are a separate daemon-global write resource.
+	// App slots protect runs; image writes are a separate daemon-global resource.
+	// Do not guess tag identity from the client family: Docker may talk to a
+	// Podman compatibility socket, and Podman short-name aliases depend on host policy.
+	// Serialize all image writers on one socket until canonical backend identity is proven.
 	if (
 		left.action !== "build" ||
 		right.action !== "build" ||
@@ -66,8 +52,6 @@ export function actionsConflict(left: Plan, right: Plan) {
 	)
 		return false;
 	return (
-		localSocket(left.container.socket) ===
-			localSocket(right.container.socket) &&
-		imageIdentity(left.container.image) === imageIdentity(right.container.image)
+		localSocket(left.container.socket) === localSocket(right.container.socket)
 	);
 }

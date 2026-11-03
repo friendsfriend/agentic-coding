@@ -59,7 +59,9 @@ export class ContainerProcess {
 		};
 		this.prefix = [
 			plan.runtime === "docker" ? "--host" : "--url",
-			pathToFileURL(spec.socket).href.replace(/^file:/, "unix:"),
+			plan.runtime === "docker"
+				? `unix://${spec.socket}`
+				: pathToFileURL(spec.socket).href.replace(/^file:/, "unix:"),
 		];
 		this.commands = new EnvironmentCommands(
 			plan,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { type Config, object, text } from "../config.ts";
 import { contained } from "../git.ts";
 import type { TaskInfo } from "../state.ts";
+import { type Availability, targetAvailability } from "./availability.ts";
 import { type ContainerTarget, readContainer } from "./container-config.ts";
 import {
 	type Action,
@@ -17,6 +18,7 @@ export type Target = {
 	action: Action;
 	runtime: "shell" | "docker" | "podman";
 	container?: ContainerTarget;
+	availability?: Availability;
 	command: string;
 	profile?: string;
 	label?: string;
@@ -150,8 +152,19 @@ function readTarget(raw: unknown): Target {
 		secretRefs,
 	};
 }
-export function projectDefaults(project: Project) {
-	return defaultTargets(project.targets, project.defaults);
+function availableTargets(project: Project): Target[] {
+	return project.targets.map((target) => ({
+		...target,
+		availability: targetAvailability(target),
+	}));
+}
+export function projectView(project: Project) {
+	const targets = availableTargets(project);
+	return {
+		...project,
+		targets,
+		defaultTargets: defaultTargets(targets, project.defaults),
+	};
 }
 function parseDefaults(
 	value: unknown,
@@ -244,7 +257,7 @@ export function resolvePlans(
 		const selection: Selection =
 			typeof target === "string" ? { target } : (target ?? {});
 		const chosen = selectTarget(
-			project.targets,
+			availableTargets(project),
 			action,
 			selection,
 			project.defaults?.[action],

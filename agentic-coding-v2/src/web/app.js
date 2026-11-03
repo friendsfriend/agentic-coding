@@ -150,7 +150,7 @@ async function refresh() {
 					? environments.projects
 							.map(
 								(project) =>
-									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}/${target.profile ?? "default"}`).join(", ")}\nDefaults: ${Object.entries(
+									`${project.id} (${project.kind}): ${project.targets.map((target) => `${target.id} · ${target.action}/${target.runtime}/${target.profile ?? "default"} · ${target.availability?.eligible === false ? `unavailable: ${target.availability.reason}` : target.availability?.eligible === true ? "metadata eligible (startup unverified)" : "availability unverified"}`).join(", ")}\nDefaults: ${Object.entries(
 										project.defaultTargets ?? {},
 									)
 										.map(

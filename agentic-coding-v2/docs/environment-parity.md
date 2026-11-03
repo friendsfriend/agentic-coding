@@ -7,12 +7,12 @@ The v2 implementation remains independent. No legacy runtime imports, storage ad
 | Capability | Acceptance / verification | Status |
 | --- | --- | --- |
 | App/library definitions and repository authorization | Strict schema; app/library distinction; no imported runtime state | Shell/Docker/Podman definitions implemented; remaining runtime schemas pending |
-| Run/build/test selection | Profile/runtime filtering, declared defaults, Docker preference, ambiguous build/test refusal, explicit Kubernetes opt-in | Implemented for shell/Docker/Podman; Kubernetes and availability discovery pending |
+| Run/build/test selection | Profile/runtime filtering, declared defaults, Docker preference, ambiguous build/test refusal, explicit Kubernetes opt-in | Implemented for shell/Docker/Podman with conservative metadata eligibility; Kubernetes and active runtime discovery pending |
 | Shell/system-shell programs | Exact approval, confined cwd, allowlisted env, exit codes, process-group cleanup | POSIX shell implemented |
 | Windows/PowerShell execution | Explicit runner, argv, cancellation and ownership-equivalent cleanup | Pending |
 | Docker/Podman containers | Structured status, health, ports, logs; lifecycle only with checked ownership | Implemented with explicit local Unix sockets; executable fixtures pass, live engine smoke unverified |
 | Compose | Config-relative files, task checkout, static project/ports, ownership labels, no foreign resource mutation | Pending |
-| Container image builds/tests | Dockerfile/context/args, actual exit results, no implicit publish | Implemented with daemon-global image writer fences, alias normalization and uncertain-writer quarantine; executable fixtures pass, live engine smoke unverified |
+| Container image builds/tests | Dockerfile/context/args, actual exit results, no implicit publish | Implemented with conservative daemon-global image writer serialization (including cross-client/short-name aliases) and uncertain-writer quarantine; executable fixtures pass, live engine smoke unverified |
 | Kubernetes apps | Explicit existing local cluster/context, Helm values/replicas, managed port forwards, guarded uninstall | Pending |
 | Cluster operations | Explicit operator-approved create/delete/recreate/status/image/secret operations, never implicit in app start | Pending |
 | App slots | Atomic multi-app grant; owner fences; queued wait, cancellation, no partial acquisition | Implemented; queue compatibility pending |
@@ -32,7 +32,9 @@ The v2 implementation remains independent. No legacy runtime imports, storage ad
 
 ## Verified checkpoint
 
-Native task scenarios use disposable repositories/state, faux model responses, executable Docker/Podman substitutes and an isolated in-test loopback engine. They exercise approval-before-effects, provider/profile defaults, foreign stop refusal, exact live creation IDs (including replacement with copied labels), unknown daemon occupancy, missing/unhealthy readiness, actual build/test exits, private stdout/stderr metadata, cancellation barriers and daemon-global image writer quarantine across aliases/workspaces. The shell queue scenario also verifies that an unrelated app can pass a blocked conflicting batch without stealing its FIFO priority. No live container engine, existing app, credential, cluster or host service was operated on.
+Native task scenarios use disposable repositories/state, faux model responses, executable Docker/Podman substitutes and an isolated in-test Unix-socket engine. They exercise approval-before-effects, provider/profile defaults, foreign stop refusal, exact live creation IDs (including replacement with copied labels), unknown daemon occupancy, missing/unhealthy readiness, actual build/test exits, private stdout/stderr metadata, cancellation barriers and daemon-global image writer quarantine across client families, aliases and workspaces. The shell queue scenario also verifies that an unrelated app can pass a blocked conflicting batch without stealing its FIFO priority. Availability checks use only executable/socket filesystem metadata, never CLI invocation, daemon probes or secret resolution. Known-unavailable targets are excluded from implicit fallback; a broken declared default still fails rather than silently selecting another target. Native scenarios also verify newline-free raw shell readiness and that redacted log presentation cannot invent a marker. A SIGKILL/reopen container scenario verifies persisted diagnostic IDs (reset to unknown ownership/health), zero engine invocations during restart/cancellation, quarantined resources and authenticated revision-bound inspection release. Its orphaned log client is bounded to the disposable fixture engine.
+
+An isolated authenticated browser smoke with fixture-only status/log data verified target eligibility/default text, health updates, retained log DOM nodes, unsent chat drafts/focus and no console errors. This was not a live-engine smoke. No live container engine, existing app, credential, cluster or host service was operated on.
 
 ## Completion rule
 

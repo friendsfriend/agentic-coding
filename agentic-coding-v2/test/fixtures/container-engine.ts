@@ -1,14 +1,26 @@
 // Executable fixture, never a real container engine. Requests go to one isolated
 // in-test engine so killing a CLI cannot strand a synthetic filesystem lock.
-const endpoint = process.env.FIXTURE_ENGINE_URL;
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-export {};
+const endpoint = process.env.FIXTURE_ENGINE_SOCKET;
+const args = process.argv.slice(2);
+const uri = args[1];
 
-if (!endpoint?.startsWith("http://127.0.0.1:"))
+if (
+	!endpoint ||
+	!uri?.startsWith("unix:///") ||
+	(args[0] === "--host"
+		? uri.slice("unix://".length)
+		: fileURLToPath(uri.replace(/^unix:/, "file:"))) !== endpoint
+)
 	throw new Error("Missing isolated fixture engine");
-const response = await fetch(endpoint, {
+const response = await fetch("http://fixture/", {
+	unix: endpoint,
 	method: "POST",
-	body: JSON.stringify(process.argv.slice(2)),
+	headers: { "X-Fixture-PID": String(process.pid) },
+	body: JSON.stringify(args),
 });
 const result = (await response.json()) as {
 	stdout: string;
@@ -21,7 +33,29 @@ if (result.stderr)
 	process.stderr.write(`${result.stderr} ${process.env.SERVICE_TOKEN ?? ""}\n`);
 if (result.follow) {
 	console.log(`service log ${process.env.SERVICE_TOKEN ?? ""}`);
-	setInterval(() => {}, 1000);
+	// Bound orphaned fixture clients to this disposable engine, even after a host SIGKILL.
+	setInterval(async () => {
+		try {
+			await fetch("http://fixture/", {
+				unix: endpoint,
+				method: "HEAD",
+				signal: AbortSignal.timeout(500),
+			});
+		} catch {
+			try {
+				fs.writeFileSync(
+					path.join(
+						process.env.CONFIG_DIR ?? "",
+						`fixture-client-${process.pid}.exited`,
+					),
+					"fixture engine closed\n",
+				);
+			} catch {
+				/* The parent may already have removed its disposable directory. */
+			}
+			process.exit(0);
+		}
+	}, 100);
 } else {
 	if (result.stdout.startsWith("build"))
 		console.log(process.env.SERVICE_TOKEN ?? "");

@@ -18,6 +18,7 @@ export type Candidate = {
 	runtime: Runtime;
 	profile?: string;
 	label?: string;
+	availability?: { eligible: boolean | null; reason: string };
 };
 const preference: Runtime[] = [
 	"docker",
@@ -42,6 +43,7 @@ export function selectTarget<T extends Candidate>(
 	let candidates = targets.filter(
 		(item) =>
 			item.action === action &&
+			item.availability?.eligible !== false &&
 			(target === undefined ||
 				(exactId ? item.id === target : item.label === target)) &&
 			(profile === undefined || (item.profile ?? "default") === profile) &&
@@ -105,7 +107,8 @@ export function defaultTargets<T extends Candidate>(
 				(item) =>
 					item.action === action &&
 					(item.profile ?? "default") === "default" &&
-					item.runtime !== "kubernetes",
+					item.runtime !== "kubernetes" &&
+					item.availability?.eligible !== false,
 			).length;
 			const reason =
 				defaults[action] === selected.id

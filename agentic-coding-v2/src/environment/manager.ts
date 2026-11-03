@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
-import { loadProjects, type Plan, projectDefaults } from "./catalog.ts";
+import { loadProjects, type Plan, projectView } from "./catalog.ts";
 import { ContainerProcess } from "./container.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -138,10 +138,7 @@ export class Environments {
 			runtime: "task-owned",
 			projects: this.projects
 				.filter((project) => !app || project.id === app)
-				.map((project) => ({
-					...project,
-					defaultTargets: projectDefaults(project),
-				})),
+				.map(projectView),
 			runs: recentRuns(
 				all.filter((run) => !app || run.plan.app === app),
 				200,
@@ -302,7 +299,7 @@ export class Environments {
 						)
 					)
 						throw new Error(
-							"An environment action already owns this workspace or container image tag; inspect interrupted actions before retrying",
+							"An environment action already owns this workspace or daemon image writer; inspect interrupted actions before retrying",
 						);
 					for (const plan of plans) {
 						const run: EnvironmentRun = {
@@ -338,7 +335,7 @@ export class Environments {
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
 				const id = `${batch}:${plan.app}`,
-					process =
+					process: EnvironmentProcess =
 						plan.runtime === "shell"
 							? new ShellProcess(plan, this.config.configDir)
 							: new ContainerProcess(
@@ -372,6 +369,9 @@ export class Environments {
 							revision: run.revision + 1,
 							ready: plan.runtime !== "shell" || plan.readyText ? true : null,
 							output: process.logs,
+							...(process.runtimeStatus
+								? { runtimeStatus: process.runtimeStatus }
+								: {}),
 						});
 					}, background);
 				} else {

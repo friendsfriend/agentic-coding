@@ -57,6 +57,7 @@ export class ShellProcess {
 	private ended = false;
 	private mainExited = false;
 	private output = "";
+	private readyObserved = false;
 	private exit: Exit | null = null;
 	private cleanupUncertain = false;
 	readonly done: Promise<Exit>;
@@ -103,11 +104,20 @@ export class ShellProcess {
 		for (const stream of [this.child.stdout, this.child.stderr]) {
 			if (!stream) continue;
 			let pending = "",
+				readinessTail = "",
 				dropping = false;
 			stream.setEncoding("utf8");
 			stream.on("data", (chunk: string) => {
 				if (stream === this.child.stdout) invocation?.captureStdout?.(chunk);
 				if (invocation?.privateOutput) return;
+				// Observe the bounded raw stream, not redacted/line-buffered presentation.
+				// A service may emit its marker without a newline; redaction must not invent one.
+				if (this.plan.readyText && !this.readyObserved) {
+					const text = readinessTail + chunk;
+					this.readyObserved = text.includes(this.plan.readyText);
+					const keep = this.plan.readyText.length - 1;
+					readinessTail = keep ? text.slice(-keep) : "";
+				}
 				const lines = `${pending}${chunk}`.split("\n");
 				pending = lines.pop() ?? "";
 				for (const line of lines) {
@@ -204,7 +214,7 @@ export class ShellProcess {
 		if (!(await this.spawned))
 			throw new Error("Environment process could not start");
 		const deadline = Date.now() + this.plan.timeoutMs;
-		while (this.plan.readyText && !this.logs.includes(this.plan.readyText)) {
+		while (this.plan.readyText && !this.readyObserved) {
 			signal?.throwIfAborted();
 			if (this.mainExited || this.ended)
 				throw new Error("Environment process exited during startup");
