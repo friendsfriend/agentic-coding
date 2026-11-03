@@ -8,6 +8,9 @@ import { renderMarkdown } from "./markdown.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Review } from "./state.ts";
 import script from "./web/app.js" with { type: "text" };
+import authenticatedMessage from "./web/authenticated-message.js" with {
+	type: "text",
+};
 import dom from "./web/dom.js" with { type: "text" };
 import diagnostics from "./web/environment-diagnostics.js" with {
 	type: "text",
@@ -99,22 +102,22 @@ function environmentTelemetryQuery(query: URLSearchParams): {
 }
 export function serve(app: Runtime, port = 0) {
 	const token = randomBytes(32).toString("hex");
-	const cookieName = `acv2_${randomBytes(8).toString("hex")}`;
 	const security = {
 		"Content-Security-Policy":
-			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 		"X-Content-Type-Options": "nosniff",
 		"Referrer-Policy": "no-referrer",
 		"Cache-Control": "no-store",
 	};
-	const json = (
-		value: unknown,
-		status = 200,
-		extra: Record<string, string> = {},
-	) => Response.json(value, { status, headers: { ...security, ...extra } });
+	const json = (value: unknown, status = 200) =>
+		Response.json(value, { status, headers: security });
 	const assets = new Map([
 		["/", { content: String(html), type: "text/html" }],
 		["/app.js", { content: script, type: "text/javascript" }],
+		[
+			"/authenticated-message.js",
+			{ content: authenticatedMessage, type: "text/javascript" },
+		],
 		["/dom.js", { content: dom, type: "text/javascript" }],
 		[
 			"/environment-lifecycle.js",
@@ -148,13 +151,9 @@ export function serve(app: Runtime, port = 0) {
 				});
 			const bearer =
 				request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
-			const cookie =
-				(request.headers.get("cookie") ?? "")
-					.split(";")
-					.map((part) => part.trim())
-					.find((part) => part.startsWith(`${cookieName}=`))
-					?.slice(cookieName.length + 1) ?? "";
-			if (!equalSecret(bearer, token) && !equalSecret(cookie, token))
+			// Cookies are host-scoped, not port-scoped. Never accept or issue a dashboard
+			// credential that another loopback service could receive.
+			if (!equalSecret(bearer, token))
 				return json(
 					{ error: "Open the private host URL printed in your terminal" },
 					401,
@@ -230,10 +229,7 @@ export function serve(app: Runtime, port = 0) {
 				}
 				if (request.method !== "POST") return json({ error: "Not found" }, 404);
 				const body = object(await request.json());
-				if (url.pathname === "/api/session")
-					return json({ ok: true }, 200, {
-						"Set-Cookie": `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/`,
-					});
+				if (url.pathname === "/api/session") return json({ ok: true });
 				if (url.pathname === "/api/chat")
 					return json({
 						submissionId: await app.chat(

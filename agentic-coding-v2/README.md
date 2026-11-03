@@ -12,7 +12,9 @@ bun run build
 bun dist/agentic-coding-v2.js --config-dir /absolute/path/to/v2-config --state-dir /absolute/path/to/v2-state
 ```
 
-The host prints its loopback URL and does not open or focus a browser. The URL fragment is a local operator credential: do not share it. The browser exchanges it for an HttpOnly, SameSite session cookie. Bindings other than loopback are not supported.
+The host prints its loopback URL and does not open or focus a browser. The URL fragment is a local operator credential: do not share it. After authentication the browser retains it in origin-scoped `sessionStorage` (including the port), removes the fragment from history and sends explicit bearer headers. **No authentication cookie is issued or accepted:** cookies are host-scoped, not port-scoped, and could reach another loopback application. Storage is accessible to this trusted UI origin, not to another port. If storage is unavailable, the credential remains only in memory; reopening/reloading may require the private URL. Bindings other than loopback are not supported. This source change does not restart older hosts, migrate their sessions or revoke their old cookies.
+
+Chat images use lazy, authenticated, no-cookie/no-redirect fetches of exact content-addressed attachment paths, then local blob URLs. An inert template prevents premature unauthenticated image requests. Display accepts PNG/JPEG/WebP/GIF up to **5 MiB per image** with a **15-second fetch deadline**, a visible failure/retry control, retained unchanged message nodes and object-URL/request cleanup when messages leave or the page receives `pagehide`. Direct attachment HTTP requests still require a bearer header; a digest is not authority. JavaScript is required for authenticated image display.
 
 Create `config.json` in the application configuration directory, separate from runtime state. The default is `~/.config/agentic-coding-v2` (respecting `XDG_CONFIG_HOME`). Override it with `--config-dir` or `AGENTIC_CODING_V2_CONFIG_DIR`:
 

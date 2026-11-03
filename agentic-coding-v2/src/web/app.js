@@ -1,3 +1,4 @@
+import { authenticatedMessage } from "/authenticated-message.js";
 import { button, element } from "/dom.js";
 import { environmentDiagnostics } from "/environment-diagnostics.js";
 import {
@@ -12,13 +13,24 @@ const $ = (id) => document.getElementById(id);
 let topic = null;
 let focusedTask = null;
 let knownTasks = [];
+let chatViews = new Map();
+let pageActive = true;
+let refreshing;
 const notice = lifecycleNotices($("environment-notices"), openOwner);
 let revision = "";
-const token = new URLSearchParams(location.hash.slice(1)).get("token");
-if (token) history.replaceState(null, "", location.pathname);
+const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
+let token = fragmentToken;
+try {
+	token ??= sessionStorage.getItem("agentic-coding-v2-token");
+} catch {
+	/* Memory-only when origin session storage is unavailable. */
+}
+if (fragmentToken) history.replaceState(null, "", location.pathname);
 async function api(url, data) {
 	const response = await fetch(url, {
 		method: data === undefined ? "GET" : "POST",
+		credentials: "omit",
+		redirect: "error",
 		headers: {
 			"Content-Type": "application/json",
 			...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -291,9 +303,16 @@ function selectTopic(value) {
 	void refresh();
 }
 $("home").onclick = () => selectTopic(null);
-async function refresh() {
+function refresh() {
+	refreshing ??= render().finally(() => {
+		refreshing = undefined;
+	});
+	return refreshing;
+}
+async function render() {
 	try {
 		const state = await api("/api/state");
+		if (!pageActive) return;
 		$("connection").textContent = "Connected";
 		knownTasks = state.tasks;
 		notice(state.environments);
@@ -588,8 +607,21 @@ async function refresh() {
 				document.querySelector("main").scrollTop -
 				document.querySelector("main").clientHeight <
 			250;
-		$("chat").replaceChildren(
-			...state.messages.map((message) => {
+		const nextChat = new Map();
+		const articles = state.messages.map((message, index) => {
+			const key = `${index}:${message.role}`;
+			let view = chatViews.get(key);
+			if (!view || view.html !== message.html) {
+				view?.dispose();
+				const rendered = authenticatedMessage(message.html, (source, signal) =>
+					fetch(source, {
+						credentials: "omit",
+						redirect: "error",
+						cache: "no-store",
+						headers: token ? { Authorization: `Bearer ${token}` } : {},
+						signal,
+					}),
+				);
 				const article = element("article", null, message.role);
 				article.append(
 					element(
@@ -599,13 +631,16 @@ async function refresh() {
 							: "Developer / task notification",
 						"meta",
 					),
+					rendered.content,
 				);
-				const content = element("div");
-				content.innerHTML = message.html;
-				article.append(content);
-				return article;
-			}),
-		);
+				view = { article, html: message.html, dispose: rendered.dispose };
+			}
+			nextChat.set(key, view);
+			return view.article;
+		});
+		for (const [key, view] of chatViews) if (!nextChat.has(key)) view.dispose();
+		chatViews = nextChat;
+		reuseChildren($("chat"), ...articles);
 		if (nearBottom) $("compose").scrollIntoView({ block: "end" });
 	} catch (error) {
 		$("connection").textContent = String(error);
@@ -626,6 +661,13 @@ $("compose").onsubmit = async (event) => {
 };
 try {
 	if (token) await api("/api/session", {});
+	if (fragmentToken) {
+		try {
+			sessionStorage.setItem("agentic-coding-v2-token", fragmentToken);
+		} catch {
+			/* Keep only in memory. */
+		}
+	}
 	await refresh();
 } catch (error) {
 	$("connection").textContent = String(error);
@@ -633,3 +675,14 @@ try {
 setInterval(() => {
 	void refresh();
 }, 1500);
+
+window.addEventListener("pagehide", () => {
+	pageActive = false;
+	for (const view of chatViews.values()) view.dispose();
+	chatViews.clear();
+	revision = "";
+});
+window.addEventListener("pageshow", () => {
+	pageActive = true;
+	void refresh();
+});

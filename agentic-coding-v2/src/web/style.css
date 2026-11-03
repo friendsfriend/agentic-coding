@@ -198,3 +198,11 @@ details {
 	outline: 2px solid #799eff;
 	outline-offset: 3px;
 }
+
+.authenticated-image {
+	display: inline-block;
+	min-height: 1.5em;
+}
+.authenticated-image [hidden] {
+	display: none;
+}

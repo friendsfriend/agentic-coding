@@ -403,6 +403,9 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 		expect(lifecycle.status).toBe(200);
 		expect(lifecycle.headers.get("content-type")).toContain("text/javascript");
 		expect(lifecycle.headers.get("x-content-type-options")).toBe("nosniff");
+		const imageScript = await fetch(`${origin}/authenticated-message.js`);
+		expect(imageScript.status).toBe(200);
+		expect(imageScript.headers.get("x-content-type-options")).toBe("nosniff");
 		const review = waiting.reviews[0];
 		const body = JSON.stringify({
 			revision: review.revision,
@@ -443,11 +446,24 @@ test("screenshots reach chat and the authenticated HTTP surface renders images w
 			headers,
 			body: "{}",
 		});
-		const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-		expect(login.headers.get("set-cookie")).toContain("HttpOnly");
+		expect(login.status).toBe(200);
+		expect(login.headers.get("set-cookie")).toBeNull();
+		expect((await fetch(`${origin}/attachments/${digest(png)}`)).status).toBe(
+			401,
+		);
+		expect(
+			(
+				await fetch(`${origin}/api/state`, {
+					headers: { Cookie: `acv2_fixture=${headers.Authorization.slice(7)}` },
+				})
+			).status,
+		).toBe(401);
 		const attachment = await fetch(`${origin}/attachments/${digest(png)}`, {
-			headers: { Cookie: cookie },
+			headers,
 		});
+		expect(attachment.headers.get("content-security-policy")).toContain(
+			"img-src 'self' blob:",
+		);
 		expect(attachment.headers.get("content-type")).toBe("image/png");
 		expect(Buffer.from(await attachment.arrayBuffer())).toEqual(png);
 	} finally {
