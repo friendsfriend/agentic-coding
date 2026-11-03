@@ -15,6 +15,10 @@ import type { HttpReceipt } from "./http-receipts.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { Plan, TelemetryOptions } from "./model.ts";
+import {
+	type OperatorRevocation,
+	OperatorRevocations,
+} from "./operator-revocation.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { DatabaseDiagnostics, type QueryReceipt } from "./query-manager.ts";
 import { runsConflict } from "./resources.ts";
@@ -47,6 +51,7 @@ export class Environments {
 	readonly http: HeldHttp;
 	readonly database: DatabaseDiagnostics;
 	readonly acquisitions: Acquisitions;
+	readonly operator: OperatorRevocations;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
@@ -76,6 +81,15 @@ export class Environments {
 					retain,
 					poll,
 				),
+		});
+		this.operator = new OperatorRevocations({
+			store: () => this.store,
+			live: (run) => this.hasLiveAuthority(run),
+			latch: (owner) => {
+				this.revoked.add(owner);
+				this.acquisitions.notify();
+			},
+			release: (owner) => this.releaseOwner(owner),
 		});
 		const authority: LiveEnvironmentAuthority = {
 			store: () => this.store,
@@ -124,6 +138,7 @@ export class Environments {
 		this.engine = engine;
 		await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState);
+			this.operator.recover(doc);
 			doc.waits ??= {};
 			for (const receipt of values<WaitReceipt>(doc.waits))
 				if (receipt.state === "waiting")
@@ -262,6 +277,15 @@ export class Environments {
 			return true;
 		}, background);
 	}
+	private hasLiveAuthority(run: EnvironmentRun) {
+		return (
+			!this.closed &&
+			(this.live.has(run.id) ||
+				[...this.pending.values()].some(
+					(entry) => entry.owner === run.owner && entry.batch === run.batch,
+				))
+		);
+	}
 	private visible(
 		run: EnvironmentRun,
 		options: { output: boolean; services?: boolean; timing?: boolean },
@@ -275,6 +299,10 @@ export class Environments {
 		} = run;
 		return {
 			...rest,
+			canRevoke:
+				holdsResource(run) &&
+				run.state !== "interrupted" &&
+				this.hasLiveAuthority(run),
 			endpoints:
 				run.state === "running" &&
 				run.ready === true &&
@@ -308,6 +336,13 @@ export class Environments {
 				.filter(({ receipt }) => !app || receipt.approved.app === app);
 		return {
 			runtime: "task-owned",
+			revocations: values<OperatorRevocation>(state?.operatorRevocations)
+				.filter(
+					(receipt) =>
+						!app ||
+						all.some((run) => run.id === receipt.runId && run.plan.app === app),
+				)
+				.slice(-100),
 			waitHistoryLimit: 200,
 			waits: values<WaitReceipt>(state?.waits)
 				.filter(

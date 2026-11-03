@@ -233,6 +233,8 @@ export function serve(app: Runtime, port = 0) {
 							text(body.requestId, "request ID", 256),
 						),
 					});
+				if (url.pathname === "/api/environments/revoke")
+					return json(await app.environments.operator.revoke(body));
 				if (url.pathname === "/api/environments/actions")
 					return json({
 						taskId: await app.startEnvironmentAction(body as OperatorAction),

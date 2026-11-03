@@ -365,6 +365,14 @@ async function refresh() {
 						`Task ${waiter.owner} waiting for ${waiter.apps.join(", ")} · FIFO acquisition`,
 					),
 				),
+			...(environments.revocations ?? [])
+				.filter((receipt) => !topic || ownerIds.has(receipt.owner))
+				.map((receipt) =>
+					element(
+						"p",
+						`Developer revocation · task ${receipt.owner} · ${receipt.state}${receipt.inspectionRequired ? " · cleanup inspection required; no saved-resource adoption" : ""} · ${receipt.reason}`,
+					),
+				),
 			...environments.runs
 				.filter((run) => !topic || ownerIds.has(run.owner))
 				.sort(
@@ -378,6 +386,7 @@ async function refresh() {
 					const resource = run.runtimeStatus;
 					const renderRevision = JSON.stringify([
 						run.revision,
+						run.canRevoke,
 						resource?.id,
 						resource?.state,
 						resource?.health,
@@ -483,6 +492,29 @@ async function refresh() {
 									},
 								),
 							);
+					if (
+						run.canRevoke &&
+						state.tasks.find((task) => task.id === run.owner)?.kind !==
+							"operator-environment"
+					)
+						card.append(
+							button("Stop and revoke task environments", async () => {
+								if (
+									!confirm(
+										`Stop ALL environment batches and dependencies held by task ${run.owner}, revoke all its pending waits and prevent future environment acquisition for that task? Its coding task will not be cancelled. Cleanup failures remain quarantined. No saved resources are adopted.`,
+									)
+								)
+									return;
+								await api("/api/environments/revoke", {
+									requestId: crypto.randomUUID(),
+									runId: run.id,
+									revision: run.revision,
+									reason:
+										"Developer requested environment release without cancelling the coding task",
+								});
+								await refresh();
+							}),
+						);
 					if (run.state === "interrupted")
 						card.append(
 							button("Release after inspection", async () => {

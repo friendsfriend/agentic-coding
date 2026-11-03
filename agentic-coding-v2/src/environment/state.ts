@@ -4,6 +4,7 @@ import type { LogTiming, RuntimeStatus, ServiceLog } from "./process.ts";
 
 export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
+	operatorRevocations?: Record<string, string>;
 	stops: Record<string, string>;
 	reuses?: Record<string, string>;
 	httpOperations?: Record<string, string>;
