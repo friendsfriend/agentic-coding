@@ -329,11 +329,18 @@ export class Environments {
 				.map(({ plans: _plans, ...waiter }) => waiter),
 		};
 	}
-	async logs(app: string, owner?: number, services = false) {
+	async logs(
+		app: string,
+		owner?: number,
+		services = false,
+		kind?: Plan["projectKind"],
+	) {
 		return recentRuns(
 			(await this.records()).filter(
 				(run) =>
-					run.plan.app === app && (owner === undefined || run.owner === owner),
+					run.plan.app === app &&
+					(owner === undefined || run.owner === owner) &&
+					(kind === undefined || run.plan.projectKind === kind),
 			),
 			20,
 		)
@@ -351,12 +358,12 @@ export class Environments {
 	) {
 		return logView(
 			app,
-			(await this.logs(app, owner, options.service !== undefined)).map(
-				(run) => ({
-					...run,
-					output: run.output ?? "",
-				}),
-			),
+			(
+				await this.logs(app, owner, options.service !== undefined, options.kind)
+			).map((run) => ({
+				...run,
+				output: run.output ?? "",
+			})),
 			options,
 		);
 	}

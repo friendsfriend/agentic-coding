@@ -44,13 +44,14 @@ export type Target = {
 };
 export type Project = {
 	id: string;
-	kind: "app" | "library";
+	kind: "app" | "library" | "infrastructure";
 	repository: string;
 	targets: Target[];
 	defaults?: Partial<Record<Action, string>>;
 };
 export type Plan = Target & {
 	app: string;
+	projectKind?: Project["kind"];
 	workspace: string;
 	cwd: string;
 	composePlan?: ComposePlan;
@@ -267,10 +268,12 @@ export function loadProjects(config: Config): Project[] {
 		const entry = object(raw);
 		keysOnly(entry, ["id", "kind", "repository", "targets", "defaults"]);
 		if (
-			!["app", "library"].includes(String(entry.kind)) ||
+			!["app", "library", "infrastructure"].includes(String(entry.kind)) ||
 			!Array.isArray(entry.targets)
 		)
-			throw new Error("Environment project needs kind app/library and targets");
+			throw new Error(
+				"Environment project needs kind app/library/infrastructure and targets",
+			);
 		const repository = fs.realpathSync(
 			text(entry.repository, "environment repository", 4096),
 		);
@@ -286,6 +289,13 @@ export function loadProjects(config: Config): Project[] {
 			targets.some((target) => target.action === "run")
 		)
 			throw new Error("Libraries cannot have run targets");
+		if (
+			entry.kind === "infrastructure" &&
+			targets.some((target) => target.action !== "run")
+		)
+			throw new Error(
+				"Infrastructure currently supports run targets only; image writes and tests need separate explicit actions",
+			);
 		return {
 			id: identifier(entry.id),
 			kind: entry.kind as Project["kind"],
@@ -352,6 +362,7 @@ export function resolvePlans(
 		return {
 			...chosen,
 			app,
+			projectKind: project.kind,
 			workspace: owner.workspace,
 			cwd,
 			...(composePlan ? { composePlan } : {}),

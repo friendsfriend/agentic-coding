@@ -92,6 +92,12 @@ export function createEnvironmentTools(
 								"Limited Compose-file adapter, not compose up/down. Docker shared mode creates an exclusive host/app-specific bridge network with service-name aliases, fenced by its live immutable creation ID. Explicit isolated mode has no shared network or service-name DNS. Only empty, identity-verified owned networks may be removed; no force disconnect, external network adoption or cross-provider DNS. Dependencies support only service_started and service_healthy, using actual engine running/image health observations. No healthcheck overrides, interpolation, named/external resources, build/test or extends. Each service receives the target environment and secret references. Only literal environments, argv commands, long-form ports and contained bind mounts are supported.",
 						}
 					: {}),
+				...(plans.some((plan) => plan.projectKind === "infrastructure")
+					? {
+							infrastructureScope:
+								"Exclusive task-owned run resources only, explicitly listed in this atomic batch. Same repository/workspace and live-receipt cleanup fences as apps. No automatic dependencies, shared/external infrastructure, imported leases, or saved-ID adoption. No implicit image builds or database query authority.",
+						}
+					: {}),
 				authority:
 					"Execute these exact configured environment actions in the task workspace. Container clients use only the explicit local API socket, never the default or a remote daemon context. Named containers are never adopted; only resources created by this live operation with matching host/run labels may be stopped or removed. Container build artifacts can persist in the local engine. Not an OS sandbox. Only conventional PATH/HOME/LANG/TMPDIR/TERM plus the displayed literal variables, referenced secrets, WORKSPACE and CONFIG_DIR are passed. Run targets last until stopped, task completion/cancellation or host shutdown. No automatic replay after ambiguous interruption.",
 			},
@@ -251,27 +257,36 @@ export function createEnvironmentTools(
 			defineTool({
 				name: "env_logs",
 				description:
-					"Read this task's retained, already-secret-redacted app logs: literal grep (not regex), then newest matching tail (default 200, maximum 1000 per run). At most 20 recent/live runs, with one shared 12 KiB encoded-output budget; whole lines only, omissions/counts explicit. No runtime CLI calls or historical completeness guarantee. Compose output is aggregate service buffers, not chronological; Kubernetes returns client diagnostics, not Pod logs. Optional service selects an exact declared Compose service's captured buffer, never parsed header text or the stack-network buffer; unavailable/legacy/other-runtime captures are explicit and never fall back to aggregate output. No timestamp or infrastructure filter yet. The home orchestrator may inspect all host runs.",
+					"Read this task's retained, already-secret-redacted app logs: literal grep (not regex), then newest matching tail (default 200, maximum 1000 per run). At most 20 recent/live runs, with one shared 12 KiB encoded-output budget; whole lines only, omissions/counts explicit. No runtime CLI calls or historical completeness guarantee. Compose output is aggregate service buffers, not chronological; Kubernetes returns client diagnostics, not Pod logs. Optional service selects an exact declared Compose service's captured buffer, never parsed header text or the stack-network buffer; unavailable/legacy/other-runtime captures are explicit and never fall back to aggregate output. Choose exactly one app or infra ID; infra selects only immutable infrastructure-kind run snapshots, not app history relabelled by current configuration. Infrastructure is exclusively task-owned, not shared/external. No timestamp filter yet. The home orchestrator may inspect all host runs.",
 				parameters: Type.Object({
-					app: Type.String(),
+					app: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+					infra: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 					grep: Type.Optional(Type.String({ maxLength: 512 })),
 					service: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 					tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
 				}),
 				replay: "safe",
-				execute: async (args, api) =>
-					environmentResult(
+				execute: async (args, api) => {
+					if ((args.app === undefined) === (args.infra === undefined))
+						throw new Error("Choose exactly one app or infra log source");
+					const id = args.app ?? args.infra;
+					if (!id) throw new Error("Choose a nonempty log source");
+					return environmentResult(
 						await manager.selectedLogs(
-							args.app,
+							id,
 							(await ownerOf(api.conversationId))?.id,
-							args,
+							{
+								...args,
+								...(args.infra ? { kind: "infrastructure" as const } : {}),
+							},
 						),
-					),
+					);
+				},
 			}),
 			defineTool({
 				name: "env_start",
 				description:
-					"Request human approval for exact configured run commands and acquire all apps atomically in FIFO order. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
+					"Request human approval for exact configured run commands and acquire all explicitly named apps and task-owned infrastructure resources atomically in FIFO order. Infrastructure is run-only, exclusive, not shared/external; dependencies are not automatically started. Only this task's repository/workspace is allowed. Release an existing batch before acquiring more apps. Shell readiness uses optional readyText; containers require running state or configured engine health. Compose supports a limited file subset: Docker shared mode uses an owned bridge with service-name aliases; explicitly isolated mode has no shared network/DNS. Shared Podman networking is unavailable. Kubernetes requires an explicitly named target or runtime and an approved local context; only bare pods in an existing non-system namespace are supported, with optional bounded HTTP/TCP kubelet readiness probes and API Ready observations (not end-to-end application verification), live UID receipts and UID-preconditioned cleanup. Acquisition timeout releases queue position; no app starts on timeout.",
 				parameters: Type.Object({
 					apps: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
 					...selectionFields,

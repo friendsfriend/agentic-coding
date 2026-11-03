@@ -1,5 +1,10 @@
 import type { EnvironmentRun } from "./state.ts";
-export type LogOptions = { grep?: string; tail?: number; service?: string };
+export type LogOptions = {
+	grep?: string;
+	tail?: number;
+	service?: string;
+	kind?: "infrastructure";
+};
 type LogRun = Pick<
 	EnvironmentRun,
 	| "id"
@@ -59,6 +64,7 @@ export function logView(
 	let remaining = outputBudgetBytes;
 	return {
 		app,
+		...(options.kind ? { projectKind: options.kind } : {}),
 		grep,
 		tail,
 		...(options.service ? { service: options.service } : {}),
@@ -89,6 +95,7 @@ export function logView(
 			return {
 				id: run.id,
 				owner: run.owner,
+				projectKind: run.plan.projectKind ?? "not-recorded",
 				runtime: run.plan.runtime,
 				action: run.plan.action,
 				state: run.state,
