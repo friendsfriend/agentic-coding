@@ -41,6 +41,11 @@ import { decodeContract } from "../contracts/decode.ts";
 import { orchestratorDeveloperInputVerificationSchema } from "../contracts/orchestrator-input.ts";
 import { DEVELOPER_ABORT_MESSAGE } from "../contracts/workflow.ts";
 import {
+	durableSessionOwner,
+	readDurableSessionRegistry,
+} from "../pi-durable-registry.ts";
+import { digestEnvironmentRevision } from "../scheduling/digest-settings.ts";
+import {
 	COMPACTION_MAX_INSTRUCTIONS,
 	type CompactionCeiling,
 	type CompactionConfig,
@@ -65,7 +70,14 @@ import { collectionExtension } from "./collection-extension.ts";
 import { compactionSerializationExtension } from "./compaction-serialization.ts";
 import { configuredProviderIds, durableModels } from "./configured-models.ts";
 import { createDebugExtension } from "./debug-tools.ts";
+import { collectProductionLogs } from "./digest-log-sources.ts";
 import { digestReportExtension } from "./digest-report-tool.ts";
+import {
+	applyDigestSessionUpdate,
+	digestSettingsEnvironment,
+	previewDigestSessionUpdate,
+} from "./digest-session-update.ts";
+import { DigestSourceReceipts } from "./digest-source-receipts.ts";
 import {
 	ENVIRONMENT_URL_ENV,
 	ensureEnvironmentServer,
@@ -104,6 +116,8 @@ import {
 } from "./protocol.ts";
 import {
 	activateScheduled,
+	activeScheduledDigest,
+	hasAdmittedScheduled,
 	hasQueuedScheduled,
 	queryScheduled,
 	reserveScheduled,
@@ -1167,6 +1181,23 @@ export class DurableHost {
 		// registration of each of those names is the one a run selects; a
 		// suggestion-only failure never replaces the tool's own error text.
 		registry.install(suggestingCodingTools(surface));
+		const sourceReceipts = new DigestSourceReceipts();
+		const activeDigest = async (conversationId: ConversationId) => {
+			const conversation = await host.instance?.harness.conversation(
+				conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			const occurrence = conversation
+				? await activeScheduledDigest(conversation)
+				: undefined;
+			const current = host.instance?.contexts.get(conversationId);
+			return occurrence && current?.toolPolicy === "collection"
+				? {
+						...occurrence,
+						settingsRevision: digestEnvironmentRevision(current.env),
+					}
+				: undefined;
+		};
 		const lookup = (conversationId: ConversationId) =>
 			host.instance?.contexts.get(conversationId);
 		const orchestrator = options.orchestrator
@@ -1187,8 +1218,39 @@ export class DurableHost {
 		// repository context prompt and `grep`, but no workflow dialogue,
 		// environment, stage or debug tools and no managed-run preamble.
 		if (options.session) {
-			registry.install(collectionExtension(lookup));
-			registry.install(digestReportExtension(lookup));
+			registry.install(
+				collectionExtension(lookup, async (conversationId, result) => {
+					const occurrence = await activeDigest(conversationId);
+					if (occurrence)
+						sourceReceipts.expectGitLab(
+							String(conversationId),
+							occurrence,
+							result,
+						);
+				}),
+			);
+			registry.install(
+				digestReportExtension(lookup, {
+					active: activeDigest,
+					sources: (conversationId, occurrence) =>
+						sourceReceipts.snapshot(String(conversationId), occurrence),
+					async collect(api, context, nominalDue) {
+						const bridge = host.instance?.localPiBridge;
+						if (bridge)
+							return bridge.collectProductionLogs(api, context, nominalDue);
+						return collectProductionLogs(
+							JSON.parse(
+								lookup(api.conversationId)?.env
+									.HERDR_DIGEST_PRODUCTION_SOURCES ?? "[]",
+							),
+							nominalDue,
+							async () => {
+								throw new Error("production-tool-binding-unavailable");
+							},
+						);
+					},
+				}),
+			);
 			registry.install(createSearchExtension(surface));
 			registry.install(
 				createPromptExtension(
@@ -1248,6 +1310,8 @@ export class DurableHost {
 						contextFor: (conversationId) =>
 							host.instance?.contexts.get(conversationId),
 						log: (line) => host.instance?.log(line),
+						sourceReceipts,
+						activeDigest,
 						catalogChanged: (id) => host.instance?.schedulePiCatalog(id),
 						ownerClosed: (id) => host.instance?.closePiCatalogWatch(id),
 					})
@@ -1547,6 +1611,27 @@ export class DurableHost {
 		} catch {
 			/* a run without a readable run.env still launches, with an empty environment */
 		}
+		const refreshCollectionSettings = () => {
+			if (this.options.session && input.toolPolicy === "collection") {
+				const registry = readDurableSessionRegistry(
+					path.dirname(this.options.layout.root),
+				);
+				const pinned = registry?.sessions.find(
+					(record) =>
+						record.runId === input.runId &&
+						record.owner === durableSessionOwner() &&
+						record.deletedAt === undefined &&
+						record.toolPolicy === "collection",
+				);
+				if (registry && !pinned)
+					throw new Error(
+						"Owned collection session metadata is unavailable; stale recovery settings refused.",
+					);
+				if (pinned)
+					envVars = { ...envVars, ...digestSettingsEnvironment(pinned) };
+			}
+		};
+		refreshCollectionSettings();
 		if (
 			envVars.HERDR_WORKFLOW_ID &&
 			!managedAdmission &&
@@ -1633,6 +1718,10 @@ export class DurableHost {
 			const issued = await tx.doc(associationDoc("run", input.runId));
 			issued.conversationId = conversationId;
 		}, context);
+		// A parallel idle settings update may have committed while native ownership
+		// was awaited. Re-read synchronously at publication: never reinstall an
+		// earlier registry snapshot over the update's live context.
+		refreshCollectionSettings();
 		const runContext: DurableRunContext = {
 			runId: input.runId,
 			toolPolicy: input.toolPolicy,
@@ -2005,7 +2094,9 @@ export class DurableHost {
 					({ tool }) =>
 						tool.name === "digest_repositories" ||
 						tool.name === "render_daily_digest" ||
-						tool.name === "normalize_digest_source_page",
+						tool.name === "normalize_digest_source_page" ||
+						tool.name === "collect_digest_production_logs" ||
+						tool.name === "digest_collection_plan",
 				)
 				.map(({ tool }) => tool);
 			return withImported(
@@ -2812,6 +2903,89 @@ export class DurableHost {
 			);
 		return String(id);
 	}
+	async updateDigestSettings(
+		request: Omit<import("./protocol.ts").DigestSettingsUpdateRequest, "type">,
+	): Promise<void> {
+		this.assertOpen();
+		if (!this.options.session) throw new Error("Named session host required.");
+		const runtimeDir = path.dirname(this.options.layout.root);
+		const preview = previewDigestSessionUpdate(
+			runtimeDir,
+			request.sessionId,
+			durableSessionOwner(),
+			request.settings,
+		);
+		if (
+			preview.expectedRevision !== request.expectedRevision ||
+			preview.binding.hostId !== (await this.scheduledIdentity())
+		)
+			throw new Error("Stale or replaced collection destination.");
+		const registry = readDurableSessionRegistry(runtimeDir);
+		const pinned = registry?.sessions.find(
+			(record) => record.id === request.sessionId,
+		);
+		if (!pinned) throw new Error("Collection destination unavailable.");
+		const record = this.requireConversation(pinned.runId);
+		if (String(record.conversationId) !== preview.binding.conversationId)
+			throw new Error("Collection conversation changed.");
+		await this.serialized(record, async () => {
+			const conversation = await this.harness.conversation(
+				record.conversationId,
+				BACKGROUND_CONTEXT,
+			);
+			if (
+				!conversation ||
+				(await hasAdmittedScheduled(this.harness, conversation))
+			)
+				throw new Error(
+					"Unsafe admission state; pause and drain before updating collection settings.",
+				);
+			const live = await this.harness.commit(async (tx) => {
+				const association = await tx.doc(associationDoc("run", pinned.runId));
+				return {
+					run: (await tx.doc(LiveDoc, record.conversationId)).run,
+					revoked: (await tx.doc(sessionRevocationDoc(pinned.runId))).revoked,
+					associated:
+						association.identity === pinned.runId &&
+						association.conversationId === record.conversationId,
+				};
+			}, BACKGROUND_CONTEXT);
+			const wake = this.harness.wake();
+			const current = this.contexts.get(record.conversationId);
+			if (
+				live.run !== undefined ||
+				live.revoked ||
+				!live.associated ||
+				wake.active ||
+				wake.at !== undefined ||
+				this.ensuringRuns.size ||
+				this.closing ||
+				current?.toolPolicy !== "collection" ||
+				current.cwd !== pinned.cwd ||
+				current.runId !== pinned.runId ||
+				(record.model !== undefined && record.model !== pinned.model) ||
+				!this.ownsConversation(pinned.runId, record.conversationId)
+			)
+				throw new Error(
+					"Unsafe admission state; pause and drain before updating collection settings.",
+				);
+			// No await from the idle/fence check through metadata and policy replacement.
+			const updated = applyDigestSessionUpdate(
+				runtimeDir,
+				request.sessionId,
+				durableSessionOwner(),
+				request.expectedRevision,
+				request.settings,
+			);
+			const next = {
+				...current,
+				env: { ...current.env, ...digestSettingsEnvironment(updated) },
+			};
+			this.contexts.set(record.conversationId, next);
+			this.runContexts.set(pinned.runId, next);
+		});
+	}
+
 	async scheduledIdentity(): Promise<string> {
 		return this.harness.commit(async (tx) => {
 			const identity = await tx.doc(
@@ -2862,7 +3036,32 @@ export class DurableHost {
 				)?.revoked
 			)
 				throw new Error("Session has been revoked");
-			return reserveScheduled(conversation, envelope);
+			const liveRecord = this.runs.get(envelope.runId),
+				record = liveRecord ?? { conversationId, readOnly: true };
+			return this.serialized(record, async () => {
+				this.assertOpen();
+				const currentIssued = await this.harness.snapshot(
+						associationDoc("run", envelope.runId),
+						BACKGROUND_CONTEXT,
+					),
+					currentOwner = this.runs.get(envelope.runId);
+				if (
+					(
+						await this.harness.snapshot(
+							sessionRevocationDoc(envelope.runId),
+							BACKGROUND_CONTEXT,
+						)
+					)?.revoked ||
+					currentIssued?.identity !== envelope.runId ||
+					currentIssued.conversationId !== conversationId ||
+					((liveRecord || currentOwner) &&
+						!this.ownsConversation(envelope.runId, conversationId))
+				)
+					throw new Error(
+						"Scheduled conversation owner changed or session revoked",
+					);
+				return reserveScheduled(conversation, envelope);
+			});
 		}
 		if (operation === "activate") {
 			// Persisted wake-up receipts can be replayed after reopen before a live
@@ -4500,6 +4699,10 @@ export class DurableHost {
 						type: "scheduledIdentity",
 						hostId: await this.scheduledIdentity(),
 					});
+					return;
+				case "digestSettingsUpdate":
+					await this.updateDigestSettings(request);
+					send({ type: "ok" });
 					return;
 				case "scheduledAdmission":
 					send({

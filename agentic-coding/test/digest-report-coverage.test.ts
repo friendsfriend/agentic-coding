@@ -50,6 +50,8 @@ test("omitted sources cannot be rendered as complete and total outages never cla
 			coverage("jira", "success"),
 			coverage("wiz", "success"),
 			coverage("gitlab", "success"),
+			coverage("azure-monitor", "success"),
+			coverage("new-relic", "success"),
 		]),
 	).toContain("complete for declared scopes");
 });

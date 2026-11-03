@@ -466,6 +466,17 @@ export class HostClient {
 		if (response.type !== "resolveSession") throw unexpected(response);
 		return response.conversationId;
 	}
+	async updateDigestSettings(
+		request: Omit<import("./protocol.ts").DigestSettingsUpdateRequest, "type">,
+	): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ ...request, type: "digestSettingsUpdate" },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+
 	async revokeSession(
 		runId: string,
 		hostId: string,

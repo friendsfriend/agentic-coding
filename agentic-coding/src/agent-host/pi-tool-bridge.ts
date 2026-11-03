@@ -17,15 +17,35 @@ import {
 	type ToolExecutionApi,
 	type ToolRegistration,
 } from "@earendil-works/pi-durable";
+import { digestEnvironmentRevision } from "../scheduling/digest-settings.ts";
 import { collectionRepositories } from "./collection-extension.ts";
 import {
 	collectionCallAllowed,
 	collectionToolVisible,
 } from "./collection-policy.ts";
+import {
+	collectProductionLogs,
+	type ProductionRead,
+	productionReceipt,
+} from "./digest-log-sources.ts";
+import type {
+	DigestOccurrence,
+	DigestSourceReceipts,
+} from "./digest-source-receipts.ts";
 import type { ToolPolicy } from "./protocol.ts";
 import type { LocalPiToolsSettings } from "./settings.ts";
 import type { DurableRunContext } from "./tools.ts";
 
+function productionReadName(name: string) {
+	const key = name.replaceAll("-", "_");
+	return key.startsWith("mcp__tools_") ? `pi__${key.slice(5)}` : key;
+}
+const reviewedProductionReads = new Set([
+	"pi__tools_azure__azure_monitor_query",
+	"pi__tools_azure__read_azure_results",
+	"pi__tools_new_relic__new_relic_nrql_query",
+	"pi__tools_new_relic__read_new_relic_results",
+]);
 type JsonObject = { [key: string]: JsonValue };
 
 const EXTENSION_NAME = "agentic.local-pi-tools";
@@ -215,6 +235,10 @@ export interface LocalPiToolBridgeOptions {
 		conversationId: ConversationId,
 	) => DurableRunContext | undefined;
 	readonly log: (diagnostic: string) => void;
+	readonly sourceReceipts?: DigestSourceReceipts;
+	readonly activeDigest?: (
+		conversationId: ConversationId,
+	) => Promise<DigestOccurrence | undefined>;
 	readonly catalogChanged?: (conversationId: ConversationId) => void;
 	readonly ownerClosed?: (
 		conversationId: ConversationId,
@@ -228,6 +252,7 @@ export interface LocalPiToolBridgeOptions {
  */
 export class LocalPiToolBridge {
 	private readonly owners = new Map<ConversationId, BridgeOwner>();
+	private readonly productionReceiptOwners = new Map<string, string>();
 	private readonly registrations = new Map<string, BridgeRegistration>();
 	private readonly reported = new Set<string>();
 	private readonly tools: ToolRegistration[] = [];
@@ -803,11 +828,94 @@ export class LocalPiToolBridge {
 		});
 	}
 
+	async collectProductionLogs(
+		api: ToolExecutionApi,
+		context: Context,
+		nominalDue: number,
+	) {
+		const run = this.options.contextFor(api.conversationId);
+		if (run?.toolPolicy !== "collection")
+			throw new Error("Collection session required.");
+		const sources: unknown = JSON.parse(
+			run.env.HERDR_DIGEST_PRODUCTION_SOURCES ?? "[]",
+		);
+		const names: Record<ProductionRead, string> = {
+			"azure-query": "pi__tools_azure__azure_monitor_query",
+			"azure-results": "pi__tools_azure__read_azure_results",
+			"new-relic-query": "pi__tools_new_relic__new_relic_nrql_query",
+			"new-relic-results": "pi__tools_new_relic__read_new_relic_results",
+		};
+		return collectProductionLogs(
+			sources,
+			nominalDue,
+			async (operation, args) => {
+				const owner = this.owners.get(api.conversationId);
+				const matches = [...(owner?.tools.keys() ?? [])].filter(
+					(name) => productionReadName(name) === names[operation],
+				);
+				if (matches.length !== 1 || !matches[0])
+					throw new Error("production-tool-binding-unavailable");
+				// Provider output/receipt paths remain inside this adapter, not model progress.
+				const quiet = new Proxy(api, {
+					get(target, property, receiver) {
+						if (property === "output") return () => {};
+						if (property === "details") return async () => {};
+						return Reflect.get(target, property, receiver);
+					},
+				});
+				const deadline = new AbortController();
+				const signal = context.abortSignal
+					? AbortSignal.any([context.abortSignal, deadline.signal])
+					: deadline.signal;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const read = this.execute(
+					matches[0],
+					quiet,
+					args,
+					withAbortSignal(signal, context),
+					true,
+				);
+				const result = await Promise.race([
+					read,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => {
+							deadline.abort();
+							reject(new Error("production-read-timeout"));
+						}, 10000);
+					}),
+				]).finally(() => {
+					if (timer) clearTimeout(timer);
+				});
+				if ("isError" in result && result.isError)
+					throw new Error("production-provider-read-failed");
+				if (operation === "azure-query" || operation === "new-relic-query") {
+					const receipt = productionReceipt(
+						result,
+						operation === "azure-query" ? "azure-monitor" : "new-relic",
+					);
+					if (typeof receipt?.filePath === "string") {
+						const custody = `${api.conversationId}:${nominalDue}:${operation}:${digestEnvironmentRevision(run.env)}`,
+							prior = this.productionReceiptOwners.get(receipt.filePath);
+						if (prior && prior !== custody)
+							throw new Error("production-cross-occurrence-receipt-denied");
+						this.productionReceiptOwners.set(receipt.filePath, custody);
+						if (this.productionReceiptOwners.size > 4000) {
+							const oldest = this.productionReceiptOwners.keys().next().value;
+							if (oldest) this.productionReceiptOwners.delete(oldest);
+						}
+					}
+				}
+				return result;
+			},
+		);
+	}
+
 	private async execute(
 		name: string,
 		api: ToolExecutionApi,
 		args: Record<string, unknown>,
 		context: Context,
+		productionRead = false,
 	) {
 		const owner = this.owners.get(api.conversationId);
 		const run = this.options.contextFor(api.conversationId);
@@ -816,24 +924,42 @@ export class LocalPiToolBridge {
 			return this.failedResult(
 				"This local Pi tool is unavailable for this run.",
 			);
+		const trustedProductionRead =
+			productionRead &&
+			run.toolPolicy === "collection" &&
+			reviewedProductionReads.has(productionReadName(name));
 		if (
-			!this.isAllowedByPolicy(name, run.toolPolicy) ||
-			(run.toolPolicy === "collection" &&
-				!collectionCallAllowed(
-					name,
-					args,
-					name.toLowerCase().includes("gitlab")
-						? (await collectionRepositories(run)).queryableProjects.map(
-								(project) => project.project,
-							)
-						: [],
-				))
+			!trustedProductionRead &&
+			(!this.isAllowedByPolicy(name, run.toolPolicy) ||
+				(run.toolPolicy === "collection" &&
+					!collectionCallAllowed(
+						name,
+						args,
+						name.toLowerCase().includes("gitlab")
+							? (await collectionRepositories(run)).queryableProjects.map(
+									(project) => project.project,
+								)
+							: [],
+					)))
 		) {
 			this.report(candidate.sourceId, "restricted-policy-denied");
 			return this.failedResult(
 				"This local Pi tool is not allowed by the run policy.",
 			);
 		}
+		const occurrence =
+			run.toolPolicy === "collection" && !trustedProductionRead
+				? await this.options.activeDigest?.(api.conversationId)
+				: undefined;
+		const receipt = occurrence
+			? this.options.sourceReceipts?.begin(
+					String(api.conversationId),
+					occurrence,
+					name,
+					args,
+					run.env.HERDR_DIGEST_GITLAB_TOOL_HOST,
+				)
+			: undefined;
 		owner.lastUsedAt = Date.now();
 		const controller = new AbortController();
 		const parentSignal = context.abortSignal;
@@ -853,7 +979,21 @@ export class LocalPiToolBridge {
 		);
 		owner.activeCalls.add(call);
 		try {
-			return await call;
+			const result = await call;
+			if (receipt) {
+				try {
+					this.options.sourceReceipts?.complete(receipt, result);
+				} catch {
+					this.options.sourceReceipts?.fail(
+						receipt,
+						"source-receipt-normalization-failed",
+					);
+				}
+			}
+			return result;
+		} catch (error) {
+			if (receipt) this.options.sourceReceipts?.fail(receipt);
+			throw error;
 		} finally {
 			parentSignal?.removeEventListener("abort", abortFromParent);
 			owner.activeControllers.delete(controller);
@@ -1013,6 +1153,8 @@ export class LocalPiToolBridge {
 						},
 					}) as AgentTool,
 			);
+			if (controller.signal.aborted)
+				return this.failedResult("The local Pi tool call was cancelled.");
 			const result = await definition.execute(
 				api.callId,
 				args,

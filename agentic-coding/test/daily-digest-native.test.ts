@@ -203,6 +203,7 @@ test("native scheduled collection paginates fake MCP through codemode, stays rea
 			"Synthetic daily digest occurrence only. Do not query live sources.";
 		const envelope = {
 			occurrenceId: "fake-occurrence",
+			nominalDue,
 			text,
 			digest: schedulingDigest(text),
 			runId: run.runId,
@@ -219,6 +220,10 @@ test("native scheduled collection paginates fake MCP through codemode, stays rea
 		expect(receipt.state).toBe("succeeded");
 		expect(receipt.submission?.answerEntryId).toBeDefined();
 		expect(receipt.result).toContain("Daily task digest");
+		expect(receipt.result).toContain(
+			"wiz / synthetic: unavailable; 0 page(s), 0 item(s)",
+		);
+		expect(receipt.result).toContain("actual-source-read-not-observed");
 		expect(receipt.result).toContain("fake-finding");
 		expect(receipt.result).toContain("fake-low");
 		expect(receipt.result).toContain("observed status OPEN");

@@ -7,6 +7,10 @@ import {
 	piDurableSessionFile,
 } from "./pi-durable-state.ts";
 import {
+	type DigestProductionSource,
+	validateProductionSources,
+} from "./scheduling/digest-settings.ts";
+import {
 	closeSecureDirectory,
 	openSecureDirectory,
 	openSecureFile,
@@ -26,6 +30,8 @@ export interface DurableSessionRecord {
 	readonly gitlabHosts?: readonly string[];
 	readonly gitlabToolHost?: string;
 	readonly repositoryRoots?: readonly string[];
+	readonly productionSources?: readonly DigestProductionSource[];
+	readonly collectionRevision?: number;
 	readonly createdAt: number;
 	readonly binding?: {
 		readonly hostId: string;
@@ -116,6 +122,14 @@ function decode(value: unknown): DurableSessionRegistry {
 			throw new Error(
 				"Corrupt durable session registry entry; no replacement attempted.",
 			);
+		if (item.productionSources !== undefined)
+			validateProductionSources(item.productionSources);
+		if (
+			item.collectionRevision !== undefined &&
+			(!Number.isSafeInteger(item.collectionRevision) ||
+				Number(item.collectionRevision) < 0)
+		)
+			throw new Error("Invalid collection settings revision.");
 		ids.add(item.id);
 		operations.add(item.operationId);
 		runs.add(item.runId);

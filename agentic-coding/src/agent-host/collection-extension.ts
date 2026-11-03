@@ -32,7 +32,13 @@ export async function collectionRepositories(run: DurableRunContext) {
 		],
 	};
 }
-export function collectionExtension(lookup: RunContextLookup) {
+export function collectionExtension(
+	lookup: RunContextLookup,
+	observed?: (
+		conversationId: import("@earendil-works/pi-durable").ConversationId,
+		result: Awaited<ReturnType<typeof collectionRepositories>>,
+	) => Promise<void>,
+) {
 	return defineExtension({
 		name: "agentic.collection",
 		tools: [
@@ -52,6 +58,7 @@ export function collectionExtension(lookup: RunContextLookup) {
 							isError: true,
 						};
 					const result = await collectionRepositories(run);
+					await observed?.(api.conversationId, result);
 					return {
 						output: [
 							{

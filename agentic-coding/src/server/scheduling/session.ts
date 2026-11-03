@@ -125,6 +125,7 @@ export function workflowlessSessionAdapter(
 					fence: occurrence.fence,
 					envelope: {
 						occurrenceId: occurrence.id,
+						nominalDue: occurrence.nominalDue,
 						digest: schedulingDigest(text),
 						text,
 						runId: record.runId,

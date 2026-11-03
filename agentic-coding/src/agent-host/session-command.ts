@@ -7,8 +7,13 @@ import {
 	selectDurableSession,
 } from "../pi-durable-registry.ts";
 import { piDurableRuntimeDir } from "../pi-durable-state.ts";
-import { dailyDigestProposal } from "../scheduling/daily-digest-setup.ts";
+import {
+	dailyDigestJobMigration,
+	dailyDigestProposal,
+} from "../scheduling/daily-digest-setup.ts";
 import { HostClient } from "./client.ts";
+import { previewDigestSessionUpdate } from "./digest-session-update.ts";
+import { hostLayout } from "./layout.ts";
 import { openPiDurableSession } from "./pi-durable-session.ts";
 export async function sessionCommand(
 	args: readonly string[],
@@ -37,6 +42,96 @@ export async function sessionCommand(
 									record.owner === owner && record.deletedAt === undefined,
 							) ?? [],
 					},
+					null,
+					2,
+				),
+			);
+			return 0;
+		}
+		if (
+			command === "digest-settings-preview" ||
+			command === "digest-settings-apply"
+		) {
+			const [id, flag, file, revisionFlag, revision] = rest;
+			const apply = command === "digest-settings-apply";
+			if (
+				!id ||
+				flag !== "--settings" ||
+				!file ||
+				rest.length !== (apply ? 5 : 3) ||
+				(apply &&
+					(revisionFlag !== "--expected-revision" ||
+						!revision ||
+						!/^[a-f0-9]{64}$/.test(revision)))
+			)
+				throw new Error(
+					"Digest settings requires ID --settings FILE; apply also requires --expected-revision SHA256.",
+				);
+			const raw = fs.readFileSync(file, "utf8");
+			if (Buffer.byteLength(raw) > 16000)
+				throw new Error("Digest settings file exceeds the byte bound.");
+			const preview = previewDigestSessionUpdate(
+				runtimeDir,
+				id,
+				owner,
+				JSON.parse(raw),
+			);
+			if (apply) {
+				if (preview.expectedRevision !== revision)
+					throw new Error("Stale collection settings preview.");
+				await new HostClient(
+					hostLayout(runtimeDir).socketPath,
+				).updateDigestSettings({
+					sessionId: id,
+					expectedRevision: preview.expectedRevision,
+					settings: preview.settings,
+				});
+			}
+			print(JSON.stringify({ ...preview, applied: apply }, null, 2));
+			return 0;
+		}
+		if (command === "digest-job-update-proposal") {
+			const [
+				id,
+				jobFlag,
+				file,
+				scheduleFlag,
+				scheduleId,
+				settingsFlag,
+				settingsFile,
+			] = rest;
+			if (
+				!id ||
+				jobFlag !== "--job" ||
+				!file ||
+				scheduleFlag !== "--schedule" ||
+				!scheduleId ||
+				!(
+					rest.length === 5 ||
+					(rest.length === 7 && settingsFlag === "--settings" && !!settingsFile)
+				)
+			)
+				throw new Error(
+					"Job migration proposal requires ID --job FILE --schedule ID [--settings FILE].",
+				);
+			const registry = readDurableSessionRegistry(runtimeDir);
+			if (!registry) throw new Error("Durable session registry unavailable.");
+			const raw = fs.readFileSync(file, "utf8");
+			if (Buffer.byteLength(raw) > 80000)
+				throw new Error("Stored job snapshot exceeds the byte bound.");
+			const settingsRaw = settingsFile
+				? fs.readFileSync(settingsFile, "utf8")
+				: undefined;
+			if (settingsRaw && Buffer.byteLength(settingsRaw) > 16000)
+				throw new Error("Digest settings exceed the byte bound.");
+			print(
+				JSON.stringify(
+					dailyDigestJobMigration(
+						requireDurableSession(registry, id, owner),
+						JSON.parse(raw),
+						scheduleId,
+						settingsRaw === undefined ? undefined : JSON.parse(settingsRaw),
+					),
 					null,
 					2,
 				),
@@ -171,7 +266,7 @@ export async function sessionCommand(
 			return 0;
 		}
 		print(
-			"Usage: agentic-coding session list | create --name NAME --cwd DIR --model PROVIDER/MODEL --thinking LEVEL --operation-id ID [--collection] [--select] [--gitlab-hosts HOST,...] [--repository-roots DIR,...] | select ID | delete ID | digest-proposal ID --base-branch BRANCH\nCreation is background by default. Deletion tombstones metadata; native history is retained. No schedule is created or activated.",
+			"Usage: agentic-coding session list | create --name NAME --cwd DIR --model PROVIDER/MODEL --thinking LEVEL --operation-id ID [--collection] [--select] [--gitlab-hosts HOST,...] [--gitlab-tool-host HOST] [--repository-roots DIR,...] | select ID | delete ID | digest-proposal ID --base-branch BRANCH | digest-settings-preview ID --settings FILE | digest-settings-apply ID --settings FILE --expected-revision REVISION | digest-job-update-proposal ID --job FILE --schedule ID [--settings FILE]\nPreview/proposal do not mutate settings or jobs. Apply requires the expected revision and idle existing host.\nCreation is background by default. Deletion tombstones metadata; native history is retained. No schedule is created or activated.",
 		);
 		return command === "--help" || command === "help" || command === undefined
 			? 0
