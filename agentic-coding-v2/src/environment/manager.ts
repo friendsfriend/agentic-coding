@@ -2,26 +2,19 @@ import { BACKGROUND_CONTEXT as background } from "@earendil-works/chord/context"
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
 import type { Config } from "../config.ts";
 import { decode, type TaskInfo, values } from "../state.ts";
+import { Acquisitions } from "./acquisitions.ts";
 import { loadProjects, type Plan, projectView } from "./catalog.ts";
 import { inspectCluster, loadClusters, prepareCluster } from "./cluster.ts";
 import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
-import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
-import { loadEndpointCa, prepareEndpointCa } from "./endpoint-ca.ts";
-import { endpointRequest } from "./http.ts";
-import { type HttpOptions, httpOptions } from "./http-options.ts";
-import {
-	type HttpInput,
-	type HttpReceipt,
-	httpDigest,
-	replayHttp,
-} from "./http-receipts.ts";
+import { HeldHttp } from "./http-manager.ts";
+import type { HttpReceipt } from "./http-receipts.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import { type LogOptions, logView } from "./logs.ts";
 import type { EnvironmentProcess } from "./process.ts";
-import { actionsConflict, runsConflict } from "./resources.ts";
+import { runsConflict } from "./resources.ts";
 import { processEnvironment, ShellProcess } from "./shell.ts";
 import {
 	type EnvironmentRun,
@@ -31,18 +24,8 @@ import {
 	type StopReceipt,
 } from "./state.ts";
 
-import { type WaitPoll, type WaitReceipt, waitingResult } from "./wait.ts";
+import type { WaitReceipt } from "./wait.ts";
 
-type Waiter = {
-	batch: string;
-	owner: number;
-	apps: string[];
-	since: number;
-	plans: Plan[];
-	active: boolean;
-	retained: boolean;
-	ordinal: number;
-};
 function recentRuns(runs: EnvironmentRun[], history: number) {
 	const recent = new Set(
 		runs
@@ -57,12 +40,11 @@ function recentRuns(runs: EnvironmentRun[], history: number) {
 export class Environments {
 	readonly projects;
 	readonly clusters;
+	readonly http: HeldHttp;
+	readonly acquisitions: Acquisitions;
 	private engine: Harness | null = null;
 	private live = new Map<string, EnvironmentProcess>();
 	private revoked = new Set<number>();
-	private waiters: Waiter[] = [];
-	private listeners = new Set<() => void>();
-	private generation = 0;
 	private closed = false;
 	private closing: Promise<void> | null = null;
 	private pending = new Map<
@@ -74,262 +56,29 @@ export class Environments {
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
 		this.clusters = loadClusters(config);
-	}
-	private async endpointRun(
-		owner: TaskInfo,
-		app: string,
-		signal?: AbortSignal,
-	) {
-		this.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error(
-				"Endpoint diagnostics require a workspace-write native task and separate approval",
-			);
-		const runs = (await this.records()).filter(
-			(run) =>
-				run.owner === owner.id &&
-				run.plan.app === app &&
-				run.state === "running" &&
-				run.ready === true,
-		);
-		const run = runs.length === 1 ? runs[0] : undefined,
-			process = run ? this.live.get(run.id) : undefined;
-		if (
-			!run ||
-			!(process instanceof ShellProcess) ||
-			process.outcome ||
-			process.cleanupFailed ||
-			run.plan.workspace !== owner.workspace
-		)
-			throw new Error(
-				"Endpoint requires this task's live ready shell app; saved receipts grant no network authority",
-			);
-		this.check(owner.id, signal, run.batch);
-		return { run, process };
-	}
-	async prepareEndpoint(
-		owner: TaskInfo,
-		app: string,
-		endpoint: string,
-		path: string,
-		signal?: AbortSignal,
-		http?: HttpOptions,
-	): Promise<EndpointRequest> {
-		const { run } = await this.endpointRun(owner, app, signal),
-			base = run.plan.endpoints?.[endpoint];
-		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
-			throw new Error("Choose a declared endpoint of the held app");
-		const ref = Object.hasOwn(run.plan.endpointCaRefs ?? {}, endpoint)
-			? run.plan.endpointCaRefs?.[endpoint]
-			: undefined;
-		const options = http ? httpOptions(http) : undefined,
-			auth =
-				options?.authenticate &&
-				Object.hasOwn(run.plan.endpointAuthRefs ?? {}, endpoint)
-					? run.plan.endpointAuthRefs?.[endpoint]
-					: undefined;
-		if (options?.authenticate && !auth)
-			throw new Error(
-				"Authentication requires a configured endpoint secret reference",
-			);
-		return {
-			run: run.id,
-			app,
-			endpoint,
-			url: endpointUrl(base, path),
-			...(options ? { http: options } : {}),
-			...(auth ? { authentication: auth } : {}),
-			...(ref ? { ca: prepareEndpointCa(this.config.configDir, ref) } : {}),
-		};
-	}
-	async httpReceipt(
-		owner: TaskInfo,
-		id: string,
-		input: HttpInput,
-		signal?: AbortSignal,
-	) {
-		this.check(owner.id, signal);
-		if (owner.policy !== "workspace-write")
-			throw new Error("HTTP receipt requires its workspace-write native owner");
-		const raw = await this.store.commit(async (tx) => {
-			const task = await tx.task(owner.id as TaskId);
-			if (!task || task.abortRequested || task.state.status === "terminal")
-				throw new Error("HTTP native owner has ended");
-			return (await tx.doc(EnvironmentState)).httpOperations?.[id];
-		}, background);
-		this.check(owner.id, signal);
-		return raw ? replayHttp(decode<HttpReceipt>(raw), owner.id, input) : null;
-	}
-	async getEndpoint(
-		owner: TaskInfo,
-		approved: EndpointRequest,
-		signal?: AbortSignal,
-		issuance?: { id: string; input: HttpInput },
-	) {
-		const { run, process } = await this.endpointRun(
-				owner,
-				approved.app,
-				signal,
-			),
-			base = run.plan.endpoints?.[approved.endpoint];
-		if (
-			run.id !== approved.run ||
-			!base ||
-			!Object.hasOwn(run.plan.endpoints ?? {}, approved.endpoint) ||
-			(Object.hasOwn(run.plan.endpointCaRefs ?? {}, approved.endpoint)
-				? run.plan.endpointCaRefs?.[approved.endpoint]
-				: undefined) !== approved.ca?.file ||
-			new URL(base).origin !== new URL(approved.url).origin
-		)
-			throw new Error("Approved endpoint no longer belongs to the held run");
-		const options = httpOptions(approved.http),
-			auth =
-				options.authenticate &&
-				Object.hasOwn(run.plan.endpointAuthRefs ?? {}, approved.endpoint)
-					? run.plan.endpointAuthRefs?.[approved.endpoint]
-					: undefined;
-		if (
-			(options.authenticate && !auth) ||
-			JSON.stringify(auth) !== JSON.stringify(approved.authentication) ||
-			(auth && new URL(approved.url).protocol !== "https:")
-		)
-			throw new Error(
-				"Approved endpoint authentication no longer matches the held run",
-			);
-		const authorization = auth
-			? process.authorization(approved.endpoint)
-			: undefined;
-		if (auth && !authorization)
-			throw new Error("Held endpoint credentials are unavailable");
-		const ca = approved.ca
-			? loadEndpointCa(this.config.configDir, approved.ca)
-			: undefined;
-		if (approved.http && !issuance)
-			throw new Error(
-				"HTTP operations require a durable native issuance identity",
-			);
-		if (
-			issuance &&
-			(issuance.input.app !== approved.app ||
-				issuance.input.endpoint !== approved.endpoint ||
-				endpointUrl(base, issuance.input.path) !== approved.url ||
-				JSON.stringify(issuance.input.http) !== JSON.stringify(options))
-		)
-			throw new Error("HTTP issuance does not match the approved request");
-		const operation = (async () => {
-			if (issuance) {
-				const previous = await this.store.commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
-					this.check(owner.id, signal, run.batch);
-					if (!task || task.abortRequested || task.state.status === "terminal")
-						throw new Error("HTTP native owner has ended");
-					const doc = await tx.doc(EnvironmentState);
-					this.check(owner.id, signal, run.batch);
-					doc.httpOperations ??= {};
-					const receipts = doc.httpOperations,
-						raw = receipts[issuance.id];
-					if (raw) return decode<HttpReceipt>(raw);
-					const receipt: HttpReceipt = {
-						owner: owner.id,
-						inputDigest: httpDigest(issuance.input),
-						approved,
-						issuedAt: Date.now(),
-						state: "issued",
-					};
-					receipts[issuance.id] = JSON.stringify(receipt);
-					return null;
-				}, background);
-				if (previous) return replayHttp(previous, owner.id, issuance.input);
-			}
-			this.check(owner.id, signal, run.batch);
-			if (process.outcome || process.cleanupFailed)
-				throw new Error("Endpoint app is closing; no request sent");
-			const result = await endpointRequest(
-					approved.url,
-					options,
-					process.redact,
+		this.acquisitions = new Acquisitions(config.stateDir, {
+			store: () => this.store,
+			check: (owner, signal, batch) => this.check(owner, signal, batch),
+			receipt: (batch, owner, request) => this.receipt(batch, owner, request),
+			execute: (batch, request, owner, plans, waitMs, signal, retain, poll) =>
+				this.execute(
+					batch,
+					request,
+					owner,
+					plans,
+					waitMs,
 					signal,
-					ca,
-					authorization,
-					async () => {
-						const current = await this.endpointRun(owner, approved.app, signal);
-						if (current.run.id !== run.id || current.process !== process)
-							throw new Error("Endpoint ownership changed");
-						return approved.ca
-							? loadEndpointCa(this.config.configDir, approved.ca)
-							: undefined;
-					},
-					() => {
-						this.check(owner.id, signal, run.batch);
-						if (
-							process.outcome ||
-							process.cleanupFailed ||
-							this.live.get(run.id) !== process
-						)
-							throw new Error("Endpoint app is closing; no request sent");
-					},
+					retain,
+					poll,
 				),
-				current = await this.endpointRun(owner, approved.app, signal);
-			this.check(owner.id, signal, run.batch);
-			if (
-				current.run.id !== run.id ||
-				current.process !== process ||
-				process.outcome ||
-				process.cleanupFailed
-			)
-				throw new Error("Endpoint ownership changed; response discarded");
-			const response = {
-				...result,
-				run: run.id,
-				app: approved.app,
-				endpoint: approved.endpoint,
-				observedAt: Date.now(),
-				...(approved.ca ? { caDigest: approved.ca.digest } : {}),
-			};
-			if (issuance)
-				await this.store.commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
-					this.check(owner.id, signal, run.batch);
-					if (!task || task.abortRequested || task.state.status === "terminal")
-						throw new Error("HTTP native owner ended; response discarded");
-					const doc = await tx.doc(EnvironmentState);
-					this.check(owner.id, signal, run.batch);
-					if (
-						process.outcome ||
-						process.cleanupFailed ||
-						this.live.get(run.id) !== process
-					)
-						throw new Error("Endpoint app ended; response discarded");
-					const raw = doc.httpOperations?.[issuance.id];
-					if (!raw)
-						throw new Error(
-							"HTTP issuance receipt is missing; no response accepted",
-						);
-					const receipt = decode<HttpReceipt>(raw);
-					if (
-						receipt.owner !== owner.id ||
-						receipt.inputDigest !== httpDigest(issuance.input) ||
-						receipt.state !== "issued" ||
-						JSON.stringify(receipt.approved) !== JSON.stringify(approved)
-					)
-						throw new Error(
-							"HTTP issuance identity changed; no response accepted",
-						);
-					if (doc.httpOperations)
-						doc.httpOperations[issuance.id] = JSON.stringify({
-							...receipt,
-							state: "completed",
-							result: response,
-						});
-				}, background);
-			return response;
-		})();
-		this.pending.set(operation, { owner: owner.id, batch: run.batch });
-		try {
-			return await operation;
-		} finally {
-			this.pending.delete(operation);
-		}
+		});
+		this.http = new HeldHttp(config, {
+			store: () => this.store,
+			records: () => this.records(),
+			live: this.live,
+			pending: this.pending,
+			check: (owner, signal, batch) => this.check(owner, signal, batch),
+		});
 	}
 	prepareCluster(owner: TaskInfo, id: string) {
 		const cluster = this.clusters.find((item) => item.id === id);
@@ -405,29 +154,6 @@ export class Environments {
 		return values<EnvironmentRun>(
 			(await this.store.snapshot(EnvironmentState, background))?.runs,
 		);
-	}
-	private notify() {
-		this.generation++;
-		for (const listener of [...this.listeners]) listener();
-	}
-	private changed(
-		generation: number,
-		signal: AbortSignal | undefined,
-		deadline: number,
-	) {
-		if (this.generation !== generation) return Promise.resolve();
-		return new Promise<void>((resolve) => {
-			const done = () => {
-				clearTimeout(timer);
-				this.listeners.delete(done);
-				signal?.removeEventListener("abort", done);
-				resolve();
-			};
-			const timer = setTimeout(done, Math.max(1, deadline - Date.now()));
-			this.listeners.add(done);
-			signal?.addEventListener("abort", done, { once: true });
-			if (signal?.aborted || this.generation !== generation) done();
-		});
 	}
 	private check(owner: number, signal?: AbortSignal, batch?: string) {
 		signal?.throwIfAborted();
@@ -572,7 +298,9 @@ export class Environments {
 				.map(({ plans, request: _request, ...receipt }) => ({
 					...receipt,
 					apps: plans.map((plan) => plan.app),
-					live: this.waiters.some((waiter) => waiter.batch === receipt.batch),
+					live: this.acquisitions.entries.some(
+						(waiter) => waiter.batch === receipt.batch,
+					),
 					authority:
 						"diagnostic only; saved queue records never restore execution authority",
 				})),
@@ -604,7 +332,7 @@ export class Environments {
 				all.filter((run) => !app || run.plan.app === app),
 				200,
 			).map((run) => this.visible(run, false)),
-			waiters: this.waiters
+			waiters: this.acquisitions.entries
 				.filter((waiter) => !app || waiter.apps.includes(app))
 				.map(({ plans: _plans, ...waiter }) => waiter),
 		};
@@ -682,7 +410,7 @@ export class Environments {
 				revision: run.revision + 1,
 			});
 		}, background);
-		this.notify();
+		this.acquisitions.notify();
 	}
 	async execute(
 		batch: string,
@@ -711,92 +439,6 @@ export class Environments {
 			this.pending.delete(operation);
 		}
 	}
-	async recordedWait(
-		pollId: string,
-		owner: number,
-		batch: string,
-		request: string,
-		waitMs: number,
-	) {
-		const state = await this.store.snapshot(EnvironmentState, background),
-			raw = state?.waitPolls?.[pollId];
-		if (!raw) return null;
-		const saved = state?.waits?.[batch];
-		if (!saved)
-			throw new Error("Missing acquisition journal for recorded queue poll");
-		const poll = decode<WaitPoll>(raw),
-			receipt = decode<WaitReceipt>(saved);
-		if (
-			poll.owner !== owner ||
-			poll.batch !== batch ||
-			poll.request !== request ||
-			poll.waitMs !== waitMs ||
-			receipt.owner !== owner ||
-			receipt.request !== request
-		)
-			throw new Error("Queue poll identity mismatch");
-		if (poll.state === "waiting") return waitingResult(poll, receipt, true);
-		if (poll.state === "acquired") return this.receipt(batch, owner, request);
-		if (poll.state === "cancelled")
-			throw new Error(
-				"Queue poll was cancelled; request fresh approval before acquiring again",
-			);
-		return null;
-	}
-	async continueWait(
-		pollId: string,
-		owner: TaskInfo,
-		batch: string,
-		waitMs: number,
-		signal?: AbortSignal,
-	) {
-		this.check(owner.id, signal, batch);
-		if (owner.policy !== "workspace-write")
-			throw new Error(
-				"Queue continuation requires the original workspace-write native owner",
-			);
-		const state = await this.store.snapshot(EnvironmentState, background),
-			raw = state?.waits?.[batch];
-		if (!raw) throw new Error("Unknown acquisition");
-		const receipt = decode<WaitReceipt>(raw);
-		if (
-			receipt.owner !== owner.id ||
-			!receipt.retained ||
-			receipt.plans.some((plan) => plan.workspace !== owner.workspace)
-		)
-			throw new Error(
-				"Only the original native owner may continue its retained approved plan",
-			);
-		const recorded = await this.recordedWait(
-			pollId,
-			owner.id,
-			batch,
-			receipt.request,
-			waitMs,
-		);
-		if (recorded) return recorded;
-		if (receipt.state === "acquired")
-			return this.receipt(batch, owner.id, receipt.request);
-		if (
-			receipt.state !== "waiting" ||
-			!this.waiters.some(
-				(waiter) => waiter.batch === batch && waiter.owner === owner.id,
-			)
-		)
-			throw new Error(
-				"No live retained acquisition; saved receipts cannot restore queue authority. Request fresh approval",
-			);
-		return this.execute(
-			batch,
-			receipt.request,
-			owner,
-			receipt.plans,
-			waitMs,
-			signal,
-			true,
-			pollId,
-		);
-	}
 	private async perform(
 		batch: string,
 		request: string,
@@ -808,7 +450,7 @@ export class Environments {
 		pollId: string,
 	) {
 		this.check(owner.id, signal, batch);
-		const recorded = await this.recordedWait(
+		const recorded = await this.acquisitions.recordedWait(
 			pollId,
 			owner.id,
 			batch,
@@ -849,229 +491,20 @@ export class Environments {
 			return this.receipt(batch, owner.id, request);
 		// Resolve referenced values only after approval, and fail before reserving or starting any app.
 		for (const plan of plans) processEnvironment(this.config.configDir, plan);
+
+		const allocation = await this.acquisitions.reserve(
+			batch,
+			request,
+			owner,
+			plans,
+			waitMs,
+			signal,
+			retainQueue,
+			pollId,
+		);
+		if (!allocation.reserved) return allocation.result;
 		const running = plans[0]?.action === "run";
-		let waiter = this.waiters.find((item) => item.batch === batch);
-		if (waiter?.active)
-			throw new Error(
-				"This acquisition already has an active native wait call",
-			);
-		if (running) {
-			if (
-				this.waiters.some(
-					(item) => item.owner === owner.id && item.batch !== batch,
-				)
-			)
-				throw new Error(
-					"Continue the existing retained acquisition with env_wait, or cancel it before acquiring another batch",
-				);
-			const receipt = await this.store.commit(async (tx) => {
-				const task = await tx.task(owner.id as TaskId),
-					doc = await tx.doc(EnvironmentState);
-				this.check(owner.id, signal, batch);
-				if (
-					!task ||
-					task.abortRequested ||
-					task.state.status === "terminal" ||
-					owner.policy !== "workspace-write"
-				)
-					throw new Error(
-						"Environment task has ended or lacks write authority",
-					);
-				doc.waits ??= {};
-				doc.waitPolls ??= {};
-				let receipt = doc.waits[batch]
-					? decode<WaitReceipt>(doc.waits[batch])
-					: undefined;
-				if (
-					receipt &&
-					(receipt.owner !== owner.id ||
-						receipt.request !== request ||
-						receipt.state !== "waiting" ||
-						!waiter)
-				)
-					throw new Error(
-						"No live matching acquisition; saved queue receipts cannot be adopted",
-					);
-				if (!receipt) {
-					doc.waitOrdinal = (doc.waitOrdinal ?? 0) + 1;
-					receipt = {
-						batch,
-						owner: owner.id,
-						request,
-						plans,
-						retained: retainQueue,
-						since: Date.now(),
-						ordinal: doc.waitOrdinal,
-						revision: 1,
-						state: "waiting",
-					};
-					doc.waits[batch] = JSON.stringify(receipt);
-				}
-				doc.waitPolls[pollId] = JSON.stringify({
-					owner: owner.id,
-					batch,
-					request,
-					waitMs,
-					state: "pending",
-					observedAt: Date.now(),
-				} satisfies WaitPoll);
-				return receipt;
-			}, background);
-			if (!waiter) {
-				waiter = {
-					batch,
-					owner: owner.id,
-					apps: plans.map((plan) => plan.app),
-					since: receipt.since,
-					plans,
-					active: true,
-					retained: retainQueue,
-					ordinal: receipt.ordinal,
-				};
-				this.waiters.push(waiter);
-				this.waiters.sort((left, right) => left.ordinal - right.ordinal);
-			} else waiter.active = true;
-		}
-		const currentWaiter = waiter;
-		let retained = false;
-		this.notify();
-		const deadline = Date.now() + waitMs;
-		let reserved = false;
 		try {
-			while (!reserved) {
-				this.check(owner.id, signal, batch);
-				const generation = this.generation;
-				reserved = await this.store.commit(async (tx) => {
-					const task = await tx.task(owner.id as TaskId);
-					this.check(owner.id, signal, batch);
-					if (!task || task.abortRequested || task.state.status === "terminal")
-						throw new Error("Environment task has ended");
-					const doc = await tx.doc(EnvironmentState),
-						active = values<EnvironmentRun>(doc.runs).filter(holdsResource);
-					if (running) {
-						if (!currentWaiter || !doc.waits || !doc.waitPolls)
-							throw new Error("Missing live queue admission");
-						const admission = decode<WaitReceipt>(doc.waits[batch]);
-						if (
-							admission.state !== "waiting" ||
-							admission.owner !== owner.id ||
-							admission.request !== request
-						)
-							throw new Error("Acquisition is no longer waiting");
-						const held = active.filter((run) => run.plan.action === "run");
-						if (held.some((run) => run.owner === owner.id))
-							throw new Error(
-								"Release your existing app batch before acquiring another; interrupted runs need operator inspection",
-							);
-						if (
-							values<WaitReceipt>(doc.waits)
-								.filter(
-									(earlier) =>
-										earlier.state === "waiting" &&
-										earlier.ordinal < admission.ordinal,
-								)
-								.some((earlier) =>
-									earlier.plans.some((left) =>
-										plans.some((right) =>
-											runsConflict(left, right, this.config.stateDir),
-										),
-									),
-								) ||
-							held.some((run) =>
-								plans.some((plan) =>
-									runsConflict(run.plan, plan, this.config.stateDir),
-								),
-							)
-						)
-							return false;
-					} else if (
-						active.some((run) =>
-							plans.some((plan) => actionsConflict(run.plan, plan)),
-						)
-					)
-						throw new Error(
-							"An environment action already owns this workspace or daemon image writer; inspect interrupted actions before retrying",
-						);
-					if (running) {
-						if (!doc.waits || !doc.waitPolls)
-							throw new Error("Missing queue admission journal");
-						const receipt = decode<WaitReceipt>(doc.waits[batch]),
-							poll = decode<WaitPoll>(doc.waitPolls[pollId]);
-						doc.waits[batch] = JSON.stringify({
-							...receipt,
-							state: "acquired",
-							revision: receipt.revision + 1,
-						});
-						doc.waitPolls[pollId] = JSON.stringify({
-							...poll,
-							state: "acquired",
-							observedAt: Date.now(),
-						});
-					}
-					for (const plan of plans) {
-						const run: EnvironmentRun = {
-							id: `${batch}:${plan.app}`,
-							batch,
-							request,
-							owner: owner.id,
-							plan,
-							state: "reserved",
-							revision: 1,
-							createdAt: Date.now(),
-							pid: null,
-							ready: null,
-							exitCode: null,
-							signal: null,
-							output: "",
-							error: null,
-						};
-						doc.runs[run.id] = JSON.stringify(run);
-					}
-					return true;
-				}, background);
-				if (!reserved) {
-					if (Date.now() >= deadline) {
-						if (retainQueue && currentWaiter) {
-							const result = await this.store.commit(async (tx) => {
-								const task = await tx.task(owner.id as TaskId),
-									doc = await tx.doc(EnvironmentState);
-								this.check(owner.id, signal, batch);
-								if (
-									!task ||
-									task.abortRequested ||
-									task.state.status === "terminal" ||
-									!doc.waits ||
-									!doc.waitPolls
-								)
-									throw new Error("Environment task has ended");
-								const receipt = decode<WaitReceipt>(doc.waits[batch]);
-								if (receipt.state !== "waiting")
-									throw new Error("Acquisition is no longer waiting");
-								const poll: WaitPoll = {
-									owner: owner.id,
-									batch,
-									request,
-									waitMs,
-									state: "waiting",
-									observedAt: Date.now(),
-									position: this.waiters.indexOf(currentWaiter) + 1,
-								};
-								doc.waitPolls[pollId] = JSON.stringify(poll);
-								return waitingResult(poll, receipt);
-							}, background);
-							retained = true;
-							currentWaiter.active = false;
-							return result;
-						}
-						throw new Error(
-							"Environment acquisition timed out; no apps started and queue position released",
-						);
-					}
-					await this.changed(generation, signal, deadline);
-				}
-			}
-			this.waiters = this.waiters.filter((item) => item !== currentWaiter);
-			this.notify();
 			for (const plan of plans) {
 				this.check(owner.id, signal, batch);
 				const id = `${batch}:${plan.app}`,
@@ -1138,61 +571,33 @@ export class Environments {
 			if (running && result?.some((run) => run.state !== "running"))
 				throw new Error("An app exited before batch startup completed");
 			return result;
-		} catch (error) {
-			if (reserved) {
-				this.stopped.add(batch);
-				for (const plan of [...plans].reverse()) {
-					const id = `${batch}:${plan.app}`,
-						process = this.live.get(id);
-					if (process) await this.stopLive(id, process);
-					else
-						await this.store.commit(async (tx) => {
-							const doc = await tx.doc(EnvironmentState),
-								run = decode<EnvironmentRun>(doc.runs[id]);
-							if (run.state === "reserved")
-								doc.runs[id] = JSON.stringify({
-									...run,
-									state: "exited",
-									revision: run.revision + 1,
-								});
-						}, background);
-					await this.update(id, {
-						error: running
-							? "Batch startup failed or was interrupted; inspect each run's exit and cleanup status."
-							: "Action timed out, failed to start, or was interrupted; inspect the exit status and redacted output.",
-					});
-				}
+		} catch {
+			this.stopped.add(batch);
+			for (const plan of [...plans].reverse()) {
+				const id = `${batch}:${plan.app}`,
+					process = this.live.get(id);
+				if (process) await this.stopLive(id, process);
+				else
+					await this.store.commit(async (tx) => {
+						const doc = await tx.doc(EnvironmentState),
+							run = decode<EnvironmentRun>(doc.runs[id]);
+						if (run.state === "reserved")
+							doc.runs[id] = JSON.stringify({
+								...run,
+								state: "exited",
+								revision: run.revision + 1,
+							});
+					}, background);
+				await this.update(id, {
+					error: running
+						? "Batch startup failed or was interrupted; inspect each run's exit and cleanup status."
+						: "Action timed out, failed to start, or was interrupted; inspect the exit status and redacted output.",
+				});
 			}
 			// Child output is available only through the redacted log path, never errors.
 			throw new Error(
-				error instanceof Error && !reserved
-					? error.message
-					: "Environment execution did not complete; inspect env_status and env_logs",
+				"Environment execution did not complete; inspect env_status and env_logs",
 			);
-		} finally {
-			if (!retained) {
-				this.waiters = this.waiters.filter((item) => item !== currentWaiter);
-				if (running)
-					await this.store.commit(async (tx) => {
-						const doc = await tx.doc(EnvironmentState);
-						if (!doc.waits || !doc.waitPolls) return;
-						const receipt = decode<WaitReceipt>(doc.waits[batch]);
-						if (receipt.state === "waiting") {
-							doc.waits[batch] = JSON.stringify({
-								...receipt,
-								state: "cancelled",
-								revision: receipt.revision + 1,
-							});
-							const poll = decode<WaitPoll>(doc.waitPolls[pollId]);
-							doc.waitPolls[pollId] = JSON.stringify({
-								...poll,
-								state: "cancelled",
-								observedAt: Date.now(),
-							});
-						}
-					}, background);
-			}
-			this.notify();
 		}
 	}
 	private async finish(
@@ -1234,7 +639,7 @@ export class Environments {
 		if (cascade) {
 			if (!this.closed && !this.stopped.has(cascade.batch)) {
 				this.stopped.add(cascade.batch);
-				this.notify();
+				this.acquisitions.notify();
 				const operation = (async () =>
 					this.stopTargets(
 						(await this.records()).filter(
@@ -1257,7 +662,7 @@ export class Environments {
 			return;
 		}
 		this.live.delete(id);
-		this.notify();
+		this.acquisitions.notify();
 	}
 	private async stopLive(id: string, process: EnvironmentProcess) {
 		try {
@@ -1355,10 +760,8 @@ export class Environments {
 				"Cannot stop a saved PID. Operator inspection is required",
 			);
 		for (const batch of batches) this.stopped.add(batch);
-		this.waiters = this.waiters.filter(
-			(waiter) => !batches.includes(waiter.batch),
-		);
-		this.notify();
+		this.acquisitions.remove(batches);
+		this.acquisitions.notify();
 		let uncertain = false;
 		for (const run of [...selected].reverse()) {
 			if (run.state === "interrupted" || run.state === "exited") continue;
@@ -1395,7 +798,7 @@ export class Environments {
 	}
 	async releaseOwner(owner: number) {
 		this.revoked.add(owner);
-		this.notify();
+		this.acquisitions.notify();
 		const runs = (await this.records()).filter(
 			(run) => run.owner === owner && holdsResource(run),
 		);
@@ -1442,7 +845,7 @@ export class Environments {
 					"Operator confirmed inspection and cleanup of ambiguous effects; resource released without changing recorded exit status.",
 			});
 		}, background);
-		this.notify();
+		this.acquisitions.notify();
 	}
 	close() {
 		this.closing ??= this.closeOnce();
@@ -1450,12 +853,12 @@ export class Environments {
 	}
 	private async closeOnce() {
 		this.closed = true;
-		this.notify();
+		this.acquisitions.notify();
 		for (const [id, process] of [...this.live].reverse())
 			await this.stopLive(id, process);
 		await Promise.allSettled([...this.pending.keys()]);
 		await Promise.allSettled([...this.dependencyCleanup.values()]);
-		this.waiters = [];
+		this.acquisitions.clear();
 		await this.store.commit(async (tx) => {
 			const doc = await tx.doc(EnvironmentState);
 			if (!doc.waits) return;
