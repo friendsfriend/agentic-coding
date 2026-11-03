@@ -61,6 +61,7 @@ export class ShellProcess {
 	private exit: Exit | null = null;
 	private cleanupUncertain = false;
 	readonly done: Promise<Exit>;
+	readonly redact: (value: string) => string;
 	readonly spawned: Promise<boolean>;
 	constructor(
 		readonly plan: Plan,
@@ -76,6 +77,7 @@ export class ShellProcess {
 		if (process.platform === "win32")
 			throw new Error("Shell environment runtime currently requires POSIX");
 		const { env, redact } = processEnvironment(configDir, plan);
+		this.redact = redact;
 		const cwd = contained(
 			plan.workspace,
 			path.relative(plan.workspace, plan.cwd),

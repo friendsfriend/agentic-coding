@@ -140,6 +140,54 @@ export function createEnvironmentTools(
 		name: "v2.environments",
 		tools: [
 			defineTool({
+				name: "env_http_get",
+				description:
+					"Request exact human approval for one GET to a named numeric-loopback HTTP endpoint of this task's live ready shell app. No redirects, proxies, cookies, credentials, custom headers or writes. GET can still have server-side effects. Ten-second deadline, 64 KiB source cap, text-only output and frozen app-secret redaction; responses are discarded if app ownership ends. Not a TLS or socket-ownership proof. Other runtimes are not yet supported.",
+				parameters: Type.Object({
+					app: Type.String({ maxLength: 64 }),
+					endpoint: Type.String({ maxLength: 64 }),
+					path: Type.Optional(Type.String({ maxLength: 2048 })),
+				}),
+				replay: "safe",
+				executionMode: "sequential",
+				execute: async (args, api, context) => {
+					const owner = await ownerOf(api.conversationId);
+					if (!owner)
+						throw new Error("Endpoint diagnostics require a native skill task");
+					const request = await manager.prepareEndpoint(
+							owner,
+							args.app,
+							args.endpoint,
+							args.path ?? "/",
+							context.abortSignal,
+						),
+						snapshot = JSON.stringify(
+							{
+								request,
+								authority:
+									"One direct GET to the displayed configured local origin while this exact ready shell app is held. GET may cause server-side effects; no redirects, proxy, cookies, credentials, custom headers or TLS/socket identity proof. Source response bounded to 64 KiB/10 seconds, known app secrets redacted; non-text/encoded bodies omitted. No other methods or origins are approved.",
+							},
+							null,
+							2,
+						);
+					const review = await requestReview(
+						owner,
+						{
+							title: `Endpoint GET: ${args.app}/${args.endpoint}`,
+							path: owner.workspace,
+							snapshot,
+						},
+						api,
+						context,
+					);
+					if (review.state !== "approved" || review.snapshot !== snapshot)
+						throw new Error("Exact current endpoint GET was not approved");
+					return environmentResult(
+						await manager.getEndpoint(owner, request, context.abortSignal),
+					);
+				},
+			}),
+			defineTool({
 				name: "env_cluster_status",
 				description:
 					"Request human approval to inspect the API identity of one explicitly configured local Kubernetes context. No default context, cluster creation, app start, secret inspection or cleanup/adoption authority. Credential plugins and inline credentials are unsupported.",

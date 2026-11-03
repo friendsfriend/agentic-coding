@@ -8,6 +8,8 @@ import type { ClusterInspection } from "./cluster-types.ts";
 import { ComposeProcess } from "./compose.ts";
 import { containerPlans } from "./compose-config.ts";
 import { ContainerProcess } from "./container.ts";
+import { type EndpointRequest, endpointUrl } from "./endpoint.ts";
+import { endpointGet } from "./http.ts";
 import { KubernetesProcess } from "./kubernetes.ts";
 import type { EnvironmentProcess } from "./process.ts";
 import { actionsConflict, runsConflict } from "./resources.ts";
@@ -55,6 +57,98 @@ export class Environments {
 	constructor(private config: Config) {
 		this.projects = loadProjects(config);
 		this.clusters = loadClusters(config);
+	}
+	private async endpointRun(
+		owner: TaskInfo,
+		app: string,
+		signal?: AbortSignal,
+	) {
+		this.check(owner.id, signal);
+		if (owner.policy !== "workspace-write")
+			throw new Error(
+				"Endpoint diagnostics require a workspace-write native task and separate approval",
+			);
+		const runs = (await this.records()).filter(
+			(run) =>
+				run.owner === owner.id &&
+				run.plan.app === app &&
+				run.state === "running" &&
+				run.ready === true,
+		);
+		const run = runs.length === 1 ? runs[0] : undefined,
+			process = run ? this.live.get(run.id) : undefined;
+		if (
+			!run ||
+			!(process instanceof ShellProcess) ||
+			process.outcome ||
+			process.cleanupFailed ||
+			run.plan.workspace !== owner.workspace
+		)
+			throw new Error(
+				"Endpoint requires this task's live ready shell app; saved receipts grant no network authority",
+			);
+		this.check(owner.id, signal, run.batch);
+		return { run, process };
+	}
+	async prepareEndpoint(
+		owner: TaskInfo,
+		app: string,
+		endpoint: string,
+		path: string,
+		signal?: AbortSignal,
+	): Promise<EndpointRequest> {
+		const { run } = await this.endpointRun(owner, app, signal),
+			base = run.plan.endpoints?.[endpoint];
+		if (!base || !Object.hasOwn(run.plan.endpoints ?? {}, endpoint))
+			throw new Error("Choose a declared endpoint of the held app");
+		return { run: run.id, app, endpoint, url: endpointUrl(base, path) };
+	}
+	async getEndpoint(
+		owner: TaskInfo,
+		approved: EndpointRequest,
+		signal?: AbortSignal,
+	) {
+		const { run, process } = await this.endpointRun(
+				owner,
+				approved.app,
+				signal,
+			),
+			base = run.plan.endpoints?.[approved.endpoint];
+		if (
+			run.id !== approved.run ||
+			!base ||
+			!Object.hasOwn(run.plan.endpoints ?? {}, approved.endpoint) ||
+			new URL(base).origin !== new URL(approved.url).origin
+		)
+			throw new Error("Approved endpoint no longer belongs to the held run");
+		const operation = (async () => {
+			this.check(owner.id, signal, run.batch);
+			if (process.outcome || process.cleanupFailed)
+				throw new Error("Endpoint app is closing; no request sent");
+			const result = await endpointGet(approved.url, process.redact, signal),
+				current = await this.endpointRun(owner, approved.app, signal);
+			this.check(owner.id, signal, run.batch);
+			if (
+				current.run.id !== run.id ||
+				current.process !== process ||
+				process.outcome ||
+				process.cleanupFailed
+			)
+				throw new Error("Endpoint ownership changed; response discarded");
+			return {
+				...result,
+				run: run.id,
+				app: approved.app,
+				endpoint: approved.endpoint,
+				observedAt: Date.now(),
+			};
+		})();
+		this.pending.set(operation, { owner: owner.id, batch: run.batch });
+		try {
+			return await operation;
+		} finally {
+			this.pending.delete(operation);
+		}
 	}
 	prepareCluster(owner: TaskInfo, id: string) {
 		const cluster = this.clusters.find((item) => item.id === id);
@@ -168,6 +262,16 @@ export class Environments {
 		const { output: stored, ...rest } = run;
 		return {
 			...rest,
+			endpoints:
+				run.state === "running" &&
+				run.ready === true &&
+				this.live.get(run.id) instanceof ShellProcess &&
+				!this.live.get(run.id)?.outcome &&
+				!this.closed &&
+				!this.revoked.has(run.owner) &&
+				!this.stopped.has(run.batch)
+					? (run.plan.endpoints ?? {})
+					: {},
 			...(this.live.get(run.id)?.runtimeStatus
 				? { runtimeStatus: this.live.get(run.id)?.runtimeStatus }
 				: {}),

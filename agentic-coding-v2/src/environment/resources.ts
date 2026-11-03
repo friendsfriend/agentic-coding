@@ -11,13 +11,45 @@ function localSocket(value: string) {
 		return path.resolve(value);
 	}
 }
-export function runsConflict(left: Plan, right: Plan, stateDir: string) {
-	if (left.app === right.app) return true;
-	return containerPlans(left).some((a) =>
-		containerPlans(right).some((b) => containerConflict(a, b, stateDir)),
+function ports(plan: Plan) {
+	return containerPlans(plan).flatMap<{
+		host: number;
+		protocol: string;
+		address: string;
+	}>(
+		(service) =>
+			service.container?.ports ??
+			Object.values(service.endpoints ?? {}).map((address) => {
+				const url = new URL(address);
+				return {
+					host: Number(url.port || 80),
+					protocol: "tcp",
+					address: url.hostname.replace(/^\[|\]$/g, ""),
+				};
+			}),
 	);
 }
-function containerConflict(left: Plan, right: Plan, stateDir: string) {
+export function runsConflict(left: Plan, right: Plan, stateDir: string) {
+	if (left.app === right.app) return true;
+	if (
+		ports(left).some((a) =>
+			ports(right).some(
+				(b) =>
+					a.host === b.host &&
+					a.protocol === b.protocol &&
+					(a.address === b.address ||
+						[a.address, b.address].some(
+							(address) => address === "0.0.0.0" || address === "::",
+						)),
+			),
+		)
+	)
+		return true;
+	return containerPlans(left).some((a) =>
+		containerPlans(right).some((b) => containerNameConflict(a, b, stateDir)),
+	);
+}
+function containerNameConflict(left: Plan, right: Plan, stateDir: string) {
 	if (left.app === right.app) return true;
 	if (!left.container || !right.container) return false;
 	const name = (plan: Plan) =>
@@ -28,17 +60,7 @@ function containerConflict(left: Plan, right: Plan, stateDir: string) {
 		name(left) === name(right)
 	)
 		return true;
-	return left.container.ports.some((a) =>
-		right.container?.ports.some(
-			(b) =>
-				a.host === b.host &&
-				a.protocol === b.protocol &&
-				(a.address === b.address ||
-					[a.address, b.address].some(
-						(address) => address === "0.0.0.0" || address === "::",
-					)),
-		),
-	);
+	return false;
 }
 export function actionsConflict(left: Plan, right: Plan) {
 	if (

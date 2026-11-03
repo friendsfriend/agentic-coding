@@ -90,7 +90,8 @@ Create `CONFIG_DIR/environments.json` (restart to discover definition changes):
           "readyText": "Listening on",
           "timeoutMs": 30000,
           "environment": { "NODE_ENV": "development" },
-          "secretRefs": { "DATABASE_URL": "WEB_DATABASE_URL" }
+          "secretRefs": { "DATABASE_URL": "WEB_DATABASE_URL" },
+          "endpoints": { "web": "http://127.0.0.1:3000" }
         },
         {
           "id": "build",
@@ -127,7 +128,22 @@ Available tools:
 - `env_list`, `env_status`, `env_logs`: inspect definitions, owners, queues, readiness, exit receipts and logs. A skill reads only its own logs; the home orchestrator and authenticated operator can inspect all host runs.
 - `env_start`: human approval for the exact command/cwd/variable-reference plan, then atomic reservation of the entire requested app batch. If a target is ambiguous, select its ID explicitly. Conflicting batches retain FIFO priority while unrelated apps can proceed; explicitly shared container names and published ports also count as conflicts. It waits inside the tool without model polling. `timeoutSec` defaults to 30 (maximum 7200); timeout/cancellation removes the queue entry and does not start anything. Acquire all required apps together; stop an existing batch before acquiring more, avoiding hold-and-wait deadlocks.
 - `env_build`, `env_test`: separately approved commands in the task's worktree, with actual exit codes and redacted output. They require no app slot, but concurrent build/test actions in the same workspace are refused. Container builds conservatively serialize all image writers on the same local API socket, across workspaces and client families: Docker-compatible endpoints and Podman short-name policy make client-side tag identity unsafe to guess. An interrupted writer keeps that daemon's image-write resource quarantined. Nonzero exit codes remain failures reported as data, not invented successful verification.
+- `env_http_get`: separately approved GET to one named local endpoint of this task's live ready shell app. No other owner's app or saved receipt grants network authority. See the limited endpoint contract below.
 - `env_stop`: live process-group or ownership-fenced container cleanup for this task's own selected apps and pending acquisitions. It cannot stop another owner. Durable stop receipts bind retries to the original selection, not newly started apps.
+
+### Initial local endpoint diagnostics
+
+Shell **run** targets may declare up to 16 `endpoints` as name → HTTP numeric-loopback URL (`127.0.0.1` or `[::1]`, no DNS, credentials, configured query or fragment). IDs use the same lowercase kebab-case convention. Set the declared port to the actual application's listening port; this declaration is not discovery, allocation, TLS authentication or proof that the process owns a socket. Declared TCP ports participate in native app-batch admission conflicts, including container-published ports and wildcard bindings. External processes are not adopted or reserved against.
+
+Usable `endpoints` are exported in run results/status only while the live shell app is ready and held; configuration/review snapshots can still show the static declaration before startup. A missing `readyText` establishes only shell startup, not application health. On stop, owner cancellation, exit or host reopen, usable endpoints disappear and requests fail closed. Container/Compose/Kubernetes address binding, automatic ports and Kubernetes forwards are **not implemented**.
+
+`env_http_get({app, endpoint, path?})` requires a workspace-write native task and exact separate human approval, including the current run ID and normalized URL. Paths append to the configured path prefix; the **origin**, not that prefix, is the scope boundary. The client never follows redirects and sends no cookies, credentials or custom headers; it connects directly without an ambient proxy. Only GET is supported, and **GET can still have server-side effects**. There is no generic write or authentication capability.
+
+A request has a ten-second total deadline, a 16 KiB HTTP-header limit and a 64 KiB source-body cap. Only UTF-8-decoded text/JSON/XML is returned; other or encoded bodies are omitted without decompression. Returned headers are restricted to content type/length/location. Literal known app secrets are redacted using the app's original startup redactor, even if `.env` changes later; this is not protection against arbitrary secret transformations or encodings. At a source-body truncation, the incomplete final line is withheld so a secret split by the cap is not returned as a prefix. Redacted output is bounded again for model delivery. Reported `bytes` counts captured source bytes, not an invented total response size.
+
+Ownership is checked before approval, immediately before sending, and before returning observations. A response is discarded if the run closes, becomes uncertain or is replaced. In-flight requests join the native run's cleanup barrier; cancellation interrupts the request. This is capability-bounded diagnostics, not an OS/socket-identity sandbox.
+
+The small functional test launches its own disposable HTTP app through the real native shell boundary: no request before approval or without a held app, a conflicting app's declared port never starts, frozen-secret redaction after dotenv rotation, a source cap bisecting a secret, no redirect follow, and cancelled in-flight request cleanup. No existing app, credential or hosted service is used.
 
 ### Structured local container targets
 
