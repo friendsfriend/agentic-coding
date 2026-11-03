@@ -1,4 +1,5 @@
 import { object, text } from "../config.ts";
+import { type ReadinessProbe, readReadinessProbe } from "./kubernetes-probe.ts";
 export type KubernetesTarget = {
 	cluster: string;
 	namespace: string;
@@ -6,6 +7,7 @@ export type KubernetesTarget = {
 	command: string[];
 	args: string[];
 	replicas: number;
+	readinessProbe?: ReadinessProbe;
 };
 export function readKubernetes(raw: unknown): KubernetesTarget {
 	const data = object(raw);
@@ -19,6 +21,7 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 					"command",
 					"args",
 					"replicas",
+					"readinessProbe",
 				].includes(key),
 		)
 	)
@@ -57,5 +60,8 @@ export function readKubernetes(raw: unknown): KubernetesTarget {
 		command: argv(data.command),
 		args: argv(data.args),
 		replicas: Number(replicas),
+		...(data.readinessProbe === undefined
+			? {}
+			: { readinessProbe: readReadinessProbe(data.readinessProbe) }),
 	};
 }

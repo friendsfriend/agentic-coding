@@ -6,6 +6,8 @@ export type RuntimeStatus = {
 	id: string | null;
 	state: "running" | "stopped" | "absent" | "unknown";
 	health: "healthy" | "unhealthy" | "starting" | null;
+	// Configured check kind; health remains a Kubernetes API observation, not a local probe.
+	readiness?: "http-probe" | "tcp-probe" | "pod-ready";
 	owned: boolean | null;
 	observedAt: number;
 };

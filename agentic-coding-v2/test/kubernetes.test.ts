@@ -6,17 +6,17 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { TaskId } from "@earendil-works/pi-durable";
 import { configureLocalCluster } from "./fixtures/cluster.ts";
 import { approve, pendingReview } from "./fixtures/environment.ts";
-import { createFixtures } from "./fixtures/runtime.ts";
+import { createFixtures, eventually } from "./fixtures/runtime.ts";
 
 const { fixture, cleanup } = createFixtures();
 afterEach(cleanup);
 // Minimal Kubernetes HTTP/CLI boundary: bounded PodList, Pod creation and
 // UID-preconditioned deletion. No scheduler, container or cluster simulation.
 const client = `import fs from "node:fs";
-const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0};
+const file=process.env.FIXTURE_STATE,s=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,"utf8")):{pods:{},serial:0,gate:process.env.FIXTURE_GATE!=="closed"};
 const args=process.argv.slice(2),method=args.find(v=>["get","create","delete"].includes(v)),uri=args[args.indexOf("--raw")+1],url=new URL(uri,"https://127.0.0.1"),name=url.pathname.split("/").at(-1);
 console.error("private-api-output");let result;
-if(method==="get"){const filter=url.searchParams.get("fieldSelector");if(!filter?.startsWith("metadata.name="))process.exit(2);const pod=s.pods[filter.slice("metadata.name=".length)];result={kind:"PodList",items:pod?[pod]:[]};}
+if(method==="get"){const filter=url.searchParams.get("fieldSelector");if(!filter?.startsWith("metadata.name="))process.exit(2);const pod=s.pods[filter.slice("metadata.name=".length)];if(pod&&s.gate===false)pod.status.conditions=[{type:"Ready",status:"False"}];result={kind:"PodList",items:pod?[pod]:[]};}
 else{const body=JSON.parse(fs.readFileSync(0,"utf8"));if(method==="create"){const name=body.metadata.name;if(s.pods[name])process.exit(1);body.metadata.uid="11111111-2222-3333-4444-"+String(++s.serial).padStart(12,"0");body.metadata.resourceVersion=String(s.serial);body.status={phase:process.env.FIXTURE_UNREADY==="yes"?"Failed":"Running",conditions:[{type:"Ready",status:process.env.FIXTURE_UNREADY==="yes"?"False":"True"}],containerStatuses:process.env.FIXTURE_UNREADY==="yes"?[{name:"app",state:{terminated:{exitCode:7}}}]:[]};body.metadata.annotations={private:"private-api-output"};s.pods[name]=body;result=body;}
 else if(method==="delete"){const pod=s.pods[name];if(!pod||body.preconditions?.uid!==pod.metadata.uid||body.preconditions?.resourceVersion!==pod.metadata.resourceVersion)process.exit(1);delete s.pods[name];result={kind:"Status",status:"Success"};}else process.exit(2);}
 if(method!=="get")fs.writeFileSync(file,JSON.stringify(s));console.log(JSON.stringify(result));`;
@@ -26,6 +26,7 @@ test("explicit bare pods acquire only after approval, reach API readiness, clean
 			configureLocalCluster(config, client, {
 				FIXTURE_STATE: path.join(config.configDir, "pods.json"),
 				FIXTURE_UNREADY: scenario === "unready" ? "yes" : "no",
+				FIXTURE_GATE: scenario === "ready" ? "closed" : "open",
 			});
 			fs.writeFileSync(
 				path.join(config.configDir, ".env"),
@@ -52,6 +53,13 @@ test("explicit bare pods acquire only after approval, reach API readiness, clean
 										namespace: "fixtures",
 										image: "fixture/app:v1",
 										replicas: 2,
+										readinessProbe:
+											scenario === "replacement"
+												? { tcpSocket: { port: 8080 }, periodSeconds: 1 }
+												: {
+														httpGet: { path: "/ready", port: 8080 },
+														periodSeconds: 1,
+													},
 									},
 									secretRefs: { TOKEN: "FIXTURE_SECRET" },
 								},
@@ -83,6 +91,27 @@ test("explicit bare pods acquire only after approval, reach API readiness, clean
 		expect(fs.existsSync(stateFile)).toBe(false);
 		await approve(app, task);
 		let replacementName = "";
+		const gate = (open: boolean) => {
+			const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+			state.gate = open;
+			fs.writeFileSync(`${stateFile}.new`, JSON.stringify(state));
+			fs.renameSync(`${stateFile}.new`, stateFile);
+		};
+		if (scenario === "ready") {
+			await eventually(
+				async () =>
+					fs.existsSync(stateFile)
+						? Object.keys(JSON.parse(fs.readFileSync(stateFile, "utf8")).pods)
+								.length
+						: 0,
+				(count) => count === 2,
+			);
+			expect((await app.environments.snapshot()).runs[0]?.state).toBe(
+				"reserved",
+			);
+			expect(transcript).toBe("");
+			gate(true);
+		}
 		if (scenario !== "unready") {
 			await pendingReview(app, task, "Hold pods");
 			const run = (await app.environments.snapshot()).runs[0];
@@ -90,10 +119,35 @@ test("explicit bare pods acquire only after approval, reach API readiness, clean
 			expect(
 				run?.runtimeStatuses?.filter((status) => status.health === "healthy"),
 			).toHaveLength(2);
+			if (scenario === "ready") {
+				gate(false);
+				await eventually(
+					() => app.environments.snapshot(),
+					(state) =>
+						state.runs[0]?.runtimeStatuses?.every(
+							(status) => status.health === "unhealthy",
+						) === true,
+				);
+				expect((await app.environments.snapshot()).runs[0]?.state).toBe(
+					"running",
+				);
+				gate(true);
+				await eventually(
+					() => app.environments.snapshot(),
+					(state) =>
+						state.runs[0]?.runtimeStatuses?.every(
+							(status) => status.health === "healthy",
+						) === true,
+				);
+			}
 			const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 			replacementName = Object.keys(state.pods)[0] ?? "";
 			expect(state.pods[replacementName].spec.containers[0]).toMatchObject({
 				image: "fixture/app:v1",
+				readinessProbe:
+					scenario === "replacement"
+						? { tcpSocket: { port: 8080 } }
+						: { httpGet: { path: "/ready", port: 8080, scheme: "HTTP" } },
 				env: expect.arrayContaining([
 					{ name: "TOKEN", value: "fixture-pod-sensitive-value" },
 				]),

@@ -227,7 +227,13 @@ A run target can now select Kubernetes explicitly:
     "image": "your-app:version",
     "command": ["/app/server"],
     "args": [],
-    "replicas": 1
+    "replicas": 1,
+    "readinessProbe": {
+      "httpGet": { "path": "/ready", "port": 8080 },
+      "periodSeconds": 2,
+      "timeoutSeconds": 1,
+      "failureThreshold": 3
+    }
   }
 }
 ```
@@ -236,11 +242,13 @@ The namespace must already exist and cannot be `default` or `kube-*`. No namespa
 
 Only successful creation responses establish live pod UID receipts. Existing names are never adopted, even with matching labels. Cleanup verifies those UIDs and host/run labels, then sends Kubernetes DELETE requests with **UID and observed resource-version preconditions**, a five-second grace period and orphan propagation. Deletions are requested before waiting for absence so replica grace periods overlap. It never uses an unchecked name-based `kubectl delete` or deletes a namespace. Replacements, unconfirmed cleanup, interrupted writes and lost ownership retain the app reservation for authenticated inspection. Resource-version conflicts also fail closed rather than retrying an ambiguous mutation. Persisted pod IDs are diagnostics, not restart adoption authority.
 
-Readiness requires observed `Running` phase and Kubernetes `Ready=True`; without an application readiness probe this is **not proof of application health**. Probe configuration is not supported in this initial subset. Termination and UID ownership are monitored. Exit codes are reported only when observed; confirmed cleanup does not invent an application success code. Pod logs are deliberately unavailable until a read boundary can avoid name-replacement races. Shell/container logs are unaffected.
+Readiness requires observed `Running` phase and Kubernetes `Ready=True`. Optional `readinessProbe` supports exactly one `httpGet` (pod-relative `path`, numeric `port`, optional `HTTP`/`HTTPS` `scheme`) or `tcpSocket` (numeric `port`). Exec/gRPC probes, host overrides, custom headers, named ports and liveness/startup probes are refused. Timings are bounded: initial delay 0–300 seconds, period 1–60, timeout 1–30 (not exceeding the period), and success/failure thresholds 1–10. Defaults are the Kubernetes defaults (0/10/1/1/3 respectively). The target timeout must also allow for scheduling, image pulls and these checks.
+
+Every replica is created before waiting for readiness, so peers can start even when readiness depends on each other. Probes execute in the kubelet, not the host. Kubernetes HTTP redirect semantics apply; HTTPS probes do **not** verify server certificates, and TCP probes establish only that the socket accepts a connection. Without a probe, Pod Ready is **not proof of application health**; even a passing configured probe does not establish end-to-end business correctness. Public per-pod `readiness` metadata distinguishes `http-probe`, `tcp-probe` and `pod-ready`. After initial readiness, observed readiness loss is `unhealthy` rather than `starting`; it does not automatically destroy the app. Termination and UID ownership are monitored. Exit codes are reported only when observed; confirmed cleanup does not invent an application success code. Pod logs are deliberately unavailable until a read boundary can avoid name-replacement races. Shell/container logs are unaffected.
 
 Target `environment`/`secretRefs` become only explicitly declared Pod environment values, not the client host environment. **The API can persist these values and authorized cluster readers can read them. This is not Kubernetes Secret-object integration.** Locally they travel over private stdin, not argv or temporary manifest files; raw API output stays private. Requested containers drop capabilities and disable privilege escalation; automatic service-account token mounting is disabled. Cluster admission, configured images and commands remain trusted execution surfaces, not an OS sandbox.
 
-The small native functional scenario uses a disposable kubectl substitute: approval-before-effects, two ready pods receiving the configured image/environment, UID-checked cleanup preserving unrelated and copied-label replacement pods, app-exit-before-readiness rollback, and private output. No live Kubernetes installation, scheduler, image pull, application connectivity or Helm compatibility has been verified.
+The small native functional scenario uses a disposable kubectl substitute: approval-before-effects, two pods receiving the configured image/environment and HTTP/TCP probe contract, all replicas present while API readiness remains false, no successful start before readiness, observed health loss/recovery, UID-checked cleanup preserving unrelated and copied-label replacement pods, app-exit-before-readiness rollback, and private output. The fixture controls API readiness; it does not simulate a kubelet or execute real HTTP/TCP probes. No live Kubernetes installation, scheduler, image pull, application connectivity or Helm compatibility has been verified.
 
 ## Verification
 

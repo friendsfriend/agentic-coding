@@ -69,6 +69,11 @@ export class KubernetesProcess implements EnvironmentProcess {
 				id: null,
 				state: "unknown",
 				health: null,
+				readiness: plan.kubernetes.readinessProbe
+					? plan.kubernetes.readinessProbe.httpGet
+						? "http-probe"
+						: "tcp-probe"
+					: "pod-ready",
 				owned: null,
 				observedAt: Date.now(),
 			});
@@ -204,7 +209,14 @@ export class KubernetesProcess implements EnvironmentProcess {
 							? "running"
 							: "unknown"
 					: "absent",
-				health: pod ? (pod.ready ? "healthy" : "starting") : null,
+				health:
+					!pod || pod.stopped
+						? null
+						: pod.ready
+							? "healthy"
+							: previous.health === "healthy" || previous.health === "unhealthy"
+								? "unhealthy"
+								: "starting",
 				owned: pod
 					? this.created.has(name)
 						? this.created.get(name) === pod.uid &&
@@ -248,6 +260,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 					{
 						name: "app",
 						image: this.target.image,
+						...(this.target.readinessProbe
+							? { readinessProbe: this.target.readinessProbe }
+							: {}),
 						...(this.target.command.length
 							? { command: this.target.command }
 							: {}),
@@ -306,6 +321,9 @@ export class KubernetesProcess implements EnvironmentProcess {
 				throw new Error("Kubernetes creation receipt ownership mismatch");
 			}
 			this.created.set(name, pod.uid);
+		}
+		// Create every replica before waiting: a pod's readiness may depend on peers.
+		for (const name of this.names) {
 			for (;;) {
 				this.controller.signal.throwIfAborted();
 				const observed = await this.observe(
