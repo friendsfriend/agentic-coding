@@ -1,6 +1,8 @@
+import { logSince, timedLines } from "./log-timing.ts";
 import type { EnvironmentRun } from "./state.ts";
 export type LogOptions = {
 	grep?: string;
+	since?: string;
 	tail?: number;
 	service?: string;
 	kind?: "infrastructure";
@@ -15,15 +17,17 @@ type LogRun = Pick<
 	| "output"
 	| "plan"
 	| "serviceLogs"
+	| "logTiming"
 >;
 function logSource(run: LogRun, service?: string) {
 	if (!service)
 		return {
 			output: run.output,
+			timing: run.logTiming,
 			availability: "available",
 			sourceTruncated: false,
 		};
-	const empty = { output: "", sourceTruncated: false };
+	const empty = { output: "", sourceTruncated: false, timing: undefined };
 	if (run.plan.runtime !== "compose")
 		return { ...empty, availability: "unsupported-runtime" };
 	if (!run.plan.composePlan?.services.some((item) => item.id === service))
@@ -33,6 +37,7 @@ function logSource(run: LogRun, service?: string) {
 		return { ...empty, availability: "not-captured" };
 	return {
 		output: capture.output,
+		timing: undefined,
 		sourceTruncated: capture.truncated,
 		availability: "available",
 	};
@@ -60,6 +65,7 @@ export function logView(
 		throw new Error(
 			"Logs require tail 1–1000, literal grep up to 512 characters, and an optional exact service name of 1–64 characters",
 		);
+	const since = logSince(options.since);
 	const outputBudgetBytes = 12288;
 	let remaining = outputBudgetBytes;
 	return {
@@ -67,6 +73,7 @@ export function logView(
 		...(options.kind ? { projectKind: options.kind } : {}),
 		grep,
 		tail,
+		...(since ? { since: since.toString() } : {}),
 		...(options.service ? { service: options.service } : {}),
 		source: "retained-redacted-runtime-buffer",
 		outputBudgetBytes,
@@ -74,6 +81,7 @@ export function logView(
 		runs: runs.slice(0, 20).map((run) => {
 			const {
 				output: source,
+				timing,
 				availability,
 				sourceTruncated,
 			} = logSource(run, options.service);
@@ -83,7 +91,14 @@ export function logView(
 			// complete first line when the runtime's 64k-character buffer reaches its cap.
 			const boundaryLineWithheld = source.length >= 64000;
 			if (boundaryLineWithheld) lines.shift();
-			const matches = lines.filter((line) => line.includes(grep)),
+			const filtered = timedLines(
+				source,
+				lines,
+				timing,
+				since,
+				boundaryLineWithheld,
+			);
+			const matches = filtered.lines.filter((line) => line.includes(grep)),
 				selected = matches.slice(-tail),
 				returned: string[] = [];
 			for (const line of selected.toReversed()) {
@@ -103,6 +118,7 @@ export function logView(
 				signal: run.signal,
 				sourceAvailability: availability,
 				sourceTruncated,
+				timeSelection: filtered.timeSelection,
 				framing: options.service
 					? "exact-service-buffer-not-event-time"
 					: run.plan.runtime === "compose"

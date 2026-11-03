@@ -5,7 +5,7 @@ import { parseEnv } from "node:util";
 import { contained } from "../git.ts";
 import type { Plan } from "./catalog.ts";
 import { authentication } from "./http-options.ts";
-import type { Exit } from "./process.ts";
+import type { Exit, LogTiming } from "./process.ts";
 
 export type { Exit } from "./process.ts";
 export function processEnvironment(configDir: string, plan: Plan) {
@@ -87,6 +87,9 @@ export class ShellProcess {
 	private ended = false;
 	private mainExited = false;
 	private output = "";
+	private timedEntries: LogTiming["entries"] = [];
+	private timedCharacters = 0;
+	private timingTruncated = false;
 	private readyObserved = false;
 	private exit: Exit | null = null;
 	private cleanupUncertain = false;
@@ -150,7 +153,19 @@ export class ShellProcess {
 			this.child.stdin?.end(invocation.input);
 		}
 		const append = (line: string) => {
-			this.output = `${this.output}${redact(line)}\n`.slice(-64000);
+			const text = `${redact(line)}\n`;
+			this.output = `${this.output}${text}`.slice(-64000);
+			this.timedEntries.push({
+				receivedAt: Date.now(),
+				characters: text.length,
+			});
+			this.timedCharacters += text.length;
+			while (this.timedCharacters > 64000 || this.timedEntries.length > 2048) {
+				const removed = this.timedEntries.shift();
+				if (!removed) break;
+				this.timedCharacters -= removed.characters;
+				this.timingTruncated = true;
+			}
 		};
 		const flushers: (() => void)[] = [];
 		for (const stream of [this.child.stdout, this.child.stderr]) {
@@ -213,6 +228,13 @@ export class ShellProcess {
 	}
 	get logs() {
 		return this.output;
+	}
+	get logTiming(): LogTiming {
+		return {
+			basis: "host-receipt-completed-lines",
+			entries: this.timedEntries.map((entry) => ({ ...entry })),
+			truncated: this.timingTruncated,
+		};
 	}
 	get outcome() {
 		return this.exit;

@@ -1,6 +1,6 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { Plan } from "./catalog.ts";
-import type { RuntimeStatus, ServiceLog } from "./process.ts";
+import type { LogTiming, RuntimeStatus, ServiceLog } from "./process.ts";
 
 export const EnvironmentState = defineDoc<{
 	runs: Record<string, string>;
@@ -45,6 +45,7 @@ export type EnvironmentRun = {
 	exitCode: number | null;
 	signal: string | null;
 	output: string;
+	logTiming?: LogTiming;
 	serviceLogs?: Record<string, ServiceLog>;
 	error: string | null;
 	runtimeStatus?: RuntimeStatus;

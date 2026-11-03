@@ -1,4 +1,9 @@
 export type Exit = { code: number | null; signal: string | null };
+export type LogTiming = {
+	basis: "host-receipt-completed-lines";
+	entries: Array<{ receivedAt: number; characters: number }>;
+	truncated: boolean;
+};
 export type ServiceLog = { output: string; truncated: boolean };
 export type RuntimeStatus = {
 	runtime: "docker" | "podman" | "kubernetes";
@@ -17,6 +22,7 @@ export interface EnvironmentProcess {
 	readonly pid: number | null;
 	readonly done: Promise<Exit>;
 	readonly logs: string;
+	readonly logTiming?: LogTiming;
 	readonly serviceLogs?: Record<string, ServiceLog>;
 	readonly outcome: Exit | null;
 	readonly cleanupFailed: boolean;

@@ -76,7 +76,12 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 		call("env_start", { apps: ["api"] }),
 		() => call("env_logs", { app: "api", grep: "[x]", tail: 2 }),
 		() => call("env_logs", { app: "api", grep: "large", tail: 1 }),
-		() => call("env_logs", { app: "api", service: "worker" }),
+		() =>
+			call("env_logs", {
+				app: "api",
+				service: "worker",
+				since: "2000-01-01T00:00:00Z",
+			}),
 		(messages) => {
 			for (const message of messages.messages) {
 				if (message.role !== "toolResult" || message.toolName !== "env_logs")
@@ -108,6 +113,7 @@ test("native log reads filter redacted lines literally, tail matching lines, pre
 	});
 	expect(observations[2]?.runs[0]).toMatchObject({
 		sourceAvailability: "unsupported-runtime",
+		timeSelection: { availability: "not-captured" },
 		output: "",
 	});
 	expect(JSON.stringify(observations)).not.toContain(secret);
